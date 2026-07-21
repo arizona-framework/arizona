@@ -689,30 +689,18 @@ apply_limit(
     {[], #{t => ?EACH, items => SnapItems, order => FlatOrder, template => Tmpl}, Views};
 apply_limit(
     Az,
-    #stream{limit = Limit, on_limit = halt, order = Order},
-    Tmpl,
-    SnapItems,
-    Views
-) ->
-    VKeys = arizona_template:visible_keys(Order, Limit),
-    KeepOnly = maps:with(VKeys, SnapItems),
-    DropOps = [
-        [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <- SnapItems, not is_map_key(K, KeepOnly)
-    ],
-    {DropOps, #{t => ?EACH, items => KeepOnly, order => VKeys, template => Tmpl}, Views};
-apply_limit(
-    Az,
-    #stream{
-        limit = Limit,
-        on_limit = drop,
-        items = ItemsMap,
-        order = Order
-    },
+    #stream{limit = Limit, items = ItemsMap, order = Order},
     Tmpl,
     SnapItems,
     Views0
 ) ->
+    %% `halt` and `drop` reconcile the visible window identically here: remove the
+    %% DOM items that fell out of it, and insert the newly-visible ones at their
+    %% ordered position. (The halt/drop distinction is about source retention,
+    %% owned by the stream module; by this point `order` already reflects it.)
+    %% The positional back-fill is what lets a delete slide the next item into the
+    %% freed slot (previously halt never inserted it) and a sort bring a hidden
+    %% item into view at the right spot (previously appended at the end).
     VKeys = arizona_template:visible_keys(Order, Limit),
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
@@ -720,30 +708,32 @@ apply_limit(
      || K := _ <- SnapItems, not is_map_key(K, VSet)
     ],
     Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
-    {InsOps, Final, Views1} = snap_add_missing(
-        Az,
-        VKeys,
-        Pruned,
-        ItemsMap,
-        Tmpl,
-        Views0
-    ),
+    {InsOps, Final, Views1} = snap_add_missing(Az, VKeys, Pruned, ItemsMap, Tmpl, Views0),
     {RemOps ++ InsOps, #{t => ?EACH, items => Final, order => VKeys, template => Tmpl}, Views1}.
 
-snap_add_missing(_Az, [], Snaps, _ItemsMap, _Tmpl, Views) ->
+snap_add_missing(Az, VKeys, Snaps, ItemsMap, Tmpl, Views) ->
+    snap_add_missing(Az, VKeys, 0, Snaps, ItemsMap, Tmpl, Views).
+
+%% Insert each visible key missing from the DOM at its position in the visible
+%% window. Processed left-to-right, so by the time a missing key at index Idx is
+%% reached the DOM already holds VKeys[0..Idx-1] (surviving items settled by the
+%% preceding moves, earlier back-fills just inserted) -- so inserting at Idx lands
+%% it correctly. Appending at -1 only happened to be right when the new item was
+%% last in the window (a delete); a sort can place it anywhere.
+snap_add_missing(_Az, [], _Idx, Snaps, _ItemsMap, _Tmpl, Views) ->
     {[], Snaps, Views};
-snap_add_missing(Az, [K | Rest], Snaps, ItemsMap, Tmpl, Views0) ->
+snap_add_missing(Az, [K | Rest], Idx, Snaps, ItemsMap, Tmpl, Views0) ->
     case Snaps of
         #{K := _} ->
-            snap_add_missing(Az, Rest, Snaps, ItemsMap, Tmpl, Views0);
+            snap_add_missing(Az, Rest, Idx + 1, Snaps, ItemsMap, Tmpl, Views0);
         #{} ->
             Item = maps:get(K, ItemsMap),
             {ItemD, Views1} = arizona_eval:render_stream_item(K, Item, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, ItemD),
-            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML],
+            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), Idx, HTML],
             NewSnaps = Snaps#{K => ItemD},
             {RestOps, FinalSnaps, Views2} =
-                snap_add_missing(Az, Rest, NewSnaps, ItemsMap, Tmpl, Views1),
+                snap_add_missing(Az, Rest, Idx + 1, NewSnaps, ItemsMap, Tmpl, Views1),
             {[InsOp | RestOps], FinalSnaps, Views2}
     end.
 

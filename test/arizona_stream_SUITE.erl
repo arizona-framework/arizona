@@ -8,6 +8,7 @@
     datatable_live_add_row/1,
     datatable_live_connected/1,
     datatable_live_delete_all_then_reset/1,
+    datatable_live_delete_middle_then_reset/1,
     datatable_live_delete_row_middle/1,
     datatable_live_delete_row/1,
     datatable_live_mount/1,
@@ -66,6 +67,8 @@
     stream_keys/1,
     stream_limit_drop_delete/1,
     stream_limit_drop_insert/1,
+    stream_limit_halt_delete_backfills/1,
+    stream_limit_drop_sort_order/1,
     stream_limit_halt_diff/1,
     stream_limit_halt_render/1,
     stream_limit_one/1,
@@ -225,6 +228,8 @@ groups() ->
             stream_limit_halt_diff,
             stream_limit_drop_delete,
             stream_limit_drop_insert,
+            stream_limit_halt_delete_backfills,
+            stream_limit_drop_sort_order,
             stream_move_op,
             stream_limit_ssr,
             stream_limit_reset,
@@ -302,6 +307,7 @@ groups() ->
             datatable_live_shuffle,
             datatable_live_sort_dom_simulation,
             datatable_live_delete_all_then_reset,
+            datatable_live_delete_middle_then_reset,
             datatable_navigate_from_page_then_add_row_no_crash
         ]},
         %% List type switch tests
@@ -1605,6 +1611,81 @@ stream_limit_drop_insert(Config) when is_list(Config) ->
     RemKeys = [K || [?OP_REMOVE, _, K] <- RemOps],
     ?assert(lists:member(<<"3">>, InsKeys)),
     ?assert(lists:member(<<"2">>, RemKeys)).
+
+%% Build a limited stream of ids [1,2,3] with `Opts`, render it, apply `Mutate` to
+%% the stream, diff, and return {Ops, StreamSnap} where StreamSnap is the nested
+%% each snapshot (carrying `items`/`order`). Lets the limit tests below assert both
+%% the emitted ops and the resulting snapshot invariant (order subset of items).
+limit_stream_diff(Opts, Mutate) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Items = [
+        #{id => 1, text => <<"A">>},
+        #{id => 2, text => <<"B">>},
+        #{id => 3, text => <<"C">>}
+    ],
+    ItemTmpl = #{
+        t => 0,
+        s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
+        d => fun(Item, Key) ->
+            [{<<"0">>, fun() -> Key end}, {<<"1">>, fun() -> maps:get(text, Item) end}]
+        end,
+        f => <<"i">>
+    },
+    B0 = #{id => <<"t">>, items => arizona_stream:new(KeyFun, Items, Opts)},
+    Tmpl0 = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [
+            {<<"0">>, fun() -> arizona_template:each(arizona_template:get(items, B0), ItemTmpl) end}
+        ],
+        f => <<"p">>
+    },
+    {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    B2 = B1#{items => Mutate(maps:get(items, B1))},
+    Tmpl1 = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [
+            {<<"0">>, fun() -> arizona_template:each(arizona_template:get(items, B2), ItemTmpl) end,
+                {m, 1}}
+        ],
+        f => <<"p">>
+    },
+    Changed = arizona_live_compute_changed(B1, B2),
+    {Ops, Snap1, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
+    #{d := [{<<"0">>, StreamSnap}]} = Snap1,
+    {Ops, StreamSnap}.
+
+%% halt + delete of a visible item back-fills the next hidden item into the freed
+%% slot. Previously the halt path never inserted it, so the DOM lost the item and
+%% the snapshot's order kept a key absent from items (a later render then crashed).
+stream_limit_halt_delete_backfills(Config) when is_list(Config) ->
+    {Ops, #{items := Items, order := Order}} =
+        limit_stream_diff(
+            #{limit => 2, on_limit => halt},
+            fun(S) -> arizona_stream:delete(S, 1) end
+        ),
+    %% Item 1 removed; item 3 slides in at the window end (position 1).
+    ?assertMatch([[?OP_REMOVE, <<"0">>, <<"1">>], [?OP_INSERT, <<"0">>, <<"3">>, 1, _]], Ops),
+    ?assertEqual([2, 3], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
+
+%% drop + sort brings a hidden item into the window at its sorted position (front),
+%% not appended at the end (the corruption this fixes).
+stream_limit_drop_sort_order(Config) when is_list(Config) ->
+    {Ops, #{items := Items, order := Order}} =
+        limit_stream_diff(
+            #{limit => 2, on_limit => drop},
+            fun(S) -> arizona_stream:sort(S, fun(#{id := A}, #{id := B}) -> A >= B end) end
+        ),
+    %% Descending sort -> window [3,2]: item 1 removed, and item 3 (newly visible)
+    %% is INSERTed at the front (position 0), not appended at -1. A no-op MOVE for
+    %% the not-yet-visible key 3 may precede it (the client skips it); the load-
+    %% bearing assertion is the insert position.
+    Inserts = [Op || [?OP_INSERT | _] = Op <- Ops],
+    ?assertEqual([[?OP_REMOVE, <<"0">>, <<"1">>]], [Op || [?OP_REMOVE | _] = Op <- Ops]),
+    ?assertMatch([[?OP_INSERT, <<"0">>, <<"3">>, 0, _]], Inserts),
+    ?assertEqual([3, 2], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
 
 stream_move_op(Config) when is_list(Config) ->
     %% stream_move generates OP_REMOVE + OP_INSERT pair
@@ -2974,6 +3055,30 @@ datatable_live_delete_all_then_reset(Config) when is_list(Config) ->
     RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
     ?assertEqual(5, length(InsOps)),
     ?assertEqual(0, length(RemOps)).
+
+%% Regression (e2e "after delete, reset restores original 5"): deleting a middle
+%% row then resetting must restore the original order, not leave the re-added row
+%% appended at the end. The reset re-inserts the deleted key AND emits a MOVE to
+%% put it back in place; positioning the re-added row is the load-bearing part.
+datatable_live_delete_middle_then_reset(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_datatable, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% Delete the middle row (3): DOM becomes [1,2,4,5].
+    {ok, _, _} = arizona_live:handle_event(
+        Pid, <<"page">>, <<"delete_row">>, #{<<"id">> => 3}
+    ),
+    %% Reset: restores all 5 in original order.
+    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
+    HasInsert3 = lists:any(fun(Op) -> match_key(?OP_INSERT, <<"3">>, Op) end, Ops),
+    HasMove3 = lists:any(fun(Op) -> match_key(?OP_MOVE, <<"3">>, Op) end, Ops),
+    ?assert(HasInsert3),
+    ?assert(HasMove3).
+
+%% True when `Op` is `[Code, _Az, Key | _]` -- a stream op targeting `Key`.
+match_key(Code, Key, [Code, _Az, Key | _]) -> true;
+match_key(_Code, _Key, _Op) -> false.
 
 %% --- datatable_navigate_from_page_then_add_row_no_crash -------------------
 %% End-to-end check that the example handlers' explicit-bindings mounts
