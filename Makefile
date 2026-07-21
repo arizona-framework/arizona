@@ -173,6 +173,9 @@ test-e2e-parallel:
 test-e2e-sequential:
 	npx playwright test --project sequential
 
+test-e2e-native:
+	npx playwright test --project native
+
 # Performance bench. Intentionally NOT wired into ci/precommit:
 # numbers are noisy under shared CI runners and need human comparison.
 # Compile under the test profile so test/support/ fixtures are on the path.

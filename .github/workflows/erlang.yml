@@ -5,8 +5,8 @@
 # - resolve-playwright-version: Standalone, runs first for E2E jobs
 # - cache-erlang: Standalone, caches Erlang build artifacts
 # - check/test/artifacts: Depend on cache-erlang only
-# - e2e-parallel/e2e-sequential: Depend on both resolve-playwright-version
-#   and cache-erlang
+# - e2e-parallel/e2e-sequential/e2e-native: Depend on both
+#   resolve-playwright-version and cache-erlang
 #
 # E2E tests use Playwright Docker containers with pre-installed browsers,
 # eliminating the need for browser caching and installation steps.
@@ -429,5 +429,100 @@ jobs:
         if: failure()
         with:
           name: playwright-report-sequential
+          path: test-results/
+          retention-days: 7
+
+  # Runs the native (`?native` JSON-wire) E2E project: a real WebSocket client
+  # (no browser) drives the JSON render target against the running server. Same
+  # container setup as the other E2E jobs. Without this job the native-wire
+  # suite ran only on dev machines and a `?native` regression could merge green.
+  e2e-native:
+    name: E2E Tests (Native)
+
+    needs: [resolve-playwright-version, cache-erlang]
+
+    runs-on: ubuntu-24.04
+
+    # Set ImageOS for erlef/setup-beam to work in containers
+    # Set HOME=/root for Firefox to work when running as root
+    env:
+      ImageOS: ubuntu22
+      HOME: /root
+
+    container:
+      image: >-
+        mcr.microsoft.com/playwright:v${{
+          needs.resolve-playwright-version.outputs.version
+        }}-noble
+      options: --user root
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Fix Docker config warnings for GitHub Actions cleanup
+      - name: Setup Docker config
+        run: |
+          mkdir -p /root/.docker
+          echo '{}' > /root/.docker/config.json
+
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
+        id: setup-beam
+        with:
+          version-type: strict
+          version-file: .tool-versions
+
+      # Composite actions don't work in container jobs, use manual apt caching
+      # Ref: https://github.com/orgs/community/discussions/53771
+      - name: Cache apt packages
+        id: cache-apt
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-inotify-tools
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y inotify-tools make
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .tool-versions
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Restore _build cache
+        id: restore-build-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: _build
+          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
+
+      - name: Restore rebar3 cache
+        id: restore-rebar3-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/rebar3
+          key: ${{ needs.cache-erlang.outputs.rebar-cache-key }}
+          restore-keys: |
+            rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
+            rebar3-${{ runner.os }}-
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Compile Arizona for test
+        run: make compile-test
+
+      - name: Run native E2E tests
+        run: make test-e2e-native
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: playwright-report-native
           path: test-results/
           retention-days: 7
