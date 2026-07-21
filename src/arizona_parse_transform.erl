@@ -1499,8 +1499,20 @@ compile_mixed_non_static(Item, Module, State) ->
 
 compile_mixed_dynamic(Item, Module, #state{nodiff = true, backend = Backend} = State) ->
     flush(State, make_nodiff_dynamic_ast(Item, Module, line(Item), Backend));
-compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State) ->
-    flush(State, make_esc_text_dynamic_ast(<<"0">>, Item, Module, line(Item), Backend)).
+compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
+    %% A bare (non-element) dynamic at the fragment top level. Allocate it a
+    %% unique az from the shared element counter and wrap it in text-slot markers,
+    %% exactly like a content slot (emit_child_dynamic/4). A hardcoded, markerless
+    %% `"0"` collided with the first element's az -- and its first content slot's
+    %% marker az is also `"0"` (text_az(0, 0)) -- so an OP_TEXT for this value
+    %% resolved to that element's slot and overwrote it, while this value, having
+    %% no marker of its own, could not be patched and stayed stale.
+    Az = integer_to_binary(State0#state.az),
+    State1 = State0#state{az = State0#state.az + 1},
+    State2 = buf_append(State1, Backend:text_slot_open(Az)),
+    DynAST = make_esc_text_dynamic_ast(Az, Item, Module, line(Item), Backend),
+    State3 = flush(State2, DynAST),
+    State3#state{buf = Backend:text_slot_close()}.
 
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
     case is_list_ast(AttrsAST) of

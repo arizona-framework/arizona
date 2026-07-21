@@ -122,6 +122,7 @@
     nodiff_with_other_attrs/1,
     render_integration/1,
     shared_az/1,
+    mixed_fragment_bare_value_gets_own_az/1,
     single_dynamic_attr/1,
     single_dynamic_text/1,
     single_expr_child/1,
@@ -348,6 +349,7 @@ groups() ->
             void_element,
             boolean_attr,
             shared_az,
+            mixed_fragment_bare_value_gets_own_az,
             event_attrs_static,
             empty_children,
             fingerprint_stability,
@@ -1382,6 +1384,46 @@ shared_az(Config) when is_list(Config) ->
     ] = maps:get(d, T),
     ?assertEqual(<<"dark">>, ThemeFun()),
     ?assertEqual(<<"hello">>, ContentFun()).
+
+%% A mixed fragment (a bare value interleaved with an element) must give the
+%% bare value its OWN az and its own text-slot markers. Previously the bare
+%% dynamic was hardcoded to a markerless az "0", which collided with the first
+%% element's az -- and that element's first content-slot marker az is also "0"
+%% (text_az(0, 0)) -- so an OP_TEXT for the bare value resolved to the element's
+%% slot and overwrote it, while the bare value (having no marker) stayed stale.
+mixed_fragment_bare_value_gets_own_az(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_mixed_frag). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html(["
+        "        <<\"Hi \">>,"
+        "        arizona_template:get(name, Bindings, <<\"Ada\">>),"
+        "        {'b', [], [arizona_template:get(bold, Bindings, <<\"Lovelace\">>)]}"
+        "    ]). "
+    ),
+    T = Mod:render(#{name => <<"Grace">>, bold => <<"Lovelace">>}),
+    Fp = maps:get(f, T),
+    %% The bare value is now wrapped in its own `<!--az:0-->...<!--/az-->` markers
+    %% and the element is pushed to az "1".
+    ?assertEqual(
+        scope_s(Fp, [
+            <<"Hi <!--az:0-->">>,
+            <<"<!--/az--><b az=\"1\"><!--az:1-->">>,
+            <<"<!--/az--></b>">>
+        ]),
+        maps:get(s, T)
+    ),
+    NameAz = <<Fp/binary, "-0">>,
+    BoldAz = <<Fp/binary, "-1">>,
+    %% Distinct az for the bare value vs the element's content slot -- the fix.
+    ?assertNotEqual(NameAz, BoldAz),
+    [
+        {NameAz, {esc, NameFun}, {pt_mixed_frag, 1}},
+        {BoldAz, {esc, BoldFun}, {pt_mixed_frag, 1}}
+    ] = maps:get(d, T),
+    ?assertEqual(<<"Grace">>, NameFun()),
+    ?assertEqual(<<"Lovelace">>, BoldFun()).
 
 %% Test 9: Event attrs (az-click) -- fully static, NO az assigned.
 event_attrs_static(Config) when is_list(Config) ->
@@ -3877,12 +3919,19 @@ layout_mixed_dynamic_item(Config) when is_list(Config) ->
         "    ]). "
     ),
     T = Mod:render(#{x => <<"middle">>}),
-    ?assertEqual([<<"prefix">>, <<"suffix">>], maps:get(s, T)),
-    ?assert(maps:is_key(f, T)),
-    [{_Az, {esc, Fun}, {pt_layout_mixed_dyn, 1}}] = maps:get(d, T),
+    Fp = maps:get(f, T),
+    %% The bare dynamic is wrapped in text-slot markers (patchable in place); with
+    %% no element in the fragment there is no collision, but markers are still the
+    %% correct, consistent behavior for a diffable slot.
+    ?assertEqual(
+        scope_s(Fp, [<<"prefix<!--az:0-->">>, <<"<!--/az-->suffix">>]),
+        maps:get(s, T)
+    ),
+    Az0 = <<Fp/binary, "-0">>,
+    [{Az0, {esc, Fun}, {pt_layout_mixed_dyn, 1}}] = maps:get(d, T),
     ?assertEqual(<<"middle">>, Fun()),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
-    ?assertEqual(<<"prefixmiddlesuffix">>, HTML).
+    ?assertEqual(<<"prefix<!--az:", Fp/binary, "-0-->middle<!--/az-->suffix">>, HTML).
 
 %% Test 77: Layout nested elements -- no az attrs at any depth.
 layout_nested_no_az(Config) when is_list(Config) ->
