@@ -97,4 +97,27 @@ final class DispatchTests: XCTestCase {
         client.tap(incButton!)
         XCTAssertEqual(captured?.sent.last, "[\"native_counter\",\"inc\",{}]")
     }
+
+    // A push_event/2 effect carries an explicit payload. On native there is no
+    // form/input auto-collection, so the explicit payload is the only way to
+    // attach data -- dropping it (defaulting to `{}`) makes a handler matching a
+    // required key crash the live process.
+    func testTapCarriesTheExplicitPayload() {
+        var captured: MockTransport?
+        let client = AzClient(
+            baseUrl: "http://localhost:4040",
+            path: "/native/counter",
+            makeTransport: { _ in let m = MockTransport(); captured = m; return m },
+            runOnMain: { $0() })
+        client.connect()
+        captured?.simulateOpen()
+        // Turn the `inc` button's on_tap into a push_event with a payload.
+        let frame = counterFrame.replacingOccurrences(
+            of: ##"[0,\"inc\"]"##, with: ##"[0,\"save\",{\"id\":\"42\"}]"##)
+        captured?.simulateText("{\"o\":[[8,\"native_counter\",\(frame)]]}")
+
+        let saveButton = childNodes(client.root!).first { $0.props["on_tap"]?.arrayValue?[1].stringValue == "save" }
+        client.tap(saveButton!)
+        XCTAssertEqual(captured?.sent.last, "[\"native_counter\",\"save\",{\"id\":\"42\"}]")
+    }
 }

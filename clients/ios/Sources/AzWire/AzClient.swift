@@ -298,7 +298,8 @@ public final class AzClient {
             return
         }
         switch code {
-        case Effect.pushEvent: pushEvent(cmd[1].stringValue!, target: target)
+        case Effect.pushEvent:
+            pushEvent(cmd[1].stringValue!, payload: cmd.count > 2 ? cmd[2] : .object([:]), target: target)
         case Effect.navigate: navigate(cmd[1].stringValue!)
         default: if strict { assertionFailure("unsupported command: \(cmd)") }
         }

@@ -188,7 +188,12 @@ class AzClient(baseUrl: String, path: String) {
     // routes the event; the server's "e" effects pass none -> root.
     private fun runEffect(cmd: JsonArray, strict: Boolean, target: String? = null) {
         when (cmd[0].jsonPrimitive.int) {
-            Effect.PUSH_EVENT -> pushEvent(cmd[1].jsonPrimitive.content, target = target)
+            Effect.PUSH_EVENT ->
+                pushEvent(
+                    cmd[1].jsonPrimitive.content,
+                    payload = cmd.getOrNull(2)?.jsonObject ?: JsonObject(emptyMap()),
+                    target = target,
+                )
             Effect.NAVIGATE -> navigate(cmd[1].jsonPrimitive.content)
             else -> if (strict) error("unsupported command: $cmd")
         }

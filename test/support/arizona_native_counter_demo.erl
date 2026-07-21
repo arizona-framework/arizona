@@ -16,7 +16,10 @@ render(Bindings) ->
         {'Column', [{id, ?get(id)}], [
             {'Text', [], [~"Count: ", ?get(count)]},
             {'Button', [{on_tap, arizona_android:push_event(~"inc")}], [~"+"]},
-            {'Button', [{on_tap, arizona_android:push_event(~"dec")}], [~"-"]}
+            {'Button', [{on_tap, arizona_android:push_event(~"dec")}], [~"-"]},
+            %% Carries an explicit push_event/2 payload; the handler matches the
+            %% required `value` key, so a client that drops the payload crashes it.
+            {'Button', [{on_tap, arizona_android:push_event(~"set", #{~"value" => 42})}], [~"Set"]}
         ]}
     ).
 
@@ -25,4 +28,6 @@ render(Bindings) ->
 handle_event(~"inc", _Payload, Bindings) ->
     {Bindings#{count => maps:get(count, Bindings) + 1}, #{}, []};
 handle_event(~"dec", _Payload, Bindings) ->
-    {Bindings#{count => maps:get(count, Bindings) - 1}, #{}, []}.
+    {Bindings#{count => maps:get(count, Bindings) - 1}, #{}, []};
+handle_event(~"set", #{~"value" := V}, Bindings) ->
+    {Bindings#{count => V}, #{}, []}.
