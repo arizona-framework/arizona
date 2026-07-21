@@ -202,7 +202,8 @@ export class NativeClient {
     // effects in the "e" stream don't apply to native). `view` (a tap's enclosing
     // view id) routes the event; the server's "e" effects pass none -> root.
     _runEffect(cmd, strict, view) {
-        if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT) this.pushEvent(cmd[1], {}, view);
+        if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT)
+            this.pushEvent(cmd[1], cmd[2] ?? {}, view);
         else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE) this.navigate(cmd[1]);
         else if (strict) throw new Error(`unsupported command: ${JSON.stringify(cmd)}`);
     }

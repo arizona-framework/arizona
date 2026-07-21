@@ -39,4 +39,21 @@ test.describe('native (JSON) wire -- counter', () => {
             client.close();
         }
     });
+
+    test('delivers an explicit push_event/2 payload to the handler', async ({ baseURL }) => {
+        const client = new NativeClient(baseURL, '/native/counter');
+        await client.connect();
+        try {
+            // The "Set" button's on_tap carries {value: 42}. The handler matches
+            // the required `value` key, so if the client dropped the payload the
+            // live process would crash and the count would never reach 42.
+            const setBtn = client.tree().children.find((c) => c.on_tap && c.on_tap[1] === 'set');
+            expect(setBtn.on_tap).toEqual([0, 'set', { value: 42 }]);
+            client.tap(setBtn);
+            const after = await client.waitFor((t) => t.children[0].children[1] === '42');
+            expect(after.children[0].children).toEqual(['Count: ', '42']);
+        } finally {
+            client.close();
+        }
+    });
 });
