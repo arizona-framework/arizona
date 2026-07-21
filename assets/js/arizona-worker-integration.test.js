@@ -226,6 +226,36 @@ describe('arizona-worker', () => {
         expect(ws.latest().url).toContain('_az_reconnect=1');
     });
 
+    it('W_UPDATE_PATH replaces the user qs on reconnect, keeping framework params', () => {
+        // Connected on /search?q=a (a page param) with a framework caps param.
+        slf.send([0, 'ws://host/ws?_az_path=%2Fsearch&q=a&_az_caps=%7B%7D']);
+        ws.latest().simulateOpen();
+        // An SPA navigation to /items?page=2 updates path + qs.
+        slf.send([3, { path: '/items', qs: 'page=2' }]);
+        // A blip forces a reconnect, whose URL must reflect the navigation.
+        ws.latest().close(1006);
+        vi.advanceTimersByTime(10000);
+        const url = ws.latest().url;
+        expect(url).toContain('_az_path=%2Fitems'); // navigated path
+        expect(url).toContain('page=2'); // navigated qs is present
+        expect(url).not.toContain('q=a'); // the stale page param is dropped
+        expect(url).toContain('_az_caps='); // framework param preserved
+    });
+
+    it('W_UPDATE_PATH lays down connect() extras carried in the posted qs', () => {
+        // arizona.js merges connect() extras into the qs it posts, so a constant
+        // connection param survives while the page qs is replaced.
+        slf.send([0, 'ws://host/ws?_az_path=%2Fsearch&q=a&token=abc']);
+        ws.latest().simulateOpen();
+        slf.send([3, { path: '/items', qs: 'page=2&token=abc' }]);
+        ws.latest().close(1006);
+        vi.advanceTimersByTime(10000);
+        const url = ws.latest().url;
+        expect(url).toContain('token=abc'); // connect extra preserved
+        expect(url).toContain('page=2');
+        expect(url).not.toContain('q=a');
+    });
+
     it('does not reset the backoff on socket open without a frame', () => {
         // backoff(0) in [800,1200), backoff(1) in [1600,2400) -- disjoint, so the
         // fire time distinguishes the attempt index. A socket that opens but never
@@ -258,22 +288,26 @@ describe('arizona-worker', () => {
         expect(ws.instances).toHaveLength(3);
     });
 
-    it('update-path message [3, path] rewrites the cached URL', () => {
+    it('update-path message [3, {path, qs}] rewrites the cached URL', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2Fold']);
-        slf.send([3, '/new']);
+        slf.send([3, { path: '/new', qs: '' }]);
         ws.latest().close(1006);
         vi.advanceTimersByTime(10000);
         expect(ws.latest().url).toContain('_az_path=%2Fnew');
     });
 
-    it('update-path leaves user params containing "path" in their name untouched', () => {
+    it('update-path targets _az_path by exact key and replaces a like-named user param', () => {
         slf.send([0, 'ws://host/ws?upload_path=%2Ffoo&_az_path=%2Fold']);
-        slf.send([3, '/new']);
+        // Navigate to a page that also carries an `upload_path` param: `_az_path`
+        // is updated by its exact key (never confused with the user param), and
+        // the stale page value is replaced by the navigated-to one.
+        slf.send([3, { path: '/new', qs: 'upload_path=%2Fbar' }]);
         ws.latest().close(1006);
         vi.advanceTimersByTime(10000);
         const url = ws.latest().url;
-        expect(url).toContain('upload_path=%2Ffoo');
         expect(url).toContain('_az_path=%2Fnew');
+        expect(url).toContain('upload_path=%2Fbar');
+        expect(url).not.toContain('upload_path=%2Ffoo');
     });
 
     it('heartbeat sends ping after 30s, closes if pong not received before next tick', () => {
