@@ -40,6 +40,10 @@ parse_headers(#{headers := Headers}) -> Headers.
 read_body(#{body := Body} = Raw) -> {Body, Raw#{body_read => true}}.
 
 resolve_route(Path, _Qs, #{routes := Routes} = Raw) ->
-    {Handler, RouteOpts} = maps:get(Path, Routes),
-    NavReq = arizona_req:new(?MODULE, Raw, #{method => ~"GET", path => Path}),
-    {Handler, RouteOpts, NavReq}.
+    case Routes of
+        #{Path := {Handler, RouteOpts}} ->
+            NavReq = arizona_req:new(?MODULE, Raw, #{method => ~"GET", path => Path}),
+            {ok, Handler, RouteOpts, NavReq};
+        #{} ->
+            error
+    end.

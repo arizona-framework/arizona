@@ -49,7 +49,7 @@ via `arizona_req:raw/1`.
     capabilities := map()
 }.
 
--nominal result() :: {halt, az:request()} | {cont, state()}.
+-nominal result() :: {halt, az:request()} | {cont, state()} | not_found.
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -63,9 +63,12 @@ against `Adapter`/`AdapterState`, and applies route middlewares.
 
 Returns `{halt, HaltReq}` when middleware short-circuits; the
 transport extracts the native raw request via `arizona_req:raw/1`
-and emits its own response. Returns `{cont, State}` otherwise; the
-transport passes `State` (which carries `handler`, `bindings`,
-`on_mount`, `req`, `reconnect`) on through to
+and emits its own response. Returns `not_found` when the client-supplied
+`_az_path` does not resolve to a live route (no match, or a
+controller/asset/ws route); the transport rejects the upgrade with a 404
+rather than crashing on an attacker-controllable path. Returns `{cont,
+State}` otherwise; the transport passes `State` (which carries `handler`,
+`bindings`, `on_mount`, `req`, `reconnect`) on through to
 `arizona_socket:init/4`.
 """.
 -spec prepare(QS, Adapter, AdapterState) -> result() when
@@ -77,24 +80,26 @@ prepare(QS, Adapter, AdapterState) ->
     Reconnect = proplists:get_value(~"_az_reconnect", QS, ~"0") =:= ~"1",
     Caps = parse_caps(proplists:get_value(~"_az_caps", QS, undefined)),
     UserQs = user_qs(QS),
-    {H, RouteOpts, ArzReq} = arizona_req:call_resolve_route(
-        Adapter, Path, UserQs, AdapterState
-    ),
-    IB = maps:get(bindings, RouteOpts, #{}),
-    OnMount = maps:get(on_mount, RouteOpts, []),
-    Middlewares = maps:get(middlewares, RouteOpts, []),
-    case arizona_middleware:apply_middlewares(Middlewares, ArzReq, IB) of
-        {halt, HaltReq} ->
-            {halt, HaltReq};
-        {cont, ArzReq1, Bindings1} ->
-            {cont, #{
-                handler => H,
-                bindings => Bindings1,
-                on_mount => OnMount,
-                req => ArzReq1,
-                reconnect => Reconnect,
-                capabilities => Caps
-            }}
+    case arizona_req:call_resolve_route(Adapter, Path, UserQs, AdapterState) of
+        error ->
+            not_found;
+        {ok, H, RouteOpts, ArzReq} ->
+            IB = maps:get(bindings, RouteOpts, #{}),
+            OnMount = maps:get(on_mount, RouteOpts, []),
+            Middlewares = maps:get(middlewares, RouteOpts, []),
+            case arizona_middleware:apply_middlewares(Middlewares, ArzReq, IB) of
+                {halt, HaltReq} ->
+                    {halt, HaltReq};
+                {cont, ArzReq1, Bindings1} ->
+                    {cont, #{
+                        handler => H,
+                        bindings => Bindings1,
+                        on_mount => OnMount,
+                        req => ArzReq1,
+                        reconnect => Reconnect,
+                        capabilities => Caps
+                    }}
+            end
     end.
 
 %% --------------------------------------------------------------------

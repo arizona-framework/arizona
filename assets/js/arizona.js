@@ -1564,10 +1564,18 @@ function execOne(el, event, cmd) {
             break;
         case JS_NAVIGATE: {
             const full = cmd[1];
+            const opts = cmd[2] || {};
+            if (opts.full) {
+                // Full-page navigation: let the browser load the URL normally.
+                // Used when the target isn't a live route (a controller/asset
+                // path, or a 404) and so can't be SPA-navigated.
+                location.assign(full);
+                break;
+            }
             const u = new URL(full, location.origin);
             const hash = u.hash ? u.hash.slice(1) : '';
             const qs = u.search ? u.search.slice(1) : '';
-            navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full });
+            navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full });
             break;
         }
         case JS_PATCH: {

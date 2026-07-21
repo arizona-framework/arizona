@@ -280,25 +280,44 @@ close_crash(Socket) ->
     {close, ?CLOSE_CRASH, ~"server crash", Socket}.
 
 handle_navigate(Path, Qs, #socket{req = Req} = Socket) ->
-    {H, RouteOpts, NewReq} = resolve_route(Path, Qs, Req),
-    do_navigate(H, RouteOpts, NewReq, Socket).
+    case resolve_route(Path, Qs, Req) of
+        {ok, H, RouteOpts, NewReq} ->
+            do_navigate(H, RouteOpts, NewReq, Socket);
+        error ->
+            full_navigate(Path, Qs, Socket)
+    end.
 
 %% A `patch` keeps the current view IFF the patched path resolves to the same
 %% root handler; otherwise it can't (a different view needs a real mount), so it
 %% degrades to a full navigate/replace. Resolves once and reuses the result for
-%% either branch.
+%% either branch. A path that resolves to no live route degrades further to a
+%% full-page navigation.
 handle_patch(Path, Qs, #socket{handler = CurrentHandler, req = Req} = Socket) ->
-    {H, RouteOpts, NewReq} = resolve_route(Path, Qs, Req),
-    case H of
-        CurrentHandler ->
+    case resolve_route(Path, Qs, Req) of
+        {ok, CurrentHandler, RouteOpts, NewReq} ->
             do_patch(RouteOpts, NewReq, Socket);
-        _ ->
-            do_navigate(H, RouteOpts, NewReq, Socket)
+        {ok, H, RouteOpts, NewReq} ->
+            do_navigate(H, RouteOpts, NewReq, Socket);
+        error ->
+            full_navigate(Path, Qs, Socket)
     end.
 
 resolve_route(Path, Qs, Req) ->
     Adapter = arizona_req:adapter(Req),
     arizona_req:call_resolve_route(Adapter, Path, Qs, arizona_req:raw(Req)).
+
+%% A navigate/patch target that doesn't resolve to a live route (a typo, a
+%% controller/asset path, a 404) can't be SPA-navigated: the client would just
+%% re-request it over the socket in a loop. Instead of crashing the live session,
+%% tell the client to do a real full-page navigation to the path -- the browser
+%% loads it normally (hitting the actual controller/asset or a 404 page).
+full_navigate(Path, Qs, Socket) ->
+    Url =
+        case Qs of
+            <<>> -> Path;
+            _ -> <<Path/binary, "?", Qs/binary>>
+        end,
+    encode_reply([], [arizona_js:navigate(Url, #{full => true})], Socket).
 
 do_navigate(H, RouteOpts, NewReq0, Socket0) ->
     {NewReq, #socket{pid = Pid, view_id = OldVId} = Socket} =

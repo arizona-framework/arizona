@@ -56,6 +56,10 @@ handle(Req) ->
     case arizona_ws:prepare(QS, arizona_roadrunner_req, Req) of
         {halt, HaltReq} ->
             {halt_response(HaltReq), arizona_req:raw(HaltReq)};
+        not_found ->
+            %% The client-supplied `_az_path` did not resolve to a live route.
+            %% Reject the upgrade with 404 rather than crashing the handler.
+            {roadrunner_resp:not_found(), Req};
         {cont, State} ->
             {{websocket, ?MODULE, State}, Req}
     end.
