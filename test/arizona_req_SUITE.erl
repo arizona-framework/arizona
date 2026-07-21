@@ -345,10 +345,15 @@ read_session_absent_is_empty(Config) when is_list(Config) ->
 call_resolve_route_dispatches_to_adapter(Config) when is_list(Config) ->
     Routes = #{~"/items" => {items_handler, #{bindings => #{kind => ~"item"}}}},
     Raw = #{routes => Routes},
-    {Handler, RouteOpts, NavReq} = arizona_req:call_resolve_route(
+    {ok, Handler, RouteOpts, NavReq} = arizona_req:call_resolve_route(
         arizona_req_test_adapter, ~"/items", ~"q=1", Raw
     ),
     ?assertEqual(items_handler, Handler),
     ?assertEqual(#{bindings => #{kind => ~"item"}}, RouteOpts),
     ?assertEqual(~"/items", arizona_req:path(NavReq)),
-    ?assertEqual(arizona_req_test_adapter, arizona_req:adapter(NavReq)).
+    ?assertEqual(arizona_req_test_adapter, arizona_req:adapter(NavReq)),
+    %% A path that does not resolve to a live route returns `error`, not a crash.
+    ?assertEqual(
+        error,
+        arizona_req:call_resolve_route(arizona_req_test_adapter, ~"/nope", ~"", Raw)
+    ).

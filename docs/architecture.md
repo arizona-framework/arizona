@@ -858,18 +858,25 @@ Both modes resolve the target route the same way. `arizona_socket` invokes the o
 
 ```erlang
 -callback resolve_route(Path :: binary(), Qs :: binary(), Raw :: term()) ->
-    {module(), arizona_live:route_opts(), arizona_req:request()}.
+    {ok, module(), arizona_live:route_opts(), arizona_req:request()} | error.
 
 -optional_callbacks([resolve_route/3]).
 ```
 
-The callback returns a handler module, the route's static options
-(`t:arizona_live:route_opts/0` -- `bindings`, `on_mount`, `layouts`, `middlewares`), and a
-navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the returned Request are
-inherited from the original upgrade Req; `path`, `bindings` (path bindings from the router), and
-`params` reflect the new path/qs. In particular `path` is the **resolved route path** (the
-`_az_path` value), not the `/ws` transport path the WebSocket rode in on, so a middleware reading
-`arizona_req:path/1` on a navigate/upgrade sees the same logical route as a plain HTTP GET.
+On a live route the callback returns `{ok, Handler, RouteOpts, NavReq}` -- a handler module, the
+route's static options (`t:arizona_live:route_opts/0` -- `bindings`, `on_mount`, `layouts`,
+`middlewares`), and a navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the
+returned Request are inherited from the original upgrade Req; `path`, `bindings` (path bindings
+from the router), and `params` reflect the new path/qs. In particular `path` is the **resolved
+route path** (the `_az_path` value), not the `/ws` transport path the WebSocket rode in on, so a
+middleware reading `arizona_req:path/1` on a navigate/upgrade sees the same logical route as a
+plain HTTP GET.
+
+The `Path` is client-supplied (the `_az_path` upgrade param, or a navigate/patch frame), so the
+callback returns `error` -- never crashes -- when it does not resolve to a live route: no matching
+route, a non-live route (controller/asset/ws), or a method mismatch. A WS upgrade to such a path
+is rejected with `404`; an in-session navigate/patch degrades to a full-page navigation
+(`arizona_js:navigate(Path, #{full => true})`) rather than tearing down the live session.
 
 **Shipped implementation:** `arizona_roadrunner_req` exports the optional `resolve_route/3` and
 runs `roadrunner_router:match/3` against the compiled dispatch stored by
@@ -961,6 +968,8 @@ Transport-agnostic upgrade bootstrap for WebSocket handlers.
   adapter's `resolve_route/3` callback, runs middlewares, and returns:
   - `{halt, az:request()}` -- middleware blocked the upgrade; caller extracts the native raw
     via `arizona_req:raw/1` to emit its transport response
+  - `not_found` -- the client-supplied `_az_path` did not resolve to a live route; the caller
+    rejects the upgrade with `404` (never crashes on the attacker-controllable path)
   - `{cont, State}` -- `State` is a map carrying `handler`, `bindings`, `on_mount`, `req`,
     `reconnect` that the caller threads into `arizona_socket:init/4`
 

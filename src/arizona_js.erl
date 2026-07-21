@@ -237,6 +237,10 @@ Triggers a SPA navigation to `Path` with options.
   server strips it from the effect (the browser never sees it) and carries it
   in-process to the target's `flash` binding, so an in-view Post/Redirect/Get
   (`submit -> flash -> navigate`) shows its message just like an HTTP redirect flash.
+- `full` -- do a real full-page navigation (`location.assign`) instead of a SPA
+  navigation. For a target that is not a live route (a controller/asset path, a
+  404); the framework itself emits this to degrade a navigate/patch whose path
+  does not resolve to a live view.
 """.
 -spec navigate(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),

@@ -228,11 +228,14 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -callback read_body(raw()) -> {body(), raw()}.
 
 %% Optional: live-capable adapters export this for SPA navigate.
-%% Returns the route's `{Handler, RouteOpts, NavRequest}` triple.
-%% HTTP-only adapters can omit it; `arizona_socket:handle_navigate`
-%% only runs against adapters that supply the callback.
+%% Returns `{ok, Handler, RouteOpts, NavRequest}` when the path resolves to a
+%% live (page) route, or `error` when it does not -- no matching route, a
+%% non-live route (controller/asset/ws), or a method mismatch. The path is
+%% client-supplied (`_az_path` on the WS upgrade, or a navigate/patch frame), so
+%% the callback must never crash on it; the caller turns `error` into a 404
+%% upgrade rejection or a full-page navigate. HTTP-only adapters can omit it.
 -callback resolve_route(path(), qs(), raw()) ->
-    {module(), arizona_live:route_opts(), request()}.
+    {ok, module(), arizona_live:route_opts(), request()} | error.
 
 -optional_callbacks([resolve_route/3]).
 
@@ -374,7 +377,7 @@ body(#{adapter := Adapter, raw := Raw} = Req) ->
 %% not implement the optional `resolve_route/3` callback.
 -doc false.
 -spec call_resolve_route(Adapter, Path, Qs, Raw) ->
-    {module(), arizona_live:route_opts(), request()}
+    {ok, module(), arizona_live:route_opts(), request()} | error
 when
     Adapter :: adapter(),
     Path :: path(),

@@ -103,25 +103,33 @@ target, and matched bindings applied.
     RouteOpts :: arizona_live:route_opts(),
     ArzReq :: arizona_req:request().
 resolve_route(Path, Qs, Req) ->
-    %% Roadrunner exposes the matched route's user-attached state as
-    %% the 5th element of `match/3`'s return — that's where arizona
-    %% stashes its per-route metadata under the `arizona` namespace.
-    %% The resolved `_az_path` is always a live (GET) page route and the
-    %% WS upgrade / navigation request is a GET, so match on its method.
+    %% Roadrunner exposes the matched route's handler + user-attached state as
+    %% elements 2 and 5 of `match/3`'s return; arizona stashes its per-route
+    %% metadata under the state's `arizona` namespace. Only a **live** (page)
+    %% route can back a WS upgrade or an SPA navigate/patch, and roadrunner tags
+    %% those with the `arizona_roadrunner_http` handler. Anything else -- a
+    %% controller/asset/ws route, a method mismatch (the upgrade is a GET so a
+    %% POST-only controller path is `method_not_allowed`), or no match at all --
+    %% resolves to `error`. `Path` is attacker-controllable via `_az_path`, so a
+    %% badmatch crash here would be a remote 500 / log-spam vector; the callers
+    %% translate `error` to a 404 upgrade rejection or a full-page navigate.
     Compiled = persistent_term:get(?DISPATCH_KEY),
-    {ok, _Handler, RawBindings, _Pipeline, #{arizona := ArzOpts}} =
-        roadrunner_router:match(roadrunner_req:method(Req), Path, Compiled),
-    Target =
-        case Qs of
-            <<>> -> Path;
-            _ -> <<Path/binary, "?", Qs/binary>>
-        end,
-    %% Overlay the resolved route `Path` (not the transport `/ws`) so
-    %% `roadrunner_req:path/1` -- and thus `arizona_req:path/1` -- reports the
-    %% logical route on a WS handshake/navigate, matching a plain HTTP GET to the
-    %% same route. Without it the stale `/ws` upgrade path would leak to any
-    %% middleware reading `path/1` for a routing decision (return-to capture,
-    %% path-based gates).
-    NavReq = Req#{target => Target, path => Path, bindings => RawBindings},
-    ArzReq = new(NavReq),
-    {maps:get(handler, ArzOpts), maps:without([handler], ArzOpts), ArzReq}.
+    case roadrunner_router:match(roadrunner_req:method(Req), Path, Compiled) of
+        {ok, arizona_roadrunner_http, RawBindings, _Pipeline, #{arizona := ArzOpts}} ->
+            Target =
+                case Qs of
+                    <<>> -> Path;
+                    _ -> <<Path/binary, "?", Qs/binary>>
+                end,
+            %% Overlay the resolved route `Path` (not the transport `/ws`) so
+            %% `roadrunner_req:path/1` -- and thus `arizona_req:path/1` -- reports
+            %% the logical route on a WS handshake/navigate, matching a plain HTTP
+            %% GET to the same route. Without it the stale `/ws` upgrade path would
+            %% leak to any middleware reading `path/1` for a routing decision
+            %% (return-to capture, path-based gates).
+            NavReq = Req#{target => Target, path => Path, bindings => RawBindings},
+            ArzReq = new(NavReq),
+            {ok, maps:get(handler, ArzOpts), maps:without([handler], ArzOpts), ArzReq};
+        _ ->
+            error
+    end.

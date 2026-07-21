@@ -9,6 +9,8 @@
     ping_pong/1,
     event_dispatch/1,
     event_dispatch_null_target/1,
+    ws_upgrade_non_live_path_404/1,
+    navigate_non_live_path_full_navigate/1,
     event_with_effects/1,
     event_no_change/1,
     unknown_json/1,
@@ -92,6 +94,8 @@ groups() ->
         ping_pong,
         event_dispatch,
         event_dispatch_null_target,
+        ws_upgrade_non_live_path_404,
+        navigate_non_live_path_full_navigate,
         event_with_effects,
         event_no_change,
         unknown_json,
@@ -413,6 +417,34 @@ event_dispatch_null_target(Config) ->
     ?assertMatch(#{~"o" := _}, json:decode(Resp)),
     ?assertMatch({_, _}, binary:match(Resp, ~"crashable:")),
     %% Connection is still alive.
+    ok = ws_send(Sock, <<"0">>),
+    ?assertEqual({text, <<"1">>}, ws_recv(Sock)),
+    ws_close(Sock).
+
+%% A WS upgrade whose client-supplied `_az_path` does not resolve to a live route
+%% must be rejected with 404, not crash the handler (a remote 500/log-spam vector
+%% -- `resolve_route/3` used to badmatch on not_found/non-live/method-mismatch).
+ws_upgrade_non_live_path_404(Config) ->
+    Port = proplists:get_value(port, Config),
+    %% No route at all.
+    ?assertEqual(404, ws_upgrade_status_qs(Port, [~"_az_path=/nonexistent"])),
+    %% A real path that is not a live route (the `/ws` endpoint itself).
+    ?assertEqual(404, ws_upgrade_status_qs(Port, [~"_az_path=/ws"])),
+    %% Sanity: a live path still upgrades.
+    ?assertEqual(101, ws_upgrade_status_qs(Port, [~"_az_path=/"])).
+
+%% An SPA navigate to a path that does not resolve to a live route degrades to a
+%% full-page navigation effect instead of crashing the live session.
+navigate_non_live_path_full_navigate(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/nonexistent", ~"qs" => ~""}]),
+    {text, Resp} = ws_recv(Sock),
+    %% Effect 10 = EFFECT_NAVIGATE, with the `full` opt set.
+    ?assertMatch(
+        #{~"e" := [[10, ~"/nonexistent", #{~"full" := true}]]},
+        json:decode(Resp)
+    ),
+    %% Session survives (no crash close).
     ok = ws_send(Sock, <<"0">>),
     ?assertEqual({text, <<"1">>}, ws_recv(Sock)),
     ws_close(Sock).

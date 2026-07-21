@@ -4006,6 +4006,26 @@ describe('navigation scroll', () => {
         expect(msgs).toContainEqual(['navigate', { path: '/to', qs: '' }]);
     });
 
+    it('JS_NAVIGATE with {full: true} does a full-page navigation, no SPA frame', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        // jsdom's location.assign is non-configurable (can't spyOn it); stub the
+        // whole global for just this call -- the full-nav branch only touches
+        // location.assign.
+        const assign = vi.fn();
+        vi.stubGlobal('location', { assign });
+        // arizona_js:navigate(~"/api", #{full => true}) -- the server emits this to
+        // degrade a navigate/patch whose path is not a live route.
+        mod.applyEffects([[10, '/api', { full: true }]]);
+        vi.unstubAllGlobals();
+        expect(assign).toHaveBeenCalledWith('/api');
+        // Browser handles it -- no SPA navigate frame is sent to the server.
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
     it('popstate with saved state restores exact coordinates after OP_REPLACE', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
