@@ -5,6 +5,7 @@
 -export([all/0, groups/0]).
 -export([
     eval_each_def_3tuple/1,
+    render_map_items_order_matches_ssr/1,
     eval_val_stateless_descriptor/1,
     stateless_callback_does_not_leak_deps/1,
     stateless_callback_with_no_eager_reads/1,
@@ -28,6 +29,7 @@ groups() ->
     [
         {eval_api, [parallel], [
             eval_each_def_3tuple,
+            render_map_items_order_matches_ssr,
             eval_val_stateless_descriptor
         ]},
         {per_item_optimization, [parallel], [
@@ -61,6 +63,22 @@ eval_each_def_3tuple(Config) when is_list(Config) ->
     {Az, Val, _Deps} = arizona_eval:eval_each_def(Def),
     ?assertEqual(<<"0">>, Az),
     ?assertMatch(#{t := 0, source := _, template := _}, Val).
+
+%% The tracked/diff render path (render_map_items) must yield entries in the same
+%% order as the SSR path (render_map_items_simple); otherwise the live snapshot
+%% disagrees with the SSR DOM item-for-item on connect. render_map_items folded
+%% with a prepend and so used to return the entries reversed.
+render_map_items_order_matches_ssr(Config) when is_list(Config) ->
+    Map = #{<<"a">> => <<"1">>, <<"b">> => <<"2">>, <<"c">> => <<"3">>},
+    Tmpl = #{
+        t => 0,
+        s => [<<"<li>">>, <<"</li>">>],
+        d => fun(K, V) -> [{<<"0">>, <<K/binary, ":", V/binary>>}] end,
+        f => <<"x">>
+    },
+    {Tracked, _Views} = arizona_eval:render_map_items(Map, Tmpl, {#{}, #{}}),
+    Simple = arizona_eval:render_map_items_simple(Map, Tmpl),
+    ?assertEqual(Simple, Tracked).
 
 %% eval_val processes stateless descriptors (#{callback, props}), and the
 %% enclosing dynamic namespaces the child's inner az ids (and fingerprint) by

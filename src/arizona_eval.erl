@@ -56,6 +56,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([render_stream_items_simple/3]).
 -export([render_list_items/3]).
 -export([render_list_items_simple/2]).
+-export([render_map_items/3]).
 -export([render_map_items_simple/2]).
 -export([check_restricted_keys/3]).
 -export([restricted_keys/0]).
@@ -543,15 +544,21 @@ eval_each_map(Source, Tmpl, Views) ->
 %% Renders map entries with view tracking. Returns `{[ItemD], Views1}`.
 %% Each map entry is passed to the template's `d` callback as `(Key, Value)`.
 render_map_items(Map, #{d := DFun}, Views) ->
-    maps:fold(
-        fun(K, V, {Acc, V0}) ->
+    %% Fold prepends, so the accumulator ends up reversed relative to the map's
+    %% iteration order -- reverse it back so the tracked/diff path renders entries
+    %% in the SAME order as the SSR path (`render_map_items_simple`, a `K := V <-`
+    %% comprehension over the same iteration order). Without this the live
+    %% snapshot disagrees with the SSR DOM item-for-item.
+    {Acc, Views1} = maps:fold(
+        fun(K, V, {Acc0, V0}) ->
             Dynamics = DFun(K, V),
             {Triples, V1} = eval_dynamics_v(Dynamics, V0),
-            {[Triples | Acc], V1}
+            {[Triples | Acc0], V1}
         end,
         {[], Views},
         Map
-    ).
+    ),
+    {lists:reverse(Acc), Views1}.
 
 eval_each(RenderFun, Tmpl, {Old, New0}, StreamExtra) ->
     {ItemSnaps, {_, LocalNew}} = with_saved_deps(fun() -> RenderFun(Old) end),
