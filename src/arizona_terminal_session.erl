@@ -22,8 +22,10 @@ reads to `handle_key/2`, and terminal resizes to `resize/3`.
 -export([handle_push/2]).
 -export([resize/3]).
 -export([stop/1]).
+-export([pid/1]).
 
 -ignore_xref([resize/3]).
+-ignore_xref([pid/1]).
 
 -record(session, {
     pid :: pid(),
@@ -119,6 +121,11 @@ disconnect the client is gone, so there's nothing to write to.
 -spec stop(session()) -> ok.
 stop(#session{pid = Pid}) ->
     arizona_live:stop(Pid).
+
+-doc "The live view process backing the session.".
+-spec pid(session()) -> pid().
+pid(#session{pid = Pid}) ->
+    Pid.
 
 %% --------------------------------------------------------------------
 %% Internal functions

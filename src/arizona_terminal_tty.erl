@@ -17,8 +17,12 @@ arizona_terminal_tty:start(my_terminal_view, #{}, my_terminal_driver).
 """.
 
 -export([start/3]).
+%% Exported for the transport-teardown test (it drives serve/2 directly, without
+%% a controlling TTY); not part of the public API.
+-export([serve/2]).
 
 -ignore_xref([start/3]).
+-ignore_xref([serve/2]).
 
 %% Terminal IO and a blocking event loop are this module's whole job, not stray
 %% debug leftovers: it writes frames with io:put_chars / io:format, and its loop
@@ -78,13 +82,44 @@ run_terminal(Handler, Bindings, Driver) ->
 run(Handler, Bindings, Driver) ->
     %% Trap exits so a dying live/reader process becomes a message the loop
     %% handles (and the cursor is restored), not a signal that kills us mid-frame.
-    process_flag(trap_exit, true),
-    {ok, Session} = arizona_terminal_session:start(
-        Handler, Bindings, Driver, [], fun io:put_chars/1
-    ),
-    Owner = self(),
-    _Reader = spawn_link(fun() -> read_loop(Owner) end),
-    loop(Session).
+    %% `start/3` runs in the caller's process, so restore the caller's flag on the
+    %% way out rather than leaving it flipped.
+    Prev = process_flag(trap_exit, true),
+    try
+        {ok, Session} = arizona_terminal_session:start(
+            Handler, Bindings, Driver, [], fun io:put_chars/1
+        ),
+        Owner = self(),
+        Reader = spawn_link(fun() -> read_loop(Owner) end),
+        serve(Session, Reader)
+    after
+        process_flag(trap_exit, Prev)
+    end.
+
+%% Run the event loop, then reap the session and the input reader on EVERY exit
+%% path (quit, eof, or a linked process dying). Without this the live view
+%% outlives the transport -- it keeps ticking, stays subscribed to pubsub, and
+%% floods the mailbox with `{arizona_push, _, _}` -- and the reader stays blocked
+%% in `io:get_chars/2` forever, stealing subsequent stdin bytes.
+-spec serve(arizona_terminal_session:session(), pid()) -> ok.
+serve(Session, Reader) ->
+    try
+        loop(Session)
+    after
+        ok = stop_session(Session),
+        true = exit(Reader, kill)
+    end.
+
+%% Stop the live view backing the session, tolerating one that has already exited
+%% (the `{'EXIT', _, _}` loop path is where the live process is what died);
+%% `gen_server:stop/1` would otherwise raise `noproc`.
+-spec stop_session(arizona_terminal_session:session()) -> ok.
+stop_session(Session) ->
+    try
+        arizona_terminal_session:stop(Session)
+    catch
+        exit:noproc -> ok
+    end.
 
 loop(Session) ->
     receive
