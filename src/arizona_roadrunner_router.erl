@@ -2,12 +2,15 @@
 -moduledoc """
 Compiles a list of Arizona route specs into a roadrunner route table.
 
-The resulting compiled routes are stored under the persistent term
-key `arizona_roadrunner_dispatch`, where roadrunner listeners and
-`arizona_roadrunner_req:resolve_route/3` look them up. Calling
-`compile_routes/1` again replaces the previous compiled set, which
-is how `arizona_roadrunner_server:recompile_routes/0` picks up new
-routes after a hot reload without restarting the listener.
+The resulting compiled routes are stored in `persistent_term`. The
+name-scoped `compile_routes/3` writes them under `{arizona_roadrunner_dispatch,
+Name}` -- one entry per listener, so `arizona_roadrunner_req:resolve_route/3`
+resolves a WS upgrade/navigate against the routes of the listener that accepted
+it, and two listeners no longer clobber each other. The nameless
+`compile_routes/1,2` write the single global `arizona_roadrunner_dispatch` key
+(the convenience form). Calling either again replaces the previous compiled set,
+which is how `arizona_roadrunner_server:recompile_routes/0` picks up new routes
+after a hot reload without restarting the listener.
 
 ## Route shapes
 
@@ -39,6 +42,8 @@ persistent term so the dev error page can build the SSE connect URL.
 
 -export([compile_routes/1]).
 -export([compile_routes/2]).
+-export([compile_routes/3]).
+-export([forget_routes/1]).
 -export([routes/1]).
 -export([routes/2]).
 
@@ -46,10 +51,11 @@ persistent term so the dev error page can build the SSE connect URL.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
-%% compile_routes/1 + routes/1 are public convenience wrappers; the
-%% in-tree callers all use the /2 form with build opts. Keep both shapes
-%% exported for downstream users.
--ignore_xref([compile_routes/1, routes/1]).
+%% compile_routes/1,2 + routes/1 are public convenience wrappers; the in-tree
+%% callers all use the name-scoped compile_routes/3 (WS dispatch keyed per
+%% listener) and routes/2 (the listener's own route table). Keep the nameless
+%% shapes exported for downstream users.
+-ignore_xref([compile_routes/1, compile_routes/2, routes/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -158,13 +164,39 @@ to per-route expansion. Recognized opts:
     Routes :: [route()],
     BuildOpts :: map().
 compile_routes(Routes, BuildOpts) when is_map(BuildOpts) ->
-    RoadrunnerRoutes = lists:flatmap(
-        fun(R) -> route_to_roadrunner(R, BuildOpts) end, Routes
-    ),
     persistent_term:put(
         ?DISPATCH_KEY,
-        roadrunner_router:compile(RoadrunnerRoutes, [])
+        roadrunner_router:compile(routes(Routes, BuildOpts), [])
     ),
+    ok.
+
+-doc """
+Like `compile_routes/2` but stores the compiled set under the
+listener-scoped key `{arizona_roadrunner_dispatch, Name}` instead of the
+single global key, so each listener's WS upgrade/navigate
+(`arizona_roadrunner_req:resolve_route/3`) resolves against its own routes.
+This is the form the server boot/recompile path uses.
+""".
+-spec compile_routes(Routes, BuildOpts, Name) -> ok when
+    Routes :: [route()],
+    BuildOpts :: map(),
+    Name :: atom().
+compile_routes(Routes, BuildOpts, Name) when is_map(BuildOpts), is_atom(Name) ->
+    persistent_term:put(
+        {?DISPATCH_KEY, Name},
+        roadrunner_router:compile(routes(Routes, BuildOpts), [])
+    ),
+    ok.
+
+-doc """
+Erases the listener-scoped dispatch key written by `compile_routes/3`.
+Called by `arizona_roadrunner_server:stop/1` so a stopped listener leaves
+no stale compiled routes behind.
+""".
+-spec forget_routes(Name) -> ok when
+    Name :: atom().
+forget_routes(Name) when is_atom(Name) ->
+    persistent_term:erase({?DISPATCH_KEY, Name}),
     ok.
 
 -doc """
@@ -203,7 +235,7 @@ route_to_roadrunner({live, Path, Handler, Opts}, BuildOpts) ->
                 path => Path,
                 handler => arizona_roadrunner_http,
                 methods => [~"GET", ~"HEAD"],
-                state => #{arizona => build_live_meta(Handler, Opts)}
+                state => #{arizona => build_live_meta(Handler, Opts, BuildOpts)}
             },
             BuildOpts
         )
@@ -288,13 +320,18 @@ asset_state(Dir, #{cache_control := Value}) ->
 asset_state(Dir, _Opts) ->
     #{dir => Dir}.
 
-build_live_meta(Handler, Opts) ->
+%% `error_page` is a per-listener choice (the server's `error_page` opt, threaded
+%% in via `BuildOpts`), baked into each live route's state so `arizona_http`'s
+%% crash path reads the owning listener's error page from `Opts` -- no shared
+%% global term that a second listener could clobber or `stop/1` erase.
+build_live_meta(Handler, Opts, BuildOpts) ->
     #{
         handler => Handler,
         layouts => maps:get(layouts, Opts, []),
         bindings => maps:get(bindings, Opts, #{}),
         on_mount => maps:get(on_mount, Opts, []),
-        middlewares => with_origin_check(Opts, maps:get(middlewares, Opts, []))
+        middlewares => with_origin_check(Opts, maps:get(middlewares, Opts, [])),
+        error_page => maps:get(error_page, BuildOpts, {arizona_error_page, render})
     }.
 
 %% Build the roadrunner route entry shared by every controller shape (verb tags

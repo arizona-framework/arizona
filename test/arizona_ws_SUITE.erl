@@ -1393,11 +1393,11 @@ https_without_tls_errors(Config) when is_list(Config) ->
     https_without_tls_check().
 
 https_without_tls_check() ->
-    %% Snapshot the suite's dispatch term and the not-yet-existing
-    %% target listener's stash key so the failed start can't leave
-    %% anything weird behind even if a future regression slips past
-    %% the up-front validation.
-    DispatchBefore = persistent_term:get(arizona_roadrunner_dispatch),
+    %% Snapshot the running suite listener's dispatch term and the
+    %% not-yet-existing target listener's stash key so the failed start
+    %% can't leave anything weird behind even if a future regression slips
+    %% past the up-front validation.
+    DispatchBefore = persistent_term:get({arizona_roadrunner_dispatch, ws_test}),
     Result =
         try
             arizona_roadrunner_server:start(arizona_https_no_tls_test, #{
@@ -1410,7 +1410,7 @@ https_without_tls_check() ->
     ?assertEqual({error_caught, https_requires_tls}, Result),
     ?assertEqual(
         DispatchBefore,
-        persistent_term:get(arizona_roadrunner_dispatch),
+        persistent_term:get({arizona_roadrunner_dispatch, ws_test}),
         "failed start must not overwrite the live dispatch table"
     ),
     ?assertEqual(

@@ -113,10 +113,10 @@ do_render(H, ArzReq, Bindings, Opts) ->
                     %% exception is swallowed and the operator gets no record of
                     %% the 500. Log it, then serve the (dev-gated) error body.
                     logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-                    {error, 500, error_body(Bindings, Class, Reason, Stacktrace), ArzReq}
+                    {error, 500, error_body(Bindings, Class, Reason, Stacktrace, Opts), ArzReq}
             end;
         #{errors := Errors} ->
-            {error, 500, error_body(Bindings, error, {compile_error, Errors}, []), ArzReq}
+            {error, 500, error_body(Bindings, error, {compile_error, Errors}, [], Opts), ArzReq}
     end.
 
 %% The rich error page (exception class, reason, and full stack with file:line)
@@ -125,7 +125,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
 %% when the dev reloader is wired) and default production to a minimal 500 with no
 %% internals. The compile-error branch only fires under a running reloader, so it
 %% always resolves to the rich page.
-error_body(Bindings, Class, Reason, Stacktrace) ->
+error_body(Bindings, Class, Reason, Stacktrace, Opts) ->
     case reload_url() of
         undefined ->
             minimal_error_body();
@@ -136,11 +136,11 @@ error_body(Bindings, Class, Reason, Stacktrace) ->
                 stacktrace => Stacktrace,
                 reload_url => ReloadUrl
             },
-            render_error_body(Bindings, ErrorInfo)
+            render_error_body(Bindings, ErrorInfo, Opts)
     end.
 
-render_error_body(Bindings, ErrorInfo) ->
-    {Mod, Fun} = error_page(),
+render_error_body(Bindings, ErrorInfo, Opts) ->
+    {Mod, Fun} = error_page(Opts),
     Tmpl = Mod:Fun(Bindings#{error_info => ErrorInfo}),
     arizona_render:render_to_iolist(Tmpl).
 
@@ -154,5 +154,8 @@ minimal_error_body() ->
     </html>
     """.
 
-error_page() ->
-    persistent_term:get(arizona_error_page, {arizona_error_page, render}).
+%% The error page module/function is baked into the route's `Opts` by the router
+%% (from the owning listener's `error_page` config), so a multi-listener setup
+%% renders each listener's own error page and no shared global term is clobbered.
+error_page(Opts) ->
+    maps:get(error_page, Opts, {arizona_error_page, render}).

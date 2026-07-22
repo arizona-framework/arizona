@@ -115,7 +115,11 @@ resolve_route(Path, Qs, Req) ->
     %% resolves to `error`. `Path` is attacker-controllable via `_az_path`, so a
     %% badmatch crash here would be a remote 500 / log-spam vector; the callers
     %% translate `error` to a 404 upgrade rejection or a full-page navigate.
-    Compiled = persistent_term:get(?DISPATCH_KEY),
+    %% Resolve against the routes of the listener that accepted THIS request
+    %% (keyed by `listener_name`), not a single global table -- so a WS upgrade
+    %% or navigate on a multi-listener deployment matches its own listener's
+    %% routes instead of whichever listener booted last.
+    Compiled = persistent_term:get({?DISPATCH_KEY, roadrunner_req:listener_name(Req)}),
     case roadrunner_router:match(roadrunner_req:method(Req), Path, Compiled) of
         {ok, arizona_roadrunner_http, RawBindings, _Pipeline, #{arizona := ArzOpts}} ->
             Target =
