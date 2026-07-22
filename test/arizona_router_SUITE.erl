@@ -14,6 +14,8 @@
     compile_routes_match_any_and_list/1,
     compile_routes_match_custom_verb/1,
     compile_routes_same_path_dispatch/1,
+    compile_routes_per_listener_dispatch/1,
+    compile_routes_per_listener_error_page/1,
     compile_routes_mcp/1,
     compile_routes_live/1,
     compile_routes_live_no_layout/1,
@@ -45,6 +47,8 @@ groups() ->
         compile_routes_match_any_and_list,
         compile_routes_match_custom_verb,
         compile_routes_same_path_dispatch,
+        compile_routes_per_listener_dispatch,
+        compile_routes_per_listener_error_page,
         compile_routes_mcp,
         compile_routes_mixed
     ],
@@ -95,6 +99,12 @@ route_match(Method, Path) ->
 match_result(Method, Path) ->
     Compiled = persistent_term:get(arizona_roadrunner_dispatch),
     roadrunner_router:match(Method, Path, Compiled).
+
+%% A minimal raw roadrunner request carrying a `listener_name`, shaped as
+%% `arizona_roadrunner_req:resolve_route/3` reads it -- the method and path
+%% drive the match, the listener name selects the per-listener dispatch table.
+listener_req(Name, Path) ->
+    #{method => ~"GET", path => Path, listener_name => Name}.
 
 %% --------------------------------------------------------------------
 %% Tests
@@ -258,6 +268,59 @@ compile_routes_same_path_dispatch(Config) ->
     {_, PostOpts} = route_match(~"POST", <<"/u">>),
     ?assertEqual(index_controller, maps:get(handler, GetOpts)),
     ?assertEqual(create_controller, maps:get(handler, PostOpts)).
+
+compile_routes_per_listener_dispatch(_Config) ->
+    %% Two listeners compile the SAME path to DIFFERENT handlers under their own
+    %% name-scoped dispatch key. A WS upgrade/navigate must resolve against the
+    %% routes of the listener that accepted it -- not whichever compiled last.
+    %% Before the per-listener keying this shared a single global dispatch, so
+    %% listener_a resolved to handler_b (the last compile wins).
+    ok = arizona_roadrunner_router:compile_routes(
+        [{live, ~"/shared", handler_a, #{}}], #{}, listener_a
+    ),
+    ok = arizona_roadrunner_router:compile_routes(
+        [{live, ~"/shared", handler_b, #{}}], #{}, listener_b
+    ),
+    try
+        ?assertMatch(
+            {ok, handler_a, _, _},
+            arizona_roadrunner_req:resolve_route(
+                ~"/shared", <<>>, listener_req(listener_a, ~"/shared")
+            )
+        ),
+        ?assertMatch(
+            {ok, handler_b, _, _},
+            arizona_roadrunner_req:resolve_route(
+                ~"/shared", <<>>, listener_req(listener_b, ~"/shared")
+            )
+        )
+    after
+        ok = arizona_roadrunner_router:forget_routes(listener_a),
+        ok = arizona_roadrunner_router:forget_routes(listener_b)
+    end.
+
+compile_routes_per_listener_error_page(_Config) ->
+    %% Each listener's `error_page` (threaded via BuildOpts) is baked into its own
+    %% live routes, so the render-crash path serves the owning listener's error
+    %% page. Before the fix this was one global term the last listener overwrote
+    %% (and either listener's stop/1 erased).
+    ok = arizona_roadrunner_router:compile_routes(
+        [{live, ~"/e", handler_a, #{}}], #{error_page => {page_a, render}}, listener_a
+    ),
+    ok = arizona_roadrunner_router:compile_routes(
+        [{live, ~"/e", handler_b, #{}}], #{error_page => {page_b, render}}, listener_b
+    ),
+    try
+        {ok, handler_a, OptsA, _} =
+            arizona_roadrunner_req:resolve_route(~"/e", <<>>, listener_req(listener_a, ~"/e")),
+        {ok, handler_b, OptsB, _} =
+            arizona_roadrunner_req:resolve_route(~"/e", <<>>, listener_req(listener_b, ~"/e")),
+        ?assertEqual({page_a, render}, maps:get(error_page, OptsA)),
+        ?assertEqual({page_b, render}, maps:get(error_page, OptsB))
+    after
+        ok = arizona_roadrunner_router:forget_routes(listener_a),
+        ok = arizona_roadrunner_router:forget_routes(listener_b)
+    end.
 
 compile_routes_mcp(Config) ->
     compile(Config, [

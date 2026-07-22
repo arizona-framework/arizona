@@ -3,8 +3,9 @@
 Boots a roadrunner listener wired up with Arizona routes.
 
 `start/2` compiles the route list, stashes the originals so they
-can be re-compiled later, configures the dispatch persistent term,
-and launches a roadrunner listener under `roadrunner_sup` via
+can be re-compiled later, configures this listener's own dispatch
+persistent term (`{arizona_roadrunner_dispatch, Name}`), and launches
+a roadrunner listener under `roadrunner_sup` via
 `roadrunner:start_listener/2`.
 
 `recompile_routes/0` rebuilds every Arizona-managed dispatch by
@@ -94,7 +95,13 @@ start(Name, #{routes := _} = Opts0) ->
     %% `Routes` is unchanged; it is idempotent, so a caller that already resolved
     %% loses nothing.
     #{routes := Routes} = Opts = arizona_config:resolve(Opts0),
-    BuildOpts = #{compress => maps:get(compress, Opts, true)},
+    %% Thread the listener's `error_page` through BuildOpts so it is baked into
+    %% each live route's state (read back by `arizona_http` on a render crash),
+    %% rather than a single global term two listeners would fight over.
+    BuildOpts = #{
+        compress => maps:get(compress, Opts, true),
+        error_page => maps:get(error_page, Opts, {arizona_error_page, render})
+    },
     Port = port_from_opts(Opts),
     UserProtoOpts = maps:get(proto_opts, Opts, #{}),
     ListenerOpts = UserProtoOpts#{
@@ -105,13 +112,13 @@ start(Name, #{routes := _} = Opts0) ->
     %% https-without-tls misconfig crashes cleanly instead of leaving a
     %% half-written dispatch behind.
     ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
-    ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts),
+    %% Store this listener's WS dispatch under its own `{dispatch, Name}` key so
+    %% a second listener does not overwrite it.
+    ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts, Name),
     %% Stash {Routes, BuildOpts} together so `recompile_routes/0` can
     %% replay the user's original build-time choices (e.g.
     %% `compress => false`) on hot reload.
     persistent_term:put({?ROUTES_KEY, Name}, {Routes, BuildOpts}),
-    ErrorPage = maps:get(error_page, Opts, {arizona_error_page, render}),
-    persistent_term:put(arizona_error_page, ErrorPage),
     roadrunner:start_listener(Name, ListenerOpts1).
 
 -doc """
@@ -122,7 +129,7 @@ Returns `{error, not_found}` if `Name` is not a running listener.
     Name :: atom().
 stop(Name) ->
     persistent_term:erase({?ROUTES_KEY, Name}),
-    persistent_term:erase(arizona_error_page),
+    ok = arizona_roadrunner_router:forget_routes(Name),
     roadrunner:stop_listener(Name).
 
 -doc """
@@ -131,7 +138,7 @@ terms. Called by the dev hot reloader after a successful recompile.
 
 Refreshes two tables in lockstep:
 
-- `arizona_roadrunner_dispatch` (read by
+- `{arizona_roadrunner_dispatch, Name}` (read by
   `arizona_roadrunner_req:resolve_route/3` on WS navigate), and
 - the listener's own compiled route table (read by roadrunner on
   every incoming HTTP request).
@@ -146,7 +153,7 @@ recompile_routes() ->
     lists:foreach(
         fun
             ({{?ROUTES_KEY, Name}, {Routes, BuildOpts}}) ->
-                ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts),
+                ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts, Name),
                 ListenerRoutes = arizona_roadrunner_router:routes(Routes, BuildOpts),
                 ok = roadrunner_listener:reload_routes(Name, ListenerRoutes);
             (_) ->
