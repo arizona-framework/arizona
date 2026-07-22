@@ -21,6 +21,7 @@
 -export([session_drives_frames/1]).
 -export([input_broadcasts_message/1]).
 -export([client_count_reflects_subscribers/1]).
+-export([tty_serve_reaps_view_and_reader/1]).
 
 %% Drives the ?terminal demo view through arizona_live with no transport and no
 %% HTTP server -- the path the terminal runtime drives, minus the TTY.
@@ -45,7 +46,8 @@ all() ->
         crlf_conversion,
         session_drives_frames,
         input_broadcasts_message,
-        client_count_reflects_subscribers
+        client_count_reflects_subscribers,
+        tty_serve_reaps_view_and_reader
     ].
 
 init_per_suite(Config) ->
@@ -62,6 +64,32 @@ init_per_suite(Config) ->
 
 end_per_suite(Config) when is_list(Config) ->
     Config.
+
+%% The local TTY transport must reap its session's live view and input reader on
+%% every loop exit -- otherwise the view outlives the transport (keeps ticking,
+%% stays subscribed to pubsub) and the reader stays blocked in io:get_chars,
+%% stealing subsequent stdin. Drive serve/2 (the loop + teardown) directly with a
+%% pre-loaded eof so it exits at once, then assert both processes are reaped.
+tty_serve_reaps_view_and_reader(Config) when is_list(Config) ->
+    {ok, Session} = arizona_terminal_session:start(
+        arizona_term_demo, #{}, arizona_term_demo_driver, [], fun(_Io) -> ok end
+    ),
+    ViewPid = arizona_terminal_session:pid(Session),
+    %% A stand-in for the input reader: a process that just blocks, so the test
+    %% can assert serve/2 kills it.
+    Reader = spawn(fun() -> timer:sleep(infinity) end),
+    VMon = monitor(process, ViewPid),
+    RMon = monitor(process, Reader),
+    self() ! {term_input, eof},
+    ok = arizona_terminal_tty:serve(Session, Reader),
+    ?assert(down_within(VMon, ViewPid)),
+    ?assert(down_within(RMon, Reader)).
+
+down_within(Mon, Pid) ->
+    receive
+        {'DOWN', Mon, process, Pid, _Reason} -> true
+    after 2000 -> false
+    end.
 
 renders_status_block(Config) when is_list(Config) ->
     {Pid, _ViewId} = start_demo(),
