@@ -121,11 +121,11 @@
     stream_update_no_change/1,
     stream_update_nonexistent_key/1,
     %% --- shuffle crash reproducers ----------------------------------------
-    repro_insert_dup_breaks_invariant/1,
-    repro_insert_at_dup_breaks_invariant/1,
+    insert_dup_key_crashes/1,
+    insert_at_dup_key_crashes/1,
     repro_reset_with_dup_keys_breaks_invariant/1,
     repro_update_missing_key_breaks_invariant/1,
-    repro_insert_dup_then_delete_yields_stale_order/1,
+    insert_dup_crashes_preventing_stale_order/1,
     repro_to_list_crash_matches_production_stack/1,
     repro_shuffle_after_insert_dup_then_delete_crashes/1,
     datatable_navigate_from_page_then_add_row_no_crash/1,
@@ -315,15 +315,19 @@ groups() ->
             list_type_switch_stream_to_list,
             list_type_switch_list_to_stream
         ]},
-        %% Reproducers for the `arizona_datatable` shuffle crash.
-        %% Each case exercises a single public-API misuse and asserts the
-        %% items <-> order invariant that the production crash violated.
+        %% Reproducers for the `arizona_datatable` shuffle crash. Each case
+        %% exercises a single public-API misuse against the items <-> order
+        %% invariant the production crash violated: the insert/update cases
+        %% now assert the misuse is rejected (or upserted) at the source;
+        %% the reset/2 dup-key case still documents an open invariant break;
+        %% the to_list/shuffle cases assert the crash guard on a stream
+        %% corrupted by direct record injection.
         {shuffle_crash_repro, [parallel], [
-            repro_insert_dup_breaks_invariant,
-            repro_insert_at_dup_breaks_invariant,
+            insert_dup_key_crashes,
+            insert_at_dup_key_crashes,
             repro_reset_with_dup_keys_breaks_invariant,
             repro_update_missing_key_breaks_invariant,
-            repro_insert_dup_then_delete_yields_stale_order,
+            insert_dup_crashes_preventing_stale_order,
             repro_to_list_crash_matches_production_stack,
             repro_shuffle_after_insert_dup_then_delete_crashes
         ]}
@@ -1934,26 +1938,33 @@ stream_update_nonexistent_key(Config) when is_list(Config) ->
 
 %% --- stream_duplicate_key_insert --------------------------------------------
 stream_duplicate_key_insert(Config) when is_list(Config) ->
-    %% Inserting a key that already exists overwrites the item in the map
+    %% Inserting a key that already exists is refused: both insert/2 and
+    %% insert/3 crash with `{stream_duplicate_key, Key}` rather than
+    %% duplicating the key in `order` and corrupting the invariant.
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"A">>}]),
-    B0 = #{items => S0},
-    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
-    S1 = arizona_stream:insert(maps:get(items, B1), #{id => 1, text => <<"B">>}),
-    %% The items map has the new value for key 1
-    B2 = B1#{items => S1},
-    %% Verify it doesn't crash when diffing
-    Tmpl0 = arizona_todo:render(#{id => <<"todo">>, items => S0}),
-    {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
-    Tmpl1 = arizona_todo:render(B2#{id => <<"todo">>}),
-    Changed = arizona_live_compute_changed(
-        #{id => <<"todo">>, items => S0},
-        B2#{id => <<"todo">>}
+    ?assertError(
+        {stream_duplicate_key, 1},
+        arizona_stream:insert(S0, #{id => 1, text => <<"B">>})
     ),
-    {Ops, _, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
-    %% Should produce an OP_INSERT for the duplicate key
-    InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
-    ?assertEqual(1, length(InsOps)).
+    ?assertError(
+        {stream_duplicate_key, 1},
+        arizona_stream:insert(S0, #{id => 1, text => <<"B">>}, 0)
+    ),
+    %% The raise carries the error_info annotation and routes through
+    %% format_error/2 for a human-readable dev-page message.
+    {Reason, Stack} =
+        try arizona_stream:insert(S0, #{id => 1, text => <<"B">>}) of
+            _ -> ct:fail(expected_duplicate_key_error)
+        catch
+            error:R:ST -> {R, ST}
+        end,
+    ?assertMatch({stream_duplicate_key, 1}, Reason),
+    [{arizona_stream, insert, _Args, Info} | _] = Stack,
+    ?assertEqual(#{module => arizona_stream}, proplists:get_value(error_info, Info)),
+    #{general := Msg} = arizona_stream:format_error(Reason, Stack),
+    Bin = unicode:characters_to_binary(Msg),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"already present">>)).
 
 %% --- stream_limit_one_test --------------------------------------------------
 stream_limit_one(Config) when is_list(Config) ->
@@ -3159,35 +3170,40 @@ stream_invariant_components(#stream{items = Items, order = Order, size = Size}) 
     Flat = Front ++ lists:reverse(Back),
     {Items, Flat, Size}.
 
-%% --- repro_insert_dup_breaks_invariant -------------------------------------
-%% insert/2 with a key that's already in items: items dedups, order grows,
-%% size grows. Pure invariant violation, no crash yet.
-repro_insert_dup_breaks_invariant(Config) when is_list(Config) ->
+%% --- insert_dup_key_crashes ------------------------------------------------
+%% insert/2 with a key that's already in items crashes with
+%% `{stream_duplicate_key, Key}` instead of duplicating the key in `order`,
+%% so the items/order/size invariant can never be broken this way.
+insert_dup_key_crashes(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
-    S1 = arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}),
-    %% Demonstrate the corruption: items count != order length != size
-    {Items, Flat, Size} = stream_invariant_components(S1),
+    ?assertError(
+        {stream_duplicate_key, 1},
+        arizona_stream:insert(S0, #{id => 1, n => <<"dup">>})
+    ),
+    %% S0 is untouched -- the invariant still holds.
+    {Items, Flat, Size} = stream_invariant_components(S0),
     ?assertEqual(2, map_size(Items)),
-    ?assertEqual(3, length(Flat)),
-    ?assertEqual(3, Size),
-    ?assertEqual([1, 2, 1], Flat),
-    %% Items <-> order invariant is broken (length(Flat) > map_size(Items)).
-    ?assertNotEqual(map_size(Items), length(Flat)).
+    ?assertEqual(2, length(Flat)),
+    ?assertEqual(2, Size),
+    ?assertEqual([1, 2], Flat),
+    ?assertEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
 
-%% --- repro_insert_at_dup_breaks_invariant ----------------------------------
-%% insert/3 has the same problem as insert/2 — order_insert_at/3 blindly
-%% adds, regardless of whether the key already lives in the order list.
-repro_insert_at_dup_breaks_invariant(Config) when is_list(Config) ->
+%% --- insert_at_dup_key_crashes ---------------------------------------------
+%% insert/3 (positional) refuses a duplicate key the same way as insert/2.
+insert_at_dup_key_crashes(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
-    S1 = arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}, 0),
-    {Items, Flat, Size} = stream_invariant_components(S1),
+    ?assertError(
+        {stream_duplicate_key, 1},
+        arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}, 0)
+    ),
+    {Items, Flat, Size} = stream_invariant_components(S0),
     ?assertEqual(2, map_size(Items)),
-    ?assertEqual(3, length(Flat)),
-    ?assertEqual(3, Size),
-    ?assertEqual([1, 1, 2], Flat),
-    ?assertNotEqual(map_size(Items), length(Flat)).
+    ?assertEqual(2, length(Flat)),
+    ?assertEqual(2, Size),
+    ?assertEqual([1, 2], Flat),
+    ?assertEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
 
 %% --- repro_reset_with_dup_keys_breaks_invariant ----------------------------
 %% reset/2's items map dedups via comprehension (last-wins) but
@@ -3230,36 +3246,30 @@ repro_update_missing_key_breaks_invariant(Config) when is_list(Config) ->
     %% Items <-> order invariant is broken (items has 99, order doesn't).
     ?assertNotEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
 
-%% --- repro_insert_dup_then_delete_yields_stale_order ----------------------
-%% This is the minimal sequence that produces the production crash shape:
-%% insert/2 dup → delete the dup'd key. delete/2 calls order_delete which
-%% strips only the FIRST match, but maps:take fully removes the items
-%% entry. Result: order keeps a stale key not in items.
-repro_insert_dup_then_delete_yields_stale_order(Config) when is_list(Config) ->
+%% --- insert_dup_crashes_preventing_stale_order -----------------------------
+%% The minimal sequence that produced the production crash shape was
+%% insert/2 dup -> delete the dup'd key (order kept a stale key not in
+%% items). insert/2 now crashes on the duplicate, so the stale-order state
+%% can never be reached through the public API in the first place.
+insert_dup_crashes_preventing_stale_order(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
-    S1 = arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}),
-    S2 = arizona_stream:delete(S1, 1),
-    {Items, Flat, Size} = stream_invariant_components(S2),
-    %% items lost key 1 entirely; order kept a stale 1
-    ?assertEqual(1, map_size(Items)),
-    ?assert(is_map_key(2, Items)),
-    ?assertNot(is_map_key(1, Items)),
-    ?assertEqual([2, 1], Flat),
-    ?assertEqual(2, Size),
-    %% This is the same shape as production: items is a strict subset of
-    %% the keys in flat_order(Order).
-    ?assertNotEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
+    ?assertError(
+        {stream_duplicate_key, 1},
+        arizona_stream:insert(S0, #{id => 1, n => <<"dup">>})
+    ).
 
 %% --- repro_to_list_crash_matches_production_stack -------------------------
-%% Same setup as the previous case, then call to_list/1 — this fires the
-%% production crash, now wrapped as a named reason carrying the
+%% to_list/1 defends the items <-> order invariant: given a stream whose
+%% order references a key missing from items (built here by direct record
+%% injection, since the public API now refuses the dup insert that produced
+%% it in production), it crashes with a named reason carrying the
 %% `error_info` annotation that routes through `format_error/2`.
 repro_to_list_crash_matches_production_stack(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
-    S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
-    S1 = arizona_stream:insert(S0, #{id => 1, n => <<"dup">>}),
-    S2 = arizona_stream:delete(S1, 1),
+    S0 = arizona_stream:new(KeyFun, [#{id => 2, n => <<"b">>}]),
+    %% order references stale key 1 that is not in items (#{2 => _}).
+    S2 = inject_bad_order(S0, [2, 1]),
     {Reason, Stack} =
         try arizona_stream:to_list(S2) of
             _ -> ct:fail(expected_invariant_break)
