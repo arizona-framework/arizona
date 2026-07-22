@@ -968,6 +968,63 @@ describe('applyOps -- skip missing', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 11b. applyOps -- per-op fault isolation (J5)
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- per-op fault isolation (J5)', () => {
+    it('a throwing hook does not abort the rest of the op batch', () => {
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        hooks.Boom = {
+            updated() {
+                throw new Error('boom');
+            },
+        };
+        document.body.innerHTML =
+            '<div id="v" az-view><span az="0" az-hook="Boom">a</span><span az="1">b</span></div>';
+        mountHooks(document);
+        // The first op fires Boom.updated() which throws; the second must still apply.
+        applyOps([
+            [OP.TEXT, 'v:0', 'A'],
+            [OP.TEXT, 'v:1', 'B'],
+        ]);
+        expect(resolveEl('v:1').textContent).toBe('B');
+        expect(errSpy).toHaveBeenCalled();
+        errSpy.mockRestore();
+    });
+
+    it('a throwing inner item op does not abort the rest of the item patch', () => {
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        hooks.Boom = {
+            updated() {
+                throw new Error('boom');
+            },
+        };
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1">' +
+                '<span az="0" az-hook="Boom">a</span><span az="1">b</span>' +
+                '</div></div>',
+        );
+        mountHooks(document);
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:0',
+                'k1',
+                [
+                    [OP.TEXT, '0', 'A'], // fires Boom.updated() -> throws
+                    [OP.TEXT, '1', 'B'], // must still apply
+                ],
+            ],
+        ]);
+        const item = resolveEl('v:0').querySelector('[az-key="k1"]');
+        expect(item.querySelector('[az="1"]').textContent).toBe('B');
+        expect(errSpy).toHaveBeenCalled();
+        errSpy.mockRestore();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 12. applyEffects
 // ---------------------------------------------------------------------------
 

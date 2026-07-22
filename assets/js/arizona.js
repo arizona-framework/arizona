@@ -468,7 +468,23 @@ function mountHook(el) {
         );
     };
     _hooks.set(el, instance);
-    if (def.mounted) def.mounted.call(instance);
+    if (def.mounted) runHookCallback(instance, def.mounted, 'mounted');
+}
+
+/**
+ * Invoke a hook lifecycle callback in isolation: a throwing user hook is logged
+ * and swallowed so it can't abort the op batch it runs inside (the server
+ * snapshot has already advanced, so a bubbling throw would desync the DOM).
+ * @param {object} instance
+ * @param {Function} cb
+ * @param {string} phase
+ */
+function runHookCallback(instance, cb, phase) {
+    try {
+        cb.call(instance);
+    } catch (err) {
+        console.error(`[arizona] hook ${instance.__name} ${phase}() threw`, err);
+    }
 }
 
 /**
@@ -481,7 +497,7 @@ function runHookPhase(el, phase) {
     const instance = _hooks.get(el);
     if (!instance) return;
     const def = hooks[instance.__name];
-    if (def?.[phase]) def[phase].call(instance);
+    if (def?.[phase]) runHookCallback(instance, def[phase], phase);
 }
 
 /**
@@ -644,54 +660,61 @@ function removeEl(el) {
 function applyOps(ops) {
     let didReplace = false;
     for (const op of ops) {
-        const el = resolveEl(op[1]);
-        if (!el) continue;
-        const az = op[1].substring(op[1].indexOf(':') + 1);
-        switch (op[0]) {
-            case OP.TEXT:
-                applyTextOp(el, az, op[2], op[3]);
-                break;
-            case OP.SET_ATTR:
-                applySetAttrOp(el, op[2], op[3]);
-                break;
-            case OP.REM_ATTR:
-                applyRemAttrOp(el, op[2]);
-                break;
-            case OP.UPDATE:
-                applyUpdateOp(el, op[2]);
-                break;
-            case OP.REPLACE: {
-                destroyHooks(el);
-                // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
-                // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
-                // view) after the swap finds nothing and the destination's hooks would
-                // never mount. Same parse-then-mount shape as OP_INSERT.
-                const tpl = el.ownerDocument.createElement('template');
-                tpl.innerHTML = op[2];
-                const added = Array.from(tpl.content.children);
-                el.replaceWith(tpl.content);
-                for (const e of added) mountHooks(e);
-                didReplace = true;
-                break;
+        // Isolate each op: a bad selector or a throwing hook must not abort the
+        // rest of the batch, or the DOM desyncs from the already-advanced server
+        // snapshot until a reload.
+        try {
+            const el = resolveEl(op[1]);
+            if (!el) continue;
+            const az = op[1].substring(op[1].indexOf(':') + 1);
+            switch (op[0]) {
+                case OP.TEXT:
+                    applyTextOp(el, az, op[2], op[3]);
+                    break;
+                case OP.SET_ATTR:
+                    applySetAttrOp(el, op[2], op[3]);
+                    break;
+                case OP.REM_ATTR:
+                    applyRemAttrOp(el, op[2]);
+                    break;
+                case OP.UPDATE:
+                    applyUpdateOp(el, op[2]);
+                    break;
+                case OP.REPLACE: {
+                    destroyHooks(el);
+                    // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
+                    // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
+                    // view) after the swap finds nothing and the destination's hooks would
+                    // never mount. Same parse-then-mount shape as OP_INSERT.
+                    const tpl = el.ownerDocument.createElement('template');
+                    tpl.innerHTML = op[2];
+                    const added = Array.from(tpl.content.children);
+                    el.replaceWith(tpl.content);
+                    for (const e of added) mountHooks(e);
+                    didReplace = true;
+                    break;
+                }
+                case OP.REMOVE_NODE:
+                    removeEl(el);
+                    break;
+                case OP.INSERT:
+                    insertItem(op[1], op[2], op[3], op[4]);
+                    break;
+                case OP.REMOVE:
+                    removeItem(op[1], op[2]);
+                    break;
+                case OP.ITEM_PATCH:
+                    patchItem(op[1], op[2], op[3]);
+                    break;
+                case OP.MOVE:
+                    moveItem(op[1], op[2], op[3]);
+                    break;
+                case OP.LIST_PATCH:
+                    applyListPatch(el, az, op[2]);
+                    break;
             }
-            case OP.REMOVE_NODE:
-                removeEl(el);
-                break;
-            case OP.INSERT:
-                insertItem(op[1], op[2], op[3], op[4]);
-                break;
-            case OP.REMOVE:
-                removeItem(op[1], op[2]);
-                break;
-            case OP.ITEM_PATCH:
-                patchItem(op[1], op[2], op[3]);
-                break;
-            case OP.MOVE:
-                moveItem(op[1], op[2], op[3]);
-                break;
-            case OP.LIST_PATCH:
-                applyListPatch(el, az, op[2]);
-                break;
+        } catch (err) {
+            console.error(`[arizona] op ${op[0]} failed; skipping`, err);
         }
     }
     // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one).
@@ -1163,40 +1186,46 @@ function resolveInnerEl(parent, az) {
  */
 function applyItemOps(item, innerOps) {
     for (const op of innerOps) {
-        const az = op[1];
-        switch (op[0]) {
-            case OP.TEXT:
-                applyTextOp(resolveInnerEl(item, az), az, op[2], op[3]);
-                break;
-            case OP.SET_ATTR:
-                applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);
-                break;
-            case OP.REM_ATTR:
-                applyRemAttrOp(resolveInnerEl(item, az), op[2]);
-                break;
-            case OP.UPDATE:
-                applyUpdateOp(resolveInnerEl(item, az), op[2]);
-                break;
-            case OP.REMOVE_NODE: {
-                const innerEl = item.querySelector(`[az="${az}"]`);
-                if (innerEl) removeEl(innerEl);
-                break;
+        // Same per-op isolation as applyOps: a throwing inner op must not abort
+        // the rest of the item's patch batch.
+        try {
+            const az = op[1];
+            switch (op[0]) {
+                case OP.TEXT:
+                    applyTextOp(resolveInnerEl(item, az), az, op[2], op[3]);
+                    break;
+                case OP.SET_ATTR:
+                    applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);
+                    break;
+                case OP.REM_ATTR:
+                    applyRemAttrOp(resolveInnerEl(item, az), op[2]);
+                    break;
+                case OP.UPDATE:
+                    applyUpdateOp(resolveInnerEl(item, az), op[2]);
+                    break;
+                case OP.REMOVE_NODE: {
+                    const innerEl = item.querySelector(`[az="${az}"]`);
+                    if (innerEl) removeEl(innerEl);
+                    break;
+                }
+                case OP.INSERT:
+                    insertItemEl(resolveInnerEl(item, az), op[2], op[3], op[4]);
+                    break;
+                case OP.REMOVE:
+                    removeItemEl(resolveInnerEl(item, az), op[2]);
+                    break;
+                case OP.ITEM_PATCH:
+                    patchItemEl(item, az, op[2], op[3]);
+                    break;
+                case OP.MOVE:
+                    moveItemEl(resolveInnerEl(item, az), op[2], op[3]);
+                    break;
+                case OP.LIST_PATCH:
+                    applyListPatch(resolveInnerEl(item, az), az, op[2]);
+                    break;
             }
-            case OP.INSERT:
-                insertItemEl(resolveInnerEl(item, az), op[2], op[3], op[4]);
-                break;
-            case OP.REMOVE:
-                removeItemEl(resolveInnerEl(item, az), op[2]);
-                break;
-            case OP.ITEM_PATCH:
-                patchItemEl(item, az, op[2], op[3]);
-                break;
-            case OP.MOVE:
-                moveItemEl(resolveInnerEl(item, az), op[2], op[3]);
-                break;
-            case OP.LIST_PATCH:
-                applyListPatch(resolveInnerEl(item, az), az, op[2]);
-                break;
+        } catch (err) {
+            console.error(`[arizona] item op ${op[0]} failed; skipping`, err);
         }
     }
 }
