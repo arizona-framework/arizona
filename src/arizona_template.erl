@@ -65,20 +65,16 @@ render(Bindings) ->
 -export([terminal_each/2]).
 -export([to_bin/1]).
 -export([raw/1]).
--export([escape_value/1]).
 -export([escape_value/2]).
--export([backend_for/1]).
 -export([mark_esc/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
 -export([format_error/2]).
--export([unwrap_val/1]).
--export([render_attr/2]).
+-export([unwrap_val/2]).
 -export([maybe_propagate/2]).
--export([maybe_put_fingerprint/2]).
 -export([make_child_snap/4]).
 -export([scope_slot/2]).
--export([unzip_triples/1]).
+-export([unzip_triples/2]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
 
@@ -136,7 +132,7 @@ render(Bindings) ->
     d := [dynamic()],
     f := binary(),
     diff => false,
-    target => html | native | terminal
+    backend => module()
 }.
 
 -nominal each_template() :: #{
@@ -145,7 +141,7 @@ render(Bindings) ->
     d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
     f := binary(),
     single_root => true,
-    target => html | native | terminal
+    backend => module()
 }.
 
 -nominal each_container() :: #{
@@ -161,7 +157,7 @@ render(Bindings) ->
     deps => [deps()],
     diff => false,
     view_id => binary(),
-    target => html | native | terminal
+    backend => module()
 }.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
@@ -385,10 +381,11 @@ to_bin(V) when is_integer(V) -> integer_to_binary(V);
 to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
 %% Escape markers are unwrapped to their raw bytes here. to_bin never escapes;
-%% escaping happens at the HTML-output boundary. At SSR that boundary is
-%% `arizona_render:render_dyn/1` (it calls `escape_value/1`); on the live diff the
-%% boundary is the JS client, which text-nodes a scalar `?OP_TEXT` value (so `<` is
-%% literal text, never parsed) -- so the diff path stays raw end to end.
+%% escaping happens at the render-output boundary. At SSR that boundary is
+%% `arizona_render:render_dyn/2` (it calls `escape_value/2` through the backend);
+%% on the live diff the boundary is the JS client, which text-nodes a scalar
+%% `?OP_TEXT` value (so `<` is literal text, never parsed) -- so the diff path
+%% stays raw end to end.
 to_bin({arizona_esc, V}) ->
     to_bin(V);
 to_bin({arizona_raw, V}) ->
@@ -450,26 +447,14 @@ format_error(parse_transform_not_applied = Reason, _ST) ->
     #{general => format_error(Reason)}.
 
 -doc """
-Materializes an attribute dynamic into its rendered binary, leaving plain
-values untouched.
+Materializes an attribute dynamic into its rendered binary through `Backend`
+(an `arizona_renderer`), leaving plain values untouched.
 """.
--spec unwrap_val(Value) -> term() when
+-spec unwrap_val(Backend, Value) -> term() when
+    Backend :: module(),
     Value :: term().
-unwrap_val({attr, Name, V}) -> render_attr(Name, V);
-unwrap_val(V) -> V.
-
--doc """
-Renders one HTML attribute, handling boolean true/false specially.
-
-`false` strips the attribute, `true` emits a bare `name`, anything else
-becomes `name="value"`.
-""".
--spec render_attr(Name, Value) -> binary() when
-    Name :: binary(),
-    Value :: term().
-render_attr(_Name, false) -> <<>>;
-render_attr(Name, true) -> <<" ", Name/binary>>;
-render_attr(Name, V) -> <<" ", Name/binary, "=\"", (escape_value(V))/binary, "\"">>.
+unwrap_val(Backend, {attr, Name, V}) -> Backend:render_attr(Name, V);
+unwrap_val(_Backend, V) -> V.
 
 -doc """
 Wraps a value to opt out of HTML auto-escaping. Use only for trusted,
@@ -483,14 +468,6 @@ with no defined meaning; using it in a `?native`/`?terminal` template is unsuppo
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
 raw(Value) -> {arizona_raw, Value}.
-
--doc """
-HTML-backend shorthand for `escape_value/2` -- used for attribute values and
-`?local` inits, which are HTML-only.
-""".
--spec escape_value(Value) -> binary() when
-    Value :: term().
-escape_value(V) -> escape_value(arizona_html, V).
 
 -doc """
 Renders a value to its output binary, escaping via `Backend` (an
@@ -525,8 +502,12 @@ mark_esc([{arizona_effect, _} | _] = E) -> E;
 mark_esc(V) -> {arizona_esc, V}.
 
 -doc """
-Propagates `f` (fingerprint) and the optional `diff => false` flag from a
-template into a snapshot.
+Propagates the template-level fields that must survive onto a snapshot: `f`
+(fingerprint), the optional `diff => false` flag, and the render `backend`.
+
+Used by both the render path (`arizona_render`) and the diff path
+(`arizona_diff`), so a diffed snapshot carries the same backend as a freshly
+rendered one -- the field is a uniform invariant on every snapshot.
 """.
 -spec maybe_propagate(Template, Snapshot) -> Snapshot1 when
     Template :: template(),
@@ -540,17 +521,12 @@ maybe_propagate(Tmpl, Snap) ->
         end,
     Snap2 = maybe_put_fingerprint(Tmpl, Snap1),
     case Tmpl of
-        #{target := Target} -> Snap2#{target => Target};
+        #{backend := Backend} -> Snap2#{backend => Backend};
         #{} -> Snap2
     end.
 
--doc """
-Copies the `f` field from a template to a snapshot if present.
-""".
--spec maybe_put_fingerprint(Template, Snapshot) -> Snapshot1 when
-    Template :: template(),
-    Snapshot :: snapshot(),
-    Snapshot1 :: snapshot().
+%% Copies the `f` field from a template to a snapshot if present. Internal to
+%% maybe_propagate/2.
 maybe_put_fingerprint(#{f := F}, Snap) -> Snap#{f => F};
 maybe_put_fingerprint(#{}, Snap) -> Snap.
 
@@ -610,13 +586,19 @@ colon_free(Az) ->
 %% is always a snapshot map -- a non-snapshot (a scalar, a stateless child that
 %% rendered to a bare binary) is filtered out there and never arrives here.
 scope_snapshot(Prefix, #{s := S, d := D} = Snap) ->
-    Backend = backend_for(maps:get(target, Snap, html)),
+    Backend = maps:get(backend, Snap, undefined),
     Snap1 = Snap#{
         s => scoped_statics(Backend, Prefix, Snap, S),
         d => [scope_dyn(Prefix, Dyn) || Dyn <- D]
     },
     scope_fp(Prefix, Snap1).
 
+%% A snapshot with no backend (a hand-constructed map; templates from the parse
+%% transform always carry one) has no known az-marker syntax to rewrite, so leave
+%% its statics untouched -- the dynamic `az`/fingerprint prefixing below is
+%% backend-independent and still applies.
+scoped_statics(undefined, _Prefix, _Snap, S) ->
+    S;
 %% Prefixing a static list is a `binary:replace` per element -- pure and
 %% deterministic in (Prefix, statics). Memoize it per (Prefix, fingerprint) in
 %% the process dictionary: a re-render or diff of the same slot (and every level
@@ -661,27 +643,24 @@ scope_val(_Prefix, #{az_local := _} = Local) -> Local;
 scope_val(Prefix, #{s := _, d := _} = Nested) -> scope_snapshot(Prefix, Nested);
 scope_val(_Prefix, Val) -> Val.
 
-backend_for(html) -> arizona_html;
-backend_for(native) -> arizona_native;
-backend_for(terminal) -> arizona_terminal.
-
 -doc """
 Splits a list of `{Az, Val, Deps}` triples into the snapshot d-list, deps list,
-and rendered values list.
+and rendered values list (each rendered through `Backend`, an `arizona_renderer`).
 """.
--spec unzip_triples(Triples) -> {DList, DepsList, Vals} when
+-spec unzip_triples(Backend, Triples) -> {DList, DepsList, Vals} when
+    Backend :: module(),
     Triples :: [{az(), term(), deps()}],
     DList :: [{az(), term()}],
     DepsList :: [deps()],
     Vals :: [term()].
-unzip_triples([]) ->
+unzip_triples(_Backend, []) ->
     {[], [], []};
-unzip_triples([{Az, Val, Deps} | Rest]) ->
-    {RestD, RestDeps, RestVals} = unzip_triples(Rest),
-    {[{Az, Val} | RestD], [Deps | RestDeps], [unwrap_val(Val) | RestVals]}.
+unzip_triples(Backend, [{Az, Val, Deps} | Rest]) ->
+    {RestD, RestDeps, RestVals} = unzip_triples(Backend, Rest),
+    {[{Az, Val} | RestD], [Deps | RestDeps], [unwrap_val(Backend, Val) | RestVals]}.
 
 -doc """
-Like `unzip_triples/1` but discards the rendered values list.
+Like `unzip_triples/2` but discards the rendered values list.
 """.
 -spec split_triples(Triples) -> {DList, DepsList} when
     Triples :: [{az(), term(), deps()}],

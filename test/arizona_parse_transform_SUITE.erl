@@ -1679,8 +1679,10 @@ fingerprint_escapes_value(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(DBin, <<"<i>">>)),
     ?assertNotEqual(nomatch, binary:match(DBin, <<"&lt;i&gt;">>)).
 
-%% The native (terminal) backend produces plain text, not HTML, so value
-%% interpolations are left bare -- escaping there would corrupt the output.
+%% Escaping is governed by the backend module, not the render target. The native
+%% backend marks value interpolations like every backend (`{esc, Fun}`), but its
+%% `arizona_renderer:escape/1` is the identity, so values reach the JSON wire
+%% unescaped (HTML-escaping there would corrupt the output).
 native_backend_not_escaped(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_esc_native). "
@@ -1689,9 +1691,11 @@ native_backend_not_escaped(Config) when is_list(Config) ->
         "    arizona_template:native({'Text', [], [arizona_template:get(x, Bindings)]}). "
     ),
     T = Mod:render(#{x => <<"<not-escaped>">>}),
-    [{_Az, Fun, _Loc}] = maps:get(d, T),
-    ?assert(is_function(Fun, 0)),
-    ?assertEqual(<<"<not-escaped>">>, Fun()).
+    ?assertEqual(arizona_native, maps:get(backend, T)),
+    ?assertMatch([{_Az, {esc, _Fun}, _Loc}], maps:get(d, T)),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
+    %% The backend's escape/1 is the identity: the value passes through unescaped.
+    ?assertEqual(<<"<not-escaped>">>, arizona_template:escape_value(arizona_native, Fun())).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's
@@ -5639,7 +5643,7 @@ cross_target_terminal_in_html(Config) when is_list(Config) ->
     ).
 
 terminal_target_marked(Config) when is_list(Config) ->
-    %% A ?terminal template carries `target => terminal`.
+    %% A ?terminal template carries `backend => arizona_terminal`.
     Mod = compile_module(
         "-module(pt_term_marked). "
         "-export([render/1]). "
@@ -5649,7 +5653,7 @@ terminal_target_marked(Config) when is_list(Config) ->
         "    ). "
     ),
     T = Mod:render(#{msg => ~"hi"}),
-    ?assertEqual(terminal, maps:get(target, T)).
+    ?assertEqual(arizona_terminal, maps:get(backend, T)).
 
 %% A `?terminal` value interpolation is now escape-marked (`{esc, Fun}`), like
 %% the HTML backend, so the terminal escaper (control-char sanitizer) runs on it

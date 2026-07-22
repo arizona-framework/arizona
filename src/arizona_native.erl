@@ -40,6 +40,7 @@ form valid JSON.
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
 -export([escape/1]).
+-export([render_attr/2]).
 
 -spec name(atom()) -> binary().
 name(Atom) ->
@@ -137,6 +138,14 @@ supports_list_patch() -> false.
 %% marks native values, so this is not reached via the escape marker.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) -> Bin.
+
+%% Render a dynamic attribute value: the prop name is baked into the static by
+%% attr_dyn_name/1, so the dynamic carries just the stringified value (the client
+%% JSON-encodes it like any other dynamic value). escape/1 is the identity here,
+%% so escape_value/2 only classifies out a `?raw`/effect and stringifies.
+-spec render_attr(binary(), term()) -> binary().
+render_attr(_Name, Value) ->
+    arizona_template:escape_value(?MODULE, Value).
 
 %% --------------------------------------------------------------------
 %% Internal functions

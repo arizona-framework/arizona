@@ -1197,21 +1197,9 @@ compile_template(Arg, Line, Module, LiveRender) ->
 
 compile_template(Arg, Line, Module, LiveRender, Backend) ->
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(Arg, Module, LiveRender, Backend),
-    Opts = maybe_target_opt(Backend, Opts0),
+    Opts = Opts0#{backend => Backend},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
-
-%% Native templates carry `target => native` so the runtime (render_fp_val)
-%% knows to inline dynamic attribute values as JSON. Terminal templates carry
-%% `target => terminal` for honesty in the snapshot (the wire path treats it like
-%% the default html, which terminal never uses). HTML templates carry no target
-%% key (the default).
-maybe_target_opt(arizona_native, Opts) ->
-    Opts#{target => native};
-maybe_target_opt(arizona_terminal, Opts) ->
-    Opts#{target => terminal};
-maybe_target_opt(_Backend, Opts) ->
-    Opts.
 
 compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
     case FunAST of
@@ -1283,7 +1271,7 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend) 
             {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
                 ElemAST, Module, false, Backend
             ),
-            Opts1 = maybe_target_opt(Backend, Opts0),
+            Opts1 = Opts0#{backend => Backend},
             Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
@@ -1982,7 +1970,7 @@ make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
     LocAST = loc_ast(Module, ExprLine),
     Body = branch_track_touches(ExprAST0) ++ [ExprAST],
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], Body}]}},
-    {tuple, 0, [ast_binary(AzBin), esc_spec(Backend, ExprAST, FunAST), LocAST]}.
+    {tuple, 0, [ast_binary(AzBin), esc_spec(ExprAST, FunAST), LocAST]}.
 
 %% A content-slot control-flow expression (`case`/`if`/`maybe`/...) compiles each
 %% branch *element* into a nested template (expand_block_element_tails/3) whose `?get`
@@ -2167,13 +2155,14 @@ list_has_element_tuple({cons, _, Head, Tail}) ->
 list_has_element_tuple(_) ->
     false.
 
-%% Tag a value interpolation `{esc, Fun}` (escaped at the render boundary per the
-%% target's backend) or leave it bare. HTML entity-escapes and the terminal
-%% sanitizes control bytes, so both mark scalar values; native (JSON wire) never
-%% escapes, so it stays bare. Blocks are always left bare and spliced raw.
-esc_spec(arizona_native, _ExprAST, FunAST) ->
-    FunAST;
-esc_spec(_Backend, ExprAST, FunAST) ->
+%% Tag a value interpolation `{esc, Fun}` so it is escaped at the render boundary,
+%% or leave a block bare. Every backend marks scalar values uniformly -- the
+%% backend's `arizona_renderer:escape/1` is the sole escaping authority (HTML
+%% entity-escapes, the terminal sanitizes control bytes, the native JSON wire is
+%% the identity), so the parse transform never special-cases a backend here.
+%% Blocks (nested templates, descriptors, `raw/1`, effects) are always left bare
+%% and spliced structurally.
+esc_spec(ExprAST, FunAST) ->
     case is_block_content_expr(ExprAST) of
         true -> FunAST;
         false -> {tuple, 0, [{atom, 0, esc}, FunAST]}
@@ -2222,7 +2211,7 @@ make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
     ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
-    {tuple, 0, [{atom, 0, undefined}, esc_spec(Backend, ExprAST, FunAST), LocAST]}.
+    {tuple, 0, [{atom, 0, undefined}, esc_spec(ExprAST, FunAST), LocAST]}.
 
 %% Markerless render-once for a `raw` raw-text element (script/style). Unlike
 %% make_nodiff_dynamic_ast/4 the value is left bare (never `{esc, Fun}`): the

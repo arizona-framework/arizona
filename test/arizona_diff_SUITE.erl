@@ -934,7 +934,8 @@ local_dep_aware_skip(Config) when is_list(Config) ->
         d => [
             {<<"0">>, fun() -> arizona_template:local(<<"k">>, arizona_template:get(foo, B0)) end}
         ],
-        f => <<"test">>
+        f => <<"test">>,
+        backend => arizona_html
     },
     {_HTML, Snap0, V0} = arizona_render:render(T0, #{}),
     B1 = #{foo => <<"b">>},
@@ -943,7 +944,8 @@ local_dep_aware_skip(Config) when is_list(Config) ->
         d => [
             {<<"0">>, fun() -> arizona_template:local(<<"k">>, arizona_template:get(foo, B1)) end}
         ],
-        f => <<"test">>
+        f => <<"test">>,
+        backend => arizona_html
     },
     Changed = compute_changed(B0, B1),
     {Ops, _Snap1, _V1} = arizona_diff:diff(T1, Snap0, V0, Changed),

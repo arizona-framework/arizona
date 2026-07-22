@@ -117,3 +117,16 @@ opt-out is classified out before this callback runs, so it never sees trusted
 fragments.
 """.
 -callback escape(Value :: binary()) -> binary().
+
+-doc """
+Render a dynamic attribute's evaluated value to this backend's output bytes.
+
+Called at the render boundary for a dynamic attribute (`{attr, Name, Value}`).
+HTML emits ` Name="Escaped"` (or a bare/absent name for a boolean value); the
+native backend bakes the prop name into the static, so it emits just the
+stringified value. Escaping is governed by the backend (via `escape/1`, through
+`arizona_template:escape_value/2`, so a `?raw` opt-out or effect command is
+classified out first). A backend that rejects dynamic attributes at compile
+time (`attr_dyn_name/1`) never has this callback reached.
+""".
+-callback render_attr(Name :: binary(), Value :: term()) -> binary().
