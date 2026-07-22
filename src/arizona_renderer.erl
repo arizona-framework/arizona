@@ -107,3 +107,13 @@ so the diff emits per-item patches; when `false`, the each keeps the wholesale
 path the client already handles. A backend capability, declared by each backend.
 """.
 -callback supports_list_patch() -> boolean().
+
+-doc """
+Escape a dynamic value's rendered bytes for this backend's output. Called at the
+render boundary on interpolated scalar values (`arizona_template:escape_value/2`).
+HTML entity-escapes (`<`, `&`, ...); the terminal strips control bytes that would
+inject escape sequences; a plain-text/JSON backend is the identity. A `?raw`
+opt-out is classified out before this callback runs, so it never sees trusted
+fragments.
+""".
+-callback escape(Value :: binary()) -> binary().

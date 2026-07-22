@@ -65,6 +65,8 @@
     cross_target_html_in_terminal/1,
     cross_target_terminal_in_html/1,
     terminal_target_marked/1,
+    terminal_value_marked_for_escape/1,
+    terminal_sanitizes_control_chars/1,
     terminal_renders_styled_ansi/1,
     terminal_custom_sgr_attr/1,
     terminal_fg_attr/1,
@@ -662,6 +664,8 @@ groups() ->
         %% Terminal (ANSI) render target
         {terminal, [parallel], [
             terminal_target_marked,
+            terminal_value_marked_for_escape,
+            terminal_sanitizes_control_chars,
             terminal_renders_styled_ansi,
             terminal_custom_sgr_attr,
             terminal_fg_attr,
@@ -5646,6 +5650,48 @@ terminal_target_marked(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{msg => ~"hi"}),
     ?assertEqual(terminal, maps:get(target, T)).
+
+%% A `?terminal` value interpolation is now escape-marked (`{esc, Fun}`), like
+%% the HTML backend, so the terminal escaper (control-char sanitizer) runs on it
+%% at the render boundary. Before, terminal values were emitted bare.
+terminal_value_marked_for_escape(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_term_esc). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {col, [], [{line, [], [arizona_template:get(msg, Bindings)]}]}"
+        "    ). "
+    ),
+    T = Mod:render(#{msg => ~"hi"}),
+    ?assertMatch([{_Az, {esc, _Fun}, {pt_term_esc, 1}}], maps:get(d, T)),
+    [{_, {esc, Fun}, _}] = maps:get(d, T),
+    ?assertEqual(~"hi", Fun()).
+
+%% A `?terminal` dynamic value carrying control bytes is sanitized at render, so
+%% it cannot inject ANSI/OSC escape sequences into the terminal (the terminal
+%% analog of XSS). ESC and BEL from the value are stripped -- neutralizing the
+%% OSC-52 clipboard write -- while printable bytes and UTF-8 survive. The line's
+%% own ANSI (CSI `\e[`) is framework static, not a dynamic value, so it is intact.
+terminal_sanitizes_control_chars(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_term_sanitize). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {col, [], [{line, [], [arizona_template:get(msg, Bindings)]}]}"
+        "    ). "
+    ),
+    %% 'a' ESC ]52;c;<base64> BEL 'b' -- an OSC-52 clipboard-write injection.
+    %% (Erlang has no `\a` escape, so BEL 0x07 is written as an explicit byte.)
+    {Output, _Snap} = arizona_render:render(Mod:render(#{msg => <<"a\e]52;c;ZXZpbA==", 7, "b">>})),
+    Bin = iolist_to_binary(Output),
+    ?assertEqual(nomatch, binary:match(Bin, ~"\e]")),
+    ?assertEqual(nomatch, binary:match(Bin, <<7>>)),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"]52;c;ZXZpbA==")),
+    %% UTF-8 multi-byte content is preserved byte-intact.
+    {Output2, _} = arizona_render:render(Mod:render(#{msg => <<"café"/utf8>>})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Output2), <<"café"/utf8>>)).
 
 terminal_renders_styled_ansi(Config) when is_list(Config) ->
     Mod = compile_module(

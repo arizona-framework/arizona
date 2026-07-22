@@ -123,7 +123,8 @@ snapshot.
     Snapshot :: arizona_template:snapshot().
 render(#{s := Statics, d := Dynamics} = Tmpl) ->
     EvalDynamics = arizona_eval:eval_dynamics(Dynamics),
-    HTML = zip(Statics, [arizona_template:unwrap_val(V) || {_Az, V} <:- EvalDynamics]),
+    Target = maps:get(target, Tmpl, html),
+    HTML = zip(Target, Statics, [arizona_template:unwrap_val(V) || {_Az, V} <:- EvalDynamics]),
     Snap0 = #{s => Statics, d => EvalDynamics},
     Snap = arizona_template:maybe_propagate(Tmpl, Snap0),
     {HTML, Snap}.
@@ -143,7 +144,8 @@ of any child views encountered during evaluation.
 render(#{s := Statics, d := Dynamics} = Tmpl, Views0) ->
     {Triples, {_Old, NewViews}} = arizona_eval:eval_dynamics_v(Dynamics, {Views0, #{}}),
     {D, Deps, Vals} = arizona_template:unzip_triples(Triples),
-    HTML = zip(Statics, Vals),
+    Target = maps:get(target, Tmpl, html),
+    HTML = zip(Target, Statics, Vals),
     Snap0 = #{s => Statics, d => D, deps => Deps},
     Snap = arizona_template:maybe_propagate(Tmpl, Snap0),
     {HTML, Snap, NewViews}.
@@ -215,35 +217,49 @@ streams) recursively.
 -spec zip(Statics, Dynamics) -> iolist() when
     Statics :: [static()],
     Dynamics :: [dynamic()].
-zip([S], []) ->
-    [S];
-zip([S | Statics], [D | Dynamics]) ->
-    [S, render_dyn(D) | zip(Statics, Dynamics)].
+zip(Statics, Dynamics) ->
+    zip(html, Statics, Dynamics).
 
-%% Pre-unwrapped value path -- factored out of zip/2's body so zip_t/2
-%% (the triple-walking variant used by zip_stream_item/2) can share the
-%% same dispatch without duplicating the case clauses.
-render_dyn({arizona_esc, V}) ->
-    arizona_template:escape_value(V);
-render_dyn(#{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) ->
+%% Target-threaded variant: the render target (html | native | terminal) selects
+%% the escaper for interpolated scalar values in `render_dyn/2`. The html-default
+%% `zip/2` above covers the HTML/native SSR + fingerprint/diff paths (native
+%% values are never escape-marked, so html is a harmless default there); only
+%% `render/1,2` pass a template's actual target, so a terminal frame's dynamics
+%% are control-char sanitized (and a terminal target never reaches the wire/fp
+%% path, which does not diff).
+-spec zip(Target, Statics, Dynamics) -> iolist() when
+    Target :: html | native | terminal,
+    Statics :: [static()],
+    Dynamics :: [dynamic()].
+zip(_Target, [S], []) ->
+    [S];
+zip(Target, [S | Statics], [D | Dynamics]) ->
+    [S, render_dyn(Target, D) | zip(Target, Statics, Dynamics)].
+
+%% Pre-unwrapped value path -- factored out of zip/3's body so zip_stream_item/3
+%% (the triple-walking variant) can share the same dispatch without duplicating
+%% the case clauses.
+render_dyn(Target, {arizona_esc, V}) ->
+    arizona_template:escape_value(arizona_template:backend_for(Target), V);
+render_dyn(Target, #{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) ->
     #{s := ItemS} = Tmpl,
-    [zip_stream_item(ItemS, ItemD) || ItemD <- Items];
-render_dyn(#{t := ?EACH, items := Items, order := Order, template := Tmpl}) ->
+    [zip_stream_item(Target, ItemS, ItemD) || ItemD <- Items];
+render_dyn(Target, #{t := ?EACH, items := Items, order := Order, template := Tmpl}) ->
     #{s := ItemS} = Tmpl,
-    [zip_stream_item(ItemS, maps:get(K, Items)) || K <- Order];
-render_dyn(#{az_local := _, target := {attr, Name}, v := V}) ->
+    [zip_stream_item(Target, ItemS, maps:get(K, Items)) || K <- Order];
+render_dyn(_Target, #{az_local := _, target := {attr, Name}, v := V}) ->
     arizona_template:render_attr(Name, V);
-render_dyn(#{az_local := _, v := V}) ->
+render_dyn(_Target, #{az_local := _, v := V}) ->
     %% Escape a content `?local`'s init like any content value: the client owns
     %% the slot via textContent (text, never parsed), so the SSR output must be
     %% the escaped form to match -- and to keep a binding-seeded init from being
-    %% an XSS vector. `escape_value/1` still honors a `?raw` opt-out.
+    %% an XSS vector. `?local` is HTML-only, so the html escaper applies.
     arizona_template:escape_value(V);
-render_dyn(#{s := InnerS, d := InnerD}) ->
-    zip_d(InnerS, InnerD);
-render_dyn(V) when is_binary(V) ->
+render_dyn(Target, #{s := InnerS, d := InnerD}) ->
+    zip_d(Target, InnerS, InnerD);
+render_dyn(_Target, V) when is_binary(V) ->
     V;
-render_dyn(V) ->
+render_dyn(_Target, V) ->
     arizona_template:to_bin(V).
 
 -doc """
@@ -366,22 +382,25 @@ apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
 %% friends produce). Inlines unwrap_val/1's `{attr, Name, V}` case via
 %% render_v/1, eliminating the per-item LC walk that previously
 %% preceded zip/2.
-zip_stream_item([S], []) ->
+zip_stream_item(Statics, Dynamics) ->
+    zip_stream_item(html, Statics, Dynamics).
+
+zip_stream_item(_Target, [S], []) ->
     [S];
-zip_stream_item([S | Statics], [{_Az, V, _Deps} | DRest]) ->
-    [S, render_v(V) | zip_stream_item(Statics, DRest)].
+zip_stream_item(Target, [S | Statics], [{_Az, V, _Deps} | DRest]) ->
+    [S, render_v(Target, V) | zip_stream_item(Target, Statics, DRest)].
 
 %% Pair walker -- like zip_stream_item/2 but consumes `[{Az, V}]` 2-tuples
 %% (the snapshot d-list shape used by nested `?stateful`/`?stateless`
 %% templates). Used by render_dyn/1's `#{s, d}` clause to skip the LC
 %% walk that previously extracted values for zip/2.
-zip_d([S], []) ->
+zip_d(_Target, [S], []) ->
     [S];
-zip_d([S | Statics], [{_Az, V} | DRest]) ->
-    [S, render_v(V) | zip_d(Statics, DRest)].
+zip_d(Target, [S | Statics], [{_Az, V} | DRest]) ->
+    [S, render_v(Target, V) | zip_d(Target, Statics, DRest)].
 
-render_v({attr, Name, V}) -> arizona_template:render_attr(Name, V);
-render_v(V) -> render_dyn(V).
+render_v(_Target, {attr, Name, V}) -> arizona_template:render_attr(Name, V);
+render_v(Target, V) -> render_dyn(Target, V).
 
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly.

@@ -66,6 +66,8 @@ render(Bindings) ->
 -export([to_bin/1]).
 -export([raw/1]).
 -export([escape_value/1]).
+-export([escape_value/2]).
+-export([backend_for/1]).
 -export([mark_esc/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
@@ -483,16 +485,27 @@ with no defined meaning; using it in a `?native`/`?terminal` template is unsuppo
 raw(Value) -> {arizona_raw, Value}.
 
 -doc """
-Renders a value to its HTML binary, HTML-escaping metacharacters. `raw/1`-wrapped
-values and already-encoded `arizona_effect` commands pass through unescaped. Used
-for attribute values and for the already-unwrapped content escape marker.
+HTML-backend shorthand for `escape_value/2` -- used for attribute values and
+`?local` inits, which are HTML-only.
 """.
 -spec escape_value(Value) -> binary() when
     Value :: term().
-escape_value({arizona_raw, V}) -> to_bin(V);
-escape_value({arizona_effect, _} = C) -> to_bin(C);
-escape_value([{arizona_effect, _} | _] = C) -> to_bin(C);
-escape_value(V) -> escape_html(to_bin(V)).
+escape_value(V) -> escape_value(arizona_html, V).
+
+-doc """
+Renders a value to its output binary, escaping via `Backend` (an
+`arizona_renderer`): HTML entity-escaping, terminal control-char sanitizing, or a
+plain-text/JSON identity. `raw/1`-wrapped values and already-encoded
+`arizona_effect` commands are classified out and pass through unescaped (the
+`?raw` opt-out and effects are trusted, backend-independent).
+""".
+-spec escape_value(Backend, Value) -> binary() when
+    Backend :: module(),
+    Value :: term().
+escape_value(_Backend, {arizona_raw, V}) -> to_bin(V);
+escape_value(_Backend, {arizona_effect, _} = C) -> to_bin(C);
+escape_value(_Backend, [{arizona_effect, _} | _] = C) -> to_bin(C);
+escape_value(Backend, V) -> Backend:escape(to_bin(V)).
 
 -doc """
 Marks an evaluated value for HTML escaping at output. Only scalars are marked --
@@ -510,20 +523,6 @@ mark_esc({arizona_raw, _} = R) -> R;
 mark_esc({arizona_effect, _} = E) -> E;
 mark_esc([{arizona_effect, _} | _] = E) -> E;
 mark_esc(V) -> {arizona_esc, V}.
-
-%% HTML-escape the five metacharacters; safe for element content and
-%% double/single-quoted attribute values. Byte-at-a-time over the tail is
-%% UTF-8 safe (continuation bytes are all > 127, never a metacharacter).
-escape_html(Bin) when is_binary(Bin) ->
-    escape_html(Bin, <<>>).
-
-escape_html(<<>>, Acc) -> Acc;
-escape_html(<<"&", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&amp;">>);
-escape_html(<<"<", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&lt;">>);
-escape_html(<<">", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&gt;">>);
-escape_html(<<"\"", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&quot;">>);
-escape_html(<<"'", R/binary>>, Acc) -> escape_html(R, <<Acc/binary, "&#39;">>);
-escape_html(<<C, R/binary>>, Acc) -> escape_html(R, <<Acc/binary, C>>).
 
 -doc """
 Propagates `f` (fingerprint) and the optional `diff => false` flag from a

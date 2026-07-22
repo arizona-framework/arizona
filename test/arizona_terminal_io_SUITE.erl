@@ -17,6 +17,8 @@
 -export([default_paint_repaints_in_place/1]).
 -export([default_paint_quit_stops/1]).
 -export([default_paint_title_bell_and_unknown/1]).
+-export([default_paint_sanitizes_title/1]).
+-export([terminal_escape_sanitizes/1]).
 
 %% arizona_terminal_io:keys/1 decodes raw terminal reads into idiomatic keys;
 %% arizona_terminal_default_driver turns those into events (quitting on Ctrl-D),
@@ -38,7 +40,9 @@ all() ->
         default_driver_setup_teardown,
         default_paint_repaints_in_place,
         default_paint_quit_stops,
-        default_paint_title_bell_and_unknown
+        default_paint_title_bell_and_unknown,
+        default_paint_sanitizes_title,
+        terminal_escape_sanitizes
     ].
 
 printable_to_char_code(Config) when is_list(Config) ->
@@ -150,6 +154,28 @@ default_paint_title_bell_and_unknown(Config) when is_list(Config) ->
     {UnknownOut, UnknownNext} = paint_result(~"x\n", [{arizona_effect, [something_else]}]),
     ?assertEqual(continue, UnknownNext),
     ?assertEqual(PlainOut, UnknownOut).
+
+%% A user-influenced title carrying ESC/BEL must not break out of the OSC string.
+%% Those bytes are stripped, so the only OSC introducer left is the driver's own
+%% `\e]0;` and the injected sequence is neutralized to inert text.
+default_paint_sanitizes_title(Config) when is_list(Config) ->
+    %% 'ev' ESC ]0;il BEL '!' -- an attempt to close the OSC early and inject.
+    {Out, _} = paint_result(~"x\n", [
+        arizona_terminal_effect:set_title(<<"ev\e]0;il", 7, "!">>)
+    ]),
+    %% Exactly one `\e]` -- the driver's introducer; the value's is stripped.
+    %% (The frame repaint uses CSI `\e[`, never `\e]`.)
+    ?assertEqual(1, length(binary:matches(Out, ~"\e]"))),
+    %% The title text survives with its ESC/BEL removed, hence contiguous.
+    ?assert(contains(Out, ~"ev]0;il!")).
+
+%% arizona_terminal:escape/1 strips control bytes that could inject escape
+%% sequences, keeps `\n`/`\t`, and preserves UTF-8 multi-byte sequences intact.
+terminal_escape_sanitizes(Config) when is_list(Config) ->
+    ?assertEqual(~"a]52;c;xb", arizona_terminal:escape(<<"a\e]52;c;x", 7, "b">>)),
+    ?assertEqual(~"line1\nline2\tcol", arizona_terminal:escape(~"line1\nline2\tcol")),
+    ?assertEqual(<<"café"/utf8>>, arizona_terminal:escape(<<"café"/utf8>>)),
+    ?assertEqual(~"", arizona_terminal:escape(<<7, 27, 127>>)).
 
 %% --------------------------------------------------------------------
 %% Helpers

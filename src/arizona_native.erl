@@ -39,6 +39,7 @@ form valid JSON.
 -export([raw_text_kind/1]).
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
+-export([escape/1]).
 
 -spec name(atom()) -> binary().
 name(Atom) ->
@@ -129,6 +130,13 @@ scope_static(Fp, S0) ->
 %% The native (`?native`) client does not implement `?OP_LIST_PATCH`; single-root
 %% list eachs keep the wholesale re-render it already handles.
 supports_list_patch() -> false.
+
+%% Native output is a JSON wire, not text with an in-band escape vocabulary --
+%% values are carried as JSON strings (encoded downstream), so nothing is escaped
+%% here. Required by the `arizona_renderer` behaviour; the parse transform never
+%% marks native values, so this is not reached via the escape marker.
+-spec escape(binary()) -> binary().
+escape(Bin) when is_binary(Bin) -> Bin.
 
 %% --------------------------------------------------------------------
 %% Internal functions

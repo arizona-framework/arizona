@@ -88,6 +88,11 @@ repaint(Frame) ->
 
 %% Frame-orthogonal effects -> escape sequences emitted with the repaint. quit is
 %% handled by the stop result in paint/3; unknown effects produce no output.
-effect_bytes({arizona_effect, [set_title, Title]}) -> [~"\e]0;", Title, ~"\a"];
-effect_bytes({arizona_effect, [bell]}) -> ~"\a";
-effect_bytes(_Effect) -> [].
+effect_bytes({arizona_effect, [set_title, Title]}) ->
+    %% Sanitize the (user-influenced) title so a `\a`/ESC byte cannot terminate
+    %% the OSC string early and inject escape sequences.
+    [~"\e]0;", arizona_terminal:escape(Title), ~"\a"];
+effect_bytes({arizona_effect, [bell]}) ->
+    ~"\a";
+effect_bytes(_Effect) ->
+    [].

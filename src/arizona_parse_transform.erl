@@ -2167,17 +2167,17 @@ list_has_element_tuple({cons, _, Head, Tail}) ->
 list_has_element_tuple(_) ->
     false.
 
-%% Tag a value interpolation `{esc, Fun}` (escaped at the HTML boundary) or leave
-%% it bare. Only the HTML backend escapes -- native/terminal output is plain text,
-%% not HTML, so escaping there would corrupt it (`>` -> `&gt;`). Blocks are always
-%% left bare and spliced raw.
-esc_spec(arizona_html, ExprAST, FunAST) ->
+%% Tag a value interpolation `{esc, Fun}` (escaped at the render boundary per the
+%% target's backend) or leave it bare. HTML entity-escapes and the terminal
+%% sanitizes control bytes, so both mark scalar values; native (JSON wire) never
+%% escapes, so it stays bare. Blocks are always left bare and spliced raw.
+esc_spec(arizona_native, _ExprAST, FunAST) ->
+    FunAST;
+esc_spec(_Backend, ExprAST, FunAST) ->
     case is_block_content_expr(ExprAST) of
         true -> FunAST;
         false -> {tuple, 0, [{atom, 0, esc}, FunAST]}
-    end;
-esc_spec(_Backend, _ExprAST, FunAST) ->
-    FunAST.
+    end.
 
 is_block_content_expr({map, _, _}) ->
     true;

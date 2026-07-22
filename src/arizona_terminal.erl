@@ -31,6 +31,17 @@ close), so set the style on the `text`/`line` that needs it. An unrecognised
 style atom, an unknown valued attribute, a dynamic attribute value, or an event
 command attribute is **rejected at compile time** with a clear message rather
 than silently dropped.
+
+## Escaping
+
+Dynamic content values are **control-char sanitized** at render (`escape/1`, the
+`arizona_renderer` escape callback): C0 bytes (except `\\n`/`\\t`) and DEL are
+stripped so an interpolated value cannot inject ANSI/OSC escape sequences into
+the terminal (the terminal analog of XSS -- e.g. an OSC 52 clipboard write or a
+scrollback wipe in a shared-channel app). UTF-8 is preserved. The `?raw`
+opt-out bypasses this, so never wrap untrusted data in `?raw` in a `?terminal`
+template. Static styling escapes (the `s` bytes above) are framework-emitted and
+never sanitized.
 """.
 -behaviour(arizona_renderer).
 
@@ -53,6 +64,7 @@ than silently dropped.
 -export([raw_text_kind/1]).
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
+-export([escape/1]).
 
 %% Full SGR reset (clears colour and every text style at once); io_ansi has no
 %% whole-reset helper, only per-attribute `*_off` and `default_color`.
@@ -179,6 +191,30 @@ scope_static(_Fp, S0) ->
 %% The terminal client does not implement `?OP_LIST_PATCH`; single-root list eachs
 %% keep the wholesale re-render.
 supports_list_patch() -> false.
+
+-doc """
+Sanitize a dynamic value's bytes for terminal output. Strips the C0 control bytes
+`0x00-0x1F` (keeping `\\n` and `\\t`) and `0x7F` (DEL), so an interpolated value
+cannot inject ANSI/OSC/DCS escape sequences (e.g. `\\e]52;c;...` clipboard writes,
+`\\e[3J` scrollback wipes) into other users' terminals. Bytes `>= 0x80` are kept
+verbatim so UTF-8 multi-byte sequences are not corrupted; dropping `\\e` (0x1B)
+already neutralizes the 7-bit C1 forms and every escape-sequence introducer.
+""".
+-spec escape(binary()) -> binary().
+escape(Bin) when is_binary(Bin) ->
+    escape(Bin, <<>>).
+
+escape(<<>>, Acc) ->
+    Acc;
+escape(<<C, R/binary>>, Acc) when C >= 16#20, C =/= 16#7F ->
+    escape(R, <<Acc/binary, C>>);
+escape(<<$\n, R/binary>>, Acc) ->
+    escape(R, <<Acc/binary, $\n>>);
+escape(<<$\t, R/binary>>, Acc) ->
+    escape(R, <<Acc/binary, $\t>>);
+escape(<<_C, R/binary>>, Acc) ->
+    %% Any other C0 control (incl. ESC 0x1B, BEL 0x07) or DEL 0x7F: drop it.
+    escape(R, Acc).
 
 %% --------------------------------------------------------------------
 %% Internal functions

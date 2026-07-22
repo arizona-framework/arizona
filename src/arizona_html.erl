@@ -28,6 +28,7 @@ identical to the previous inlined emission.
 -export([raw_text_kind/1]).
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
+-export([escape/1]).
 
 -spec name(atom()) -> binary().
 name(Atom) ->
@@ -131,3 +132,18 @@ scope_static(Fp, S0) ->
 %% The web client implements `?OP_LIST_PATCH` (positional single-root plain-list
 %% `?each` diffing), so single-root list items are flagged for it.
 supports_list_patch() -> true.
+
+%% HTML-escape the five metacharacters; safe for element content and
+%% double/single-quoted attribute values. Byte-at-a-time over the tail is
+%% UTF-8 safe (continuation bytes are all > 127, never a metacharacter).
+-spec escape(binary()) -> binary().
+escape(Bin) when is_binary(Bin) ->
+    escape(Bin, <<>>).
+
+escape(<<>>, Acc) -> Acc;
+escape(<<"&", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&amp;">>);
+escape(<<"<", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&lt;">>);
+escape(<<">", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&gt;">>);
+escape(<<"\"", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&quot;">>);
+escape(<<"'", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#39;">>);
+escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
