@@ -25,6 +25,11 @@ The defaults:
 
 -behaviour(arizona_terminal_driver).
 
+%% BEL (0x07). Erlang has no `\a` escape (unlike C -- `~"\a"` is the literal byte
+%% `a`, 0x61, not the alert char), so BEL is written as control-G. Used as the
+%% OSC string terminator for `set_title` and as the `bell` effect's byte.
+-define(BEL, ~"\^g").
+
 -export([init/1]).
 -export([keys/2]).
 -export([paint/3]).
@@ -89,10 +94,10 @@ repaint(Frame) ->
 %% Frame-orthogonal effects -> escape sequences emitted with the repaint. quit is
 %% handled by the stop result in paint/3; unknown effects produce no output.
 effect_bytes({arizona_effect, [set_title, Title]}) ->
-    %% Sanitize the (user-influenced) title so a `\a`/ESC byte cannot terminate
+    %% Sanitize the (user-influenced) title so a BEL/ESC byte cannot terminate
     %% the OSC string early and inject escape sequences.
-    [~"\e]0;", arizona_terminal:escape(Title), ~"\a"];
+    [~"\e]0;", arizona_terminal:escape(Title), ?BEL];
 effect_bytes({arizona_effect, [bell]}) ->
-    ~"\a";
+    ?BEL;
 effect_bytes(_Effect) ->
     [].

@@ -23,6 +23,8 @@
 -export([client_count_reflects_subscribers/1]).
 -export([tty_serve_reaps_view_and_reader/1]).
 -export([render_attr_rejected/1]).
+-export([bell_effect_emits_bel/1]).
+-export([set_title_effect_bel_terminated/1]).
 
 %% Drives the ?terminal demo view through arizona_live with no transport and no
 %% HTTP server -- the path the terminal runtime drives, minus the TTY.
@@ -49,7 +51,9 @@ all() ->
         input_broadcasts_message,
         client_count_reflects_subscribers,
         tty_serve_reaps_view_and_reader,
-        render_attr_rejected
+        render_attr_rejected,
+        bell_effect_emits_bel,
+        set_title_effect_bel_terminated
     ].
 
 init_per_suite(Config) ->
@@ -181,6 +185,26 @@ render_attr_rejected(Config) when is_list(Config) ->
         {arizona_render_reject, _},
         arizona_terminal:render_attr(~"data-x", ~"v")
     ).
+
+%% Erlang has no `\a` escape (unlike C), so BEL must be written as control-G.
+%% The bell effect must emit the actual BEL byte (0x07), never the literal `a`
+%% that `~"\a"` produced.
+bell_effect_emits_bel(Config) when is_list(Config) ->
+    {Output, continue, _State} = arizona_terminal_default_driver:paint(
+        ~"", [arizona_terminal_effect:bell()], #{}
+    ),
+    Bin = iolist_to_binary(Output),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<7>>)),
+    ?assertEqual(nomatch, binary:match(Bin, ~"a")).
+
+%% The set_title OSC string must be terminated by BEL (0x07), not the literal `a`.
+%% Asserts the exact `ESC ]0;<title> BEL` sequence.
+set_title_effect_bel_terminated(Config) when is_list(Config) ->
+    {Output, continue, _State} = arizona_terminal_default_driver:paint(
+        ~"", [arizona_terminal_effect:set_title(~"Doc")], #{}
+    ),
+    Bin = iolist_to_binary(Output),
+    ?assertNotEqual(nomatch, binary:match(Bin, <<"\e]0;Doc", 7>>)).
 
 log_lines_filters_effects(Config) when is_list(Config) ->
     Effects = [
