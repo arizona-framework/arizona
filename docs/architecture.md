@@ -49,7 +49,7 @@
 | `src/arizona_roadrunner_req.erl`          | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                                     |
 | `src/arizona_roadrunner_reload.erl`       | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                                     |
 | `src/arizona_jsonrpc.erl`                 | JSON-RPC 2.0 codec -- `decode/1`, `result/2`, `error/3`, `notification/2`                                                                                                                 |
-| `src/arizona_mcp.erl`                     | MCP server behaviour an app implements (`init/1`, `tools/1`, `handle_tool/3`, optional `resources`/`prompts`/`channels`/`terminate`) plus the server-push API (`broadcast/3`, `notify/3`) |
+| `src/arizona_mcp.erl`                     | MCP server behaviour an app implements (`init/1`, `tools/1`, `handle_tool/4`, optional `resources`/`prompts`/`channels`/`terminate`) plus the server-push API (`broadcast/3`, `notify/3`) |
 | `src/arizona_mcp_handler.erl`             | Roadrunner handler -- MCP Streamable HTTP transport (POST/GET/DELETE), the Origin/auth gate, and the pure `dispatch/3` / `handle_method/4` method dispatch                                |
 | `src/arizona_mcp_session.erl`             | Per-session `gen_server` -- holds the handler state, serializes a session's requests, owns the SSE channel and the resumability buffer                                                    |
 | `src/arizona_mcp_session_registry.erl`    | ETS registry mapping `Mcp-Session-Id` to a session pid; sweeps dead pids on lookup                                                                                                        |
@@ -107,7 +107,7 @@ is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
 (`arizona_live:render_current/1`) rather than applying diff ops, so the backend
 writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
 
-Escaping is per-backend via the `arizona_renderer:escape/1` callback, selected by the
+Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
 bytes except `\n`/`\t`, and DEL; preserves UTF-8), native is a no-op (JSON handles it).
 So a dynamic value in a `?terminal` view cannot inject ANSI/OSC escape sequences into
@@ -1230,11 +1230,18 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | 7    | `OP_ITEM_PATCH`  | `[target, key, innerOps]`  | Stream item patch                                      |
 | 8    | `OP_REPLACE`     | `[target, html]`           | Element swap (navigate); `target` is the OLD view id   |
 | 9    | `OP_MOVE`        | `[target, key, afterKey]`  | Stream move (afterKey=null -> prepend)                 |
+| 10   | `OP_LIST_PATCH`  | `[target, subOps]`         | Single-root plain-list `?each` positional item patch   |
 
 A content-slot dynamic -- a value, a nested template, *or a plain-list `?each`* -- is anchored
 by `<!--az:X-->...<!--/az-->` comment markers in SSR (no wrapper element carries the slot `az`),
-so its diff patch is the marker-aware `OP_TEXT`: it replaces only the span between the markers,
-leaving the slot's static siblings and the enclosing element intact.
+so its diff patch replaces only the span between the markers, leaving the slot's static siblings
+and the enclosing element intact. A single-root plain-list `?each` patches in place with
+`OP_LIST_PATCH`: its `subOps` address items by DOM-order position between the markers
+(`[OP_ITEM_PATCH, idx, innerOps]` patches item `idx`, `[OP_REMOVE, idx]` removes it, and
+`[OP_INSERT, idx, html]` inserts), so an item change never touches the container's `childList`.
+The wholesale marker-aware `OP_TEXT` re-render is the fallback -- used when positional patching is
+unsound (the old slot was not a list, the item is not a single root element, or the list rendered a
+per-item child view). A scalar value or a nested template still patches via that `OP_TEXT`.
 
 **Exception -- raw-text elements (`script`/`style`/`textarea`/`title`).** The browser does not
 parse HTML comments inside these, so a comment marker becomes literal content and corrupts it (an

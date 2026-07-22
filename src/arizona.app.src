@@ -2,12 +2,21 @@
     {description, "Real-time web framework for Erlang"},
     {vsn, semver},
     {registered, []},
+    %% Only what arizona ALWAYS needs. roadrunner (HTTP server), ssh (SSH/TTY
+    %% transport), and fs (dev reloader watcher) are deliberately in NEITHER
+    %% `applications` nor `optional_applications`: arizona lazy-starts each on
+    %% demand (roadrunner when a `server` env is set, ssh when the SSH transport
+    %% starts, fs via `fs:start_link/2`). Listing them here -- or in
+    %% optional_applications, which relx also bundles AND force-starts -- would
+    %% boot them for every consumer, including server-less/static-generation use,
+    %% and start fs's default CWD watcher in production. A consumer that ships the
+    %% server declares roadrunner (and ssh) in its OWN app's `applications`, so
+    %% its release bundles them and arizona lazy-starts them.
     {applications, [
         kernel,
         stdlib,
         crypto
     ]},
-    {optional_applications, [roadrunner, fs, ssh]},
     {mod, {arizona_app, []}},
     {env, []},
     {modules, []},

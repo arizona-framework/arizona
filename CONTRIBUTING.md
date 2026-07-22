@@ -27,10 +27,12 @@ make compile
 Two commands cover day-to-day development:
 
 - **`make precommit`** -- run before every commit. Formats Erlang/JS,
-  runs fast checks (lint, hank, xref, JS type checks), and runs the
-  Erlang + JS unit test suites. Skips Dialyzer and E2E for speed.
-- **`make ci`** -- run before pushing. The full pipeline: precommit plus
-  Dialyzer, coverage, E2E, and docs. CI re-runs it on the PR.
+  recompiles, runs the fast checks (Erlang format check plus the JS
+  lint/type checks), and runs the Erlang + JS unit test suites. Skips
+  Elvis lint, hank, xref, Dialyzer, and E2E for speed.
+- **`make ci`** -- run before pushing. The full pipeline: adds Elvis lint,
+  hank, xref, Dialyzer, coverage, E2E, and docs on top of what precommit
+  covers. CI re-runs it on the PR.
 
 For everything else (single-suite runs, coverage reports, individual
 check stages, doc generation, etc.) see the targets in the project's

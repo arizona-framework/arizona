@@ -21,12 +21,12 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | Target | Description |
 |--------|-------------|
 | `make` / `make start` | Start the test server (default) |
-| `make ci` | Full CI: check + test + cover + E2E + doc |
-| `make precommit` | Fast pre-commit: fmt, check-fast, test-erl, test-js |
+| `make ci` | Full CI: compile, check-dirty, `check-erl` + `check-js`, test, cover, E2E, doc |
+| `make precommit` | Fast pre-commit: fmt, compile, `check-fmt` + `check-js`, test-erl, test-js |
 | `make compile` | Compile Erlang sources |
 | `make fmt` | Format all (`fmt-erl` `fmt-js`) |
-| `make check` | All checks incl. dialyzer (`check-erl` `check-js`) |
-| `make check-fast` | Fast checks -- no dialyzer (`check-fmt` `check-lint` `check-hank` `check-xref` `check-js`) |
+| `make check` | All checks incl. dialyzer (`check-erl` `check-js` `check-md` `check-yaml` `check-actions`) |
+| `make check-fast` | Fast checks -- no dialyzer (`check-fmt` `check-js` `check-md`) |
 | `make test` | All tests -- no coverage (`test-erl` `test-js` `test-e2e`) |
 | `make test-erl` | Common Test + EUnit |
 | `make test-ct` | Common Test only |
