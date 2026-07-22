@@ -3632,6 +3632,82 @@ describe('connection CSS classes', () => {
 });
 
 // ---------------------------------------------------------------------------
+// WS_CLOSE_CRASH (4500) reload loop guard (J6)
+// ---------------------------------------------------------------------------
+
+describe('WS_CLOSE_CRASH reload guard', () => {
+    /** @type {ReturnType<typeof setupMockWorker>} */
+    let mock;
+    let reload;
+    let errSpy;
+
+    beforeEach(() => {
+        sessionStorage.clear();
+        reload = vi.fn();
+        errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        if (mock) mock.restore();
+        errSpy.mockRestore();
+        sessionStorage.clear();
+    });
+
+    // Stub location AFTER connect() runs: connect builds the Worker URL via
+    // `new URL(..., import.meta.url)`, which vitest+jsdom resolves against the real
+    // `location`, so replacing it beforehand throws. crashReload only needs
+    // `location.reload`, and no code path after connect constructs a URL.
+    function stubReload() {
+        vi.stubGlobal('location', { reload, href: 'http://localhost/' });
+    }
+
+    it('reloads on a crash close but stops after the cap to break the loop', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        stubReload();
+
+        // A deterministic mount crash: every close is a 4500 (WS_CLOSE_CRASH).
+        for (let i = 0; i < 5; i++) mock.simulateClose(4500);
+
+        // At most 3 reloads, then it gives up (no infinite loop) and logs.
+        expect(reload).toHaveBeenCalledTimes(3);
+        expect(errSpy).toHaveBeenCalled();
+    });
+
+    it('a normal (non-crash) close never reloads', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        stubReload();
+
+        mock.simulateClose(1006);
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('a clean reconnect resets the guard so a later crash reloads again', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        stubReload();
+
+        for (let i = 0; i < 4; i++) mock.simulateClose(4500); // 3 reloads, then stop
+        expect(reload).toHaveBeenCalledTimes(3);
+
+        mock.simulateOpen(true); // a clean reconnect clears the crash counter
+        mock.simulateClose(4500);
+        expect(reload).toHaveBeenCalledTimes(4);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // connection params
 // ---------------------------------------------------------------------------
 
