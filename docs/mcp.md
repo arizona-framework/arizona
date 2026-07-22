@@ -117,10 +117,16 @@ route is **localhost-only by default**: `arizona_dev_mcp:route/1,2` set `allow_r
 and the MCP handler refuses any request whose peer is not a loopback address -- regardless of which
 interface the listener bound. That peer check (mirroring Tidewave, which is localhost-only by default
 rather than gated by a per-tool switch) is the primary guard, alongside the `Origin` check and
-keeping this a dev-only dependency; set `allow_remote_access => true` only on a network you trust. As
-defense in depth you can also bind the listener to loopback (`proto_opts => #{ip => {127,0,0,1}}`).
-Running it in session mode means a slow eval runs in the session's worker, so it is cancellable and
-bounded by `request_timeout_ms` rather than wedging the session.
+keeping this a dev-only dependency; set `allow_remote_access => true` only on a network you trust.
+
+**The peer check is void behind a proxy or tunnel.** It trusts the immediate TCP peer, so a same-host
+reverse proxy or a dev tunnel (ngrok/cloudflared/port-forward) makes every remote client look like
+loopback -- and binding the listener to loopback does *not* help (the tunnel connects to loopback
+anyway). Whenever the port is reachable through anything but a direct local socket, gate `eval` with
+an `auth` hook (a shared secret) instead; `proto_opts => #{ip => {127,0,0,1}}` only hardens a *direct*
+remote connection, and `proxy_protocol => true` lets a client spoof the peer. Running it in session
+mode means a slow eval runs in the session's worker, so it is cancellable and bounded by
+`request_timeout_ms` rather than wedging the session.
 
 ## Route options
 
@@ -131,7 +137,7 @@ All optional, with safe defaults; a route that sets none behaves as a plain stat
 | `sessions` | `false` | Opt into stateful sessions (`initialize` mints an `Mcp-Session-Id`). |
 | `origins` | `[]` | `Origin` allowlist (no-`Origin` requests are always allowed). |
 | `auth` | none | A per-route auth hook run after the `Origin` check. |
-| `allow_remote_access` | `true` | When `false`, refuse a non-loopback peer (regardless of listener binding). `arizona_dev_mcp` defaults it `false`. |
+| `allow_remote_access` | `false` | Localhost-only unless `true`: refuse a non-loopback peer (void behind a same-host proxy/tunnel -- use `auth`). |
 | `max_sessions` | unbounded | Cap on live sessions for this route; `initialize` past it gets a `503`. |
 | `session_ttl_ms` | `300000` | Idle timeout before an abandoned session is reaped. |
 | `request_timeout_ms` | `60000` | How long a buffered request waits before the client gets a timeout. |

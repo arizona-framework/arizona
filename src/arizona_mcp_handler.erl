@@ -166,28 +166,35 @@ with_gate(Req, Opts, Fun) ->
             end
     end.
 
-%% Localhost gate. When the route sets `allow_remote_access => false`, refuse a
-%% request whose peer is not a loopback address -- regardless of which interface
-%% the listener bound. This is the primary guard for a dev MCP's `eval` (RCE):
-%% the tool self-protects at the application layer rather than trusting the
-%% operator to bind loopback (mirrors Tidewave). Default `true` leaves a generic
-%% MCP route unrestricted.
+%% Localhost gate, safe-by-default. Unless the route sets
+%% `allow_remote_access => true`, refuse a request whose peer is not a loopback
+%% address -- regardless of which interface the listener bound. This is the
+%% primary guard for a dev MCP's `eval` (RCE): the tool self-protects at the
+%% application layer rather than trusting the operator to bind loopback (mirrors
+%% Tidewave). Default `false` matches the sibling `origins`/`check_origin` gates
+%% (a genuinely-remote MCP opts in explicitly) rather than leaning on the mount
+%% helper to close the hole.
+%%
+%% Caveat: the peer is the immediate TCP peer, so a same-host reverse proxy or a
+%% dev tunnel (ngrok/cloudflared) makes every client look loopback -- pair any
+%% non-direct remote exposure with an `auth` hook; the peer check alone can't see
+%% past a local hop.
 check_remote_access(Req, Opts) ->
-    case maps:get(allow_remote_access, Opts, true) of
-        true ->
-            ok;
+    case maps:get(allow_remote_access, Opts, false) of
         false ->
             case is_loopback_peer(roadrunner_req:peer(Req)) of
                 true -> ok;
                 false -> forbidden
-            end
+            end;
+        true ->
+            ok
     end.
 
 %% A loopback peer: IPv4 127.0.0.0/8, IPv6 `::1`, or an IPv4-mapped
-%% `::ffff:127.x`. A missing peer (`undefined`) fails closed.
+%% `::ffff:127.0.0.0/8`. A missing peer (`undefined`) fails closed.
 is_loopback_peer({{127, _, _, _}, _Port}) -> true;
 is_loopback_peer({{0, 0, 0, 0, 0, 0, 0, 1}, _Port}) -> true;
-is_loopback_peer({{0, 0, 0, 0, 0, 16#ffff, 16#7f00, _}, _Port}) -> true;
+is_loopback_peer({{0, 0, 0, 0, 0, 16#ffff, G, _}, _Port}) when G bsr 8 =:= 127 -> true;
 is_loopback_peer(_) -> false.
 
 %% Run the route's optional `auth` hook (a `fun/1` or `{Module, Function}`)
@@ -291,11 +298,6 @@ Exported for unit testing; `handle/1` calls it inside a crash guard.
     Ctx :: map().
 dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
     PageSize = maps:get(page_size, Ctx, ?DEFAULT_PAGE_SIZE),
-    %% Route opts (the `{mcp, ...}` route's config) are handed to the callback's
-    %% `init/1` as `mcp_route_opts` so a callback can configure itself from its
-    %% own route config. Server-supplied, so it overrides any same-named client
-    %% `params` key below.
-    RouteOpts = maps:get(route_opts, Ctx, #{}),
     case Id of
         %% A JSON-RPC notification (no id) is accepted and never answered,
         %% whatever its method -- `notifications/initialized` included.
@@ -303,13 +305,13 @@ dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
             notification;
         _ when Method =:= ~"initialize" ->
             {ServerInfo, #{caps := Caps}} =
-                open_session(Mod, Params#{mcp_route_opts => RouteOpts}, PageSize),
+                open_session(Mod, Params, PageSize),
             {reply, arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params))};
         _ ->
             %% Stateless: a fresh per-request session sourced from `init/1`.
             %% Nothing outlives the request, so the threaded-back session is
             %% discarded -- the next request rebuilds from `init/1`.
-            {_ServerInfo, Session} = open_session(Mod, #{mcp_route_opts => RouteOpts}, PageSize),
+            {_ServerInfo, Session} = open_session(Mod, #{}, PageSize),
             {Outcome, _Session1} = handle_method(Method, Params, Id, Session),
             Outcome
     end.
@@ -431,7 +433,7 @@ check_origin(Req, Opts) ->
 %% Stateless mode: every request is self-contained -- dispatch against a fresh
 %% per-request session, encode. No `Mcp-Session-Id`.
 reply_stateless(Request, #{handler := Mod} = Opts) ->
-    reply_dispatch(Mod, Request, page_size(Opts), Opts).
+    reply_dispatch(Mod, Request, page_size(Opts)).
 
 %% The configured list page size, defaulting when the route does not set it. A
 %% `page_size` of zero/negative would make the cursor never advance (an empty
@@ -506,7 +508,7 @@ start_initialized_session(Params, Id, RouteKey, #{handler := Mod} = Opts) ->
         %% The session id is handed to the handler so it can address its own
         %% session later via `arizona_mcp:notify/3`. An atom key can't collide
         %% with the client's binary-keyed JSON params.
-        InitParams = Params#{mcp_session_id => SessionId, mcp_route_opts => Opts},
+        InitParams = Params#{mcp_session_id => SessionId},
         {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams, page_size(Opts)),
         SessionOpts = #{
             ttl_ms => maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
@@ -620,9 +622,7 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
             %% Stateless: a fresh per-request session; the worker frees the loop
             %% to push, and any state it mutates is per-request and discarded.
             %% page_size is irrelevant to a tools/call -- the default suffices.
-            {_ServerInfo, Session} = open_session(
-                Mod, #{mcp_route_opts => Opts}, ?DEFAULT_PAGE_SIZE
-            ),
+            {_ServerInfo, Session} = open_session(Mod, #{}, ?DEFAULT_PAGE_SIZE),
             Ctx = #{token => Token, to => ConnPid},
             Worker = spawn(fun() ->
                 ok = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
@@ -710,8 +710,8 @@ stream_tool_outcome({error, ToolError, NewState}, Id) ->
 generate_session_id() ->
     binary:encode_hex(crypto:strong_rand_bytes(16), lowercase).
 
-reply_dispatch(Mod, Request, PageSize, RouteOpts) ->
-    try dispatch(Mod, Request, #{page_size => PageSize, route_opts => RouteOpts}) of
+reply_dispatch(Mod, Request, PageSize) ->
+    try dispatch(Mod, Request, #{page_size => PageSize}) of
         {reply, Object} -> safe_json(Object, reply_id(Request));
         {error, Object} -> safe_json(Object, reply_id(Request));
         notification -> roadrunner_resp:status(202)

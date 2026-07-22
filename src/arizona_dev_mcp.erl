@@ -38,9 +38,15 @@ arizona_dev_mcp:route(~"/mcp")
 arizona_dev_mcp:route(~"/mcp", #{allow_remote_access => true, auth => Hook})
 ```
 
-As defense in depth you can also bind the dev listener to loopback
-(`proto_opts => #{ip => {127,0,0,1}}` in your server config) so the endpoint is
-never on the wire. Never expose the dev MCP to an untrusted network.
+**Limitation -- the peer check is void behind a proxy or tunnel.** It trusts the
+*immediate TCP peer*, so a same-host reverse proxy or a dev tunnel
+(ngrok/cloudflared/port-forward) makes every remote client look like loopback,
+and binding the listener to loopback does **not** help (the tunnel connects to
+loopback anyway). Whenever the port is reachable through anything but a direct
+local socket, treat the peer check as void and gate `eval` with an `auth` hook (a
+shared secret). Binding loopback (`proto_opts => #{ip => {127,0,0,1}}`) only
+hardens against a *direct* remote connection, and `proxy_protocol => true` lets a
+client spoof the peer outright. Never expose the dev MCP to an untrusted network.
 
 Session mode (`sessions => true`, the default) makes `eval`'s bindings persist
 across calls (a REPL the agent drives) and runs a slow `eval`/`render_component`
