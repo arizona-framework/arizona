@@ -74,14 +74,16 @@ const CRASH_RELOAD_KEY = 'arizona:crash-reloads';
  * an error and stay put with the `az-disconnected` state already set by the caller.
  */
 function crashReload() {
+    /** @type {{count?: number, first?: number}} */
     let rec = {};
     try {
-        rec = JSON.parse(sessionStorage.getItem(CRASH_RELOAD_KEY)) || {};
+        const raw = sessionStorage.getItem(CRASH_RELOAD_KEY);
+        if (raw) rec = JSON.parse(raw);
     } catch {
         /* no/invalid record -- treat as a fresh window */
     }
     const now = Date.now();
-    const count = rec.first && now - rec.first < CRASH_RELOAD_WINDOW_MS ? rec.count : 0;
+    const count = rec.first && now - rec.first < CRASH_RELOAD_WINDOW_MS ? rec.count || 0 : 0;
     if (count >= CRASH_RELOAD_MAX) {
         console.error(
             `[arizona] WebSocket closed with a crash ${count} times within ` +
@@ -518,7 +520,7 @@ function mountHook(el) {
  * Invoke a hook lifecycle callback in isolation: a throwing user hook is logged
  * and swallowed so it can't abort the op batch it runs inside (the server
  * snapshot has already advanced, so a bubbling throw would desync the DOM).
- * @param {object} instance
+ * @param {{__name: string} & Object<string, *>} instance
  * @param {Function} cb
  * @param {string} phase
  */
@@ -1495,6 +1497,7 @@ function maybeResetForm(form) {
  * submit listener can defer `az-form-reset` to the fetch response instead of resetting
  * synchronously on submit.
  * @param {Array<*>} cmds
+ * @returns {boolean}
  */
 function commandsIncludeFetch(cmds) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
