@@ -12,7 +12,7 @@
     boot_without_config/1,
     boot_with_only_server/1,
     boot_with_only_reloader/1,
-    declares_runtime_deps_in_applications/1
+    transport_deps_are_not_forced/1
 ]).
 
 -define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
@@ -23,7 +23,7 @@ all() ->
         boot_without_config,
         boot_with_only_server,
         boot_with_only_reloader,
-        declares_runtime_deps_in_applications
+        transport_deps_are_not_forced
     ].
 
 init_per_testcase(boot_with_server_and_reloader, Config) ->
@@ -40,7 +40,7 @@ init_per_testcase(boot_with_server_and_reloader, Config) ->
 init_per_testcase(boot_without_config, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     Config;
-init_per_testcase(declares_runtime_deps_in_applications, Config) ->
+init_per_testcase(transport_deps_are_not_forced, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     Config;
 init_per_testcase(boot_with_only_server, Config) ->
@@ -87,18 +87,28 @@ boot_with_only_reloader(Config) when is_list(Config) ->
     ?assertNot(is_listener_up(arizona_http)),
     ?assert(has_watcher_child()).
 
-%% relx (and OTP's boot script) ignore an app listed only in
-%% optional_applications, so a runtime dep must also appear in `applications` or a
-%% release omits it and the server crashes at boot. `roadrunner` (the HTTP server)
-%% and `ssh` (the SSH terminal transport) must be there. `fs` (the dev reloader's
-%% watcher) must NOT: it is started via standalone `fs:start_link/2`, so forcing
-%% the `fs` app on the boot path would start its default CWD watcher in every
-%% release, including production.
-declares_runtime_deps_in_applications(Config) when is_list(Config) ->
+%% Arizona lazy-starts its heavy deps on demand: roadrunner only when a `server`
+%% env is set (arizona_app:maybe_start_server/0), ssh only when the SSH transport
+%% starts (arizona_terminal_ssh:start/1), fs via standalone fs:start_link/2. So it
+%% forces none of them onto the boot path. Listing any in `applications` -- or in
+%% `optional_applications`, which relx also bundles AND force-starts -- would boot
+%% them for every consumer, including a server-less/static-generation user, and
+%% would start fs's default CWD watcher in production. A consumer that ships the
+%% server declares roadrunner/ssh in its OWN app's `applications`.
+transport_deps_are_not_forced(Config) when is_list(Config) ->
     {ok, Apps} = application:get_key(arizona, applications),
-    ?assert(lists:member(roadrunner, Apps)),
-    ?assert(lists:member(ssh, Apps)),
-    ?assertNot(lists:member(fs, Apps)).
+    ?assert(lists:member(crypto, Apps)),
+    ?assertNot(lists:member(roadrunner, Apps)),
+    ?assertNot(lists:member(ssh, Apps)),
+    ?assertNot(lists:member(fs, Apps)),
+    Optional =
+        case application:get_key(arizona, optional_applications) of
+            {ok, L} -> L;
+            undefined -> []
+        end,
+    ?assertNot(lists:member(roadrunner, Optional)),
+    ?assertNot(lists:member(ssh, Optional)),
+    ?assertNot(lists:member(fs, Optional)).
 
 %% ============================================================================
 %% Helpers
