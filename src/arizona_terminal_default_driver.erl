@@ -21,6 +21,18 @@ The defaults:
   then clear below) so it does not flicker, and interprets the framework terminal
   effects (`m:arizona_terminal_effect`): `quit` stops the session, `set_title` sets
   the terminal title, `bell` rings it. Unknown effects are ignored.
+
+> #### Frame must fit the terminal {: .warning}
+>
+> The in-place repaint homes with `\e[H` (absolute top-left) and writes every line,
+> so it assumes the frame **fits within the terminal's visible rows**. A frame taller
+> than the window scrolls on each paint: `\e[H` no longer addresses the true top and
+> each repaint appends another screenful to the scrollback (a continuous flood under
+> the periodic tick). Clamping to the visible rows would need the terminal geometry,
+> which this default driver is not given (the SSH transport knows it, but a local TTY
+> cannot read its own size). Keep a `?terminal` view's rendered height within the
+> smallest terminal you target, or supply a custom driver that clamps against a size
+> it tracks.
 """.
 
 -behaviour(arizona_terminal_driver).
@@ -96,7 +108,9 @@ to_command(Key) -> {event, ~"key", #{key => Key}}.
 
 %% Repaint in place: home, write each line clearing to end-of-line (so a now-shorter
 %% line erases its old tail) then CRLF, and finally clear everything below (leftover
-%% from a previously longer frame). Avoids the full-screen flash of \e[2J.
+%% from a previously longer frame). Avoids the full-screen flash of \e[2J. Assumes
+%% the frame fits the terminal's visible rows -- a taller frame scrolls and floods
+%% the scrollback (see the "Frame must fit the terminal" note in the moduledoc).
 repaint(Frame) ->
     [~"\e[H", binary:replace(Frame, ~"\n", ~"\e[K\r\n", [global]), ~"\e[J"].
 
