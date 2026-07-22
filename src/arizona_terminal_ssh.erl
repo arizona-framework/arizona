@@ -38,6 +38,7 @@ production passes real keys and real auth.
 %% --------------------------------------------------------------------
 
 -export([start/1]).
+-export([daemon_opts/1]).
 
 %% --------------------------------------------------------------------
 %% ssh_server_channel callback exports
@@ -49,6 +50,7 @@ production passes real keys and real auth.
 -export([terminate/2]).
 
 -ignore_xref([start/1]).
+-ignore_xref([daemon_opts/1]).
 
 %% init/1 is the ssh_server_channel callback and must return {ok, State}; elvis's
 %% consistent_ok_error_spec doesn't know this behaviour, so it misreads the
@@ -85,6 +87,16 @@ production passes real keys and real auth.
 -define(DEFAULT_ROWS, 24).
 -define(DEFAULT_COLS, 80).
 
+%% Bound the concurrent session channels a single daemon accepts, so a client
+%% cannot mount unlimited live views (each is a process + pubsub subscription).
+%% A caller's own `max_sessions` in `daemon_opts` overrides this default.
+-define(DEFAULT_MAX_SESSIONS, 100).
+
+%% Finite per-frame send timeout. With the ssh default of `infinity`, a client that
+%% stops extending its flow-control window blocks the channel forever while pushes
+%% accumulate (unbounded memory). A finite timeout bounds each send instead.
+-define(SEND_TIMEOUT, 5000).
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
@@ -96,14 +108,32 @@ interactive shell. Returns the daemon reference (stop it with
 `m:ssh` daemon options (typically authentication).
 """.
 -spec start(opts()) -> {ok, ssh:daemon_ref()} | {error, term()}.
-start(#{port := Port, handler := Handler, driver := Driver, system_dir := SystemDir} = Opts) ->
+start(#{port := Port} = Opts) ->
     {ok, _Started} = application:ensure_all_started(ssh),
-    DaemonOpts = [
+    ssh:daemon(Port, daemon_opts(Opts)).
+
+-doc """
+Builds the `m:ssh` daemon options for `start/1`: the framework's `ssh_cli` (this
+module as the shell) and `system_dir`, a bounded `max_sessions` default (so a client
+cannot mount unlimited live views), and the caller's `daemon_opts` (typically
+authentication). A caller's own `max_sessions` overrides the default.
+""".
+-spec daemon_opts(opts()) -> [term()].
+daemon_opts(#{handler := Handler, driver := Driver, system_dir := SystemDir} = Opts) ->
+    CallerOpts = maps:get(daemon_opts, Opts, []),
+    [
         {ssh_cli, {?MODULE, [#{handler => Handler, driver => Driver}]}},
         {system_dir, SystemDir}
-        | maps:get(daemon_opts, Opts, [])
-    ],
-    ssh:daemon(Port, DaemonOpts).
+        | max_sessions_default(CallerOpts) ++ CallerOpts
+    ].
+
+%% Prepend the max_sessions cap unless the caller already set one (their value then
+%% wins). Prepending a default the caller can override keeps the cap opt-out.
+max_sessions_default(CallerOpts) ->
+    case proplists:is_defined(max_sessions, CallerOpts) of
+        true -> [];
+        false -> [{max_sessions, ?DEFAULT_MAX_SESSIONS}]
+    end.
 
 %% --------------------------------------------------------------------
 %% ssh_server_channel Callbacks
@@ -115,15 +145,27 @@ init([#{handler := Handler, driver := Driver}]) ->
 
 -doc """
 Handles non-SSH messages: the one-shot `ssh_channel_up` (records the connection
-and channel) and the live process's `{arizona_push, _, Effects}` updates (timer
-ticks, pubsub), which the session turns into a repaint or a stop. Any other
-message is ignored, mirroring the local driver's selective receive.
+and channel), the live process's `{arizona_push, _, Effects}` updates (timer ticks,
+pubsub) which the session turns into a repaint or a stop, and the linked live
+view's `{'EXIT', _, _}` (ssh channels trap exits, so a crash surfaces as a message
+rather than killing the channel) which restores the client's terminal and stops
+the channel. Any other message is ignored, mirroring the local driver's selective
+receive.
 """.
 -spec handle_msg(term(), state()) -> {ok, state()} | {stop, ssh:channel_id(), state()}.
 handle_msg({ssh_channel_up, ChannelId, ConnectionRef}, State) ->
     {ok, State#state{conn = ConnectionRef, channel = ChannelId}};
 handle_msg({arizona_push, _Ops, Effects}, #state{session = Session, channel = ChannelId} = State) ->
     apply_session_result(arizona_terminal_session:handle_push(Session, Effects), ChannelId, State);
+handle_msg(
+    {'EXIT', _Pid, _Reason}, #state{session = Session, channel = ChannelId} = State
+) when Session =/= undefined ->
+    %% The linked live view died abnormally. Without this the exit is swallowed
+    %% and the client is left with a frozen screen (no teardown) until the next
+    %% keystroke crashes with noproc. Restore the terminal via the driver teardown,
+    %% then stop the channel.
+    ok = arizona_terminal_session:teardown(Session),
+    {stop, ChannelId, State};
 handle_msg(_Msg, State) ->
     {ok, State}.
 
@@ -160,7 +202,9 @@ handle_ssh_msg({ssh_cm, _Conn, _Msg}, State) ->
 terminate(_Reason, #state{session = Session}) when Session =/= undefined ->
     %% Stop the live view so it doesn't outlive the channel and linger as a
     %% pubsub subscriber -- the start_link link doesn't fire on a normal stop.
-    arizona_terminal_session:stop(Session);
+    %% Tolerate a session whose live view already died (the {'EXIT', _, _} path),
+    %% where arizona_live:stop would otherwise raise noproc.
+    stop_session(Session);
 terminate(_Reason, _State) ->
     ok.
 
@@ -187,10 +231,22 @@ start_session(
     {ok, Session} = arizona_terminal_session:start(Handler, Bindings, Driver, [], Out),
     State#state{session = Session}.
 
-%% Write to the SSH channel, swallowing a send error on an already-closing
-%% channel -- the matching `closed` event stops the session.
+%% Stop the live view, tolerating one already gone (the {'EXIT', _, _} teardown
+%% path is where the live process is what died); arizona_live:stop would otherwise
+%% raise noproc.
+stop_session(Session) ->
+    try
+        arizona_terminal_session:stop(Session)
+    catch
+        exit:noproc -> ok
+    end.
+
+%% Write to the SSH channel under a finite timeout so a stalled client (one that
+%% stops extending its flow-control window) cannot block the channel forever.
+%% Type 0 is normal channel data. A send error (a closing channel, or a timeout on
+%% a stalled peer) is swallowed -- the matching `closed` event stops the session.
 send(Conn, ChannelId, Iodata) ->
-    case ssh_connection:send(Conn, ChannelId, Iodata) of
+    case ssh_connection:send(Conn, ChannelId, 0, Iodata, ?SEND_TIMEOUT) of
         ok -> ok;
         {error, _Reason} -> ok
     end.

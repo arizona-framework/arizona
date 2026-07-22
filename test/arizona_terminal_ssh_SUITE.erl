@@ -11,6 +11,8 @@
 -export([restores_cursor_on_quit/1]).
 -export([chat_broadcasts_to_all_terminals/1]).
 -export([disconnect_removes_subscriber/1]).
+-export([live_view_crash_tears_down/1]).
+-export([daemon_opts_bounds_sessions/1]).
 
 %% End-to-end: arizona_terminal_ssh serves the ?terminal demo view over a real SSH daemon,
 %% driven by the OTP ssh client. A throwaway host key + accept-all password auth
@@ -27,7 +29,9 @@ all() ->
         window_change_resizes,
         restores_cursor_on_quit,
         chat_broadcasts_to_all_terminals,
-        disconnect_removes_subscriber
+        disconnect_removes_subscriber,
+        live_view_crash_tears_down,
+        daemon_opts_bounds_sessions
     ].
 
 init_per_suite(Config) ->
@@ -132,9 +136,58 @@ disconnect_removes_subscriber(Config) when is_list(Config) ->
     ok = ssh:close(Conn),
     ok = wait_until(fun() -> length(arizona_pubsub:subscribers(demo)) =:= Before end).
 
+live_view_crash_tears_down(Config) when is_list(Config) ->
+    %% An abnormal live-view crash must not leave the client with a frozen screen.
+    %% ssh channels trap exits, so the linked live view's death arrives as an
+    %% {'EXIT', _, _} message the channel must turn into a teardown + stop, rather
+    %% than silently swallowing it (the pre-fix behaviour).
+    Port = ?config(port, Config),
+    Before = arizona_pubsub:subscribers(demo),
+    {Conn, _Ch} = connect(Port),
+    _ = recv_until(Conn, ~"== Arizona Terminal Demo ==", 3000),
+    %% The live view backing this channel is the new demo subscriber.
+    LivePid = wait_new_subscriber(Before),
+    exit(LivePid, kill),
+    %% The client receives the cursor-restore teardown (hidden at session start).
+    _ = recv_until(Conn, iolist_to_binary(io_ansi:cursor_show()), 3000),
+    ok = ssh:close(Conn).
+
+daemon_opts_bounds_sessions(Config) when is_list(Config) ->
+    %% The daemon caps concurrent session channels by default, so a client cannot
+    %% mount unlimited live views (each is a process + pubsub subscription).
+    Base = #{port => 0, handler => my_handler, driver => my_driver, system_dir => "sysdir"},
+    Opts = arizona_terminal_ssh:daemon_opts(Base),
+    ?assert(is_integer(proplists:get_value(max_sessions, Opts))),
+    ?assert(proplists:get_value(max_sessions, Opts) > 0),
+    %% The framework shell + host key dir are wired into the daemon options.
+    ?assertMatch({arizona_terminal_ssh, _}, proplists:get_value(ssh_cli, Opts)),
+    ?assertEqual("sysdir", proplists:get_value(system_dir, Opts)),
+    %% A caller's own max_sessions overrides the default -- exactly one entry (theirs).
+    Opts2 = arizona_terminal_ssh:daemon_opts(Base#{daemon_opts => [{max_sessions, 3}]}),
+    ?assertEqual([3], [N || {max_sessions, N} <- Opts2]).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+%% Wait until exactly one subscriber has been added to the demo channel since
+%% `Before`, returning its pid (the live view the just-connected channel mounted).
+wait_new_subscriber(Before) ->
+    wait_new_subscriber(Before, erlang:monotonic_time(millisecond) + 3000).
+
+wait_new_subscriber(Before, Deadline) ->
+    case arizona_pubsub:subscribers(demo) -- Before of
+        [Pid] ->
+            Pid;
+        _ ->
+            case erlang:monotonic_time(millisecond) < Deadline of
+                true ->
+                    timer:sleep(50),
+                    wait_new_subscriber(Before, Deadline);
+                false ->
+                    ct:fail(no_new_subscriber)
+            end
+    end.
 
 %% Poll Pred until it returns true or a 3s deadline passes.
 wait_until(Pred) ->

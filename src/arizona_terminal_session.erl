@@ -22,9 +22,11 @@ reads to `handle_key/2`, and terminal resizes to `resize/3`.
 -export([handle_push/2]).
 -export([resize/3]).
 -export([stop/1]).
+-export([teardown/1]).
 -export([pid/1]).
 
 -ignore_xref([resize/3]).
+-ignore_xref([teardown/1]).
 -ignore_xref([pid/1]).
 
 -record(session, {
@@ -77,7 +79,7 @@ repainted. A read that maps to nothing returns `{cont, Session}` without repaint
 """.
 -spec handle_key(session(), string() | binary()) -> {cont, session()} | quit.
 handle_key(#session{driver = Driver, dstate = DState} = Session, Input) ->
-    {Commands, DState1} = call_keys(Driver, iolist_to_binary(Input), DState),
+    {Commands, DState1} = call_keys(Driver, to_binary(Input), DState),
     Session1 = Session#session{dstate = DState1},
     case lists:member(stop, Commands) of
         true ->
@@ -122,6 +124,17 @@ disconnect the client is gone, so there's nothing to write to.
 stop(#session{pid = Pid}) ->
     arizona_live:stop(Pid).
 
+-doc """
+Emits the driver's teardown output (e.g. restoring the cursor) via the session's
+output function, without touching the live process. A transport calls this to
+restore the client's terminal when the live view has died asynchronously -- the
+quit path already tears down before returning `quit`, but an out-of-band live-view
+crash never reaches that path.
+""".
+-spec teardown(session()) -> ok.
+teardown(Session) ->
+    do_teardown(Session).
+
 -doc "The live view process backing the session.".
 -spec pid(session()) -> pid().
 pid(#session{pid = Pid}) ->
@@ -130,6 +143,17 @@ pid(#session{pid = Pid}) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% Normalize a raw key read to a byte binary. A network transport delivers a byte
+%% binary already in the wire encoding, so pass it through untouched (the driver's
+%% decoder handles any non-UTF-8 byte). A local TTY in unicode mode delivers a list
+%% of codepoints (possibly > 255, e.g. "€" is 8364), which iolist_to_binary rejects
+%% with badarg -- encode those to UTF-8 so a non-Latin-1 keystroke can't crash the
+%% session.
+to_binary(Input) when is_binary(Input) ->
+    Input;
+to_binary(Input) when is_list(Input) ->
+    unicode:characters_to_binary(Input).
 
 dispatch_events(#session{pid = Pid, view_id = ViewId}, Events) ->
     lists:flatmap(
