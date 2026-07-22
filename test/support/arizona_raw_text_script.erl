@@ -13,5 +13,5 @@ and drop into HTML parsing -- the classic JSON-in-script XSS. The backend's
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
-        {'script', [{type, ~"application/json"}], [?get(json)]}
+        {script, [{type, ~"application/json"}], [?get(json)]}
     ).

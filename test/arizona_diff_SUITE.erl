@@ -1152,7 +1152,9 @@ wire_helper_raw_value_escaped(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, <<"&lt;b&gt;a&lt;/b&gt;">>)),
     ?assertEqual(nomatch, binary:match(HTML, <<"<b>a</b>">>)),
     %% First live update: still a bare text-node string, never a `#{~"raw" => _}` tag.
-    {Ops, _, _} = arizona_diff:diff(M:helper_raw(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}),
+    {Ops, _, _} = arizona_diff:diff(
+        M:helper_raw(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}
+    ),
     ?assertMatch([[?OP_TEXT, _, <<"<b>z</b>">>]], Ops).
 
 %% =============================================================================
