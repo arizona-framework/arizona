@@ -120,7 +120,7 @@ diff(#{s := Statics, d := NewDynamics} = Tmpl, #{s := Statics, d := OldEvals} = 
     EvalNew = arizona_eval:eval_dynamics(NewDynamics),
     Ops = diff_dynamics(EvalNew, OldEvals),
     Snap0 = preserve_view_id(OldSnap, #{s => Statics, d => EvalNew}),
-    {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0)}.
+    {Ops, arizona_template:maybe_propagate(Tmpl, Snap0)}.
 
 -doc """
 Diff with view tracking: threads a `Views` map through the recursion so
@@ -144,7 +144,7 @@ diff(
     {EvalNew, NewDeps} = arizona_template:split_triples(Triples),
     Ops = diff_dynamics(EvalNew, OldEvals),
     Snap0 = preserve_view_id(OldSnap, #{s => Statics, d => EvalNew, deps => NewDeps}),
-    {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0), NewViews}.
+    {Ops, arizona_template:maybe_propagate(Tmpl, Snap0), NewViews}.
 
 -doc """
 Dependency-aware diff: takes a `Changed` map of dirty binding keys and
@@ -172,7 +172,7 @@ diff(
     {Ops, NewD, NewDeps, {_Old, NewViews}} =
         diff_dynamics_v(NewDynamics, OldEvals, OldDeps, Changed, {Views0, #{}}),
     Snap0 = preserve_view_id(OldSnap, #{s => Statics, d => NewD, deps => NewDeps}),
-    {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0), NewViews}.
+    {Ops, arizona_template:maybe_propagate(Tmpl, Snap0), NewViews}.
 
 %% `view_id` lives on child-view snapshots (set by `make_child_snap`) and is
 %% read by `make_op/3` to detect child diffs. The rebuilt snapshot must carry

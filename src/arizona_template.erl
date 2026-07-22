@@ -72,7 +72,6 @@ render(Bindings) ->
 -export([format_error/2]).
 -export([unwrap_val/2]).
 -export([maybe_propagate/2]).
--export([maybe_put_fingerprint/2]).
 -export([make_child_snap/4]).
 -export([scope_slot/2]).
 -export([unzip_triples/2]).
@@ -503,8 +502,12 @@ mark_esc([{arizona_effect, _} | _] = E) -> E;
 mark_esc(V) -> {arizona_esc, V}.
 
 -doc """
-Propagates `f` (fingerprint) and the optional `diff => false` flag from a
-template into a snapshot.
+Propagates the template-level fields that must survive onto a snapshot: `f`
+(fingerprint), the optional `diff => false` flag, and the render `backend`.
+
+Used by both the render path (`arizona_render`) and the diff path
+(`arizona_diff`), so a diffed snapshot carries the same backend as a freshly
+rendered one -- the field is a uniform invariant on every snapshot.
 """.
 -spec maybe_propagate(Template, Snapshot) -> Snapshot1 when
     Template :: template(),
@@ -522,13 +525,8 @@ maybe_propagate(Tmpl, Snap) ->
         #{} -> Snap2
     end.
 
--doc """
-Copies the `f` field from a template to a snapshot if present.
-""".
--spec maybe_put_fingerprint(Template, Snapshot) -> Snapshot1 when
-    Template :: template(),
-    Snapshot :: snapshot(),
-    Snapshot1 :: snapshot().
+%% Copies the `f` field from a template to a snapshot if present. Internal to
+%% maybe_propagate/2.
 maybe_put_fingerprint(#{f := F}, Snap) -> Snap#{f => F};
 maybe_put_fingerprint(#{}, Snap) -> Snap.
 
