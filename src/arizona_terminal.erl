@@ -62,6 +62,7 @@ never sanitized.
 -export([text_slot_close/0]).
 -export([is_void/1]).
 -export([raw_text_kind/1]).
+-export([raw_text/1]).
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
 -export([escape/1]).
@@ -216,6 +217,11 @@ escape(<<$\t, R/binary>>, Acc) ->
 escape(<<_C, R/binary>>, Acc) ->
     %% Any other C0 control (incl. ESC 0x1B, BEL 0x07) or DEL 0x7F: drop it.
     escape(R, Acc).
+
+%% Terminal output has no raw-text elements (raw_text_kind/1 is always `none`), so
+%% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
+-spec raw_text(term()) -> term().
+raw_text(Value) -> Value.
 
 %% Unreachable: attr_dyn_name/1 rejects dynamic attributes at compile time, so a
 %% ?terminal template never produces a dynamic-attr dynamic to render. Kept to

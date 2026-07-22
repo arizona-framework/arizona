@@ -1797,8 +1797,10 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 
 %% Scan an element's attrs + direct children for ?local markers and, if any,
 %% inject a static `az-local` descriptor attribute the client scans on the DOM.
-%% The descriptor JSON (`#{a => #{AttrName => Key}, c => ContentKey}`) is built
-%% and HTML-attribute-escaped at compile time (reusing arizona_effect:escape_attr/1).
+%% The descriptor JSON (`#{a => #{AttrName => Key}, c => ContentKey}`) is emitted
+%% as an ordinary static attribute value, so the backend's attr/2 HTML-escapes it
+%% for the attribute context (the client reads it via getAttribute, which decodes
+%% the entities back). No separate escape here -- that would double-escape.
 maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
     AttrLocals = collect_attr_locals(Backend, Attrs, Line),
     AttrAffixes = collect_attr_affixes(Backend, Attrs, Line),
@@ -1810,8 +1812,8 @@ maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
             assert_local_supported(Backend, State, Line),
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
             Desc = build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals),
-            Escaped = arizona_effect:escape_attr(iolist_to_binary(json:encode(Desc))),
-            [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Escaped)]} | Attrs]
+            Json = iolist_to_binary(json:encode(Desc)),
+            [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Json)]} | Attrs]
     end.
 
 assert_local_supported(Backend, State, Line) ->
@@ -2252,7 +2254,11 @@ make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
 make_raw_text_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
     ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
-    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+    %% Neutralize a close-tag breakout (`</script>`) in the value: the content is
+    %% emitted verbatim, so the backend that owns raw-text elements sanitizes it.
+    GuardedAST =
+        {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, raw_text}}, [ExprAST]},
+    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [GuardedAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, FunAST, LocAST]}.
 
 make_nodiff_attr_dynamic_ast(AttrNameBin, ExprAST, Module, ExprLine) ->

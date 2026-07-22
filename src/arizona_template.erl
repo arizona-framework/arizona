@@ -486,17 +486,28 @@ escape_value(Backend, V) -> Backend:escape(to_bin(V)).
 
 -doc """
 Marks an evaluated value for HTML escaping at output. Only scalars are marked --
-nested templates/descriptors and stateless-child snapshots (all maps), `raw/1`,
-and effects pass through untouched so they render structurally (their own inner
+nested templates/descriptors and stateless-child snapshots (all maps) and
+effects pass through untouched so they render structurally (their own inner
 dynamics carry their own marks). A stateless descriptor returned from a
 conditional content slot reduces to a bare snapshot map here, so the `is_map`
 clause passes it through and `scope_slot/2` later namespaces it -- the same
 treatment a directly-slotted stateless child gets.
+
+`mark_esc/1` is reached only for an **escape-tagged** content slot (`{esc, Fun}`),
+which the parse transform emits for every content interpolation that is not a
+literal block -- a literal `raw/1` at the template site compiles to a bare
+(un-esc-tagged) slot and never reaches here. So a `{arizona_raw, V}` arriving
+here was produced by a **helper** returning `raw/1` into an escaping slot, which
+the documented rule forbids ("the parse transform only recognizes the opt-out
+when the `raw` call is literal at the template site"). Honor that rule: unwrap
+the raw and escape its inner value like any plain scalar, so a helper wrapping
+user data in `raw/1` cannot smuggle trusted markup past the escaper (on SSR or
+across the live diff).
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
 mark_esc(V) when is_map(V) -> V;
-mark_esc({arizona_raw, _} = R) -> R;
+mark_esc({arizona_raw, V}) -> mark_esc(V);
 mark_esc({arizona_effect, _} = E) -> E;
 mark_esc([{arizona_effect, _} | _] = E) -> E;
 mark_esc(V) -> {arizona_esc, V}.

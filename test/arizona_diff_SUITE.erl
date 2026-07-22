@@ -58,7 +58,8 @@
     conditional_two_slot_fine_grained/1,
     conditional_nested_element_recurses/1,
     wire_get_value_raw/1,
-    wire_raw_value_tagged_html/1
+    wire_raw_value_tagged_html/1,
+    wire_helper_raw_value_escaped/1
 ]).
 
 all() ->
@@ -127,7 +128,8 @@ groups() ->
         ]},
         {wire_payload, [parallel], [
             wire_get_value_raw,
-            wire_raw_value_tagged_html
+            wire_raw_value_tagged_html,
+            wire_helper_raw_value_escaped
         ]}
     ].
 
@@ -1135,6 +1137,25 @@ wire_raw_value_tagged_html(Config) when is_list(Config) ->
     {_HTML, S0, V0} = arizona_render:render(M:raw_text(#{html => <<"<b>a</b>">>}), #{}),
     {Ops, _, _} = arizona_diff:diff(M:raw_text(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}),
     ?assertMatch([[?OP_TEXT, _, #{~"raw" := <<"<b>z</b>">>}]], Ops).
+
+%% A raw tuple returned by a HELPER (not a literal `?raw` at the slot) is treated as a
+%% plain scalar and ESCAPED: the wire value is a bare text-node string (the client
+%% text-nodes it, so markup shows literally), never the `#{~"raw" => _}` innerHTML tag
+%% that a literal `?raw` gets above. This enforces the documented literal-only rule --
+%% before the fix, `mark_esc/1` passed the raw tuple through and the first live update
+%% injected the markup as trusted HTML.
+wire_helper_raw_value_escaped(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    {HTML0, S0, V0} = arizona_render:render(M:helper_raw(#{html => <<"<b>a</b>">>}), #{}),
+    %% First load (SSR): the helper-returned raw is escaped, no trusted markup.
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"&lt;b&gt;a&lt;/b&gt;">>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<"<b>a</b>">>)),
+    %% First live update: still a bare text-node string, never a `#{~"raw" => _}` tag.
+    {Ops, _, _} = arizona_diff:diff(
+        M:helper_raw(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}
+    ),
+    ?assertMatch([[?OP_TEXT, _, <<"<b>z</b>">>]], Ops).
 
 %% =============================================================================
 %% Helpers

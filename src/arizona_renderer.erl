@@ -119,6 +119,17 @@ fragments.
 -callback escape(Value :: binary()) -> binary().
 
 -doc """
+Neutralize a dynamic value spliced into a **raw-text** element (`raw_text_kind/1
+=:= raw` -- HTML `script`/`style`). Such content is emitted verbatim (the browser
+decodes nothing there), so HTML entity-escaping does not apply, yet a value
+carrying a close-tag sequence (`</script>`) would still break out of the element
+into HTML parsing. The parse transform wraps every raw-text dynamic in this
+callback, so the backend that owns raw-text elements neutralizes the breakout;
+backends without raw-text elements return the value unchanged.
+""".
+-callback raw_text(Value :: term()) -> term().
+
+-doc """
 Render a dynamic attribute's evaluated value to this backend's output bytes.
 
 Called at the render boundary for a dynamic attribute (`{attr, Name, Value}`).
