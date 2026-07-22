@@ -2223,7 +2223,11 @@ make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
 make_raw_text_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
     ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
-    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
+    %% Neutralize a close-tag breakout (`</script>`) in the value: the content is
+    %% emitted verbatim, so the backend that owns raw-text elements sanitizes it.
+    GuardedAST =
+        {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, raw_text}}, [ExprAST]},
+    FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [GuardedAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, FunAST, LocAST]}.
 
 make_nodiff_attr_dynamic_ast(AttrNameBin, ExprAST, Module, ExprLine) ->

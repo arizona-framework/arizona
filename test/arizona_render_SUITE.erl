@@ -30,6 +30,7 @@
     no_diff_ssr_nested/1,
     render_attr/1,
     static_attr_escaped/1,
+    raw_text_breakout_neutralized/1,
     render_nested_sd/1,
     render_nodiff_layout_location_success/1,
     render_nodiff_layout_location_wrapping/1,
@@ -91,6 +92,7 @@ groups() ->
             render_text,
             render_attr,
             static_attr_escaped,
+            raw_text_breakout_neutralized,
             render_nested_sd,
             render_with_views_no_children,
             repeated_stateless_distinct_az,
@@ -251,6 +253,30 @@ static_attr_escaped(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(HTML, ~"&amp;amp;")),
     %% Folded effect command: escaped once by encode/1, emitted verbatim (not re-escaped).
     ?assertNotEqual(nomatch, binary:match(HTML, ~"az-click=\"[0,&quot;inc&quot;]\"")).
+
+%% P9: a dynamic value in a raw-text element (<script>) renders verbatim, but a
+%% `</script>` in the value would break out into HTML parsing. The backend's
+%% raw_text/1 neutralizes the close tag (inserting a backslash), transparently for
+%% JSON, while a benign value is left byte-for-byte unchanged.
+raw_text_breakout_neutralized(Config) when is_list(Config) ->
+    Payload = ~"{\"x\":\"</script><img src=x onerror=alert(1)>\"}",
+    Hostile = iolist_to_binary(
+        element(1, arizona_render:render(arizona_raw_text_script:render(#{json => Payload})))
+    ),
+    %% The literal close-tag breakout no longer appears -- it is broken with a backslash.
+    ?assertEqual(nomatch, binary:match(Hostile, ~"</script><img")),
+    ?assertNotEqual(nomatch, binary:match(Hostile, ~"<\\/script><img")),
+    %% Case-insensitive: `</STYLE` is neutralized too.
+    Styleish = iolist_to_binary(
+        element(1, arizona_render:render(arizona_raw_text_script:render(#{json => ~"a</STYLE>b"})))
+    ),
+    ?assertEqual(nomatch, binary:match(Styleish, ~"</STYLE>")),
+    ?assertNotEqual(nomatch, binary:match(Styleish, ~"<\\/STYLE>")),
+    %% A benign value passes through byte-for-byte (no false neutralization, no escaping).
+    Benign = iolist_to_binary(
+        element(1, arizona_render:render(arizona_raw_text_script:render(#{json => ~"{\"a\":1<2}"})))
+    ),
+    ?assertNotEqual(nomatch, binary:match(Benign, ~"{\"a\":1<2}")).
 
 render_nested_sd(Config) when is_list(Config) ->
     T = #{

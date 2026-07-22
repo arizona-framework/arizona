@@ -29,6 +29,7 @@ identical to the previous inlined emission.
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
 -export([escape/1]).
+-export([raw_text/1]).
 -export([render_attr/2]).
 
 -spec name(atom()) -> binary().
@@ -168,6 +169,46 @@ escape(<<">", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&gt;">>);
 escape(<<"\"", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&quot;">>);
 escape(<<"'", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#39;">>);
 escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
+
+%% Neutralize a raw-text (script/style) close-tag breakout. Raw-text content is
+%% emitted verbatim -- HTML entity-escaping does not apply (the browser decodes
+%% nothing there) -- but a value carrying `</script>`/`</style>` would still close
+%% the element and drop into HTML parsing (the classic JSON-in-script XSS). Insert
+%% a backslash after the `<` of a case-insensitive `</script`/`</style`, so the
+%% raw-text tokenizer never matches the end tag. `<\/script` is transparent in the
+%% string/JSON/CSS contexts such content lives in (`\/` decodes to `/`), and a
+%% value that legitimately needs a literal `</script` in a raw-text element is a
+%% breakout by definition. Only the two raw-text tag names close a raw-text
+%% element, so nothing else is touched. Non-binary values (a nested template, an
+%% integer) cannot carry the sequence and pass through unchanged.
+-spec raw_text(term()) -> term().
+raw_text(Value) when is_binary(Value) ->
+    neutralize_raw_text(Value, <<>>);
+raw_text(Value) ->
+    Value.
+
+neutralize_raw_text(<<>>, Acc) ->
+    Acc;
+neutralize_raw_text(<<"<", R/binary>>, Acc) ->
+    case raw_text_breakout(R) of
+        true -> neutralize_raw_text(R, <<Acc/binary, "<\\">>);
+        false -> neutralize_raw_text(R, <<Acc/binary, "<">>)
+    end;
+neutralize_raw_text(<<C, R/binary>>, Acc) ->
+    neutralize_raw_text(R, <<Acc/binary, C>>).
+
+%% Does the text right after a `<` begin a `/script` or `/style` end tag (ASCII
+%% case-insensitive)? Only these close a raw-text element.
+raw_text_breakout(<<$/, R/binary>>) ->
+    ci_prefix(R, <<"script">>) orelse ci_prefix(R, <<"style">>);
+raw_text_breakout(_) ->
+    false.
+
+%% Case-insensitive (ASCII) prefix match; the pattern is always lowercase letters.
+ci_prefix(_Bin, <<>>) -> true;
+ci_prefix(<<>>, _Pattern) -> false;
+ci_prefix(<<C, R/binary>>, <<P, PR/binary>>) when C =:= P; C =:= P - 32 -> ci_prefix(R, PR);
+ci_prefix(_Bin, _Pattern) -> false.
 
 %% Render a dynamic attribute value: `false` strips the attribute, `true` emits a
 %% bare name. A `?raw` opt-out and an effect command are trusted (classified out

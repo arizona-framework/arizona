@@ -37,6 +37,7 @@ form valid JSON.
 -export([text_slot_close/0]).
 -export([is_void/1]).
 -export([raw_text_kind/1]).
+-export([raw_text/1]).
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
 -export([escape/1]).
@@ -138,6 +139,11 @@ supports_list_patch() -> false.
 %% marks native values, so this is not reached via the escape marker.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) -> Bin.
+
+%% The native wire has no raw-text elements (raw_text_kind/1 is always `none`), so
+%% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
+-spec raw_text(term()) -> term().
+raw_text(Value) -> Value.
 
 %% Render a dynamic attribute value: the prop name is baked into the static by
 %% attr_dyn_name/1, so the dynamic carries just the stringified value (the client
