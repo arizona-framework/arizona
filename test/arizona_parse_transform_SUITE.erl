@@ -16,6 +16,7 @@
     each_named_fun_ref_guard/1,
     each_named_fun_ref_prefix_body/1,
     each_named_fun_ref_nested_each/1,
+    each_named_fun_ref_nested_macros_render/1,
     each_named_fun_multi_clause_rejected/1,
     each_named_fun_wrong_arity_rejected/1,
     each_named_fun_undefined_rejected/1,
@@ -421,6 +422,7 @@ groups() ->
             each_named_fun_ref_guard,
             each_named_fun_ref_prefix_body,
             each_named_fun_ref_nested_each,
+            each_named_fun_ref_nested_macros_render,
             each_named_fun_multi_clause_rejected,
             each_named_fun_wrong_arity_rejected,
             each_named_fun_undefined_rejected,
@@ -4553,7 +4555,38 @@ each_named_fun_ref_nested_each(Config) when is_list(Config) ->
         "    arizona_template:html({'div', [], [arizona_template:each(fun section/1, "
         "        arizona_template:get(sections, Bindings))]}). "
     ),
-    ?assert(is_map(Mod:render(#{sections => [#{items => [~"a"]}]}))).
+    T = Mod:render(#{sections => [#{items => [~"a", ~"b"]}]}),
+    ?assert(is_map(T)),
+    %% The nested ?each inside the resolved section/1 clause must be transformed --
+    %% left as a raw runtime stub it crashes (function_clause) when the per-item
+    %% template is rendered, so render it out and assert both levels appear.
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<ul")),
+    ?assertEqual(2, length(binary:matches(HTMLBin, ~"<li"))).
+
+%% P5 companion: a nested ?each AND a nested ?html inside an INLINE named-fun each
+%% callback body -- both are template macros that must be transformed in the resolved
+%% clause. Renders correctly only when the resolved body is re-walked by the transform.
+each_named_fun_ref_nested_macros_render(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_nested_macros). "
+        "-export([render/1, row/1]). "
+        "row(R) -> {'div', [], ["
+        "    arizona_template:html({'span', [], [arizona_template:get(title, R)]}),"
+        "    {'ul', [], [arizona_template:each(fun(I) -> {'li', [], [I]} end, "
+        "        arizona_template:get(items, R))]}"
+        "]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'main', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(rows, Bindings))]}). "
+    ),
+    T = Mod:render(#{rows => [#{title => ~"T", items => [~"a", ~"b"]}]}),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<span")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"T")),
+    ?assertEqual(2, length(binary:matches(HTMLBin, ~"<li"))).
 
 %% A multi-clause local ref can't map to one shared per-item template -- rejected.
 each_named_fun_multi_clause_rejected(Config) when is_list(Config) ->

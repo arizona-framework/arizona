@@ -1248,10 +1248,22 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
 %% `L` is the fun-ref location (for the error/synthesized clause); `Line` the each call site.
 compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
     case FunDefs of
-        #{{Name, Arity} := [Clause]} ->
-            compile_each(
-                {'fun', L, {clauses, [Clause]}}, SourceAST, Line, Module, Backend, FunDefs
-            );
+        #{{Name, Arity} := [{clause, CL, Vars, Guards, Body}]} ->
+            %% FunDefs holds the ORIGINAL, untransformed clause. The inline-fun path
+            %% reaches compile_each already processed -- the top-down mark_targets
+            %% pre-pass has run and the bottom-up transform has reduced its nested
+            %% ?html/?each macros to template maps. A resolved clause has seen neither,
+            %% so a nested ?html/?each left in it would compile to a raw runtime stub
+            %% call and crash at render (function_clause in arizona_template:each/2).
+            %% Mirror the inline pipeline on the resolved clause: unwrap a whole-body
+            %% wrapper (so a single-root item keeps positional diffing, exactly as
+            %% unwrap_each_body does for an inline fun), run mark_targets with this
+            %% each's render-target context, then the bottom-up transform.
+            UnwrappedBody = unwrap_last_wrapper(Body, backend_template_fn(Backend)),
+            Clause1 = {clause, CL, Vars, Guards, UnwrappedBody},
+            FunAST0 = mark_targets({'fun', L, {clauses, [Clause1]}}, backend_ctx(Backend)),
+            FunAST = transform_expr(FunAST0, Module, #{}, FunDefs),
+            compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs);
         #{{Name, Arity} := [_ | _]} ->
             parse_error(each_named_fun_multi_clause, L);
         #{} ->
@@ -1328,6 +1340,12 @@ each_body_unwrap(LastExpr, _Backend) ->
 backend_template_fn(arizona_html) -> html;
 backend_template_fn(arizona_native) -> native;
 backend_template_fn(arizona_terminal) -> terminal.
+
+%% The mark_targets render-target context (`html`/`native`/`terminal`) for a backend
+%% module -- used when re-running the pre-pass over a resolved named-fun each clause.
+backend_ctx(arizona_html) -> html;
+backend_ctx(arizona_native) -> native;
+backend_ctx(arizona_terminal) -> terminal.
 
 %% A compiled template map literal carries all three of the `s`/`d`/`f` assoc keys (from
 %% build_template_ast). A user map or a ?stateful/?stateless descriptor (a runtime call, not
