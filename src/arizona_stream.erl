@@ -281,22 +281,37 @@ delete(
 
 -doc """
 Replaces the item at `Key` with `NewItem` and queues an update op.
+
+If `Key` is not present it is appended as a new item (an upsert): the
+differ already renders a queued update of an unseen key as an insert
+(`OP_INSERT` at the tail), so appending here keeps that op consistent
+with the items/order/size invariant.
 """.
 -spec update(Stream, Key, NewItem) -> Stream1 when
     Stream :: stream(),
     Key :: key(),
     NewItem :: item(),
     Stream1 :: stream().
-update(#stream{items = Items, pending = Pending} = S, Key, NewItem) ->
-    Changed =
-        case Items of
-            #{Key := OldItem} -> compute_item_changed(OldItem, NewItem);
-            #{} -> #{}
-        end,
-    S#stream{
-        items = Items#{Key => NewItem},
-        pending = queue:in({update, Key, NewItem, Changed}, Pending)
-    }.
+update(
+    #stream{items = Items, order = {Front, Back}, pending = Pending, size = Size} = S,
+    Key,
+    NewItem
+) ->
+    case Items of
+        #{Key := OldItem} ->
+            Changed = compute_item_changed(OldItem, NewItem),
+            S#stream{
+                items = Items#{Key => NewItem},
+                pending = queue:in({update, Key, NewItem, Changed}, Pending)
+            };
+        #{} ->
+            S#stream{
+                items = Items#{Key => NewItem},
+                order = {Front, [Key | Back]},
+                pending = queue:in({update, Key, NewItem, #{}}, Pending),
+                size = Size + 1
+            }
+    end.
 
 -doc """
 Set of keys that differ between two item maps -- added, removed, or value

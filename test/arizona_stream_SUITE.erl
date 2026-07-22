@@ -124,7 +124,7 @@
     insert_dup_key_crashes/1,
     insert_at_dup_key_crashes/1,
     repro_reset_with_dup_keys_breaks_invariant/1,
-    repro_update_missing_key_breaks_invariant/1,
+    update_missing_key_upserts/1,
     insert_dup_crashes_preventing_stale_order/1,
     repro_to_list_crash_matches_production_stack/1,
     repro_shuffle_after_insert_dup_then_delete_crashes/1,
@@ -326,7 +326,7 @@ groups() ->
             insert_dup_key_crashes,
             insert_at_dup_key_crashes,
             repro_reset_with_dup_keys_breaks_invariant,
-            repro_update_missing_key_breaks_invariant,
+            update_missing_key_upserts,
             insert_dup_crashes_preventing_stale_order,
             repro_to_list_crash_matches_production_stack,
             repro_shuffle_after_insert_dup_then_delete_crashes
@@ -3228,23 +3228,22 @@ repro_reset_with_dup_keys_breaks_invariant(Config) when is_list(Config) ->
     ?assertEqual([1, 1, 2], Flat),
     ?assertNotEqual(map_size(Items), length(Flat)).
 
-%% --- repro_update_missing_key_breaks_invariant -----------------------------
-%% update/3 silently inserts the key into items if it wasn't there, but
-%% never touches order. The asymmetric mismatch (items has key, order
-%% doesn't) doesn't crash to_list but does break the invariant and will
-%% trip up sort/2 when its comparator is called on a key not in the
-%% order-iterated subset (and vice versa for any caller that walks items).
-repro_update_missing_key_breaks_invariant(Config) when is_list(Config) ->
+%% --- update_missing_key_upserts --------------------------------------------
+%% update/3 on a key not yet present upserts: it appends the item to `items`
+%% AND `order` and bumps `size`, so the items/order/size invariant holds.
+%% (The differ renders the queued update of an unseen key as an OP_INSERT.)
+update_missing_key_upserts(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}]),
     S1 = arizona_stream:update(S0, 99, #{id => 99, n => <<"phantom">>}),
     {Items, Flat, Size} = stream_invariant_components(S1),
     ?assertEqual(2, map_size(Items)),
-    ?assertEqual(1, length(Flat)),
-    ?assertEqual(1, Size),
-    ?assertEqual([1], Flat),
-    %% Items <-> order invariant is broken (items has 99, order doesn't).
-    ?assertNotEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
+    ?assertEqual(2, length(Flat)),
+    ?assertEqual(2, Size),
+    %% The upserted key is appended to the tail of the order.
+    ?assertEqual([1, 99], Flat),
+    %% Items <-> order invariant holds (items and order agree on the keys).
+    ?assertEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
 
 %% --- insert_dup_crashes_preventing_stale_order -----------------------------
 %% The minimal sequence that produced the production crash shape was
