@@ -145,10 +145,12 @@ default_paint_quit_stops(Config) when is_list(Config) ->
     ?assertEqual(stop, Next).
 
 default_paint_title_bell_and_unknown(Config) when is_list(Config) ->
+    %% The OSC terminator and the bell are a real BEL byte (0x07); Erlang has no
+    %% `\a` escape (that would be the literal byte `a`).
     {TitleOut, _} = paint_result(~"x\n", [arizona_terminal_effect:set_title(~"Hi")]),
-    ?assert(contains(TitleOut, ~"\e]0;Hi\a")),
+    ?assert(contains(TitleOut, <<"\e]0;Hi", 7>>)),
     {BellOut, _} = paint_result(~"x\n", [arizona_terminal_effect:bell()]),
-    ?assert(contains(BellOut, ~"\a")),
+    ?assert(contains(BellOut, <<7>>)),
     %% an unknown effect is ignored: no stop, no output beyond the plain repaint
     {PlainOut, _} = paint_result(~"x\n", []),
     {UnknownOut, UnknownNext} = paint_result(~"x\n", [{arizona_effect, [something_else]}]),
