@@ -133,8 +133,15 @@ persistent term so the dev error page can build the SSE connect URL.
     origins => [binary()],
     auth => arizona_mcp_handler:auth_hook(),
     sessions => boolean(),
+    max_sessions => pos_integer() | infinity,
     session_ttl_ms => pos_integer(),
     session_buffer_max => pos_integer(),
+    %% Localhost gate (default `false`, safe-by-default like `origins`): unless
+    %% `true`, refuse a request whose peer is not a loopback address, regardless of
+    %% the listener's bind interface. `arizona_dev_mcp` relies on this for its
+    %% always-on `eval` (RCE). Void behind a same-host proxy/tunnel -- use `auth`
+    %% for non-direct remote exposure.
+    allow_remote_access => boolean(),
     _ => term()
 }.
 

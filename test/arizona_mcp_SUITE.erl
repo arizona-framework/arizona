@@ -60,6 +60,14 @@
     handle_origin_allowed_ok/1,
     handle_origin_disallowed_403/1,
     handle_origin_empty_allowlist_403/1,
+    handle_remote_access_default_local_only/1,
+    handle_remote_access_opt_in_allows/1,
+    handle_local_only_loopback_ok/1,
+    handle_local_only_ipv6_loopback_ok/1,
+    handle_local_only_mapped_loopback_ok/1,
+    handle_local_only_mapped_slash8_ok/1,
+    handle_local_only_no_peer_403/1,
+    handle_local_only_session_get_remote_403/1,
     handle_auth_rejects/1,
     handle_auth_reads_header/1,
     handle_auth_mfa/1,
@@ -132,6 +140,14 @@ all() ->
         handle_origin_allowed_ok,
         handle_origin_disallowed_403,
         handle_origin_empty_allowlist_403,
+        handle_remote_access_default_local_only,
+        handle_remote_access_opt_in_allows,
+        handle_local_only_loopback_ok,
+        handle_local_only_ipv6_loopback_ok,
+        handle_local_only_mapped_loopback_ok,
+        handle_local_only_mapped_slash8_ok,
+        handle_local_only_no_peer_403,
+        handle_local_only_session_get_remote_403,
         handle_auth_rejects,
         handle_auth_reads_header,
         handle_auth_mfa,
@@ -576,6 +592,58 @@ handle_origin_empty_allowlist_403(_Config) ->
     Resp = handle(~"POST", Headers, ping_body(), #{handler => ?SERVER, origins => []}),
     ?assertEqual(403, status(Resp)).
 
+%% allow_remote_access now defaults to false (safe-by-default), so even a generic
+%% MCP route refuses a non-loopback peer -- this is the primary guard for the dev
+%% MCP's eval, independent of how the listener bound.
+handle_remote_access_default_local_only(_Config) ->
+    Opts = #{handler => ?SERVER, origins => []},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, {{203, 0, 113, 7}, 5555}),
+    ?assertEqual(403, status(Resp)).
+
+%% Explicit allow_remote_access => true opts a route into non-loopback peers.
+handle_remote_access_opt_in_allows(_Config) ->
+    Opts = #{handler => ?SERVER, origins => [], allow_remote_access => true},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, {{203, 0, 113, 7}, 5555}),
+    ?assertEqual(200, status(Resp)).
+
+%% A loopback (IPv4 127.0.0.0/8) peer is served under the default local-only gate.
+handle_local_only_loopback_ok(_Config) ->
+    Opts = #{handler => ?SERVER, origins => []},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, {{127, 0, 0, 1}, 5555}),
+    ?assertEqual(200, status(Resp)).
+
+%% An IPv6 `::1` peer is served.
+handle_local_only_ipv6_loopback_ok(_Config) ->
+    Opts = #{handler => ?SERVER, origins => []},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, {{0, 0, 0, 0, 0, 0, 0, 1}, 5555}),
+    ?assertEqual(200, status(Resp)).
+
+%% An IPv4-mapped loopback `::ffff:127.0.0.1` peer is served.
+handle_local_only_mapped_loopback_ok(_Config) ->
+    Opts = #{handler => ?SERVER, origins => []},
+    Peer = {{0, 0, 0, 0, 0, 16#ffff, 16#7f00, 1}, 5555},
+    ?assertEqual(200, status(handle_peer(~"POST", [], ping_body(), Opts, Peer))).
+
+%% An IPv4-mapped loopback outside 127.0/16 (`::ffff:127.1.2.3`) is served too:
+%% the whole 127.0.0.0/8 is loopback, matching the plain-IPv4 clause.
+handle_local_only_mapped_slash8_ok(_Config) ->
+    Opts = #{handler => ?SERVER, origins => []},
+    Peer = {{0, 0, 0, 0, 0, 16#ffff, 16#7f01, 16#0203}, 5555},
+    ?assertEqual(200, status(handle_peer(~"POST", [], ping_body(), Opts, Peer))).
+
+%% No peer info fails closed (403).
+handle_local_only_no_peer_403(_Config) ->
+    Opts = #{handler => ?SERVER, origins => []},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, undefined),
+    ?assertEqual(403, status(Resp)).
+
+%% The gate covers the session-mode verbs too: a remote GET (the SSE channel) is
+%% refused before it can attach to a session.
+handle_local_only_session_get_remote_403(_Config) ->
+    Opts = #{handler => ?SERVER, origins => [], sessions => true},
+    Resp = handle_peer(~"GET", [], <<>>, Opts, {{203, 0, 113, 7}, 5555}),
+    ?assertEqual(403, status(Resp)).
+
 handle_auth_rejects(_Config) ->
     Auth = fun(_Req) -> {reject, 401} end,
     Resp = handle(~"POST", [], ping_body(), #{handler => ?SERVER, auth => Auth}),
@@ -715,14 +783,29 @@ dispatch_on(Mod, Method, Params, Id) ->
     arizona_mcp_handler:dispatch(Mod, Request, #{}).
 
 handle(Method, Headers, Body, Opts) ->
-    %% A complete `roadrunner_req:request()` (method/target/version/headers
-    %% are required) so the handler's contract is satisfied at the type level.
+    %% A complete `roadrunner_req:request()` (method/target/version/headers are
+    %% required) with a loopback peer, so the default localhost gate treats it as
+    %% a local request; `handle_peer/5` overrides the peer.
     Req = #{
         method => Method,
         target => ~"/mcp",
         version => {1, 1},
         headers => Headers,
         body => Body,
+        peer => {{127, 0, 0, 1}, 0},
+        state => #{arizona => Opts}
+    },
+    {Resp, _Req} = arizona_mcp_handler:handle(Req),
+    Resp.
+
+handle_peer(Method, Headers, Body, Opts, Peer) ->
+    Req = #{
+        method => Method,
+        target => ~"/mcp",
+        version => {1, 1},
+        headers => Headers,
+        body => Body,
+        peer => Peer,
         state => #{arizona => Opts}
     },
     {Resp, _Req} = arizona_mcp_handler:handle(Req),

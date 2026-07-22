@@ -1,14 +1,15 @@
 {"1.2.0",
 [{<<"fs">>,{pkg,<<"fs">>,<<"11.4.1">>},0},
- {<<"roadrunner">>,{pkg,<<"roadrunner">>,<<"0.8.0">>},0},
+ {<<"roadrunner">>,
+  {git,"https://github.com/arizona-framework/roadrunner.git",
+       {ref,"319130fe6b45011585ed05ff4d2e017fe453b08f"}},
+  0},
  {<<"telemetry">>,{pkg,<<"telemetry">>,<<"1.4.2">>},1}]}.
 [
 {pkg_hash,[
  {<<"fs">>, <<"11FB3153BB2E1DE851B8263BB5698D526894853C73A525EBEB5E69108B2D25CD">>},
- {<<"roadrunner">>, <<"7BBC9DA8E2085EA94FE0A06DB51DBAD762AA016E70972F2A533C3914438C96F6">>},
  {<<"telemetry">>, <<"A0CB522801DFFB1C49FE6E30561BADFFC7B6D0E180DB1300DF759FAA22062855">>}]},
 {pkg_hash_ext,[
  {<<"fs">>, <<"DD00A61D89EAC01D16D3FC51D5B0EB5F0722EF8E3C1A3A547CD086957F3260A9">>},
- {<<"roadrunner">>, <<"76F3389A27CE084FF380F80C6DE73C2448A6702017A2C22ACF34DE606C8239D1">>},
  {<<"telemetry">>, <<"928F6495066506077862C0D1646609EED891A4326BEE3126BA54B60AF61FEBB1">>}]}
 ].

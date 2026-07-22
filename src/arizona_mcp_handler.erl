@@ -147,18 +147,55 @@ session_verb(Req, Opts, Fun) ->
         false -> method_not_allowed(Opts)
     end.
 
-%% The security gate every verb passes: the DNS-rebinding `Origin` check,
-%% then the optional auth hook. Either may short-circuit the request.
+%% The security gate every verb passes: the localhost-only remote-access check,
+%% the DNS-rebinding `Origin` check, then the optional auth hook. Any may
+%% short-circuit the request.
 with_gate(Req, Opts, Fun) ->
-    case check_origin(Req, Opts) of
+    case check_remote_access(Req, Opts) of
         forbidden ->
             roadrunner_resp:forbidden();
         ok ->
-            case check_auth(Req, Opts) of
-                ok -> Fun();
-                {reject, Status} -> roadrunner_resp:status(Status)
+            case check_origin(Req, Opts) of
+                forbidden ->
+                    roadrunner_resp:forbidden();
+                ok ->
+                    case check_auth(Req, Opts) of
+                        ok -> Fun();
+                        {reject, Status} -> roadrunner_resp:status(Status)
+                    end
             end
     end.
+
+%% Localhost gate, safe-by-default. Unless the route sets
+%% `allow_remote_access => true`, refuse a request whose peer is not a loopback
+%% address -- regardless of which interface the listener bound. This is the
+%% primary guard for a dev MCP's `eval` (RCE): the tool self-protects at the
+%% application layer rather than trusting the operator to bind loopback (mirrors
+%% Tidewave). Default `false` matches the sibling `origins`/`check_origin` gates
+%% (a genuinely-remote MCP opts in explicitly) rather than leaning on the mount
+%% helper to close the hole.
+%%
+%% Caveat: the peer is the immediate TCP peer, so a same-host reverse proxy or a
+%% dev tunnel (ngrok/cloudflared) makes every client look loopback -- pair any
+%% non-direct remote exposure with an `auth` hook; the peer check alone can't see
+%% past a local hop.
+check_remote_access(Req, Opts) ->
+    case maps:get(allow_remote_access, Opts, false) of
+        false ->
+            case is_loopback_peer(roadrunner_req:peer(Req)) of
+                true -> ok;
+                false -> forbidden
+            end;
+        true ->
+            ok
+    end.
+
+%% A loopback peer: IPv4 127.0.0.0/8, IPv6 `::1`, or an IPv4-mapped
+%% `::ffff:127.0.0.0/8`. A missing peer (`undefined`) fails closed.
+is_loopback_peer({{127, _, _, _}, _Port}) -> true;
+is_loopback_peer({{0, 0, 0, 0, 0, 0, 0, 1}, _Port}) -> true;
+is_loopback_peer({{0, 0, 0, 0, 0, 16#ffff, G, _}, _Port}) when G bsr 8 =:= 127 -> true;
+is_loopback_peer(_) -> false.
 
 %% Run the route's optional `auth` hook (a `fun/1` or `{Module, Function}`)
 %% against the request. Absent => allow.
@@ -267,7 +304,8 @@ dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
         undefined ->
             notification;
         _ when Method =:= ~"initialize" ->
-            {ServerInfo, #{caps := Caps}} = open_session(Mod, Params, PageSize),
+            {ServerInfo, #{caps := Caps}} =
+                open_session(Mod, Params, PageSize),
             {reply, arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params))};
         _ ->
             %% Stateless: a fresh per-request session sourced from `init/1`.

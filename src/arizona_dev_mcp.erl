@@ -20,15 +20,39 @@ Tools:
 - `reloader_status` -- the dev reloader's current compile error, if any.
 - `app_info` -- Arizona version, OTP release, node, process count.
 - `render_component` -- render a component to HTML with given bindings.
-- `eval` -- **run Erlang in the live node**, with bindings that persist across calls.
+- `eval` -- **run Erlang in the live node**, with bindings that persist across
+  calls. Always available (see the safety note below).
 
-`eval` is arbitrary remote code execution. Only ever mount this on a trusted,
-dev-only, localhost route behind the `Origin` allowlist, and never expose it to
-an untrusted client.
+`eval` is arbitrary remote code execution, so the dev route is **localhost-only
+by default**: `route/1,2` set `allow_remote_access => false`, and the MCP handler
+refuses any request whose peer is not a loopback address -- no matter which
+interface the server bound. That peer check is the primary guard (it mirrors
+Tidewave, which is localhost-only by default rather than gated by a per-tool
+switch), together with the `Origin` check and keeping this a **dev-only**
+dependency. Only relax it on a network you trust, ideally behind an `auth` hook:
 
-It runs in session mode so `eval`'s bindings persist across calls (a REPL the
-agent drives) and a slow `eval`/`render_component` runs in the session's worker
-rather than blocking the session.
+```erlang
+%% localhost-only (default) -- safe for eval
+arizona_dev_mcp:route(~"/mcp")
+%% opt in to remote clients (trusted network only)
+arizona_dev_mcp:route(~"/mcp", #{allow_remote_access => true, auth => Hook})
+```
+
+**Limitation -- the peer check is void behind a proxy or tunnel.** It trusts the
+*immediate TCP peer*, so a same-host reverse proxy or a dev tunnel
+(ngrok/cloudflared/port-forward) makes every remote client look like loopback,
+and binding the listener to loopback does **not** help (the tunnel connects to
+loopback anyway). Whenever the port is reachable through anything but a direct
+local socket, treat the peer check as void and gate `eval` with an `auth` hook (a
+shared secret). Binding loopback (`proto_opts => #{ip => {127,0,0,1}}`) only
+hardens against a *direct* remote connection, and `proxy_protocol => true` lets a
+client spoof the peer outright. Never expose the dev MCP to an untrusted network.
+
+Session mode (`sessions => true`, the default) makes `eval`'s bindings persist
+across calls (a REPL the agent drives) and runs a slow `eval`/`render_component`
+in the session's worker rather than blocking the session; the default route also
+caps concurrent sessions (`max_sessions => 32`) so a client cannot pin unbounded
+memory by looping `initialize`.
 """.
 -behaviour(arizona_mcp).
 
@@ -48,10 +72,13 @@ rather than blocking the session.
 
 -doc """
 A ready-to-mount dev route. Add `arizona_dev_mcp:route(~"/mcp")` to your **dev**
-server's routes; it defaults to `sessions => true` so `eval` is a persistent
-REPL. A CLI agent (Claude Code, the Inspector's proxy) connects with no extra
+server's routes. It defaults to `sessions => true` (so a session's `eval`
+bindings persist) and `max_sessions => 32` (so a client cannot pin unbounded
+memory). A CLI agent (Claude Code, the Inspector's proxy) connects with no extra
 config; `origins` stays opt-in (omitted blocks all browser origins, the safe
-DNS-rebinding posture).
+DNS-rebinding posture). `eval` is always available, and the route is
+**localhost-only** (`allow_remote_access => false`) so it stays off the network
+-- see the module doc.
 """.
 -spec route(Path) -> Route when
     Path :: binary(),
@@ -60,27 +87,37 @@ route(Path) ->
     route(Path, #{}).
 
 -doc """
-Like `route/1`, with extra MCP route opts merged over the defaults (e.g.
-`#{origins => [~"http://localhost:5173"]}` to also allow a browser client, or
-`#{sessions => false}` to opt out of the REPL).
+Like `route/1`, with extra MCP route opts merged over the defaults:
+`#{allow_remote_access => true}` lets non-loopback clients reach the route
+(localhost-only by default; trusted networks only -- see the module doc),
+`#{origins => [~"http://localhost:5173"]}` also allows a browser client,
+`#{auth => Hook}` gates the route, `#{sessions => false}` opts out of session
+mode.
 """.
 -spec route(Path, Opts) -> Route when
     Path :: binary(),
     Opts :: arizona_roadrunner_router:arizona_mcp_route_opts(),
     Route :: arizona_roadrunner_router:route().
 route(Path, Opts) ->
-    {mcp, Path, ?MODULE, maps:merge(#{sessions => true}, Opts)}.
+    Defaults = #{sessions => true, max_sessions => 32, allow_remote_access => false},
+    {mcp, Path, ?MODULE, maps:merge(Defaults, Opts)}.
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
 %% --------------------------------------------------------------------
 
 init(_InitParams) ->
+    %% `eval` is always available; the dev route's localhost-only gate
+    %% (`allow_remote_access => false`, enforced by the MCP handler) is what keeps
+    %% its RCE off the network, so there is nothing to configure here.
     {ok, #{name => ~"arizona_dev", version => ~"0.1.0"}, #{tools => #{}}, #{
         bindings => erl_eval:new_bindings()
     }}.
 
 tools(_State) ->
+    base_tools() ++ eval_tools().
+
+base_tools() ->
     [
         #{
             name => ~"list_routes",
@@ -123,10 +160,18 @@ tools(_State) ->
                 },
                 required => [~"module"]
             }
-        },
+        }
+    ].
+
+%% `eval` is arbitrary remote code execution, but the dev route is localhost-only
+%% by default (`allow_remote_access => false`, enforced by the MCP handler), so it
+%% is advertised unconditionally alongside the safe introspection tools.
+eval_tools() ->
+    [
         #{
             name => ~"eval",
-            description => ~"Evaluate Erlang in the live node (dev only); bindings persist",
+            description =>
+                ~"Evaluate Erlang in the live node (dev only); bindings persist",
             input_schema => #{
                 type => ~"object",
                 properties => #{code => #{type => ~"string"}},
@@ -152,8 +197,10 @@ handle_tool(~"render_component", #{~"module" := ModBin} = Args, _Ctx, State) ->
     outcome(with_module(ModBin, fun(Mod) -> render_component(Mod, Bindings) end), State);
 handle_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State) ->
     case eval_code(Code, Bindings) of
-        {ok, Value, NewBindings} -> {reply, format_value(Value), State#{bindings := NewBindings}};
-        {error, Message} -> {error, Message, State}
+        {ok, Value, NewBindings} ->
+            {reply, format_value(Value), State#{bindings := NewBindings}};
+        {error, Message} ->
+            {error, Message, State}
     end.
 
 %% --------------------------------------------------------------------

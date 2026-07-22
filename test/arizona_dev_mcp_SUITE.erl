@@ -4,6 +4,7 @@
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2, end_per_testcase/2]).
 -export([
     tools_list/1,
+    route_bounds_sessions/1,
     list_routes_lists_mcp_route/1,
     list_routes_formats_shapes/1,
     list_routes_env_unset/1,
@@ -39,6 +40,7 @@
 all() ->
     [
         tools_list,
+        route_bounds_sessions,
         list_routes_lists_mcp_route,
         list_routes_formats_shapes,
         list_routes_env_unset,
@@ -92,8 +94,11 @@ end_per_testcase(_Case, _Config) ->
 %% tools
 %% --------------------------------------------------------------------
 
+%% All tools are advertised, including eval -- it is always available; the dev
+%% route's localhost-only gate (not a per-tool switch) is what keeps it safe.
 tools_list(_Config) ->
-    Names = [maps:get(name, Tool) || Tool <- arizona_dev_mcp:tools(#{})],
+    {ok, _, _, DefaultState} = arizona_dev_mcp:init(#{}),
+    Names = [maps:get(name, Tool) || Tool <- arizona_dev_mcp:tools(DefaultState)],
     Expected = [
         ~"list_routes",
         ~"describe_component",
@@ -105,6 +110,19 @@ tools_list(_Config) ->
         ~"eval"
     ],
     ?assertEqual(lists:sort(Expected), lists:sort(Names)).
+
+%% The dev route bounds concurrent sessions (M2) so a client cannot pin unbounded
+%% memory by looping `initialize`, and keeps session mode on; an explicit
+%% override wins.
+route_bounds_sessions(_Config) ->
+    ?assertMatch(
+        {mcp, ~"/mcp", arizona_dev_mcp, #{
+            sessions := true, max_sessions := 32, allow_remote_access := false
+        }},
+        arizona_dev_mcp:route(~"/mcp")
+    ),
+    {mcp, _, _, Opts} = arizona_dev_mcp:route(~"/mcp", #{max_sessions => 4}),
+    ?assertEqual(4, maps:get(max_sessions, Opts)).
 
 %% --------------------------------------------------------------------
 %% list_routes
