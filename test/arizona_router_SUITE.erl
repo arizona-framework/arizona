@@ -100,11 +100,20 @@ match_result(Method, Path) ->
     Compiled = persistent_term:get(arizona_roadrunner_dispatch),
     roadrunner_router:match(Method, Path, Compiled).
 
-%% A minimal raw roadrunner request carrying a `listener_name`, shaped as
+%% A raw roadrunner request carrying a `listener_name`, shaped as
 %% `arizona_roadrunner_req:resolve_route/3` reads it -- the method and path
 %% drive the match, the listener name selects the per-listener dispatch table.
+%% The `target`/`version`/`headers` keys are unused here but are required by the
+%% `roadrunner_req:request()` type, so include them to keep the call well-typed.
 listener_req(Name, Path) ->
-    #{method => ~"GET", path => Path, listener_name => Name}.
+    #{
+        method => ~"GET",
+        target => Path,
+        path => Path,
+        version => {1, 1},
+        headers => [],
+        listener_name => Name
+    }.
 
 %% --------------------------------------------------------------------
 %% Tests
