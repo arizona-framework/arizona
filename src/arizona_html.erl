@@ -57,6 +57,19 @@ element_close(TagName) ->
 
 -spec attr(binary(), binary()) -> binary().
 attr(Name, Value) ->
+    %% HTML-escape the value: an attribute value is text, so a literal `"`/`&`/`<`
+    %% (from a static template literal or a dynamic scalar) must be entity-escaped
+    %% or it terminates/breaks the attribute. This is the sole escaping boundary
+    %% for attribute values -- render_attr/2 hands plain scalars straight here and
+    %% routes the trusted cases (a `?raw` opt-out, a pre-escaped effect command)
+    %% through attr_unescaped/2 instead, so nothing is double-escaped.
+    attr_unescaped(Name, escape(Value)).
+
+%% Emit ` Name="Value"` with the value spliced verbatim -- for values that are
+%% already safe for the attribute context (an effect command's JSON, escaped by
+%% arizona_effect:encode/1, or a trusted `?raw` opt-out).
+-spec attr_unescaped(binary(), binary()) -> binary().
+attr_unescaped(Name, Value) ->
     <<" ", Name/binary, "=\"", Value/binary, "\"">>.
 
 -spec attr_boolean(binary()) -> binary().
@@ -66,8 +79,9 @@ attr_boolean(Name) ->
 -spec attr_command(binary(), term()) -> binary().
 attr_command(Name, Cmd) ->
     %% A folded effect command: its JSON, escaped for the HTML attribute
-    %% context, as a normal name="value" attribute.
-    attr(Name, arizona_effect:encode(Cmd)).
+    %% context by arizona_effect:encode/1, as a normal name="value" attribute --
+    %% emitted verbatim so the already-escaped JSON is not escaped twice.
+    attr_unescaped(Name, arizona_effect:encode(Cmd)).
 
 -spec attr_dyn_name(binary()) -> binary().
 attr_dyn_name(_Name) ->
@@ -81,6 +95,12 @@ children_sep() ->
 
 -spec text_child(binary()) -> binary().
 text_child(Text) ->
+    %% Static text is spliced verbatim: it is the documented raw-HTML seam (a
+    %% layout emits `~"<!DOCTYPE html>"` / literal fragments as static text), so it
+    %% is deliberately NOT escaped here. Escaped element content comes from dynamic
+    %% values (the escape/1 boundary); `?raw` is the opt-out for trusted dynamic
+    %% HTML. Only static attribute *values* are escaped (attr/2), where a literal
+    %% `"` would otherwise terminate the attribute with no raw-splice use case.
     Text.
 
 -spec text_az(binary(), non_neg_integer()) -> binary().
@@ -150,9 +170,13 @@ escape(<<"'", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#39;">>);
 escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
 
 %% Render a dynamic attribute value: `false` strips the attribute, `true` emits a
-%% bare name, anything else becomes ` Name="Escaped"` (the value entity-escaped
-%% via escape_value/2, which classifies out a `?raw` opt-out or effect command).
+%% bare name. A `?raw` opt-out and an effect command are trusted (classified out
+%% and emitted verbatim, mirroring escape_value/2); any other scalar goes through
+%% attr/2, which entity-escapes it -- the one attribute-value escaping boundary.
 -spec render_attr(binary(), term()) -> binary().
 render_attr(_Name, false) -> <<>>;
 render_attr(Name, true) -> attr_boolean(Name);
-render_attr(Name, Value) -> attr(Name, arizona_template:escape_value(?MODULE, Value)).
+render_attr(Name, {arizona_raw, V}) -> attr_unescaped(Name, arizona_template:to_bin(V));
+render_attr(Name, {arizona_effect, _} = Cmd) -> attr_command(Name, Cmd);
+render_attr(Name, [{arizona_effect, _} | _] = Cmd) -> attr_command(Name, Cmd);
+render_attr(Name, Value) -> attr(Name, arizona_template:to_bin(Value)).

@@ -29,6 +29,7 @@
     no_diff_render_with_views/1,
     no_diff_ssr_nested/1,
     render_attr/1,
+    static_attr_escaped/1,
     render_nested_sd/1,
     render_nodiff_layout_location_success/1,
     render_nodiff_layout_location_wrapping/1,
@@ -89,6 +90,7 @@ groups() ->
         {render, [parallel], [
             render_text,
             render_attr,
+            static_attr_escaped,
             render_nested_sd,
             render_with_views_no_children,
             repeated_stateless_distinct_az,
@@ -230,6 +232,25 @@ render_attr(Config) when is_list(Config) ->
         },
         Snap
     ).
+
+%% P4: a static attribute value is HTML-escaped at compile time (a literal `"`
+%% would otherwise terminate the attribute), matching the dynamic-value boundary
+%% and escaping exactly once -- a folded effect command (pre-escaped by
+%% arizona_effect:encode/1) is not double-escaped.
+static_attr_escaped(Config) when is_list(Config) ->
+    T = arizona_static_attr_escape:render(#{dyn => ~"p&q"}),
+    {HTML0, _Snap} = arizona_render:render(T),
+    HTML = iolist_to_binary(HTML0),
+    %% Static attribute values entity-escaped (regression: were emitted verbatim).
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"title=\"say &quot;hi&quot; &amp; &lt;b&gt;\"")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"data-x=\"a&amp;b\"")),
+    %% A raw `"`/`<` never survives into the markup unescaped.
+    ?assertEqual(nomatch, binary:match(HTML, ~"say \"hi\"")),
+    %% Dynamic attribute value escaped exactly once (no double `&amp;amp;`).
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"data-dyn=\"p&amp;q\"")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&amp;amp;")),
+    %% Folded effect command: escaped once by encode/1, emitted verbatim (not re-escaped).
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"az-click=\"[0,&quot;inc&quot;]\"")).
 
 render_nested_sd(Config) when is_list(Config) ->
     T = #{
