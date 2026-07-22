@@ -1230,11 +1230,18 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | 7    | `OP_ITEM_PATCH`  | `[target, key, innerOps]`  | Stream item patch                                      |
 | 8    | `OP_REPLACE`     | `[target, html]`           | Element swap (navigate); `target` is the OLD view id   |
 | 9    | `OP_MOVE`        | `[target, key, afterKey]`  | Stream move (afterKey=null -> prepend)                 |
+| 10   | `OP_LIST_PATCH`  | `[target, subOps]`         | Single-root plain-list `?each` positional item patch   |
 
 A content-slot dynamic -- a value, a nested template, *or a plain-list `?each`* -- is anchored
 by `<!--az:X-->...<!--/az-->` comment markers in SSR (no wrapper element carries the slot `az`),
-so its diff patch is the marker-aware `OP_TEXT`: it replaces only the span between the markers,
-leaving the slot's static siblings and the enclosing element intact.
+so its diff patch replaces only the span between the markers, leaving the slot's static siblings
+and the enclosing element intact. A single-root plain-list `?each` patches in place with
+`OP_LIST_PATCH`: its `subOps` address items by DOM-order position between the markers
+(`[OP_ITEM_PATCH, idx, innerOps]` patches item `idx`, `[OP_REMOVE, idx]` removes it, and
+`[OP_INSERT, idx, html]` inserts), so an item change never touches the container's `childList`.
+The wholesale marker-aware `OP_TEXT` re-render is the fallback -- used when positional patching is
+unsound (the old slot was not a list, the item is not a single root element, or the list rendered a
+per-item child view). A scalar value or a nested template still patches via that `OP_TEXT`.
 
 **Exception -- raw-text elements (`script`/`style`/`textarea`/`title`).** The browser does not
 parse HTML comments inside these, so a comment marker becomes literal content and corrupts it (an
