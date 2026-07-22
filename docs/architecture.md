@@ -107,7 +107,7 @@ is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
 (`arizona_live:render_current/1`) rather than applying diff ops, so the backend
 writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
 
-Escaping is per-backend via the `arizona_renderer:escape/1` callback, selected by the
+Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
 bytes except `\n`/`\t`, and DEL; preserves UTF-8), native is a no-op (JSON handles it).
 So a dynamic value in a `?terminal` view cannot inject ANSI/OSC escape sequences into
