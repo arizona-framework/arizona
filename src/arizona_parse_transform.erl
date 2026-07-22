@@ -2301,8 +2301,14 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
     AzBin = extract_binary_value(AzAST),
     {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
 
+%% The fingerprint keys the client's persistent (IndexedDB) statics cache, whose
+%% collision domain is every template version a browser has ever seen -- a collision
+%% silently renders another template's cached markup. `phash2/1` spans only 2^27, so a
+%% few thousand distinct templates already carry a real birthday-collision risk. Take
+%% the full 2^32 range (`phash2/2`) instead -- same fast native hash, ~32x fewer
+%% collisions, and `f` stays an opaque base-36 string so the wire format is unchanged.
 generate_fingerprint(Statics) ->
-    Hash = erlang:phash2(Statics),
+    Hash = erlang:phash2(Statics, 1 bsl 32),
     integer_to_binary(Hash, 36).
 
 split_fun_body([Last]) ->

@@ -82,6 +82,7 @@
     empty_children/1,
     event_attrs_static/1,
     fingerprint_stability/1,
+    fingerprint_avoids_phash2_collision/1,
     format_error/1,
     invalid_attribute_name_false/1,
     invalid_attribute_name/1,
@@ -358,6 +359,7 @@ groups() ->
             event_attrs_static,
             empty_children,
             fingerprint_stability,
+            fingerprint_avoids_phash2_collision,
             render_integration,
             diff_integration,
             two_dynamic_attrs,
@@ -1473,6 +1475,29 @@ fingerprint_stability(Config) when is_list(Config) ->
     T2 = Mod:render(#{x => <<"b">>}),
     ?assertEqual(maps:get(f, T1), maps:get(f, T2)),
     ?assert(is_binary(maps:get(f, T1))).
+
+%% The fingerprint keys the client's persistent statics cache, so two distinct
+%% templates sharing a fingerprint silently render the wrong cached markup. The
+%% statics [~"22906"] and [~"28755"] collide under phash2/1 (2^27) but not over the
+%% full 2^32 range -- so these two static templates share a fingerprint before the
+%% widening and must differ after it.
+fingerprint_avoids_phash2_collision(Config) when is_list(Config) ->
+    ModA = compile_module(
+        "-module(pt_fp_collide_a). "
+        "-export([render/1]). "
+        "render(_Bindings) -> arizona_template:html(<<\"22906\">>). "
+    ),
+    ModB = compile_module(
+        "-module(pt_fp_collide_b). "
+        "-export([render/1]). "
+        "render(_Bindings) -> arizona_template:html(<<\"28755\">>). "
+    ),
+    %% Same collision under the old default phash2/1 range, proving the statics really
+    %% collide (the precondition that made the two fingerprints equal before the fix).
+    ?assertEqual(erlang:phash2([~"22906"]), erlang:phash2([~"28755"])),
+    FA = maps:get(f, ModA:render(#{})),
+    FB = maps:get(f, ModB:render(#{})),
+    ?assertNotEqual(FA, FB).
 
 %% Test 12: Integration -- arizona:render/1 produces valid HTML.
 render_integration(Config) when is_list(Config) ->
