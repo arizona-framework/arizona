@@ -172,6 +172,12 @@ new(KeyFun, Items, Opts) when is_function(KeyFun, 1), is_list(Items), is_map(Opt
 
 -doc """
 Appends `Item` to the end of the stream and queues an insert op.
+
+Crashes with `{stream_duplicate_key, Key}` (carrying an `error_info`
+annotation that routes through `format_error/2`) if `Key` is already
+present -- inserting a duplicate key would duplicate it in `order` and
+corrupt the items/order/size invariant. Use `update/3` to replace an
+existing item.
 """.
 -spec insert(Stream, Item) -> Stream1 when
     Stream :: stream(),
@@ -188,18 +194,28 @@ insert(
     Item
 ) ->
     Key = KeyFun(Item),
-    %% O(1): cons to BackRev instead of `Front ++ [Key]`. The buffer is
-    %% flushed by the next non-insert/2 operation (or by visible_keys
-    %% on read). For 1000 sequential inserts this turns O(N^2) into O(N).
-    S#stream{
-        items = Items#{Key => Item},
-        order = {Front, [Key | Back]},
-        pending = queue:in({insert, Key, Item, -1}, Pending),
-        size = Size + 1
-    }.
+    case Items of
+        #{Key := _} ->
+            erlang:error({stream_duplicate_key, Key}, [S, Item], [
+                {error_info, #{module => ?MODULE}}
+            ]);
+        #{} ->
+            %% O(1): cons to BackRev instead of `Front ++ [Key]`. The buffer is
+            %% flushed by the next non-insert/2 operation (or by visible_keys
+            %% on read). For 1000 sequential inserts this turns O(N^2) into O(N).
+            S#stream{
+                items = Items#{Key => Item},
+                order = {Front, [Key | Back]},
+                pending = queue:in({insert, Key, Item, -1}, Pending),
+                size = Size + 1
+            }
+    end.
 
 -doc """
 Inserts `Item` at the given zero-based `Pos` and queues an insert op.
+
+Crashes with `{stream_duplicate_key, Key}` (see `insert/2`) if `Key` is
+already present. Use `update/3` to replace an existing item.
 """.
 -spec insert(Stream, Item, Pos) -> Stream1 when
     Stream :: stream(),
@@ -218,13 +234,20 @@ insert(
     Pos
 ) ->
     Key = KeyFun(Item),
-    Flat = flat_order(Order),
-    S#stream{
-        items = Items#{Key => Item},
-        order = {order_insert_at(Flat, Key, Pos), []},
-        pending = queue:in({insert, Key, Item, Pos}, Pending),
-        size = Size + 1
-    }.
+    case Items of
+        #{Key := _} ->
+            erlang:error({stream_duplicate_key, Key}, [S, Item, Pos], [
+                {error_info, #{module => ?MODULE}}
+            ]);
+        #{} ->
+            Flat = flat_order(Order),
+            S#stream{
+                items = Items#{Key => Item},
+                order = {order_insert_at(Flat, Key, Pos), []},
+                pending = queue:in({insert, Key, Item, Pos}, Pending),
+                size = Size + 1
+            }
+    end.
 
 -doc """
 Removes the item with `Key` and queues a delete op. No-op if `Key`
@@ -258,22 +281,37 @@ delete(
 
 -doc """
 Replaces the item at `Key` with `NewItem` and queues an update op.
+
+If `Key` is not present it is appended as a new item (an upsert): the
+differ already renders a queued update of an unseen key as an insert
+(`OP_INSERT` at the tail), so appending here keeps that op consistent
+with the items/order/size invariant.
 """.
 -spec update(Stream, Key, NewItem) -> Stream1 when
     Stream :: stream(),
     Key :: key(),
     NewItem :: item(),
     Stream1 :: stream().
-update(#stream{items = Items, pending = Pending} = S, Key, NewItem) ->
-    Changed =
-        case Items of
-            #{Key := OldItem} -> compute_item_changed(OldItem, NewItem);
-            #{} -> #{}
-        end,
-    S#stream{
-        items = Items#{Key => NewItem},
-        pending = queue:in({update, Key, NewItem, Changed}, Pending)
-    }.
+update(
+    #stream{items = Items, order = {Front, Back}, pending = Pending, size = Size} = S,
+    Key,
+    NewItem
+) ->
+    case Items of
+        #{Key := OldItem} ->
+            Changed = compute_item_changed(OldItem, NewItem),
+            S#stream{
+                items = Items#{Key => NewItem},
+                pending = queue:in({update, Key, NewItem, Changed}, Pending)
+            };
+        #{} ->
+            S#stream{
+                items = Items#{Key => NewItem},
+                order = {Front, [Key | Back]},
+                pending = queue:in({update, Key, NewItem, #{}}, Pending),
+                size = Size + 1
+            }
+    end.
 
 -doc """
 Set of keys that differ between two item maps -- added, removed, or value
@@ -507,6 +545,15 @@ format_error({stream_order_stale_key, K, Order, ItemKeys}, _ST) ->
             "(order=~0tp, items keys=~0tp). Every key in order must "
             "be present in items, with no duplicates.",
             [K, Order, ItemKeys]
+        )
+    };
+format_error({stream_duplicate_key, Key}, _ST) ->
+    #{
+        general => io_lib:format(
+            "cannot insert stream key ~0tp: it is already present. Keys "
+            "must be unique; use arizona_stream:update/3 to replace an "
+            "existing item.",
+            [Key]
         )
     };
 format_error(missing_stream_key, [{_M, _F, [#stream{items = Items}, Key], _Info} | _]) ->
