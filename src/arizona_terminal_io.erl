@@ -22,6 +22,7 @@ sequences are dropped.
 """.
 
 -export([keys/1]).
+-export([take_incomplete/1]).
 
 -export_type([key/0]).
 
@@ -35,6 +36,34 @@ keys(Bytes) ->
     case decode(Bytes) of
         {skip, Rest} -> keys(Rest);
         {Key, Rest} -> [Key | keys(Rest)]
+    end.
+
+-doc """
+Split a read into its leading decodable bytes and a trailing **incomplete** escape
+sequence. A read may end mid-sequence -- a transport delivers bytes in chunks (the
+local TTY reads fixed-size chunks; a network transport fragments on TCP boundaries),
+so an escape sequence like `\\e[A` (an arrow key) can be cut after `\\e[`. Decoded in
+isolation that tail is lost and the next read's `A` mis-decodes into a spurious `$A`.
+
+Returns `{Complete, Incomplete}`: `Complete` decodes cleanly via `keys/1`, and a
+driver carries `Incomplete` in its state to prepend to the next read. The incomplete
+tail is the trailing bytes of an unfinished CSI (`\\e[` + parameter/intermediate
+bytes, awaiting a final byte), an unfinished SS3 introducer (`\\eO`), or a lone
+trailing `\\e` (which could begin any of those). A trailing lone `\\e` therefore
+holds until the next read -- the classic terminal ESC-vs-sequence ambiguity, resolved
+here by buffering rather than a timer.
+""".
+-spec take_incomplete(binary()) -> {binary(), binary()}.
+take_incomplete(Bytes) ->
+    case last_esc_pos(Bytes) of
+        none ->
+            {Bytes, <<>>};
+        Pos ->
+            <<Complete:Pos/binary, Suffix/binary>> = Bytes,
+            case incomplete_escape(Suffix) of
+                true -> {Complete, Suffix};
+                false -> {Bytes, <<>>}
+            end
     end.
 
 %% --------------------------------------------------------------------
@@ -87,3 +116,27 @@ decode(<<_Byte, Rest/binary>>) -> {skip, Rest}.
 skip_csi(<<Byte, Rest/binary>>) when Byte >= 16#40, Byte =< 16#7E -> Rest;
 skip_csi(<<_Byte, Rest/binary>>) -> skip_csi(Rest);
 skip_csi(<<>>) -> <<>>.
+
+%% Byte offset of the last ESC (0x1B) in the read, or `none`. An incomplete escape
+%% is always a trailing thing (bytes ran out mid-sequence), so any earlier ESC has
+%% enough bytes after it to complete -- only the final ESC's suffix can be pending.
+last_esc_pos(Bytes) ->
+    case binary:matches(Bytes, <<$\e>>) of
+        [] -> none;
+        Matches -> element(1, lists:last(Matches))
+    end.
+
+%% Does a suffix starting at an ESC form an unfinished escape sequence? A lone
+%% `\e`, an SS3 introducer `\eO`, or a CSI `\e[` whose bytes are all parameter/
+%% intermediate (0x20-0x3F) with no final byte yet. Anything else starting with ESC
+%% (Alt-<char>, a finished `\e[A`/`\eOA`) is decodable now.
+incomplete_escape(<<$\e>>) -> true;
+incomplete_escape(<<$\e, $O>>) -> true;
+incomplete_escape(<<$\e, $[, Rest/binary>>) -> csi_unfinished(Rest);
+incomplete_escape(_Suffix) -> false.
+
+%% A CSI is unfinished while every byte so far is a parameter/intermediate byte
+%% (0x20-0x3F) -- the final byte (0x40-0x7E) has not arrived.
+csi_unfinished(<<>>) -> true;
+csi_unfinished(<<Byte, Rest/binary>>) when Byte >= 16#20, Byte =< 16#3F -> csi_unfinished(Rest);
+csi_unfinished(_Rest) -> false.

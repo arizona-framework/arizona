@@ -10,6 +10,8 @@
 -export([ctrl_letters/1]).
 -export([tokenises_multiple_keys/1]).
 -export([drops_unknown_input/1]).
+-export([take_incomplete_splits_pending/1]).
+-export([default_driver_buffers_split_escape/1]).
 -export([driver_quits_on_ctrl_d/1]).
 -export([driver_emits_key_events/1]).
 -export([effect_builders/1]).
@@ -34,6 +36,8 @@ all() ->
         ctrl_letters,
         tokenises_multiple_keys,
         drops_unknown_input,
+        take_incomplete_splits_pending,
+        default_driver_buffers_split_escape,
         driver_quits_on_ctrl_d,
         driver_emits_key_events,
         effect_builders,
@@ -99,7 +103,41 @@ drops_unknown_input(Config) when is_list(Config) ->
     ?assertEqual([], arizona_terminal_io:keys(~"\e[Z")),
     ?assertEqual([], arizona_terminal_io:keys(~"\e[12;34R")),
     %% A lone non-ASCII byte (e.g. a UTF-8 continuation) is dropped.
-    ?assertEqual([], arizona_terminal_io:keys(<<200>>)).
+    ?assertEqual([], arizona_terminal_io:keys(<<200>>)),
+    %% C0 control bytes outside the 1-26 ctrl-letter range (NUL, FS/GS/RS/US) are
+    %% not mapped to keys -- they are dropped.
+    ?assertEqual([], arizona_terminal_io:keys(<<0>>)),
+    ?assertEqual([], arizona_terminal_io:keys(<<28, 29, 30, 31>>)).
+
+%% A read can end mid escape sequence; take_incomplete/1 splits off the trailing
+%% incomplete prefix so a driver can carry it to the next read.
+take_incomplete_splits_pending(Config) when is_list(Config) ->
+    %% A complete arrow key followed by a cut CSI: the finished one decodes, the
+    %% `\e[` tail is held.
+    ?assertEqual({~"\e[A", ~"\e["}, arizona_terminal_io:take_incomplete(~"\e[A\e[")),
+    %% Bare introducers with no final byte are incomplete.
+    ?assertEqual({<<>>, ~"\e["}, arizona_terminal_io:take_incomplete(~"\e[")),
+    ?assertEqual({<<>>, ~"\eO"}, arizona_terminal_io:take_incomplete(~"\eO")),
+    ?assertEqual({<<>>, <<27>>}, arizona_terminal_io:take_incomplete(<<27>>)),
+    %% A CSI awaiting its final byte (params only) is incomplete.
+    ?assertEqual({~"j", ~"\e[12;3"}, arizona_terminal_io:take_incomplete(~"j\e[12;3")),
+    %% Complete sequences are not split off -- nothing to carry over.
+    ?assertEqual({~"\e[A", <<>>}, arizona_terminal_io:take_incomplete(~"\e[A")),
+    ?assertEqual({~"\eOA", <<>>}, arizona_terminal_io:take_incomplete(~"\eOA")),
+    ?assertEqual({~"\ea", <<>>}, arizona_terminal_io:take_incomplete(~"\ea")),
+    ?assertEqual({~"abc", <<>>}, arizona_terminal_io:take_incomplete(~"abc")),
+    ?assertEqual({<<>>, <<>>}, arizona_terminal_io:take_incomplete(<<>>)).
+
+%% The default driver buffers an escape sequence split across two reads (a transport
+%% delivers bytes in chunks) rather than mis-decoding it into a spurious key.
+default_driver_buffers_split_escape(Config) when is_list(Config) ->
+    %% First read ends with the incomplete `\e[`: no key yet, prefix buffered.
+    {Cmds1, State1} = arizona_terminal_default_driver:keys(~"\e[", #{}),
+    ?assertEqual([], Cmds1),
+    %% Second read supplies the final byte: the two reads join into one arrow key,
+    %% NOT the spurious `$A` a per-read decode would produce.
+    {Cmds2, _State2} = arizona_terminal_default_driver:keys(~"A", State1),
+    ?assertEqual([{event, ~"key", #{key => up}}], Cmds2).
 
 driver_quits_on_ctrl_d(Config) when is_list(Config) ->
     %% Ctrl-D (EOF) is the one always-available escape.

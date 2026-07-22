@@ -45,10 +45,19 @@ The defaults:
 init(_Arg) ->
     #{}.
 
--doc "Translate the read and turn keys into events; Ctrl-D (EOF) quits.".
+-doc """
+Translate the read and turn keys into events; Ctrl-D (EOF) quits. An escape
+sequence split across reads (a transport delivers bytes in chunks) would otherwise
+mis-decode -- a trailing `\\e[` dropped, the next read's `A` surfacing as a spurious
+`$a`. So the incomplete trailing escape prefix is buffered in the driver state
+(`pending`) and prepended to the next read.
+""".
 -spec keys(binary(), State) -> {[arizona_terminal_driver:command()], State}.
 keys(Bytes, State) ->
-    {[to_command(Key) || Key <- arizona_terminal_io:keys(Bytes)], State}.
+    Pending = maps:get(pending, State, <<>>),
+    {Complete, Pending1} = arizona_terminal_io:take_incomplete(<<Pending/binary, Bytes/binary>>),
+    Commands = [to_command(Key) || Key <- arizona_terminal_io:keys(Complete)],
+    {Commands, State#{pending => Pending1}}.
 
 -doc """
 Repaint the frame in place and interpret framework terminal effects: a `quit`
