@@ -887,6 +887,63 @@ describe('applyOps -- OP.ITEM_PATCH', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 10c. applyOps -- stream keys containing CSS metacharacters (D9)
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- stream keys with CSS metacharacters (D9)', () => {
+    // A server stream key is arbitrary app data. A `"` or `\` in it makes an
+    // unescaped `[az-key="..."]` selector invalid, throwing a SyntaxError that
+    // (without CSS.escape) aborts the op batch and desyncs the DOM.
+    const KEY = 'a"b\\c';
+
+    /** Serialize an element with `az-key` = `k` set safely (no manual escaping). */
+    function keyedHTML(k, tag = 'p') {
+        const el = document.createElement(tag);
+        el.setAttribute('az-key', k);
+        el.textContent = 'X';
+        return el.outerHTML;
+    }
+
+    it('OP.REMOVE removes an item whose key has metacharacters', () => {
+        setupView('v', `<div az="0">${keyedHTML(KEY)}</div>`);
+        const container = resolveEl('v:0');
+        applyOps([[OP.REMOVE, 'v:0', KEY]]);
+        expect(container.querySelector('[az-key]')).toBeNull();
+    });
+
+    it('OP.MOVE reorders an item whose key has metacharacters', () => {
+        setupView('v', `<div az="0">${keyedHTML('a')}${keyedHTML(KEY)}</div>`);
+        const container = resolveEl('v:0');
+        applyOps([[OP.MOVE, 'v:0', KEY, null]]); // prepend the metachar item
+        const keys = Array.from(container.querySelectorAll(':scope > [az-key]')).map((c) =>
+            c.getAttribute('az-key'),
+        );
+        expect(keys).toEqual([KEY, 'a']);
+    });
+
+    it('OP.ITEM_PATCH patches an item whose key has metacharacters', () => {
+        const outer = document.createElement('div');
+        outer.setAttribute('az-key', KEY);
+        outer.innerHTML = '<span az="0">old</span>';
+        setupView('v', `<div az="0">${outer.outerHTML}</div>`);
+        applyOps([[OP.ITEM_PATCH, 'v:0', KEY, [[OP.TEXT, '0', 'new']]]]);
+        expect(resolveEl('v:0').querySelector('span[az="0"]').textContent).toBe('new');
+    });
+
+    it('OP.INSERT mounts a hook on an inserted item whose key has metacharacters', () => {
+        const mounted = vi.fn();
+        hooks.Probe = { mounted };
+        setupView('v', '<div az="0"></div>');
+        const item = document.createElement('p');
+        item.setAttribute('az-key', KEY);
+        item.setAttribute('az-hook', 'Probe');
+        // The post-insert lookup that mounts hooks must find the metachar item.
+        applyOps([[OP.INSERT, 'v:0', KEY, -1, item.outerHTML]]);
+        expect(mounted).toHaveBeenCalledTimes(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 11. applyOps -- skip missing elements
 // ---------------------------------------------------------------------------
 
@@ -907,6 +964,63 @@ describe('applyOps -- skip missing', () => {
         ]);
         // Original element should be untouched
         expect(resolveEl('v:0').textContent).toBe('hi');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 11b. applyOps -- per-op fault isolation (J5)
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- per-op fault isolation (J5)', () => {
+    it('a throwing hook does not abort the rest of the op batch', () => {
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        hooks.Boom = {
+            updated() {
+                throw new Error('boom');
+            },
+        };
+        document.body.innerHTML =
+            '<div id="v" az-view><span az="0" az-hook="Boom">a</span><span az="1">b</span></div>';
+        mountHooks(document);
+        // The first op fires Boom.updated() which throws; the second must still apply.
+        applyOps([
+            [OP.TEXT, 'v:0', 'A'],
+            [OP.TEXT, 'v:1', 'B'],
+        ]);
+        expect(resolveEl('v:1').textContent).toBe('B');
+        expect(errSpy).toHaveBeenCalled();
+        errSpy.mockRestore();
+    });
+
+    it('a throwing inner item op does not abort the rest of the item patch', () => {
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        hooks.Boom = {
+            updated() {
+                throw new Error('boom');
+            },
+        };
+        setupView(
+            'v',
+            '<div az="0"><div az-key="k1">' +
+                '<span az="0" az-hook="Boom">a</span><span az="1">b</span>' +
+                '</div></div>',
+        );
+        mountHooks(document);
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:0',
+                'k1',
+                [
+                    [OP.TEXT, '0', 'A'], // fires Boom.updated() -> throws
+                    [OP.TEXT, '1', 'B'], // must still apply
+                ],
+            ],
+        ]);
+        const item = resolveEl('v:0').querySelector('[az-key="k1"]');
+        expect(item.querySelector('[az="1"]').textContent).toBe('B');
+        expect(errSpy).toHaveBeenCalled();
+        errSpy.mockRestore();
     });
 });
 
@@ -3218,6 +3332,43 @@ describe('saveFormState / restoreFormState edge cases', () => {
         expect(document.querySelector('input[name="opt"]').checked).toBe(false);
     });
 
+    it('restores a checkbox group by value, not by name presence (J4)', () => {
+        // A checkbox group saves only the CHECKED boxes' values, so a name-presence
+        // check would tick every box in the group.
+        document.body.innerHTML =
+            '<form id="f">' +
+            '<input type="checkbox" name="c" value="a" checked>' +
+            '<input type="checkbox" name="c" value="b">' +
+            '<input type="checkbox" name="c" value="c" checked>' +
+            '</form>';
+        saveFormState();
+
+        document.body.innerHTML =
+            '<form id="f">' +
+            '<input type="checkbox" name="c" value="a">' +
+            '<input type="checkbox" name="c" value="b">' +
+            '<input type="checkbox" name="c" value="c">' +
+            '</form>';
+        restoreFormState();
+        const boxes = document.querySelectorAll('input[name="c"]');
+        expect(boxes[0].checked).toBe(true); // "a" was checked
+        expect(boxes[1].checked).toBe(false); // "b" was not
+        expect(boxes[2].checked).toBe(true); // "c" was checked
+    });
+
+    it('restores duplicate-name text inputs positionally, not the stringified array (J4)', () => {
+        document.body.innerHTML =
+            '<form id="f"><input name="t" value="first"><input name="t" value="second"></form>';
+        saveFormState();
+
+        document.body.innerHTML =
+            '<form id="f"><input name="t" value=""><input name="t" value=""></form>';
+        restoreFormState();
+        const inputs = document.querySelectorAll('input[name="t"]');
+        expect(inputs[0].value).toBe('first');
+        expect(inputs[1].value).toBe('second');
+    });
+
     it('saves and restores radio buttons', () => {
         document.body.innerHTML =
             '<form id="f">' +
@@ -3477,6 +3628,82 @@ describe('connection CSS classes', () => {
         mock.simulateClose(1006);
         mock.simulateOpen(true);
         expect(document.documentElement.classList.contains('az-connected')).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// WS_CLOSE_CRASH (4500) reload loop guard (J6)
+// ---------------------------------------------------------------------------
+
+describe('WS_CLOSE_CRASH reload guard', () => {
+    /** @type {ReturnType<typeof setupMockWorker>} */
+    let mock;
+    let reload;
+    let errSpy;
+
+    beforeEach(() => {
+        sessionStorage.clear();
+        reload = vi.fn();
+        errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        if (mock) mock.restore();
+        errSpy.mockRestore();
+        sessionStorage.clear();
+    });
+
+    // Stub location AFTER connect() runs: connect builds the Worker URL via
+    // `new URL(..., import.meta.url)`, which vitest+jsdom resolves against the real
+    // `location`, so replacing it beforehand throws. crashReload only needs
+    // `location.reload`, and no code path after connect constructs a URL.
+    function stubReload() {
+        vi.stubGlobal('location', { reload, href: 'http://localhost/' });
+    }
+
+    it('reloads on a crash close but stops after the cap to break the loop', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        stubReload();
+
+        // A deterministic mount crash: every close is a 4500 (WS_CLOSE_CRASH).
+        for (let i = 0; i < 5; i++) mock.simulateClose(4500);
+
+        // At most 3 reloads, then it gives up (no infinite loop) and logs.
+        expect(reload).toHaveBeenCalledTimes(3);
+        expect(errSpy).toHaveBeenCalled();
+    });
+
+    it('a normal (non-crash) close never reloads', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        stubReload();
+
+        mock.simulateClose(1006);
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('a clean reconnect resets the guard so a later crash reloads again', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        stubReload();
+
+        for (let i = 0; i < 4; i++) mock.simulateClose(4500); // 3 reloads, then stop
+        expect(reload).toHaveBeenCalledTimes(3);
+
+        mock.simulateOpen(true); // a clean reconnect clears the crash counter
+        mock.simulateClose(4500);
+        expect(reload).toHaveBeenCalledTimes(4);
     });
 });
 
@@ -4825,5 +5052,56 @@ describe('fetch + az-form-reset via the submit listener', () => {
         });
 
         mock.restore();
+    });
+
+    it('defers the reset when the fetch is wrapped in transition(...) (E2)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // Defer the view-transition callback the way a real browser does, so a
+        // synchronous reset would clear the form before the wrapped fetch reads it.
+        let vtCallback = null;
+        document.startViewTransition = (arg) => {
+            vtCallback = typeof arg === 'object' ? arg.update : arg;
+            return {
+                ready: Promise.resolve(),
+                finished: Promise.resolve(),
+                updateCallbackDone: Promise.resolve(),
+                skipTransition: vi.fn(),
+            };
+        };
+
+        // {az_submit, transition(fetch("/x"))} = [JS_TRANSITION, opts, [JS_FETCH, url, {}]]
+        document.body.innerHTML =
+            '<form id="f" az-submit=\'[20,{},[22,"/x",{}]]\' az-form-reset>' +
+            '<input id="n" name="n" /><button type="submit">Go</button></form>';
+        const input = document.querySelector('#n');
+        input.value = 'typed';
+
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({ ok: false, status: 422, text: () => Promise.resolve('') }),
+        );
+
+        try {
+            document
+                .querySelector('#f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+            // The reset must NOT fire synchronously on submit (the wrapped fetch owns it)...
+            expect(input.value).toBe('typed');
+            // ...so when the deferred transition callback runs, the fetch POSTs the field.
+            vtCallback();
+            await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+            expect(globalThis.fetch.mock.calls[0][1].body.toString()).toContain('n=typed');
+
+            // A 422 keeps the typed fields (reset is 2xx-only).
+            await Promise.resolve();
+            expect(input.value).toBe('typed');
+        } finally {
+            delete document.startViewTransition;
+            mock.restore();
+        }
     });
 });

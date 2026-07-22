@@ -131,10 +131,11 @@ export default defineConfig(({ mode }) => ({
     test: {
         environment: 'jsdom',
         include: ['assets/**/*.test.js'],
+        setupFiles: ['./assets/js/test-setup.js'],
         coverage: {
             provider: 'v8',
             include: ['assets/**/*.js'],
-            exclude: ['assets/**/*.test.js'],
+            exclude: ['assets/**/*.test.js', 'assets/js/test-setup.js'],
             thresholds: {
                 perFile: true,
                 statements: 80,

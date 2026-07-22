@@ -58,6 +58,51 @@ const W_UPDATE_PATH = 3;
 const WS_CLOSE_NORMAL = 1000;
 const WS_CLOSE_CRASH = 4500;
 
+/**
+ * Crash-reload loop guard: a WS_CLOSE_CRASH triggers a full-page reload, so a view
+ * that crashes deterministically on mount would reload forever. Allow at most
+ * CRASH_RELOAD_MAX reloads inside CRASH_RELOAD_WINDOW_MS (tracked in sessionStorage,
+ * reset on a clean connect) before giving up.
+ */
+const CRASH_RELOAD_MAX = 3;
+const CRASH_RELOAD_WINDOW_MS = 10000;
+const CRASH_RELOAD_KEY = 'arizona:crash-reloads';
+
+/**
+ * Reload after a server-side crash close, unless we have already reloaded
+ * CRASH_RELOAD_MAX times within the window (a deterministic crash loop): then log
+ * an error and stay put with the `az-disconnected` state already set by the caller.
+ */
+function crashReload() {
+    /** @type {{count?: number, first?: number}} */
+    let rec = {};
+    try {
+        const raw = sessionStorage.getItem(CRASH_RELOAD_KEY);
+        if (raw) rec = JSON.parse(raw);
+    } catch {
+        /* no/invalid record -- treat as a fresh window */
+    }
+    const now = Date.now();
+    const count = rec.first && now - rec.first < CRASH_RELOAD_WINDOW_MS ? rec.count || 0 : 0;
+    if (count >= CRASH_RELOAD_MAX) {
+        console.error(
+            `[arizona] WebSocket closed with a crash ${count} times within ` +
+                `${CRASH_RELOAD_WINDOW_MS}ms; not reloading again -- the view likely ` +
+                `crashes deterministically on mount server-side.`,
+        );
+        return;
+    }
+    try {
+        sessionStorage.setItem(
+            CRASH_RELOAD_KEY,
+            JSON.stringify({ count: count + 1, first: count === 0 ? now : rec.first }),
+        );
+    } catch {
+        /* sessionStorage unavailable -- reload anyway, just without the guard */
+    }
+    location.reload();
+}
+
 // ---------------------------------------------------------------------------
 // Hook system -- element lifecycle hooks via az-hook attribute
 //
@@ -468,7 +513,23 @@ function mountHook(el) {
         );
     };
     _hooks.set(el, instance);
-    if (def.mounted) def.mounted.call(instance);
+    if (def.mounted) runHookCallback(instance, def.mounted, 'mounted');
+}
+
+/**
+ * Invoke a hook lifecycle callback in isolation: a throwing user hook is logged
+ * and swallowed so it can't abort the op batch it runs inside (the server
+ * snapshot has already advanced, so a bubbling throw would desync the DOM).
+ * @param {{__name: string} & Object<string, *>} instance
+ * @param {Function} cb
+ * @param {string} phase
+ */
+function runHookCallback(instance, cb, phase) {
+    try {
+        cb.call(instance);
+    } catch (err) {
+        console.error(`[arizona] hook ${instance.__name} ${phase}() threw`, err);
+    }
 }
 
 /**
@@ -481,7 +542,7 @@ function runHookPhase(el, phase) {
     const instance = _hooks.get(el);
     if (!instance) return;
     const def = hooks[instance.__name];
-    if (def?.[phase]) def[phase].call(instance);
+    if (def?.[phase]) runHookCallback(instance, def[phase], phase);
 }
 
 /**
@@ -644,54 +705,61 @@ function removeEl(el) {
 function applyOps(ops) {
     let didReplace = false;
     for (const op of ops) {
-        const el = resolveEl(op[1]);
-        if (!el) continue;
-        const az = op[1].substring(op[1].indexOf(':') + 1);
-        switch (op[0]) {
-            case OP.TEXT:
-                applyTextOp(el, az, op[2], op[3]);
-                break;
-            case OP.SET_ATTR:
-                applySetAttrOp(el, op[2], op[3]);
-                break;
-            case OP.REM_ATTR:
-                applyRemAttrOp(el, op[2]);
-                break;
-            case OP.UPDATE:
-                applyUpdateOp(el, op[2]);
-                break;
-            case OP.REPLACE: {
-                destroyHooks(el);
-                // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
-                // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
-                // view) after the swap finds nothing and the destination's hooks would
-                // never mount. Same parse-then-mount shape as OP_INSERT.
-                const tpl = el.ownerDocument.createElement('template');
-                tpl.innerHTML = op[2];
-                const added = Array.from(tpl.content.children);
-                el.replaceWith(tpl.content);
-                for (const e of added) mountHooks(e);
-                didReplace = true;
-                break;
+        // Isolate each op: a bad selector or a throwing hook must not abort the
+        // rest of the batch, or the DOM desyncs from the already-advanced server
+        // snapshot until a reload.
+        try {
+            const el = resolveEl(op[1]);
+            if (!el) continue;
+            const az = op[1].substring(op[1].indexOf(':') + 1);
+            switch (op[0]) {
+                case OP.TEXT:
+                    applyTextOp(el, az, op[2], op[3]);
+                    break;
+                case OP.SET_ATTR:
+                    applySetAttrOp(el, op[2], op[3]);
+                    break;
+                case OP.REM_ATTR:
+                    applyRemAttrOp(el, op[2]);
+                    break;
+                case OP.UPDATE:
+                    applyUpdateOp(el, op[2]);
+                    break;
+                case OP.REPLACE: {
+                    destroyHooks(el);
+                    // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
+                    // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
+                    // view) after the swap finds nothing and the destination's hooks would
+                    // never mount. Same parse-then-mount shape as OP_INSERT.
+                    const tpl = el.ownerDocument.createElement('template');
+                    tpl.innerHTML = op[2];
+                    const added = Array.from(tpl.content.children);
+                    el.replaceWith(tpl.content);
+                    for (const e of added) mountHooks(e);
+                    didReplace = true;
+                    break;
+                }
+                case OP.REMOVE_NODE:
+                    removeEl(el);
+                    break;
+                case OP.INSERT:
+                    insertItem(op[1], op[2], op[3], op[4]);
+                    break;
+                case OP.REMOVE:
+                    removeItem(op[1], op[2]);
+                    break;
+                case OP.ITEM_PATCH:
+                    patchItem(op[1], op[2], op[3]);
+                    break;
+                case OP.MOVE:
+                    moveItem(op[1], op[2], op[3]);
+                    break;
+                case OP.LIST_PATCH:
+                    applyListPatch(el, az, op[2]);
+                    break;
             }
-            case OP.REMOVE_NODE:
-                removeEl(el);
-                break;
-            case OP.INSERT:
-                insertItem(op[1], op[2], op[3], op[4]);
-                break;
-            case OP.REMOVE:
-                removeItem(op[1], op[2]);
-                break;
-            case OP.ITEM_PATCH:
-                patchItem(op[1], op[2], op[3]);
-                break;
-            case OP.MOVE:
-                moveItem(op[1], op[2], op[3]);
-                break;
-            case OP.LIST_PATCH:
-                applyListPatch(el, az, op[2]);
-                break;
+        } catch (err) {
+            console.error(`[arizona] op ${op[0]} failed; skipping`, err);
         }
     }
     // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one).
@@ -1014,7 +1082,7 @@ function insertItemEl(el, key, pos, html) {
             el.appendChild(fragment);
         }
     }
-    const item = el.querySelector(`[az-key="${key}"]`);
+    const item = el.querySelector(`[az-key="${CSS.escape(key)}"]`);
     if (item) mountHooks(item);
     else console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
 }
@@ -1048,7 +1116,7 @@ function insertItem(target, key, pos, html) {
  * @param {string} key
  */
 function removeItemEl(el, key) {
-    const item = el.querySelector(`:scope > [az-key="${key}"]`);
+    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for remove`);
         return;
@@ -1072,7 +1140,7 @@ function removeItem(target, key) {
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
  */
 function moveItemEl(el, key, afterKey) {
-    const item = el.querySelector(`:scope > [az-key="${key}"]`);
+    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for move`);
         return;
@@ -1080,7 +1148,7 @@ function moveItemEl(el, key, afterKey) {
     if (afterKey === null) {
         el.prepend(item);
     } else {
-        const ref = el.querySelector(`:scope > [az-key="${afterKey}"]`);
+        const ref = el.querySelector(`:scope > [az-key="${CSS.escape(afterKey)}"]`);
         if (ref) ref.after(item);
         else el.appendChild(item);
     }
@@ -1107,7 +1175,7 @@ function moveItem(target, key, afterKey) {
  * @param {Array<Array<*>>} innerOps
  */
 function applyItemPatch(container, key, innerOps) {
-    const item = container.querySelector(`:scope > [az-key="${key}"]`);
+    const item = container.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
         return;
@@ -1163,40 +1231,46 @@ function resolveInnerEl(parent, az) {
  */
 function applyItemOps(item, innerOps) {
     for (const op of innerOps) {
-        const az = op[1];
-        switch (op[0]) {
-            case OP.TEXT:
-                applyTextOp(resolveInnerEl(item, az), az, op[2], op[3]);
-                break;
-            case OP.SET_ATTR:
-                applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);
-                break;
-            case OP.REM_ATTR:
-                applyRemAttrOp(resolveInnerEl(item, az), op[2]);
-                break;
-            case OP.UPDATE:
-                applyUpdateOp(resolveInnerEl(item, az), op[2]);
-                break;
-            case OP.REMOVE_NODE: {
-                const innerEl = item.querySelector(`[az="${az}"]`);
-                if (innerEl) removeEl(innerEl);
-                break;
+        // Same per-op isolation as applyOps: a throwing inner op must not abort
+        // the rest of the item's patch batch.
+        try {
+            const az = op[1];
+            switch (op[0]) {
+                case OP.TEXT:
+                    applyTextOp(resolveInnerEl(item, az), az, op[2], op[3]);
+                    break;
+                case OP.SET_ATTR:
+                    applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);
+                    break;
+                case OP.REM_ATTR:
+                    applyRemAttrOp(resolveInnerEl(item, az), op[2]);
+                    break;
+                case OP.UPDATE:
+                    applyUpdateOp(resolveInnerEl(item, az), op[2]);
+                    break;
+                case OP.REMOVE_NODE: {
+                    const innerEl = item.querySelector(`[az="${az}"]`);
+                    if (innerEl) removeEl(innerEl);
+                    break;
+                }
+                case OP.INSERT:
+                    insertItemEl(resolveInnerEl(item, az), op[2], op[3], op[4]);
+                    break;
+                case OP.REMOVE:
+                    removeItemEl(resolveInnerEl(item, az), op[2]);
+                    break;
+                case OP.ITEM_PATCH:
+                    patchItemEl(item, az, op[2], op[3]);
+                    break;
+                case OP.MOVE:
+                    moveItemEl(resolveInnerEl(item, az), op[2], op[3]);
+                    break;
+                case OP.LIST_PATCH:
+                    applyListPatch(resolveInnerEl(item, az), az, op[2]);
+                    break;
             }
-            case OP.INSERT:
-                insertItemEl(resolveInnerEl(item, az), op[2], op[3], op[4]);
-                break;
-            case OP.REMOVE:
-                removeItemEl(resolveInnerEl(item, az), op[2]);
-                break;
-            case OP.ITEM_PATCH:
-                patchItemEl(item, az, op[2], op[3]);
-                break;
-            case OP.MOVE:
-                moveItemEl(resolveInnerEl(item, az), op[2], op[3]);
-                break;
-            case OP.LIST_PATCH:
-                applyListPatch(resolveInnerEl(item, az), az, op[2]);
-                break;
+        } catch (err) {
+            console.error(`[arizona] item op ${op[0]} failed; skipping`, err);
         }
     }
 }
@@ -1423,10 +1497,18 @@ function maybeResetForm(form) {
  * submit listener can defer `az-form-reset` to the fetch response instead of resetting
  * synchronously on submit.
  * @param {Array<*>} cmds
+ * @returns {boolean}
  */
 function commandsIncludeFetch(cmds) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
-    return list.some((c) => c[0] === JS_FETCH);
+    return list.some((c) => {
+        if (c[0] === JS_FETCH) return true;
+        // transition(...)/on_key(...) wrap their inner command(s) in c[2]; a fetch
+        // nested there still runs (inside the transition callback), so it must also
+        // defer the reset -- recurse instead of only checking the top level.
+        if (c[0] === JS_TRANSITION || c[0] === JS_ON_KEY) return commandsIncludeFetch(c[2]);
+        return false;
+    });
 }
 
 /**
@@ -1935,15 +2017,32 @@ function restoreFormState() {
         const form = document.getElementById(formId);
         if (!form) continue;
         const formEl = /** @type {HTMLFormElement} */ (form);
+        // A duplicate name (a repeated text input, a checkbox group) was saved as
+        // an array. Value-setting fields consume it positionally, so track how many
+        // values each name has handed out; checkbox groups match by value instead.
+        /** @type {Object<string, number>} */
+        const cursor = {};
+        /** @param {string} name @returns {string|undefined} */
+        const nextValue = (name) => {
+            const val = fields[name];
+            if (!Array.isArray(val)) return /** @type {string} */ (val);
+            const i = cursor[name] || 0;
+            cursor[name] = i + 1;
+            return val[i];
+        };
         for (const el of formEl.elements) {
             if (el instanceof HTMLInputElement) {
                 if (!el.name || el.type === 'file') continue;
                 if (el.type === 'checkbox') {
-                    el.checked = el.name in fields;
+                    // Check by value membership: a checkbox group saves only the
+                    // checked boxes' values, so `name in fields` would tick them all.
+                    const val = fields[el.name];
+                    el.checked = Array.isArray(val) ? val.includes(el.value) : val === el.value;
                 } else if (el.type === 'radio') {
                     el.checked = fields[el.name] === el.value;
                 } else if (el.name in fields) {
-                    el.value = /** @type {string} */ (fields[el.name]);
+                    const v = nextValue(el.name);
+                    if (v !== undefined) el.value = v;
                 }
             } else if (el instanceof HTMLSelectElement) {
                 if (!el.name || !(el.name in fields)) continue;
@@ -1952,11 +2051,13 @@ function restoreFormState() {
                     const arr = Array.isArray(val) ? val : [val];
                     for (const opt of el.options) opt.selected = arr.includes(opt.value);
                 } else {
-                    el.value = /** @type {string} */ (fields[el.name]);
+                    const v = nextValue(el.name);
+                    if (v !== undefined) el.value = v;
                 }
             } else if (el instanceof HTMLTextAreaElement) {
                 if (el.name && el.name in fields) {
-                    el.value = /** @type {string} */ (fields[el.name]);
+                    const v = nextValue(el.name);
+                    if (v !== undefined) el.value = v;
                 }
             }
         }
@@ -2261,6 +2362,13 @@ function connect(endpoint, params = {}) {
                     _connected = true;
                     document.documentElement.classList.add('az-connected');
                     document.documentElement.classList.remove('az-disconnected');
+                    // A clean connect means any prior crash loop is broken -- reset
+                    // the crash-reload guard so a future genuine crash reloads again.
+                    try {
+                        sessionStorage.removeItem(CRASH_RELOAD_KEY);
+                    } catch {
+                        /* sessionStorage unavailable -- nothing to reset */
+                    }
                     if (!msg[1]) {
                         mountHooks(document);
                     }
@@ -2272,7 +2380,7 @@ function connect(endpoint, params = {}) {
                     document.documentElement.classList.add('az-disconnected');
                     document.documentElement.classList.remove('az-connected');
                     if (msg[1] === WS_CLOSE_CRASH) {
-                        location.reload();
+                        crashReload();
                         return;
                     }
                     if (msg[1] !== WS_CLOSE_NORMAL) saveFormState();
