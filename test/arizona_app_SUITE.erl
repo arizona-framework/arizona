@@ -88,13 +88,17 @@ boot_with_only_reloader(Config) when is_list(Config) ->
     ?assert(has_watcher_child()).
 
 %% relx (and OTP's boot script) ignore an app listed only in
-%% optional_applications, so the runtime deps must also appear in
-%% `applications` or a release omits them and the server crashes at boot.
+%% optional_applications, so a runtime dep must also appear in `applications` or a
+%% release omits it and the server crashes at boot. `roadrunner` (the HTTP server)
+%% and `ssh` (the SSH terminal transport) must be there. `fs` (the dev reloader's
+%% watcher) must NOT: it is started via standalone `fs:start_link/2`, so forcing
+%% the `fs` app on the boot path would start its default CWD watcher in every
+%% release, including production.
 declares_runtime_deps_in_applications(Config) when is_list(Config) ->
     {ok, Apps} = application:get_key(arizona, applications),
     ?assert(lists:member(roadrunner, Apps)),
-    ?assert(lists:member(fs, Apps)),
-    ?assert(lists:member(ssh, Apps)).
+    ?assert(lists:member(ssh, Apps)),
+    ?assertNot(lists:member(fs, Apps)).
 
 %% ============================================================================
 %% Helpers

@@ -7,10 +7,9 @@
         stdlib,
         crypto,
         roadrunner,
-        fs,
         ssh
     ]},
-    {optional_applications, [roadrunner, fs, ssh]},
+    {optional_applications, [roadrunner, ssh]},
     {mod, {arizona_app, []}},
     {env, []},
     {modules, []},
