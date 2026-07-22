@@ -887,6 +887,63 @@ describe('applyOps -- OP.ITEM_PATCH', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 10c. applyOps -- stream keys containing CSS metacharacters (D9)
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- stream keys with CSS metacharacters (D9)', () => {
+    // A server stream key is arbitrary app data. A `"` or `\` in it makes an
+    // unescaped `[az-key="..."]` selector invalid, throwing a SyntaxError that
+    // (without CSS.escape) aborts the op batch and desyncs the DOM.
+    const KEY = 'a"b\\c';
+
+    /** Serialize an element with `az-key` = `k` set safely (no manual escaping). */
+    function keyedHTML(k, tag = 'p') {
+        const el = document.createElement(tag);
+        el.setAttribute('az-key', k);
+        el.textContent = 'X';
+        return el.outerHTML;
+    }
+
+    it('OP.REMOVE removes an item whose key has metacharacters', () => {
+        setupView('v', `<div az="0">${keyedHTML(KEY)}</div>`);
+        const container = resolveEl('v:0');
+        applyOps([[OP.REMOVE, 'v:0', KEY]]);
+        expect(container.querySelector('[az-key]')).toBeNull();
+    });
+
+    it('OP.MOVE reorders an item whose key has metacharacters', () => {
+        setupView('v', `<div az="0">${keyedHTML('a')}${keyedHTML(KEY)}</div>`);
+        const container = resolveEl('v:0');
+        applyOps([[OP.MOVE, 'v:0', KEY, null]]); // prepend the metachar item
+        const keys = Array.from(container.querySelectorAll(':scope > [az-key]')).map((c) =>
+            c.getAttribute('az-key'),
+        );
+        expect(keys).toEqual([KEY, 'a']);
+    });
+
+    it('OP.ITEM_PATCH patches an item whose key has metacharacters', () => {
+        const outer = document.createElement('div');
+        outer.setAttribute('az-key', KEY);
+        outer.innerHTML = '<span az="0">old</span>';
+        setupView('v', `<div az="0">${outer.outerHTML}</div>`);
+        applyOps([[OP.ITEM_PATCH, 'v:0', KEY, [[OP.TEXT, '0', 'new']]]]);
+        expect(resolveEl('v:0').querySelector('span[az="0"]').textContent).toBe('new');
+    });
+
+    it('OP.INSERT mounts a hook on an inserted item whose key has metacharacters', () => {
+        const mounted = vi.fn();
+        hooks.Probe = { mounted };
+        setupView('v', '<div az="0"></div>');
+        const item = document.createElement('p');
+        item.setAttribute('az-key', KEY);
+        item.setAttribute('az-hook', 'Probe');
+        // The post-insert lookup that mounts hooks must find the metachar item.
+        applyOps([[OP.INSERT, 'v:0', KEY, -1, item.outerHTML]]);
+        expect(mounted).toHaveBeenCalledTimes(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 11. applyOps -- skip missing elements
 // ---------------------------------------------------------------------------
 

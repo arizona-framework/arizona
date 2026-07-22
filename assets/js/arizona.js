@@ -1014,7 +1014,7 @@ function insertItemEl(el, key, pos, html) {
             el.appendChild(fragment);
         }
     }
-    const item = el.querySelector(`[az-key="${key}"]`);
+    const item = el.querySelector(`[az-key="${CSS.escape(key)}"]`);
     if (item) mountHooks(item);
     else console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
 }
@@ -1048,7 +1048,7 @@ function insertItem(target, key, pos, html) {
  * @param {string} key
  */
 function removeItemEl(el, key) {
-    const item = el.querySelector(`:scope > [az-key="${key}"]`);
+    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for remove`);
         return;
@@ -1072,7 +1072,7 @@ function removeItem(target, key) {
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
  */
 function moveItemEl(el, key, afterKey) {
-    const item = el.querySelector(`:scope > [az-key="${key}"]`);
+    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for move`);
         return;
@@ -1080,7 +1080,7 @@ function moveItemEl(el, key, afterKey) {
     if (afterKey === null) {
         el.prepend(item);
     } else {
-        const ref = el.querySelector(`:scope > [az-key="${afterKey}"]`);
+        const ref = el.querySelector(`:scope > [az-key="${CSS.escape(afterKey)}"]`);
         if (ref) ref.after(item);
         else el.appendChild(item);
     }
@@ -1107,7 +1107,7 @@ function moveItem(target, key, afterKey) {
  * @param {Array<Array<*>>} innerOps
  */
 function applyItemPatch(container, key, innerOps) {
-    const item = container.querySelector(`:scope > [az-key="${key}"]`);
+    const item = container.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
         return;
