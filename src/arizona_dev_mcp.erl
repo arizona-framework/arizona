@@ -20,15 +20,28 @@ Tools:
 - `reloader_status` -- the dev reloader's current compile error, if any.
 - `app_info` -- Arizona version, OTP release, node, process count.
 - `render_component` -- render a component to HTML with given bindings.
-- `eval` -- **run Erlang in the live node**, with bindings that persist across calls.
+- `eval` -- **run Erlang in the live node**, with bindings that persist across
+  calls. **Opt-in and off by default** (see below).
 
-`eval` is arbitrary remote code execution. Only ever mount this on a trusted,
-dev-only, localhost route behind the `Origin` allowlist, and never expose it to
-an untrusted client.
+`eval` is arbitrary remote code execution, so it is disabled unless the route
+enables it (`route/2`'s `eval` opt):
 
-It runs in session mode so `eval`'s bindings persist across calls (a REPL the
-agent drives) and a slow `eval`/`render_component` runs in the session's worker
-rather than blocking the session.
+```erlang
+arizona_dev_mcp:route(~"/mcp", #{eval => true})
+```
+
+Even then, only ever run this on a trusted, dev-only host. The MCP `Origin` check
+allows a *missing* `Origin` (every CLI/`curl`/LAN client sends none), so the
+allowlist alone does not stop a non-browser client -- pair `eval` with an `auth`
+hook (`route/2`'s `auth` opt) and bind the dev server to loopback, and never
+expose it to an untrusted network. The safe introspection tools above are always
+available; only `eval` is gated.
+
+Session mode (`sessions => true`, the default) makes `eval`'s bindings persist
+across calls (a REPL the agent drives) and runs a slow `eval`/`render_component`
+in the session's worker rather than blocking the session; the default route also
+caps concurrent sessions (`max_sessions => 32`) so a client cannot pin unbounded
+memory by looping `initialize`.
 """.
 -behaviour(arizona_mcp).
 
@@ -48,10 +61,12 @@ rather than blocking the session.
 
 -doc """
 A ready-to-mount dev route. Add `arizona_dev_mcp:route(~"/mcp")` to your **dev**
-server's routes; it defaults to `sessions => true` so `eval` is a persistent
-REPL. A CLI agent (Claude Code, the Inspector's proxy) connects with no extra
+server's routes. It defaults to `sessions => true` (so a session's `eval`
+bindings persist) and `max_sessions => 32` (so a client cannot pin unbounded
+memory). A CLI agent (Claude Code, the Inspector's proxy) connects with no extra
 config; `origins` stays opt-in (omitted blocks all browser origins, the safe
-DNS-rebinding posture).
+DNS-rebinding posture). `eval` itself is off unless you enable it (`route/2`'s
+`eval` opt) -- see the module doc.
 """.
 -spec route(Path) -> Route when
     Path :: binary(),
@@ -60,27 +75,37 @@ route(Path) ->
     route(Path, #{}).
 
 -doc """
-Like `route/1`, with extra MCP route opts merged over the defaults (e.g.
-`#{origins => [~"http://localhost:5173"]}` to also allow a browser client, or
-`#{sessions => false}` to opt out of the REPL).
+Like `route/1`, with extra MCP route opts merged over the defaults:
+`#{eval => true}` enables the `eval` RCE tool (off by default; see the module
+doc), `#{origins => [~"http://localhost:5173"]}` also allows a browser client,
+`#{auth => Hook}` gates the route, `#{sessions => false}` opts out of session
+mode.
 """.
 -spec route(Path, Opts) -> Route when
     Path :: binary(),
     Opts :: arizona_roadrunner_router:arizona_mcp_route_opts(),
     Route :: arizona_roadrunner_router:route().
 route(Path, Opts) ->
-    {mcp, Path, ?MODULE, maps:merge(#{sessions => true}, Opts)}.
+    {mcp, Path, ?MODULE, maps:merge(#{sessions => true, max_sessions => 32}, Opts)}.
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
 %% --------------------------------------------------------------------
 
-init(_InitParams) ->
+init(InitParams) ->
+    %% `eval` is configured per route (`route/2`'s `eval` opt), threaded to the
+    %% callback by the handler as `mcp_route_opts`. Stash it in the state so
+    %% `tools/1` and `handle_tool/4` gate on it.
+    RouteOpts = maps:get(mcp_route_opts, InitParams, #{}),
     {ok, #{name => ~"arizona_dev", version => ~"0.1.0"}, #{tools => #{}}, #{
-        bindings => erl_eval:new_bindings()
+        bindings => erl_eval:new_bindings(),
+        eval => maps:get(eval, RouteOpts, false)
     }}.
 
-tools(_State) ->
+tools(State) ->
+    base_tools() ++ eval_tools(State).
+
+base_tools() ->
     [
         #{
             name => ~"list_routes",
@@ -123,17 +148,35 @@ tools(_State) ->
                 },
                 required => [~"module"]
             }
-        },
-        #{
-            name => ~"eval",
-            description => ~"Evaluate Erlang in the live node (dev only); bindings persist",
-            input_schema => #{
-                type => ~"object",
-                properties => #{code => #{type => ~"string"}},
-                required => [~"code"]
-            }
         }
     ].
+
+%% `eval` is arbitrary remote code execution, so it is advertised (and handled
+%% below) only when the route enables it (`route(Path, #{eval => true})`). The
+%% safe introspection tools above are always available.
+eval_tools(State) ->
+    case eval_enabled(State) of
+        true ->
+            [
+                #{
+                    name => ~"eval",
+                    description =>
+                        ~"Evaluate Erlang in the live node (dev only); bindings persist",
+                    input_schema => #{
+                        type => ~"object",
+                        properties => #{code => #{type => ~"string"}},
+                        required => [~"code"]
+                    }
+                }
+            ];
+        false ->
+            []
+    end.
+
+%% Only a literal `true` from the route's `eval` opt enables it; any other value
+%% (or absent) keeps it off.
+eval_enabled(#{eval := true}) -> true;
+eval_enabled(#{}) -> false.
 
 handle_tool(~"list_routes", _Args, _Ctx, State) ->
     {reply, list_routes(), State};
@@ -151,9 +194,20 @@ handle_tool(~"render_component", #{~"module" := ModBin} = Args, _Ctx, State) ->
     Bindings = maps:get(~"bindings", Args, #{}),
     outcome(with_module(ModBin, fun(Mod) -> render_component(Mod, Bindings) end), State);
 handle_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State) ->
-    case eval_code(Code, Bindings) of
-        {ok, Value, NewBindings} -> {reply, format_value(Value), State#{bindings := NewBindings}};
-        {error, Message} -> {error, Message, State}
+    %% Gate here too, not just in the advertised tool list: a client can call a
+    %% tool without listing it, so the RCE surface must be closed at the handler.
+    case eval_enabled(State) of
+        false ->
+            {error,
+                ~"eval is disabled; enable it on the route with #{eval => true} (dev only, RCE)",
+                State};
+        true ->
+            case eval_code(Code, Bindings) of
+                {ok, Value, NewBindings} ->
+                    {reply, format_value(Value), State#{bindings := NewBindings}};
+                {error, Message} ->
+                    {error, Message, State}
+            end
     end.
 
 %% --------------------------------------------------------------------

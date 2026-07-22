@@ -261,19 +261,25 @@ Exported for unit testing; `handle/1` calls it inside a crash guard.
     Ctx :: map().
 dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
     PageSize = maps:get(page_size, Ctx, ?DEFAULT_PAGE_SIZE),
+    %% Route opts (the `{mcp, ...}` route's config) are handed to the callback's
+    %% `init/1` as `mcp_route_opts` so a handler can gate on its own route config
+    %% (e.g. arizona_dev_mcp's `eval`). Server-supplied, so it overrides any
+    %% same-named client `params` key below.
+    RouteOpts = maps:get(route_opts, Ctx, #{}),
     case Id of
         %% A JSON-RPC notification (no id) is accepted and never answered,
         %% whatever its method -- `notifications/initialized` included.
         undefined ->
             notification;
         _ when Method =:= ~"initialize" ->
-            {ServerInfo, #{caps := Caps}} = open_session(Mod, Params, PageSize),
+            {ServerInfo, #{caps := Caps}} =
+                open_session(Mod, Params#{mcp_route_opts => RouteOpts}, PageSize),
             {reply, arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params))};
         _ ->
             %% Stateless: a fresh per-request session sourced from `init/1`.
             %% Nothing outlives the request, so the threaded-back session is
             %% discarded -- the next request rebuilds from `init/1`.
-            {_ServerInfo, Session} = open_session(Mod, #{}, PageSize),
+            {_ServerInfo, Session} = open_session(Mod, #{mcp_route_opts => RouteOpts}, PageSize),
             {Outcome, _Session1} = handle_method(Method, Params, Id, Session),
             Outcome
     end.
@@ -395,7 +401,7 @@ check_origin(Req, Opts) ->
 %% Stateless mode: every request is self-contained -- dispatch against a fresh
 %% per-request session, encode. No `Mcp-Session-Id`.
 reply_stateless(Request, #{handler := Mod} = Opts) ->
-    reply_dispatch(Mod, Request, page_size(Opts)).
+    reply_dispatch(Mod, Request, page_size(Opts), Opts).
 
 %% The configured list page size, defaulting when the route does not set it. A
 %% `page_size` of zero/negative would make the cursor never advance (an empty
@@ -470,7 +476,7 @@ start_initialized_session(Params, Id, RouteKey, #{handler := Mod} = Opts) ->
         %% The session id is handed to the handler so it can address its own
         %% session later via `arizona_mcp:notify/3`. An atom key can't collide
         %% with the client's binary-keyed JSON params.
-        InitParams = Params#{mcp_session_id => SessionId},
+        InitParams = Params#{mcp_session_id => SessionId, mcp_route_opts => Opts},
         {ServerInfo, #{caps := Caps} = Session} = open_session(Mod, InitParams, page_size(Opts)),
         SessionOpts = #{
             ttl_ms => maps:get(session_ttl_ms, Opts, ?DEFAULT_TTL_MS),
@@ -584,7 +590,9 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
             %% Stateless: a fresh per-request session; the worker frees the loop
             %% to push, and any state it mutates is per-request and discarded.
             %% page_size is irrelevant to a tools/call -- the default suffices.
-            {_ServerInfo, Session} = open_session(Mod, #{}, ?DEFAULT_PAGE_SIZE),
+            {_ServerInfo, Session} = open_session(
+                Mod, #{mcp_route_opts => Opts}, ?DEFAULT_PAGE_SIZE
+            ),
             Ctx = #{token => Token, to => ConnPid},
             Worker = spawn(fun() ->
                 ok = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
@@ -672,8 +680,8 @@ stream_tool_outcome({error, ToolError, NewState}, Id) ->
 generate_session_id() ->
     binary:encode_hex(crypto:strong_rand_bytes(16), lowercase).
 
-reply_dispatch(Mod, Request, PageSize) ->
-    try dispatch(Mod, Request, #{page_size => PageSize}) of
+reply_dispatch(Mod, Request, PageSize, RouteOpts) ->
+    try dispatch(Mod, Request, #{page_size => PageSize, route_opts => RouteOpts}) of
         {reply, Object} -> safe_json(Object, reply_id(Request));
         {error, Object} -> safe_json(Object, reply_id(Request));
         notification -> roadrunner_resp:status(202)

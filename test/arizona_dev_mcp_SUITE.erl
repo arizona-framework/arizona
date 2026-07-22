@@ -4,6 +4,9 @@
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2, end_per_testcase/2]).
 -export([
     tools_list/1,
+    eval_off_by_default/1,
+    eval_enabled_via_route_opt/1,
+    route_bounds_sessions/1,
     list_routes_lists_mcp_route/1,
     list_routes_formats_shapes/1,
     list_routes_env_unset/1,
@@ -39,6 +42,9 @@
 all() ->
     [
         tools_list,
+        eval_off_by_default,
+        eval_enabled_via_route_opt,
+        route_bounds_sessions,
         list_routes_lists_mcp_route,
         list_routes_formats_shapes,
         list_routes_env_unset,
@@ -92,8 +98,11 @@ end_per_testcase(_Case, _Config) ->
 %% tools
 %% --------------------------------------------------------------------
 
+%% The default route does not enable eval, so only the safe introspection tools
+%% are advertised.
 tools_list(_Config) ->
-    Names = [maps:get(name, Tool) || Tool <- arizona_dev_mcp:tools(#{})],
+    {ok, _, _, DefaultState} = arizona_dev_mcp:init(#{}),
+    Names = [maps:get(name, Tool) || Tool <- arizona_dev_mcp:tools(DefaultState)],
     Expected = [
         ~"list_routes",
         ~"describe_component",
@@ -101,10 +110,42 @@ tools_list(_Config) ->
         ~"get_source_location",
         ~"reloader_status",
         ~"app_info",
-        ~"render_component",
-        ~"eval"
+        ~"render_component"
     ],
     ?assertEqual(lists:sort(Expected), lists:sort(Names)).
+
+%% `eval` is arbitrary RCE, so with the route opt off it is neither advertised
+%% nor runnable -- the surface is closed at both the tool list and the handler
+%% (a client can call a tool it never listed). The safe tools stay available.
+eval_off_by_default(_Config) ->
+    {ok, _, _, State} = arizona_dev_mcp:init(#{}),
+    Names = [maps:get(name, Tool) || Tool <- arizona_dev_mcp:tools(State)],
+    ?assertNot(lists:member(~"eval", Names)),
+    ?assert(lists:member(~"list_routes", Names)),
+    ?assert(lists:member(~"render_component", Names)),
+    ?assertMatch(
+        {error, Bin, _} when is_binary(Bin),
+        call(~"eval", #{~"code" => ~"1 + 2."}, State)
+    ).
+
+%% The `eval => true` route opt (threaded to `init/1` as `mcp_route_opts` by the
+%% handler) advertises and runs eval.
+eval_enabled_via_route_opt(_Config) ->
+    {ok, _, _, State} = arizona_dev_mcp:init(#{mcp_route_opts => #{eval => true}}),
+    Names = [maps:get(name, Tool) || Tool <- arizona_dev_mcp:tools(State)],
+    ?assert(lists:member(~"eval", Names)),
+    ?assertMatch({reply, ~"3", _}, call(~"eval", #{~"code" => ~"1 + 2."}, State)).
+
+%% The dev route bounds concurrent sessions (M2) so a client cannot pin unbounded
+%% memory by looping `initialize`, and keeps session mode on; an explicit
+%% override wins.
+route_bounds_sessions(_Config) ->
+    ?assertMatch(
+        {mcp, ~"/mcp", arizona_dev_mcp, #{sessions := true, max_sessions := 32}},
+        arizona_dev_mcp:route(~"/mcp")
+    ),
+    {mcp, _, _, Opts} = arizona_dev_mcp:route(~"/mcp", #{max_sessions => 4}),
+    ?assertEqual(4, maps:get(max_sessions, Opts)).
 
 %% --------------------------------------------------------------------
 %% list_routes
@@ -309,7 +350,8 @@ render_component_unknown_key(_Config) ->
 %% --------------------------------------------------------------------
 
 state() ->
-    {ok, _Info, _Caps, State} = arizona_dev_mcp:init(#{}),
+    %% Enable eval for the functional eval_* tests -- it is off by route default.
+    {ok, _Info, _Caps, State} = arizona_dev_mcp:init(#{mcp_route_opts => #{eval => true}}),
     State.
 
 ctx() ->

@@ -127,8 +127,13 @@ persistent term so the dev error page can build the SSE connect URL.
     origins => [binary()],
     auth => arizona_mcp_handler:auth_hook(),
     sessions => boolean(),
+    max_sessions => pos_integer() | infinity,
     session_ttl_ms => pos_integer(),
     session_buffer_max => pos_integer(),
+    %% Consumed by the route's callback module (threaded to its `init/1` as
+    %% `mcp_route_opts`), not the handler -- e.g. `arizona_dev_mcp`'s `eval`
+    %% enables its live-eval (RCE) tool, off by default.
+    eval => boolean(),
     _ => term()
 }.
 
