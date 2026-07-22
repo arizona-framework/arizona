@@ -12,6 +12,7 @@
 -export([chat_broadcasts_to_all_terminals/1]).
 -export([disconnect_removes_subscriber/1]).
 -export([live_view_crash_tears_down/1]).
+-export([daemon_opts_bounds_sessions/1]).
 
 %% End-to-end: arizona_terminal_ssh serves the ?terminal demo view over a real SSH daemon,
 %% driven by the OTP ssh client. A throwaway host key + accept-all password auth
@@ -29,7 +30,8 @@ all() ->
         restores_cursor_on_quit,
         chat_broadcasts_to_all_terminals,
         disconnect_removes_subscriber,
-        live_view_crash_tears_down
+        live_view_crash_tears_down,
+        daemon_opts_bounds_sessions
     ].
 
 init_per_suite(Config) ->
@@ -149,6 +151,20 @@ live_view_crash_tears_down(Config) when is_list(Config) ->
     %% The client receives the cursor-restore teardown (hidden at session start).
     _ = recv_until(Conn, iolist_to_binary(io_ansi:cursor_show()), 3000),
     ok = ssh:close(Conn).
+
+daemon_opts_bounds_sessions(Config) when is_list(Config) ->
+    %% The daemon caps concurrent session channels by default, so a client cannot
+    %% mount unlimited live views (each is a process + pubsub subscription).
+    Base = #{port => 0, handler => my_handler, driver => my_driver, system_dir => "sysdir"},
+    Opts = arizona_terminal_ssh:daemon_opts(Base),
+    ?assert(is_integer(proplists:get_value(max_sessions, Opts))),
+    ?assert(proplists:get_value(max_sessions, Opts) > 0),
+    %% The framework shell + host key dir are wired into the daemon options.
+    ?assertMatch({arizona_terminal_ssh, _}, proplists:get_value(ssh_cli, Opts)),
+    ?assertEqual("sysdir", proplists:get_value(system_dir, Opts)),
+    %% A caller's own max_sessions overrides the default -- exactly one entry (theirs).
+    Opts2 = arizona_terminal_ssh:daemon_opts(Base#{daemon_opts => [{max_sessions, 3}]}),
+    ?assertEqual([3], [N || {max_sessions, N} <- Opts2]).
 
 %% --------------------------------------------------------------------
 %% Helpers
