@@ -109,6 +109,20 @@ path the client already handles. A backend capability, declared by each backend.
 -callback supports_list_patch() -> boolean().
 
 -doc """
+This backend's render-target name (`html` | `native` | `terminal`) -- the atom the
+`?html`/`?native`/`?terminal` macros expand to. Lets the parse transform recover a
+target name from a backend module without hardcoding the module -> name mapping.
+""".
+-callback target() -> atom().
+
+-doc """
+Whether this backend supports the client-owned `?local` slot (a browser/HTML-only
+feature). A backend capability, declared by each backend; the parse transform
+rejects `?local` at compile time when `false`.
+""".
+-callback supports_local() -> boolean().
+
+-doc """
 Escape a dynamic value's rendered bytes for this backend's output. Called at the
 render boundary on interpolated scalar values (`arizona_template:escape_value/2`).
 HTML entity-escapes (`<`, `&`, ...); the terminal strips control bytes that would

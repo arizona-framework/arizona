@@ -28,6 +28,8 @@ identical to the previous inlined emission.
 -export([raw_text_kind/1]).
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
+-export([target/0]).
+-export([supports_local/0]).
 -export([escape/1]).
 -export([raw_text/1]).
 -export([render_attr/2]).
@@ -154,6 +156,10 @@ scope_static(Fp, S0) ->
 %% The web client implements `?OP_LIST_PATCH` (positional single-root plain-list
 %% `?each` diffing), so single-root list items are flagged for it.
 supports_list_patch() -> true.
+
+target() -> html.
+
+supports_local() -> true.
 
 %% HTML-escape the five metacharacters; safe for element content and
 %% double/single-quoted attribute values. Byte-at-a-time over the tail is
