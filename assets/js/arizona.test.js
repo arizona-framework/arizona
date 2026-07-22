@@ -3275,6 +3275,43 @@ describe('saveFormState / restoreFormState edge cases', () => {
         expect(document.querySelector('input[name="opt"]').checked).toBe(false);
     });
 
+    it('restores a checkbox group by value, not by name presence (J4)', () => {
+        // A checkbox group saves only the CHECKED boxes' values, so a name-presence
+        // check would tick every box in the group.
+        document.body.innerHTML =
+            '<form id="f">' +
+            '<input type="checkbox" name="c" value="a" checked>' +
+            '<input type="checkbox" name="c" value="b">' +
+            '<input type="checkbox" name="c" value="c" checked>' +
+            '</form>';
+        saveFormState();
+
+        document.body.innerHTML =
+            '<form id="f">' +
+            '<input type="checkbox" name="c" value="a">' +
+            '<input type="checkbox" name="c" value="b">' +
+            '<input type="checkbox" name="c" value="c">' +
+            '</form>';
+        restoreFormState();
+        const boxes = document.querySelectorAll('input[name="c"]');
+        expect(boxes[0].checked).toBe(true); // "a" was checked
+        expect(boxes[1].checked).toBe(false); // "b" was not
+        expect(boxes[2].checked).toBe(true); // "c" was checked
+    });
+
+    it('restores duplicate-name text inputs positionally, not the stringified array (J4)', () => {
+        document.body.innerHTML =
+            '<form id="f"><input name="t" value="first"><input name="t" value="second"></form>';
+        saveFormState();
+
+        document.body.innerHTML =
+            '<form id="f"><input name="t" value=""><input name="t" value=""></form>';
+        restoreFormState();
+        const inputs = document.querySelectorAll('input[name="t"]');
+        expect(inputs[0].value).toBe('first');
+        expect(inputs[1].value).toBe('second');
+    });
+
     it('saves and restores radio buttons', () => {
         document.body.innerHTML =
             '<form id="f">' +

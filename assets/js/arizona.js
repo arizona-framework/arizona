@@ -1935,15 +1935,32 @@ function restoreFormState() {
         const form = document.getElementById(formId);
         if (!form) continue;
         const formEl = /** @type {HTMLFormElement} */ (form);
+        // A duplicate name (a repeated text input, a checkbox group) was saved as
+        // an array. Value-setting fields consume it positionally, so track how many
+        // values each name has handed out; checkbox groups match by value instead.
+        /** @type {Object<string, number>} */
+        const cursor = {};
+        /** @param {string} name @returns {string|undefined} */
+        const nextValue = (name) => {
+            const val = fields[name];
+            if (!Array.isArray(val)) return /** @type {string} */ (val);
+            const i = cursor[name] || 0;
+            cursor[name] = i + 1;
+            return val[i];
+        };
         for (const el of formEl.elements) {
             if (el instanceof HTMLInputElement) {
                 if (!el.name || el.type === 'file') continue;
                 if (el.type === 'checkbox') {
-                    el.checked = el.name in fields;
+                    // Check by value membership: a checkbox group saves only the
+                    // checked boxes' values, so `name in fields` would tick them all.
+                    const val = fields[el.name];
+                    el.checked = Array.isArray(val) ? val.includes(el.value) : val === el.value;
                 } else if (el.type === 'radio') {
                     el.checked = fields[el.name] === el.value;
                 } else if (el.name in fields) {
-                    el.value = /** @type {string} */ (fields[el.name]);
+                    const v = nextValue(el.name);
+                    if (v !== undefined) el.value = v;
                 }
             } else if (el instanceof HTMLSelectElement) {
                 if (!el.name || !(el.name in fields)) continue;
@@ -1952,11 +1969,13 @@ function restoreFormState() {
                     const arr = Array.isArray(val) ? val : [val];
                     for (const opt of el.options) opt.selected = arr.includes(opt.value);
                 } else {
-                    el.value = /** @type {string} */ (fields[el.name]);
+                    const v = nextValue(el.name);
+                    if (v !== undefined) el.value = v;
                 }
             } else if (el instanceof HTMLTextAreaElement) {
                 if (el.name && el.name in fields) {
-                    el.value = /** @type {string} */ (fields[el.name]);
+                    const v = nextValue(el.name);
+                    if (v !== undefined) el.value = v;
                 }
             }
         }
