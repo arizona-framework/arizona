@@ -22,9 +22,11 @@ reads to `handle_key/2`, and terminal resizes to `resize/3`.
 -export([handle_push/2]).
 -export([resize/3]).
 -export([stop/1]).
+-export([teardown/1]).
 -export([pid/1]).
 
 -ignore_xref([resize/3]).
+-ignore_xref([teardown/1]).
 -ignore_xref([pid/1]).
 
 -record(session, {
@@ -121,6 +123,17 @@ disconnect the client is gone, so there's nothing to write to.
 -spec stop(session()) -> ok.
 stop(#session{pid = Pid}) ->
     arizona_live:stop(Pid).
+
+-doc """
+Emits the driver's teardown output (e.g. restoring the cursor) via the session's
+output function, without touching the live process. A transport calls this to
+restore the client's terminal when the live view has died asynchronously -- the
+quit path already tears down before returning `quit`, but an out-of-band live-view
+crash never reaches that path.
+""".
+-spec teardown(session()) -> ok.
+teardown(Session) ->
+    do_teardown(Session).
 
 -doc "The live view process backing the session.".
 -spec pid(session()) -> pid().

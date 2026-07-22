@@ -115,15 +115,27 @@ init([#{handler := Handler, driver := Driver}]) ->
 
 -doc """
 Handles non-SSH messages: the one-shot `ssh_channel_up` (records the connection
-and channel) and the live process's `{arizona_push, _, Effects}` updates (timer
-ticks, pubsub), which the session turns into a repaint or a stop. Any other
-message is ignored, mirroring the local driver's selective receive.
+and channel), the live process's `{arizona_push, _, Effects}` updates (timer ticks,
+pubsub) which the session turns into a repaint or a stop, and the linked live
+view's `{'EXIT', _, _}` (ssh channels trap exits, so a crash surfaces as a message
+rather than killing the channel) which restores the client's terminal and stops
+the channel. Any other message is ignored, mirroring the local driver's selective
+receive.
 """.
 -spec handle_msg(term(), state()) -> {ok, state()} | {stop, ssh:channel_id(), state()}.
 handle_msg({ssh_channel_up, ChannelId, ConnectionRef}, State) ->
     {ok, State#state{conn = ConnectionRef, channel = ChannelId}};
 handle_msg({arizona_push, _Ops, Effects}, #state{session = Session, channel = ChannelId} = State) ->
     apply_session_result(arizona_terminal_session:handle_push(Session, Effects), ChannelId, State);
+handle_msg(
+    {'EXIT', _Pid, _Reason}, #state{session = Session, channel = ChannelId} = State
+) when Session =/= undefined ->
+    %% The linked live view died abnormally. Without this the exit is swallowed
+    %% and the client is left with a frozen screen (no teardown) until the next
+    %% keystroke crashes with noproc. Restore the terminal via the driver teardown,
+    %% then stop the channel.
+    ok = arizona_terminal_session:teardown(Session),
+    {stop, ChannelId, State};
 handle_msg(_Msg, State) ->
     {ok, State}.
 
@@ -160,7 +172,9 @@ handle_ssh_msg({ssh_cm, _Conn, _Msg}, State) ->
 terminate(_Reason, #state{session = Session}) when Session =/= undefined ->
     %% Stop the live view so it doesn't outlive the channel and linger as a
     %% pubsub subscriber -- the start_link link doesn't fire on a normal stop.
-    arizona_terminal_session:stop(Session);
+    %% Tolerate a session whose live view already died (the {'EXIT', _, _} path),
+    %% where arizona_live:stop would otherwise raise noproc.
+    stop_session(Session);
 terminate(_Reason, _State) ->
     ok.
 
@@ -186,6 +200,16 @@ start_session(
     Bindings = #{term_rows => Rows, term_cols => Cols},
     {ok, Session} = arizona_terminal_session:start(Handler, Bindings, Driver, [], Out),
     State#state{session = Session}.
+
+%% Stop the live view, tolerating one already gone (the {'EXIT', _, _} teardown
+%% path is where the live process is what died); arizona_live:stop would otherwise
+%% raise noproc.
+stop_session(Session) ->
+    try
+        arizona_terminal_session:stop(Session)
+    catch
+        exit:noproc -> ok
+    end.
 
 %% Write to the SSH channel, swallowing a send error on an already-closing
 %% channel -- the matching `closed` event stops the session.
