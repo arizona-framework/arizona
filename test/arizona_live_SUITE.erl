@@ -71,6 +71,7 @@
     seed_fps_merges_with_existing/1,
     seed_fps_skips_statics/1,
     seed_fps_unknown_fp_still_sends/1,
+    seed_fps_caps_growth/1,
     stateful_child_independent_state/1,
     nested_stateful_child_event/1,
     nested_stateful_grandchild_survives_root_skip/1,
@@ -212,7 +213,8 @@ groups() ->
             seed_fps_skips_statics,
             seed_fps_unknown_fp_still_sends,
             seed_fps_merges_with_existing,
-            seed_fps_idempotent
+            seed_fps_idempotent,
+            seed_fps_caps_growth
         ]}
     ].
 
@@ -1857,6 +1859,22 @@ seed_fps_idempotent(Config) when is_list(Config) ->
     ),
     [[?OP_INSERT, _, _, _, Payload]] = Ops,
     ?assertNot(maps:is_key(<<"s">>, Payload)).
+
+seed_fps_caps_growth(Config) when is_list(Config) ->
+    %% A crafted client can spam `cached_fps` frames with distinct arbitrary keys.
+    %% The merge must bound the set size (per-connection memory) and drop
+    %% non-binary entries (a fingerprint is always a binary).
+    %% Cap: 20000 distinct binaries collapse to the 10000-entry ceiling.
+    Big = [integer_to_binary(N) || N <- lists:seq(1, 20000)],
+    Capped = arizona_live:merge_seed_fps(#{}, Big),
+    ?assertEqual(10000, map_size(Capped)),
+    %% Non-binary entries (arbitrary JSON from a crafted frame) are dropped; only
+    %% the binary fingerprints survive. Before the fix `maps:from_keys/2` accepted
+    %% every term verbatim.
+    Mixed = arizona_live:merge_seed_fps(#{}, [~"a", 1, [x], #{y => z}, ~"b", true]),
+    ?assertEqual(#{~"a" => true, ~"b" => true}, Mixed),
+    %% Already-known binaries below the cap merge idempotently.
+    ?assertEqual(#{~"a" => true}, arizona_live:merge_seed_fps(#{~"a" => true}, [~"a"])).
 
 %% =============================================================================
 %% Helpers

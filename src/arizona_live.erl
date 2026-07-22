@@ -71,6 +71,7 @@ fingerprints already shipped in the initial HTML.
 -export([patch/2]).
 -export([handle_event/4]).
 -export([seed_fps/2]).
+-export([merge_seed_fps/2]).
 -export([dedup_fps/2]).
 -export([apply_on_mount/2]).
 -export([format_error/2]).
@@ -97,6 +98,7 @@ fingerprints already shipped in the initial HTML.
     send/2,
     send_after/3,
     navigate/3,
+    merge_seed_fps/2,
     dedup_fps/2,
     format_error/2
 ]).
@@ -139,6 +141,19 @@ fingerprints already shipped in the initial HTML.
     check_origin => boolean(),
     _ => term()
 }.
+
+%% --------------------------------------------------------------------
+%% Macros
+%% --------------------------------------------------------------------
+
+%% Upper bound on the per-connection `sent_fps` set. Client-reported cached
+%% fingerprints (`cached_fps` frames) merge into it, so an unbounded merge lets a
+%% crafted client grow it without limit (per-connection memory exhaustion). A
+%% fingerprint is a base-36 phash2 of a template's statics, so the number a
+%% legitimate connection accumulates is bounded by its distinct rendered
+%% templates -- well under this cap. Overflowing merely disables static dedup for
+%% the extra fingerprints (their statics re-ship), never a crash.
+-define(MAX_SENT_FPS, 10000).
 
 %% --------------------------------------------------------------------
 %% Records
@@ -567,8 +582,7 @@ handle_call({patch, Params}, _From, #state{handler = H, bindings = B0} = State) 
     }}.
 
 handle_cast({seed_fps, FpList}, #state{sent_fps = Fps0} = State) ->
-    Fps1 = maps:merge(Fps0, maps:from_keys(FpList, true)),
-    {noreply, State#state{sent_fps = Fps1}};
+    {noreply, State#state{sent_fps = merge_seed_fps(Fps0, FpList)}};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -816,6 +830,29 @@ push(_Pid, [], []) ->
 push(Pid, Ops, Effects) ->
     Pid ! {arizona_push, Ops, Effects},
     ok.
+
+-doc false.
+-spec merge_seed_fps(Fps, FpList) -> Fps1 when
+    Fps :: #{binary() => true},
+    FpList :: [term()],
+    Fps1 :: #{binary() => true}.
+merge_seed_fps(Fps, FpList) ->
+    %% Threads a growing accumulator whose cap check depends on its current size,
+    %% so a fold (not a comprehension) is required.
+    lists:foldl(fun seed_one_fp/2, Fps, FpList).
+
+%% A fingerprint is a base-36 phash2 binary. Drop any non-binary entry (a crafted
+%% `cached_fps` frame can carry arbitrary JSON, and `maps:from_keys/2` would
+%% accept any term), and stop growing the set past ?MAX_SENT_FPS so repeated
+%% frames of distinct keys cannot exhaust per-connection memory.
+seed_one_fp(Fp, Acc) when is_binary(Fp) ->
+    case Acc of
+        #{Fp := _} -> Acc;
+        #{} when map_size(Acc) < ?MAX_SENT_FPS -> Acc#{Fp => true};
+        #{} -> Acc
+    end;
+seed_one_fp(_Fp, Acc) ->
+    Acc.
 
 %% Walk ops, stripping statics from fingerprinted payloads already sent.
 dedup_fps(Ops, Fps) ->
