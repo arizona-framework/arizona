@@ -422,6 +422,12 @@ format_error(local_attr_multiple) ->
 format_error(local_attr_mixed) ->
     "a ?local in an attribute value can only be combined with static text, not "
     "another dynamic expression";
+format_error(nested_nodiff) ->
+    "az-nodiff is only honored on a template's top-level (root) element -- it is a "
+    "whole-template directive, not a per-element one, so on a nested element it cannot "
+    "be scoped and would leak the reserved attribute into the DOM. Move it to the root "
+    "element, or split the subtree into its own ?html/?stateless template whose root "
+    "carries az-nodiff";
 format_error(cross_target_nesting) ->
     "cannot nest ?html, ?native and ?terminal in one template -- they produce "
     "incompatible statics. Render cross-target content via a separate "
@@ -1135,10 +1141,16 @@ iv_quals(Qs, Inline) ->
 
 iv_qual({generate, L, P, E}, Inline) ->
     {{generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({generate_strict, L, P, E}, Inline) ->
+    {{generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
 iv_qual({b_generate, L, P, E}, Inline) ->
     {{b_generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({b_generate_strict, L, P, E}, Inline) ->
+    {{b_generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
 iv_qual({m_generate, L, P, E}, Inline) ->
     {{m_generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({m_generate_strict, L, P, E}, Inline) ->
+    {{m_generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
 iv_qual(Filter, Inline) ->
     {iv(Filter, Inline), Inline}.
 
@@ -1242,10 +1254,22 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
 %% `L` is the fun-ref location (for the error/synthesized clause); `Line` the each call site.
 compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
     case FunDefs of
-        #{{Name, Arity} := [Clause]} ->
-            compile_each(
-                {'fun', L, {clauses, [Clause]}}, SourceAST, Line, Module, Backend, FunDefs
-            );
+        #{{Name, Arity} := [{clause, CL, Vars, Guards, Body}]} ->
+            %% FunDefs holds the ORIGINAL, untransformed clause. The inline-fun path
+            %% reaches compile_each already processed -- the top-down mark_targets
+            %% pre-pass has run and the bottom-up transform has reduced its nested
+            %% ?html/?each macros to template maps. A resolved clause has seen neither,
+            %% so a nested ?html/?each left in it would compile to a raw runtime stub
+            %% call and crash at render (function_clause in arizona_template:each/2).
+            %% Mirror the inline pipeline on the resolved clause: unwrap a whole-body
+            %% wrapper (so a single-root item keeps positional diffing, exactly as
+            %% unwrap_each_body does for an inline fun), run mark_targets with this
+            %% each's render-target context, then the bottom-up transform.
+            UnwrappedBody = unwrap_last_wrapper(Body, backend_template_fn(Backend)),
+            Clause1 = {clause, CL, Vars, Guards, UnwrappedBody},
+            FunAST0 = mark_targets({'fun', L, {clauses, [Clause1]}}, backend_ctx(Backend)),
+            FunAST = transform_expr(FunAST0, Module, #{}, FunDefs),
+            compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs);
         #{{Name, Arity} := [_ | _]} ->
             parse_error(each_named_fun_multi_clause, L);
         #{} ->
@@ -1322,6 +1346,12 @@ each_body_unwrap(LastExpr, _Backend) ->
 backend_template_fn(arizona_html) -> html;
 backend_template_fn(arizona_native) -> native;
 backend_template_fn(arizona_terminal) -> terminal.
+
+%% The mark_targets render-target context (`html`/`native`/`terminal`) for a backend
+%% module -- used when re-running the pre-pass over a resolved named-fun each clause.
+backend_ctx(arizona_html) -> html;
+backend_ctx(arizona_native) -> native;
+backend_ctx(arizona_terminal) -> terminal.
 
 %% A compiled template map literal carries all three of the `s`/`d`/`f` assoc keys (from
 %% build_template_ast). A user map or a ?stateful/?stateless descriptor (a runtime call, not
@@ -1520,6 +1550,7 @@ extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
+    ok = reject_nested_directives(Attrs0, Line),
     Backend = State0#state.backend,
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
     Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, Line, State0),
@@ -2270,8 +2301,14 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
     AzBin = extract_binary_value(AzAST),
     {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
 
+%% The fingerprint keys the client's persistent (IndexedDB) statics cache, whose
+%% collision domain is every template version a browser has ever seen -- a collision
+%% silently renders another template's cached markup. `phash2/1` spans only 2^27, so a
+%% few thousand distinct templates already carry a real birthday-collision risk. Take
+%% the full 2^32 range (`phash2/2`) instead -- same fast native hash, ~32x fewer
+%% collisions, and `f` stays an opaque base-36 string so the wire format is unchanged.
 generate_fingerprint(Statics) ->
-    Hash = erlang:phash2(Statics),
+    Hash = erlang:phash2(Statics, 1 bsl 32),
     integer_to_binary(Hash, 36).
 
 split_fun_body([Last]) ->
@@ -2470,6 +2507,30 @@ contains_inner_content(_) ->
 
 directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
 directive_opts(_) -> false.
+
+%% az-nodiff is a whole-compile-unit directive: it is stripped from a template's
+%% top-level element attrs (compile_fragment_parts / compile_mixed_items) before
+%% compile_element runs. A NESTED element reaches compile_element with its attrs
+%% unstripped, so a directive attribute here is az-nodiff on a non-top-level element.
+%% There is no per-element nodiff scope, and left as an ordinary boolean attribute it
+%% would silently leak the reserved `az-nodiff` into the DOM while keeping the element
+%% diffable. Reject it with a clear error rather than mis-compiling it.
+reject_nested_directives(Attrs, Line) ->
+    case lists:any(fun is_directive_attr/1, Attrs) of
+        true -> parse_error(nested_nodiff, Line);
+        false -> ok
+    end.
+
+is_directive_attr(Attr) ->
+    case bare_attr_name(Attr) of
+        {ok, Name} ->
+            case directive_opts(Name) of
+                {ok, _} -> true;
+                false -> false
+            end;
+        error ->
+            false
+    end.
 
 bare_attr_name({atom, _, Name}) ->
     {ok, arizona_html:name(Name)};

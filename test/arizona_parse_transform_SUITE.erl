@@ -16,6 +16,7 @@
     each_named_fun_ref_guard/1,
     each_named_fun_ref_prefix_body/1,
     each_named_fun_ref_nested_each/1,
+    each_named_fun_ref_nested_macros_render/1,
     each_named_fun_multi_clause_rejected/1,
     each_named_fun_wrong_arity_rejected/1,
     each_named_fun_undefined_rejected/1,
@@ -81,6 +82,7 @@
     empty_children/1,
     event_attrs_static/1,
     fingerprint_stability/1,
+    fingerprint_avoids_phash2_collision/1,
     format_error/1,
     invalid_attribute_name_false/1,
     invalid_attribute_name/1,
@@ -121,6 +123,7 @@
     nodiff_binary/1,
     nodiff_diff_integration/1,
     nodiff_each/1,
+    nodiff_nested_element_rejected/1,
     nodiff_with_other_attrs/1,
     render_integration/1,
     shared_az/1,
@@ -198,6 +201,7 @@
     inline_non_bindings_var_name/1,
     inline_destructuring_not_inlined/1,
     inline_comprehension_source/1,
+    inline_strict_generator_shadow/1,
     tracked_get_submap_errors/1,
     tracked_get_submap_az_errors/1,
     tracked_get_lazy_submap_errors/1,
@@ -355,6 +359,7 @@ groups() ->
             event_attrs_static,
             empty_children,
             fingerprint_stability,
+            fingerprint_avoids_phash2_collision,
             render_integration,
             diff_integration,
             two_dynamic_attrs,
@@ -420,6 +425,7 @@ groups() ->
             each_named_fun_ref_guard,
             each_named_fun_ref_prefix_body,
             each_named_fun_ref_nested_each,
+            each_named_fun_ref_nested_macros_render,
             each_named_fun_multi_clause_rejected,
             each_named_fun_wrong_arity_rejected,
             each_named_fun_undefined_rejected,
@@ -473,6 +479,7 @@ groups() ->
             nodiff_binary,
             nodiff_absent,
             nodiff_diff_integration,
+            nodiff_nested_element_rejected,
             bool_attr_true,
             bool_attr_false,
             bare_binary_bool,
@@ -562,7 +569,8 @@ groups() ->
             inline_same_var_two_slots,
             inline_non_bindings_var_name,
             inline_destructuring_not_inlined,
-            inline_comprehension_source
+            inline_comprehension_source,
+            inline_strict_generator_shadow
         ]},
         %% Reject the tracked accessor reading a non-bindings (sub-)map
         {tracked_get, [parallel], [
@@ -1467,6 +1475,29 @@ fingerprint_stability(Config) when is_list(Config) ->
     T2 = Mod:render(#{x => <<"b">>}),
     ?assertEqual(maps:get(f, T1), maps:get(f, T2)),
     ?assert(is_binary(maps:get(f, T1))).
+
+%% The fingerprint keys the client's persistent statics cache, so two distinct
+%% templates sharing a fingerprint silently render the wrong cached markup. The
+%% statics [~"22906"] and [~"28755"] collide under phash2/1 (2^27) but not over the
+%% full 2^32 range -- so these two static templates share a fingerprint before the
+%% widening and must differ after it.
+fingerprint_avoids_phash2_collision(Config) when is_list(Config) ->
+    ModA = compile_module(
+        "-module(pt_fp_collide_a). "
+        "-export([render/1]). "
+        "render(_Bindings) -> arizona_template:html(<<\"22906\">>). "
+    ),
+    ModB = compile_module(
+        "-module(pt_fp_collide_b). "
+        "-export([render/1]). "
+        "render(_Bindings) -> arizona_template:html(<<\"28755\">>). "
+    ),
+    %% Same collision under the old default phash2/1 range, proving the statics really
+    %% collide (the precondition that made the two fingerprints equal before the fix).
+    ?assertEqual(erlang:phash2([~"22906"]), erlang:phash2([~"28755"])),
+    FA = maps:get(f, ModA:render(#{})),
+    FB = maps:get(f, ModB:render(#{})),
+    ?assertNotEqual(FA, FB).
 
 %% Test 12: Integration -- arizona:render/1 produces valid HTML.
 render_integration(Config) when is_list(Config) ->
@@ -3736,6 +3767,23 @@ nodiff_each(Config) when is_list(Config) ->
     StaticsBin = iolist_to_binary(maps:get(s, Tmpl)),
     ?assertEqual(nomatch, binary:match(StaticsBin, <<"az-nodiff">>)).
 
+%% az-nodiff is only honored on a template's top-level element (directives are
+%% stripped there). On a NESTED element it is neither stripped nor honored -- left as
+%% an ordinary boolean attr it would leak the reserved `az-nodiff` into the DOM while
+%% the element stayed diffable. It must be a clear compile error, not silently ignored.
+nodiff_nested_element_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_nodiff_nested). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [], ["
+        "            {'span', ['az-nodiff'], [arizona_template:get(x, Bindings)]}"
+        "        ]}"
+        "    ). ",
+        fun(R) -> R =:= nested_nodiff end
+    ).
+
 %% Test 67: mixed attr forms -- atom, binary, {k,true}, {k,false}, {k,v} on one element.
 mixed_attr_forms(Config) when is_list(Config) ->
     Mod = compile_module(
@@ -4534,7 +4582,38 @@ each_named_fun_ref_nested_each(Config) when is_list(Config) ->
         "    arizona_template:html({'div', [], [arizona_template:each(fun section/1, "
         "        arizona_template:get(sections, Bindings))]}). "
     ),
-    ?assert(is_map(Mod:render(#{sections => [#{items => [~"a"]}]}))).
+    T = Mod:render(#{sections => [#{items => [~"a", ~"b"]}]}),
+    ?assert(is_map(T)),
+    %% The nested ?each inside the resolved section/1 clause must be transformed --
+    %% left as a raw runtime stub it crashes (function_clause) when the per-item
+    %% template is rendered, so render it out and assert both levels appear.
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<ul")),
+    ?assertEqual(2, length(binary:matches(HTMLBin, ~"<li"))).
+
+%% P5 companion: a nested ?each AND a nested ?html inside an INLINE named-fun each
+%% callback body -- both are template macros that must be transformed in the resolved
+%% clause. Renders correctly only when the resolved body is re-walked by the transform.
+each_named_fun_ref_nested_macros_render(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_nested_macros). "
+        "-export([render/1, row/1]). "
+        "row(R) -> {'div', [], ["
+        "    arizona_template:html({'span', [], [arizona_template:get(title, R)]}),"
+        "    {'ul', [], [arizona_template:each(fun(I) -> {'li', [], [I]} end, "
+        "        arizona_template:get(items, R))]}"
+        "]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'main', [], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(rows, Bindings))]}). "
+    ),
+    T = Mod:render(#{rows => [#{title => ~"T", items => [~"a", ~"b"]}]}),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<span")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"T")),
+    ?assertEqual(2, length(binary:matches(HTMLBin, ~"<li"))).
 
 %% A multi-clause local ref can't map to one shared per-item template -- rejected.
 each_named_fun_multi_clause_rejected(Config) when is_list(Config) ->
@@ -6229,6 +6308,30 @@ inline_comprehension_source(Config) when is_list(Config) ->
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"ab", Fun()),
     ?assertEqual(#{names => true}, slot_deps(Fun)).
+
+%% A template comprehension whose OTP-28 strict generator (`<:-`) pattern reuses a
+%% hoisted read's variable name. The inline-var substitution must treat a strict
+%% generator like the lazy forms -- shadowing the pattern var, not substituting the
+%% read into the generator pattern (which erl_lint rejects as a hard illegal_pattern
+%% error). Before the fix this fails to compile; after, it renders the fallback then
+%% the list. (Non-strict compile: reusing the name inherently warns shadowed_var, which
+%% is orthogonal to the illegal_pattern error the fix removes.)
+inline_strict_generator_shadow(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_strict_gen). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Item = arizona_template:get(fallback, Bindings), "
+        "    arizona_template:html({'ul', [], ["
+        "        {'li', [], [Item]},"
+        "        [ Row || Item <:- arizona_template:get(items, Bindings), Row <- [Item] ]"
+        "    ]}). "
+    ),
+    T = Mod:render(#{fallback => ~"F", items => [~"a", ~"b"]}),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"F")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"ab")).
 
 %% ============================================================================
 %% Tracked get/get_lazy on a non-bindings map
