@@ -2523,8 +2523,13 @@ reject_nested_directives(Attrs, Line) ->
 
 is_directive_attr(Attr) ->
     case bare_attr_name(Attr) of
-        {ok, Name} -> directive_opts(Name) =/= false;
-        error -> false
+        {ok, Name} ->
+            case directive_opts(Name) of
+                {ok, _} -> true;
+                false -> false
+            end;
+        error ->
+            false
     end.
 
 bare_attr_name({atom, _, Name}) ->
