@@ -147,18 +147,48 @@ session_verb(Req, Opts, Fun) ->
         false -> method_not_allowed(Opts)
     end.
 
-%% The security gate every verb passes: the DNS-rebinding `Origin` check,
-%% then the optional auth hook. Either may short-circuit the request.
+%% The security gate every verb passes: the localhost-only remote-access check,
+%% the DNS-rebinding `Origin` check, then the optional auth hook. Any may
+%% short-circuit the request.
 with_gate(Req, Opts, Fun) ->
-    case check_origin(Req, Opts) of
+    case check_remote_access(Req, Opts) of
         forbidden ->
             roadrunner_resp:forbidden();
         ok ->
-            case check_auth(Req, Opts) of
-                ok -> Fun();
-                {reject, Status} -> roadrunner_resp:status(Status)
+            case check_origin(Req, Opts) of
+                forbidden ->
+                    roadrunner_resp:forbidden();
+                ok ->
+                    case check_auth(Req, Opts) of
+                        ok -> Fun();
+                        {reject, Status} -> roadrunner_resp:status(Status)
+                    end
             end
     end.
+
+%% Localhost gate. When the route sets `allow_remote_access => false`, refuse a
+%% request whose peer is not a loopback address -- regardless of which interface
+%% the listener bound. This is the primary guard for a dev MCP's `eval` (RCE):
+%% the tool self-protects at the application layer rather than trusting the
+%% operator to bind loopback (mirrors Tidewave). Default `true` leaves a generic
+%% MCP route unrestricted.
+check_remote_access(Req, Opts) ->
+    case maps:get(allow_remote_access, Opts, true) of
+        true ->
+            ok;
+        false ->
+            case is_loopback_peer(roadrunner_req:peer(Req)) of
+                true -> ok;
+                false -> forbidden
+            end
+    end.
+
+%% A loopback peer: IPv4 127.0.0.0/8, IPv6 `::1`, or an IPv4-mapped
+%% `::ffff:127.x`. A missing peer (`undefined`) fails closed.
+is_loopback_peer({{127, _, _, _}, _Port}) -> true;
+is_loopback_peer({{0, 0, 0, 0, 0, 0, 0, 1}, _Port}) -> true;
+is_loopback_peer({{0, 0, 0, 0, 0, 16#ffff, 16#7f00, _}, _Port}) -> true;
+is_loopback_peer(_) -> false.
 
 %% Run the route's optional `auth` hook (a `fun/1` or `{Module, Function}`)
 %% against the request. Absent => allow.
@@ -262,9 +292,9 @@ Exported for unit testing; `handle/1` calls it inside a crash guard.
 dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
     PageSize = maps:get(page_size, Ctx, ?DEFAULT_PAGE_SIZE),
     %% Route opts (the `{mcp, ...}` route's config) are handed to the callback's
-    %% `init/1` as `mcp_route_opts` so a handler can gate on its own route config
-    %% (e.g. arizona_dev_mcp's `eval`). Server-supplied, so it overrides any
-    %% same-named client `params` key below.
+    %% `init/1` as `mcp_route_opts` so a callback can configure itself from its
+    %% own route config. Server-supplied, so it overrides any same-named client
+    %% `params` key below.
     RouteOpts = maps:get(route_opts, Ctx, #{}),
     case Id of
         %% A JSON-RPC notification (no id) is accepted and never answered,

@@ -21,21 +21,26 @@ Tools:
 - `app_info` -- Arizona version, OTP release, node, process count.
 - `render_component` -- render a component to HTML with given bindings.
 - `eval` -- **run Erlang in the live node**, with bindings that persist across
-  calls. **Opt-in and off by default** (see below).
+  calls. Always available (see the safety note below).
 
-`eval` is arbitrary remote code execution, so it is disabled unless the route
-enables it (`route/2`'s `eval` opt):
+`eval` is arbitrary remote code execution, so the dev route is **localhost-only
+by default**: `route/1,2` set `allow_remote_access => false`, and the MCP handler
+refuses any request whose peer is not a loopback address -- no matter which
+interface the server bound. That peer check is the primary guard (it mirrors
+Tidewave, which is localhost-only by default rather than gated by a per-tool
+switch), together with the `Origin` check and keeping this a **dev-only**
+dependency. Only relax it on a network you trust, ideally behind an `auth` hook:
 
 ```erlang
-arizona_dev_mcp:route(~"/mcp", #{eval => true})
+%% localhost-only (default) -- safe for eval
+arizona_dev_mcp:route(~"/mcp")
+%% opt in to remote clients (trusted network only)
+arizona_dev_mcp:route(~"/mcp", #{allow_remote_access => true, auth => Hook})
 ```
 
-Even then, only ever run this on a trusted, dev-only host. The MCP `Origin` check
-allows a *missing* `Origin` (every CLI/`curl`/LAN client sends none), so the
-allowlist alone does not stop a non-browser client -- pair `eval` with an `auth`
-hook (`route/2`'s `auth` opt) and bind the dev server to loopback, and never
-expose it to an untrusted network. The safe introspection tools above are always
-available; only `eval` is gated.
+As defense in depth you can also bind the dev listener to loopback
+(`proto_opts => #{ip => {127,0,0,1}}` in your server config) so the endpoint is
+never on the wire. Never expose the dev MCP to an untrusted network.
 
 Session mode (`sessions => true`, the default) makes `eval`'s bindings persist
 across calls (a REPL the agent drives) and runs a slow `eval`/`render_component`
@@ -65,8 +70,9 @@ server's routes. It defaults to `sessions => true` (so a session's `eval`
 bindings persist) and `max_sessions => 32` (so a client cannot pin unbounded
 memory). A CLI agent (Claude Code, the Inspector's proxy) connects with no extra
 config; `origins` stays opt-in (omitted blocks all browser origins, the safe
-DNS-rebinding posture). `eval` itself is off unless you enable it (`route/2`'s
-`eval` opt) -- see the module doc.
+DNS-rebinding posture). `eval` is always available, and the route is
+**localhost-only** (`allow_remote_access => false`) so it stays off the network
+-- see the module doc.
 """.
 -spec route(Path) -> Route when
     Path :: binary(),
@@ -76,8 +82,9 @@ route(Path) ->
 
 -doc """
 Like `route/1`, with extra MCP route opts merged over the defaults:
-`#{eval => true}` enables the `eval` RCE tool (off by default; see the module
-doc), `#{origins => [~"http://localhost:5173"]}` also allows a browser client,
+`#{allow_remote_access => true}` lets non-loopback clients reach the route
+(localhost-only by default; trusted networks only -- see the module doc),
+`#{origins => [~"http://localhost:5173"]}` also allows a browser client,
 `#{auth => Hook}` gates the route, `#{sessions => false}` opts out of session
 mode.
 """.
@@ -86,24 +93,23 @@ mode.
     Opts :: arizona_roadrunner_router:arizona_mcp_route_opts(),
     Route :: arizona_roadrunner_router:route().
 route(Path, Opts) ->
-    {mcp, Path, ?MODULE, maps:merge(#{sessions => true, max_sessions => 32}, Opts)}.
+    Defaults = #{sessions => true, max_sessions => 32, allow_remote_access => false},
+    {mcp, Path, ?MODULE, maps:merge(Defaults, Opts)}.
 
 %% --------------------------------------------------------------------
 %% Behaviour callbacks
 %% --------------------------------------------------------------------
 
-init(InitParams) ->
-    %% `eval` is configured per route (`route/2`'s `eval` opt), threaded to the
-    %% callback by the handler as `mcp_route_opts`. Stash it in the state so
-    %% `tools/1` and `handle_tool/4` gate on it.
-    RouteOpts = maps:get(mcp_route_opts, InitParams, #{}),
+init(_InitParams) ->
+    %% `eval` is always available; the dev route's localhost-only gate
+    %% (`allow_remote_access => false`, enforced by the MCP handler) is what keeps
+    %% its RCE off the network, so there is nothing to configure here.
     {ok, #{name => ~"arizona_dev", version => ~"0.1.0"}, #{tools => #{}}, #{
-        bindings => erl_eval:new_bindings(),
-        eval => maps:get(eval, RouteOpts, false)
+        bindings => erl_eval:new_bindings()
     }}.
 
-tools(State) ->
-    base_tools() ++ eval_tools(State).
+tools(_State) ->
+    base_tools() ++ eval_tools().
 
 base_tools() ->
     [
@@ -151,32 +157,22 @@ base_tools() ->
         }
     ].
 
-%% `eval` is arbitrary remote code execution, so it is advertised (and handled
-%% below) only when the route enables it (`route(Path, #{eval => true})`). The
-%% safe introspection tools above are always available.
-eval_tools(State) ->
-    case eval_enabled(State) of
-        true ->
-            [
-                #{
-                    name => ~"eval",
-                    description =>
-                        ~"Evaluate Erlang in the live node (dev only); bindings persist",
-                    input_schema => #{
-                        type => ~"object",
-                        properties => #{code => #{type => ~"string"}},
-                        required => [~"code"]
-                    }
-                }
-            ];
-        false ->
-            []
-    end.
-
-%% Only a literal `true` from the route's `eval` opt enables it; any other value
-%% (or absent) keeps it off.
-eval_enabled(#{eval := true}) -> true;
-eval_enabled(#{}) -> false.
+%% `eval` is arbitrary remote code execution, but the dev route is localhost-only
+%% by default (`allow_remote_access => false`, enforced by the MCP handler), so it
+%% is advertised unconditionally alongside the safe introspection tools.
+eval_tools() ->
+    [
+        #{
+            name => ~"eval",
+            description =>
+                ~"Evaluate Erlang in the live node (dev only); bindings persist",
+            input_schema => #{
+                type => ~"object",
+                properties => #{code => #{type => ~"string"}},
+                required => [~"code"]
+            }
+        }
+    ].
 
 handle_tool(~"list_routes", _Args, _Ctx, State) ->
     {reply, list_routes(), State};
@@ -194,20 +190,11 @@ handle_tool(~"render_component", #{~"module" := ModBin} = Args, _Ctx, State) ->
     Bindings = maps:get(~"bindings", Args, #{}),
     outcome(with_module(ModBin, fun(Mod) -> render_component(Mod, Bindings) end), State);
 handle_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State) ->
-    %% Gate here too, not just in the advertised tool list: a client can call a
-    %% tool without listing it, so the RCE surface must be closed at the handler.
-    case eval_enabled(State) of
-        false ->
-            {error,
-                ~"eval is disabled; enable it on the route with #{eval => true} (dev only, RCE)",
-                State};
-        true ->
-            case eval_code(Code, Bindings) of
-                {ok, Value, NewBindings} ->
-                    {reply, format_value(Value), State#{bindings := NewBindings}};
-                {error, Message} ->
-                    {error, Message, State}
-            end
+    case eval_code(Code, Bindings) of
+        {ok, Value, NewBindings} ->
+            {reply, format_value(Value), State#{bindings := NewBindings}};
+        {error, Message} ->
+            {error, Message, State}
     end.
 
 %% --------------------------------------------------------------------

@@ -60,6 +60,11 @@
     handle_origin_allowed_ok/1,
     handle_origin_disallowed_403/1,
     handle_origin_empty_allowlist_403/1,
+    handle_remote_access_default_allows/1,
+    handle_local_only_loopback_ok/1,
+    handle_local_only_ipv6_loopback_ok/1,
+    handle_local_only_remote_403/1,
+    handle_local_only_no_peer_403/1,
     handle_auth_rejects/1,
     handle_auth_reads_header/1,
     handle_auth_mfa/1,
@@ -132,6 +137,11 @@ all() ->
         handle_origin_allowed_ok,
         handle_origin_disallowed_403,
         handle_origin_empty_allowlist_403,
+        handle_remote_access_default_allows,
+        handle_local_only_loopback_ok,
+        handle_local_only_ipv6_loopback_ok,
+        handle_local_only_remote_403,
+        handle_local_only_no_peer_403,
         handle_auth_rejects,
         handle_auth_reads_header,
         handle_auth_mfa,
@@ -576,6 +586,38 @@ handle_origin_empty_allowlist_403(_Config) ->
     Resp = handle(~"POST", Headers, ping_body(), #{handler => ?SERVER, origins => []}),
     ?assertEqual(403, status(Resp)).
 
+%% allow_remote_access defaults to true, so a generic MCP route serves a
+%% non-loopback peer.
+handle_remote_access_default_allows(_Config) ->
+    Opts = #{handler => ?SERVER, origins => []},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, {{203, 0, 113, 7}, 5555}),
+    ?assertEqual(200, status(Resp)).
+
+%% allow_remote_access => false serves a loopback (IPv4 127.0.0.0/8) peer.
+handle_local_only_loopback_ok(_Config) ->
+    Opts = #{handler => ?SERVER, origins => [], allow_remote_access => false},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, {{127, 0, 0, 1}, 5555}),
+    ?assertEqual(200, status(Resp)).
+
+%% allow_remote_access => false serves an IPv6 `::1` peer.
+handle_local_only_ipv6_loopback_ok(_Config) ->
+    Opts = #{handler => ?SERVER, origins => [], allow_remote_access => false},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, {{0, 0, 0, 0, 0, 0, 0, 1}, 5555}),
+    ?assertEqual(200, status(Resp)).
+
+%% allow_remote_access => false refuses a non-loopback peer (403) -- the primary
+%% guard for the dev MCP's eval, independent of how the listener bound.
+handle_local_only_remote_403(_Config) ->
+    Opts = #{handler => ?SERVER, origins => [], allow_remote_access => false},
+    Resp = handle_peer(~"POST", [], ping_body(), Opts, {{203, 0, 113, 7}, 5555}),
+    ?assertEqual(403, status(Resp)).
+
+%% allow_remote_access => false with no peer info fails closed (403).
+handle_local_only_no_peer_403(_Config) ->
+    Opts = #{handler => ?SERVER, origins => [], allow_remote_access => false},
+    Resp = handle(~"POST", [], ping_body(), Opts),
+    ?assertEqual(403, status(Resp)).
+
 handle_auth_rejects(_Config) ->
     Auth = fun(_Req) -> {reject, 401} end,
     Resp = handle(~"POST", [], ping_body(), #{handler => ?SERVER, auth => Auth}),
@@ -723,6 +765,19 @@ handle(Method, Headers, Body, Opts) ->
         version => {1, 1},
         headers => Headers,
         body => Body,
+        state => #{arizona => Opts}
+    },
+    {Resp, _Req} = arizona_mcp_handler:handle(Req),
+    Resp.
+
+handle_peer(Method, Headers, Body, Opts, Peer) ->
+    Req = #{
+        method => Method,
+        target => ~"/mcp",
+        version => {1, 1},
+        headers => Headers,
+        body => Body,
+        peer => Peer,
         state => #{arizona => Opts}
     },
     {Resp, _Req} = arizona_mcp_handler:handle(Req),

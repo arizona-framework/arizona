@@ -112,10 +112,15 @@ handle_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State) 
 ```
 
 This is what makes a dev tool genuinely useful -- the agent can inspect any state and call any
-function. It is also **arbitrary remote code execution**. Only ever mount `eval` on a dev-only,
-localhost route behind the `Origin` allowlist, and never on anything reachable by an untrusted
-client. Running it in session mode means a slow eval runs in the session's worker, so it is
-cancellable and bounded by `request_timeout_ms` rather than wedging the session.
+function. It is also **arbitrary remote code execution**, so `eval` is always available but the dev
+route is **localhost-only by default**: `arizona_dev_mcp:route/1,2` set `allow_remote_access => false`,
+and the MCP handler refuses any request whose peer is not a loopback address -- regardless of which
+interface the listener bound. That peer check (mirroring Tidewave, which is localhost-only by default
+rather than gated by a per-tool switch) is the primary guard, alongside the `Origin` check and
+keeping this a dev-only dependency; set `allow_remote_access => true` only on a network you trust. As
+defense in depth you can also bind the listener to loopback (`proto_opts => #{ip => {127,0,0,1}}`).
+Running it in session mode means a slow eval runs in the session's worker, so it is cancellable and
+bounded by `request_timeout_ms` rather than wedging the session.
 
 ## Route options
 
@@ -126,6 +131,7 @@ All optional, with safe defaults; a route that sets none behaves as a plain stat
 | `sessions` | `false` | Opt into stateful sessions (`initialize` mints an `Mcp-Session-Id`). |
 | `origins` | `[]` | `Origin` allowlist (no-`Origin` requests are always allowed). |
 | `auth` | none | A per-route auth hook run after the `Origin` check. |
+| `allow_remote_access` | `true` | When `false`, refuse a non-loopback peer (regardless of listener binding). `arizona_dev_mcp` defaults it `false`. |
 | `max_sessions` | unbounded | Cap on live sessions for this route; `initialize` past it gets a `503`. |
 | `session_ttl_ms` | `300000` | Idle timeout before an abandoned session is reaped. |
 | `request_timeout_ms` | `60000` | How long a buffered request waits before the client gets a timeout. |
