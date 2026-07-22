@@ -34,6 +34,7 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([nested_element/1]).
 -export([top_text/1]).
 -export([raw_text/1]).
+-export([helper_raw/1]).
 
 %% Constant scrutinee (`flag`), branch reads `val`: a change to `val` must
 %% re-render the `<p>` even though `flag` is unchanged.
@@ -354,3 +355,14 @@ top_text(Bindings) ->
 -spec raw_text(az:bindings()) -> az:template().
 raw_text(Bindings) ->
     ?html({'div', [{id, ~"x"}], [?raw(?get(html))]}).
+
+%% A raw tuple returned by a HELPER (`wrap_raw/1`), not a literal `?raw` at the
+%% template site. The documented rule honors the `raw/1` opt-out only when literal
+%% at the slot, so a helper-returned raw in a content slot must be ESCAPED (SSR and
+%% across the diff), never spliced/innerHTMLd -- unlike `raw_text/1` above.
+-spec helper_raw(az:bindings()) -> az:template().
+helper_raw(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [wrap_raw(?get(html))]}).
+
+wrap_raw(Value) ->
+    arizona_template:raw(Value).
