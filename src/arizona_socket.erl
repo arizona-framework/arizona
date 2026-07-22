@@ -518,8 +518,16 @@ flatten_ops(ViewId, [Op | Rest]) ->
 
 %% Custom JSON encoder. Pattern-matches the `{ViewId, RawOp}` tag
 %% produced by `flatten_ops/2` and emits the JSON array with the scoped
-%% target inline as iodata. ViewId and Az are known safe (alphanumeric
-%% + dash + colon), so we can skip `json:escape_binary/5` on them.
+%% target `<ViewId>:<Az>` as a JSON string. `Az` (Target) is
+%% framework-generated (fingerprint-scoped, alphanumeric + dash) and safe,
+%% but `ViewId` is the app-supplied `id` binding (root and `?stateful`
+%% props) and is NOT validated -- an id from user data containing `"`
+%% would break the ops frame, and a crafted value could inject ops
+%% (an injected `OP_REPLACE`/`OP_UPDATE` reaches `innerHTML`: stored XSS
+%% via the diff channel). So the scoped target is run through
+%% `json:encode/1`, which escapes the JSON-breaking bytes (`"`/`\`); on
+%% safe ids this is byte-identical to the previous raw emit. The SSR path
+%% already escapes the same id in HTML; this closes the ops channel.
 %% Op codes 0..9 emit as a single digit byte (`OpCode + $0`, skipping an
 %% `integer_to_binary/1` per op); codes 10+ use `integer_to_binary/1` (see
 %% `op_code_iodata/1`). Falls back to `json:encode_value/2` for everything
@@ -533,11 +541,8 @@ op_encoder({ViewId, [OpCode, Target | RestArgs]}, E) when
     [
         $[,
         op_code_iodata(OpCode),
-        <<",\"">>,
-        ViewId,
-        $:,
-        Target,
-        <<"\"">>,
+        $,,
+        json:encode(<<ViewId/binary, $:, Target/binary>>),
         encode_rest(RestArgs, E),
         $]
     ];
@@ -618,5 +623,18 @@ encode_list_patch_op_test() ->
         ~"{\"o\":[[10,\"page:4\",[[7,0,[[0,\"0\",\"X\"]]],[5,1,{\"f\":\"fp\"}],[6,2]]]]}",
         Bytes
     ).
+
+%% A view id is the app-supplied `id` binding and is NOT validated, so a value
+%% carrying a JSON metacharacter (`"`) must be escaped in the ops frame. An
+%% unescaped quote would terminate the target string early and inject ops
+%% (OP_REPLACE/OP_UPDATE -> innerHTML: XSS via the diff channel). op_encoder runs
+%% the scoped target through json:encode, so the quote is escaped rather than
+%% closing the string, and the frame stays valid JSON with the id intact.
+op_encoder_escapes_view_id_test() ->
+    Op = [0, ~"0", ~"New"],
+    Bytes = iolist_to_binary(encode(#{?OPS => flatten_ops(~"ev\"il", [Op])})),
+    ?assertEqual(~"{\"o\":[[0,\"ev\\\"il:0\",\"New\"]]}", Bytes),
+    %% Round-trips as valid JSON (the raw, unescaped emit would not parse).
+    ?assertEqual(#{~"o" => [[0, ~"ev\"il:0", ~"New"]]}, json:decode(Bytes)).
 
 -endif.
