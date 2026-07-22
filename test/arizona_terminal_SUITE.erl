@@ -22,6 +22,7 @@
 -export([input_broadcasts_message/1]).
 -export([client_count_reflects_subscribers/1]).
 -export([tty_serve_reaps_view_and_reader/1]).
+-export([handle_key_encodes_unicode_input/1]).
 -export([render_attr_rejected/1]).
 -export([bell_effect_emits_bel/1]).
 -export([set_title_effect_bel_terminated/1]).
@@ -51,6 +52,7 @@ all() ->
         input_broadcasts_message,
         client_count_reflects_subscribers,
         tty_serve_reaps_view_and_reader,
+        handle_key_encodes_unicode_input,
         render_attr_rejected,
         bell_effect_emits_bel,
         set_title_effect_bel_terminated
@@ -96,6 +98,17 @@ down_within(Mon, Pid) ->
         {'DOWN', Mon, process, Pid, _Reason} -> true
     after 2000 -> false
     end.
+
+%% A local TTY in unicode mode delivers codepoints (a list, not bytes); "€" is 8364,
+%% which iolist_to_binary would reject with badarg, killing the session and its
+%% linked live view. unicode:characters_to_binary encodes it; the multibyte UTF-8 is
+%% then dropped by the byte decoder (unsupported), so the session simply continues.
+handle_key_encodes_unicode_input(Config) when is_list(Config) ->
+    {ok, Session} = arizona_terminal_session:start(
+        arizona_term_demo, #{}, arizona_term_demo_driver, [], fun(_Io) -> ok end
+    ),
+    ?assertMatch({cont, _}, arizona_terminal_session:handle_key(Session, [8364])),
+    ok = arizona_terminal_session:stop(Session).
 
 renders_status_block(Config) when is_list(Config) ->
     {Pid, _ViewId} = start_demo(),
