@@ -22,6 +22,7 @@
 -export([input_broadcasts_message/1]).
 -export([client_count_reflects_subscribers/1]).
 -export([tty_serve_reaps_view_and_reader/1]).
+-export([render_attr_rejected/1]).
 
 %% Drives the ?terminal demo view through arizona_live with no transport and no
 %% HTTP server -- the path the terminal runtime drives, minus the TTY.
@@ -47,7 +48,8 @@ all() ->
         session_drives_frames,
         input_broadcasts_message,
         client_count_reflects_subscribers,
-        tty_serve_reaps_view_and_reader
+        tty_serve_reaps_view_and_reader,
+        render_attr_rejected
     ].
 
 init_per_suite(Config) ->
@@ -170,6 +172,15 @@ tty_quit_effect(Config) when is_list(Config) ->
 count_lines_counts_rows(Config) when is_list(Config) ->
     ?assertEqual(3, arizona_term_demo_driver:count_lines(~"a\nb\nc\n")),
     ?assertEqual(0, arizona_term_demo_driver:count_lines(~"no newline")).
+
+%% The terminal has no dynamic attributes (attr_dyn_name/1 rejects them at compile
+%% time), so the render_attr/2 backend callback is unreachable at runtime and
+%% rejects like its sibling -- asserting the invariant rather than a real path.
+render_attr_rejected(Config) when is_list(Config) ->
+    ?assertError(
+        {arizona_render_reject, _},
+        arizona_terminal:render_attr(~"data-x", ~"v")
+    ).
 
 log_lines_filters_effects(Config) when is_list(Config) ->
     Effects = [

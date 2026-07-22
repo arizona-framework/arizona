@@ -65,6 +65,7 @@ never sanitized.
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
 -export([escape/1]).
+-export([render_attr/2]).
 
 %% Full SGR reset (clears colour and every text style at once); io_ansi has no
 %% whole-reset helper, only per-attribute `*_off` and `default_color`.
@@ -215,6 +216,13 @@ escape(<<$\t, R/binary>>, Acc) ->
 escape(<<_C, R/binary>>, Acc) ->
     %% Any other C0 control (incl. ESC 0x1B, BEL 0x07) or DEL 0x7F: drop it.
     escape(R, Acc).
+
+%% Unreachable: attr_dyn_name/1 rejects dynamic attributes at compile time, so a
+%% ?terminal template never produces a dynamic-attr dynamic to render. Kept to
+%% satisfy the arizona_renderer behaviour; delegates to the same rejection.
+-spec render_attr(binary(), term()) -> no_return().
+render_attr(Name, _Value) ->
+    attr_dyn_name(Name).
 
 %% --------------------------------------------------------------------
 %% Internal functions

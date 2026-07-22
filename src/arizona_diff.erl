@@ -141,7 +141,7 @@ diff(
     Views0
 ) ->
     {Triples, {_Old, NewViews}} = arizona_eval:eval_dynamics_v(NewDynamics, {Views0, #{}}),
-    {EvalNew, NewDeps, _Vals} = arizona_template:unzip_triples(Triples),
+    {EvalNew, NewDeps} = arizona_template:split_triples(Triples),
     Ops = diff_dynamics(EvalNew, OldEvals),
     Snap0 = preserve_view_id(OldSnap, #{s => Statics, d => EvalNew, deps => NewDeps}),
     {Ops, arizona_template:maybe_put_fingerprint(Tmpl, Snap0), NewViews}.

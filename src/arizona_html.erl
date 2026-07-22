@@ -29,6 +29,7 @@ identical to the previous inlined emission.
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
 -export([escape/1]).
+-export([render_attr/2]).
 
 -spec name(atom()) -> binary().
 name(Atom) ->
@@ -147,3 +148,11 @@ escape(<<">", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&gt;">>);
 escape(<<"\"", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&quot;">>);
 escape(<<"'", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#39;">>);
 escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
+
+%% Render a dynamic attribute value: `false` strips the attribute, `true` emits a
+%% bare name, anything else becomes ` Name="Escaped"` (the value entity-escaped
+%% via escape_value/2, which classifies out a `?raw` opt-out or effect command).
+-spec render_attr(binary(), term()) -> binary().
+render_attr(_Name, false) -> <<>>;
+render_attr(Name, true) -> attr_boolean(Name);
+render_attr(Name, Value) -> attr(Name, arizona_template:escape_value(?MODULE, Value)).

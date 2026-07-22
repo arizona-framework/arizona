@@ -216,7 +216,8 @@ render_attr(Config) when is_list(Config) ->
     T = #{
         s => [<<"<div az=\"0\"">>, <<">ok</div>">>],
         d => [{<<"0">>, {attr, <<"class">>, fun() -> <<"active">> end}}],
-        f => <<"test">>
+        f => <<"test">>,
+        backend => arizona_html
     },
     {HTML, Snap} = arizona_render:render(T),
     ?assertEqual(<<"<div az=\"0\" class=\"active\">ok</div>">>, iolist_to_binary(HTML)),
@@ -224,7 +225,8 @@ render_attr(Config) when is_list(Config) ->
         #{
             s => [<<"<div az=\"0\"">>, <<">ok</div>">>],
             d => [{<<"0">>, {attr, <<"class">>, <<"active">>}}],
-            f => <<"test">>
+            f => <<"test">>,
+            backend => arizona_html
         },
         Snap
     ).
@@ -656,7 +658,8 @@ fingerprint_payload_local_content_escaped(Config) when is_list(Config) ->
     Snap = #{
         s => [<<"<span>">>, <<"</span>">>],
         d => [{<<"0">>, #{diff => false, az_local => ~"content", v => <<"<img src=x>">>}}],
-        f => <<"fp_local_content">>
+        f => <<"fp_local_content">>,
+        backend => arizona_html
     },
     ?assertEqual(
         #{
@@ -677,7 +680,8 @@ fingerprint_payload_local_slots(Config) when is_list(Config) ->
             {<<"1">>, #{diff => false, az_local => ~"open", target => {attr, ~"open"}, v => false}},
             {<<"2">>, #{diff => false, az_local => ~"title", v => ~"hi"}}
         ],
-        f => <<"fp_local">>
+        f => <<"fp_local">>,
+        backend => arizona_html
     },
     ?assertEqual(
         #{
