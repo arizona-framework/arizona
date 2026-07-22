@@ -72,6 +72,7 @@
     seed_fps_skips_statics/1,
     seed_fps_unknown_fp_still_sends/1,
     seed_fps_caps_growth/1,
+    live_unknown_view_id_noop/1,
     stateful_child_independent_state/1,
     nested_stateful_child_event/1,
     nested_stateful_grandchild_survives_root_skip/1,
@@ -131,6 +132,7 @@ groups() ->
             live_child_then_parent_sync,
             live_counter2_child_event,
             live_inc_then_dec,
+            live_unknown_view_id_noop,
             render_current_full_frame
         ]},
         {mount_and_render, [parallel], [
@@ -365,6 +367,21 @@ live_dec_event(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"-1">>]], Ops).
+
+live_unknown_view_id_noop(Config) when is_list(Config) ->
+    %% An event addressed to a view id that is neither the root nor a known child
+    %% must be a no-op -- not routed to the root handler. A crafted frame could
+    %% otherwise dispatch an arbitrary event to the root via a bogus id.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_root_counter, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% Bogus id: dropped (no ops, no effects). Before the fix this fell through
+    %% to the root `inc`, returning the count op.
+    ?assertEqual({ok, [], []}, arizona_live:handle_event(Pid, <<"nope">>, <<"inc">>, #{})),
+    %% Root state is untouched: the next real inc yields count 1, not 2.
+    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
 
 live_init_bindings(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
@@ -873,22 +890,15 @@ live_navigate_resets_views(Config) when is_list(Config) ->
     {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Navigate to about (has no children)
     {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{}),
-    %% Counter events should no longer work as child events
-    %% <<"counter">> is not in views map, so it falls through to root
-    %% arizona_about has no <<"inc">> handler -> gen_server crashes
-    unlink(Pid),
-    Ref = monitor(process, Pid),
-    #{level := OldLevel} = logger:get_primary_config(),
-    _ = logger:set_primary_config(level, none),
-    ?assertExit(
-        _,
+    %% The views map was reset: <<"counter">> is no longer a known child, and it
+    %% is not the new root's id (<<"about-page">>) either. An event to it is a
+    %% safe no-op -- it must NOT fall through to the new root handler (which would
+    %% crash on the unknown event) -- and the live process survives.
+    ?assertEqual(
+        {ok, [], []},
         arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{})
     ),
-    receive
-        {'DOWN', Ref, process, Pid, _} -> ok
-    after 1000 -> error(timeout)
-    end,
-    logger:set_primary_config(level, OldLevel).
+    ?assert(is_process_alive(Pid)).
 
 live_navigate_round_trip(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(

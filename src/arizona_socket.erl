@@ -158,10 +158,13 @@ Recognized payloads:
 - `[~"cached_fps", FpList]` -- seeds fingerprints into the live process
 - `[~"navigate", #{~"path" := Path, ~"qs" := Qs}]` -- SPA navigation (replace)
 - `[~"patch", #{~"path" := Path, ~"qs" := Qs}]` -- in-place SPA navigation
-- `[ViewId, Event, Payload]` -- UI event dispatch
+- `[ViewId, Event, Payload]` -- UI event dispatch (`Event` a binary,
+  `Payload` a map)
 
 Unrecognized payloads, and frames whose body is not valid JSON, are
-silently dropped (a single bad frame must not crash the socket).
+silently dropped (a single bad frame must not crash the socket). An event
+frame whose `Payload` is not a map is dropped the same way, so a crafted
+non-map payload can't reach a `#{...}`-matching handler and crash it.
 """.
 -spec handle_in(Frame, Socket) -> result() when
     Frame :: binary(),
@@ -196,7 +199,7 @@ handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
                     logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
                     close_crash(Socket)
             end;
-        [Target, Event, Payload] when is_binary(Event) ->
+        [Target, Event, Payload] when is_binary(Event), is_map(Payload) ->
             ViewId = event_target(Target, RootViewId),
             try dispatch_event(Pid, ViewId, Event, Payload) of
                 {AllOps, AllEffects} ->

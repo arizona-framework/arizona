@@ -525,12 +525,24 @@ handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} 
     Tmpl = arizona_stateful:call_render(H, B),
     {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
     {reply, {ok, iolist_to_binary(HTML)}, State};
-handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0} = State) ->
+handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0, bindings = B0} = State) ->
     case V0 of
         #{ViewId := _} ->
             handle_child_event(ViewId, Event, Payload, State);
         #{} ->
-            handle_root_event(Event, Payload, State)
+            case maps:get(id, B0) of
+                ViewId ->
+                    handle_root_event(Event, Payload, State);
+                _ ->
+                    %% Unknown view id -- neither the root nor a known child. Drop
+                    %% it (no ops, no effects) instead of dispatching to the root,
+                    %% so a crafted frame can't route an arbitrary event to the
+                    %% root via a bogus id. `arizona_socket:event_target/2` already
+                    %% maps a null/non-binary target to the root's real id, so a
+                    %% legitimate push_event with no enclosing element still matches
+                    %% the root here.
+                    {reply, {ok, [], []}, State}
+            end
     end;
 handle_call(
     {navigate, NewHandler, NewIB, NewOnMount},

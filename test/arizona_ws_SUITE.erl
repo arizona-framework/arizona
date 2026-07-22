@@ -13,6 +13,8 @@
     navigate_non_live_path_full_navigate/1,
     event_with_effects/1,
     event_no_change/1,
+    event_non_map_payload_dropped/1,
+    event_unknown_view_id_dropped/1,
     unknown_json/1,
     unknown_frame/1,
     malformed_json/1,
@@ -98,6 +100,8 @@ groups() ->
         navigate_non_live_path_full_navigate,
         event_with_effects,
         event_no_change,
+        event_non_map_payload_dropped,
+        event_unknown_view_id_dropped,
         unknown_json,
         unknown_frame,
         malformed_json,
@@ -465,6 +469,30 @@ event_no_change(Config) ->
     %% Verify connection is alive via ping (no event response expected)
     ok = ws_send(Sock, <<"0">>),
     {text, <<"1">>} = ws_recv(Sock),
+    ws_close(Sock).
+
+event_non_map_payload_dropped(Config) ->
+    %% An event frame whose payload is not a map must be dropped at the socket
+    %% (the `is_map/1` guard). A `#{...}`-matching handler would otherwise raise
+    %% function_clause on a non-map payload and crash-close the socket
+    %% (4500 -> client reload), a deterministic crash loop from one crafted frame.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"crashable", ~"set_status", ~"not_a_map"]),
+    %% Connection survives: the frame was dropped, not dispatched-and-crashed.
+    ok = ws_send(Sock, <<"0">>),
+    ?assertEqual({text, <<"1">>}, ws_recv(Sock)),
+    ws_close(Sock).
+
+event_unknown_view_id_dropped(Config) ->
+    %% An event addressed to a view id that is neither the root nor a known child
+    %% must be dropped, not routed to the root handler via a bogus id. Before the
+    %% fix, `set_status` (which changes root state) would route to the root and
+    %% ship an ops reply; now the next frame received is the pong, proving nothing
+    %% was dispatched.
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ok = ws_send_json(Sock, [~"bogus_view", ~"set_status", #{~"value" => ~"changed"}]),
+    ok = ws_send(Sock, <<"0">>),
+    ?assertEqual({text, <<"1">>}, ws_recv(Sock)),
     ws_close(Sock).
 
 unknown_json(Config) ->
