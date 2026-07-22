@@ -11,7 +11,8 @@
     boot_with_server_and_reloader/1,
     boot_without_config/1,
     boot_with_only_server/1,
-    boot_with_only_reloader/1
+    boot_with_only_reloader/1,
+    declares_runtime_deps_in_applications/1
 ]).
 
 -define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
@@ -21,7 +22,8 @@ all() ->
         boot_with_server_and_reloader,
         boot_without_config,
         boot_with_only_server,
-        boot_with_only_reloader
+        boot_with_only_reloader,
+        declares_runtime_deps_in_applications
     ].
 
 init_per_testcase(boot_with_server_and_reloader, Config) ->
@@ -36,6 +38,9 @@ init_per_testcase(boot_with_server_and_reloader, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     Config;
 init_per_testcase(boot_without_config, Config) ->
+    {ok, _} = application:ensure_all_started(arizona),
+    Config;
+init_per_testcase(declares_runtime_deps_in_applications, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     Config;
 init_per_testcase(boot_with_only_server, Config) ->
@@ -81,6 +86,15 @@ boot_with_only_server(Config) when is_list(Config) ->
 boot_with_only_reloader(Config) when is_list(Config) ->
     ?assertNot(is_listener_up(arizona_http)),
     ?assert(has_watcher_child()).
+
+%% relx (and OTP's boot script) ignore an app listed only in
+%% optional_applications, so the runtime deps must also appear in
+%% `applications` or a release omits them and the server crashes at boot.
+declares_runtime_deps_in_applications(Config) when is_list(Config) ->
+    {ok, Apps} = application:get_key(arizona, applications),
+    ?assert(lists:member(roadrunner, Apps)),
+    ?assert(lists:member(fs, Apps)),
+    ?assert(lists:member(ssh, Apps)).
 
 %% ============================================================================
 %% Helpers

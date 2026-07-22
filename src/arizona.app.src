@@ -5,7 +5,10 @@
     {applications, [
         kernel,
         stdlib,
-        crypto
+        crypto,
+        roadrunner,
+        fs,
+        ssh
     ]},
     {optional_applications, [roadrunner, fs, ssh]},
     {mod, {arizona_app, []}},
