@@ -1498,7 +1498,14 @@ function maybeResetForm(form) {
  */
 function commandsIncludeFetch(cmds) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
-    return list.some((c) => c[0] === JS_FETCH);
+    return list.some((c) => {
+        if (c[0] === JS_FETCH) return true;
+        // transition(...)/on_key(...) wrap their inner command(s) in c[2]; a fetch
+        // nested there still runs (inside the transition callback), so it must also
+        // defer the reset -- recurse instead of only checking the top level.
+        if (c[0] === JS_TRANSITION || c[0] === JS_ON_KEY) return commandsIncludeFetch(c[2]);
+        return false;
+    });
 }
 
 /**

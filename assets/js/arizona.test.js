@@ -5053,4 +5053,55 @@ describe('fetch + az-form-reset via the submit listener', () => {
 
         mock.restore();
     });
+
+    it('defers the reset when the fetch is wrapped in transition(...) (E2)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // Defer the view-transition callback the way a real browser does, so a
+        // synchronous reset would clear the form before the wrapped fetch reads it.
+        let vtCallback = null;
+        document.startViewTransition = (arg) => {
+            vtCallback = typeof arg === 'object' ? arg.update : arg;
+            return {
+                ready: Promise.resolve(),
+                finished: Promise.resolve(),
+                updateCallbackDone: Promise.resolve(),
+                skipTransition: vi.fn(),
+            };
+        };
+
+        // {az_submit, transition(fetch("/x"))} = [JS_TRANSITION, opts, [JS_FETCH, url, {}]]
+        document.body.innerHTML =
+            '<form id="f" az-submit=\'[20,{},[22,"/x",{}]]\' az-form-reset>' +
+            '<input id="n" name="n" /><button type="submit">Go</button></form>';
+        const input = document.querySelector('#n');
+        input.value = 'typed';
+
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({ ok: false, status: 422, text: () => Promise.resolve('') }),
+        );
+
+        try {
+            document
+                .querySelector('#f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+            // The reset must NOT fire synchronously on submit (the wrapped fetch owns it)...
+            expect(input.value).toBe('typed');
+            // ...so when the deferred transition callback runs, the fetch POSTs the field.
+            vtCallback();
+            await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+            expect(globalThis.fetch.mock.calls[0][1].body.toString()).toContain('n=typed');
+
+            // A 422 keeps the typed fields (reset is 2xx-only).
+            await Promise.resolve();
+            expect(input.value).toBe('typed');
+        } finally {
+            delete document.startViewTransition;
+            mock.restore();
+        }
+    });
 });
