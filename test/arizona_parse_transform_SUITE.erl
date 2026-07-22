@@ -121,6 +121,7 @@
     nodiff_binary/1,
     nodiff_diff_integration/1,
     nodiff_each/1,
+    nodiff_nested_element_rejected/1,
     nodiff_with_other_attrs/1,
     render_integration/1,
     shared_az/1,
@@ -473,6 +474,7 @@ groups() ->
             nodiff_binary,
             nodiff_absent,
             nodiff_diff_integration,
+            nodiff_nested_element_rejected,
             bool_attr_true,
             bool_attr_false,
             bare_binary_bool,
@@ -3735,6 +3737,23 @@ nodiff_each(Config) when is_list(Config) ->
     ?assertEqual(false, maps:get(diff, Tmpl)),
     StaticsBin = iolist_to_binary(maps:get(s, Tmpl)),
     ?assertEqual(nomatch, binary:match(StaticsBin, <<"az-nodiff">>)).
+
+%% az-nodiff is only honored on a template's top-level element (directives are
+%% stripped there). On a NESTED element it is neither stripped nor honored -- left as
+%% an ordinary boolean attr it would leak the reserved `az-nodiff` into the DOM while
+%% the element stayed diffable. It must be a clear compile error, not silently ignored.
+nodiff_nested_element_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_nodiff_nested). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [], ["
+        "            {'span', ['az-nodiff'], [arizona_template:get(x, Bindings)]}"
+        "        ]}"
+        "    ). ",
+        fun(R) -> R =:= nested_nodiff end
+    ).
 
 %% Test 67: mixed attr forms -- atom, binary, {k,true}, {k,false}, {k,v} on one element.
 mixed_attr_forms(Config) when is_list(Config) ->

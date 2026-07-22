@@ -422,6 +422,12 @@ format_error(local_attr_multiple) ->
 format_error(local_attr_mixed) ->
     "a ?local in an attribute value can only be combined with static text, not "
     "another dynamic expression";
+format_error(nested_nodiff) ->
+    "az-nodiff is only honored on a template's top-level (root) element -- it is a "
+    "whole-template directive, not a per-element one, so on a nested element it cannot "
+    "be scoped and would leak the reserved attribute into the DOM. Move it to the root "
+    "element, or split the subtree into its own ?html/?stateless template whose root "
+    "carries az-nodiff";
 format_error(cross_target_nesting) ->
     "cannot nest ?html, ?native and ?terminal in one template -- they produce "
     "incompatible statics. Render cross-target content via a separate "
@@ -1520,6 +1526,7 @@ extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
+    ok = reject_nested_directives(Attrs0, Line),
     Backend = State0#state.backend,
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
     Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, Line, State0),
@@ -2470,6 +2477,25 @@ contains_inner_content(_) ->
 
 directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
 directive_opts(_) -> false.
+
+%% az-nodiff is a whole-compile-unit directive: it is stripped from a template's
+%% top-level element attrs (compile_fragment_parts / compile_mixed_items) before
+%% compile_element runs. A NESTED element reaches compile_element with its attrs
+%% unstripped, so a directive attribute here is az-nodiff on a non-top-level element.
+%% There is no per-element nodiff scope, and left as an ordinary boolean attribute it
+%% would silently leak the reserved `az-nodiff` into the DOM while keeping the element
+%% diffable. Reject it with a clear error rather than mis-compiling it.
+reject_nested_directives(Attrs, Line) ->
+    case lists:any(fun is_directive_attr/1, Attrs) of
+        true -> parse_error(nested_nodiff, Line);
+        false -> ok
+    end.
+
+is_directive_attr(Attr) ->
+    case bare_attr_name(Attr) of
+        {ok, Name} -> directive_opts(Name) =/= false;
+        error -> false
+    end.
 
 bare_attr_name({atom, _, Name}) ->
     {ok, arizona_html:name(Name)};
