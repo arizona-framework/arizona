@@ -1141,10 +1141,16 @@ iv_quals(Qs, Inline) ->
 
 iv_qual({generate, L, P, E}, Inline) ->
     {{generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({generate_strict, L, P, E}, Inline) ->
+    {{generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
 iv_qual({b_generate, L, P, E}, Inline) ->
     {{b_generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({b_generate_strict, L, P, E}, Inline) ->
+    {{b_generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
 iv_qual({m_generate, L, P, E}, Inline) ->
     {{m_generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({m_generate_strict, L, P, E}, Inline) ->
+    {{m_generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
 iv_qual(Filter, Inline) ->
     {iv(Filter, Inline), Inline}.
 

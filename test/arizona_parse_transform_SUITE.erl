@@ -200,6 +200,7 @@
     inline_non_bindings_var_name/1,
     inline_destructuring_not_inlined/1,
     inline_comprehension_source/1,
+    inline_strict_generator_shadow/1,
     tracked_get_submap_errors/1,
     tracked_get_submap_az_errors/1,
     tracked_get_lazy_submap_errors/1,
@@ -566,7 +567,8 @@ groups() ->
             inline_same_var_two_slots,
             inline_non_bindings_var_name,
             inline_destructuring_not_inlined,
-            inline_comprehension_source
+            inline_comprehension_source,
+            inline_strict_generator_shadow
         ]},
         %% Reject the tracked accessor reading a non-bindings (sub-)map
         {tracked_get, [parallel], [
@@ -6281,6 +6283,30 @@ inline_comprehension_source(Config) when is_list(Config) ->
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(~"ab", Fun()),
     ?assertEqual(#{names => true}, slot_deps(Fun)).
+
+%% A template comprehension whose OTP-28 strict generator (`<:-`) pattern reuses a
+%% hoisted read's variable name. The inline-var substitution must treat a strict
+%% generator like the lazy forms -- shadowing the pattern var, not substituting the
+%% read into the generator pattern (which erl_lint rejects as a hard illegal_pattern
+%% error). Before the fix this fails to compile; after, it renders the fallback then
+%% the list. (Non-strict compile: reusing the name inherently warns shadowed_var, which
+%% is orthogonal to the illegal_pattern error the fix removes.)
+inline_strict_generator_shadow(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_inline_strict_gen). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Item = arizona_template:get(fallback, Bindings), "
+        "    arizona_template:html({'ul', [], ["
+        "        {'li', [], [Item]},"
+        "        [ Row || Item <:- arizona_template:get(items, Bindings), Row <- [Item] ]"
+        "    ]}). "
+    ),
+    T = Mod:render(#{fallback => ~"F", items => [~"a", ~"b"]}),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"F")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"ab")).
 
 %% ============================================================================
 %% Tracked get/get_lazy on a non-bindings map
