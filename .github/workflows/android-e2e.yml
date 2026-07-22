@@ -72,11 +72,22 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci
 
+      # Cache the compiled deps so the server step's rebar3 compile only rebuilds
+      # arizona itself -- a cold full compile plus vite build otherwise races the
+      # server-start poll budget below on slow runners.
+      - name: Cache rebar3 _build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: _build
+          key: android-rebar3-${{ runner.os }}-${{ hashFiles('rebar.lock') }}
+          restore-keys: |
+            android-rebar3-${{ runner.os }}-
+
       - name: Start Arizona server (port 4040; the emulator reaches it via adb reverse)
         run: |
           export PORT=4040 ERLANG_EXTRA_ARGS=-noshell
           ./scripts/start_test_server.sh > /tmp/arizona-server.log 2>&1 &
-          for _ in $(seq 1 60); do
+          for _ in $(seq 1 180); do
             if curl -sf http://localhost:4040/ > /dev/null; then echo "server up"; exit 0; fi
             sleep 1
           done
