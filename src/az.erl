@@ -14,10 +14,10 @@ optimized template map.
 
 ## Parse transform stubs
 
-`html/1` and `each/2` are stubs -- they exist so callers can write
-`az:html({...})` and the parse transform can detect and replace the
-call. They never actually execute at runtime; calling them directly
-errors with `parse_transform_not_applied`.
+`html/1`, `native/1`, `terminal/1` and `each/2` are stubs -- they exist
+so callers can write `az:html({...})` and the parse transform can detect
+and replace the call. They never actually execute at runtime; calling
+them directly errors with `parse_transform_not_applied`.
 
 ## Layout helper
 
@@ -231,7 +231,8 @@ stateless(Handler, Fun, Props) ->
 -doc """
 Parse transform stub. The parse transform replaces `az:each(Fun, Source)`
 with compiled iteration code; this runtime body is only reached if the
-parse transform did not run, in which case the call will fail.
+parse transform did not run, in which case it errors with
+`parse_transform_not_applied` like the other stubs.
 """.
 -spec each(Fun, Source) -> no_return() when
     Fun :: fun(),

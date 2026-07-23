@@ -338,12 +338,21 @@ Wraps a `t:template/0` produced by the parse transform with an `each` source.
 
 Called by the parse transform to compile `?each(Fun, Source)` -- pairs
 the per-item template with its source list, stream, or map.
+
+`?each(Fun, Source)` expands to a call on this same name, which the parse
+transform replaces with the compiled pairing above. Reached with the macro's
+own `(Fun, Source)` argument order, the transform did not run: say so with
+`parse_transform_not_applied` rather than a bare `function_clause`.
 """.
 -spec each(Source, Template) -> each_container() when
     Source :: term(),
     Template :: each_template().
 each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_function(DFun, 2) ->
-    #{t => ?EACH, source => Source, template => Tmpl}.
+    #{t => ?EACH, source => Source, template => Tmpl};
+each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 -doc """
 Compile-time stub for the native each. The parse transform replaces every
