@@ -50,6 +50,7 @@
     http_flash_round_trip/1,
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
+    http_combines_duplicate_header_lines/1,
     http_exposes_roadrunner_request_id/1,
     drain_default_closes_ws_cleanly/1,
     drain_user_callback_pushes_effect_then_stops/1,
@@ -141,6 +142,7 @@ groups() ->
         http_flash_round_trip,
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
+        http_combines_duplicate_header_lines,
         http_exposes_roadrunner_request_id,
         drain_default_closes_ws_cleanly,
         drain_user_callback_pushes_effect_then_stops,
@@ -345,6 +347,16 @@ init_per_group(roadrunner, Config) ->
                             Id -> <<"id=", Id/binary>>
                         end,
                     {cont, Req, B#{status => Status}}
+                end
+            ]
+        }},
+        %% Projects the (possibly repeated) `x-probe` header into `status` so a
+        %% test can read the adapter's view of a duplicated field off the HTML.
+        {live, <<"/echo_probe_header">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {Headers, Req1} = arizona_req:headers(Req),
+                    {cont, Req1, B#{status => maps:get(~"x-probe", Headers, ~"none")}}
                 end
             ]
         }},
@@ -1634,6 +1646,19 @@ http_reads_cookies_headers_body(Config) ->
     %% status binding projects into the rendered page: c=2 h=N b=0
     ?assertNotEqual(nomatch, binary:match(Resp, <<"c=2">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"b=0">>)).
+
+http_combines_duplicate_header_lines(Config) ->
+    %% A field sent on several lines (a proxy chain appending X-Forwarded-For, a
+    %% client splitting Accept) used to reach the handler as the last line only --
+    %% every earlier value dropped, and the opposite of `roadrunner_req:header/2`,
+    %% which returns the first. RFC 9110 §5.3: combine, in the order received.
+    Resp = http_get(Config, "/echo_probe_header", [
+        "X-Probe: 1.1.1.1\r\n", "X-Probe: 2.2.2.2\r\n"
+    ]),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"1.1.1.1, 2.2.2.2">>)),
+    %% A single line is untouched -- no stray separator.
+    Single = http_get(Config, "/echo_probe_header", ["X-Probe: 1.1.1.1\r\n"]),
+    ?assertNotEqual(nomatch, binary:match(Single, <<"1.1.1.1<">>)).
 
 http_exposes_roadrunner_request_id(Config) ->
     %% The adapter forwards roadrunner's per-request 16-char hex id into

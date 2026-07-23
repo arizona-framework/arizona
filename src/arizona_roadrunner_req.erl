@@ -77,7 +77,22 @@ parse_cookies(RoadrunnerReq) ->
 -spec parse_headers(RoadrunnerReq) -> arizona_req:headers() when
     RoadrunnerReq :: roadrunner_req:request().
 parse_headers(RoadrunnerReq) ->
-    maps:from_list(roadrunner_req:headers(RoadrunnerReq)).
+    %% Roadrunner keeps the header list in wire order, duplicates included. A
+    %% plain `maps:from_list/1` would keep only the last line of a repeated field
+    %% (`X-Forwarded-For`, `Accept`, ...), silently dropping the rest -- and
+    %% disagreeing with `roadrunner_req:header/2`, which returns the first.
+    %% Combine them instead, as RFC 9110 §5.3 allows: values in the order
+    %% received, comma-separated.
+    lists:foldl(
+        fun({Name, Value}, Acc) ->
+            case Acc of
+                #{Name := Prev} -> Acc#{Name => join_field(Name, Prev, Value)};
+                #{} -> Acc#{Name => Value}
+            end
+        end,
+        #{},
+        roadrunner_req:headers(RoadrunnerReq)
+    ).
 
 -spec read_body(RoadrunnerReq) -> {arizona_req:body(), RoadrunnerReq} when
     RoadrunnerReq :: roadrunner_req:request().
@@ -139,3 +154,14 @@ resolve_route(Path, Qs, Req) ->
         _ ->
             error
     end.
+
+%% --------------------------------------------------------------------
+%% Internal functions
+%% --------------------------------------------------------------------
+
+%% Combine two lines of the same header field. RFC 9110 §5.3's separator is a
+%% comma; `Cookie` is the exception -- it is a `; `-separated list, and an HTTP/2
+%% client may legally split it across field lines (RFC 9113 §8.2.3), so it is
+%% rejoined with its own separator.
+join_field(~"cookie", Prev, Value) -> <<Prev/binary, "; ", Value/binary>>;
+join_field(_Name, Prev, Value) -> <<Prev/binary, ", ", Value/binary>>.
