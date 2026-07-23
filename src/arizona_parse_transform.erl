@@ -392,6 +392,18 @@ format_error(live_render_id_must_be_get_id) ->
 format_error(az_view_not_allowed) ->
     "az_view attribute is auto-injected by the parse transform in "
     "arizona_stateful render/1 and must not be set manually";
+format_error({reserved_attr, Name}) ->
+    lists:flatten(
+        io_lib:format(
+            "the ~ts attribute is reserved -- the parse transform emits it itself "
+            "(az addresses an element for the diff, az-local describes its ?local "
+            "slots), so a template-authored one renders as a duplicate whose value "
+            "can collide with a real slot address and misroute a patch. Remove it: "
+            "az-key, the az-* event attributes and any az-* name of your own are "
+            "unaffected",
+            [Name]
+        )
+    );
 format_error({invalid_child, ValueStr}) ->
     lists:flatten(
         io_lib:format(
@@ -1516,6 +1528,7 @@ extract_element(Node) ->
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
     ok = reject_nested_directives(Attrs0, Line),
+    ok = reject_reserved_attrs(Attrs0, Line),
     Backend = State0#state.backend,
     RawKind = Backend:raw_text_kind(Tag),
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
@@ -2572,6 +2585,43 @@ bare_attr_name({bin, _, _} = Bin) ->
     end;
 bare_attr_name(_) ->
     error.
+
+%% The two attribute names the transform emits into the rendered output itself:
+%% `az` (the element's diff address, emitted by `Backend:az_attr/1` on any element
+%% carrying dynamics) and `az-local` (the `?local` descriptor injected by
+%% maybe_inject_local_descriptor/6). A template-authored copy is emitted *beside*
+%% the injected one: HTML keeps the first of a duplicate pair and the native wire
+%% keeps the last, so one of the two silently disappears -- and when the element
+%% has no dynamics the user's `az` is the only one, is fingerprint-scoped like a
+%% real address (`scope_static/2` rewrites every ` az="`), and can collide with a
+%% genuine slot id. The client resolves a slot with `querySelector('[az=...]')`,
+%% which takes the first match in document order, so the op then patches the wrong
+%% element. Reject both names at compile time.
+%%
+%% Deliberately narrow: `az-view` has its own check (it is legal, and injected, on a
+%% live root), and every other `az-*` name is user territory -- `az-key` keys stream
+%% items, `az-click`/`az-submit`/... carry effects, and an app is free to invent its
+%% own `az-*` attributes.
+reserved_attr_name(<<"az">>) -> true;
+reserved_attr_name(<<"az-local">>) -> true;
+reserved_attr_name(_) -> false.
+
+reject_reserved_attrs(Attrs, Line) ->
+    case [Name || Attr <- Attrs, Name <- [attr_name(Attr)], reserved_attr_name(Name)] of
+        [] -> ok;
+        [Name | _] -> parse_error({reserved_attr, Name}, Line)
+    end.
+
+%% The literal name of an attribute in any of its forms (`name`, `<<"name">>`,
+%% `{name, Value}`), normalized like a directive so `az_local` and `'az-local'`
+%% are one name. `undefined` when the name is not a compile-time literal.
+attr_name({tuple, _, [NameAST | _]}) ->
+    attr_name(NameAST);
+attr_name(Attr) ->
+    case bare_attr_name(Attr) of
+        {ok, Name} -> Name;
+        error -> undefined
+    end.
 
 %% Normalize a directive attribute atom to its canonical dashed binary
 %% (`az_nodiff` -> `<<"az-nodiff">>`) for framework directive matching. Deliberately

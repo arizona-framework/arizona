@@ -81,6 +81,13 @@ Void elements (`br`, `img`, `input`, `hr`, `meta`, `link`, `base`, `col`, `embed
 | `{name, false}` | `{hidden, false}` | Stripped |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Stripped, emits `diff => false` |
 
+Two names are reserved because the transform emits them itself and a duplicate would
+misroute a patch: `az` (the element's diff address) and `az-local` (the `?local`
+descriptor). Either one in a template is a compile error (`reserved_attr`), in any form
+(`{az, V}`, bare `az`, `<<"az">>`, `az_local`). `az-view` has its own rule -- injected on a
+live root, rejected elsewhere. Everything else `az-*` is the template author's: `az_key`
+keys stream items, `az_click`/`az_submit`/... carry effects, and an app may invent its own.
+
 ## Route options
 
 A route's static config is the single canonical type `arizona_live:route_opts/0`:

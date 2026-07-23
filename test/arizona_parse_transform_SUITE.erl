@@ -244,6 +244,9 @@
     az_view_on_child_raises/1,
     az_view_in_stateless_raises/1,
     az_view_binary_form_raises/1,
+    reserved_az_attr_raises/1,
+    reserved_az_local_attr_raises/1,
+    az_prefixed_user_attrs_allowed/1,
     az_view_case_in_render/1,
     az_view_if_in_render/1,
     az_view_try_in_render/1,
@@ -715,6 +718,9 @@ groups() ->
             az_view_on_child_raises,
             az_view_in_stateless_raises,
             az_view_binary_form_raises,
+            reserved_az_attr_raises,
+            reserved_az_local_attr_raises,
+            az_prefixed_user_attrs_allowed,
             az_view_case_in_render,
             az_view_if_in_render,
             az_view_try_in_render,
@@ -5604,6 +5610,121 @@ az_view_binary_form_raises(Config) when is_list(Config) ->
             (_) -> false
         end
     ).
+
+%% `az` is the element's diff address: the transform emits it on every element
+%% carrying dynamics, and `scope_static/2` fingerprint-scopes every ` az="` it
+%% finds -- including a template-authored one, which can then equal a real slot
+%% address. The client resolves a slot with querySelector, taking the first match
+%% in document order, so the op patches the wrong element. Reject every literal
+%% form (`{az, V}`, bare `az`, `<<"az">>`) at compile time.
+reserved_az_attr_raises(Config) when is_list(Config) ->
+    Reserved = fun
+        ({reserved_attr, ~"az"}) -> true;
+        (_) -> false
+    end,
+    assert_parse_error(
+        "-module(pt_reserved_az_tuple). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{az, <<\"0\">>}], [arizona_template:get(x, Bindings)]}"
+        "    ). ",
+        Reserved
+    ),
+    assert_parse_error(
+        "-module(pt_reserved_az_atom). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [az], [arizona_template:get(x, Bindings)]}"
+        "    ). ",
+        Reserved
+    ),
+    assert_parse_error(
+        "-module(pt_reserved_az_bin). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [<<\"az\">>], [arizona_template:get(x, Bindings)]}"
+        "    ). ",
+        Reserved
+    ),
+    %% A static element gets no injected `az`, so the authored one would be the
+    %% only holder of a scoped address -- the collision case. Still rejected.
+    assert_parse_error(
+        "-module(pt_reserved_az_static). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [{az, <<\"0\">>}], [<<\"static\">>]}). ",
+        Reserved
+    ).
+
+%% `az-local` is the ?local descriptor the transform injects; an authored one is
+%% emitted beside it (a duplicate the client's scan reads at most one of) or,
+%% with no ?local on the element, describes slots that do not exist.
+reserved_az_local_attr_raises(Config) when is_list(Config) ->
+    Reserved = fun
+        ({reserved_attr, ~"az-local"}) -> true;
+        (_) -> false
+    end,
+    %% The underscore atom form normalizes to the same dashed name the HTML
+    %% backend emits, so both spellings are caught.
+    assert_parse_error(
+        "-module(pt_reserved_local_underscore). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{az_local, <<\"{}\">>}], "
+        "                [arizona_template:local(<<\"k\">>, <<\"i\">>)]}"
+        "    ). ",
+        Reserved
+    ),
+    assert_parse_error(
+        "-module(pt_reserved_local_dashed). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [{'az-local', <<\"{}\">>}], [<<\"x\">>]}). ",
+        Reserved
+    ).
+
+%% The rejection must stay narrow: every other `az-*` name belongs to the
+%% template author. `az_key` keys stream items, the event attributes carry
+%% effects, `az_view` has its own (permissive on a live root) check, and an app
+%% may invent its own `az-*` names.
+az_prefixed_user_attrs_allowed(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_user_attrs). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'ul', [{'az-drop', <<\"reorder\">>}], ["
+        "            {'li', [{az_key, <<\"k1\">>}, "
+        "                    {az_click, arizona_js:push_event(<<\"pick\">>)}, "
+        "                    {'az-mine', <<\"1\">>}, "
+        "                    az_navigate], "
+        "                   [arizona_template:get(x, Bindings)]}"
+        "        ]}"
+        "    ). "
+    ),
+    StaticsBin = iolist_to_binary(maps:get(s, Mod:render(#{x => ~"v"}))),
+    ?assertNotEqual(nomatch, binary:match(StaticsBin, ~"az-key=\"k1\"")),
+    ?assertNotEqual(nomatch, binary:match(StaticsBin, ~"az-drop=\"reorder\"")),
+    ?assertNotEqual(nomatch, binary:match(StaticsBin, ~"az-mine=\"1\"")),
+    ?assertNotEqual(nomatch, binary:match(StaticsBin, ~"az-click=")),
+    ?assertNotEqual(nomatch, binary:match(StaticsBin, ~"az-navigate")),
+    %% An `az_view` on a live root is still accepted by its own check.
+    LiveMod = compile_module(
+        "-module(pt_az_user_attrs_live). "
+        "-behaviour(arizona_stateful). "
+        "-export([mount/1, render/1]). "
+        "mount(B) -> {#{id => maps:get(id, B, <<\"v\">>)}, #{}}. "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{id, az:get(id, Bindings)}, az_view], [<<\"hi\">>]}"
+        "    ). "
+    ),
+    LiveStatics = iolist_to_binary(maps:get(s, LiveMod:render(#{id => ~"v"}))),
+    ?assertNotEqual(nomatch, binary:match(LiveStatics, ~"az-view")).
 
 az_view_case_in_render(Config) when is_list(Config) ->
     %% case expression in render/1 -- az-view auto-injected in each branch
