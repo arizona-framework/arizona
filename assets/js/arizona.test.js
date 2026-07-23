@@ -3839,6 +3839,92 @@ describe('connection params', () => {
 });
 
 // ---------------------------------------------------------------------------
+// single live connection
+// ---------------------------------------------------------------------------
+
+describe('connect() ownership of module state', () => {
+    /** Mock the Worker ctor, recording every instance it hands out. */
+    function trackWorkers() {
+        /** @type {Array<{postMessage: Function, onmessage: Function|null, onerror: Function|null, terminate: Function}>} */
+        const made = [];
+        const OrigWorker = globalThis.Worker;
+        globalThis.Worker = function () {
+            const inst = {
+                postMessage() {},
+                onmessage: null,
+                onerror: null,
+                terminate: vi.fn(),
+            };
+            made.push(inst);
+            return inst;
+        };
+        return {
+            made,
+            restore() {
+                globalThis.Worker = OrigWorker;
+            },
+        };
+    }
+
+    it('a second connect() retires the first instead of orphaning its worker', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const w = trackWorkers();
+
+        const first = mod.connect('/ws');
+        const second = mod.connect('/ws');
+        w.restore();
+
+        // Both sockets would otherwise apply ops to the same document.
+        expect(w.made).toHaveLength(2);
+        expect(w.made[0].terminate).toHaveBeenCalled();
+        expect(warn).toHaveBeenCalled();
+
+        // The retired connection's teardown is spent, so it cannot reach in and
+        // terminate the worker that now owns the module state.
+        first();
+        expect(w.made[1].terminate).not.toHaveBeenCalled();
+
+        second();
+        expect(w.made[1].terminate).toHaveBeenCalled();
+        warn.mockRestore();
+    });
+
+    it('connect() after a disconnect() is a clean start, no warning', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const w = trackWorkers();
+
+        mod.connect('/ws')();
+        const second = mod.connect('/ws');
+        w.restore();
+
+        expect(warn).not.toHaveBeenCalled();
+        second();
+        warn.mockRestore();
+    });
+
+    it('logs a worker that fails to load, which otherwise never reports', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const w = trackWorkers();
+
+        const disconnect = mod.connect('/ws');
+        w.restore();
+        // A worker that throws at top level posts no [1, ...] -- without this the
+        // page just silently never connects.
+        w.made[0].onerror({ message: 'boom' });
+        expect(error).toHaveBeenCalledWith('[arizona] worker error:', 'boom');
+
+        disconnect();
+        error.mockRestore();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // worker spawn shape
 // ---------------------------------------------------------------------------
 

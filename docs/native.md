@@ -149,7 +149,11 @@ by the `native` e2e project), `clients/android/` (the Kotlin/Compose Android cli
 All three are near-copies of the browser worker (`assets/js/arizona-worker.js` + `arizona-core.js`):
 
 1. **Cache statics by fingerprint** in platform storage (browser uses
-   IndexedDB); send `["cached_fps", [...]]` on connect.
+   IndexedDB); send `["cached_fps", [...]]` on connect. Bound it: a fingerprint
+   hashes a template's statics, so every edit mints a key and orphans the old
+   one. The browser client keeps the 1000 most recently used and announces no
+   more (`FP_CACHE_MAX` in `assets/js/arizona-core.js`); evicting only ever
+   costs a re-send, since the server ships statics for anything unannounced.
 2. **Interleave** `s` + `d` to reconstruct content — identical to the browser's
    `zipTemplate`, except each `d` value is **JSON-encoded** (string → quoted,
    number → as-is) rather than text-concatenated. Recurse into nested

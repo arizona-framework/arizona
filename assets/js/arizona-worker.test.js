@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     backoff,
+    FP_CACHE_MAX,
     fpCache,
     loadFpEntries,
+    mruFpKeys,
     resolveHtml,
     setOnPersist,
+    takeTouchedFps,
     zipTemplate,
 } from './arizona-core.js';
 
@@ -15,6 +18,7 @@ import {
 /** Reset fp cache between tests so fingerprints don't leak across tests. */
 beforeEach(() => {
     fpCache.clear();
+    takeTouchedFps();
     setOnPersist(null);
 });
 
@@ -241,7 +245,10 @@ describe('cache persistence', () => {
         setOnPersist(spy);
         resolveHtml({ f: 'ls_persist_1', s: ['<b>', '</b>'], d: ['x'] });
         expect(spy).toHaveBeenCalledOnce();
-        expect(spy).toHaveBeenCalledWith('ls_persist_1', { s: ['<b>', '</b>'] });
+        expect(spy).toHaveBeenCalledWith('ls_persist_1', {
+            s: ['<b>', '</b>'],
+            u: expect.any(Number),
+        });
     });
 
     it('multiple fingerprints each call onPersist individually', () => {
@@ -250,8 +257,14 @@ describe('cache persistence', () => {
         resolveHtml({ f: 'ls_multi_a', s: ['<i>', '</i>'], d: ['1'] });
         resolveHtml({ f: 'ls_multi_b', s: ['<u>', '</u>'], d: ['2'] });
         expect(spy).toHaveBeenCalledTimes(2);
-        expect(spy).toHaveBeenCalledWith('ls_multi_a', { s: ['<i>', '</i>'] });
-        expect(spy).toHaveBeenCalledWith('ls_multi_b', { s: ['<u>', '</u>'] });
+        expect(spy).toHaveBeenCalledWith('ls_multi_a', {
+            s: ['<i>', '</i>'],
+            u: expect.any(Number),
+        });
+        expect(spy).toHaveBeenCalledWith('ls_multi_b', {
+            s: ['<u>', '</u>'],
+            u: expect.any(Number),
+        });
     });
 
     it('resolveHtml without s does not call onPersist', () => {
@@ -277,7 +290,58 @@ describe('cache persistence', () => {
         const spy = vi.fn();
         setOnPersist(spy);
         resolveHtml({ t: 0, f: 'ls_stream', s: ['<li>', '</li>'], d: [['x']] });
-        expect(spy).toHaveBeenCalledWith('ls_stream', { s: ['<li>', '</li>'], t: 0 });
+        expect(spy).toHaveBeenCalledWith('ls_stream', {
+            s: ['<li>', '</li>'],
+            t: 0,
+            u: expect.any(Number),
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Cache bounding -- last-used stamps, MRU selection, touch queue
+// ---------------------------------------------------------------------------
+
+describe('fp cache bounding', () => {
+    it('mruFpKeys returns every key when the cache is under the limit', () => {
+        loadFpEntries([
+            ['a', { s: ['<b>', '</b>'], u: 1 }],
+            ['b', { s: ['<i>', '</i>'], u: 2 }],
+        ]);
+        expect(mruFpKeys(FP_CACHE_MAX).sort()).toEqual(['a', 'b']);
+    });
+
+    it('mruFpKeys keeps the most recently used and drops the stalest', () => {
+        loadFpEntries([
+            ['old', { s: ['<b>', '</b>'], u: 100 }],
+            ['newest', { s: ['<i>', '</i>'], u: 300 }],
+            ['mid', { s: ['<u>', '</u>'], u: 200 }],
+        ]);
+        expect(mruFpKeys(2)).toEqual(['newest', 'mid']);
+    });
+
+    it('a resolve re-stamps an entry whose stamp has gone stale and queues it', () => {
+        loadFpEntries([['stale', { s: ['<b>', '</b>'], u: 0 }]]);
+        takeTouchedFps();
+        resolveHtml({ f: 'stale', d: ['x'] });
+        expect(fpCache.get('stale').u).toBeGreaterThan(Date.now() - 5000);
+        expect(takeTouchedFps()).toEqual(['stale']);
+    });
+
+    it('a resolve of a freshly stamped entry queues no write', () => {
+        // The stamp is coarse on purpose: a stream of patches against the same
+        // templates must not rewrite the store on every message.
+        resolveHtml({ f: 'fresh', s: ['<b>', '</b>'], d: ['1'] });
+        takeTouchedFps();
+        resolveHtml({ f: 'fresh', d: ['2'] });
+        expect(takeTouchedFps()).toEqual([]);
+    });
+
+    it('takeTouchedFps drains the queue', () => {
+        loadFpEntries([['drain', { s: ['<b>', '</b>'], u: 0 }]]);
+        resolveHtml({ f: 'drain', d: ['x'] });
+        expect(takeTouchedFps()).toEqual(['drain']);
+        expect(takeTouchedFps()).toEqual([]);
     });
 });
 

@@ -1,19 +1,23 @@
 /**
  * Integration tests for arizona-worker.js. Mocks WebSocket + postMessage;
- * indexedDB is stubbed to a no-op (the worker only uses it for fire-and-forget
- * cache persistence, which these tests don't assert on).
+ * indexedDB is stubbed with an in-memory store that records puts and deletes,
+ * so the cache hydration + eviction path is assertable.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FP_CACHE_MAX } from './arizona-core.js';
 
 function installIndexedDBStub({ seed = [] } = {}) {
     const puts = [];
+    const deletes = [];
     const orig = globalThis.indexedDB;
     globalThis.indexedDB = {
         open() {
             const req = { result: null, onsuccess: null, onupgradeneeded: null, onerror: null };
             queueMicrotask(() => {
                 req.result = {
+                    objectStoreNames: { contains: () => false },
                     createObjectStore() {},
+                    deleteObjectStore() {},
                     transaction() {
                         return {
                             objectStore() {
@@ -42,6 +46,9 @@ function installIndexedDBStub({ seed = [] } = {}) {
                                     put(value, key) {
                                         puts.push([key, value]);
                                     },
+                                    delete(key) {
+                                        deletes.push(key);
+                                    },
                                 };
                             },
                         };
@@ -55,6 +62,7 @@ function installIndexedDBStub({ seed = [] } = {}) {
     };
     return {
         puts,
+        deletes,
         restore() {
             globalThis.indexedDB = orig;
         },
@@ -196,10 +204,19 @@ describe('arizona-worker', () => {
         expect(ws.latest().sent).toContain('["navigate",{"path":"/x","qs":""}]');
     });
 
-    it('send message is dropped before socket is open', () => {
+    it('send message is dropped before socket is open, with a warning', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
-        slf.send([1, 'dropped']);
+        slf.send([1, '["v1","inc",{"password":"hunter2"}]']);
         expect(ws.latest().sent).toHaveLength(0);
+        // The drop is announced -- silence here reads as a handler that never fired.
+        expect(warn).toHaveBeenCalledOnce();
+        const line = warn.mock.calls[0][0];
+        expect(line).toContain('socket not open');
+        // ... but the frame's own bytes never reach the console.
+        expect(line).not.toContain('hunter2');
+        expect(line).not.toContain('inc');
+        warn.mockRestore();
     });
 
     it('close message [2, code] closes the WebSocket', () => {
@@ -420,10 +437,10 @@ describe('arizona-worker', () => {
     });
 
     it('hydrates fp cache from IndexedDB cursor entries on boot', async () => {
-        // Re-install stubs with a pre-seeded cursor row so idbLoadAll iterates.
+        // Re-install stubs with a pre-seeded cursor row so idbLoadPruned iterates.
         idb.restore();
         idb = installIndexedDBStub({
-            seed: [['pre_seeded', { s: ['<em>', '</em>'] }]],
+            seed: [['pre_seeded', { s: ['<em>', '</em>'], u: 1 }]],
         });
         await loadWorker();
 
@@ -449,5 +466,71 @@ describe('arizona-worker', () => {
         ws.latest().simulateOpen();
         const sentFps = ws.latest().sent.find((s) => s.startsWith('["cached_fps"'));
         expect(sentFps).toContain('fp_z');
+    });
+
+    it('hydration evicts all but the FP_CACHE_MAX most-recently-used entries', async () => {
+        // A store one generation past the cap: `u` ranks them, oldest first.
+        const seed = [];
+        for (let i = 0; i < FP_CACHE_MAX + 3; i++) {
+            seed.push([`fp${i}`, { s: ['<p>', '</p>'], u: i }]);
+        }
+        idb.restore();
+        idb = installIndexedDBStub({ seed });
+        await loadWorker();
+
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        vi.useRealTimers();
+        await new Promise((r) => setTimeout(r, 0));
+
+        // The three stalest entries are gone from the store, not just unloaded.
+        expect([...idb.deletes].sort()).toEqual(['fp0', 'fp1', 'fp2']);
+        // ... and the announcement carries the survivors only, so it cannot grow
+        // past the cap however long the origin has been storing fingerprints.
+        const sentFps = ws.latest().sent.find((s) => s.startsWith('["cached_fps"'));
+        expect(JSON.parse(sentFps)[1]).toHaveLength(FP_CACHE_MAX);
+        expect(sentFps).not.toContain('"fp0"');
+        expect(sentFps).toContain(`"fp${FP_CACHE_MAX + 2}"`);
+    });
+
+    it('hydration keeps a store at the cap intact', async () => {
+        const seed = [];
+        for (let i = 0; i < FP_CACHE_MAX; i++) {
+            seed.push([`fp${i}`, { s: ['<p>', '</p>'], u: i }]);
+        }
+        idb.restore();
+        idb = installIndexedDBStub({ seed });
+        await loadWorker();
+
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        vi.useRealTimers();
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(idb.deletes).toEqual([]);
+        const sentFps = ws.latest().sent.find((s) => s.startsWith('["cached_fps"'));
+        expect(JSON.parse(sentFps)[1]).toHaveLength(FP_CACHE_MAX);
+    });
+
+    it('a resolve re-stamps a hydrated entry so the next hydration ranks it as used', async () => {
+        // Its stored stamp is stale, so eviction would rank it last -- even though
+        // the app still renders it. Resolving it writes the fresh stamp back.
+        idb.restore();
+        idb = installIndexedDBStub({ seed: [['fp_used', { s: ['<p>', '</p>'], u: 1 }]] });
+        await loadWorker();
+
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        vi.useRealTimers();
+        await new Promise((r) => setTimeout(r, 0));
+        // Statics omitted: the server trusts the announcement, so this is a hit.
+        ws.latest().simulateMessage(
+            JSON.stringify({ o: [[0, 'v:0', { f: 'fp_used', d: ['hi'] }]] }),
+        );
+        await new Promise((r) => setTimeout(r, 0));
+
+        const written = idb.puts.find(([k]) => k === 'fp_used');
+        expect(written).toBeDefined();
+        expect(written[1].u).toBeGreaterThan(Date.now() - 5000);
     });
 });
