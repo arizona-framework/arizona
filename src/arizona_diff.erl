@@ -424,21 +424,50 @@ diff_stream_op(Az, reorder, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
 diff_stream_op(Az, {reset, OldItems}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views).
 
-stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
-    HTML = arizona_render:zip_item(Tmpl, ItemD),
-    InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), Pos, HTML],
-    NewSnapAcc = SnapAcc#{Key => ItemD},
-    {RestOps, FinalSnap, Views2} =
-        diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views1),
-    {[InsOp | RestOps], FinalSnap, Views2}.
+%% Is `Key` in the window the snapshot ends up with? The stream record is already
+%% the post-op state (`pending` is its op log), so the final window is known while
+%% the queue is still being drained. An unlimited stream keeps every key.
+%%
+%% Skipping an op for a key outside the window is safe in both directions:
+%% `apply_limit/5` back-fills any visible key missing from the snapshot at its
+%% ordered position, so a key that slides into view later still lands.
+visible_key(_Key, #stream{limit = infinity}) ->
+    true;
+visible_key(Key, #stream{order = Order, limit = Limit}) ->
+    lists:member(Key, arizona_template:visible_keys(Order, Limit)).
 
+%% An insert past the limit used to render the item, ship its HTML, and then have
+%% `apply_limit/5` remove it in the same batch -- payload the client mounts and
+%% immediately destroys, firing a phantom `mounted()`/`destroyed()` pair.
+stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+    case visible_key(Key, Source) of
+        true ->
+            {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
+            HTML = arizona_render:zip_item(Tmpl, ItemD),
+            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), Pos, HTML],
+            NewSnapAcc = SnapAcc#{Key => ItemD},
+            {RestOps, FinalSnap, Views2} =
+                diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views1),
+            {[InsOp | RestOps], FinalSnap, Views2};
+        false ->
+            diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
+
+%% `SnapAcc` tracks what the client's DOM holds as the ops are applied, so a key
+%% absent from it has no node to remove -- the case for a key the limit kept out
+%% of the window, whether this batch skipped its insert or an earlier cycle pruned
+%% it. Mirrors the guard `stream_move/9` already applies.
 stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
-    DelOp = [?OP_REMOVE, Az, arizona_template:to_bin(Key)],
-    NewSnapAcc = maps:remove(Key, SnapAcc),
-    {RestOps, FinalSnap, Views1} =
-        diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
-    {[DelOp | RestOps], FinalSnap, Views1}.
+    case SnapAcc of
+        #{Key := _} ->
+            DelOp = [?OP_REMOVE, Az, arizona_template:to_bin(Key)],
+            NewSnapAcc = maps:remove(Key, SnapAcc),
+            {RestOps, FinalSnap, Views1} =
+                diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
+            {[DelOp | RestOps], FinalSnap, Views1};
+        #{} ->
+            diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
 
 stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
@@ -451,8 +480,7 @@ stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, 
                 Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1
             );
         #{} ->
-            {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
-            stream_update_missing(Az, Key, NewD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1)
+            stream_update_missing(Az, Key, NewItem, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
 stream_update_existing(Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
@@ -468,13 +496,22 @@ stream_update_existing(Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrde
             {[PatchOp | RestOps], FinalSnap, Views2}
     end.
 
-stream_update_missing(Az, Key, NewD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
-    HTML = arizona_render:zip_item(Tmpl, NewD),
-    InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
-    NewSnapAcc = SnapAcc#{Key => NewD},
-    {RestOps, FinalSnap, Views1} =
-        diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
-    {[InsOp | RestOps], FinalSnap, Views1}.
+%% Same window guard as `stream_insert/10`: an update whose key the client's DOM
+%% doesn't hold becomes an insert, so it is only worth rendering when the key ends
+%% up visible.
+stream_update_missing(Az, Key, NewItem, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+    case visible_key(Key, Source) of
+        true ->
+            {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
+            HTML = arizona_render:zip_item(Tmpl, NewD),
+            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
+            NewSnapAcc = SnapAcc#{Key => NewD},
+            {RestOps, FinalSnap, Views2} =
+                diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views1),
+            {[InsOp | RestOps], FinalSnap, Views2};
+        false ->
+            diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
 
 stream_move(Az, Key, AfterKey, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
