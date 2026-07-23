@@ -399,6 +399,10 @@ format_error(local_in_nodiff) ->
     "diff target for the client to address";
 format_error(local_unsupported) ->
     "?local is not supported by this render target";
+format_error(local_in_raw_text) ->
+    "a content ?local cannot be used inside a raw-text element "
+    "(script/style/textarea/title) -- raw-text content carries no slot markers "
+    "for the client to address, so the value would never update";
 format_error(local_key_reused) ->
     "a ?local key cannot bind both content and an attribute on the same element";
 format_error(local_attr_multiple) ->
@@ -1505,9 +1509,9 @@ extract_element(Node) ->
 compile_element(Tag, Attrs0, Children, Line, State0) ->
     ok = reject_nested_directives(Attrs0, Line),
     Backend = State0#state.backend,
-    Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
-    Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, Line, State0),
     RawKind = Backend:raw_text_kind(Tag),
+    Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
+    Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, RawKind, Line, State0),
     State1 = State0#state{root = false},
     %% A dynamic content slot inside a raw-text element is markerless/render-once
     %% (see emit_child_dynamic/4), so it never needs an element-level `az` target.
@@ -1754,7 +1758,7 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% as an ordinary static attribute value, so the backend's attr/2 HTML-escapes it
 %% for the attribute context (the client reads it via getAttribute, which decodes
 %% the entities back). No separate escape here -- that would double-escape.
-maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
+maybe_inject_local_descriptor(Backend, Attrs, Children, RawKind, Line, State) ->
     AttrLocals = collect_attr_locals(Backend, Attrs, Line),
     AttrAffixes = collect_attr_affixes(Backend, Attrs, Line),
     ContentLocals = collect_content_locals(Children, Line),
@@ -1762,11 +1766,23 @@ maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
         false ->
             Attrs;
         true ->
+            assert_content_local_not_raw_text(ContentLocals, RawKind, Line),
             assert_local_supported(Backend, State, Line),
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
             Desc = build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals),
             Json = iolist_to_binary(json:encode(Desc)),
             [{tuple, 0, [ast_binary(~"az-local"), ast_binary(Json)]} | Attrs]
+    end.
+
+%% A content ?local under a raw-text element (`<script>`/`<style>`/`<textarea>`/
+%% `<title>`) renders markerless -- raw-text content carries no `<!--az:...-->`
+%% slot markers -- so the client's az-local scan can never resolve the slot and
+%% the value silently never updates. Reject it at compile time. An *attribute*
+%% ?local on the same element is unaffected (the attribute is not raw-text content).
+assert_content_local_not_raw_text(ContentLocals, RawKind, Line) ->
+    case map_size(ContentLocals) > 0 andalso RawKind =/= none of
+        true -> parse_error(local_in_raw_text, Line);
+        false -> ok
     end.
 
 assert_local_supported(Backend, State, Line) ->

@@ -272,6 +272,8 @@
     local_attr_interp_numeric/1,
     local_attr_interp_multi_static/1,
     local_in_native_error/1,
+    local_content_in_raw_text_error/1,
+    local_attr_in_raw_text_ok/1,
     local_in_each_renders/1,
     local_atom_key/1,
     local_atom_binary_reuse_error/1,
@@ -395,6 +397,8 @@ groups() ->
             local_attr_interp_numeric,
             local_attr_interp_multi_static,
             local_in_native_error,
+            local_content_in_raw_text_error,
+            local_attr_in_raw_text_ok,
             local_in_each_renders,
             local_atom_key,
             local_atom_binary_reuse_error
@@ -1117,6 +1121,36 @@ local_in_native_error(Config) when is_list(Config) ->
         "    ). ",
         fun(R) -> R =:= local_unsupported end
     ).
+
+%% A content ?local inside a raw-text element (script/style/textarea/title)
+%% renders markerless, so the client's az-local scan can never resolve the slot
+%% and the value would silently never update. It must be a compile error.
+local_content_in_raw_text_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'script', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]}"
+        "    ). ",
+        fun(R) -> R =:= local_in_raw_text end
+    ).
+
+%% An *attribute* ?local on a raw-text element is fine (the attribute value is not
+%% raw-text content) -- only the content slot is markerless, so it still compiles.
+local_attr_in_raw_text_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_raw_attr). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'script', [{'data-k', arizona_template:local(<<\"k\">>, <<\"v\">>)}], "
+        "            [<<\"body\">>]}"
+        "    ). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(#{~"a" => #{~"data-k" => ~"k"}}, decode_local_descriptor(HTML)).
 
 %% ?local renders inside an ?each item. Keys are compile-time literals, so every
 %% item carries the SAME slot key (shared) -- this pins that `?local` works in a
