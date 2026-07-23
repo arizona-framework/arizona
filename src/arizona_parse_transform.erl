@@ -397,8 +397,8 @@ format_error(local_key_not_literal) ->
 format_error(local_in_nodiff) ->
     "?local cannot be used in an az-nodiff template -- the element has no "
     "diff target for the client to address";
-format_error(local_html_only) ->
-    "?local is only supported in ?html templates";
+format_error(local_unsupported) ->
+    "?local is not supported by this render target";
 format_error(local_key_reused) ->
     "a ?local key cannot bind both content and an attribute on the same element";
 format_error(local_attr_multiple) ->
@@ -1772,7 +1772,7 @@ maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
 assert_local_supported(Backend, State, Line) ->
     case Backend:supports_local() of
         true -> ok;
-        false -> parse_error(local_html_only, Line)
+        false -> parse_error(local_unsupported, Line)
     end,
     case State#state.nodiff of
         false -> ok;
