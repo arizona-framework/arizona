@@ -485,6 +485,11 @@ render_ssr_val(_Backend, #{t := ?EACH, source := Source, template := Tmpl}) when
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
 render_ssr_val(Backend, #{stateful := H, props := Props}) ->
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
+    %% Enforce restricted keys (e.g. `id`) at SSR too -- the live child-mount path
+    %% (arizona_eval:fresh_mount_stateful) already does, so a handler that rewrites
+    %% a restricted key must fail here rather than SSR cleanly and crash only at
+    %% WS connect.
+    ok = arizona_eval:check_restricted_keys(B1, Props, H),
     Snap = render_ssr_val(Backend, arizona_stateful:call_render(H, B1)),
     %% Mark the child as a view boundary (mirroring the live path's
     %% make_child_snap `view_id`) so a scope_slot pass over an enclosing

@@ -1008,7 +1008,12 @@ function forEachLocal(root, key, viewId, fn) {
             }
         }
     };
-    if (root instanceof Element && root.hasAttribute('az-local')) visit(root);
+    // `nodeType`, not `instanceof Element`: a popped-out (Document PiP) root
+    // lives in another realm with its own Element constructor, so `instanceof`
+    // is false cross-realm and would skip the root's own slot (a Document is
+    // nodeType 9, so it still skips the self-check). Mirrors `mountHooks`.
+    if (root.nodeType === 1 && /** @type {Element} */ (root).hasAttribute('az-local'))
+        visit(/** @type {Element} */ (root));
     root.querySelectorAll('[az-local]').forEach(visit);
 }
 

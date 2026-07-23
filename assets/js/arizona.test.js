@@ -2877,6 +2877,30 @@ describe('?local -- set/get content', () => {
         expect(span.querySelector('img')).toBeNull();
         expect(span.textContent).toBe('<img src=x onerror=alert(1)>');
     });
+
+    // Regression (D-low.3): when the view root ELEMENT itself carries the
+    // az-local slot (not a descendant), the self-visit must gate on nodeType,
+    // not `instanceof Element`. In a Document PiP window the root lives in
+    // another realm whose Element constructor differs, so `instanceof Element`
+    // (this realm's) is false and the root's own slot would be skipped. Simulate
+    // the realm mismatch by swapping globalThis.Element -- a real jsdom element
+    // then fails `instanceof` yet still reports nodeType 1. querySelectorAll only
+    // matches descendants, so the root's own slot is reachable only via the
+    // self-visit under test.
+    it('updates a ?local on the view root itself even when the root is cross-realm', () => {
+        document.body.innerHTML =
+            `<div id="v" az-view az="0" az-local='{"c":{"0":"title"}}'>` +
+            `<!--az:0-->old<!--/az--></div>`;
+        const RealElement = globalThis.Element;
+        // A distinct constructor so real DOM nodes are not instances of it.
+        globalThis.Element = class {};
+        try {
+            set('v', 'title', 'new');
+        } finally {
+            globalThis.Element = RealElement;
+        }
+        expect(document.getElementById('v').textContent).toBe('new');
+    });
 });
 
 describe('?local -- set/get attribute', () => {

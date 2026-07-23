@@ -45,6 +45,7 @@
     stateful_inside_stateless_ssr_matches_live/1,
     stateless_descriptor_from_conditional_live/1,
     stateful_descriptor_from_conditional_live/1,
+    ssr_stateful_child_rejects_restricted_id/1,
     render_to_iolist_nodiff_multi/1,
     render_to_iolist_nodiff_static/1,
     render_to_iolist_nodiff/1,
@@ -101,7 +102,8 @@ groups() ->
             each_in_stateless_distinct_containers,
             stateful_inside_stateless_ssr_matches_live,
             stateless_descriptor_from_conditional_live,
-            stateful_descriptor_from_conditional_live
+            stateful_descriptor_from_conditional_live,
+            ssr_stateful_child_rejects_restricted_id
         ]},
         {ssr, [parallel], [
             ssr_counter,
@@ -583,6 +585,23 @@ stateful_descriptor_from_conditional_live(Config) when is_list(Config) ->
     %% The stateful child keeps its own view-id boundary and spawns a child view.
     ?assertNotEqual(nomatch, binary:match(SSR, <<"az-view id=\"c1\"">>)),
     ?assert(maps:is_key(<<"c1">>, Views)).
+
+%% Regression: a `?stateful` child whose `mount/1` rewrites the framework-owned
+%% `id` binding must be rejected on the SSR path too, not only on the live path.
+%% The live render already crashes with `restricted_key_modified` (via
+%% `arizona_eval:fresh_mount_stateful`); before the fix the SSR path skipped the
+%% check, so a broken handler SSRed cleanly and only blew up at WS connect. Both
+%% paths must now fail the same way.
+ssr_stateful_child_rejects_restricted_id(Config) when is_list(Config) ->
+    Tmpl = arizona_restricted_id_child:host(),
+    %% Live path: already enforced (bare reason).
+    ?assertError(restricted_key_modified, arizona_render:render(Tmpl, #{})),
+    %% SSR path: must enforce it identically. The SSR walker wraps the raise with
+    %% source-location info for the dev error page, so the reason is `arizona_loc`.
+    ?assertError(
+        {arizona_loc, _, restricted_key_modified},
+        iolist_to_binary(arizona_render:render_to_iolist(Tmpl))
+    ).
 
 %% Regression: a repeated stateless whose body has an inline conditional, a
 %% client-owned `?local`, and a nested stateless grandchild. With no `?each`,
