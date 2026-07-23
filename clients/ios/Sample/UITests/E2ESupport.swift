@@ -57,11 +57,27 @@ extension XCTestCase {
         button.tap()
     }
 
-    /// Launch the sample app with the `-uitest` debug toolbar enabled.
-    func launchSample() -> XCUIApplication {
+    /// Launch the sample app with the `-uitest` debug toolbar enabled, and wait
+    /// until it has rendered its first server frame.
+    ///
+    /// Every case starts from the server-rendered menu, so the menu's first
+    /// button proves the whole chain is up: app launched, WebSocket connected,
+    /// mount frame applied. That cold start is a different budget from an
+    /// in-session round-trip -- it also pays the app launch, which a loaded CI
+    /// runner can stretch to tens of seconds -- so it gets its own, and the
+    /// per-assertion timeouts stay tight. Failing here names the launch rather
+    /// than blaming whichever assertion happened to come first.
+    func launchSample(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-uitest"]
         app.launch()
+        XCTAssertTrue(
+            app.buttons["Counter"].waitForExistence(timeout: 60),
+            "the app never rendered its first server frame -- is the test server on :4040?",
+            file: file, line: line)
         return app
     }
 }
