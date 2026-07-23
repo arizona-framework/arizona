@@ -65,6 +65,8 @@ never sanitized.
 -export([raw_text/1]).
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
+-export([target/0]).
+-export([supports_local/0]).
 -export([escape/1]).
 -export([render_attr/2]).
 
@@ -193,6 +195,10 @@ scope_static(_Fp, S0) ->
 %% The terminal client does not implement `?OP_LIST_PATCH`; single-root list eachs
 %% keep the wholesale re-render.
 supports_list_patch() -> false.
+
+target() -> terminal.
+
+supports_local() -> false.
 
 -doc """
 Sanitize a dynamic value's bytes for terminal output. Strips the C0 control bytes

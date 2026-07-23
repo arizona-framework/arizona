@@ -40,6 +40,8 @@ form valid JSON.
 -export([raw_text/1]).
 -export([scope_static/2]).
 -export([supports_list_patch/0]).
+-export([target/0]).
+-export([supports_local/0]).
 -export([escape/1]).
 -export([render_attr/2]).
 
@@ -132,6 +134,10 @@ scope_static(Fp, S0) ->
 %% The native (`?native`) client does not implement `?OP_LIST_PATCH`; single-root
 %% list eachs keep the wholesale re-render it already handles.
 supports_list_patch() -> false.
+
+target() -> native.
+
+supports_local() -> false.
 
 %% Native output is a JSON wire, not text with an in-band escape vocabulary --
 %% values are carried as JSON strings (encoded downstream), so nothing is escaped

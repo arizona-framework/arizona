@@ -1115,7 +1115,7 @@ local_in_native_error(Config) when is_list(Config) ->
         "    arizona_template:native("
         "        {'Text', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]}"
         "    ). ",
-        fun(R) -> R =:= local_html_only end
+        fun(R) -> R =:= local_unsupported end
     ).
 
 %% ?local renders inside an ?each item. Keys are compile-time literals, so every

@@ -118,7 +118,7 @@ render(Bindings) ->
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean(),
-    backend = arizona_html :: module()
+    backend = target_backend(html) :: module()
 }).
 
 %% --------------------------------------------------------------------
@@ -229,7 +229,7 @@ is_module_attr(_) -> false.
 %%      `?each` is rewritten to the internal `native_each`, and inside a
 %%      `?terminal(...)` to `terminal_each`, so the bottom-up transform compiles it
 %%      with the matching backend. `?each` under `?html` (or standalone) keeps the
-%%      `each` name (default `arizona_html` backend).
+%%      `each` name (default `html` target).
 %%   2. Reject inline cross-target nesting: any target macro literally inside a
 %%      different one (e.g. `?html(...)` in `?native(...)`) would mix incompatible
 %%      statics in one tree. Caught here as a compile error instead of corrupting
@@ -246,33 +246,18 @@ is_module_attr(_) -> false.
 %% only one literally nested in the other errors. Cross-target nesting via a
 %% `?stateful`/`?stateless` child *module* is invisible at this AST level and
 %% stays a documented "one target per tree" rule.
-mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, _}, Ctx) when
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, _}, Ctx) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (Ctx =:= native orelse Ctx =:= terminal)
+        (Target =:= html orelse Target =:= native orelse Target =:= terminal) andalso
+        (Ctx =:= html orelse Ctx =:= native orelse Ctx =:= terminal) andalso
+        Ctx =/= Target
 ->
     parse_error(cross_target_nesting, L);
-mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, _}, Ctx) when
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [Arg]}, _Ctx) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (Ctx =:= html orelse Ctx =:= terminal)
+        (Target =:= html orelse Target =:= native orelse Target =:= terminal)
 ->
-    parse_error(cross_target_nesting, L);
-mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal}}, _}, Ctx) when
-    (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (Ctx =:= html orelse Ctx =:= native)
-->
-    parse_error(cross_target_nesting, L);
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, html}}, [Arg]}, _Ctx) when
-    Mod =:= arizona_template orelse Mod =:= az
-->
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, html}}, [mark_targets(Arg, html)]};
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [Arg]}, _Ctx) when
-    Mod =:= arizona_template orelse Mod =:= az
-->
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native}}, [mark_targets(Arg, native)]};
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, terminal}}, [Arg]}, _Ctx) when
-    Mod =:= arizona_template orelse Mod =:= az
-->
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, terminal}}, [mark_targets(Arg, terminal)]};
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [mark_targets(Arg, Target)]};
 mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, native) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
@@ -288,7 +273,7 @@ mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, t
      || A <- unwrap_each_body(Args, terminal)
     ]};
 %% `?each` under `?html` (or standalone -- `none`) keeps the name `each` (the
-%% bottom-up transform compiles it with the default `arizona_html` backend), but
+%% bottom-up transform compiles it with the default `html` target), but
 %% we still unwrap an inline `?html(...)` callback body here. The guard lets any
 %% other (future) `Ctx` fall through to the generic tuple recursion below.
 mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, Ctx) when
@@ -412,8 +397,8 @@ format_error(local_key_not_literal) ->
 format_error(local_in_nodiff) ->
     "?local cannot be used in an az-nodiff template -- the element has no "
     "diff target for the client to address";
-format_error(local_html_only) ->
-    "?local is only supported in ?html templates";
+format_error(local_unsupported) ->
+    "?local is not supported by this render target";
 format_error(local_key_reused) ->
     "a ?local key cannot bind both content and an attribute on the same element";
 format_error(local_attr_multiple) ->
@@ -583,54 +568,26 @@ transform_expr(Expr, Module, Inline, FunDefs) ->
 transform_node(Node, Module, Inline, FunDefs) ->
     N = erl_syntax:revert(Node),
     case N of
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
-            Mod =:= arizona_template; Mod =:= az
+        %% `?html`/`?native`/`?terminal` all compile non-live here (LiveRender =
+        %% false). The live root is handled in transform_live_render_leaf/4; and
+        %% `?terminal` is *always* non-live -- no client root id / az_view is
+        %% injected (the transport repaints whole frames rather than addressing the
+        %% root node), so the live-render last-expr path also falls through to here.
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Arg]} when
+            (Mod =:= arizona_template orelse Mod =:= az) andalso
+                (Target =:= html orelse Target =:= native orelse Target =:= terminal)
         ->
-            compile_template(inline_vars(Arg, Inline), L, Module);
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
-            Mod =:= arizona_template; Mod =:= az
-        ->
-            compile_template(inline_vars(Arg, Inline), L, Module, false, arizona_native);
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal}}, [Arg]} when
-            Mod =:= arizona_template; Mod =:= az
-        ->
-            %% Terminal templates compile as non-live (no client root id / az_view
-            %% injection): the live process derives the view id from bindings, and
-            %% the terminal transport repaints whole frames rather than addressing
-            %% the root node. So the live-render last-expr path falls through to
-            %% here for `?terminal(...)`.
-            compile_template(inline_vars(Arg, Inline), L, Module, false, arizona_terminal);
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [FunArg, SourceArg]} when
-            Mod =:= arizona_template; Mod =:= az
+            compile_template(inline_vars(Arg, Inline), L, Module, false, target_backend(Target));
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, EachFn}}, [FunArg, SourceArg]} when
+            (Mod =:= arizona_template orelse Mod =:= az) andalso
+                (EachFn =:= each orelse EachFn =:= native_each orelse EachFn =:= terminal_each)
         ->
             compile_each(
                 inline_vars(FunArg, Inline),
                 inline_vars(SourceArg, Inline),
                 L,
                 Module,
-                arizona_html,
-                FunDefs
-            );
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native_each}}, [FunArg, SourceArg]} when
-            Mod =:= arizona_template; Mod =:= az
-        ->
-            compile_each(
-                inline_vars(FunArg, Inline),
-                inline_vars(SourceArg, Inline),
-                L,
-                Module,
-                arizona_native,
-                FunDefs
-            );
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, terminal_each}}, [FunArg, SourceArg]} when
-            Mod =:= arizona_template; Mod =:= az
-        ->
-            compile_each(
-                inline_vars(FunArg, Inline),
-                inline_vars(SourceArg, Inline),
-                L,
-                Module,
-                arizona_terminal,
+                target_backend(each_target(EachFn)),
                 FunDefs
             );
         %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
@@ -639,7 +596,7 @@ transform_node(Node, Module, Inline, FunDefs) ->
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, stateless}} = Callee, [
             {atom, AL, Name}, PropsArg
         ]} when
-            Mod =:= arizona_template; Mod =:= az
+            Mod =:= arizona_template orelse Mod =:= az
         ->
             FunRef = {'fun', AL, {function, Name, 1}},
             {call, L, Callee, [FunRef, PropsArg]};
@@ -673,18 +630,16 @@ transform_live_render_last(Expr, Module, Inline, FunDefs) ->
 
 transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
     case erl_syntax:revert(Expr) of
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, html}}, [Arg]} when
-            Mod =:= arizona_template; Mod =:= az
+        %% A live root is `?html` or `?native` (LiveRender = true, injecting the
+        %% client root id / az_view). `?terminal` is always non-live, so it is not
+        %% matched here and falls through to the non-live path (transform_node/4).
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Arg]} when
+            (Mod =:= arizona_template orelse Mod =:= az) andalso
+                (Target =:= html orelse Target =:= native)
         ->
             validate_live_root(Arg, L, Inline),
             Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
-            compile_template(inline_vars(Arg1, Inline), L, Module, true);
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, native}}, [Arg]} when
-            Mod =:= arizona_template; Mod =:= az
-        ->
-            validate_live_root(Arg, L, Inline),
-            Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
-            compile_template(inline_vars(Arg1, Inline), L, Module, true, arizona_native);
+            compile_template(inline_vars(Arg1, Inline), L, Module, true, target_backend(Target));
         _ ->
             transform_expr(Expr, Module, Inline, FunDefs)
     end.
@@ -1201,12 +1156,6 @@ count_var(V, [H | T], N) ->
 count_var(_V, _Other, N) ->
     N.
 
-compile_template(Arg, Line, Module) ->
-    compile_template(Arg, Line, Module, false).
-
-compile_template(Arg, Line, Module, LiveRender) ->
-    compile_template(Arg, Line, Module, LiveRender, arizona_html).
-
 compile_template(Arg, Line, Module, LiveRender, Backend) ->
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(Arg, Module, LiveRender, Backend),
     Opts = Opts0#{backend => Backend},
@@ -1265,9 +1214,9 @@ compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
             %% wrapper (so a single-root item keeps positional diffing, exactly as
             %% unwrap_each_body does for an inline fun), run mark_targets with this
             %% each's render-target context, then the bottom-up transform.
-            UnwrappedBody = unwrap_last_wrapper(Body, backend_template_fn(Backend)),
+            UnwrappedBody = unwrap_last_wrapper(Body, Backend:target()),
             Clause1 = {clause, CL, Vars, Guards, UnwrappedBody},
-            FunAST0 = mark_targets({'fun', L, {clauses, [Clause1]}}, backend_ctx(Backend)),
+            FunAST0 = mark_targets({'fun', L, {clauses, [Clause1]}}, Backend:target()),
             FunAST = transform_expr(FunAST0, Module, #{}, FunDefs),
             compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs);
         #{{Name, Arity} := [_ | _]} ->
@@ -1330,7 +1279,7 @@ each_body_unwrap(
 ) when
     Mod =:= arizona_template; Mod =:= az
 ->
-    Wrapper = backend_template_fn(Backend),
+    Wrapper = Backend:target(),
     case Fn of
         Wrapper -> {element, Inner};
         _ -> {element, Call}
@@ -1343,15 +1292,19 @@ each_body_unwrap({map, _, Fields} = Map, _Backend) ->
 each_body_unwrap(LastExpr, _Backend) ->
     {element, LastExpr}.
 
-backend_template_fn(arizona_html) -> html;
-backend_template_fn(arizona_native) -> native;
-backend_template_fn(arizona_terminal) -> terminal.
+%% The single registry mapping a render-target name (`html`/`native`/`terminal`,
+%% the `?html`/`?native`/`?terminal` macro atoms) to its renderer backend module.
+%% This is the ONLY place the parse transform names a concrete backend module;
+%% each backend's behaviour (`Backend:target/0`, `name/1`, `supports_local/0`, ...)
+%% covers everything else.
+target_backend(html) -> arizona_html;
+target_backend(native) -> arizona_native;
+target_backend(terminal) -> arizona_terminal.
 
-%% The mark_targets render-target context (`html`/`native`/`terminal`) for a backend
-%% module -- used when re-running the pre-pass over a resolved named-fun each clause.
-backend_ctx(arizona_html) -> html;
-backend_ctx(arizona_native) -> native;
-backend_ctx(arizona_terminal) -> terminal.
+%% The render target a `?each`/`?native_each`/`?terminal_each` macro compiles for.
+each_target(each) -> html;
+each_target(native_each) -> native;
+each_target(terminal_each) -> terminal.
 
 %% A compiled template map literal carries all three of the `s`/`d`/`f` assoc keys (from
 %% build_template_ast). A user map or a ?stateful/?stateless descriptor (a runtime call, not
@@ -1817,9 +1770,9 @@ maybe_inject_local_descriptor(Backend, Attrs, Children, Line, State) ->
     end.
 
 assert_local_supported(Backend, State, Line) ->
-    case Backend of
-        arizona_html -> ok;
-        _ -> parse_error(local_html_only, Line)
+    case Backend:supports_local() of
+        true -> ok;
+        false -> parse_error(local_unsupported, Line)
     end,
     case State#state.nodiff of
         false -> ok;
@@ -1877,7 +1830,7 @@ local_call({interp, LocalCall, _Prefix, _Suffix}) -> LocalCall.
 
 %% Collect each content `?local` keyed by its dynamic-text slot index -- the
 %% suffix the client needs to reconstruct the slot's comment-marker az (see
-%% arizona_html:text_az/2). The slot counter advances on every dynamic text
+%% the backend's `text_az/2`). The slot counter advances on every dynamic text
 %% child (the same classification compile_child/4 uses), so static text and
 %% nested elements don't consume a slot. No sole-child restriction: multiple
 %% content locals, and locals mixed with other children, each get their own
@@ -2539,7 +2492,7 @@ is_directive_attr(Attr) ->
     end.
 
 bare_attr_name({atom, _, Name}) ->
-    {ok, arizona_html:name(Name)};
+    {ok, directive_attr_name(Name)};
 bare_attr_name({bin, _, _} = Bin) ->
     case is_static_binary(Bin) of
         true -> {ok, extract_binary_value(Bin)};
@@ -2547,6 +2500,14 @@ bare_attr_name({bin, _, _} = Bin) ->
     end;
 bare_attr_name(_) ->
     error.
+
+%% Normalize a directive attribute atom to its canonical dashed binary
+%% (`az_nodiff` -> `<<"az-nodiff">>`) for framework directive matching. Deliberately
+%% NOT a render backend's `name/1`: `az-nodiff` and friends are framework directives
+%% that must match identically for every render target -- and directive pre-scan
+%% (`prescan_directives/1`) runs before any backend is resolved.
+directive_attr_name(Name) ->
+    binary:replace(atom_to_binary(Name), <<"_">>, <<"-">>, [global]).
 
 extract_directives(Attrs) ->
     extract_directives(Attrs, #{}).
