@@ -825,8 +825,11 @@ lives here independent of the server.
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{close, Code, Reason, Socket}`
 
-The `#socket{}` record carries only `pid, view_id, req` -- the post-mount state needed to
-dispatch events and navigate. The route adapter is recovered from `req` on demand.
+The `#socket{}` record carries `pid, view_id, handler, req, pending_flash` -- the post-mount
+state needed to dispatch events and navigate. `handler` is the current root handler (so a
+`patch` frame can tell same-handler in-place patch from a full navigate), and `pending_flash`
+holds a one-shot flash carried in-process across an SPA navigate/patch. The route adapter is
+recovered from `req` on demand.
 
 Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply/3` (build
 `#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `close_crash/1` (crash close tuple),
