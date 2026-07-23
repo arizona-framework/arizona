@@ -4525,6 +4525,21 @@ describe('executeJS -- JS_SCROLL_TO', () => {
         expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth' });
     });
 
+    it('keeps the smooth default when options omit behavior', () => {
+        document.body.innerHTML = '<div id="t"></div>';
+        executeJS(document.body, null, [13, '#t', { block: 'center' }]);
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({
+            behavior: 'smooth',
+            block: 'center',
+        });
+    });
+
+    it('keeps the smooth default for an empty options map', () => {
+        document.body.innerHTML = '<div id="t"></div>';
+        executeJS(document.body, null, [13, '#t', {}]);
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth' });
+    });
+
     it('no-ops when selector matches nothing', () => {
         executeJS(document.body, null, [13, '#missing']);
         expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();

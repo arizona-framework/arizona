@@ -1851,7 +1851,11 @@ function execOne(el, event, cmd) {
             });
             break;
         case JS_SCROLL_TO:
-            withQuery(cmd[1], (t) => t.scrollIntoView(cmd[2] || { behavior: 'smooth' }));
+            // Smooth is the default, and opts merge onto it rather than replacing
+            // it: passing only an alignment (`#{block => center}`) would otherwise
+            // fall back to scrollIntoView's own `behavior: 'auto'` and scroll
+            // instantly. An explicit `behavior` still wins.
+            withQuery(cmd[1], (t) => t.scrollIntoView({ behavior: 'smooth', ...cmd[2] }));
             break;
         case JS_SET_TITLE:
             document.title = cmd[1];

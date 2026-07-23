@@ -421,14 +421,18 @@ handler effect from `handle_event/3`.
     Selector :: binary().
 close_modal(Sel) -> {arizona_effect, [?EFFECT_CLOSE_MODAL, Sel]}.
 
--doc "Scrolls to the first element matching the selector.".
+-doc "Scrolls smoothly to the first element matching the selector.".
 -spec scroll_to(Selector) -> arizona_effect:cmd() when
     Selector :: binary().
 scroll_to(Sel) -> {arizona_effect, [?EFFECT_SCROLL_TO, Sel]}.
 
 -doc """
-Scrolls to the first element matching the selector with options
-(e.g. `behavior: smooth`).
+Scrolls to the first element matching the selector with `scrollIntoView`
+options (`behavior`, `block`, `inline`).
+
+`Opts` merges onto the `#{behavior => smooth}` default of `scroll_to/1`, so
+tuning only the alignment keeps the smooth scroll; pass `#{behavior => auto}`
+for an instant jump.
 """.
 -spec scroll_to(Selector, Opts) -> arizona_effect:cmd() when
     Selector :: binary(),
