@@ -394,7 +394,21 @@ to_bin({arizona_effect, _} = Cmd) ->
     arizona_effect:encode(Cmd);
 to_bin([{arizona_effect, _} | _] = Cmds) ->
     arizona_effect:encode(Cmds);
-to_bin(V) when is_list(V) -> iolist_to_binary(V);
+to_bin(V) when is_list(V) ->
+    %% A charlist/iodata is text: decode it as Unicode codepoints so the output is
+    %% valid UTF-8. `iolist_to_binary/1` truncates a 128..255 codepoint to an
+    %% invalid latin-1 byte (`"café"` -> `<<...,233>>` instead of `<<...,195,169>>`)
+    %% and crashes a codepoint > 255 with a bare `badarg`. A term that is not valid
+    %% chardata (e.g. a list wrapping a binary of non-UTF-8 bytes) yields the same
+    %% `bad_template_value` as any other unsupported value.
+    case unicode:characters_to_binary(V) of
+        Bin when is_binary(Bin) ->
+            Bin;
+        _ ->
+            erlang:error({bad_template_value, V}, [V], [
+                {error_info, #{module => ?MODULE}}
+            ])
+    end;
 to_bin(V) ->
     erlang:error({bad_template_value, V}, [V], [
         {error_info, #{module => ?MODULE}}

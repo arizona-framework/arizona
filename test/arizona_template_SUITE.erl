@@ -16,6 +16,7 @@
     to_bin_atom/1,
     to_bin_binary/1,
     to_bin_integer/1,
+    to_bin_charlist_encodes_utf8/1,
     get_missing_binding_raises_named_reason/1,
     format_error_missing_binding_renders_message/1,
     to_bin_bad_value_routes_through_format_error_2/1,
@@ -40,6 +41,7 @@ groups() ->
             to_bin_atom,
             to_bin_binary,
             to_bin_integer,
+            to_bin_charlist_encodes_utf8,
             get_missing_binding_raises_named_reason,
             format_error_missing_binding_renders_message,
             to_bin_bad_value_routes_through_format_error_2,
@@ -89,6 +91,16 @@ to_bin_integer(Config) when is_list(Config) ->
 
 to_bin_atom(Config) when is_list(Config) ->
     ?assertEqual(<<"true">>, arizona_template:to_bin(true)).
+
+%% A charlist is decoded as Unicode codepoints to valid UTF-8, not truncated to
+%% latin-1 bytes, and a codepoint > 255 no longer crashes with a bare badarg.
+to_bin_charlist_encodes_utf8(Config) when is_list(Config) ->
+    %% "café" as codepoints -> UTF-8 (é is <<195,169>>), not the latin-1 byte 233.
+    ?assertEqual(<<99, 97, 102, 195, 169>>, arizona_template:to_bin([99, 97, 102, 233])),
+    %% A codepoint > 255 (an emoji) encodes to UTF-8 instead of raising badarg.
+    ?assertEqual(<<240, 159, 152, 128>>, arizona_template:to_bin([128512])),
+    %% A plain ASCII iodata list still concatenates unchanged.
+    ?assertEqual(<<"abcd">>, arizona_template:to_bin([<<"a">>, $b, "cd"])).
 
 %% --- html/1 stub ---
 
