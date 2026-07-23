@@ -28,8 +28,8 @@
 | `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
 | `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `redirect`/`halted_redirect`                                                   |
 | `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner + built-in `extract/1`/`put_request/2`/`fetch_flash/2`/`fetch_session/2`/`check_origin/2` steps                   |
-| `src/arizona_origin.erl`                  | CSRF Origin check -- `check/2` (same-origin or `csrf_origins` allowlist; missing Origin allowed); behind the default-on `check_origin/2` middleware                                       |
-| `src/arizona_crypto.erl`                  | Signed/encrypted value primitives -- `sign/1,2`+`verify/1` (HMAC-SHA256) and `encrypt/1,2`+`decrypt/1` (AES-256-GCM), with optional `#{ttl}` expiry; keyed off `secret_key`               |
+| `src/arizona_origin.erl`                  | CSRF Origin check -- `check/3` (same-origin authority+scheme, or `csrf_origins` allowlist; missing Origin ok); default-on `check_origin/2` step                                           |
+| `src/arizona_crypto.erl`                  | Signed/encrypted value primitives -- `sign/2,3`+`verify/2` (HMAC-SHA256) and `encrypt/2,3`+`decrypt/2` (AES-256-GCM), domain-separated by `Purpose`, optional `#{ttl}`                    |
 | `src/arizona_flash.erl`                   | Signed, one-time flash cookie codec -- `encode/1`/`decode/1` (signed JSON + baked-in TTL), `resp_cookie/2`; HTTP full-page-redirect path (a live navigate carries flash in-process)       |
 | `src/arizona_session.erl`                 | Encrypted, durable session cookie codec -- `encode/1`/`decode/1` (AES-256-GCM via `arizona_crypto`, TTL = max-age), durable `resp_cookie/2`; a read does not consume                      |
 | `src/arizona_session_store.erl`           | Server-side session store behaviour -- `get/put/delete` (+ optional `child_spec/0`); opt-in via `session_store`, opaque signed-id cookie; mirrors `Plug.Session.Store`                    |
@@ -940,7 +940,9 @@ adapter's behaviour callbacks on first access and cached in the returned request
   re-emits the cookie only on a write
 
 The behaviour expects adapters to implement `parse_bindings/1`, `parse_params/1`,
-`parse_cookies/1`, `parse_headers/1`, `read_body/1` against their native request type.
+`parse_cookies/1`, `parse_headers/1`, `read_body/1`, `scheme/1` against their native request
+type. `scheme/1` reports the connection's own scheme (`https` only on TLS), which
+`check_origin/2` compares the `Origin` against after folding in `X-Forwarded-Proto`.
 
 ## API -- `arizona_middleware.erl`
 

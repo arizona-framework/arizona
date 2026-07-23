@@ -9,6 +9,7 @@
 -export([new_stores_adapter_method_and_path/1]).
 -export([new_accepts_prepopulated_fields/1]).
 -export([method_and_path_are_eager/1]).
+-export([scheme_comes_from_the_adapter/1]).
 -export([raw_returns_underlying/1]).
 -export([bindings_lazy_loads_and_caches/1]).
 -export([params_preserves_repeats/1]).
@@ -46,6 +47,7 @@ groups() ->
             new_stores_adapter_method_and_path,
             new_accepts_prepopulated_fields,
             method_and_path_are_eager,
+            scheme_comes_from_the_adapter,
             raw_returns_underlying,
             bindings_lazy_loads_and_caches,
             params_preserves_repeats,
@@ -122,6 +124,12 @@ method_and_path_are_eager(Config) when is_list(Config) ->
     %% Accessors return direct values, no threading.
     ?assertEqual(~"GET", arizona_req:method(Req)),
     ?assertEqual(~"/", arizona_req:path(Req)).
+
+scheme_comes_from_the_adapter(Config) when is_list(Config) ->
+    %% Eager like method/path, and answered by the adapter (the transport knows
+    %% whether the connection is TLS -- it is never read off a client header).
+    ?assertEqual(http, arizona_req:scheme(arizona_req_test_adapter:new(#{}))),
+    ?assertEqual(https, arizona_req:scheme(arizona_req_test_adapter:new(#{scheme => https}))).
 
 raw_returns_underlying(Config) when is_list(Config) ->
     Raw = #{marker => raw_value},

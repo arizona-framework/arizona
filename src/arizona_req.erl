@@ -15,6 +15,7 @@ A web-server adapter implements the mandatory parsing callbacks:
 - `parse_cookies/1` -- parse the Cookie header as a proplist
 - `parse_headers/1` -- headers as a map
 - `read_body/1` -- consume the request body
+- `scheme/1` -- the connection scheme (`http` | `https`)
 
 Plus one optional callback for live-capable transports:
 
@@ -52,6 +53,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([adapter/1]).
 -export([method/1]).
 -export([path/1]).
+-export([scheme/1]).
 -export([request_id/1]).
 -export([raw/1]).
 -export([set_raw/2]).
@@ -92,6 +94,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 
 -ignore_xref([method/1]).
 -ignore_xref([path/1]).
+-ignore_xref([scheme/1]).
 -ignore_xref([request_id/1]).
 -ignore_xref([set_raw/2]).
 -ignore_xref([bindings/1]).
@@ -129,6 +132,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([raw/0]).
 -export_type([method/0]).
 -export_type([path/0]).
+-export_type([scheme/0]).
 -export_type([bindings/0]).
 -export_type([params/0]).
 -export_type([cookies/0]).
@@ -178,6 +182,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -nominal raw() :: dynamic().
 -nominal method() :: binary().
 -nominal path() :: binary().
+-nominal scheme() :: http | https.
 -nominal bindings() :: #{binary() => dynamic()}.
 -nominal params() :: [{binary(), binary() | true}].
 -nominal cookies() :: [{binary(), binary()}].
@@ -233,6 +238,12 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -callback parse_headers(raw()) -> headers().
 -callback read_body(raw()) -> {body(), raw()}.
 
+%% The scheme of the connection the request arrived on -- `https` only when the
+%% transport itself is TLS. A TLS-terminating proxy in front reports `http` here
+%% (the hop the adapter sees); `arizona_middleware:check_origin/2` folds in the
+%% proxy's `X-Forwarded-Proto` before deciding.
+-callback scheme(raw()) -> scheme().
+
 %% Optional: live-capable adapters export this for SPA navigate.
 %% Returns `{ok, Handler, RouteOpts, NavRequest}` when the path resolves to a
 %% live (page) route, or `error` when it does not -- no matching route, a
@@ -284,6 +295,18 @@ method(#{method := Method}) -> Method.
 -doc "Returns the request path (no query string).".
 -spec path(request()) -> path().
 path(#{path := Path}) -> Path.
+
+-doc """
+Returns the scheme of the connection the request arrived on (`http` | `https`),
+straight from the adapter -- eager, nothing to thread.
+
+This is the transport's own view, so a deployment behind a TLS-terminating proxy
+reports `http` even though the browser spoke HTTPS. Callers that need the
+*client-facing* scheme (`arizona_middleware:check_origin/2`) fold in the proxy's
+`X-Forwarded-Proto` header on top of this.
+""".
+-spec scheme(request()) -> scheme().
+scheme(#{adapter := Adapter, raw := Raw}) -> Adapter:scheme(Raw).
 
 -doc """
 Returns the adapter-supplied request ID (e.g. roadrunner's 16-char

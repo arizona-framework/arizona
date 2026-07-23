@@ -2,17 +2,20 @@
 -moduledoc """
 Signed- and encrypted-value primitives over arbitrary binaries.
 
-**Signing (HMAC-SHA256)** -- `sign/1` wraps a binary into a tamper-evident,
-URL-safe wire value `b64(tagged) "." b64(hmac)`; `sign/2` additionally bakes a
-signed expiry (`#{ttl => Seconds}`) so the value rejects after a deadline.
-`verify/1` constant-time-checks the HMAC, enforces any expiry, and returns the
-original payload as `{ok, Payload}` (or `error` on a tampered, malformed, or
-expired value). Use when the value may be read by the client but must not be
-forged (e.g. `arizona_flash`).
+Every function takes a `Purpose` -- a caller-owned context label that binds the
+value to one consumer (see "Domain separation" below).
 
-**Encryption (AES-256-GCM)** -- `encrypt/1,2` wrap a binary into an authenticated,
+**Signing (HMAC-SHA256)** -- `sign/2` wraps a binary into a tamper-evident,
+URL-safe wire value `b64(tagged) "." b64(hmac)`; `sign/3` additionally bakes a
+signed expiry (`#{ttl => Seconds}`) so the value rejects after a deadline.
+`verify/2` constant-time-checks the HMAC, enforces any expiry, and returns the
+original payload as `{ok, Payload}` (or `error` on a tampered, malformed,
+expired, or wrong-purpose value). Use when the value may be read by the client
+but must not be forged (e.g. `arizona_flash`).
+
+**Encryption (AES-256-GCM)** -- `encrypt/2,3` wrap a binary into an authenticated,
 URL-safe ciphertext (confidential *and* tamper-evident, with the same optional
-`#{ttl => Seconds}` expiry); `decrypt/1` authenticates and returns `{ok, Payload}`
+`#{ttl => Seconds}` expiry); `decrypt/2` authenticates and returns `{ok, Payload}`
 or `error`. Use when the value must also be unreadable by the client (e.g.
 `arizona_session`).
 
@@ -21,6 +24,25 @@ The key is the `arizona` `secret_key` application env (a non-empty binary);
 domain-separated from the raw secret used for HMAC, so the two uses never share key
 material. This module owns no domain shape: callers layer their own encoding (e.g.
 both `arizona_flash` and `arizona_session` carry JSON).
+
+**Domain separation.** All consumers share one `secret_key`, so without a context
+label two logically distinct token types would be cryptographically interchangeable:
+a value minted by one consumer would verify for another, and the only thing standing
+between that and a privilege confusion is whatever the second consumer's payload
+parser happens to reject. `Purpose` closes that by construction -- it is mixed into
+the HMAC message (signing) and passed as the GCM additional authenticated data
+(encryption), so a value minted for `~"arizona.flash"` fails `verify/2` under
+`~"arizona.session_id"`. The label is never transmitted: it is context both sides
+already know, so it costs no wire bytes and cannot be attacker-selected. Pick a
+stable, namespaced literal per token type and never reuse one across shapes.
+
+**Key strength.** The secret is used as key material directly -- HMAC-SHA256 for
+signing, a sha256 derivation for the AES key -- and neither is a slow KDF, so an
+offline attacker with one captured cookie can test candidate secrets at hardware
+speed. Give `secret_key` a full 256 bits of randomness (`crypto:strong_rand_bytes(32)`,
+base64-encoded for a config file); a passphrase or a short string is not enough.
+`secret/0` logs a warning (once per distinct key) when the configured secret is
+under 32 bytes.
 
 **Key rotation.** `sign`/`encrypt` always use the primary `secret_key`, but
 `verify`/`decrypt` also accept any key listed in the optional `secret_key_previous`
@@ -35,12 +57,12 @@ try each candidate key in turn.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([sign/1]).
 -export([sign/2]).
--export([verify/1]).
--export([encrypt/1]).
+-export([sign/3]).
+-export([verify/2]).
 -export([encrypt/2]).
--export([decrypt/1]).
+-export([encrypt/3]).
+-export([decrypt/2]).
 -export([secret/0]).
 -export([format_error/2]).
 
@@ -50,12 +72,12 @@ try each candidate key in turn.
 
 %% Public primitive, exercised by arizona_flash (and future signed-token
 %% callers); no other internal callers by design.
--ignore_xref([sign/1]).
 -ignore_xref([sign/2]).
--ignore_xref([verify/1]).
--ignore_xref([encrypt/1]).
+-ignore_xref([sign/3]).
+-ignore_xref([verify/2]).
 -ignore_xref([encrypt/2]).
--ignore_xref([decrypt/1]).
+-ignore_xref([encrypt/3]).
+-ignore_xref([decrypt/2]).
 -ignore_xref([secret/0]).
 -ignore_xref([format_error/2]).
 
@@ -63,11 +85,16 @@ try each candidate key in turn.
 %% Types exports
 %% --------------------------------------------------------------------
 
+-export_type([purpose/0]).
 -export_type([sign_opts/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
+
+%% A stable, caller-owned context label naming the token type (e.g.
+%% `~"arizona.session_id"`). Authenticated but never transmitted.
+-nominal purpose() :: binary().
 
 -nominal sign_opts() :: #{ttl := non_neg_integer()}.
 
@@ -80,78 +107,99 @@ try each candidate key in turn.
 -define(IV_SIZE, 12).
 -define(TAG_SIZE, 16).
 
+%% The `secret_key` length below which `secret/0` warns: 32 bytes, matching the
+%% 256-bit strength of both primitives keyed off it.
+-define(MIN_SECRET_BYTES, 32).
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
 -doc """
-Signs `Payload` into the URL-safe `b64(tagged) "." b64(hmac)` wire value, never
-expiring. Errors if `secret_key` is unset (see `secret/0`).
+Signs `Payload` under `Purpose` into the URL-safe `b64(tagged) "." b64(hmac)` wire
+value, never expiring. Only `verify/2` under the same `Purpose` accepts it. Errors
+if `secret_key` is unset (see `secret/0`).
 """.
--spec sign(Payload) -> binary() when Payload :: binary().
-sign(Payload) when is_binary(Payload) ->
-    sign_envelope(<<?TAG_RAW, Payload/binary>>).
+-spec sign(Purpose, Payload) -> binary() when
+    Purpose :: purpose(),
+    Payload :: binary().
+sign(Purpose, Payload) when is_binary(Purpose), is_binary(Payload) ->
+    sign_envelope(Purpose, <<?TAG_RAW, Payload/binary>>).
 
 -doc """
-Like `sign/1` but bakes a signed expiry: `#{ttl => Seconds}` makes the value
+Like `sign/2` but bakes a signed expiry: `#{ttl => Seconds}` makes the value
 verify only until `Seconds` from now (inclusive). Errors if `secret_key` is unset.
 """.
--spec sign(Payload, Opts) -> binary() when
+-spec sign(Purpose, Payload, Opts) -> binary() when
+    Purpose :: purpose(),
     Payload :: binary(),
     Opts :: sign_opts().
-sign(Payload, #{ttl := Secs}) when is_binary(Payload), is_integer(Secs), Secs >= 0 ->
+sign(Purpose, Payload, #{ttl := Secs}) when
+    is_binary(Purpose), is_binary(Payload), is_integer(Secs), Secs >= 0
+->
     ExpiresAt = erlang:system_time(second) + Secs,
-    sign_envelope(<<?TAG_TTL, ExpiresAt:64, Payload/binary>>).
+    sign_envelope(Purpose, <<?TAG_TTL, ExpiresAt:64, Payload/binary>>).
 
 -doc """
-Verifies a signed value, returning `{ok, Payload}` when the HMAC matches and the
-value is unexpired, and `error` when it is malformed, tampered, or expired. The
-HMAC compare is constant-time. Errors if `secret_key` is unset.
+Verifies a value signed under `Purpose`, returning `{ok, Payload}` when the HMAC
+matches and the value is unexpired, and `error` when it is malformed, tampered,
+expired, or was signed under a different purpose. The HMAC compare is
+constant-time. Errors if `secret_key` is unset.
 """.
--spec verify(Signed) -> {ok, binary()} | error when
+-spec verify(Purpose, Signed) -> {ok, binary()} | error when
+    Purpose :: purpose(),
     Signed :: binary().
-verify(Signed) when is_binary(Signed) ->
-    do_verify(Signed, erlang:system_time(second)).
+verify(Purpose, Signed) when is_binary(Purpose), is_binary(Signed) ->
+    do_verify(Purpose, Signed, erlang:system_time(second)).
 
 -doc """
-Encrypts `Payload` into a URL-safe, authenticated (AES-256-GCM) wire value that
-never expires. The result is confidential (the client cannot read it) and
-tamper-evident. Errors if `secret_key` is unset (see `secret/0`).
+Encrypts `Payload` under `Purpose` into a URL-safe, authenticated (AES-256-GCM)
+wire value that never expires. The result is confidential (the client cannot read
+it) and tamper-evident. Errors if `secret_key` is unset (see `secret/0`).
 """.
--spec encrypt(Payload) -> binary() when Payload :: binary().
-encrypt(Payload) when is_binary(Payload) ->
-    encrypt_envelope(<<?TAG_RAW, Payload/binary>>).
+-spec encrypt(Purpose, Payload) -> binary() when
+    Purpose :: purpose(),
+    Payload :: binary().
+encrypt(Purpose, Payload) when is_binary(Purpose), is_binary(Payload) ->
+    encrypt_envelope(Purpose, <<?TAG_RAW, Payload/binary>>).
 
 -doc """
-Like `encrypt/1` but bakes an expiry (`#{ttl => Seconds}`) into the authenticated
-plaintext; `decrypt/1` rejects the value after the deadline. Errors if `secret_key`
+Like `encrypt/2` but bakes an expiry (`#{ttl => Seconds}`) into the authenticated
+plaintext; `decrypt/2` rejects the value after the deadline. Errors if `secret_key`
 is unset.
 """.
--spec encrypt(Payload, Opts) -> binary() when
+-spec encrypt(Purpose, Payload, Opts) -> binary() when
+    Purpose :: purpose(),
     Payload :: binary(),
     Opts :: sign_opts().
-encrypt(Payload, #{ttl := Secs}) when is_binary(Payload), is_integer(Secs), Secs >= 0 ->
+encrypt(Purpose, Payload, #{ttl := Secs}) when
+    is_binary(Purpose), is_binary(Payload), is_integer(Secs), Secs >= 0
+->
     ExpiresAt = erlang:system_time(second) + Secs,
-    encrypt_envelope(<<?TAG_TTL, ExpiresAt:64, Payload/binary>>).
+    encrypt_envelope(Purpose, <<?TAG_TTL, ExpiresAt:64, Payload/binary>>).
 
 -doc """
-Decrypts and authenticates a value produced by `encrypt/1,2`, returning
-`{ok, Payload}` when it is intact and unexpired, and `error` when it is malformed,
-tampered, or expired. Errors if `secret_key` is unset.
+Decrypts and authenticates a value produced by `encrypt/2,3` under the same
+`Purpose`, returning `{ok, Payload}` when it is intact and unexpired, and `error`
+when it is malformed, tampered, expired, or was encrypted under a different
+purpose. Errors if `secret_key` is unset.
 """.
--spec decrypt(Encrypted) -> {ok, binary()} | error when
+-spec decrypt(Purpose, Encrypted) -> {ok, binary()} | error when
+    Purpose :: purpose(),
     Encrypted :: binary().
-decrypt(Encrypted) when is_binary(Encrypted) ->
-    do_decrypt(Encrypted, erlang:system_time(second)).
+decrypt(Purpose, Encrypted) when is_binary(Purpose), is_binary(Encrypted) ->
+    do_decrypt(Purpose, Encrypted, erlang:system_time(second)).
 
 -doc """
 Returns the configured signing secret from the `arizona` `secret_key` application
-env, erroring if it is unset or empty.
+env, erroring if it is unset or empty and warning once if it is shorter than 32
+bytes (see "Key strength").
 """.
 -spec secret() -> binary().
 secret() ->
     case arizona_config:get_env(secret_key) of
         {ok, Secret} when is_binary(Secret), Secret =/= <<>> ->
+            ok = warn_weak_secret(Secret),
             Secret;
         _ ->
             erlang:error(secret_key_not_configured, [], [
@@ -183,22 +231,56 @@ format_error(secret_key_not_configured, _ST) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-sign_envelope(Tagged) ->
-    Sig = crypto:mac(hmac, sha256, secret(), Tagged),
+%% Warn when the configured secret is shorter than a full 256-bit key. Neither the
+%% HMAC nor the sha256-derived AES key is a slow KDF, so a short (usually
+%% human-chosen, thus low-entropy) secret is brute-forceable offline against a
+%% single captured cookie -- and every cookie the node ever issued falls with it.
+%% This warns rather than crashes: a hard minimum would lock out a running app the
+%% moment it upgrades, and the value is loud, actionable, and free either way.
+%% Warned once per distinct secret (the marker holds a hash of it, never the secret
+%% itself), so a rotation to another weak key is not swallowed by the first warning.
+warn_weak_secret(Secret) when byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+    ok;
+warn_weak_secret(Secret) ->
+    Digest = crypto:hash(sha256, Secret),
+    case persistent_term:get({?MODULE, weak_secret_warned}, undefined) of
+        Digest ->
+            ok;
+        _Other ->
+            persistent_term:put({?MODULE, weak_secret_warned}, Digest),
+            logger:warning(
+                "arizona `secret_key` is ~b bytes, under the ~b-byte minimum: "
+                "signing and encryption are only as strong as this key, and it is "
+                "used directly (no slow KDF), so a short or guessable value is "
+                "brute-forceable offline from one captured cookie. Set it to ~b "
+                "random bytes, e.g. crypto:strong_rand_bytes(~b).",
+                [byte_size(Secret), ?MIN_SECRET_BYTES, ?MIN_SECRET_BYTES, ?MIN_SECRET_BYTES]
+            )
+    end.
+
+sign_envelope(Purpose, Tagged) ->
+    Sig = crypto:mac(hmac, sha256, secret(), mac_message(Purpose, Tagged)),
     <<(b64(Tagged))/binary, ".", (b64(Sig))/binary>>.
 
-encrypt_envelope(Plaintext) ->
+encrypt_envelope(Purpose, Plaintext) ->
     IV = crypto:strong_rand_bytes(?IV_SIZE),
     {Cipher, Tag} = crypto:crypto_one_time_aead(
-        aes_256_gcm, aead_key(secret()), IV, Plaintext, <<>>, true
+        aes_256_gcm, aead_key(secret()), IV, Plaintext, Purpose, true
     ),
     b64(<<IV/binary, Tag/binary, Cipher/binary>>).
 
+%% The HMAC message: the purpose label length-prefixed ahead of the envelope, so
+%% the two halves cannot be shifted into each other (a purpose ending in the
+%% envelope's first bytes must not collide with a shorter one). The label is
+%% authenticated but not transmitted -- both sides supply it from context.
+mac_message(Purpose, Tagged) ->
+    <<(byte_size(Purpose)):32, Purpose/binary, Tagged/binary>>.
+
 %% The clock is injected so the expiry boundary is deterministically testable.
-do_decrypt(Encrypted, Now) ->
+do_decrypt(Purpose, Encrypted, Now) ->
     try
         <<IV:?IV_SIZE/binary, Tag:?TAG_SIZE/binary, Cipher/binary>> = unb64(Encrypted),
-        case decrypt_candidates(candidate_keys(), IV, Cipher, Tag) of
+        case decrypt_candidates(candidate_keys(), Purpose, IV, Cipher, Tag) of
             error -> error;
             Plaintext -> unwrap(Plaintext, Now)
         end
@@ -207,12 +289,13 @@ do_decrypt(Encrypted, Now) ->
     end.
 
 %% Try each candidate key (primary first, then rotated-out previous keys) until one
-%% authenticates the ciphertext; `error` when none do.
-decrypt_candidates([], _IV, _Cipher, _Tag) ->
+%% authenticates the ciphertext under `Purpose` (the GCM additional authenticated
+%% data); `error` when none do.
+decrypt_candidates([], _Purpose, _IV, _Cipher, _Tag) ->
     error;
-decrypt_candidates([Key | Rest], IV, Cipher, Tag) ->
-    case crypto:crypto_one_time_aead(aes_256_gcm, aead_key(Key), IV, Cipher, <<>>, Tag, false) of
-        error -> decrypt_candidates(Rest, IV, Cipher, Tag);
+decrypt_candidates([Key | Rest], Purpose, IV, Cipher, Tag) ->
+    case crypto:crypto_one_time_aead(aes_256_gcm, aead_key(Key), IV, Cipher, Purpose, Tag, false) of
+        error -> decrypt_candidates(Rest, Purpose, IV, Cipher, Tag);
         Plaintext when is_binary(Plaintext) -> Plaintext
     end.
 
@@ -230,12 +313,12 @@ candidate_keys() ->
     [secret() | arizona_config:get_env(secret_key_previous, [])].
 
 %% The clock is injected so the expiry boundary is deterministically testable.
-do_verify(Signed, Now) ->
+do_verify(Purpose, Signed, Now) ->
     try
         [B64Tagged, B64Sig] = binary:split(Signed, ~"."),
         Tagged = unb64(B64Tagged),
         Sig = unb64(B64Sig),
-        case verify_candidates(candidate_keys(), Tagged, Sig) of
+        case verify_candidates(candidate_keys(), mac_message(Purpose, Tagged), Sig) of
             true -> unwrap(Tagged, Now);
             false -> error
         end
@@ -245,12 +328,12 @@ do_verify(Signed, Now) ->
 
 %% Constant-time HMAC compare against each candidate key (primary first, then
 %% rotated-out previous keys); `true` when any matches.
-verify_candidates([], _Tagged, _Sig) ->
+verify_candidates([], _Message, _Sig) ->
     false;
-verify_candidates([Key | Rest], Tagged, Sig) ->
-    case crypto:hash_equals(Sig, crypto:mac(hmac, sha256, Key, Tagged)) of
+verify_candidates([Key | Rest], Message, Sig) ->
+    case crypto:hash_equals(Sig, crypto:mac(hmac, sha256, Key, Message)) of
         true -> true;
-        false -> verify_candidates(Rest, Tagged, Sig)
+        false -> verify_candidates(Rest, Message, Sig)
     end.
 
 unwrap(<<?TAG_RAW, Payload/binary>>, _Now) ->
@@ -273,30 +356,33 @@ unb64(Bin) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
+-define(EUNIT_SECRET, ~"eunit-secret-key-0123456789abcdef").
+-define(EUNIT_PURPOSE, ~"arizona.eunit").
+
 ttl_expiry_boundary_test() ->
-    application:set_env(arizona, secret_key, ~"eunit-secret-key"),
+    application:set_env(arizona, secret_key, ?EUNIT_SECRET),
     %% A signed envelope with a fixed absolute expiry, verified against an
     %% injected clock -- no wall-clock, no sleep.
-    Signed = sign_envelope(<<?TAG_TTL, 1000:64, "payload">>),
-    ?assertEqual({ok, ~"payload"}, do_verify(Signed, 999)),
-    ?assertEqual({ok, ~"payload"}, do_verify(Signed, 1000)),
-    ?assertEqual(error, do_verify(Signed, 1001)),
+    Signed = sign_envelope(?EUNIT_PURPOSE, <<?TAG_TTL, 1000:64, "payload">>),
+    ?assertEqual({ok, ~"payload"}, do_verify(?EUNIT_PURPOSE, Signed, 999)),
+    ?assertEqual({ok, ~"payload"}, do_verify(?EUNIT_PURPOSE, Signed, 1000)),
+    ?assertEqual(error, do_verify(?EUNIT_PURPOSE, Signed, 1001)),
     application:unset_env(arizona, secret_key).
 
 raw_ignores_clock_test() ->
-    application:set_env(arizona, secret_key, ~"eunit-secret-key"),
-    Signed = sign(~"payload"),
-    ?assertEqual({ok, ~"payload"}, do_verify(Signed, 1 bsl 40)),
+    application:set_env(arizona, secret_key, ?EUNIT_SECRET),
+    Signed = sign(?EUNIT_PURPOSE, ~"payload"),
+    ?assertEqual({ok, ~"payload"}, do_verify(?EUNIT_PURPOSE, Signed, 1 bsl 40)),
     application:unset_env(arizona, secret_key).
 
 encrypt_ttl_expiry_boundary_test() ->
-    application:set_env(arizona, secret_key, ~"eunit-secret-key"),
+    application:set_env(arizona, secret_key, ?EUNIT_SECRET),
     %% An encrypted envelope with a fixed absolute expiry, authenticated against an
     %% injected clock -- no wall-clock, no sleep.
-    Blob = encrypt_envelope(<<?TAG_TTL, 1000:64, "payload">>),
-    ?assertEqual({ok, ~"payload"}, do_decrypt(Blob, 999)),
-    ?assertEqual({ok, ~"payload"}, do_decrypt(Blob, 1000)),
-    ?assertEqual(error, do_decrypt(Blob, 1001)),
+    Blob = encrypt_envelope(?EUNIT_PURPOSE, <<?TAG_TTL, 1000:64, "payload">>),
+    ?assertEqual({ok, ~"payload"}, do_decrypt(?EUNIT_PURPOSE, Blob, 999)),
+    ?assertEqual({ok, ~"payload"}, do_decrypt(?EUNIT_PURPOSE, Blob, 1000)),
+    ?assertEqual(error, do_decrypt(?EUNIT_PURPOSE, Blob, 1001)),
     application:unset_env(arizona, secret_key).
 
 -endif.

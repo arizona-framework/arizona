@@ -20,11 +20,14 @@ to the follow-up navigate frame -- delivered exactly once, no cookie. Each navig
 kind thus arms exactly one mechanism: cookie for the full-page redirect, in-process
 carry for the live navigate.
 
-The cookie value is the flash JSON signed by `arizona_crypto:sign/2` with a
-`MAX_AGE`-second expiry baked into the signature (`b64(payload) "." b64(signature)`,
-URL-safe base64 without padding). `decode/1` returns `#{}` when the signature does
-not verify or has expired -- so a replayed cookie kept past its `Max-Age` is
-rejected, not just the browser's soft expiry.
+The cookie value is the flash JSON signed by `arizona_crypto:sign/3` under the
+`arizona.flash` purpose with a `MAX_AGE`-second expiry baked into the signature
+(`b64(payload) "." b64(signature)`, URL-safe base64 without padding). `decode/1`
+returns `#{}` when the signature does not verify or has expired -- so a replayed
+cookie kept past its `Max-Age` is rejected, not just the browser's soft expiry.
+The purpose label domain-separates the flash from every other consumer of the
+same `secret_key`: a session cookie replayed as a flash fails the HMAC outright
+rather than relying on the JSON parse to reject it.
 
 The `flash_secure` app env sets the `Secure` cookie flag (default `false`). **Set it to
 `true` in production** (HTTPS); it defaults `false` because a `Secure` cookie is silently
@@ -62,6 +65,9 @@ dropped over plain HTTP, breaking local dev. (Mirrors `session_secure`.)
 %% request, so the max-age is only a safety net if that request never arrives.
 -define(COOKIE, ~"az_flash").
 -define(MAX_AGE, 60).
+%% Crypto domain-separation label: binds a signed value to this consumer, so a
+%% token minted for another purpose under the same secret never verifies here.
+-define(PURPOSE, ~"arizona.flash").
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -74,7 +80,7 @@ cookie_name() ->
 
 -doc """
 Encodes a flash map into a signed cookie value with a baked-in `MAX_AGE`-second
-expiry (via `arizona_crypto:sign/2`), matching the cookie's own `Max-Age`. The
+expiry (via `arizona_crypto:sign/3`), matching the cookie's own `Max-Age`. The
 signed expiry is defense-in-depth: even a client that ignores `Max-Age` and replays
 a kept cookie past its lifetime gets `#{}` from `decode/1`. Errors if `secret_key`
 is unset.
@@ -82,7 +88,7 @@ is unset.
 -spec encode(Flash) -> binary() when
     Flash :: arizona_req:flash().
 encode(Flash) ->
-    arizona_crypto:sign(iolist_to_binary(json:encode(Flash)), #{ttl => ?MAX_AGE}).
+    arizona_crypto:sign(?PURPOSE, iolist_to_binary(json:encode(Flash)), #{ttl => ?MAX_AGE}).
 
 -doc """
 Decodes and verifies a cookie value into a flash map, returning `#{}` when the
@@ -91,12 +97,12 @@ signature does not match, has expired, or the value is malformed.
 -spec decode(Value) -> arizona_req:flash() when
     Value :: binary().
 decode(Value) ->
-    case arizona_crypto:verify(Value) of
+    case arizona_crypto:verify(?PURPOSE, Value) of
         {ok, Payload} ->
-            %% `verify` owns the tamper check; the remaining failure is a
-            %% verified-but-non-JSON payload (possible now that arizona_crypto
-            %% is shared -- another consumer could sign non-JSON under the same
-            %% secret), which `decode/1`'s total `#{}`-on-anything contract
+            %% `verify` owns the tamper and cross-purpose checks; the remaining
+            %% failure is a verified-but-non-JSON payload (this consumer's own
+            %% past encoding, or a hand-rolled value signed under the flash
+            %% purpose), which `decode/1`'s total `#{}`-on-anything contract
             %% must still swallow rather than crash on.
             try json:decode(Payload) of
                 Flash when is_map(Flash) -> Flash;

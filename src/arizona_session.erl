@@ -35,7 +35,8 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
   `arizona_session_store_ets`); the cookie then carries only a signed opaque id (`encode_id/1`,
   `decode_id/1`, `set_cookie_id/1`) and the map lives in the store, enabling revocation and
   large state. Unset (the default) keeps the encrypted cookie store. The mode switch is in
-  `arizona_req`.
+  `arizona_req`. The id is signed with the same `session_max_age` expiry the cookie and the
+  store entry carry, so expiry never rests on the store alone.
 """.
 
 %% --------------------------------------------------------------------
@@ -81,6 +82,12 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 %% server rejects an expired cookie even if the browser replays it.
 -define(COOKIE, ~"az_session").
 -define(DEFAULT_MAX_AGE, 604800).
+%% Crypto domain-separation labels. The cookie-store payload and the store-mode id
+%% are distinct token types over the same `secret_key`, so each names its own
+%% purpose: neither verifies as the other, nor as another consumer's value
+%% (`arizona_flash`).
+-define(PURPOSE, ~"arizona.session").
+-define(PURPOSE_ID, ~"arizona.session_id").
 %% Browsers cap a single cookie at ~4KB (name + value + attributes); an oversized
 %% `Set-Cookie` is silently dropped, losing the session with no error. Guard the
 %% encoded value against that so the failure is loud at write time instead.
@@ -106,7 +113,7 @@ silently drops.
     Session :: arizona_req:session().
 encode(Session) ->
     Payload = iolist_to_binary(json:encode(Session)),
-    Cookie = arizona_crypto:encrypt(Payload, #{ttl => max_age()}),
+    Cookie = arizona_crypto:encrypt(?PURPOSE, Payload, #{ttl => max_age()}),
     Limit = max_bytes(),
     case byte_size(Cookie) of
         Size when Size > Limit ->
@@ -124,12 +131,12 @@ the value is tampered, malformed, or its baked-in expiry has passed.
 -spec decode(Value) -> arizona_req:session() when
     Value :: binary().
 decode(Value) ->
-    case arizona_crypto:decrypt(Value) of
+    case arizona_crypto:decrypt(?PURPOSE, Value) of
         {ok, Payload} ->
-            %% `decrypt` owns the tamper check; the remaining failure is a
-            %% decrypted-but-non-JSON payload (possible now that arizona_crypto
-            %% is shared -- another consumer could encrypt non-JSON under the
-            %% same secret), which `decode/1`'s total `#{}`-on-anything contract
+            %% `decrypt` owns the tamper and cross-purpose checks; the remaining
+            %% failure is a decrypted-but-non-JSON payload (this consumer's own
+            %% past encoding, or a hand-rolled value encrypted under the session
+            %% purpose), which `decode/1`'s total `#{}`-on-anything contract
             %% must still swallow rather than crash on.
             try json:decode(Payload) of
                 Session when is_map(Session) -> Session;
@@ -192,15 +199,25 @@ max_age() ->
 new_id() ->
     binary:encode_hex(crypto:strong_rand_bytes(16), lowercase).
 
--doc "Signs a session id into the cookie value (the id is not secret, just unforgeable).".
+-doc """
+Signs a session id into the cookie value (the id is not secret, just unforgeable),
+with a `max_age/0` expiry baked into the signature. The store entry carries the
+same TTL, so the crypto expiry costs a live session nothing -- it is the backstop
+for the case where the store's own expiry does not fire (a custom backend that
+ignores its `TtlSecs`, a restored backup, a clock jump), which would otherwise let
+a captured cookie resolve to a live session forever.
+""".
 -spec encode_id(Id) -> binary() when Id :: binary().
 encode_id(Id) ->
-    arizona_crypto:sign(Id).
+    arizona_crypto:sign(?PURPOSE_ID, Id, #{ttl => max_age()}).
 
--doc "Recovers a session id from a cookie value, returning `error` if tampered or malformed.".
+-doc """
+Recovers a session id from a cookie value, returning `error` if tampered,
+malformed, expired, or signed under another purpose.
+""".
 -spec decode_id(Value) -> {ok, binary()} | error when Value :: binary().
 decode_id(Value) ->
-    arizona_crypto:verify(Value).
+    arizona_crypto:verify(?PURPOSE_ID, Value).
 
 -doc "The `Set-Cookie` tuple carrying the signed session `Id` (store mode).".
 -spec set_cookie_id(Id) -> {binary(), binary(), arizona_req:resp_cookie_opts()} when

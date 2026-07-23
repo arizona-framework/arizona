@@ -17,6 +17,9 @@
 -export([check_origin_conts_same_origin/1]).
 -export([check_origin_conts_missing_origin/1]).
 -export([check_origin_halts_cross_origin_with_403/1]).
+-export([check_origin_halts_http_origin_on_tls_connection/1]).
+-export([check_origin_halts_http_origin_behind_https_proxy/1]).
+-export([check_origin_conts_https_origin_behind_plain_proxy/1]).
 -export([fetch_session_reads_session_into_binding/1]).
 
 %% Exported for use via {?MODULE, Fun} in apply_middlewares_cont_mf.
@@ -41,6 +44,9 @@ groups() ->
             check_origin_conts_same_origin,
             check_origin_conts_missing_origin,
             check_origin_halts_cross_origin_with_403,
+            check_origin_halts_http_origin_on_tls_connection,
+            check_origin_halts_http_origin_behind_https_proxy,
+            check_origin_conts_https_origin_behind_plain_proxy,
             fetch_session_reads_session_into_binding
         ]}
     ].
@@ -160,6 +166,40 @@ check_origin_halts_cross_origin_with_403(Config) when is_list(Config) ->
     }),
     {halt, Req1} = arizona_middleware:check_origin(Req, #{}),
     ?assertEqual(403, arizona_req:resp_status(Req1)).
+
+check_origin_halts_http_origin_on_tls_connection(Config) when is_list(Config) ->
+    %% A TLS connection carrying an Origin from the plain-HTTP page of the same
+    %% authority: a cross-scheme post an active network attacker can mount without
+    %% a certificate. The authority matches, so only the scheme comparison stops it.
+    Req = arizona_req_test_adapter:new(#{
+        scheme => https,
+        headers => #{~"origin" => ~"http://app.example", ~"host" => ~"app.example"}
+    }),
+    {halt, Req1} = arizona_middleware:check_origin(Req, #{}),
+    ?assertEqual(403, arizona_req:resp_status(Req1)).
+
+check_origin_halts_http_origin_behind_https_proxy(Config) when is_list(Config) ->
+    %% The same attack behind a TLS-terminating proxy: the backend connection is
+    %% plain HTTP, so the client-facing scheme comes from the proxy's
+    %% X-Forwarded-Proto. The header can only upgrade the check, never relax it.
+    Req = arizona_req_test_adapter:new(#{
+        headers => #{
+            ~"origin" => ~"http://app.example",
+            ~"host" => ~"app.example",
+            ~"x-forwarded-proto" => ~"https, http"
+        }
+    }),
+    {halt, Req1} = arizona_middleware:check_origin(Req, #{}),
+    ?assertEqual(403, arizona_req:resp_status(Req1)).
+
+check_origin_conts_https_origin_behind_plain_proxy(Config) when is_list(Config) ->
+    %% A proxy that terminates TLS but forwards no X-Forwarded-Proto: the backend
+    %% sees plain HTTP while the browser reports https. That deployment must keep
+    %% working, so a plain-HTTP request accepts an https Origin.
+    Req = arizona_req_test_adapter:new(#{
+        headers => #{~"origin" => ~"https://app.example", ~"host" => ~"app.example"}
+    }),
+    ?assertMatch({cont, _Req1, #{}}, arizona_middleware:check_origin(Req, #{})).
 
 fetch_session_reads_session_into_binding(Config) when is_list(Config) ->
     application:set_env(arizona, secret_key, ~"test-secret-key-0123456789abcdef"),

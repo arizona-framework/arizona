@@ -194,6 +194,12 @@ clients, CLI tools, top-level GET navigations) continues.
 The router prepends this to `live` and `controller` routes by default; opt a route out
 with `check_origin => false`, or disable globally with the `check_origin` app env.
 
+The Origin is compared against the request's scheme as well as its `Host`, so an
+HTTPS request refuses a plain-`http` Origin. The scheme is the connection's own
+(`arizona_req:scheme/1`), upgraded to `https` when a proxy in front sets
+`X-Forwarded-Proto: https` -- an upgrade-only read, so the header cannot be forged
+into weakening the check.
+
 ```erlang
 #{middlewares => [{arizona_middleware, check_origin}]}
 ```
@@ -203,7 +209,7 @@ check_origin(Req0, Bindings) ->
     {Headers, Req} = arizona_req:headers(Req0),
     Origin = maps:get(~"origin", Headers, undefined),
     Host = maps:get(~"host", Headers, undefined),
-    case arizona_origin:check(Origin, Host) of
+    case arizona_origin:check(Origin, Host, client_scheme(Req, Headers)) of
         ok -> {cont, Req, Bindings};
         forbidden -> {halt, arizona_req:put_resp_status(Req, 403)}
     end.
@@ -211,6 +217,29 @@ check_origin(Req0, Bindings) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% The scheme the *browser* used, which is what an Origin must be compared against:
+%% TLS on this connection, or a proxy in front reporting the original request was
+%% HTTPS. Note the asymmetry -- this only ever upgrades http to https, so a forged
+%% `X-Forwarded-Proto` can tighten the Origin check (rejecting the forger's own
+%% request) but never loosen it, which is why the header needs no trusted-proxy
+%% configuration to be safe here.
+client_scheme(Req, Headers) ->
+    case arizona_req:scheme(Req) of
+        https -> https;
+        http -> forwarded_scheme(Headers)
+    end.
+
+%% `X-Forwarded-Proto` is a comma-separated chain when several proxies append to
+%% it; the client-facing hop is the first entry.
+forwarded_scheme(#{~"x-forwarded-proto" := Proto}) ->
+    [First | _] = binary:split(iolist_to_binary(Proto), ~","),
+    case string:equal(string:trim(First), ~"https", true) of
+        true -> https;
+        false -> http
+    end;
+forwarded_scheme(#{}) ->
+    http.
 
 call({Mod, Fun}, Req, Bindings) -> Mod:Fun(Req, Bindings);
 call(Fun, Req, Bindings) -> Fun(Req, Bindings).
