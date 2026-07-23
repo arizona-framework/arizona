@@ -12,6 +12,11 @@
       "groupName": "dev tools"
     },
     {
+      "description": "Node: only even majors get an LTS line; odd ones are Current-only and stop getting security fixes about six months in. This toolchain builds the published npm bundle, so it stays on LTS. Raise the bound when the next even major reaches Active LTS.",
+      "matchDatasources": ["node-version"],
+      "allowedVersions": "<25"
+    },
+    {
       "matchFileNames": ["rebar.config"],
       "groupName": "rebar.config deps"
     },
