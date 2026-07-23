@@ -103,10 +103,19 @@ render(Bindings) ->
 -nominal dynamic() :: erl_parse:abstract_form().
 -nominal az() :: non_neg_integer().
 
+%% One piece of a static under construction. Plain bytes are literal output;
+%% the two tagged forms are the framework's own `az` markers, held apart from
+%% the literal bytes so the fingerprint scoping can rebuild exactly those and
+%% never touch user-authored content that happens to look like a marker (a
+%% static text child is spliced verbatim -- it is the documented raw-HTML seam
+%% -- so ` az="` / `<!--az:` in a page *about* markup is ordinary content).
+-type segment() :: binary() | {az_attr, binary()} | {az_slot, binary()}.
+
 %% Compile state threaded through element/attribute/child compilation.
 -record(state, {
-    buf = <<>> :: binary(),
-    statics = [] :: [static()],
+    %% Segments of the static under construction, newest first.
+    buf = [] :: [segment()],
+    statics = [] :: [[segment()]],
     dynamics = [] :: [dynamic()],
     az = 0 :: az(),
     nodiff = false :: boolean(),
@@ -1409,10 +1418,9 @@ classify_other_body(AST) ->
         false -> text_dynamic
     end.
 
-compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, _Backend) ->
-    Bin = extract_binary_value(ExprAST),
-    Statics = [Bin],
-    {Statics, [], generate_fingerprint(Statics), #{}};
+compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, Backend) ->
+    Statics = [[extract_binary_value(ExprAST)]],
+    {Statics, [], fingerprint(Backend, Statics), #{}};
 compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend) ->
     compile_fragment_parts([ExprAST], Module, LiveRender, Backend);
 compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
@@ -1420,9 +1428,9 @@ compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
     compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend);
 compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend) ->
-    Statics = [<<>>, <<>>],
+    Statics = [[], []],
     DynASTs = [make_esc_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST), Backend)],
-    {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
+    {Statics, DynASTs, fingerprint(Backend, Statics), #{}}.
 
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
     Opts = prescan_directives(ElementASTs),
@@ -1443,7 +1451,7 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
         ElementASTs
     ),
     {Statics, DynASTs} = finalize(State1),
-    Fingerprint = generate_fingerprint(Statics),
+    Fingerprint = fingerprint(Backend, Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
 compile_mixed_items(Items, Module, Backend) ->
@@ -1453,7 +1461,7 @@ compile_mixed_items(Items, Module, Backend) ->
         fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
     ),
     {Statics, DynASTs} = finalize(State1),
-    Fingerprint = generate_fingerprint(Statics),
+    Fingerprint = fingerprint(Backend, Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
 compile_mixed_item(Item, Module, State) ->
@@ -1484,10 +1492,10 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     %% no marker of its own, could not be patched and stayed stale.
     Az = integer_to_binary(State0#state.az),
     State1 = State0#state{az = State0#state.az + 1},
-    State2 = buf_append(State1, Backend:text_slot_open(Az)),
+    State2 = buf_az_slot(State1, Az),
     DynAST = make_esc_text_dynamic_ast(Az, Item, Module, line(Item), Backend),
     State3 = flush(State2, DynAST),
-    State3#state{buf = Backend:text_slot_close()}.
+    State3#state{buf = [Backend:text_slot_close()]}.
 
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
     case is_list_ast(AttrsAST) of
@@ -1530,8 +1538,7 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             none ->
                 State3;
             N ->
-                AzBin = integer_to_binary(N),
-                buf_append(State3, Backend:az_attr(AzBin))
+                buf_az_attr(State3, integer_to_binary(N))
         end,
     State5 = compile_attrs(Attrs, ElemAz, State4, Line),
     case Backend:is_void(Tag) andalso Children =/= [] of
@@ -1949,10 +1956,10 @@ emit_child_dynamic(
 emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
     MarkerAz = Backend:text_az(ElemAzBin, Slot),
-    State1 = buf_append(State0, Backend:text_slot_open(MarkerAz)),
+    State1 = buf_az_slot(State0, MarkerAz),
     DynAST = make_esc_text_dynamic_ast(MarkerAz, Child, Module, line(Child), Backend),
     State2 = flush(State1, DynAST),
-    {State2#state{buf = Backend:text_slot_close()}, Slot + 1}.
+    {State2#state{buf = [Backend:text_slot_close()]}, Slot + 1}.
 
 make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),
@@ -2246,26 +2253,50 @@ loc_ast(Module, Line) ->
     {tuple, 0, [{atom, 0, Module}, {integer, 0, Line}]}.
 
 buf_append(State, Bin) ->
-    State#state{buf = <<(State#state.buf)/binary, Bin/binary>>}.
+    State#state{buf = [Bin | State#state.buf]}.
+
+%% Record the framework's own `az` markers as tagged segments rather than bytes,
+%% so scope_az/4 can rebuild them from the id alone.
+buf_az_attr(State, Az) ->
+    State#state{buf = [{az_attr, Az} | State#state.buf]}.
+
+buf_az_slot(State, Az) ->
+    State#state{buf = [{az_slot, Az} | State#state.buf]}.
 
 flush(State, DynAST) ->
     State#state{
-        statics = State#state.statics ++ [State#state.buf],
+        statics = State#state.statics ++ [lists:reverse(State#state.buf)],
         dynamics = State#state.dynamics ++ [DynAST],
-        buf = <<>>
+        buf = []
     }.
 
 finalize(State) ->
-    Statics = State#state.statics ++ [State#state.buf],
+    Statics = State#state.statics ++ [lists:reverse(State#state.buf)],
     Dynamics = State#state.dynamics,
     {Statics, Dynamics}.
 
+%% Render a static's segments to bytes, each `az` marker built from `Prefix`
+%% plus its id. `Prefix` is empty for the fingerprint pass (the fingerprint is
+%% taken over the unscoped bytes) and `<Fp>-` for the emitted statics.
+-spec render_static(module(), binary(), [segment()]) -> static().
+render_static(Backend, Prefix, Segments) ->
+    iolist_to_binary([render_segment(Backend, Prefix, Seg) || Seg <- Segments]).
+
+render_segment(_Backend, _Prefix, Bin) when is_binary(Bin) ->
+    Bin;
+render_segment(Backend, Prefix, {az_attr, Az}) ->
+    Backend:az_attr(<<Prefix/binary, Az/binary>>);
+render_segment(Backend, Prefix, {az_slot, Az}) ->
+    Backend:text_slot_open(<<Prefix/binary, Az/binary>>).
+
 %% Prefix az values with the template fingerprint to prevent collisions
-%% when stateless children are inlined in a parent template.
-scope_az(_Backend, _Fp, Statics, []) ->
-    {Statics, []};
+%% when stateless children are inlined in a parent template. The markers are
+%% re-emitted from the tagged segments, so only ids the framework itself
+%% allocated are prefixed -- literal bytes (a verbatim static text child, a
+%% user-written `az` attribute) are copied through untouched.
 scope_az(Backend, Fp, Statics, DynASTs) ->
-    {[Backend:scope_static(Fp, S) || S <- Statics], [
+    Prefix = <<Fp/binary, "-">>,
+    {[render_static(Backend, Prefix, S) || S <- Statics], [
         scope_dynamic_ast(Fp, D)
      || D <- DynASTs
     ]}.
@@ -2275,6 +2306,12 @@ scope_dynamic_ast(_Fp, {tuple, _, [{atom, _, undefined} | _]} = D) ->
 scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
     AzBin = extract_binary_value(AzAST),
     {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
+
+%% The fingerprint identifies the template's shape, so it is taken over the
+%% *unscoped* statics -- the bytes with each `az` marker rendered from its bare
+%% id, which is what the statics were before scoping became structural.
+fingerprint(Backend, Statics) ->
+    generate_fingerprint([render_static(Backend, <<>>, S) || S <- Statics]).
 
 %% The fingerprint keys the client's persistent (IndexedDB) statics cache, whose
 %% collision domain is every template version a browser has ever seen -- a collision

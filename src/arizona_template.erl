@@ -624,27 +624,33 @@ scope_snapshot(Prefix, #{s := S, d := D} = Snap) ->
 %% backend-independent and still applies.
 scoped_statics(undefined, _Prefix, _Snap, S) ->
     S;
-%% Prefixing a static list is a `binary:replace` per element -- pure and
-%% deterministic in (Prefix, statics). Memoize it per (Prefix, fingerprint) in
-%% the process dictionary: a re-render or diff of the same slot (and every level
-%% of a deep stateless nest, whose inner statics would otherwise be re-walked
-%% once per ancestor) reuses the cached result instead of re-scoping. The
-%% fingerprint identifies the statics (it is base-36 `phash2` of them), so
-%% {Prefix, F} keys the scoped output uniquely -- the same assumption the client
-%% statics cache already relies on. A snapshot without `f` (none carry one in
-%% practice) scopes directly.
+%% The fingerprint is both the memo key and the marker anchor. Anchor: the parse
+%% transform builds every marker from the id it allocated, so a framework `az` in
+%% a compiled static is always `<F>-<id>` -- matching the bare marker opener
+%% instead would rewrite user-authored bytes (a static text child is spliced
+%% verbatim, so a page showing markup carries ` az="` / `<!--az:` as content).
+%% After a scope pass the statics read `<Prefix>-<F>-<id>` and `f` becomes
+%% `<Prefix>-<F>`, so a re-scope of an already-scoped snapshot anchors correctly
+%% too. Memo: prefixing a static list is a `binary:replace` per element -- pure
+%% and deterministic in (Prefix, statics) -- so cache it per (Prefix, fingerprint)
+%% in the process dictionary; a re-render or diff of the same slot (and every
+%% level of a deep stateless nest, whose inner statics would otherwise be
+%% re-walked once per ancestor) reuses the cached result.
 scoped_statics(Backend, Prefix, #{f := F}, S) ->
     Key = {'$arizona_scoped_statics', Prefix, F},
     case erlang:get(Key) of
         undefined ->
-            Scoped = [Backend:scope_static(Prefix, X) || X <- S],
+            Scoped = [Backend:scope_static(F, Prefix, X) || X <- S],
             erlang:put(Key, Scoped),
             Scoped;
         Scoped ->
             Scoped
     end;
-scoped_statics(Backend, Prefix, #{}, S) ->
-    [Backend:scope_static(Prefix, X) || X <- S].
+%% No fingerprint means no anchor, so no marker can be told apart from content.
+%% Every template the parse transform emits carries one, so this is only reached
+%% by a hand-built snapshot -- which has no framework markers to scope either.
+scoped_statics(_Backend, _Prefix, #{}, S) ->
+    S.
 
 scope_fp(Prefix, #{f := F} = Snap) -> Snap#{f => <<Prefix/binary, "-", F/binary>>};
 scope_fp(_Prefix, Snap) -> Snap.

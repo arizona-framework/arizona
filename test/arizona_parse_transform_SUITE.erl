@@ -323,6 +323,10 @@
     cond_maybe_bare_element/1,
     cond_receive_bare_element/1
 ]).
+-export([scope_keeps_static_marker_text/1]).
+-export([scope_keeps_static_marker_text_in_each_item/1]).
+-export([scope_slot_keeps_static_marker_text/1]).
+-export([scope_repeated_stateless_keeps_static_marker_text/1]).
 
 all() ->
     [
@@ -342,7 +346,8 @@ all() ->
         {group, cross_target},
         {group, terminal},
         {group, az_macros},
-        {group, az_view}
+        {group, az_view},
+        {group, az_scoping}
     ].
 
 groups() ->
@@ -716,6 +721,13 @@ groups() ->
             az_view_no_html_in_render,
             az_view_static_id_raises,
             az_view_composed_id_raises
+        ]},
+        %% Fingerprint/slot `az` scoping vs. user-authored marker lookalikes
+        {az_scoping, [parallel], [
+            scope_keeps_static_marker_text,
+            scope_keeps_static_marker_text_in_each_item,
+            scope_slot_keeps_static_marker_text,
+            scope_repeated_stateless_keeps_static_marker_text
         ]}
     ].
 
@@ -6793,6 +6805,100 @@ guard_pattern_bound_from_tracked_case_ok(Config) when is_list(Config) ->
     ),
     {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{show => true}), #{}),
     ?assertEqual([#{show => true}], maps:get(deps, Snap)).
+
+%% ============================================================================
+%% az scoping vs. user-authored marker lookalikes
+%% ============================================================================
+
+%% Compile-time scoping. A static text child is spliced verbatim (the documented
+%% raw-HTML seam), so a page that *shows* markup carries ` az="` and `<!--az:`
+%% as ordinary content. Prefixing the fingerprint must rebuild only the markers
+%% the transform itself emitted and leave those bytes alone.
+scope_keeps_static_marker_text(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_scope_text). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        <<\"write az=\\\"1\\\" and <!--az:2--> to target\">>, "
+        "        arizona_template:get(v, Bindings)"
+        "    ]}). "
+    ),
+    Tmpl = Mod:render(#{v => ~"V"}),
+    Fp = maps:get(f, Tmpl),
+    [S1, _S2] = maps:get(s, Tmpl),
+    %% The user's bytes survive verbatim...
+    ?assertNotEqual(nomatch, binary:match(S1, ~"write az=\"1\" and <!--az:2--> to target")),
+    %% ...while the element `az` and the content-slot marker are still scoped.
+    ?assertNotEqual(nomatch, binary:match(S1, <<"<div az=\"", Fp/binary, "-0\">">>)),
+    ?assertNotEqual(nomatch, binary:match(S1, <<"<!--az:", Fp/binary, "-0-->">>)).
+
+%% The per-item template of an `?each` is compiled and scoped by the same path,
+%% so an item whose static text shows markup is preserved there too.
+scope_keeps_static_marker_text_in_each_item(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_scope_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], ["
+        "        arizona_template:each(fun(Item) -> "
+        "            {'li', [], [<<\"write az=\\\"1\\\" here \">>, Item]} "
+        "        end, arizona_template:get(items, Bindings))"
+        "    ]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{items => [~"a", ~"b"]})),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertEqual(2, length(binary:matches(HTMLBin, ~"write az=\"1\" here"))).
+
+%% Runtime scoping. A conditional branch compiles to a nested template whose
+%% statics are re-scoped by the enclosing slot `az` when the slot is evaluated.
+%% The branch's own marker gains the slot prefix; its static text does not.
+scope_slot_keeps_static_marker_text(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_scope_slot). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(flag, Bindings) of "
+        "            true -> {'p', [], [<<\"write az=\\\"9\\\" here \">>, "
+        "                               arizona_template:get(v, Bindings)]}; "
+        "            false -> <<>> "
+        "        end"
+        "    ]}). "
+    ),
+    {HTML, Snap} = arizona_render:render(Mod:render(#{flag => true, v => ~"V"})),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"write az=\"9\" here")),
+    %% The nested snapshot's fingerprint carries the slot prefix, and every
+    %% marker in its statics carries the same scoped fingerprint.
+    [{SlotAz, #{f := NestedFp}}] = maps:get(d, Snap),
+    ?assertEqual(<<SlotAz/binary, "-">>, binary:part(NestedFp, 0, byte_size(SlotAz) + 1)),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"<p az=\"", NestedFp/binary, "-0\">">>)),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"<!--az:", NestedFp/binary, "-0-->">>)).
+
+%% The same runtime pass namespaces a repeated stateless child: both instances
+%% keep their static text intact and still get distinct `az` targets (the whole
+%% point of the scoping).
+scope_repeated_stateless_keeps_static_marker_text(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_scope_stateless). "
+        "-export([render/1, row/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        arizona_template:stateless(fun row/1, #{n => arizona_template:get(a, Bindings)}), "
+        "        arizona_template:stateless(fun row/1, #{n => arizona_template:get(b, Bindings)})"
+        "    ]}). "
+        "row(Bindings) -> "
+        "    arizona_template:html({'span', [], [<<\"write az=\\\"9\\\" here \">>, "
+        "                                        arizona_template:get(n, Bindings)]}). "
+    ),
+    {HTML, Snap} = arizona_render:render(Mod:render(#{a => ~"A", b => ~"B"})),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertEqual(2, length(binary:matches(HTMLBin, ~"write az=\"9\" here"))),
+    [{_Az1, #{f := Fp1}}, {_Az2, #{f := Fp2}}] = maps:get(d, Snap),
+    ?assertNotEqual(Fp1, Fp2),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"<span az=\"", Fp1/binary, "-0\">">>)),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"<span az=\"", Fp2/binary, "-0\">">>)).
 
 %% Like compile_module/1 but compiles with warnings_as_errors, matching the
 %% project's real erl_opts. Needed because unused-variable / match_underscore_var
