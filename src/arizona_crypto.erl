@@ -36,6 +36,14 @@ the HMAC message (signing) and passed as the GCM additional authenticated data
 already know, so it costs no wire bytes and cannot be attacker-selected. Pick a
 stable, namespaced literal per token type and never reuse one across shapes.
 
+**Key strength.** The secret is used as key material directly -- HMAC-SHA256 for
+signing, a sha256 derivation for the AES key -- and neither is a slow KDF, so an
+offline attacker with one captured cookie can test candidate secrets at hardware
+speed. Give `secret_key` a full 256 bits of randomness (`crypto:strong_rand_bytes(32)`,
+base64-encoded for a config file); a passphrase or a short string is not enough.
+`secret/0` logs a warning (once per distinct key) when the configured secret is
+under 32 bytes.
+
 **Key rotation.** `sign`/`encrypt` always use the primary `secret_key`, but
 `verify`/`decrypt` also accept any key listed in the optional `secret_key_previous`
 application env (`[binary()]`, default `[]`). Rotate with zero downtime and no forced
@@ -98,6 +106,10 @@ try each candidate key in turn.
 %% AES-256-GCM nonce (96-bit, the standard GCM IV size) and authentication tag sizes.
 -define(IV_SIZE, 12).
 -define(TAG_SIZE, 16).
+
+%% The `secret_key` length below which `secret/0` warns: 32 bytes, matching the
+%% 256-bit strength of both primitives keyed off it.
+-define(MIN_SECRET_BYTES, 32).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -180,12 +192,14 @@ decrypt(Purpose, Encrypted) when is_binary(Purpose), is_binary(Encrypted) ->
 
 -doc """
 Returns the configured signing secret from the `arizona` `secret_key` application
-env, erroring if it is unset or empty.
+env, erroring if it is unset or empty and warning once if it is shorter than 32
+bytes (see "Key strength").
 """.
 -spec secret() -> binary().
 secret() ->
     case arizona_config:get_env(secret_key) of
         {ok, Secret} when is_binary(Secret), Secret =/= <<>> ->
+            ok = warn_weak_secret(Secret),
             Secret;
         _ ->
             erlang:error(secret_key_not_configured, [], [
@@ -216,6 +230,33 @@ format_error(secret_key_not_configured, _ST) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% Warn when the configured secret is shorter than a full 256-bit key. Neither the
+%% HMAC nor the sha256-derived AES key is a slow KDF, so a short (usually
+%% human-chosen, thus low-entropy) secret is brute-forceable offline against a
+%% single captured cookie -- and every cookie the node ever issued falls with it.
+%% This warns rather than crashes: a hard minimum would lock out a running app the
+%% moment it upgrades, and the value is loud, actionable, and free either way.
+%% Warned once per distinct secret (the marker holds a hash of it, never the secret
+%% itself), so a rotation to another weak key is not swallowed by the first warning.
+warn_weak_secret(Secret) when byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+    ok;
+warn_weak_secret(Secret) ->
+    Digest = crypto:hash(sha256, Secret),
+    case persistent_term:get({?MODULE, weak_secret_warned}, undefined) of
+        Digest ->
+            ok;
+        _Other ->
+            persistent_term:put({?MODULE, weak_secret_warned}, Digest),
+            logger:warning(
+                "arizona `secret_key` is ~b bytes, under the ~b-byte minimum: "
+                "signing and encryption are only as strong as this key, and it is "
+                "used directly (no slow KDF), so a short or guessable value is "
+                "brute-forceable offline from one captured cookie. Set it to ~b "
+                "random bytes, e.g. crypto:strong_rand_bytes(~b).",
+                [byte_size(Secret), ?MIN_SECRET_BYTES, ?MIN_SECRET_BYTES, ?MIN_SECRET_BYTES]
+            )
+    end.
 
 sign_envelope(Purpose, Tagged) ->
     Sig = crypto:mac(hmac, sha256, secret(), mac_message(Purpose, Tagged)),

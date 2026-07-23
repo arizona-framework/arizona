@@ -28,6 +28,8 @@
 -export([verify_rejects_fully_rotated_key/1]).
 -export([decrypt_rejects_fully_rotated_key/1]).
 -export([secret_returns_configured/1]).
+-export([secret_warns_once_when_short/1]).
+-export([secret_silent_when_long_enough/1]).
 -export([secret_errors_when_unset/1]).
 -export([sign_errors_when_secret_unset/1]).
 -export([encrypt_errors_when_secret_unset/1]).
@@ -63,6 +65,8 @@ all() ->
         verify_rejects_fully_rotated_key,
         decrypt_rejects_fully_rotated_key,
         secret_returns_configured,
+        secret_warns_once_when_short,
+        secret_silent_when_long_enough,
         secret_errors_when_unset,
         sign_errors_when_secret_unset,
         encrypt_errors_when_secret_unset,
@@ -242,6 +246,45 @@ decrypt_rejects_fully_rotated_key(Config) when is_list(Config) ->
 secret_returns_configured(Config) when is_list(Config) ->
     ?assertEqual(?SECRET, arizona_crypto:secret()).
 
+secret_warns_once_when_short(Config) when is_list(Config) ->
+    %% The secret is key material used directly (no slow KDF), so a short one is
+    %% brute-forceable offline from a single captured cookie. That must be loud --
+    %% but only once per distinct key, not on every sign.
+    HandlerId = arizona_crypto_suite_log_capture,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning,
+        config => #{pid => self()}
+    }),
+    %% A fresh key each run: the marker is keyed by the secret, so a key another
+    %% case already warned about would (correctly) stay quiet.
+    Weak = <<"short-", (binary:encode_hex(crypto:strong_rand_bytes(4)))/binary>>,
+    application:set_env(arizona, secret_key, Weak),
+    try
+        ?assertEqual(Weak, arizona_crypto:secret()),
+        ?assert(received_weak_secret_warning(1000)),
+        %% The same key again is silent -- one warning, not one per signed value.
+        ?assertEqual(Weak, arizona_crypto:secret()),
+        ?assertNot(received_weak_secret_warning(200))
+    after
+        ok = logger:remove_handler(HandlerId),
+        application:set_env(arizona, secret_key, ?SECRET)
+    end.
+
+secret_silent_when_long_enough(Config) when is_list(Config) ->
+    %% A full 32-byte key is the documented minimum, so it must not nag.
+    HandlerId = arizona_crypto_suite_log_capture,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning,
+        config => #{pid => self()}
+    }),
+    try
+        ?assertEqual(?SECRET, arizona_crypto:secret()),
+        ?assertEqual(32, byte_size(?SECRET)),
+        ?assertNot(received_weak_secret_warning(200))
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.
+
 secret_errors_when_unset(Config) when is_list(Config) ->
     application:unset_env(arizona, secret_key),
     try
@@ -269,6 +312,21 @@ encrypt_errors_when_secret_unset(Config) when is_list(Config) ->
 format_error_renders_secret_message(Config) when is_list(Config) ->
     #{general := Msg} = arizona_crypto:format_error(secret_key_not_configured, []),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Msg), ~"secret_key")).
+
+%% Drain forwarded log events until one is the weak-secret warning, else time out.
+%% Unrelated warnings from elsewhere in the node are skipped, not counted.
+received_weak_secret_warning(Timeout) ->
+    receive
+        {arizona_test_log_handler, #{msg := {Format, _Args}}} when is_list(Format) ->
+            case string:find(Format, "`secret_key` is") of
+                nomatch -> received_weak_secret_warning(Timeout);
+                _Found -> true
+            end;
+        {arizona_test_log_handler, _Event} ->
+            received_weak_secret_warning(Timeout)
+    after Timeout ->
+        false
+    end.
 
 %% Flip the first byte to a guaranteed-different value, keeping it in the
 %% URL-safe base64 alphabet so only the HMAC (not the decode) rejects it.
