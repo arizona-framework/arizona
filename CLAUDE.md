@@ -39,7 +39,7 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-tauri` | Tauri shell Rust tests (opt-in; compiles the shell; full UI run manually; **not** in `ci`) |
 | `make dev-tauri` | Run the reference Tauri shell in dev mode (devtools) against a running `make start`; opt-in, **not** in `ci` |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
-| `make cover-erl` | Erlang coverage (min 80%) |
+| `make cover-erl` | Erlang coverage (min 80% of the project total, not per module) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
 | `make doc-erl` | Erlang docs (ex_doc) |
 | `make setup-e2e` | Install E2E deps |
