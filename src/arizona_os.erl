@@ -8,8 +8,10 @@ capabilities the browser sandbox forbids -- window control, native
 notifications, screen-capture protection, and so on. Each builder returns an
 `t:arizona_effect:cmd/0` tuple `{arizona_effect, [OpCode | Args]}` -- the shared
 wire format every client-command module produces (op codes in
-`include/arizona_effect.hrl`), encoded by `arizona_effect:encode_json/1`. Use
-them as effects from `handle_event/3`/`handle_info/2` or as event props.
+`include/arizona_effect.hrl`), encoded by `arizona_effect:encode/1` (the same web
+path as `arizona_js`: HTML-attribute-safe in event props, raw JSON on the WS
+frame). Use them as effects from `handle_event/3`/`handle_info/2` or as event
+props.
 
 Unlike `arizona_js` (one typed op per browser action), shell capabilities are
 **shell-implemented and open-ended**: the engine is a pure pass-through and does
