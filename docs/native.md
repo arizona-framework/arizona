@@ -146,7 +146,7 @@ browser, so statics are sent once and never re-sent:
 Reference implementations live in-repo: `e2e/utils/native_client.js` (a JS client used
 by the `native` e2e project), `clients/android/` (the Kotlin/Compose Android client), and
 `clients/ios/` (the Swift/SwiftUI iOS client).
-Both are near-copies of the browser worker (`assets/js/arizona-worker.js` + `arizona-core.js`):
+All three are near-copies of the browser worker (`assets/js/arizona-worker.js` + `arizona-core.js`):
 
 1. **Cache statics by fingerprint** in platform storage (browser uses
    IndexedDB); send `["cached_fps", [...]]` on connect.
@@ -194,9 +194,6 @@ The `native` e2e exercises each example over the real socket: a counter
 (`/native/nested`), navigation (`/native/menu`), and reconnect-after-drop. The in-repo Android
 (`clients/android`) and iOS (`clients/ios`) samples are launchers that open `/native/menu` and
 navigate to each on a device or Simulator.
-
-An iOS/SwiftUI client would follow the same contract (e.g. `mob`'s SwiftUI renderer is a
-natural starting point — point it at an Arizona WebSocket instead of an on-device NIF).
 
 ## Effect commands
 

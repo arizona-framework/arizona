@@ -35,7 +35,7 @@
 | `src/arizona_session_store.erl`           | Server-side session store behaviour -- `get/put/delete` (+ optional `child_spec/0`); opt-in via `session_store`, opaque signed-id cookie; mirrors `Plug.Session.Store`                    |
 | `src/arizona_session_store_ets.erl`       | Default in-memory `arizona_session_store` -- a supervised public-ETS owner + periodic sweep + lazy expiry; `get/put/delete` run off the request process                                   |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
-| `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|redirect\|ok\|error, ...}` tuples                                               |
+| `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares, renders the view, returns `{halt\|ok\|error, ...}` tuples                                                         |
 | `src/arizona_controller.erl`              | Reply helpers for controller routes consumed by `arizona_js:fetch/2` -- `reply_effects/1` (the `{"e": [...]}` wire body), `reply_redirect/1` (a `navigate` effect)                        |
 | `src/arizona_static.erl`                  | Offline static-site generation -- `generate/2,3` renders route handlers to HTML files under an out-dir; returns `{Written, Failed}`                                                       |
 | `src/arizona_ws.erl`                      | Transport-agnostic WS upgrade bootstrap -- `prepare/3` parses framework keys, resolves the route, runs middlewares, returns state for `arizona_socket`                                    |
@@ -825,8 +825,11 @@ lives here independent of the server.
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{close, Code, Reason, Socket}`
 
-The `#socket{}` record carries only `pid, view_id, req` -- the post-mount state needed to
-dispatch events and navigate. The route adapter is recovered from `req` on demand.
+The `#socket{}` record carries `pid, view_id, handler, req, pending_flash` -- the post-mount
+state needed to dispatch events and navigate. `handler` is the current root handler (so a
+`patch` frame can tell same-handler in-place patch from a full navigate), and `pending_flash`
+holds a one-shot flash carried in-process across an SPA navigate/patch. The route adapter is
+recovered from `req` on demand.
 
 Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply/3` (build
 `#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `close_crash/1` (crash close tuple),
@@ -956,13 +959,16 @@ native request in an `arizona_req:request()`, runs any route middlewares, and ca
 `arizona_render:render_view_to_iolist/2`. The transport handler translates the returned result
 into its native reply shape.
 
-- `render/3(Handler, Req, Opts)` -- returns one of:
-  - `{halt, Raw}` -- middleware halted; the native raw req already has a response written
-  - `{redirect, redirect_status(), Location}` -- middleware halted via `arizona_req:redirect/2,3`
-  - `{ok, 200, iolist()}` -- rendered page body
-  - `{error, 500, iolist()}` -- rendered error page body (crash or stashed hot-reload error)
+- `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
+  transport can flush any middleware-stashed response headers/cookies):
+  - `{halt, Request}` -- middleware halted; the transport decodes the stashed redirect
+    (`arizona_req:halted_redirect/1`) or status off the request (or ships a 204/400 when the
+    middleware wrote its own reply)
+  - `{ok, resp_status(), iolist(), Request}` -- rendered page body; the status defaults to 200,
+    but a view or middleware may stash a non-200 (e.g. 401)
+  - `{error, 500, iolist(), Request}` -- rendered error page body (crash or stashed hot-reload error)
 
-`arizona_roadrunner_http` consumes this helper and maps the four result shapes into roadrunner's
+`arizona_roadrunner_http` consumes this helper and maps the three result shapes into roadrunner's
 reply tuple.
 
 ## API -- `arizona_ws.erl`
