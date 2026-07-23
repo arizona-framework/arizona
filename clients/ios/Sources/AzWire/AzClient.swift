@@ -56,7 +56,13 @@ public final class AzClient {
 
     private let makeTransport: (URL) -> WebSocketTransport
     private let runOnMain: (@escaping () -> Void) -> Void
+    private let runAfter: (Int, DispatchWorkItem) -> Void
     private var transport: WebSocketTransport?
+
+    // Bumped on every connect and on every accepted close, and captured by value
+    // in each socket's callbacks. A callback whose generation is stale belongs to
+    // a socket we have already retired, so it is dropped -- see `handleClose`.
+    private var generation = 0
 
     private var closing = false
     private var reconnectAttempt = 0
@@ -70,11 +76,17 @@ public final class AzClient {
     ///     Apple platforms; tests inject a mock.
     ///   - runOnMain: marshals transport callbacks onto the main thread. Tests
     ///     pass a synchronous closure.
+    ///   - runAfter: schedules the backoff-delayed reconnect. Tests capture the
+    ///     work item and run it by hand, so the reconnect path is exercised
+    ///     without waiting out a real backoff.
     public init(
         baseUrl: String,
         path: String,
         makeTransport: ((URL) -> WebSocketTransport)? = nil,
-        runOnMain: @escaping (@escaping () -> Void) -> Void = { DispatchQueue.main.async(execute: $0) }
+        runOnMain: @escaping (@escaping () -> Void) -> Void = { DispatchQueue.main.async(execute: $0) },
+        runAfter: @escaping (Int, DispatchWorkItem) -> Void = { ms, item in
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms), execute: item)
+        }
     ) {
         let scheme: String
         if let r = baseUrl.range(of: "http") {
@@ -85,6 +97,7 @@ public final class AzClient {
         self.wsBase = scheme + "/ws?_az_path="
         self.wsUrl = scheme + "/ws?_az_path=" + Self.encodeURIComponent(path) + "&_az_reconnect=1"
         self.runOnMain = runOnMain
+        self.runAfter = runAfter
         self.makeTransport = makeTransport ?? { url in
             #if canImport(Darwin)
             return URLSessionWebSocketTransport(url: url)
@@ -96,22 +109,28 @@ public final class AzClient {
 
     public func connect() {
         closing = false
+        stopHeartbeat()
+        reconnectItem?.cancel()
+        reconnectItem = nil
+        // Retire the previous socket *before* closing it, so its close
+        // notification lands on a stale generation and does not reconnect. It
+        // still has to be closed: an orphaned socket keeps its live process on
+        // the server and keeps pushing frames the UI would apply.
+        generation += 1
+        transport?.cancel()
+        let gen = generation
         status = .connecting
         guard let url = URL(string: wsUrl) else { preconditionFailure("bad ws url: \(wsUrl)") }
         let transport = makeTransport(url)
         self.transport = transport
         transport.onOpen = { [weak self] in
-            self?.runOnMain {
-                guard let self else { return }
-                self.transport?.send("[\"cached_fps\",[]]")
-                self.startHeartbeat()
-            }
+            self?.runOnMain { self?.handleOpen(gen) }
         }
         transport.onText = { [weak self] text in
-            self?.runOnMain { self?.handleText(text) }
+            self?.runOnMain { self?.handleFrame(text, gen) }
         }
         transport.onClose = { [weak self] code in
-            self?.runOnMain { self?.scheduleReconnect(code) }
+            self?.runOnMain { self?.handleClose(code, gen) }
         }
         transport.connect()
     }
@@ -120,12 +139,26 @@ public final class AzClient {
         closing = true
         stopHeartbeat()
         reconnectItem?.cancel()
+        reconnectItem = nil
         transport?.close(code: 1000)
     }
 
     /// Abruptly drop the socket (like a network failure) to exercise reconnect.
     public func forceDrop() {
         transport?.cancel()
+    }
+
+    // MARK: - Socket callbacks (generation-guarded)
+
+    private func handleOpen(_ gen: Int) {
+        guard gen == generation, let transport else { return }
+        transport.send("[\"cached_fps\",[]]")
+        startHeartbeat()
+    }
+
+    private func handleFrame(_ text: String, _ gen: Int) {
+        guard gen == generation else { return }
+        handleText(text)
     }
 
     /// Apply one received text frame. Synchronous and UI-agnostic (the unit of
@@ -309,7 +342,21 @@ public final class AzClient {
 
     // Flip to DISCONNECTED and, unless we closed on purpose or it was a normal
     // close (1000), reopen with backoff -- re-mounting via _az_reconnect=1.
-    private func scheduleReconnect(_ code: Int) {
+    //
+    // Exactly one close is honored per socket: accepting it bumps the generation,
+    // so any further notification carrying `gen` is dropped. A transport is free
+    // to report the same drop more than once -- `URLSessionWebSocketTask` reports
+    // it through both the failed `receive` and the delegate's `didCloseWith`, and
+    // the two can arrive seconds apart -- and the second report would otherwise
+    // open a *second* socket. Two sockets means two live processes: the later
+    // mount replaces the rendered tree from scratch, silently discarding the
+    // state the user just produced on the first one. The same guard drops a late
+    // close from a socket already superseded by `connect()`, which would
+    // otherwise flip a healthy connection to DISCONNECTED.
+    private func handleClose(_ code: Int, _ gen: Int) {
+        guard gen == generation else { return }
+        generation += 1
+        transport = nil
         stopHeartbeat()
         status = .disconnected
         onChange?()
@@ -321,7 +368,7 @@ public final class AzClient {
             self.connect()
         }
         reconnectItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay), execute: item)
+        runAfter(delay, item)
     }
 
     private func startHeartbeat() {
