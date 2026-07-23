@@ -51,6 +51,7 @@
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
     http_combines_duplicate_header_lines/1,
+    http_flushes_iodata_resp_header/1,
     http_exposes_roadrunner_request_id/1,
     drain_default_closes_ws_cleanly/1,
     drain_user_callback_pushes_effect_then_stops/1,
@@ -143,6 +144,7 @@ groups() ->
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
         http_combines_duplicate_header_lines,
+        http_flushes_iodata_resp_header,
         http_exposes_roadrunner_request_id,
         drain_default_closes_ws_cleanly,
         drain_user_callback_pushes_effect_then_stops,
@@ -347,6 +349,16 @@ init_per_group(roadrunner, Config) ->
                             Id -> <<"id=", Id/binary>>
                         end,
                     {cont, Req, B#{status => Status}}
+                end
+            ]
+        }},
+        %% Stashes a response header whose value is an iolist -- the type
+        %% `arizona_req:put_resp_header/3` advertises, but not what the wire
+        %% encoder accepts, so something on the way must flatten it.
+        {live, <<"/iodata_resp_header">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {cont, arizona_req:put_resp_header(Req, ~"x-io", [~"sess=", ~"abc"]), B}
                 end
             ]
         }},
@@ -1646,6 +1658,14 @@ http_reads_cookies_headers_body(Config) ->
     %% status binding projects into the rendered page: c=2 h=N b=0
     ?assertNotEqual(nomatch, binary:match(Resp, <<"c=2">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"b=0">>)).
+
+http_flushes_iodata_resp_header(Config) ->
+    %% `put_resp_header/3` takes iodata; the wire encoder takes binaries only
+    %% (a non-binary value is a 500). The flush is what closes the gap, for the
+    %% page render as much as for a controller reply.
+    Resp = http_get(Config, "/iodata_resp_header", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"x-io: sess=abc\r\n">>)).
 
 http_combines_duplicate_header_lines(Config) ->
     %% A field sent on several lines (a proxy chain appending X-Forwarded-For, a
