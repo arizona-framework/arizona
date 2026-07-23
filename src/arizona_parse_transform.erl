@@ -1418,7 +1418,7 @@ classify_other_body(AST) ->
         false -> text_dynamic
     end.
 
-compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, Backend) ->
+compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, _Backend) ->
     Statics = [[extract_binary_value(ExprAST)]],
     {Statics, [], fingerprint(Statics), #{}};
 compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend) ->
