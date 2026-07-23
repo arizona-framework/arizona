@@ -1418,9 +1418,9 @@ classify_other_body(AST) ->
         false -> text_dynamic
     end.
 
-compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, Backend) ->
+compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, _Backend) ->
     Statics = [[extract_binary_value(ExprAST)]],
-    {Statics, [], fingerprint(Backend, Statics), #{}};
+    {Statics, [], generate_fingerprint(Statics), #{}};
 compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend) ->
     compile_fragment_parts([ExprAST], Module, LiveRender, Backend);
 compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
@@ -1430,7 +1430,7 @@ compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
 compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend) ->
     Statics = [[], []],
     DynASTs = [make_esc_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST), Backend)],
-    {Statics, DynASTs, fingerprint(Backend, Statics), #{}}.
+    {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
     Opts = prescan_directives(ElementASTs),
@@ -1451,7 +1451,7 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
         ElementASTs
     ),
     {Statics, DynASTs} = finalize(State1),
-    Fingerprint = fingerprint(Backend, Statics),
+    Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
 compile_mixed_items(Items, Module, Backend) ->
@@ -1461,7 +1461,7 @@ compile_mixed_items(Items, Module, Backend) ->
         fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
     ),
     {Statics, DynASTs} = finalize(State1),
-    Fingerprint = fingerprint(Backend, Statics),
+    Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
 compile_mixed_item(Item, Module, State) ->
@@ -2307,18 +2307,21 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
     AzBin = extract_binary_value(AzAST),
     {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
 
-%% The fingerprint identifies the template's shape, so it is taken over the
-%% *unscoped* statics -- the bytes with each `az` marker rendered from its bare
-%% id, which is what the statics were before scoping became structural.
-fingerprint(Backend, Statics) ->
-    generate_fingerprint([render_static(Backend, <<>>, S) || S <- Statics]).
-
-%% The fingerprint keys the client's persistent (IndexedDB) statics cache, whose
-%% collision domain is every template version a browser has ever seen -- a collision
-%% silently renders another template's cached markup. `phash2/1` spans only 2^27, so a
-%% few thousand distinct templates already carry a real birthday-collision risk. Take
-%% the full 2^32 range (`phash2/2`) instead -- same fast native hash, ~32x fewer
-%% collisions, and `f` stays an opaque base-36 string so the wire format is unchanged.
+%% Hashes the template's shape over its `Statics` *segments* (`binary()` literals
+%% interleaved with `{az_attr, _}` / `{az_slot, _}` markers), not their rendered
+%% bytes. Segments distinguish a framework marker from literal bytes that merely
+%% look like one, so two templates differing only in that respect -- exactly the
+%% pair the scoping bug used to conflate -- get different fingerprints; hashing
+%% the rendered bytes would give a repaired template the same `f` as its
+%% corrupted predecessor, and since `f` keys the client's persistent (IndexedDB)
+%% statics cache, the repair would never reach a client holding the broken entry.
+%%
+%% That cache's collision domain is every template version a browser has ever
+%% seen, and a collision silently renders another template's markup. `phash2/1`
+%% spans only 2^27, so a few thousand distinct templates already carry a real
+%% birthday-collision risk; the full 2^32 range (`phash2/2`) is the same fast
+%% native hash with ~32x fewer collisions, and `f` stays an opaque base-36 string
+%% so the wire format is unchanged.
 generate_fingerprint(Statics) ->
     Hash = erlang:phash2(Statics, 1 bsl 32),
     integer_to_binary(Hash, 36).
