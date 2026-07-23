@@ -39,6 +39,18 @@ of the owner drops every session. For multi-node or restart-survival, provide an
 -export([handle_info/2]).
 
 %% --------------------------------------------------------------------
+%% Test-only exports
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+%% The guarded lazy-expiry drop is only reachable from `get/1`, which captures
+%% `Now` *before* its lookup. Its whole point is the window between those two, so
+%% pinning it needs a call with a stale `Now` -- something no public-API sequence
+%% can produce. Exported for `arizona_session_store_SUITE`.
+-export([drop_if_expired/2]).
+-endif.
+
+%% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
@@ -157,38 +169,3 @@ schedule_sweep(State) ->
 
 sweep_ms() ->
     arizona_config:get_env(session_store_sweep_ms, ?DEFAULT_SWEEP_MS).
-
-%% --------------------------------------------------------------------
-%% EUnit tests
-%% --------------------------------------------------------------------
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-%% The guarded lazy-expiry drop must not clobber a row a concurrent `put/3`
-%% refreshed between `get/1`'s lookup and the delete. Reproduced deterministically:
-%% a fresh row is present when the drop runs with the older (`get`-time) `Now`, so
-%% nothing is removed. An unconditional delete-by-key would drop the fresh row.
-drop_if_expired_spares_refreshed_row_test() ->
-    _ = ets:new(?TABLE, [named_table, public]),
-    try
-        Now = erlang:system_time(second),
-        true = ets:insert(?TABLE, {~"id", #{~"a" => 1}, Now + 3600}),
-        ok = drop_if_expired(~"id", Now),
-        ?assertMatch([{~"id", #{~"a" := 1}, _}], ets:lookup(?TABLE, ~"id"))
-    after
-        true = ets:delete(?TABLE)
-    end.
-
-drop_if_expired_removes_expired_row_test() ->
-    _ = ets:new(?TABLE, [named_table, public]),
-    try
-        Now = erlang:system_time(second),
-        true = ets:insert(?TABLE, {~"id", #{}, Now - 1}),
-        ok = drop_if_expired(~"id", Now),
-        ?assertEqual([], ets:lookup(?TABLE, ~"id"))
-    after
-        true = ets:delete(?TABLE)
-    end.
-
--endif.

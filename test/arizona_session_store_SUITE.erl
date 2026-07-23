@@ -10,6 +10,8 @@
 -export([ets_get_missing_is_no_session/1]).
 -export([ets_delete_removes/1]).
 -export([ets_get_lazy_expires/1]).
+-export([ets_expiry_drop_spares_refreshed_row/1]).
+-export([ets_expiry_drop_removes_still_expired_row/1]).
 -export([ets_sweep_reaps_expired/1]).
 -export([req_put_session_persists_to_store/1]).
 -export([req_session_id_available_after_write/1]).
@@ -36,6 +38,8 @@ all() ->
         ets_get_missing_is_no_session,
         ets_delete_removes,
         ets_get_lazy_expires,
+        ets_expiry_drop_spares_refreshed_row,
+        ets_expiry_drop_removes_still_expired_row,
         ets_sweep_reaps_expired,
         req_put_session_persists_to_store,
         req_session_id_available_after_write,
@@ -100,6 +104,24 @@ ets_get_lazy_expires(Config) when is_list(Config) ->
     true = ets:insert(arizona_session_store_ets, {~"expired", #{~"a" => 1}, Past}),
     ?assertEqual(no_session, arizona_session_store_ets:get(~"expired")),
     ?assertEqual([], ets:lookup(arizona_session_store_ets, ~"expired")).
+
+%% `get/1` captures `Now` before its lookup, so a `put/3` landing in between leaves
+%% a fresh row behind an already-taken expired branch. Calling the drop with that
+%% older `Now` reproduces the interleaving deterministically: the row is no longer
+%% expired, so nothing may be removed. An unconditional delete-by-key would drop
+%% the freshly written row and silently log the user out.
+ets_expiry_drop_spares_refreshed_row(Config) when is_list(Config) ->
+    Now = erlang:system_time(second),
+    ok = arizona_session_store_ets:put(~"refreshed", #{~"a" => 1}, 3600),
+    ok = arizona_session_store_ets:drop_if_expired(~"refreshed", Now),
+    ?assertEqual({ok, #{~"a" => 1}}, arizona_session_store_ets:get(~"refreshed")).
+
+%% The guard still drops a row that remains expired as of the captured `Now`.
+ets_expiry_drop_removes_still_expired_row(Config) when is_list(Config) ->
+    Past = erlang:system_time(second) - 1,
+    true = ets:insert(arizona_session_store_ets, {~"drop-me", #{}, Past}),
+    ok = arizona_session_store_ets:drop_if_expired(~"drop-me", erlang:system_time(second)),
+    ?assertEqual([], ets:lookup(arizona_session_store_ets, ~"drop-me")).
 
 ets_sweep_reaps_expired(Config) when is_list(Config) ->
     Past = erlang:system_time(second) - 1,
