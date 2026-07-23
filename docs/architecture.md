@@ -1344,6 +1344,25 @@ statics would otherwise be re-walked once per ancestor) reuses the cached scoped
 re-scoping. Only the first render of a given slot pays the walk; the fingerprint keys the statics
 the same way the client's statics cache does.
 
+### Scoping must not touch user content
+
+A static carries framework markers (`az="…"`, `<!--az:…-->`) *and* user bytes, and a static text
+child is spliced verbatim (the raw-HTML seam), so a page that shows markup carries those same
+sequences as ordinary content. Both scoping passes therefore discriminate rather than
+search-and-replace blindly:
+
+- **Compile time** (`scope_az/4`) is structural. The parse transform accumulates each static as a
+  list of segments, with the markers it emits held as tagged `{az_attr, Id}` / `{az_slot, Id}`
+  entries rather than bytes; scoping rebuilds exactly those through the backend's `az_attr/1` /
+  `text_slot_open/1` with the fingerprint prepended, and copies literal segments through untouched.
+  The fingerprint is still taken over the *unscoped* bytes, so it is unchanged by this.
+- **Runtime** (the `scope_static/3` renderer callback) has only bytes, so it anchors on the template's
+  own fingerprint: every framework `az` in a compiled static is `<Fp>-<id>`, so the backend matches
+  `az="<Fp>` / `<!--az:<Fp>` (HTML) or `"az":"<Fp>` (native), never the bare marker opener. After a
+  pass the statics read `<Prefix>-<Fp>-<id>` and `f` becomes `<Prefix>-<Fp>`, so re-scoping an
+  already-scoped snapshot anchors correctly too. The terminal backend writes no markers, so its
+  `scope_static/3` is the identity.
+
 ## Server integration
 
 The core engine (`arizona_template`, `arizona_render`, `arizona_diff`, `arizona_live`,

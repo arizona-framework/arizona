@@ -26,6 +26,7 @@
 -export([diff_stream_remove_op/1]).
 -export([diff_stream_move_op/1]).
 -export([diff_remove_node_op/1]).
+-export([scope_keeps_command_payload_az/1]).
 
 all() ->
     [
@@ -51,7 +52,8 @@ all() ->
         diff_stream_insert_op,
         diff_stream_remove_op,
         diff_stream_move_op,
-        diff_remove_node_op
+        diff_remove_node_op,
+        scope_keeps_command_payload_az
     ].
 
 %% --------------------------------------------------------------------
@@ -442,6 +444,28 @@ diff_remove_node_op(Config) when is_list(Config) ->
     {_, Snap0} = arizona_render:render(Mod:render(#{label => ~"Banner"})),
     {Ops, _} = arizona_diff:diff(Mod:render(#{label => remove}), Snap0),
     ?assertMatch([[?OP_REMOVE_NODE, _Az]], Ops).
+
+%% A folded effect command is spliced into the static as raw JSON, so a payload
+%% key named `az` puts a literal `"az":"` in the statics. Fingerprint scoping
+%% must rebuild only the node ids the transform allocated and leave the
+%% command's own JSON alone.
+scope_keeps_command_payload_az(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(nt_scope_cmd). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Button', [{on_tap, arizona_android:push_event(<<\"inc\">>, "
+        "                                     #{<<\"az\">> => <<\"7\">>})}], "
+        "              [arizona_template:get(v, Bindings)]}). "
+    ),
+    T = Mod:render(#{v => ~"V"}),
+    Fp = maps:get(f, T),
+    [S1, _S2] = maps:get(s, T),
+    %% The command's payload is untouched...
+    ?assertNotEqual(nomatch, binary:match(S1, ~"[0,\"inc\",{\"az\":\"7\"}]")),
+    %% ...while the widget's own `az` and its slot node id are scoped.
+    ?assertNotEqual(nomatch, binary:match(S1, <<"\"az\":\"", Fp/binary, "-0\"">>)),
+    ?assertNotEqual(nomatch, binary:match(S1, <<"\"az\":\"", Fp/binary, "-0t0\"">>)).
 
 %% --------------------------------------------------------------------
 %% Helpers

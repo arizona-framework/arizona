@@ -7,7 +7,7 @@ with ANSI escape codes, for views rendered into a terminal via `?terminal(...)`.
 Built for a transport that **repaints the whole frame** each update (see
 `arizona_live:render_current/1`) rather than applying diff ops, so unlike the
 HTML and native backends it writes **no `az`/slot markers** into the output --
-`az_attr/1`, `text_slot_open/1`, `text_slot_close/0` and `scope_static/2` are
+`az_attr/1`, `text_slot_open/1`, `text_slot_close/0` and `scope_static/3` are
 no-ops. (`text_az/2` still hands out distinct slot ids so the snapshot's
 `d`-list stays well-formed for the diff engine, whose ops the terminal
 transport ignores.)
@@ -63,7 +63,7 @@ never sanitized.
 -export([is_void/1]).
 -export([raw_text_kind/1]).
 -export([raw_text/1]).
--export([scope_static/2]).
+-export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
 -export([supports_local/0]).
@@ -187,8 +187,8 @@ raw_text_kind(_Tag) ->
     %% the raw-text corruption does not apply.
     none.
 
--spec scope_static(binary(), binary()) -> binary().
-scope_static(_Fp, S0) ->
+-spec scope_static(binary(), binary(), binary()) -> binary().
+scope_static(_Fp, _Prefix, S0) ->
     %% No az references live in terminal statics, so there is nothing to scope.
     S0.
 

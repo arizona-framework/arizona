@@ -94,10 +94,18 @@ does not use HTML comment markers.
 -callback raw_text_kind(Tag :: atom()) -> none | raw | escapable.
 
 -doc """
-Prefix a static's embedded `az` references with the fingerprint, so a child
-template inlined into a parent does not collide on `az` targets.
+Prefix a static's embedded `az` references with `Prefix`, so a child template
+inlined into a parent does not collide on `az` targets.
+
+`Fingerprint` is the fingerprint of the template the static belongs to, and it
+is the **anchor**: the parse transform builds every marker from the id it
+allocated, so a framework `az` in a compiled static is always `<Fingerprint>-…`.
+Match on `<marker-open><Fingerprint>`, never on the marker opener alone -- a
+static text child is spliced verbatim (the raw-HTML seam), so ` az="` and
+`<!--az:` also occur as ordinary user content in a page that shows markup.
 """.
--callback scope_static(Fingerprint :: binary(), Static :: binary()) -> binary().
+-callback scope_static(Fingerprint :: binary(), Prefix :: binary(), Static :: binary()) ->
+    binary().
 
 -doc """
 Whether this backend's client supports `?OP_LIST_PATCH` -- positional, per-item

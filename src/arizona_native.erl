@@ -38,7 +38,7 @@ form valid JSON.
 -export([is_void/1]).
 -export([raw_text_kind/1]).
 -export([raw_text/1]).
--export([scope_static/2]).
+-export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
 -export([supports_local/0]).
@@ -127,9 +127,15 @@ raw_text_kind(_Tag) ->
     %% not comment markers, so the raw-text corruption does not apply.
     none.
 
--spec scope_static(binary(), binary()) -> binary().
-scope_static(Fp, S0) ->
-    binary:replace(S0, <<"\"az\":\"">>, <<"\"az\":\"", Fp/binary, "-">>, [global]).
+%% Anchored on the fingerprint: every framework-emitted `az` in a compiled
+%% static is `<Fp>-<id>`, so `"az":"<Fp>` cannot be confused with a JSON `az`
+%% key the template itself carries (a user attribute literally named `az`, or
+%% an effect command whose payload has that key).
+-spec scope_static(binary(), binary(), binary()) -> binary().
+scope_static(Fp, Prefix, S0) ->
+    binary:replace(
+        S0, <<"\"az\":\"", Fp/binary>>, <<"\"az\":\"", Prefix/binary, "-", Fp/binary>>, [global]
+    ).
 
 %% The native (`?native`) client does not implement `?OP_LIST_PATCH`; single-root
 %% list eachs keep the wholesale re-render it already handles.

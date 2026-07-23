@@ -26,7 +26,7 @@ identical to the previous inlined emission.
 -export([text_slot_close/0]).
 -export([is_void/1]).
 -export([raw_text_kind/1]).
--export([scope_static/2]).
+-export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
 -export([supports_local/0]).
@@ -148,10 +148,21 @@ raw_text_kind(textarea) -> escapable;
 raw_text_kind(title) -> escapable;
 raw_text_kind(_) -> none.
 
--spec scope_static(binary(), binary()) -> binary().
-scope_static(Fp, S0) ->
-    S1 = binary:replace(S0, <<" az=\"">>, <<" az=\"", Fp/binary, "-">>, [global]),
-    binary:replace(S1, <<"<!--az:">>, <<"<!--az:", Fp/binary, "-">>, [global]).
+%% Every framework-emitted `az` in a compiled static is `<Fp>-<id>` (the parse
+%% transform builds the marker from the id, so the fingerprint is always the
+%% leading component), which makes the fingerprint the anchor that separates a
+%% real marker from user-authored bytes. Matching ` az="` / `<!--az:` alone
+%% would rewrite a static text child that merely *shows* markup -- static text
+%% is spliced verbatim (the raw-HTML seam), so a page about Arizona itself
+%% carries those sequences as ordinary content.
+-spec scope_static(binary(), binary(), binary()) -> binary().
+scope_static(Fp, Prefix, S0) ->
+    S1 = binary:replace(
+        S0, <<" az=\"", Fp/binary>>, <<" az=\"", Prefix/binary, "-", Fp/binary>>, [global]
+    ),
+    binary:replace(
+        S1, <<"<!--az:", Fp/binary>>, <<"<!--az:", Prefix/binary, "-", Fp/binary>>, [global]
+    ).
 
 %% The web client implements `?OP_LIST_PATCH` (positional single-root plain-list
 %% `?each` diffing), so single-root list items are flagged for it.
