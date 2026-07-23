@@ -54,9 +54,10 @@ const INIT_SCRIPT: &str = r#"
         case 'window_title': return w.setTitle(args[0]);
         case 'window_focus': return w.setFocus();
         case 'window_minimize': return w.minimize();
-        // Maximize, never toggle: the seam documents this capability as
-        // "maximizes", and a server may re-assert it, so it must be idempotent.
-        case 'window_maximize': return w.maximize();
+        // Maximize/restore by boolean arg, never toggle: the seam models this as
+        // a two-state window mode (like fullscreen), and a server may re-assert
+        // it, so each direction must be idempotent.
+        case 'window_maximize': return args[0] ? w.maximize() : w.unmaximize();
         case 'window_fullscreen': return w.setFullscreen(!!args[0]);
         case 'screen_capture_protection': return w.setContentProtected(!!args[0]);
         default: return Promise.resolve();

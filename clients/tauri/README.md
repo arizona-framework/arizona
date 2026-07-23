@@ -57,17 +57,18 @@ sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget file openssl \
    Point it elsewhere with `ARIZONA_URL=https://your-app.example.com make dev-tauri`.
 
 You should see: the window-control buttons appear once connected (capability
-negotiated); **Maximize** maximizes the window (a client-triggered OS command --
-idempotent, so restore it from the window manager, e.g. double-click the title
-bar); focusing / blurring the window updates the view (an inbound OS event), and
+negotiated); **Maximize** / **Restore** switch the window between maximized and
+normal (client-triggered OS commands -- idempotent each way, so re-asserting the
+current state on reconnect is a no-op); focusing / blurring the window updates
+the view (an inbound OS event), and
 the title is re-asserted on connect (a server-emitted OS command). The same app
 in a plain browser simply omits the buttons -- the commands are safe no-ops.
 
 > **Linux note:** `set_title` *does apply* (verify with
 > `getCurrentWindow().title()` in devtools), but some Linux window managers don't
 > repaint the visible CSD title bar -- a WM/wry cosmetic quirk, not a command
-> failure. Click `Maximize` for an unmistakable effect -- it applies once (restore
-> from the window manager, e.g. double-click the title bar, to see it again).
+> failure. Click `Maximize` then `Restore` for a repeatable unmistakable effect
+> (`arizona_os:maximize(true|false)`, a two-state window mode like fullscreen).
 > `screen_capture_protection` is advertised but is a **no-op on Linux** (it works
 > on Windows 10 2004+ / macOS only).
 

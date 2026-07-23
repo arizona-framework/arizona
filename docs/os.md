@@ -112,7 +112,7 @@ Typed sugars are the documented path; `command/2` is the unchecked escape hatch
 | `set_title/1` | `~"window_title"` |
 | `focus/0` | `~"window_focus"` |
 | `minimize/0` | `~"window_minimize"` |
-| `maximize/0` | `~"window_maximize"` |
+| `maximize/0,1` | `~"window_maximize"` |
 | `fullscreen/1` | `~"window_fullscreen"` |
 | `notify/1,2` | `~"notify"` |
 | `capture_protection/1` | `~"screen_capture_protection"` |

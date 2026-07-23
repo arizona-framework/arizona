@@ -64,8 +64,11 @@ render(Bindings) ->
                                 {az_click, arizona_os:set_title(~"Clicked title")}
                             ],
                             [~"Set title"]},
-                        {button, [{id, ~"maximize"}, {az_click, arizona_os:maximize()}], [
+                        {button, [{id, ~"maximize"}, {az_click, arizona_os:maximize(true)}], [
                             ~"Maximize"
+                        ]},
+                        {button, [{id, ~"restore"}, {az_click, arizona_os:maximize(false)}], [
+                            ~"Restore"
                         ]}
                     ]};
                 false ->

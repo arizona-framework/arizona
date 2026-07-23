@@ -514,7 +514,7 @@ handle_event(~"inc", _P, B) ->
 (Tauri/Electron/...), `arizona_os` builds OS-capability commands -- all through one generic op
 `?EFFECT_OS` carrying a capability **name** plus args (the shell owns the vocabulary; new
 capabilities are new names, not new op codes): `set_title/1`, `focus/0`, `minimize/0`,
-`maximize/0`, `fullscreen/1`, `notify/1,2`, `capture_protection/1`, `command/1,2`. Negotiated via
+`maximize/0,1`, `fullscreen/1`, `notify/1,2`, `capture_protection/1`, `command/1,2`. Negotiated via
 the `_az_caps` connect param and read server-side with `?capability(Name)`; a safe no-op in a
 plain browser. See [os.md](os.md).
 
