@@ -23,6 +23,7 @@
     debounce_accumulates/1,
     debounce_resets_timer/1,
     debounce_deduplicates/1,
+    debounce_flushes_stale_fire/1,
     callback_undefined/1,
     callback_receives_filtered/1,
     similarly_named_dir/1,
@@ -53,6 +54,7 @@ groups() ->
             debounce_accumulates,
             debounce_resets_timer,
             debounce_deduplicates,
+            debounce_flushes_stale_fire,
             callback_undefined,
             callback_receives_filtered,
             similarly_named_dir,
@@ -225,6 +227,39 @@ debounce_deduplicates(Config) when is_list(Config) ->
     after 500 -> ct:fail(no_callback)
     end.
 
+%% A debounce timer that fires while the watcher is busy leaves a `debounce_fire`
+%% queued *behind* a newly arriving file event. When the event is handled it
+%% arms a fresh timer, so the stale fire (if not flushed) makes the debounce
+%% trigger early -- before the new window elapses -- defeating coalescing.
+%% `sys:suspend/resume` forces exactly that mailbox ordering deterministically.
+debounce_flushes_stale_fire(Config) when is_list(Config) ->
+    W = proplists:get_value(watcher, Config),
+    Dir = proplists:get_value(tmp_dir, Config),
+    F1 = Dir ++ "/first.erl",
+    F2 = Dir ++ "/second.erl",
+    Debounce = 100,
+    %% Arm the debounce with a first event; `sys:suspend` returns only after the
+    %% event (queued ahead of the suspend system message) is handled, so the
+    %% timer is running by the time the watcher freezes.
+    send_fs_event(W, F1, [modified]),
+    ok = sys:suspend(W),
+    %% Queue a second event, then wait past the window so the first timer's
+    %% `debounce_fire` lands in the (frozen) mailbox behind it: [F2, fire].
+    send_fs_event(W, F2, [modified]),
+    timer:sleep(Debounce * 3),
+    ok = sys:resume(W),
+    %% Handling F2 re-arms the debounce; the stale fire must be flushed, so no
+    %% callback may run before the fresh window elapses.
+    receive
+        {cb, _} -> ct:fail(fired_early)
+    after Debounce div 2 -> ok
+    end,
+    %% It still fires exactly once, after the window, carrying both files.
+    receive
+        {cb, Files} -> ?assertEqual(lists:sort([F1, F2]), lists:sort(Files))
+    after 500 -> ct:fail(no_callback)
+    end.
+
 callback_undefined(Config) when is_list(Config) ->
     W = proplists:get_value(watcher, Config),
     Dir = proplists:get_value(tmp_dir, Config),
@@ -296,6 +331,8 @@ watcher_opts(debounce_accumulates) ->
 watcher_opts(debounce_resets_timer) ->
     Self = self(),
     #{callback => fun(_) -> Self ! {cb, erlang:monotonic_time(millisecond)} end, debounce => 100};
+watcher_opts(debounce_flushes_stale_fire) ->
+    #{debounce => 100};
 watcher_opts(stop_during_debounce) ->
     #{debounce => 500};
 watcher_opts(broadcast_on_debounce) ->

@@ -210,14 +210,17 @@ manual_compile([], []) ->
 manual_compile([], Errors) ->
     {error, #{errors => lists:reverse(Errors)}};
 manual_compile([File | Rest], Errors) ->
+    %% Only used to look up prior compile opts before the module name is known;
+    %% the reloaded module is whatever the compiler reports, not the basename (a
+    %% file whose `-module` differs from its filename otherwise `case_clause`es).
     Mod = list_to_atom(filename:basename(File, ".erl")),
     Opts = get_compile_opts(Mod),
     case compile:file(File, [binary, return_errors | Opts]) of
-        {ok, Mod, Binary} ->
-            reload_module(Mod, File, Binary),
+        {ok, ActualMod, Binary} ->
+            reload_module(ActualMod, File, Binary),
             manual_compile(Rest, Errors);
-        {ok, Mod, Binary, _Warnings} ->
-            reload_module(Mod, File, Binary),
+        {ok, ActualMod, Binary, _Warnings} ->
+            reload_module(ActualMod, File, Binary),
             manual_compile(Rest, Errors);
         {error, FileErrors, _Warnings} ->
             manual_compile(Rest, FileErrors ++ Errors)

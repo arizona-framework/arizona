@@ -260,8 +260,19 @@ restart_debounce(#state{debounce_timer = OldTimer, debounce_ms = Ms} = State) ->
 cancel_timer(undefined) ->
     ok;
 cancel_timer(Ref) ->
-    _ = erlang:cancel_timer(Ref),
-    ok.
+    case erlang:cancel_timer(Ref) of
+        false ->
+            %% The timer already fired: its `debounce_fire` is sitting in the
+            %% mailbox. Flush it so a stale fire can't trigger the debounce early
+            %% right after we arm a fresh timer, which would defeat coalescing
+            %% (and possibly recompile a half-written file).
+            receive
+                debounce_fire -> ok
+            after 0 -> ok
+            end;
+        _RemainingMs ->
+            ok
+    end.
 
 call_callback(undefined, _Files) -> ok;
 call_callback(Fun, Files) -> Fun(Files).

@@ -33,6 +33,7 @@
     get_error_default_undefined/1,
     clear_error_resets/1,
     compile_success_reloads_module/1,
+    compile_module_name_differs_from_basename/1,
     compile_error_stores_error/1,
     compile_error_cleared_on_success/1,
     non_erl_files_skip_compile/1,
@@ -65,6 +66,7 @@ groups() ->
             get_error_default_undefined,
             clear_error_resets,
             compile_success_reloads_module,
+            compile_module_name_differs_from_basename,
             compile_error_stores_error,
             compile_error_cleared_on_success,
             non_erl_files_skip_compile,
@@ -260,6 +262,18 @@ compile_success_reloads_module(Config) ->
     ?assertEqual(ok, arizona_reloader:compile([File])),
     ?assertEqual(2, erlang:apply(arizona_dev_ct_good, value, [])).
 
+%% A file whose `-module` differs from its filename compiles to the *declared*
+%% module name, not the basename. manual_compile/2 must bind and reload that
+%% actual module rather than pattern-matching the basename-derived atom (which
+%% `case_clause`es, crashing the reloader gen_server).
+compile_module_name_differs_from_basename(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    File = filename:join(Dir, "arizona_dev_ct_basename.erl"),
+    ok = file:write_file(File, mismatch_module_src()),
+    ?assertEqual(ok, arizona_reloader:compile([File])),
+    ?assertEqual(undefined, arizona_reloader:get_error()),
+    ?assertEqual(ok, erlang:apply(arizona_dev_ct_declared, check, [])).
+
 compile_error_stores_error(Config) ->
     Dir = proplists:get_value(tmp_dir, Config),
     File = filename:join(Dir, "arizona_dev_ct_bad.erl"),
@@ -388,6 +402,11 @@ bad_module_src2() ->
     "-module(arizona_dev_ct_bad2).\n"
     "-export([value/0]).\n"
     "value() -> {\n".
+
+mismatch_module_src() ->
+    "-module(arizona_dev_ct_declared).\n"
+    "-export([check/0]).\n"
+    "check() -> ok.\n".
 
 mixed_good_module_src() ->
     "-module(arizona_dev_ct_mixed).\n"
