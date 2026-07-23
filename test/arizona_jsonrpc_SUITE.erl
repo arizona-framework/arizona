@@ -13,6 +13,8 @@
     decode_invalid_wrong_version/1,
     decode_invalid_params_not_object/1,
     decode_invalid_batch_array/1,
+    decode_invalid_fractional_id/1,
+    decode_invalid_non_scalar_id/1,
     result_shape/1,
     error_shape/1
 ]).
@@ -29,6 +31,8 @@ all() ->
         decode_invalid_wrong_version,
         decode_invalid_params_not_object,
         decode_invalid_batch_array,
+        decode_invalid_fractional_id,
+        decode_invalid_non_scalar_id,
         result_shape,
         error_shape
     ].
@@ -101,6 +105,40 @@ decode_invalid_batch_array(_Config) ->
     [{"jsonrpc":"2.0","id":1,"method":"ping"}]
     """,
     ?assertEqual({error, invalid_request}, arizona_jsonrpc:decode(Body)).
+
+decode_invalid_fractional_id(_Config) ->
+    %% MCP request ids are string-or-integer, so a fractional id is invalid --
+    %% and must be reported as such rather than silently read as a notification
+    %% (which answers 202 with no body, hanging the client that sent it).
+    Fractional =
+        ~"""
+    {"jsonrpc":"2.0","id":2.5,"method":"ping"}
+    """,
+    ?assertEqual({error, invalid_request}, arizona_jsonrpc:decode(Fractional)),
+    %% Exponent notation decodes to a float too, so it is invalid the same way.
+    Exponent =
+        ~"""
+    {"jsonrpc":"2.0","id":1e2,"method":"ping"}
+    """,
+    ?assertEqual({error, invalid_request}, arizona_jsonrpc:decode(Exponent)).
+
+decode_invalid_non_scalar_id(_Config) ->
+    %% Neither is a boolean, an array, nor an object a request id.
+    Boolean =
+        ~"""
+    {"jsonrpc":"2.0","id":true,"method":"ping"}
+    """,
+    ?assertEqual({error, invalid_request}, arizona_jsonrpc:decode(Boolean)),
+    Array =
+        ~"""
+    {"jsonrpc":"2.0","id":[1],"method":"ping"}
+    """,
+    ?assertEqual({error, invalid_request}, arizona_jsonrpc:decode(Array)),
+    Object =
+        ~"""
+    {"jsonrpc":"2.0","id":{"n":1},"method":"ping"}
+    """,
+    ?assertEqual({error, invalid_request}, arizona_jsonrpc:decode(Object)).
 
 result_shape(_Config) ->
     ?assertEqual(

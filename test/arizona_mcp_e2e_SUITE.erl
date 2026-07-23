@@ -9,6 +9,7 @@
     post_tools_call/1,
     post_streaming_progress/1,
     post_progress_without_accept_buffered/1,
+    post_fractional_id_invalid_request/1,
     stateless_disconnect_kills_worker/1,
     post_tools_list_paginates/1,
     post_resources_read/1,
@@ -52,6 +53,7 @@ all() ->
         post_tools_call,
         post_streaming_progress,
         post_progress_without_accept_buffered,
+        post_fractional_id_invalid_request,
         stateless_disconnect_kills_worker,
         post_tools_list_paginates,
         post_resources_read,
@@ -219,6 +221,18 @@ post_progress_without_accept_buffered(Config) ->
         #{~"content" => [#{~"type" => ~"text", ~"text" => ~"done"}], ~"isError" => false},
         Result
     ).
+
+post_fractional_id_invalid_request(Config) ->
+    %% A fractional id is not an MCP request id. The client still expects an
+    %% answer to its POST, so it gets a -32600 -- never a bodyless 202, which
+    %% would leave it waiting for a response that never comes.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":2.5,"method":"ping"}
+    """,
+    Resp = post(Config, "/mcp", [], Body),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"error" := #{~"code" := -32600}}, body_json(Resp)).
 
 stateless_disconnect_kills_worker(Config) ->
     %% A stateless streaming tool that blocks; dropping the connection kills its
