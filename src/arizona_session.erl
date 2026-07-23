@@ -35,7 +35,8 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
   `arizona_session_store_ets`); the cookie then carries only a signed opaque id (`encode_id/1`,
   `decode_id/1`, `set_cookie_id/1`) and the map lives in the store, enabling revocation and
   large state. Unset (the default) keeps the encrypted cookie store. The mode switch is in
-  `arizona_req`.
+  `arizona_req`. The id is signed with the same `session_max_age` expiry the cookie and the
+  store entry carry, so expiry never rests on the store alone.
 """.
 
 %% --------------------------------------------------------------------
@@ -198,14 +199,21 @@ max_age() ->
 new_id() ->
     binary:encode_hex(crypto:strong_rand_bytes(16), lowercase).
 
--doc "Signs a session id into the cookie value (the id is not secret, just unforgeable).".
+-doc """
+Signs a session id into the cookie value (the id is not secret, just unforgeable),
+with a `max_age/0` expiry baked into the signature. The store entry carries the
+same TTL, so the crypto expiry costs a live session nothing -- it is the backstop
+for the case where the store's own expiry does not fire (a custom backend that
+ignores its `TtlSecs`, a restored backup, a clock jump), which would otherwise let
+a captured cookie resolve to a live session forever.
+""".
 -spec encode_id(Id) -> binary() when Id :: binary().
 encode_id(Id) ->
-    arizona_crypto:sign(?PURPOSE_ID, Id).
+    arizona_crypto:sign(?PURPOSE_ID, Id, #{ttl => max_age()}).
 
 -doc """
 Recovers a session id from a cookie value, returning `error` if tampered,
-malformed, or signed under another purpose.
+malformed, expired, or signed under another purpose.
 """.
 -spec decode_id(Value) -> {ok, binary()} | error when Value :: binary().
 decode_id(Value) ->

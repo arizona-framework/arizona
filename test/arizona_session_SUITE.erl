@@ -18,6 +18,7 @@
 -export([encode_errors_when_too_large/1]).
 -export([format_error_renders_too_large_message/1]).
 -export([decode_id_rejects_other_consumers_cookie/1]).
+-export([decode_id_rejects_expired_id/1]).
 
 %% The session cookie's crypto domain-separation label, mirrored from
 %% arizona_session: the wire contract a hand-built value must match to be
@@ -39,7 +40,8 @@ all() ->
         cookie_secure_follows_env,
         encode_errors_when_too_large,
         format_error_renders_too_large_message,
-        decode_id_rejects_other_consumers_cookie
+        decode_id_rejects_other_consumers_cookie,
+        decode_id_rejects_expired_id
     ].
 
 init_per_suite(Config) ->
@@ -138,3 +140,20 @@ decode_id_rejects_other_consumers_cookie(Config) when is_list(Config) ->
     %% The mirror direction: a session-id cookie is not a flash.
     IdCookie = arizona_session:encode_id(arizona_session:new_id()),
     ?assertEqual(#{}, arizona_flash:decode(IdCookie)).
+
+decode_id_rejects_expired_id(Config) when is_list(Config) ->
+    %% Store mode: the id cookie carries a signed expiry, so a captured cookie
+    %% replayed past `session_max_age` is refused by crypto. Without it, expiry
+    %% would rest entirely on the store -- a backend that ignores its TtlSecs, a
+    %% restored backup, or a clock jump would let the id resolve indefinitely.
+    %% A zero max-age expires at the issuing second, so one second later it is out.
+    application:set_env(arizona, session_max_age, 0),
+    try
+        Id = arizona_session:new_id(),
+        Cookie = arizona_session:encode_id(Id),
+        ?assertEqual({ok, Id}, arizona_session:decode_id(Cookie)),
+        timer:sleep(1100),
+        ?assertEqual(error, arizona_session:decode_id(Cookie))
+    after
+        application:unset_env(arizona, session_max_age)
+    end.
