@@ -17,6 +17,8 @@
     subscriber_cleanup/1,
     message_ordering/1,
     duplicate_join/1,
+    raced_join_delivers_once/1,
+    raced_join_unsubscribe_clears_all/1,
     monitor_reports_join_and_leave/1
 ]).
 
@@ -35,6 +37,8 @@ groups() ->
             subscriber_cleanup,
             message_ordering,
             duplicate_join,
+            raced_join_delivers_once,
+            raced_join_unsubscribe_clears_all,
             monitor_reports_join_and_leave
         ]}
     ].
@@ -173,6 +177,32 @@ duplicate_join(Config) when is_list(Config) ->
     end,
     timer:sleep(50),
     %% Should have received exactly one copy.
+    ?assertEqual([], flush()).
+
+%% `subscribe/2` reads membership then joins, so two concurrent subscribes of the
+%% same pid can both reach `pg` (which has no atomic join-if-absent) and leave it
+%% holding two memberships for one subscriber. That state is what these two cases
+%% construct directly -- joining twice through `pg` is exactly what the race
+%% produces -- and assert the API still behaves as a set.
+raced_join_delivers_once(Config) when is_list(Config) ->
+    ok = pg:join(arizona_pubsub, test_group, [self(), self()]),
+    ?assertEqual([self(), self()], pg:get_members(arizona_pubsub, test_group)),
+    ?assertEqual([self()], arizona_pubsub:subscribers(test_group)),
+    ok = arizona_pubsub:broadcast(test_group, raced),
+    receive
+        raced -> ok
+    after 1000 -> ct:fail(timeout)
+    end,
+    timer:sleep(50),
+    ?assertEqual([], flush()).
+
+raced_join_unsubscribe_clears_all(Config) when is_list(Config) ->
+    ok = pg:join(arizona_pubsub, test_group, [self(), self()]),
+    ok = arizona_pubsub:unsubscribe(test_group, self()),
+    ?assertEqual([], pg:get_members(arizona_pubsub, test_group)),
+    ?assertEqual({error, not_joined}, arizona_pubsub:unsubscribe(test_group, self())),
+    ok = arizona_pubsub:broadcast(test_group, after_unsubscribe),
+    timer:sleep(50),
     ?assertEqual([], flush()).
 
 monitor_reports_join_and_leave(Config) when is_list(Config) ->
