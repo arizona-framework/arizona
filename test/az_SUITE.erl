@@ -1,5 +1,6 @@
 -module(az_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-dialyzer({nowarn_function, each_stub/1}).
 
 -export([all/0, groups/0]).
 -export([
@@ -73,6 +74,10 @@ html_stub(Config) when is_list(Config) ->
 %% function the transform emits (with Source first), and forwarding the macro's
 %% own (Fun, Source) order into it used to fall off its only clause as a bare
 %% function_clause -- no hint that the transform simply had not run.
+%%
+%% Dialyzer is silenced for this case on purpose: the stub clause never returns,
+%% so every call below is "will never return" -- which is exactly the assertion.
+%% The pairing clause keeps its full contract, so a real caller is still checked.
 each_stub(Config) when is_list(Config) ->
     Fun = fun(Item) -> Item end,
     ?assertError(parse_transform_not_applied, az:each(Fun, [1, 2, 3])),
@@ -81,7 +86,12 @@ each_stub(Config) when is_list(Config) ->
     StreamFun = fun(Item, _Key) -> Item end,
     ?assertError(parse_transform_not_applied, az:each(StreamFun, [1, 2, 3])),
     %% The pairing form the transform emits is untouched.
-    Template = #{t => 0, s => [~"<li>", ~"</li>"], d => fun(Item) -> [Item] end},
+    Template = #{
+        t => 0,
+        s => [~"<li>", ~"</li>"],
+        d => fun(Item) -> [Item] end,
+        f => ~"FP"
+    },
     ?assertEqual(
         #{t => 0, source => [1, 2], template => Template},
         arizona_template:each([1, 2], Template)
