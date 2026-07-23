@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectStaysConnected } from '../utils/helpers.js';
+import { expectStaysConnected, serverFrames } from '../utils/helpers.js';
 
 // ---------------------------------------------------------------------------
 // Client-owned slots (?local): the browser owns these slots and updates them
@@ -91,29 +91,18 @@ test.describe('?local -- tabs', () => {
 
 test.describe('?local -- client-only', () => {
     test('updating a slot sends no server message and stays connected', async ({ page }) => {
+        const frames = serverFrames(page);
         await page.goto('/local');
         await wsReady(page);
-
-        // Count any server -> client message that arrives after the click.
-        await page.evaluate(() => {
-            /** @type {any} */ (window).__msgs = 0;
-            const orig = window._ws.onmessage;
-            window._ws.onmessage = (e) => {
-                /** @type {any} */ (window).__msgs += 1;
-                if (orig) orig(e);
-            };
-        });
 
         await expectStaysConnected(page, async () => {
             await openBtn(page).click();
             await expect(dialog(page)).toBeVisible();
             await settingsTab(page).click();
             await expect(settingsPanel(page)).toBeVisible();
-            await page.waitForTimeout(200);
         });
 
-        const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
-        expect(msgs, 'no server round-trip for ?local updates').toBe(0);
+        await frames.expectNone('no server round-trip for ?local updates');
     });
 
     test('a forced reconnect resets slots to their SSR initial', async ({ page }) => {
@@ -140,30 +129,19 @@ test.describe('?local -- client-only', () => {
 
 test.describe('?local -- multiple content slots', () => {
     test('one button updates two slots in one <p>, no round-trip', async ({ page }) => {
+        const frames = serverFrames(page);
         await page.goto('/local');
         await wsReady(page);
 
         const name = page.locator('#local_demo p.name');
         await expect(name).toHaveText('Name: Ada Lovelace');
 
-        // Count any server -> client message that arrives after the click.
-        await page.evaluate(() => {
-            /** @type {any} */ (window).__msgs = 0;
-            const orig = window._ws.onmessage;
-            window._ws.onmessage = (e) => {
-                /** @type {any} */ (window).__msgs += 1;
-                if (orig) orig(e);
-            };
-        });
-
         await expectStaysConnected(page, async () => {
             await page.getByRole('button', { name: 'Rename' }).click();
             await expect(name).toHaveText('Name: Grace Hopper');
-            await page.waitForTimeout(200);
         });
 
-        const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
-        expect(msgs, 'no server round-trip for multi-slot ?local updates').toBe(0);
+        await frames.expectNone('no server round-trip for multi-slot ?local updates');
     });
 });
 
@@ -173,29 +151,19 @@ test.describe('?local -- multiple content slots', () => {
 
 test.describe('?local -- interpolated attribute', () => {
     test('a button recomposes a bound attribute client-side, no round-trip', async ({ page }) => {
+        const frames = serverFrames(page);
         await page.goto('/local');
         await wsReady(page);
 
         const badge = page.locator('#status_badge');
         await expect(badge).toHaveAttribute('class', 'badge badge-ok');
 
-        await page.evaluate(() => {
-            /** @type {any} */ (window).__msgs = 0;
-            const orig = window._ws.onmessage;
-            window._ws.onmessage = (e) => {
-                /** @type {any} */ (window).__msgs += 1;
-                if (orig) orig(e);
-            };
-        });
-
         await expectStaysConnected(page, async () => {
             await page.getByRole('button', { name: 'Warn', exact: true }).click();
             await expect(badge).toHaveAttribute('class', 'badge badge-warn');
-            await page.waitForTimeout(200);
         });
 
-        const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
-        expect(msgs, 'no server round-trip for interpolated-attribute ?local').toBe(0);
+        await frames.expectNone('no server round-trip for interpolated-attribute ?local');
     });
 });
 
@@ -206,6 +174,7 @@ test.describe('?local -- interpolated attribute', () => {
 
 test.describe('?local -- status card (one key, three slots)', () => {
     test('one click recomposes interp class, interp title, and content label', async ({ page }) => {
+        const frames = serverFrames(page);
         await page.goto('/local');
         await wsReady(page);
 
@@ -215,21 +184,11 @@ test.describe('?local -- status card (one key, three slots)', () => {
         await expect(card).toHaveAttribute('title', 'Current status: ok');
         await expect(label).toHaveText('Status: ok');
 
-        await page.evaluate(() => {
-            /** @type {any} */ (window).__msgs = 0;
-            const orig = window._ws.onmessage;
-            window._ws.onmessage = (e) => {
-                /** @type {any} */ (window).__msgs += 1;
-                if (orig) orig(e);
-            };
-        });
-
         await expectStaysConnected(page, async () => {
             await page.getByRole('button', { name: 'Warning' }).click();
             await expect(card).toHaveAttribute('class', 'card status-warning');
             await expect(card).toHaveAttribute('title', 'Current status: warning');
             await expect(label).toHaveText('Status: warning');
-            await page.waitForTimeout(200);
         });
 
         // A second value, to show repeated client-only recomposition of all slots.
@@ -238,7 +197,6 @@ test.describe('?local -- status card (one key, three slots)', () => {
         await expect(card).toHaveAttribute('title', 'Current status: error');
         await expect(label).toHaveText('Status: error');
 
-        const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
-        expect(msgs, 'no server round-trip for status-card ?local updates').toBe(0);
+        await frames.expectNone('no server round-trip for status-card ?local updates');
     });
 });

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectStaysConnected } from '../utils/helpers.js';
+import { expectStaysConnected, serverFrames } from '../utils/helpers.js';
 
 // ---------------------------------------------------------------------------
 // A fully client-only app: nested stateless (tab bar) + stateful (widgets)
@@ -14,6 +14,7 @@ test.describe('?local -- fully client-only app', () => {
     test('theme, tabs, and both widgets are interactive with zero server round-trips', async ({
         page,
     }) => {
+        const frames = serverFrames(page);
         await page.goto('/local-app');
         await wsReady(page);
 
@@ -26,16 +27,6 @@ test.describe('?local -- fully client-only app', () => {
         await expect(app).toHaveClass('app theme-light');
         await expect(tabs).toHaveAttribute('data-active', 'home');
         await expect(wa.locator('.status')).toHaveClass('status status-idle');
-
-        // Count any server -> client frame that arrives after connect.
-        await page.evaluate(() => {
-            /** @type {any} */ (window).__msgs = 0;
-            const orig = window._ws.onmessage;
-            window._ws.onmessage = (e) => {
-                /** @type {any} */ (window).__msgs += 1;
-                if (orig) orig(e);
-            };
-        });
 
         await expectStaysConnected(page, async () => {
             // Theme (view-scoped client slot, interpolated class).
@@ -59,11 +50,8 @@ test.describe('?local -- fully client-only app', () => {
             await wb.getByRole('button', { name: 'Done' }).click();
             await expect(wb.locator('.status')).toHaveClass('status status-done');
             await expect(wa.locator('.status')).toHaveClass('status status-active');
-
-            await page.waitForTimeout(200);
         });
 
-        const msgs = await page.evaluate(() => /** @type {any} */ (window).__msgs);
-        expect(msgs, 'a fully client-only app sends zero server frames').toBe(0);
+        await frames.expectNone('a fully client-only app sends zero server frames');
     });
 });

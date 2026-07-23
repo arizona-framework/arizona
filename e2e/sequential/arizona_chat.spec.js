@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { serverFrames } from '../utils/helpers.js';
 
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
@@ -44,6 +45,7 @@ test.describe
             const pageA = await ctx1.newPage();
             const pageB = await ctx2.newPage();
 
+            const framesA = serverFrames(pageA);
             await pageA.goto('/chat');
             await pageB.goto('/chat');
             await wsReady(pageA);
@@ -52,8 +54,10 @@ test.describe
             await sendMsg(pageA, 'no dup');
             await expect(messageItems(pageB)).toHaveCount(1, { timeout: 3000 });
 
-            // Wait a bit and verify sender still has exactly 1 (no duplicate)
-            await pageA.waitForTimeout(500);
+            // An echo to the sender would be a frame queued before this barrier's
+            // pong, so once the pong lands the sender has seen everything it is
+            // going to see -- the count below is then conclusive, not a guess.
+            await framesA.settle();
             await expect(messageItems(pageA)).toHaveCount(1);
 
             await ctx1.close();
