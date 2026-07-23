@@ -172,8 +172,14 @@ handle_msg(_Msg, State) ->
 -doc """
 Handles SSH connection-protocol events: `pty-req` stashes the terminal size,
 `shell` mounts the live view, `data` feeds key bytes to the session,
-`window-change` resizes it, and `closed` stops the channel. Other events (env,
-exec, eof, signal) are ignored -- the TUI only needs pty + shell + data.
+`window-change` resizes it, and `closed` stops the channel. `exec` and `env` are
+refused (this shell serves an interactive `?terminal` view only); other events
+(eof, signal) are ignored.
+
+Nothing in the protocol orders these: a `pty-req` (or an `env`) is what makes the
+connection handler spawn this channel process, so a client may send `data` or a
+`window-change` before -- or a second `shell` after -- the one that mounts the
+view. Each is handled on its own terms rather than assuming pty -> shell -> data.
 """.
 -spec handle_ssh_msg(ssh_connection:event(), state()) ->
     {ok, state()} | {stop, ssh:channel_id(), state()}.
@@ -182,7 +188,9 @@ handle_ssh_msg(
 ) ->
     ok = reply(Conn, ChannelId, WantReply),
     {ok, State#state{rows = Rows, cols = Cols}};
-handle_ssh_msg({ssh_cm, Conn, {shell, ChannelId, WantReply}}, State) ->
+handle_ssh_msg(
+    {ssh_cm, Conn, {shell, ChannelId, WantReply}}, #state{session = undefined} = State
+) ->
     ok = reply(Conn, ChannelId, WantReply),
     case start_session(Conn, ChannelId, State) of
         {ok, Session} ->
@@ -192,14 +200,41 @@ handle_ssh_msg({ssh_cm, Conn, {shell, ChannelId, WantReply}}, State) ->
             %% out on the channel), so there is no session to serve.
             {stop, ChannelId, State}
     end;
+handle_ssh_msg({ssh_cm, Conn, {shell, ChannelId, WantReply}}, State) ->
+    %% A channel serves one view. Mounting a second one would paint two live
+    %% views over each other on the same terminal and orphan the first, so refuse
+    %% the request instead of replacing the session.
+    ok = reply_failure(Conn, ChannelId, WantReply),
+    {ok, State};
+handle_ssh_msg(
+    {ssh_cm, _Conn, {data, _ChannelId, 0, _Data}}, #state{session = undefined} = State
+) ->
+    %% Keys typed before the shell request have no view to reach; drop them.
+    {ok, State};
 handle_ssh_msg({ssh_cm, _Conn, {data, ChannelId, 0, Data}}, #state{session = Session} = State) ->
     apply_session_result(arizona_terminal_session:handle_key(Session, Data), ChannelId, State);
+handle_ssh_msg(
+    {ssh_cm, _Conn, {window_change, _ChannelId, Cols, Rows, _PixW, _PixH}},
+    #state{session = undefined} = State
+) ->
+    %% Resized before the shell request: no session to notify, but this is the
+    %% geometry the view must mount with.
+    {ok, State#state{rows = Rows, cols = Cols}};
 handle_ssh_msg(
     {ssh_cm, _Conn, {window_change, _ChannelId, Cols, Rows, _PixW, _PixH}},
     #state{session = Session} = State
 ) ->
     ok = arizona_terminal_session:resize(Session, Rows, Cols),
     {ok, State#state{rows = Rows, cols = Cols}};
+handle_ssh_msg({ssh_cm, Conn, {exec, ChannelId, WantReply, _Cmd}}, State) ->
+    %% Non-interactive command execution is not served. Refusing it explicitly
+    %% matters: a client that asked for a reply otherwise waits for one that
+    %% never comes, hanging until its own timeout.
+    ok = reply_failure(Conn, ChannelId, WantReply),
+    {ok, State};
+handle_ssh_msg({ssh_cm, Conn, {env, ChannelId, WantReply, _Var, _Value}}, State) ->
+    ok = reply_failure(Conn, ChannelId, WantReply),
+    {ok, State};
 handle_ssh_msg({ssh_cm, _Conn, {closed, ChannelId}}, State) ->
     {stop, ChannelId, State};
 handle_ssh_msg({ssh_cm, _Conn, _Msg}, State) ->
@@ -261,3 +296,8 @@ reply(_Conn, _ChannelId, false) ->
     ok;
 reply(Conn, ChannelId, true) ->
     ssh_connection:reply_request(Conn, true, success, ChannelId).
+
+reply_failure(_Conn, _ChannelId, false) ->
+    ok;
+reply_failure(Conn, ChannelId, true) ->
+    ssh_connection:reply_request(Conn, true, failure, ChannelId).
