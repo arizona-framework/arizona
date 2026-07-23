@@ -9,12 +9,17 @@ them on yet. Every roadrunner dispatcher (`arizona_roadrunner_http`,
 folding that stash onto whatever response it is about to return -- which is what
 `flush/2` does, for every response shape a handler may return, not just the
 buffered `{Status, Headers, Body}` triple.
+
+`halt/1` builds the whole response for a middleware `{halt, Request}` the same
+way for all three, so the status a denied request sees does not depend on which
+dispatcher happened to run it.
 """.
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([halt/1]).
 -export([flush/2]).
 -export([format_error/2]).
 
@@ -24,6 +29,34 @@ buffered `{Status, Headers, Body}` triple.
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
+
+-doc """
+Builds the response for a middleware `{halt, Request}`, stashed headers and
+cookies included.
+
+A halting middleware says what the client should see by stashing a redirect
+(`arizona_req:redirect/2,3`) or a status (`arizona_req:put_resp_status/2`) --
+`check_origin/2`'s `403` is the built-in example. A halt carrying neither is a
+refusal with no reason disclosed, which is exactly `403 Forbidden` (RFC 9110
+§15.5.4): `204` would report a denial as success (a browser sits on the page
+with no feedback, a `fetch` sees `ok` and resets the form), and `400` would
+blame request syntax the framework knows nothing about.
+""".
+-spec halt(Request) -> Resp when
+    Request :: arizona_req:request(),
+    Resp :: roadrunner_resp:buffered_response().
+halt(HaltReq) ->
+    Resp =
+        case arizona_req:halted_redirect(HaltReq) of
+            {Status, Location} ->
+                roadrunner_resp:redirect(Status, Location);
+            undefined ->
+                case arizona_req:resp_status(HaltReq) of
+                    undefined -> roadrunner_resp:forbidden();
+                    Status -> roadrunner_resp:status(Status)
+                end
+        end,
+    flush(HaltReq, Resp).
 
 -doc """
 Folds the request's stashed response headers and cookies onto `Resp`.

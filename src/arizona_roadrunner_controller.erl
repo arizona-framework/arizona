@@ -48,7 +48,7 @@ handle(Req) ->
     ArzReq = arizona_roadrunner_req:new(Req),
     case arizona_middleware:apply_middlewares(Middlewares, ArzReq, #{}) of
         {halt, HaltReq} ->
-            {halt_response(HaltReq), arizona_req:raw(HaltReq)};
+            {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
         {cont, ArzReq1, _Bindings} ->
             %% Restore the controller's own state into the raw request (the dispatcher
             %% overwrote it with the arizona meta), run the action, then flush any
@@ -98,18 +98,3 @@ dispatch_action(Handler, Action, Req) ->
                 ?MODULE
             )
     end.
-
-%% A middleware halted before the handler. Ship a stashed redirect or status (e.g.
-%% check_origin's 403), else a bare 400, then flush stashed headers/cookies.
-halt_response(HaltReq) ->
-    Resp =
-        case arizona_req:halted_redirect(HaltReq) of
-            {Status, Location} ->
-                roadrunner_resp:redirect(Status, Location);
-            undefined ->
-                case arizona_req:resp_status(HaltReq) of
-                    undefined -> roadrunner_resp:bad_request();
-                    Status -> roadrunner_resp:status(Status)
-                end
-        end,
-    arizona_roadrunner_resp:flush(HaltReq, Resp).

@@ -963,8 +963,9 @@ into its native reply shape.
 - `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
   transport can flush any middleware-stashed response headers/cookies):
   - `{halt, Request}` -- middleware halted; the transport decodes the stashed redirect
-    (`arizona_req:halted_redirect/1`) or status off the request (or ships a 204/400 when the
-    middleware wrote its own reply)
+    (`arizona_req:halted_redirect/1`) or status off the request via
+    `arizona_roadrunner_resp:halt/1`, which answers a halt carrying neither with `403`
+    (one default for pages, controllers, and the WS upgrade alike)
   - `{ok, resp_status(), iolist(), Request}` -- rendered page body; the status defaults to 200,
     but a view or middleware may stash a non-200 (e.g. 401)
   - `{error, 500, iolist(), Request}` -- rendered error page body (crash or stashed hot-reload error)

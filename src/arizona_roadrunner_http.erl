@@ -36,29 +36,9 @@ handle(Req) ->
     ArzReq = arizona_roadrunner_req:new(Req),
     case arizona_http:render(H, ArzReq, State) of
         {halt, HaltReq} ->
-            {halt_response(HaltReq), arizona_req:raw(HaltReq)};
+            {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
         {ok, Status, Body, ArzReq1} ->
             {arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)), Req};
         {error, Status, Body, ArzReq1} ->
             {arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)), Req}
     end.
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
-%% Middleware halted before render. Ship a stashed redirect, a stashed status (e.g.
-%% check_origin's 403), or a 204 when the middleware emitted its own response via direct
-%% roadrunner calls, then flush any stashed response headers/cookies.
-halt_response(HaltReq) ->
-    Resp =
-        case arizona_req:halted_redirect(HaltReq) of
-            {Status, Location} ->
-                roadrunner_resp:redirect(Status, Location);
-            undefined ->
-                case arizona_req:resp_status(HaltReq) of
-                    undefined -> roadrunner_resp:no_content();
-                    Status -> roadrunner_resp:status(Status)
-                end
-        end,
-    arizona_roadrunner_resp:flush(HaltReq, Resp).

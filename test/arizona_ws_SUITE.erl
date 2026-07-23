@@ -83,6 +83,7 @@
     controller_dispatches_action_by_verb/1,
     controller_missing_action_errors/1,
     controller_flushes_stash_onto_stream_response/1,
+    bare_halt_is_forbidden_on_every_dispatcher/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -172,7 +173,8 @@ groups() ->
         controller_rejects_disallowed_method,
         controller_dispatches_action_by_verb,
         controller_missing_action_errors,
-        controller_flushes_stash_onto_stream_response
+        controller_flushes_stash_onto_stream_response,
+        bare_halt_is_forbidden_on_every_dispatcher
     ],
     Crash = [
         crash_event_closes,
@@ -230,6 +232,16 @@ init_per_group(roadrunner, Config) ->
                     {halt, arizona_req:redirect(Req, <<"/login">>)}
                 end
             ]
+        }},
+        %% Bare halt -- no stashed redirect, no stashed status. Same route shape on a
+        %% live page, a controller, and the WS upgrade so the three dispatchers'
+        %% default is asserted to be one status, not three.
+        {live, <<"/bare_halt">>, arizona_crashable, #{
+            middlewares => [fun(Req, _B) -> {halt, Req} end]
+        }},
+        {get, <<"/_test/bare-halt">>, arizona_state_echo_controller, #{
+            state => #{marker => ~"STATE_OK"},
+            middlewares => [fun(Req, _B) -> {halt, Req} end]
         }},
         {live, <<"/pipeline">>, arizona_crashable, #{
             middlewares => [
@@ -788,6 +800,20 @@ controller_missing_action_errors(Config) ->
     %% clear missing_action error.
     Resp = http_req(Config, "GET", "/_test/bad-action", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)).
+
+bare_halt_is_forbidden_on_every_dispatcher(Config) ->
+    %% A shared auth-gate middleware that halts without stashing a redirect or a
+    %% status used to report the denial differently per dispatcher: 204 (success!)
+    %% on a page, 400 on a controller and on the WS upgrade. One default now: 403,
+    %% the RFC 9110 status for a refusal with no reason disclosed.
+    Port = proplists:get_value(port, Config),
+    PageResp = http_get(Config, "/bare_halt", []),
+    ?assertNotEqual(nomatch, binary:match(PageResp, <<"403">>)),
+    ?assertEqual(nomatch, binary:match(PageResp, <<"204">>)),
+    CtrlResp = http_get(Config, "/_test/bare-halt", []),
+    ?assertNotEqual(nomatch, binary:match(CtrlResp, <<"403">>)),
+    ?assertEqual(nomatch, binary:match(CtrlResp, <<"STATE_OK">>)),
+    ?assertEqual(403, ws_upgrade_status_qs(Port, [~"_az_path=/bare_halt"])).
 
 controller_flushes_stash_onto_stream_response(Config) ->
     %% The stash flush is not buffered-response-only: a controller answering with
