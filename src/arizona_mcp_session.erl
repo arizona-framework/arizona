@@ -154,6 +154,12 @@ dispatch(Pid, Method, Params, Id, Timeout) ->
         gen_server:call(Pid, {dispatch, Method, Params, Id}, Timeout)
     catch
         exit:{timeout, _} ->
+            %% The freed caller abandons its request: one still waiting its turn
+            %% is dropped, so it neither runs for nobody (a client that re-sends
+            %% would have the tool run twice) nor holds a `max_pending` slot
+            %% against the callers still waiting. A request already running is
+            %% left alone, as above.
+            ok = gen_server:cast(Pid, {abandon, Id}),
             {error, arizona_jsonrpc:error(Id, -32603, ~"Request timed out")};
         exit:_ ->
             {error, arizona_jsonrpc:error(Id, -32603, ~"Session ended")}
@@ -357,6 +363,14 @@ handle_cast(
     {noreply, refresh_ttl(State#state{streams = Streams1})};
 handle_cast({cancel, Id}, State) ->
     {noreply, cancel_request(Id, State)};
+handle_cast({abandon, Id}, #state{dispatch_q = Q} = State) ->
+    %% The caller timed out and is already freed, so there is nobody to reply to
+    %% -- just release the queue slot. A request that has meanwhile become the
+    %% active one is left alone (it keeps running, as the timeout documents).
+    case drop_queued(Id, Q) of
+        {_From, Q1} -> {noreply, refresh_ttl(State#state{dispatch_q = Q1})};
+        error -> {noreply, State}
+    end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
