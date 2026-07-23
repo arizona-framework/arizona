@@ -74,11 +74,14 @@ jobs:
           restore-keys: |
             ios-rebar3-${{ runner.os }}-
 
+      # The start script runs a cold `vite build` plus a `rebar3 compile` before
+      # it binds the port, and a macOS runner is slow enough to sit past a
+      # one-minute budget. Same 180s budget as android-e2e's identical step.
       - name: Start Arizona server (port 4040; the Simulator reaches it on localhost)
         run: |
           export PORT=4040 ERLANG_EXTRA_ARGS=-noshell
           ./scripts/start_test_server.sh > /tmp/arizona-server.log 2>&1 &
-          for _ in $(seq 1 60); do
+          for _ in $(seq 1 180); do
             if curl -sf http://localhost:4040/ > /dev/null; then echo "server up"; exit 0; fi
             sleep 1
           done
@@ -92,14 +95,39 @@ jobs:
 
       - name: Run the iOS Simulator e2e
         run: |
-          # Pick whatever recent iPhone simulator the runner image provides.
-          DEVICE=$(xcrun simctl list devices available | grep -oE 'iPhone [0-9]+( Pro)?' | head -1)
-          echo "Using simulator: $DEVICE"
-          # Boot it up front so the first test doesn't pay the cold-boot cost
-          # (the launch + connect latency that flaked the first test before).
-          xcrun simctl boot "$DEVICE" || true
+          # Resolve ONE concrete simulator and address it by UDID from here on: a
+          # model name can match several installed runtimes, and the device we
+          # boot has to be the device xcodebuild runs the tests on.
+          UDID=$(xcrun simctl list devices available --json \
+            | jq -r '.devices | to_entries[]
+                     | select(.key | contains("SimRuntime.iOS"))
+                     | .value[] | select(.name | startswith("iPhone")) | .udid' \
+            | head -1)
+          if [ -z "$UDID" ]; then
+            echo "no available iPhone simulator"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Using simulator $UDID"
+          # `simctl boot` only kicks the boot off, so the old fire-and-forget
+          # left the first test's app launch racing a half-booted device.
+          # `bootstatus -b` boots if needed and blocks until the boot completes.
+          xcrun simctl bootstatus "$UDID" -b
           cd clients/ios/Sample
           xcodebuild test \
             -scheme Sample \
-            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -destination "id=$UDID" \
             -resultBundlePath /tmp/ios-e2e.xcresult
+
+      # A Simulator failure is undiagnosable once the runner is gone: the
+      # xcresult carries the failing test's screenshots and the app's console
+      # output, and the server log says whether the other end was healthy.
+      - name: Upload the failure diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: ios-e2e-diagnostics
+          path: |
+            /tmp/ios-e2e.xcresult
+            /tmp/arizona-server.log
+          retention-days: 7
