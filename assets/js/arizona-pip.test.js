@@ -128,6 +128,37 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide'); // cleanup
     });
 
+    it('does not leak a placeholder when the PiP request is rejected', async () => {
+        document.body.innerHTML = '<div id="v6" az-view az="0"></div>';
+        const requestWindow = vi.fn().mockRejectedValue(new Error('no user gesture'));
+        /** @type {any} */ (window).documentPictureInPicture = { requestWindow };
+
+        await expect(requestPip('v6')).rejects.toThrow();
+
+        // The view stays inline and no `az-pip:` placeholder comment is orphaned.
+        expect(document.getElementById('v6')).not.toBeNull();
+        const orphaned = [...document.body.childNodes].some(
+            (n) => n.nodeType === 8 && /az-pip:/.test(/** @type {Comment} */ (n).data),
+        );
+        expect(orphaned).toBe(false);
+    });
+
+    it('JS_REQUEST_PIP swallows a rejected request (no unhandled rejection)', async () => {
+        document.body.innerHTML = '<div id="v7" az-view az="0"></div>';
+        const requestWindow = vi.fn().mockRejectedValue(new Error('no user gesture'));
+        /** @type {any} */ (window).documentPictureInPicture = { requestWindow };
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        // A server-pushed request_pip has no gesture, so requestWindow rejects; the
+        // effect must catch it (a logged no-op), not leave an unhandled rejection.
+        executeJS(document.documentElement, null, [18, 'v7']); // JS_REQUEST_PIP
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(spy).toHaveBeenCalled();
+        spy.mockRestore();
+    });
+
     it('passes width/height options through to requestWindow', async () => {
         document.body.innerHTML = '<div id="v5" az-view az="0"></div>';
         const pip = makePipWindow();

@@ -2027,6 +2027,26 @@ describe('executeJS -- select/copy_to_clipboard/show_modal/close_modal', () => {
         expect(() => executeJS(document.body, null, [27, '#t'])).not.toThrow();
     });
 
+    it('copy_to_clipboard swallows a rejected writeText (no unhandled rejection)', async () => {
+        document.body.innerHTML = '<input id="t" value="x" />';
+        const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+        Object.defineProperty(navigator, 'clipboard', {
+            value: { writeText },
+            configurable: true,
+        });
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        // writeText rejects without permission; the effect must catch it (a logged
+        // no-op), not leave an unhandled rejection.
+        executeJS(document.body, null, [27, '#t']); // op 27 = copy_to_clipboard
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(writeText).toHaveBeenCalledWith('x');
+        expect(spy).toHaveBeenCalled();
+        spy.mockRestore();
+    });
+
     it('show_modal calls showModal() on the first matching dialog only', () => {
         document.body.innerHTML = '<dialog class="d"></dialog><dialog class="d"></dialog>';
         const [first, second] = document.querySelectorAll('.d');

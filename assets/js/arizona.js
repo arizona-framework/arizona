@@ -1806,7 +1806,12 @@ function execOne(el, event, cmd) {
             // a DOM mutation, so no notifyUpdated.
             withQuery(cmd[1], (t) => {
                 const text = /** @type {any} */ (t).value ?? t.textContent ?? '';
-                navigator.clipboard?.writeText?.(text);
+                // writeText rejects without permission / a secure context; catch it
+                // (like JS_OS) so a blocked copy is a logged no-op, not an unhandled
+                // rejection.
+                navigator.clipboard
+                    ?.writeText?.(text)
+                    ?.catch?.((err) => console.error('[arizona] copy_to_clipboard failed:', err));
             });
             break;
         case JS_SHOW_MODAL:
@@ -1865,7 +1870,12 @@ function execOne(el, event, cmd) {
             break;
         }
         case JS_REQUEST_PIP:
-            requestPip(cmd[1], cmd[2] || {});
+            // requestWindow rejects without a user gesture; catch it (like JS_OS)
+            // so a server-pushed request_pip is a logged no-op, not an unhandled
+            // rejection.
+            requestPip(cmd[1], cmd[2] || {}).catch((err) =>
+                console.error('[arizona] request_pip failed:', cmd[1], err),
+            );
             break;
         case JS_EXIT_PIP:
             exitPip(cmd[1]);
@@ -2553,13 +2563,16 @@ async function requestPip(viewId, opts = {}) {
     const view = document.getElementById(viewId);
     if (!view) return null;
 
-    // Remember where the view sat so it can be restored in place on close.
-    const placeholder = document.createComment(`az-pip:${viewId}`);
-    view.before(placeholder);
-
+    // Open the floating window FIRST. requestWindow rejects without a user
+    // gesture (a server-pushed request_pip has none); await before touching the
+    // DOM so a rejection leaves no orphaned placeholder behind.
     // Forward the caller's options straight to the browser (no framework defaults);
     // requestWindow ignores dictionary members it doesn't know (e.g. onClose).
     const pip = await pipApi.requestWindow(opts);
+
+    // Remember where the view sat so it can be restored in place on close.
+    const placeholder = document.createComment(`az-pip:${viewId}`);
+    view.before(placeholder);
 
     copyStyles(document, pip.document);
     pip.document.body.append(view);
