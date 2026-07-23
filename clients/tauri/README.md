@@ -15,7 +15,7 @@ See [`docs/os.md`](../../docs/os.md) for the full contract.
 | --- | --- |
 | expose `__arizona_os__` before page JS | `WebviewWindowBuilder::initialization_script` (runs before the remote page's scripts) |
 | `capabilities` advertised | the object literal in the init script (`-> _az_caps -> ?capability`) |
-| `invoke(name, args)` -> native | `window.__TAURI__.window.getCurrentWindow()` **core window commands** (`setTitle` / `setFocus` / `minimize` / `toggleMaximize` / `setFullscreen` / `setContentProtected`) -- permission-gated, so reachable from a remote page |
+| `invoke(name, args)` -> native | `window.__TAURI__.window.getCurrentWindow()` **core window commands** (`setTitle` / `setFocus` / `minimize` / `maximize` / `setFullscreen` / `setContentProtected`) -- permission-gated, so reachable from a remote page |
 | `onEvent(cb)` <- OS events | `window.__TAURI__.event.listen('arizona-event', ...)`; Rust `app.emit('arizona-event', ...)` on window events |
 | window control / capture protection | `WebviewWindow::set_title` / `set_focus` / `minimize` / `maximize` / `set_fullscreen` / `set_content_protected` |
 
@@ -57,15 +57,18 @@ sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget file openssl \
    Point it elsewhere with `ARIZONA_URL=https://your-app.example.com make dev-tauri`.
 
 You should see: the window-control buttons appear once connected (capability
-negotiated); **Maximize** toggles the window (a client-triggered OS command),
-focusing / blurring the window updates the view (an inbound OS event), and the
-title is re-asserted on connect (a server-emitted OS command). The same app in a
-plain browser simply omits the buttons -- the commands are safe no-ops.
+negotiated); **Maximize** / **Restore** switch the window between maximized and
+normal (client-triggered OS commands -- idempotent each way, so re-asserting the
+current state on reconnect is a no-op); focusing / blurring the window updates
+the view (an inbound OS event), and
+the title is re-asserted on connect (a server-emitted OS command). The same app
+in a plain browser simply omits the buttons -- the commands are safe no-ops.
 
 > **Linux note:** `set_title` *does apply* (verify with
 > `getCurrentWindow().title()` in devtools), but some Linux window managers don't
 > repaint the visible CSD title bar -- a WM/wry cosmetic quirk, not a command
-> failure. Use `Maximize` (or minimize / fullscreen) to see an unmistakable effect.
+> failure. Click `Maximize` then `Restore` for a repeatable unmistakable effect
+> (`arizona_os:maximize(true|false)`, a two-state window mode like fullscreen).
 > `screen_capture_protection` is advertised but is a **no-op on Linux** (it works
 > on Windows 10 2004+ / macOS only).
 

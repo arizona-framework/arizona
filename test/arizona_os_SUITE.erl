@@ -88,7 +88,13 @@ minimize(Config) when is_list(Config) ->
     ?assertEqual({arizona_effect, [?EFFECT_OS, ~"window_minimize"]}, arizona_os:minimize()).
 
 maximize(Config) when is_list(Config) ->
-    ?assertEqual({arizona_effect, [?EFFECT_OS, ~"window_maximize"]}, arizona_os:maximize()).
+    Maximized = {arizona_effect, [?EFFECT_OS, ~"window_maximize", true]},
+    ?assertEqual(Maximized, arizona_os:maximize(true)),
+    %% maximize/0 is the shorthand for maximize(true).
+    ?assertEqual(Maximized, arizona_os:maximize()),
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_OS, ~"window_maximize", false]}, arizona_os:maximize(false)
+    ).
 
 fullscreen(Config) when is_list(Config) ->
     ?assertEqual(

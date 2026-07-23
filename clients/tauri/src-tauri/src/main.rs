@@ -54,7 +54,10 @@ const INIT_SCRIPT: &str = r#"
         case 'window_title': return w.setTitle(args[0]);
         case 'window_focus': return w.setFocus();
         case 'window_minimize': return w.minimize();
-        case 'window_maximize': return w.toggleMaximize();
+        // Maximize/restore by boolean arg, never toggle: the seam models this as
+        // a two-state window mode (like fullscreen), and a server may re-assert
+        // it, so each direction must be idempotent.
+        case 'window_maximize': return args[0] ? w.maximize() : w.unmaximize();
         case 'window_fullscreen': return w.setFullscreen(!!args[0]);
         case 'screen_capture_protection': return w.setContentProtected(!!args[0]);
         default: return Promise.resolve();
@@ -116,5 +119,15 @@ mod tests {
                 "capability `{cap}` is advertised but missing from the page contract script",
             );
         }
+    }
+
+    #[test]
+    fn window_maximize_is_idempotent_not_a_toggle() {
+        // `arizona_os:maximize/0` maximizes the window; a shell that toggles would
+        // restore an already-maximized window when the server re-asserts it.
+        assert!(
+            !INIT_SCRIPT.contains("toggleMaximize"),
+            "`window_maximize` must maximize, not toggle",
+        );
     }
 }

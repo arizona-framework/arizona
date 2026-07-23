@@ -48,6 +48,7 @@ decision.
 -export([focus/0]).
 -export([minimize/0]).
 -export([maximize/0]).
+-export([maximize/1]).
 -export([fullscreen/1]).
 -export([notify/1]).
 -export([notify/2]).
@@ -65,6 +66,7 @@ decision.
     focus/0,
     minimize/0,
     maximize/0,
+    maximize/1,
     fullscreen/1,
     notify/1,
     notify/2,
@@ -104,9 +106,19 @@ focus() -> command(~"window_focus").
 -spec minimize() -> arizona_effect:cmd().
 minimize() -> command(~"window_minimize").
 
--doc "Maximizes the shell window.".
+-doc "Maximizes the shell window; the shorthand for `maximize(true)`.".
 -spec maximize() -> arizona_effect:cmd().
-maximize() -> command(~"window_maximize").
+maximize() -> maximize(true).
+
+-doc """
+Maximizes (`true`) or restores (`false`) the shell window. Idempotent in each
+direction, never a toggle: a shell maps each to its maximize/unmaximize
+primitive, so re-asserting the current state from server bindings on reconnect
+leaves the window as it is.
+""".
+-spec maximize(Enabled) -> arizona_effect:cmd() when
+    Enabled :: boolean().
+maximize(Enabled) -> command(~"window_maximize", [Enabled]).
 
 -doc "Enters (`true`) or leaves (`false`) fullscreen.".
 -spec fullscreen(Enabled) -> arizona_effect:cmd() when
