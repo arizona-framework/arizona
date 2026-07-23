@@ -1527,8 +1527,7 @@ extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
-    ok = reject_nested_directives(Attrs0, Line),
-    ok = reject_reserved_attrs(Attrs0, Line),
+    ok = reject_framework_attrs(Attrs0, Line),
     Backend = State0#state.backend,
     RawKind = Backend:raw_text_kind(Tag),
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
@@ -2551,6 +2550,13 @@ contains_inner_content(_) ->
 
 directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
 directive_opts(_) -> false.
+
+%% Attribute names the template author may not write, checked on the element's
+%% ORIGINAL attrs -- before az-view / az-local injection, so an injected name is
+%% never mistaken for an authored one.
+reject_framework_attrs(Attrs, Line) ->
+    ok = reject_nested_directives(Attrs, Line),
+    reject_reserved_attrs(Attrs, Line).
 
 %% az-nodiff is a whole-compile-unit directive: it is stripped from a template's
 %% top-level element attrs (compile_fragment_parts / compile_mixed_items) before
