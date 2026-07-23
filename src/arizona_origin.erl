@@ -82,5 +82,9 @@ same_origin(Origin, Host) ->
         _ -> false
     end.
 
+%% Match case-insensitively, consistent with `same_origin/2`: browser Origins are
+%% already lowercase, so an uppercase `csrf_origins` entry is an operator typo that
+%% should still match its lowercased origin, not silently 403.
 allowlisted(Origin) ->
-    lists:member(Origin, arizona_config:get_env(csrf_origins, [])).
+    Lower = string:lowercase(Origin),
+    lists:member(Lower, [string:lowercase(O) || O <- arizona_config:get_env(csrf_origins, [])]).

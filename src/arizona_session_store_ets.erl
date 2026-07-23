@@ -39,6 +39,18 @@ of the owner drops every session. For multi-node or restart-survival, provide an
 -export([handle_info/2]).
 
 %% --------------------------------------------------------------------
+%% Test-only exports
+%% --------------------------------------------------------------------
+
+-ifdef(TEST).
+%% The guarded lazy-expiry drop is only reachable from `get/1`, which captures
+%% `Now` *before* its lookup. Its whole point is the window between those two, so
+%% pinning it needs a call with a stale `Now` -- something no public-API sequence
+%% can produce. Exported for `arizona_session_store_SUITE`.
+-export([drop_if_expired/2]).
+-endif.
+
+%% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
@@ -91,7 +103,7 @@ get(Id) ->
         [{_, Session, ExpiresAt}] when ExpiresAt >= Now ->
             {ok, Session};
         [{_, _, _}] ->
-            ok = delete(Id),
+            ok = drop_if_expired(Id, Now),
             no_session;
         [] ->
             no_session
@@ -141,6 +153,15 @@ handle_info(_Info, State) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% Drop the row for `Id` only while it is still expired as of `Now` (the timestamp
+%% `get/1` captured before its lookup). A plain `delete(Id)` here would race a
+%% concurrent `put/3` that re-inserted a fresh row between the lookup and the delete,
+%% dropping that fresh row; the guarded `select_delete` (matching the sweep's guard)
+%% removes the row only if it remains expired.
+drop_if_expired(Id, Now) ->
+    _ = ets:select_delete(?TABLE, [{{Id, '_', '$1'}, [{'<', '$1', Now}], [true]}]),
+    ok.
 
 schedule_sweep(State) ->
     _ = erlang:send_after(sweep_ms(), self(), sweep),
