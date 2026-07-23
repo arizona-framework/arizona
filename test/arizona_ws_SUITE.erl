@@ -66,6 +66,8 @@
     recompile_routes_runs/1,
     recompile_routes_syncs_listener/1,
     https_without_tls_errors/1,
+    tls_without_scheme_serves_https/1,
+    tls_with_http_scheme_errors/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
@@ -153,6 +155,8 @@ groups() ->
         recompile_routes_runs,
         recompile_routes_syncs_listener,
         https_without_tls_errors,
+        tls_without_scheme_serves_https,
+        tls_with_http_scheme_errors,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
         ws_upgrade_preserves_duplicate_qs_keys,
@@ -1418,6 +1422,64 @@ https_without_tls_check() ->
         persistent_term:get({arizona_roadrunner_routes, arizona_https_no_tls_test}, undefined),
         "failed start must not stash routes for the dead listener"
     ).
+
+tls_without_scheme_serves_https(Config) when is_list(Config) ->
+    %% The mirror footgun: `tls => [...]` with no `scheme` used to drop the certs
+    %% and boot a plain-HTTP listener, so traffic the operator configured TLS for
+    %% went out in cleartext. `tls` alone now means https.
+    Name = arizona_tls_no_scheme_test,
+    Port = pick_port(),
+    {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
+        routes => [],
+        tls => test_tls_opts(),
+        transport_opts => [{port, Port}]
+    }),
+    try
+        ?assertMatch(
+            {ok, _},
+            ssl:connect("localhost", Port, [{verify, verify_none}, binary, {active, false}], 5000)
+        )
+    after
+        ok = arizona_roadrunner_server:stop(Name)
+    end.
+
+tls_with_http_scheme_errors(Config) when is_list(Config) ->
+    %% Certs beside an explicit `scheme => http` is a contradiction with no safe
+    %% reading -- honoring either half silently is the downgrade footgun, so it
+    %% raises before the listener (or any persistent_term) exists.
+    Result =
+        try
+            arizona_roadrunner_server:start(arizona_tls_http_scheme_test, #{
+                routes => [],
+                scheme => http,
+                tls => test_tls_opts()
+            })
+        catch
+            error:Reason -> {error_caught, Reason}
+        end,
+    ?assertEqual({error_caught, tls_with_http_scheme}, Result),
+    ?assertEqual(
+        undefined,
+        persistent_term:get({arizona_roadrunner_routes, arizona_tls_http_scheme_test}, undefined),
+        "failed start must not stash routes for the dead listener"
+    ).
+
+%% Self-signed server TLS opts for the listener boot tests. `pkix_test_data/1`
+%% returns in-memory cert/key terms (no files to write or clean up); EC keys keep
+%% the generation cheap enough to run inline.
+test_tls_opts() ->
+    Key = fun() -> public_key:generate_key({namedCurve, secp256r1}) end,
+    #{server_config := ServerConf} = public_key:pkix_test_data(#{
+        server_chain => #{
+            root => [{key, Key()}, {digest, sha256}],
+            peer => [{key, Key()}, {digest, sha256}]
+        },
+        client_chain => #{
+            root => [{key, Key()}, {digest, sha256}],
+            peer => [{key, Key()}, {digest, sha256}]
+        }
+    }),
+    ServerConf.
 
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and
