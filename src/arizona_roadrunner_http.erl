@@ -38,9 +38,9 @@ handle(Req) ->
         {halt, HaltReq} ->
             {halt_response(HaltReq), arizona_req:raw(HaltReq)};
         {ok, Status, Body, ArzReq1} ->
-            {flush_resp(ArzReq1, roadrunner_resp:html(Status, Body)), Req};
+            {arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)), Req};
         {error, Status, Body, ArzReq1} ->
-            {flush_resp(ArzReq1, roadrunner_resp:html(Status, Body)), Req}
+            {arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)), Req}
     end.
 
 %% --------------------------------------------------------------------
@@ -61,17 +61,4 @@ halt_response(HaltReq) ->
                     Status -> roadrunner_resp:status(Status)
                 end
         end,
-    flush_resp(HaltReq, Resp).
-
-%% Fold stashed response headers and cookies onto Resp.
-flush_resp(ArzReq, Resp0) ->
-    Resp1 = lists:foldl(
-        fun({Name, Value}, R) -> roadrunner_resp:add_header(R, Name, Value) end,
-        Resp0,
-        arizona_req:resp_headers(ArzReq)
-    ),
-    lists:foldl(
-        fun({Name, Value, Opts}, R) -> roadrunner_resp:set_cookie(R, Name, Value, Opts) end,
-        Resp1,
-        arizona_req:resp_cookies(ArzReq)
-    ).
+    arizona_roadrunner_resp:flush(HaltReq, Resp).

@@ -55,7 +55,7 @@ handle(Req) ->
             %% middleware-stashed cookies/headers onto the action's response.
             Raw = arizona_req:raw(ArzReq1),
             {Resp, Req1} = dispatch_action(Handler, Action, Raw#{state => State}),
-            {flush_resp(ArzReq1, Resp), Req1}
+            {arizona_roadrunner_resp:flush(ArzReq1, Resp), Req1}
     end.
 
 -doc """
@@ -112,17 +112,4 @@ halt_response(HaltReq) ->
                     Status -> roadrunner_resp:status(Status)
                 end
         end,
-    flush_resp(HaltReq, Resp).
-
-%% Fold stashed response headers and cookies onto Resp.
-flush_resp(ArzReq, Resp0) ->
-    Resp1 = lists:foldl(
-        fun({Name, Value}, R) -> roadrunner_resp:add_header(R, Name, Value) end,
-        Resp0,
-        arizona_req:resp_headers(ArzReq)
-    ),
-    lists:foldl(
-        fun({Name, Value, Opts}, R) -> roadrunner_resp:set_cookie(R, Name, Value, Opts) end,
-        Resp1,
-        arizona_req:resp_cookies(ArzReq)
-    ).
+    arizona_roadrunner_resp:flush(HaltReq, Resp).

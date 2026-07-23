@@ -82,6 +82,7 @@
     controller_rejects_disallowed_method/1,
     controller_dispatches_action_by_verb/1,
     controller_missing_action_errors/1,
+    controller_flushes_stash_onto_stream_response/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -170,7 +171,8 @@ groups() ->
         controller_rejects_cross_origin,
         controller_rejects_disallowed_method,
         controller_dispatches_action_by_verb,
-        controller_missing_action_errors
+        controller_missing_action_errors,
+        controller_flushes_stash_onto_stream_response
     ],
     Crash = [
         crash_event_closes,
@@ -367,6 +369,16 @@ init_per_group(roadrunner, Config) ->
         {post, <<"/_test/users">>, arizona_users_controller, #{action => create}},
         %% Route naming an action the controller does not export (error path).
         {get, <<"/_test/bad-action">>, arizona_users_controller, #{action => nope}},
+        %% Non-buffered ({stream, ...}) controller response on a route whose
+        %% middleware stashes a response cookie -- the flush must reach it.
+        {get, <<"/_test/stream-cookie">>, arizona_stream_controller, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {cont, arizona_req:put_resp_cookie(Req, ~"probe", ~"flushed", #{path => ~"/"}),
+                        B}
+                end
+            ]
+        }},
         %% Native-shell capability negotiation chain (`_az_caps` -> ?capability).
         {live, <<"/caps_probe">>, arizona_os_caps_probe, #{}},
         {ws, <<"/ws">>, #{}},
@@ -777,9 +789,41 @@ controller_missing_action_errors(Config) ->
     Resp = http_req(Config, "GET", "/_test/bad-action", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)).
 
+controller_flushes_stash_onto_stream_response(Config) ->
+    %% The stash flush is not buffered-response-only: a controller answering with
+    %% a `{stream, ...}` (or loop/sendfile) response on a route whose middleware
+    %% stashed a cookie used to crash with function_clause -> 500, so the two
+    %% features were mutually exclusive without anything saying so.
+    Resp = http_req_until_close(Config, "GET", "/_test/stream-cookie", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"probe=flushed">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"STREAM_OK">>)).
+
 %% Raw HTTP GET to Path with extra header lines; returns the full response binary.
 http_get(Config, Path, ExtraHeaders) ->
     http_req(Config, "GET", Path, ExtraHeaders).
+
+%% Like `http_req/4` but drains until the peer closes, so a chunked/streamed body
+%% (which arrives after the header block, in its own read) is part of the result.
+http_req_until_close(Config, Method, Path, ExtraHeaders) ->
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        Method,
+        " ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Connection: close\r\n",
+        ExtraHeaders,
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    Full = read_until_close(Sock, <<>>),
+    gen_tcp:close(Sock),
+    Full.
 
 %% Raw HTTP request with the given method to Path; returns the full response binary.
 http_req(Config, Method, Path, ExtraHeaders) ->
