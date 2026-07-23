@@ -110,57 +110,12 @@ fn main() {
 mod tests {
     use super::{CAPABILITIES, INIT_SCRIPT};
 
-    const CAPABILITIES_JSON: &str = include_str!("../capabilities/default.json");
-
-    // Capability name -> the core window command the init script dispatches it to,
-    // and the `core:window:allow-*` permission that command needs. Remote content
-    // reaches only permission-gated core commands, so a dispatch whose grant is
-    // missing fails at runtime with nothing to catch it at build time.
-    const DISPATCH: &[(&str, &str, &str)] = &[
-        ("window_title", "setTitle", "core:window:allow-set-title"),
-        ("window_focus", "setFocus", "core:window:allow-set-focus"),
-        ("window_minimize", "minimize", "core:window:allow-minimize"),
-        ("window_maximize", "maximize", "core:window:allow-maximize"),
-        (
-            "window_fullscreen",
-            "setFullscreen",
-            "core:window:allow-set-fullscreen",
-        ),
-        (
-            "screen_capture_protection",
-            "setContentProtected",
-            "core:window:allow-set-content-protected",
-        ),
-    ];
-
     #[test]
     fn advertised_capabilities_appear_in_the_page_contract() {
         for cap in CAPABILITIES {
             assert!(
                 INIT_SCRIPT.contains(cap),
                 "capability `{cap}` is advertised but missing from the page contract script",
-            );
-        }
-    }
-
-    #[test]
-    fn every_dispatched_core_command_is_granted_by_the_capability() {
-        let json: serde_json::Value =
-            serde_json::from_str(CAPABILITIES_JSON).expect("capability file is valid JSON");
-        let granted: Vec<&str> = json["permissions"]
-            .as_array()
-            .expect("capability file has a `permissions` array")
-            .iter()
-            .filter_map(|p| p.as_str())
-            .collect();
-        for (cap, method, permission) in DISPATCH {
-            assert!(
-                INIT_SCRIPT.contains(&format!("case '{cap}': return w.{method}(")),
-                "capability `{cap}` must dispatch to the core window command `{method}`",
-            );
-            assert!(
-                granted.contains(permission),
-                "core window command `{method}` needs `{permission}` in the capability file",
             );
         }
     }

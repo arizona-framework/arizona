@@ -66,7 +66,8 @@ in a plain browser simply omits the buttons -- the commands are safe no-ops.
 > **Linux note:** `set_title` *does apply* (verify with
 > `getCurrentWindow().title()` in devtools), but some Linux window managers don't
 > repaint the visible CSD title bar -- a WM/wry cosmetic quirk, not a command
-> failure. Use `Maximize` (or minimize / fullscreen) to see an unmistakable effect.
+> failure. Click `Maximize` for an unmistakable effect -- it applies once (restore
+> from the window manager, e.g. double-click the title bar, to see it again).
 > `screen_capture_protection` is advertised but is a **no-op on Linux** (it works
 > on Windows 10 2004+ / macOS only).
 
