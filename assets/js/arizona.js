@@ -182,6 +182,12 @@ let _connectQs = '';
 /** @type {Map<string, {fields: Object<string, string|string[]>, azChange: string|null}>} */
 const _savedForms = new Map();
 
+// Teardown for the connection currently owning the module state, so a second
+// `connect()` can retire the first instead of orphaning its Worker. Cleared by
+// the teardown itself.
+/** @type {(() => void)|null} */
+let _teardown = null;
+
 // --------------------------------------------------------------------------
 // Multi-document support (Document Picture-in-Picture)
 // --------------------------------------------------------------------------
@@ -1669,7 +1675,14 @@ function execOne(el, event, cmd) {
             });
             break;
         case JS_DISPATCH_EVENT:
-            document.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} }));
+            // Every hosting document, like the selector effects: a popped-out
+            // (PiP) view is a first-class Arizona document (it gets the same
+            // event delegation and the same server patches), so a listener there
+            // is as legitimate a target as one on the main document. A fresh
+            // event per document -- an Event carries its own dispatch state.
+            for (const doc of allDocs()) {
+                doc.dispatchEvent(new CustomEvent(cmd[1], { detail: cmd[2] || {} }));
+            }
             break;
         case JS_NAVIGATE: {
             const full = cmd[1];
@@ -2189,11 +2202,21 @@ function bindDocumentEvents(target, signal) {
  * a no-op. Useful for tests that spin Arizona up and down repeatedly, and
  * for host apps that need to shut Arizona down on route change.
  *
+ * The connection owns module-level state (the Worker handle, the connected flag,
+ * the saved forms), so only one can be live: calling `connect` again retires the
+ * previous one first. Left unretired, its Worker would keep a second socket
+ * applying ops to the same document, and its `disconnect` -- reading the same
+ * module state -- would terminate THIS connection's Worker instead of its own.
+ *
  * @param {string} endpoint
  * @param {Object<string, unknown>} [params]
  * @returns {() => void} disconnect
  */
 function connect(endpoint, params = {}) {
+    if (_teardown) {
+        console.warn('[arizona] connect() called twice; disconnecting the previous connection');
+        _teardown();
+    }
     const controller = new AbortController();
     const signal = controller.signal;
     const prevScrollRestoration = /** @type {any} */ (history).scrollRestoration;
@@ -2342,6 +2365,12 @@ function connect(endpoint, params = {}) {
         // content-hashed, and its URL rewritten (no runtime-string 404).
         _worker = new Worker(new URL('./arizona-worker.js', import.meta.url), { type: 'module' });
 
+        // A Worker that fails to load or throws at top level never posts [1, ...],
+        // so without this the page just silently never connects.
+        _worker.onerror = (e) => {
+            console.error('[arizona] worker error:', e.message || e);
+        };
+
         _worker.onmessage = (e) => {
             const msg = e.data;
             switch (msg[0]) {
@@ -2477,9 +2506,10 @@ function connect(endpoint, params = {}) {
     );
 
     let disconnected = false;
-    return function disconnect() {
+    _teardown = function disconnect() {
         if (disconnected) return;
         disconnected = true;
+        _teardown = null;
         controller.abort();
         if (_worker) {
             _worker.terminate();
@@ -2518,6 +2548,7 @@ function connect(endpoint, params = {}) {
             delete (/** @type {any} */ (window)._ws);
         }
     };
+    return _teardown;
 }
 
 /**

@@ -16,7 +16,15 @@
  *   [2, code]       -- close WS
  */
 
-import { fpCache, loadFpEntries, resolveHtml, setOnPersist } from './arizona-core.js';
+import {
+    FP_CACHE_MAX,
+    fpCache,
+    loadFpEntries,
+    mruFpKeys,
+    resolveHtml,
+    setOnPersist,
+    takeTouchedFps,
+} from './arizona-core.js';
 
 /** Op codes -- must match server and main thread. */
 const OP_TEXT = 0;
@@ -35,6 +43,10 @@ const SYS_PONG = '1';
 
 const DB_NAME = 'arizona';
 const STORE = 'cache';
+// Entries carry a last-used stamp that ranks eviction; a store written under a
+// shape without it cannot be ranked, so the upgrade rebuilds the store rather
+// than mixing the two.
+const DB_VERSION = 2;
 
 /** @type {Promise<IDBDatabase>|null} */
 let _dbReady = null;
@@ -42,8 +54,12 @@ let _dbReady = null;
 function getDB() {
     if (!_dbReady) {
         _dbReady = new Promise((resolve, reject) => {
-            const req = indexedDB.open(DB_NAME, 1);
-            req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+            const req = indexedDB.open(DB_NAME, DB_VERSION);
+            req.onupgradeneeded = () => {
+                const db = req.result;
+                if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
+                db.createObjectStore(STORE);
+            };
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
         });
@@ -51,12 +67,19 @@ function getDB() {
     return _dbReady;
 }
 
-/** Read all entries as [[fpId, {s, t?}], ...] for cache hydration. */
-function idbLoadAll() {
+/**
+ * Read the store for cache hydration, keeping at most `FP_CACHE_MAX` entries and
+ * deleting the rest. Pruning happens HERE, before the connection announces its
+ * keys: the server stops shipping statics for every fingerprint the client
+ * announced, so an eviction mid-connection would leave a payload the client
+ * cannot resolve.
+ * @returns {Promise<Array<[string, {s: Array<string>, t?: number, u: number}]>>}
+ */
+function idbLoadPruned() {
     return getDB().then(
         (db) =>
             new Promise((resolve) => {
-                /** @type {Array<[string, {s: Array<string>, t?: number}]>} */
+                /** @type {Array<[string, {s: Array<string>, t?: number, u: number}]>} */
                 const entries = [];
                 const req = db.transaction(STORE).objectStore(STORE).openCursor();
                 req.onsuccess = () => {
@@ -64,7 +87,7 @@ function idbLoadAll() {
                     if (c) {
                         entries.push([/** @type {string} */ (c.key), c.value]);
                         c.continue();
-                    } else resolve(entries);
+                    } else resolve(prune(db, entries));
                 };
                 req.onerror = () => {
                     console.warn('[arizona] idb cache cursor error:', req.error);
@@ -75,14 +98,46 @@ function idbLoadAll() {
 }
 
 /**
+ * Drop all but the `FP_CACHE_MAX` most-recently-used entries, returning the kept
+ * ones. Evicting is only ever a cache miss (the fingerprint is a hash of the
+ * statics, so the server re-sends them), which is what makes a plain cap safe.
+ * @param {IDBDatabase} db
+ * @param {Array<[string, {s: Array<string>, t?: number, u: number}]>} entries
+ */
+function prune(db, entries) {
+    if (entries.length <= FP_CACHE_MAX) return entries;
+    entries.sort((a, b) => b[1].u - a[1].u);
+    const store = db.transaction(STORE, 'readwrite').objectStore(STORE);
+    for (const [k] of entries.slice(FP_CACHE_MAX)) store.delete(k);
+    return entries.slice(0, FP_CACHE_MAX);
+}
+
+/**
  * Write a single fingerprint entry.
  * @param {string} fpId
- * @param {{s: Array<string>, t?: number}} entry
+ * @param {{s: Array<string>, t?: number, u: number}} entry
  */
 function idbPut(fpId, entry) {
     getDB()
         .then((db) => {
             db.transaction(STORE, 'readwrite').objectStore(STORE).put(entry, fpId);
+        })
+        .catch(() => {});
+}
+
+/**
+ * Persist the last-used stamps moved by the resolves just processed, so the next
+ * hydration evicts by what the app actually renders rather than by when the
+ * statics happened to arrive. A no-op on nearly every message: the stamp is
+ * coarse, so a steady stream of patches touches nothing.
+ */
+function flushTouchedFps() {
+    const keys = takeTouchedFps();
+    if (keys.length === 0) return;
+    getDB()
+        .then((db) => {
+            const store = db.transaction(STORE, 'readwrite').objectStore(STORE);
+            for (const k of keys) store.put(fpCache.get(k), k);
         })
         .catch(() => {});
 }
@@ -115,16 +170,22 @@ let _fpsSent = false;
  * Send cached fingerprint keys to the server exactly once per connection.
  * Called from ws.onopen and after IDB load -- whichever finds both fpCache
  * populated and WS open first actually sends; the other is a no-op.
+ * Capped at the most-recently-used `FP_CACHE_MAX`: this frame goes out on every
+ * open, reconnects included, and anything left out simply arrives with its
+ * statics attached.
  */
 function sendCachedFps() {
     if (_fpsSent || fpCache.size === 0 || !_ws || _ws.readyState !== 1) return;
     _fpsSent = true;
-    _ws.send(JSON.stringify(['cached_fps', Array.from(fpCache.keys())]));
+    _ws.send(JSON.stringify(['cached_fps', mruFpKeys(FP_CACHE_MAX)]));
 }
 
 // Wire up fp cache persistence: write each new fingerprint to IndexedDB.
 setOnPersist(
-    /** @param {string} fpId @param {{s: Array<string>, t?: number}} entry */ (fpId, entry) => {
+    /** @param {string} fpId @param {{s: Array<string>, t?: number, u: number}} entry */ (
+        fpId,
+        entry,
+    ) => {
         idbPut(fpId, entry);
     },
 );
@@ -244,7 +305,10 @@ function openSocket() {
         const ops = msg.o || null;
         const effects = msg.e || null;
 
-        if (ops) resolveOps(ops);
+        if (ops) {
+            resolveOps(ops);
+            flushTouchedFps();
+        }
 
         const firstAfterReconnect = _reconnecting;
         if (_reconnecting) _reconnecting = false;
@@ -266,6 +330,11 @@ function openSocket() {
         _reconnectTimer = setTimeout(openSocket, backoff(_attempt++));
     };
 
+    // Deliberately silent: a WebSocket error is always followed by `onclose`,
+    // which reports the code to the main thread and drives the reconnect, and the
+    // browser already logs the failed handshake itself. Logging here too would
+    // print a duplicate line on every backoff attempt of a server restart. The
+    // handler exists only so the error event has a listener.
     ws.onerror = () => {};
 }
 
@@ -283,7 +352,7 @@ self.onmessage = (e) => {
 
             // Hydrate in-memory cache from IDB (cross-session persistence),
             // then announce cached fingerprints to the server.
-            idbLoadAll()
+            idbLoadPruned()
                 .then((entries) => {
                     if (entries.length > 0) loadFpEntries(entries);
                     sendCachedFps();
@@ -291,10 +360,24 @@ self.onmessage = (e) => {
                 .catch(() => {});
             break;
         }
-        case 1:
+        case 1: {
             // [1, jsonString] -- send data
-            if (_ws && _ws.readyState === 1) _ws.send(msg[1]);
+            if (_ws && _ws.readyState === 1) {
+                _ws.send(msg[1]);
+                break;
+            }
+            // The socket is down (typically the reconnect backoff window, up to
+            // ~10s), so the frame is dropped: replaying it after the reconnect
+            // would apply stale intent to a re-mounted view. Say so -- silence
+            // here is indistinguishable from a handler that never fired, and this
+            // window is exactly when a user retries the click that "did nothing".
+            // Reported by size, not content: an event frame carries the
+            // auto-collected form fields, passwords included, and parsing one
+            // here would make a diagnostic throw on a frame the socket path
+            // itself never inspects.
+            console.warn(`[arizona] socket not open, dropped a ${msg[1].length}-byte frame`);
             break;
+        }
         case 2:
             // [2, code] -- close WS
             if (_ws) _ws.close(msg[1]);

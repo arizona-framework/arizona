@@ -100,6 +100,49 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide');
     });
 
+    it('dispatches a server-driven custom event into the PiP document too', async () => {
+        document.body.innerHTML = '<div id="v8" az-view az="0"></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v8');
+
+        let mainSeen = 0;
+        let pipSeen = 0;
+        const onMain = () => mainSeen++;
+        const onPip = () => pipSeen++;
+        document.addEventListener('az-test-evt', onMain);
+        pip.document.addEventListener('az-test-evt', onPip);
+
+        // JS_DISPATCH_EVENT (9): a listener in a popped-out view is as legitimate
+        // a target as one on the main document, like the selector effects.
+        executeJS(document.documentElement, null, [9, 'az-test-evt', { n: 1 }]);
+        expect(mainSeen).toBe(1);
+        expect(pipSeen).toBe(1);
+
+        document.removeEventListener('az-test-evt', onMain);
+        pip.fire('pagehide');
+    });
+
+    it('carries the effect detail to every document it reaches', async () => {
+        document.body.innerHTML = '<div id="v9" az-view az="0"></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v9');
+
+        /** @type {Array<*>} */
+        const details = [];
+        const onMain = (/** @type {CustomEvent} */ e) => details.push(e.detail);
+        const onPip = (/** @type {CustomEvent} */ e) => details.push(e.detail);
+        document.addEventListener('az-detail-evt', onMain);
+        pip.document.addEventListener('az-detail-evt', onPip);
+
+        executeJS(document.documentElement, null, [9, 'az-detail-evt', { id: 7 }]);
+        expect(details).toEqual([{ id: 7 }, { id: 7 }]);
+
+        document.removeEventListener('az-detail-evt', onMain);
+        pip.fire('pagehide');
+    });
+
     it('restores the view inline when the window closes', async () => {
         document.body.innerHTML = '<div id="v3" az-view az="0"></div>';
         const pip = makePipWindow();
