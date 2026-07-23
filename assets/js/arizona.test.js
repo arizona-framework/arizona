@@ -2027,6 +2027,26 @@ describe('executeJS -- select/copy_to_clipboard/show_modal/close_modal', () => {
         expect(() => executeJS(document.body, null, [27, '#t'])).not.toThrow();
     });
 
+    it('copy_to_clipboard swallows a rejected writeText (no unhandled rejection)', async () => {
+        document.body.innerHTML = '<input id="t" value="x" />';
+        const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+        Object.defineProperty(navigator, 'clipboard', {
+            value: { writeText },
+            configurable: true,
+        });
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        // writeText rejects without permission; the effect must catch it (a logged
+        // no-op), not leave an unhandled rejection.
+        executeJS(document.body, null, [27, '#t']); // op 27 = copy_to_clipboard
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(writeText).toHaveBeenCalledWith('x');
+        expect(spy).toHaveBeenCalled();
+        spy.mockRestore();
+    });
+
     it('show_modal calls showModal() on the first matching dialog only', () => {
         document.body.innerHTML = '<dialog class="d"></dialog><dialog class="d"></dialog>';
         const [first, second] = document.querySelectorAll('.d');
@@ -2205,6 +2225,29 @@ describe('hooks -- mounted', () => {
         expect(mounted).toHaveBeenCalledOnce();
     });
 
+    // Nested streams: a pre-existing outer item holds an inner item that shares the
+    // new item's az-key string. Verify hook mounting via a DIRECT-child query (`:scope >`),
+    // not a descendant one -- otherwise the nested inner item (first in document order)
+    // matches, so its hook mounts while the newly inserted OUTER item's hook never does.
+    it('mounts the inserted item hook, not a nested descendant sharing the key', () => {
+        let mountedEl = null;
+        hooks.Row = {
+            mounted() {
+                mountedEl = this.el;
+            },
+        };
+        setupView(
+            'v',
+            '<div az="0"><div az-key="a"><span az-key="k" az-hook="Row">inner</span></div></div>',
+        );
+        const container = resolveEl('v:0');
+        applyOps([[OP.INSERT, 'v:0', 'k', -1, '<div az-key="k" az-hook="Row">outer</div>']]);
+        // The hook mounted on the newly inserted DIRECT child, not the pre-existing nested one.
+        expect(mountedEl).not.toBeNull();
+        expect(mountedEl.textContent).toBe('outer');
+        expect(mountedEl.parentElement).toBe(container);
+    });
+
     it('fires after OP_UPDATE innerHTML with az-hook element', () => {
         const mounted = vi.fn();
         hooks.Widget = { mounted };
@@ -2299,6 +2342,18 @@ describe('hooks -- mounted', () => {
         const mounted = vi.fn();
         hooks.Inline = { mounted };
         setupView('v', '<div az="0"><!--az:0-->old<!--/az--></div>');
+        applyOps([[OP.TEXT, 'v:0', '<span az-hook="Inline">new</span>', true]]);
+        expect(mounted).toHaveBeenCalledOnce();
+    });
+
+    // The markerless HTML fallback (no <!--az:X--> comment: the slot is the element's
+    // whole content) innerHTMLs the fragment. Like the marker path and OP_UPDATE, it
+    // must mount hooks on the inserted content, or an [az-hook] arriving that way never
+    // fires mounted().
+    it('fires after OP_TEXT markerless HTML fallback with az-hook', () => {
+        const mounted = vi.fn();
+        hooks.Inline = { mounted };
+        setupView('v', '<div az="0">old</div>');
         applyOps([[OP.TEXT, 'v:0', '<span az-hook="Inline">new</span>', true]]);
         expect(mounted).toHaveBeenCalledOnce();
     });
@@ -2841,6 +2896,30 @@ describe('?local -- set/get content', () => {
         const span = document.querySelector('[az="0"]');
         expect(span.querySelector('img')).toBeNull();
         expect(span.textContent).toBe('<img src=x onerror=alert(1)>');
+    });
+
+    // Regression (D-low.3): when the view root ELEMENT itself carries the
+    // az-local slot (not a descendant), the self-visit must gate on nodeType,
+    // not `instanceof Element`. In a Document PiP window the root lives in
+    // another realm whose Element constructor differs, so `instanceof Element`
+    // (this realm's) is false and the root's own slot would be skipped. Simulate
+    // the realm mismatch by swapping globalThis.Element -- a real jsdom element
+    // then fails `instanceof` yet still reports nodeType 1. querySelectorAll only
+    // matches descendants, so the root's own slot is reachable only via the
+    // self-visit under test.
+    it('updates a ?local on the view root itself even when the root is cross-realm', () => {
+        document.body.innerHTML =
+            `<div id="v" az-view az="0" az-local='{"c":{"0":"title"}}'>` +
+            `<!--az:0-->old<!--/az--></div>`;
+        const RealElement = globalThis.Element;
+        // A distinct constructor so real DOM nodes are not instances of it.
+        globalThis.Element = class {};
+        try {
+            set('v', 'title', 'new');
+        } finally {
+            globalThis.Element = RealElement;
+        }
+        expect(document.getElementById('v').textContent).toBe('new');
     });
 });
 

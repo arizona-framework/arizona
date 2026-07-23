@@ -132,8 +132,11 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
 %% --------------------------------------------------------------------
 
 -doc """
-Pushes a named event to the server. Auto-collects payload from
-sibling inputs/forms when used inside one.
+Pushes a named event to the server. The payload is auto-collected from the
+**triggering element** itself, not its siblings: a form trigger contributes its
+fields (a form submit passes the form), an input/select/textarea trigger its
+`value`; any other trigger (e.g. a plain button inside a form) sends an empty
+payload. Use `push_event/2` to attach data explicitly.
 """.
 -spec push_event(Event) -> arizona_effect:cmd() when
     Event :: binary().
@@ -445,6 +448,11 @@ reload() -> {arizona_effect, [?EFFECT_RELOAD]}.
 Wraps a command (or list of commands) so it only fires when a key
 matching `Key` is pressed. `Key` can be an atom (e.g. `enter`), a
 list of atoms (matches any), or a regex pattern as a binary.
+
+Matching is **case-insensitive**: the client lowercases the browser's
+`event.key` before comparing, so give keys and patterns in lowercase
+(`enter`, `escape`, `arrowdown`). An uppercase name or pattern (`'Enter'`,
+`~"^[A-Z]$"`) never matches.
 """.
 -spec on_key(Key, Cmd) -> arizona_effect:cmd() when
     Key :: atom() | [atom()] | binary(),
