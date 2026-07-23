@@ -77,8 +77,8 @@ raise_or_propagate_retags_at_the_callback(Config) when is_list(Config) ->
     %% The callback itself is missing: the top frame names it at the arity the
     %% dispatcher asked for, so the failure is re-tagged into the friendly reason.
     ST = crash_stacktrace(fun() -> (self_mod()):probe_missing(arg) end),
-    ?assertError(
-        {missing_action, ?MODULE, probe_missing, 1},
+    ?assertMatch(
+        {{missing_action, ?MODULE, probe_missing, 1}, _},
         retag(ST, {?MODULE, probe_missing, 1})
     ).
 
@@ -89,23 +89,28 @@ raise_or_propagate_propagates_other_arity_of_same_name(Config) when is_list(Conf
     %% entirely -- the arity is what tells the two apart.
     ST = crash_stacktrace(fun() -> ?MODULE:probe_handle(arg) end),
     ?assertMatch([{?MODULE, probe_handle, [arg, extra], _} | _], ST),
-    ?assertError(undef, retag(ST, {?MODULE, probe_handle, 1})).
+    ?assertEqual({undef, ST}, retag(ST, {?MODULE, probe_handle, 1})).
 
 raise_or_propagate_propagates_inner_failure(Config) when is_list(Config) ->
     %% A failure from a different function inside the callback body propagates
-    %% untouched, stacktrace included.
+    %% untouched, original stacktrace included.
     ST = crash_stacktrace(fun() -> ?MODULE:probe_inner_undef(arg) end),
-    ?assertError(undef, retag(ST, {?MODULE, probe_inner_undef, 1})).
+    ?assertEqual({undef, ST}, retag(ST, {?MODULE, probe_inner_undef, 1})).
 
 %% --- Helpers -------------------------------------------------------------
 
 %% Runs the dispatcher-side retag with a fixed reason/args, so a test only varies
-%% the stacktrace and the callback MFA being claimed.
+%% the stacktrace and the callback MFA being claimed. The helper never returns
+%% normally, so this reports what it raised, stacktrace included.
 retag(ST, MFA) ->
     {Mod, Fn, Arity} = MFA,
-    arizona_error:raise_or_propagate(
-        undef, ST, MFA, {missing_action, Mod, Fn, Arity}, [Mod, Fn], ?MODULE
-    ).
+    try
+        arizona_error:raise_or_propagate(
+            undef, ST, MFA, {missing_action, Mod, Fn, Arity}, [Mod, Fn], ?MODULE
+        )
+    catch
+        error:Reason:RaisedST -> {Reason, RaisedST}
+    end.
 
 %% The real stacktrace of a real `undef`, not a synthesized one -- the frame shape
 %% (args list vs arity integer) is exactly what the match depends on.
