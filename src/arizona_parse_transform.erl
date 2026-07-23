@@ -1420,7 +1420,7 @@ classify_other_body(AST) ->
 
 compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, Backend) ->
     Statics = [[extract_binary_value(ExprAST)]],
-    {Statics, [], fingerprint(Backend, Statics), #{}};
+    {Statics, [], fingerprint(Statics), #{}};
 compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend) ->
     compile_fragment_parts([ExprAST], Module, LiveRender, Backend);
 compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
@@ -1430,7 +1430,7 @@ compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
 compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend) ->
     Statics = [[], []],
     DynASTs = [make_esc_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST), Backend)],
-    {Statics, DynASTs, fingerprint(Backend, Statics), #{}}.
+    {Statics, DynASTs, fingerprint(Statics), #{}}.
 
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
     Opts = prescan_directives(ElementASTs),
@@ -1451,7 +1451,7 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
         ElementASTs
     ),
     {Statics, DynASTs} = finalize(State1),
-    Fingerprint = fingerprint(Backend, Statics),
+    Fingerprint = fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
 compile_mixed_items(Items, Module, Backend) ->
@@ -1461,7 +1461,7 @@ compile_mixed_items(Items, Module, Backend) ->
         fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
     ),
     {Statics, DynASTs} = finalize(State1),
-    Fingerprint = fingerprint(Backend, Statics),
+    Fingerprint = fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
 compile_mixed_item(Item, Module, State) ->
@@ -2308,10 +2308,15 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
     {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
 
 %% The fingerprint identifies the template's shape, so it is taken over the
-%% *unscoped* statics -- the bytes with each `az` marker rendered from its bare
-%% id, which is what the statics were before scoping became structural.
-fingerprint(Backend, Statics) ->
-    generate_fingerprint([render_static(Backend, <<>>, S) || S <- Statics]).
+%% *segments* rather than the rendered bytes. Segments distinguish a framework
+%% marker from literal bytes that merely look like one, so two templates that
+%% differ only in that respect -- exactly the pair this scoping bug used to
+%% conflate -- get different fingerprints. Hashing the rendered bytes instead
+%% would give a repaired template the same `f` as its corrupted predecessor, and
+%% `f` keys the client's statics cache, so the repair would never reach a client
+%% that had already cached the broken statics.
+fingerprint(Statics) ->
+    generate_fingerprint(Statics).
 
 %% The fingerprint keys the client's persistent (IndexedDB) statics cache, whose
 %% collision domain is every template version a browser has ever seen -- a collision
