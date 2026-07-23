@@ -628,6 +628,7 @@ function applyTextOp(el, az, val, isHtml) {
         destroyChildHooks(el);
         if (isHtml) {
             el.innerHTML = val;
+            mountHooks(el);
         } else {
             // In-place when the element holds exactly one text node: `textContent =`
             // would remove + reinsert it (childList churn), and that forces a layout
@@ -1082,7 +1083,10 @@ function insertItemEl(el, key, pos, html) {
             el.appendChild(fragment);
         }
     }
-    const item = el.querySelector(`[az-key="${CSS.escape(key)}"]`);
+    // Match a DIRECT child (`:scope >`), like removeItemEl/moveItemEl/patchItemEl do:
+    // a descendant query would match an inner item sharing the key string first (nested
+    // streams), mounting hooks on the wrong element and skipping the new item's own.
+    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
     if (item) mountHooks(item);
     else console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
 }

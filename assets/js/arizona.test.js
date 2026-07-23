@@ -2205,6 +2205,29 @@ describe('hooks -- mounted', () => {
         expect(mounted).toHaveBeenCalledOnce();
     });
 
+    // Nested streams: a pre-existing outer item holds an inner item that shares the
+    // new item's az-key string. Verify hook mounting via a DIRECT-child query (`:scope >`),
+    // not a descendant one -- otherwise the nested inner item (first in document order)
+    // matches, so its hook mounts while the newly inserted OUTER item's hook never does.
+    it('mounts the inserted item hook, not a nested descendant sharing the key', () => {
+        let mountedEl = null;
+        hooks.Row = {
+            mounted() {
+                mountedEl = this.el;
+            },
+        };
+        setupView(
+            'v',
+            '<div az="0"><div az-key="a"><span az-key="k" az-hook="Row">inner</span></div></div>',
+        );
+        const container = resolveEl('v:0');
+        applyOps([[OP.INSERT, 'v:0', 'k', -1, '<div az-key="k" az-hook="Row">outer</div>']]);
+        // The hook mounted on the newly inserted DIRECT child, not the pre-existing nested one.
+        expect(mountedEl).not.toBeNull();
+        expect(mountedEl.textContent).toBe('outer');
+        expect(mountedEl.parentElement).toBe(container);
+    });
+
     it('fires after OP_UPDATE innerHTML with az-hook element', () => {
         const mounted = vi.fn();
         hooks.Widget = { mounted };
@@ -2299,6 +2322,18 @@ describe('hooks -- mounted', () => {
         const mounted = vi.fn();
         hooks.Inline = { mounted };
         setupView('v', '<div az="0"><!--az:0-->old<!--/az--></div>');
+        applyOps([[OP.TEXT, 'v:0', '<span az-hook="Inline">new</span>', true]]);
+        expect(mounted).toHaveBeenCalledOnce();
+    });
+
+    // The markerless HTML fallback (no <!--az:X--> comment: the slot is the element's
+    // whole content) innerHTMLs the fragment. Like the marker path and OP_UPDATE, it
+    // must mount hooks on the inserted content, or an [az-hook] arriving that way never
+    // fires mounted().
+    it('fires after OP_TEXT markerless HTML fallback with az-hook', () => {
+        const mounted = vi.fn();
+        hooks.Inline = { mounted };
+        setupView('v', '<div az="0">old</div>');
         applyOps([[OP.TEXT, 'v:0', '<span az-hook="Inline">new</span>', true]]);
         expect(mounted).toHaveBeenCalledOnce();
     });
