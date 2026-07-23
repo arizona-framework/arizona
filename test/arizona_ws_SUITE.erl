@@ -1543,10 +1543,12 @@ tls_with_http_scheme_errors(Config) when is_list(Config) ->
     %% raises before the listener (or any persistent_term) exists.
     Result =
         try
+            %% The certs are never reached -- the contradiction is rejected up
+            %% front -- so this needs no real key material.
             arizona_roadrunner_server:start(arizona_tls_http_scheme_test, #{
                 routes => [],
                 scheme => http,
-                tls => test_tls_opts()
+                tls => [{certfile, "priv/nonexistent.pem"}]
             })
         catch
             error:Reason -> {error_caught, Reason}
@@ -1558,11 +1560,10 @@ tls_with_http_scheme_errors(Config) when is_list(Config) ->
         "failed start must not stash routes for the dead listener"
     ).
 
-%% Self-signed server TLS opts for the listener boot tests. `pkix_test_data/1`
-%% returns in-memory cert/key terms (no files to write or clean up); EC keys keep
-%% the generation cheap enough to run inline.
+%% Self-signed server TLS opts for the listener boot test. `pkix_test_data/1`
+%% returns in-memory cert/key terms, so there is nothing to write or clean up.
 test_tls_opts() ->
-    Key = fun() -> public_key:generate_key({namedCurve, secp256r1}) end,
+    Key = fun() -> public_key:generate_key({rsa, 2048, 65537}) end,
     #{server_config := ServerConf} = public_key:pkix_test_data(#{
         server_chain => #{
             root => [{key, Key()}, {digest, sha256}],
