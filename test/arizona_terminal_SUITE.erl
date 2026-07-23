@@ -26,6 +26,7 @@
 -export([tty_serve_exits_on_linked_death/1]).
 -export([tty_serve_handles_push_then_eof/1]).
 -export([handle_key_encodes_unicode_input/1]).
+-export([initial_paint_stop_quits/1]).
 -export([render_attr_rejected/1]).
 -export([bell_effect_emits_bel/1]).
 -export([set_title_effect_bel_terminated/1]).
@@ -59,6 +60,7 @@ all() ->
         tty_serve_exits_on_linked_death,
         tty_serve_handles_push_then_eof,
         handle_key_encodes_unicode_input,
+        initial_paint_stop_quits,
         render_attr_rejected,
         bell_effect_emits_bel,
         set_title_effect_bel_terminated
@@ -147,6 +149,42 @@ handle_key_encodes_unicode_input(Config) when is_list(Config) ->
     ),
     ?assertMatch({cont, _}, arizona_terminal_session:handle_key(Session, [8364])),
     ok = arizona_terminal_session:stop(Session).
+
+%% The initial paint's continue/stop verdict counts like every other paint's. A
+%% driver that stops on the first frame must get `quit` back -- with its teardown
+%% emitted and the live view reaped -- rather than a session the transport then
+%% loops on, ignoring the refusal.
+initial_paint_stop_quits(Config) when is_list(Config) ->
+    Self = self(),
+    Out = fun(Iodata) ->
+        Self ! {out, iolist_to_binary(Iodata)},
+        ok
+    end,
+    %% The live view is linked to this process, so trapping exits both proves it
+    %% was stopped and yields its pid.
+    Prev = process_flag(trap_exit, true),
+    try
+        ?assertEqual(
+            quit,
+            arizona_terminal_session:start(
+                arizona_term_demo, #{}, arizona_term_stop_driver, [], Out
+            )
+        ),
+        ?assert(contains(collect_out(), ~"stop-driver-teardown")),
+        receive
+            {'EXIT', _LivePid, normal} -> ok
+        after 2000 -> ct:fail(live_view_not_stopped)
+        end
+    after
+        process_flag(trap_exit, Prev)
+    end.
+
+%% Everything the session's Out function wrote, concatenated.
+collect_out() ->
+    receive
+        {out, Bin} -> <<Bin/binary, (collect_out())/binary>>
+    after 0 -> <<>>
+    end.
 
 %% Start a demo session (no-op Out) plus a blocking stand-in reader, both monitored,
 %% for driving arizona_terminal_tty:serve/2 to an exit path.

@@ -86,12 +86,17 @@ run(Handler, Bindings, Driver) ->
     %% way out rather than leaving it flipped.
     Prev = process_flag(trap_exit, true),
     try
-        {ok, Session} = arizona_terminal_session:start(
-            Handler, Bindings, Driver, [], fun io:put_chars/1
-        ),
-        Owner = self(),
-        Reader = spawn_link(fun() -> read_loop(Owner) end),
-        serve(Session, Reader)
+        %% A driver whose first paint asks to stop never yields a session: it has
+        %% already emitted its teardown and stopped the live view, so there is no
+        %% reader to spawn and no loop to run.
+        case arizona_terminal_session:start(Handler, Bindings, Driver, [], fun io:put_chars/1) of
+            quit ->
+                ok;
+            {ok, Session} ->
+                Owner = self(),
+                Reader = spawn_link(fun() -> read_loop(Owner) end),
+                serve(Session, Reader)
+        end
     after
         process_flag(trap_exit, Prev)
     end.

@@ -184,6 +184,15 @@ SSH). `arizona_terminal_io:keys/1` decodes a raw input read into idiomatic keys
 (char codes, atoms like `up`/`enter`, `{ctrl, _}` / `{alt, _}`) for drivers to match
 on.
 
+Every `paint/3` decides `continue` or `stop`, the **initial** paint included: a driver
+that stops on the first frame gets its teardown emitted and the live view reaped, and
+`arizona_terminal_session:start/5` answers `quit` instead of handing back a session.
+The SSH transport serves one view per channel -- a second `shell` request is refused
+rather than mounting a second view over the first, `exec` is refused (this shell is
+interactive only), and input or a resize arriving before the `shell` request is
+dropped or folded into the mount geometry rather than reaching a session that does not
+exist yet.
+
 A view drives the terminal back with **effects** from `arizona_terminal_effect` (the
 `?terminal` analog of `arizona_js` / `arizona_android`): `quit/0` stops the session,
 `set_title/1` sets the terminal title, `bell/0` rings it. The default driver's

@@ -52,8 +52,13 @@ Mounts `Handler` (request-free `mount/1`) as a live view whose transport is the
 calling process, creates the `Driver` state from `DriverArg`, and paints the
 initial frame via `Out` (after the driver's `setup`). `Bindings` carries any
 connection context (e.g. `term_rows`/`term_cols`).
+
+The initial paint decides `continue`/`stop` like every other paint: a driver that
+stops on the very first frame gets `quit` instead of a session, having already
+emitted its teardown. Since the caller never receives a session it could stop,
+`start/5` also stops the live process itself on that path.
 """.
--spec start(Handler, Bindings, Driver, DriverArg, Out) -> {ok, session()} when
+-spec start(Handler, Bindings, Driver, DriverArg, Out) -> {ok, session()} | quit when
     Handler :: module(),
     Bindings :: arizona_template:bindings(),
     Driver :: module(),
@@ -67,9 +72,17 @@ start(Handler, Bindings, Driver, DriverArg, Out) ->
     DState0 = call_init(Driver, DriverArg),
     {Setup, DState1} = call_setup(Driver, DState0),
     {ok, Frame} = arizona_live:render_current(Pid),
-    {Paint, _Next, DState2} = call_paint(Driver, Frame, [], DState1),
+    {Paint, Next, DState2} = call_paint(Driver, Frame, [], DState1),
     ok = Out([Setup, Paint]),
-    {ok, #session{pid = Pid, view_id = ViewId, driver = Driver, dstate = DState2, out = Out}}.
+    Session = #session{pid = Pid, view_id = ViewId, driver = Driver, dstate = DState2, out = Out},
+    case Next of
+        continue ->
+            {ok, Session};
+        stop ->
+            ok = do_teardown(Session),
+            ok = stop(Session),
+            quit
+    end.
 
 -doc """
 Handles a raw key read (a character list from a local TTY, or a byte binary from a

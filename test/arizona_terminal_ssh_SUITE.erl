@@ -13,6 +13,10 @@
 -export([disconnect_removes_subscriber/1]).
 -export([live_view_crash_tears_down/1]).
 -export([daemon_opts_bounds_sessions/1]).
+-export([data_before_shell_keeps_channel/1]).
+-export([window_change_before_shell_sizes_view/1]).
+-export([second_shell_refused/1]).
+-export([exec_replies_failure/1]).
 
 %% End-to-end: arizona_terminal_ssh serves the ?terminal demo view over a real SSH daemon,
 %% driven by the OTP ssh client. A throwaway host key + accept-all password auth
@@ -31,7 +35,11 @@ all() ->
         chat_broadcasts_to_all_terminals,
         disconnect_removes_subscriber,
         live_view_crash_tears_down,
-        daemon_opts_bounds_sessions
+        daemon_opts_bounds_sessions,
+        data_before_shell_keeps_channel,
+        window_change_before_shell_sizes_view,
+        second_shell_refused,
+        exec_replies_failure
     ].
 
 init_per_suite(Config) ->
@@ -166,6 +174,51 @@ daemon_opts_bounds_sessions(Config) when is_list(Config) ->
     Opts2 = arizona_terminal_ssh:daemon_opts(Base#{daemon_opts => [{max_sessions, 3}]}),
     ?assertEqual([3], [N || {max_sessions, N} <- Opts2]).
 
+data_before_shell_keeps_channel(Config) when is_list(Config) ->
+    %% The pty-req -- not the shell request -- is what makes the ssh server spawn
+    %% this channel process, so a keystroke can arrive while there is no session
+    %% yet. Feeding it to the session crashed the channel (function_clause on an
+    %% undefined session), killing it before the shell request that follows.
+    {Conn, Ch} = connect_pty(?config(port, Config)),
+    ok = ssh_connection:send(Conn, Ch, ~"j"),
+    ok = ssh_connection:shell(Conn, Ch),
+    Frame = recv_until(Conn, ~"== Arizona Terminal Demo ==", 3000),
+    %% The premature keystroke was dropped, not applied: the menu is unmoved.
+    ?assert(contains(Frame, ~"> New Game")),
+    ok = ssh:close(Conn).
+
+window_change_before_shell_sizes_view(Config) when is_list(Config) ->
+    %% Same window: a resize before the shell request has no session to notify,
+    %% but it is the geometry the view must mount with.
+    {Conn, Ch} = connect_pty(?config(port, Config)),
+    ok = ssh_connection:window_change(Conn, Ch, 100, 40),
+    ok = ssh_connection:shell(Conn, Ch),
+    _ = recv_until(Conn, ~"Terminal: 100x40", 3000),
+    ok = ssh:close(Conn).
+
+second_shell_refused(Config) when is_list(Config) ->
+    %% A channel serves one view. Honoring a second shell request mounted another
+    %% live view over the same channel -- two views painting the same terminal,
+    %% with the first orphaned (terminate/2 only stops the one in state).
+    Port = ?config(port, Config),
+    Before = arizona_pubsub:subscribers(demo),
+    {Conn, Ch} = connect(Port),
+    _ = recv_until(Conn, ~"== Arizona Terminal Demo ==", 3000),
+    ok = wait_until(fun() -> length(arizona_pubsub:subscribers(demo) -- Before) =:= 1 end),
+    ok = ssh_connection:shell(Conn, Ch),
+    %% The first tick is a second away -- ample time for a second mount to land.
+    _ = recv_until(Conn, ~"Server ticks: 1", 3000),
+    ?assertEqual(1, length(arizona_pubsub:subscribers(demo) -- Before)),
+    ok = ssh:close(Conn).
+
+exec_replies_failure(Config) when is_list(Config) ->
+    %% This shell serves an interactive view only. Silently ignoring an exec
+    %% request leaves a client that asked for a reply waiting for one that never
+    %% comes; refusing it answers immediately.
+    {Conn, Ch} = connect_pty(?config(port, Config)),
+    ?assertEqual(failure, ssh_connection:exec(Conn, Ch, "ls", 3000)),
+    ok = ssh:close(Conn).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
@@ -217,6 +270,15 @@ write_host_key(Dir) ->
 %% Connect as the OTP ssh client, allocate an 80x24 pty, and request a shell --
 %% the same sequence `ssh -t` performs.
 connect(Port) ->
+    {Conn, Ch} = connect_pty(Port),
+    ok = ssh_connection:shell(Conn, Ch),
+    {Conn, Ch}.
+
+%% The same sequence stopped one step short of the shell request. The pty-req is
+%% already enough for the ssh server to spawn the channel process, so this is the
+%% window in which a client's data / window-change reaches a channel that has no
+%% session yet.
+connect_pty(Port) ->
     {ok, Conn} = ssh:connect("localhost", Port, [
         {user, ?USER},
         {password, ?PASSWORD},
@@ -227,7 +289,6 @@ connect(Port) ->
     success = ssh_connection:ptty_alloc(Conn, Ch, [
         {term, "xterm"}, {width, 80}, {height, 24}
     ]),
-    ok = ssh_connection:shell(Conn, Ch),
     {Conn, Ch}.
 
 %% Accumulate channel data until `Pattern` appears or the deadline passes. The
