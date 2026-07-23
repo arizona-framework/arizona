@@ -34,11 +34,23 @@ handle(Req) ->
     #{arizona := State} = roadrunner_req:state(Req),
     #{handler := H} = State,
     ArzReq = arizona_roadrunner_req:new(Req),
+    %% Every arm hands roadrunner back the *threaded* raw request, never the one we
+    %% came in with. Reading the body mutates the raw req in `body_buffering =>
+    %% manual` mode (it advances the body_reader), and roadrunner's finishing phase
+    %% drains the reader off whatever req the handler returns -- give it the stale
+    %% one and it re-reads the already consumed body out of the next pipelined
+    %% request, corrupting keep-alive framing.
     case arizona_http:render(H, ArzReq, State) of
         {halt, HaltReq} ->
             {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
         {ok, Status, Body, ArzReq1} ->
-            {arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)), Req};
+            {
+                arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)),
+                arizona_req:raw(ArzReq1)
+            };
         {error, Status, Body, ArzReq1} ->
-            {arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)), Req}
+            {
+                arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)),
+                arizona_req:raw(ArzReq1)
+            }
     end.
