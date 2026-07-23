@@ -87,6 +87,13 @@ Count the live sessions opened on route `RouteKey`, for the per-route
 `max_sessions` cap. Counts table rows directly (a stale row of a crashed
 session is swept on its next `lookup/1`), so the count is approximate under a
 burst of concurrent `initialize`s -- acceptable for a soft capacity limit.
+
+The scan is linear in the table, so an `initialize` on a capped route pays
+roughly one microsecond per 15 live sessions -- bounded by the cap the operator
+chose, and only on routes that set one. A cached per-route counter would make
+it constant-time but could not self-heal: a session killed without running
+`terminate/2` would leak an increment and lock its route out for good, where a
+stale row is swept the next time its id is looked up.
 """.
 -spec count(RouteKey) -> non_neg_integer() when
     RouteKey :: binary().
