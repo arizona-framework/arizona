@@ -184,7 +184,14 @@ handle_ssh_msg(
     {ok, State#state{rows = Rows, cols = Cols}};
 handle_ssh_msg({ssh_cm, Conn, {shell, ChannelId, WantReply}}, State) ->
     ok = reply(Conn, ChannelId, WantReply),
-    {ok, start_session(Conn, ChannelId, State)};
+    case start_session(Conn, ChannelId, State) of
+        {ok, Session} ->
+            {ok, State#state{session = Session}};
+        quit ->
+            %% The driver stopped on its first paint (its teardown already went
+            %% out on the channel), so there is no session to serve.
+            {stop, ChannelId, State}
+    end;
 handle_ssh_msg({ssh_cm, _Conn, {data, ChannelId, 0, Data}}, #state{session = Session} = State) ->
     apply_session_result(arizona_terminal_session:handle_key(Session, Data), ChannelId, State);
 handle_ssh_msg(
@@ -224,12 +231,11 @@ apply_session_result({cont, Session}, _ChannelId, State) ->
 %% Mount the live view with the channel as its transport. The output function
 %% writes frames to the SSH channel; the driver owns cursor/screen setup+teardown.
 start_session(
-    Conn, ChannelId, #state{handler = Handler, driver = Driver, rows = Rows, cols = Cols} = State
+    Conn, ChannelId, #state{handler = Handler, driver = Driver, rows = Rows, cols = Cols}
 ) ->
     Out = fun(Iodata) -> send(Conn, ChannelId, Iodata) end,
     Bindings = #{term_rows => Rows, term_cols => Cols},
-    {ok, Session} = arizona_terminal_session:start(Handler, Bindings, Driver, [], Out),
-    State#state{session = Session}.
+    arizona_terminal_session:start(Handler, Bindings, Driver, [], Out).
 
 %% Stop the live view, tolerating one already gone (the {'EXIT', _, _} teardown
 %% path is where the live process is what died); arizona_live:stop would otherwise
