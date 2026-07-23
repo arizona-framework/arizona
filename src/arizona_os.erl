@@ -104,7 +104,10 @@ focus() -> command(~"window_focus").
 -spec minimize() -> arizona_effect:cmd().
 minimize() -> command(~"window_minimize").
 
--doc "Maximizes the shell window.".
+-doc """
+Maximizes the shell window. Idempotent, never a toggle: a shell maps this to its
+maximize primitive, so re-asserting it leaves an already-maximized window alone.
+""".
 -spec maximize() -> arizona_effect:cmd().
 maximize() -> command(~"window_maximize").
 

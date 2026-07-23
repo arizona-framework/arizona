@@ -192,7 +192,7 @@ by each shell's native primitives:
 | Contract piece | Tauri v2 | Electron |
 | --- | --- | --- |
 | install `__arizona_os__` before page JS | `WebviewWindowBuilder::initialization_script` | `preload.js` + `contextBridge.exposeInMainWorld` |
-| `invoke(name, args)` -> native | `getCurrentWindow()` **core window commands** (`setTitle` / `minimize` / `toggleMaximize` / ...) | `ipcRenderer.invoke` -> `ipcMain.handle` |
+| `invoke(name, args)` -> native | `getCurrentWindow()` **core window commands** (`setTitle` / `minimize` / `maximize` / ...) | `ipcRenderer.invoke` -> `ipcMain.handle` |
 | `onEvent(cb)` <- OS events | `window.__TAURI__.event.listen` + Rust `app.emit` | `ipcRenderer.on` + main `webContents.send` |
 | window control / capture protection | `WebviewWindow::set_title` / `set_content_protected` | `BrowserWindow.setTitle` / `setContentProtection` |
 
