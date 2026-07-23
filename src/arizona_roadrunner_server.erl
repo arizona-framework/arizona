@@ -202,7 +202,7 @@ port_from_opts(Opts) ->
 %% `tls => [...]` listener opt. Top-level `tls` overrides
 %% `proto_opts.tls` (which has already flowed into `ListenerOpts`).
 %% Roadrunner turns TLS on from the `tls` listener opt alone, so `tls`
-%% with no `scheme` means https — dropping it (the old behaviour) served
+%% with no `scheme` means https; dropping it (the old behaviour) served
 %% the configured certs' traffic in cleartext on the same port, the same
 %% silent-downgrade footgun as `scheme => https` with no certs. Both
 %% halves of the contradiction now fail loudly instead: no certs for
