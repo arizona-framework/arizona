@@ -95,7 +95,7 @@ annotation.
     Reason :: term(),
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
-format_error({unflushable_response, websocket}, _ST) ->
+format_error({unflushable_response, websocket}, [{_M, _F, _Args, _Info} | _]) ->
     #{
         general =>
             "a websocket upgrade response carries no headers, so the response "
