@@ -43,10 +43,7 @@ const SYS_PONG = '1';
 
 const DB_NAME = 'arizona';
 const STORE = 'cache';
-// Entries carry a last-used stamp that ranks eviction; a store written under a
-// shape without it cannot be ranked, so the upgrade rebuilds the store rather
-// than mixing the two.
-const DB_VERSION = 2;
+const DB_VERSION = 1;
 
 /** @type {Promise<IDBDatabase>|null} */
 let _dbReady = null;
@@ -55,11 +52,7 @@ function getDB() {
     if (!_dbReady) {
         _dbReady = new Promise((resolve, reject) => {
             const req = indexedDB.open(DB_NAME, DB_VERSION);
-            req.onupgradeneeded = () => {
-                const db = req.result;
-                if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
-                db.createObjectStore(STORE);
-            };
+            req.onupgradeneeded = () => req.result.createObjectStore(STORE);
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
         });
