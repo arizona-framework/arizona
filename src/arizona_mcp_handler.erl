@@ -256,8 +256,11 @@ handle_info(_Info, _Push, State) ->
     {ok, State}.
 
 %% On client disconnect, stop the running streaming tool: kill the stateless
-%% worker, or ask the session to cancel the request it tracks.
+%% worker, or ask the session to cancel the request it tracks. Unlink first so
+%% the kill does not ride the link back into this connection process, which is
+%% mid-teardown and owes roadrunner a clean return.
 cancel_stream(#{worker := Worker}) ->
+    true = unlink(Worker),
     true = exit(Worker, kill),
     ok;
 cancel_stream(#{session := SessionPid, id := Id}) ->
@@ -624,7 +627,13 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
             %% page_size is irrelevant to a tools/call -- the default suffices.
             {_ServerInfo, Session} = open_session(Mod, #{}, ?DEFAULT_PAGE_SIZE),
             Ctx = #{token => Token, to => ConnPid},
-            Worker = spawn(fun() ->
+            %% Linked, so the worker dies with the connection it serves: the
+            %% clean disconnect below kills it explicitly, but a conn that dies
+            %% without running that path (the `exit(Pid, shutdown)` a listener
+            %% drain sends, a conn crash) has no other reaper -- a stateless
+            %% worker has no session, no monitor, and no TTL, so a blocking tool
+            %% would otherwise run for the life of the node.
+            Worker = spawn_link(fun() ->
                 ok = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
             end),
             %% Track the worker so a client disconnect kills it.

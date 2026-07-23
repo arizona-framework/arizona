@@ -37,6 +37,7 @@
     buffered_requests_serialize/1,
     cancel_queued_buffered_request/1,
     buffered_queue_cap_rejects/1,
+    buffered_timeout_frees_queue_slot/1,
     keepalive_pings_channel/1,
     keepalive_off_when_infinity/1,
     keepalive_stops_on_detach/1,
@@ -88,6 +89,7 @@ all() ->
         buffered_requests_serialize,
         cancel_queued_buffered_request,
         buffered_queue_cap_rejects,
+        buffered_timeout_frees_queue_slot,
         keepalive_pings_channel,
         keepalive_off_when_infinity,
         keepalive_stops_on_detach,
@@ -570,6 +572,35 @@ buffered_queue_cap_rejects(_Config) ->
     receive
         {r2, R2} -> ?assertMatch({reply, _}, R2)
     after 5000 -> ct:fail(queued_not_run)
+    end.
+
+buffered_timeout_frees_queue_slot(_Config) ->
+    {_Id, Pid} = start_opts(#{max_pending => 1}),
+    Self = self(),
+    %% Occupy the single worker slot with a blocking tool.
+    P1 = #{~"name" => ~"block", ~"arguments" => #{watch => Self}},
+    _C1 = spawn(fun() ->
+        R1 = arizona_mcp_session:dispatch(Pid, ~"tools/call", P1, 7),
+        Self ! {r1, R1}
+    end),
+    receive
+        {block_started, _} -> ok
+    after 5000 -> ct:fail(block_did_not_start)
+    end,
+    %% A queued request whose caller times out is dropped: it neither runs later
+    %% for a caller that is gone nor keeps holding the only pending slot.
+    R2 = arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8, 100),
+    ?assertMatch({error, #{~"error" := #{~"message" := ~"Request timed out"}}}, R2),
+    %% Let the drop land, then take the freed slot: the next request queues (and
+    %% times out on the same blocker) instead of being rejected as overloaded.
+    timer:sleep(50),
+    R3 = arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 9, 100),
+    ?assertMatch({error, #{~"error" := #{~"message" := ~"Request timed out"}}}, R3),
+    %% Free the blocking request's caller to clean up.
+    ok = arizona_mcp_session:cancel(Pid, 7),
+    receive
+        {r1, _} -> ok
+    after 5000 -> ct:fail(active_not_freed)
     end.
 
 keepalive_pings_channel(_Config) ->

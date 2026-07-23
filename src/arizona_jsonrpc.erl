@@ -8,7 +8,9 @@ message, and build the success / error response objects.
 
 A decoded message is `#{method := binary(), params := map(), id := id()}`.
 An absent (or null) `id` decodes to `undefined`, marking a
-*notification* -- a message the server must never reply to.
+*notification* -- a message the server must never reply to. A present `id`
+that is neither a string nor an integer (MCP's two request-id types) is an
+*invalid request*, not a notification, so its sender still gets an answer.
 
 Only single messages are decoded; a top-level JSON array (a JSON-RPC
 *batch*) decodes to `{error, invalid_request}`. Batch support was
@@ -68,8 +70,8 @@ Decode a request body into a normalized JSON-RPC message.
 Returns `{error, parse_error}` for invalid JSON, or
 `{error, invalid_request}` for valid JSON that is not a well-formed
 JSON-RPC 2.0 request object (wrong/absent `jsonrpc` version, a
-non-binary or absent `method`, a non-object `params`, or a top-level
-array).
+non-binary or absent `method`, a non-object `params`, a present `id`
+that is neither a string nor an integer, or a top-level array).
 """.
 -spec decode(Body) -> {ok, request()} | {error, parse_error | invalid_request} when
     Body :: iodata().
@@ -112,8 +114,11 @@ error(Id, Code, Message) ->
 %% --------------------------------------------------------------------
 
 validate(#{~"jsonrpc" := ~"2.0", ~"method" := Method} = Msg) when is_binary(Method) ->
-    case params(Msg) of
-        {ok, Params} -> {ok, #{method => Method, params => Params, id => id(Msg)}};
+    maybe
+        {ok, Params} ?= params(Msg),
+        {ok, Id} ?= id(Msg),
+        {ok, #{method => Method, params => Params, id => Id}}
+    else
         error -> {error, invalid_request}
     end;
 validate(_) ->
@@ -126,6 +131,13 @@ params(#{~"params" := _}) -> error;
 params(_) -> {ok, #{}}.
 
 %% A present string/integer id is a request id; an absent or null id is a
-%% notification (`undefined`).
-id(#{~"id" := Id}) when is_binary(Id); is_integer(Id) -> Id;
-id(_) -> undefined.
+%% notification (`undefined`). A present id of any other JSON type -- a
+%% fractional number (`2.5`, or the `1e2` a decoder also reads as a float), a
+%% boolean, an array, an object -- is none of the two: MCP ids are
+%% string-or-integer. Reporting it invalid answers the client that sent it,
+%% where reading it as a notification would leave the request unanswered
+%% forever (HTTP 202, no body).
+id(#{~"id" := Id}) when is_binary(Id); is_integer(Id) -> {ok, Id};
+id(#{~"id" := null}) -> {ok, undefined};
+id(#{~"id" := _}) -> error;
+id(_) -> {ok, undefined}.

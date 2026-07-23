@@ -9,7 +9,9 @@
     post_tools_call/1,
     post_streaming_progress/1,
     post_progress_without_accept_buffered/1,
+    post_fractional_id_invalid_request/1,
     stateless_disconnect_kills_worker/1,
+    stateless_conn_kill_kills_worker/1,
     post_tools_list_paginates/1,
     post_resources_read/1,
     post_resources_templates_list/1,
@@ -52,7 +54,9 @@ all() ->
         post_tools_call,
         post_streaming_progress,
         post_progress_without_accept_buffered,
+        post_fractional_id_invalid_request,
         stateless_disconnect_kills_worker,
+        stateless_conn_kill_kills_worker,
         post_tools_list_paginates,
         post_resources_read,
         post_resources_templates_list,
@@ -220,9 +224,22 @@ post_progress_without_accept_buffered(Config) ->
         Result
     ).
 
+post_fractional_id_invalid_request(Config) ->
+    %% A fractional id is not an MCP request id. The client still expects an
+    %% answer to its POST, so it gets a -32600 -- never a bodyless 202, which
+    %% would leave it waiting for a response that never comes.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":2.5,"method":"ping"}
+    """,
+    Resp = post(Config, "/mcp", [], Body),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"error" := #{~"code" := -32600}}, body_json(Resp)).
+
 stateless_disconnect_kills_worker(Config) ->
     %% A stateless streaming tool that blocks; dropping the connection kills its
     %% worker. The server stays up to serve the next request.
+    Before = streaming_workers(),
     Body =
         ~"""
     {"jsonrpc":"2.0","id":20,"method":"tools/call",
@@ -230,7 +247,9 @@ stateless_disconnect_kills_worker(Config) ->
     """,
     Sock = stream_post(Config, "/mcp", [], Body),
     _Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    Worker = await_new_streaming_worker(Before, 5000),
     gen_tcp:close(Sock),
+    ?assertEqual(ok, await_dead(Worker, 5000)),
     %% The server survived; a fresh request still works.
     Ping =
         ~"""
@@ -239,6 +258,25 @@ stateless_disconnect_kills_worker(Config) ->
     Resp = post(Config, "/mcp", [], Ping),
     ?assertEqual(200, status_code(Resp)),
     ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
+
+stateless_conn_kill_kills_worker(Config) ->
+    %% The stateless streaming worker is linked to its POST connection, so a
+    %% conn death that never delivers `roadrunner_disconnect` reaps it too --
+    %% the `exit(Pid, shutdown)` a listener drain sends at its deadline. Nothing
+    %% else could: a stateless worker has no session, no monitor, and no TTL.
+    Before = streaming_workers(),
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":22,"method":"tools/call",
+     "params":{"name":"block","arguments":{},"_meta":{"progressToken":"t"}}}
+    """,
+    Sock = stream_post(Config, "/mcp", [], Body),
+    _Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    Worker = await_new_streaming_worker(Before, 5000),
+    {parent, ConnPid} = erlang:process_info(Worker, parent),
+    true = exit(ConnPid, shutdown),
+    ?assertEqual(ok, await_dead(Worker, 5000)),
+    gen_tcp:close(Sock).
 
 post_tools_list_paginates(Config) ->
     %% On the page_size=2 route, the first tools/list page carries 2 tools and a
@@ -693,6 +731,48 @@ post_stream_until(Config, Path, ExtraHeaders, Body, Needle) ->
     Data = recv_until(Sock, Needle, 5000),
     gen_tcp:close(Sock),
     Data.
+
+%% Every process currently running a streaming tool. A worker is an anonymous
+%% spawn with no handle reachable from outside the connection, so it is
+%% identified by the `run_streaming_tool/6` frame on its stack.
+streaming_workers() ->
+    [Pid || Pid <- erlang:processes(), in_streaming_tool(Pid)].
+
+in_streaming_tool(Pid) ->
+    case erlang:process_info(Pid, current_stacktrace) of
+        {current_stacktrace, Stack} ->
+            lists:any(
+                fun({Mod, Fun, _Arity, _Loc}) ->
+                    Mod =:= arizona_mcp_handler andalso Fun =:= run_streaming_tool
+                end,
+                Stack
+            );
+        undefined ->
+            false
+    end.
+
+%% Wait for a streaming worker that was not running at `Before`.
+await_new_streaming_worker(Before, Timeout) when Timeout =< 0 ->
+    ct:fail({no_streaming_worker, Before});
+await_new_streaming_worker(Before, Timeout) ->
+    case streaming_workers() -- Before of
+        [Worker | _] ->
+            Worker;
+        [] ->
+            timer:sleep(25),
+            await_new_streaming_worker(Before, Timeout - 25)
+    end.
+
+await_dead(_Pid, Timeout) when Timeout =< 0 ->
+    {error, still_alive};
+await_dead(Pid, Timeout) ->
+    case is_process_alive(Pid) of
+        false ->
+            ok;
+        true ->
+            timer:sleep(25),
+            await_dead(Pid, Timeout - 25)
+    end.
 
 %% Accumulate socket data until `Needle` appears or time runs out.
 recv_until(Sock, Needle, Timeout) ->
