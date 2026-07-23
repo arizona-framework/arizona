@@ -17,6 +17,12 @@
 -export([cookie_secure_follows_env/1]).
 -export([encode_errors_when_too_large/1]).
 -export([format_error_renders_too_large_message/1]).
+-export([decode_id_rejects_other_consumers_cookie/1]).
+
+%% The session cookie's crypto domain-separation label, mirrored from
+%% arizona_session: the wire contract a hand-built value must match to be
+%% accepted at all.
+-define(PURPOSE, ~"arizona.session").
 
 %% Sequential (not parallel): the cases share the `secret_key` application env.
 all() ->
@@ -32,7 +38,8 @@ all() ->
         resp_cookie_none_when_clean,
         cookie_secure_follows_env,
         encode_errors_when_too_large,
-        format_error_renders_too_large_message
+        format_error_renders_too_large_message,
+        decode_id_rejects_other_consumers_cookie
     ].
 
 init_per_suite(Config) ->
@@ -61,12 +68,12 @@ decode_rejects_malformed(Config) when is_list(Config) ->
 
 decode_swallows_decrypted_non_json(Config) when is_list(Config) ->
     Ttl = arizona_session:max_age(),
-    %% A payload that decrypts cleanly (encrypted under the same secret, e.g. by
-    %% another arizona_crypto consumer) but is not JSON -- json:decode raises.
-    NonJson = arizona_crypto:encrypt(~"not json {{{", #{ttl => Ttl}),
+    %% A payload that decrypts cleanly (encrypted under the same secret and the
+    %% session's own crypto purpose) but is not JSON -- json:decode raises.
+    NonJson = arizona_crypto:encrypt(?PURPOSE, ~"not json {{{", #{ttl => Ttl}),
     ?assertEqual(#{}, arizona_session:decode(NonJson)),
     %% Decrypts to valid JSON that is not a map -- the non-map clause.
-    NotMap = arizona_crypto:encrypt(iolist_to_binary(json:encode(42)), #{ttl => Ttl}),
+    NotMap = arizona_crypto:encrypt(?PURPOSE, iolist_to_binary(json:encode(42)), #{ttl => Ttl}),
     ?assertEqual(#{}, arizona_session:decode(NotMap)).
 
 key_normalizes_atom(Config) when is_list(Config) ->
@@ -120,3 +127,14 @@ encode_errors_when_too_large(Config) when is_list(Config) ->
 format_error_renders_too_large_message(Config) when is_list(Config) ->
     #{general := Msg} = arizona_session:format_error({session_too_large, 5000, 4096}, []),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Msg), ~"session")).
+
+decode_id_rejects_other_consumers_cookie(Config) when is_list(Config) ->
+    %% Every consumer signs with the same secret_key, so without domain separation
+    %% a flash cookie (a signed JSON payload) would verify as a store-mode session
+    %% id -- leaving only the store lookup between an attacker-shaped payload and
+    %% a session id. The purpose label rejects it at the HMAC.
+    FlashCookie = arizona_flash:encode(#{~"error" => ~"boom"}),
+    ?assertEqual(error, arizona_session:decode_id(FlashCookie)),
+    %% The mirror direction: a session-id cookie is not a flash.
+    IdCookie = arizona_session:encode_id(arizona_session:new_id()),
+    ?assertEqual(#{}, arizona_flash:decode(IdCookie)).

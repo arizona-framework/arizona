@@ -57,7 +57,7 @@ encode_bakes_a_signed_expiry(Config) when is_list(Config) ->
     %% signed form. The expiry rejection itself is covered by arizona_crypto_SUITE.
     Flash = #{~"error" => ~"boom"},
     ?assertEqual(Flash, arizona_flash:decode(arizona_flash:encode(Flash))),
-    Raw = arizona_crypto:sign(iolist_to_binary(json:encode(Flash))),
+    Raw = arizona_crypto:sign(~"arizona.flash", iolist_to_binary(json:encode(Flash))),
     ?assertNotEqual(Raw, arizona_flash:encode(Flash)).
 
 decode_rejects_tampered_signature(Config) when is_list(Config) ->
