@@ -180,9 +180,12 @@ supports_local() -> true.
 %% metacharacter at all, so locate the first one before building anything: with
 %% none, the input is returned as-is -- no accumulator, no copy. Only a value that
 %% really needs an entity allocates, and only from that first metacharacter on
-%% (the clean prefix seeds the accumulator in one slice). Measured over 200k calls
-%% on a 38-byte clean value this is ~5x the plain accumulator loop, ~16x on a 1.2 KB
-%% one, and never slower when the value does need escaping.
+%% (the clean prefix seeds the accumulator in one slice). Measured over 200k calls,
+%% a clean value is ~5x the plain accumulator loop at every size tried (5 B to
+%% 1.2 KB), ~3x when the first metacharacter is near the end, and at parity when
+%% the value is escape-dense. A word-at-a-time (SWAR) scan was measured too: ~2x
+%% faster again on pure ASCII but slower on multi-byte UTF-8 and far harder to
+%% read, so the plain scan wins on the balance.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) ->
     case first_meta(Bin, 0) of
