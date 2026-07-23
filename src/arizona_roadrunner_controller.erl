@@ -91,8 +91,7 @@ dispatch_action(Handler, Action, Req) ->
             arizona_error:raise_or_propagate(
                 undef,
                 ST,
-                Handler,
-                Action,
+                {Handler, Action, 1},
                 {missing_action, Handler, Action, 1},
                 [Handler, Action, Req],
                 ?MODULE

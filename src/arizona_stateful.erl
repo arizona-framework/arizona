@@ -337,14 +337,13 @@ call_render(H, Bindings) ->
     catch
         error:undef:ST ->
             arizona_error:raise_or_propagate(
-                undef, ST, H, render, {missing_callback, H, render, 1}, [H, Bindings], ?MODULE
+                undef, ST, {H, render, 1}, {missing_callback, H, render, 1}, [H, Bindings], ?MODULE
             );
         error:function_clause:ST ->
             arizona_error:raise_or_propagate(
                 function_clause,
                 ST,
-                H,
-                render,
+                {H, render, 1},
                 {render_no_clause, H, Bindings},
                 [H, Bindings],
                 ?MODULE
@@ -375,8 +374,7 @@ call_handle_event(H, Event, Payload, Bindings) ->
             arizona_error:raise_or_propagate(
                 undef,
                 ST,
-                H,
-                handle_event,
+                {H, handle_event, 3},
                 {missing_callback, H, handle_event, 3},
                 [H, Event, Payload, Bindings],
                 ?MODULE
@@ -385,8 +383,7 @@ call_handle_event(H, Event, Payload, Bindings) ->
             arizona_error:raise_or_propagate(
                 function_clause,
                 ST,
-                H,
-                handle_event,
+                {H, handle_event, 3},
                 {unhandled_event, H, Event, Bindings},
                 [H, Event, Payload, Bindings],
                 ?MODULE
@@ -418,8 +415,7 @@ call_handle_info(H, Info, Bindings) ->
                     arizona_error:raise_or_propagate(
                         function_clause,
                         ST,
-                        H,
-                        handle_info,
+                        {H, handle_info, 2},
                         {unhandled_info, H, Info, Bindings},
                         [H, Info, Bindings],
                         ?MODULE
@@ -456,8 +452,7 @@ call_handle_update(H, Props, Bindings, Effects) ->
                     arizona_error:raise_or_propagate(
                         function_clause,
                         ST,
-                        H,
-                        handle_update,
+                        {H, handle_update, 3},
                         {unhandled_update, H, Props, Bindings},
                         [H, Props, Bindings, Effects],
                         ?MODULE
@@ -494,8 +489,7 @@ call_handle_drain(H, Deadline, Bindings) ->
                     arizona_error:raise_or_propagate(
                         function_clause,
                         ST,
-                        H,
-                        handle_drain,
+                        {H, handle_drain, 2},
                         {unhandled_drain, H, Deadline, Bindings},
                         [H, Deadline, Bindings],
                         ?MODULE
@@ -525,8 +519,7 @@ call_unmount(H, Bindings) ->
                     arizona_error:raise_or_propagate(
                         function_clause,
                         ST,
-                        H,
-                        unmount,
+                        {H, unmount, 1},
                         {unhandled_unmount, H, Bindings},
                         [H, Bindings],
                         ?MODULE
