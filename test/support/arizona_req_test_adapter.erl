@@ -21,6 +21,7 @@ up a real listener.
 -export([parse_cookies/1]).
 -export([parse_headers/1]).
 -export([read_body/1]).
+-export([scheme/1]).
 -export([resolve_route/3]).
 
 new() ->
@@ -38,6 +39,14 @@ parse_cookies(#{cookies := Cookies}) -> Cookies.
 parse_headers(#{headers := Headers}) -> Headers.
 
 read_body(#{body := Body} = Raw) -> {Body, Raw#{body_read => true}}.
+
+%% Most raw values in the suites are plain-HTTP fixtures that never state a
+%% scheme; a case exercising the TLS branch sets `scheme => https` explicitly.
+scheme(Raw) ->
+    case Raw of
+        #{scheme := Scheme} -> Scheme;
+        #{} -> http
+    end.
 
 resolve_route(Path, _Qs, #{routes := Routes} = Raw) ->
     case Routes of

@@ -128,13 +128,15 @@ References resolve **anywhere** in the config surface: the scalar keys (`secret_
 
 ## CSRF / Origin checking
 
-CSRF defense is an **Origin check**, not a token: `arizona_origin:check(Origin, Host)` rejects a request whose `Origin` header is neither same-origin (its authority equals the `Host`) nor in an allowlist. A missing `Origin` (native `?native` clients, CLI tools, top-level GET navigations) is allowed.
+CSRF defense is an **Origin check**, not a token: `arizona_origin:check(Origin, Host, Scheme)` rejects a request whose `Origin` header is neither same-origin (its authority equals the `Host`, and an HTTPS request demands an `https` Origin -- a plain-HTTP page on the same authority is a different origin an active network attacker can serve) nor in an allowlist. A missing `Origin` (native `?native` clients, CLI tools, top-level GET navigations) is allowed.
 
 It's the `arizona_middleware:check_origin/2` middleware step, and the router **applies it by default** to `{live, ...}` routes -- so it runs on both the page render (GET, usually no `Origin`) and the **WebSocket upgrade** (`arizona_ws:prepare/3` runs the resolved route's middlewares; a cross-origin upgrade gets `403`). Off by exception, not omission:
 
 - `check_origin` app env (`boolean()`, default `true`) -- global switch.
 - `csrf_origins` app env (`[binary()]`, default `[]`) -- extra trusted origins (proxy/multi-origin).
 - `check_origin => false` in a route's `Opts` -- opt a single route out (a deliberately cross-origin endpoint).
+
+The scheme compared against is the connection's (`arizona_req:scheme/1`), upgraded to `https` when a fronting proxy sets `X-Forwarded-Proto: https`. The read is upgrade-only, so a forged header can tighten the check but never weaken it, and a TLS-terminating proxy that sets no such header keeps working (a plain-HTTP request accepts either scheme).
 
 This closes the WS-CSRF vector (a cross-origin page opening a WS as the victim). It is **not** CORS: CORS gates response-reading + preflight and lets simple cross-site requests through; the Origin check rejects the request outright. Controller routes (verb-tags like `{post, ...}` and `{match, ...}`) get the same default: they dispatch through `arizona_roadrunner_controller`, which runs the middleware pipeline (check_origin first) before the action -- so a cross-origin POST to a fetch endpoint is also refused with `403`.
 

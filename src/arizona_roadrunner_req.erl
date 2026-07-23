@@ -25,6 +25,7 @@ and everything else lazy-loaded on first access.
 -export([parse_cookies/1]).
 -export([parse_headers/1]).
 -export([read_body/1]).
+-export([scheme/1]).
 -export([resolve_route/3]).
 
 %% --------------------------------------------------------------------
@@ -84,6 +85,13 @@ parse_headers(RoadrunnerReq) ->
 read_body(RoadrunnerReq) ->
     {ok, Body, RoadrunnerReq1} = roadrunner_req:read_body(RoadrunnerReq),
     {Body, RoadrunnerReq1}.
+
+-spec scheme(RoadrunnerReq) -> arizona_req:scheme() when
+    RoadrunnerReq :: roadrunner_req:request().
+scheme(RoadrunnerReq) ->
+    %% Roadrunner derives this from the accepting socket, so it is `https` only
+    %% for a TLS connection to this node -- never from a client-supplied header.
+    roadrunner_req:scheme(RoadrunnerReq).
 
 -doc """
 Resolves a path to `{ok, Handler, RouteOpts, Request}` by running the
