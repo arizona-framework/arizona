@@ -19,6 +19,10 @@ routes take effect without restarting the listener.
 - `error_page` -- `{Module, Function}` to render the dev error page
   (default `{arizona_error_page, render}`)
 - `scheme` -- `http` (default) or `https`
+- `tls` -- `[ssl:tls_server_option()]`. Supplying it turns the listener
+  into an HTTPS one, so `scheme => https` is optional sugar; pairing it
+  with an explicit `scheme => http` is a contradiction and raises
+  `tls_with_http_scheme`
 - `transport_opts` -- listener opts, currently `[{port, Port}]`
   (default `[{port, 4040}]`)
 - `proto_opts` -- map of roadrunner listener opts merged on top of
@@ -171,7 +175,13 @@ this module. Picked up by `erl_error:format_exception/3`.
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
 format_error(https_requires_tls, [{_M, _F, _Args, _Info} | _]) ->
-    #{general => "scheme => https requires tls => [...] in opts or proto_opts.tls => [...]"}.
+    #{general => "scheme => https requires tls => [...] in opts or proto_opts.tls => [...]"};
+format_error(tls_with_http_scheme, [{_M, _F, _Args, _Info} | _]) ->
+    #{
+        general =>
+            "tls => [...] implies https; drop scheme => http (or drop tls) "
+            "instead of serving the configured certs' traffic in cleartext"
+    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -191,14 +201,21 @@ port_from_opts(Opts) ->
 %% Translate the `scheme => https` shorthand into roadrunner's
 %% `tls => [...]` listener opt. Top-level `tls` overrides
 %% `proto_opts.tls` (which has already flowed into `ListenerOpts`).
-%% Asking for `scheme => https` with no TLS config anywhere fails
-%% loudly — silently downgrading to plain HTTP on the same port is a
-%% security footgun.
+%% Roadrunner turns TLS on from the `tls` listener opt alone, so `tls`
+%% with no `scheme` means https; dropping it (the old behaviour) served
+%% the configured certs' traffic in cleartext on the same port, the same
+%% silent-downgrade footgun as `scheme => https` with no certs. Both
+%% halves of the contradiction now fail loudly instead: no certs for
+%% https, and an explicit `scheme => http` beside certs.
 maybe_inject_tls(ListenerOpts, #{scheme := https, tls := Tls}) ->
     ListenerOpts#{tls => Tls};
 maybe_inject_tls(#{tls := _} = ListenerOpts, #{scheme := https}) ->
     ListenerOpts;
 maybe_inject_tls(_ListenerOpts, #{scheme := https} = Opts) ->
     erlang:error(https_requires_tls, [Opts], [{error_info, #{module => ?MODULE}}]);
+maybe_inject_tls(_ListenerOpts, #{scheme := http, tls := _} = Opts) ->
+    erlang:error(tls_with_http_scheme, [Opts], [{error_info, #{module => ?MODULE}}]);
+maybe_inject_tls(ListenerOpts, #{tls := Tls}) ->
+    ListenerOpts#{tls => Tls};
 maybe_inject_tls(ListenerOpts, _Opts) ->
     ListenerOpts.

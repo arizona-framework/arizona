@@ -55,7 +55,7 @@ handle(Req) ->
     QS = roadrunner_req:parse_qs(Req),
     case arizona_ws:prepare(QS, arizona_roadrunner_req, Req) of
         {halt, HaltReq} ->
-            {halt_response(HaltReq), arizona_req:raw(HaltReq)};
+            {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
         not_found ->
             %% The client-supplied `_az_path` did not resolve to a live route.
             %% Reject the upgrade with 404 rather than crashing the handler.
@@ -135,33 +135,3 @@ to_roadrunner({reply, Data, Sock}, State) ->
     {reply, [{text, Data}], State#{socket => Sock}};
 to_roadrunner({close, Code, Reason, Sock}, State) ->
     {close, Code, Reason, State#{socket => Sock}}.
-
-%% Middleware halted before the upgrade — emit a stashed redirect or a
-%% bare 400 if the middleware did not write its own response, then flush any
-%% stashed response headers/cookies (put_resp_header/put_resp_cookie).
-halt_response(HaltReq) ->
-    Resp =
-        case arizona_req:halted_redirect(HaltReq) of
-            {Status, Location} ->
-                roadrunner_resp:redirect(Status, Location);
-            undefined ->
-                %% A middleware (e.g. check_origin) may stash a status; honor it.
-                case arizona_req:resp_status(HaltReq) of
-                    undefined -> roadrunner_resp:bad_request();
-                    Status -> roadrunner_resp:status(Status)
-                end
-        end,
-    flush_resp(HaltReq, Resp).
-
-%% Fold stashed response headers and cookies onto Resp.
-flush_resp(ArzReq, Resp0) ->
-    Resp1 = lists:foldl(
-        fun({Name, Value}, R) -> roadrunner_resp:add_header(R, Name, Value) end,
-        Resp0,
-        arizona_req:resp_headers(ArzReq)
-    ),
-    lists:foldl(
-        fun({Name, Value, Opts}, R) -> roadrunner_resp:set_cookie(R, Name, Value, Opts) end,
-        Resp1,
-        arizona_req:resp_cookies(ArzReq)
-    ).

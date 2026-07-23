@@ -50,6 +50,8 @@
     http_flash_round_trip/1,
     http_render_crash_emits_error_page/1,
     http_reads_cookies_headers_body/1,
+    http_combines_duplicate_header_lines/1,
+    http_flushes_iodata_resp_header/1,
     http_exposes_roadrunner_request_id/1,
     drain_default_closes_ws_cleanly/1,
     drain_user_callback_pushes_effect_then_stops/1,
@@ -66,6 +68,8 @@
     recompile_routes_runs/1,
     recompile_routes_syncs_listener/1,
     https_without_tls_errors/1,
+    tls_without_scheme_serves_https/1,
+    tls_with_http_scheme_errors/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
@@ -80,6 +84,8 @@
     controller_rejects_disallowed_method/1,
     controller_dispatches_action_by_verb/1,
     controller_missing_action_errors/1,
+    controller_flushes_stash_onto_stream_response/1,
+    bare_halt_is_forbidden_on_every_dispatcher/1,
     crash_event_closes/1,
     crash_info_closes/1,
     crash_init_closes/1,
@@ -137,6 +143,8 @@ groups() ->
         http_flash_round_trip,
         http_render_crash_emits_error_page,
         http_reads_cookies_headers_body,
+        http_combines_duplicate_header_lines,
+        http_flushes_iodata_resp_header,
         http_exposes_roadrunner_request_id,
         drain_default_closes_ws_cleanly,
         drain_user_callback_pushes_effect_then_stops,
@@ -153,6 +161,8 @@ groups() ->
         recompile_routes_runs,
         recompile_routes_syncs_listener,
         https_without_tls_errors,
+        tls_without_scheme_serves_https,
+        tls_with_http_scheme_errors,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
         ws_upgrade_preserves_duplicate_qs_keys,
@@ -166,7 +176,9 @@ groups() ->
         controller_rejects_cross_origin,
         controller_rejects_disallowed_method,
         controller_dispatches_action_by_verb,
-        controller_missing_action_errors
+        controller_missing_action_errors,
+        controller_flushes_stash_onto_stream_response,
+        bare_halt_is_forbidden_on_every_dispatcher
     ],
     Crash = [
         crash_event_closes,
@@ -224,6 +236,16 @@ init_per_group(roadrunner, Config) ->
                     {halt, arizona_req:redirect(Req, <<"/login">>)}
                 end
             ]
+        }},
+        %% Bare halt -- no stashed redirect, no stashed status. Same route shape on a
+        %% live page, a controller, and the WS upgrade so the three dispatchers'
+        %% default is asserted to be one status, not three.
+        {live, <<"/bare_halt">>, arizona_crashable, #{
+            middlewares => [fun(Req, _B) -> {halt, Req} end]
+        }},
+        {get, <<"/_test/bare-halt">>, arizona_state_echo_controller, #{
+            state => #{marker => ~"STATE_OK"},
+            middlewares => [fun(Req, _B) -> {halt, Req} end]
         }},
         {live, <<"/pipeline">>, arizona_crashable, #{
             middlewares => [
@@ -330,6 +352,26 @@ init_per_group(roadrunner, Config) ->
                 end
             ]
         }},
+        %% Stashes a response header whose value is an iolist -- the type
+        %% `arizona_req:put_resp_header/3` advertises, but not what the wire
+        %% encoder accepts, so something on the way must flatten it.
+        {live, <<"/iodata_resp_header">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {cont, arizona_req:put_resp_header(Req, ~"x-io", [~"sess=", ~"abc"]), B}
+                end
+            ]
+        }},
+        %% Projects the (possibly repeated) `x-probe` header into `status` so a
+        %% test can read the adapter's view of a duplicated field off the HTML.
+        {live, <<"/echo_probe_header">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {Headers, Req1} = arizona_req:headers(Req),
+                    {cont, Req1, B#{status => maps:get(~"x-probe", Headers, ~"none")}}
+                end
+            ]
+        }},
         {live, <<"/reads_cookies_headers_body">>, arizona_crashable, #{
             middlewares => [
                 fun(Req, B) ->
@@ -363,6 +405,16 @@ init_per_group(roadrunner, Config) ->
         {post, <<"/_test/users">>, arizona_users_controller, #{action => create}},
         %% Route naming an action the controller does not export (error path).
         {get, <<"/_test/bad-action">>, arizona_users_controller, #{action => nope}},
+        %% Non-buffered ({stream, ...}) controller response on a route whose
+        %% middleware stashes a response cookie -- the flush must reach it.
+        {get, <<"/_test/stream-cookie">>, arizona_stream_controller, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {cont, arizona_req:put_resp_cookie(Req, ~"probe", ~"flushed", #{path => ~"/"}),
+                        B}
+                end
+            ]
+        }},
         %% Native-shell capability negotiation chain (`_az_caps` -> ?capability).
         {live, <<"/caps_probe">>, arizona_os_caps_probe, #{}},
         {ws, <<"/ws">>, #{}},
@@ -773,9 +825,55 @@ controller_missing_action_errors(Config) ->
     Resp = http_req(Config, "GET", "/_test/bad-action", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)).
 
+bare_halt_is_forbidden_on_every_dispatcher(Config) ->
+    %% A shared auth-gate middleware that halts without stashing a redirect or a
+    %% status used to report the denial differently per dispatcher: 204 (success!)
+    %% on a page, 400 on a controller and on the WS upgrade. One default now: 403,
+    %% the RFC 9110 status for a refusal with no reason disclosed.
+    Port = proplists:get_value(port, Config),
+    PageResp = http_get(Config, "/bare_halt", []),
+    ?assertNotEqual(nomatch, binary:match(PageResp, <<"403">>)),
+    ?assertEqual(nomatch, binary:match(PageResp, <<"204">>)),
+    CtrlResp = http_get(Config, "/_test/bare-halt", []),
+    ?assertNotEqual(nomatch, binary:match(CtrlResp, <<"403">>)),
+    ?assertEqual(nomatch, binary:match(CtrlResp, <<"STATE_OK">>)),
+    ?assertEqual(403, ws_upgrade_status_qs(Port, [~"_az_path=/bare_halt"])).
+
+controller_flushes_stash_onto_stream_response(Config) ->
+    %% The stash flush is not buffered-response-only: a controller answering with
+    %% a `{stream, ...}` (or loop/sendfile) response on a route whose middleware
+    %% stashed a cookie used to crash with function_clause -> 500, so the two
+    %% features were mutually exclusive without anything saying so.
+    Resp = http_req_until_close(Config, "GET", "/_test/stream-cookie", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"probe=flushed">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"STREAM_OK">>)).
+
 %% Raw HTTP GET to Path with extra header lines; returns the full response binary.
 http_get(Config, Path, ExtraHeaders) ->
     http_req(Config, "GET", Path, ExtraHeaders).
+
+%% Like `http_req/4` but drains until the peer closes, so a chunked/streamed body
+%% (which arrives after the header block, in its own read) is part of the result.
+http_req_until_close(Config, Method, Path, ExtraHeaders) ->
+    Port = proplists:get_value(port, Config),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    Req = [
+        Method,
+        " ",
+        Path,
+        " HTTP/1.1\r\n",
+        "Host: localhost:",
+        integer_to_list(Port),
+        "\r\n",
+        "Connection: close\r\n",
+        ExtraHeaders,
+        "\r\n"
+    ],
+    ok = gen_tcp:send(Sock, Req),
+    Full = read_until_close(Sock, <<>>),
+    gen_tcp:close(Sock),
+    Full.
 
 %% Raw HTTP request with the given method to Path; returns the full response binary.
 http_req(Config, Method, Path, ExtraHeaders) ->
@@ -1419,6 +1517,65 @@ https_without_tls_check() ->
         "failed start must not stash routes for the dead listener"
     ).
 
+tls_without_scheme_serves_https(Config) when is_list(Config) ->
+    %% The mirror footgun: `tls => [...]` with no `scheme` used to drop the certs
+    %% and boot a plain-HTTP listener, so traffic the operator configured TLS for
+    %% went out in cleartext. `tls` alone now means https.
+    Name = arizona_tls_no_scheme_test,
+    Port = pick_port(),
+    {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
+        routes => [],
+        tls => test_tls_opts(),
+        transport_opts => [{port, Port}]
+    }),
+    try
+        ?assertMatch(
+            {ok, _},
+            ssl:connect("localhost", Port, [{verify, verify_none}, binary, {active, false}], 5000)
+        )
+    after
+        ok = arizona_roadrunner_server:stop(Name)
+    end.
+
+tls_with_http_scheme_errors(Config) when is_list(Config) ->
+    %% Certs beside an explicit `scheme => http` is a contradiction with no safe
+    %% reading -- honoring either half silently is the downgrade footgun, so it
+    %% raises before the listener (or any persistent_term) exists.
+    Result =
+        try
+            %% The certs are never reached -- the contradiction is rejected up
+            %% front -- so this needs no real key material.
+            arizona_roadrunner_server:start(arizona_tls_http_scheme_test, #{
+                routes => [],
+                scheme => http,
+                tls => [{certfile, "priv/nonexistent.pem"}]
+            })
+        catch
+            error:Reason -> {error_caught, Reason}
+        end,
+    ?assertEqual({error_caught, tls_with_http_scheme}, Result),
+    ?assertEqual(
+        undefined,
+        persistent_term:get({arizona_roadrunner_routes, arizona_tls_http_scheme_test}, undefined),
+        "failed start must not stash routes for the dead listener"
+    ).
+
+%% Self-signed server TLS opts for the listener boot test. `pkix_test_data/1`
+%% returns in-memory cert/key terms, so there is nothing to write or clean up.
+test_tls_opts() ->
+    Key = fun() -> public_key:generate_key({rsa, 2048, 65537}) end,
+    #{server_config := ServerConf} = public_key:pkix_test_data(#{
+        server_chain => #{
+            root => [{key, Key()}, {digest, sha256}],
+            peer => [{key, Key()}, {digest, sha256}]
+        },
+        client_chain => #{
+            root => [{key, Key()}, {digest, sha256}],
+            peer => [{key, Key()}, {digest, sha256}]
+        }
+    }),
+    ServerConf.
+
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and
     %% verify the event is written to the stream. Exercises
@@ -1502,6 +1659,27 @@ http_reads_cookies_headers_body(Config) ->
     %% status binding projects into the rendered page: c=2 h=N b=0
     ?assertNotEqual(nomatch, binary:match(Resp, <<"c=2">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"b=0">>)).
+
+http_flushes_iodata_resp_header(Config) ->
+    %% `put_resp_header/3` takes iodata; the wire encoder takes binaries only
+    %% (a non-binary value is a 500). The flush is what closes the gap, for the
+    %% page render as much as for a controller reply.
+    Resp = http_get(Config, "/iodata_resp_header", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"x-io: sess=abc\r\n">>)).
+
+http_combines_duplicate_header_lines(Config) ->
+    %% A field sent on several lines (a proxy chain appending X-Forwarded-For, a
+    %% client splitting Accept) used to reach the handler as the last line only --
+    %% every earlier value dropped, and the opposite of `roadrunner_req:header/2`,
+    %% which returns the first. RFC 9110 §5.3: combine, in the order received.
+    Resp = http_get(Config, "/echo_probe_header", [
+        "X-Probe: 1.1.1.1\r\n", "X-Probe: 2.2.2.2\r\n"
+    ]),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"1.1.1.1, 2.2.2.2">>)),
+    %% A single line is untouched -- no stray separator.
+    Single = http_get(Config, "/echo_probe_header", ["X-Probe: 1.1.1.1\r\n"]),
+    ?assertNotEqual(nomatch, binary:match(Single, <<"1.1.1.1<">>)).
 
 http_exposes_roadrunner_request_id(Config) ->
     %% The adapter forwards roadrunner's per-request 16-char hex id into

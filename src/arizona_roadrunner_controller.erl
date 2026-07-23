@@ -48,14 +48,14 @@ handle(Req) ->
     ArzReq = arizona_roadrunner_req:new(Req),
     case arizona_middleware:apply_middlewares(Middlewares, ArzReq, #{}) of
         {halt, HaltReq} ->
-            {halt_response(HaltReq), arizona_req:raw(HaltReq)};
+            {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
         {cont, ArzReq1, _Bindings} ->
             %% Restore the controller's own state into the raw request (the dispatcher
             %% overwrote it with the arizona meta), run the action, then flush any
             %% middleware-stashed cookies/headers onto the action's response.
             Raw = arizona_req:raw(ArzReq1),
             {Resp, Req1} = dispatch_action(Handler, Action, Raw#{state => State}),
-            {flush_resp(ArzReq1, Resp), Req1}
+            {arizona_roadrunner_resp:flush(ArzReq1, Resp), Req1}
     end.
 
 -doc """
@@ -91,38 +91,9 @@ dispatch_action(Handler, Action, Req) ->
             arizona_error:raise_or_propagate(
                 undef,
                 ST,
-                Handler,
-                Action,
+                {Handler, Action, 1},
                 {missing_action, Handler, Action, 1},
                 [Handler, Action, Req],
                 ?MODULE
             )
     end.
-
-%% A middleware halted before the handler. Ship a stashed redirect or status (e.g.
-%% check_origin's 403), else a bare 400, then flush stashed headers/cookies.
-halt_response(HaltReq) ->
-    Resp =
-        case arizona_req:halted_redirect(HaltReq) of
-            {Status, Location} ->
-                roadrunner_resp:redirect(Status, Location);
-            undefined ->
-                case arizona_req:resp_status(HaltReq) of
-                    undefined -> roadrunner_resp:bad_request();
-                    Status -> roadrunner_resp:status(Status)
-                end
-        end,
-    flush_resp(HaltReq, Resp).
-
-%% Fold stashed response headers and cookies onto Resp.
-flush_resp(ArzReq, Resp0) ->
-    Resp1 = lists:foldl(
-        fun({Name, Value}, R) -> roadrunner_resp:add_header(R, Name, Value) end,
-        Resp0,
-        arizona_req:resp_headers(ArzReq)
-    ),
-    lists:foldl(
-        fun({Name, Value, Opts}, R) -> roadrunner_resp:set_cookie(R, Name, Value, Opts) end,
-        Resp1,
-        arizona_req:resp_cookies(ArzReq)
-    ).

@@ -47,6 +47,7 @@
 | `src/arizona_roadrunner_controller.erl`   | Roadrunner handler for controller routes -- middleware pipeline (CSRF default-on), restores `state`, then dispatches `Handler:Action/1` (`action` opt, default `handle`)                  |
 | `src/arizona_roadrunner_server.erl`       | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                                 |
 | `src/arizona_roadrunner_req.erl`          | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                                     |
+| `src/arizona_roadrunner_resp.erl`         | Roadrunner response adapter -- `flush/2` folds the request's stashed response headers/cookies onto any handler response shape (buffered, stream, loop, sendfile)                          |
 | `src/arizona_roadrunner_reload.erl`       | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                                     |
 | `src/arizona_jsonrpc.erl`                 | JSON-RPC 2.0 codec -- `decode/1`, `result/2`, `error/3`, `notification/2`                                                                                                                 |
 | `src/arizona_mcp.erl`                     | MCP server behaviour an app implements (`init/1`, `tools/1`, `handle_tool/4`, optional `resources`/`prompts`/`channels`/`terminate`) plus the server-push API (`broadcast/3`, `notify/3`) |
@@ -962,8 +963,9 @@ into its native reply shape.
 - `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
   transport can flush any middleware-stashed response headers/cookies):
   - `{halt, Request}` -- middleware halted; the transport decodes the stashed redirect
-    (`arizona_req:halted_redirect/1`) or status off the request (or ships a 204/400 when the
-    middleware wrote its own reply)
+    (`arizona_req:halted_redirect/1`) or status off the request via
+    `arizona_roadrunner_resp:halt/1`, which answers a halt carrying neither with `403`
+    (one default for pages, controllers, and the WS upgrade alike)
   - `{ok, resp_status(), iolist(), Request}` -- rendered page body; the status defaults to 200,
     but a view or middleware may stash a non-200 (e.g. 401)
   - `{error, 500, iolist(), Request}` -- rendered error page body (crash or stashed hot-reload error)
@@ -1009,6 +1011,11 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
 - `arizona_roadrunner_ws.erl` -- thin WebSocket handler. Delegates the upgrade to
   `arizona_ws:prepare/3` and forwards frames to `arizona_socket`. Translates
   `arizona_socket:result()` to roadrunner return tuples
+- `arizona_roadrunner_resp.erl` -- shared response side. `flush/2` folds the request's
+  middleware-stashed response headers/cookies onto the outgoing response, for every
+  header-bearing shape (buffered triple plus the `stream`/`loop`/`sendfile` quadruples);
+  a stashed header on a `websocket` upgrade (which has no header section) raises
+  `{unflushable_response, websocket}` instead of being dropped
 
 ## Data flow
 

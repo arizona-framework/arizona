@@ -228,6 +228,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -callback parse_bindings(raw()) -> bindings().
 -callback parse_params(raw()) -> params().
 -callback parse_cookies(raw()) -> cookies().
+%% Header names lowercase; a field repeated across lines is combined into one
+%% entry, values in the order received (RFC 9110 §5.3), not last-line-wins.
 -callback parse_headers(raw()) -> headers().
 -callback read_body(raw()) -> {body(), raw()}.
 
@@ -341,7 +343,13 @@ cookies(#{adapter := Adapter, raw := Raw} = Req) ->
     Cookies = Adapter:parse_cookies(Raw),
     {Cookies, Req#{cookies => Cookies}}.
 
--doc "Returns request headers as a map. Lazy-loaded and cached.".
+-doc """
+Returns request headers as a map. Lazy-loaded and cached.
+
+A field sent on several lines arrives as one entry holding every value in the
+order received, comma-separated (RFC 9110 §5.3) -- `cookie` uses its own `; `
+separator. Names are lowercase.
+""".
 -spec headers(request()) -> {headers(), request()}.
 headers(#{headers := Headers} = Req) ->
     {Headers, Req};

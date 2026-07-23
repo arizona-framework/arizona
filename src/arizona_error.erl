@@ -7,16 +7,16 @@ Two utilities consumed across the framework:
 - `did_you_mean/2` -- "did you mean?" suggestion for `format_error/2`
   clauses that report a missing key. Used by
   `arizona_template:format_error/2` and `arizona_stream:format_error/2`.
-- `raise_or_propagate/7` -- the catch-clause helper that lets a
+- `raise_or_propagate/6` -- the catch-clause helper that lets a
   dispatcher re-tag a failure originating at the user's exact callback
   while propagating any other failure untouched. Used by every
   `arizona_stateful:call_*` wrapper.
 """.
 
 -export([did_you_mean/2]).
--export([raise_or_propagate/7]).
+-export([raise_or_propagate/6]).
 -ignore_xref([did_you_mean/2]).
--ignore_xref([raise_or_propagate/7]).
+-ignore_xref([raise_or_propagate/6]).
 
 -doc """
 Returns the candidate closest to `Target` by Levenshtein edit distance, or
@@ -41,31 +41,41 @@ did_you_mean(Target, Candidates) ->
 -doc """
 Catch-clause helper for dispatchers that wrap a user callback.
 
-When the top stack frame is the user's exact callback (`Mod:Fn`), raises
-`Reason` with an `error_info` annotation pointing at `FormatErrorMod` --
-the module that exports the matching `format_error/2` clause. Otherwise
-propagates `error:OrigReason` with the original stacktrace untouched.
+When the top stack frame is the user's exact callback (`Mod:Fn/Arity`),
+raises `Reason` with an `error_info` annotation pointing at
+`FormatErrorMod` -- the module that exports the matching `format_error/2`
+clause. Otherwise propagates `error:OrigReason` with the original
+stacktrace untouched.
+
+The arity is part of the match, not decoration: a callback whose body calls
+a same-named function of a different arity (`?MODULE:handle(Req, Opts)`
+from inside `handle/1`) leaves a top frame naming that other function, and
+re-tagging it would report the running callback as the missing one.
 
 The `FormatErrorMod` parameter exists because this helper lives in
 `arizona_error` but is called from various dispatcher modules; the
 `error_info` annotation must point at whichever module owns the format
 clauses for `Reason`.
 """.
--spec raise_or_propagate(OrigReason, Stacktrace, Mod, Fn, Reason, ErrorArgs, FormatErrorMod) ->
+-spec raise_or_propagate(OrigReason, Stacktrace, MFA, Reason, ErrorArgs, FormatErrorMod) ->
     no_return()
 when
     OrigReason :: term(),
     Stacktrace :: [tuple()],
-    Mod :: module(),
-    Fn :: atom(),
+    MFA :: {module(), atom(), arity()},
     Reason :: term(),
     ErrorArgs :: [term()],
     FormatErrorMod :: module().
+%% The top frame of an `undef` or `function_clause` always carries the call's
+%% argument list (a deeper frame is the one that degrades to a bare arity), so
+%% the arity check is `length(Args)`.
 raise_or_propagate(
-    _OrigReason, [{Mod, Fn, _, _} | _], Mod, Fn, Reason, ErrorArgs, FormatErrorMod
-) ->
+    _OrigReason, [{Mod, Fn, Args, _} | _], {Mod, Fn, Arity}, Reason, ErrorArgs, FormatErrorMod
+) when
+    length(Args) =:= Arity
+->
     erlang:error(Reason, ErrorArgs, [{error_info, #{module => FormatErrorMod}}]);
-raise_or_propagate(OrigReason, ST, _Mod, _Fn, _Reason, _ErrorArgs, _FormatErrorMod) ->
+raise_or_propagate(OrigReason, ST, _MFA, _Reason, _ErrorArgs, _FormatErrorMod) ->
     erlang:raise(error, OrigReason, ST).
 
 %% --------------------------------------------------------------------

@@ -16,6 +16,12 @@ steps left-to-right, stopping on the first halt. Transports
 view; a route lists its steps under the `middlewares` key of
 `t:arizona_live:route_opts/0`.
 
+A halting step says what the client sees by stashing a redirect
+(`arizona_req:redirect/2,3`) or a status (`arizona_req:put_resp_status/2`,
+as `check_origin/2` does with its `403`). A bare `{halt, Request}` carrying
+neither is answered `403 Forbidden` -- the same on a page render, a
+controller, and a WebSocket upgrade.
+
 ## Built-in steps
 
 - `extract/1` -- copy selected request data (path bindings, params,
