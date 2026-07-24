@@ -22,6 +22,7 @@
     compile_routes_live_multiple_pages/1,
     compile_routes_live_default_origin_check/1,
     compile_routes_live_opts_out_origin_check/1,
+    compile_routes_live_method_gating/1,
     compile_routes_mixed/1,
     compile_routes_ws/1
 ]).
@@ -36,6 +37,7 @@ groups() ->
         compile_routes_live_multiple_pages,
         compile_routes_live_default_origin_check,
         compile_routes_live_opts_out_origin_check,
+        compile_routes_live_method_gating,
         compile_routes_ws,
         compile_routes_asset_dir,
         compile_routes_asset_priv_dir,
@@ -171,6 +173,18 @@ compile_routes_live_opts_out_origin_check(Config) ->
     compile(Config, [{live, <<"/foo">>, my_handler, #{check_origin => false}}]),
     {_Handler, Opts} = route_match(<<"/foo">>),
     ?assertNot(lists:member({arizona_middleware, check_origin}, maps:get(middlewares, Opts))).
+
+compile_routes_live_method_gating(Config) ->
+    %% A live route answers GET (the page render) plus HEAD only; the WebSocket
+    %% upgrade rides its own `{ws, ...}` route. A non-GET to a live path is 405 with
+    %% an Allow of exactly the live methods -- decided by the router before any
+    %% middleware, so a mutating verb (a cross-site POST to a page) never reaches a
+    %% handler that only renders. Controller 405s are covered above; this guards the
+    %% same gate on the `{live, ...}` kind.
+    compile(Config, [{live, <<"/dash">>, my_handler, #{}}]),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"GET", <<"/dash">>)),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"HEAD", <<"/dash">>)),
+    ?assertEqual({method_not_allowed, [~"GET", ~"HEAD"]}, match_result(~"POST", <<"/dash">>)).
 
 compile_routes_ws(Config) ->
     compile(Config, [
