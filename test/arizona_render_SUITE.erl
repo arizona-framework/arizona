@@ -30,6 +30,7 @@
     no_diff_ssr_nested/1,
     render_attr/1,
     static_attr_escaped/1,
+    escape_clean_value_not_rebuilt/1,
     raw_text_breakout_neutralized/1,
     render_nested_sd/1,
     render_nodiff_layout_location_success/1,
@@ -93,6 +94,7 @@ groups() ->
             render_text,
             render_attr,
             static_attr_escaped,
+            escape_clean_value_not_rebuilt,
             raw_text_breakout_neutralized,
             render_nested_sd,
             render_with_views_no_children,
@@ -255,6 +257,35 @@ static_attr_escaped(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(HTML, ~"&amp;amp;")),
     %% Folded effect command: escaped once by encode/1, emitted verbatim (not re-escaped).
     ?assertNotEqual(nomatch, binary:match(HTML, ~"az-click=\"[0,&quot;inc&quot;]\"")).
+
+%% Escaping runs on every dynamic scalar, and almost every value carries no
+%% metacharacter at all. A clean value must come back as the *same term* -- term
+%% identity is the observable proof that escape/1 short-circuits on the scan
+%% instead of rebuilding the binary byte by byte into a fresh accumulator. The
+%% escaping itself is unchanged, including a metacharacter at either end and
+%% multi-byte UTF-8 either side of one.
+escape_clean_value_not_rebuilt(Config) when is_list(Config) ->
+    Clean = ~"The quick brown fox jumps over the lazy dog",
+    ?assertEqual(Clean, arizona_html:escape(Clean)),
+    ?assert(erts_debug:same(Clean, arizona_html:escape(Clean))),
+    Utf8 = <<"olá, açúcar e café"/utf8>>,
+    ?assert(erts_debug:same(Utf8, arizona_html:escape(Utf8))),
+    Empty = <<>>,
+    ?assert(erts_debug:same(Empty, arizona_html:escape(Empty))),
+    %% All five metacharacters still become their entities.
+    ?assertEqual(~"&amp;&lt;&gt;&quot;&#39;", arizona_html:escape(~"&<>\"'")),
+    %% First byte, last byte, and a long clean prefix before the first one.
+    ?assertEqual(~"&lt;tail", arizona_html:escape(~"<tail")),
+    ?assertEqual(~"head&gt;", arizona_html:escape(~"head>")),
+    ?assertEqual(
+        ~"a long clean prefix &amp; a suffix",
+        arizona_html:escape(~"a long clean prefix & a suffix")
+    ),
+    %% UTF-8 continuation bytes are never mistaken for a metacharacter.
+    ?assertEqual(<<"café &amp; tea"/utf8>>, arizona_html:escape(<<"café & tea"/utf8>>)),
+    %% A value that does need escaping is a new term, not the input.
+    Dirty = ~"a & b",
+    ?assertNot(erts_debug:same(Dirty, arizona_html:escape(Dirty))).
 
 %% P9: a dynamic value in a raw-text element (<script>) renders verbatim, but a
 %% `</script>` in the value would break out into HTML parsing. The backend's

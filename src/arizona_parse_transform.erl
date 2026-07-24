@@ -392,6 +392,18 @@ format_error(live_render_id_must_be_get_id) ->
 format_error(az_view_not_allowed) ->
     "az_view attribute is auto-injected by the parse transform in "
     "arizona_stateful render/1 and must not be set manually";
+format_error({reserved_attr, Name}) ->
+    lists:flatten(
+        io_lib:format(
+            "the ~ts attribute is reserved -- the parse transform emits it itself "
+            "(az addresses an element for the diff, az-local describes its ?local "
+            "slots), so a template-authored one renders as a duplicate whose value "
+            "can collide with a real slot address and misroute a patch. Remove it: "
+            "az-key, the az-* event attributes and any az-* name of your own are "
+            "unaffected",
+            [Name]
+        )
+    );
 format_error({invalid_child, ValueStr}) ->
     lists:flatten(
         io_lib:format(
@@ -1515,7 +1527,7 @@ extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
-    ok = reject_nested_directives(Attrs0, Line),
+    ok = reject_framework_attrs(Attrs0, Line),
     Backend = State0#state.backend,
     RawKind = Backend:raw_text_kind(Tag),
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
@@ -2385,21 +2397,37 @@ extract_attr_name(_Backend, BinAST) -> extract_binary_value(BinAST).
 extract_binary_value({bin, _, Elements}) ->
     iolist_to_binary([extract_bin_element(E) || E <- Elements]).
 
-extract_bin_element({bin_element, _, {string, _, Chars}, _, _}) ->
+%% Templates treat binary-literal content as UTF-8 text: a code point is encoded
+%% to its UTF-8 bytes (`<<"caf", 233/utf8>>` and a bare `<<233>>` alike render é
+%% as `<<195,169>>`), so folded content matches SSR and the diff path. Only the
+%% elements is_static_binary/1 admits -- default-unit string/integer, `default` or
+%% `[utf8]` type -- reach here.
+extract_bin_element({bin_element, _, {string, _, Chars}, default, _Type}) ->
     unicode:characters_to_binary(Chars);
-extract_bin_element({bin_element, _, {integer, _, N}, _, _}) ->
+extract_bin_element({bin_element, _, {integer, _, N}, default, _Type}) ->
     <<N/utf8>>.
 
 is_static_binary({bin, _, Elements}) ->
-    lists:all(
-        fun
-            ({bin_element, _, {string, _, _}, _, _}) -> true;
-            ({bin_element, _, {integer, _, _}, _, _}) -> true;
-            (_) -> false
-        end,
-        Elements
-    );
+    lists:all(fun is_foldable_bin_element/1, Elements);
 is_static_binary(_) ->
+    false.
+
+%% A binary literal folds into a compile-time static only when its content is the
+%% UTF-8 text the template convention assumes. An explicit **size** (`<<X:16>>`)
+%% or a non-`utf8` **type** spec (`<<X/little>>`, `<<X:16/big>>`) instead pins an
+%% exact byte layout -- `<<1024:16>>` is `<<4,0>>`, not U+0400's UTF-8 -- so it
+%% must not be UTF-8 re-encoded here; it falls through to the runtime dynamic path
+%% (rendered by `to_bin/1`), which preserves its bytes. Default-unit
+%% `default`/`[utf8]` string and integer elements fold.
+is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, default}) ->
+    true;
+is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, [utf8]}) ->
+    true;
+is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, default}) ->
+    true;
+is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, [utf8]}) ->
+    true;
+is_foldable_bin_element(_) ->
     false.
 
 %% Try to fold an attribute value AST that is a literal `arizona_js`
@@ -2523,6 +2551,13 @@ contains_inner_content(_) ->
 directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
 directive_opts(_) -> false.
 
+%% Attribute names the template author may not write, checked on the element's
+%% ORIGINAL attrs -- before az-view / az-local injection, so an injected name is
+%% never mistaken for an authored one.
+reject_framework_attrs(Attrs, Line) ->
+    ok = reject_nested_directives(Attrs, Line),
+    reject_reserved_attrs(Attrs, Line).
+
 %% az-nodiff is a whole-compile-unit directive: it is stripped from a template's
 %% top-level element attrs (compile_fragment_parts / compile_mixed_items) before
 %% compile_element runs. A NESTED element reaches compile_element with its attrs
@@ -2556,6 +2591,43 @@ bare_attr_name({bin, _, _} = Bin) ->
     end;
 bare_attr_name(_) ->
     error.
+
+%% The two attribute names the transform emits into the rendered output itself:
+%% `az` (the element's diff address, emitted by `Backend:az_attr/1` on any element
+%% carrying dynamics) and `az-local` (the `?local` descriptor injected by
+%% maybe_inject_local_descriptor/6). A template-authored copy is emitted *beside*
+%% the injected one: HTML keeps the first of a duplicate pair and the native wire
+%% keeps the last, so one of the two silently disappears -- and when the element
+%% has no dynamics the user's `az` is the only one, is fingerprint-scoped like a
+%% real address (`scope_static/2` rewrites every ` az="`), and can collide with a
+%% genuine slot id. The client resolves a slot with `querySelector('[az=...]')`,
+%% which takes the first match in document order, so the op then patches the wrong
+%% element. Reject both names at compile time.
+%%
+%% Deliberately narrow: `az-view` has its own check (it is legal, and injected, on a
+%% live root), and every other `az-*` name is user territory -- `az-key` keys stream
+%% items, `az-click`/`az-submit`/... carry effects, and an app is free to invent its
+%% own `az-*` attributes.
+reserved_attr_name(<<"az">>) -> true;
+reserved_attr_name(<<"az-local">>) -> true;
+reserved_attr_name(_) -> false.
+
+reject_reserved_attrs(Attrs, Line) ->
+    case [Name || Attr <- Attrs, Name <- [attr_name(Attr)], reserved_attr_name(Name)] of
+        [] -> ok;
+        [Name | _] -> parse_error({reserved_attr, Name}, Line)
+    end.
+
+%% The literal name of an attribute in any of its forms (`name`, `<<"name">>`,
+%% `{name, Value}`), normalized like a directive so `az_local` and `'az-local'`
+%% are one name. `undefined` when the name is not a compile-time literal.
+attr_name({tuple, _, [NameAST | _]}) ->
+    attr_name(NameAST);
+attr_name(Attr) ->
+    case bare_attr_name(Attr) of
+        {ok, Name} -> Name;
+        error -> undefined
+    end.
 
 %% Normalize a directive attribute atom to its canonical dashed binary
 %% (`az_nodiff` -> `<<"az-nodiff">>`) for framework directive matching. Deliberately
