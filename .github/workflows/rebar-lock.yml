@@ -42,25 +42,25 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
           app-id: ${{vars.ARIZONA_BOT_APP_ID}}
           private-key: ${{secrets.ARIZONA_BOT_PRIVATE_KEY}}
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           token: ${{steps.app-token.outputs.token}}
           ref: ${{needs.branch.outputs.head_ref}}
 
-      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24
         id: setup-beam
         with:
           version-type: strict
           version-file: .tool-versions
 
       - name: Restore _build
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: _build
           key: "_build-cache-for\
@@ -70,7 +70,7 @@ jobs:
             -hash-${{hashFiles('rebar.lock')}}-${{hashFiles('rebar.config')}}"
 
       - name: Restore rebar3's cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.cache/rebar3
           key: "rebar3-cache-for\
