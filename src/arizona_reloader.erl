@@ -100,13 +100,25 @@ broadcast() ->
 -doc """
 Recompiles the changed `.erl` files, refreshes routes, and
 broadcasts a reload message. Called by the file watcher.
+
+After the reload is broadcast, runs a best-effort call-consistency check
+(`arizona_reloader_consistency:check/1`) that warns about a loaded module left
+calling a function the just-reloaded module no longer exports (the classic
+stale-beam-after-mtime-skip mismatch that otherwise stays silent until a runtime
+`undef`). It is advisory, so it runs *after* the broadcast -- never in the
+reload's critical path, and its beam sweep can never delay the client seeing the
+change. It never crashes or interferes with the reload.
 """.
 -spec reload_erl(Files) -> ok when
     Files :: [file:filename()].
 reload_erl(Files) ->
-    _ = compile(Files),
+    CompileResult = compile(Files),
     arizona_roadrunner_server:recompile_routes(),
-    broadcast().
+    broadcast(),
+    case CompileResult of
+        ok -> arizona_reloader_consistency:check(Files);
+        {error, _} -> ok
+    end.
 
 -doc """
 Triggers a CSS reload broadcast. Ignores the file list -- the client

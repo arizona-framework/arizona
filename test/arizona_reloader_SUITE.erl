@@ -11,6 +11,9 @@
     end_per_testcase/2
 ]).
 
+%% logger handler callback (used by the consistency integration tests)
+-export([log/2]).
+
 %% pubsub group tests
 -export([
     join_without_pg_scope/1,
@@ -40,12 +43,25 @@
     mixed_files_only_compile_erl/1
 ]).
 
+%% consistency group tests
+-export([
+    broken_edge_detected/1,
+    consistent_reload_reports_nothing/1,
+    unreloaded_target_not_flagged/1,
+    stale_beam_detected/1,
+    fresh_beam_not_stale/1,
+    candidate_modules_excludes_otp/1,
+    check_reports_broken_edge/1,
+    check_clean_reports_nothing/1,
+    check_best_effort_never_crashes/1
+]).
+
 %% ============================================================================
 %% CT callbacks
 %% ============================================================================
 
 all() ->
-    [{group, pubsub}, {group, integration}, {group, compile}].
+    [{group, pubsub}, {group, integration}, {group, compile}, {group, consistency}].
 
 groups() ->
     [
@@ -71,6 +87,17 @@ groups() ->
             compile_error_cleared_on_success,
             non_erl_files_skip_compile,
             mixed_files_only_compile_erl
+        ]},
+        {consistency, [sequence], [
+            broken_edge_detected,
+            consistent_reload_reports_nothing,
+            unreloaded_target_not_flagged,
+            stale_beam_detected,
+            fresh_beam_not_stale,
+            candidate_modules_excludes_otp,
+            check_reports_broken_edge,
+            check_clean_reports_nothing,
+            check_best_effort_never_crashes
         ]}
     ].
 
@@ -88,9 +115,13 @@ init_per_group(integration, Config) ->
     _ = ensure_pg_started(),
     Config;
 init_per_group(compile, Config) ->
+    Config;
+init_per_group(consistency, Config) ->
     Config.
 
 end_per_group(compile, _Config) ->
+    ok;
+end_per_group(consistency, _Config) ->
     ok;
 end_per_group(_Group, _Config) ->
     ensure_pg_stopped(),
@@ -309,6 +340,115 @@ mixed_files_only_compile_erl(Config) ->
     ?assertEqual(ok, erlang:apply(arizona_dev_ct_mixed, check, [])).
 
 %% ============================================================================
+%% consistency group tests (arizona_reloader_consistency)
+%% ============================================================================
+
+%% A caller whose beam still calls a function the reloaded callee dropped is the
+%% exact broken edge the check exists to surface.
+broken_edge_detected(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Caller = az_cc_caller_a,
+    Callee = az_cc_callee_a,
+    {Caller, _} = compile_and_load(Caller, caller_src(Caller, Callee), Dir),
+    %% Reload the callee so it exports foo/2 and no longer foo/1.
+    {Callee, _} = compile_and_load(Callee, callee_foo2_src(Callee), Dir),
+    Edges = arizona_reloader_consistency:broken_edges([Callee], [Caller]),
+    ?assertEqual([{Caller, {Callee, foo, 1}}], Edges).
+
+%% A callee that still exports what the caller calls is consistent: no edge.
+consistent_reload_reports_nothing(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Caller = az_cc_caller_b,
+    Callee = az_cc_callee_b,
+    {Caller, _} = compile_and_load(Caller, caller_src(Caller, Callee), Dir),
+    {Callee, _} = compile_and_load(Callee, callee_foo1_src(Callee), Dir),
+    ?assertEqual([], arizona_reloader_consistency:broken_edges([Callee], [Caller])).
+
+%% A structurally-broken edge whose target was NOT reloaded this wave is not
+%% flagged: the check reports only what this wave could have broken.
+unreloaded_target_not_flagged(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Caller = az_cc_caller_c,
+    Callee = az_cc_callee_c,
+    {Caller, _} = compile_and_load(Caller, caller_src(Caller, Callee), Dir),
+    {Callee, _} = compile_and_load(Callee, callee_foo2_src(Callee), Dir),
+    %% The edge exists (callee dropped foo/1) but callee is not in Reloaded.
+    ?assertEqual([], arizona_reloader_consistency:broken_edges([], [Caller])).
+
+%% A module running an older version than its beam on disk is stale.
+stale_beam_detected(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_cc_stale_a,
+    {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+    %% Rewrite the beam on disk to a different version WITHOUT reloading it.
+    Bin2 = compile_only(Mod, versioned_src(Mod, 2), Dir),
+    ok = file:write_file(Beam, Bin2),
+    Stale = arizona_reloader_consistency:stale_modules([Mod]),
+    ?assertMatch([{Mod, LoadedVsn, DiskVsn}] when LoadedVsn =/= DiskVsn, Stale),
+    %% Reloading to match disk clears the staleness (and tidies up for later tests).
+    {module, Mod} = code:load_binary(Mod, Beam, Bin2),
+    ?assertEqual([], arizona_reloader_consistency:stale_modules([Mod])).
+
+%% A freshly loaded module whose beam matches memory is not stale.
+fresh_beam_not_stale(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_cc_fresh_a,
+    {Mod, _} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+    ?assertEqual([], arizona_reloader_consistency:stale_modules([Mod])).
+
+%% The candidate set is application code only: it includes a loaded module with a
+%% readable non-OTP beam and excludes OTP (a stdlib module).
+candidate_modules_excludes_otp(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_cc_candidate_a,
+    {Mod, _} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+    Candidates = arizona_reloader_consistency:candidate_modules(),
+    ?assert(lists:member(Mod, Candidates)),
+    ?assertNot(lists:member(lists, Candidates)).
+
+%% End-to-end: check/1 discovers the caller itself, detects the broken edge, and
+%% logs a warning naming the caller and the missing callee.
+check_reports_broken_edge(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Caller = az_cc_caller_d,
+    Callee = az_cc_callee_d,
+    {Caller, _} = compile_and_load(Caller, caller_src(Caller, Callee), Dir),
+    {Callee, _} = compile_and_load(Callee, callee_foo2_src(Callee), Dir),
+    CalleeErl = filename:join(Dir, atom_to_list(Callee) ++ ".erl"),
+    Msgs = with_log_capture(fun() ->
+        ?assertEqual(ok, arizona_reloader_consistency:check([CalleeErl]))
+    end),
+    ?assert(
+        lists:any(
+            fun(M) -> contains(M, "az_cc_caller_d") andalso contains(M, "az_cc_callee_d") end,
+            Msgs
+        )
+    ).
+
+%% End-to-end: a consistent reload produces no finding about the reloaded pair.
+check_clean_reports_nothing(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Caller = az_cc_caller_e,
+    Callee = az_cc_callee_e,
+    {Caller, _} = compile_and_load(Caller, caller_src(Caller, Callee), Dir),
+    {Callee, _} = compile_and_load(Callee, callee_foo1_src(Callee), Dir),
+    CalleeErl = filename:join(Dir, atom_to_list(Callee) ++ ".erl"),
+    Msgs = with_log_capture(fun() ->
+        ?assertEqual(ok, arizona_reloader_consistency:check([CalleeErl]))
+    end),
+    ?assertEqual(
+        [],
+        [M || M <- Msgs, contains(M, "az_cc_caller_e") orelse contains(M, "az_cc_callee_e")]
+    ).
+
+%% The whole pass is best-effort: a garbage argument that would crash the scan
+%% is swallowed and check/1 still returns ok. (The bad value is laundered through
+%% proplists:get_value/3 so its static type stays term().)
+check_best_effort_never_crashes(Config) when is_list(Config) ->
+    Bad = proplists:get_value(no_such_key, Config, not_a_list),
+    ?assertEqual(ok, arizona_reloader_consistency:check(Bad)).
+
+%% ============================================================================
 %% Helpers
 %% ============================================================================
 
@@ -412,3 +552,94 @@ mixed_good_module_src() ->
     "-module(arizona_dev_ct_mixed).\n"
     "-export([check/0]).\n"
     "check() -> ok.\n".
+
+%% --- consistency helpers ---
+
+%% Compile Src to a real .beam file under Dir and load it from that path, so
+%% code:which/1 returns a readable non-OTP beam (what the check reads). Returns
+%% {Module, BeamPath}.
+compile_and_load(Name, Src, Dir) ->
+    Erl = filename:join(Dir, atom_to_list(Name) ++ ".erl"),
+    ok = file:write_file(Erl, Src),
+    {ok, Name, Bin} = compile:file(Erl, [binary, return_errors]),
+    Beam = filename:join(Dir, atom_to_list(Name) ++ ".beam"),
+    ok = file:write_file(Beam, Bin),
+    code:purge(Name),
+    {module, Name} = code:load_binary(Name, Beam, Bin),
+    {Name, Beam}.
+
+%% Compile Src to a binary without loading it. Returns the beam binary.
+compile_only(Name, Src, Dir) ->
+    Erl = filename:join(Dir, atom_to_list(Name) ++ ".erl"),
+    ok = file:write_file(Erl, Src),
+    {ok, Name, Bin} = compile:file(Erl, [binary, return_errors]),
+    Bin.
+
+caller_src(Name, Callee) ->
+    io_lib:format(
+        "-module(~p).\n"
+        "-export([run/1]).\n"
+        "run(X) -> ~p:foo(X).\n",
+        [Name, Callee]
+    ).
+
+callee_foo1_src(Name) ->
+    io_lib:format(
+        "-module(~p).\n"
+        "-export([foo/1]).\n"
+        "foo(_) -> ok.\n",
+        [Name]
+    ).
+
+callee_foo2_src(Name) ->
+    io_lib:format(
+        "-module(~p).\n"
+        "-export([foo/2]).\n"
+        "foo(_, _) -> ok.\n",
+        [Name]
+    ).
+
+versioned_src(Name, Value) ->
+    io_lib:format(
+        "-module(~p).\n"
+        "-export([value/0]).\n"
+        "value() -> ~b.\n",
+        [Name, Value]
+    ).
+
+%% Capture the warnings logged while Fun runs, as flattened strings.
+with_log_capture(Fun) ->
+    HandlerId = az_cc_capture,
+    true = register(az_cc_log_collector, self()),
+    ok = logger:add_handler(HandlerId, ?MODULE, #{level => warning}),
+    try
+        Fun(),
+        collect_logs()
+    after
+        ok = logger:remove_handler(HandlerId),
+        true = unregister(az_cc_log_collector)
+    end.
+
+collect_logs() ->
+    receive
+        {az_cc_log, Msg} -> [Msg | collect_logs()]
+    after 200 -> []
+    end.
+
+contains(Str, Sub) ->
+    string:find(Str, Sub) =/= nomatch.
+
+%% logger handler callback: forwards each formatted message to the collector.
+log(#{msg := Msg}, _Config) ->
+    case erlang:whereis(az_cc_log_collector) of
+        undefined ->
+            ok;
+        Pid ->
+            Pid ! {az_cc_log, format_msg(Msg)},
+            ok
+    end.
+
+format_msg({Format, Args}) when is_list(Format) ->
+    lists:flatten(io_lib:format(Format, Args));
+format_msg(Other) ->
+    lists:flatten(io_lib:format("~p", [Other])).
