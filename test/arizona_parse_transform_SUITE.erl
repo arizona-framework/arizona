@@ -286,7 +286,9 @@
     value_template_inner_escaped/1,
     diff_value_stays_raw/1,
     fingerprint_escapes_value/1,
-    native_backend_not_escaped/1
+    native_backend_not_escaped/1,
+    static_binary_sized_integer_not_utf8/1,
+    static_binary_utf8_and_ascii_still_fold/1
 ]).
 -export([
     raw_text_script_markerless/1,
@@ -511,7 +513,9 @@ groups() ->
             value_template_inner_escaped,
             diff_value_stays_raw,
             fingerprint_escapes_value,
-            native_backend_not_escaped
+            native_backend_not_escaped,
+            static_binary_sized_integer_not_utf8,
+            static_binary_utf8_and_ascii_still_fold
         ]},
         %% Raw-text elements (script/style/textarea/title): a dynamic content
         %% slot is markerless/render-once -- HTML comment diff markers would
@@ -844,6 +848,34 @@ local_attr_render(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"data-active=")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"home")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"az-local=")).
+
+%% An explicit-size element carries its own byte layout: `<<1024:16>>` is <<4,0>>,
+%% not U+0400's UTF-8 (`<<208,128>>`). It must not fold; it renders through the
+%% dynamic path, which preserves the bytes. Discriminates: the pre-fix static path
+%% baked <<208,128>> and no <<4,0>>.
+static_binary_sized_integer_not_utf8(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_static_sized). "
+        "-export([render/1]). "
+        "render(Bindings) -> arizona_template:html({'p', [], [<<1024:16>>]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<4, 0>>)),
+    ?assertEqual(nomatch, binary:match(HTML, <<208, 128>>)).
+
+%% Guard against over-rejection: a `[utf8]` element (`~"..."`, `X/utf8`) and an
+%% all-ASCII `default` element still fold to a static (no dynamic-slot markers),
+%% and a UTF-8 literal keeps its two bytes -- that was already correct and stays.
+static_binary_utf8_and_ascii_still_fold(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_static_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> arizona_template:html({'p', [], [<<\"caf\", 233/utf8>>]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(<<"<p>caf", 195, 169, "</p>">>, HTML).
 
 %% ?local: the slot is never diffed -- even when the init's binding source
 %% changes between renders, no op is emitted (the bind-map is #{diff := false}).

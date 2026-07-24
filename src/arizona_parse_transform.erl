@@ -2385,21 +2385,37 @@ extract_attr_name(_Backend, BinAST) -> extract_binary_value(BinAST).
 extract_binary_value({bin, _, Elements}) ->
     iolist_to_binary([extract_bin_element(E) || E <- Elements]).
 
-extract_bin_element({bin_element, _, {string, _, Chars}, _, _}) ->
+%% Templates treat binary-literal content as UTF-8 text: a code point is encoded
+%% to its UTF-8 bytes (`<<"caf", 233/utf8>>` and a bare `<<233>>` alike render é
+%% as `<<195,169>>`), so folded content matches SSR and the diff path. Only the
+%% elements is_static_binary/1 admits -- default-unit string/integer, `default` or
+%% `[utf8]` type -- reach here.
+extract_bin_element({bin_element, _, {string, _, Chars}, default, _Type}) ->
     unicode:characters_to_binary(Chars);
-extract_bin_element({bin_element, _, {integer, _, N}, _, _}) ->
+extract_bin_element({bin_element, _, {integer, _, N}, default, _Type}) ->
     <<N/utf8>>.
 
 is_static_binary({bin, _, Elements}) ->
-    lists:all(
-        fun
-            ({bin_element, _, {string, _, _}, _, _}) -> true;
-            ({bin_element, _, {integer, _, _}, _, _}) -> true;
-            (_) -> false
-        end,
-        Elements
-    );
+    lists:all(fun is_foldable_bin_element/1, Elements);
 is_static_binary(_) ->
+    false.
+
+%% A binary literal folds into a compile-time static only when its content is the
+%% UTF-8 text the template convention assumes. An explicit **size** (`<<X:16>>`)
+%% or a non-`utf8` **type** spec (`<<X/little>>`, `<<X:16/big>>`) instead pins an
+%% exact byte layout -- `<<1024:16>>` is `<<4,0>>`, not U+0400's UTF-8 -- so it
+%% must not be UTF-8 re-encoded here; it falls through to the runtime dynamic path
+%% (rendered by `to_bin/1`), which preserves its bytes. Default-unit
+%% `default`/`[utf8]` string and integer elements fold.
+is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, default}) ->
+    true;
+is_foldable_bin_element({bin_element, _, {string, _, _Chars}, default, [utf8]}) ->
+    true;
+is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, default}) ->
+    true;
+is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, [utf8]}) ->
+    true;
+is_foldable_bin_element(_) ->
     false.
 
 %% Try to fold an attribute value AST that is a literal `arizona_js`
