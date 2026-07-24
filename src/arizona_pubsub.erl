@@ -66,7 +66,14 @@ start_link() ->
 
 -doc """
 Subscribes `Pid` to `Channel`. Returns `{error, already_joined}` if
-the pid is already subscribed (idempotent at the API level).
+the pid is already subscribed.
+
+The membership check is a read followed by a join, so two concurrent
+subscribes of the same pid can both return `ok` and both reach `pg`
+(which has no atomic join-if-absent). Membership is a **set** regardless:
+`subscribers/1` reports each pid once, so a broadcast still delivers a
+single copy, and `unsubscribe/2` drops every `pg` membership the pid
+holds rather than leaving a stray one behind.
 """.
 -spec subscribe(Channel, Pid) -> ok | {error, already_joined} when
     Channel :: channel(),
@@ -85,9 +92,15 @@ the pid was not a subscriber.
     Channel :: channel(),
     Pid :: pid().
 unsubscribe(Channel, Pid) ->
-    case pg:leave(?MODULE, Channel, [Pid]) of
-        ok -> ok;
-        not_joined -> {error, not_joined}
+    %% Leave every membership the pid holds, not just one: concurrent
+    %% subscribes race past the `subscribe/2` check and can join the same
+    %% pid twice, and `pg:leave/3` drops exactly as many occurrences as it
+    %% is given -- a single-pid leave would leave the pid still subscribed.
+    case [P || P <- pg:get_members(?MODULE, Channel), P =:= Pid] of
+        [] ->
+            {error, not_joined};
+        Memberships ->
+            ok = pg:leave(?MODULE, Channel, Memberships)
     end.
 
 -doc """
@@ -129,12 +142,16 @@ send_each_skip([Pid | Rest], Data, From) ->
     send_each_skip(Rest, Data, From).
 
 -doc """
-Returns the list of pids currently subscribed to `Channel`.
+Returns the pids currently subscribed to `Channel`, each once.
+
+`pg` memberships are a multiset and `subscribe/2`'s check-then-join is
+not atomic, so a pid can hold more than one membership; deduplicating
+here is what keeps `broadcast/2` at one message per subscriber.
 """.
 -spec subscribers(Channel) -> [pid()] when
     Channel :: channel().
 subscribers(Channel) ->
-    pg:get_members(?MODULE, Channel).
+    lists:usort(pg:get_members(?MODULE, Channel)).
 
 -doc """
 Subscribes the caller to membership changes on `Channel`. It begins receiving

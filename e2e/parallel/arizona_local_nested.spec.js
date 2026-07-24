@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectStaysConnected } from '../utils/helpers.js';
+import { expectStaysConnected, serverFrames } from '../utils/helpers.js';
 
 // ---------------------------------------------------------------------------
 // ?local inside nested ?stateful children: per-view scoping, and the
@@ -14,17 +14,6 @@ const note = (page, id) => page.locator(`#${id} .note`);
 const count = (page, id) => page.locator(`#${id} .count`);
 const label = (page, id) => page.locator(`#${id} .label`);
 const pnote = (page) => page.locator('#local_nested .pnote');
-
-const countMessages = (page) =>
-    page.evaluate(() => {
-        /** @type {any} */ (window).__msgs = 0;
-        const orig = window._ws.onmessage;
-        window._ws.onmessage = (e) => {
-            /** @type {any} */ (window).__msgs += 1;
-            if (orig) orig(e);
-        };
-    });
-const messageCount = (page) => page.evaluate(() => /** @type {any} */ (window).__msgs);
 
 test.describe('?local in nested children -- SSR', () => {
     test('each child and the parent render their own initial slot values', async ({ page }) => {
@@ -41,9 +30,9 @@ test.describe('?local in nested children -- client-only isolation', () => {
     test('a child set is scoped to that child; a parent set never reaches children', async ({
         page,
     }) => {
+        const frames = serverFrames(page);
         await page.goto('/local-nested');
         await wsReady(page);
-        await countMessages(page);
 
         await expectStaysConnected(page, async () => {
             // Edit child_a's note: only child_a changes.
@@ -57,10 +46,9 @@ test.describe('?local in nested children -- client-only isolation', () => {
             await expect(pnote(page)).toHaveText('Parent note: parent-edited');
             await expect(note(page, 'child_a')).toHaveText('edited');
             await expect(note(page, 'child_b')).toHaveText('untouched');
-            await page.waitForTimeout(200);
         });
 
-        expect(await messageCount(page), 'client-owned sets send no server frame').toBe(0);
+        await frames.expectNone('client-owned sets send no server frame');
     });
 });
 

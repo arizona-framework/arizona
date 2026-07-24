@@ -59,7 +59,21 @@ push_event(Event, Payload) -> {arizona_effect, [?EFFECT_PUSH_EVENT, Event, Paylo
     Path :: binary().
 navigate(Path) -> {arizona_effect, [?EFFECT_NAVIGATE, Path]}.
 
--doc "Navigates to `Path` with options (e.g. `replace`).".
+-doc """
+Navigates to `Path` with options.
+
+Only server-consumed options reach a native client's behaviour:
+
+- `flash` -- a flash map (`#{binary() => term()}`) for the view navigated to.
+  `arizona_socket` strips it from the effect and carries it in-process to the
+  target's `flash` binding, exactly as it does for `arizona_js:navigate/2`; the
+  client never sees the key.
+
+The browser-only options of `arizona_js:navigate/2` (`replace`, `full`) have no
+native counterpart -- there is no history stack to replace and no page to load --
+and the Android and iOS clients read only the path from the command, so passing
+them is silently ignored rather than an error.
+""".
 -spec navigate(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),
     Opts :: map().

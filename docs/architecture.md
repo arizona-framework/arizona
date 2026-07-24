@@ -514,7 +514,8 @@ handle_event(~"inc", _P, B) ->
 - `show_modal/1`, `close_modal/1` -- open the first matching `<dialog>` as a true modal
   (`showModal`, top layer + `::backdrop` + ESC-to-close, unlike the `open` attribute) / close it
   (`close`); a non-dialog match is a safe no-op
-- `scroll_to/1,2` -- scroll element into view (opts: `#{behavior => <<"smooth">>}`)
+- `scroll_to/1,2` -- scroll element into view, smoothly by default; `scrollIntoView` opts merge onto
+  that default (`#{block => <<"center">>}` stays smooth, `#{behavior => <<"auto">>}` jumps)
 - `set_title/1` -- set document title
 - `reload/0` -- reload page
 - `encode/1` -- encode single cmd or list of cmds to HTML-safe JSON binary (called automatically by

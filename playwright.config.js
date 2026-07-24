@@ -7,8 +7,18 @@ const BASE_URL = `http://localhost:${PORT}`;
 export default defineConfig({
     timeout: 15000,
     fullyParallel: true,
+    // One retry on CI, none locally. A retried test is reported as `flaky`
+    // rather than passing silently, so a timing-dependent failure still shows
+    // up -- it just doesn't fail the whole job on a single bad roll.
+    retries: process.env.CI ? 1 : 0,
     use: {
         baseURL: BASE_URL,
+        // The CI job uploads `test-results/` when the e2e step fails, which was
+        // empty without these: a flake failed the job with nothing to look at.
+        // The trace rides the retry (the run that already knows it is suspect),
+        // the screenshot is cheap enough to take on every failure.
+        trace: 'on-first-retry',
+        screenshot: 'only-on-failure',
     },
     projects: [
         {
