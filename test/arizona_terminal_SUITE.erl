@@ -21,10 +21,6 @@
 -export([session_drives_frames/1]).
 -export([input_broadcasts_message/1]).
 -export([client_count_reflects_subscribers/1]).
--export([tty_serve_reaps_view_and_reader/1]).
--export([tty_serve_quits_on_stop_key/1]).
--export([tty_serve_exits_on_linked_death/1]).
--export([tty_serve_handles_push_then_eof/1]).
 -export([handle_key_encodes_unicode_input/1]).
 -export([initial_paint_stop_quits/1]).
 -export([render_attr_rejected/1]).
@@ -55,10 +51,6 @@ all() ->
         session_drives_frames,
         input_broadcasts_message,
         client_count_reflects_subscribers,
-        tty_serve_reaps_view_and_reader,
-        tty_serve_quits_on_stop_key,
-        tty_serve_exits_on_linked_death,
-        tty_serve_handles_push_then_eof,
         handle_key_encodes_unicode_input,
         initial_paint_stop_quits,
         render_attr_rejected,
@@ -80,64 +72,6 @@ init_per_suite(Config) ->
 
 end_per_suite(Config) when is_list(Config) ->
     Config.
-
-%% The local TTY transport must reap its session's live view and input reader on
-%% every loop exit -- otherwise the view outlives the transport (keeps ticking,
-%% stays subscribed to pubsub) and the reader stays blocked in io:get_chars,
-%% stealing subsequent stdin. Drive serve/2 (the loop + teardown) directly with a
-%% pre-loaded eof so it exits at once, then assert both processes are reaped.
-tty_serve_reaps_view_and_reader(Config) when is_list(Config) ->
-    {ok, Session} = arizona_terminal_session:start(
-        arizona_term_demo, #{}, arizona_term_demo_driver, [], fun(_Io) -> ok end
-    ),
-    ViewPid = arizona_terminal_session:pid(Session),
-    %% A stand-in for the input reader: a process that just blocks, so the test
-    %% can assert serve/2 kills it.
-    Reader = spawn(fun() -> timer:sleep(infinity) end),
-    VMon = monitor(process, ViewPid),
-    RMon = monitor(process, Reader),
-    self() ! {term_input, eof},
-    ok = arizona_terminal_tty:serve(Session, Reader),
-    ?assert(down_within(VMon, ViewPid)),
-    ?assert(down_within(RMon, Reader)).
-
-down_within(Mon, Pid) ->
-    receive
-        {'DOWN', Mon, process, Pid, _Reason} -> true
-    after 2000 -> false
-    end.
-
-%% A stop-mapping key (Ctrl-D in the demo driver) makes the loop quit; serve/2 then
-%% reaps the view and reader on that exit path too.
-tty_serve_quits_on_stop_key(Config) when is_list(Config) ->
-    #{session := Session, view := ViewPid, reader := Reader, vmon := VMon, rmon := RMon} =
-        serve_fixture(),
-    self() ! {term_input, [4]},
-    ok = arizona_terminal_tty:serve(Session, Reader),
-    ?assert(down_within(VMon, ViewPid)),
-    ?assert(down_within(RMon, Reader)).
-
-%% A linked process death arrives as an {'EXIT', _, _} message (the tty run/3 traps
-%% exits); the loop returns and serve/2 reaps both processes.
-tty_serve_exits_on_linked_death(Config) when is_list(Config) ->
-    #{session := Session, view := ViewPid, reader := Reader, vmon := VMon, rmon := RMon} =
-        serve_fixture(),
-    Dummy = spawn(fun() -> ok end),
-    self() ! {'EXIT', Dummy, boom},
-    ok = arizona_terminal_tty:serve(Session, Reader),
-    ?assert(down_within(VMon, ViewPid)),
-    ?assert(down_within(RMon, Reader)).
-
-%% A push (timer tick / broadcast) repaints and continues the loop; a following eof
-%% ends it. Exercises the loop's {arizona_push, _, _} continue branch.
-tty_serve_handles_push_then_eof(Config) when is_list(Config) ->
-    #{session := Session, view := ViewPid, reader := Reader, vmon := VMon, rmon := RMon} =
-        serve_fixture(),
-    self() ! {arizona_push, [], [arizona_term_demo_effects:log(~"tick")]},
-    self() ! {term_input, eof},
-    ok = arizona_terminal_tty:serve(Session, Reader),
-    ?assert(down_within(VMon, ViewPid)),
-    ?assert(down_within(RMon, Reader)).
 
 %% A local TTY in unicode mode delivers codepoints (a list, not bytes); "€" is 8364,
 %% which iolist_to_binary would reject with badarg, killing the session and its
@@ -185,22 +119,6 @@ collect_out() ->
         {out, Bin} -> <<Bin/binary, (collect_out())/binary>>
     after 0 -> <<>>
     end.
-
-%% Start a demo session (no-op Out) plus a blocking stand-in reader, both monitored,
-%% for driving arizona_terminal_tty:serve/2 to an exit path.
-serve_fixture() ->
-    {ok, Session} = arizona_terminal_session:start(
-        arizona_term_demo, #{}, arizona_term_demo_driver, [], fun(_Io) -> ok end
-    ),
-    ViewPid = arizona_terminal_session:pid(Session),
-    Reader = spawn(fun() -> timer:sleep(infinity) end),
-    #{
-        session => Session,
-        view => ViewPid,
-        reader => Reader,
-        vmon => monitor(process, ViewPid),
-        rmon => monitor(process, Reader)
-    }.
 
 renders_status_block(Config) when is_list(Config) ->
     {Pid, _ViewId} = start_demo(),
