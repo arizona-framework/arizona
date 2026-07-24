@@ -1166,6 +1166,15 @@ routing and navigate targeting. The parse transform auto-injects `az-view` as a 
 on the root element of `render/1` when the module declares the `arizona_stateful` behaviour. Using
 `az_view` manually outside this context raises a compile error.
 
+The injection (and the `{id, ?get(id)}` enforcement below) happens only when the parse transform
+sees a **literal template call** (`?html`/`?native`) as `render/1`'s tail expression. A route-root
+`render/1` that **delegates** instead -- `render(B) -> page(B).` -- falls through both: the root
+carries no `az-view` marker and skips the `id` check, so events resolve to the enclosing view with
+no diagnostic. This is not caught at compile time (a non-template tail is legal for embeddable
+components), so it is a documented constraint: a route-root view's `render/1` must inline its
+`?html(...)`, composing sub-views as `?stateful`/`?stateless` children within it rather than
+delegating the whole body.
+
 **`id` attribute restriction:** The root element's `id` MUST use `{id, ?get(id)}` (or the equivalent
 `arizona_template:get(id, Bindings)` / `az:get(id, Bindings)`). Static binaries and composed values
 are not allowed. This is a compile-time check.

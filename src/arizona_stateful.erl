@@ -212,6 +212,14 @@ render and after every state change.
 
 Must use `?html(...)` so the parse transform can compile it into a
 template map.
+
+For a **route-root** view the `?html(...)` must be the **direct** body of
+`render/1`, not delegated to another function (`render(B) -> page(B).`). The
+parse transform injects the `az-view` marker and enforces the `{id, ?get(id)}`
+root only when it sees a literal template call as `render/1`'s tail; a delegating
+tail falls through both, producing a root with no view marker whose events
+silently resolve to the enclosing view. Compose with `?stateful`/`?stateless`
+children **inside** a direct `?html(...)` root instead.
 """.
 -callback render(Bindings :: bindings()) ->
     render_ret().
