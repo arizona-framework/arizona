@@ -70,6 +70,9 @@
     stream_limit_halt_delete_backfills/1,
     stream_limit_drop_sort_order/1,
     stream_limit_halt_diff/1,
+    stream_limit_halt_insert_then_delete/1,
+    stream_limit_hidden_delete/1,
+    stream_limit_hidden_update/1,
     stream_limit_halt_render/1,
     stream_limit_one/1,
     stream_limit_reset/1,
@@ -226,6 +229,9 @@ groups() ->
             stream_get_lazy_missing_key_calls_fun,
             stream_limit_halt_render,
             stream_limit_halt_diff,
+            stream_limit_halt_insert_then_delete,
+            stream_limit_hidden_delete,
+            stream_limit_hidden_update,
             stream_limit_drop_delete,
             stream_limit_drop_insert,
             stream_limit_halt_delete_backfills,
@@ -1410,76 +1416,59 @@ stream_limit_halt_render(Config) when is_list(Config) ->
     ?assertMatch({_, _}, binary:match(HTMLBin, <<"B">>)),
     ?assertEqual(nomatch, binary:match(HTMLBin, <<"C">>)).
 
+%% halt + insert past the limit ships nothing at all. The item is outside the
+%% visible window, so rendering it, sending its HTML and having `apply_limit`
+%% remove it in the same batch would be payload the client mounts and instantly
+%% destroys (a phantom `mounted()`/`destroyed()` pair).
 stream_limit_halt_diff(Config) when is_list(Config) ->
-    %% Insert 4th item when limit=3 and 3 already visible → no OP_INSERT (halted)
-    KeyFun = fun(#{id := Id}) -> Id end,
-    Items = [
-        #{id => 1, text => <<"A">>},
-        #{id => 2, text => <<"B">>},
-        #{id => 3, text => <<"C">>}
-    ],
-    S0 = arizona_stream:new(KeyFun, Items, #{limit => 3}),
-    Bindings0 = #{id => <<"test">>, items => S0},
-    Tmpl0 = #{
-        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
-        d => [
-            {<<"0">>, fun() ->
-                arizona_template:each(
-                    arizona_template:get(items, Bindings0),
-                    #{
-                        t => 0,
-                        s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
-                        d => fun(Item, Key) ->
-                            [
-                                {<<"0">>, fun() -> Key end},
-                                {<<"1">>, fun() -> maps:get(text, Item) end}
-                            ]
-                        end,
-                        f => <<"test">>
-                    }
+    {Ops, #{items := Items, order := Order}} =
+        limit_stream_diff(
+            #{limit => 3, on_limit => halt},
+            fun(S) -> arizona_stream:insert(S, #{id => 4, text => <<"D">>}) end
+        ),
+    ?assertEqual([], Ops),
+    ?assertEqual([1, 2, 3], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
+
+%% Inserting past the limit and deleting the same key in one batch is silent too:
+%% the skipped insert left no node, so the delete has nothing to remove.
+stream_limit_halt_insert_then_delete(Config) when is_list(Config) ->
+    {Ops, #{items := Items, order := Order}} =
+        limit_stream_diff(
+            #{limit => 3, on_limit => halt},
+            fun(S) ->
+                arizona_stream:delete(
+                    arizona_stream:insert(S, #{id => 4, text => <<"D">>}), 4
                 )
-            end}
-        ],
-        f => <<"test">>
-    },
-    {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
-    B1 = arizona_stream:clear_stream_pending(Bindings0, arizona_stream:stream_keys(Bindings0)),
-    %% Insert 4th item -- limit=3 with halt mode
-    S1 = arizona_stream:insert(maps:get(items, B1), #{id => 4, text => <<"D">>}),
-    B2 = B1#{items => S1},
-    Tmpl1 = #{
-        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
-        d => [
-            {<<"0">>, fun() ->
-                arizona_template:each(
-                    arizona_template:get(items, B2),
-                    #{
-                        t => 0,
-                        s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
-                        d => fun(Item, Key) ->
-                            [
-                                {<<"0">>, fun() -> Key end},
-                                {<<"1">>, fun() -> maps:get(text, Item) end}
-                            ]
-                        end,
-                        f => <<"test">>
-                    }
-                )
-            end}
-        ],
-        f => <<"test">>
-    },
-    Changed = arizona_live_compute_changed(B1, B2),
-    {Ops, _, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
-    %% The insert op is emitted (pending is processed), but then apply_limit
-    %% truncates the snapshot to 3 items, removing the 4th with OP_REMOVE.
-    %% Net result: one INSERT + one REMOVE (or just empty if implementation
-    %% is smarter). Let's check: 3 visible before + 1 insert = 4 in snap,
-    %% then truncate to 3 removes 1.
-    InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
-    RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
-    ?assertEqual(1, length(InsOps)),
-    ?assertEqual(1, length(RemOps)).
+            end
+        ),
+    ?assertEqual([], Ops),
+    ?assertEqual([1, 2, 3], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
+
+%% Deleting an item the limit keeps hidden emits no OP_REMOVE -- the client never
+%% rendered a node for it, and the visible window is unchanged.
+stream_limit_hidden_delete(Config) when is_list(Config) ->
+    {Ops, #{items := Items, order := Order}} =
+        limit_stream_diff(
+            #{limit => 2, on_limit => halt},
+            fun(S) -> arizona_stream:delete(S, 3) end
+        ),
+    ?assertEqual([], Ops),
+    ?assertEqual([1, 2], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
+
+%% Updating a hidden item emits nothing either. The differ renders an update of a
+%% key the DOM lacks as an insert, which the window would reject right back.
+stream_limit_hidden_update(Config) when is_list(Config) ->
+    {Ops, #{items := Items, order := Order}} =
+        limit_stream_diff(
+            #{limit => 2, on_limit => halt},
+            fun(S) -> arizona_stream:update(S, 3, #{id => 3, text => <<"C2">>}) end
+        ),
+    ?assertEqual([], Ops),
+    ?assertEqual([1, 2], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
 
 stream_limit_drop_delete(Config) when is_list(Config) ->
     %% on_limit => drop: delete visible item → next slides in

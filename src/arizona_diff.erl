@@ -375,10 +375,15 @@ diff_stream(
 ) ->
     case OldSnap of
         #{order := OldOrder} ->
+            %% The drain threads `{Source, Vis}` as one term (`SV`): both are
+            %% constant for the whole drain, and bundling them keeps each stream
+            %% helper's arity in bounds. The window (`Vis`) is computed once here
+            %% rather than re-materialised on every insert/update op.
+            SV = {Source, visible_set(Source)},
             diff_stream_pending(
                 Az,
                 Source#stream.pending,
-                Source,
+                SV,
                 Tmpl,
                 OldItems,
                 OldOrder,
@@ -403,44 +408,79 @@ diff_stream(
             {[[?OP_UPDATE, Az, HTML]], NewSnap, Views1}
     end.
 
-diff_stream_pending(Az, Queue, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+diff_stream_pending(Az, Queue, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    {Source, _Vis} = SV,
     case queue:out(Queue) of
         {empty, _} ->
             apply_limit(Az, Source, Tmpl, SnapAcc, Views0);
         {{value, Op}, Rest} ->
-            diff_stream_op(Az, Op, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0)
+            diff_stream_op(Az, Op, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
-diff_stream_op(Az, {insert, Key, Item, Pos}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, {delete, Key}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, {update, Key, NewItem, Changed}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, {move, Key, AfterKey}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_move(Az, Key, AfterKey, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, reorder, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_reorder(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, {reset, OldItems}, Rest, Source, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views).
+diff_stream_op(Az, {insert, Key, Item, Pos}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_insert(Az, Key, Item, Pos, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {delete, Key}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_delete(Az, Key, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {update, Key, NewItem, Changed}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {move, Key, AfterKey}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, reorder, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {reset, OldItems}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views).
 
-stream_insert(Az, Key, Item, Pos, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
-    HTML = arizona_render:zip_item(Tmpl, ItemD),
-    InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), Pos, HTML],
-    NewSnapAcc = SnapAcc#{Key => ItemD},
-    {RestOps, FinalSnap, Views2} =
-        diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views1),
-    {[InsOp | RestOps], FinalSnap, Views2}.
+%% The visibility window as a set, computed once per drain from the (constant)
+%% stream record. An unlimited stream keeps every key, so it needs no set. The
+%% stream record is already the post-op state, so this is the *final* window --
+%% skipping an op for a key outside it is safe in both directions, since
+%% `apply_limit/5` back-fills any visible key missing from the snapshot at its
+%% ordered position, so a key that slides into view later still lands.
+visible_set(#stream{limit = infinity}) ->
+    all;
+visible_set(#stream{order = Order, limit = Limit}) ->
+    maps:from_keys(arizona_template:visible_keys(Order, Limit), true).
 
-stream_delete(Az, Key, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
-    DelOp = [?OP_REMOVE, Az, arizona_template:to_bin(Key)],
-    NewSnapAcc = maps:remove(Key, SnapAcc),
-    {RestOps, FinalSnap, Views1} =
-        diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
-    {[DelOp | RestOps], FinalSnap, Views1}.
+is_visible(_Key, all) ->
+    true;
+is_visible(Key, Vis) ->
+    is_map_key(Key, Vis).
 
-stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+%% An insert past the limit used to render the item, ship its HTML, and then have
+%% `apply_limit/5` remove it in the same batch -- payload the client mounts and
+%% immediately destroys, firing a phantom `mounted()`/`destroyed()` pair.
+stream_insert(Az, Key, Item, Pos, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    {_Source, Vis} = SV,
+    case is_visible(Key, Vis) of
+        true ->
+            {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
+            HTML = arizona_render:zip_item(Tmpl, ItemD),
+            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), Pos, HTML],
+            NewSnapAcc = SnapAcc#{Key => ItemD},
+            {RestOps, FinalSnap, Views2} =
+                diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views1),
+            {[InsOp | RestOps], FinalSnap, Views2};
+        false ->
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
+
+%% `SnapAcc` tracks what the client's DOM holds as the ops are applied, so a key
+%% absent from it has no node to remove -- the case for a key the limit kept out
+%% of the window, whether this batch skipped its insert or an earlier cycle pruned
+%% it. Mirrors the guard `stream_move/9` already applies.
+stream_delete(Az, Key, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    case SnapAcc of
+        #{Key := _} ->
+            DelOp = [?OP_REMOVE, Az, arizona_template:to_bin(Key)],
+            NewSnapAcc = maps:remove(Key, SnapAcc),
+            {RestOps, FinalSnap, Views1} =
+                diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views0),
+            {[DelOp | RestOps], FinalSnap, Views1};
+        #{} ->
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
+
+stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
         #{Key := OldD} ->
             {NewD, Views1} =
@@ -448,57 +488,68 @@ stream_update(Az, Key, NewItem, Changed, Rest, Source, Tmpl, SnapAcc, OldOrder, 
                     Key, NewItem, OldD, Changed, Tmpl, Views0
                 ),
             stream_update_existing(
-                Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1
+                Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, Views1
             );
         #{} ->
-            {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
-            stream_update_missing(Az, Key, NewD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1)
+            stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
-stream_update_existing(Az, Key, NewD, OldD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
     case InnerOps of
         [] ->
-            diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views1);
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views1);
         _ ->
             PatchOp = [?OP_ITEM_PATCH, Az, arizona_template:to_bin(Key), InnerOps],
             NewSnapAcc = SnapAcc#{Key => NewD},
             {RestOps, FinalSnap, Views2} =
-                diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views1),
+                diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views1),
             {[PatchOp | RestOps], FinalSnap, Views2}
     end.
 
-stream_update_missing(Az, Key, NewD, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
-    HTML = arizona_render:zip_item(Tmpl, NewD),
-    InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
-    NewSnapAcc = SnapAcc#{Key => NewD},
-    {RestOps, FinalSnap, Views1} =
-        diff_stream_pending(Az, Rest, Source, Tmpl, NewSnapAcc, OldOrder, Views0),
-    {[InsOp | RestOps], FinalSnap, Views1}.
+%% Same window guard as `stream_insert/10`: an update whose key the client's DOM
+%% doesn't hold becomes an insert, so it is only worth rendering when the key ends
+%% up visible.
+stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    {_Source, Vis} = SV,
+    case is_visible(Key, Vis) of
+        true ->
+            {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
+            HTML = arizona_render:zip_item(Tmpl, NewD),
+            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
+            NewSnapAcc = SnapAcc#{Key => NewD},
+            {RestOps, FinalSnap, Views2} =
+                diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views1),
+            {[InsOp | RestOps], FinalSnap, Views2};
+        false ->
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
 
-stream_move(Az, Key, AfterKey, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
         #{Key := _} ->
             Ref = move_after_ref(AfterKey),
             MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref],
             {RestOps, FinalSnap, Views1} =
-                diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0),
+                diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0),
             {[MoveOp | RestOps], FinalSnap, Views1};
         #{} ->
-            diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0)
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
 move_after_ref(null) -> null;
 move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
 
-stream_reorder(Az, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    {Source, _Vis} = SV,
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
     MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc),
     {RestOps, FinalSnap, Views1} =
-        diff_stream_pending(Az, Rest, Source, Tmpl, SnapAcc, VKeys, Views0),
+        diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, VKeys, Views0),
     {MoveOps ++ RestOps, FinalSnap, Views1}.
 
-stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
+stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    {Source, _Vis} = SV,
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
     VSet = maps:from_keys(VKeys, true),
     RemOps = [
@@ -510,7 +561,7 @@ stream_reset(Az, OldItems, Rest, Source, Tmpl, SnapAcc, OldOrder, Views0) ->
         smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
     MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept),
     {RestOps, FinalSnap, Views2} =
-        diff_stream_pending(Az, Rest, Source, Tmpl, NewSnaps, VKeys, Views1),
+        diff_stream_pending(Az, Rest, SV, Tmpl, NewSnaps, VKeys, Views1),
     {RemOps ++ DiffOps ++ MoveOps ++ RestOps, FinalSnap, Views2}.
 
 diff_list(Az, #{source := Items, template := Tmpl}, OldSnap, Views0) ->
