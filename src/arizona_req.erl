@@ -528,22 +528,24 @@ resp_cookies(Req) ->
 %% (logout) the clearing cookie, an untouched session nothing. The store-mode
 %% write/delete lives in `commit_session/1`.
 session_resp_cookie(Req) ->
-    SessionOut = maps:get(session_out, Req, #{}),
-    Dirty = maps:get(session_dirty, Req, false),
     case session_store() of
         undefined ->
+            SessionOut = maps:get(session_out, Req, #{}),
+            Dirty = maps:get(session_dirty, Req, false),
             arizona_session:resp_cookie(SessionOut, Dirty);
         _Store ->
-            store_resp_cookie(Req, SessionOut, Dirty)
+            store_resp_cookie(Req)
     end.
 
 %% Pure store-mode counterpart of `arizona_session:resp_cookie/2`.
-store_resp_cookie(_Req, _SessionOut, false) ->
-    none;
-store_resp_cookie(Req, SessionOut, true) when map_size(SessionOut) > 0 ->
+store_resp_cookie(#{session_dirty := true, session_out := SessionOut} = Req) when
+    map_size(SessionOut) > 0
+->
     arizona_session:set_cookie_id(maps:get(session_id, Req));
-store_resp_cookie(_Req, _SessionOut, true) ->
-    arizona_session:clear_cookie().
+store_resp_cookie(#{session_dirty := true}) ->
+    arizona_session:clear_cookie();
+store_resp_cookie(_Req) ->
+    none.
 
 -doc """
 Commits a written session to the server-side store (store mode): a dirty
@@ -563,22 +565,21 @@ put/delete.
 commit_session(Req) ->
     case session_store() of
         undefined -> ok;
-        Store -> commit_session_store(Store, Req, maps:get(session_dirty, Req, false))
+        Store -> commit_session_store(Store, Req)
     end.
 
-commit_session_store(_Store, _Req, false) ->
-    ok;
-commit_session_store(Store, Req, true) ->
-    case maps:get(session_out, Req, #{}) of
-        SessionOut when map_size(SessionOut) > 0 ->
-            ok = Store:put(maps:get(session_id, Req), SessionOut, arizona_session:max_age()),
-            %% On a rotation (clear_session then put_session, e.g. login) drop the
-            %% pre-rotation entry so a pre-login / fixated id cannot be reused.
-            maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined));
-        _Empty ->
-            %% Cleared (logout): drop the store entry if we know the id.
-            maybe_delete_stored(Store, maps:get(session_id, Req, undefined))
-    end.
+commit_session_store(Store, #{session_dirty := true, session_out := SessionOut} = Req) when
+    map_size(SessionOut) > 0
+->
+    ok = Store:put(maps:get(session_id, Req), SessionOut, arizona_session:max_age()),
+    %% On a rotation (clear_session then put_session, e.g. login) drop the
+    %% pre-rotation entry so a pre-login / fixated id cannot be reused.
+    maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined));
+commit_session_store(Store, #{session_dirty := true} = Req) ->
+    %% Cleared (logout): drop the store entry if we know the id.
+    maybe_delete_stored(Store, maps:get(session_id, Req, undefined));
+commit_session_store(_Store, _Req) ->
+    ok.
 
 maybe_delete_stored(_Store, undefined) -> ok;
 maybe_delete_stored(Store, Id) -> Store:delete(Id).
