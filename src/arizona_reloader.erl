@@ -27,6 +27,7 @@ recompile and broadcasts a reload message:
 - `join/1` -- subscribe a pid to the reloader topic (idempotent)
 - `broadcast/0` -- emit a reload message manually
 - `reload_erl/1` -- compile + reload + broadcast (called by the watcher)
+- `sync/0` -- force a compile+reload sync now (called by the dev MCP `reload` tool)
 - `reload_css/0,1` -- broadcast a CSS reload (no compile needed)
 - `get_error/0` / `clear_error/0` -- inspect/reset the last compile error
 """.
@@ -38,6 +39,7 @@ recompile and broadcasts a reload message:
 -export([join/1]).
 -export([broadcast/0]).
 -export([reload_erl/1]).
+-export([sync/0]).
 -export([reload_css/1]).
 -export([reload_css/0]).
 -export([compile/1]).
@@ -121,6 +123,31 @@ reload_erl(Files) ->
     end.
 
 -doc """
+Forces a compile+reload sync now, without waiting for a watcher event: under
+`rebar3 shell` the project is recompiled through `rebar_agent` (which also
+hot-reloads the modules it rebuilds); then any module whose loaded code still
+differs from its beam on disk (a rebuild outside the watcher's eye) is
+reloaded from that beam. Refreshes routes and broadcasts a reload on success,
+mirroring `reload_erl/1`. Called by the dev MCP's `reload` tool.
+
+Returns `{ok, #{agent := AgentUsed, reloaded := Mods}}` on success, or
+`{error, Reason}` when the `rebar_agent` compile fails. The failure is
+reported to the caller only -- the watcher wave owns the dev error page's
+stash, and a forced sync has no changed-file list to collect structured
+errors from.
+""".
+-spec sync() -> {ok, Info} | {error, term()} when
+    Info :: #{agent := boolean(), reloaded := [module()]}.
+sync() ->
+    maybe
+        {ok, AgentUsed} ?= agent_compile(),
+        Reloaded = reload_stale_modules(),
+        ok = arizona_roadrunner_server:recompile_routes(),
+        ok = broadcast(),
+        {ok, #{agent => AgentUsed, reloaded => Reloaded}}
+    end.
+
+-doc """
 Triggers a CSS reload broadcast. Ignores the file list -- the client
 re-fetches its stylesheet on receipt.
 """.
@@ -193,6 +220,44 @@ clear_error() ->
 
 set_error(Error) ->
     persistent_term:put(?COMPILE_ERROR_KEY, Error).
+
+%% Recompile the project through rebar_agent when running under `rebar3 shell`
+%% (it hot-reloads what it rebuilds). Absent the agent there is nothing to
+%% compile with -- the sync still reconciles loaded code against the beams on
+%% disk. A successful compile clears the stashed error, like compile/1 does.
+agent_compile() ->
+    case erlang:whereis(rebar_agent) of
+        undefined ->
+            {ok, false};
+        _Pid ->
+            case erlang:apply(rebar_agent, do, [compile]) of
+                ok ->
+                    clear_error(),
+                    {ok, true};
+                {error, Reason} ->
+                    {error, Reason}
+            end
+    end.
+
+%% Reload every module whose loaded code differs from its beam on disk, from
+%% that beam (the path it was loaded from). A beam that fails to load
+%% (mid-write) is skipped, as the consistency pass skips unreadable beams.
+reload_stale_modules() ->
+    Candidates = arizona_reloader_consistency:candidate_modules(),
+    Stale = arizona_reloader_consistency:stale_modules(Candidates),
+    [Mod || {Mod, _LoadedVsn, _DiskVsn} <:- Stale, reload_from_disk(Mod)].
+
+reload_from_disk(Mod) ->
+    case code:which(Mod) of
+        Path when is_list(Path) ->
+            code:purge(Mod),
+            case code:load_abs(filename:rootname(Path)) of
+                {module, Mod} -> true;
+                {error, _Reason} -> false
+            end;
+        _NonPath ->
+            false
+    end.
 
 %% Use rebar_agent when available (rebar3 shell), fall back to manual compile.
 compile_and_load(ErlFiles) ->

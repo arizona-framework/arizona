@@ -22,6 +22,8 @@
     get_source_location_unknown_function/1,
     reloader_status_ok/1,
     reloader_status_reports_stale_modules/1,
+    reload_ok_reports_no_agent/1,
+    reload_syncs_stale_module/1,
     app_info_reports_version/1,
     eval_returns_value/1,
     eval_appends_dot/1,
@@ -59,6 +61,8 @@ all() ->
         get_source_location_unknown_function,
         reloader_status_ok,
         reloader_status_reports_stale_modules,
+        reload_ok_reports_no_agent,
+        reload_syncs_stale_module,
         app_info_reports_version,
         eval_returns_value,
         eval_appends_dot,
@@ -109,7 +113,8 @@ tools_list(_Config) ->
         ~"reloader_status",
         ~"app_info",
         ~"render_component",
-        ~"eval"
+        ~"eval",
+        ~"reload"
     ],
     ?assertEqual(lists:sort(Expected), lists:sort(Names)).
 
@@ -259,6 +264,36 @@ reloader_status_reports_stale_modules(_Config) ->
         {module, Mod} = code:load_binary(Mod, Beam, Bin2),
         {reply, OkText, _} = call(~"reloader_status", #{}),
         ?assertMatch({_, _}, binary:match(OkText, ~"no stale modules"))
+    after
+        _ = file:del_dir_r(Dir)
+    end.
+
+%% CT does not run under `rebar3 shell`, so the forced sync reports the
+%% source-recompilation gap (no rebar_agent) while confirming loaded code is
+%% already in sync with the beams on disk.
+reload_ok_reports_no_agent(_Config) ->
+    {reply, Text, _} = call(~"reload", #{}),
+    ?assertMatch({_, _}, binary:match(Text, ~"ok")),
+    ?assertMatch({_, _}, binary:match(Text, ~"no rebar_agent")).
+
+%% The thing an agent wants after reloader_status reports drift: force the
+%% loaded code back in sync with the beams on disk, and say what was reloaded.
+reload_syncs_stale_module(_Config) ->
+    Dir = tmp_dir(),
+    Mod = az_dev_mcp_reload,
+    try
+        {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+        ?assertEqual(1, Mod:value()),
+        Bin2 = compile_only(Mod, versioned_src(Mod, 2), Dir),
+        ok = file:write_file(Beam, Bin2),
+        {reply, Text, _} = call(~"reload", #{}),
+        ?assertMatch({_, _}, binary:match(Text, ~"reloaded")),
+        ?assertMatch({_, _}, binary:match(Text, ~"az_dev_mcp_reload")),
+        %% The disk version is now the running code.
+        ?assertEqual(2, Mod:value()),
+        %% And the status tool agrees the drift is gone.
+        {reply, StatusText, _} = call(~"reloader_status", #{}),
+        ?assertMatch({_, _}, binary:match(StatusText, ~"no stale modules"))
     after
         _ = file:del_dir_r(Dir)
     end.
