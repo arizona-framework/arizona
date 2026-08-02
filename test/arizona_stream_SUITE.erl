@@ -77,6 +77,8 @@
     stream_limit_halt_insert_then_delete/1,
     stream_limit_hidden_delete/1,
     stream_limit_hidden_update/1,
+    stream_limit_move_then_update_hidden_key/1,
+    stream_upsert_unlimited_inserts_at_tail/1,
     stream_limit_halt_render/1,
     stream_limit_one/1,
     stream_limit_reset/1,
@@ -236,6 +238,8 @@ groups() ->
             stream_limit_halt_insert_then_delete,
             stream_limit_hidden_delete,
             stream_limit_hidden_update,
+            stream_limit_move_then_update_hidden_key,
+            stream_upsert_unlimited_inserts_at_tail,
             stream_limit_drop_delete,
             stream_limit_drop_insert,
             stream_limit_drop_append_overfull,
@@ -1466,8 +1470,9 @@ stream_limit_hidden_delete(Config) when is_list(Config) ->
     ?assertEqual([1, 2], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
 
-%% Updating a hidden item emits nothing either. The differ renders an update of a
-%% key the DOM lacks as an insert, which the window would reject right back.
+%% Updating a hidden item emits nothing either. A limited stream's missing-key
+%% update is left to apply_limit's back-fill, and a hidden key is not in the
+%% final window -- so nothing renders.
 stream_limit_hidden_update(Config) when is_list(Config) ->
     {Ops, #{items := Items, order := Order}} =
         limit_stream_diff(
@@ -1579,6 +1584,44 @@ stream_limit_drop_upsert_evicts(Config) when is_list(Config) ->
     RemKeys = [K || [?OP_REMOVE, _, K] <- Ops],
     ?assertEqual([<<"3">>], InsKeys),
     ?assertEqual([<<"1">>], RemKeys).
+
+%% A limit-hidden key made visible by a move and updated in the SAME frame must
+%% land at its window position, not be appended: stream_update_missing used to
+%% emit its insert at -1, and since the key was then in the snapshot the
+%% positional back-fill skipped it -- permanently diverging the client DOM
+%% ([1,3]) from the server order ([3,1]). The differ now leaves a limited
+%% stream's missing-key update entirely to apply_limit's back-fill, which
+%% renders the item's current source state at its exact window index.
+stream_limit_move_then_update_hidden_key(Config) when is_list(Config) ->
+    {Ops, #{order := Order}} =
+        limit_stream_diff(
+            #{limit => 2, on_limit => halt},
+            fun(S0) ->
+                S1 = arizona_stream:move(S0, 3, 0),
+                arizona_stream:update(S1, 3, #{id => 3, text => <<"C2">>})
+            end
+        ),
+    ?assertEqual([3, 1], Order),
+    %% The updated content rides the back-fill insert at window position 0.
+    ?assertMatch([_, [?OP_INSERT, <<"0">>, <<"3">>, 0, #{~"d" := [_, <<"C2">>]}]], Ops),
+    %% Applying the ops in order against the pre-frame DOM [1,2] must reproduce
+    %% the server's visible order exactly (the strict simulator crashes on an
+    %% op referencing an absent key/position).
+    ?assertEqual([3, 1], simulate_dom_ops([1, 2], Ops)).
+
+%% An unlimited stream has no back-fill pass, so its missing-key update (the
+%% upsert of a brand-new key) still renders as a tail insert -- the upsert
+%% appends to `order`, making -1 exact.
+stream_upsert_unlimited_inserts_at_tail(Config) when is_list(Config) ->
+    {Ops, #{order := Order}, _Stream} =
+        limit_stream_diff(
+            [#{id => 1, text => <<"A">>}],
+            #{},
+            fun(S) -> arizona_stream:update(S, 2, #{id => 2, text => <<"B">>}) end
+        ),
+    ?assertMatch([[?OP_INSERT, <<"0">>, <<"2">>, -1, #{~"d" := [_, <<"B">>]}]], Ops),
+    ?assertEqual([1, 2], Order),
+    ?assertEqual([1, 2], simulate_dom_ops([1], Ops)).
 
 %% halt + positional insert INTO the window: pure window reconciliation -- the
 %% new item lands at its position and the item pushed past the window edge is
@@ -3409,6 +3452,43 @@ simulate_dom_moves(Dom, [[?OP_MOVE, _Az, KeyBin, RefBin] | Rest]) ->
 
 insert_after(Key, Ref, [Ref | T]) -> [Ref, Key | T];
 insert_after(Key, Ref, [H | T]) -> [H | insert_after(Key, Ref, T)].
+
+%% Strict left-to-right op simulator over an ordered key list, as the client
+%% applies a frame. Unlike the real client it has NO fallbacks: an INSERT past
+%% the current length, a MOVE of an absent key, or a MOVE/INSERT after an
+%% absent ref crashes -- so a passing test proves every emitted op references
+%% only keys/positions already present when it is applied.
+simulate_dom_ops(Dom, []) ->
+    Dom;
+simulate_dom_ops(Dom, [[?OP_INSERT, _Az, KeyBin, Pos, _Payload] | Rest]) ->
+    Key = binary_to_integer(KeyBin),
+    Dom1 =
+        case Pos of
+            -1 -> Dom ++ [Key];
+            _ -> insert_at(Dom, Key, Pos)
+        end,
+    simulate_dom_ops(Dom1, Rest);
+simulate_dom_ops(Dom, [[?OP_REMOVE, _Az, KeyBin] | Rest]) ->
+    Key = binary_to_integer(KeyBin),
+    true = lists:member(Key, Dom),
+    simulate_dom_ops(lists:delete(Key, Dom), Rest);
+simulate_dom_ops(Dom, [[?OP_MOVE, _Az, KeyBin, RefBin] | Rest]) ->
+    Key = binary_to_integer(KeyBin),
+    true = lists:member(Key, Dom),
+    DomWithout = lists:delete(Key, Dom),
+    Dom1 =
+        case RefBin of
+            null -> [Key | DomWithout];
+            _ -> insert_after(Key, binary_to_integer(RefBin), DomWithout)
+        end,
+    simulate_dom_ops(Dom1, Rest);
+simulate_dom_ops(Dom, [[?OP_ITEM_PATCH, _Az, KeyBin, _InnerOps] | Rest]) ->
+    %% Content-only: the key must exist, order is untouched.
+    true = lists:member(binary_to_integer(KeyBin), Dom),
+    simulate_dom_ops(Dom, Rest).
+
+insert_at(Dom, Key, 0) -> [Key | Dom];
+insert_at([H | T], Key, Pos) when Pos > 0 -> [H | insert_at(T, Key, Pos - 1)].
 
 list_type_switch_stream_to_list(Config) when is_list(Config) ->
     %% Old was a stream, new is a plain list → marker-aware OP_TEXT (a plain-list

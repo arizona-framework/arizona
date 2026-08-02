@@ -514,13 +514,20 @@ stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, V
             {[PatchOp | RestOps], FinalSnap, Views2}
     end.
 
-%% Same window guard as `stream_insert/10`: an update whose key the client's DOM
-%% doesn't hold becomes an insert, so it is only worth rendering when the key ends
-%% up visible.
+%% An update whose key the client's DOM (`SnapAcc`) doesn't hold has nothing to
+%% patch. On an UNLIMITED stream that key can only be this frame's upsert of a
+%% brand-new key, which appended to `order` -- so render it as a tail insert
+%% (`-1`), the one rendering path an infinity stream has (its `apply_limit/5`
+%% clause does no back-fill). On a LIMITED stream the key is (or was)
+%% limit-hidden: leave it entirely to `apply_limit/5`, whose left-to-right
+%% back-fill renders the item's CURRENT source state at its exact window index,
+%% or keeps it out when it is not in the final window. Inserting here at -1 put
+%% a newly-visible mid-window key at the tail and, being in `SnapAcc`, made the
+%% back-fill skip it -- permanently diverging the client's order from the
+%% server's (e.g. a hidden key moved to the front and updated in one frame).
 stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {_Source, Vis} = SV,
-    case is_visible(Key, Vis) of
-        true ->
+    case SV of
+        {#stream{limit = infinity}, _Vis} ->
             {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, NewD),
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
@@ -528,7 +535,7 @@ stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views
             {RestOps, FinalSnap, Views2} =
                 diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views1),
             {[InsOp | RestOps], FinalSnap, Views2};
-        false ->
+        {#stream{}, _Vis} ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
