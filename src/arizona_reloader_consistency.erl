@@ -78,11 +78,10 @@ interferes with the reload -- `check/1` wraps everything in a catch-all.
 %% --------------------------------------------------------------------
 
 %% These are called locally by check/1 and directly by the test suite; xref sees
-%% no external caller, so the exports read as unused.
+%% no external caller, so the exports read as unused. (candidate_modules/0 and
+%% stale_modules/1 need no entry -- arizona_dev_mcp's reloader_status calls them.)
 -ignore_xref([reloaded_modules/1]).
--ignore_xref([candidate_modules/0]).
 -ignore_xref([broken_edges/2]).
--ignore_xref([stale_modules/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings

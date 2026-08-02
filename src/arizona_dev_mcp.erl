@@ -17,7 +17,9 @@ Tools:
 - `describe_component` -- a component's kind (stateful/stateless), its exports, and moduledoc.
 - `get_docs` -- a module's or function's documentation (EEP-48).
 - `get_source_location` -- where a module (or function) is defined.
-- `reloader_status` -- the dev reloader's current compile error, if any.
+- `reloader_status` -- the dev reloader's current compile error, if any, plus
+  loaded-vs-disk drift: modules whose loaded code differs from their beam on
+  disk (a node serving stale code otherwise reads "ok").
 - `app_info` -- Arizona version, OTP release, node, process count.
 - `render_component` -- render a component to HTML with given bindings.
 - `eval` -- **run Erlang in the live node**, with bindings that persist across
@@ -141,7 +143,8 @@ base_tools() ->
         },
         #{
             name => ~"reloader_status",
-            description => ~"The dev reloader's current compile error, if any",
+            description =>
+                ~"The dev reloader's compile error and any loaded-vs-disk stale modules",
             input_schema => #{type => ~"object", properties => #{}}
         },
         #{
@@ -252,8 +255,30 @@ get_source_location(Module, _Args) ->
 
 reloader_status() ->
     case arizona_reloader:get_error() of
-        undefined -> ~"ok (no compile error)";
+        undefined -> drift_status();
         Error -> fmt("compile error: ~tp", [Error])
+    end.
+
+%% No compile error: also check for loaded-vs-disk drift. A node serving stale
+%% code (a rebuild outside the watcher's eye, a missed wave) otherwise reads
+%% "ok" while an agent debugs against code that isn't running. Cheap to ask:
+%% the consistency pass caches its beam facts by mtime, so after the first call
+%% this is one stat per loaded module.
+drift_status() ->
+    Candidates = arizona_reloader_consistency:candidate_modules(),
+    case arizona_reloader_consistency:stale_modules(Candidates) of
+        [] ->
+            ~"ok (no compile error, no stale modules)";
+        Stale ->
+            Lines = [
+                fmt("  ~p (loaded vsn ~p, disk vsn ~p)", [Mod, LoadedVsn, DiskVsn])
+             || {Mod, LoadedVsn, DiskVsn} <:- Stale
+            ],
+            iolist_to_binary([
+                ~"stale modules -- loaded code differs from the beam on disk;",
+                ~" recompile and reload to sync:\n",
+                lists:join($\n, Lines)
+            ])
     end.
 
 app_info() ->
