@@ -29,8 +29,10 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
   because a `Secure` cookie is *silently dropped* over plain HTTP -- breaking local dev
   with no error -- and a deployment behind a TLS-terminating proxy can't be auto-detected.
   Treat enabling it as a deploy-checklist item (mirroring `flash_secure`).
-- `session_max_bytes` -- max encoded-cookie size (default 4096); `encode/1` errors with
-  `{session_too_large, Size, Limit}` past it rather than letting the browser drop it.
+- `session_max_bytes` -- max serialized `Set-Cookie` line size, name and attributes
+  included (default 4096, what browsers count against their ~4KB cap); `encode/1`
+  errors with `{session_too_large, Size, Limit}` past it rather than letting the
+  browser drop it.
 - `session_store` -- opt into a server-side store (an `arizona_session_store` module, e.g.
   `arizona_session_store_ets`); the cookie then carries only a signed opaque id (`encode_id/1`,
   `decode_id/1`, `set_cookie_id/1`) and the map lives in the store, enabling revocation and
@@ -88,9 +90,13 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 %% (`arizona_flash`).
 -define(PURPOSE, ~"arizona.session").
 -define(PURPOSE_ID, ~"arizona.session_id").
-%% Browsers cap a single cookie at ~4KB (name + value + attributes); an oversized
-%% `Set-Cookie` is silently dropped, losing the session with no error. Guard the
-%% encoded value against that so the failure is loud at write time instead.
+%% Browsers cap a single cookie at ~4KB -- counted over at least name + value
+%% (Chrome), and RFC 6265's minimum is the whole name + value + attributes line
+%% -- and silently drop an oversized `Set-Cookie`, losing the session with no
+%% error. Guard the full serialized line (`cookie_overhead/0` + the encoded
+%% value) against that so the failure is loud at write time instead: a value
+%% that fits the cap alone can still be dropped once the name and attributes
+%% are added.
 -define(DEFAULT_MAX_BYTES, 4096).
 
 %% --------------------------------------------------------------------
@@ -105,9 +111,10 @@ cookie_name() ->
 -doc """
 Encodes a session map into an encrypted cookie value with a baked-in absolute
 expiry (`max_age/0` seconds from now). Errors if `secret_key` is unset, or with
-`{session_too_large, Size, Limit}` if the encoded value exceeds `session_max_bytes`
-(default 4096) -- a loud failure at write time instead of a cookie the browser
-silently drops.
+`{session_too_large, Size, Limit}` if the serialized `Set-Cookie` line -- the
+cookie name, the encoded value, and the attributes, which is what browsers count
+against their ~4KB cap -- exceeds `session_max_bytes` (default 4096): a loud
+failure at write time instead of a cookie the browser silently drops.
 """.
 -spec encode(Session) -> binary() when
     Session :: arizona_req:session().
@@ -115,7 +122,7 @@ encode(Session) ->
     Payload = iolist_to_binary(json:encode(Session)),
     Cookie = arizona_crypto:encrypt(?PURPOSE, Payload, #{ttl => max_age()}),
     Limit = max_bytes(),
-    case byte_size(Cookie) of
+    case cookie_overhead() + byte_size(Cookie) of
         Size when Size > Limit ->
             erlang:error({session_too_large, Size, Limit}, [Session], [
                 {error_info, #{module => ?MODULE}}
@@ -241,9 +248,10 @@ format_error({session_too_large, Size, Limit}, _ST) ->
     #{
         general =>
             io_lib:format(
-                "session cookie is ~b bytes, over the ~b-byte limit; browsers "
-                "silently drop oversized cookies. Store less in the session (an id, "
-                "not a blob), or raise the `session_max_bytes` application env.",
+                "session Set-Cookie line (name + value + attributes) is ~b bytes, "
+                "over the ~b-byte limit; browsers silently drop oversized cookies. "
+                "Store less in the session (an id, not a blob), or raise the "
+                "`session_max_bytes` application env.",
                 [Size, Limit]
             )
     }.
@@ -252,9 +260,20 @@ format_error({session_too_large, Size, Limit}, _ST) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Maximum encoded-cookie size in bytes (default 4096, the ~4KB browser cap).
+%% Maximum serialized `Set-Cookie` line size in bytes (default 4096, the ~4KB
+%% browser cap; see `?DEFAULT_MAX_BYTES`).
 max_bytes() ->
     arizona_config:get_env(session_max_bytes, ?DEFAULT_MAX_BYTES).
+
+%% What the `Set-Cookie` line adds around the encoded value, mirroring the
+%% transport serializer over this module's own `cookie_opts/1`: `name` + `=`,
+%% `; Path=/` (8), `; Max-Age=` (10) plus its digits, `; HttpOnly` (10), and
+%% `; SameSite=Lax` (14). The `; Secure` budget (8) is counted regardless of
+%% `session_secure`, so enabling it in production never shrinks the budget a
+%% session was written against.
+cookie_overhead() ->
+    MaxAgeDigits = byte_size(integer_to_binary(max_age())),
+    byte_size(cookie_name()) + 1 + 8 + 10 + MaxAgeDigits + 10 + 14 + 8.
 
 cookie_opts(MaxAge) ->
     #{

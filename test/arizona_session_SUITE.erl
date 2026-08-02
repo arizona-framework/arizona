@@ -16,6 +16,7 @@
 -export([resp_cookie_none_when_clean/1]).
 -export([cookie_secure_follows_env/1]).
 -export([encode_errors_when_too_large/1]).
+-export([encode_size_guard_counts_cookie_line/1]).
 -export([format_error_renders_too_large_message/1]).
 -export([decode_id_rejects_other_consumers_cookie/1]).
 -export([decode_id_rejects_expired_id/1]).
@@ -39,6 +40,7 @@ all() ->
         resp_cookie_none_when_clean,
         cookie_secure_follows_env,
         encode_errors_when_too_large,
+        encode_size_guard_counts_cookie_line,
         format_error_renders_too_large_message,
         decode_id_rejects_other_consumers_cookie,
         decode_id_rejects_expired_id
@@ -122,6 +124,44 @@ encode_errors_when_too_large(Config) when is_list(Config) ->
             {session_too_large, _, 8},
             arizona_session:encode(#{~"k" => ~"a value well over eight bytes"})
         )
+    after
+        application:unset_env(arizona, session_max_bytes)
+    end.
+
+encode_size_guard_counts_cookie_line(Config) when is_list(Config) ->
+    %% Browsers count at least name+value against the ~4096 cap (RFC 6265's
+    %% minimum is the whole name+value+attributes line), so a value that fits
+    %% `session_max_bytes` alone can still be silently dropped once
+    %% `az_session=` and the attributes are added -- exactly the failure the
+    %% guard exists to make loud. The guard must therefore measure the full
+    %% Set-Cookie line, and the boundary must sit exactly at the limit.
+    Session = #{~"user_id" => ~"42"},
+    %% The encoded value length is deterministic for a fixed payload (the IV is
+    %% random but fixed-size, and base64 length depends only on payload length).
+    Value = arizona_session:encode(Session),
+    %% Recover the guarded size from the error tuple under an impossible limit.
+    application:set_env(arizona, session_max_bytes, 1),
+    Size =
+        try
+            arizona_session:encode(Session)
+        catch
+            error:{session_too_large, S, 1} -> S
+        end,
+    try
+        %% The guard counts the line, not the bare value: name + "=" +
+        %% `; Path=/` (8) + `; Max-Age=` (10) + its digits + `; HttpOnly` (10) +
+        %% `; SameSite=Lax` (14) + the `; Secure` budget (8, counted regardless
+        %% of session_secure so enabling it in production never shrinks the
+        %% budget a session was written against).
+        MaxAgeDigits = byte_size(integer_to_binary(arizona_session:max_age())),
+        Overhead = byte_size(~"az_session") + 1 + 8 + 10 + MaxAgeDigits + 10 + 14 + 8,
+        ?assertEqual(byte_size(Value) + Overhead, Size),
+        %% Boundary: a limit of exactly the line size passes ...
+        application:set_env(arizona, session_max_bytes, Size),
+        ?assertEqual(byte_size(Value), byte_size(arizona_session:encode(Session))),
+        %% ... and one byte under it errors.
+        application:set_env(arizona, session_max_bytes, Size - 1),
+        ?assertError({session_too_large, Size, _}, arizona_session:encode(Session))
     after
         application:unset_env(arizona, session_max_bytes)
     end.
