@@ -778,7 +778,13 @@ function applyOps(ops) {
         // snapshot until a reload.
         try {
             const el = resolve(op[1]);
-            if (!el) continue;
+            if (!el) {
+                // Loud like the stream-item warns: a silently dropped op (a
+                // server op addressed to a slot SSR never anchored) reads as
+                // "nothing happened" and costs a debugging round trip.
+                console.warn(`[arizona] op ${op[0]} target "${op[1]}" not found; skipping`);
+                continue;
+            }
             const az = op[1].substring(op[1].indexOf(':') + 1);
             switch (op[0]) {
                 case OP.TEXT:

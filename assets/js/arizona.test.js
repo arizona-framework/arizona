@@ -1102,6 +1102,24 @@ describe('applyOps -- skip missing', () => {
         // Original element should be untouched
         expect(resolveEl('v:0').textContent).toBe('hi');
     });
+
+    it('warns on an unresolvable target and still applies the rest of the batch', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupView('v', '<span az="0">hi</span>');
+        // A silently dropped op (e.g. a server op addressed to a slot SSR never
+        // anchored) reads as "nothing happened" -- it must be loud, like the
+        // stream-item warns.
+        applyOps([
+            [OP.TEXT, 'missing:0', 'x'],
+            [OP.TEXT, 'v:0', 'updated'],
+        ]);
+        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy.mock.calls[0][0]).toBe(
+            '[arizona] op 0 target "missing:0" not found; skipping',
+        );
+        expect(resolveEl('v:0').textContent).toBe('updated');
+        warnSpy.mockRestore();
+    });
 });
 
 // ---------------------------------------------------------------------------
