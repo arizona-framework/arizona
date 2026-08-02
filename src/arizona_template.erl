@@ -65,6 +65,7 @@ render(Bindings) ->
 -export([terminal_each/2]).
 -export([to_bin/1]).
 -export([raw/1]).
+-export([classify_trusted/1]).
 -export([escape_value/2]).
 -export([mark_esc/1]).
 -export([dyn_az/1]).
@@ -397,31 +398,33 @@ to_bin(V) when is_atom(V) -> atom_to_binary(V);
 %% stays raw end to end.
 to_bin({arizona_esc, V}) ->
     to_bin(V);
-to_bin({arizona_raw, V}) ->
-    to_bin(V);
-to_bin({arizona_effect, _} = Cmd) ->
-    arizona_effect:encode(Cmd);
-to_bin([{arizona_effect, _} | _] = Cmds) ->
-    arizona_effect:encode(Cmds);
-to_bin(V) when is_list(V) ->
-    %% A charlist/iodata is text: decode it as Unicode codepoints so the output is
-    %% valid UTF-8. `iolist_to_binary/1` truncates a 128..255 codepoint to an
-    %% invalid latin-1 byte (`"café"` -> `<<...,233>>` instead of `<<...,195,169>>`)
-    %% and crashes a codepoint > 255 with a bare `badarg`. A term that is not valid
-    %% chardata (e.g. a list wrapping a binary of non-UTF-8 bytes) yields the same
-    %% `bad_template_value` as any other unsupported value.
-    case unicode:characters_to_binary(V) of
-        Bin when is_binary(Bin) ->
-            Bin;
-        _ ->
-            erlang:error({bad_template_value, V}, [V], [
+to_bin(V0) ->
+    case classify_trusted(V0) of
+        {raw, V} ->
+            to_bin(V);
+        {effect, Cmd} ->
+            arizona_effect:encode(Cmd);
+        value when is_list(V0) ->
+            %% A charlist/iodata is text: decode it as Unicode codepoints so the
+            %% output is valid UTF-8. `iolist_to_binary/1` truncates a 128..255
+            %% codepoint to an invalid latin-1 byte (`"café"` -> `<<...,233>>`
+            %% instead of `<<...,195,169>>`) and crashes a codepoint > 255 with a
+            %% bare `badarg`. A term that is not valid chardata (e.g. a list
+            %% wrapping a binary of non-UTF-8 bytes) yields the same
+            %% `bad_template_value` as any other unsupported value.
+            case unicode:characters_to_binary(V0) of
+                Bin when is_binary(Bin) ->
+                    Bin;
+                _ ->
+                    erlang:error({bad_template_value, V0}, [V0], [
+                        {error_info, #{module => ?MODULE}}
+                    ])
+            end;
+        value ->
+            erlang:error({bad_template_value, V0}, [V0], [
                 {error_info, #{module => ?MODULE}}
             ])
-    end;
-to_bin(V) ->
-    erlang:error({bad_template_value, V}, [V], [
-        {error_info, #{module => ?MODULE}}
-    ]).
+    end.
 
 -doc """
 Extracts the `t:az/0` index from a 2- or 3-tuple `t:dynamic/0`.
@@ -493,6 +496,24 @@ with no defined meaning; using it in a `?native`/`?terminal` template is unsuppo
 raw(Value) -> {arizona_raw, Value}.
 
 -doc """
+Classifies the escape-exempt content shapes: a `raw/1` opt-out
+(`{arizona_raw, V}`, returned unwrapped) and an already-encoded effect command
+or command list (`{arizona_effect, _}`). Every other value is `value`.
+
+The single definition of the shape vocabulary -- `to_bin/1`, `escape_value/2`,
+`mark_esc/1`, and `arizona_html:render_attr/2` all dispatch on it, so growing
+the vocabulary is a one-place change. Each call site decides the policy for a
+shape (`mark_esc/1` deliberately unwraps and re-escapes a helper-produced raw).
+""".
+-spec classify_trusted(Value) -> {raw, term()} | {effect, Effect} | value when
+    Value :: term(),
+    Effect :: term().
+classify_trusted({arizona_raw, V}) -> {raw, V};
+classify_trusted({arizona_effect, _} = Cmd) -> {effect, Cmd};
+classify_trusted([{arizona_effect, _} | _] = Cmds) -> {effect, Cmds};
+classify_trusted(_Value) -> value.
+
+-doc """
 Renders a value to its output binary, escaping via `Backend` (an
 `arizona_renderer`): HTML entity-escaping, terminal control-char sanitizing, or a
 plain-text/JSON identity. `raw/1`-wrapped values and already-encoded
@@ -502,10 +523,12 @@ plain-text/JSON identity. `raw/1`-wrapped values and already-encoded
 -spec escape_value(Backend, Value) -> binary() when
     Backend :: module(),
     Value :: term().
-escape_value(_Backend, {arizona_raw, V}) -> to_bin(V);
-escape_value(_Backend, {arizona_effect, _} = C) -> to_bin(C);
-escape_value(_Backend, [{arizona_effect, _} | _] = C) -> to_bin(C);
-escape_value(Backend, V) -> Backend:escape(to_bin(V)).
+escape_value(Backend, V0) ->
+    case classify_trusted(V0) of
+        {raw, V} -> to_bin(V);
+        {effect, Cmd} -> to_bin(Cmd);
+        value -> Backend:escape(to_bin(V0))
+    end.
 
 -doc """
 Marks an evaluated value for HTML escaping at output. Only scalars are marked --
@@ -529,11 +552,14 @@ across the live diff).
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
-mark_esc(V) when is_map(V) -> V;
-mark_esc({arizona_raw, V}) -> mark_esc(V);
-mark_esc({arizona_effect, _} = E) -> E;
-mark_esc([{arizona_effect, _} | _] = E) -> E;
-mark_esc(V) -> {arizona_esc, V}.
+mark_esc(V) when is_map(V) ->
+    V;
+mark_esc(V0) ->
+    case classify_trusted(V0) of
+        {raw, V} -> mark_esc(V);
+        {effect, E} -> E;
+        value -> {arizona_esc, V0}
+    end.
 
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`

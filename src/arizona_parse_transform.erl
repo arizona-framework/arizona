@@ -2427,7 +2427,6 @@ is_block_content_expr({call, _, {remote, _, {atom, _, M}, {atom, _, F}}, _Args})
             stateless,
             inner_content,
             local,
-            slot,
             raw
         ]);
 is_block_content_expr(_) ->
