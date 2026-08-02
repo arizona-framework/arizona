@@ -67,8 +67,33 @@ handle(Req) ->
                 Raw#{state => State}
             ),
             {Resp, Req1} = dispatch_action(Handler, Action, ActionReq),
-            {arizona_roadrunner_resp:flush(ArzReq1, Resp), Req1}
+            %% Flush the action's OWN arizona_req, recovered from the request it
+            %% returned: an action that writes the session/flash
+            %% (`put_session/3`, `clear_session/1`, ...) through
+            %% `arizona_controller:req/1` must have those writes serialized and
+            %% committed, not silently dropped in favour of the pre-action copy.
+            %% An action that returns a request without the stash (a hand-built
+            %% one) falls back to the pipeline's own.
+            FlushReq = action_arizona_req(Req1, ArzReq1),
+            %% Drop the stash before roadrunner sees the request again: it holds
+            %% the DECRYPTED session, and a handler crash logs the request.
+            {arizona_roadrunner_resp:flush(FlushReq, Resp), strip_arizona_private(Req1)}
     end.
+
+%% The action's post-write arizona_req, or the pipeline's when the action
+%% returned a request that no longer carries the stash.
+action_arizona_req(Req, Fallback) ->
+    case roadrunner_req:private(Req) of
+        #{{arizona, req} := ArzReq} -> ArzReq;
+        #{} -> Fallback
+    end.
+
+%% The stash exists for the action only; roadrunner logs the request on a
+%% handler crash, so the decrypted session must not ride back out with it.
+strip_arizona_private(Req) ->
+    roadrunner_req:delete_private(
+        {arizona, bindings}, roadrunner_req:delete_private({arizona, req}, Req)
+    ).
 
 -doc """
 Renders a friendly message when a route names an `action` the controller module

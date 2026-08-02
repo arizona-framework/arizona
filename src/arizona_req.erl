@@ -538,14 +538,25 @@ session_resp_cookie(Req) ->
     end.
 
 %% Pure store-mode counterpart of `arizona_session:resp_cookie/2`.
-store_resp_cookie(#{session_dirty := true, session_out := SessionOut} = Req) when
+store_resp_cookie(Req) ->
+    case session_outcome(Req) of
+        {write, _SessionOut} -> arizona_session:set_cookie_id(maps:get(session_id, Req));
+        clear -> arizona_session:clear_cookie();
+        untouched -> none
+    end.
+
+%% THE classification of what this request did to the session, consumed by
+%% both the cookie build (store_resp_cookie/1) and the store commit
+%% (commit_session_store/2) -- one definition, so the Set-Cookie and the
+%% store write can never disagree about the outcome.
+session_outcome(#{session_dirty := true, session_out := SessionOut}) when
     map_size(SessionOut) > 0
 ->
-    arizona_session:set_cookie_id(maps:get(session_id, Req));
-store_resp_cookie(#{session_dirty := true}) ->
-    arizona_session:clear_cookie();
-store_resp_cookie(_Req) ->
-    none.
+    {write, SessionOut};
+session_outcome(#{session_dirty := true}) ->
+    clear;
+session_outcome(_Req) ->
+    untouched.
 
 -doc """
 Commits a written session to the server-side store (store mode): a dirty
@@ -555,10 +566,12 @@ fixated id cannot be reused -- while a cleared one (logout) is deleted. A no-op
 in cookie mode or when the session is untouched.
 
 Called by the transports at response flush, beside serializing `resp_cookies/1`
-(a pure getter that performs no store writes). Flush time is the
-commit-on-success point: a handler that crashes after `put_session/3` leaves the
-store untouched. Idempotent -- committing the same request again repeats the same
-put/delete.
+(a pure getter that performs no store writes). Flushing is the commit point, so
+the cookie and the store entry always agree: a response that cannot be built
+(an unflushable shape raises in the header fold, before this call) commits
+nothing. A `{live, ...}` render crash is not such a case -- it is caught and
+flushed as a 500 error page, so a session written before the crash does commit.
+Idempotent -- committing the same request again repeats the same put/delete.
 """.
 -spec commit_session(Request) -> ok when
     Request :: request().
@@ -568,18 +581,23 @@ commit_session(Req) ->
         Store -> commit_session_store(Store, Req)
     end.
 
-commit_session_store(Store, #{session_dirty := true, session_out := SessionOut} = Req) when
-    map_size(SessionOut) > 0
-->
-    ok = Store:put(maps:get(session_id, Req), SessionOut, arizona_session:max_age()),
-    %% On a rotation (clear_session then put_session, e.g. login) drop the
-    %% pre-rotation entry so a pre-login / fixated id cannot be reused.
-    maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined));
-commit_session_store(Store, #{session_dirty := true} = Req) ->
-    %% Cleared (logout): drop the store entry if we know the id.
-    maybe_delete_stored(Store, maps:get(session_id, Req, undefined));
-commit_session_store(_Store, _Req) ->
-    ok.
+commit_session_store(Store, Req) ->
+    case session_outcome(Req) of
+        {write, SessionOut} ->
+            ok = Store:put(maps:get(session_id, Req), SessionOut, arizona_session:max_age()),
+            %% On a rotation (clear_session then put_session, e.g. login) drop the
+            %% pre-rotation entry so a pre-login / fixated id cannot be reused.
+            maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined));
+        clear ->
+            %% Cleared (logout): drop the store entry if we know the id -- and
+            %% the pre-rotation one too, so a rotation whose writes all got
+            %% removed again (clear_session, put_session, delete_session) does
+            %% not leave the pre-login entry resolvable.
+            ok = maybe_delete_stored(Store, maps:get(session_id, Req, undefined)),
+            maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined));
+        untouched ->
+            ok
+    end.
 
 maybe_delete_stored(_Store, undefined) -> ok;
 maybe_delete_stored(Store, Id) -> Store:delete(Id).
@@ -871,7 +889,16 @@ read_session_value(Value, Req) ->
                         no_session ->
                             {#{}, Req#{session_in => #{}}};
                         {error, _Reason} = Error ->
-                            {#{}, Req#{session_in => #{}, session_error => Error}}
+                            %% The id is validly signed even though the entry
+                            %% read failed, so keep it: a logout during a
+                            %% transient read outage still revokes at flush
+                            %% (commit_session's cleared leg deletes by this
+                            %% id) instead of leaving the entry -- and any
+                            %% captured cookie -- live until TTL. The session
+                            %% DATA stays empty; a failed read grants nothing.
+                            {#{}, Req#{
+                                session_in => #{}, session_id => Id, session_error => Error
+                            }}
                     end;
                 error ->
                     {#{}, Req#{session_in => #{}}}

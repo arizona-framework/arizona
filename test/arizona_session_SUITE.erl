@@ -194,7 +194,23 @@ encode_size_guard_counts_cookie_line(Config) when is_list(Config) ->
         ?assertEqual(byte_size(Value), byte_size(arizona_session:encode(Session))),
         %% ... and one byte under it errors.
         application:set_env(arizona, session_max_bytes, Size - 1),
-        ?assertError({session_too_large, Size, _}, arizona_session:encode(Session))
+        ?assertError({session_too_large, Size, _}, arizona_session:encode(Session)),
+        %% The constants must cover what the transport serializer actually
+        %% emits -- pin them against roadrunner_cookie:serialize/3 over this
+        %% module's own opts at the conservatively budgeted maximum (secure
+        %% mode: __Host- name + the Secure flag). A serializer growing an
+        %% attribute, or a wrong constant, fails here instead of silently
+        %% under-counting the budget.
+        Serialized = iolist_to_binary(
+            roadrunner_cookie:serialize(~"__Host-az_session", Value, #{
+                http_only => true,
+                secure => true,
+                same_site => lax,
+                path => ~"/",
+                max_age => arizona_session:max_age()
+            })
+        ),
+        ?assert(byte_size(Serialized) =< Size)
     after
         application:unset_env(arizona, session_max_bytes)
     end.

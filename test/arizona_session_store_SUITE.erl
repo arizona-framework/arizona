@@ -27,6 +27,7 @@
 -export([req_revocation_empties_session/1]).
 -export([req_revocation_records_no_error/1]).
 -export([req_store_failure_is_observable/1]).
+-export([req_clear_session_during_store_outage_still_revokes/1]).
 -export([req_tampered_cookie_records_no_error/1]).
 -export([req_cookie_mode_records_no_error/1]).
 -export([req_store_failure_survives_put_session/1]).
@@ -59,6 +60,7 @@ all() ->
         req_revocation_empties_session,
         req_revocation_records_no_error,
         req_store_failure_is_observable,
+        req_clear_session_during_store_outage_still_revokes,
         req_tampered_cookie_records_no_error,
         req_cookie_mode_records_no_error,
         req_store_failure_survives_put_session,
@@ -333,11 +335,29 @@ req_store_failure_is_observable(Config) when is_list(Config) ->
     Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Cookie}]}),
     {Session, Req1} = arizona_req:read_session(Req0),
     ?assertEqual(#{}, Session),
-    ?assertEqual(undefined, arizona_req:session_id(Req1)),
+    %% The id is validly signed, so it IS kept (it lets a logout revoke during
+    %% the outage) -- keeping it grants no data, as the misses below prove.
+    ?assertEqual(Id, arizona_req:session_id(Req1)),
     ?assertEqual({error, store_unreachable}, arizona_req:session_error(Req1)),
     %% Public-API proof the failed read grants nothing: get_session misses too.
     ?assertEqual(error, arizona_req:get_session(Req1, user_id)),
     ?assertEqual(default, arizona_req:get_session(Req1, user_id, default)).
+
+req_clear_session_during_store_outage_still_revokes(Config) when is_list(Config) ->
+    %% A transient read outage must not turn logout into a client-only clear:
+    %% the incoming id is validly signed even when the entry read fails, so
+    %% the flush's cleared leg still deletes the entry (the fixture forwards
+    %% writes to the real ETS table; only its reads fail).
+    Id = arizona_session:new_id(),
+    ok = arizona_session_store_ets:put(Id, #{~"user" => ~"u1"}, 60),
+    application:set_env(arizona, session_store, arizona_failing_session_store),
+    Cookie = arizona_session:encode_id(Id),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Cookie}]}),
+    Req1 = arizona_req:clear_session(Req0),
+    ?assertMatch([{_, <<>>, _}], arizona_req:resp_cookies(Req1)),
+    ok = arizona_req:commit_session(Req1),
+    application:set_env(arizona, session_store, arizona_session_store_ets),
+    ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
 
 req_tampered_cookie_records_no_error(Config) when is_list(Config) ->
     %% A tampered/forged signed id fails decode before the store is ever consulted: it is a

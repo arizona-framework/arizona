@@ -121,6 +121,13 @@ effects are visible to the action -- e.g. after an
 route's `state` rides the request to `roadrunner_req:state/1`. Only set by the
 controller dispatcher, so calling it on a request that did not come through a
 controller route crashes.
+
+Writes are honored too: an action that returns the roadrunner request it was
+given (the usual shape) has this request's session/flash/cookie writes
+serialized and committed at flush, so `arizona_req:clear_session/1` in a logout
+action revokes for real. Reading the body is the exception -- use
+`roadrunner_req:body/1` on the roadrunner request, not `arizona_req:body/1` on
+this one, so the advanced body reader rides back out to the transport.
 """.
 -spec req(RoadrunnerReq) -> arizona_req:request() when
     RoadrunnerReq :: roadrunner_req:request().
