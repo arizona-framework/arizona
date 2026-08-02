@@ -59,11 +59,21 @@
     conditional_nested_element_recurses/1,
     wire_get_value_raw/1,
     wire_raw_value_tagged_html/1,
-    wire_helper_raw_value_escaped/1
+    wire_helper_raw_value_escaped/1,
+    markerless_stream_item_update_no_dangling_op/1,
+    markerless_list_item_falls_back_to_full_update/1,
+    markerless_list_no_change_no_ops/1,
+    markerless_stateful_child_update_no_dangling_op/1
 ]).
 
 all() ->
-    [{group, basic_ops}, {group, no_diff}, {group, conditional_dep}, {group, wire_payload}].
+    [
+        {group, basic_ops},
+        {group, no_diff},
+        {group, conditional_dep},
+        {group, wire_payload},
+        {group, markerless_slots}
+    ].
 
 groups() ->
     [
@@ -130,6 +140,12 @@ groups() ->
             wire_get_value_raw,
             wire_raw_value_tagged_html,
             wire_helper_raw_value_escaped
+        ]},
+        {markerless_slots, [parallel], [
+            markerless_stream_item_update_no_dangling_op,
+            markerless_list_item_falls_back_to_full_update,
+            markerless_list_no_change_no_ops,
+            markerless_stateful_child_update_no_dangling_op
         ]}
     ].
 
@@ -1156,6 +1172,138 @@ wire_helper_raw_value_escaped(Config) when is_list(Config) ->
         M:helper_raw(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}
     ),
     ?assertMatch([[?OP_TEXT, _, <<"<b>z</b>">>]], Ops).
+
+%% =============================================================================
+%% Markerless (raw-text) slots inside items and child views
+%% =============================================================================
+%% A raw-text element's content slot (script/style/textarea/title) has
+%% Az = undefined -- markerless, render-once (see the arizona_diff moduledoc).
+%% The top-level walkers (diff_dynamics/3, diff_dynamics_v/5) always skipped
+%% it; these cases guard the per-item and child-view walkers, which used to
+%% emit ops targeting `undefined` (a dangling target the client resolves to
+%% the item element itself, wiping its static children).
+
+%% Build a limit-free stream page whose item template holds a markerless
+%% (textarea) content slot, render it, apply `Mutate` to the stream, and diff.
+markerless_stream_diff(Mutate) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az-key=\"">>, <<"\"><textarea>">>, <<"</textarea></li>">>],
+        d => fun(Item, Key) ->
+            [{<<"0">>, fun() -> Key end}, {undefined, fun() -> maps:get(text, Item) end}]
+        end,
+        f => <<"item">>
+    },
+    B0 = #{id => <<"t">>, items => arizona_stream:new(KeyFun, [#{id => 1, text => <<"a">>}])},
+    Tmpl0 = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [
+            {<<"0">>, fun() -> arizona_template:each(arizona_template:get(items, B0), ItemTmpl) end}
+        ],
+        f => <<"p">>
+    },
+    {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    B2 = B1#{items => Mutate(maps:get(items, B1))},
+    Tmpl1 = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [
+            {<<"0">>, fun() -> arizona_template:each(arizona_template:get(items, B2), ItemTmpl) end,
+                {m, 1}}
+        ],
+        f => <<"p">>
+    },
+    Changed = compute_changed(B1, B2),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
+    Ops.
+
+%% Updating a stream item's markerless slot emits nothing at all: the slot is
+%% render-once (no comment marker to target). Previously the per-item walker
+%% emitted an ?OP_ITEM_PATCH whose inner op targeted `undefined`.
+markerless_stream_item_update_no_dangling_op(Config) when is_list(Config) ->
+    Ops = markerless_stream_diff(fun(S) ->
+        arizona_stream:update(S, 1, #{id => 1, text => <<"b">>})
+    end),
+    ?assertEqual([], Ops).
+
+%% Diff a single-root plain-list `?each` whose item template holds a markerless
+%% (textarea) content slot beside a normal marker slot.
+markerless_list_diff(Old, New) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<": <textarea>">>, <<"</textarea></li>">>],
+        d => fun(I) -> [{<<"0">>, maps:get(name, I)}, {undefined, maps:get(text, I)}] end,
+        f => <<"item">>,
+        single_root => true
+    },
+    {OldItems, _} = arizona_eval:render_list_items(Old, ItemTmpl, {#{}, #{}}),
+    OldSnap = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, #{t => ?EACH, items => OldItems, template => ItemTmpl}}],
+        deps => [#{rows => true}],
+        f => <<"parent">>
+    },
+    NewTmpl = #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, fun() -> arizona_template:each(New, ItemTmpl) end, {m, 1}}],
+        f => <<"parent">>
+    },
+    {Ops, _Snap, _Views} = arizona_diff:diff(NewTmpl, OldSnap, #{}, #{rows => true}),
+    Ops.
+
+%% A change to the markerless slot cannot ride a per-item patch (no op target),
+%% so the list is not positionally patchable: the wholesale marker-aware
+%% ?OP_TEXT re-render delivers the raw-text content instead. Previously an
+%% OP_LIST_PATCH carried an inner op targeting `undefined` and the change was
+%% lost (or destructive) client-side.
+markerless_list_item_falls_back_to_full_update(Config) when is_list(Config) ->
+    Ops = markerless_list_diff(
+        [#{name => <<"a">>, text => <<"x">>}],
+        [#{name => <<"a">>, text => <<"y">>}]
+    ),
+    ?assertMatch(
+        [[?OP_TEXT, <<"0">>, #{<<"t">> := ?EACH, <<"d">> := [[<<"a">>, <<"y">>]]}]], Ops
+    ).
+
+%% The wholesale fallback fires only on an actual change: an identical list
+%% emits nothing.
+markerless_list_no_change_no_ops(Config) when is_list(Config) ->
+    Items = [#{name => <<"a">>, text => <<"x">>}],
+    ?assertEqual([], markerless_list_diff(Items, Items)).
+
+%% A stateful child whose only change is its markerless textarea slot emits no
+%% ops at all -- render-once, same as a root-level raw-text slot. Previously
+%% the child walker emitted `[ViewId, [[?OP_TEXT, undefined, _]]]` and the
+%% client dropped the dangling update with a console warning.
+markerless_stateful_child_update_no_dangling_op(Config) when is_list(Config) ->
+    B0 = #{text => <<"one">>},
+    T0 = #{
+        s => [<<"<main az=\"0\"><!--az:0-->">>, <<"<!--/az--></main>">>],
+        d => [
+            {<<"0">>,
+                arizona_template:stateful(
+                    arizona_textarea_child,
+                    #{id => <<"c">>, text => arizona_template:get(text, B0)}
+                )}
+        ],
+        f => <<"test">>
+    },
+    {_HTML, Snap0, V0} = arizona_render:render(T0, #{}),
+    B1 = #{text => <<"two">>},
+    T1 = #{
+        s => [<<"<main az=\"0\"><!--az:0-->">>, <<"<!--/az--></main>">>],
+        d => [
+            {<<"0">>,
+                arizona_template:stateful(
+                    arizona_textarea_child,
+                    #{id => <<"c">>, text => arizona_template:get(text, B1)}
+                )}
+        ],
+        f => <<"test">>
+    },
+    {Ops, _Snap1, _V1} = arizona_diff:diff(T1, Snap0, V0),
+    ?assertEqual([], Ops).
 
 %% =============================================================================
 %% Helpers
