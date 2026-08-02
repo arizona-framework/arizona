@@ -15,6 +15,7 @@
 -export([resp_cookie_clears_when_dirty_and_empty/1]).
 -export([resp_cookie_none_when_clean/1]).
 -export([cookie_secure_follows_env/1]).
+-export([host_prefix_round_trips_when_secure/1]).
 -export([encode_errors_when_too_large/1]).
 -export([encode_size_guard_counts_cookie_line/1]).
 -export([format_error_renders_too_large_message/1]).
@@ -39,6 +40,7 @@ all() ->
         resp_cookie_clears_when_dirty_and_empty,
         resp_cookie_none_when_clean,
         cookie_secure_follows_env,
+        host_prefix_round_trips_when_secure,
         encode_errors_when_too_large,
         encode_size_guard_counts_cookie_line,
         format_error_renders_too_large_message,
@@ -116,6 +118,36 @@ cookie_secure_follows_env(Config) when is_list(Config) ->
         application:unset_env(arizona, session_secure)
     end.
 
+host_prefix_round_trips_when_secure(Config) when is_list(Config) ->
+    %% With session_secure enabled the cookie uses the `__Host-` prefixed name,
+    %% which the browser only accepts as Secure + Path=/ + Domain-less -- closing
+    %% sibling-subdomain cookie tossing (a planted, path-scoped `az_session`
+    %% shadow that would otherwise precede the real cookie and survive login
+    %% rotation). Write and read sides must agree on the name.
+    application:set_env(arizona, session_secure, true),
+    try
+        ?assertEqual(~"__Host-az_session", arizona_session:cookie_name()),
+        %% All three Set-Cookie builders carry the prefixed name and satisfy the
+        %% prefix requirements (Secure, Path=/, no Domain).
+        {~"__Host-az_session", _, SetOpts} = arizona_session:set_cookie(#{~"k" => ~"v"}),
+        ?assertMatch(#{secure := true, path := ~"/"}, SetOpts),
+        ?assertNot(maps:is_key(domain, SetOpts)),
+        ?assertMatch({~"__Host-az_session", <<>>, _}, arizona_session:clear_cookie()),
+        ?assertMatch({~"__Host-az_session", _, _}, arizona_session:set_cookie_id(~"abc")),
+        %% End-to-end through arizona_req: a write emits the prefixed cookie and
+        %% a follow-up request carrying it reads the session back.
+        Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+        Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+        [{~"__Host-az_session", Value, _}] = arizona_req:resp_cookies(Req1),
+        Req2 = arizona_req_test_adapter:new(#{cookies => [{~"__Host-az_session", Value}]}),
+        {Session, _Req3} = arizona_req:read_session(Req2),
+        ?assertEqual(#{~"user_id" => ~"42"}, Session)
+    after
+        application:unset_env(arizona, session_secure)
+    end,
+    %% secure=false keeps the plain name.
+    ?assertEqual(~"az_session", arizona_session:cookie_name()).
+
 encode_errors_when_too_large(Config) when is_list(Config) ->
     %% A tiny limit forces the guard; the encoded (encrypted) value exceeds 8 bytes.
     application:set_env(arizona, session_max_bytes, 8),
@@ -150,11 +182,12 @@ encode_size_guard_counts_cookie_line(Config) when is_list(Config) ->
     try
         %% The guard counts the line, not the bare value: name + "=" +
         %% `; Path=/` (8) + `; Max-Age=` (10) + its digits + `; HttpOnly` (10) +
-        %% `; SameSite=Lax` (14) + the `; Secure` budget (8, counted regardless
-        %% of session_secure so enabling it in production never shrinks the
-        %% budget a session was written against).
+        %% `; SameSite=Lax` (14) + the `; Secure` budget (8). The Secure flag and
+        %% the longer `__Host-` prefixed name are counted regardless of
+        %% session_secure, so enabling it in production never shrinks the budget
+        %% a session was written against.
         MaxAgeDigits = byte_size(integer_to_binary(arizona_session:max_age())),
-        Overhead = byte_size(~"az_session") + 1 + 8 + 10 + MaxAgeDigits + 10 + 14 + 8,
+        Overhead = byte_size(~"__Host-az_session") + 1 + 8 + 10 + MaxAgeDigits + 10 + 14 + 8,
         ?assertEqual(byte_size(Value) + Overhead, Size),
         %% Boundary: a limit of exactly the line size passes ...
         application:set_env(arizona, session_max_bytes, Size),

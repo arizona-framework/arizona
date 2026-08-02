@@ -28,7 +28,9 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
   production** so the session cookie is only sent over HTTPS. It defaults to `false`
   because a `Secure` cookie is *silently dropped* over plain HTTP -- breaking local dev
   with no error -- and a deployment behind a TLS-terminating proxy can't be auto-detected.
-  Treat enabling it as a deploy-checklist item (mirroring `flash_secure`).
+  Treat enabling it as a deploy-checklist item (mirroring `flash_secure`). Enabling it
+  also switches the cookie to the `__Host-az_session` name (see `cookie_name/0`), whose
+  browser-enforced `__Host-` prefix closes sibling-subdomain cookie tossing.
 - `session_max_bytes` -- max serialized `Set-Cookie` line size, name and attributes
   included (default 4096, what browsers count against their ~4KB cap); `encode/1`
   errors with `{session_too_large, Size, Limit}` past it rather than letting the
@@ -82,7 +84,11 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 %% durable across requests, so the lifetime is the real expiry, not a safety net
 %% (cf. arizona_flash's 60s). The encrypted payload carries the same TTL, so the
 %% server rejects an expired cookie even if the browser replays it.
+%% With `session_secure` enabled the name takes the `__Host-` prefix, which a
+%% browser only accepts on a Secure, `Path=/`, Domain-less cookie -- see
+%% `cookie_name/0`.
 -define(COOKIE, ~"az_session").
+-define(COOKIE_SECURE, ~"__Host-az_session").
 -define(DEFAULT_MAX_AGE, 604800).
 %% Crypto domain-separation labels. The cookie-store payload and the store-mode id
 %% are distinct token types over the same `secret_key`, so each names its own
@@ -103,10 +109,26 @@ server-side store is the place for large, long-lived, or instantly-revocable sta
 %% API Functions
 %% --------------------------------------------------------------------
 
--doc "The session cookie name.".
+-doc """
+The session cookie name: `az_session`, or `__Host-az_session` when
+`session_secure` is enabled.
+
+The `__Host-` prefix makes the browser refuse to store the cookie unless it is
+`Secure`, `Path=/`, and Domain-less -- all of which the session cookie already
+is when `session_secure` is on. That closes sibling-subdomain cookie tossing: a
+compromised `evil.example.com` can plant an `az_session` cookie for
+`.example.com` scoped to a more specific `Path`, which browsers order ahead of
+the real cookie -- and a planted (validly encrypted, attacker-minted) session
+would survive login rotation. A `__Host-` cookie cannot be set with a `Domain`
+at all, so no sibling host can shadow it. Read and write sides both resolve the
+name here, so they always agree.
+""".
 -spec cookie_name() -> binary().
 cookie_name() ->
-    ?COOKIE.
+    case arizona_config:get_env(session_secure, false) of
+        true -> ?COOKIE_SECURE;
+        false -> ?COOKIE
+    end.
 
 -doc """
 Encodes a session map into an encrypted cookie value with a baked-in absolute
@@ -159,12 +181,12 @@ decode(Value) ->
 -spec set_cookie(Session) -> {binary(), binary(), arizona_req:resp_cookie_opts()} when
     Session :: arizona_req:session().
 set_cookie(Session) ->
-    {?COOKIE, encode(Session), cookie_opts(max_age())}.
+    {cookie_name(), encode(Session), cookie_opts(max_age())}.
 
 -doc "The `Set-Cookie` tuple that clears the session (logout).".
 -spec clear_cookie() -> {binary(), binary(), arizona_req:resp_cookie_opts()}.
 clear_cookie() ->
-    {?COOKIE, <<>>, cookie_opts(0)}.
+    {cookie_name(), <<>>, cookie_opts(0)}.
 
 -doc """
 The session `Set-Cookie` a response should carry, given the desired next-state
@@ -230,7 +252,7 @@ decode_id(Value) ->
 -spec set_cookie_id(Id) -> {binary(), binary(), arizona_req:resp_cookie_opts()} when
     Id :: binary().
 set_cookie_id(Id) ->
-    {?COOKIE, encode_id(Id), cookie_opts(max_age())}.
+    {cookie_name(), encode_id(Id), cookie_opts(max_age())}.
 
 %% --------------------------------------------------------------------
 %% Format error
@@ -268,12 +290,12 @@ max_bytes() ->
 %% What the `Set-Cookie` line adds around the encoded value, mirroring the
 %% transport serializer over this module's own `cookie_opts/1`: `name` + `=`,
 %% `; Path=/` (8), `; Max-Age=` (10) plus its digits, `; HttpOnly` (10), and
-%% `; SameSite=Lax` (14). The `; Secure` budget (8) is counted regardless of
-%% `session_secure`, so enabling it in production never shrinks the budget a
-%% session was written against.
+%% `; SameSite=Lax` (14). The `; Secure` budget (8) and the longer `__Host-`
+%% prefixed name are counted regardless of `session_secure`, so enabling it in
+%% production never shrinks the budget a session was written against.
 cookie_overhead() ->
     MaxAgeDigits = byte_size(integer_to_binary(max_age())),
-    byte_size(cookie_name()) + 1 + 8 + 10 + MaxAgeDigits + 10 + 14 + 8.
+    byte_size(?COOKIE_SECURE) + 1 + 8 + 10 + MaxAgeDigits + 10 + 14 + 8.
 
 cookie_opts(MaxAge) ->
     #{

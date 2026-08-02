@@ -31,7 +31,9 @@ rather than relying on the JSON parse to reject it.
 
 The `flash_secure` app env sets the `Secure` cookie flag (default `false`). **Set it to
 `true` in production** (HTTPS); it defaults `false` because a `Secure` cookie is silently
-dropped over plain HTTP, breaking local dev. (Mirrors `session_secure`.)
+dropped over plain HTTP, breaking local dev. Enabling it also switches the cookie to the
+`__Host-az_flash` name (see `cookie_name/0`), whose browser-enforced `__Host-` prefix
+closes sibling-subdomain cookie tossing. (Mirrors `session_secure`.)
 """.
 
 %% --------------------------------------------------------------------
@@ -63,7 +65,10 @@ dropped over plain HTTP, breaking local dev. (Mirrors `session_secure`.)
 
 %% Flash cookie name and lifetime. The flash is consumed on the very next
 %% request, so the max-age is only a safety net if that request never arrives.
+%% With `flash_secure` enabled the name takes the `__Host-` prefix -- see
+%% `cookie_name/0`.
 -define(COOKIE, ~"az_flash").
+-define(COOKIE_SECURE, ~"__Host-az_flash").
 -define(MAX_AGE, 60).
 %% Crypto domain-separation label: binds a signed value to this consumer, so a
 %% token minted for another purpose under the same secret never verifies here.
@@ -73,10 +78,22 @@ dropped over plain HTTP, breaking local dev. (Mirrors `session_secure`.)
 %% API Functions
 %% --------------------------------------------------------------------
 
--doc "The flash cookie name.".
+-doc """
+The flash cookie name: `az_flash`, or `__Host-az_flash` when `flash_secure` is
+enabled.
+
+The `__Host-` prefix makes the browser refuse to store the cookie unless it is
+`Secure`, `Path=/`, and Domain-less -- all of which the flash cookie already is
+when `flash_secure` is on -- so no sibling subdomain can plant a shadowing
+cookie under the same name. Read and write sides both resolve the name here, so
+they always agree. (Mirrors `arizona_session:cookie_name/0`.)
+""".
 -spec cookie_name() -> binary().
 cookie_name() ->
-    ?COOKIE.
+    case arizona_config:get_env(flash_secure, false) of
+        true -> ?COOKIE_SECURE;
+        false -> ?COOKIE
+    end.
 
 -doc """
 Encodes a flash map into a signed cookie value with a baked-in `MAX_AGE`-second
@@ -118,12 +135,12 @@ decode(Value) ->
 -spec set_cookie(Flash) -> {binary(), binary(), arizona_req:resp_cookie_opts()} when
     Flash :: arizona_req:flash().
 set_cookie(Flash) ->
-    {?COOKIE, encode(Flash), cookie_opts(?MAX_AGE)}.
+    {cookie_name(), encode(Flash), cookie_opts(?MAX_AGE)}.
 
 -doc "The `Set-Cookie` tuple that clears a consumed flash.".
 -spec clear_cookie() -> {binary(), binary(), arizona_req:resp_cookie_opts()}.
 clear_cookie() ->
-    {?COOKIE, <<>>, cookie_opts(0)}.
+    {cookie_name(), <<>>, cookie_opts(0)}.
 
 -doc """
 The flash `Set-Cookie` a response should carry, given the outgoing flash and

@@ -15,6 +15,7 @@
 -export([resp_cookie_clears_when_consumed/1]).
 -export([resp_cookie_none_when_idle/1]).
 -export([cookie_secure_follows_env/1]).
+-export([host_prefix_round_trips_when_secure/1]).
 -export([secret_errors_when_unset/1]).
 
 %% Sequential (not parallel): the cases share the `secret_key` application env,
@@ -31,6 +32,7 @@ all() ->
         resp_cookie_clears_when_consumed,
         resp_cookie_none_when_idle,
         cookie_secure_follows_env,
+        host_prefix_round_trips_when_secure,
         secret_errors_when_unset
     ].
 
@@ -101,6 +103,29 @@ cookie_secure_follows_env(Config) when is_list(Config) ->
     after
         application:unset_env(arizona, flash_secure)
     end.
+
+host_prefix_round_trips_when_secure(Config) when is_list(Config) ->
+    %% With flash_secure enabled the cookie uses the `__Host-` prefixed name
+    %% (Secure + Path=/ + Domain-less enforced by the browser), closing
+    %% sibling-subdomain cookie tossing -- mirroring session_secure. Write and
+    %% read sides must agree on the name.
+    application:set_env(arizona, flash_secure, true),
+    try
+        ?assertEqual(~"__Host-az_flash", arizona_flash:cookie_name()),
+        {~"__Host-az_flash", Value, Opts} = arizona_flash:set_cookie(#{~"error" => ~"boom"}),
+        ?assertMatch(#{secure := true, path := ~"/"}, Opts),
+        ?assertNot(maps:is_key(domain, Opts)),
+        ?assertMatch({~"__Host-az_flash", <<>>, _}, arizona_flash:clear_cookie()),
+        %% End-to-end through arizona_req: a request carrying the prefixed
+        %% cookie consumes the flash.
+        Req0 = arizona_req_test_adapter:new(#{cookies => [{~"__Host-az_flash", Value}]}),
+        {Flash, _Req1} = arizona_req:consume_flash(Req0),
+        ?assertEqual(#{~"error" => ~"boom"}, Flash)
+    after
+        application:unset_env(arizona, flash_secure)
+    end,
+    %% secure=false keeps the plain name.
+    ?assertEqual(~"az_flash", arizona_flash:cookie_name()).
 
 secret_errors_when_unset(Config) when is_list(Config) ->
     application:unset_env(arizona, secret_key),
