@@ -2,6 +2,10 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("common_test/include/ct.hrl").
 
+%% The listener name the suite compiles its routes under -- compile_routes/3 is
+%% listener-scoped (there is no nameless global form).
+-define(LISTENER, arizona_router_suite).
+
 -export([all/0, groups/0, init_per_group/2, end_per_group/2]).
 -export([
     compile_routes_asset_dir/1,
@@ -78,7 +82,7 @@ end_per_group(_Adapter, _Config) ->
 
 compile(Config, Routes) ->
     Router = ?config(router, Config),
-    ok = Router:compile_routes(Routes).
+    ok = Router:compile_routes(Routes, #{}, ?LISTENER).
 
 %% Resolve a request path to `{Handler, Opts}` via roadrunner's runtime
 %% lookup: `roadrunner_router:match/3` against the persistent term key
@@ -101,7 +105,7 @@ route_match(Method, Path) ->
 
 %% The raw `match/3` result (incl. `{method_not_allowed, Allow}` and `not_found`).
 match_result(Method, Path) ->
-    Compiled = persistent_term:get(arizona_roadrunner_dispatch),
+    Compiled = persistent_term:get({arizona_roadrunner_dispatch, ?LISTENER}),
     roadrunner_router:match(Method, Path, Compiled).
 
 %% A raw roadrunner request carrying a `listener_name`, shaped as

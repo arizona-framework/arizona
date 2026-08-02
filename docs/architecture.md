@@ -20,7 +20,7 @@
 | `src/arizona_terminal_tty.erl`            | Local TTY transport -- raw-mode `shell:start_interactive`, a blocking input reader, `io:put_chars` as the output                                                                          |
 | `src/arizona_terminal_ssh.erl`            | SSH transport -- serves a `?terminal` view over an `ssh_server_channel` (pty-req, window-change), one live view per connection                                                            |
 | `src/arizona_diff.erl`                    | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                                           |
-| `src/arizona_roadrunner_router.erl`       | Roadrunner route compilation -- `compile_routes/1,2`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                                      |
+| `src/arizona_roadrunner_router.erl`       | Roadrunner route compilation -- `compile_routes/3`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                                        |
 | `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
 | `src/arizona_js.erl`                      | Web/browser command/effect builders -- `push_event`, `navigate`, `patch`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
 | `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
@@ -697,9 +697,10 @@ Caveats (by design):
 Roadrunner route compilation. A `{reload, ...}` entry adds the dev-mode SSE endpoint, and a
 build-opts variant supports hot-reload-safe rebuilds.
 
-- `compile_routes/1,2` -- build the map-shape roadrunner dispatch from route specs and store in
-  `persistent_term`; the `/2` form threads build-time opts (e.g. `compress => false`) for
-  replay across hot reloads
+- `compile_routes/3` -- build the map-shape roadrunner dispatch from route specs and store it
+  under the listener-scoped `{arizona_roadrunner_dispatch, Name}` persistent term (the key
+  `resolve_route/3` reads); threads build-time opts (e.g. `compress => false`) for replay
+  across hot reloads
 - `routes/1,2` -- expand specs into roadrunner's map-shape route entries without compiling
   (used by the listener boot path)
 

@@ -2,15 +2,14 @@
 -moduledoc """
 Compiles a list of Arizona route specs into a roadrunner route table.
 
-The resulting compiled routes are stored in `persistent_term`. The
-name-scoped `compile_routes/3` writes them under `{arizona_roadrunner_dispatch,
-Name}` -- one entry per listener, so `arizona_roadrunner_req:resolve_route/3`
-resolves a WS upgrade/navigate against the routes of the listener that accepted
-it, and two listeners no longer clobber each other. The nameless
-`compile_routes/1,2` write the single global `arizona_roadrunner_dispatch` key
-(the convenience form). Calling either again replaces the previous compiled set,
-which is how `arizona_roadrunner_server:recompile_routes/0` picks up new routes
-after a hot reload without restarting the listener.
+The resulting compiled routes are stored in `persistent_term` under the
+listener-scoped key `{arizona_roadrunner_dispatch, Name}` -- one entry per
+listener, so `arizona_roadrunner_req:resolve_route/3` resolves a WS
+upgrade/navigate against the routes of the listener that accepted it, and two
+listeners do not clobber each other. Calling `compile_routes/3` again replaces
+the previous compiled set, which is how
+`arizona_roadrunner_server:recompile_routes/0` picks up new routes after a hot
+reload without restarting the listener.
 
 ## Route shapes
 
@@ -40,8 +39,6 @@ persistent term so the dev error page can build the SSE connect URL.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([compile_routes/1]).
--export([compile_routes/2]).
 -export([compile_routes/3]).
 -export([forget_routes/1]).
 -export([routes/1]).
@@ -52,11 +49,9 @@ persistent term so the dev error page can build the SSE connect URL.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
-%% compile_routes/1,2 + routes/1 are public convenience wrappers; the in-tree
-%% callers all use the name-scoped compile_routes/3 (WS dispatch keyed per
-%% listener) and routes/2 (the listener's own route table). Keep the nameless
-%% shapes exported for downstream users.
--ignore_xref([compile_routes/1, compile_routes/2, routes/1]).
+%% routes/1 is a public convenience wrapper; the in-tree callers all use
+%% routes/2 (the listener's own route table). Kept exported for downstream users.
+-ignore_xref([routes/1]).
 %% Called by `erl_error` via the `error_info` annotation, not directly.
 -ignore_xref([format_error/2]).
 
@@ -153,39 +148,17 @@ persistent term so the dev error page can build the SSE connect URL.
 %% --------------------------------------------------------------------
 
 -doc """
-Compiles `Routes` into a roadrunner route table and stores it under
-the persistent term key `arizona_roadrunner_dispatch`. Replaces any
-previous compiled set atomically.
-""".
--spec compile_routes(Routes) -> ok when
-    Routes :: [route()].
-compile_routes(Routes) ->
-    compile_routes(Routes, #{}).
+Compiles `Routes` into a roadrunner route table and stores it under the
+listener-scoped persistent term key `{arizona_roadrunner_dispatch, Name}`, so
+each listener's WS upgrade/navigate (`arizona_roadrunner_req:resolve_route/3`)
+resolves against its own routes. Replaces any previous compiled set atomically.
+This is the form the server boot/recompile path uses.
 
--doc """
-Like `compile_routes/1` but threads a build-time options map through
-to per-route expansion. Recognized opts:
+`BuildOpts` threads build-time options through to per-route expansion:
 
 - `compress` — when `true` (default), `roadrunner_compress` is
   attached as a per-route middleware on `live` and `asset` routes.
   WS, dev SSE reload, and controller (verb/`match`) routes are not compressed.
-""".
--spec compile_routes(Routes, BuildOpts) -> ok when
-    Routes :: [route()],
-    BuildOpts :: map().
-compile_routes(Routes, BuildOpts) when is_map(BuildOpts) ->
-    persistent_term:put(
-        ?DISPATCH_KEY,
-        roadrunner_router:compile(routes(Routes, BuildOpts), [])
-    ),
-    ok.
-
--doc """
-Like `compile_routes/2` but stores the compiled set under the
-listener-scoped key `{arizona_roadrunner_dispatch, Name}` instead of the
-single global key, so each listener's WS upgrade/navigate
-(`arizona_roadrunner_req:resolve_route/3`) resolves against its own routes.
-This is the form the server boot/recompile path uses.
 """.
 -spec compile_routes(Routes, BuildOpts, Name) -> ok when
     Routes :: [route()],
