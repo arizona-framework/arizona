@@ -5215,6 +5215,49 @@ describe('executeJS -- fetch', () => {
         await vi.waitFor(() => expect(document.title).toBe('Err'));
         expect(input.value).toBe('typed');
     });
+
+    it('a throwing response effect on a 2xx is logged, not misreported as a network failure', async () => {
+        document.title = 'Old';
+        const fetchErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', fetchErr);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        // on_key (16) with an invalid regex throws synchronously while the
+        // effects apply -- on a 200 whose body parsed fine.
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([[16, '(', []]])));
+
+        executeJS(document.body, null, [22, '/api', { on_error: [14, 'Failed'] }]);
+
+        await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+        // The throw is logged; on_error and arizona:fetch-error stay silent --
+        // the request succeeded, only the app's effect broke.
+        await Promise.resolve();
+        expect(document.title).toBe('Old');
+        expect(fetchErr).not.toHaveBeenCalled();
+
+        errorSpy.mockRestore();
+        document.removeEventListener('arizona:fetch-error', fetchErr);
+    });
+
+    it('a throwing az-form-reset on a 2xx is logged, not misreported as a network failure', async () => {
+        document.body.innerHTML = '<form az-form-reset><input name="n" /></form>';
+        const form = /** @type {HTMLFormElement} */ (document.querySelector('form'));
+        form.reset = () => {
+            throw new Error('reset boom');
+        };
+        const fetchErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', fetchErr);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(form, null, [22, '/account', { on_error: [14, 'Failed'] }]);
+
+        await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+        await Promise.resolve();
+        expect(fetchErr).not.toHaveBeenCalled();
+
+        errorSpy.mockRestore();
+        document.removeEventListener('arizona:fetch-error', fetchErr);
+    });
 });
 
 describe('fetch + az-form-reset via the submit listener', () => {

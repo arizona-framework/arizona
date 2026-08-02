@@ -1786,12 +1786,28 @@ function execOne(el, event, cmd) {
                         } else if (resp.ok) {
                             effects = [];
                         }
-                        if (effects !== null)
-                            executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
-                        else onError({ url, status: resp.status });
+                        // Effect application is isolated from the trailing network
+                        // .catch: a throw here is an app bug on a request that
+                        // SUCCEEDED (the body parsed), so it is logged -- letting it
+                        // flow into the .catch would fire on_error/arizona:fetch-error
+                        // as a phantom network failure, after effects partially applied.
+                        if (effects !== null) {
+                            try {
+                                executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
+                            } catch (err) {
+                                console.error('[arizona] fetch response effect threw', err);
+                            }
+                        } else onError({ url, status: resp.status });
                         // Honor az-form-reset only on a 2xx success, so a validation
-                        // error (a non-2xx) keeps the typed fields.
-                        if (resp.ok && form) maybeResetForm(form);
+                        // error (a non-2xx) keeps the typed fields. Same isolation as
+                        // the effects above.
+                        if (resp.ok && form) {
+                            try {
+                                maybeResetForm(form);
+                            } catch (err) {
+                                console.error('[arizona] az-form-reset failed', err);
+                            }
+                        }
                     }),
                 )
                 .catch((error) => onError({ url, error }));
