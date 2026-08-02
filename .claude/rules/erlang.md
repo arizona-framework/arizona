@@ -333,6 +333,16 @@ Label = case ?get(mode) of dark -> ?get(a); _ -> ?get(b) end, ?html({p, [], [Lab
 case ?get(mode) of dark -> X = ?get(a); _ -> X = ?get(b) end, ?html({p, [], [X]}).
 ```
 
+A hoisted **template constructor** also compiles and tracks:
+`Header = ?html({h1, [], [?get(title)]})`, `Items = ?each(...)`, or
+`Card = ?stateless(card, #{x => ?get(x)})` bound to a local and used in a content
+slot is spliced back and compiled -- a `?html`/`?native`/`?terminal` constructor
+additionally gets track touches for the literal keys read inside it (a nested
+template's inner reads are otherwise isolated from the slot bracket), so the slot
+re-renders when they change. A hoisted `?html` used as a whole `?each` callback
+body (`fun(_I) -> Row end`) keeps the per-item element path and its `single_root`
+flag.
+
 Exceptions that stay un-tracked (slot frozen after SSR): a binding destructured
 in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
 (`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a variable
@@ -356,15 +366,56 @@ whose map argument is a local that is not the bindings (or an alias/`with`
 projection of it) with `tracked_get_on_non_bindings_map`. Read sub-structures with
 plain `maps:get/2`: `User = ?get(user), Name = maps:get(name, User)`.
 
+### Local element helpers -- inlined at the call site
+
+A **local** call in a content slot whose callee is a single-clause function
+returning an element is inlined at the call site, so markup can be factored into a
+named helper instead of copy-pasted:
+
+```erlang
+brand() -> {svg, [{width, ~"24"}], [...]}.
+alert(Kind, Msg) -> {'p', [{class, Kind}], [Msg]}.
+header(Bindings) -> {h1, [], [?get(title)]}.
+
+?html({'div', [], [brand(), alert(~"warn", ?get(msg)), header(Bindings)]})
+```
+
+The body replaces the call (a whole-body `?html(...)` wrapper unwraps first,
+exactly as `?each` callbacks do), each parameter is substituted with its argument
+expression, and the spliced element compiles like a literal one -- it flattens into
+the template, and `?get` reads in the body or the arguments land in the enclosing
+slot's dependency bracket, so the slot stays reactive. Same-module explicit calls
+(`?MODULE:brand()`) resolve like bare local calls; nested helper calls inline
+recursively; a helper call as a whole `?each` callback body
+(`fun(I) -> item(I) end`) inlines into the per-item element. The now-orphaned
+definition is covered by auto-injected `nowarn_unused_function` / `-ignore_xref`,
+mirroring `?each` named-fun refs. An element-**list** body compiles into a
+nested-template child whose literal reads are tracked on the slot -- the same
+tracking a literal element-list child gets.
+
+A callee whose body is not element-shaped (a scalar helper) is untouched: the call
+runs inside the slot closure, so its reads fire in-bracket as before. Shapes that
+cannot be cleanly inlined are compile errors when the body is a **bare** element
+(they previously compiled clean and crashed at first render with
+`bad_template_value`): multi-clause (`helper_multi_clause` -- collapse the clauses
+into a case inside the element), a guard (`helper_guarded`),
+non-variable/repeated/`_` parameters (`helper_params_not_vars`), statements before
+the element (`helper_body_not_single_expr`), and recursion (`helper_recursive`).
+The same shapes with a whole-body `?html` wrapper are **not** rejected -- they
+already render as a runtime nested template and keep doing so (body reads frozen;
+hand a subset over with `az:with` below). Genuinely remote calls (`mod:helper()`),
+imported functions, and variable-bound fun calls are not resolvable at compile
+time and keep today's behavior (an element-returning one still crashes at render).
+
 ### Handing a bindings subset to a sub-context -- `az:with`
 
-A child template embedded via a **raw function call** (or an explicit nested
-`?html(...)` call returning a template) freezes: the outer slot is
-`fun() -> child(Bindings) end`, building `child` fires no `?get` at the outer level
-(its reads sit in `child`'s own closures), so the outer slot captures empty deps and
-the diff engine skips it forever. Idiomatic composition is `?stateful`/`?stateless`
-(props reads track on the parent slot); an inline nested *element* is also fine (it
-flattens into the parent template).
+A child template embedded via a **raw function call** that the helper inlining
+above cannot resolve (a multi-statement `?html`-wrapped helper, a remote helper)
+freezes: the outer slot is `fun() -> child(Bindings) end`, building `child` fires
+no `?get` at the outer level (its reads sit in `child`'s own closures), so the
+outer slot captures empty deps and the diff engine skips it forever. Idiomatic
+composition is `?stateful`/`?stateless` (props reads track on the parent slot); an
+inline nested *element* is also fine (it flattens into the parent template).
 
 When you must hand a bindings subset to a sub-context (a helper, a passed-through
 map), declare the dependency with `az:with([keys], Bindings)` -- it tracks each key

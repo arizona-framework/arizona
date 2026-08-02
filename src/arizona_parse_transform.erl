@@ -87,6 +87,11 @@ render(Bindings) ->
 %% literals that look structurally similar but represent different shapes.
 -elvis([{elvis_style, dont_repeat_yourself, disable}]).
 
+%% fresh_helper_var/1 mints compile-time variable names via list_to_atom --
+%% fresh names are the point (no caller expression may contain them), so
+%% list_to_existing_atom cannot apply; growth is bounded by helper call sites.
+-elvis([{elvis_style, no_common_caveats_call, disable}]).
+
 %% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
@@ -168,17 +173,63 @@ parse_transform(Forms, _Options) ->
 collect_fun_defs(Forms) ->
     #{{Name, Arity} => Clauses || {function, _, Name, Arity, Clauses} <- Forms}.
 
-%% A local `fun Name/Arity` ?each callback is inlined into the per-item template, so
-%% the function loses its only reference. Suppress the resulting unused-function
+%% A local `fun Name/Arity` ?each callback -- or a local element helper called
+%% in a template (inline_helper_calls/4) -- is inlined at its use site, so the
+%% function loses its only reference. Suppress the resulting unused-function
 %% warning (compiler, under warnings_as_errors) and xref finding (locals_not_used /
 %% exports_not_used) by injecting -compile(nowarn_unused_function) and -ignore_xref
 %% attributes for the consumed pairs. A no-op when the function is also used elsewhere.
 inject_each_callback_suppressions(Forms, OrigForms, FunDefs, Module) ->
-    case collect_each_callback_pairs(OrigForms, FunDefs, Module) of
+    EachPairs = collect_each_callback_pairs(OrigForms, FunDefs, Module),
+    HelperPairs = collect_helper_pairs(OrigForms, FunDefs, Module),
+    case lists:usort(EachPairs ++ HelperPairs) of
         [] ->
             Forms;
         Pairs ->
             insert_suppression_attrs(Forms, Pairs)
+    end.
+
+%% Scan the original forms for local (and same-module explicit) calls whose
+%% callee helper_plan_shape/4 would inline under some render target -- those
+%% calls disappear when they sit in a template, orphaning the definition. The
+%% scan is position-blind, which is sound for suppression: a helper also (or
+%% only) called outside a template keeps a real reference, and
+%% nowarn_unused_function on a referenced function is a no-op.
+collect_helper_pairs(Forms, FunDefs, Module) ->
+    Pairs = helper_call_pairs(Forms, #{}, FunDefs, Module),
+    [Pair || Pair := _ <- Pairs].
+
+helper_call_pairs({call, _, {atom, _, Name}, Args} = Node, Acc, FunDefs, Module) ->
+    Acc1 = maybe_helper_pair(Name, length(Args), FunDefs, Acc),
+    helper_call_pairs(tuple_to_list(Node), Acc1, FunDefs, Module);
+helper_call_pairs(
+    {call, _, {remote, _, {atom, _, Module}, {atom, _, Name}}, Args} = Node,
+    Acc,
+    FunDefs,
+    Module
+) ->
+    Acc1 = maybe_helper_pair(Name, length(Args), FunDefs, Acc),
+    helper_call_pairs(tuple_to_list(Node), Acc1, FunDefs, Module);
+helper_call_pairs(Node, Acc, FunDefs, Module) when is_tuple(Node) ->
+    helper_call_pairs(tuple_to_list(Node), Acc, FunDefs, Module);
+helper_call_pairs([H | T], Acc, FunDefs, Module) ->
+    helper_call_pairs(T, helper_call_pairs(H, Acc, FunDefs, Module), FunDefs, Module);
+helper_call_pairs(_Node, Acc, _FunDefs, _Module) ->
+    Acc.
+
+maybe_helper_pair(Name, Arity, FunDefs, Acc) ->
+    Inlineable = lists:any(
+        fun(Target) ->
+            case helper_plan_shape(Name, Arity, FunDefs, Target) of
+                {inline, _Params, _Body} -> true;
+                _ -> false
+            end
+        end,
+        [html, native, terminal]
+    ),
+    case Inlineable of
+        true -> Acc#{{Name, Arity} => true};
+        false -> Acc
     end.
 
 %% Scan the original forms (pre-mark_targets, so every ?each is still spelled `each`
@@ -432,6 +483,10 @@ format_error(local_orphaned) ->
     "conditional-branch value there is no enclosing element to carry the "
     "az-local descriptor, so the client could never bind the key and "
     "set/set_all would be silent no-ops";
+%% The helper_* rejection reasons are the only 3-tuple reasons; dispatch to
+%% format_helper_error/3 to keep format_error/1's clause complexity in check.
+format_error({HelperReason, Name, Arity}) ->
+    format_helper_error(HelperReason, Name, Arity);
 format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
@@ -455,6 +510,55 @@ format_error(tracked_get_on_non_bindings_map) ->
     "nested map, read it with maps:get/2 (`User = arizona_template:get(user, Bindings), "
     "Name = maps:get(name, User)`); if it is a bindings value reached through a "
     "case/merge the transform cannot see into, alias it directly with `B = Bindings` first".
+
+format_helper_error(helper_multi_clause, Name, Arity) ->
+    lists:flatten(
+        io_lib:format(
+            "local helper ~ts/~p returns an element from a multi-clause "
+            "definition -- an element helper is inlined at the call site, so it "
+            "must be a single clause. Collapse the clauses into a case inside "
+            "the returned element",
+            [Name, Arity]
+        )
+    );
+format_helper_error(helper_guarded, Name, Arity) ->
+    lists:flatten(
+        io_lib:format(
+            "local element helper ~ts/~p has a guard -- a guard cannot be "
+            "preserved when the body is inlined at the call site. Move the "
+            "condition into a case inside the returned element",
+            [Name, Arity]
+        )
+    );
+format_helper_error(helper_params_not_vars, Name, Arity) ->
+    lists:flatten(
+        io_lib:format(
+            "local element helper ~ts/~p has a non-variable, repeated, or _ "
+            "parameter -- arguments are inlined by substitution, which needs "
+            "each parameter to be a distinct plain variable. Destructure inside "
+            "the returned element instead",
+            [Name, Arity]
+        )
+    );
+format_helper_error(helper_body_not_single_expr, Name, Arity) ->
+    lists:flatten(
+        io_lib:format(
+            "local element helper ~ts/~p has statements before its element -- "
+            "an inlined body must be a single element expression (a begin-block "
+            "would leak its bindings into the caller). Compute values inside "
+            "the element, or take them as parameters",
+            [Name, Arity]
+        )
+    );
+format_helper_error(helper_recursive, Name, Arity) ->
+    lists:flatten(
+        io_lib:format(
+            "local element helper ~ts/~p is recursive -- its body cannot be "
+            "inlined into itself. Render repetition with ?each or a "
+            "?stateless/?stateful child",
+            [Name, Arity]
+        )
+    ).
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -608,13 +712,12 @@ transform_node(Node, Module, Inline, FunDefs) ->
             (Mod =:= arizona_template orelse Mod =:= az) andalso
                 (Target =:= html orelse Target =:= native orelse Target =:= terminal)
         ->
-            compile_template(
-                retransform_spliced(inline_vars(Arg, Inline), Inline, Module, FunDefs),
-                L,
-                Module,
-                false,
-                target_backend(Target)
-            );
+            Arg1 = inline_vars(Arg, Inline),
+            {Arg2, HelperCh} = inline_helper_calls(Arg1, Module, FunDefs, Target),
+            Arg3 = retransform_spliced(
+                Arg2, map_size(Inline) > 0 orelse HelperCh, Module, FunDefs
+            ),
+            compile_template(Arg3, L, Module, false, target_backend(Target));
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, EachFn}}, [FunArg, SourceArg]} when
             (Mod =:= arizona_template orelse Mod =:= az) andalso
                 (EachFn =:= each orelse EachFn =:= native_each orelse EachFn =:= terminal_each)
@@ -626,17 +729,17 @@ transform_node(Node, Module, Inline, FunDefs) ->
                     %% retransform_spliced/4 re-run: pass it through untouched.
                     N;
                 false ->
+                    Spliced = map_size(Inline) > 0,
+                    FunArg1 = unwrap_spliced_each_callback(
+                        inline_vars(FunArg, Inline), EachFn, Inline
+                    ),
+                    {FunArg2, FunCh} = inline_helper_calls(
+                        FunArg1, Module, FunDefs, each_target(EachFn)
+                    ),
                     compile_each(
+                        retransform_spliced(FunArg2, Spliced orelse FunCh, Module, FunDefs),
                         retransform_spliced(
-                            unwrap_spliced_each_callback(
-                                inline_vars(FunArg, Inline), EachFn, Inline
-                            ),
-                            Inline,
-                            Module,
-                            FunDefs
-                        ),
-                        retransform_spliced(
-                            inline_vars(SourceArg, Inline), Inline, Module, FunDefs
+                            inline_vars(SourceArg, Inline), Spliced, Module, FunDefs
                         ),
                         L,
                         Module,
@@ -658,20 +761,21 @@ transform_node(Node, Module, Inline, FunDefs) ->
             N
     end.
 
-%% Inlining a hoisted variable (inline_vars/2) may splice a raw, untransformed
-%% template-constructor call -- `arizona_template:html/1`, `each/2`, the
-%% `stateless(atom, Props)` sugar -- into an expression the bottom-up transform
-%% has already finished with. Left raw, the call hits the runtime stub
-%% (parse_transform_not_applied) or the untransformed sugar (function_clause)
-%% at first render. Re-run the bottom-up transform over the spliced expression
-%% so those constructors compile exactly as written-inline code would. The
-%% re-run is idempotent on already-compiled output: template maps are not
-%% calls, the stateless sugar only matches an atom callback, and a compiled
-%% each pairing is recognized and skipped (is_compiled_each_pairing/2). A
-%% clause with no hoisted vars skips the re-run entirely.
-retransform_spliced(Expr, Inline, _Module, _FunDefs) when map_size(Inline) =:= 0 ->
+%% Inlining a hoisted variable (inline_vars/2) or a local element helper
+%% (inline_helper_calls/4) may splice a raw, untransformed template-constructor
+%% call -- `arizona_template:html/1`, `each/2`, the `stateless(atom, Props)`
+%% sugar -- into an expression the bottom-up transform has already finished
+%% with. Left raw, the call hits the runtime stub (parse_transform_not_applied)
+%% or the untransformed sugar (function_clause) at first render. Re-run the
+%% bottom-up transform over the spliced expression so those constructors
+%% compile exactly as written-inline code would. The re-run is idempotent on
+%% already-compiled output: template maps are not calls, the stateless sugar
+%% only matches an atom callback, and a compiled each pairing is recognized and
+%% skipped (is_compiled_each_pairing/2). Skipped entirely when nothing was
+%% spliced.
+retransform_spliced(Expr, false, _Module, _FunDefs) ->
     Expr;
-retransform_spliced(Expr, _Inline, Module, FunDefs) ->
+retransform_spliced(Expr, true, Module, FunDefs) ->
     transform_expr(Expr, Module, #{}, FunDefs).
 
 %% True for the OUTPUT form of a compiled ?each -- `arizona_template:each(Source,
@@ -732,6 +836,198 @@ is_track_touch(
 is_track_touch(_Stmt) ->
     false.
 
+%% --------------------------------------------------------------------
+%% Local element-helper inlining
+%% --------------------------------------------------------------------
+%%
+%% A LOCAL call in a template whose callee is a single-clause function
+%% returning an element -- `brand()`, `alert(Kind, Msg)` -- is inlined at the
+%% call site: the body (unwrapped from a whole-body `?html`/`?native`/
+%% `?terminal` wrapper, exactly as ?each callbacks unwrap) replaces the call,
+%% with each parameter substituted by its argument expression via the ordinary
+%% inline_vars/2 machinery. The spliced element then compiles like a literal
+%% one -- it flattens (or leaf-expands) into the template, and `?get` reads in
+%% the body or the args land in the enclosing slot's dependency bracket, so
+%% the slot stays reactive. Without this, a bare-element body compiled clean
+%% and crashed at first render (bad_template_value in to_bin/1).
+%%
+%% Scope: bare local calls and same-module explicit calls (`?MODULE:helper()`)
+%% resolvable through FunDefs -- mirroring the ?each named-fun-ref rules. A
+%% callee whose body is not element-shaped (a scalar helper) is untouched: the
+%% call runs inside the slot closure, so its reads already fire in-bracket.
+%% Rejections fire ONLY for shapes that would otherwise crash at render (a
+%% BARE-element body that cannot be cleanly inlined): multi-clause, guarded,
+%% non-variable/repeated params, statements before the element, and recursion.
+%% A `?html`-wrapped body that cannot be cleanly inlined is NOT rejected -- it
+%% already renders as a runtime nested template (the az:with handoff pattern)
+%% and keeps doing so. Genuinely remote calls, imported functions (invisible
+%% bodies, indistinguishable from auto-imported BIFs), and variable-bound fun
+%% calls are undetectable and stay as-is.
+%%
+%% Returns {Expr1, Changed} so the caller re-runs the bottom-up transform
+%% (retransform_spliced/4) only when a body was actually spliced.
+inline_helper_calls(Expr, Module, FunDefs, Target) ->
+    ih(Expr, {Module, FunDefs, Target, #{}}, false).
+
+ih({call, L, {atom, _, Name}, Args} = Call, Ctx, Ch) ->
+    ih_call(Call, Name, Args, L, Ctx, Ch);
+ih(
+    {call, L, {remote, _, {atom, _, Module}, {atom, _, Name}}, Args} = Call,
+    {Module, _, _, _} = Ctx,
+    Ch
+) ->
+    ih_call(Call, Name, Args, L, Ctx, Ch);
+ih({map, _, _} = Map, _Ctx, Ch) ->
+    %% Map literals hold runtime data (user maps, ?stateful props) or
+    %% already-compiled templates from a previous pass -- never descend.
+    {Map, Ch};
+ih({map, _, _, _} = Map, _Ctx, Ch) ->
+    {Map, Ch};
+ih(T, Ctx, Ch) when is_tuple(T) ->
+    {L1, Ch1} = ih_list(tuple_to_list(T), Ctx, Ch),
+    {list_to_tuple(L1), Ch1};
+ih(L, Ctx, Ch) when is_list(L) ->
+    ih_list(L, Ctx, Ch);
+ih(Other, _Ctx, Ch) ->
+    {Other, Ch}.
+
+ih_list([], _Ctx, Ch) ->
+    {[], Ch};
+ih_list([H | T], Ctx, Ch) ->
+    {H1, Ch1} = ih(H, Ctx, Ch),
+    {T1, Ch2} = ih_list(T, Ctx, Ch1),
+    {[H1 | T1], Ch2}.
+
+ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch) ->
+    Arity = length(Args),
+    case helper_plan(Name, Arity, FunDefs, Target, L) of
+        skip ->
+            %% Not an inlineable element helper: recurse into the args (they
+            %% may contain helper calls of their own).
+            {Parts, Ch1} = ih_list(tuple_to_list(Call), Ctx, Ch),
+            {list_to_tuple(Parts), Ch1};
+        {inline, Params, BodyExpr} ->
+            case Stack of
+                #{{Name, Arity} := _} -> parse_error({helper_recursive, Name, Arity}, L);
+                #{} -> ok
+            end,
+            Spliced = mark_targets(subst_helper_args(BodyExpr, Params, Args), Target),
+            Ctx1 = {Module, FunDefs, Target, Stack#{{Name, Arity} => true}},
+            {Spliced1, true} = ih(Spliced, Ctx1, true),
+            {Spliced1, true}
+    end.
+
+%% Substitute the helper's params with the caller's argument expressions via
+%% two inline_vars/2 passes through fresh intermediate names. A direct
+%% one-pass substitution loops: iv/2 re-enters the substituted expression, so
+%% an argument referencing a caller variable named like a parameter
+%% (`badge(A)` passing the caller's `A` into a param `A`) recurses forever.
+%% Pass one renames each param occurrence to a fresh variable no caller
+%% expression can contain; pass two binds the fresh variable to the argument
+%% -- both terminate, and iv's scope handling (shadowing funs, patterns,
+%% guards untouched) applies unchanged.
+subst_helper_args(BodyExpr, [], []) ->
+    BodyExpr;
+subst_helper_args(BodyExpr, Params, Args) ->
+    Fresh = [fresh_helper_var(P) || P <- Params],
+    Rename = maps:from_list([{P, {var, 0, F}} || {P, F} <:- lists:zip(Params, Fresh)]),
+    Bind = maps:from_list(lists:zip(Fresh, Args)),
+    inline_vars(inline_vars(BodyExpr, Rename), Bind).
+
+fresh_helper_var(P) ->
+    list_to_atom(
+        "AzHelperArg" ++ integer_to_list(erlang:unique_integer([positive])) ++ atom_to_list(P)
+    ).
+
+%% Decide what to do with a local call: `skip` (leave the call -- a scalar
+%% helper, an unresolvable callee, or a wrapped body that renders fine as-is)
+%% or `{inline, ParamNames, BodyExpr}`. Raises the helper_* errors only for
+%% bare-element bodies, which pre-fix compiled clean and crashed at render.
+helper_plan(Name, Arity, FunDefs, Target, CallLine) ->
+    case helper_plan_shape(Name, Arity, FunDefs, Target) of
+        {reject, Reason} -> parse_error(Reason, CallLine);
+        Plan -> Plan
+    end.
+
+%% The non-throwing decision core -- also reused by the position-blind
+%% suppression scan (collect_helper_pairs/3), which must never raise for a
+%% helper called outside a template.
+helper_plan_shape(Name, Arity, FunDefs, Target) ->
+    case FunDefs of
+        #{{Name, Arity} := Clauses} ->
+            helper_clause_plan(Clauses, Name, Arity, Target);
+        #{} ->
+            skip
+    end.
+
+helper_clause_plan([{clause, _, Params, Guards, Body}], Name, Arity, Target) ->
+    case helper_body_shape(lists:last(Body), Target) of
+        none ->
+            skip;
+        {Wrap, BodyExpr} ->
+            ParamNames = helper_param_names(Params),
+            Clean =
+                Guards =:= [] andalso is_single_expr_body(Body) andalso
+                    ParamNames =/= invalid,
+            case {Clean, Wrap} of
+                {true, _} ->
+                    {inline, ParamNames, BodyExpr};
+                {false, wrapped} ->
+                    %% Renders as a runtime nested template today; keep it.
+                    skip;
+                {false, bare} ->
+                    {reject, helper_reject_reason(Guards, Body, Name, Arity)}
+            end
+    end;
+helper_clause_plan(Clauses, Name, Arity, Target) ->
+    BareClause = fun({clause, _, _P, _G, B}) ->
+        case helper_body_shape(lists:last(B), Target) of
+            {bare, _} -> true;
+            _ -> false
+        end
+    end,
+    case lists:any(BareClause, Clauses) of
+        true -> {reject, {helper_multi_clause, Name, Arity}};
+        false -> skip
+    end.
+
+is_single_expr_body([_]) -> true;
+is_single_expr_body(_Body) -> false.
+
+helper_reject_reason([_ | _], _Body, Name, Arity) ->
+    {helper_guarded, Name, Arity};
+helper_reject_reason([], [_, _ | _], Name, Arity) ->
+    {helper_body_not_single_expr, Name, Arity};
+helper_reject_reason([], [_], Name, Arity) ->
+    {helper_params_not_vars, Name, Arity}.
+
+%% `{bare, Expr}` for a bare element body, `{wrapped, Expr}` for a whole-body
+%% wrapper of THIS template's target whose inner is element-shaped, `none`
+%% otherwise (scalar bodies, case/if bodies, cross-target wrappers).
+helper_body_shape(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Inner]}, Target
+) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    case is_nested_template_leaf(Inner) of
+        true -> {wrapped, Inner};
+        false -> none
+    end;
+helper_body_shape(Expr, _Target) ->
+    case is_nested_template_leaf(Expr) of
+        true -> {bare, Expr};
+        false -> none
+    end.
+
+%% All params must be distinct plain variables (not `_`) so substitution is
+%% faithful; anything else returns `invalid`.
+helper_param_names(Params) ->
+    Names = [V || {var, _, V} <- Params, V =/= '_'],
+    case length(Names) =:= length(Params) andalso length(lists:usort(Names)) =:= length(Names) of
+        true -> Names;
+        false -> invalid
+    end.
+
 transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body),
     {Init0, [Last]} = lists:split(length(Body) - 1, Body),
@@ -767,8 +1063,12 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
         ->
             validate_live_root(Arg, L, Inline),
             Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
-            Arg2 = retransform_spliced(inline_vars(Arg1, Inline), Inline, Module, FunDefs),
-            compile_template(Arg2, L, Module, true, target_backend(Target));
+            Arg2 = inline_vars(Arg1, Inline),
+            {Arg3, HelperCh} = inline_helper_calls(Arg2, Module, FunDefs, Target),
+            Arg4 = retransform_spliced(
+                Arg3, map_size(Inline) > 0 orelse HelperCh, Module, FunDefs
+            ),
+            compile_template(Arg4, L, Module, true, target_backend(Target));
         _ ->
             transform_expr(Expr, Module, Inline, FunDefs)
     end.
@@ -1425,7 +1725,10 @@ compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
             UnwrappedBody = unwrap_last_wrapper(Body, Backend:target()),
             Clause1 = {clause, CL, Vars, Guards, UnwrappedBody},
             FunAST0 = mark_targets({'fun', L, {clauses, [Clause1]}}, Backend:target()),
-            FunAST = transform_expr(FunAST0, Module, #{}, FunDefs),
+            {FunAST1, _HelperCh} = inline_helper_calls(
+                FunAST0, Module, FunDefs, Backend:target()
+            ),
+            FunAST = transform_expr(FunAST1, Module, #{}, FunDefs),
             compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs);
         #{{Name, Arity} := [_ | _]} ->
             parse_error(each_named_fun_multi_clause, L);
@@ -2223,7 +2526,19 @@ branch_track_touches(ExprAST0) ->
     Expr = erl_syntax:revert(ExprAST0),
     case is_control_flow_ast(Expr) of
         false ->
-            [];
+            %% A BARE nested-template leaf -- a literal element list (or mixed
+            %% fragment) child, or a local helper's inlined element-list body --
+            %% is compiled into a nested template by expand_element_leaf/3 with
+            %% its reads equally isolated, so it needs the same touches or the
+            %% slot freezes (a scalar or already-compiled expr contributes
+            %% nothing and stays untouched).
+            case is_nested_template_leaf(Expr) of
+                true ->
+                    Keys = dedup_keys(collect_read_keys(Expr, [])),
+                    [track_call_ast(K) || K <- Keys];
+                false ->
+                    []
+            end;
         true ->
             Keys = dedup_keys(collect_branch_keys(Expr, [])),
             [track_call_ast(K) || K <- Keys]
