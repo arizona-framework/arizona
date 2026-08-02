@@ -28,6 +28,15 @@ sequences are dropped.
 
 -nominal key() :: char() | atom() | {ctrl, char()} | {alt, char()}.
 
+%% Cap on a held incomplete escape. Real key sequences are tiny (a CSI is a few
+%% parameter bytes plus a final byte), so a "sequence" still unfinished past
+%% this many bytes is a hostile or garbage stream, not a split key. Holding it
+%% would grow a driver's pending buffer without bound -- and each read rescans
+%% the whole buffer, an O(N^2) cost an attacker controls -- so past the cap the
+%% suffix is handed back as decodable input, which the decoder consumes and
+%% drops (its CSI clause eats parameter bytes to the end).
+-define(MAX_PENDING, 64).
+
 -doc "Decode a raw terminal read into idiomatic keys.".
 -spec keys(binary()) -> [key()].
 keys(<<>>) ->
@@ -52,6 +61,12 @@ bytes, awaiting a final byte), an unfinished SS3 introducer (`\\eO`), or a lone
 trailing `\\e` (which could begin any of those). A trailing lone `\\e` therefore
 holds until the next read -- the classic terminal ESC-vs-sequence ambiguity, resolved
 here by buffering rather than a timer.
+
+The held tail is capped (real key sequences are tiny): a "CSI" still unfinished
+past ~64 bytes is a hostile or garbage stream, not a split key, and holding it
+would grow the pending buffer -- rescanned per read -- without bound. Past the
+cap the tail is returned in `Complete` instead, where `keys/1` consumes and
+drops the unterminated sequence.
 """.
 -spec take_incomplete(binary()) -> {binary(), binary()}.
 take_incomplete(Bytes) ->
@@ -60,7 +75,7 @@ take_incomplete(Bytes) ->
             {Bytes, <<>>};
         Pos ->
             <<Complete:Pos/binary, Suffix/binary>> = Bytes,
-            case incomplete_escape(Suffix) of
+            case byte_size(Suffix) =< ?MAX_PENDING andalso incomplete_escape(Suffix) of
                 true -> {Complete, Suffix};
                 false -> {Bytes, <<>>}
             end
