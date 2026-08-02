@@ -254,12 +254,17 @@ ci_prefix(_Bin, _Pattern) -> false.
 
 %% Render a dynamic attribute value: `false` strips the attribute, `true` emits a
 %% bare name. A `?raw` opt-out and an effect command are trusted (classified out
-%% and emitted verbatim, mirroring escape_value/2); any other scalar goes through
-%% attr/2, which entity-escapes it -- the one attribute-value escaping boundary.
+%% via arizona_template:classify_trusted/1 and emitted verbatim, mirroring
+%% escape_value/2); any other scalar goes through attr/2, which entity-escapes
+%% it -- the one attribute-value escaping boundary.
 -spec render_attr(binary(), term()) -> binary().
-render_attr(_Name, false) -> <<>>;
-render_attr(Name, true) -> attr_boolean(Name);
-render_attr(Name, {arizona_raw, V}) -> attr_unescaped(Name, arizona_template:to_bin(V));
-render_attr(Name, {arizona_effect, _} = Cmd) -> attr_command(Name, Cmd);
-render_attr(Name, [{arizona_effect, _} | _] = Cmd) -> attr_command(Name, Cmd);
-render_attr(Name, Value) -> attr(Name, arizona_template:to_bin(Value)).
+render_attr(_Name, false) ->
+    <<>>;
+render_attr(Name, true) ->
+    attr_boolean(Name);
+render_attr(Name, Value) ->
+    case arizona_template:classify_trusted(Value) of
+        {raw, V} -> attr_unescaped(Name, arizona_template:to_bin(V));
+        {effect, Cmd} -> attr_command(Name, Cmd);
+        value -> attr(Name, arizona_template:to_bin(Value))
+    end.

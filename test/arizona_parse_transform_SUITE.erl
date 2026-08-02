@@ -202,6 +202,29 @@
     inline_destructuring_not_inlined/1,
     inline_comprehension_source/1,
     inline_strict_generator_shadow/1,
+    inline_hoisted_html_renders_and_tracks/1,
+    inline_hoisted_html_nested_chain/1,
+    inline_hoisted_each_renders_and_tracks/1,
+    inline_hoisted_stateless_atom_renders_and_tracks/1,
+    inline_hoisted_html_each_body_single_root/1,
+    inline_hoisted_html_unrelated_key_skipped/1,
+    helper_zero_arity_inlines/1,
+    helper_with_args_renders_and_tracks/1,
+    helper_body_read_tracks/1,
+    helper_whole_body_html_unwraps_and_tracks/1,
+    helper_nested_calls_inline/1,
+    helper_element_list_body_tracks/1,
+    helper_in_each_item_body_inlines/1,
+    helper_same_module_call_inlines/1,
+    element_list_child_tracks/1,
+    helper_multi_clause_error/1,
+    helper_guarded_error/1,
+    helper_params_not_vars_error/1,
+    helper_body_not_single_expr_error/1,
+    helper_recursive_error/1,
+    helper_scalar_body_read_still_tracks/1,
+    helper_multi_clause_scalar_untouched/1,
+    helper_wrapped_multi_statement_untouched/1,
     tracked_get_submap_errors/1,
     tracked_get_submap_az_errors/1,
     tracked_get_lazy_submap_errors/1,
@@ -280,6 +303,9 @@
     local_in_each_renders/1,
     local_atom_key/1,
     local_atom_binary_reuse_error/1,
+    local_orphaned_fragment_top_error/1,
+    local_orphaned_conditional_branch_error/1,
+    local_orphaned_whole_body_error/1,
     ssr_escapes_content_value/1,
     ssr_escapes_attr_value/1,
     ssr_escape_all_unsafe_chars/1,
@@ -343,6 +369,7 @@ all() ->
         {group, raw_text},
         {group, conditional_elements},
         {group, inline},
+        {group, helper},
         {group, tracked_get},
         {group, tracked_guard},
         {group, layout},
@@ -411,7 +438,10 @@ groups() ->
             local_attr_in_raw_text_ok,
             local_in_each_renders,
             local_atom_key,
-            local_atom_binary_reuse_error
+            local_atom_binary_reuse_error,
+            local_orphaned_fragment_top_error,
+            local_orphaned_conditional_branch_error,
+            local_orphaned_whole_body_error
         ]},
         %% Tests 26-39: template/2 (each) tests
         {each, [parallel], [
@@ -586,7 +616,33 @@ groups() ->
             inline_non_bindings_var_name,
             inline_destructuring_not_inlined,
             inline_comprehension_source,
-            inline_strict_generator_shadow
+            inline_strict_generator_shadow,
+            inline_hoisted_html_renders_and_tracks,
+            inline_hoisted_html_nested_chain,
+            inline_hoisted_each_renders_and_tracks,
+            inline_hoisted_stateless_atom_renders_and_tracks,
+            inline_hoisted_html_each_body_single_root,
+            inline_hoisted_html_unrelated_key_skipped
+        ]},
+        %% Local element-returning helper calls inlined at the template call site
+        {helper, [parallel], [
+            helper_zero_arity_inlines,
+            helper_with_args_renders_and_tracks,
+            helper_body_read_tracks,
+            helper_whole_body_html_unwraps_and_tracks,
+            helper_nested_calls_inline,
+            helper_element_list_body_tracks,
+            helper_in_each_item_body_inlines,
+            helper_same_module_call_inlines,
+            element_list_child_tracks,
+            helper_multi_clause_error,
+            helper_guarded_error,
+            helper_params_not_vars_error,
+            helper_body_not_single_expr_error,
+            helper_recursive_error,
+            helper_scalar_body_read_still_tracks,
+            helper_multi_clause_scalar_untouched,
+            helper_wrapped_multi_statement_untouched
         ]},
         %% Reject the tracked accessor reading a non-bindings (sub-)map
         {tracked_get, [parallel], [
@@ -1257,6 +1313,49 @@ local_atom_binary_reuse_error(Config) when is_list(Config) ->
         "            [arizona_template:local(<<\"x\">>, <<\"y\">>)]}"
         "    ). ",
         fun(R) -> R =:= local_key_reused end
+    ).
+
+%% A ?local at the top level of a fragment has no enclosing element to carry
+%% the az-local descriptor: the client could never bind the key, so
+%% set/set_all would be silent no-ops. Compile error (before the fix it
+%% rendered the init with no descriptor anywhere).
+local_orphaned_fragment_top_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_orphan_frag). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html([{'span', [], [<<\"x\">>]}, "
+        "        arizona_template:local(count, 0)]). ",
+        fun(R) -> R =:= local_orphaned end
+    ).
+
+%% A ?local as a bare conditional-branch value never reaches the enclosing
+%% element's descriptor scan (the child is the case expr, not the local), so
+%% the key would be unreachable -- and a conditionally-present local makes no
+%% sense against a static descriptor. Compile error.
+local_orphaned_conditional_branch_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_orphan_cond). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(open, Bindings) of"
+        "            true -> arizona_template:local(k, <<\"v\">>);"
+        "            false -> <<>>"
+        "        end"
+        "    ]}). ",
+        fun(R) -> R =:= local_orphaned end
+    ).
+
+%% A whole-template-body ?local (`?html(?local(...))`) is equally orphaned:
+%% no element wraps the slot, so no az-local descriptor is emitted.
+local_orphaned_whole_body_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_orphan_body). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html(arizona_template:local(k, <<\"v\">>)). ",
+        fun(R) -> R =:= local_orphaned end
     ).
 
 %% Test 1: Static-only element -- no dynamics, single static binary.
@@ -6541,6 +6640,457 @@ inline_strict_generator_shadow(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"F")),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"ab")).
 
+%% A hoisted `?html(...)` whose body reads a binding, used in a content slot:
+%% the spliced RHS must be compiled (not left as a raw runtime-stub call --
+%% before the fix rendering crashed with parse_transform_not_applied) and the
+%% slot must track the read inside, so a change to it produces a diff op.
+inline_hoisted_html_renders_and_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoisthtml). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Header = arizona_template:html("
+        "        {'h1', [], [arizona_template:get(title, Bindings)]}), "
+        "    arizona_template:html({'div', [], [Header]}). "
+    ),
+    B0 = #{title => ~"T1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<h1")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"T1")),
+    B1 = #{title => ~"T2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A two-level hoist chain: an inner hoisted `?html` spliced into an outer
+%% hoisted `?html`, spliced into the root template. Both levels compile and the
+%% inner read still reaches the root slot's deps.
+inline_hoisted_html_nested_chain(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoistchain). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Inner = arizona_template:html("
+        "        {'em', [], [arizona_template:get(x, Bindings)]}), "
+        "    Outer = arizona_template:html({'p', [], [Inner]}), "
+        "    arizona_template:html({'div', [], [Outer]}). "
+    ),
+    B0 = #{x => ~"X1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<em")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"X1")),
+    B1 = #{x => ~"X2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A hoisted `?each(...)` used in a content slot compiles (before the fix the
+%% raw call hit the runtime stub) and its source read fires at slot eval, so an
+%% items change produces a diff op.
+inline_hoisted_each_renders_and_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoisteach). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Items = arizona_template:each(fun(I) -> {'li', [], [I]} end, "
+        "                                  arizona_template:get(items, Bindings)), "
+        "    arizona_template:html({'ul', [], [Items]}). "
+    ),
+    B0 = #{items => [~"a"]},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<li")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"a")),
+    B1 = #{items => [~"a", ~"b"]},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A hoisted `?stateless(atom, Props)` (atom sugar): the spliced RHS must go
+%% through the sugar rewrite (before the fix the raw atom form died with
+%% function_clause in arizona_template:stateless/2), and the props read fires
+%% at slot eval, so a prop-binding change produces a diff op.
+inline_hoisted_stateless_atom_renders_and_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoistsless). "
+        "-export([render/1]). "
+        "-export([card/1]). "
+        "card(Props) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Props)]}). "
+        "render(Bindings) -> "
+        "    Card = arizona_template:stateless(card, "
+        "        #{x => arizona_template:get(x, Bindings)}), "
+        "    arizona_template:html({'div', [], [Card]}). "
+    ),
+    B0 = #{x => ~"PX1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"PX1")),
+    B1 = #{x => ~"PX2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% Regression guard: a hoisted `?html` used as a whole `?each` callback body
+%% (`fun(_I) -> Row end`) already worked pre-fix via the raw-wrapper unwrap and
+%% must keep both rendering AND the per-item `single_root` flag (positional
+%% list patching) -- a fix that splices an already-compiled template map here
+%% would silently drop the flag.
+inline_hoisted_html_each_body_single_root(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoisteachbody). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Row = arizona_template:html("
+        "        {'li', [], [arizona_template:get(x, Bindings)]}), "
+        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "        fun(_I) -> Row end, arizona_template:get(items, Bindings))]}). "
+    ),
+    T = Mod:render(#{x => ~"X", items => [1, 2]}),
+    [{_Az, EachFun, _Loc}] = maps:get(d, T),
+    ?assertMatch(
+        #{t := 0, template := #{single_root := true}},
+        EachFun()
+    ),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<li")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"X")).
+
+%% The hoisted-template tracking is scoped: a change to an unrelated key still
+%% skips the slot carrying the spliced template.
+inline_hoisted_html_unrelated_key_skipped(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoistscoped). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Header = arizona_template:html("
+        "        {'h1', [], [arizona_template:get(title, Bindings)]}), "
+        "    arizona_template:html({'div', [], [Header]}). "
+    ),
+    B0 = #{title => ~"T", other => 1},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{title => ~"T", other => 2},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertEqual([], Ops).
+
+%% ============================================================================
+%% Local element-returning helper calls inlined at the template call site
+%% ============================================================================
+
+%% A 0-arity local helper returning a bare element tuple, called in a content
+%% slot, inlines: before the fix it compiled clean and crashed at first render
+%% with bad_template_value. The element flattens into the outer statics.
+helper_zero_arity_inlines(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_zero). "
+        "-export([render/1]). "
+        "brand() -> {'svg', [{width, <<\"24\">>}], [<<\"logo\">>]}. "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [], [brand()]}). "
+    ),
+    T = Mod:render(#{}),
+    ?assert(
+        lists:any(
+            fun(S) -> binary:match(S, ~"<svg") =/= nomatch end,
+            maps:get(s, T)
+        )
+    ),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"logo")).
+
+%% A helper with args: the args are ordinary expressions substituted into the
+%% body, so a `?get` at the call site lands in the slot bracket and tracks.
+helper_with_args_renders_and_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_args). "
+        "-export([render/1]). "
+        "alert(Kind, Msg) -> {'p', [{class, Kind}], [Msg]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        alert(<<\"warn\">>, arizona_template:get(msg, Bindings))"
+        "    ]}). "
+    ),
+    B0 = #{msg => ~"M1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"class=\"warn\"")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"M1")),
+    B1 = #{msg => ~"M2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% The reactivity core: a `?get` INSIDE the helper body (via a bindings param)
+%% compiles into the enclosing slot's dependency bracket, so a change to it
+%% re-renders the slot -- discriminated by the op, not just the render.
+helper_body_read_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_bodyread). "
+        "-export([render/1]). "
+        "header(B) -> {'h1', [], [arizona_template:get(title, B)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [header(Bindings)]}). "
+    ),
+    B0 = #{title => ~"T1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<h1")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"T1")),
+    B1 = #{title => ~"T2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A whole-body `?html(...)` wrapper unwraps exactly as ?each callbacks do: the
+%% element flattens into the outer statics (pre-fix it rendered as a runtime
+%% nested template) and a body read tracks (pre-fix the slot froze -- the
+%% documented raw-call freeze this feature lifts for inlineable helpers).
+helper_whole_body_html_unwraps_and_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_wrapped). "
+        "-export([render/1]). "
+        "-export([card/1]). "
+        "card(B) -> "
+        "    arizona_template:html("
+        "        {'section', [], [arizona_template:get(x, B)]}). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [card(Bindings)]}). "
+    ),
+    B0 = #{x => ~"X1"},
+    T = Mod:render(B0),
+    ?assert(
+        lists:any(
+            fun(S) -> binary:match(S, ~"<section") =/= nomatch end,
+            maps:get(s, T)
+        )
+    ),
+    {_HTML, Snap0, V0} = arizona_render:render(T, #{}),
+    B1 = #{x => ~"X2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A helper body may itself call another helper: nested calls inline
+%% recursively.
+helper_nested_calls_inline(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_nested). "
+        "-export([render/1]). "
+        "brand() -> {'svg', [], [<<\"logo\">>]}. "
+        "card(B) -> {'section', [], [brand(), arizona_template:get(x, B)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [card(Bindings)]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{x => ~"X"})),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<svg")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"logo")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"X")).
+
+%% An element-LIST body inlines as a nested-template child and its reads become
+%% slot deps (via the bare nested-template leaf tracking), so it stays reactive.
+helper_element_list_body_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_list). "
+        "-export([render/1]). "
+        "rows(B) -> "
+        "    [{'p', [], [arizona_template:get(a, B)]}, {'p', [], [<<\"s\">>]}]. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [rows(Bindings)]}). "
+    ),
+    B0 = #{a => ~"A1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"A1")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"s")),
+    B1 = #{a => ~"A2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A helper call as the whole ?each callback body inlines to the element, so
+%% the per-item template compiles (pre-fix: each_body_not_element).
+helper_in_each_item_body_inlines(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_eachitem). "
+        "-export([render/1]). "
+        "item(I) -> {'li', [], [I]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "        fun(I) -> item(I) end, arizona_template:get(items, Bindings))]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{items => [~"a", ~"b"]})),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<li")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"a")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"b")).
+
+%% A same-module explicit call (`?MODULE:helper()`, here spelled literally)
+%% resolves to the local body exactly like the bare call -- mirroring the
+%% fun ?MODULE:row/1 ?each rule.
+helper_same_module_call_inlines(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_samemod). "
+        "-export([render/1]). "
+        "brand() -> {'svg', [], [<<\"logo\">>]}. "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [], [pt_helper_samemod:brand()]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<svg")).
+
+%% Supporting fix: a LITERAL element-list child compiles to a nested template
+%% whose reads were isolated from the slot bracket, so the slot froze. The bare
+%% nested-template leaf now contributes its literal reads as slot deps (same
+%% principle as conditional branch-read tracking).
+element_list_child_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_elem_list_child). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        [{'p', [], [arizona_template:get(x, Bindings)]},"
+        "         {'p', [], [<<\"s\">>]}]"
+        "    ]}). "
+    ),
+    B0 = #{x => ~"A"},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{x => ~"B"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A multi-clause helper with a bare-element clause cannot be inlined (one
+%% shared call site cannot select a clause) -- and pre-fix it crashed at
+%% render, so it is a compile error now.
+helper_multi_clause_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_multi). "
+        "-export([render/1]). "
+        "badge(ok) -> {'span', [{class, <<\"ok\">>}], [<<\"OK\">>]}; "
+        "badge(_) -> {'span', [{class, <<\"err\">>}], [<<\"ERR\">>]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], "
+        "        [badge(arizona_template:get(status, Bindings))]}). ",
+        fun(R) -> R =:= {helper_multi_clause, badge, 1} end
+    ).
+
+%% A guarded bare-element helper cannot keep its guard through inlining.
+helper_guarded_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_guarded). "
+        "-export([render/1]). "
+        "badge(K) when is_binary(K) -> {'span', [], [K]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], "
+        "        [badge(arizona_template:get(k, Bindings))]}). ",
+        fun(R) -> R =:= {helper_guarded, badge, 1} end
+    ).
+
+%% Substitution needs each parameter to be a distinct plain variable.
+helper_params_not_vars_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_pattern). "
+        "-export([render/1]). "
+        "badge({K, V}) -> {'span', [{class, K}], [V]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], "
+        "        [badge(arizona_template:get(kv, Bindings))]}). ",
+        fun(R) -> R =:= {helper_params_not_vars, badge, 1} end
+    ).
+
+%% Statements before the element cannot be inlined (a begin-block would leak
+%% its bindings into the caller's scope).
+helper_body_not_single_expr_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_stmts). "
+        "-export([render/1]). "
+        "brand() -> "
+        "    Size = <<\"24\">>, "
+        "    {'svg', [{width, Size}], [<<\"logo\">>]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [brand()]}). ",
+        fun(R) -> R =:= {helper_body_not_single_expr, brand, 0} end
+    ).
+
+%% A recursive element helper cannot be inlined into itself.
+helper_recursive_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_rec). "
+        "-export([render/1]). "
+        "tree() -> {'div', [], [tree()]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [tree()]}). ",
+        fun(R) -> R =:= {helper_recursive, tree, 0} end
+    ).
+
+%% Control: a scalar-returning local call keeps today's behavior -- the call
+%% runs inside the slot closure, so its body read fires in-bracket and tracks.
+%% No inlining, no rejection.
+helper_scalar_body_read_still_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_scalar). "
+        "-export([render/1]). "
+        "-export([label/1]). "
+        "label(B) -> arizona_template:get(x, B). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], [label(Bindings)]}). "
+    ),
+    B0 = #{x => ~"A"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"A")),
+    B1 = #{x => ~"B"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% Control: a multi-clause SCALAR helper is untouched (no rejection) -- the
+%% multi-clause error fires only when a clause returns a bare element.
+helper_multi_clause_scalar_untouched(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_multiscalar). "
+        "-export([render/1]). "
+        "-export([label/1]). "
+        "label(ok) -> <<\"OK\">>; "
+        "label(_) -> <<\"ERR\">>. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], "
+        "        [label(arizona_template:get(status, Bindings))]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{status => ok})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"OK")).
+
+%% Control: a multi-statement `?html`-wrapped helper is NOT inlineable and NOT
+%% rejected -- it keeps today's behavior (renders as a runtime nested template;
+%% body reads stay frozen, the az:with handoff exists for that pattern).
+helper_wrapped_multi_statement_untouched(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_wrappedstmts). "
+        "-export([render/1]). "
+        "-export([card/1]). "
+        "card(B) -> "
+        "    Cls = <<\"card\">>, "
+        "    arizona_template:html("
+        "        {'section', [{class, Cls}], [arizona_template:get(x, B)]}). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [card(Bindings)]}). "
+    ),
+    B0 = #{x => ~"X1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<section")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"X1")),
+    B1 = #{x => ~"X2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertEqual([], Ops).
+
 %% ============================================================================
 %% Tracked get/get_lazy on a non-bindings map
 %% ============================================================================
@@ -6687,6 +7237,10 @@ tracked_get_case_aliased_bindings_flagged(Config) when is_list(Config) ->
 %% The outer slot is `fun() -> inner(Bindings) end`; building `inner` fires no tracked
 %% read at the outer level (its reads sit in inner's own closures), so the outer slot
 %% captures empty deps (proven directly via slot_deps) and the diff engine skips it.
+%% The frozen baseline `az:with` exists for: a raw call returning a template.
+%% Note the helper is deliberately NOT inlineable (statements before its
+%% whole-body ?html) -- a cleanly-inlineable single-expression helper is now
+%% inlined by the element-helper feature and tracks its body reads instead.
 with_handoff_freezes_without_tracking(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_with_freeze). "
@@ -6694,7 +7248,9 @@ with_handoff_freezes_without_tracking(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'p', [], [inner(Bindings)]}). "
         "inner(B) -> "
-        "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
+        "    Cls = <<\"row\">>, "
+        "    arizona_template:html("
+        "        {'span', [{class, Cls}], [arizona_template:get(x, B)]}). "
     ),
     B0 = #{x => ~"Ada"},
     [{_Az, {esc, OuterFun}, _Loc}] = maps:get(d, Mod:render(B0)),
