@@ -23,8 +23,12 @@ routes take effect without restarting the listener.
   into an HTTPS one, so `scheme => https` is optional sugar; pairing it
   with an explicit `scheme => http` is a contradiction and raises
   `tls_with_http_scheme`
-- `transport_opts` -- listener opts, currently `[{port, Port}]`
-  (default `[{port, 4040}]`)
+- `transport_opts` -- `[{port, Port}]` sugar for the listen port. Only
+  `port` is accepted; any other entry errors (`unsupported_transport_opt`)
+  rather than being silently dropped -- roadrunner takes other
+  listener/socket options (`ip`, `socket_backlog`, ...) directly in
+  `proto_opts`. Port precedence: `transport_opts` port, then
+  `proto_opts.port`, then `4040`
 - `proto_opts` -- map of roadrunner listener opts merged on top of
   the dispatch (e.g. `max_clients`, `max_content_length`,
   `request_timeout`, `tls`, `slot_reconciliation`)
@@ -181,22 +185,50 @@ format_error(tls_with_http_scheme, [{_M, _F, _Args, _Info} | _]) ->
         general =>
             "tls => [...] implies https; drop scheme => http (or drop tls) "
             "instead of serving the configured certs' traffic in cleartext"
+    };
+format_error({unsupported_transport_opt, Opt}, _ST) ->
+    #{
+        general =>
+            io_lib:format(
+                "transport_opts accepts only {port, Port}; ~tp would be silently "
+                "dropped. Roadrunner takes listener/socket options (ip, "
+                "socket_backlog, ...) directly in proto_opts, which is merged "
+                "into the listener opts wholesale.",
+                [Opt]
+            )
     }.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Pull the port out of either the `transport_opts` proplist or
-%% directly from `proto_opts.port`. Default 4040.
+%% The listen port, by deliberate precedence: `transport_opts`'s `{port, Port}`
+%% (the explicit sugar) wins, then `proto_opts.port`, then the 4040 default -- a
+%% present-but-portless `transport_opts` no longer silently clobbers
+%% `proto_opts.port`. `transport_opts` accepts ONLY `{port, Port}`: roadrunner
+%% takes every other listener/socket option (`ip`, `socket_backlog`, ...)
+%% directly in its flat listener-opts map, which `proto_opts` already merges
+%% into wholesale -- so any other entry here would be silently dropped, and
+%% errors up front instead (before any persistent_term is written).
 port_from_opts(Opts) ->
-    case maps:get(transport_opts, Opts, undefined) of
-        undefined ->
+    TransportOpts = maps:get(transport_opts, Opts, []),
+    ok = check_transport_opts(TransportOpts),
+    case lists:keyfind(port, 1, TransportOpts) of
+        {port, Port} ->
+            Port;
+        false ->
             ProtoOpts = maps:get(proto_opts, Opts, #{}),
-            maps:get(port, ProtoOpts, 4040);
-        TransportOpts when is_list(TransportOpts) ->
-            proplists:get_value(port, TransportOpts, 4040)
+            maps:get(port, ProtoOpts, 4040)
     end.
+
+check_transport_opts([]) ->
+    ok;
+check_transport_opts([{port, _Port} | Rest]) ->
+    check_transport_opts(Rest);
+check_transport_opts([Opt | _Rest]) ->
+    erlang:error(
+        {unsupported_transport_opt, Opt}, [Opt], [{error_info, #{module => ?MODULE}}]
+    ).
 
 %% Translate the `scheme => https` shorthand into roadrunner's
 %% `tls => [...]` listener opt. Top-level `tls` overrides

@@ -70,6 +70,9 @@
     https_without_tls_errors/1,
     tls_without_scheme_serves_https/1,
     tls_with_http_scheme_errors/1,
+    portless_transport_opts_keeps_proto_opts_port/1,
+    transport_opts_port_wins_over_proto_opts/1,
+    unsupported_transport_opt_errors/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
@@ -163,6 +166,9 @@ groups() ->
         https_without_tls_errors,
         tls_without_scheme_serves_https,
         tls_with_http_scheme_errors,
+        portless_transport_opts_keeps_proto_opts_port,
+        transport_opts_port_wins_over_proto_opts,
+        unsupported_transport_opt_errors,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
         ws_upgrade_preserves_duplicate_qs_keys,
@@ -1557,6 +1563,62 @@ tls_with_http_scheme_errors(Config) when is_list(Config) ->
     ?assertEqual(
         undefined,
         persistent_term:get({arizona_roadrunner_routes, arizona_tls_http_scheme_test}, undefined),
+        "failed start must not stash routes for the dead listener"
+    ).
+
+portless_transport_opts_keeps_proto_opts_port(Config) when is_list(Config) ->
+    %% A present-but-portless transport_opts used to silently override
+    %% proto_opts.port with the 4040 default. The port now falls back to
+    %% proto_opts.port when transport_opts carries no port entry.
+    Name = arizona_portless_transport_test,
+    Port = pick_port(),
+    {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
+        routes => [],
+        transport_opts => [],
+        proto_opts => #{port => Port}
+    }),
+    try
+        ?assertEqual(Port, roadrunner_listener:port(Name))
+    after
+        ok = arizona_roadrunner_server:stop(Name)
+    end.
+
+transport_opts_port_wins_over_proto_opts(Config) when is_list(Config) ->
+    %% When both name a port, the transport_opts one (the explicit listen-port
+    %% sugar) wins over proto_opts.port.
+    Name = arizona_transport_port_wins_test,
+    TransportPort = pick_port(),
+    ProtoPort = pick_port(),
+    {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
+        routes => [],
+        transport_opts => [{port, TransportPort}],
+        proto_opts => #{port => ProtoPort}
+    }),
+    try
+        ?assertEqual(TransportPort, roadrunner_listener:port(Name))
+    after
+        ok = arizona_roadrunner_server:stop(Name)
+    end.
+
+unsupported_transport_opt_errors(Config) when is_list(Config) ->
+    %% transport_opts accepts only {port, _}: every other entry used to be
+    %% silently discarded (an operator's `ip` restriction just did not apply).
+    %% It now errors up front, before any persistent_term is written; roadrunner
+    %% takes those listener/socket options directly in proto_opts.
+    Name = arizona_bad_transport_opt_test,
+    Result =
+        try
+            arizona_roadrunner_server:start(Name, #{
+                routes => [],
+                transport_opts => [{ip, {127, 0, 0, 1}}, {port, pick_port()}]
+            })
+        catch
+            error:Reason -> {error_caught, Reason}
+        end,
+    ?assertEqual({error_caught, {unsupported_transport_opt, {ip, {127, 0, 0, 1}}}}, Result),
+    ?assertEqual(
+        undefined,
+        persistent_term:get({arizona_roadrunner_routes, Name}, undefined),
         "failed start must not stash routes for the dead listener"
     ).
 
