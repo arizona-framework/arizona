@@ -654,8 +654,12 @@ function applyTextOp(el, az, val, isHtml) {
 }
 
 /**
- * Apply a SET_ATTR op: setAttribute and sync the DOM `value` property for
- * form elements (setAttribute alone doesn't update the live value).
+ * Apply a SET_ATTR op: setAttribute and sync the live DOM property for form
+ * controls. Once the user has interacted, the browser's dirty value/checkedness
+ * flags make attribute writes stop affecting `.value`/`.checked`/`.selected`,
+ * so without the property write a server-driven change would silently stop
+ * rendering. The server is authoritative; a SET_ATTR of a boolean attribute
+ * always means true (false diffs to REM_ATTR).
  * @param {Element} el
  * @param {string} name
  * @param {string} val
@@ -663,6 +667,8 @@ function applyTextOp(el, az, val, isHtml) {
 function applySetAttrOp(el, name, val) {
     el.setAttribute(name, val);
     if (name === 'value' && 'value' in el) el.value = val;
+    else if (name === 'checked' && 'checked' in el) el.checked = true;
+    else if (name === 'selected' && 'selected' in el) el.selected = true;
     notifyUpdated(el);
 }
 
@@ -670,11 +676,17 @@ function applySetAttrOp(el, name, val) {
  * Apply a REM_ATTR op: removeAttribute and run the hook `updated` phase. The
  * canonical attribute-removal write shared by diff ops, item patches, and the
  * `arizona_js` attribute effects, so a removal behaves the same whatever drove it.
+ * Mirrors applySetAttrOp's form-control property sync: a boolean removal means
+ * false, and removing `value` clears the default value, so the live value resets
+ * to that empty default (the dirty flags would otherwise keep the stale state).
  * @param {Element} el
  * @param {string} name
  */
 function applyRemAttrOp(el, name) {
     el.removeAttribute(name);
+    if (name === 'value' && 'value' in el) el.value = '';
+    else if (name === 'checked' && 'checked' in el) el.checked = false;
+    else if (name === 'selected' && 'selected' in el) el.selected = false;
     notifyUpdated(el);
 }
 

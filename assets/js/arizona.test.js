@@ -406,6 +406,32 @@ describe('applyOps -- OP.SET_ATTR', () => {
         expect(el.getAttribute('value')).toBe('new');
         expect(el.value).toBe('new');
     });
+
+    it('syncs checkedness after user interaction (dirty checkedness flag)', () => {
+        setupView('v', '<input type="checkbox" az="0" />');
+        const el = /** @type {HTMLInputElement} */ (resolveEl('v:0'));
+        // A user click sets the dirty checkedness flag; from then on attribute
+        // writes alone no longer change .checked.
+        el.click(); // checked
+        el.click(); // unchecked, dirty
+        applyOps([[OP.SET_ATTR, 'v:0', 'checked', '']]);
+        expect(el.checked).toBe(true);
+    });
+
+    it('syncs option selectedness after user interaction (dirty flag)', () => {
+        setupView(
+            'v',
+            '<select><option value="1">1</option><option value="2" az="0">2</option></select>',
+        );
+        const opt = /** @type {HTMLOptionElement} */ (resolveEl('v:0'));
+        // The selected IDL setter marks the option dirty; attribute writes
+        // alone no longer change .selected.
+        opt.selected = true;
+        opt.selected = false;
+        applyOps([[OP.SET_ATTR, 'v:0', 'selected', '']]);
+        expect(opt.selected).toBe(true);
+        expect(/** @type {HTMLSelectElement} */ (opt.closest('select')).value).toBe('2');
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -417,6 +443,41 @@ describe('applyOps -- OP.REM_ATTR', () => {
         setupView('v', '<span az="0" class="old">hi</span>');
         applyOps([[OP.REM_ATTR, 'v:0', 'class']]);
         expect(resolveEl('v:0').hasAttribute('class')).toBe(false);
+    });
+
+    it('unchecks a user-checked checkbox (dirty checkedness flag)', () => {
+        setupView('v', '<input type="checkbox" az="0" />');
+        const el = /** @type {HTMLInputElement} */ (resolveEl('v:0'));
+        // User checks the box: no `checked` attribute exists, but the live
+        // checkedness is true and dirty -- removeAttribute alone is a no-op.
+        el.click();
+        expect(el.checked).toBe(true);
+        applyOps([[OP.REM_ATTR, 'v:0', 'checked']]);
+        expect(el.checked).toBe(false);
+    });
+
+    it('deselects a user-selected option (dirty flag)', () => {
+        setupView(
+            'v',
+            '<select><option value="1">1</option>' +
+                '<option value="2" az="0" selected>2</option></select>',
+        );
+        const opt = /** @type {HTMLOptionElement} */ (resolveEl('v:0'));
+        opt.selected = true; // user re-picks it -- dirty
+        applyOps([[OP.REM_ATTR, 'v:0', 'selected']]);
+        expect(opt.selected).toBe(false);
+        expect(/** @type {HTMLSelectElement} */ (opt.closest('select')).value).toBe('1');
+    });
+
+    it('resets a typed-in value when the value attribute is removed', () => {
+        setupView('v', '<input az="0" value="server" />');
+        const el = /** @type {HTMLInputElement} */ (resolveEl('v:0'));
+        el.value = 'typed'; // dirty value flag
+        applyOps([[OP.REM_ATTR, 'v:0', 'value']]);
+        // Removing the attribute clears the default value; the live value is
+        // server-driven, so it resets to that empty default.
+        expect(el.hasAttribute('value')).toBe(false);
+        expect(el.value).toBe('');
     });
 });
 
