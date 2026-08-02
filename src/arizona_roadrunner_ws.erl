@@ -67,14 +67,18 @@ handle(Req) ->
 -doc """
 `roadrunner_ws_handler` `init/1` callback. Builds the Arizona socket
 and starts the live process. On reconnect, returns the page snapshot
-as the first outbound text frame.
+as the first outbound text frame -- unless the client flagged
+`_az_fps_follow`, in which case the socket defers the snapshot until
+the client's `cached_fps` frame arrives so the payload dedups against
+the announced fingerprints.
 """.
 -spec init(State) -> Result when
     State :: map(),
     Result :: roadrunner_ws_handler:result().
 init(#{handler := H, bindings := IB, on_mount := OM, req := ArzReq, reconnect := R} = State) ->
     Caps = maps:get(capabilities, State, #{}),
-    Opts = #{reconnect => R, on_mount => OM, capabilities => Caps},
+    FpsFollow = maps:get(fps_follow, State, false),
+    Opts = #{reconnect => R, fps_follow => FpsFollow, on_mount => OM, capabilities => Caps},
     to_roadrunner(arizona_socket:init(H, IB, ArzReq, Opts), State).
 
 -doc """
@@ -133,5 +137,10 @@ to_roadrunner({ok, Sock}, State) ->
     {ok, State#{socket => Sock}};
 to_roadrunner({reply, Data, Sock}, State) ->
     {reply, [{text, Data}], State#{socket => Sock}};
+to_roadrunner({reply_many, Frames, Sock}, State) ->
+    %% Multiple ordered frames from one inbound frame -- e.g. a deferred
+    %% reconnect resync flushed by a non-`cached_fps` frame ships the resync
+    %% first, then that frame's own reply.
+    {reply, [{text, Data} || Data <- Frames], State#{socket => Sock}};
 to_roadrunner({close, Code, Reason, Sock}, State) ->
     {close, Code, Reason, State#{socket => Sock}}.

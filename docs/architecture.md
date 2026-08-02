@@ -825,7 +825,14 @@ lives here independent of the server.
 - `init/4` -- `init(Handler, Bindings, Req, Opts)`. Traps exits, starts
   `arizona_live:start_link/4` (passing `self()` as transport PID and any `on_mount`
   hooks), mounts. On reconnect (`#{reconnect => true}`), also renders and returns `OP_REPLACE`
-  frame. Opts: `reconnect` (boolean), `on_mount` (list of `t:arizona_live:on_mount_hook/0`).
+  frame -- unless the client flagged `fps_follow` (the `_az_fps_follow` upgrade param): then
+  the mount+render is DEFERRED until the client's `cached_fps` frame arrives, so the resync
+  payload dedups statics against the announced fingerprints (a deploy-drain reconnect storm
+  re-ships roughly the dynamics instead of every page's full statics). Any other first frame
+  (or a `?RESYNC_TIMEOUT_MS` backstop) flushes the resync undeduped first, the frame's own
+  reply following it on the wire (`reply_many`); a client without the flag keeps the
+  immediate resync. Opts: `reconnect` (boolean), `fps_follow` (boolean), `on_mount` (list of
+  `t:arizona_live:on_mount_hook/0`).
   The route adapter for SPA navigate is recovered from `Req` via `arizona_req:adapter/1`
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
   `["navigate", #{~"path" := Path, ~"qs" := Qs}]` (replace), `["patch", #{~"path", ~"qs"}]`
@@ -998,7 +1005,8 @@ reply tuple.
 Transport-agnostic upgrade bootstrap for WebSocket handlers.
 
 - `prepare/3(QS, Adapter, AdapterState)` -- accepts the pre-parsed upgrade query string
-  (`[{binary(), binary() | true}]`), reads `_az_path` and `_az_reconnect` framework keys,
+  (`[{binary(), binary() | true}]`), reads the `_az_path`, `_az_reconnect`, and
+  `_az_fps_follow` framework keys,
   strips them to compute the user-visible query string, resolves the target route via the
   adapter's `resolve_route/3` callback, runs middlewares, and returns:
   - `{halt, az:request()}` -- middleware blocked the upgrade; caller extracts the native raw
@@ -1006,7 +1014,7 @@ Transport-agnostic upgrade bootstrap for WebSocket handlers.
   - `not_found` -- the client-supplied `_az_path` did not resolve to a live route; the caller
     rejects the upgrade with `404` (never crashes on the attacker-controllable path)
   - `{cont, State}` -- `State` is a map carrying `handler`, `bindings`, `on_mount`, `req`,
-    `reconnect` that the caller threads into `arizona_socket:init/4`
+    `reconnect`, `fps_follow` that the caller threads into `arizona_socket:init/4`
 
 `arizona_roadrunner_ws` collapses to a few lines that call `parse_qs`, invoke
 `arizona_ws:prepare/3`, and wire the result into roadrunner's callback contract.
