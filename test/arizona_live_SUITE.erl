@@ -440,7 +440,7 @@ live_connected_event(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% mount sends self() ! arizona_connected, handle_info pushes to transport
     receive
-        {arizona_push, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects} ->
             ?assertMatch([[?OP_TEXT, _, <<"Connected">>]], Ops),
             ?assertEqual([{arizona_effect, [14, <<"Welcome">>]}], Effects)
     after 1000 ->
@@ -843,7 +843,7 @@ effect_grandchild_update_reaches_child_push(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {arizona_view, <<"uep">>, bump},
     receive
-        {arizona_push, _Ops, Effects} ->
+        {arizona_push, _, _Ops, Effects} ->
             ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects)
     after 1000 ->
         error(timeout)
@@ -945,7 +945,7 @@ live_navigate_then_event(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain the arizona_connected push from page mount
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> ct:fail(timeout)
     end,
     %% Navigate to about
@@ -954,7 +954,7 @@ live_navigate_then_event(Config) when is_list(Config) ->
     ),
     %% About's mount sends arizona_connected via handle_info
     receive
-        {arizona_push, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects} ->
             %% About's connected doesn't change bindings, so no ops
             ?assertEqual([], Ops),
             %% But produces set_title effect
@@ -1060,7 +1060,7 @@ live_handle_info(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {set_message, <<"hello">>},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"hello">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1073,7 +1073,7 @@ live_handle_info_with_effects(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {set_message_with_effect, <<"hi">>},
     receive
-        {arizona_push, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects} ->
             ?assertMatch([[?OP_TEXT, _, <<"hi">>]], Ops),
             ?assertEqual(
                 [
@@ -1093,7 +1093,7 @@ live_handle_info_no_callback(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! some_message,
     receive
-        {arizona_push, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1105,7 +1105,7 @@ live_handle_info_before_mount(Config) when is_list(Config) ->
     ),
     Pid ! {set_message, <<"hello">>},
     receive
-        {arizona_push, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1119,7 +1119,7 @@ live_handle_info_no_change(Config) when is_list(Config) ->
     %% Re-set message to the same default value
     Pid ! {set_message, <<"none">>},
     receive
-        {arizona_push, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1137,7 +1137,7 @@ live_handle_info_after_navigate(Config) when is_list(Config) ->
     %% Send message after navigate -- should still push
     Pid ! {set_message, <<"after_nav">>},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"after_nav">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1152,7 +1152,7 @@ live_handle_info_undefined_transport(Config) when is_list(Config) ->
     Pid ! {set_message, <<"hello">>},
     %% No crash, no push
     receive
-        {arizona_push, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1166,7 +1166,7 @@ live_send_to_root(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"via send">>}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"via send">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1179,13 +1179,13 @@ live_send_to_child(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push from page mount
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Send to child counter view
     Pid ! {arizona_view, <<"counter">>, {set_count, 99}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"99">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1226,7 +1226,7 @@ live_send_after_to_root(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"delayed">>}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"delayed">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1245,7 +1245,7 @@ unmount_on_navigate(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Navigate to page -- should not crash
@@ -1260,19 +1260,19 @@ unmount_timer_cancelled_on_navigate(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push (which also starts the tick timer)
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Navigate to page -- cancels pending timers
     {ok, _, _} = arizona_live:navigate(Pid, arizona_page, #{}),
     %% Drain page's arizona_connected push
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Wait -- no tick should arrive (timer was cancelled)
     receive
-        {arizona_push, _, _} -> error(unexpected_tick_push)
+        {arizona_push, _, _, _} -> error(unexpected_tick_push)
     after 1500 ->
         ok
     end.
@@ -1364,7 +1364,7 @@ fired_timer_ref_pruned(Config) when is_list(Config) ->
         %% Each fire increments `closes`, so the push confirms the delivery
         %% (and thus the prune) happened.
         receive
-            {arizona_push, _, _} -> ok
+            {arizona_push, _, _, _} -> ok
         after 1000 -> error(timeout_waiting_for_close_push)
         end
     end,
@@ -1427,7 +1427,7 @@ child_in_stream_survives_dep_skip(Config) when is_list(Config) ->
     %% Now send to the child inside the stream -- should NOT crash with unknown_view.
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 42}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"42">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1471,14 +1471,14 @@ multiple_children_in_stream_survive_dep_skip(Config) when is_list(Config) ->
     %% Both children should still be routable
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
-        {arizona_push, Ops1, []} ->
+        {arizona_push, _, Ops1, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"10">>]], Ops1)
     after 1000 ->
         error(timeout)
     end,
     Pid ! {arizona_view, <<"counter-2">>, {set_count, 20}},
     receive
-        {arizona_push, Ops2, []} ->
+        {arizona_push, _, Ops2, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"20">>]], Ops2)
     after 1000 ->
         error(timeout)
@@ -1493,7 +1493,7 @@ child_in_stream_survives_item_update(Config) when is_list(Config) ->
     %% Set counter-1 to 5
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 5}},
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Update item 1's label -- child should survive with count=5
@@ -1503,7 +1503,7 @@ child_in_stream_survives_item_update(Config) when is_list(Config) ->
     %% Verify counter-1 still has count=5 (handle_update merges, keeps count)
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 7}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"7">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1523,7 +1523,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     %% counter-1 should be routable
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
-        {arizona_push, Ops1, []} ->
+        {arizona_push, _, Ops1, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"10">>]], Ops1)
     after 1000 ->
         error(timeout)
@@ -1531,7 +1531,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     %% extra-1 should also be routable
     Pid ! {arizona_view, <<"extra-1">>, {set_count, 20}},
     receive
-        {arizona_push, Ops2, []} ->
+        {arizona_push, _, Ops2, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"20">>]], Ops2)
     after 1000 ->
         error(timeout)
@@ -1554,7 +1554,7 @@ on_mount_transforms_bindings(Config) when is_list(Config) ->
     %% For a stronger test, send set_message and verify the process is alive.
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"hello">>}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"hello">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1574,7 +1574,7 @@ on_mount_works_on_navigate(Config) when is_list(Config) ->
     %% Verify process is alive and functional
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"after_nav">>}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"after_nav">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1599,7 +1599,7 @@ on_mount_pipeline(Config) when is_list(Config) ->
     %% Both hooks ran -- step should be 2
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"ok">>}},
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 ->
         error(timeout)
     end.

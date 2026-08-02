@@ -9,7 +9,7 @@ handling -- to the `arizona_terminal_driver` it is given.
 
 A linked **input reader** process blocks on `io:get_chars/2` and forwards each
 read as `{term_input, Chars}`, so a blocking read never starves the live process's
-asynchronous `{arizona_push, _, _}` updates (timer ticks, pubsub broadcasts).
+asynchronous `{arizona_push, _, _, _}` updates (timer ticks, pubsub broadcasts).
 
 ```erlang
 arizona_terminal_tty:start(my_terminal_view, #{}, my_terminal_driver).
@@ -104,7 +104,7 @@ run(Handler, Bindings, Driver) ->
 %% Run the event loop, then reap the session and the input reader on EVERY exit
 %% path (quit, eof, or a linked process dying). Without this the live view
 %% outlives the transport -- it keeps ticking, stays subscribed to pubsub, and
-%% floods the mailbox with `{arizona_push, _, _}` -- and the reader stays blocked
+%% floods the mailbox with `{arizona_push, _, _, _}` -- and the reader stays blocked
 %% in `io:get_chars/2` forever, stealing subsequent stdin bytes.
 -spec serve(arizona_terminal_session:session(), pid()) -> ok.
 serve(Session, Reader) ->
@@ -135,7 +135,7 @@ loop(Session) ->
                 quit -> ok;
                 {cont, Session1} -> loop(Session1)
             end;
-        {arizona_push, _Ops, Effects} ->
+        {arizona_push, _ViewId, _Ops, Effects} ->
             %% Timer tick or pubsub broadcast updated the view -- redraw the status
             %% block, streaming any log lines above it.
             case arizona_terminal_session:handle_push(Session, Effects) of

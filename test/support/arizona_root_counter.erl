@@ -1,6 +1,6 @@
 -module(arizona_root_counter).
 -include("arizona_stateful.hrl").
--export([mount/1, render/1, handle_event/3]).
+-export([mount/1, render/1, handle_event/3, handle_info/2]).
 
 %% Minimal view counter for arizona_live machinery tests. Mirrors
 %% arizona_counter's mount/event shape but as a route-level view, since
@@ -32,3 +32,9 @@ handle_event(~"dec", _Payload, Bindings) ->
     {Bindings#{count => maps:get(count, Bindings) - 1}, #{}, []};
 handle_event(~"noop", _Payload, Bindings) ->
     {Bindings, #{}, []}.
+
+%% Mirrors arizona_counter's set_count, so a suite can interleave an info-driven
+%% change with an event on the same binding (transport push-ordering tests).
+-spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
+handle_info({set_count, N}, Bindings) ->
+    {Bindings#{count => N}, #{}, []}.

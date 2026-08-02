@@ -271,8 +271,10 @@ send_after(ViewId, Time, Msg) ->
 -doc """
 Starts a live process for a route-level view `Handler`.
 
-The transport pid receives `{arizona_push, Ops, Effects}` messages when
-the live process diffs and emits updates. `OnMount` is the route's hook
+The transport pid receives `{arizona_push, RootViewId, Ops, Effects}`
+messages when the live process diffs and emits updates; `RootViewId` is
+the emitting page's root view id, so a transport can drop a push that
+raced a navigate. `OnMount` is the route's hook
 chain. Any request data the view needs is supplied as bindings by the
 transport layer (e.g. via `arizona_middleware:extract/1` middlewares); the live
 process is transport-agnostic and never sees a request.
@@ -724,7 +726,7 @@ handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} 
             {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
                 H, B1, Resets, Effects, State
             ),
-            push(TPid, Ops1, Effects1),
+            push(TPid, root_view_id(State), Ops1, Effects1),
             {noreply, NewState#state{
                 bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
             }}
@@ -739,7 +741,7 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
             {Ops1, V1, Fps1, Effects1} = process_child_change(
                 H, B1, Resets, Effects, ViewId, View, State
             ),
-            push(TPid, Ops1, Effects1),
+            push(TPid, root_view_id(State), Ops1, Effects1),
             {noreply, State#state{views = V1, sent_fps = Fps1}}
     end.
 
@@ -756,13 +758,13 @@ handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = T
             %% auto-reconnects (vs `normal` which closes 1000 and stays
             %% disconnected). `terminate/2` still runs `unmount/1` as for
             %% any other graceful exit.
-            push(TPid, [], Effects),
+            push(TPid, root_view_id(State), [], Effects),
             {stop, {shutdown, drain}, State#state{bindings = B1}};
         {B1, Resets, Effects} ->
             {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
                 H, B1, Resets, Effects, State
             ),
-            push(TPid, Ops1, Effects1),
+            push(TPid, root_view_id(State), Ops1, Effects1),
             {noreply, NewState#state{
                 bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
             }}
@@ -918,13 +920,20 @@ key_changed(K, V, OldBindings) ->
         #{} -> true
     end.
 
-push(undefined, _Ops, _Effects) ->
+%% A push names the root view that owns it (the page's id at emit time), so a
+%% transport can drop a push that raced a navigate -- processed after the
+%% navigate it would otherwise be tagged with the NEW page's id and deliver
+%% stale ops into the fresh view.
+push(undefined, _ViewId, _Ops, _Effects) ->
     ok;
-push(_Pid, [], []) ->
+push(_Pid, _ViewId, [], []) ->
     ok;
-push(Pid, Ops, Effects) ->
-    Pid ! {arizona_push, Ops, Effects},
+push(Pid, ViewId, Ops, Effects) ->
+    Pid ! {arizona_push, ViewId, Ops, Effects},
     ok.
+
+root_view_id(#state{bindings = Bindings}) ->
+    maps:get(id, Bindings).
 
 -doc false.
 -spec merge_seed_fps(Fps, FpList) -> Fps1 when

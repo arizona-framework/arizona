@@ -92,7 +92,7 @@ handle_frame(_Frame, State) ->
 
 -doc """
 Roadrunner `handle_info/2` callback. Forwards mailbox messages
-(typically `{arizona_push, Ops, Effects}` from the live process) to
+(typically `{arizona_push, ViewId, Ops, Effects}` from the live process) to
 `arizona_socket:handle_info/2`.
 """.
 -spec handle_info(Msg, State) -> Result when
