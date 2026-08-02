@@ -72,9 +72,10 @@ Az dynamic, so it is never re-evaluated and never produces an op.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
-%% Public bare-diff entry point, exercised by the test suites but no longer
-%% called from production (arizona_live uses diff/3 and diff/4).
+%% Public diff entry points, exercised by the test suites but no longer
+%% called from production (arizona_live uses the dep-gated diff/4).
 -ignore_xref([diff/2]).
+-ignore_xref([diff/3]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
