@@ -167,24 +167,26 @@ init(Handler, Bindings, Req, Opts) ->
     safe_init(Handler, Socket, fun() ->
         ConnInfo = #{capabilities => Capabilities, reconnect => Reconnect},
         {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, ConnInfo),
-        case {Reconnect, FpsFollow} of
-            {true, true} ->
-                %% Defer the whole mount+render to the resync flush: the mount
-                %% must not run twice, and no frame can reach the unmounted
-                %% live process -- handle_in flushes before processing any
-                %% frame, and an unmounted process has no subscriptions or
-                %% timers to push from.
-                TRef = erlang:send_after(?RESYNC_TIMEOUT_MS, self(), arizona_resync_timeout),
-                {ok, Socket#socket{pid = Pid, pending_resync = TRef}};
-            {true, false} ->
-                {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
-                Ops = replace_ops(ViewId, PageHTML),
-                {reply, encode(#{?OPS => Ops}), Socket#socket{pid = Pid, view_id = ViewId}};
-            {false, _} ->
-                {ok, ViewId} = arizona_live:mount(Pid),
-                {ok, Socket#socket{pid = Pid, view_id = ViewId}}
-        end
+        init_view(Reconnect, FpsFollow, Pid, Socket)
     end).
+
+%% The three connect shapes, by reconnect and the client's fingerprint-follow
+%% promise.
+%%
+%% A flagged reconnect defers the whole mount+render to the resync flush: the
+%% mount must not run twice, and no frame can reach the unmounted live process
+%% -- handle_in flushes before processing any frame, and an unmounted process
+%% has no subscriptions or timers to push from.
+init_view(true, true, Pid, Socket) ->
+    TRef = erlang:send_after(?RESYNC_TIMEOUT_MS, self(), arizona_resync_timeout),
+    {ok, Socket#socket{pid = Pid, pending_resync = TRef}};
+init_view(true, false, Pid, Socket) ->
+    {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
+    Ops = replace_ops(ViewId, PageHTML),
+    {reply, encode(#{?OPS => Ops}), Socket#socket{pid = Pid, view_id = ViewId}};
+init_view(false, _FpsFollow, Pid, Socket) ->
+    {ok, ViewId} = arizona_live:mount(Pid),
+    {ok, Socket#socket{pid = Pid, view_id = ViewId}}.
 
 -doc """
 Handles an inbound text frame.
