@@ -86,6 +86,9 @@ The live process is linked. Exits map to WebSocket close codes:
     %% frame has no `Set-Cookie` leg, so a flash set by a halting middleware (or an
     %% `arizona_js:navigate`/`patch` `flash` opt) rides the socket to the follow-up
     %% frame, where `take_pending_flash/2` injects it into the resolved request.
+    %% Delivery therefore requires the follow-up target to resolve to a LIVE
+    %% route: a target that degrades to a full-page navigation destroys the
+    %% socket, so the flash is dropped with a warning (`drop_pending_flash/2`).
     pending_flash = #{} :: arizona_req:flash()
 }).
 
@@ -322,13 +325,31 @@ resolve_route(Path, Qs, Req) ->
 %% re-request it over the socket in a loop. Instead of crashing the live session,
 %% tell the client to do a real full-page navigation to the path -- the browser
 %% loads it normally (hitting the actual controller/asset or a 404 page).
-full_navigate(Path, Qs, Socket) ->
+full_navigate(Path, Qs, Socket0) ->
+    Socket = drop_pending_flash(Path, Socket0),
     Url =
         case Qs of
             <<>> -> Path;
             _ -> <<Path/binary, "?", Qs/binary>>
         end,
     encode_reply([], [arizona_js:navigate(Url, #{full => true})], Socket).
+
+%% A flash stashed for a WS-carried navigate can only reach a LIVE destination
+%% (do_navigate/do_patch inject it into the resolved request); a full-page
+%% navigation destroys this socket, and a WebSocket frame has no Set-Cookie leg
+%% for the signed flash cookie, so the flash cannot follow. Warn -- the
+%% app-visible symptom is a silently missing flash -- and clear the stash so it
+%% cannot leak into a later, unrelated navigate.
+drop_pending_flash(_Path, #socket{pending_flash = Flash} = Socket) when map_size(Flash) =:= 0 ->
+    Socket;
+drop_pending_flash(Path, Socket) ->
+    logger:warning(
+        "flash dropped on full-page navigation to ~s: a flash carried over a "
+        "WebSocket navigate needs a live route destination (a WS frame has no "
+        "Set-Cookie leg)",
+        [Path]
+    ),
+    Socket#socket{pending_flash = #{}}.
 
 do_navigate(H, RouteOpts, NewReq0, Socket0) ->
     {NewReq, #socket{pid = Pid, view_id = OldVId} = Socket} =

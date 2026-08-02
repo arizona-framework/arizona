@@ -839,8 +839,10 @@ lives here independent of the server.
 The `#socket{}` record carries `pid, view_id, handler, req, pending_flash` -- the post-mount
 state needed to dispatch events and navigate. `handler` is the current root handler (so a
 `patch` frame can tell same-handler in-place patch from a full navigate), and `pending_flash`
-holds a one-shot flash carried in-process across an SPA navigate/patch. The route adapter is
-recovered from `req` on demand.
+holds a one-shot flash carried in-process across an SPA navigate/patch. Flash over a WS
+navigate requires a live destination: a target that degrades to a full-page navigation
+destroys the socket (and a WS frame has no `Set-Cookie` leg), so the stashed flash is dropped
+with a logged warning. The route adapter is recovered from `req` on demand.
 
 Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply/3` (build
 `#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `close_crash/1` (crash close tuple),
@@ -935,7 +937,9 @@ adapter's behaviour callbacks on first access and cached in the returned request
   `undefined`
 - flash (one-request): `put_flash/3` (set), `flash/1` (read) -- signed messages cleared on read;
   survive a full-page HTTP redirect (signed `az_flash` cookie) and a WebSocket SPA navigate
-  (`arizona_socket` in-process carry, exactly-once, no cookie)
+  (`arizona_socket` in-process carry, exactly-once, no cookie). The WS carry needs a live
+  destination -- a navigate that degrades to a full-page navigation drops the flash with a
+  logged warning
 - session (durable): `put_session/3`, `delete_session/2`, `clear_session/1`, `session/1`,
   `get_session/2,3`, `read_session/1` -- encrypted state; a read does not consume, the response
   re-emits the cookie only on a write

@@ -10,12 +10,14 @@
 -export([push_racing_navigate_dropped/1]).
 -export([queued_push_prepended_to_event_reply/1]).
 -export([queued_push_prepended_to_patch_reply/1]).
+-export([full_navigate_drops_pending_flash/1]).
 
 all() ->
     [
         push_racing_navigate_dropped,
         queued_push_prepended_to_event_reply,
-        queued_push_prepended_to_patch_reply
+        queued_push_prepended_to_patch_reply,
+        full_navigate_drops_pending_flash
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -86,4 +88,49 @@ queued_push_prepended_to_patch_reply(Config) when is_list(Config) ->
     receive
         LeftOver -> error({push_left_in_mailbox, LeftOver})
     after 0 -> ok
+    end.
+
+full_navigate_drops_pending_flash(Config) when is_list(Config) ->
+    %% A flash stashed for a WS-carried navigate needs a LIVE destination:
+    %% do_navigate/do_patch inject it into the resolved request, but a target
+    %% resolving to no live route degrades to a full-page navigation, which
+    %% destroys the socket -- and a WS frame has no Set-Cookie leg, so the
+    %% flash cannot follow. The socket must warn (the app-visible symptom is a
+    %% silently missing flash) and clear the stash so it cannot leak into a
+    %% later, unrelated navigate.
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning, config => #{pid => self()}
+    }),
+    try
+        Req = arizona_req_test_adapter:new(#{routes => #{}}),
+        {ok, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+        %% The handler's navigate effect carries a flash opt; encode_reply
+        %% strips it from the client effect and stashes it on the socket.
+        EventFrame = iolist_to_binary(json:encode([~"crashable", ~"flash_navigate", #{}])),
+        {reply, _EffectFrame, Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+        %% The follow-up navigate resolves to no live route -> full-page nav.
+        NavFrame = iolist_to_binary(
+            json:encode([~"navigate", #{~"path" => ~"/show_flash", ~"qs" => <<>>}])
+        ),
+        {reply, _FullNavFrame, Socket2} = arizona_socket:handle_in(NavFrame, Socket1),
+        receive
+            {arizona_test_log_handler, #{level := warning, msg := {Fmt, Args}}} ->
+                Msg = iolist_to_binary(io_lib:format(Fmt, Args)),
+                ?assertMatch({_, _}, binary:match(Msg, ~"/show_flash"))
+        after 1000 ->
+            error(no_flash_drop_warning)
+        end,
+        %% The stash was cleared: a second unresolvable navigate has nothing
+        %% left to drop, so it does not warn again.
+        NavFrame2 = iolist_to_binary(
+            json:encode([~"navigate", #{~"path" => ~"/elsewhere", ~"qs" => <<>>}])
+        ),
+        {reply, _FullNavFrame2, _Socket3} = arizona_socket:handle_in(NavFrame2, Socket2),
+        receive
+            {arizona_test_log_handler, Unexpected} -> error({unexpected_warning, Unexpected})
+        after 200 -> ok
+        end
+    after
+        ok = logger:remove_handler(HandlerId)
     end.
