@@ -1440,8 +1440,17 @@ compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
     compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend);
 compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend) ->
-    Statics = [[], []],
-    DynASTs = [make_esc_text_dynamic_ast(<<"0">>, ExprAST, Module, line(ExprAST), Backend)],
+    %% A whole-template bare dynamic (`?html(case ...)`, `?html(?get(x))`, a
+    %% root `?stateless`/`?stateful` descriptor) sits inside no element, so no
+    %% content slot would otherwise anchor it: wrap the slot in its own
+    %% text-slot markers, exactly like a content slot inside an element
+    %% (emit_child_dynamic/4) and like a bare dynamic in a root fragment
+    %% (compile_mixed_dynamic/3). Without the anchor, SSR renders no marker
+    %% for the slot, so its diff ops (both branch toggles of a
+    %% conditional-only child) target an az that exists nowhere in the DOM
+    %% and the client drops them.
+    Statics = [[{az_slot, ~"0"}], [Backend:text_slot_close()]],
+    DynASTs = [make_esc_text_dynamic_ast(~"0", ExprAST, Module, line(ExprAST), Backend)],
     {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->

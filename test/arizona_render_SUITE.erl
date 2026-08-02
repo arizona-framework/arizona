@@ -46,6 +46,10 @@
     stateful_inside_stateless_ssr_matches_live/1,
     stateless_descriptor_from_conditional_live/1,
     stateful_descriptor_from_conditional_live/1,
+    conditional_root_child_toggle_on/1,
+    conditional_root_child_toggle_off/1,
+    conditional_root_child_branch_change/1,
+    descriptor_root_nested_anchor/1,
     ssr_stateful_child_rejects_restricted_id/1,
     render_to_iolist_nodiff_multi/1,
     render_to_iolist_nodiff_static/1,
@@ -79,7 +83,8 @@ all() ->
         {group, ssr},
         {group, fingerprint},
         {group, error_page},
-        {group, nodiff}
+        {group, nodiff},
+        {group, root_dynamic_anchor}
     ].
 
 groups() ->
@@ -89,6 +94,12 @@ groups() ->
             zip_text_slot,
             zip_nested_sd,
             zip_nested_element
+        ]},
+        {root_dynamic_anchor, [parallel], [
+            conditional_root_child_toggle_on,
+            conditional_root_child_toggle_off,
+            conditional_root_child_branch_change,
+            descriptor_root_nested_anchor
         ]},
         {render, [parallel], [
             render_text,
@@ -616,6 +627,81 @@ stateful_descriptor_from_conditional_live(Config) when is_list(Config) ->
     %% The stateful child keeps its own view-id boundary and spawns a child view.
     ?assertNotEqual(nomatch, binary:match(SSR, <<"az-view id=\"c1\"">>)),
     ?assert(maps:is_key(<<"c1">>, Views)).
+
+%% =============================================================================
+%% Root-slot anchoring: a template whose WHOLE body is a bare dynamic
+%% =============================================================================
+%% A `?stateless` child whose whole template is a bare conditional (or a root
+%% child descriptor) compiles to a template with no enclosing element. Its root
+%% slot must still be marker-anchored in the compiled statics: without the
+%% anchor, SSR renders no `<!--az:X-->` for the slot, so BOTH branch toggles
+%% emit ops targeting an az that exists nowhere in the DOM -- the client
+%% resolves markers by exact comment match and drops the op, and the banner
+%% neither appears nor disappears. The load-bearing assertion (missed by the
+%% older regression tests) is that the diff op's TARGET exists in the SSR HTML.
+
+%% Hidden -> visible: the wholesale branch op must target a marker SSR anchored.
+conditional_root_child_toggle_on(Config) when is_list(Config) ->
+    T0 = arizona_conditional_root:page(#{notice => none}),
+    SSR0 = iolist_to_binary(arizona_render:render_to_iolist(T0)),
+    {HTML0, Snap0, _V0} = arizona_render:render(T0, #{}),
+    ?assertEqual(SSR0, iolist_to_binary(HTML0)),
+    {Ops, _Snap1} = arizona_diff:diff(
+        arizona_conditional_root:page(#{notice => <<"ALERT">>}), Snap0
+    ),
+    ?assertMatch([[?OP_TEXT, _, #{<<"d">> := [<<"ALERT">>]}]], Ops),
+    [[?OP_TEXT, Az, _Payload]] = Ops,
+    ?assertNotEqual(nomatch, binary:match(SSR0, <<"<!--az:", Az/binary, "-->">>)).
+
+%% Visible -> hidden: the empty-branch op must target that same anchored marker
+%% (the visible-branch SSR carries it too -- only the marker CONTENT differs).
+conditional_root_child_toggle_off(Config) when is_list(Config) ->
+    T0 = arizona_conditional_root:page(#{notice => <<"ALERT">>}),
+    SSR0 = iolist_to_binary(arizona_render:render_to_iolist(T0)),
+    {HTML0, Snap0, _V0} = arizona_render:render(T0, #{}),
+    ?assertEqual(SSR0, iolist_to_binary(HTML0)),
+    ?assertNotEqual(nomatch, binary:match(SSR0, <<"class=\"notice\"">>)),
+    {Ops, _Snap1} = arizona_diff:diff(
+        arizona_conditional_root:page(#{notice => none}), Snap0
+    ),
+    ?assertMatch([[?OP_TEXT, _, <<>>]], Ops),
+    [[?OP_TEXT, Az, <<>>]] = Ops,
+    ?assertNotEqual(nomatch, binary:match(SSR0, <<"<!--az:", Az/binary, "-->">>)).
+
+%% Visible -> other visible: the same-branch fine-grained diff keeps patching
+%% the inner element slot, whose marker SSR always anchored.
+conditional_root_child_branch_change(Config) when is_list(Config) ->
+    T0 = arizona_conditional_root:page(#{notice => <<"ALERT">>}),
+    SSR0 = iolist_to_binary(arizona_render:render_to_iolist(T0)),
+    {_HTML0, Snap0, _V0} = arizona_render:render(T0, #{}),
+    {Ops, _Snap1} = arizona_diff:diff(
+        arizona_conditional_root:page(#{notice => <<"WARNING">>}), Snap0
+    ),
+    ?assertMatch([[?OP_TEXT, _, <<"WARNING">>]], Ops),
+    [[?OP_TEXT, Az, _]] = Ops,
+    ?assertNotEqual(nomatch, binary:match(SSR0, <<"<!--az:", Az/binary, "-->">>)).
+
+%% Two root slots deep: a child whose whole template is another child's
+%% descriptor, whose whole template is a bare conditional. Each root slot gets
+%% its own nested anchor, so the deep toggle op targets a marker SSR rendered.
+descriptor_root_nested_anchor(Config) when is_list(Config) ->
+    T0 = arizona_conditional_root:nested_page(#{hint => none}),
+    SSR0 = iolist_to_binary(arizona_render:render_to_iolist(T0)),
+    {HTML0, Snap0, _V0} = arizona_render:render(T0, #{}),
+    ?assertEqual(SSR0, iolist_to_binary(HTML0)),
+    {Ops, _Snap1} = arizona_diff:diff(
+        arizona_conditional_root:nested_page(#{hint => <<"deep">>}), Snap0
+    ),
+    ?assertMatch([[?OP_TEXT, _, #{<<"d">> := [<<"deep">>]}]], Ops),
+    [[?OP_TEXT, Az, _]] = Ops,
+    ?assertNotEqual(nomatch, binary:match(SSR0, <<"<!--az:", Az/binary, "-->">>)),
+    %% And SSR/live byte equality holds for the visible shape too.
+    TV = arizona_conditional_root:nested_page(#{hint => <<"deep">>}),
+    {HTMLV, _SnapV, _VV} = arizona_render:render(TV, #{}),
+    ?assertEqual(
+        iolist_to_binary(arizona_render:render_to_iolist(TV)),
+        iolist_to_binary(HTMLV)
+    ).
 
 %% Regression: a `?stateful` child whose `mount/1` rewrites the framework-owned
 %% `id` binding must be rejected on the SSR path too, not only on the live path.

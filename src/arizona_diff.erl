@@ -54,7 +54,12 @@ A diffable template can also carry an individual `Az = undefined` dynamic:
 a content slot inside a raw-text element (`script`/`style`/`textarea`/`title`),
 where HTML comment markers would become literal content. Such a slot is
 render-once -- `diff_dynamics/3` and `diff_dynamics_v/5` skip any `undefined`
-Az dynamic, so it is never re-evaluated and never produces an op.
+Az dynamic, so it is never re-evaluated and never produces an op. The
+per-item and child-view walkers (`diff_item_dynamics_v/3`,
+`diff_child_dynamics/3`) skip it the same way; the one place such a change
+IS delivered is a plain-list `?each`, whose wholesale `?OP_TEXT` re-render
+ships raw-text content as plain HTML (so a markerless item slot routes the
+list to that fallback instead of a per-item patch).
 """.
 
 -include("arizona.hrl").
@@ -208,37 +213,38 @@ diff_dynamics_v([], [], [], _Changed, Views) ->
     {[], [], [], Views};
 diff_dynamics_v(
     [_Def | DR],
-    [{undefined, Old} | OR],
+    [{undefined, _} = OldD | OR],
     [ODeps | DepsR],
     Changed,
     Views0
 ) ->
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so skip it -- never re-evaluate, never emit an op.
-    skip_dynamic(undefined, Old, ODeps, DR, OR, DepsR, Changed, Views0);
+    skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
 diff_dynamics_v(
     [_Def | DR],
-    [{Az, #{diff := false} = Old} | OR],
+    [{_Az, #{diff := false}} = OldD | OR],
     [ODeps | DepsR],
     Changed,
     Views0
 ) ->
-    skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0);
-diff_dynamics_v([Def | DR], [{Az, Old} | OR], [ODeps | DepsR], Changed, Views0) ->
+    skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
+diff_dynamics_v([Def | DR], [{Az, Old} = OldD | OR], [ODeps | DepsR], Changed, Views0) ->
     case deps_changed(ODeps, Changed) of
         false ->
-            skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0);
+            skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
         true ->
             diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0)
     end.
 
 %% Skip a dynamic whose deps haven't changed: carry its child views to the
-%% new accumulator and continue with the original Az/Old/Deps.
-skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0) ->
+%% new accumulator and cons the original `{Az, Old}` tuple onto the new
+%% snapshot -- shared with the old one, not rebuilt.
+skip_dynamic({_Az, Old} = OldD, ODeps, DR, OR, DepsR, Changed, Views0) ->
     Views1 = carry_skipped_view(Old, Views0),
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {OpsRest, [{Az, Old} | DRest], [ODeps | DepsRest], Views2}.
+    {OpsRest, [OldD | DRest], [ODeps | DepsRest], Views2}.
 
 %% Re-evaluate a dynamic whose deps have changed. Each-containers take a
 %% special path because their child snapshots need merging; everything else
@@ -412,7 +418,7 @@ diff_stream_pending(Az, Queue, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
     case queue:out(Queue) of
         {empty, _} ->
-            apply_limit(Az, Source, Tmpl, SnapAcc, Views0);
+            apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
         {{value, Op}, Rest} ->
             diff_stream_op(Az, Op, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
@@ -434,7 +440,7 @@ diff_stream_op(Az, {reset, OldItems}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) 
 %% stream record. An unlimited stream keeps every key, so it needs no set. The
 %% stream record is already the post-op state, so this is the *final* window --
 %% skipping an op for a key outside it is safe in both directions, since
-%% `apply_limit/5` back-fills any visible key missing from the snapshot at its
+%% `apply_limit/6` back-fills any visible key missing from the snapshot at its
 %% ordered position, so a key that slides into view later still lands.
 visible_set(#stream{limit = infinity}) ->
     all;
@@ -447,11 +453,21 @@ is_visible(Key, Vis) ->
     is_map_key(Key, Vis).
 
 %% An insert past the limit used to render the item, ship its HTML, and then have
-%% `apply_limit/5` remove it in the same batch -- payload the client mounts and
+%% `apply_limit/6` remove it in the same batch -- payload the client mounts and
 %% immediately destroys, firing a phantom `mounted()`/`destroyed()` pair.
+%%
+%% The `SnapAcc` guard makes a REPLAYED insert a no-op: the stream API refuses
+%% duplicate-key inserts, so a queued insert whose key the client DOM already
+%% holds can only be the re-drain of a pending queue that was never cleared --
+%% a `#stream{}` nested inside another value (a field of a parent stream's
+%% item) is out of `clear_stream_pending`'s reach, so every re-eval of the
+%% enclosing slot re-drains it. Skipping the replay (delete/update/move/
+%% reorder/reset replays are already no-ops against the post-drain SnapAcc)
+%% makes the whole re-drain idempotent instead of emitting duplicate
+%% OP_INSERTs (duplicate DOM nodes under one az-key).
 stream_insert(Az, Key, Item, Pos, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {_Source, Vis} = SV,
-    case is_visible(Key, Vis) of
+    case is_visible(Key, Vis) andalso not is_map_key(Key, SnapAcc) of
         true ->
             {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, ItemD),
@@ -495,7 +511,9 @@ stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, View
     end.
 
 stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    %% A changed markerless slot is ignored: a stream item's raw-text content is
+    %% render-once (no marker, no per-item re-render op that preserves siblings).
+    {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
     case InnerOps of
         [] ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views1);
@@ -507,13 +525,20 @@ stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, V
             {[PatchOp | RestOps], FinalSnap, Views2}
     end.
 
-%% Same window guard as `stream_insert/10`: an update whose key the client's DOM
-%% doesn't hold becomes an insert, so it is only worth rendering when the key ends
-%% up visible.
+%% An update whose key the client's DOM (`SnapAcc`) doesn't hold has nothing to
+%% patch. On an UNLIMITED stream that key can only be this frame's upsert of a
+%% brand-new key, which appended to `order` -- so render it as a tail insert
+%% (`-1`), the one rendering path an infinity stream has (its `apply_limit/6`
+%% clause does no back-fill). On a LIMITED stream the key is (or was)
+%% limit-hidden: leave it entirely to `apply_limit/6`, whose left-to-right
+%% back-fill renders the item's CURRENT source state at its exact window index,
+%% or keeps it out when it is not in the final window. Inserting here at -1 put
+%% a newly-visible mid-window key at the tail and, being in `SnapAcc`, made the
+%% back-fill skip it -- permanently diverging the client's order from the
+%% server's (e.g. a hidden key moved to the front and updated in one frame).
 stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {_Source, Vis} = SV,
-    case is_visible(Key, Vis) of
-        true ->
+    case SV of
+        {#stream{limit = infinity}, _Vis} ->
             {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, NewD),
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
@@ -521,21 +546,41 @@ stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views
             {RestOps, FinalSnap, Views2} =
                 diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views1),
             {[InsOp | RestOps], FinalSnap, Views2};
-        false ->
+        {#stream{}, _Vis} ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
 stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
         #{Key := _} ->
-            Ref = move_after_ref(AfterKey),
-            MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref],
-            {RestOps, FinalSnap, Views1} =
-                diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0),
-            {[MoveOp | RestOps], FinalSnap, Views1};
+            case after_ref_in_dom(AfterKey, SnapAcc) of
+                true ->
+                    Ref = move_after_ref(AfterKey),
+                    MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref],
+                    {RestOps, FinalSnap, Views1} =
+                        diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0),
+                    {[MoveOp | RestOps], FinalSnap, Views1};
+                false ->
+                    %% The after-reference is a limit-hidden key the client DOM
+                    %% doesn't hold; a MOVE with a missing ref makes the client's
+                    %% moveItemEl fall back to appending, scrambling surviving
+                    %% order. Remove the item instead and let `apply_limit/6`'s
+                    %% left-to-right back-fill re-insert it at its exact final
+                    %% window index (or keep it out when it moved past the
+                    %% window). Only reachable on a limited stream -- an
+                    %% unlimited stream's SnapAcc holds every live key.
+                    RemOp = [?OP_REMOVE, Az, arizona_template:to_bin(Key)],
+                    NewSnapAcc = maps:remove(Key, SnapAcc),
+                    {RestOps, FinalSnap, Views1} =
+                        diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views0),
+                    {[RemOp | RestOps], FinalSnap, Views1}
+            end;
         #{} ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
+
+after_ref_in_dom(null, _SnapAcc) -> true;
+after_ref_in_dom(AfterKey, SnapAcc) -> is_map_key(AfterKey, SnapAcc).
 
 move_after_ref(null) -> null;
 move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
@@ -543,7 +588,7 @@ move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
 stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc),
+    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc),
     {RestOps, FinalSnap, Views1} =
         diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, VKeys, Views0),
     {MoveOps ++ RestOps, FinalSnap, Views1}.
@@ -559,7 +604,7 @@ stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
         smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept),
+    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps),
     {RestOps, FinalSnap, Views2} =
         diff_stream_pending(Az, Rest, SV, Tmpl, NewSnaps, VKeys, Views1),
     {RemOps ++ DiffOps ++ MoveOps ++ RestOps, FinalSnap, Views2}.
@@ -591,10 +636,15 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
     %% re-mounted by a full re-render -- the existing unsupported case, preserved;
     %% detected by the child-view accumulator growing across the render).
     %% Otherwise the wholesale marker re-render is the only correct patch.
+    %% A markerless (raw-text content, `Az = undefined`) slot in the item
+    %% template is additionally not per-item patchable: it has no op target, so
+    %% a positional patch would silently drop (or dangle) its changes. The
+    %% wholesale re-render delivers raw-text content correctly as plain HTML.
     Patchable =
         is_list(OldItemsList) andalso
             is_single_root(Tmpl) andalso
-            map_size(NewLocal1) =:= map_size(NewLocal0),
+            map_size(NewLocal1) =:= map_size(NewLocal0) andalso
+            not has_markerless_slot(NewItemsList),
     case Patchable of
         true ->
             {SubOps, Views2} =
@@ -611,6 +661,20 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
 
 is_single_root(#{single_root := true}) -> true;
 is_single_root(#{}) -> false.
+
+%% Every item shares one template, so probing the first rendered item's
+%% dynamics for an `undefined` Az suffices. An empty list has no dynamics to
+%% patch, so it stays patchable (tail inserts/removes only).
+has_markerless_slot([ItemD | _]) ->
+    lists:any(
+        fun
+            ({undefined, _, _}) -> true;
+            ({_, _, _}) -> false
+        end,
+        ItemD
+    );
+has_markerless_slot([]) ->
+    false.
 
 %% Wholesale fallback: a non-single-root (multi-root/fragment) item, a list
 %% bearing per-item child views, or a slot that previously held a non-list.
@@ -634,9 +698,11 @@ diff_list_full(Az, Tmpl, NewItemsList, _OldItemsList, NewSnap, Views0) ->
 %% walk but emits no ops, just whether any item changed (an inner diff =/= [] or
 %% a length difference), threading child views through.
 list_changed([NewD | NR], [OldD | OR], Views0) ->
-    {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    %% A changed markerless slot emits no inner op but IS a change: the
+    %% wholesale re-render is exactly what delivers it.
+    {InnerOps, Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
     {RestChanged, Views2} = list_changed(NR, OR, Views1),
-    {InnerOps =/= [] orelse RestChanged, Views2};
+    {InnerOps =/= [] orelse Markerless orelse RestChanged, Views2};
 list_changed([], [], Views) ->
     {false, Views};
 list_changed(_NewTail, _OldTail, Views) ->
@@ -665,7 +731,9 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% exactly) and minimal in childList churn; identity across reorders is the keyed
 %% `arizona_stream`'s job, not a plain list's.
 diff_list_positional(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
-    {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    %% Markerless slots never reach this walk: `diff_each_items/6` routes any
+    %% template carrying one to the wholesale fallback.
+    {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
     {RestOps, Views2} = diff_list_positional(Tmpl, NR, OR, Idx + 1, Views1),
     case InnerOps of
         [] -> {RestOps, Views2};
@@ -687,7 +755,8 @@ smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
             {NewD, Views1} =
                 render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0),
             NewSnaps = Snaps#{K => NewD},
-            {InnerOps, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
+            %% Render-once markerless slots: same rule as stream_update_existing.
+            {InnerOps, _Markerless, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
             case InnerOps of
                 [] ->
                     smart_reset_items(
@@ -731,6 +800,7 @@ apply_limit(
     #stream{limit = infinity, order = Order},
     Tmpl,
     SnapItems,
+    _OldOrder,
     Views
 ) ->
     %% Flush the {Front, BackRev} buffer to a flat list -- the snapshot's
@@ -743,6 +813,7 @@ apply_limit(
     #stream{limit = Limit, items = ItemsMap, order = Order},
     Tmpl,
     SnapItems,
+    OldOrder,
     Views0
 ) ->
     %% `halt` and `drop` reconcile the visible window identically here: remove the
@@ -753,14 +824,39 @@ apply_limit(
     %% freed slot (previously halt never inserted it) and a sort bring a hidden
     %% item into view at the right spot (previously appended at the end).
     VKeys = arizona_template:visible_keys(Order, Limit),
-    VSet = maps:from_keys(VKeys, true),
-    RemOps = [
-        [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <- SnapItems, not is_map_key(K, VSet)
-    ],
-    Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
-    {InsOps, Final, Views1} = snap_add_missing(Az, VKeys, Pruned, ItemsMap, Tmpl, Views0),
-    {RemOps ++ InsOps, #{t => ?EACH, items => Final, order => VKeys, template => Tmpl}, Views1}.
+    case window_unchanged(VKeys, OldOrder, SnapItems, 0) of
+        true ->
+            %% Fast path -- the frame didn't touch window membership or order
+            %% (e.g. a single visible-item content update): nothing fell out,
+            %% nothing to back-fill, so skip the VSet/RemOps/Pruned passes and
+            %% their map allocations entirely.
+            {[], #{t => ?EACH, items => SnapItems, order => VKeys, template => Tmpl}, Views0};
+        false ->
+            VSet = maps:from_keys(VKeys, true),
+            RemOps = [
+                [?OP_REMOVE, Az, arizona_template:to_bin(K)]
+             || K := _ <- SnapItems, not is_map_key(K, VSet)
+            ],
+            Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
+            {InsOps, Final, Views1} =
+                snap_add_missing(Az, VKeys, Pruned, ItemsMap, Tmpl, Views0),
+            {
+                RemOps ++ InsOps,
+                #{t => ?EACH, items => Final, order => VKeys, template => Tmpl},
+                Views1
+            }
+    end.
+
+%% Allocation-light equality for the fast path: the new visible window must
+%% equal the pre-frame window (`OldOrder`) element-wise, every window key must
+%% be in the client-DOM snapshot, and the snapshot must hold EXACTLY those
+%% keys (the size check catches keys the drain added or should prune).
+window_unchanged([K | VR], [K | OR], SnapItems, N) when is_map_key(K, SnapItems) ->
+    window_unchanged(VR, OR, SnapItems, N + 1);
+window_unchanged([], [], SnapItems, N) ->
+    map_size(SnapItems) =:= N;
+window_unchanged(_VKeys, _OldOrder, _SnapItems, _N) ->
+    false.
 
 snap_add_missing(Az, VKeys, Snaps, ItemsMap, Tmpl, Views) ->
     snap_add_missing(Az, VKeys, 0, Snaps, ItemsMap, Tmpl, Views).
@@ -861,9 +957,15 @@ lis_backtrack(Idx, Parent, Acc) ->
         end,
     lis_backtrack(Next, Parent, Acc#{Idx => true}).
 
-compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept) ->
+%% `Kept` is the LIS base (keys the client held BEFORE this reconciliation --
+%% their old positions anchor the stable subsequence). `Present` is what the
+%% client DOM holds when the emitted moves apply: for a plain reorder the same
+%% as `Kept` (hidden keys are back-filled only later, by `apply_limit/6`); for
+%% a reset it also includes the keys `smart_reset_items/8` just inserted, whose
+%% tail (-1) inserts precede these moves on the wire.
+compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present) ->
     [];
-compute_reorder_ops(Az, OldOrder, NewOrder, Kept) ->
+compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present) ->
     KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],
     case KeptOld of
         [] ->
@@ -871,18 +973,29 @@ compute_reorder_ops(Az, OldOrder, NewOrder, Kept) ->
         _ ->
             OldPosMap = pos_map(KeptOld, 1),
             LISSet = lis_indices(NewOrder, OldPosMap),
-            emit_move_ops(Az, LISSet, NewOrder, 1, null)
+            emit_move_ops(Az, LISSet, NewOrder, 1, null, Present)
     end.
 
 pos_map([], _I) -> #{};
 pos_map([K | Rest], I) -> (pos_map(Rest, I + 1))#{K => I}.
 
-emit_move_ops(_Az, _LIS, [], _I, _Prev) ->
+%% Walk NewOrder left-to-right: LIS keys stay put, other PRESENT keys move to
+%% sit after the last present key placed (`Prev`). A key absent from `Present`
+%% (limit-hidden, back-filled later at its exact index) is skipped entirely:
+%% it neither gets a MOVE (the client has no node for it) nor becomes a ref --
+%% a MOVE whose ref is missing makes the client's moveItemEl fall back to
+%% appending, scrambling the surviving order. Skipping is sound because by the
+%% time a present key is placed, every present key to its left in NewOrder has
+%% already settled, so "after the last present key placed" IS its position
+%% among present keys; the back-fill then interleaves the hidden ones.
+emit_move_ops(_Az, _LIS, [], _I, _Prev, _Present) ->
     [];
-emit_move_ops(Az, LIS, [Key | Rest], I, Prev) ->
+emit_move_ops(Az, LIS, [Key | Rest], I, Prev, Present) ->
     case LIS of
         #{I := _} ->
-            emit_move_ops(Az, LIS, Rest, I + 1, Key);
+            emit_move_ops(Az, LIS, Rest, I + 1, Key, Present);
+        #{} when not is_map_key(Key, Present) ->
+            emit_move_ops(Az, LIS, Rest, I + 1, Prev, Present);
         #{} ->
             Ref =
                 case Prev of
@@ -891,7 +1004,7 @@ emit_move_ops(Az, LIS, [Key | Rest], I, Prev) ->
                 end,
             [
                 [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref]
-                | emit_move_ops(Az, LIS, Rest, I + 1, Key)
+                | emit_move_ops(Az, LIS, Rest, I + 1, Key, Present)
             ]
     end.
 
@@ -989,33 +1102,49 @@ make_ops(_Az, #{s := S, d := NewD} = New, #{s := S, d := OldD}, Tail) when
     not is_map_key(view_id, New)
 ->
     diff_dynamics(NewD, OldD, Tail);
+make_ops(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}, Tail) ->
+    %% Child view: diff its inner dynamics like make_op/3's child clause, but
+    %% suppress the wrapper when no inner op survives (e.g. only a markerless
+    %% raw-text slot changed) -- an empty `[VId, []]` op is wire noise.
+    case diff_child_dynamics(NewD, OldD) of
+        [] -> Tail;
+        ChildOps -> [[VId, ChildOps] | Tail]
+    end;
 make_ops(Az, New, Old, Tail) ->
     [make_op(Az, New, Old) | Tail].
 
+%% Walks an item's dynamics, returning `{Ops, Markerless, Views}`. `Markerless`
+%% is true when a markerless slot (raw-text element content, `Az = undefined`)
+%% changed value: such a slot has no op target, so no op is ever emitted for it
+%% (mirroring `diff_dynamics/3`), but a plain-list container uses the flag to
+%% fall back to the wholesale re-render that CAN deliver the change (see
+%% `diff_each_items/6` / `list_changed/3`). Stream items and reset keeps ignore
+%% it -- their markerless slots are render-once, like a root-level raw-text slot.
 diff_item_dynamics_v([], [], Views) ->
-    {[], Views};
+    {[], false, Views};
 diff_item_dynamics_v([{Az, _, _} | NR], [{Az, #{diff := false}, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{Az, Same, _} | NR], [{Az, Same, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
+diff_item_dynamics_v([{undefined, _New, _} | NR], [{undefined, _Old, _} | OR], Views0) ->
+    %% Markerless render-once slot whose value changed (equal pairs matched
+    %% above): never emit an op -- there is no comment marker to target.
+    {Ops, _Markerless, Views1} = diff_item_dynamics_v(NR, OR, Views0),
+    {Ops, true, Views1};
 diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
     case {New, Old} of
-        {#{t := ?EACH, source := Src, template := Tmpl}, #{t := ?EACH}} ->
+        {#{t := ?EACH, source := #stream{} = Src, template := Tmpl}, #{t := ?EACH}} ->
+            %% Only a STREAM each snapshot carries `source` (build_each_snap /
+            %% diff_stream's first-render clause): list- and map-source eaches
+            %% evaluate to snapshots without it, so they fall to the make_ops
+            %% clause below and re-render wholesale via the ?OP_TEXT each clause.
             EachDesc = #{source => Src, template => Tmpl},
-            {EachOps, _NewSnap, Views1} =
-                case Src of
-                    #stream{} ->
-                        diff_stream(Az, EachDesc, Old, Views0);
-                    _ when is_list(Src) ->
-                        diff_list(Az, EachDesc, Old, Views0);
-                    _ when is_map(Src) ->
-                        diff_map(Az, EachDesc, Old, Views0)
-                end,
-            {RestOps, Views2} = diff_item_dynamics_v(NR, OR, Views1),
-            {EachOps ++ RestOps, Views2};
+            {EachOps, _NewSnap, Views1} = diff_stream(Az, EachDesc, Old, Views0),
+            {RestOps, Markerless, Views2} = diff_item_dynamics_v(NR, OR, Views1),
+            {EachOps ++ RestOps, Markerless, Views2};
         _ ->
-            {RestOps, Views1} = diff_item_dynamics_v(NR, OR, Views0),
-            {make_ops(Az, New, Old, RestOps), Views1}
+            {RestOps, Markerless, Views1} = diff_item_dynamics_v(NR, OR, Views0),
+            {make_ops(Az, New, Old, RestOps), Markerless, Views1}
     end.
 
 diff_child_dynamics(NewD, OldD) ->
@@ -1023,6 +1152,10 @@ diff_child_dynamics(NewD, OldD) ->
 
 diff_child_dynamics([], [], Tail) ->
     Tail;
+diff_child_dynamics([{undefined, _} | NR], [{undefined, _} | OR], Tail) ->
+    %% Markerless render-once slot (raw-text element content): no comment
+    %% marker to target, so never emit an op -- mirrors diff_dynamics/3.
+    diff_child_dynamics(NR, OR, Tail);
 diff_child_dynamics([{Az, _New} | NR], [{Az, #{diff := false}} | OR], Tail) ->
     diff_child_dynamics(NR, OR, Tail);
 diff_child_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail) ->
