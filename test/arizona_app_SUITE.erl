@@ -217,15 +217,8 @@ server_opts() ->
         routes => [{asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}]
     }.
 
-%% A free OS-assigned port: bind an ephemeral port (0), read it back, release
-%% it. The old `4040 + counter` scheme was deterministic across VM restarts --
-%% the first call of each fresh VM landed on 4041 -- so it intermittently hit
-%% eaddrinuse against a prior CT run's listener still in TIME_WAIT.
 pick_port() ->
-    {ok, Sock} = gen_tcp:listen(0, []),
-    {ok, Port} = inet:port(Sock),
-    ok = gen_tcp:close(Sock),
-    Port.
+    arizona_test_port:pick().
 
 unset_env(Key) ->
     application:unset_env(arizona, Key).

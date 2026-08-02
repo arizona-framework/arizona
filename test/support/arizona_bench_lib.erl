@@ -499,7 +499,7 @@ hammer a single keep-alive connection past roadrunner's default of 1000.
     Result :: term().
 with_roadrunner(Name, Routes, Fun) ->
     {ok, _} = application:ensure_all_started(roadrunner),
-    Port = 24040 + erlang:unique_integer([positive, monotonic]) rem 1000,
+    Port = arizona_test_port:pick(),
     {ok, _} = arizona_roadrunner_server:start(Name, #{
         transport_opts => [{port, Port}],
         proto_opts => #{max_keep_alive_requests => 100_000_000},

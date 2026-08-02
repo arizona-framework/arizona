@@ -26,8 +26,9 @@ init_per_suite(Config) ->
         _ ->
             {ok, _} = application:ensure_all_started(arizona),
             {ok, _} = application:ensure_all_started(roadrunner),
-            %% 15050+ is well clear of the WHATWG "bad ports" the SDK refuses.
-            Port = 15050 + erlang:unique_integer([positive, monotonic]) rem 1000,
+            %% An OS-assigned free port -- `arizona_test_port:pick/0` also keeps
+            %% it clear of the WHATWG "bad ports" the SDK refuses to connect to.
+            Port = arizona_test_port:pick(),
             %% page_size 2 forces multi-page lists, so the SDK driver exercises
             %% the cursor protocol end-to-end.
             Routes = [
