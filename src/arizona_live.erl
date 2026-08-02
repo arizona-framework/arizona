@@ -886,7 +886,7 @@ prune_fired_timers(ViewId) ->
         undefined ->
             ok;
         #{ViewId := Refs} = Timers ->
-            case [Ref || Ref <- Refs, erlang:read_timer(Ref) =/= false] of
+            case [Ref || Ref <- Refs, is_integer(erlang:read_timer(Ref))] of
                 [] -> _ = erlang:put('$arizona_timers', maps:remove(ViewId, Timers));
                 Live -> _ = erlang:put('$arizona_timers', Timers#{ViewId => Live})
             end,
