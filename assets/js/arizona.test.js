@@ -4557,6 +4557,45 @@ describe('navigation scroll', () => {
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
     });
 
+    it('cross-page popstate while disconnected falls back to a full page load', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        history.replaceState(null, '', '/cur');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateClose();
+
+        // The browser already changed the URL on Back; returning silently would
+        // desync URL and content and leave the reconnect URL stale.
+        const reload = vi.fn();
+        vi.stubGlobal('location', { pathname: '/other', search: '', hash: '', reload });
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        vi.unstubAllGlobals();
+
+        expect(reload).toHaveBeenCalledOnce();
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
+    it('fragment-only popstate while disconnected scrolls without reloading', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        history.replaceState(null, '', '/cur');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateClose();
+
+        const reload = vi.fn();
+        vi.stubGlobal('location', { pathname: '/cur', search: '', hash: '', reload });
+        window.dispatchEvent(
+            new PopStateEvent('popstate', { state: { _azScroll: { x: 0, y: 70 } } }),
+        );
+        vi.unstubAllGlobals();
+
+        // A same-page fragment change needs no server -- restore scroll locally.
+        expect(reload).not.toHaveBeenCalled();
+        expect(scrollSpy).toHaveBeenCalledWith(0, 70);
+    });
+
     it('same-path hash nav saves outgoing scroll so Back can restore it', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');

@@ -2330,7 +2330,6 @@ function connect(endpoint, params = {}) {
     window.addEventListener(
         'popstate',
         (e) => {
-            if (!_connected) return;
             const path = location.pathname;
             const qs = location.search ? location.search.slice(1) : '';
             const hash = location.hash ? location.hash.slice(1) : '';
@@ -2339,8 +2338,20 @@ function connect(endpoint, params = {}) {
             // jump fires popstate in some browsers, but it needs no server
             // round-trip -- just scroll. Mirrors the click handler's same-page
             // fast path so in-page anchors don't trigger a full OP_REPLACE.
+            // Needs no connection either, so it runs even while disconnected.
             if (path === _currentPath && qs === _currentQs) {
                 applyScroll({ kind: 'pop', hash, saved });
+                return;
+            }
+            // A cross-page popstate cannot be served over a down WebSocket, and
+            // the browser has already changed the URL -- returning would desync
+            // URL and content and leave the reconnect URL stale (a reconnect
+            // would resync to the pre-back path, and a later Forward would look
+            // fragment-only). Degrade to a full load of the URL the browser now
+            // shows, like a disconnected az-navigate click falls through to the
+            // browser.
+            if (!_connected) {
+                location.reload();
                 return;
             }
             // Replay the same mode the edge was navigated with (tagged `_azNav`),
