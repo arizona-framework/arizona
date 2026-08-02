@@ -21,6 +21,7 @@
 -export([default_paint_title_bell_and_unknown/1]).
 -export([default_paint_sanitizes_title/1]).
 -export([terminal_escape_sanitizes/1]).
+-export([terminal_escape_clean_value_identity/1]).
 
 %% arizona_terminal_io:keys/1 decodes raw terminal reads into idiomatic keys;
 %% arizona_terminal_default_driver turns those into events (quitting on Ctrl-D),
@@ -46,7 +47,8 @@ all() ->
         default_paint_quit_stops,
         default_paint_title_bell_and_unknown,
         default_paint_sanitizes_title,
-        terminal_escape_sanitizes
+        terminal_escape_sanitizes,
+        terminal_escape_clean_value_identity
     ].
 
 printable_to_char_code(Config) when is_list(Config) ->
@@ -216,6 +218,21 @@ terminal_escape_sanitizes(Config) when is_list(Config) ->
     ?assertEqual(~"line1\nline2\tcol", arizona_terminal:escape(~"line1\nline2\tcol")),
     ?assertEqual(<<"café"/utf8>>, arizona_terminal:escape(<<"café"/utf8>>)),
     ?assertEqual(~"", arizona_terminal:escape(<<7, 27, 127>>)).
+
+%% arizona_terminal:escape/1 has a clean-value fast path (mirroring
+%% arizona_html:escape/1): a value with no stripped byte is returned unchanged,
+%% no accumulator, no copy. Term sharing is not observable through =:=, so only
+%% equality is asserted; the dirty case pins the scan's mid-binary hand-off
+%% (clean prefix preserved, control dropped, suffix still processed).
+terminal_escape_clean_value_identity(Config) when is_list(Config) ->
+    Clean = ~"plain ASCII value 123 +-*/",
+    ?assertEqual(Clean, arizona_terminal:escape(Clean)),
+    Kept = ~"line1\nline2\tcol",
+    ?assertEqual(Kept, arizona_terminal:escape(Kept)),
+    Utf8 = <<"café ↑ ✓"/utf8>>,
+    ?assertEqual(Utf8, arizona_terminal:escape(Utf8)),
+    ?assertEqual(<<>>, arizona_terminal:escape(<<>>)),
+    ?assertEqual(~"prefix-suffix\n", arizona_terminal:escape(<<"prefix", 27, "-suffix\n", 7>>)).
 
 %% --------------------------------------------------------------------
 %% Helpers
