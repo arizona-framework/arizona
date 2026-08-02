@@ -18,6 +18,8 @@
 -export([null_origin_forbidden/1]).
 -export([allowlisted_origin_passes/1]).
 -export([allowlisted_origin_case_insensitive/1]).
+-export([allowlist_follows_env_change/1]).
+-export([allowlist_resolves_env_reference/1]).
 -export([disabled_allows_any_origin/1]).
 
 all() ->
@@ -39,6 +41,8 @@ groups() ->
             null_origin_forbidden,
             allowlisted_origin_passes,
             allowlisted_origin_case_insensitive,
+            allowlist_follows_env_change,
+            allowlist_resolves_env_reference,
             disabled_allows_any_origin
         ]}
     ].
@@ -115,6 +119,42 @@ allowlisted_origin_case_insensitive(Config) when is_list(Config) ->
         ?assertEqual(ok, arizona_origin:check(~"https://trusted.example", ~"app.example", https))
     after
         application:unset_env(arizona, csrf_origins)
+    end.
+
+allowlist_follows_env_change(Config) when is_list(Config) ->
+    %% The lowercased allowlist is cached (keyed by the raw app-env value), so
+    %% repeated checks must not go stale: a changed `csrf_origins` app env takes
+    %% effect on the next request, both granting a newly listed origin and
+    %% revoking a delisted one.
+    application:set_env(arizona, csrf_origins, [~"https://a.example"]),
+    try
+        ?assertEqual(ok, arizona_origin:check(~"https://a.example", ~"app.example", https)),
+        ?assertEqual(
+            forbidden, arizona_origin:check(~"https://b.example", ~"app.example", https)
+        ),
+        application:set_env(arizona, csrf_origins, [~"https://b.example"]),
+        ?assertEqual(ok, arizona_origin:check(~"https://b.example", ~"app.example", https)),
+        ?assertEqual(
+            forbidden, arizona_origin:check(~"https://a.example", ~"app.example", https)
+        )
+    after
+        application:unset_env(arizona, csrf_origins)
+    end.
+
+allowlist_resolves_env_reference(Config) when is_list(Config) ->
+    %% A `{env, ...}` reference as the csrf_origins value resolves through the
+    %% cache exactly as the direct read did.
+    Var = "ARIZONA_ORIGIN_SUITE_ALLOWLIST",
+    true = os:putenv(Var, "https://proxy.example"),
+    application:set_env(arizona, csrf_origins, {env, Var, []}),
+    try
+        ?assertEqual(ok, arizona_origin:check(~"https://proxy.example", ~"app.example", https)),
+        ?assertEqual(
+            forbidden, arizona_origin:check(~"https://other.example", ~"app.example", https)
+        )
+    after
+        application:unset_env(arizona, csrf_origins),
+        os:unsetenv(Var)
     end.
 
 disabled_allows_any_origin(Config) when is_list(Config) ->

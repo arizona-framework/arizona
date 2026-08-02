@@ -115,5 +115,23 @@ same_scheme(OriginScheme, https) ->
 %% already lowercase, so an uppercase `csrf_origins` entry is an operator typo that
 %% should still match its lowercased origin, not silently 403.
 allowlisted(Origin) ->
-    Lower = string:lowercase(Origin),
-    lists:member(Lower, [string:lowercase(O) || O <- arizona_config:get_env(csrf_origins, [])]).
+    lists:member(string:lowercase(Origin), allowlist()).
+
+%% The lowercased allowlist, cached in persistent_term keyed by the RAW app-env
+%% value (a cheap read), so the `{env, ...}` resolution and per-entry lowercasing
+%% run once per distinct config value instead of on every request. A changed
+%% `csrf_origins` app env still takes effect (the raw value no longer matches the
+%% cached key); what stays fixed -- `arizona_config`'s resolved-at-startup
+%% semantics, the same staleness stance `warn_disabled/0` takes -- is the resolved
+%% value of an unchanged `{env, ...}` reference whose underlying variable is
+%% mutated at runtime.
+allowlist() ->
+    Raw = application:get_env(arizona, csrf_origins, []),
+    case persistent_term:get({?MODULE, allowlist}, undefined) of
+        {Raw, Lowered} ->
+            Lowered;
+        _Other ->
+            Lowered = [string:lowercase(O) || O <- arizona_config:resolve(Raw)],
+            persistent_term:put({?MODULE, allowlist}, {Raw, Lowered}),
+            Lowered
+    end.
