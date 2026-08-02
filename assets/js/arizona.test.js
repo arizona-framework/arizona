@@ -5222,6 +5222,88 @@ describe('page lifecycle -- bfcache', () => {
 
         mock.restore();
     });
+
+    it('reconnects with the post-SPA-nav path and the reconnect flag on restore', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const originalHref = location.href;
+        history.replaceState(null, '', '/start');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // An SPA navigation moves the path; the worker (which tracked it via
+        // W_UPDATE_PATH) is then killed on pagehide, so the respawned worker
+        // must be handed the CURRENT route, flagged as a reconnect -- the DOM
+        // exists with evolved live state and needs the server's full resync.
+        mod.applyEffects([[10, '/next?tab=2']]);
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+
+        const connects = mock.posted.filter((d) => d[0] === 0);
+        expect(connects.length).toBe(2);
+        const [, url, reconnect] = connects[1];
+        expect(url).toContain('_az_path=%2Fnext');
+        expect(url).toContain('tab=2');
+        expect(url).not.toContain('%2Fstart');
+        expect(reconnect).toBe(true);
+
+        mock.restore();
+        history.replaceState(null, '', originalHref);
+    });
+
+    it('preserves the _az_caps query on the rebuilt bfcache reconnect URL', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        /** @type {any} */ (globalThis).__arizona_os__ = { capabilities: { window: true } };
+        const originalHref = location.href;
+        history.replaceState(null, '', '/start');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        mod.applyEffects([[10, '/next']]);
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+
+        const connects = mock.posted.filter((d) => d[0] === 0);
+        expect(connects[1][1]).toContain(`_az_caps=${encodeURIComponent('{"window":true}')}`);
+
+        mock.restore();
+        delete (/** @type {any} */ (globalThis).__arizona_os__);
+        history.replaceState(null, '', originalHref);
+    });
+
+    it('saves form state on pagehide and restores it after the reconnect resync', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        setupView('page', '<form id="f"><input name="n" /></form>');
+        /** @type {HTMLInputElement} */ (document.querySelector('[name="n"]')).value = 'typed';
+
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+        mock.simulateOpen(true);
+        // The reconnect resync REPLACEs the restored DOM (fresh, empty field);
+        // the first frame after a reconnect then restores the saved fields.
+        mock.simulateMessage(
+            [
+                [
+                    OP.REPLACE,
+                    'page',
+                    '<div id="page" az-view><form id="f"><input name="n" /></form></div>',
+                ],
+            ],
+            null,
+            true,
+        );
+
+        expect(/** @type {HTMLInputElement} */ (document.querySelector('[name="n"]')).value).toBe(
+            'typed',
+        );
+
+        mock.restore();
+    });
 });
 
 // ---------------------------------------------------------------------------

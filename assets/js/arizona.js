@@ -14,9 +14,9 @@
  *   [2, closeCode]                                    -- WS closed
  *
  * Wire protocol (Main -> Worker):
- *   [0, wsUrl]      -- connect
- *   [1, jsonString] -- send data
- *   [2, code]       -- close WS
+ *   [0, wsUrl, isReconnect] -- connect
+ *   [1, jsonString]         -- send data
+ *   [2, code]               -- close WS
  */
 
 /**
@@ -2466,35 +2466,44 @@ function connect(endpoint, params = {}) {
         { signal },
     );
 
-    // Build full WS URL -- Worker can't access location.*
-    // Framework keys are `_az_`-prefixed so they can't collide with user params
-    // or the page's own query string; user-page qs and connect params ride as
-    // regular URL query keys (server reaches them via arizona_req:params/1).
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const pagePath = encodeURIComponent(location.pathname);
-    const pageQs = location.search ? location.search.slice(1) : '';
+    // The WS URL is (re)built at every worker spawn -- the Worker can't access
+    // location.*. Framework keys are `_az_`-prefixed so they can't collide with
+    // user params or the page's own query string; the user-facing qs is the
+    // tracked page qs plus the connect() extras (server reaches them via
+    // arizona_req:params/1). Building from `_currentPath`/`_currentQs` rather
+    // than a connect-time snapshot matters for the bfcache respawn: an SPA
+    // navigation moves the path only inside the worker (W_UPDATE_PATH), the
+    // worker dies on pagehide, and the respawned one must target the route the
+    // restored page actually shows.
     /** @type {Record<string, string>} */
     const stringParams = {};
     for (const k of Object.keys(params)) stringParams[k] = String(params[k]);
-    const extraQs = new URLSearchParams(stringParams).toString();
-    _connectQs = extraQs;
-    const userQs = [pageQs, extraQs].filter(Boolean).join('&');
-    const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
-    // Native-shell capabilities (Electron/Tauri/...) advertised at the WS
-    // handshake so the live process can answer ?capability(...). Absent in a
-    // plain browser (no `__arizona_os__`), so capsQs is empty and nothing
-    // changes. Rides reconnect because the Worker reuses this URL's search.
-    const osCaps = osHost()?.capabilities;
-    const capsQs = osCaps ? `&_az_caps=${encodeURIComponent(JSON.stringify(osCaps))}` : '';
-    const wsUrl = `${protocol}//${location.host}${endpoint}?${qs}${capsQs}`;
+    _connectQs = new URLSearchParams(stringParams).toString();
+    const buildWsUrl = () => {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const pagePath = encodeURIComponent(_currentPath);
+        const userQs = reconnectUserQs(_currentQs);
+        const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
+        // Native-shell capabilities (Electron/Tauri/...) advertised at the WS
+        // handshake so the live process can answer ?capability(...). Absent in a
+        // plain browser (no `__arizona_os__`), so capsQs is empty and nothing
+        // changes. Rides reconnect because the Worker reuses this URL's search.
+        const osCaps = osHost()?.capabilities;
+        const capsQs = osCaps ? `&_az_caps=${encodeURIComponent(JSON.stringify(osCaps))}` : '';
+        return `${protocol}//${location.host}${endpoint}?${qs}${capsQs}`;
+    };
 
     /** @type {Function|null} */
     let _onmessageHook = null;
 
     // Spawn the Worker, wire its message handler, and open the socket. Extracted
     // so a bfcache restore (`pageshow`) can re-establish the connection that
-    // `pagehide` tore down.
-    const spawnWorker = () => {
+    // `pagehide` tore down. `reconnect` flags that spawn: the restored page's
+    // DOM already exists with the live state it had at pagehide, so the worker
+    // must open with `_az_reconnect=1` -- only that makes the server send the
+    // full-page resync (and the first frame restore any saved form state).
+    /** @param {boolean} reconnect */
+    const spawnWorker = (reconnect) => {
         // Worker is co-located with this script. This static
         // `new Worker(new URL(..., import.meta.url), { type: 'module' })` shape is
         // what bundlers (Vite/Rollup/rolldown) statically detect: Arizona's own
@@ -2592,11 +2601,12 @@ function connect(endpoint, params = {}) {
             }
         };
 
-        // Send connect message to Worker
-        workerPost(W_CONNECT, wsUrl);
+        // Send connect message to Worker, rebuilding the URL from the
+        // currently tracked route (see buildWsUrl).
+        workerPost(W_CONNECT, buildWsUrl(), reconnect);
     };
 
-    spawnWorker();
+    spawnWorker(false);
 
     // Let the native shell (if any) inject OS events (window focus/blur, capture
     // state, ...) into the ROOT view's normal event handling. The shell calls
@@ -2639,6 +2649,11 @@ function connect(endpoint, params = {}) {
         'pagehide',
         () => {
             if (_worker) {
+                // Preserve typed form fields first: the pageshow reconnect asks
+                // the server for a full resync, whose OP_REPLACE rebuilds the
+                // DOM bfcache had preserved -- the same save/restore that
+                // covers an abnormal close covers this.
+                saveFormState();
                 _worker.terminate();
                 _worker = null;
                 _connected = false;
@@ -2654,8 +2669,10 @@ function connect(endpoint, params = {}) {
     window.addEventListener(
         'pageshow',
         (e) => {
-            // Only on a real bfcache restore; a normal load already has a worker.
-            if (e.persisted && !_worker) spawnWorker();
+            // Only on a real bfcache restore; a normal load already has a
+            // worker. A restore is semantically a reconnect: the DOM exists
+            // with evolved live state, so the server must resync it.
+            if (e.persisted && !_worker) spawnWorker(true);
         },
         { signal },
     );
