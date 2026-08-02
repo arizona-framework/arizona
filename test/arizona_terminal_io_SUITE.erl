@@ -11,7 +11,9 @@
 -export([tokenises_multiple_keys/1]).
 -export([drops_unknown_input/1]).
 -export([take_incomplete_splits_pending/1]).
+-export([take_incomplete_caps_pending/1]).
 -export([default_driver_buffers_split_escape/1]).
+-export([default_driver_caps_pending_escape/1]).
 -export([driver_quits_on_ctrl_d/1]).
 -export([driver_emits_key_events/1]).
 -export([effect_builders/1]).
@@ -21,6 +23,7 @@
 -export([default_paint_title_bell_and_unknown/1]).
 -export([default_paint_sanitizes_title/1]).
 -export([terminal_escape_sanitizes/1]).
+-export([terminal_escape_clean_value_identity/1]).
 
 %% arizona_terminal_io:keys/1 decodes raw terminal reads into idiomatic keys;
 %% arizona_terminal_default_driver turns those into events (quitting on Ctrl-D),
@@ -37,7 +40,9 @@ all() ->
         tokenises_multiple_keys,
         drops_unknown_input,
         take_incomplete_splits_pending,
+        take_incomplete_caps_pending,
         default_driver_buffers_split_escape,
+        default_driver_caps_pending_escape,
         driver_quits_on_ctrl_d,
         driver_emits_key_events,
         effect_builders,
@@ -46,7 +51,8 @@ all() ->
         default_paint_quit_stops,
         default_paint_title_bell_and_unknown,
         default_paint_sanitizes_title,
-        terminal_escape_sanitizes
+        terminal_escape_sanitizes,
+        terminal_escape_clean_value_identity
     ].
 
 printable_to_char_code(Config) when is_list(Config) ->
@@ -128,6 +134,20 @@ take_incomplete_splits_pending(Config) when is_list(Config) ->
     ?assertEqual({~"abc", <<>>}, arizona_terminal_io:take_incomplete(~"abc")),
     ?assertEqual({<<>>, <<>>}, arizona_terminal_io:take_incomplete(<<>>)).
 
+%% A real key sequence is tiny, so a "CSI" still unfinished past the cap is a
+%% hostile or garbage stream, not a split key. It must not be held (the pending
+%% buffer would grow without bound, rescanned per read at O(N^2) cost) -- past
+%% the cap the suffix is handed back as decodable input, which the decoder
+%% consumes and drops.
+take_incomplete_caps_pending(Config) when is_list(Config) ->
+    %% Below the cap an unfinished CSI is still held.
+    Small = <<"\e[", (binary:copy(~"1", 10))/binary>>,
+    ?assertEqual({<<>>, Small}, arizona_terminal_io:take_incomplete(Small)),
+    %% Past the cap it is not: released whole, and the decoder drops it.
+    Junk = <<"\e[", (binary:copy(~"1", 100))/binary>>,
+    ?assertEqual({Junk, <<>>}, arizona_terminal_io:take_incomplete(Junk)),
+    ?assertEqual([], arizona_terminal_io:keys(Junk)).
+
 %% The default driver buffers an escape sequence split across two reads (a transport
 %% delivers bytes in chunks) rather than mis-decoding it into a spurious key.
 default_driver_buffers_split_escape(Config) when is_list(Config) ->
@@ -138,6 +158,25 @@ default_driver_buffers_split_escape(Config) when is_list(Config) ->
     %% NOT the spurious `$A` a per-read decode would produce.
     {Cmds2, _State2} = arizona_terminal_default_driver:keys(~"A", State1),
     ?assertEqual([{event, ~"key", #{key => up}}], Cmds2).
+
+%% Driving the shared cap through the default driver: an unterminated CSI fed
+%% in chunks never grows the driver's pending buffer past the cap, and later
+%% input still decodes once the junk is flushed.
+default_driver_caps_pending_escape(Config) when is_list(Config) ->
+    {[], State1} = arizona_terminal_default_driver:keys(~"\e[", #{}),
+    Chunk = binary:copy(~"3", 16),
+    StateN = lists:foldl(
+        fun(_N, S) ->
+            {_Cmds, S1} = arizona_terminal_default_driver:keys(Chunk, S),
+            #{pending := Pending} = S1,
+            ?assert(byte_size(Pending) =< 64),
+            S1
+        end,
+        State1,
+        lists:seq(1, 20)
+    ),
+    {Cmds, _StateLast} = arizona_terminal_default_driver:keys(~"\e[A", StateN),
+    ?assertEqual([{event, ~"key", #{key => up}}], Cmds).
 
 driver_quits_on_ctrl_d(Config) when is_list(Config) ->
     %% Ctrl-D (EOF) is the one always-available escape.
@@ -216,6 +255,21 @@ terminal_escape_sanitizes(Config) when is_list(Config) ->
     ?assertEqual(~"line1\nline2\tcol", arizona_terminal:escape(~"line1\nline2\tcol")),
     ?assertEqual(<<"café"/utf8>>, arizona_terminal:escape(<<"café"/utf8>>)),
     ?assertEqual(~"", arizona_terminal:escape(<<7, 27, 127>>)).
+
+%% arizona_terminal:escape/1 has a clean-value fast path (mirroring
+%% arizona_html:escape/1): a value with no stripped byte is returned unchanged,
+%% no accumulator, no copy. Term sharing is not observable through =:=, so only
+%% equality is asserted; the dirty case pins the scan's mid-binary hand-off
+%% (clean prefix preserved, control dropped, suffix still processed).
+terminal_escape_clean_value_identity(Config) when is_list(Config) ->
+    Clean = ~"plain ASCII value 123 +-*/",
+    ?assertEqual(Clean, arizona_terminal:escape(Clean)),
+    Kept = ~"line1\nline2\tcol",
+    ?assertEqual(Kept, arizona_terminal:escape(Kept)),
+    Utf8 = <<"café ↑ ✓"/utf8>>,
+    ?assertEqual(Utf8, arizona_terminal:escape(Utf8)),
+    ?assertEqual(<<>>, arizona_terminal:escape(<<>>)),
+    ?assertEqual(~"prefix-suffix\n", arizona_terminal:escape(<<"prefix", 27, "-suffix\n", 7>>)).
 
 %% --------------------------------------------------------------------
 %% Helpers

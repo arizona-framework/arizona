@@ -50,6 +50,14 @@ the `tools` application and no xref server to start. Dynamic calls (`apply/3`,
 behaviour callbacks resolved at runtime) are invisible to the import table; that
 is fine, the check is best-effort and the static case is the one that bites.
 
+The pass runs synchronously in the watcher on every save, over every loaded
+non-OTP module, so its disk work is kept minimal: each candidate's `imports`
+and `attributes` (vsn) chunks are fetched in **one** `beam_lib` pass, and the
+result is cached across waves keyed by the beam file's path + mtime -- an
+unchanged module costs one `stat` per wave, not repeated full reads. The wave's
+just-reloaded modules are evicted up front (their beams were rewritten, and an
+mtime has whole-second resolution), so their fresh facts are always re-read.
+
 The whole pass is **best-effort**: it runs only on a successful reload (dev
 mode), finds nothing and logs nothing on a clean wave, and never crashes or
 interferes with the reload -- `check/1` wraps everything in a catch-all.
@@ -70,11 +78,10 @@ interferes with the reload -- `check/1` wraps everything in a catch-all.
 %% --------------------------------------------------------------------
 
 %% These are called locally by check/1 and directly by the test suite; xref sees
-%% no external caller, so the exports read as unused.
+%% no external caller, so the exports read as unused. (candidate_modules/0 and
+%% stale_modules/1 need no entry -- arizona_dev_mcp's reloader_status calls them.)
 -ignore_xref([reloaded_modules/1]).
--ignore_xref([candidate_modules/0]).
 -ignore_xref([broken_edges/2]).
--ignore_xref([stale_modules/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -83,6 +90,18 @@ interferes with the reload -- `check/1` wraps everything in a catch-all.
 %% Module names are derived from source filenames via list_to_atom, the same
 %% way the reloader itself does; the set is bounded by the project's sources.
 -elvis([{elvis_style, no_common_caveats_call, disable}]).
+
+-include_lib("kernel/include/file.hrl").
+
+%% --------------------------------------------------------------------
+%% Macros
+%% --------------------------------------------------------------------
+
+%% The cross-wave beam-facts cache: one row per module, keyed by the beam
+%% file's path + mtime. Created lazily by whichever process runs the first
+%% check (the watcher in dev mode) and owned by it -- losing the owner just
+%% drops a cache, rebuilt on the next wave.
+-define(CACHE, arizona_reloader_beam_cache).
 
 %% --------------------------------------------------------------------
 %% Types
@@ -165,7 +184,7 @@ broken_edges(Reloaded, Candidates) ->
     [
         {Caller, {Mod, Fun, Arity}}
      || Caller <- Candidates,
-        {Mod, Fun, Arity} <:- module_imports(Caller),
+        {Mod, Fun, Arity} <:- maps:get(imports, beam_facts(Caller)),
         lists:member(Mod, Reloaded),
         not erlang:function_exported(Mod, Fun, Arity)
     ].
@@ -196,10 +215,18 @@ do_check(Files) ->
         [] ->
             ok;
         Reloaded ->
+            %% The wave just rewrote these beams; drop their cache rows so this
+            %% pass re-reads them even when the rewrite landed within the same
+            %% mtime second as the cached read.
+            ok = evict(Reloaded),
             Candidates = candidate_modules(),
             log_broken_edges(broken_edges(Reloaded, Candidates)),
             log_stale_modules(stale_modules(Candidates))
     end.
+
+evict(Mods) ->
+    ok = ensure_cache(),
+    lists:foreach(fun(Mod) -> true = ets:delete(?CACHE, Mod) end, Mods).
 
 log_broken_edges(Edges) ->
     lists:foreach(fun log_broken_edge/1, Edges).
@@ -223,40 +250,82 @@ log_stale_module({Mod, LoadedVsn, DiskVsn}) ->
         [Mod, LoadedVsn, DiskVsn]
     ).
 
-%% The static external-call table of a module, read from its beam on disk. A
-%% beam can be unreadable (cover-compiled, mid-write, loaded from memory, or a
-%% source-path filename after a manual reload) -- that is genuinely variable
-%% input, so skip the module rather than aborting the whole sweep.
-module_imports(Mod) ->
+%% The disk-derived facts the checks need -- the static external-call table
+%% (the `imports` chunk) and the beam's vsn (from the `attributes` chunk, the
+%% same source `beam_lib:version/1` reads) -- fetched in ONE beam_lib pass and
+%% cached across waves keyed by the beam file's path + mtime, so a wave
+%% re-reads only modules whose beam actually changed (one stat per candidate
+%% instead of two full reads). A beam can be unreadable (cover-compiled,
+%% mid-write, loaded from memory, or a source-path filename after a manual
+%% reload) -- that is genuinely variable input, so the module yields the same
+%% skip values as an absent beam rather than aborting the whole sweep.
+%% Limitation: a rewrite landing within the same mtime second as the cached
+%% read of a module OUTSIDE the reloaded set (which do_check evicts) can serve
+%% stale facts until that beam's next rewrite -- acceptable for a best-effort
+%% advisory pass.
+beam_facts(Mod) ->
     case beam_path(Mod) of
-        {ok, Beam} ->
-            case beam_lib:chunks(Beam, [imports]) of
-                {ok, {Mod, [{imports, Imports}]}} -> Imports;
-                _ -> []
+        {ok, Path} ->
+            case file:read_file_info(Path, [{time, posix}]) of
+                {ok, #file_info{mtime = Mtime}} ->
+                    cached_beam_facts(Mod, Path, Mtime);
+                {error, _Reason} ->
+                    unreadable_facts()
             end;
         error ->
-            []
+            unreadable_facts()
+    end.
+
+cached_beam_facts(Mod, Path, Mtime) ->
+    ok = ensure_cache(),
+    case ets:lookup(?CACHE, Mod) of
+        [{Mod, Path, Mtime, Facts}] ->
+            Facts;
+        _StaleOrMissing ->
+            Facts = read_beam_facts(Mod, Path),
+            true = ets:insert(?CACHE, {Mod, Path, Mtime, Facts}),
+            Facts
+    end.
+
+read_beam_facts(Mod, Path) ->
+    case beam_lib:chunks(Path, [imports, attributes]) of
+        {ok, {Mod, [{imports, Imports}, {attributes, Attrs}]}} ->
+            #{imports => Imports, disk_vsn => attrs_vsn(Attrs)};
+        _Other ->
+            unreadable_facts()
+    end.
+
+unreadable_facts() ->
+    #{imports => [], disk_vsn => unknown}.
+
+ensure_cache() ->
+    case ets:whereis(?CACHE) of
+        undefined ->
+            try
+                _ = ets:new(?CACHE, [named_table, public, {read_concurrency, true}]),
+                ok
+            catch
+                %% Lost the creation race to a concurrent wave; the winner's
+                %% table serves this one.
+                error:badarg -> ok
+            end;
+        _Tid ->
+            ok
     end.
 
 module_vsns(Mod) ->
-    {loaded_vsn(Mod), disk_vsn(Mod)}.
+    {loaded_vsn(Mod), maps:get(disk_vsn, beam_facts(Mod))}.
 
 loaded_vsn(Mod) ->
-    Attrs = Mod:module_info(attributes),
+    attrs_vsn(Mod:module_info(attributes)).
+
+%% The vsn attribute -- present even without an explicit `-vsn`, defaulting to
+%% the module checksum -- read the same way for the loaded and the disk side so
+%% the staleness compare is apples-to-apples.
+attrs_vsn(Attrs) ->
     case lists:keyfind(vsn, 1, Attrs) of
         {vsn, Vsn} -> Vsn;
         false -> unknown
-    end.
-
-disk_vsn(Mod) ->
-    case beam_path(Mod) of
-        {ok, Beam} ->
-            case beam_lib:version(Beam) of
-                {ok, {Mod, Vsn}} -> Vsn;
-                _ -> unknown
-            end;
-        error ->
-            unknown
     end.
 
 %% A readable, non-OTP beam file for Mod, or error when there is none to read.

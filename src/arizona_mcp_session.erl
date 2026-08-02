@@ -148,8 +148,9 @@ dispatch(Pid, Method, Params, Id) ->
 dispatch(Pid, Method, Params, Id, Timeout) ->
     %% Bounded by the route's `request_timeout_ms`: a buffered tool that runs
     %% past it frees the client with a -32603 (the session stays responsive and
-    %% keeps running the call in its worker). A session that ends mid-wait (idle
-    %% reap / DELETE) frees the caller the same way rather than crashing it.
+    %% keeps running the call in its worker). A session that ends mid-wait (a
+    %% DELETE -- a served or queued request holds off the idle reap) frees the
+    %% caller the same way rather than crashing it.
     try
         gen_server:call(Pid, {dispatch, Method, Params, Id}, Timeout)
     catch
@@ -262,6 +263,11 @@ init({SessionId, Session, SessionOpts}) ->
         keepalive_ms := KeepaliveMs,
         route_key := RouteKey
     } = SessionOpts,
+    %% Trap exits so a supervisor shutdown runs terminate/2 (killing the
+    %% in-flight workers, running the app's Mod:terminate/2, dropping the
+    %% registry row) instead of killing the session outright and orphaning its
+    %% workers for the life of the node.
+    false = process_flag(trap_exit, true),
     proc_lib:set_label({arizona_mcp_session, SessionId}),
     ok = arizona_mcp_session_registry:add(SessionId, self(), RouteKey),
     Channels = subscribe_channels(Session),
@@ -351,10 +357,12 @@ handle_cast(
     %% Run the tool in a monitored worker so the session stays free to handle a
     %% cancel. The worker reads a snapshot of `Session`, relays progress + result
     %% to `ConnPid`, and threads no state back (only the buffered queue mutates
-    %% session state). It signals completion so we can drop the tracking.
+    %% session state). It signals completion so we can drop the tracking. Linked
+    %% (exits are trapped) so it dies with the session even on an untrappable
+    %% kill, which skips terminate/2's explicit worker reaping.
     SessionPid = self(),
     Ctx = #{token => Token, to => ConnPid},
-    WorkerPid = spawn(fun() ->
+    WorkerPid = spawn_link(fun() ->
         ok = arizona_mcp_handler:run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid),
         SessionPid ! {streaming_done, Id}
     end),
@@ -437,6 +445,14 @@ handle_info(mcp_keepalive, #state{channel = ChannelPid} = State) ->
     {noreply, arm_keepalive(State)};
 handle_info(session_ttl_expired, State) ->
     {stop, normal, State};
+handle_info({'EXIT', _Pid, _Reason}, State) ->
+    %% A linked worker's exit signal (exits are trapped). Worker outcomes are
+    %% fully handled through their monitors (`'DOWN'` / `dispatch_done` /
+    %% `streaming_done`); the link exists only so workers die with the session
+    %% -- even an untrappable kill, which skips terminate/2. Nothing to do.
+    %% (An exit from the supervisor never lands here: gen_server intercepts the
+    %% parent's exit and runs terminate/2.)
+    {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -447,13 +463,25 @@ terminate(
         id = SessionId,
         session = #{mod := Mod, state := HandlerState},
         streams = Streams,
-        dispatch_active = Active
+        dispatch_active = Active,
+        channel = Channel
     }
 ) ->
     %% Kill any in-flight workers (streaming + the active buffered one) so none
-    %% outlive the session (a blocking tool would otherwise run forever, orphaned).
-    maps:foreach(fun(_Id, {WorkerPid, _MonRef, _ConnPid}) -> exit(WorkerPid, kill) end, Streams),
+    %% outlive the session (a blocking tool would otherwise run forever,
+    %% orphaned), and release the connection loops held on this session: each
+    %% streaming POST loop is told to stop (no result -- its request dies with
+    %% the session), as is the attached GET channel. The loops also monitor the
+    %% session, so a teardown that skips terminate/2 releases them too.
+    maps:foreach(
+        fun(_Id, {WorkerPid, _MonRef, ConnPid}) ->
+            true = exit(WorkerPid, kill),
+            ConnPid ! mcp_cancelled
+        end,
+        Streams
+    ),
     kill_active_dispatch(Active),
+    notify_channel_closed(Channel),
     %% Run the app's optional cleanup hook, then drop the registry row. (pg
     %% auto-removes the session from its subscribed channels on exit.)
     erlang:function_exported(Mod, terminate, 2) andalso Mod:terminate(Reason, HandlerState),
@@ -503,7 +531,9 @@ start_next_dispatch(#state{dispatch_q = Q, session = Session} = State) ->
             State;
         {{value, {From, Id, Method, Params}}, Q1} ->
             SessionPid = self(),
-            WorkerPid = spawn(fun() ->
+            %% Linked like the streaming workers: exits are trapped, and the
+            %% link reaps the worker even when the session is killed untrappably.
+            WorkerPid = spawn_link(fun() ->
                 {Outcome, Session1} = safe_handle_method(Method, Params, Id, Session),
                 SessionPid ! {dispatch_done, self(), Outcome, Session1}
             end),
@@ -558,6 +588,14 @@ kill_active_dispatch({WorkerPid, _MonRef, _From, _Id}) ->
     true = exit(WorkerPid, kill),
     ok;
 kill_active_dispatch(undefined) ->
+    ok.
+
+%% Tell the attached GET channel loop the session is gone, so it stops instead
+%% of hanging open forever (it otherwise stops only on client disconnect).
+notify_channel_closed(undefined) ->
+    ok;
+notify_channel_closed(ChannelPid) ->
+    ChannelPid ! mcp_session_closed,
     ok.
 
 %% Subscribe to the handler's declared pubsub channels (if it exports
@@ -664,10 +702,10 @@ demonitor_channel(Mon) ->
     true = erlang:demonitor(Mon, [flush]),
     ok.
 
-%% A session with a live SSE channel or an in-flight streaming request is kept
-%% alive by it; an otherwise connectionless session counts down to teardown.
-%% Cancel any pending timer, then arm a fresh one only when nothing holds it
-%% (so a streaming tool is never idle-reaped mid-run).
+%% A session with a live SSE channel or an in-flight request is kept alive by
+%% it; an otherwise connectionless session counts down to teardown. Cancel any
+%% pending timer, then arm a fresh one only when nothing holds it (so a tool is
+%% never idle-reaped mid-run).
 refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
     cancel_timer(Old),
     case held_open(State) of
@@ -678,9 +716,15 @@ refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
             State#state{ttl_timer = Ref}
     end.
 
-%% An attached channel or any in-flight streaming worker holds the session open.
-held_open(#state{channel = Channel, streams = Streams}) ->
-    Channel =/= undefined orelse Streams =/= #{}.
+%% An attached channel, any in-flight streaming worker, the active buffered
+%% dispatch, or a queued buffered request holds the session open -- a session
+%% actively serving a request is not idle, so a `session_ttl_ms` below a tool's
+%% runtime must not reap it mid-run ("Session ended" to a waiting caller).
+held_open(#state{
+    channel = Channel, streams = Streams, dispatch_active = Active, dispatch_q = Q
+}) ->
+    Channel =/= undefined orelse Streams =/= #{} orelse Active =/= undefined orelse
+        not queue:is_empty(Q).
 
 %% Arm the periodic keep-alive timer, but only when enabled and a channel is
 %% attached (there is nothing to keep alive otherwise).

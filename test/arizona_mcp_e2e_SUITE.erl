@@ -37,11 +37,15 @@
     session_streaming_progress/1,
     session_cancel_stops_stream/1,
     session_disconnect_cancels_stream/1,
+    session_delete_releases_streaming_post/1,
+    session_death_releases_streaming_post/1,
+    session_delete_releases_channel_get/1,
     session_buffered_cancel_frees_request/1,
     session_max_sessions_503/1,
     auth_missing_token_401/1,
     auth_valid_token_ok/1,
-    session_init_crash_internal_error/1
+    session_init_crash_internal_error/1,
+    stateless_streaming_init_crash_internal_error/1
 ]).
 
 -define(LISTENER, arizona_mcp_e2e).
@@ -82,11 +86,15 @@ all() ->
         session_streaming_progress,
         session_cancel_stops_stream,
         session_disconnect_cancels_stream,
+        session_delete_releases_streaming_post,
+        session_death_releases_streaming_post,
+        session_delete_releases_channel_get,
         session_buffered_cancel_frees_request,
         session_max_sessions_503,
         auth_missing_token_401,
         auth_valid_token_ok,
-        session_init_crash_internal_error
+        session_init_crash_internal_error,
+        stateless_streaming_init_crash_internal_error
     ].
 
 init_per_suite(Config) ->
@@ -109,6 +117,7 @@ init_per_suite(Config) ->
             origins => [?ALLOWED_ORIGIN],
             auth => Auth
         }},
+        {mcp, ~"/mcp-crash", arizona_mcp_crashing_server, #{origins => [?ALLOWED_ORIGIN]}},
         {mcp, ~"/mcp-session-crash", arizona_mcp_crashing_server, #{
             origins => [?ALLOWED_ORIGIN],
             sessions => true
@@ -599,6 +608,53 @@ session_disconnect_cancels_stream(Config) ->
     ?assertEqual(200, status_code(Resp)),
     ?assertMatch(#{~"result" := #{}}, body_json(Resp)).
 
+session_delete_releases_streaming_post(Config) ->
+    SessionId = open_session(Config),
+    %% A DELETE during a streaming tools/call must release the POST connection
+    %% (its loop stops and the socket closes) -- not just kill the worker while
+    %% the conn hangs open forever.
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":41,"method":"tools/call",
+     "params":{"name":"block","arguments":{},"_meta":{"progressToken":"t"}}}
+    """,
+    Sock = stream_post(Config, "/mcp-session", session_header(SessionId), Body),
+    Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"200 OK")),
+    Deleted = request(Config, "DELETE", "/mcp-session", session_header(SessionId), <<>>),
+    ?assertEqual(204, status_code(Deleted)),
+    ?assertEqual(closed, wait_closed(Sock, 5000)),
+    gen_tcp:close(Sock).
+
+session_death_releases_streaming_post(Config) ->
+    SessionId = open_session(Config),
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":42,"method":"tools/call",
+     "params":{"name":"block","arguments":{},"_meta":{"progressToken":"t"}}}
+    """,
+    Sock = stream_post(Config, "/mcp-session", session_header(SessionId), Body),
+    Head = recv_until(Sock, ~"\r\n\r\n", 5000),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"200 OK")),
+    %% Kill the session brutally: terminate/2 never runs, so only the conn
+    %% loop's monitor on the session can release it. (The same monitor closes
+    %% the lookup-then-cast race -- a session dead before the cast delivers an
+    %% immediate 'DOWN' instead of leaving the loop waiting forever.)
+    {ok, Pid} = arizona_mcp_session_registry:lookup(SessionId),
+    exit(Pid, kill),
+    ?assertEqual(closed, wait_closed(Sock, 5000)),
+    gen_tcp:close(Sock).
+
+session_delete_releases_channel_get(Config) ->
+    SessionId = open_session(Config),
+    {ok, Sock} = open_channel(Config, SessionId),
+    %% Tearing the session down must release its GET channel loop too -- it
+    %% otherwise stops only on client disconnect.
+    Deleted = request(Config, "DELETE", "/mcp-session", session_header(SessionId), <<>>),
+    ?assertEqual(204, status_code(Deleted)),
+    ?assertEqual(closed, wait_closed(Sock, 5000)),
+    gen_tcp:close(Sock).
+
 session_buffered_cancel_frees_request(Config) ->
     SessionId = open_session(Config),
     %% A buffered (no progressToken) blocking tool holds its HTTP POST open. The
@@ -646,6 +702,21 @@ session_init_crash_internal_error(Config) ->
     Resp = post(Config, "/mcp-session-crash", [], initialize_body()),
     ?assertEqual(200, status_code(Resp)),
     ?assertMatch(#{~"error" := #{~"code" := -32603}}, body_json(Resp)).
+
+%% A crashing init/1 on the stateless STREAMING leg (a token-bearing tools/call
+%% from an SSE-accepting client) must answer -32603 like every sibling path --
+%% the buffered stateless leg (reply_dispatch's guard) and the session
+%% initialize (its own try/catch) -- not drop the socket.
+stateless_streaming_init_crash_internal_error(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":50,"method":"tools/call",
+     "params":{"name":"block","arguments":{},"_meta":{"progressToken":"t"}}}
+    """,
+    Headers = ["Accept: application/json, text/event-stream\r\n"],
+    Resp = post(Config, "/mcp-crash", Headers, Body),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"id" := 50, ~"error" := #{~"code" := -32603}}, body_json(Resp)).
 
 %% --------------------------------------------------------------------
 %% Helpers

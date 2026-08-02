@@ -21,6 +21,9 @@
     get_source_location_no_line_info/1,
     get_source_location_unknown_function/1,
     reloader_status_ok/1,
+    reloader_status_reports_stale_modules/1,
+    reload_ok_reports_no_agent/1,
+    reload_syncs_stale_module/1,
     app_info_reports_version/1,
     eval_returns_value/1,
     eval_appends_dot/1,
@@ -57,6 +60,9 @@ all() ->
         get_source_location_no_line_info,
         get_source_location_unknown_function,
         reloader_status_ok,
+        reloader_status_reports_stale_modules,
+        reload_ok_reports_no_agent,
+        reload_syncs_stale_module,
         app_info_reports_version,
         eval_returns_value,
         eval_appends_dot,
@@ -107,7 +113,8 @@ tools_list(_Config) ->
         ~"reloader_status",
         ~"app_info",
         ~"render_component",
-        ~"eval"
+        ~"eval",
+        ~"reload"
     ],
     ?assertEqual(lists:sort(Expected), lists:sort(Names)).
 
@@ -234,7 +241,62 @@ get_source_location_unknown_function(_Config) ->
 reloader_status_ok(_Config) ->
     ok = arizona_reloader:clear_error(),
     {reply, Text, _} = call(~"reloader_status", #{}),
-    ?assertMatch({_, _}, binary:match(Text, ~"ok")).
+    ?assertMatch({_, _}, binary:match(Text, ~"ok")),
+    %% The ok leg vouches for both signals: no compile error AND no drift.
+    ?assertMatch({_, _}, binary:match(Text, ~"no stale modules")).
+
+%% A node serving stale code (loaded code differs from the beam on disk -- e.g.
+%% a rebuild outside the watcher's eye) must be reported, not read "ok"; an
+%% agent asking the dev node otherwise debugs against code that isn't running.
+reloader_status_reports_stale_modules(_Config) ->
+    ok = arizona_reloader:clear_error(),
+    Dir = tmp_dir(),
+    Mod = az_dev_mcp_stale,
+    try
+        {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+        %% Rewrite the beam on disk to a different version WITHOUT reloading.
+        Bin2 = compile_only(Mod, versioned_src(Mod, 2), Dir),
+        ok = file:write_file(Beam, Bin2),
+        {reply, Text, _} = call(~"reloader_status", #{}),
+        ?assertMatch({_, _}, binary:match(Text, ~"stale")),
+        ?assertMatch({_, _}, binary:match(Text, ~"az_dev_mcp_stale")),
+        %% Re-sync loaded code to disk so later tests see no drift.
+        {module, Mod} = code:load_binary(Mod, Beam, Bin2),
+        {reply, OkText, _} = call(~"reloader_status", #{}),
+        ?assertMatch({_, _}, binary:match(OkText, ~"no stale modules"))
+    after
+        _ = file:del_dir_r(Dir)
+    end.
+
+%% CT does not run under `rebar3 shell`, so the forced sync reports the
+%% source-recompilation gap (no rebar_agent) while confirming loaded code is
+%% already in sync with the beams on disk.
+reload_ok_reports_no_agent(_Config) ->
+    {reply, Text, _} = call(~"reload", #{}),
+    ?assertMatch({_, _}, binary:match(Text, ~"ok")),
+    ?assertMatch({_, _}, binary:match(Text, ~"no rebar_agent")).
+
+%% The thing an agent wants after reloader_status reports drift: force the
+%% loaded code back in sync with the beams on disk, and say what was reloaded.
+reload_syncs_stale_module(_Config) ->
+    Dir = tmp_dir(),
+    Mod = az_dev_mcp_reload,
+    try
+        {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+        ?assertEqual(1, Mod:value()),
+        Bin2 = compile_only(Mod, versioned_src(Mod, 2), Dir),
+        ok = file:write_file(Beam, Bin2),
+        {reply, Text, _} = call(~"reload", #{}),
+        ?assertMatch({_, _}, binary:match(Text, ~"reloaded")),
+        ?assertMatch({_, _}, binary:match(Text, ~"az_dev_mcp_reload")),
+        %% The disk version is now the running code.
+        ?assertEqual(2, Mod:value()),
+        %% And the status tool agrees the drift is gone.
+        {reply, StatusText, _} = call(~"reloader_status", #{}),
+        ?assertMatch({_, _}, binary:match(StatusText, ~"no stale modules"))
+    after
+        _ = file:del_dir_r(Dir)
+    end.
 
 app_info_reports_version(_Config) ->
     {reply, Text, _} = call(~"app_info", #{}),
@@ -343,3 +405,38 @@ call(Tool, Args, State) ->
 %% used to raise -- taking the connection with it -- on a latin1 binary.
 encode_json(Term) ->
     iolist_to_binary(json:encode(Term)).
+
+%% --- stale-module fixtures (the arizona_reloader_SUITE consistency pattern) ---
+
+tmp_dir() ->
+    Dir = filename:join(
+        "/tmp", "arizona_dev_mcp_ct_" ++ integer_to_list(erlang:unique_integer([positive]))
+    ),
+    ok = file:make_dir(Dir),
+    Dir.
+
+%% Compile Src to a real .beam under Dir and load it from that path, so
+%% code:which/1 returns a readable beam (what the staleness check reads).
+compile_and_load(Name, Src, Dir) ->
+    Erl = filename:join(Dir, atom_to_list(Name) ++ ".erl"),
+    ok = file:write_file(Erl, Src),
+    {ok, Name, Bin} = compile:file(Erl, [binary, return_errors]),
+    Beam = filename:join(Dir, atom_to_list(Name) ++ ".beam"),
+    ok = file:write_file(Beam, Bin),
+    _ = code:purge(Name),
+    {module, Name} = code:load_binary(Name, Beam, Bin),
+    {Name, Beam}.
+
+compile_only(Name, Src, Dir) ->
+    Erl = filename:join(Dir, atom_to_list(Name) ++ ".erl"),
+    ok = file:write_file(Erl, Src),
+    {ok, Name, Bin} = compile:file(Erl, [binary, return_errors]),
+    Bin.
+
+versioned_src(Name, Value) ->
+    io_lib:format(
+        "-module(~p).\n"
+        "-export([value/0]).\n"
+        "value() -> ~b.\n",
+        [Name, Value]
+    ).

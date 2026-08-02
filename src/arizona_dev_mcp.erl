@@ -17,9 +17,14 @@ Tools:
 - `describe_component` -- a component's kind (stateful/stateless), its exports, and moduledoc.
 - `get_docs` -- a module's or function's documentation (EEP-48).
 - `get_source_location` -- where a module (or function) is defined.
-- `reloader_status` -- the dev reloader's current compile error, if any.
+- `reloader_status` -- the dev reloader's current compile error, if any, plus
+  loaded-vs-disk drift: modules whose loaded code differs from their beam on
+  disk (a node serving stale code otherwise reads "ok").
 - `app_info` -- Arizona version, OTP release, node, process count.
 - `render_component` -- render a component to HTML with given bindings.
+- `reload` -- **force a compile+reload sync now** (recompile via `rebar_agent`
+  under `rebar3 shell`, then reload any module whose beam on disk differs from
+  the loaded code) -- the action to take when `reloader_status` reports drift.
 - `eval` -- **run Erlang in the live node**, with bindings that persist across
   calls. Always available (see the safety note below).
 
@@ -141,7 +146,8 @@ base_tools() ->
         },
         #{
             name => ~"reloader_status",
-            description => ~"The dev reloader's current compile error, if any",
+            description =>
+                ~"The dev reloader's compile error and any loaded-vs-disk stale modules",
             input_schema => #{type => ~"object", properties => #{}}
         },
         #{
@@ -163,9 +169,11 @@ base_tools() ->
         }
     ].
 
-%% `eval` is arbitrary remote code execution, but the dev route is localhost-only
-%% by default (`allow_remote_access => false`, enforced by the MCP handler), so it
-%% is advertised unconditionally alongside the safe introspection tools.
+%% The node-mutating tools. `eval` is arbitrary remote code execution and
+%% `reload` swaps running code, but the dev route is localhost-only by default
+%% (`allow_remote_access => false`, enforced by the MCP handler), so both are
+%% advertised unconditionally alongside the safe introspection tools -- the
+%% route-level gate, not a per-tool switch, is what keeps them off the network.
 eval_tools() ->
     [
         #{
@@ -177,6 +185,12 @@ eval_tools() ->
                 properties => #{code => #{type => ~"string"}},
                 required => [~"code"]
             }
+        },
+        #{
+            name => ~"reload",
+            description =>
+                ~"Force a compile+reload sync: recompile the project and reload stale modules",
+            input_schema => #{type => ~"object", properties => #{}}
         }
     ].
 
@@ -190,6 +204,8 @@ handle_tool(~"get_source_location", #{~"module" := ModBin} = Args, _Ctx, State) 
     outcome(with_module(ModBin, fun(Mod) -> get_source_location(Mod, Args) end), State);
 handle_tool(~"reloader_status", _Args, _Ctx, State) ->
     {reply, reloader_status(), State};
+handle_tool(~"reload", _Args, _Ctx, State) ->
+    outcome(reload(), State);
 handle_tool(~"app_info", _Args, _Ctx, State) ->
     {reply, app_info(), State};
 handle_tool(~"render_component", #{~"module" := ModBin} = Args, _Ctx, State) ->
@@ -252,9 +268,54 @@ get_source_location(Module, _Args) ->
 
 reloader_status() ->
     case arizona_reloader:get_error() of
-        undefined -> ~"ok (no compile error)";
+        undefined -> drift_status();
         Error -> fmt("compile error: ~tp", [Error])
     end.
+
+%% No compile error: also check for loaded-vs-disk drift. A node serving stale
+%% code (a rebuild outside the watcher's eye, a missed wave) otherwise reads
+%% "ok" while an agent debugs against code that isn't running. Cheap to ask:
+%% the consistency pass caches its beam facts by mtime, so after the first call
+%% this is one stat per loaded module.
+drift_status() ->
+    Candidates = arizona_reloader_consistency:candidate_modules(),
+    case arizona_reloader_consistency:stale_modules(Candidates) of
+        [] ->
+            ~"ok (no compile error, no stale modules)";
+        Stale ->
+            Lines = [
+                fmt("  ~p (loaded vsn ~p, disk vsn ~p)", [Mod, LoadedVsn, DiskVsn])
+             || {Mod, LoadedVsn, DiskVsn} <:- Stale
+            ],
+            iolist_to_binary([
+                ~"stale modules -- loaded code differs from the beam on disk;",
+                ~" use the reload tool to sync:\n",
+                lists:join($\n, Lines)
+            ])
+    end.
+
+%% Force a compile+reload sync through the reloader's machinery, reporting what
+%% happened in agent-readable text.
+reload() ->
+    case arizona_reloader:sync() of
+        {ok, #{agent := AgentUsed, reloaded := Reloaded}} ->
+            {ok, format_sync(AgentUsed, Reloaded)};
+        {error, Reason} ->
+            {error, fmt("compile error: ~tp", [Reason])}
+    end.
+
+format_sync(AgentUsed, []) ->
+    fmt("ok (~ts; nothing else to reload -- loaded code matches the beams on disk)", [
+        agent_note(AgentUsed)
+    ]);
+format_sync(AgentUsed, Reloaded) ->
+    Names = lists:join(~", ", [atom_to_binary(Mod) || Mod <- Reloaded]),
+    fmt("reloaded from disk: ~ts (~ts)", [iolist_to_binary(Names), agent_note(AgentUsed)]).
+
+agent_note(true) ->
+    ~"project recompiled via rebar_agent";
+agent_note(false) ->
+    ~"no rebar_agent -- not running under rebar3 shell, so sources were not recompiled".
 
 app_info() ->
     Vsn =

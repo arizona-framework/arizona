@@ -13,6 +13,7 @@
     prompt_get_threads_state/1,
     stop_removes_registration/1,
     stale_pid_is_swept/1,
+    count_sweeps_dead_sessions/1,
     idle_ttl_terminates/1,
     ignores_unknown_messages/1,
     notify_pushes_to_channel/1,
@@ -31,6 +32,7 @@
     streaming_tool_holds_session/1,
     terminate_kills_streaming_worker/1,
     buffered_dispatch_runs_in_worker/1,
+    buffered_dispatch_survives_short_ttl/1,
     buffered_cancel_frees_caller/1,
     buffered_worker_crash_frees_caller/1,
     buffered_block_does_not_wedge_session/1,
@@ -50,7 +52,11 @@
     replay_after_last_event_id/1,
     replay_buffer_evicts_oldest/1,
     fresh_attach_no_replay/1,
-    terminate_calls_app/1
+    terminate_calls_app/1,
+    supervisor_shutdown_runs_terminate/1,
+    session_kill_reaps_workers/1,
+    terminate_releases_streaming_conn/1,
+    terminate_releases_channel/1
 ]).
 
 all() ->
@@ -65,6 +71,7 @@ all() ->
         prompt_get_threads_state,
         stop_removes_registration,
         stale_pid_is_swept,
+        count_sweeps_dead_sessions,
         idle_ttl_terminates,
         ignores_unknown_messages,
         notify_pushes_to_channel,
@@ -83,6 +90,7 @@ all() ->
         streaming_tool_holds_session,
         terminate_kills_streaming_worker,
         buffered_dispatch_runs_in_worker,
+        buffered_dispatch_survives_short_ttl,
         buffered_cancel_frees_caller,
         buffered_worker_crash_frees_caller,
         buffered_block_does_not_wedge_session,
@@ -102,7 +110,11 @@ all() ->
         replay_after_last_event_id,
         replay_buffer_evicts_oldest,
         fresh_attach_no_replay,
-        terminate_calls_app
+        terminate_calls_app,
+        supervisor_shutdown_runs_terminate,
+        session_kill_reaps_workers,
+        terminate_releases_streaming_conn,
+        terminate_releases_channel
     ].
 
 init_per_suite(Config) ->
@@ -190,6 +202,22 @@ stale_pid_is_swept(_Config) ->
     after 5000 -> ct:fail(session_did_not_die)
     end,
     ?assertEqual(error, arizona_mcp_session_registry:lookup(Id)).
+
+count_sweeps_dead_sessions(_Config) ->
+    %% A brutal kill skips terminate/2, leaving a stale registry row. Its client
+    %% never presents that id again, so lookup/1's lazy sweep can't fire -- yet
+    %% the row must not consume max_sessions capacity forever: count/1 sweeps
+    %% dead pids itself.
+    RouteKey = ~"/count-sweep",
+    {_Id, Pid} = start_opts(#{route_key => RouteKey}),
+    ?assertEqual(1, arizona_mcp_session_registry:count(RouteKey)),
+    Ref = erlang:monitor(process, Pid),
+    exit(Pid, kill),
+    receive
+        {'DOWN', Ref, process, Pid, _} -> ok
+    after 5000 -> ct:fail(session_did_not_die)
+    end,
+    ?assertEqual(0, arizona_mcp_session_registry:count(RouteKey)).
 
 idle_ttl_terminates(_Config) ->
     {Id, Pid} = start(100),
@@ -425,6 +453,24 @@ buffered_dispatch_runs_in_worker(_Config) ->
     ok = arizona_mcp_session:cancel(Pid, 7),
     ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8)).
 
+buffered_dispatch_survives_short_ttl(_Config) ->
+    {_Id, Pid} = start(100),
+    %% An actively-served buffered request holds the session open, like an
+    %% in-flight streaming request: with session_ttl_ms (100) below the tool's
+    %% runtime (the sleep tool, 300ms), the request must complete rather than
+    %% the session being idle-reaped mid-run ("Session ended" to its caller).
+    Result = arizona_mcp_session:dispatch(Pid, ~"tools/call", #{~"name" => ~"sleep"}, 7),
+    ?assertMatch(
+        {reply, #{~"result" := #{~"content" := [#{~"text" := ~"slept"}]}}}, Result
+    ),
+    %% With the dispatch done and nothing else holding it, the idle timer
+    %% re-arms and the session is reaped.
+    Ref = erlang:monitor(process, Pid),
+    receive
+        {'DOWN', Ref, process, Pid, normal} -> ok
+    after 5000 -> ct:fail(ttl_did_not_rearm)
+    end.
+
 buffered_cancel_frees_caller(_Config) ->
     {_Id, Pid} = start(60000),
     Self = self(),
@@ -457,8 +503,10 @@ buffered_worker_crash_frees_caller(_Config) ->
 buffered_block_does_not_wedge_session(_Config) ->
     {_Id, Pid} = start(100),
     Self = self(),
-    %% A never-returning buffered tool no longer wedges the session: with a 100ms
-    %% idle TTL the session is still reaped, and teardown kills the stuck worker.
+    %% A never-returning buffered tool does not wedge the session process (the
+    %% tool runs in a worker), and -- like an in-flight streaming request -- an
+    %% actively-served buffered request holds the session open past the 100ms
+    %% idle TTL rather than being reaped mid-run.
     Params = #{~"name" => ~"block", ~"arguments" => #{watch => Self}},
     _Caller = spawn(fun() ->
         Result = arizona_mcp_session:dispatch(Pid, ~"tools/call", Params, 7),
@@ -469,15 +517,24 @@ buffered_block_does_not_wedge_session(_Config) ->
             {block_started, W} -> W
         after 5000 -> ct:fail(block_did_not_start)
         end,
+    timer:sleep(250),
+    ?assert(is_process_alive(Pid)),
+    %% Cancelling the stuck request kills its worker, frees its caller, and
+    %% re-arms the idle timer, so the session is then reaped.
     SRef = erlang:monitor(process, Pid),
     WRef = erlang:monitor(process, Worker),
+    ok = arizona_mcp_session:cancel(Pid, 7),
     receive
-        {'DOWN', SRef, process, Pid, normal} -> ok
-    after 5000 -> ct:fail(session_wedged)
+        {caller_result, R} -> ?assertMatch({error, #{~"error" := #{~"code" := -32603}}}, R)
+    after 5000 -> ct:fail(caller_not_freed)
     end,
     receive
         {'DOWN', WRef, process, Worker, killed} -> ok
     after 5000 -> ct:fail(worker_not_killed)
+    end,
+    receive
+        {'DOWN', SRef, process, Pid, normal} -> ok
+    after 5000 -> ct:fail(ttl_did_not_rearm)
     end.
 
 buffered_requests_serialize(_Config) ->
@@ -739,6 +796,91 @@ terminate_calls_app(_Config) ->
     receive
         {mcp_terminated, _Reason} -> ok
     after 5000 -> ct:fail(terminate_not_called)
+    end.
+
+supervisor_shutdown_runs_terminate(_Config) ->
+    %% A supervisor shutdown reaches the session as a trappable exit signal --
+    %% the session must trap exits so gen_server runs terminate/2 (killing its
+    %% workers, running the app's Mod:terminate/2, dropping the registry row)
+    %% instead of dying silently and orphaning its workers for the node's life.
+    Id = integer_to_binary(erlang:unique_integer([positive])),
+    Session = #{
+        mod => arizona_mcp_test_server,
+        state => #{terminate_pid => self()},
+        caps => #{tools => #{}},
+        page_size => 50,
+        log_min_severity => 1
+    },
+    SessionOpts = #{
+        ttl_ms => 60000,
+        buffer_max => 256,
+        max_pending => 100,
+        keepalive_ms => infinity,
+        route_key => ~"/test"
+    },
+    {ok, Pid} = arizona_mcp_sup:start_session(Id, Session, SessionOpts),
+    ok = arizona_mcp_session:start_streaming_tool(
+        Pid, ~"block", #{watch => self()}, 7, ~"tok", self()
+    ),
+    Worker =
+        receive
+            {block_started, W} -> W
+        after 5000 -> ct:fail(worker_did_not_start)
+        end,
+    WRef = erlang:monitor(process, Worker),
+    ok = supervisor:terminate_child(arizona_mcp_sup, Pid),
+    receive
+        {mcp_terminated, shutdown} -> ok
+    after 5000 -> ct:fail(terminate_not_run)
+    end,
+    receive
+        {'DOWN', WRef, process, Worker, killed} -> ok
+    after 5000 -> ct:fail(worker_orphaned)
+    end,
+    ?assertEqual(error, arizona_mcp_session_registry:lookup(Id)).
+
+terminate_releases_streaming_conn(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A DELETE mid-stream must tell the POST loop (us) to stop: the worker
+    %% dying alone leaves the conn waiting on a result that never comes, since
+    %% the loop only stops on {mcp_result, _} / mcp_cancelled / disconnect.
+    ok = arizona_mcp_session:start_streaming_tool(Pid, ~"block", #{}, 7, ~"tok", self()),
+    ok = arizona_mcp_session:stop(Pid),
+    receive
+        mcp_cancelled -> ok
+    after 5000 -> ct:fail(conn_not_released)
+    end,
+    no_result().
+
+terminate_releases_channel(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% The GET channel loop only stops on client disconnect; a session teardown
+    %% must release it too.
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    ok = arizona_mcp_session:stop(Pid),
+    receive
+        mcp_session_closed -> ok
+    after 5000 -> ct:fail(channel_not_released)
+    end.
+
+session_kill_reaps_workers(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% An untrappable kill of the session skips terminate/2 entirely; the
+    %% worker link is then what reaps the tool, instead of orphaning it for
+    %% the life of the node.
+    ok = arizona_mcp_session:start_streaming_tool(
+        Pid, ~"block", #{watch => self()}, 7, ~"tok", self()
+    ),
+    Worker =
+        receive
+            {block_started, W} -> W
+        after 5000 -> ct:fail(worker_did_not_start)
+        end,
+    WRef = erlang:monitor(process, Worker),
+    exit(Pid, kill),
+    receive
+        {'DOWN', WRef, process, Worker, killed} -> ok
+    after 5000 -> ct:fail(worker_orphaned)
     end.
 
 %% --------------------------------------------------------------------

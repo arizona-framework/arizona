@@ -12,7 +12,10 @@
     boot_without_config/1,
     boot_with_only_server/1,
     boot_with_only_reloader/1,
-    transport_deps_are_not_forced/1
+    transport_deps_are_not_forced/1,
+    prep_stop_stops_listener_before_tree/1,
+    boot_logs_reloader_enabled/1,
+    boot_logs_reloader_disabled/1
 ]).
 
 -define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
@@ -23,7 +26,10 @@ all() ->
         boot_without_config,
         boot_with_only_server,
         boot_with_only_reloader,
-        transport_deps_are_not_forced
+        transport_deps_are_not_forced,
+        prep_stop_stops_listener_before_tree,
+        boot_logs_reloader_enabled,
+        boot_logs_reloader_disabled
     ].
 
 init_per_testcase(boot_with_server_and_reloader, Config) ->
@@ -46,6 +52,23 @@ init_per_testcase(transport_deps_are_not_forced, Config) ->
 init_per_testcase(boot_with_only_server, Config) ->
     ok = application:set_env(arizona, server, server_opts()),
     {ok, _} = application:ensure_all_started(arizona),
+    Config;
+init_per_testcase(prep_stop_stops_listener_before_tree, Config) ->
+    ok = application:set_env(arizona, server, server_opts()),
+    {ok, _} = application:ensure_all_started(arizona),
+    Config;
+%% The two boot-log tests start the app in the test body, AFTER installing the
+%% log capture handler -- the line under test fires in arizona_sup:init/1.
+init_per_testcase(boot_logs_reloader_enabled, Config) ->
+    ok = ensure_dir(?WATCH_DIR),
+    ok = application:set_env(arizona, reloader, #{
+        enabled => true,
+        rules => [
+            #{directory => ?WATCH_DIR, patterns => [".*\\.erl$"], callback => fun(_) -> ok end}
+        ]
+    }),
+    Config;
+init_per_testcase(boot_logs_reloader_disabled, Config) ->
     Config;
 init_per_testcase(boot_with_only_reloader, Config) ->
     ok = ensure_dir(?WATCH_DIR),
@@ -95,6 +118,18 @@ boot_with_only_reloader(Config) when is_list(Config) ->
 %% them for every consumer, including a server-less/static-generation user, and
 %% would start fs's default CWD watcher in production. A consumer that ships the
 %% server declares roadrunner/ssh in its OWN app's `applications`.
+%% The HTTP listener must go down in prep_stop/1 -- BEFORE the supervision tree
+%% -- or shutdown briefly serves requests against dead infrastructure (pubsub,
+%% MCP registry, session store). prep_stop stops the listener while arizona_sup
+%% is still up; the follow-up application:stop (end_per_testcase) then runs
+%% prep_stop again plus stop/1, so both must be idempotent about the
+%% already-stopped listener.
+prep_stop_stops_listener_before_tree(Config) when is_list(Config) ->
+    ?assert(is_listener_up(arizona_http)),
+    ?assertEqual([], arizona_app:prep_stop([])),
+    ?assertNot(is_listener_up(arizona_http)),
+    ?assert(is_pid(erlang:whereis(arizona_sup))).
+
 transport_deps_are_not_forced(Config) when is_list(Config) ->
     {ok, Apps} = application:get_key(arizona, applications),
     ?assert(lists:member(crypto, Apps)),
@@ -110,9 +145,70 @@ transport_deps_are_not_forced(Config) when is_list(Config) ->
     ?assertNot(lists:member(ssh, Optional)),
     ?assertNot(lists:member(fs, Optional)).
 
+%% Boot logs one line stating the reloader state, so a dev node silently
+%% missing hot reload is visible. Enabled logs at `info`, naming the watched
+%% dirs/patterns.
+boot_logs_reloader_enabled(Config) when is_list(Config) ->
+    {Level, Text} = with_boot_log(info, fun() ->
+        {ok, _} = application:ensure_all_started(arizona),
+        await_reload_log()
+    end),
+    ?assertEqual(info, Level),
+    ?assertMatch({_, _}, binary:match(Text, ~"hot reload enabled")),
+    ?assertMatch({_, _}, binary:match(Text, list_to_binary(?WATCH_DIR))),
+    ?assertMatch({_, _}, binary:match(Text, ~".erl")).
+
+%% Disabled logs at `notice` -- visible under OTP's default primary level
+%% (notice), without being a warning -- and says how to enable it.
+boot_logs_reloader_disabled(Config) when is_list(Config) ->
+    {Level, Text} = with_boot_log(notice, fun() ->
+        {ok, _} = application:ensure_all_started(arizona),
+        await_reload_log()
+    end),
+    ?assertEqual(notice, Level),
+    ?assertMatch({_, _}, binary:match(Text, ~"hot reload off")),
+    ?assertMatch({_, _}, binary:match(Text, ~"reloader")).
+
 %% ============================================================================
 %% Helpers
 %% ============================================================================
+
+%% Capture logs at `Level` while Fun runs: install the forwarding handler and
+%% lower the primary level (OTP defaults it to notice, which would filter an
+%% info line before any handler sees it), restoring both afterwards.
+with_boot_log(Level, Fun) ->
+    HandlerId = az_app_boot_log,
+    OldPrimary = maps:get(level, logger:get_primary_config()),
+    ok = logger:set_primary_config(level, Level),
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => Level, config => #{pid => self()}
+    }),
+    try
+        Fun()
+    after
+        ok = logger:remove_handler(HandlerId),
+        ok = logger:set_primary_config(level, OldPrimary)
+    end.
+
+%% The first captured log line about hot reload, as {Level, Text}; other boot
+%% logs are skipped.
+await_reload_log() ->
+    receive
+        {arizona_test_log_handler, #{level := Level, msg := Msg}} ->
+            Text = format_log_msg(Msg),
+            case binary:match(Text, ~"hot reload") of
+                nomatch -> await_reload_log();
+                {_, _} -> {Level, Text}
+            end
+    after 5000 -> ct:fail(no_reloader_boot_log)
+    end.
+
+format_log_msg({string, Chardata}) ->
+    unicode:characters_to_binary(Chardata);
+format_log_msg({Format, Args}) when is_list(Format) ->
+    unicode:characters_to_binary(io_lib:format(Format, Args));
+format_log_msg(Other) ->
+    unicode:characters_to_binary(io_lib:format("~tp", [Other])).
 
 server_opts() ->
     #{

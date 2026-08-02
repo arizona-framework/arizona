@@ -1,5 +1,6 @@
 -module(arizona_reloader_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("kernel/include/file.hrl").
 -export([
     all/0,
     groups/0,
@@ -40,7 +41,9 @@
     compile_error_stores_error/1,
     compile_error_cleared_on_success/1,
     non_erl_files_skip_compile/1,
-    mixed_files_only_compile_erl/1
+    mixed_files_only_compile_erl/1,
+    deleted_file_skips_compile/1,
+    deleted_file_alongside_good_compiles_good/1
 ]).
 
 %% consistency group tests
@@ -50,6 +53,7 @@
     unreloaded_target_not_flagged/1,
     stale_beam_detected/1,
     fresh_beam_not_stale/1,
+    beam_facts_cached_by_mtime/1,
     candidate_modules_excludes_otp/1,
     check_reports_broken_edge/1,
     check_clean_reports_nothing/1,
@@ -86,7 +90,9 @@ groups() ->
             compile_error_stores_error,
             compile_error_cleared_on_success,
             non_erl_files_skip_compile,
-            mixed_files_only_compile_erl
+            mixed_files_only_compile_erl,
+            deleted_file_skips_compile,
+            deleted_file_alongside_good_compiles_good
         ]},
         {consistency, [sequence], [
             broken_edge_detected,
@@ -94,6 +100,7 @@ groups() ->
             unreloaded_target_not_flagged,
             stale_beam_detected,
             fresh_beam_not_stale,
+            beam_facts_cached_by_mtime,
             candidate_modules_excludes_otp,
             check_reports_broken_edge,
             check_clean_reports_nothing,
@@ -339,6 +346,27 @@ mixed_files_only_compile_erl(Config) ->
     ?assertEqual(undefined, arizona_reloader:get_error()),
     ?assertEqual(ok, erlang:apply(arizona_dev_ct_mixed, check, [])).
 
+%% The watcher treats a delete as a relevant event, so the manual-compile
+%% fallback can receive a path that no longer exists. Compiling it would stash
+%% a spurious {epp, enoent} on the dev error page until an unrelated successful
+%% wave clears it -- a vanished path is skipped instead.
+deleted_file_skips_compile(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Missing = filename:join(Dir, "arizona_dev_ct_gone.erl"),
+    ?assertEqual(ok, arizona_reloader:compile([Missing])),
+    ?assertEqual(undefined, arizona_reloader:get_error()).
+
+%% A delete arriving in the same wave as a real edit must not poison the wave:
+%% the surviving file compiles and no error is stashed.
+deleted_file_alongside_good_compiles_good(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Missing = filename:join(Dir, "arizona_dev_ct_gone2.erl"),
+    Good = filename:join(Dir, "arizona_dev_ct_alive.erl"),
+    ok = file:write_file(Good, alive_module_src()),
+    ?assertEqual(ok, arizona_reloader:compile([Missing, Good])),
+    ?assertEqual(undefined, arizona_reloader:get_error()),
+    ?assertEqual(ok, erlang:apply(arizona_dev_ct_alive, check, [])).
+
 %% ============================================================================
 %% consistency group tests (arizona_reloader_consistency)
 %% ============================================================================
@@ -395,6 +423,32 @@ fresh_beam_not_stale(Config) ->
     Mod = az_cc_fresh_a,
     {Mod, _} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
     ?assertEqual([], arizona_reloader_consistency:stale_modules([Mod])).
+
+%% The per-module beam facts (imports + disk vsn) are cached across waves keyed
+%% by the beam file's mtime, so an unchanged module costs one stat -- not two
+%% full disk reads -- per save. Proven by rewriting the beam while restoring
+%% its mtime (cache hit: the old facts still apply) and then bumping the mtime
+%% (cache invalidated: the new beam is read and the mismatch surfaces).
+beam_facts_cached_by_mtime(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_cc_cache_a,
+    {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+    {ok, #file_info{mtime = Mtime} = Info} = file:read_file_info(Beam, [{time, posix}]),
+    %% Prime the cache: memory matches disk, nothing stale.
+    ?assertEqual([], arizona_reloader_consistency:stale_modules([Mod])),
+    %% Rewrite the beam to a different version but restore the original mtime:
+    %% an unchanged mtime means no re-read, so the cached facts still apply.
+    Bin2 = compile_only(Mod, versioned_src(Mod, 2), Dir),
+    ok = file:write_file(Beam, Bin2),
+    ok = file:write_file_info(Beam, Info#file_info{mtime = Mtime}, [{time, posix}]),
+    ?assertEqual([], arizona_reloader_consistency:stale_modules([Mod])),
+    %% Bumping the mtime invalidates the entry: the new beam is read and the
+    %% version mismatch surfaces.
+    ok = file:write_file_info(Beam, Info#file_info{mtime = Mtime + 5}, [{time, posix}]),
+    ?assertMatch(
+        [{Mod, LoadedVsn, DiskVsn}] when LoadedVsn =/= DiskVsn,
+        arizona_reloader_consistency:stale_modules([Mod])
+    ).
 
 %% The candidate set is application code only: it includes a loaded module with a
 %% readable non-OTP beam and excludes OTP (a stdlib module).
@@ -550,6 +604,11 @@ mismatch_module_src() ->
 
 mixed_good_module_src() ->
     "-module(arizona_dev_ct_mixed).\n"
+    "-export([check/0]).\n"
+    "check() -> ok.\n".
+
+alive_module_src() ->
+    "-module(arizona_dev_ct_alive).\n"
     "-export([check/0]).\n"
     "check() -> ok.\n".
 

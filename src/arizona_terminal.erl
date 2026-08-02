@@ -210,7 +210,32 @@ already neutralizes the 7-bit C1 forms and every escape-sequence introducer.
 """.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) ->
-    escape(Bin, <<>>).
+    %% Almost every rendered value carries no stripped byte at all, so locate
+    %% the first one before building anything: with none, the input is returned
+    %% as-is -- no accumulator, no copy. Only a value that really needs
+    %% stripping allocates, and only from that first control byte on (the clean
+    %% prefix seeds the accumulator in one slice). The same fast path, and the
+    %% same measured rationale, as arizona_html:escape/1.
+    case first_control(Bin, 0) of
+        none ->
+            Bin;
+        Pos ->
+            <<Clean:Pos/binary, Rest/binary>> = Bin,
+            escape(Rest, Clean)
+    end.
+
+%% Byte offset of the first stripped byte (a C0 control other than `\n`/`\t`,
+%% or DEL 0x7F), `none` when the value is already clean.
+first_control(<<C, R/binary>>, Pos) when C >= 16#20, C =/= 16#7F ->
+    first_control(R, Pos + 1);
+first_control(<<$\n, R/binary>>, Pos) ->
+    first_control(R, Pos + 1);
+first_control(<<$\t, R/binary>>, Pos) ->
+    first_control(R, Pos + 1);
+first_control(<<>>, _Pos) ->
+    none;
+first_control(_Bin, Pos) ->
+    Pos.
 
 escape(<<>>, Acc) ->
     Acc;

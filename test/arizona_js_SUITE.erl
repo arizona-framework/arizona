@@ -8,9 +8,12 @@
 -export([fetch_unwraps_single_on_error_cmd/1]).
 -export([fetch_unwraps_on_error_cmd_list/1]).
 -export([fetch_without_on_error_unchanged/1]).
+-export([fetch_empty_on_error_list/1]).
+-export([transition_empty_cmd_list/1]).
+-export([on_key_empty_cmd_list/1]).
 
 all() ->
-    [{group, fetch_on_error}].
+    [{group, fetch_on_error}, {group, empty_cmd_lists}].
 
 groups() ->
     [
@@ -18,6 +21,11 @@ groups() ->
             fetch_unwraps_single_on_error_cmd,
             fetch_unwraps_on_error_cmd_list,
             fetch_without_on_error_unchanged
+        ]},
+        {empty_cmd_lists, [parallel], [
+            fetch_empty_on_error_list,
+            transition_empty_cmd_list,
+            on_key_empty_cmd_list
         ]}
     ].
 
@@ -77,3 +85,30 @@ fetch_without_on_error_unchanged(Config) when is_list(Config) ->
         {arizona_effect, [?EFFECT_FETCH, ~"/x", #{method := post}]},
         arizona_js:fetch(~"/x", #{method => post})
     ).
+
+%% --------------------------------------------------------------------
+%% Empty command lists
+%% --------------------------------------------------------------------
+
+%% The public specs admit [] (dynamic construction via a comprehension can
+%% legitimately yield an empty command list), and the client treats an empty
+%% effect list as a no-op -- so [] must build a harmless wire value instead of
+%% crashing function_clause inside unwrap_cmds/1.
+
+fetch_empty_on_error_list(Config) when is_list(Config) ->
+    Cmd = arizona_js:fetch(~"/x", #{method => post, on_error => []}),
+    ?assertMatch(
+        {arizona_effect, [?EFFECT_FETCH, ~"/x", #{on_error := []}]},
+        Cmd
+    ),
+    ?assert(is_binary(arizona_effect:encode(Cmd))).
+
+transition_empty_cmd_list(Config) when is_list(Config) ->
+    Cmd = arizona_js:transition([]),
+    ?assertMatch({arizona_effect, [?EFFECT_TRANSITION, #{}, []]}, Cmd),
+    ?assert(is_binary(arizona_effect:encode(Cmd))).
+
+on_key_empty_cmd_list(Config) when is_list(Config) ->
+    Cmd = arizona_js:on_key(enter, []),
+    ?assertMatch({arizona_effect, [?EFFECT_ON_KEY, _Key, []]}, Cmd),
+    ?assert(is_binary(arizona_effect:encode(Cmd))).
