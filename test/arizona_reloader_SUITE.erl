@@ -40,7 +40,9 @@
     compile_error_stores_error/1,
     compile_error_cleared_on_success/1,
     non_erl_files_skip_compile/1,
-    mixed_files_only_compile_erl/1
+    mixed_files_only_compile_erl/1,
+    deleted_file_skips_compile/1,
+    deleted_file_alongside_good_compiles_good/1
 ]).
 
 %% consistency group tests
@@ -86,7 +88,9 @@ groups() ->
             compile_error_stores_error,
             compile_error_cleared_on_success,
             non_erl_files_skip_compile,
-            mixed_files_only_compile_erl
+            mixed_files_only_compile_erl,
+            deleted_file_skips_compile,
+            deleted_file_alongside_good_compiles_good
         ]},
         {consistency, [sequence], [
             broken_edge_detected,
@@ -339,6 +343,27 @@ mixed_files_only_compile_erl(Config) ->
     ?assertEqual(undefined, arizona_reloader:get_error()),
     ?assertEqual(ok, erlang:apply(arizona_dev_ct_mixed, check, [])).
 
+%% The watcher treats a delete as a relevant event, so the manual-compile
+%% fallback can receive a path that no longer exists. Compiling it would stash
+%% a spurious {epp, enoent} on the dev error page until an unrelated successful
+%% wave clears it -- a vanished path is skipped instead.
+deleted_file_skips_compile(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Missing = filename:join(Dir, "arizona_dev_ct_gone.erl"),
+    ?assertEqual(ok, arizona_reloader:compile([Missing])),
+    ?assertEqual(undefined, arizona_reloader:get_error()).
+
+%% A delete arriving in the same wave as a real edit must not poison the wave:
+%% the surviving file compiles and no error is stashed.
+deleted_file_alongside_good_compiles_good(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Missing = filename:join(Dir, "arizona_dev_ct_gone2.erl"),
+    Good = filename:join(Dir, "arizona_dev_ct_alive.erl"),
+    ok = file:write_file(Good, alive_module_src()),
+    ?assertEqual(ok, arizona_reloader:compile([Missing, Good])),
+    ?assertEqual(undefined, arizona_reloader:get_error()),
+    ?assertEqual(ok, erlang:apply(arizona_dev_ct_alive, check, [])).
+
 %% ============================================================================
 %% consistency group tests (arizona_reloader_consistency)
 %% ============================================================================
@@ -550,6 +575,11 @@ mismatch_module_src() ->
 
 mixed_good_module_src() ->
     "-module(arizona_dev_ct_mixed).\n"
+    "-export([check/0]).\n"
+    "check() -> ok.\n".
+
+alive_module_src() ->
+    "-module(arizona_dev_ct_alive).\n"
     "-export([check/0]).\n"
     "check() -> ok.\n".
 

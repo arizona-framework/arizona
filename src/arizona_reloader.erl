@@ -213,9 +213,13 @@ rebar3_compile(ErlFiles) ->
             collect_errors(ErlFiles)
     end.
 
-%% Direct compile:file fallback when rebar3 is not available.
+%% Direct compile:file fallback when rebar3 is not available. The watcher treats
+%% a delete as a relevant event, so a wave can carry paths that no longer exist;
+%% compiling one would stash a spurious {epp, enoent} error on the dev error page
+%% until an unrelated successful wave clears it. A deletion is not a compile
+%% error, so vanished paths are skipped.
 manual_compile(Files) ->
-    manual_compile(Files, []).
+    manual_compile([F || F <- Files, filelib:is_regular(F)], []).
 
 manual_compile([], []) ->
     ok;
