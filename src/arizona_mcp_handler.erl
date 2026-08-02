@@ -223,11 +223,15 @@ Roadrunner loop `handle_info/3` callback for the two SSE loops:
 - the **streaming POST** (`#{mcp_post_stream := true}`) -- pushes the running
   tool's `notifications/progress` as they arrive, then the final result, then
   stops; a client disconnect just stops the loop.
+
+Both loops monitor their session (`session_mon`), so a session death of any
+cause -- idle reap, `DELETE`, a crash, even one racing the loop's setup --
+releases the connection instead of leaving it open forever.
 """.
 -spec handle_info(Info, Push, State) -> {ok, State} | {stop, State} when
     Info :: term(),
     Push :: roadrunner_handler:push_fun(),
-    State :: #{session := pid()} | #{mcp_post_stream := true, _ => term()}.
+    State :: #{session := pid(), _ => term()} | #{mcp_post_stream := true, _ => term()}.
 %% Each message carries an already-framed (and so already encoded) event: this
 %% process only pushes bytes. Encoding here would run outside every crash guard,
 %% so a callback returning content `json:encode/1` rejects would kill the
@@ -242,7 +246,17 @@ handle_info({mcp_result, Frame}, Push, State) ->
     _ = Push(Frame),
     {stop, State};
 handle_info(mcp_cancelled, _Push, State) ->
-    %% The session cancelled this streaming request; close the stream, no result.
+    %% The session cancelled this streaming request (or died taking it along);
+    %% close the stream, no result.
+    {stop, State};
+handle_info(mcp_session_closed, _Push, State) ->
+    %% The session was torn down (DELETE / idle reap); the GET channel loop
+    %% dies with it.
+    {stop, State};
+handle_info({'DOWN', Mon, process, _Pid, _Reason}, _Push, #{session_mon := Mon} = State) ->
+    %% The monitored session died without a clean teardown signal (a crash, a
+    %% kill skipping terminate/2, or a death racing this loop's setup). Nothing
+    %% will ever feed this loop again -- stop it.
     {stop, State};
 %% The streaming-POST disconnect is checked first: its state may also carry
 %% `session`, which would otherwise match the GET-channel clause below.
@@ -601,7 +615,10 @@ with_session(SessionId, Found, NotFound) ->
 attach_or_reject(Pid, LastEventId) ->
     case arizona_mcp_session:attach_channel(Pid, self(), LastEventId) of
         ok ->
-            {loop, 200, sse_headers(), #{session => Pid}};
+            %% Monitor the session so its death of any cause releases this
+            %% channel loop (the clean teardown also sends mcp_session_closed).
+            Mon = erlang:monitor(process, Pid),
+            {loop, 200, sse_headers(), #{session => Pid, session_mon => Mon}};
         {error, already_attached} ->
             roadrunner_resp:status(409)
     end.
@@ -646,13 +663,25 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
                     with_session(
                         SessionId,
                         fun(Pid) ->
+                            %% Monitor the session before starting the tool: a
+                            %% session dying at any point -- including the gap
+                            %% between the registry lookup and this cast (which
+                            %% then starts no worker) -- releases the loop via
+                            %% the 'DOWN' instead of leaving the POST open
+                            %% forever (a dead target delivers one immediately).
+                            Mon = erlang:monitor(process, Pid),
                             ok = arizona_mcp_session:start_streaming_tool(
                                 Pid, Name, Args, Id, Token, ConnPid
                             ),
                             %% Track the session + request id so a disconnect
                             %% cancels it (a `notifications/cancelled` arrives on
                             %% its own POST instead).
-                            stream_loop(#{mcp_post_stream => true, session => Pid, id => Id})
+                            stream_loop(#{
+                                mcp_post_stream => true,
+                                session => Pid,
+                                id => Id,
+                                session_mon => Mon
+                            })
                         end,
                         fun() -> unknown_session(Id) end
                     )

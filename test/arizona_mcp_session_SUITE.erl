@@ -54,7 +54,9 @@
     fresh_attach_no_replay/1,
     terminate_calls_app/1,
     supervisor_shutdown_runs_terminate/1,
-    session_kill_reaps_workers/1
+    session_kill_reaps_workers/1,
+    terminate_releases_streaming_conn/1,
+    terminate_releases_channel/1
 ]).
 
 all() ->
@@ -110,7 +112,9 @@ all() ->
         fresh_attach_no_replay,
         terminate_calls_app,
         supervisor_shutdown_runs_terminate,
-        session_kill_reaps_workers
+        session_kill_reaps_workers,
+        terminate_releases_streaming_conn,
+        terminate_releases_channel
     ].
 
 init_per_suite(Config) ->
@@ -834,6 +838,30 @@ supervisor_shutdown_runs_terminate(_Config) ->
     after 5000 -> ct:fail(worker_orphaned)
     end,
     ?assertEqual(error, arizona_mcp_session_registry:lookup(Id)).
+
+terminate_releases_streaming_conn(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% A DELETE mid-stream must tell the POST loop (us) to stop: the worker
+    %% dying alone leaves the conn waiting on a result that never comes, since
+    %% the loop only stops on {mcp_result, _} / mcp_cancelled / disconnect.
+    ok = arizona_mcp_session:start_streaming_tool(Pid, ~"block", #{}, 7, ~"tok", self()),
+    ok = arizona_mcp_session:stop(Pid),
+    receive
+        mcp_cancelled -> ok
+    after 5000 -> ct:fail(conn_not_released)
+    end,
+    no_result().
+
+terminate_releases_channel(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% The GET channel loop only stops on client disconnect; a session teardown
+    %% must release it too.
+    ok = arizona_mcp_session:attach_channel(Pid, self(), undefined),
+    ok = arizona_mcp_session:stop(Pid),
+    receive
+        mcp_session_closed -> ok
+    after 5000 -> ct:fail(channel_not_released)
+    end.
 
 session_kill_reaps_workers(_Config) ->
     {_Id, Pid} = start(60000),

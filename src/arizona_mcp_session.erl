@@ -462,13 +462,25 @@ terminate(
         id = SessionId,
         session = #{mod := Mod, state := HandlerState},
         streams = Streams,
-        dispatch_active = Active
+        dispatch_active = Active,
+        channel = Channel
     }
 ) ->
     %% Kill any in-flight workers (streaming + the active buffered one) so none
-    %% outlive the session (a blocking tool would otherwise run forever, orphaned).
-    maps:foreach(fun(_Id, {WorkerPid, _MonRef, _ConnPid}) -> exit(WorkerPid, kill) end, Streams),
+    %% outlive the session (a blocking tool would otherwise run forever,
+    %% orphaned), and release the connection loops held on this session: each
+    %% streaming POST loop is told to stop (no result -- its request dies with
+    %% the session), as is the attached GET channel. The loops also monitor the
+    %% session, so a teardown that skips terminate/2 releases them too.
+    maps:foreach(
+        fun(_Id, {WorkerPid, _MonRef, ConnPid}) ->
+            true = exit(WorkerPid, kill),
+            ConnPid ! mcp_cancelled
+        end,
+        Streams
+    ),
     kill_active_dispatch(Active),
+    notify_channel_closed(Channel),
     %% Run the app's optional cleanup hook, then drop the registry row. (pg
     %% auto-removes the session from its subscribed channels on exit.)
     erlang:function_exported(Mod, terminate, 2) andalso Mod:terminate(Reason, HandlerState),
@@ -575,6 +587,14 @@ kill_active_dispatch({WorkerPid, _MonRef, _From, _Id}) ->
     true = exit(WorkerPid, kill),
     ok;
 kill_active_dispatch(undefined) ->
+    ok.
+
+%% Tell the attached GET channel loop the session is gone, so it stops instead
+%% of hanging open forever (it otherwise stops only on client disconnect).
+notify_channel_closed(undefined) ->
+    ok;
+notify_channel_closed(ChannelPid) ->
+    ChannelPid ! mcp_session_closed,
     ok.
 
 %% Subscribe to the handler's declared pubsub channels (if it exports
