@@ -200,6 +200,33 @@ let _teardown = null;
 /** @type {Map<string, Document>} */
 const _viewDocs = new Map();
 
+// The PiP window and inline placeholder per popped-out view, so a navigate's
+// OP_REPLACE -- which destroys the placeholder with the outgoing subtree -- can
+// close the now-orphaned window instead of leaving it floating over dead server
+// state. Entries live and die with `_viewDocs` (set in requestPip, removed by
+// the window's pagehide handler).
+/** @type {Map<string, {win: Window, placeholder: Comment}>} */
+const _pipWindows = new Map();
+
+/**
+ * Close any popped-out (PiP) window whose inline placeholder is no longer in
+ * the DOM -- its home was destroyed (a navigate OP_REPLACE swapped the page),
+ * so the floating view shows dead server state. Closing fires the window's
+ * pagehide handler, which discards the stale view and unregisters the maps.
+ * Same reconciliation `disconnect` performs, driven here by the page swap.
+ */
+function closeOrphanedPipWindows() {
+    for (const pip of [..._pipWindows.values()]) {
+        if (!pip.placeholder.isConnected) {
+            try {
+                pip.win.close();
+            } catch {
+                /* window already gone */
+            }
+        }
+    }
+}
+
 /**
  * Every document currently hosting Arizona views: the main document plus any
  * popped-out PiP documents. Used by document-wide local-slot ops.
@@ -752,6 +779,9 @@ function applyOps(ops) {
                     const added = Array.from(tpl.content.children);
                     el.replaceWith(tpl.content);
                     for (const e of added) mountHooks(e);
+                    // A popped-out (PiP) view whose placeholder just went with
+                    // the outgoing subtree is orphaned -- close its window.
+                    closeOrphanedPipWindows();
                     didReplace = true;
                     break;
                 }
@@ -2590,6 +2620,7 @@ function connect(endpoint, params = {}) {
             }
         }
         _viewDocs.clear();
+        _pipWindows.clear();
         // Run destroyed() on every tracked hook and clear the map. Without
         // this, hook instances leak when host code removes the DOM by means
         // arizona didn't observe (third-party libs, test teardown via
@@ -2668,6 +2699,7 @@ async function requestPip(viewId, opts = {}) {
     copyStyles(document, pip.document);
     pip.document.body.append(view);
     _viewDocs.set(viewId, pip.document);
+    _pipWindows.set(viewId, { win: pip, placeholder });
 
     // Delegate events fired inside the floating window; torn down on close.
     const controller = new AbortController();
@@ -2678,8 +2710,21 @@ async function requestPip(viewId, opts = {}) {
         () => {
             controller.abort();
             _viewDocs.delete(viewId);
-            if (placeholder.parentNode) placeholder.replaceWith(view);
-            else document.body.append(view);
+            _pipWindows.delete(viewId);
+            // isConnected, not parentNode: a replaced (navigate) outgoing
+            // subtree is detached wholesale, so the placeholder still HAS a
+            // parent -- inside a dead tree.
+            if (placeholder.isConnected) {
+                placeholder.replaceWith(view);
+            } else {
+                // The view's inline home was destroyed while it was popped out
+                // (a navigate OP_REPLACE swapped the page): the new page has its
+                // own content, so discard the stale element -- appending it to
+                // the new page's body would resurrect dead server state. Tear
+                // its hooks down like any removed subtree.
+                destroyHooks(view);
+                view.remove();
+            }
             if (opts.onClose) opts.onClose();
         },
         { once: true },
