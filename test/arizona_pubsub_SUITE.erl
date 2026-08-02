@@ -17,7 +17,7 @@
     subscriber_cleanup/1,
     message_ordering/1,
     duplicate_join/1,
-    raced_join_delivers_once/1,
+    raced_join_delivers_per_membership/1,
     raced_join_unsubscribe_clears_all/1,
     monitor_reports_join_and_leave/1
 ]).
@@ -37,7 +37,7 @@ groups() ->
             subscriber_cleanup,
             message_ordering,
             duplicate_join,
-            raced_join_delivers_once,
+            raced_join_delivers_per_membership,
             raced_join_unsubscribe_clears_all,
             monitor_reports_join_and_leave
         ]}
@@ -183,8 +183,12 @@ duplicate_join(Config) when is_list(Config) ->
 %% same pid can both reach `pg` (which has no atomic join-if-absent) and leave it
 %% holding two memberships for one subscriber. That state is what these two cases
 %% construct directly -- joining twice through `pg` is exactly what the race
-%% produces -- and assert the API still behaves as a set.
-raced_join_delivers_once(Config) when is_list(Config) ->
+%% produces. `broadcast/2` deliberately iterates the raw membership list (no
+%% per-message usort -- sorting every broadcast to dedupe a state that requires
+%% two concurrent subscribes of the SAME pid is pure fan-out overhead), so this
+%% pathological state delivers one copy per membership; `subscribers/1` still
+%% reports the pid once and `unsubscribe/2` clears every membership.
+raced_join_delivers_per_membership(Config) when is_list(Config) ->
     ok = pg:join(arizona_pubsub, test_group, [self(), self()]),
     ?assertEqual([self(), self()], pg:get_members(arizona_pubsub, test_group)),
     ?assertEqual([self()], arizona_pubsub:subscribers(test_group)),
@@ -193,6 +197,11 @@ raced_join_delivers_once(Config) when is_list(Config) ->
         raced -> ok
     after 1000 -> ct:fail(timeout)
     end,
+    timer:sleep(50),
+    %% One copy per pg membership: the double-joined state yields a second copy.
+    ?assertEqual([raced], flush()),
+    ok = arizona_pubsub:unsubscribe(test_group, self()),
+    ok = arizona_pubsub:broadcast(test_group, after_clear),
     timer:sleep(50),
     ?assertEqual([], flush()).
 

@@ -6,6 +6,14 @@ Subscribers join a channel (any term) by pid and receive whatever is
 broadcast to that channel as a plain mailbox message. There's no
 serialization or queueing -- it's just `pg:join/3` plus a fan-out send.
 
+The broadcast paths iterate `pg`'s raw membership list without sorting or
+deduplicating -- a per-message `usort` over the whole member list would tax
+every broadcast (and every subscribe) to paper over a state only two
+*concurrent* subscribes of the SAME pid can create (`subscribe/2`'s
+check-then-join is not atomic). In that essentially-unreachable state a
+subscriber receives one copy per membership until `unsubscribe/2` clears
+them all; `subscribers/1` still reports each pid once.
+
 Used by `arizona_watcher` (file change events), `arizona_reloader`
 (dev hot reload), and any handler that wants cross-process messaging
 (e.g. multi-tab chat in `arizona_chat`).
@@ -70,16 +78,17 @@ the pid is already subscribed.
 
 The membership check is a read followed by a join, so two concurrent
 subscribes of the same pid can both return `ok` and both reach `pg`
-(which has no atomic join-if-absent). Membership is a **set** regardless:
-`subscribers/1` reports each pid once, so a broadcast still delivers a
-single copy, and `unsubscribe/2` drops every `pg` membership the pid
-holds rather than leaving a stray one behind.
+(which has no atomic join-if-absent). `subscribers/1` reports each pid
+once regardless, and `unsubscribe/2` drops every `pg` membership the pid
+holds rather than leaving a stray one behind; until then a broadcast
+delivers one copy per membership (see the moduledoc).
 """.
 -spec subscribe(Channel, Pid) -> ok | {error, already_joined} when
     Channel :: channel(),
     Pid :: pid().
 subscribe(Channel, Pid) ->
-    case lists:member(Pid, subscribers(Channel)) of
+    %% Raw membership read -- no usort; lists:member only needs to find the pid.
+    case lists:member(Pid, pg:get_members(?MODULE, Channel)) of
         true -> {error, already_joined};
         false -> pg:join(?MODULE, Channel, [Pid])
     end.
@@ -104,13 +113,14 @@ unsubscribe(Channel, Pid) ->
     end.
 
 -doc """
-Sends `Data` as a mailbox message to every subscriber of `Channel`.
+Sends `Data` as a mailbox message to every subscriber of `Channel`
+(one copy per `pg` membership -- see the moduledoc).
 """.
 -spec broadcast(Channel, Data) -> ok when
     Channel :: channel(),
     Data :: term().
 broadcast(Channel, Data) ->
-    send_each(subscribers(Channel), Data).
+    send_each(pg:get_members(?MODULE, Channel), Data).
 
 -doc """
 Like `broadcast/2` but skips `From` -- useful when the publisher is
@@ -121,7 +131,7 @@ also a subscriber and shouldn't echo to itself.
     Channel :: channel(),
     Data :: term().
 broadcast_from(From, Channel, Data) ->
-    send_each_skip(subscribers(Channel), Data, From).
+    send_each_skip(pg:get_members(?MODULE, Channel), Data, From).
 
 %% Tail-recursive send loop -- the previous `[Pid ! Data || Pid <- Subs]`
 %% form allocated a result list (one cons cell per subscriber) just to
@@ -145,8 +155,9 @@ send_each_skip([Pid | Rest], Data, From) ->
 Returns the pids currently subscribed to `Channel`, each once.
 
 `pg` memberships are a multiset and `subscribe/2`'s check-then-join is
-not atomic, so a pid can hold more than one membership; deduplicating
-here is what keeps `broadcast/2` at one message per subscriber.
+not atomic, so a pid can hold more than one membership; this diagnostic
+view deduplicates. The broadcast paths deliberately do not (see the
+moduledoc), so they never pay this sort.
 """.
 -spec subscribers(Channel) -> [pid()] when
     Channel :: channel().
