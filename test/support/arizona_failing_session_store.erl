@@ -6,7 +6,9 @@ answers `{error, Reason}` so tests can assert that a store failure is observable
 `arizona_req:session_error/1`, distinct from a genuinely absent session. `Reason` is the
 `test_failing_store_reason` app env (default `store_unreachable`), so a test can also drive
 the `{error, undefined}` case that the tagged return keeps distinct from the no-error
-sentinel.
+sentinel. Writes forward to the supervised `arizona_session_store_ets` table, so a test can
+seed state and observe that a write-side operation (a logout's delete) still lands during a
+read outage.
 """.
 
 -behaviour(arizona_session_store).
@@ -26,9 +28,9 @@ get(_Id) ->
     Id :: binary(),
     Session :: arizona_req:session(),
     TtlSecs :: pos_integer().
-put(_Id, _Session, _TtlSecs) ->
-    ok.
+put(Id, Session, TtlSecs) ->
+    arizona_session_store_ets:put(Id, Session, TtlSecs).
 
 -spec delete(Id) -> ok when Id :: binary().
-delete(_Id) ->
-    ok.
+delete(Id) ->
+    arizona_session_store_ets:delete(Id).

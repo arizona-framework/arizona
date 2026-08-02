@@ -70,6 +70,9 @@
     https_without_tls_errors/1,
     tls_without_scheme_serves_https/1,
     tls_with_http_scheme_errors/1,
+    portless_transport_opts_keeps_proto_opts_port/1,
+    transport_opts_port_wins_over_proto_opts/1,
+    unsupported_transport_opt_errors/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
@@ -80,6 +83,7 @@
     caps_reach_capability_in_render/1,
     caps_absent_capability_false/1,
     controller_runs_handler_with_state/1,
+    controller_action_reads_middleware_output/1,
     controller_rejects_cross_origin/1,
     controller_rejects_disallowed_method/1,
     controller_dispatches_action_by_verb/1,
@@ -163,6 +167,9 @@ groups() ->
         https_without_tls_errors,
         tls_without_scheme_serves_https,
         tls_with_http_scheme_errors,
+        portless_transport_opts_keeps_proto_opts_port,
+        transport_opts_port_wins_over_proto_opts,
+        unsupported_transport_opt_errors,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
         ws_upgrade_preserves_duplicate_qs_keys,
@@ -173,6 +180,7 @@ groups() ->
         caps_reach_capability_in_render,
         caps_absent_capability_false,
         controller_runs_handler_with_state,
+        controller_action_reads_middleware_output,
         controller_rejects_cross_origin,
         controller_rejects_disallowed_method,
         controller_dispatches_action_by_verb,
@@ -399,6 +407,11 @@ init_per_group(roadrunner, Config) ->
         {live, <<"/drain_noop">>, arizona_drainable, #{bindings => #{drain_mode => noop}}},
         {get, <<"/_test/state-echo">>, arizona_state_echo_controller, #{
             state => #{marker => ~"STATE_OK"}
+        }},
+        %% Controller route whose middleware output the action reads back
+        %% (arizona_controller:req/1 + bindings/1).
+        {get, <<"/_test/session-echo">>, arizona_session_echo_controller, #{
+            middlewares => [{arizona_middleware, fetch_session}]
         }},
         %% Resource-style controller: same path, verb selects the action.
         {get, <<"/_test/users">>, arizona_users_controller, #{action => index}},
@@ -794,6 +807,20 @@ controller_runs_handler_with_state(Config) ->
     Resp = http_get(Config, "/_test/state-echo", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"STATE_OK">>)).
+
+controller_action_reads_middleware_output(Config) ->
+    %% The middleware pipeline's product reaches the action: fetch_session runs
+    %% on the controller route and the action recovers both the post-middleware
+    %% arizona_req (arizona_controller:req/1 -- get_session sees the decoded
+    %% session) and the produced bindings (arizona_controller:bindings/1 -- the
+    %% `session` binding). They used to be discarded, so fetch_session/extract
+    %% middlewares on controller routes ran for nothing.
+    Cookie = arizona_session:encode(#{~"user_id" => ~"u1"}),
+    CookieHeader = ["Cookie: az_session=", binary_to_list(Cookie), "\r\n"],
+    Resp = http_get(Config, "/_test/session-echo", [CookieHeader]),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"session=u1">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"binding=u1">>)).
 
 controller_rejects_cross_origin(Config) ->
     %% The default check_origin middleware runs on controllers too: a cross-origin
@@ -1557,6 +1584,62 @@ tls_with_http_scheme_errors(Config) when is_list(Config) ->
     ?assertEqual(
         undefined,
         persistent_term:get({arizona_roadrunner_routes, arizona_tls_http_scheme_test}, undefined),
+        "failed start must not stash routes for the dead listener"
+    ).
+
+portless_transport_opts_keeps_proto_opts_port(Config) when is_list(Config) ->
+    %% A present-but-portless transport_opts used to silently override
+    %% proto_opts.port with the 4040 default. The port now falls back to
+    %% proto_opts.port when transport_opts carries no port entry.
+    Name = arizona_portless_transport_test,
+    Port = pick_port(),
+    {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
+        routes => [],
+        transport_opts => [],
+        proto_opts => #{port => Port}
+    }),
+    try
+        ?assertEqual(Port, roadrunner_listener:port(Name))
+    after
+        ok = arizona_roadrunner_server:stop(Name)
+    end.
+
+transport_opts_port_wins_over_proto_opts(Config) when is_list(Config) ->
+    %% When both name a port, the transport_opts one (the explicit listen-port
+    %% sugar) wins over proto_opts.port.
+    Name = arizona_transport_port_wins_test,
+    TransportPort = pick_port(),
+    ProtoPort = pick_port(),
+    {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
+        routes => [],
+        transport_opts => [{port, TransportPort}],
+        proto_opts => #{port => ProtoPort}
+    }),
+    try
+        ?assertEqual(TransportPort, roadrunner_listener:port(Name))
+    after
+        ok = arizona_roadrunner_server:stop(Name)
+    end.
+
+unsupported_transport_opt_errors(Config) when is_list(Config) ->
+    %% transport_opts accepts only {port, _}: every other entry used to be
+    %% silently discarded (an operator's `ip` restriction just did not apply).
+    %% It now errors up front, before any persistent_term is written; roadrunner
+    %% takes those listener/socket options directly in proto_opts.
+    Name = arizona_bad_transport_opt_test,
+    Result =
+        try
+            arizona_roadrunner_server:start(Name, #{
+                routes => [],
+                transport_opts => [{ip, {127, 0, 0, 1}}, {port, pick_port()}]
+            })
+        catch
+            error:Reason -> {error_caught, Reason}
+        end,
+    ?assertEqual({error_caught, {unsupported_transport_opt, {ip, {127, 0, 0, 1}}}}, Result),
+    ?assertEqual(
+        undefined,
+        persistent_term:get({arizona_roadrunner_routes, Name}, undefined),
         "failed start must not stash routes for the dead listener"
     ).
 

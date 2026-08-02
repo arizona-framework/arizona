@@ -15,7 +15,9 @@
 -export([resp_cookie_clears_when_dirty_and_empty/1]).
 -export([resp_cookie_none_when_clean/1]).
 -export([cookie_secure_follows_env/1]).
+-export([host_prefix_round_trips_when_secure/1]).
 -export([encode_errors_when_too_large/1]).
+-export([encode_size_guard_counts_cookie_line/1]).
 -export([format_error_renders_too_large_message/1]).
 -export([decode_id_rejects_other_consumers_cookie/1]).
 -export([decode_id_rejects_expired_id/1]).
@@ -38,7 +40,9 @@ all() ->
         resp_cookie_clears_when_dirty_and_empty,
         resp_cookie_none_when_clean,
         cookie_secure_follows_env,
+        host_prefix_round_trips_when_secure,
         encode_errors_when_too_large,
+        encode_size_guard_counts_cookie_line,
         format_error_renders_too_large_message,
         decode_id_rejects_other_consumers_cookie,
         decode_id_rejects_expired_id
@@ -114,6 +118,36 @@ cookie_secure_follows_env(Config) when is_list(Config) ->
         application:unset_env(arizona, session_secure)
     end.
 
+host_prefix_round_trips_when_secure(Config) when is_list(Config) ->
+    %% With session_secure enabled the cookie uses the `__Host-` prefixed name,
+    %% which the browser only accepts as Secure + Path=/ + Domain-less -- closing
+    %% sibling-subdomain cookie tossing (a planted, path-scoped `az_session`
+    %% shadow that would otherwise precede the real cookie and survive login
+    %% rotation). Write and read sides must agree on the name.
+    application:set_env(arizona, session_secure, true),
+    try
+        ?assertEqual(~"__Host-az_session", arizona_session:cookie_name()),
+        %% All three Set-Cookie builders carry the prefixed name and satisfy the
+        %% prefix requirements (Secure, Path=/, no Domain).
+        {~"__Host-az_session", _, SetOpts} = arizona_session:set_cookie(#{~"k" => ~"v"}),
+        ?assertMatch(#{secure := true, path := ~"/"}, SetOpts),
+        ?assertNot(maps:is_key(domain, SetOpts)),
+        ?assertMatch({~"__Host-az_session", <<>>, _}, arizona_session:clear_cookie()),
+        ?assertMatch({~"__Host-az_session", _, _}, arizona_session:set_cookie_id(~"abc")),
+        %% End-to-end through arizona_req: a write emits the prefixed cookie and
+        %% a follow-up request carrying it reads the session back.
+        Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+        Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+        [{~"__Host-az_session", Value, _}] = arizona_req:resp_cookies(Req1),
+        Req2 = arizona_req_test_adapter:new(#{cookies => [{~"__Host-az_session", Value}]}),
+        {Session, _Req3} = arizona_req:read_session(Req2),
+        ?assertEqual(#{~"user_id" => ~"42"}, Session)
+    after
+        application:unset_env(arizona, session_secure)
+    end,
+    %% secure=false keeps the plain name.
+    ?assertEqual(~"az_session", arizona_session:cookie_name()).
+
 encode_errors_when_too_large(Config) when is_list(Config) ->
     %% A tiny limit forces the guard; the encoded (encrypted) value exceeds 8 bytes.
     application:set_env(arizona, session_max_bytes, 8),
@@ -122,6 +156,61 @@ encode_errors_when_too_large(Config) when is_list(Config) ->
             {session_too_large, _, 8},
             arizona_session:encode(#{~"k" => ~"a value well over eight bytes"})
         )
+    after
+        application:unset_env(arizona, session_max_bytes)
+    end.
+
+encode_size_guard_counts_cookie_line(Config) when is_list(Config) ->
+    %% Browsers count at least name+value against the ~4096 cap (RFC 6265's
+    %% minimum is the whole name+value+attributes line), so a value that fits
+    %% `session_max_bytes` alone can still be silently dropped once
+    %% `az_session=` and the attributes are added -- exactly the failure the
+    %% guard exists to make loud. The guard must therefore measure the full
+    %% Set-Cookie line, and the boundary must sit exactly at the limit.
+    Session = #{~"user_id" => ~"42"},
+    %% The encoded value length is deterministic for a fixed payload (the IV is
+    %% random but fixed-size, and base64 length depends only on payload length).
+    Value = arizona_session:encode(Session),
+    %% Recover the guarded size from the error tuple under an impossible limit.
+    application:set_env(arizona, session_max_bytes, 1),
+    Size =
+        try
+            arizona_session:encode(Session)
+        catch
+            error:{session_too_large, S, 1} -> S
+        end,
+    try
+        %% The guard counts the line, not the bare value: name + "=" +
+        %% `; Path=/` (8) + `; Max-Age=` (10) + its digits + `; HttpOnly` (10) +
+        %% `; SameSite=Lax` (14) + the `; Secure` budget (8). The Secure flag and
+        %% the longer `__Host-` prefixed name are counted regardless of
+        %% session_secure, so enabling it in production never shrinks the budget
+        %% a session was written against.
+        MaxAgeDigits = byte_size(integer_to_binary(arizona_session:max_age())),
+        Overhead = byte_size(~"__Host-az_session") + 1 + 8 + 10 + MaxAgeDigits + 10 + 14 + 8,
+        ?assertEqual(byte_size(Value) + Overhead, Size),
+        %% Boundary: a limit of exactly the line size passes ...
+        application:set_env(arizona, session_max_bytes, Size),
+        ?assertEqual(byte_size(Value), byte_size(arizona_session:encode(Session))),
+        %% ... and one byte under it errors.
+        application:set_env(arizona, session_max_bytes, Size - 1),
+        ?assertError({session_too_large, Size, _}, arizona_session:encode(Session)),
+        %% The constants must cover what the transport serializer actually
+        %% emits -- pin them against roadrunner_cookie:serialize/3 over this
+        %% module's own opts at the conservatively budgeted maximum (secure
+        %% mode: __Host- name + the Secure flag). A serializer growing an
+        %% attribute, or a wrong constant, fails here instead of silently
+        %% under-counting the budget.
+        Serialized = iolist_to_binary(
+            roadrunner_cookie:serialize(~"__Host-az_session", Value, #{
+                http_only => true,
+                secure => true,
+                same_site => lax,
+                path => ~"/",
+                max_age => arizona_session:max_age()
+            })
+        ),
+        ?assert(byte_size(Serialized) =< Size)
     after
         application:unset_env(arizona, session_max_bytes)
     end.

@@ -9,8 +9,12 @@ the request in an `arizona_req:request()`, runs the route's `middlewares` (so CS
 `check_origin` and any app middleware apply to controllers too), and on `{cont, ...}`
 restores the controller's `state` into the request and calls the app controller action
 (`Handler:Action/1`, the route's `action` option defaulting to `handle`), flushing any
-middleware-stashed cookies/headers onto its response. On `{halt, ...}` it ships the
-halt (e.g. `check_origin`'s `403`) without invoking the action.
+middleware-stashed cookies/headers onto its response. The pipeline's product is
+threaded to the action through the request: `arizona_controller:req/1` recovers the
+post-middleware `arizona_req:request()` and `arizona_controller:bindings/1` the
+produced bindings (so e.g. a `fetch_session` step's session is readable in the
+action). On `{halt, ...}` it ships the halt (e.g. `check_origin`'s `403`) without
+invoking the action.
 """.
 
 -behaviour(roadrunner_handler).
@@ -49,14 +53,47 @@ handle(Req) ->
     case arizona_middleware:apply_middlewares(Middlewares, ArzReq, #{}) of
         {halt, HaltReq} ->
             {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
-        {cont, ArzReq1, _Bindings} ->
+        {cont, ArzReq1, Bindings} ->
             %% Restore the controller's own state into the raw request (the dispatcher
-            %% overwrote it with the arizona meta), run the action, then flush any
-            %% middleware-stashed cookies/headers onto the action's response.
+            %% overwrote it with the arizona meta) and thread the pipeline's product --
+            %% the post-middleware arizona_req and the produced bindings -- through the
+            %% roadrunner `private` scratchpad, where `arizona_controller:req/1` and
+            %% `arizona_controller:bindings/1` recover them (mirroring how `state` rides
+            %% the request to `roadrunner_req:state/1`). Then run the action and flush
+            %% any middleware-stashed cookies/headers onto its response.
             Raw = arizona_req:raw(ArzReq1),
-            {Resp, Req1} = dispatch_action(Handler, Action, Raw#{state => State}),
-            {arizona_roadrunner_resp:flush(ArzReq1, Resp), Req1}
+            ActionReq = roadrunner_req:merge_private(
+                #{{arizona, req} => ArzReq1, {arizona, bindings} => Bindings},
+                Raw#{state => State}
+            ),
+            {Resp, Req1} = dispatch_action(Handler, Action, ActionReq),
+            %% Flush the action's OWN arizona_req, recovered from the request it
+            %% returned: an action that writes the session/flash
+            %% (`put_session/3`, `clear_session/1`, ...) through
+            %% `arizona_controller:req/1` must have those writes serialized and
+            %% committed, not silently dropped in favour of the pre-action copy.
+            %% An action that returns a request without the stash (a hand-built
+            %% one) falls back to the pipeline's own.
+            FlushReq = action_arizona_req(Req1, ArzReq1),
+            %% Drop the stash before roadrunner sees the request again: it holds
+            %% the DECRYPTED session, and a handler crash logs the request.
+            {arizona_roadrunner_resp:flush(FlushReq, Resp), strip_arizona_private(Req1)}
     end.
+
+%% The action's post-write arizona_req, or the pipeline's when the action
+%% returned a request that no longer carries the stash.
+action_arizona_req(Req, Fallback) ->
+    case roadrunner_req:private(Req) of
+        #{{arizona, req} := ArzReq} -> ArzReq;
+        #{} -> Fallback
+    end.
+
+%% The stash exists for the action only; roadrunner logs the request on a
+%% handler crash, so the decrypted session must not ride back out with it.
+strip_arizona_private(Req) ->
+    roadrunner_req:delete_private(
+        {arizona, bindings}, roadrunner_req:delete_private({arizona, req}, Req)
+    ).
 
 -doc """
 Renders a friendly message when a route names an `action` the controller module

@@ -72,6 +72,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([put_resp_status/2]).
 -export([resp_headers/1]).
 -export([resp_cookies/1]).
+-export([commit_session/1]).
 -export([resp_status/1]).
 -export([put_flash/3]).
 -export([flash/1]).
@@ -498,8 +499,13 @@ Returns the stashed response cookies (newest first), or `[]`, plus the flash and
 session cookies when warranted: a freshly `put_flash/3`-set flash serializes to a
 signed `Set-Cookie` (a consumed incoming flash with no new one serializes to a
 clearing cookie); a written session (`put_session/3`/`delete_session/2`) serializes
-to an encrypted `Set-Cookie`, a cleared one (`clear_session/1`) to a clearing
-cookie, and an untouched session to nothing. Transports flush this list verbatim.
+to an encrypted `Set-Cookie` (in store mode, the signed session id), a cleared one
+(`clear_session/1`) to a clearing cookie, and an untouched session to nothing.
+Transports flush this list verbatim.
+
+A pure getter: it builds the cookie list and nothing else. In store mode the
+matching store write/delete is `commit_session/1`, which the transports call at
+response flush.
 """.
 -spec resp_cookies(Request) -> [{binary(), binary(), resp_cookie_opts()}] when
     Request :: request().
@@ -517,34 +523,81 @@ resp_cookies(Req) ->
         SessionCookie -> WithFlash ++ [SessionCookie]
     end.
 
-%% The session `Set-Cookie` for this response. In store mode this also commits the write
-%% (the response is where a written session is persisted): a non-empty dirty session is
-%% put under its id and the signed id is emitted; a cleared one (logout) is deleted and
-%% the cookie cleared; an untouched session emits nothing. Cookie mode encrypts the map
-%% into the cookie as before.
+%% The session `Set-Cookie` for this response -- built, not committed: a non-empty
+%% dirty session emits the fresh cookie (store mode: the signed id), a cleared one
+%% (logout) the clearing cookie, an untouched session nothing. The store-mode
+%% write/delete lives in `commit_session/1`.
 session_resp_cookie(Req) ->
-    SessionOut = maps:get(session_out, Req, #{}),
-    Dirty = maps:get(session_dirty, Req, false),
     case session_store() of
         undefined ->
+            SessionOut = maps:get(session_out, Req, #{}),
+            Dirty = maps:get(session_dirty, Req, false),
             arizona_session:resp_cookie(SessionOut, Dirty);
-        Store ->
-            store_resp_cookie(Store, Req, SessionOut, Dirty)
+        _Store ->
+            store_resp_cookie(Req)
     end.
 
-store_resp_cookie(_Store, _Req, _SessionOut, false) ->
-    none;
-store_resp_cookie(Store, Req, SessionOut, true) when map_size(SessionOut) > 0 ->
-    Id = maps:get(session_id, Req),
-    ok = Store:put(Id, SessionOut, arizona_session:max_age()),
-    %% On a rotation (clear_session then put_session, e.g. login) drop the
-    %% pre-rotation entry so a pre-login / fixated id cannot be reused.
-    ok = maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined)),
-    arizona_session:set_cookie_id(Id);
-store_resp_cookie(Store, Req, _SessionOut, true) ->
-    %% Cleared (logout): drop the store entry if we know the id, and clear the cookie.
-    ok = maybe_delete_stored(Store, maps:get(session_id, Req, undefined)),
-    arizona_session:clear_cookie().
+%% Pure store-mode counterpart of `arizona_session:resp_cookie/2`.
+store_resp_cookie(Req) ->
+    case session_outcome(Req) of
+        {write, _SessionOut} -> arizona_session:set_cookie_id(maps:get(session_id, Req));
+        clear -> arizona_session:clear_cookie();
+        untouched -> none
+    end.
+
+%% THE classification of what this request did to the session, consumed by
+%% both the cookie build (store_resp_cookie/1) and the store commit
+%% (commit_session_store/2) -- one definition, so the Set-Cookie and the
+%% store write can never disagree about the outcome.
+session_outcome(#{session_dirty := true, session_out := SessionOut}) when
+    map_size(SessionOut) > 0
+->
+    {write, SessionOut};
+session_outcome(#{session_dirty := true}) ->
+    clear;
+session_outcome(_Req) ->
+    untouched.
+
+-doc """
+Commits a written session to the server-side store (store mode): a dirty
+non-empty session is `put` under its id -- and, on a rotation (`clear_session/1`
+then `put_session/3`, the login pattern), the pre-rotation entry is dropped so a
+fixated id cannot be reused -- while a cleared one (logout) is deleted. A no-op
+in cookie mode or when the session is untouched.
+
+Called by the transports at response flush, beside serializing `resp_cookies/1`
+(a pure getter that performs no store writes). Flushing is the commit point, so
+the cookie and the store entry always agree: a response that cannot be built
+(an unflushable shape raises in the header fold, before this call) commits
+nothing. A `{live, ...}` render crash is not such a case -- it is caught and
+flushed as a 500 error page, so a session written before the crash does commit.
+Idempotent -- committing the same request again repeats the same put/delete.
+""".
+-spec commit_session(Request) -> ok when
+    Request :: request().
+commit_session(Req) ->
+    case session_store() of
+        undefined -> ok;
+        Store -> commit_session_store(Store, Req)
+    end.
+
+commit_session_store(Store, Req) ->
+    case session_outcome(Req) of
+        {write, SessionOut} ->
+            ok = Store:put(maps:get(session_id, Req), SessionOut, arizona_session:max_age()),
+            %% On a rotation (clear_session then put_session, e.g. login) drop the
+            %% pre-rotation entry so a pre-login / fixated id cannot be reused.
+            maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined));
+        clear ->
+            %% Cleared (logout): drop the store entry if we know the id -- and
+            %% the pre-rotation one too, so a rotation whose writes all got
+            %% removed again (clear_session, put_session, delete_session) does
+            %% not leave the pre-login entry resolvable.
+            ok = maybe_delete_stored(Store, maps:get(session_id, Req, undefined)),
+            maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined));
+        untouched ->
+            ok
+    end.
 
 maybe_delete_stored(_Store, undefined) -> ok;
 maybe_delete_stored(Store, Id) -> Store:delete(Id).
@@ -697,13 +750,30 @@ delete_session(Req0, Key) ->
     }.
 
 -doc """
-Clears the entire session (logout). On the response a clearing `Set-Cookie` is sent
-regardless of the incoming session. Unlike `put_session/3` it does not require
-`secret_key` -- clearing encrypts nothing, so logout always works.
+Clears the entire session (logout). On the response a clearing `Set-Cookie` is
+sent regardless of the incoming session, and in store mode the server-side entry
+is dropped at flush -- logout revokes, so a captured signed-id cookie stops
+resolving immediately, whether or not anything read the session earlier this
+request (the incoming cookie's id is resolved here). In cookie mode it does not
+require `secret_key` -- clearing encrypts nothing, so logout always works; store
+mode reads the signed id with the `secret_key` store mode requires anyway.
 """.
 -spec clear_session(Request) -> Request when
     Request :: request().
-clear_session(Req) ->
+clear_session(Req0) ->
+    %% In store mode, resolve the incoming cookie's id first (the read path):
+    %% only `read_session` stashes `session_id`, so a clear on a request that
+    %% never read the session would otherwise clear just the client cookie and
+    %% leave the store entry -- and any captured signed-id cookie -- live until
+    %% TTL, defeating logout revocation.
+    Req =
+        case session_store() of
+            undefined ->
+                Req0;
+            _Store ->
+                {_Session, ReadReq} = read_session(Req0),
+                ReadReq
+        end,
     %% Mark the session reset. In store mode a subsequent write (the login
     %% rotation pattern `clear_session` then `put_session`) then mints a FRESH id
     %% rather than reusing the incoming one, so a pre-login -- possibly
@@ -819,7 +889,16 @@ read_session_value(Value, Req) ->
                         no_session ->
                             {#{}, Req#{session_in => #{}}};
                         {error, _Reason} = Error ->
-                            {#{}, Req#{session_in => #{}, session_error => Error}}
+                            %% The id is validly signed even though the entry
+                            %% read failed, so keep it: a logout during a
+                            %% transient read outage still revokes at flush
+                            %% (commit_session's cleared leg deletes by this
+                            %% id) instead of leaving the entry -- and any
+                            %% captured cookie -- live until TTL. The session
+                            %% DATA stays empty; a failed read grants nothing.
+                            {#{}, Req#{
+                                session_in => #{}, session_id => Id, session_error => Error
+                            }}
                     end;
                 error ->
                     {#{}, Req#{session_in => #{}}}

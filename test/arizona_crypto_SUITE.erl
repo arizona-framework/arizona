@@ -33,6 +33,10 @@
 -export([secret_errors_when_unset/1]).
 -export([sign_errors_when_secret_unset/1]).
 -export([encrypt_errors_when_secret_unset/1]).
+-export([verify_errors_when_secret_unset/1]).
+-export([decrypt_errors_when_secret_unset/1]).
+-export([verify_errors_on_broken_previous_key_env/1]).
+-export([decrypt_errors_on_broken_previous_key_env/1]).
 -export([format_error_renders_secret_message/1]).
 
 -define(SECRET, ~"test-secret-key-0123456789abcdef").
@@ -70,6 +74,10 @@ all() ->
         secret_errors_when_unset,
         sign_errors_when_secret_unset,
         encrypt_errors_when_secret_unset,
+        verify_errors_when_secret_unset,
+        decrypt_errors_when_secret_unset,
+        verify_errors_on_broken_previous_key_env,
+        decrypt_errors_on_broken_previous_key_env,
         format_error_renders_secret_message
     ].
 
@@ -307,6 +315,53 @@ encrypt_errors_when_secret_unset(Config) when is_list(Config) ->
         ?assertError(secret_key_not_configured, arizona_crypto:encrypt(?PURPOSE, ~"x"))
     after
         application:set_env(arizona, secret_key, ?SECRET)
+    end.
+
+verify_errors_when_secret_unset(Config) when is_list(Config) ->
+    %% The read path must fail as loudly as the write path: a missing secret is a
+    %% node misconfiguration, not a tampered cookie. Swallowing it into the
+    %% tampered-value `error` sentinel would silently sign every user out with
+    %% nothing logged.
+    Signed = arizona_crypto:sign(?PURPOSE, ~"payload"),
+    application:unset_env(arizona, secret_key),
+    try
+        ?assertError(secret_key_not_configured, arizona_crypto:verify(?PURPOSE, Signed))
+    after
+        application:set_env(arizona, secret_key, ?SECRET)
+    end.
+
+decrypt_errors_when_secret_unset(Config) when is_list(Config) ->
+    Blob = arizona_crypto:encrypt(?PURPOSE, ~"payload"),
+    application:unset_env(arizona, secret_key),
+    try
+        ?assertError(secret_key_not_configured, arizona_crypto:decrypt(?PURPOSE, Blob))
+    after
+        application:set_env(arizona, secret_key, ?SECRET)
+    end.
+
+verify_errors_on_broken_previous_key_env(Config) when is_list(Config) ->
+    %% A broken `{env, ...}` reference in secret_key_previous is the same class of
+    %% config error: resolution failure (env_not_set) must propagate from the read
+    %% path, not read as a signed-out request.
+    Var = "ARIZONA_CRYPTO_SUITE_UNSET_PREV",
+    true = os:unsetenv(Var),
+    Signed = arizona_crypto:sign(?PURPOSE, ~"payload"),
+    application:set_env(arizona, secret_key_previous, {env, Var}),
+    try
+        ?assertError({env_not_set, Var}, arizona_crypto:verify(?PURPOSE, Signed))
+    after
+        application:unset_env(arizona, secret_key_previous)
+    end.
+
+decrypt_errors_on_broken_previous_key_env(Config) when is_list(Config) ->
+    Var = "ARIZONA_CRYPTO_SUITE_UNSET_PREV",
+    true = os:unsetenv(Var),
+    Blob = arizona_crypto:encrypt(?PURPOSE, ~"payload"),
+    application:set_env(arizona, secret_key_previous, {env, Var}),
+    try
+        ?assertError({env_not_set, Var}, arizona_crypto:decrypt(?PURPOSE, Blob))
+    after
+        application:unset_env(arizona, secret_key_previous)
     end.
 
 format_error_renders_secret_message(Config) when is_list(Config) ->

@@ -59,7 +59,11 @@ halt(HaltReq) ->
     flush(HaltReq, Resp).
 
 -doc """
-Folds the request's stashed response headers and cookies onto `Resp`.
+Folds the request's stashed response headers and cookies onto `Resp`, then
+commits a written server-side session (`arizona_req:commit_session/1`) -- the
+flush is the commit-on-success point, so the store write happens only once a
+response has actually been built, never as a side effect of reading
+`arizona_req:resp_cookies/1`.
 
 Accepts every header-bearing `t:roadrunner_handler:response/0` shape: the
 buffered triple and the `stream`/`loop`/`sendfile` quadruples. A `websocket`
@@ -78,13 +82,17 @@ flush(ArzReq, Resp0) ->
         Resp0,
         arizona_req:resp_headers(ArzReq)
     ),
-    lists:foldl(
+    Resp = lists:foldl(
         fun({Name, Value, Opts}, R) ->
             add_header(R, ~"set-cookie", roadrunner_cookie:serialize(Name, Value, Opts))
         end,
         Resp1,
         arizona_req:resp_cookies(ArzReq)
-    ).
+    ),
+    %% After the folds: an unflushable response shape raises above, so a session
+    %% whose cookie cannot reach the client is never committed either.
+    ok = arizona_req:commit_session(ArzReq),
+    Resp.
 
 -doc """
 Renders the error raised when a stashed header cannot be flushed onto the

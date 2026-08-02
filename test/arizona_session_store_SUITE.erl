@@ -13,16 +13,21 @@
 -export([ets_expiry_drop_spares_refreshed_row/1]).
 -export([ets_expiry_drop_removes_still_expired_row/1]).
 -export([ets_sweep_reaps_expired/1]).
+-export([req_resp_cookies_is_pure_getter/1]).
+-export([req_transport_flush_commits_store_write/1]).
 -export([req_put_session_persists_to_store/1]).
 -export([req_session_id_available_after_write/1]).
 -export([req_read_session_from_store/1]).
 -export([req_put_session_merges_onto_stored/1]).
 -export([req_clear_session_deletes_from_store/1]).
+-export([req_clear_session_without_read_deletes_from_store/1]).
+-export([req_login_rotation_without_read_drops_incoming_entry/1]).
 -export([req_login_rotation_mints_fresh_id/1]).
 -export([req_clear_then_put_without_read_mints_fresh_id/1]).
 -export([req_revocation_empties_session/1]).
 -export([req_revocation_records_no_error/1]).
 -export([req_store_failure_is_observable/1]).
+-export([req_clear_session_during_store_outage_still_revokes/1]).
 -export([req_tampered_cookie_records_no_error/1]).
 -export([req_cookie_mode_records_no_error/1]).
 -export([req_store_failure_survives_put_session/1]).
@@ -41,16 +46,21 @@ all() ->
         ets_expiry_drop_spares_refreshed_row,
         ets_expiry_drop_removes_still_expired_row,
         ets_sweep_reaps_expired,
+        req_resp_cookies_is_pure_getter,
+        req_transport_flush_commits_store_write,
         req_put_session_persists_to_store,
         req_session_id_available_after_write,
         req_read_session_from_store,
         req_put_session_merges_onto_stored,
         req_clear_session_deletes_from_store,
+        req_clear_session_without_read_deletes_from_store,
+        req_login_rotation_without_read_drops_incoming_entry,
         req_login_rotation_mints_fresh_id,
         req_clear_then_put_without_read_mints_fresh_id,
         req_revocation_empties_session,
         req_revocation_records_no_error,
         req_store_failure_is_observable,
+        req_clear_session_during_store_outage_still_revokes,
         req_tampered_cookie_records_no_error,
         req_cookie_mode_records_no_error,
         req_store_failure_survives_put_session,
@@ -135,11 +145,44 @@ ets_sweep_reaps_expired(Config) when is_list(Config) ->
 %% arizona_req in store mode
 %% --------------------------------------------------------------------
 
+req_resp_cookies_is_pure_getter(Config) when is_list(Config) ->
+    %% resp_cookies/1 is documented as a getter, so it must BUILD the Set-Cookie
+    %% without committing the store write -- it used to put/delete as a side
+    %% effect of being read. The commit is the explicit commit_session/1 the
+    %% transports call at response flush.
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+    [{~"az_session", Value, _Opts}] = arizona_req:resp_cookies(Req1),
+    {ok, Id} = arizona_session:decode_id(Value),
+    ?assertEqual(no_session, arizona_session_store_ets:get(Id)),
+    ok = arizona_req:commit_session(Req1),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)),
+    %% Idempotent: a second commit repeats the same write.
+    ok = arizona_req:commit_session(Req1),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)).
+
+req_transport_flush_commits_store_write(Config) when is_list(Config) ->
+    %% The roadrunner transport flush is the commit point: flushing a response
+    %% both serializes the session Set-Cookie onto it and commits the store
+    %% write -- so a handler that crashes before a response is flushed leaves
+    %% the store untouched (commit-on-success).
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+    {200, Headers, <<>>} = arizona_roadrunner_resp:flush(Req1, {200, [], <<>>}),
+    {~"set-cookie", SetCookie} = lists:keyfind(~"set-cookie", 1, Headers),
+    [~"az_session", Value | _] = binary:split(iolist_to_binary(SetCookie), [~"=", ~";"], [
+        global
+    ]),
+    {ok, Id} = arizona_session:decode_id(Value),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)).
+
 req_put_session_persists_to_store(Config) when is_list(Config) ->
     Req0 = arizona_req_test_adapter:new(#{cookies => []}),
     Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
-    %% The cookie carries the signed id; the store holds the map (put on response).
+    %% The cookie carries the signed id; the store holds the map, committed at
+    %% response flush (commit_session/1 -- the transports' flush step).
     [{~"az_session", Value, _Opts}] = arizona_req:resp_cookies(Req1),
+    ok = arizona_req:commit_session(Req1),
     {ok, Id} = arizona_session:decode_id(Value),
     ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)).
 
@@ -170,6 +213,7 @@ req_put_session_merges_onto_stored(Config) when is_list(Config) ->
     }),
     Req1 = arizona_req:put_session(Req0, b, 2),
     [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req1),
+    ok = arizona_req:commit_session(Req1),
     %% Same id reused; the store holds the merged map.
     ?assertEqual({ok, Id}, arizona_session:decode_id(Value)),
     ?assertEqual({ok, #{~"a" => 1, ~"b" => 2}}, arizona_session_store_ets:get(Id)).
@@ -183,8 +227,45 @@ req_clear_session_deletes_from_store(Config) when is_list(Config) ->
     {_, Req1} = arizona_req:read_session(Req0),
     Req2 = arizona_req:clear_session(Req1),
     [{~"az_session", <<>>, Opts}] = arizona_req:resp_cookies(Req2),
+    ok = arizona_req:commit_session(Req2),
     ?assertEqual(0, maps:get(max_age, Opts)),
     ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
+
+req_clear_session_without_read_deletes_from_store(Config) when is_list(Config) ->
+    %% Logout revocation must not depend on the request having read the session
+    %% first: a controller-style flow calling only clear_session (no
+    %% fetch_session middleware, no get_session/read_session) used to clear just
+    %% the client cookie, leaving the store entry -- and any captured signed-id
+    %% cookie -- live until TTL, defeating store mode's headline revocation
+    %% property. clear_session now resolves the incoming cookie's id itself, so
+    %% the flush drops the entry.
+    Id = arizona_session:new_id(),
+    ok = arizona_session_store_ets:put(Id, #{~"user_id" => ~"7"}, 3600),
+    Req0 = arizona_req_test_adapter:new(#{
+        cookies => [{~"az_session", arizona_session:encode_id(Id)}]
+    }),
+    Req1 = arizona_req:clear_session(Req0),
+    [{~"az_session", <<>>, _Opts}] = arizona_req:resp_cookies(Req1),
+    ok = arizona_req:commit_session(Req1),
+    ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
+
+req_login_rotation_without_read_drops_incoming_entry(Config) when is_list(Config) ->
+    %% The same resolution feeds the fixation defense: a rotation
+    %% (clear_session then put_session) with NO prior read still lands under a
+    %% fresh id and drops the pre-login (possibly attacker-planted) entry.
+    IncomingId = arizona_session:new_id(),
+    ok = arizona_session_store_ets:put(IncomingId, #{}, 3600),
+    Req0 = arizona_req_test_adapter:new(#{
+        cookies => [{~"az_session", arizona_session:encode_id(IncomingId)}]
+    }),
+    Req1 = arizona_req:clear_session(Req0),
+    Req2 = arizona_req:put_session(Req1, user_id, ~"42"),
+    [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req2),
+    ok = arizona_req:commit_session(Req2),
+    {ok, OutId} = arizona_session:decode_id(Value),
+    ?assertNotEqual(IncomingId, OutId),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(OutId)),
+    ?assertEqual(no_session, arizona_session_store_ets:get(IncomingId)).
 
 %% Session fixation defense: the login rotation pattern (read the incoming id,
 %% clear_session, then put_session the new identity) must land the authenticated
@@ -200,6 +281,7 @@ req_login_rotation_mints_fresh_id(Config) when is_list(Config) ->
     Req2 = arizona_req:clear_session(Req1),
     Req3 = arizona_req:put_session(Req2, user_id, ~"42"),
     [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req3),
+    ok = arizona_req:commit_session(Req3),
     {ok, OutId} = arizona_session:decode_id(Value),
     %% Rotated to a fresh id, and the cookie carries it.
     ?assertNotEqual(IncomingId, OutId),
@@ -216,6 +298,7 @@ req_clear_then_put_without_read_mints_fresh_id(Config) when is_list(Config) ->
     Req1 = arizona_req:clear_session(Req0),
     Req2 = arizona_req:put_session(Req1, user_id, ~"42"),
     [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req2),
+    ok = arizona_req:commit_session(Req2),
     {ok, OutId} = arizona_session:decode_id(Value),
     ?assertEqual(OutId, arizona_req:session_id(Req2)),
     ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(OutId)).
@@ -252,11 +335,29 @@ req_store_failure_is_observable(Config) when is_list(Config) ->
     Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Cookie}]}),
     {Session, Req1} = arizona_req:read_session(Req0),
     ?assertEqual(#{}, Session),
-    ?assertEqual(undefined, arizona_req:session_id(Req1)),
+    %% The id is validly signed, so it IS kept (it lets a logout revoke during
+    %% the outage) -- keeping it grants no data, as the misses below prove.
+    ?assertEqual(Id, arizona_req:session_id(Req1)),
     ?assertEqual({error, store_unreachable}, arizona_req:session_error(Req1)),
     %% Public-API proof the failed read grants nothing: get_session misses too.
     ?assertEqual(error, arizona_req:get_session(Req1, user_id)),
     ?assertEqual(default, arizona_req:get_session(Req1, user_id, default)).
+
+req_clear_session_during_store_outage_still_revokes(Config) when is_list(Config) ->
+    %% A transient read outage must not turn logout into a client-only clear:
+    %% the incoming id is validly signed even when the entry read fails, so
+    %% the flush's cleared leg still deletes the entry (the fixture forwards
+    %% writes to the real ETS table; only its reads fail).
+    Id = arizona_session:new_id(),
+    ok = arizona_session_store_ets:put(Id, #{~"user" => ~"u1"}, 60),
+    application:set_env(arizona, session_store, arizona_failing_session_store),
+    Cookie = arizona_session:encode_id(Id),
+    Req0 = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Cookie}]}),
+    Req1 = arizona_req:clear_session(Req0),
+    ?assertMatch([{_, <<>>, _}], arizona_req:resp_cookies(Req1)),
+    ok = arizona_req:commit_session(Req1),
+    application:set_env(arizona, session_store, arizona_session_store_ets),
+    ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
 
 req_tampered_cookie_records_no_error(Config) when is_list(Config) ->
     %% A tampered/forged signed id fails decode before the store is ever consulted: it is a

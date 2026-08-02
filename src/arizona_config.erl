@@ -96,8 +96,8 @@ get_env(Key) ->
 
 -doc """
 Like `application:get_env(arizona, Key, Default)`, but resolves any `{env, ...}`
-references in the stored value. `Default` is returned (unresolved) when `Key` is
-unset.
+references in the value -- including in `Default` when `Key` is unset, so a
+default may itself be an env-var reference.
 """.
 -spec get_env(Key, Default) -> Value when
     Key :: atom(),
