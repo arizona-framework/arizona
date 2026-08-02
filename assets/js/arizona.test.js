@@ -4556,6 +4556,31 @@ describe('navigation scroll', () => {
         expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
     });
+
+    it('same-path hash nav saves outgoing scroll so Back can restore it', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState(null, '', '/same');
+        setupView('page', '<section id="sec">x</section>');
+        Object.defineProperty(window, 'scrollY', { value: 500, configurable: true });
+
+        const replaceSpy = vi.spyOn(history, 'replaceState');
+        clickLink('/same#sec');
+
+        // scrollRestoration is 'manual', so without saving the outgoing scroll
+        // onto the pre-anchor entry, Back after an in-page anchor click lands
+        // at the top instead of where the user was.
+        const savingCall = replaceSpy.mock.calls.find(
+            (c) => c[0] && typeof c[0] === 'object' && c[0]._azScroll,
+        );
+        expect(savingCall).toBeTruthy();
+        expect(savingCall[0]._azScroll).toEqual({ x: 0, y: 500 });
+        expect(location.pathname + location.hash).toBe('/same#sec');
+        replaceSpy.mockRestore();
+    });
 });
 
 // ---------------------------------------------------------------------------

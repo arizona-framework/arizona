@@ -2300,7 +2300,11 @@ function connect(endpoint, params = {}) {
             e.preventDefault();
 
             // Same-page hash nav: update URL + scroll, no server round-trip.
+            // Save the outgoing scroll first (scrollRestoration is 'manual'),
+            // matching the push branch of navigateTo -- otherwise Back after an
+            // in-page anchor click lands at the top.
             if (path === location.pathname && qs === location.search.slice(1)) {
+                saveCurrentScroll();
                 history.pushState(null, '', href);
                 if (!noscroll) applyScroll({ kind: 'push', hash });
                 return;
