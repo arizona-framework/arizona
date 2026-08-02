@@ -487,19 +487,23 @@ eval_stateful(H, Props, {Old, New}) ->
         {B1, Resets, Effects1} = mount_or_update_stateful(H, Props, Id, Old, Effects0),
         ok = set_update_effects(Effects1),
         Tmpl = arizona_stateful:call_render(H, B1),
-        {ChildTriples, {Old, New1}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, New}),
-        {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
-        %% Whatever this child's dynamics added to the views accumulator is its
-        %% transitive descendant subtree (grandchildren and deeper). Record it on
-        %% the snapshot so a skipped root diff (carry_skipped_view) and a child's
-        %% own event (arizona_live:process_child_change) can carry/reconcile the
-        %% WHOLE subtree, not just this child -- otherwise a depth-2 grandchild is
+        %% Evaluate this child's dynamics against a FRESH accumulator (mirroring
+        %% eval_template/eval_each): whatever lands in LocalNew is exactly its
+        %% transitive descendant subtree (grandchildren and deeper), read in
+        %% O(subtree) -- scanning the whole accumulated views map per child would
+        %% make N sibling children O(N^2). Record it on the snapshot so a skipped
+        %% root diff (carry_skipped_view) and a child's own event
+        %% (arizona_live:process_child_change) can carry/reconcile the WHOLE
+        %% subtree, not just this child -- otherwise a depth-2 grandchild is
         %% dropped from the views map and unmounted/reset.
-        Descendants = [K || K <- maps:keys(New1), not is_map_key(K, New)],
+        {ChildTriples, {Old, LocalNew}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, #{}}),
+        {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
+        Descendants = maps:keys(LocalNew),
         Snap0 = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
         Snap = Snap0#{child_views => Descendants},
         B2 = maps:merge(B1, Resets),
         ChildEntry = #{handler => H, bindings => B2, snapshot => Snap},
+        New1 = maps:merge(New, LocalNew),
         {Snap, {Old, New1#{Id => ChildEntry}}}
     end).
 
