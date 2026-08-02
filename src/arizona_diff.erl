@@ -1133,17 +1133,13 @@ diff_item_dynamics_v([{undefined, _New, _} | NR], [{undefined, _Old, _} | OR], V
     {Ops, true, Views1};
 diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
     case {New, Old} of
-        {#{t := ?EACH, source := Src, template := Tmpl}, #{t := ?EACH}} ->
+        {#{t := ?EACH, source := #stream{} = Src, template := Tmpl}, #{t := ?EACH}} ->
+            %% Only a STREAM each snapshot carries `source` (build_each_snap /
+            %% diff_stream's first-render clause): list- and map-source eaches
+            %% evaluate to snapshots without it, so they fall to the make_ops
+            %% clause below and re-render wholesale via the ?OP_TEXT each clause.
             EachDesc = #{source => Src, template => Tmpl},
-            {EachOps, _NewSnap, Views1} =
-                case Src of
-                    #stream{} ->
-                        diff_stream(Az, EachDesc, Old, Views0);
-                    _ when is_list(Src) ->
-                        diff_list(Az, EachDesc, Old, Views0);
-                    _ when is_map(Src) ->
-                        diff_map(Az, EachDesc, Old, Views0)
-                end,
+            {EachOps, _NewSnap, Views1} = diff_stream(Az, EachDesc, Old, Views0),
             {RestOps, Markerless, Views2} = diff_item_dynamics_v(NR, OR, Views1),
             {EachOps ++ RestOps, Markerless, Views2};
         _ ->
