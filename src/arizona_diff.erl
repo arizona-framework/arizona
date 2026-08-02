@@ -454,9 +454,19 @@ is_visible(Key, Vis) ->
 %% An insert past the limit used to render the item, ship its HTML, and then have
 %% `apply_limit/5` remove it in the same batch -- payload the client mounts and
 %% immediately destroys, firing a phantom `mounted()`/`destroyed()` pair.
+%%
+%% The `SnapAcc` guard makes a REPLAYED insert a no-op: the stream API refuses
+%% duplicate-key inserts, so a queued insert whose key the client DOM already
+%% holds can only be the re-drain of a pending queue that was never cleared --
+%% a `#stream{}` nested inside another value (a field of a parent stream's
+%% item) is out of `clear_stream_pending`'s reach, so every re-eval of the
+%% enclosing slot re-drains it. Skipping the replay (delete/update/move/
+%% reorder/reset replays are already no-ops against the post-drain SnapAcc)
+%% makes the whole re-drain idempotent instead of emitting duplicate
+%% OP_INSERTs (duplicate DOM nodes under one az-key).
 stream_insert(Az, Key, Item, Pos, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {_Source, Vis} = SV,
-    case is_visible(Key, Vis) of
+    case is_visible(Key, Vis) andalso not is_map_key(Key, SnapAcc) of
         true ->
             {ItemD, Views1} = arizona_eval:render_stream_item(Key, Item, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, ItemD),

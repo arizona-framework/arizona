@@ -31,6 +31,7 @@
     list_type_switch_stream_to_list/1,
     navigate_with_stream_items/1,
     nested_stream_render/1,
+    nested_stream_redrain_no_duplicate_inserts/1,
     page_add_todo_live/1,
     page_add_todo_then_title_change_then_add_todo/1,
     page_clear_todos_live/1,
@@ -306,7 +307,8 @@ groups() ->
         ]},
         %% Nested stream tests
         {nested_stream, [parallel], [
-            nested_stream_render
+            nested_stream_render,
+            nested_stream_redrain_no_duplicate_inserts
         ]},
         %% DataTable handler tests
         {datatable, [parallel], [
@@ -2868,6 +2870,73 @@ nested_stream_render(Config) when is_list(Config) ->
     ?assertMatch({_, _}, binary:match(HTMLBin, <<"X">>)),
     ?assertMatch({_, _}, binary:match(HTMLBin, <<"Y">>)),
     ?assertMatch({_, _}, binary:match(HTMLBin, <<"Z">>)).
+
+%% A `#stream{}` nested inside another value (here: a field of a parent
+%% stream's item) is out of `clear_stream_pending`'s reach -- the live process
+%% only clears top-level stream bindings -- so its pending queue survives every
+%% drain and is REPLAYED on each re-eval of the enclosing slot. The drain must
+%% therefore be idempotent: a replayed insert whose key the client DOM already
+%% holds is skipped (delete/update/move/reorder/reset replays were already
+%% no-ops against the post-drain snapshot). Previously each re-drain emitted
+%% duplicate OP_INSERTs: duplicate DOM nodes under the same az-key.
+nested_stream_redrain_no_duplicate_inserts(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Cells0 = arizona_stream:new(KeyFun, [#{id => <<"a">>, val => <<"X">>}]),
+    Rows0 = arizona_stream:new(KeyFun, [#{id => 1, cells => Cells0}]),
+    B0 = #{id => <<"t">>, rows => Rows0},
+    {_, Snap0, V0} = arizona_render:render(nested_stream_tmpl(B0), #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    %% Cycle 1: mutate the inner stream (its pending still holds the initial
+    %% insert of cell "a") and update the outer row so the slot re-drains.
+    Cells1 = arizona_stream:insert(Cells0, #{id => <<"b">>, val => <<"Y">>}),
+    Rows1 = arizona_stream:update(maps:get(rows, B1), 1, #{id => 1, cells => Cells1}),
+    B2 = B1#{rows => Rows1},
+    Changed1 = arizona_live_compute_changed(B1, B2),
+    {Ops1, Snap1, V1} = arizona_diff:diff(nested_stream_tmpl(B2), Snap0, V0, Changed1),
+    [[?OP_ITEM_PATCH, _, <<"1">>, InnerOps1]] = Ops1,
+    %% Only the new cell "b" is inserted -- the replayed insert of "a" is
+    %% recognized as already applied.
+    ?assertEqual([<<"b">>], [K || [?OP_INSERT, _, K | _] <- InnerOps1]),
+    %% Cycle 2: mutate the inner stream again -- its pending now carries the
+    %% inserts of "a", "b", and "c"; only "c" may emit.
+    B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
+    Cells2 = arizona_stream:insert(Cells1, #{id => <<"c">>, val => <<"Z">>}),
+    Rows2 = arizona_stream:update(maps:get(rows, B3), 1, #{id => 1, cells => Cells2}),
+    B4 = B3#{rows => Rows2},
+    Changed2 = arizona_live_compute_changed(B3, B4),
+    {Ops2, _Snap2, _V2} = arizona_diff:diff(nested_stream_tmpl(B4), Snap1, V1, Changed2),
+    [[?OP_ITEM_PATCH, _, <<"1">>, InnerOps2]] = Ops2,
+    ?assertEqual([<<"c">>], [K || [?OP_INSERT, _, K | _] <- InnerOps2]).
+
+%% Outer page template for the nested-stream re-drain test: a stream of rows
+%% whose item template embeds a per-row inner stream of cells.
+nested_stream_tmpl(B) ->
+    InnerTmpl = #{
+        t => 0,
+        s => [<<"<td az-key=\"">>, <<"\">">>, <<"</td>">>],
+        d => fun(Cell, CellKey) ->
+            [{<<"0">>, fun() -> CellKey end}, {<<"1">>, fun() -> maps:get(val, Cell) end}]
+        end,
+        f => <<"cell">>
+    },
+    RowTmpl = #{
+        t => 0,
+        s => [<<"<tr az-key=\"">>, <<"\" az=\"1\">">>, <<"</tr>">>],
+        d => fun(Row, RowKey) ->
+            [
+                {<<"0">>, fun() -> RowKey end},
+                {<<"1">>, fun() -> arizona_template:each(maps:get(cells, Row), InnerTmpl) end}
+            ]
+        end,
+        f => <<"row">>
+    },
+    #{
+        s => [<<"<table az=\"0\">">>, <<"</table>">>],
+        d => [
+            {<<"0">>, fun() -> arizona_template:each(arizona_template:get(rows, B), RowTmpl) end}
+        ],
+        f => <<"tbl">>
+    }.
 
 %% =============================================================================
 %% DataTable handler tests
