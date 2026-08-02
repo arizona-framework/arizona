@@ -3419,7 +3419,9 @@ template1_static_binary(Config) when is_list(Config) ->
     ?assertEqual([], maps:get(d, T)),
     ?assert(is_binary(maps:get(f, T))).
 
-%% Test 48: template/1 with dynamic expression -- fallback path.
+%% Test 48: template/1 with dynamic expression -- fallback path. The root slot
+%% is marker-anchored in the statics (previously `[<<>>, <<>>]`, which left its
+%% diff ops targeting an az that existed nowhere in the DOM).
 template1_dynamic_expr(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_dyn_expr). "
@@ -3429,12 +3431,14 @@ template1_dynamic_expr(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{content => <<"hello">>}),
     Fp = maps:get(f, T),
-    ?assertEqual([<<>>, <<>>], maps:get(s, T)),
     Az0 = <<Fp/binary, "-0">>,
+    ?assertEqual([<<"<!--az:", Az0/binary, "-->">>, <<"<!--/az-->">>], maps:get(s, T)),
     [{Az0, {esc, Fun}, {pt_dyn_expr, 1}}] = maps:get(d, T),
     ?assertEqual(<<"hello">>, Fun()).
 
-%% Test 49: template/1 with dynamic expression -- render integration.
+%% Test 49: template/1 with dynamic expression -- render integration. The
+%% rendered value sits inside the root slot's markers, and the diff op targets
+%% that anchored marker.
 template1_dynamic_expr_render(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_dyn_expr_render). "
@@ -3446,11 +3450,13 @@ template1_dynamic_expr_render(Config) when is_list(Config) ->
     Fp = maps:get(f, Tmpl),
     Az0 = <<Fp/binary, "-0">>,
     {HTML, Snap} = arizona_render:render(Tmpl),
-    ?assertEqual(<<"hello">>, iolist_to_binary(HTML)),
-    %% Diff works
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertEqual(<<"<!--az:", Az0/binary, "-->hello<!--/az-->">>, HTMLBin),
+    %% Diff works, and its target is the marker SSR just rendered.
     Tmpl2 = Mod:render(#{content => <<"world">>}),
     {Ops, _} = arizona_diff:diff(Tmpl2, Snap),
-    ?assertEqual([[0, Az0, <<"world">>]], Ops).
+    ?assertEqual([[0, Az0, <<"world">>]], Ops),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"<!--az:", Az0/binary, "-->">>)).
 
 %% Test 50: template/1 with static-only fragment -- no dynamics in any element.
 template1_static_fragment(Config) when is_list(Config) ->
@@ -4032,7 +4038,8 @@ layout_void_dynamic_attr(Config) when is_list(Config) ->
     StaticsBin = iolist_to_binary(maps:get(s, T)),
     ?assertEqual(nomatch, binary:match(StaticsBin, <<"az=\"">>)).
 
-%% Test 75: html with a single dynamic expression -- now uses standard html path.
+%% Test 75: html with a single dynamic expression -- now uses standard html
+%% path, with the root slot marker-anchored in the statics.
 layout_bare_dynamic(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_layout_bare_dyn). "
@@ -4041,8 +4048,10 @@ layout_bare_dynamic(Config) when is_list(Config) ->
         "    arizona_template:html(maps:get(content, Bindings)). "
     ),
     T = Mod:render(#{content => <<"hi">>}),
-    ?assertEqual([<<>>, <<>>], maps:get(s, T)),
-    ?assert(maps:is_key(f, T)),
+    Fp = maps:get(f, T),
+    ?assertEqual(
+        [<<"<!--az:", Fp/binary, "-0-->">>, <<"<!--/az-->">>], maps:get(s, T)
+    ),
     [{_Az, {esc, Fun}, {pt_layout_bare_dyn, 1}}] = maps:get(d, T),
     ?assertEqual(<<"hi">>, Fun()).
 
