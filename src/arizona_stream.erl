@@ -218,21 +218,7 @@ insert(#stream{key = KeyFun, items = Items} = S0, Item) ->
                 {error_info, #{module => ?MODULE}}
             ]);
         #{} ->
-            #stream{
-                items = Items1,
-                order = {Front, Back},
-                pending = Pending,
-                size = Size
-            } = S = drop_oldest_for_append(S0),
-            %% O(1): cons to BackRev instead of `Front ++ [Key]`. The buffer is
-            %% flushed by the next non-insert/2 operation (or by visible_keys
-            %% on read). For 1000 sequential inserts this turns O(N^2) into O(N).
-            S#stream{
-                items = Items1#{Key => Item},
-                order = {Front, [Key | Back]},
-                pending = queue:in({insert, Key, Item, -1}, Pending),
-                size = Size + 1
-            }
+            append_key(S0, Key, Item, {insert, Key, Item, -1})
     end.
 
 -doc """
@@ -325,18 +311,7 @@ update(#stream{items = Items, pending = Pending} = S0, Key, NewItem) ->
                 pending = queue:in({update, Key, NewItem, Changed}, Pending)
             };
         #{} ->
-            #stream{
-                items = Items1,
-                order = {Front, Back},
-                pending = Pending1,
-                size = Size
-            } = S = drop_oldest_for_append(S0),
-            S#stream{
-                items = Items1#{Key => NewItem},
-                order = {Front, [Key | Back]},
-                pending = queue:in({update, Key, NewItem, #{}}, Pending1),
-                size = Size + 1
-            }
+            append_key(S0, Key, NewItem, {update, Key, NewItem, #{}})
     end.
 
 -doc """
@@ -606,6 +581,25 @@ format_error(missing_stream_key, [{_M, _F, [#stream{items = Items}, Key], _Info}
 %% `insert/2` (the bulk-append hot path) leaves the buffer non-empty.
 flat_order({Front, []}) -> Front;
 flat_order({Front, Back}) -> Front ++ lists:reverse(Back).
+
+%% Shared append path for `insert/2` and the `update/3` upsert: evict for
+%% `drop` limit mode, then add `Key` at the order tail with `PendingOp`
+%% queued. O(1): cons to BackRev instead of `Front ++ [Key]`; the buffer is
+%% flushed by the next non-append operation (or by visible_keys on read), so
+%% 1000 sequential appends are O(N), not O(N^2).
+append_key(S0, Key, Item, PendingOp) ->
+    #stream{
+        items = Items,
+        order = {Front, Back},
+        pending = Pending,
+        size = Size
+    } = S = drop_oldest_for_append(S0),
+    S#stream{
+        items = Items#{Key => Item},
+        order = {Front, [Key | Back]},
+        pending = queue:in(PendingOp, Pending),
+        size = Size + 1
+    }.
 
 %% `drop` limit mode, before an append: evict the oldest (front-of-order)
 %% item(s) so the appended item lands inside the visible window (the FIRST
