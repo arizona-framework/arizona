@@ -12,7 +12,8 @@
     boot_without_config/1,
     boot_with_only_server/1,
     boot_with_only_reloader/1,
-    transport_deps_are_not_forced/1
+    transport_deps_are_not_forced/1,
+    prep_stop_stops_listener_before_tree/1
 ]).
 
 -define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
@@ -23,7 +24,8 @@ all() ->
         boot_without_config,
         boot_with_only_server,
         boot_with_only_reloader,
-        transport_deps_are_not_forced
+        transport_deps_are_not_forced,
+        prep_stop_stops_listener_before_tree
     ].
 
 init_per_testcase(boot_with_server_and_reloader, Config) ->
@@ -44,6 +46,10 @@ init_per_testcase(transport_deps_are_not_forced, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     Config;
 init_per_testcase(boot_with_only_server, Config) ->
+    ok = application:set_env(arizona, server, server_opts()),
+    {ok, _} = application:ensure_all_started(arizona),
+    Config;
+init_per_testcase(prep_stop_stops_listener_before_tree, Config) ->
     ok = application:set_env(arizona, server, server_opts()),
     {ok, _} = application:ensure_all_started(arizona),
     Config;
@@ -95,6 +101,18 @@ boot_with_only_reloader(Config) when is_list(Config) ->
 %% them for every consumer, including a server-less/static-generation user, and
 %% would start fs's default CWD watcher in production. A consumer that ships the
 %% server declares roadrunner/ssh in its OWN app's `applications`.
+%% The HTTP listener must go down in prep_stop/1 -- BEFORE the supervision tree
+%% -- or shutdown briefly serves requests against dead infrastructure (pubsub,
+%% MCP registry, session store). prep_stop stops the listener while arizona_sup
+%% is still up; the follow-up application:stop (end_per_testcase) then runs
+%% prep_stop again plus stop/1, so both must be idempotent about the
+%% already-stopped listener.
+prep_stop_stops_listener_before_tree(Config) when is_list(Config) ->
+    ?assert(is_listener_up(arizona_http)),
+    ?assertEqual([], arizona_app:prep_stop([])),
+    ?assertNot(is_listener_up(arizona_http)),
+    ?assert(is_pid(erlang:whereis(arizona_sup))).
+
 transport_deps_are_not_forced(Config) when is_list(Config) ->
     {ok, Apps} = application:get_key(arizona, applications),
     ?assert(lists:member(crypto, Apps)),
