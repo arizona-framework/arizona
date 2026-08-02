@@ -148,8 +148,9 @@ dispatch(Pid, Method, Params, Id) ->
 dispatch(Pid, Method, Params, Id, Timeout) ->
     %% Bounded by the route's `request_timeout_ms`: a buffered tool that runs
     %% past it frees the client with a -32603 (the session stays responsive and
-    %% keeps running the call in its worker). A session that ends mid-wait (idle
-    %% reap / DELETE) frees the caller the same way rather than crashing it.
+    %% keeps running the call in its worker). A session that ends mid-wait (a
+    %% DELETE -- a served or queued request holds off the idle reap) frees the
+    %% caller the same way rather than crashing it.
     try
         gen_server:call(Pid, {dispatch, Method, Params, Id}, Timeout)
     catch
