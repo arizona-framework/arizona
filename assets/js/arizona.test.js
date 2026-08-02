@@ -3014,6 +3014,38 @@ describe('?local -- set/get attribute', () => {
     });
 });
 
+describe('?local -- descriptor cache and early exit', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('parses each az-local descriptor once per element, then serves from cache', () => {
+        setupView(
+            'v',
+            `<span az="1" az-local='{"c":{"0":"title"}}'><!--az:1-->Hi<!--/az--></span>`,
+        );
+        set('v', 'title', 'One');
+        // The element's descriptor is now cached (it is written once at SSR and
+        // never diffed, so it is immutable for the element's lifetime).
+        const parseSpy = vi.spyOn(JSON, 'parse');
+        set('v', 'title', 'Two');
+        expect(get('v', 'title')).toBe('Two');
+        expect(parseSpy).not.toHaveBeenCalled();
+    });
+
+    it('get stops scanning at the first matching slot', () => {
+        setupView(
+            'v',
+            `<span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->first<!--/az--></span>` +
+                `<span az="2" az-local='{"c":{"0":"other"}}'><!--az:2-->x<!--/az--></span>`,
+        );
+        const parseSpy = vi.spyOn(JSON, 'parse');
+        expect(get('k')).toBe('first');
+        // The first element matched, so the second descriptor is never parsed.
+        expect(parseSpy).toHaveBeenCalledTimes(1);
+    });
+});
+
 describe('?local -- interpolated attribute', () => {
     it('set recomposes prefix + value + suffix; get strips them', () => {
         setupView(

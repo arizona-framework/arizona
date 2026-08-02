@@ -1022,44 +1022,76 @@ function readLocalValue(el, target) {
 }
 
 /**
+ * A parsed `az-local` descriptor: content slots, attribute bindings, and
+ * interpolated-attribute affixes.
+ * @typedef {{c?: Object<string, string>, a?: Object<string, string>, ap?: Object<string, [string, string]>}} LocalDesc
+ */
+
+// Parsed `az-local` descriptors, cached per element. NOT a persistent index --
+// discovery still queries the live DOM every call; only the JSON.parse of each
+// element's descriptor is memoized. The attribute is written once at SSR and a
+// ?local slot is never diffed, so a descriptor is immutable for its element's
+// lifetime; a re-rendered slot is a NEW element (a fresh cache key) and dropped
+// elements fall out of the WeakMap with GC.
+/** @type {WeakMap<Element, LocalDesc>} */
+const _localDescs = new WeakMap();
+
+/**
  * Visit each bound slot for `key` under `root`. When `viewId` is non-null only
- * slots whose nearest view is `viewId` are visited (per-view isolation).
+ * slots whose nearest view is `viewId` are visited (per-view isolation). The
+ * callback may return `true` to stop the scan (first-match reads); the return
+ * value says whether it did.
  * @param {Element|Document} root
  * @param {string} key
  * @param {string|null} viewId
- * @param {(el: Element, target: string[]) => void} fn
+ * @param {(el: Element, target: string[]) => boolean|void} fn
+ * @returns {boolean}
  */
 function forEachLocal(root, key, viewId, fn) {
-    /** @param {Element} el */
+    /** @param {Element} el @returns {boolean} */
     const visit = (el) => {
-        const desc = el.getAttribute('az-local');
-        if (!desc) return;
-        if (viewId !== null && resolveTarget(el) !== viewId) return;
-        // The descriptor is always framework-generated valid JSON.
-        const parsed = JSON.parse(desc);
+        let parsed = _localDescs.get(el);
+        if (parsed === undefined) {
+            const desc = el.getAttribute('az-local');
+            if (!desc) return false;
+            // The descriptor is always framework-generated valid JSON.
+            parsed = /** @type {LocalDesc} */ (JSON.parse(desc));
+            _localDescs.set(el, parsed);
+        }
+        if (viewId !== null && resolveTarget(el) !== viewId) return false;
         // c maps each content slot index -> key; a maps each attr name -> key;
         // ap (optional) carries [prefix, suffix] for interpolated attributes.
         if (parsed.c) {
             for (const [slot, k] of Object.entries(parsed.c)) {
-                if (k === key) fn(el, ['content', slot]);
+                if (k === key && fn(el, ['content', slot]) === true) return true;
             }
         }
         if (parsed.a) {
             for (const [attr, k] of Object.entries(parsed.a)) {
                 if (k === key) {
                     const aff = parsed.ap?.[attr];
-                    fn(el, aff ? ['attr', attr, aff[0], aff[1]] : ['attr', attr]);
+                    const t = aff ? ['attr', attr, aff[0], aff[1]] : ['attr', attr];
+                    if (fn(el, t) === true) return true;
                 }
             }
         }
+        return false;
     };
     // `nodeType`, not `instanceof Element`: a popped-out (Document PiP) root
     // lives in another realm with its own Element constructor, so `instanceof`
     // is false cross-realm and would skip the root's own slot (a Document is
     // nodeType 9, so it still skips the self-check). Mirrors `mountHooks`.
-    if (root.nodeType === 1 && /** @type {Element} */ (root).hasAttribute('az-local'))
-        visit(/** @type {Element} */ (root));
-    root.querySelectorAll('[az-local]').forEach(visit);
+    if (
+        root.nodeType === 1 &&
+        /** @type {Element} */ (root).hasAttribute('az-local') &&
+        visit(/** @type {Element} */ (root))
+    ) {
+        return true;
+    }
+    for (const el of root.querySelectorAll('[az-local]')) {
+        if (visit(el)) return true;
+    }
+    return false;
 }
 
 /**
@@ -1098,16 +1130,21 @@ function get(a, b) {
     const key = scoped ? /** @type {string} */ (b) : a;
     /** @type {*} */
     let result;
+    // First match wins -- the callback returns true so the scan stops there
+    // instead of visiting (and parsing) every remaining slot.
     /** @param {Element|Document} root */
     const scan = (root) =>
         forEachLocal(root, key, viewId, (el, target) => {
-            if (result === undefined) result = readLocalValue(el, target);
+            result = readLocalValue(el, target);
+            return true;
         });
     if (viewId) {
         const root = findViewRoot(viewId);
         if (root) scan(root);
     } else {
-        for (const doc of allDocs()) scan(doc);
+        for (const doc of allDocs()) {
+            if (scan(doc)) break;
+        }
     }
     return result;
 }
