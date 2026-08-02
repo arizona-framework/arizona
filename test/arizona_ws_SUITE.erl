@@ -453,7 +453,7 @@ end_per_group(_Group, _Config) ->
     ok.
 
 pick_port() ->
-    14040 + erlang:unique_integer([positive, monotonic]) rem 1000.
+    arizona_test_port:pick().
 
 %% --------------------------------------------------------------------
 %% Basic tests

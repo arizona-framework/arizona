@@ -100,7 +100,7 @@ all() ->
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     {ok, _} = application:ensure_all_started(roadrunner),
-    Port = 15050 + erlang:unique_integer([positive, monotonic]) rem 1000,
+    Port = arizona_test_port:pick(),
     Auth = fun(Req) ->
         case roadrunner_req:header(~"authorization", Req) of
             ~"Bearer let-me-in" -> ok;
