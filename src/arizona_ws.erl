@@ -5,8 +5,8 @@ Transport-agnostic bootstrap for WebSocket handlers.
 Factors out the upgrade-time logic common to every WebSocket
 transport adapter:
 
-1. Read the framework keys `_az_path` and `_az_reconnect` from the
-   parsed upgrade query string.
+1. Read the framework keys `_az_path`, `_az_reconnect`, and
+   `_az_fps_follow` from the parsed upgrade query string.
 2. Strip framework keys to recover the user-page query string.
 3. Resolve the target route via the `arizona_req` adapter's
    `resolve_route/3` callback.
@@ -46,6 +46,7 @@ via `arizona_req:raw/1`.
     on_mount := arizona_live:on_mount(),
     req := az:request(),
     reconnect := boolean(),
+    fps_follow := boolean(),
     capabilities := map()
 }.
 
@@ -58,8 +59,9 @@ via `arizona_req:raw/1`.
 -doc """
 Prepares a WebSocket upgrade.
 
-Reads `_az_path` / `_az_reconnect` from `QS`, resolves the route
-against `Adapter`/`AdapterState`, and applies route middlewares.
+Reads `_az_path` / `_az_reconnect` / `_az_fps_follow` from `QS`,
+resolves the route against `Adapter`/`AdapterState`, and applies route
+middlewares.
 
 Returns `{halt, HaltReq}` when middleware short-circuits; the
 transport extracts the native raw request via `arizona_req:raw/1`
@@ -68,7 +70,7 @@ and emits its own response. Returns `not_found` when the client-supplied
 controller/asset/ws route); the transport rejects the upgrade with a 404
 rather than crashing on an attacker-controllable path. Returns `{cont,
 State}` otherwise; the transport passes `State` (which carries `handler`,
-`bindings`, `on_mount`, `req`, `reconnect`) on through to
+`bindings`, `on_mount`, `req`, `reconnect`, `fps_follow`) on through to
 `arizona_socket:init/4`.
 """.
 -spec prepare(QS, Adapter, AdapterState) -> result() when
@@ -78,6 +80,13 @@ State}` otherwise; the transport passes `State` (which carries `handler`,
 prepare(QS, Adapter, AdapterState) ->
     Path = proplists:get_value(~"_az_path", QS, ~"/"),
     Reconnect = proplists:get_value(~"_az_reconnect", QS, ~"0") =:= ~"1",
+    %% The client's promise that a `cached_fps` frame follows this reconnect
+    %% open as its first frame, so the resync render may wait for it and dedup
+    %% statics against the announced fingerprints (arizona_socket). One
+    %% constant-size flag -- the fingerprint LIST stays off the URL (it can
+    %% grow past URL limits); a client that does not set the flag keeps the
+    %% immediate, undeduped resync.
+    FpsFollow = proplists:get_value(~"_az_fps_follow", QS, ~"0") =:= ~"1",
     Caps = parse_caps(proplists:get_value(~"_az_caps", QS, undefined)),
     UserQs = user_qs(QS),
     case arizona_req:call_resolve_route(Adapter, Path, UserQs, AdapterState) of
@@ -97,6 +106,7 @@ prepare(QS, Adapter, AdapterState) ->
                         on_mount => OnMount,
                         req => ArzReq1,
                         reconnect => Reconnect,
+                        fps_follow => FpsFollow,
                         capabilities => Caps
                     }}
             end
@@ -115,6 +125,7 @@ user_qs(QS) ->
 
 is_framework_key(~"_az_path") -> true;
 is_framework_key(~"_az_reconnect") -> true;
+is_framework_key(~"_az_fps_follow") -> true;
 is_framework_key(~"_az_caps") -> true;
 is_framework_key(_) -> false.
 

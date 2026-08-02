@@ -72,6 +72,13 @@ The live process is linked. Exits map to WebSocket close codes:
 -define(SYS_PONG, ~"1").
 -define(CLOSE_GOING_AWAY, 1001).
 -define(CLOSE_CRASH, 4500).
+%% Backstop for a deferred reconnect resync (`_az_fps_follow`): a client that
+%% set the flag promises its `cached_fps` frame as the first frame after open,
+%% typically in flight already -- the timeout only covers one that then sends
+%% nothing at all, so the resync still goes out (undeduped) instead of leaving
+%% the page stale forever. Generous next to a frame's real arrival time (one
+%% network round trip plus the client's IndexedDB cache hydration).
+-define(RESYNC_TIMEOUT_MS, 1000).
 
 %% --------------------------------------------------------------------
 %% Records
@@ -89,7 +96,13 @@ The live process is linked. Exits map to WebSocket close codes:
     %% Delivery therefore requires the follow-up target to resolve to a LIVE
     %% route: a target that degrades to a full-page navigation destroys the
     %% socket, so the flash is dropped with a warning (`drop_pending_flash/2`).
-    pending_flash = #{} :: arizona_req:flash()
+    pending_flash = #{} :: arizona_req:flash(),
+    %% Deferred reconnect resync (`_az_fps_follow`): the backstop timer ref
+    %% while the socket waits for the client's `cached_fps` frame before
+    %% mounting + rendering the full-page replace, so the payload dedups
+    %% against the announced fingerprints. `undefined` once flushed (or when
+    %% the connection never deferred).
+    pending_resync = undefined :: undefined | reference()
 }).
 
 %% --------------------------------------------------------------------
@@ -108,6 +121,7 @@ The live process is linked. Exits map to WebSocket close codes:
 -nominal result() ::
     {ok, socket()}
     | {reply, iodata(), socket()}
+    | {reply_many, [iodata()], socket()}
     | {close, pos_integer(), binary(), socket()}.
 
 %% --------------------------------------------------------------------
@@ -119,9 +133,19 @@ Creates a socket for `Handler` with the given `Bindings` and `Req`,
 and starts its live process.
 
 `Opts` may include:
-- `reconnect` -- if `true`, immediately renders the page and replies
-  with an `?OP_REPLACE` op (used when the client is reconnecting after
-  a network drop)
+- `reconnect` -- if `true`, renders the page and replies with an
+  `?OP_REPLACE` op (used when the client is reconnecting after a
+  network drop)
+- `fps_follow` -- if `true` (with `reconnect`), the client promised its
+  `cached_fps` frame as the first frame after open, so the resync render
+  is DEFERRED until that frame arrives and its payload dedups statics
+  against the announced fingerprints -- the difference between re-shipping
+  a full page's statics to every client of a deploy-drain reconnect storm
+  and shipping roughly the dynamics. A backstop timer
+  (`?RESYNC_TIMEOUT_MS`) flushes the resync undeduped for a flagged
+  client that never sends the frame; a client without the flag (a native
+  client, any non-announcing one) keeps the immediate resync -- zero
+  penalty.
 - `on_mount` -- list of `t:arizona_live:on_mount/0` hooks
 
 The route adapter (used by SPA navigate to resolve new routes) is
@@ -134,6 +158,7 @@ recovered from `Req` itself via `arizona_req:adapter/1`.
     Opts :: map().
 init(Handler, Bindings, Req, Opts) ->
     Reconnect = maps:get(reconnect, Opts, false),
+    FpsFollow = maps:get(fps_follow, Opts, false),
     OnMount = maps:get(on_mount, Opts, []),
     Capabilities = maps:get(capabilities, Opts, #{}),
     %% Track the root handler so a `patch` frame can decide same-view (patch in
@@ -142,12 +167,20 @@ init(Handler, Bindings, Req, Opts) ->
     safe_init(Handler, Socket, fun() ->
         ConnInfo = #{capabilities => Capabilities, reconnect => Reconnect},
         {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, ConnInfo),
-        case Reconnect of
-            true ->
+        case {Reconnect, FpsFollow} of
+            {true, true} ->
+                %% Defer the whole mount+render to the resync flush: the mount
+                %% must not run twice, and no frame can reach the unmounted
+                %% live process -- handle_in flushes before processing any
+                %% frame, and an unmounted process has no subscriptions or
+                %% timers to push from.
+                TRef = erlang:send_after(?RESYNC_TIMEOUT_MS, self(), arizona_resync_timeout),
+                {ok, Socket#socket{pid = Pid, pending_resync = TRef}};
+            {true, false} ->
                 {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
                 Ops = replace_ops(ViewId, PageHTML),
                 {reply, encode(#{?OPS => Ops}), Socket#socket{pid = Pid, view_id = ViewId}};
-            false ->
+            {false, _} ->
                 {ok, ViewId} = arizona_live:mount(Pid),
                 {ok, Socket#socket{pid = Pid, view_id = ViewId}}
         end
@@ -155,6 +188,12 @@ init(Handler, Bindings, Req, Opts) ->
 
 -doc """
 Handles an inbound text frame.
+
+While a deferred reconnect resync is pending (`fps_follow`, see `init/4`),
+the FIRST frame settles it: the promised `[~"cached_fps", FpList]` seeds
+the fingerprints and the resync replies deduped; any other frame flushes
+the resync undeduped first, its own reply following in the same result
+(`reply_many`), so no frame ever reaches the still-unmounted live process.
 
 Recognized payloads:
 - `~"0"` -- ping, replied with `~"1"`
@@ -172,6 +211,28 @@ non-map payload can't reach a `#{...}`-matching handler and crash it.
 -spec handle_in(Frame, Socket) -> result() when
     Frame :: binary(),
     Socket :: socket().
+handle_in(Frame, #socket{pending_resync = TRef, pid = Pid} = Socket0) when
+    is_reference(TRef)
+->
+    %% Deferred reconnect resync: the first inbound frame settles it. The
+    %% conforming case is the promised `cached_fps` -- seed the announced
+    %% fingerprints (a cast; processed before the mount_and_render call below,
+    %% same-sender ordering) so the resync payload elides their statics. ANY
+    %% other frame (an event racing the announcement, a ping) flushes the
+    %% resync first, undeduped -- the live process is not mounted until the
+    %% flush, so nothing may reach it earlier -- and the frame's own reply
+    %% follows the resync frame on the wire (`reply_many`).
+    ok = erlang:cancel_timer(TRef, [{info, false}]),
+    Socket1 = Socket0#socket{pending_resync = undefined},
+    case decode_cached_fps(Frame) of
+        {ok, FpList} ->
+            ok = arizona_live:seed_fps(Pid, FpList),
+            {Ops, Socket} = flush_resync(Socket1),
+            {reply, encode(#{?OPS => Ops}), Socket};
+        error ->
+            {Ops, Socket} = flush_resync(Socket1),
+            resync_then(encode(#{?OPS => Ops}), handle_in(Frame, Socket))
+    end;
 handle_in(?SYS_PING, Socket) ->
     {reply, ?SYS_PONG, Socket};
 handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
@@ -246,6 +307,16 @@ from the linked live process per the mapping in this module's
 -spec handle_info(Info, Socket) -> result() when
     Info :: term(),
     Socket :: socket().
+handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0) when
+    is_reference(TRef)
+->
+    %% Backstop: the flagged client never sent its promised `cached_fps`.
+    %% Resync undeduped rather than leaving the page stale forever. (A stale
+    %% timeout message -- the resync already flushed by a frame that raced the
+    %% firing timer -- has `pending_resync = undefined` and falls through to
+    %% the catch-all below.)
+    {Ops, Socket} = flush_resync(Socket0#socket{pending_resync = undefined}),
+    {reply, encode(#{?OPS => Ops}), Socket};
 handle_info({arizona_push, ViewId, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
     encode_reply(flatten_ops(ViewId, Ops), Effects, Socket);
 handle_info({arizona_push, _StaleViewId, _Ops, _Effects}, Socket) ->
@@ -292,6 +363,35 @@ safe_init(Handler, Socket, Fun) ->
 
 close_crash(Socket) ->
     {close, ?CLOSE_CRASH, ~"server crash", Socket}.
+
+%% Is this frame the `cached_fps` announcement? Decoded here only to route the
+%% deferred-resync leg; the announcement leg never re-decodes, and the rare
+%% violation leg (a flagged client's non-announcement first frame) pays one
+%% duplicate decode in handle_in.
+decode_cached_fps(Frame) ->
+    try json:decode(Frame) of
+        [~"cached_fps", FpList] when is_list(FpList) -> {ok, FpList};
+        _ -> error
+    catch
+        error:_ -> error
+    end.
+
+%% Mount the live process and render the reconnect full-page replace. The
+%% dedup against `sent_fps` happens inside `mount_and_render` -- any
+%% fingerprints seeded before this call elide their statics from the payload.
+flush_resync(#socket{pid = Pid} = Socket) ->
+    {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
+    {replace_ops(ViewId, PageHTML), Socket#socket{view_id = ViewId}}.
+
+%% Ship the resync frame BEFORE the triggering frame's own result: the client
+%% must apply the full-page replace first, then the frame's reply against the
+%% fresh DOM. A close outranks the resync -- the socket is going away.
+resync_then(ResyncFrame, {ok, Socket}) ->
+    {reply, ResyncFrame, Socket};
+resync_then(ResyncFrame, {reply, Frame, Socket}) ->
+    {reply_many, [ResyncFrame, Frame], Socket};
+resync_then(_ResyncFrame, {close, _Code, _Reason, _Socket} = Close) ->
+    Close.
 
 handle_navigate(Path, Qs, #socket{req = Req} = Socket) ->
     case resolve_route(Path, Qs, Req) of

@@ -11,13 +11,23 @@
 -export([queued_push_prepended_to_event_reply/1]).
 -export([queued_push_prepended_to_patch_reply/1]).
 -export([full_navigate_drops_pending_flash/1]).
+-export([unflagged_reconnect_replies_immediately/1]).
+-export([flagged_reconnect_defers_and_dedups_resync/1]).
+-export([deferred_resync_flushed_by_event_frame/1]).
+-export([deferred_resync_flushed_by_ping/1]).
+-export([deferred_resync_timeout_flushes_undeduped/1]).
 
 all() ->
     [
         push_racing_navigate_dropped,
         queued_push_prepended_to_event_reply,
         queued_push_prepended_to_patch_reply,
-        full_navigate_drops_pending_flash
+        full_navigate_drops_pending_flash,
+        unflagged_reconnect_replies_immediately,
+        flagged_reconnect_defers_and_dedups_resync,
+        deferred_resync_flushed_by_event_frame,
+        deferred_resync_flushed_by_ping,
+        deferred_resync_timeout_flushes_undeduped
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -133,4 +143,98 @@ full_navigate_drops_pending_flash(Config) when is_list(Config) ->
         end
     after
         ok = logger:remove_handler(HandlerId)
+    end.
+
+unflagged_reconnect_replies_immediately(Config) when is_list(Config) ->
+    %% Regression pin: a reconnect WITHOUT `fps_follow` (a native client, any
+    %% non-announcing one) keeps today's immediate full-page resync, statics
+    %% attached -- zero added latency.
+    Req = arizona_req_test_adapter:new(),
+    {reply, Frame, _Socket} =
+        arizona_socket:init(arizona_root_counter, #{}, Req, #{reconnect => true}),
+    #{~"o" := [[?OP_REPLACE, _ViewId, Payload]]} = json:decode(iolist_to_binary(Frame)),
+    ?assertMatch(#{~"f" := _, ~"s" := [_ | _]}, Payload).
+
+flagged_reconnect_defers_and_dedups_resync(Config) when is_list(Config) ->
+    %% The core of the deferred resync: a flagged reconnect's init replies
+    %% NOTHING (pre-fix it replied the full page immediately, fps_follow
+    %% ignored); the client's `cached_fps` frame then triggers the resync,
+    %% whose payload ELIDES the statics of every announced fingerprint --
+    %% the whole point of deferring.
+    Req0 = arizona_req_test_adapter:new(),
+    %% Reference run (unflagged) to learn the page's root fingerprint.
+    {reply, RefFrame, _RefSocket} =
+        arizona_socket:init(arizona_root_counter, #{}, Req0, #{reconnect => true}),
+    #{~"o" := [[?OP_REPLACE, _, #{~"f" := Fp, ~"s" := [_ | _]}]]} =
+        json:decode(iolist_to_binary(RefFrame)),
+    %% Flagged run: no reply at init.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} =
+        arizona_socket:init(
+            arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+        ),
+    %% The announcement flushes the resync, deduped for the announced fp.
+    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", [Fp]])),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(FpsFrame, Socket0),
+    #{~"o" := [[?OP_REPLACE, _ViewId, Payload]]} = json:decode(iolist_to_binary(Frame)),
+    ?assertMatch(#{~"f" := Fp, ~"d" := _}, Payload),
+    ?assertNot(is_map_key(~"s", Payload)).
+
+deferred_resync_flushed_by_event_frame(Config) when is_list(Config) ->
+    %% Protocol-violation robustness: a flagged client's first frame SHOULD be
+    %% `cached_fps`, but an event racing the announcement must not reach the
+    %% still-unmounted live process. The socket flushes the resync first
+    %% (undeduped) and the event's own reply follows it in one `reply_many` --
+    %% resync applies before the event ops on the client, in order.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} =
+        arizona_socket:init(
+            arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+        ),
+    EventFrame = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+    {reply_many, [ResyncFrame, ReplyFrame], _Socket1} =
+        arizona_socket:handle_in(EventFrame, Socket0),
+    #{~"o" := [[?OP_REPLACE, _, ResyncPayload]]} =
+        json:decode(iolist_to_binary(ResyncFrame)),
+    %% Undeduped: nothing was announced, so the statics ship.
+    ?assertMatch(#{~"f" := _, ~"s" := [_ | _]}, ResyncPayload),
+    %% The event was processed against the (just-mounted) live process.
+    #{~"o" := EventOps} = json:decode(iolist_to_binary(ReplyFrame)),
+    ?assertMatch([[?OP_TEXT, _, ~"1"]], EventOps).
+
+deferred_resync_flushed_by_ping(Config) when is_list(Config) ->
+    %% A heartbeat ping while the resync is pending flushes it too -- the pong
+    %% follows the resync frame. (Any frame at all settles the deferral.)
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} =
+        arizona_socket:init(
+            arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+        ),
+    {reply_many, [ResyncFrame, ~"1"], _Socket1} = arizona_socket:handle_in(~"0", Socket0),
+    ?assertMatch(
+        #{~"o" := [[?OP_REPLACE, _, #{~"s" := [_ | _]}]]},
+        json:decode(iolist_to_binary(ResyncFrame))
+    ).
+
+deferred_resync_timeout_flushes_undeduped(Config) when is_list(Config) ->
+    %% Backstop: a flagged client that never sends its promised announcement.
+    %% The armed timer targets the socket process (this test process), so the
+    %% real `arizona_resync_timeout` message arrives here; feeding it to
+    %% handle_info flushes the resync undeduped.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} =
+        arizona_socket:init(
+            arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+        ),
+    receive
+        arizona_resync_timeout = Msg ->
+            {reply, Frame, Socket1} = arizona_socket:handle_info(Msg, Socket0),
+            ?assertMatch(
+                #{~"o" := [[?OP_REPLACE, _, #{~"f" := _, ~"s" := [_ | _]}]]},
+                json:decode(iolist_to_binary(Frame))
+            ),
+            %% A stale timeout after the flush is ignored (already resynced).
+            ?assertEqual({ok, Socket1}, arizona_socket:handle_info(Msg, Socket1))
+    after 2000 ->
+        error(resync_timeout_never_fired)
     end.
