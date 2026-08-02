@@ -17,7 +17,9 @@ diff pipeline.
    pushes ops back over the transport.
 3. **Info messages** -- `handle_info/2` invokes the handler's optional
    `handle_info/2` callback, diffs, and pushes the resulting ops.
-4. **Navigate** -- `navigate/3,4` unmounts the old root, cancels pending
+4. **Navigate** -- `navigate/3,4` unmounts the old page (embedded child
+   views first, then the root -- the same removal semantics as a diff
+   removal; `terminate/2` unmounts in the same order), cancels pending
    timers, and mounts the new handler. The previous root's final
    bindings are carried forward as the floor for the new mount's input
    -- `InitBindings` (route static config + middleware enrichments)
@@ -547,9 +549,20 @@ handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0, bindings 
 handle_call(
     {navigate, NewHandler, NewIB, NewOnMount},
     _From,
-    #state{handler = OldH, bindings = OldB, transport_pid = TPid, sent_fps = Fps0} = _State
+    #state{
+        handler = OldH,
+        bindings = OldB,
+        views = OldV,
+        transport_pid = TPid,
+        sent_fps = Fps0
+    } = _State
 ) ->
     ok = cancel_pending_timers(),
+    %% The outgoing page's children are discarded wholesale (the views map is
+    %% wiped by do_mount below), which is a removal -- so unmount them exactly
+    %% like a diff removal would: children first, then the root, mirroring
+    %% removal semantics.
+    ok = unmount_removed_views(OldV),
     ok = arizona_stateful:call_unmount(OldH, OldB),
     %% Carry the previous root handler's final bindings forward as the floor;
     %% NewIB (route static config + middleware enrichments) overrides on
@@ -633,7 +646,10 @@ handle_info({arizona_drain, Deadline}, #state{snapshot = Snap} = State) when
 handle_info(Info, State) ->
     handle_root_info(Info, State).
 
-terminate(_Reason, #state{handler = H, bindings = B}) ->
+terminate(_Reason, #state{handler = H, bindings = B, views = V}) ->
+    %% Unmount every child view, then the root -- the same children-first
+    %% removal semantics as navigate, for any exit reason terminate sees.
+    ok = unmount_removed_views(V),
     ok = arizona_stateful:call_unmount(H, B);
 terminate(_Reason, _State) ->
     ok.

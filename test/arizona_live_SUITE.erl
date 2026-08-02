@@ -82,6 +82,8 @@
     unmount_on_navigate/1,
     unmount_timer_cancelled_on_navigate/1,
     unmount_on_terminate/1,
+    unmount_children_on_navigate/1,
+    unmount_children_on_terminate/1,
     live_reaped_on_transport_disconnect/1,
     child_in_stream_survives_dep_skip/1,
     child_in_stream_removed_on_delete/1,
@@ -184,6 +186,8 @@ groups() ->
             unmount_on_navigate,
             unmount_timer_cancelled_on_navigate,
             unmount_on_terminate,
+            unmount_children_on_navigate,
+            unmount_children_on_terminate,
             live_reaped_on_transport_disconnect,
             child_in_stream_survives_dep_skip,
             child_in_stream_removed_on_delete,
@@ -1208,6 +1212,44 @@ unmount_on_terminate(Config) when is_list(Config) ->
         {'DOWN', Ref, process, Pid, shutdown} -> ok
     after 1000 ->
         error(timeout)
+    end.
+
+unmount_children_on_navigate(Config) when is_list(Config) ->
+    %% Embedded child views' unmount/1 must fire on navigate: the old root's
+    %% children are discarded wholesale (the views map is wiped), which is a
+    %% removal -- the same contract as diff-removal. A child that subscribes in
+    %% mount/1 and unsubscribes in unmount/1 would otherwise leak its
+    %% subscription into the new page.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_root_counter, #{}),
+    %% Children unmount before the root, mirroring removal semantics.
+    receive
+        Msg1 -> ?assertEqual({child_unmounted, ~"uchild"}, Msg1)
+    after 1000 -> error(timeout_child_unmount)
+    end,
+    receive
+        Msg2 -> ?assertEqual({root_unmounted, ~"uparent"}, Msg2)
+    after 1000 -> error(timeout_root_unmount)
+    end.
+
+unmount_children_on_terminate(Config) when is_list(Config) ->
+    %% Same contract when the live process terminates (stop/1 -> terminate/2):
+    %% child unmounts fire before the root's, for any graceful exit.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    ok = arizona_live:stop(Pid),
+    receive
+        Msg1 -> ?assertEqual({child_unmounted, ~"uchild"}, Msg1)
+    after 1000 -> error(timeout_child_unmount)
+    end,
+    receive
+        Msg2 -> ?assertEqual({root_unmounted, ~"uparent"}, Msg2)
+    after 1000 -> error(timeout_root_unmount)
     end.
 
 live_reaped_on_transport_disconnect(Config) when is_list(Config) ->
