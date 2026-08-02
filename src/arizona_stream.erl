@@ -12,6 +12,21 @@ operations to the client.
 This avoids re-rendering whole lists when only a few items change --
 the differ knows exactly which keys to insert, remove, update, or move.
 
+## Complexity -- prefer reset/2 and sort/2 for bulk mutation
+
+`items` is a map (effectively O(1) per-key access); `order` is a list with
+an O(1) append buffer. Per mutation, over N = stream size:
+
+- `insert/2` (append) and `update/3` -- O(1) amortized
+- `delete/2` -- O(position of Key in order), keeping the append buffer
+- positional `insert/3` and `move/3` -- O(N) list surgery on the order
+- `sort/2` -- O(N log N); `reset/1,2` -- O(N)
+
+So K per-item `delete`/`move`/`insert/3` calls in one event are O(K*N).
+For bulk mutation build the new item list once and call `reset/2` (a
+single op -- the differ still patches only the actual per-item delta), or
+reorder everything with one `sort/2`, instead of K positional calls.
+
 ## Limit modes
 
 - `infinity` (default) -- no cap, all items remain visible
@@ -277,10 +292,9 @@ delete(
 ) ->
     case maps:take(Key, Items) of
         {_, NewItems} ->
-            Flat = flat_order(Order),
             S#stream{
                 items = NewItems,
-                order = {order_delete(Flat, Key), []},
+                order = order_delete_split(Order, Key),
                 pending = queue:in({delete, Key}, Pending),
                 size = Size - 1
             };
@@ -632,6 +646,27 @@ order_insert_at([H | T], Key, Pos) -> [H | order_insert_at(T, Key, Pos - 1)].
 order_delete([], _Key) -> [];
 order_delete([Key | T], Key) -> T;
 order_delete([H | T], Key) -> [H | order_delete(T, Key)].
+
+%% Delete `Key` from the {Front, BackRev} order buffer WITHOUT flattening it:
+%% the tail -f pattern (bulk appends + deletes of old front items) keeps the
+%% append buffer intact this way -- flattening here would turn every
+%% subsequent `insert/2` append back into O(N). The key is known present (the
+%% caller checked `items`), so when it is not in Front it must be in Back.
+order_delete_split({Front, Back}, Key) ->
+    case order_delete_found(Front, Key) of
+        {found, Front1} -> {Front1, Back};
+        not_found -> {Front, order_delete(Back, Key)}
+    end.
+
+order_delete_found([], _Key) ->
+    not_found;
+order_delete_found([Key | T], Key) ->
+    {found, T};
+order_delete_found([H | T], Key) ->
+    case order_delete_found(T, Key) of
+        {found, T1} -> {found, [H | T1]};
+        not_found -> not_found
+    end.
 
 %% Find the key immediately before Key in Order, or null if Key is first.
 key_before(Key, [Key | _]) -> null;

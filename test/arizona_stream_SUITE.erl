@@ -43,6 +43,7 @@
     render_fp_val_stream_items/1,
     render_to_iolist_with_stream_items/1,
     stream_dedup_strips_statics/1,
+    delete_preserves_append_buffer/1,
     stream_delete_nonexistent_key/1,
     stream_deps_skip/1,
     stream_update_identical_emits_no_ops/1,
@@ -262,6 +263,7 @@ groups() ->
         ]},
         %% Edge case tests
         {stream_edge_cases, [parallel], [
+            delete_preserves_append_buffer,
             stream_delete_nonexistent_key,
             stream_update_nonexistent_key,
             stream_duplicate_key_insert,
@@ -2041,6 +2043,33 @@ reset_pending_op_carries_old_items(Config) when is_list(Config) ->
 %% =============================================================================
 %% Edge case tests
 %% =============================================================================
+
+%% delete/2 must not flatten the {Front, BackRev} append buffer: the tail -f
+%% pattern (bulk appends + occasional deletes of old front items) relies on the
+%% buffer keeping each subsequent insert/2 append O(1). It deletes from
+%% whichever side holds the key, leaving the other side untouched.
+delete_preserves_append_buffer(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    %% new/3 materialises order into Front; appends land in BackRev.
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, n => <<"a">>}]),
+    S1 = arizona_stream:insert(S0, #{id => 2, n => <<"b">>}),
+    S2 = arizona_stream:insert(S1, #{id => 3, n => <<"c">>}),
+    ?assertMatch(#stream{order = {[1], [3, 2]}}, S2),
+    %% Deleting a Front key leaves the append buffer untouched.
+    S3 = arizona_stream:delete(S2, 1),
+    ?assertMatch(#stream{order = {[], [3, 2]}}, S3),
+    %% Deleting a buffered (Back) key keeps the split too.
+    S4 = arizona_stream:delete(S2, 2),
+    ?assertMatch(#stream{order = {[1], [3]}}, S4),
+    %% Logical order is intact either way.
+    ?assertEqual(
+        [#{id => 2, n => <<"b">>}, #{id => 3, n => <<"c">>}],
+        arizona_stream:to_list(S3)
+    ),
+    ?assertEqual(
+        [#{id => 1, n => <<"a">>}, #{id => 3, n => <<"c">>}],
+        arizona_stream:to_list(S4)
+    ).
 
 %% --- stream_delete nonexistent key ------------------------------------------
 stream_delete_nonexistent_key(Config) when is_list(Config) ->
