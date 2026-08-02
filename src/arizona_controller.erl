@@ -53,6 +53,8 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 -export([reply_effects/1]).
 -export([reply_effects/2]).
 -export([reply_redirect/1]).
+-export([req/1]).
+-export([bindings/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -61,6 +63,8 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 -ignore_xref([reply_effects/1]).
 -ignore_xref([reply_effects/2]).
 -ignore_xref([reply_redirect/1]).
+-ignore_xref([req/1]).
+-ignore_xref([bindings/1]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -105,3 +109,34 @@ instead, so the socket re-handshakes with the new session.
     Location :: binary().
 reply_redirect(Location) ->
     reply_effects([arizona_js:navigate(Location)]).
+
+-doc """
+The post-middleware `arizona_req:request()` for this controller request,
+recovered from the roadrunner request the action received.
+
+This is the request the route's middleware pipeline produced, so middleware
+effects are visible to the action -- e.g. after an
+`{arizona_middleware, fetch_session}` step the action reads the session with
+`arizona_req:get_session/2,3` or `arizona_req:session/1`. Mirrors how the
+route's `state` rides the request to `roadrunner_req:state/1`. Only set by the
+controller dispatcher, so calling it on a request that did not come through a
+controller route crashes.
+""".
+-spec req(RoadrunnerReq) -> arizona_req:request() when
+    RoadrunnerReq :: roadrunner_req:request().
+req(RoadrunnerReq) ->
+    #{{arizona, req} := ArzReq} = roadrunner_req:private(RoadrunnerReq),
+    ArzReq.
+
+-doc """
+The bindings the route's middleware pipeline produced -- e.g. `session` from
+`fetch_session`, `flash` from `fetch_flash`, or the keys an
+`arizona_middleware:extract/1` step pulled from the request -- the same map a
+live route hands its view as mount bindings. Like `req/1`, only set by the
+controller dispatcher.
+""".
+-spec bindings(RoadrunnerReq) -> az:bindings() when
+    RoadrunnerReq :: roadrunner_req:request().
+bindings(RoadrunnerReq) ->
+    #{{arizona, bindings} := Bindings} = roadrunner_req:private(RoadrunnerReq),
+    Bindings.

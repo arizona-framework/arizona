@@ -9,8 +9,12 @@ the request in an `arizona_req:request()`, runs the route's `middlewares` (so CS
 `check_origin` and any app middleware apply to controllers too), and on `{cont, ...}`
 restores the controller's `state` into the request and calls the app controller action
 (`Handler:Action/1`, the route's `action` option defaulting to `handle`), flushing any
-middleware-stashed cookies/headers onto its response. On `{halt, ...}` it ships the
-halt (e.g. `check_origin`'s `403`) without invoking the action.
+middleware-stashed cookies/headers onto its response. The pipeline's product is
+threaded to the action through the request: `arizona_controller:req/1` recovers the
+post-middleware `arizona_req:request()` and `arizona_controller:bindings/1` the
+produced bindings (so e.g. a `fetch_session` step's session is readable in the
+action). On `{halt, ...}` it ships the halt (e.g. `check_origin`'s `403`) without
+invoking the action.
 """.
 
 -behaviour(roadrunner_handler).
@@ -49,12 +53,20 @@ handle(Req) ->
     case arizona_middleware:apply_middlewares(Middlewares, ArzReq, #{}) of
         {halt, HaltReq} ->
             {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
-        {cont, ArzReq1, _Bindings} ->
+        {cont, ArzReq1, Bindings} ->
             %% Restore the controller's own state into the raw request (the dispatcher
-            %% overwrote it with the arizona meta), run the action, then flush any
-            %% middleware-stashed cookies/headers onto the action's response.
+            %% overwrote it with the arizona meta) and thread the pipeline's product --
+            %% the post-middleware arizona_req and the produced bindings -- through the
+            %% roadrunner `private` scratchpad, where `arizona_controller:req/1` and
+            %% `arizona_controller:bindings/1` recover them (mirroring how `state` rides
+            %% the request to `roadrunner_req:state/1`). Then run the action and flush
+            %% any middleware-stashed cookies/headers onto its response.
             Raw = arizona_req:raw(ArzReq1),
-            {Resp, Req1} = dispatch_action(Handler, Action, Raw#{state => State}),
+            ActionReq = roadrunner_req:merge_private(
+                #{{arizona, req} => ArzReq1, {arizona, bindings} => Bindings},
+                Raw#{state => State}
+            ),
+            {Resp, Req1} = dispatch_action(Handler, Action, ActionReq),
             {arizona_roadrunner_resp:flush(ArzReq1, Resp), Req1}
     end.
 

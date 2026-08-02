@@ -83,6 +83,7 @@
     caps_reach_capability_in_render/1,
     caps_absent_capability_false/1,
     controller_runs_handler_with_state/1,
+    controller_action_reads_middleware_output/1,
     controller_rejects_cross_origin/1,
     controller_rejects_disallowed_method/1,
     controller_dispatches_action_by_verb/1,
@@ -179,6 +180,7 @@ groups() ->
         caps_reach_capability_in_render,
         caps_absent_capability_false,
         controller_runs_handler_with_state,
+        controller_action_reads_middleware_output,
         controller_rejects_cross_origin,
         controller_rejects_disallowed_method,
         controller_dispatches_action_by_verb,
@@ -405,6 +407,11 @@ init_per_group(roadrunner, Config) ->
         {live, <<"/drain_noop">>, arizona_drainable, #{bindings => #{drain_mode => noop}}},
         {get, <<"/_test/state-echo">>, arizona_state_echo_controller, #{
             state => #{marker => ~"STATE_OK"}
+        }},
+        %% Controller route whose middleware output the action reads back
+        %% (arizona_controller:req/1 + bindings/1).
+        {get, <<"/_test/session-echo">>, arizona_session_echo_controller, #{
+            middlewares => [{arizona_middleware, fetch_session}]
         }},
         %% Resource-style controller: same path, verb selects the action.
         {get, <<"/_test/users">>, arizona_users_controller, #{action => index}},
@@ -800,6 +807,20 @@ controller_runs_handler_with_state(Config) ->
     Resp = http_get(Config, "/_test/state-echo", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"STATE_OK">>)).
+
+controller_action_reads_middleware_output(Config) ->
+    %% The middleware pipeline's product reaches the action: fetch_session runs
+    %% on the controller route and the action recovers both the post-middleware
+    %% arizona_req (arizona_controller:req/1 -- get_session sees the decoded
+    %% session) and the produced bindings (arizona_controller:bindings/1 -- the
+    %% `session` binding). They used to be discarded, so fetch_session/extract
+    %% middlewares on controller routes ran for nothing.
+    Cookie = arizona_session:encode(#{~"user_id" => ~"u1"}),
+    CookieHeader = ["Cookie: az_session=", binary_to_list(Cookie), "\r\n"],
+    Resp = http_get(Config, "/_test/session-echo", [CookieHeader]),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"session=u1">>)),
+    ?assertNotEqual(nomatch, binary:match(Resp, <<"binding=u1">>)).
 
 controller_rejects_cross_origin(Config) ->
     %% The default check_origin middleware runs on controllers too: a cross-origin
