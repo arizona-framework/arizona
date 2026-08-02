@@ -583,7 +583,7 @@ transform_form(Form, _Module, _IsLive, _FunDefs) ->
 transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body0),
     Body = normalize_tail_binds(Body0),
-    Inline = collect_inline(Body),
+    Inline = prepare_inline(collect_inline(Body), Body),
     Body1 = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Body],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
@@ -602,19 +602,42 @@ transform_node(Node, Module, Inline, FunDefs) ->
             (Mod =:= arizona_template orelse Mod =:= az) andalso
                 (Target =:= html orelse Target =:= native orelse Target =:= terminal)
         ->
-            compile_template(inline_vars(Arg, Inline), L, Module, false, target_backend(Target));
+            compile_template(
+                retransform_spliced(inline_vars(Arg, Inline), Inline, Module, FunDefs),
+                L,
+                Module,
+                false,
+                target_backend(Target)
+            );
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, EachFn}}, [FunArg, SourceArg]} when
             (Mod =:= arizona_template orelse Mod =:= az) andalso
                 (EachFn =:= each orelse EachFn =:= native_each orelse EachFn =:= terminal_each)
         ->
-            compile_each(
-                inline_vars(FunArg, Inline),
-                inline_vars(SourceArg, Inline),
-                L,
-                Module,
-                target_backend(each_target(EachFn)),
-                FunDefs
-            );
+            case is_compiled_each_pairing(EachFn, SourceArg) of
+                true ->
+                    %% Already-compiled pairing (`arizona_template:each(Source,
+                    %% #{s,d,f,...})` from a previous pass) revisited by a
+                    %% retransform_spliced/4 re-run: pass it through untouched.
+                    N;
+                false ->
+                    compile_each(
+                        retransform_spliced(
+                            unwrap_spliced_each_callback(
+                                inline_vars(FunArg, Inline), EachFn, Inline
+                            ),
+                            Inline,
+                            Module,
+                            FunDefs
+                        ),
+                        retransform_spliced(
+                            inline_vars(SourceArg, Inline), Inline, Module, FunDefs
+                        ),
+                        L,
+                        Module,
+                        target_backend(each_target(EachFn)),
+                        FunDefs
+                    )
+            end;
         %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
         %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
         %% Fun references and other shapes pass through unchanged.
@@ -629,13 +652,87 @@ transform_node(Node, Module, Inline, FunDefs) ->
             N
     end.
 
+%% Inlining a hoisted variable (inline_vars/2) may splice a raw, untransformed
+%% template-constructor call -- `arizona_template:html/1`, `each/2`, the
+%% `stateless(atom, Props)` sugar -- into an expression the bottom-up transform
+%% has already finished with. Left raw, the call hits the runtime stub
+%% (parse_transform_not_applied) or the untransformed sugar (function_clause)
+%% at first render. Re-run the bottom-up transform over the spliced expression
+%% so those constructors compile exactly as written-inline code would. The
+%% re-run is idempotent on already-compiled output: template maps are not
+%% calls, the stateless sugar only matches an atom callback, and a compiled
+%% each pairing is recognized and skipped (is_compiled_each_pairing/2). A
+%% clause with no hoisted vars skips the re-run entirely.
+retransform_spliced(Expr, Inline, _Module, _FunDefs) when map_size(Inline) =:= 0 ->
+    Expr;
+retransform_spliced(Expr, _Inline, Module, FunDefs) ->
+    transform_expr(Expr, Module, #{}, FunDefs).
+
+%% True for the OUTPUT form of a compiled ?each -- `arizona_template:each(Source,
+%% #{t,s,d,f,...})` (build_each_ast/build_each_from_compiled) -- revisited when
+%% retransform_spliced/4 re-runs the transform. The SOURCE form pairs
+%% `(Fun, Source)`, and a compiled pairing always carries the `t` assoc on top
+%% of `s`/`d`/`f`, so a literal map source can never be mistaken for one short
+%% of spelling out all four keys.
+is_compiled_each_pairing(each, {map, _, Fields}) ->
+    is_compiled_template_map(Fields) andalso
+        lists:member(t, [K || {map_field_assoc, _, {atom, _, K}, _} <:- Fields]);
+is_compiled_each_pairing(_EachFn, _SourceArg) ->
+    false.
+
+%% Post-splice mirror of the mark-time unwrap_each_body/2 jobs, for material the
+%% inline splice just introduced into an ?each callback: flatten a spliced
+%% track-wrap block in the callback's last expr, then unwrap a spliced
+%% whole-body wrapper (`fun(_I) -> Row end` where Row hoisted `?html({li,...})`)
+%% -- BEFORE retransform_spliced/4 would compile that wrapper to a map, which
+%% skips body classification and silently drops `single_root` (positional list
+%% patching). A no-op when the clause hoists nothing.
+unwrap_spliced_each_callback(FunArg, _EachFn, Inline) when map_size(Inline) =:= 0 ->
+    FunArg;
+unwrap_spliced_each_callback(FunArg, EachFn, _Inline) ->
+    [FunArg1 | _] = unwrap_each_body([flatten_spliced_tracks(FunArg)], each_target(EachFn)),
+    FunArg1.
+
+%% Flatten a spliced track-wrap block (`begin ok = track(K), ..., Expr end`, the
+%% shape prepare_inline_rhs/2 synthesizes) sitting as the last expression of an
+%% inline ?each callback: hoist the touches into the body statements so the last
+%% expr is the wrapped value again. Without this the block would classify as a
+%% non-element body (each_body_not_element). The touches then run per item
+%% inside the each's saved-deps bracket, where they are dependency no-ops --
+%% exactly the pre-wrap behavior.
+flatten_spliced_tracks({'fun', FL, {clauses, [{clause, CL, Vars, Guards, Body}]}} = Fun) ->
+    {Prefix, Last} = split_fun_body(Body),
+    case Last of
+        {block, _, [_, _ | _] = BlockBody} ->
+            {Touches, _Wrapped} = split_fun_body(BlockBody),
+            case lists:all(fun is_track_touch/1, Touches) of
+                true ->
+                    {'fun', FL, {clauses, [{clause, CL, Vars, Guards, Prefix ++ BlockBody}]}};
+                false ->
+                    Fun
+            end;
+        _ ->
+            Fun
+    end;
+flatten_spliced_tracks(FunArg) ->
+    FunArg.
+
+%% The exact statement shape track_call_ast/1 synthesizes.
+is_track_touch(
+    {match, _, {atom, _, ok},
+        {call, _, {remote, _, {atom, _, arizona_template}, {atom, _, track}}, [_Key]}}
+) ->
+    true;
+is_track_touch(_Stmt) ->
+    false.
+
 transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body),
     {Init0, [Last]} = lists:split(length(Body) - 1, Body),
     %% Only the init statements are normalized: the last expr carries the live root
     %% template and is handled by transform_live_render_last/4.
     Init = normalize_tail_binds(Init0),
-    Inline = collect_inline(Init ++ [Last]),
+    Inline = prepare_inline(collect_inline(Init ++ [Last]), Init ++ [Last]),
     TransformedInit = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Init],
     TransformedLast = transform_live_render_last(Last, Module, Inline, FunDefs),
     Body1 = TransformedInit ++ [TransformedLast],
@@ -664,7 +761,8 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
         ->
             validate_live_root(Arg, L, Inline),
             Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
-            compile_template(inline_vars(Arg1, Inline), L, Module, true, target_backend(Target));
+            Arg2 = retransform_spliced(inline_vars(Arg1, Inline), Inline, Module, FunDefs),
+            compile_template(Arg2, L, Module, true, target_backend(Target));
         _ ->
             transform_expr(Expr, Module, Inline, FunDefs)
     end.
@@ -795,6 +893,85 @@ is_az_view_attr(_) ->
 collect_inline(Body) ->
     {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}),
     keep_reaching(maps:without(maps:keys(Poisoned), Raw)).
+
+%% Post-process the collected inline map: an RHS containing a template
+%% constructor (`?html`/`?native`/`?terminal`) is pre-inlined (in statement
+%% order, so a reference to an earlier hoisted var resolves to its prepared
+%% form) and wrapped with a track touch per literal binding key read inside the
+%% constructor subtrees. The constructor compiles (retransform_spliced/4) to a
+%% nested template whose inner reads are isolated from the enclosing slot's
+%% dependency bracket (eval_template/2's with_saved_deps), so without the
+%% touches the spliced template would render once and freeze -- the touches
+%% record those reads as slot deps, mirroring the conditional branch-read
+%% auto-tracking (branch_track_touches/1). Every other RHS is stored raw,
+%% exactly as before. A fun-literal RHS is never wrapped: its reads fire
+%% wherever the fun is called, and a wrap would break splicing it as an ?each
+%% callback.
+prepare_inline(Raw, _Body) when map_size(Raw) =:= 0 ->
+    Raw;
+prepare_inline(Raw, Body) ->
+    lists:foldl(fun(Stmt, Acc) -> prepare_inline_stmt(Stmt, Raw, Acc) end, #{}, Body).
+
+prepare_inline_stmt({match, _, {var, _, V}, _RHS}, Raw, Acc) ->
+    case Raw of
+        #{V := RHS} -> Acc#{V => prepare_inline_rhs(RHS, Acc)};
+        #{} -> Acc
+    end;
+prepare_inline_stmt(_Stmt, _Raw, Acc) ->
+    Acc.
+
+prepare_inline_rhs({'fun', _, _} = RHS, _Prepared) ->
+    RHS;
+prepare_inline_rhs({named_fun, _, _, _} = RHS, _Prepared) ->
+    RHS;
+prepare_inline_rhs(RHS0, Prepared) ->
+    case rhs_has_template_ctor(RHS0) of
+        false ->
+            RHS0;
+        true ->
+            RHS = inline_vars(RHS0, Prepared),
+            track_wrap(RHS, dedup_keys(ctor_read_keys(RHS, [])))
+    end.
+
+%% Does the AST contain a template-constructor call that compiles to a
+%% template-map literal? (`?each`/`?stateless` are deliberately not listed:
+%% their spliced calls evaluate inside the slot bracket, so their reads track
+%% without a wrap.)
+rhs_has_template_ctor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso
+        (F =:= html orelse F =:= native orelse F =:= terminal)
+->
+    true;
+rhs_has_template_ctor(T) when is_tuple(T) ->
+    rhs_has_template_ctor_any(tuple_to_list(T));
+rhs_has_template_ctor(L) when is_list(L) ->
+    rhs_has_template_ctor_any(L);
+rhs_has_template_ctor(_Other) ->
+    false.
+
+rhs_has_template_ctor_any([]) ->
+    false;
+rhs_has_template_ctor_any([H | T]) ->
+    rhs_has_template_ctor(H) orelse rhs_has_template_ctor_any(T).
+
+%% Literal binding keys read anywhere inside the template-constructor subtrees
+%% of an RHS -- the reads a spliced compiled template isolates from the slot.
+ctor_read_keys({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args} = Call, Acc) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso
+        (F =:= html orelse F =:= native orelse F =:= terminal)
+->
+    collect_read_keys(Call, Acc);
+ctor_read_keys(T, Acc) when is_tuple(T) ->
+    ctor_read_keys(tuple_to_list(T), Acc);
+ctor_read_keys([H | T], Acc) ->
+    ctor_read_keys(T, ctor_read_keys(H, Acc));
+ctor_read_keys(_Other, Acc) ->
+    Acc.
+
+track_wrap(Expr, []) ->
+    Expr;
+track_wrap(Expr, Keys) ->
+    {block, 0, [track_call_ast(K) || K <- Keys] ++ [Expr]}.
 
 scan_top_matches([], Raw, Poisoned) ->
     {Raw, Poisoned};

@@ -202,6 +202,12 @@
     inline_destructuring_not_inlined/1,
     inline_comprehension_source/1,
     inline_strict_generator_shadow/1,
+    inline_hoisted_html_renders_and_tracks/1,
+    inline_hoisted_html_nested_chain/1,
+    inline_hoisted_each_renders_and_tracks/1,
+    inline_hoisted_stateless_atom_renders_and_tracks/1,
+    inline_hoisted_html_each_body_single_root/1,
+    inline_hoisted_html_unrelated_key_skipped/1,
     tracked_get_submap_errors/1,
     tracked_get_submap_az_errors/1,
     tracked_get_lazy_submap_errors/1,
@@ -586,7 +592,13 @@ groups() ->
             inline_non_bindings_var_name,
             inline_destructuring_not_inlined,
             inline_comprehension_source,
-            inline_strict_generator_shadow
+            inline_strict_generator_shadow,
+            inline_hoisted_html_renders_and_tracks,
+            inline_hoisted_html_nested_chain,
+            inline_hoisted_each_renders_and_tracks,
+            inline_hoisted_stateless_atom_renders_and_tracks,
+            inline_hoisted_html_each_body_single_root,
+            inline_hoisted_html_unrelated_key_skipped
         ]},
         %% Reject the tracked accessor reading a non-bindings (sub-)map
         {tracked_get, [parallel], [
@@ -6540,6 +6552,143 @@ inline_strict_generator_shadow(Config) when is_list(Config) ->
     HTMLBin = iolist_to_binary(HTML),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"F")),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"ab")).
+
+%% A hoisted `?html(...)` whose body reads a binding, used in a content slot:
+%% the spliced RHS must be compiled (not left as a raw runtime-stub call --
+%% before the fix rendering crashed with parse_transform_not_applied) and the
+%% slot must track the read inside, so a change to it produces a diff op.
+inline_hoisted_html_renders_and_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoisthtml). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Header = arizona_template:html("
+        "        {'h1', [], [arizona_template:get(title, Bindings)]}), "
+        "    arizona_template:html({'div', [], [Header]}). "
+    ),
+    B0 = #{title => ~"T1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<h1")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"T1")),
+    B1 = #{title => ~"T2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A two-level hoist chain: an inner hoisted `?html` spliced into an outer
+%% hoisted `?html`, spliced into the root template. Both levels compile and the
+%% inner read still reaches the root slot's deps.
+inline_hoisted_html_nested_chain(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoistchain). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Inner = arizona_template:html("
+        "        {'em', [], [arizona_template:get(x, Bindings)]}), "
+        "    Outer = arizona_template:html({'p', [], [Inner]}), "
+        "    arizona_template:html({'div', [], [Outer]}). "
+    ),
+    B0 = #{x => ~"X1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<em")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"X1")),
+    B1 = #{x => ~"X2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A hoisted `?each(...)` used in a content slot compiles (before the fix the
+%% raw call hit the runtime stub) and its source read fires at slot eval, so an
+%% items change produces a diff op.
+inline_hoisted_each_renders_and_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoisteach). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Items = arizona_template:each(fun(I) -> {'li', [], [I]} end, "
+        "                                  arizona_template:get(items, Bindings)), "
+        "    arizona_template:html({'ul', [], [Items]}). "
+    ),
+    B0 = #{items => [~"a"]},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<li")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"a")),
+    B1 = #{items => [~"a", ~"b"]},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% A hoisted `?stateless(atom, Props)` (atom sugar): the spliced RHS must go
+%% through the sugar rewrite (before the fix the raw atom form died with
+%% function_clause in arizona_template:stateless/2), and the props read fires
+%% at slot eval, so a prop-binding change produces a diff op.
+inline_hoisted_stateless_atom_renders_and_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoistsless). "
+        "-export([render/1]). "
+        "-export([card/1]). "
+        "card(Props) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Props)]}). "
+        "render(Bindings) -> "
+        "    Card = arizona_template:stateless(card, "
+        "        #{x => arizona_template:get(x, Bindings)}), "
+        "    arizona_template:html({'div', [], [Card]}). "
+    ),
+    B0 = #{x => ~"PX1"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"PX1")),
+    B1 = #{x => ~"PX2"},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertNotEqual([], Ops).
+
+%% Regression guard: a hoisted `?html` used as a whole `?each` callback body
+%% (`fun(_I) -> Row end`) already worked pre-fix via the raw-wrapper unwrap and
+%% must keep both rendering AND the per-item `single_root` flag (positional
+%% list patching) -- a fix that splices an already-compiled template map here
+%% would silently drop the flag.
+inline_hoisted_html_each_body_single_root(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoisteachbody). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Row = arizona_template:html("
+        "        {'li', [], [arizona_template:get(x, Bindings)]}), "
+        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "        fun(_I) -> Row end, arizona_template:get(items, Bindings))]}). "
+    ),
+    T = Mod:render(#{x => ~"X", items => [1, 2]}),
+    [{_Az, EachFun, _Loc}] = maps:get(d, T),
+    ?assertMatch(
+        #{t := 0, template := #{single_root := true}},
+        EachFun()
+    ),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"<li")),
+    ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"X")).
+
+%% The hoisted-template tracking is scoped: a change to an unrelated key still
+%% skips the slot carrying the spliced template.
+inline_hoisted_html_unrelated_key_skipped(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_hoistscoped). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Header = arizona_template:html("
+        "        {'h1', [], [arizona_template:get(title, Bindings)]}), "
+        "    arizona_template:html({'div', [], [Header]}). "
+    ),
+    B0 = #{title => ~"T", other => 1},
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    B1 = #{title => ~"T", other => 2},
+    Changed = compute_changed(B0, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
+    ?assertEqual([], Ops).
 
 %% ============================================================================
 %% Tracked get/get_lazy on a non-bindings map
