@@ -46,6 +46,7 @@ persistent term so the dev error page can build the SSE connect URL.
 -export([forget_routes/1]).
 -export([routes/1]).
 -export([routes/2]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -56,6 +57,8 @@ persistent term so the dev error page can build the SSE connect URL.
 %% listener) and routes/2 (the listener's own route table). Keep the nameless
 %% shapes exported for downstream users.
 -ignore_xref([compile_routes/1, compile_routes/2, routes/1]).
+%% Called by `erl_error` via the `error_info` annotation, not directly.
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -223,6 +226,23 @@ routes(Routes) ->
 routes(Routes, BuildOpts) when is_map(BuildOpts) ->
     lists:flatmap(fun(R) -> route_to_roadrunner(R, BuildOpts) end, Routes).
 
+-doc """
+Formats route-compilation errors into a human-readable message. Picked up by
+`erl_error:format_exception/3` via the `error_info` annotation at the raise site.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error(wildcard_in_method_list, _ST) ->
+    #{
+        general =>
+            "'*' (any method) is only valid as the whole method spec: "
+            "{match, '*', Path, Handler, Opts}. Inside a method list -- or "
+            "spelled as the binary ~\"*\" -- it would match no real method; "
+            "list explicit verbs, or use '*' alone."
+    }.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -372,6 +392,16 @@ normalize_methods(Methods) when is_list(Methods) ->
 normalize_methods(Method) ->
     with_head([method_bin(Method)]).
 
+%% `'*'` (any method) is only meaningful as the WHOLE `{match, ...}` spec, where
+%% `normalize_methods/1` turns it into roadrunner's "no allowlist". Reaching here
+%% -- inside a method list, or as the binary spelling `~"*"` -- it would silently
+%% normalize to the literal method `~"*"`, which no real request carries (while
+%% the 405 Allow header advertised `*`), so fail loudly at route compilation
+%% instead, mirroring the unknown-verb-tag failure.
+method_bin('*') ->
+    erlang:error(wildcard_in_method_list, ['*'], [{error_info, #{module => ?MODULE}}]);
+method_bin(~"*") ->
+    erlang:error(wildcard_in_method_list, [~"*"], [{error_info, #{module => ?MODULE}}]);
 method_bin(M) when is_atom(M) -> upper(atom_to_binary(M, utf8));
 method_bin(M) when is_binary(M) -> upper(M).
 

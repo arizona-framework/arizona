@@ -12,6 +12,7 @@
     compile_routes_controller_opts_out_origin_check/1,
     compile_routes_method_gating/1,
     compile_routes_match_any_and_list/1,
+    compile_routes_match_wildcard_in_list_errors/1,
     compile_routes_match_custom_verb/1,
     compile_routes_same_path_dispatch/1,
     compile_routes_per_listener_dispatch/1,
@@ -47,6 +48,7 @@ groups() ->
         compile_routes_controller_opts_out_origin_check,
         compile_routes_method_gating,
         compile_routes_match_any_and_list,
+        compile_routes_match_wildcard_in_list_errors,
         compile_routes_match_custom_verb,
         compile_routes_same_path_dispatch,
         compile_routes_per_listener_dispatch,
@@ -267,6 +269,31 @@ compile_routes_match_any_and_list(Config) ->
     ?assertMatch({ok, _, _, _, _}, match_result(~"HEAD", <<"/multi">>)),
     ?assertEqual(
         {method_not_allowed, [~"GET", ~"HEAD", ~"POST"]}, match_result(~"PUT", <<"/multi">>)
+    ).
+
+compile_routes_match_wildcard_in_list_errors(Config) ->
+    %% '*' means "any method" only as the WHOLE spec. Inside a method list it
+    %% used to silently normalize to the literal binary ~"*" -- a method no real
+    %% request carries (while the 405 Allow header advertised "*") -- so route
+    %% compilation now fails loudly instead. The binary spelling is the same
+    %% trap, listed or bare.
+    Router = ?config(router, Config),
+    ?assertError(
+        wildcard_in_method_list,
+        Router:routes([{match, [get, '*'], <<"/w">>, my_controller, #{}}])
+    ),
+    ?assertError(
+        wildcard_in_method_list,
+        Router:routes([{match, [~"*"], <<"/w">>, my_controller, #{}}])
+    ),
+    ?assertError(
+        wildcard_in_method_list,
+        Router:routes([{match, ~"*", <<"/w">>, my_controller, #{}}])
+    ),
+    %% The bare-atom wildcard stays the supported any-method form.
+    ?assertMatch(
+        [#{methods := undefined}],
+        Router:routes([{match, '*', <<"/w">>, my_controller, #{}}])
     ).
 
 compile_routes_match_custom_verb(Config) ->
