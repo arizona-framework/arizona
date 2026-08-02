@@ -743,16 +743,41 @@ function removeEl(el) {
  * all template payloads are already HTML strings. A view transition, when one is
  * pending, wraps this call (plus the message's effects) at the message handler,
  * not here -- so `applyOps` itself is synchronous.
+ *
+ * Two per-batch resolution caches keep a K-op batch from re-scanning the view
+ * subtree per op:
+ * - `els` memoizes target -> element. Every hit is verified live (`isConnected`)
+ *   before use: an op that replaced/re-rendered a subtree (REPLACE, UPDATE,
+ *   TEXT) leaves the old elements disconnected, so a stale entry re-resolves
+ *   itself -- no per-op invalidation bookkeeping. (A connected-but-wrong hit
+ *   would need a duplicate az within one view, which the compiler prevents.)
+ *   Nulls are not cached, so an element created mid-batch is found.
+ * - `streams` maps a stream container to a key -> item map of its direct keyed
+ *   children, built on first keyed lookup and maintained by the batch's
+ *   INSERT/REMOVE ops -- an N-op reorder is O(N), not O(N^2) scans (mirrors
+ *   applyListPatch's one-snapshot-per-batch shape).
  * @param {Array<Array<*>>} ops
  */
 function applyOps(ops) {
     let didReplace = false;
+    /** @type {Map<string, Element>} */
+    const els = new Map();
+    /** @type {Map<Element, Map<string, Element>>} */
+    const streams = new Map();
+    /** @param {string} target @returns {Element|null} */
+    const resolve = (target) => {
+        const hit = els.get(target);
+        if (hit?.isConnected) return hit;
+        const el = resolveEl(target);
+        if (el) els.set(target, el);
+        return el;
+    };
     for (const op of ops) {
         // Isolate each op: a bad selector or a throwing hook must not abort the
         // rest of the batch, or the DOM desyncs from the already-advanced server
         // snapshot until a reload.
         try {
-            const el = resolveEl(op[1]);
+            const el = resolve(op[1]);
             if (!el) continue;
             const az = op[1].substring(op[1].indexOf(':') + 1);
             switch (op[0]) {
@@ -789,16 +814,16 @@ function applyOps(ops) {
                     removeEl(el);
                     break;
                 case OP.INSERT:
-                    insertItem(op[1], op[2], op[3], op[4]);
+                    insertItemEl(el, op[2], op[3], op[4], streams);
                     break;
                 case OP.REMOVE:
-                    removeItem(op[1], op[2]);
+                    removeItemEl(el, op[2], streams);
                     break;
                 case OP.ITEM_PATCH:
-                    patchItem(op[1], op[2], op[3]);
+                    applyItemPatch(el, op[2], op[3], streams);
                     break;
                 case OP.MOVE:
-                    moveItem(op[1], op[2], op[3]);
+                    moveItemEl(el, op[2], op[3], streams);
                     break;
                 case OP.LIST_PATCH:
                     applyListPatch(el, az, op[2]);
@@ -1150,88 +1175,113 @@ function get(a, b) {
 }
 
 /**
+ * Build a key -> element map of a container's direct keyed (az-key) children,
+ * in DOM order. Under a duplicate key the FIRST child wins, matching what a
+ * `:scope > [az-key="..."]` query would return.
+ * @param {Element} el
+ * @returns {Map<string, Element>}
+ */
+function buildKeyMap(el) {
+    const map = new Map();
+    for (const child of el.children) {
+        const k = child.getAttribute('az-key');
+        if (k !== null && !map.has(k)) map.set(k, child);
+    }
+    return map;
+}
+
+/**
+ * Look up a stream container's direct keyed child. With a per-batch `streams`
+ * cache (top-level applyOps) the container's children are scanned once and the
+ * map is maintained by the batch's inserts/removes, so an N-op stream batch is
+ * O(N) instead of one full child scan per op. Without one (nested item ops) it
+ * falls back to a direct query. A cached entry that went stale -- a non-stream
+ * op (UPDATE/TEXT) rewrote the container's children under the map -- triggers
+ * one rebuild and retry, so the cache can never return a disconnected element.
+ * @param {Map<Element, Map<string, Element>>|null} streams
+ * @param {Element} el
+ * @param {string} key
+ * @returns {Element|null}
+ */
+function itemByKey(streams, el, key) {
+    if (!streams) return el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
+    let map = streams.get(el);
+    if (!map) {
+        map = buildKeyMap(el);
+        streams.set(el, map);
+    }
+    let item = map.get(key);
+    if (item === undefined || !item.isConnected) {
+        map = buildKeyMap(el);
+        streams.set(el, map);
+        item = map.get(key);
+    }
+    return item ?? null;
+}
+
+/**
  * Insert a keyed child into a container element.
  * @param {Element} el -- container element
  * @param {string} key
  * @param {number} pos -- -1 means append, otherwise insert before child at index
  * @param {string} html
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function insertItemEl(el, key, pos, html) {
+function insertItemEl(el, key, pos, html, streams = null) {
     const tpl = el.ownerDocument.createElement('template');
     tpl.innerHTML = html;
-    const fragment = tpl.content;
+    // Grab the keyed item from the payload BEFORE inserting it: re-querying the
+    // container by key afterwards would find a PRE-EXISTING element first under
+    // a duplicate key, mounting hooks on the wrong element and skipping the new
+    // item's own.
+    const item = Array.from(tpl.content.children).find((e) => e.getAttribute('az-key') === key);
     if (pos === -1) {
-        el.appendChild(fragment);
+        el.appendChild(tpl.content);
     } else {
+        // Positional: the live child list, not the key map -- MOVE ops change
+        // DOM order without touching the map, so only the DOM knows position.
         const children = el.querySelectorAll(':scope > [az-key]');
         if (pos < children.length) {
-            el.insertBefore(fragment, children[pos]);
+            el.insertBefore(tpl.content, children[pos]);
         } else {
-            el.appendChild(fragment);
+            el.appendChild(tpl.content);
         }
     }
-    // Match a DIRECT child (`:scope >`), like removeItemEl/moveItemEl/patchItemEl do:
-    // a descendant query would match an inner item sharing the key string first (nested
-    // streams), mounting hooks on the wrong element and skipping the new item's own.
-    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
-    if (item) mountHooks(item);
-    else console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
-}
-
-/**
- * If `target` resolves to an element, call `fn` with it. Otherwise no-op.
- * @param {string} target
- * @param {(el: Element) => void} fn
- */
-function withTarget(target, fn) {
-    const el = resolveEl(target);
-    if (el) fn(el);
-}
-
-/**
- * Stream ops -- insert, remove, and patch operate on keyed children (az-key)
- * within a container element. pos=-1 means append; otherwise insert before
- * the child at that index.
- * @param {string} target
- * @param {string} key
- * @param {number} pos
- * @param {string} html
- */
-function insertItem(target, key, pos, html) {
-    withTarget(target, (el) => insertItemEl(el, key, pos, html));
+    if (item) {
+        streams?.get(el)?.set(key, item);
+        mountHooks(item);
+    } else {
+        console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
+    }
 }
 
 /**
  * Remove a keyed child from a container element.
  * @param {Element} el -- container element
  * @param {string} key
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function removeItemEl(el, key) {
-    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
+function removeItemEl(el, key, streams = null) {
+    const item = itemByKey(streams, el, key);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for remove`);
         return;
     }
     removeEl(item);
+    streams?.get(el)?.delete(key);
 }
 
 /**
- * Remove a keyed child element from its container.
- * @param {string} target
- * @param {string} key
- */
-function removeItem(target, key) {
-    withTarget(target, (el) => removeItemEl(el, key));
-}
-
-/**
- * Move a keyed child after another keyed element within a container.
+ * Move a keyed child after another keyed element within a container (or prepend
+ * if afterKey is null). Preserves form state, focus, scroll position, CSS
+ * animations, and hook instances.
  * @param {Element} el -- container element
  * @param {string} key
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function moveItemEl(el, key, afterKey) {
-    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
+function moveItemEl(el, key, afterKey, streams = null) {
+    const item = itemByKey(streams, el, key);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for move`);
         return;
@@ -1239,23 +1289,11 @@ function moveItemEl(el, key, afterKey) {
     if (afterKey === null) {
         el.prepend(item);
     } else {
-        const ref = el.querySelector(`:scope > [az-key="${CSS.escape(afterKey)}"]`);
+        const ref = itemByKey(streams, el, afterKey);
         if (ref) ref.after(item);
         else el.appendChild(item);
     }
     notifyUpdated(item);
-}
-
-/**
- * Move a keyed child element after another keyed element (or prepend if
- * afterKey is null). Preserves form state, focus, scroll position, CSS
- * animations, and hook instances.
- * @param {string} target
- * @param {string} key
- * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
- */
-function moveItem(target, key, afterKey) {
-    withTarget(target, (el) => moveItemEl(el, key, afterKey));
 }
 
 /**
@@ -1264,9 +1302,10 @@ function moveItem(target, key, afterKey) {
  * @param {Element} container
  * @param {string} key
  * @param {Array<Array<*>>} innerOps
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function applyItemPatch(container, key, innerOps) {
-    const item = container.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
+function applyItemPatch(container, key, innerOps, streams = null) {
+    const item = itemByKey(streams, container, key);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
         return;
@@ -1284,17 +1323,6 @@ function applyItemPatch(container, key, innerOps) {
  */
 function patchItemEl(parentEl, az, key, innerOps) {
     applyItemPatch(resolveInnerEl(parentEl, az), key, innerOps);
-}
-
-/**
- * Apply ops scoped to a single keyed item. innerOps use bare az indices
- * (not "viewId:az"), resolved relative to the item element.
- * @param {string} target
- * @param {string} key
- * @param {Array<Array<*>>} innerOps
- */
-function patchItem(target, key, innerOps) {
-    withTarget(target, (el) => applyItemPatch(el, key, innerOps));
 }
 
 /**

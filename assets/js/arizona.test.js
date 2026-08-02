@@ -744,6 +744,21 @@ describe('applyOps -- OP.INSERT', () => {
         );
         expect(keys).toEqual(['a', 'z']);
     });
+
+    it('mounts hooks on the newly built item, not a pre-existing duplicate key', () => {
+        // Under a duplicate key, re-querying the container by key after the
+        // insert finds the FIRST (pre-existing) element -- the new item's hooks
+        // must still mount on the element built from the payload.
+        setupView('v', '<ul az="0"><li az-key="k1">old</li></ul>');
+        const mounted = vi.fn();
+        hooks.H = { mounted };
+        applyOps([[OP.INSERT, 'v:0', 'k1', -1, '<li az-key="k1" az-hook="H">new</li>']]);
+
+        expect(document.querySelectorAll('[az-key="k1"]').length).toBe(2);
+        expect(mounted).toHaveBeenCalledTimes(1);
+        expect(mounted.mock.instances[0].el.textContent).toBe('new');
+        delete hooks.H;
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -950,6 +965,67 @@ describe('applyOps -- OP.ITEM_PATCH', () => {
 // ---------------------------------------------------------------------------
 // 10c. applyOps -- stream keys containing CSS metacharacters (D9)
 // ---------------------------------------------------------------------------
+
+describe('applyOps -- per-batch resolution caches', () => {
+    it('applies a post-REPLACE op to the fresh element, never a stale memoized one', () => {
+        setupView('page', '<span az="0">old</span>');
+        applyOps([
+            [OP.SET_ATTR, 'page:0', 'data-a', '1'],
+            [OP.REPLACE, 'page', '<div id="page" az-view><span az="0">new</span></div>'],
+            [OP.SET_ATTR, 'page:0', 'data-b', '2'],
+        ]);
+        const span = document.querySelector('#page [az="0"]');
+        expect(span.textContent).toBe('new');
+        // The post-replace op landed on the NEW span (a memo entry for the
+        // replaced subtree must not survive the swap).
+        expect(span.getAttribute('data-b')).toBe('2');
+        expect(span.getAttribute('data-a')).toBeNull();
+    });
+
+    it('applies a mixed stream batch (insert/move/remove/patch) correctly', () => {
+        setupView(
+            'v',
+            '<ul az="0">' +
+                '<li az-key="a"><span az="1"><!--az:1-->A<!--/az--></span></li>' +
+                '<li az-key="b"><span az="1"><!--az:1-->B<!--/az--></span></li>' +
+                '<li az-key="c"><span az="1"><!--az:1-->C<!--/az--></span></li></ul>',
+        );
+        applyOps([
+            [
+                OP.INSERT,
+                'v:0',
+                'd',
+                -1,
+                '<li az-key="d"><span az="1"><!--az:1-->D<!--/az--></span></li>',
+            ],
+            [OP.MOVE, 'v:0', 'a', 'c'],
+            [OP.REMOVE, 'v:0', 'b'],
+            [OP.ITEM_PATCH, 'v:0', 'd', [[OP.TEXT, '1', 'D2']]],
+            [OP.MOVE, 'v:0', 'd', null],
+        ]);
+        const keys = Array.from(document.querySelectorAll('#v li')).map((li) =>
+            li.getAttribute('az-key'),
+        );
+        expect(keys).toEqual(['d', 'c', 'a']);
+        expect(document.querySelector('[az-key="d"]').textContent).toBe('D2');
+    });
+
+    it('stream ops keep working after an UPDATE rewrites the container mid-batch', () => {
+        setupView('v', '<ul az="0"><li az-key="x">X</li></ul>');
+        applyOps([
+            // Primes any per-batch key map for the container.
+            [OP.MOVE, 'v:0', 'x', null],
+            // Rewrites the container's children wholesale.
+            [OP.UPDATE, 'v:0', '<li az-key="y">Y</li><li az-key="z">Z</li>'],
+            // Keyed lookups must see the fresh children, not stale entries.
+            [OP.MOVE, 'v:0', 'z', null],
+        ]);
+        const keys = Array.from(document.querySelectorAll('#v li')).map((li) =>
+            li.getAttribute('az-key'),
+        );
+        expect(keys).toEqual(['z', 'y']);
+    });
+});
 
 describe('applyOps -- stream keys with CSS metacharacters (D9)', () => {
     // A server stream key is arbitrary app data. A `"` or `\` in it makes an
