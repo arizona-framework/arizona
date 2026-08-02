@@ -80,6 +80,7 @@
     stream_limit_hidden_delete/1,
     stream_limit_hidden_update/1,
     stream_limit_move_then_update_hidden_key/1,
+    stream_limit_update_only_frame_minimal_ops/1,
     stream_limit_move_after_hidden_key/1,
     stream_limit_sort_ref_hidden_key/1,
     stream_upsert_unlimited_inserts_at_tail/1,
@@ -243,6 +244,7 @@ groups() ->
             stream_limit_hidden_delete,
             stream_limit_hidden_update,
             stream_limit_move_then_update_hidden_key,
+            stream_limit_update_only_frame_minimal_ops,
             stream_limit_move_after_hidden_key,
             stream_limit_sort_ref_hidden_key,
             stream_upsert_unlimited_inserts_at_tail,
@@ -1616,6 +1618,20 @@ stream_limit_move_then_update_hidden_key(Config) when is_list(Config) ->
     %% the server's visible order exactly (the strict simulator crashes on an
     %% op referencing an absent key/position).
     ?assertEqual([3, 1], simulate_dom_ops([1, 2], Ops)).
+
+%% Op-output equivalence pin for the window-reconciliation early exit: a frame
+%% that leaves the visible window untouched (a single visible-item content
+%% update) emits exactly its ITEM_PATCH -- no REMOVE/INSERT -- and the
+%% snapshot keeps the same window items/order.
+stream_limit_update_only_frame_minimal_ops(Config) when is_list(Config) ->
+    {Ops, #{items := Items, order := Order}} =
+        limit_stream_diff(
+            #{limit => 2, on_limit => halt},
+            fun(S) -> arizona_stream:update(S, 1, #{id => 1, text => <<"A2">>}) end
+        ),
+    ?assertMatch([[?OP_ITEM_PATCH, <<"0">>, <<"1">>, [[?OP_TEXT, _, <<"A2">>]]]], Ops),
+    ?assertEqual([1, 2], Order),
+    ?assertEqual([1, 2], lists:sort(maps:keys(Items))).
 
 %% A move whose after-reference is a still-hidden key used to reach the client
 %% before that key existed in the DOM; the client's moveItemEl fallback appends

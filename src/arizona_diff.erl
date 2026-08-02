@@ -417,7 +417,7 @@ diff_stream_pending(Az, Queue, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
     case queue:out(Queue) of
         {empty, _} ->
-            apply_limit(Az, Source, Tmpl, SnapAcc, Views0);
+            apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
         {{value, Op}, Rest} ->
             diff_stream_op(Az, Op, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
@@ -799,6 +799,7 @@ apply_limit(
     #stream{limit = infinity, order = Order},
     Tmpl,
     SnapItems,
+    _OldOrder,
     Views
 ) ->
     %% Flush the {Front, BackRev} buffer to a flat list -- the snapshot's
@@ -811,6 +812,7 @@ apply_limit(
     #stream{limit = Limit, items = ItemsMap, order = Order},
     Tmpl,
     SnapItems,
+    OldOrder,
     Views0
 ) ->
     %% `halt` and `drop` reconcile the visible window identically here: remove the
@@ -821,14 +823,39 @@ apply_limit(
     %% freed slot (previously halt never inserted it) and a sort bring a hidden
     %% item into view at the right spot (previously appended at the end).
     VKeys = arizona_template:visible_keys(Order, Limit),
-    VSet = maps:from_keys(VKeys, true),
-    RemOps = [
-        [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <- SnapItems, not is_map_key(K, VSet)
-    ],
-    Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
-    {InsOps, Final, Views1} = snap_add_missing(Az, VKeys, Pruned, ItemsMap, Tmpl, Views0),
-    {RemOps ++ InsOps, #{t => ?EACH, items => Final, order => VKeys, template => Tmpl}, Views1}.
+    case window_unchanged(VKeys, OldOrder, SnapItems, 0) of
+        true ->
+            %% Fast path -- the frame didn't touch window membership or order
+            %% (e.g. a single visible-item content update): nothing fell out,
+            %% nothing to back-fill, so skip the VSet/RemOps/Pruned passes and
+            %% their map allocations entirely.
+            {[], #{t => ?EACH, items => SnapItems, order => VKeys, template => Tmpl}, Views0};
+        false ->
+            VSet = maps:from_keys(VKeys, true),
+            RemOps = [
+                [?OP_REMOVE, Az, arizona_template:to_bin(K)]
+             || K := _ <- SnapItems, not is_map_key(K, VSet)
+            ],
+            Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
+            {InsOps, Final, Views1} =
+                snap_add_missing(Az, VKeys, Pruned, ItemsMap, Tmpl, Views0),
+            {
+                RemOps ++ InsOps,
+                #{t => ?EACH, items => Final, order => VKeys, template => Tmpl},
+                Views1
+            }
+    end.
+
+%% Allocation-light equality for the fast path: the new visible window must
+%% equal the pre-frame window (`OldOrder`) element-wise, every window key must
+%% be in the client-DOM snapshot, and the snapshot must hold EXACTLY those
+%% keys (the size check catches keys the drain added or should prune).
+window_unchanged([K | VR], [K | OR], SnapItems, N) when is_map_key(K, SnapItems) ->
+    window_unchanged(VR, OR, SnapItems, N + 1);
+window_unchanged([], [], SnapItems, N) ->
+    map_size(SnapItems) =:= N;
+window_unchanged(_VKeys, _OldOrder, _SnapItems, _N) ->
+    false.
 
 snap_add_missing(Az, VKeys, Snaps, ItemsMap, Tmpl, Views) ->
     snap_add_missing(Az, VKeys, 0, Snaps, ItemsMap, Tmpl, Views).
