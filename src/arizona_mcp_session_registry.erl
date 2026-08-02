@@ -84,18 +84,24 @@ lookup(SessionId) ->
 
 -doc """
 Count the live sessions opened on route `RouteKey`, for the per-route
-`max_sessions` cap. Counts table rows directly (a stale row of a crashed
-session is swept on its next `lookup/1`), so the count is approximate under a
-burst of concurrent `initialize`s -- acceptable for a soft capacity limit.
+`max_sessions` cap. Dead pids found on the way (sessions killed without running
+`terminate/2`) are swept, mirroring `lookup/1`'s lazy sweep -- a crashed
+session's client never presents its id again, so without this sweep its stale
+row would consume `max_sessions` capacity forever. The count is still
+approximate under a burst of concurrent `initialize`s -- acceptable for a soft
+capacity limit.
 
 The scan is linear in the table, so an `initialize` on a capped route pays
 roughly one microsecond per 15 live sessions -- bounded by the cap the operator
 chose, and only on routes that set one. A cached per-route counter would make
 it constant-time but could not self-heal: a session killed without running
 `terminate/2` would leak an increment and lock its route out for good, where a
-stale row is swept the next time its id is looked up.
+stale row is swept here or the next time its id is looked up.
 """.
 -spec count(RouteKey) -> non_neg_integer() when
     RouteKey :: binary().
 count(RouteKey) ->
-    ets:select_count(?TABLE, [{{'_', '_', RouteKey}, [], [true]}]).
+    Rows = ets:select(?TABLE, [{{'$1', '$2', RouteKey}, [], [{{'$1', '$2'}}]}]),
+    Dead = [Id || {Id, Pid} <:- Rows, not is_process_alive(Pid)],
+    ok = lists:foreach(fun remove/1, Dead),
+    length(Rows) - length(Dead).

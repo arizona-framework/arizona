@@ -13,6 +13,7 @@
     prompt_get_threads_state/1,
     stop_removes_registration/1,
     stale_pid_is_swept/1,
+    count_sweeps_dead_sessions/1,
     idle_ttl_terminates/1,
     ignores_unknown_messages/1,
     notify_pushes_to_channel/1,
@@ -65,6 +66,7 @@ all() ->
         prompt_get_threads_state,
         stop_removes_registration,
         stale_pid_is_swept,
+        count_sweeps_dead_sessions,
         idle_ttl_terminates,
         ignores_unknown_messages,
         notify_pushes_to_channel,
@@ -190,6 +192,22 @@ stale_pid_is_swept(_Config) ->
     after 5000 -> ct:fail(session_did_not_die)
     end,
     ?assertEqual(error, arizona_mcp_session_registry:lookup(Id)).
+
+count_sweeps_dead_sessions(_Config) ->
+    %% A brutal kill skips terminate/2, leaving a stale registry row. Its client
+    %% never presents that id again, so lookup/1's lazy sweep can't fire -- yet
+    %% the row must not consume max_sessions capacity forever: count/1 sweeps
+    %% dead pids itself.
+    RouteKey = ~"/count-sweep",
+    {_Id, Pid} = start_opts(#{route_key => RouteKey}),
+    ?assertEqual(1, arizona_mcp_session_registry:count(RouteKey)),
+    Ref = erlang:monitor(process, Pid),
+    exit(Pid, kill),
+    receive
+        {'DOWN', Ref, process, Pid, _} -> ok
+    after 5000 -> ct:fail(session_did_not_die)
+    end,
+    ?assertEqual(0, arizona_mcp_session_registry:count(RouteKey)).
 
 idle_ttl_terminates(_Config) ->
     {Id, Pid} = start(100),
