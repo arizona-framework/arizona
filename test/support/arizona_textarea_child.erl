@@ -21,7 +21,7 @@ mount(Bindings) ->
 render(Bindings) ->
     ?html(
         {'div', [{id, ?get(id)}], [
-            {'label', [], [~"Note"]},
-            {'textarea', [], [?get(text)]}
+            {label, [], [~"Note"]},
+            {textarea, [], [?get(text)]}
         ]}
     ).
