@@ -72,6 +72,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([put_resp_status/2]).
 -export([resp_headers/1]).
 -export([resp_cookies/1]).
+-export([commit_session/1]).
 -export([resp_status/1]).
 -export([put_flash/3]).
 -export([flash/1]).
@@ -498,8 +499,13 @@ Returns the stashed response cookies (newest first), or `[]`, plus the flash and
 session cookies when warranted: a freshly `put_flash/3`-set flash serializes to a
 signed `Set-Cookie` (a consumed incoming flash with no new one serializes to a
 clearing cookie); a written session (`put_session/3`/`delete_session/2`) serializes
-to an encrypted `Set-Cookie`, a cleared one (`clear_session/1`) to a clearing
-cookie, and an untouched session to nothing. Transports flush this list verbatim.
+to an encrypted `Set-Cookie` (in store mode, the signed session id), a cleared one
+(`clear_session/1`) to a clearing cookie, and an untouched session to nothing.
+Transports flush this list verbatim.
+
+A pure getter: it builds the cookie list and nothing else. In store mode the
+matching store write/delete is `commit_session/1`, which the transports call at
+response flush.
 """.
 -spec resp_cookies(Request) -> [{binary(), binary(), resp_cookie_opts()}] when
     Request :: request().
@@ -517,34 +523,62 @@ resp_cookies(Req) ->
         SessionCookie -> WithFlash ++ [SessionCookie]
     end.
 
-%% The session `Set-Cookie` for this response. In store mode this also commits the write
-%% (the response is where a written session is persisted): a non-empty dirty session is
-%% put under its id and the signed id is emitted; a cleared one (logout) is deleted and
-%% the cookie cleared; an untouched session emits nothing. Cookie mode encrypts the map
-%% into the cookie as before.
+%% The session `Set-Cookie` for this response -- built, not committed: a non-empty
+%% dirty session emits the fresh cookie (store mode: the signed id), a cleared one
+%% (logout) the clearing cookie, an untouched session nothing. The store-mode
+%% write/delete lives in `commit_session/1`.
 session_resp_cookie(Req) ->
     SessionOut = maps:get(session_out, Req, #{}),
     Dirty = maps:get(session_dirty, Req, false),
     case session_store() of
         undefined ->
             arizona_session:resp_cookie(SessionOut, Dirty);
-        Store ->
-            store_resp_cookie(Store, Req, SessionOut, Dirty)
+        _Store ->
+            store_resp_cookie(Req, SessionOut, Dirty)
     end.
 
-store_resp_cookie(_Store, _Req, _SessionOut, false) ->
+%% Pure store-mode counterpart of `arizona_session:resp_cookie/2`.
+store_resp_cookie(_Req, _SessionOut, false) ->
     none;
-store_resp_cookie(Store, Req, SessionOut, true) when map_size(SessionOut) > 0 ->
-    Id = maps:get(session_id, Req),
-    ok = Store:put(Id, SessionOut, arizona_session:max_age()),
-    %% On a rotation (clear_session then put_session, e.g. login) drop the
-    %% pre-rotation entry so a pre-login / fixated id cannot be reused.
-    ok = maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined)),
-    arizona_session:set_cookie_id(Id);
-store_resp_cookie(Store, Req, _SessionOut, true) ->
-    %% Cleared (logout): drop the store entry if we know the id, and clear the cookie.
-    ok = maybe_delete_stored(Store, maps:get(session_id, Req, undefined)),
+store_resp_cookie(Req, SessionOut, true) when map_size(SessionOut) > 0 ->
+    arizona_session:set_cookie_id(maps:get(session_id, Req));
+store_resp_cookie(_Req, _SessionOut, true) ->
     arizona_session:clear_cookie().
+
+-doc """
+Commits a written session to the server-side store (store mode): a dirty
+non-empty session is `put` under its id -- and, on a rotation (`clear_session/1`
+then `put_session/3`, the login pattern), the pre-rotation entry is dropped so a
+fixated id cannot be reused -- while a cleared one (logout) is deleted. A no-op
+in cookie mode or when the session is untouched.
+
+Called by the transports at response flush, beside serializing `resp_cookies/1`
+(a pure getter that performs no store writes). Flush time is the
+commit-on-success point: a handler that crashes after `put_session/3` leaves the
+store untouched. Idempotent -- committing the same request again repeats the same
+put/delete.
+""".
+-spec commit_session(Request) -> ok when
+    Request :: request().
+commit_session(Req) ->
+    case session_store() of
+        undefined -> ok;
+        Store -> commit_session_store(Store, Req, maps:get(session_dirty, Req, false))
+    end.
+
+commit_session_store(_Store, _Req, false) ->
+    ok;
+commit_session_store(Store, Req, true) ->
+    case maps:get(session_out, Req, #{}) of
+        SessionOut when map_size(SessionOut) > 0 ->
+            ok = Store:put(maps:get(session_id, Req), SessionOut, arizona_session:max_age()),
+            %% On a rotation (clear_session then put_session, e.g. login) drop the
+            %% pre-rotation entry so a pre-login / fixated id cannot be reused.
+            maybe_delete_stored(Store, maps:get(session_prev_id, Req, undefined));
+        _Empty ->
+            %% Cleared (logout): drop the store entry if we know the id.
+            maybe_delete_stored(Store, maps:get(session_id, Req, undefined))
+    end.
 
 maybe_delete_stored(_Store, undefined) -> ok;
 maybe_delete_stored(Store, Id) -> Store:delete(Id).

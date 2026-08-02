@@ -13,6 +13,8 @@
 -export([ets_expiry_drop_spares_refreshed_row/1]).
 -export([ets_expiry_drop_removes_still_expired_row/1]).
 -export([ets_sweep_reaps_expired/1]).
+-export([req_resp_cookies_is_pure_getter/1]).
+-export([req_transport_flush_commits_store_write/1]).
 -export([req_put_session_persists_to_store/1]).
 -export([req_session_id_available_after_write/1]).
 -export([req_read_session_from_store/1]).
@@ -41,6 +43,8 @@ all() ->
         ets_expiry_drop_spares_refreshed_row,
         ets_expiry_drop_removes_still_expired_row,
         ets_sweep_reaps_expired,
+        req_resp_cookies_is_pure_getter,
+        req_transport_flush_commits_store_write,
         req_put_session_persists_to_store,
         req_session_id_available_after_write,
         req_read_session_from_store,
@@ -135,11 +139,44 @@ ets_sweep_reaps_expired(Config) when is_list(Config) ->
 %% arizona_req in store mode
 %% --------------------------------------------------------------------
 
+req_resp_cookies_is_pure_getter(Config) when is_list(Config) ->
+    %% resp_cookies/1 is documented as a getter, so it must BUILD the Set-Cookie
+    %% without committing the store write -- it used to put/delete as a side
+    %% effect of being read. The commit is the explicit commit_session/1 the
+    %% transports call at response flush.
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+    [{~"az_session", Value, _Opts}] = arizona_req:resp_cookies(Req1),
+    {ok, Id} = arizona_session:decode_id(Value),
+    ?assertEqual(no_session, arizona_session_store_ets:get(Id)),
+    ok = arizona_req:commit_session(Req1),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)),
+    %% Idempotent: a second commit repeats the same write.
+    ok = arizona_req:commit_session(Req1),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)).
+
+req_transport_flush_commits_store_write(Config) when is_list(Config) ->
+    %% The roadrunner transport flush is the commit point: flushing a response
+    %% both serializes the session Set-Cookie onto it and commits the store
+    %% write -- so a handler that crashes before a response is flushed leaves
+    %% the store untouched (commit-on-success).
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+    {200, Headers, <<>>} = arizona_roadrunner_resp:flush(Req1, {200, [], <<>>}),
+    {~"set-cookie", SetCookie} = lists:keyfind(~"set-cookie", 1, Headers),
+    [~"az_session", Value | _] = binary:split(iolist_to_binary(SetCookie), [~"=", ~";"], [
+        global
+    ]),
+    {ok, Id} = arizona_session:decode_id(Value),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)).
+
 req_put_session_persists_to_store(Config) when is_list(Config) ->
     Req0 = arizona_req_test_adapter:new(#{cookies => []}),
     Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
-    %% The cookie carries the signed id; the store holds the map (put on response).
+    %% The cookie carries the signed id; the store holds the map, committed at
+    %% response flush (commit_session/1 -- the transports' flush step).
     [{~"az_session", Value, _Opts}] = arizona_req:resp_cookies(Req1),
+    ok = arizona_req:commit_session(Req1),
     {ok, Id} = arizona_session:decode_id(Value),
     ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)).
 
@@ -170,6 +207,7 @@ req_put_session_merges_onto_stored(Config) when is_list(Config) ->
     }),
     Req1 = arizona_req:put_session(Req0, b, 2),
     [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req1),
+    ok = arizona_req:commit_session(Req1),
     %% Same id reused; the store holds the merged map.
     ?assertEqual({ok, Id}, arizona_session:decode_id(Value)),
     ?assertEqual({ok, #{~"a" => 1, ~"b" => 2}}, arizona_session_store_ets:get(Id)).
@@ -183,6 +221,7 @@ req_clear_session_deletes_from_store(Config) when is_list(Config) ->
     {_, Req1} = arizona_req:read_session(Req0),
     Req2 = arizona_req:clear_session(Req1),
     [{~"az_session", <<>>, Opts}] = arizona_req:resp_cookies(Req2),
+    ok = arizona_req:commit_session(Req2),
     ?assertEqual(0, maps:get(max_age, Opts)),
     ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
 
@@ -200,6 +239,7 @@ req_login_rotation_mints_fresh_id(Config) when is_list(Config) ->
     Req2 = arizona_req:clear_session(Req1),
     Req3 = arizona_req:put_session(Req2, user_id, ~"42"),
     [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req3),
+    ok = arizona_req:commit_session(Req3),
     {ok, OutId} = arizona_session:decode_id(Value),
     %% Rotated to a fresh id, and the cookie carries it.
     ?assertNotEqual(IncomingId, OutId),
@@ -216,6 +256,7 @@ req_clear_then_put_without_read_mints_fresh_id(Config) when is_list(Config) ->
     Req1 = arizona_req:clear_session(Req0),
     Req2 = arizona_req:put_session(Req1, user_id, ~"42"),
     [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req2),
+    ok = arizona_req:commit_session(Req2),
     {ok, OutId} = arizona_session:decode_id(Value),
     ?assertEqual(OutId, arizona_req:session_id(Req2)),
     ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(OutId)).
