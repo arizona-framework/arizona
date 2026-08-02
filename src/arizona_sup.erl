@@ -67,6 +67,7 @@ start_link() ->
     ChildSpec :: supervisor:child_spec().
 init(#{}) ->
     Reloader = arizona_config:get_env(reloader, #{}),
+    ok = log_reloader_state(Reloader),
     Children =
         [pubsub_spec(), mcp_sup_spec()] ++ store_specs() ++ watcher_specs(Reloader),
     {ok, {#{strategy => one_for_one}, Children}}.
@@ -74,6 +75,25 @@ init(#{}) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% One boot line stating the reloader state, so a dev node silently missing hot
+%% reload (env absent or disabled -- zero watchers started, nothing else says
+%% so) is visible. Enabled is ordinary dev-mode operation: `info`. Disabled
+%% logs at `notice`: OTP's default primary level is `notice`, so the line shows
+%% on a default node -- where an `info` would be filtered before any handler --
+%% without being an alarming warning. The clauses mirror watcher_specs/1, so
+%% the line always states what actually started.
+log_reloader_state(#{enabled := true, rules := Rules}) when is_list(Rules) ->
+    logger:info("Arizona hot reload enabled: watching ~ts", [summarize_rules(Rules)]);
+log_reloader_state(_Reloader) ->
+    logger:notice("Arizona hot reload off; set the arizona `reloader` app env to enable it").
+
+summarize_rules(Rules) ->
+    lists:join("; ", [summarize_rule(Rule) || Rule <- Rules]).
+
+summarize_rule(#{directory := Dir} = Rule) ->
+    Patterns = maps:get(patterns, Rule, [".*"]),
+    io_lib:format("~ts (~ts)", [Dir, lists:join(", ", Patterns)]).
 
 pubsub_spec() ->
     #{
