@@ -412,6 +412,50 @@ describe('arizona-worker', () => {
         expect(resolved[1][0][2]).toBe('replace-html');
     });
 
+    it('a reconnect open flags _az_fps_follow=1; a first connect does not', () => {
+        // First connect: no flag (SSR delivered the page, nothing to defer)
+        // and an empty cache announces nothing -- no extra frame.
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        expect(ws.latest().url).not.toContain('_az_fps_follow');
+        ws.latest().simulateOpen();
+        expect(ws.latest().sent.find((s) => s.startsWith('["cached_fps"'))).toBeUndefined();
+        // Backoff reconnect: the flag rides beside _az_reconnect, promising
+        // the cached_fps frame the server holds its resync for.
+        ws.latest().close(1006);
+        vi.advanceTimersByTime(10000);
+        expect(ws.latest().url).toContain('_az_reconnect=1');
+        expect(ws.latest().url).toContain('_az_fps_follow=1');
+    });
+
+    it('a flagged reconnect announces even an empty cache', async () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        ws.latest().close(1006);
+        // The async advance flushes the (empty) hydration microtasks and fires
+        // the backoff timer, so the reconnect opens with hydration settled.
+        await vi.advanceTimersByTimeAsync(10000);
+        ws.latest().simulateOpen();
+        // The server defers its resync for this frame, so it MUST go out even
+        // with nothing cached -- pre-fix the empty-suppression starved it.
+        expect(ws.latest().sent).toContain(JSON.stringify(['cached_fps', []]));
+    });
+
+    it('a flagged fresh-worker connect waits for IDB hydration before announcing', async () => {
+        // A bfcache respawn: fresh worker (cold in-memory cache), flagged
+        // connect. The announcement must carry the REAL (IDB) cache, so it
+        // waits for hydration to settle instead of claiming an empty cache.
+        idb.restore();
+        idb = installIndexedDBStub({ seed: [['fp_seed', { s: ['<p>', '</p>'], u: 1 }]] });
+        slf.send([0, 'ws://host/ws?_az_path=%2F', true]);
+        ws.latest().simulateOpen();
+        // Hydration microtasks have not run yet: nothing announced.
+        expect(ws.latest().sent.find((s) => s.startsWith('["cached_fps"'))).toBeUndefined();
+        vi.useRealTimers();
+        await new Promise((r) => setTimeout(r, 0));
+        const sentFps = ws.latest().sent.find((s) => s.startsWith('["cached_fps"'));
+        expect(sentFps).toContain('fp_seed');
+    });
+
     it('reconnect: after successful reopen, next message flags firstAfterReconnect=true', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
@@ -470,9 +514,11 @@ describe('arizona-worker', () => {
         ws.latest().simulateMessage(
             JSON.stringify({ o: [[0, 'v:0', { f: 'fp_z', s: ['<i>', '</i>'], d: ['x'] }]] }),
         );
-        // Reconnect resets _fpsSent; next open should re-ship cached fps
+        // Reconnect resets _fpsSent; next open should re-ship cached fps. The
+        // async advance also settles hydration, which a flagged reconnect's
+        // announcement waits for.
         ws.latest().close(1006);
-        vi.advanceTimersByTime(10000);
+        await vi.advanceTimersByTimeAsync(10000);
         ws.latest().simulateOpen();
         const sentFps = ws.latest().sent.find((s) => s.startsWith('["cached_fps"'));
         expect(sentFps).toContain('fp_z');

@@ -161,15 +161,39 @@ let _heartbeatPending = false;
 let _fpsSent = false;
 
 /**
+ * IDB cache hydration settled (loaded or failed). A flagged reconnect must
+ * announce the REAL cache -- a fresh worker (bfcache respawn) announcing
+ * before hydration would claim an empty cache and forfeit the dedup.
+ * @type {boolean}
+ */
+let _hydrated = false;
+
+/**
+ * The current connection carried `_az_fps_follow=1`: it promised the server a
+ * `cached_fps` frame (possibly empty) as its first frame, and the server is
+ * holding the reconnect resync for it so the payload can dedup against the
+ * announced fingerprints.
+ * @type {boolean}
+ */
+let _fpsFollow = false;
+
+/**
  * Send cached fingerprint keys to the server exactly once per connection.
- * Called from ws.onopen and after IDB load -- whichever finds both fpCache
- * populated and WS open first actually sends; the other is a no-op.
- * Capped at the most-recently-used `FP_CACHE_MAX`: this frame goes out on every
- * open, reconnects included, and anything left out simply arrives with its
- * statics attached.
+ * Called from ws.onopen and after IDB hydration settles -- whichever finds the
+ * preconditions met first actually sends; the other is a no-op. On a flagged
+ * reconnect (`_fpsFollow`) the frame is MANDATORY (the server defers its
+ * resync for it) and goes out even empty, but only once hydration settled; on
+ * a first connect an empty cache sends nothing (no behavior to unlock, no
+ * extra frame). Capped at the most-recently-used `FP_CACHE_MAX`: anything left
+ * out simply arrives with its statics attached.
  */
 function sendCachedFps() {
-    if (_fpsSent || fpCache.size === 0 || !_ws || _ws.readyState !== 1) return;
+    if (_fpsSent || !_ws || _ws.readyState !== 1) return;
+    if (_fpsFollow) {
+        if (!_hydrated) return;
+    } else if (fpCache.size === 0) {
+        return;
+    }
     _fpsSent = true;
     _ws.send(JSON.stringify(['cached_fps', mruFpKeys(FP_CACHE_MAX)]));
 }
@@ -251,6 +275,11 @@ function openSocket() {
     if (_reconnectTimer) clearTimeout(_reconnectTimer);
     _reconnectTimer = null;
     _fpsSent = false;
+    // A reconnect open promises the `cached_fps` announcement as its first
+    // frame (`_az_fps_follow=1` below), so the server defers the full-page
+    // resync until it arrives and dedups the payload against it. First
+    // connects never flag: SSR already delivered the page, nothing to defer.
+    _fpsFollow = _reconnecting;
 
     if (!_wsUrl) return;
 
@@ -262,7 +291,7 @@ function openSocket() {
     const incoming = new URL(_wsUrl);
     const protocol = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
     let url = `${protocol}//${self.location.host}${incoming.pathname}${incoming.search}`;
-    if (_reconnecting) url += '&_az_reconnect=1';
+    if (_reconnecting) url += '&_az_reconnect=1&_az_fps_follow=1';
 
     const ws = new WebSocket(url);
     _ws = ws;
@@ -350,13 +379,19 @@ self.onmessage = (e) => {
             openSocket();
 
             // Hydrate in-memory cache from IDB (cross-session persistence),
-            // then announce cached fingerprints to the server.
+            // then announce cached fingerprints to the server. The settle
+            // marker runs on success AND failure: a flagged reconnect's
+            // mandatory announcement waits for it (see sendCachedFps), so a
+            // broken IDB must still unblock the server's deferred resync.
             idbLoadPruned()
                 .then((entries) => {
                     if (entries.length > 0) loadFpEntries(entries);
-                    sendCachedFps();
                 })
-                .catch(() => {});
+                .catch(() => {})
+                .then(() => {
+                    _hydrated = true;
+                    sendCachedFps();
+                });
             break;
         }
         case 1: {
