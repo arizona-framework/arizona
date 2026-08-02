@@ -1,15 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyOps, executeJS, requestPip, resolveEl } from './arizona.js';
+import { applyOps, executeJS, hooks, mountHooks, OP, requestPip, resolveEl } from './arizona.js';
 
 // A minimal stand-in for a Document Picture-in-Picture window, backed by a real
 // (jsdom) Document, so the multi-document patch/effect paths can be exercised
-// without a Chromium PiP window (which jsdom can't provide).
+// without a Chromium PiP window (which jsdom can't provide). `close()` fires the
+// registered pagehide handler, like a real window closing.
 function makePipWindow() {
     const doc = document.implementation.createHTMLDocument('pip');
     /** @type {Record<string, Function>} */
     const handlers = {};
     return {
         document: doc,
+        closed: false,
         /** @param {string} type @param {Function} fn */
         addEventListener(type, fn) {
             handlers[type] = fn;
@@ -17,6 +19,10 @@ function makePipWindow() {
         /** @param {string} type */
         fire(type) {
             handlers[type]?.();
+        },
+        close() {
+            this.closed = true;
+            handlers.pagehide?.();
         },
     };
 }
@@ -214,5 +220,74 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         await Promise.resolve();
         await Promise.resolve();
         pip.fire('pagehide'); // cleanup
+    });
+
+    it('closes an orphaned PiP window when a navigate replaces the outgoing page', async () => {
+        // A child view popped out, then the ROOT is replaced (SPA navigate):
+        // the placeholder dies with the outgoing subtree, so the floating view
+        // shows dead server state and must be closed + discarded.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><div id="player" az-view az="0" az-hook="H"></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+        expect(pip.document.getElementById('player')).not.toBeNull();
+
+        applyOps([[OP.REPLACE, 'root', '<div id="other" az-view az="0">new page</div>']]);
+
+        // The window was closed, the stale element discarded (NOT dumped into
+        // the new page's body), and its hook torn down.
+        expect(pip.closed).toBe(true);
+        expect(document.getElementById('player')).toBeNull();
+        expect(destroyed).toHaveBeenCalledOnce();
+        // The PiP document is unregistered: the view no longer resolves.
+        expect(resolveEl('player')).toBeNull();
+
+        delete hooks.H;
+    });
+
+    it('keeps an unrelated PiP window open across a navigate', async () => {
+        // Two roots: one is replaced, the other's popped-out child keeps its
+        // placeholder -- its window must survive.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0">page</div>' +
+            '<div id="side" az-view az="0"><div id="player" az-view az="0"></div></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        applyOps([[OP.REPLACE, 'root', '<div id="other" az-view az="0">new</div>']]);
+
+        expect(pip.closed).toBe(false);
+        expect(resolveEl('player')?.ownerDocument).toBe(pip.document);
+
+        pip.fire('pagehide'); // cleanup
+    });
+
+    it('discards the stale view on close when its placeholder is gone', async () => {
+        // The placeholder is wiped by an inner re-render (not a REPLACE, so no
+        // auto-close); when the user then closes the window, the stale element
+        // must be discarded, not appended to the page body.
+        document.body.innerHTML =
+            '<div id="root" az-view az="0"><div id="player" az-view az="0" az-hook="H"></div></div>';
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        mountHooks(document);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('player');
+
+        // OP.UPDATE on the root: innerHTML wipes the inline placeholder.
+        applyOps([[OP.UPDATE, 'root:0', 'wiped']]);
+        pip.fire('pagehide'); // user closes the floating window
+
+        expect(document.getElementById('player')).toBeNull();
+        expect(document.body.contains(pip.document.getElementById('player'))).toBe(false);
+        expect(destroyed).toHaveBeenCalledOnce();
+
+        delete hooks.H;
     });
 });

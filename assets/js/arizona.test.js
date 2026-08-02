@@ -406,6 +406,32 @@ describe('applyOps -- OP.SET_ATTR', () => {
         expect(el.getAttribute('value')).toBe('new');
         expect(el.value).toBe('new');
     });
+
+    it('syncs checkedness after user interaction (dirty checkedness flag)', () => {
+        setupView('v', '<input type="checkbox" az="0" />');
+        const el = /** @type {HTMLInputElement} */ (resolveEl('v:0'));
+        // A user click sets the dirty checkedness flag; from then on attribute
+        // writes alone no longer change .checked.
+        el.click(); // checked
+        el.click(); // unchecked, dirty
+        applyOps([[OP.SET_ATTR, 'v:0', 'checked', '']]);
+        expect(el.checked).toBe(true);
+    });
+
+    it('syncs option selectedness after user interaction (dirty flag)', () => {
+        setupView(
+            'v',
+            '<select><option value="1">1</option><option value="2" az="0">2</option></select>',
+        );
+        const opt = /** @type {HTMLOptionElement} */ (resolveEl('v:0'));
+        // The selected IDL setter marks the option dirty; attribute writes
+        // alone no longer change .selected.
+        opt.selected = true;
+        opt.selected = false;
+        applyOps([[OP.SET_ATTR, 'v:0', 'selected', '']]);
+        expect(opt.selected).toBe(true);
+        expect(/** @type {HTMLSelectElement} */ (opt.closest('select')).value).toBe('2');
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -417,6 +443,41 @@ describe('applyOps -- OP.REM_ATTR', () => {
         setupView('v', '<span az="0" class="old">hi</span>');
         applyOps([[OP.REM_ATTR, 'v:0', 'class']]);
         expect(resolveEl('v:0').hasAttribute('class')).toBe(false);
+    });
+
+    it('unchecks a user-checked checkbox (dirty checkedness flag)', () => {
+        setupView('v', '<input type="checkbox" az="0" />');
+        const el = /** @type {HTMLInputElement} */ (resolveEl('v:0'));
+        // User checks the box: no `checked` attribute exists, but the live
+        // checkedness is true and dirty -- removeAttribute alone is a no-op.
+        el.click();
+        expect(el.checked).toBe(true);
+        applyOps([[OP.REM_ATTR, 'v:0', 'checked']]);
+        expect(el.checked).toBe(false);
+    });
+
+    it('deselects a user-selected option (dirty flag)', () => {
+        setupView(
+            'v',
+            '<select><option value="1">1</option>' +
+                '<option value="2" az="0" selected>2</option></select>',
+        );
+        const opt = /** @type {HTMLOptionElement} */ (resolveEl('v:0'));
+        opt.selected = true; // user re-picks it -- dirty
+        applyOps([[OP.REM_ATTR, 'v:0', 'selected']]);
+        expect(opt.selected).toBe(false);
+        expect(/** @type {HTMLSelectElement} */ (opt.closest('select')).value).toBe('1');
+    });
+
+    it('resets a typed-in value when the value attribute is removed', () => {
+        setupView('v', '<input az="0" value="server" />');
+        const el = /** @type {HTMLInputElement} */ (resolveEl('v:0'));
+        el.value = 'typed'; // dirty value flag
+        applyOps([[OP.REM_ATTR, 'v:0', 'value']]);
+        // Removing the attribute clears the default value; the live value is
+        // server-driven, so it resets to that empty default.
+        expect(el.hasAttribute('value')).toBe(false);
+        expect(el.value).toBe('');
     });
 });
 
@@ -683,6 +744,21 @@ describe('applyOps -- OP.INSERT', () => {
         );
         expect(keys).toEqual(['a', 'z']);
     });
+
+    it('mounts hooks on the newly built item, not a pre-existing duplicate key', () => {
+        // Under a duplicate key, re-querying the container by key after the
+        // insert finds the FIRST (pre-existing) element -- the new item's hooks
+        // must still mount on the element built from the payload.
+        setupView('v', '<ul az="0"><li az-key="k1">old</li></ul>');
+        const mounted = vi.fn();
+        hooks.H = { mounted };
+        applyOps([[OP.INSERT, 'v:0', 'k1', -1, '<li az-key="k1" az-hook="H">new</li>']]);
+
+        expect(document.querySelectorAll('[az-key="k1"]').length).toBe(2);
+        expect(mounted).toHaveBeenCalledTimes(1);
+        expect(mounted.mock.instances[0].el.textContent).toBe('new');
+        delete hooks.H;
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -890,6 +966,67 @@ describe('applyOps -- OP.ITEM_PATCH', () => {
 // 10c. applyOps -- stream keys containing CSS metacharacters (D9)
 // ---------------------------------------------------------------------------
 
+describe('applyOps -- per-batch resolution caches', () => {
+    it('applies a post-REPLACE op to the fresh element, never a stale memoized one', () => {
+        setupView('page', '<span az="0">old</span>');
+        applyOps([
+            [OP.SET_ATTR, 'page:0', 'data-a', '1'],
+            [OP.REPLACE, 'page', '<div id="page" az-view><span az="0">new</span></div>'],
+            [OP.SET_ATTR, 'page:0', 'data-b', '2'],
+        ]);
+        const span = document.querySelector('#page [az="0"]');
+        expect(span.textContent).toBe('new');
+        // The post-replace op landed on the NEW span (a memo entry for the
+        // replaced subtree must not survive the swap).
+        expect(span.getAttribute('data-b')).toBe('2');
+        expect(span.getAttribute('data-a')).toBeNull();
+    });
+
+    it('applies a mixed stream batch (insert/move/remove/patch) correctly', () => {
+        setupView(
+            'v',
+            '<ul az="0">' +
+                '<li az-key="a"><span az="1"><!--az:1-->A<!--/az--></span></li>' +
+                '<li az-key="b"><span az="1"><!--az:1-->B<!--/az--></span></li>' +
+                '<li az-key="c"><span az="1"><!--az:1-->C<!--/az--></span></li></ul>',
+        );
+        applyOps([
+            [
+                OP.INSERT,
+                'v:0',
+                'd',
+                -1,
+                '<li az-key="d"><span az="1"><!--az:1-->D<!--/az--></span></li>',
+            ],
+            [OP.MOVE, 'v:0', 'a', 'c'],
+            [OP.REMOVE, 'v:0', 'b'],
+            [OP.ITEM_PATCH, 'v:0', 'd', [[OP.TEXT, '1', 'D2']]],
+            [OP.MOVE, 'v:0', 'd', null],
+        ]);
+        const keys = Array.from(document.querySelectorAll('#v li')).map((li) =>
+            li.getAttribute('az-key'),
+        );
+        expect(keys).toEqual(['d', 'c', 'a']);
+        expect(document.querySelector('[az-key="d"]').textContent).toBe('D2');
+    });
+
+    it('stream ops keep working after an UPDATE rewrites the container mid-batch', () => {
+        setupView('v', '<ul az="0"><li az-key="x">X</li></ul>');
+        applyOps([
+            // Primes any per-batch key map for the container.
+            [OP.MOVE, 'v:0', 'x', null],
+            // Rewrites the container's children wholesale.
+            [OP.UPDATE, 'v:0', '<li az-key="y">Y</li><li az-key="z">Z</li>'],
+            // Keyed lookups must see the fresh children, not stale entries.
+            [OP.MOVE, 'v:0', 'z', null],
+        ]);
+        const keys = Array.from(document.querySelectorAll('#v li')).map((li) =>
+            li.getAttribute('az-key'),
+        );
+        expect(keys).toEqual(['z', 'y']);
+    });
+});
+
 describe('applyOps -- stream keys with CSS metacharacters (D9)', () => {
     // A server stream key is arbitrary app data. A `"` or `\` in it makes an
     // unescaped `[az-key="..."]` selector invalid, throwing a SyntaxError that
@@ -964,6 +1101,24 @@ describe('applyOps -- skip missing', () => {
         ]);
         // Original element should be untouched
         expect(resolveEl('v:0').textContent).toBe('hi');
+    });
+
+    it('warns on an unresolvable target and still applies the rest of the batch', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupView('v', '<span az="0">hi</span>');
+        // A silently dropped op (e.g. a server op addressed to a slot SSR never
+        // anchored) reads as "nothing happened" -- it must be loud, like the
+        // stream-item warns.
+        applyOps([
+            [OP.TEXT, 'missing:0', 'x'],
+            [OP.TEXT, 'v:0', 'updated'],
+        ]);
+        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy.mock.calls[0][0]).toBe(
+            '[arizona] op 0 target "missing:0" not found; skipping',
+        );
+        expect(resolveEl('v:0').textContent).toBe('updated');
+        warnSpy.mockRestore();
     });
 });
 
@@ -2953,6 +3108,38 @@ describe('?local -- set/get attribute', () => {
     });
 });
 
+describe('?local -- descriptor cache and early exit', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('parses each az-local descriptor once per element, then serves from cache', () => {
+        setupView(
+            'v',
+            `<span az="1" az-local='{"c":{"0":"title"}}'><!--az:1-->Hi<!--/az--></span>`,
+        );
+        set('v', 'title', 'One');
+        // The element's descriptor is now cached (it is written once at SSR and
+        // never diffed, so it is immutable for the element's lifetime).
+        const parseSpy = vi.spyOn(JSON, 'parse');
+        set('v', 'title', 'Two');
+        expect(get('v', 'title')).toBe('Two');
+        expect(parseSpy).not.toHaveBeenCalled();
+    });
+
+    it('get stops scanning at the first matching slot', () => {
+        setupView(
+            'v',
+            `<span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->first<!--/az--></span>` +
+                `<span az="2" az-local='{"c":{"0":"other"}}'><!--az:2-->x<!--/az--></span>`,
+        );
+        const parseSpy = vi.spyOn(JSON, 'parse');
+        expect(get('k')).toBe('first');
+        // The first element matched, so the second descriptor is never parsed.
+        expect(parseSpy).toHaveBeenCalledTimes(1);
+    });
+});
+
 describe('?local -- interpolated attribute', () => {
     it('set recomposes prefix + value + suffix; get strips them', () => {
         setupView(
@@ -4240,6 +4427,59 @@ describe('navigation scroll', () => {
         expect(scrollSpy).toHaveBeenCalledWith(0, 0);
     });
 
+    it('a no-op patch does not yank scroll on a later unrelated diff', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickPatchLink('/next');
+        // The patch round-trip completes without ops (an effects-only reply);
+        // the armed scroll intent must die with it.
+        mock.simulateMessage(null, [[14, 'T']]);
+        // A later unrelated push (e.g. a timer tick) must not consume a stale
+        // intent and yank the scroll to top.
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
+
+        expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it('a no-op patch on popstate does not replay the saved restore on a later diff', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState({ _azNav: 'patch' }, '', '/patched');
+        window.dispatchEvent(
+            new PopStateEvent('popstate', {
+                state: { _azNav: 'patch', _azScroll: { x: 0, y: 320 } },
+            }),
+        );
+        // The patch reply carries no ops; the saved-scroll intent is discarded.
+        mock.simulateMessage(null, null);
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
+
+        expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it('a patch intent armed by a frame effect survives to its own reply frame', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // This frame's EFFECTS arm a fresh patch intent (JS_PATCH = 24); the
+        // end-of-frame cleanup must not clear the intent it just armed.
+        mock.simulateMessage(null, [[24, '/to']]);
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
+
+        expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+    });
+
     it('JS_PATCH effect ([24, path]) sends a patch frame', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
@@ -4494,6 +4734,70 @@ describe('navigation scroll', () => {
         expect(location.pathname + location.hash).toBe('/same#sec');
         expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
+    it('cross-page popstate while disconnected falls back to a full page load', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        history.replaceState(null, '', '/cur');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateClose();
+
+        // The browser already changed the URL on Back; returning silently would
+        // desync URL and content and leave the reconnect URL stale.
+        const reload = vi.fn();
+        vi.stubGlobal('location', { pathname: '/other', search: '', hash: '', reload });
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        vi.unstubAllGlobals();
+
+        expect(reload).toHaveBeenCalledOnce();
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
+    it('fragment-only popstate while disconnected scrolls without reloading', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        history.replaceState(null, '', '/cur');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mock.simulateClose();
+
+        const reload = vi.fn();
+        vi.stubGlobal('location', { pathname: '/cur', search: '', hash: '', reload });
+        window.dispatchEvent(
+            new PopStateEvent('popstate', { state: { _azScroll: { x: 0, y: 70 } } }),
+        );
+        vi.unstubAllGlobals();
+
+        // A same-page fragment change needs no server -- restore scroll locally.
+        expect(reload).not.toHaveBeenCalled();
+        expect(scrollSpy).toHaveBeenCalledWith(0, 70);
+    });
+
+    it('same-path hash nav saves outgoing scroll so Back can restore it', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState(null, '', '/same');
+        setupView('page', '<section id="sec">x</section>');
+        Object.defineProperty(window, 'scrollY', { value: 500, configurable: true });
+
+        const replaceSpy = vi.spyOn(history, 'replaceState');
+        clickLink('/same#sec');
+
+        // scrollRestoration is 'manual', so without saving the outgoing scroll
+        // onto the pre-anchor entry, Back after an in-page anchor click lands
+        // at the top instead of where the user was.
+        const savingCall = replaceSpy.mock.calls.find(
+            (c) => c[0] && typeof c[0] === 'object' && c[0]._azScroll,
+        );
+        expect(savingCall).toBeTruthy();
+        expect(savingCall[0]._azScroll).toEqual({ x: 0, y: 500 });
+        expect(location.pathname + location.hash).toBe('/same#sec');
+        replaceSpy.mockRestore();
     });
 });
 
@@ -4936,6 +5240,88 @@ describe('page lifecycle -- bfcache', () => {
 
         mock.restore();
     });
+
+    it('reconnects with the post-SPA-nav path and the reconnect flag on restore', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const originalHref = location.href;
+        history.replaceState(null, '', '/start');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // An SPA navigation moves the path; the worker (which tracked it via
+        // W_UPDATE_PATH) is then killed on pagehide, so the respawned worker
+        // must be handed the CURRENT route, flagged as a reconnect -- the DOM
+        // exists with evolved live state and needs the server's full resync.
+        mod.applyEffects([[10, '/next?tab=2']]);
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+
+        const connects = mock.posted.filter((d) => d[0] === 0);
+        expect(connects.length).toBe(2);
+        const [, url, reconnect] = connects[1];
+        expect(url).toContain('_az_path=%2Fnext');
+        expect(url).toContain('tab=2');
+        expect(url).not.toContain('%2Fstart');
+        expect(reconnect).toBe(true);
+
+        mock.restore();
+        history.replaceState(null, '', originalHref);
+    });
+
+    it('preserves the _az_caps query on the rebuilt bfcache reconnect URL', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        /** @type {any} */ (globalThis).__arizona_os__ = { capabilities: { window: true } };
+        const originalHref = location.href;
+        history.replaceState(null, '', '/start');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        mod.applyEffects([[10, '/next']]);
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+
+        const connects = mock.posted.filter((d) => d[0] === 0);
+        expect(connects[1][1]).toContain(`_az_caps=${encodeURIComponent('{"window":true}')}`);
+
+        mock.restore();
+        delete (/** @type {any} */ (globalThis).__arizona_os__);
+        history.replaceState(null, '', originalHref);
+    });
+
+    it('saves form state on pagehide and restores it after the reconnect resync', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        setupView('page', '<form id="f"><input name="n" /></form>');
+        /** @type {HTMLInputElement} */ (document.querySelector('[name="n"]')).value = 'typed';
+
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+        mock.simulateOpen(true);
+        // The reconnect resync REPLACEs the restored DOM (fresh, empty field);
+        // the first frame after a reconnect then restores the saved fields.
+        mock.simulateMessage(
+            [
+                [
+                    OP.REPLACE,
+                    'page',
+                    '<div id="page" az-view><form id="f"><input name="n" /></form></div>',
+                ],
+            ],
+            null,
+            true,
+        );
+
+        expect(/** @type {HTMLInputElement} */ (document.querySelector('[name="n"]')).value).toBe(
+            'typed',
+        );
+
+        mock.restore();
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -5153,6 +5539,49 @@ describe('executeJS -- fetch', () => {
         // The effects ran (title set), proving the chain completed; the field survived.
         await vi.waitFor(() => expect(document.title).toBe('Err'));
         expect(input.value).toBe('typed');
+    });
+
+    it('a throwing response effect on a 2xx is logged, not misreported as a network failure', async () => {
+        document.title = 'Old';
+        const fetchErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', fetchErr);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        // on_key (16) with an invalid regex throws synchronously while the
+        // effects apply -- on a 200 whose body parsed fine.
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([[16, '(', []]])));
+
+        executeJS(document.body, null, [22, '/api', { on_error: [14, 'Failed'] }]);
+
+        await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+        // The throw is logged; on_error and arizona:fetch-error stay silent --
+        // the request succeeded, only the app's effect broke.
+        await Promise.resolve();
+        expect(document.title).toBe('Old');
+        expect(fetchErr).not.toHaveBeenCalled();
+
+        errorSpy.mockRestore();
+        document.removeEventListener('arizona:fetch-error', fetchErr);
+    });
+
+    it('a throwing az-form-reset on a 2xx is logged, not misreported as a network failure', async () => {
+        document.body.innerHTML = '<form az-form-reset><input name="n" /></form>';
+        const form = /** @type {HTMLFormElement} */ (document.querySelector('form'));
+        form.reset = () => {
+            throw new Error('reset boom');
+        };
+        const fetchErr = vi.fn();
+        document.addEventListener('arizona:fetch-error', fetchErr);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(form, null, [22, '/account', { on_error: [14, 'Failed'] }]);
+
+        await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+        await Promise.resolve();
+        expect(fetchErr).not.toHaveBeenCalled();
+
+        errorSpy.mockRestore();
+        document.removeEventListener('arizona:fetch-error', fetchErr);
     });
 });
 

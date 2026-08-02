@@ -11,9 +11,10 @@
  *   [2, closeCode]                                    -- WS closed
  *
  * Main -> Worker protocol:
- *   [0, wsUrl]      -- connect (full URL)
- *   [1, jsonString] -- send data (pre-stringified on main)
- *   [2, code]       -- close WS
+ *   [0, wsUrl, isReconnect] -- connect (full URL; isReconnect resyncs an
+ *                              already-rendered DOM, e.g. a bfcache restore)
+ *   [1, jsonString]         -- send data (pre-stringified on main)
+ *   [2, code]               -- close WS
  */
 
 import {
@@ -339,8 +340,13 @@ self.onmessage = (e) => {
     const msg = e.data;
     switch (msg[0]) {
         case 0: {
-            // [0, wsUrl] -- connect
+            // [0, wsUrl, isReconnect] -- connect. isReconnect marks a connect
+            // that must resync an already-rendered DOM (a bfcache restore
+            // respawns the worker against the page state pagehide froze), so
+            // the socket opens with `_az_reconnect=1` exactly like an
+            // in-worker backoff reconnect.
             _wsUrl = msg[1];
+            if (msg[2]) _reconnecting = true;
             openSocket();
 
             // Hydrate in-memory cache from IDB (cross-session persistence),

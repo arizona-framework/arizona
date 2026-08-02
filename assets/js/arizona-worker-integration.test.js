@@ -234,6 +234,16 @@ describe('arizona-worker', () => {
         expect(ws.instances).toHaveLength(1);
     });
 
+    it('connect flagged as reconnect opens with _az_reconnect=1 and reports it', () => {
+        // A bfcache restore respawns the worker against an already-rendered
+        // page: the main thread flags the connect so the server sends the
+        // full-page resync, exactly like an in-worker backoff reconnect.
+        slf.send([0, 'ws://host/ws?_az_path=%2Fnext', true]);
+        expect(ws.latest().url).toContain('_az_reconnect=1');
+        ws.latest().simulateOpen();
+        expect(slf.posted).toContainEqual([1, true]);
+    });
+
     it('close with non-1000 schedules reconnect with _az_reconnect=1', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

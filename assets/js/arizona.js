@@ -14,9 +14,9 @@
  *   [2, closeCode]                                    -- WS closed
  *
  * Wire protocol (Main -> Worker):
- *   [0, wsUrl]      -- connect
- *   [1, jsonString] -- send data
- *   [2, code]       -- close WS
+ *   [0, wsUrl, isReconnect] -- connect
+ *   [1, jsonString]         -- send data
+ *   [2, code]               -- close WS
  */
 
 /**
@@ -200,6 +200,33 @@ let _teardown = null;
 /** @type {Map<string, Document>} */
 const _viewDocs = new Map();
 
+// The PiP window and inline placeholder per popped-out view, so a navigate's
+// OP_REPLACE -- which destroys the placeholder with the outgoing subtree -- can
+// close the now-orphaned window instead of leaving it floating over dead server
+// state. Entries live and die with `_viewDocs` (set in requestPip, removed by
+// the window's pagehide handler).
+/** @type {Map<string, {win: Window, placeholder: Comment}>} */
+const _pipWindows = new Map();
+
+/**
+ * Close any popped-out (PiP) window whose inline placeholder is no longer in
+ * the DOM -- its home was destroyed (a navigate OP_REPLACE swapped the page),
+ * so the floating view shows dead server state. Closing fires the window's
+ * pagehide handler, which discards the stale view and unregisters the maps.
+ * Same reconciliation `disconnect` performs, driven here by the page swap.
+ */
+function closeOrphanedPipWindows() {
+    for (const pip of [..._pipWindows.values()]) {
+        if (!pip.placeholder.isConnected) {
+            try {
+                pip.win.close();
+            } catch {
+                /* window already gone */
+            }
+        }
+    }
+}
+
 /**
  * Every document currently hosting Arizona views: the main document plus any
  * popped-out PiP documents. Used by document-wide local-slot ops.
@@ -257,7 +284,9 @@ function findViewRoot(viewId) {
 /**
  * Pending scroll intent set when az-navigate/az-patch/popstate is handled. A
  * navigate applies it after its OP_REPLACE; a patch (`patch: true`) applies it
- * after the first non-empty diff batch (it has no OP_REPLACE).
+ * after the first non-empty diff batch (it has no OP_REPLACE), and is dropped
+ * at the end of the first worker frame after the patch either way (see the
+ * worker message handler), so a no-op patch can't leave it armed indefinitely.
  * @type {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null, patch?: boolean}|null}
  */
 let _pendingScroll = null;
@@ -289,13 +318,17 @@ function applyScroll(p) {
  * (keeping the view) rather than the default navigate -- important when the
  * entry was a full page load, which carries no tag of its own. The server still
  * corrects the verb (a cross-handler patch falls back to navigate), so the tag
- * is only a hint.
+ * is only a hint. A pending view transition is stamped (`_azTransition`) in the
+ * SAME write, so back/forward across the edge replays it -- one replaceState per
+ * outgoing entry, not one per concern (Safari rate-limits history writes to
+ * ~100/30s, then throws SecurityError).
  * @param {string} [navKind]
  */
 function saveCurrentScroll(navKind) {
     const st = history.state || {};
     const next = { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } };
     if (navKind === 'patch') next._azNav = 'patch';
+    if (_pendingTransition) next._azTransition = _pendingTransition;
     history.replaceState(next, '', location.href);
 }
 
@@ -410,16 +443,6 @@ function withTransitionAttr(el, cmds) {
     return t ? [JS_TRANSITION, t, cmds] : cmds;
 }
 
-/**
- * Stamp the pending transition opts onto the current (outgoing) history entry,
- * preserving existing state (e.g. _azScroll), so back/forward across this edge
- * replays the transition.
- */
-function stampOutgoingTransition() {
-    const st = history.state || {};
-    history.replaceState({ ...st, _azTransition: _pendingTransition }, '', location.href);
-}
-
 // The user-facing query string carried to the worker for the next reconnect
 // after an SPA navigation: the navigated-to page qs plus the connection-level
 // `connect()` extras (constant across navigations). The worker replaces the
@@ -468,8 +491,9 @@ function navigateTo(path, qs, hash, opts) {
     if (opts.replace) {
         history.replaceState(state, '', fullUrl);
     } else {
+        // One replaceState: saveCurrentScroll stamps scroll, patch tag, AND any
+        // pending transition onto the outgoing entry together.
         saveCurrentScroll(kind);
-        if (_pendingTransition) stampOutgoingTransition();
         history.pushState(state, '', fullUrl);
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash, patch: kind === 'patch' };
     }
@@ -654,8 +678,12 @@ function applyTextOp(el, az, val, isHtml) {
 }
 
 /**
- * Apply a SET_ATTR op: setAttribute and sync the DOM `value` property for
- * form elements (setAttribute alone doesn't update the live value).
+ * Apply a SET_ATTR op: setAttribute and sync the live DOM property for form
+ * controls. Once the user has interacted, the browser's dirty value/checkedness
+ * flags make attribute writes stop affecting `.value`/`.checked`/`.selected`,
+ * so without the property write a server-driven change would silently stop
+ * rendering. The server is authoritative; a SET_ATTR of a boolean attribute
+ * always means true (false diffs to REM_ATTR).
  * @param {Element} el
  * @param {string} name
  * @param {string} val
@@ -663,6 +691,8 @@ function applyTextOp(el, az, val, isHtml) {
 function applySetAttrOp(el, name, val) {
     el.setAttribute(name, val);
     if (name === 'value' && 'value' in el) el.value = val;
+    else if (name === 'checked' && 'checked' in el) el.checked = true;
+    else if (name === 'selected' && 'selected' in el) el.selected = true;
     notifyUpdated(el);
 }
 
@@ -670,11 +700,17 @@ function applySetAttrOp(el, name, val) {
  * Apply a REM_ATTR op: removeAttribute and run the hook `updated` phase. The
  * canonical attribute-removal write shared by diff ops, item patches, and the
  * `arizona_js` attribute effects, so a removal behaves the same whatever drove it.
+ * Mirrors applySetAttrOp's form-control property sync: a boolean removal means
+ * false, and removing `value` clears the default value, so the live value resets
+ * to that empty default (the dirty flags would otherwise keep the stale state).
  * @param {Element} el
  * @param {string} name
  */
 function applyRemAttrOp(el, name) {
     el.removeAttribute(name);
+    if (name === 'value' && 'value' in el) el.value = '';
+    else if (name === 'checked' && 'checked' in el) el.checked = false;
+    else if (name === 'selected' && 'selected' in el) el.selected = false;
     notifyUpdated(el);
 }
 
@@ -707,17 +743,48 @@ function removeEl(el) {
  * all template payloads are already HTML strings. A view transition, when one is
  * pending, wraps this call (plus the message's effects) at the message handler,
  * not here -- so `applyOps` itself is synchronous.
+ *
+ * Two per-batch resolution caches keep a K-op batch from re-scanning the view
+ * subtree per op:
+ * - `els` memoizes target -> element. Every hit is verified live (`isConnected`)
+ *   before use: an op that replaced/re-rendered a subtree (REPLACE, UPDATE,
+ *   TEXT) leaves the old elements disconnected, so a stale entry re-resolves
+ *   itself -- no per-op invalidation bookkeeping. (A connected-but-wrong hit
+ *   would need a duplicate az within one view, which the compiler prevents.)
+ *   Nulls are not cached, so an element created mid-batch is found.
+ * - `streams` maps a stream container to a key -> item map of its direct keyed
+ *   children, built on first keyed lookup and maintained by the batch's
+ *   INSERT/REMOVE ops -- an N-op reorder is O(N), not O(N^2) scans (mirrors
+ *   applyListPatch's one-snapshot-per-batch shape).
  * @param {Array<Array<*>>} ops
  */
 function applyOps(ops) {
     let didReplace = false;
+    /** @type {Map<string, Element>} */
+    const els = new Map();
+    /** @type {Map<Element, Map<string, Element>>} */
+    const streams = new Map();
+    /** @param {string} target @returns {Element|null} */
+    const resolve = (target) => {
+        const hit = els.get(target);
+        if (hit?.isConnected) return hit;
+        const el = resolveEl(target);
+        if (el) els.set(target, el);
+        return el;
+    };
     for (const op of ops) {
         // Isolate each op: a bad selector or a throwing hook must not abort the
         // rest of the batch, or the DOM desyncs from the already-advanced server
         // snapshot until a reload.
         try {
-            const el = resolveEl(op[1]);
-            if (!el) continue;
+            const el = resolve(op[1]);
+            if (!el) {
+                // Loud like the stream-item warns: a silently dropped op (a
+                // server op addressed to a slot SSR never anchored) reads as
+                // "nothing happened" and costs a debugging round trip.
+                console.warn(`[arizona] op ${op[0]} target "${op[1]}" not found; skipping`);
+                continue;
+            }
             const az = op[1].substring(op[1].indexOf(':') + 1);
             switch (op[0]) {
                 case OP.TEXT:
@@ -743,6 +810,9 @@ function applyOps(ops) {
                     const added = Array.from(tpl.content.children);
                     el.replaceWith(tpl.content);
                     for (const e of added) mountHooks(e);
+                    // A popped-out (PiP) view whose placeholder just went with
+                    // the outgoing subtree is orphaned -- close its window.
+                    closeOrphanedPipWindows();
                     didReplace = true;
                     break;
                 }
@@ -750,16 +820,16 @@ function applyOps(ops) {
                     removeEl(el);
                     break;
                 case OP.INSERT:
-                    insertItem(op[1], op[2], op[3], op[4]);
+                    insertItemEl(el, op[2], op[3], op[4], streams);
                     break;
                 case OP.REMOVE:
-                    removeItem(op[1], op[2]);
+                    removeItemEl(el, op[2], streams);
                     break;
                 case OP.ITEM_PATCH:
-                    patchItem(op[1], op[2], op[3]);
+                    applyItemPatch(el, op[2], op[3], streams);
                     break;
                 case OP.MOVE:
-                    moveItem(op[1], op[2], op[3]);
+                    moveItemEl(el, op[2], op[3], streams);
                     break;
                 case OP.LIST_PATCH:
                     applyListPatch(el, az, op[2]);
@@ -983,44 +1053,76 @@ function readLocalValue(el, target) {
 }
 
 /**
+ * A parsed `az-local` descriptor: content slots, attribute bindings, and
+ * interpolated-attribute affixes.
+ * @typedef {{c?: Object<string, string>, a?: Object<string, string>, ap?: Object<string, [string, string]>}} LocalDesc
+ */
+
+// Parsed `az-local` descriptors, cached per element. NOT a persistent index --
+// discovery still queries the live DOM every call; only the JSON.parse of each
+// element's descriptor is memoized. The attribute is written once at SSR and a
+// ?local slot is never diffed, so a descriptor is immutable for its element's
+// lifetime; a re-rendered slot is a NEW element (a fresh cache key) and dropped
+// elements fall out of the WeakMap with GC.
+/** @type {WeakMap<Element, LocalDesc>} */
+const _localDescs = new WeakMap();
+
+/**
  * Visit each bound slot for `key` under `root`. When `viewId` is non-null only
- * slots whose nearest view is `viewId` are visited (per-view isolation).
+ * slots whose nearest view is `viewId` are visited (per-view isolation). The
+ * callback may return `true` to stop the scan (first-match reads); the return
+ * value says whether it did.
  * @param {Element|Document} root
  * @param {string} key
  * @param {string|null} viewId
- * @param {(el: Element, target: string[]) => void} fn
+ * @param {(el: Element, target: string[]) => boolean|void} fn
+ * @returns {boolean}
  */
 function forEachLocal(root, key, viewId, fn) {
-    /** @param {Element} el */
+    /** @param {Element} el @returns {boolean} */
     const visit = (el) => {
-        const desc = el.getAttribute('az-local');
-        if (!desc) return;
-        if (viewId !== null && resolveTarget(el) !== viewId) return;
-        // The descriptor is always framework-generated valid JSON.
-        const parsed = JSON.parse(desc);
+        let parsed = _localDescs.get(el);
+        if (parsed === undefined) {
+            const desc = el.getAttribute('az-local');
+            if (!desc) return false;
+            // The descriptor is always framework-generated valid JSON.
+            parsed = /** @type {LocalDesc} */ (JSON.parse(desc));
+            _localDescs.set(el, parsed);
+        }
+        if (viewId !== null && resolveTarget(el) !== viewId) return false;
         // c maps each content slot index -> key; a maps each attr name -> key;
         // ap (optional) carries [prefix, suffix] for interpolated attributes.
         if (parsed.c) {
             for (const [slot, k] of Object.entries(parsed.c)) {
-                if (k === key) fn(el, ['content', slot]);
+                if (k === key && fn(el, ['content', slot]) === true) return true;
             }
         }
         if (parsed.a) {
             for (const [attr, k] of Object.entries(parsed.a)) {
                 if (k === key) {
                     const aff = parsed.ap?.[attr];
-                    fn(el, aff ? ['attr', attr, aff[0], aff[1]] : ['attr', attr]);
+                    const t = aff ? ['attr', attr, aff[0], aff[1]] : ['attr', attr];
+                    if (fn(el, t) === true) return true;
                 }
             }
         }
+        return false;
     };
     // `nodeType`, not `instanceof Element`: a popped-out (Document PiP) root
     // lives in another realm with its own Element constructor, so `instanceof`
     // is false cross-realm and would skip the root's own slot (a Document is
     // nodeType 9, so it still skips the self-check). Mirrors `mountHooks`.
-    if (root.nodeType === 1 && /** @type {Element} */ (root).hasAttribute('az-local'))
-        visit(/** @type {Element} */ (root));
-    root.querySelectorAll('[az-local]').forEach(visit);
+    if (
+        root.nodeType === 1 &&
+        /** @type {Element} */ (root).hasAttribute('az-local') &&
+        visit(/** @type {Element} */ (root))
+    ) {
+        return true;
+    }
+    for (const el of root.querySelectorAll('[az-local]')) {
+        if (visit(el)) return true;
+    }
+    return false;
 }
 
 /**
@@ -1059,18 +1161,68 @@ function get(a, b) {
     const key = scoped ? /** @type {string} */ (b) : a;
     /** @type {*} */
     let result;
+    // First match wins -- the callback returns true so the scan stops there
+    // instead of visiting (and parsing) every remaining slot.
     /** @param {Element|Document} root */
     const scan = (root) =>
         forEachLocal(root, key, viewId, (el, target) => {
-            if (result === undefined) result = readLocalValue(el, target);
+            result = readLocalValue(el, target);
+            return true;
         });
     if (viewId) {
         const root = findViewRoot(viewId);
         if (root) scan(root);
     } else {
-        for (const doc of allDocs()) scan(doc);
+        for (const doc of allDocs()) {
+            if (scan(doc)) break;
+        }
     }
     return result;
+}
+
+/**
+ * Build a key -> element map of a container's direct keyed (az-key) children,
+ * in DOM order. Under a duplicate key the FIRST child wins, matching what a
+ * `:scope > [az-key="..."]` query would return.
+ * @param {Element} el
+ * @returns {Map<string, Element>}
+ */
+function buildKeyMap(el) {
+    const map = new Map();
+    for (const child of el.children) {
+        const k = child.getAttribute('az-key');
+        if (k !== null && !map.has(k)) map.set(k, child);
+    }
+    return map;
+}
+
+/**
+ * Look up a stream container's direct keyed child. With a per-batch `streams`
+ * cache (top-level applyOps) the container's children are scanned once and the
+ * map is maintained by the batch's inserts/removes, so an N-op stream batch is
+ * O(N) instead of one full child scan per op. Without one (nested item ops) it
+ * falls back to a direct query. A cached entry that went stale -- a non-stream
+ * op (UPDATE/TEXT) rewrote the container's children under the map -- triggers
+ * one rebuild and retry, so the cache can never return a disconnected element.
+ * @param {Map<Element, Map<string, Element>>|null} streams
+ * @param {Element} el
+ * @param {string} key
+ * @returns {Element|null}
+ */
+function itemByKey(streams, el, key) {
+    if (!streams) return el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
+    let map = streams.get(el);
+    if (!map) {
+        map = buildKeyMap(el);
+        streams.set(el, map);
+    }
+    let item = map.get(key);
+    if (item === undefined || !item.isConnected) {
+        map = buildKeyMap(el);
+        streams.set(el, map);
+        item = map.get(key);
+    }
+    return item ?? null;
 }
 
 /**
@@ -1079,83 +1231,63 @@ function get(a, b) {
  * @param {string} key
  * @param {number} pos -- -1 means append, otherwise insert before child at index
  * @param {string} html
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function insertItemEl(el, key, pos, html) {
+function insertItemEl(el, key, pos, html, streams = null) {
     const tpl = el.ownerDocument.createElement('template');
     tpl.innerHTML = html;
-    const fragment = tpl.content;
+    // Grab the keyed item from the payload BEFORE inserting it: re-querying the
+    // container by key afterwards would find a PRE-EXISTING element first under
+    // a duplicate key, mounting hooks on the wrong element and skipping the new
+    // item's own.
+    const item = Array.from(tpl.content.children).find((e) => e.getAttribute('az-key') === key);
     if (pos === -1) {
-        el.appendChild(fragment);
+        el.appendChild(tpl.content);
     } else {
+        // Positional: the live child list, not the key map -- MOVE ops change
+        // DOM order without touching the map, so only the DOM knows position.
         const children = el.querySelectorAll(':scope > [az-key]');
         if (pos < children.length) {
-            el.insertBefore(fragment, children[pos]);
+            el.insertBefore(tpl.content, children[pos]);
         } else {
-            el.appendChild(fragment);
+            el.appendChild(tpl.content);
         }
     }
-    // Match a DIRECT child (`:scope >`), like removeItemEl/moveItemEl/patchItemEl do:
-    // a descendant query would match an inner item sharing the key string first (nested
-    // streams), mounting hooks on the wrong element and skipping the new item's own.
-    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
-    if (item) mountHooks(item);
-    else console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
-}
-
-/**
- * If `target` resolves to an element, call `fn` with it. Otherwise no-op.
- * @param {string} target
- * @param {(el: Element) => void} fn
- */
-function withTarget(target, fn) {
-    const el = resolveEl(target);
-    if (el) fn(el);
-}
-
-/**
- * Stream ops -- insert, remove, and patch operate on keyed children (az-key)
- * within a container element. pos=-1 means append; otherwise insert before
- * the child at that index.
- * @param {string} target
- * @param {string} key
- * @param {number} pos
- * @param {string} html
- */
-function insertItem(target, key, pos, html) {
-    withTarget(target, (el) => insertItemEl(el, key, pos, html));
+    if (item) {
+        streams?.get(el)?.set(key, item);
+        mountHooks(item);
+    } else {
+        console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
+    }
 }
 
 /**
  * Remove a keyed child from a container element.
  * @param {Element} el -- container element
  * @param {string} key
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function removeItemEl(el, key) {
-    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
+function removeItemEl(el, key, streams = null) {
+    const item = itemByKey(streams, el, key);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for remove`);
         return;
     }
     removeEl(item);
+    streams?.get(el)?.delete(key);
 }
 
 /**
- * Remove a keyed child element from its container.
- * @param {string} target
- * @param {string} key
- */
-function removeItem(target, key) {
-    withTarget(target, (el) => removeItemEl(el, key));
-}
-
-/**
- * Move a keyed child after another keyed element within a container.
+ * Move a keyed child after another keyed element within a container (or prepend
+ * if afterKey is null). Preserves form state, focus, scroll position, CSS
+ * animations, and hook instances.
  * @param {Element} el -- container element
  * @param {string} key
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function moveItemEl(el, key, afterKey) {
-    const item = el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
+function moveItemEl(el, key, afterKey, streams = null) {
+    const item = itemByKey(streams, el, key);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for move`);
         return;
@@ -1163,23 +1295,11 @@ function moveItemEl(el, key, afterKey) {
     if (afterKey === null) {
         el.prepend(item);
     } else {
-        const ref = el.querySelector(`:scope > [az-key="${CSS.escape(afterKey)}"]`);
+        const ref = itemByKey(streams, el, afterKey);
         if (ref) ref.after(item);
         else el.appendChild(item);
     }
     notifyUpdated(item);
-}
-
-/**
- * Move a keyed child element after another keyed element (or prepend if
- * afterKey is null). Preserves form state, focus, scroll position, CSS
- * animations, and hook instances.
- * @param {string} target
- * @param {string} key
- * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
- */
-function moveItem(target, key, afterKey) {
-    withTarget(target, (el) => moveItemEl(el, key, afterKey));
 }
 
 /**
@@ -1188,9 +1308,10 @@ function moveItem(target, key, afterKey) {
  * @param {Element} container
  * @param {string} key
  * @param {Array<Array<*>>} innerOps
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function applyItemPatch(container, key, innerOps) {
-    const item = container.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
+function applyItemPatch(container, key, innerOps, streams = null) {
+    const item = itemByKey(streams, container, key);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
         return;
@@ -1208,17 +1329,6 @@ function applyItemPatch(container, key, innerOps) {
  */
 function patchItemEl(parentEl, az, key, innerOps) {
     applyItemPatch(resolveInnerEl(parentEl, az), key, innerOps);
-}
-
-/**
- * Apply ops scoped to a single keyed item. innerOps use bare az indices
- * (not "viewId:az"), resolved relative to the item element.
- * @param {string} target
- * @param {string} key
- * @param {Array<Array<*>>} innerOps
- */
-function patchItem(target, key, innerOps) {
-    withTarget(target, (el) => applyItemPatch(el, key, innerOps));
 }
 
 /**
@@ -1774,12 +1884,28 @@ function execOne(el, event, cmd) {
                         } else if (resp.ok) {
                             effects = [];
                         }
-                        if (effects !== null)
-                            executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
-                        else onError({ url, status: resp.status });
+                        // Effect application is isolated from the trailing network
+                        // .catch: a throw here is an app bug on a request that
+                        // SUCCEEDED (the body parsed), so it is logged -- letting it
+                        // flow into the .catch would fire on_error/arizona:fetch-error
+                        // as a phantom network failure, after effects partially applied.
+                        if (effects !== null) {
+                            try {
+                                executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
+                            } catch (err) {
+                                console.error('[arizona] fetch response effect threw', err);
+                            }
+                        } else onError({ url, status: resp.status });
                         // Honor az-form-reset only on a 2xx success, so a validation
-                        // error (a non-2xx) keeps the typed fields.
-                        if (resp.ok && form) maybeResetForm(form);
+                        // error (a non-2xx) keeps the typed fields. Same isolation as
+                        // the effects above.
+                        if (resp.ok && form) {
+                            try {
+                                maybeResetForm(form);
+                            } catch (err) {
+                                console.error('[arizona] az-form-reset failed', err);
+                            }
+                        }
                     }),
                 )
                 .catch((error) => onError({ url, error }));
@@ -2277,7 +2403,11 @@ function connect(endpoint, params = {}) {
             e.preventDefault();
 
             // Same-page hash nav: update URL + scroll, no server round-trip.
+            // Save the outgoing scroll first (scrollRestoration is 'manual'),
+            // matching the push branch of navigateTo -- otherwise Back after an
+            // in-page anchor click lands at the top.
             if (path === location.pathname && qs === location.search.slice(1)) {
+                saveCurrentScroll();
                 history.pushState(null, '', href);
                 if (!noscroll) applyScroll({ kind: 'push', hash });
                 return;
@@ -2303,7 +2433,6 @@ function connect(endpoint, params = {}) {
     window.addEventListener(
         'popstate',
         (e) => {
-            if (!_connected) return;
             const path = location.pathname;
             const qs = location.search ? location.search.slice(1) : '';
             const hash = location.hash ? location.hash.slice(1) : '';
@@ -2312,8 +2441,20 @@ function connect(endpoint, params = {}) {
             // jump fires popstate in some browsers, but it needs no server
             // round-trip -- just scroll. Mirrors the click handler's same-page
             // fast path so in-page anchors don't trigger a full OP_REPLACE.
+            // Needs no connection either, so it runs even while disconnected.
             if (path === _currentPath && qs === _currentQs) {
                 applyScroll({ kind: 'pop', hash, saved });
+                return;
+            }
+            // A cross-page popstate cannot be served over a down WebSocket, and
+            // the browser has already changed the URL -- returning would desync
+            // URL and content and leave the reconnect URL stale (a reconnect
+            // would resync to the pre-back path, and a later Forward would look
+            // fragment-only). Degrade to a full load of the URL the browser now
+            // shows, like a disconnected az-navigate click falls through to the
+            // browser.
+            if (!_connected) {
+                location.reload();
                 return;
             }
             // Replay the same mode the edge was navigated with (tagged `_azNav`),
@@ -2331,35 +2472,44 @@ function connect(endpoint, params = {}) {
         { signal },
     );
 
-    // Build full WS URL -- Worker can't access location.*
-    // Framework keys are `_az_`-prefixed so they can't collide with user params
-    // or the page's own query string; user-page qs and connect params ride as
-    // regular URL query keys (server reaches them via arizona_req:params/1).
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const pagePath = encodeURIComponent(location.pathname);
-    const pageQs = location.search ? location.search.slice(1) : '';
+    // The WS URL is (re)built at every worker spawn -- the Worker can't access
+    // location.*. Framework keys are `_az_`-prefixed so they can't collide with
+    // user params or the page's own query string; the user-facing qs is the
+    // tracked page qs plus the connect() extras (server reaches them via
+    // arizona_req:params/1). Building from `_currentPath`/`_currentQs` rather
+    // than a connect-time snapshot matters for the bfcache respawn: an SPA
+    // navigation moves the path only inside the worker (W_UPDATE_PATH), the
+    // worker dies on pagehide, and the respawned one must target the route the
+    // restored page actually shows.
     /** @type {Record<string, string>} */
     const stringParams = {};
     for (const k of Object.keys(params)) stringParams[k] = String(params[k]);
-    const extraQs = new URLSearchParams(stringParams).toString();
-    _connectQs = extraQs;
-    const userQs = [pageQs, extraQs].filter(Boolean).join('&');
-    const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
-    // Native-shell capabilities (Electron/Tauri/...) advertised at the WS
-    // handshake so the live process can answer ?capability(...). Absent in a
-    // plain browser (no `__arizona_os__`), so capsQs is empty and nothing
-    // changes. Rides reconnect because the Worker reuses this URL's search.
-    const osCaps = osHost()?.capabilities;
-    const capsQs = osCaps ? `&_az_caps=${encodeURIComponent(JSON.stringify(osCaps))}` : '';
-    const wsUrl = `${protocol}//${location.host}${endpoint}?${qs}${capsQs}`;
+    _connectQs = new URLSearchParams(stringParams).toString();
+    const buildWsUrl = () => {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const pagePath = encodeURIComponent(_currentPath);
+        const userQs = reconnectUserQs(_currentQs);
+        const qs = userQs ? `_az_path=${pagePath}&${userQs}` : `_az_path=${pagePath}`;
+        // Native-shell capabilities (Electron/Tauri/...) advertised at the WS
+        // handshake so the live process can answer ?capability(...). Absent in a
+        // plain browser (no `__arizona_os__`), so capsQs is empty and nothing
+        // changes. Rides reconnect because the Worker reuses this URL's search.
+        const osCaps = osHost()?.capabilities;
+        const capsQs = osCaps ? `&_az_caps=${encodeURIComponent(JSON.stringify(osCaps))}` : '';
+        return `${protocol}//${location.host}${endpoint}?${qs}${capsQs}`;
+    };
 
     /** @type {Function|null} */
     let _onmessageHook = null;
 
     // Spawn the Worker, wire its message handler, and open the socket. Extracted
     // so a bfcache restore (`pageshow`) can re-establish the connection that
-    // `pagehide` tore down.
-    const spawnWorker = () => {
+    // `pagehide` tore down. `reconnect` flags that spawn: the restored page's
+    // DOM already exists with the live state it had at pagehide, so the worker
+    // must open with `_az_reconnect=1` -- only that makes the server send the
+    // full-page resync (and the first frame restore any saved form state).
+    /** @param {boolean} reconnect */
+    const spawnWorker = (reconnect) => {
         // Worker is co-located with this script. This static
         // `new Worker(new URL(..., import.meta.url), { type: 'module' })` shape is
         // what bundlers (Vite/Rollup/rolldown) statically detect: Arizona's own
@@ -2381,9 +2531,25 @@ function connect(endpoint, params = {}) {
                 case 0: {
                     // [0, ops|null, effects|null, firstAfterReconnect]
                     const apply = () => {
+                        // A patch-scroll intent lives exactly until the first frame
+                        // after the patch request. applyOps consumes it when the
+                        // frame carries ops (the patch reply diff -- scroll applies);
+                        // otherwise it is cleared here, so a no-op patch (the server
+                        // sends nothing back) can't leave the intent armed for an
+                        // unrelated later diff to yank the scroll. Identity-checked
+                        // so an intent armed by THIS frame's effects (a JS_PATCH
+                        // command) survives to its own reply. Residual race: for a
+                        // truly silent patch the next frame -- whatever it is -- is
+                        // indistinguishable from a slow patch reply, so one
+                        // unrelated ops-frame can still scroll; there is no reply
+                        // id on the wire to do better client-side.
+                        const armedScroll = _pendingScroll;
                         if (msg[1]) applyOps(msg[1]);
                         if (msg[2]) applyEffects(msg[2]);
                         if (msg[3]) restoreFormState();
+                        if (armedScroll?.patch && _pendingScroll === armedScroll) {
+                            _pendingScroll = null;
+                        }
                     };
                     // A pending transition wraps its batch -- ops and effects
                     // together, in order, so the swap and any effect fall inside
@@ -2441,11 +2607,12 @@ function connect(endpoint, params = {}) {
             }
         };
 
-        // Send connect message to Worker
-        workerPost(W_CONNECT, wsUrl);
+        // Send connect message to Worker, rebuilding the URL from the
+        // currently tracked route (see buildWsUrl).
+        workerPost(W_CONNECT, buildWsUrl(), reconnect);
     };
 
-    spawnWorker();
+    spawnWorker(false);
 
     // Let the native shell (if any) inject OS events (window focus/blur, capture
     // state, ...) into the ROOT view's normal event handling. The shell calls
@@ -2488,6 +2655,11 @@ function connect(endpoint, params = {}) {
         'pagehide',
         () => {
             if (_worker) {
+                // Preserve typed form fields first: the pageshow reconnect asks
+                // the server for a full resync, whose OP_REPLACE rebuilds the
+                // DOM bfcache had preserved -- the same save/restore that
+                // covers an abnormal close covers this.
+                saveFormState();
                 _worker.terminate();
                 _worker = null;
                 _connected = false;
@@ -2503,8 +2675,10 @@ function connect(endpoint, params = {}) {
     window.addEventListener(
         'pageshow',
         (e) => {
-            // Only on a real bfcache restore; a normal load already has a worker.
-            if (e.persisted && !_worker) spawnWorker();
+            // Only on a real bfcache restore; a normal load already has a
+            // worker. A restore is semantically a reconnect: the DOM exists
+            // with evolved live state, so the server must resync it.
+            if (e.persisted && !_worker) spawnWorker(true);
         },
         { signal },
     );
@@ -2534,6 +2708,7 @@ function connect(endpoint, params = {}) {
             }
         }
         _viewDocs.clear();
+        _pipWindows.clear();
         // Run destroyed() on every tracked hook and clear the map. Without
         // this, hook instances leak when host code removes the DOM by means
         // arizona didn't observe (third-party libs, test teardown via
@@ -2612,6 +2787,7 @@ async function requestPip(viewId, opts = {}) {
     copyStyles(document, pip.document);
     pip.document.body.append(view);
     _viewDocs.set(viewId, pip.document);
+    _pipWindows.set(viewId, { win: pip, placeholder });
 
     // Delegate events fired inside the floating window; torn down on close.
     const controller = new AbortController();
@@ -2622,8 +2798,21 @@ async function requestPip(viewId, opts = {}) {
         () => {
             controller.abort();
             _viewDocs.delete(viewId);
-            if (placeholder.parentNode) placeholder.replaceWith(view);
-            else document.body.append(view);
+            _pipWindows.delete(viewId);
+            // isConnected, not parentNode: a replaced (navigate) outgoing
+            // subtree is detached wholesale, so the placeholder still HAS a
+            // parent -- inside a dead tree.
+            if (placeholder.isConnected) {
+                placeholder.replaceWith(view);
+            } else {
+                // The view's inline home was destroyed while it was popped out
+                // (a navigate OP_REPLACE swapped the page): the new page has its
+                // own content, so discard the stale element -- appending it to
+                // the new page's body would resurrect dead server state. Tear
+                // its hooks down like any removed subtree.
+                destroyHooks(view);
+                view.remove();
+            }
             if (opts.onClose) opts.onClose();
         },
         { once: true },
