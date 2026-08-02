@@ -1,5 +1,6 @@
 -module(arizona_reloader_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("kernel/include/file.hrl").
 -export([
     all/0,
     groups/0,
@@ -52,6 +53,7 @@
     unreloaded_target_not_flagged/1,
     stale_beam_detected/1,
     fresh_beam_not_stale/1,
+    beam_facts_cached_by_mtime/1,
     candidate_modules_excludes_otp/1,
     check_reports_broken_edge/1,
     check_clean_reports_nothing/1,
@@ -98,6 +100,7 @@ groups() ->
             unreloaded_target_not_flagged,
             stale_beam_detected,
             fresh_beam_not_stale,
+            beam_facts_cached_by_mtime,
             candidate_modules_excludes_otp,
             check_reports_broken_edge,
             check_clean_reports_nothing,
@@ -420,6 +423,32 @@ fresh_beam_not_stale(Config) ->
     Mod = az_cc_fresh_a,
     {Mod, _} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
     ?assertEqual([], arizona_reloader_consistency:stale_modules([Mod])).
+
+%% The per-module beam facts (imports + disk vsn) are cached across waves keyed
+%% by the beam file's mtime, so an unchanged module costs one stat -- not two
+%% full disk reads -- per save. Proven by rewriting the beam while restoring
+%% its mtime (cache hit: the old facts still apply) and then bumping the mtime
+%% (cache invalidated: the new beam is read and the mismatch surfaces).
+beam_facts_cached_by_mtime(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_cc_cache_a,
+    {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+    {ok, #file_info{mtime = Mtime} = Info} = file:read_file_info(Beam, [{time, posix}]),
+    %% Prime the cache: memory matches disk, nothing stale.
+    ?assertEqual([], arizona_reloader_consistency:stale_modules([Mod])),
+    %% Rewrite the beam to a different version but restore the original mtime:
+    %% an unchanged mtime means no re-read, so the cached facts still apply.
+    Bin2 = compile_only(Mod, versioned_src(Mod, 2), Dir),
+    ok = file:write_file(Beam, Bin2),
+    ok = file:write_file_info(Beam, Info#file_info{mtime = Mtime}, [{time, posix}]),
+    ?assertEqual([], arizona_reloader_consistency:stale_modules([Mod])),
+    %% Bumping the mtime invalidates the entry: the new beam is read and the
+    %% version mismatch surfaces.
+    ok = file:write_file_info(Beam, Info#file_info{mtime = Mtime + 5}, [{time, posix}]),
+    ?assertMatch(
+        [{Mod, LoadedVsn, DiskVsn}] when LoadedVsn =/= DiskVsn,
+        arizona_reloader_consistency:stale_modules([Mod])
+    ).
 
 %% The candidate set is application code only: it includes a loaded module with a
 %% readable non-OTP beam and excludes OTP (a stdlib module).
