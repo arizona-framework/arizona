@@ -731,13 +731,30 @@ delete_session(Req0, Key) ->
     }.
 
 -doc """
-Clears the entire session (logout). On the response a clearing `Set-Cookie` is sent
-regardless of the incoming session. Unlike `put_session/3` it does not require
-`secret_key` -- clearing encrypts nothing, so logout always works.
+Clears the entire session (logout). On the response a clearing `Set-Cookie` is
+sent regardless of the incoming session, and in store mode the server-side entry
+is dropped at flush -- logout revokes, so a captured signed-id cookie stops
+resolving immediately, whether or not anything read the session earlier this
+request (the incoming cookie's id is resolved here). In cookie mode it does not
+require `secret_key` -- clearing encrypts nothing, so logout always works; store
+mode reads the signed id with the `secret_key` store mode requires anyway.
 """.
 -spec clear_session(Request) -> Request when
     Request :: request().
-clear_session(Req) ->
+clear_session(Req0) ->
+    %% In store mode, resolve the incoming cookie's id first (the read path):
+    %% only `read_session` stashes `session_id`, so a clear on a request that
+    %% never read the session would otherwise clear just the client cookie and
+    %% leave the store entry -- and any captured signed-id cookie -- live until
+    %% TTL, defeating logout revocation.
+    Req =
+        case session_store() of
+            undefined ->
+                Req0;
+            _Store ->
+                {_Session, ReadReq} = read_session(Req0),
+                ReadReq
+        end,
     %% Mark the session reset. In store mode a subsequent write (the login
     %% rotation pattern `clear_session` then `put_session`) then mints a FRESH id
     %% rather than reusing the incoming one, so a pre-login -- possibly
