@@ -80,6 +80,7 @@
     nested_stateful_child_event/1,
     nested_stateful_grandchild_survives_root_skip/1,
     nested_stateful_grandchild_unmounted_on_removal/1,
+    child_diff_dep_skips_unchanged_grandchild/1,
     nested_local_diff_skipped/1,
     nested_local_set_effect/1,
     unmount_on_navigate/1,
@@ -120,6 +121,7 @@ groups() ->
             nested_stateful_child_event,
             nested_stateful_grandchild_survives_root_skip,
             nested_stateful_grandchild_unmounted_on_removal,
+            child_diff_dep_skips_unchanged_grandchild,
             nested_local_diff_skipped,
             nested_local_set_effect,
             live_mount,
@@ -308,6 +310,26 @@ nested_stateful_grandchild_unmounted_on_removal(Config) when is_list(Config) ->
     after 1000 ->
         error(timeout)
     end.
+
+child_diff_dep_skips_unchanged_grandchild(Config) when is_list(Config) ->
+    %% A CHILD-targeted event must diff through the dep-gated fast path like the
+    %% root does: an event changing only `label` leaves the grandchild slot's
+    %% deps (`value`) untouched, so the grandchild descriptor is skipped -- its
+    %% handle_update/3 must NOT run (observable: no folded push_event effect)
+    %% and the only op is the label slot's. Before the fix the child path used
+    %% the full re-eval diff/3, re-running every grandchild handle_update.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_root, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"relabel">>, #{}),
+    ?assertEqual([], Effects),
+    ?assertMatch([[?OP_TEXT, _, <<"relabelled">>]], Ops),
+    %% The skipped grandchild survived the dep skip: a value bump still reaches
+    %% it (handle_update runs, its effect ships, its slot re-renders).
+    {ok, BumpOps, BumpEffects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
+    ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], BumpEffects),
+    ?assertMatch([[<<"uep_child">>, [[?OP_TEXT, _, <<"1">>]]]], BumpOps).
 
 %% A ?local inside a stateful child is diff-skipped both when the child handles
 %% its own event AND when a parent update propagates new props down -- only the

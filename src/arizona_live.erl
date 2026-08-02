@@ -790,8 +790,10 @@ process_root_change(
     {Ops1, Snap1, V1, B3, Fps1, State, Effects1}.
 
 %% Same idea as process_root_change/5 but for a nested child view. Diffs through
-%% the view-tracking path (diff/3) so a grandchild stateful descriptor in the
-%% child's template resolves to a child snapshot instead of crashing the bare
+%% the dep-gated view-tracking path (diff/4, mirroring the root): only the
+%% dynamics whose deps intersect the child's changed bindings re-evaluate, so a
+%% grandchild stateful descriptor with untouched props is skipped (no spurious
+%% handle_update) and resolves to a child snapshot instead of crashing the bare
 %% diff (`bad_template_value`). NewViews is this child's freshly rendered
 %% descendant subtree; reconcile it against the old subtree (recorded on Snap0 as
 %% child_views): grandchildren the child no longer renders are unmounted, the rest
@@ -801,12 +803,15 @@ process_root_change(
 %% a grandchild whose props changed runs its handle_update/3 during this diff
 %% and folds its effects onto the accumulator; the drained result is the full
 %% list the caller ships (reply or push).
-process_child_change(H, B1, Resets, Effects0, ViewId, #{snapshot := Snap0} = View, #state{
-    views = V0, sent_fps = Fps0
-}) ->
+process_child_change(
+    H, B1, Resets, Effects0, ViewId, #{bindings := B0, snapshot := Snap0} = View, #state{
+        views = V0, sent_fps = Fps0
+    }
+) ->
     Tmpl = arizona_stateful:call_render(H, B1),
+    Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
-    {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0),
+    {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
     Effects1 = arizona_eval:drain_update_effects(),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
