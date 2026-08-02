@@ -262,6 +262,11 @@ init({SessionId, Session, SessionOpts}) ->
         keepalive_ms := KeepaliveMs,
         route_key := RouteKey
     } = SessionOpts,
+    %% Trap exits so a supervisor shutdown runs terminate/2 (killing the
+    %% in-flight workers, running the app's Mod:terminate/2, dropping the
+    %% registry row) instead of killing the session outright and orphaning its
+    %% workers for the life of the node.
+    false = process_flag(trap_exit, true),
     proc_lib:set_label({arizona_mcp_session, SessionId}),
     ok = arizona_mcp_session_registry:add(SessionId, self(), RouteKey),
     Channels = subscribe_channels(Session),
@@ -351,10 +356,12 @@ handle_cast(
     %% Run the tool in a monitored worker so the session stays free to handle a
     %% cancel. The worker reads a snapshot of `Session`, relays progress + result
     %% to `ConnPid`, and threads no state back (only the buffered queue mutates
-    %% session state). It signals completion so we can drop the tracking.
+    %% session state). It signals completion so we can drop the tracking. Linked
+    %% (exits are trapped) so it dies with the session even on an untrappable
+    %% kill, which skips terminate/2's explicit worker reaping.
     SessionPid = self(),
     Ctx = #{token => Token, to => ConnPid},
-    WorkerPid = spawn(fun() ->
+    WorkerPid = spawn_link(fun() ->
         ok = arizona_mcp_handler:run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid),
         SessionPid ! {streaming_done, Id}
     end),
@@ -437,6 +444,14 @@ handle_info(mcp_keepalive, #state{channel = ChannelPid} = State) ->
     {noreply, arm_keepalive(State)};
 handle_info(session_ttl_expired, State) ->
     {stop, normal, State};
+handle_info({'EXIT', _Pid, _Reason}, State) ->
+    %% A linked worker's exit signal (exits are trapped). Worker outcomes are
+    %% fully handled through their monitors (`'DOWN'` / `dispatch_done` /
+    %% `streaming_done`); the link exists only so workers die with the session
+    %% -- even an untrappable kill, which skips terminate/2. Nothing to do.
+    %% (An exit from the supervisor never lands here: gen_server intercepts the
+    %% parent's exit and runs terminate/2.)
+    {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -503,7 +518,9 @@ start_next_dispatch(#state{dispatch_q = Q, session = Session} = State) ->
             State;
         {{value, {From, Id, Method, Params}}, Q1} ->
             SessionPid = self(),
-            WorkerPid = spawn(fun() ->
+            %% Linked like the streaming workers: exits are trapped, and the
+            %% link reaps the worker even when the session is killed untrappably.
+            WorkerPid = spawn_link(fun() ->
                 {Outcome, Session1} = safe_handle_method(Method, Params, Id, Session),
                 SessionPid ! {dispatch_done, self(), Outcome, Session1}
             end),

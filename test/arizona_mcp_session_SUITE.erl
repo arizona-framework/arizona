@@ -52,7 +52,9 @@
     replay_after_last_event_id/1,
     replay_buffer_evicts_oldest/1,
     fresh_attach_no_replay/1,
-    terminate_calls_app/1
+    terminate_calls_app/1,
+    supervisor_shutdown_runs_terminate/1,
+    session_kill_reaps_workers/1
 ]).
 
 all() ->
@@ -106,7 +108,9 @@ all() ->
         replay_after_last_event_id,
         replay_buffer_evicts_oldest,
         fresh_attach_no_replay,
-        terminate_calls_app
+        terminate_calls_app,
+        supervisor_shutdown_runs_terminate,
+        session_kill_reaps_workers
     ].
 
 init_per_suite(Config) ->
@@ -788,6 +792,67 @@ terminate_calls_app(_Config) ->
     receive
         {mcp_terminated, _Reason} -> ok
     after 5000 -> ct:fail(terminate_not_called)
+    end.
+
+supervisor_shutdown_runs_terminate(_Config) ->
+    %% A supervisor shutdown reaches the session as a trappable exit signal --
+    %% the session must trap exits so gen_server runs terminate/2 (killing its
+    %% workers, running the app's Mod:terminate/2, dropping the registry row)
+    %% instead of dying silently and orphaning its workers for the node's life.
+    Id = integer_to_binary(erlang:unique_integer([positive])),
+    Session = #{
+        mod => arizona_mcp_test_server,
+        state => #{terminate_pid => self()},
+        caps => #{tools => #{}},
+        page_size => 50,
+        log_min_severity => 1
+    },
+    SessionOpts = #{
+        ttl_ms => 60000,
+        buffer_max => 256,
+        max_pending => 100,
+        keepalive_ms => infinity,
+        route_key => ~"/test"
+    },
+    {ok, Pid} = arizona_mcp_sup:start_session(Id, Session, SessionOpts),
+    ok = arizona_mcp_session:start_streaming_tool(
+        Pid, ~"block", #{watch => self()}, 7, ~"tok", self()
+    ),
+    Worker =
+        receive
+            {block_started, W} -> W
+        after 5000 -> ct:fail(worker_did_not_start)
+        end,
+    WRef = erlang:monitor(process, Worker),
+    ok = supervisor:terminate_child(arizona_mcp_sup, Pid),
+    receive
+        {mcp_terminated, shutdown} -> ok
+    after 5000 -> ct:fail(terminate_not_run)
+    end,
+    receive
+        {'DOWN', WRef, process, Worker, killed} -> ok
+    after 5000 -> ct:fail(worker_orphaned)
+    end,
+    ?assertEqual(error, arizona_mcp_session_registry:lookup(Id)).
+
+session_kill_reaps_workers(_Config) ->
+    {_Id, Pid} = start(60000),
+    %% An untrappable kill of the session skips terminate/2 entirely; the
+    %% worker link is then what reaps the tool, instead of orphaning it for
+    %% the life of the node.
+    ok = arizona_mcp_session:start_streaming_tool(
+        Pid, ~"block", #{watch => self()}, 7, ~"tok", self()
+    ),
+    Worker =
+        receive
+            {block_started, W} -> W
+        after 5000 -> ct:fail(worker_did_not_start)
+        end,
+    WRef = erlang:monitor(process, Worker),
+    exit(Pid, kill),
+    receive
+        {'DOWN', WRef, process, Worker, killed} -> ok
+    after 5000 -> ct:fail(worker_orphaned)
     end.
 
 %% --------------------------------------------------------------------
