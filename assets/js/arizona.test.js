@@ -4301,6 +4301,59 @@ describe('navigation scroll', () => {
         expect(scrollSpy).toHaveBeenCalledWith(0, 0);
     });
 
+    it('a no-op patch does not yank scroll on a later unrelated diff', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickPatchLink('/next');
+        // The patch round-trip completes without ops (an effects-only reply);
+        // the armed scroll intent must die with it.
+        mock.simulateMessage(null, [[14, 'T']]);
+        // A later unrelated push (e.g. a timer tick) must not consume a stale
+        // intent and yank the scroll to top.
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
+
+        expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it('a no-op patch on popstate does not replay the saved restore on a later diff', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        history.replaceState({ _azNav: 'patch' }, '', '/patched');
+        window.dispatchEvent(
+            new PopStateEvent('popstate', {
+                state: { _azNav: 'patch', _azScroll: { x: 0, y: 320 } },
+            }),
+        );
+        // The patch reply carries no ops; the saved-scroll intent is discarded.
+        mock.simulateMessage(null, null);
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
+
+        expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it('a patch intent armed by a frame effect survives to its own reply frame', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        // This frame's EFFECTS arm a fresh patch intent (JS_PATCH = 24); the
+        // end-of-frame cleanup must not clear the intent it just armed.
+        mock.simulateMessage(null, [[24, '/to']]);
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
+
+        expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+    });
+
     it('JS_PATCH effect ([24, path]) sends a patch frame', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');

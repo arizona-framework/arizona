@@ -257,7 +257,9 @@ function findViewRoot(viewId) {
 /**
  * Pending scroll intent set when az-navigate/az-patch/popstate is handled. A
  * navigate applies it after its OP_REPLACE; a patch (`patch: true`) applies it
- * after the first non-empty diff batch (it has no OP_REPLACE).
+ * after the first non-empty diff batch (it has no OP_REPLACE), and is dropped
+ * at the end of the first worker frame after the patch either way (see the
+ * worker message handler), so a no-op patch can't leave it armed indefinitely.
  * @type {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null, patch?: boolean}|null}
  */
 let _pendingScroll = null;
@@ -2419,9 +2421,25 @@ function connect(endpoint, params = {}) {
                 case 0: {
                     // [0, ops|null, effects|null, firstAfterReconnect]
                     const apply = () => {
+                        // A patch-scroll intent lives exactly until the first frame
+                        // after the patch request. applyOps consumes it when the
+                        // frame carries ops (the patch reply diff -- scroll applies);
+                        // otherwise it is cleared here, so a no-op patch (the server
+                        // sends nothing back) can't leave the intent armed for an
+                        // unrelated later diff to yank the scroll. Identity-checked
+                        // so an intent armed by THIS frame's effects (a JS_PATCH
+                        // command) survives to its own reply. Residual race: for a
+                        // truly silent patch the next frame -- whatever it is -- is
+                        // indistinguishable from a slow patch reply, so one
+                        // unrelated ops-frame can still scroll; there is no reply
+                        // id on the wire to do better client-side.
+                        const armedScroll = _pendingScroll;
                         if (msg[1]) applyOps(msg[1]);
                         if (msg[2]) applyEffects(msg[2]);
                         if (msg[3]) restoreFormState();
+                        if (armedScroll?.patch && _pendingScroll === armedScroll) {
+                            _pendingScroll = null;
+                        }
                     };
                     // A pending transition wraps its batch -- ops and effects
                     // together, in order, so the swap and any effect fall inside
