@@ -706,8 +706,8 @@ handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
 handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
-    {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
-    {reply, {ok, Ops1, Effects}, State#state{views = V1, sent_fps = Fps1}}.
+    {Ops1, V1, Fps1, Effects1} = process_child_change(H, B1, Resets, Effects, ViewId, View, State),
+    {reply, {ok, Ops1, Effects1}, State#state{views = V1, sent_fps = Fps1}}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
     case arizona_stateful:call_handle_info(H, Info, B0) of
@@ -729,8 +729,10 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
         ok ->
             {noreply, State};
         {B1, Resets, Effects} ->
-            {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
-            push(TPid, Ops1, Effects),
+            {Ops1, V1, Fps1, Effects1} = process_child_change(
+                H, B1, Resets, Effects, ViewId, View, State
+            ),
+            push(TPid, Ops1, Effects1),
             {noreply, State#state{views = V1, sent_fps = Fps1}}
     end.
 
@@ -787,18 +789,25 @@ process_root_change(
     B3 = clear_streams_and_apply_resets(B1, Resets),
     {Ops1, Snap1, V1, B3, Fps1, State, Effects1}.
 
-%% Same idea as process_root_change/4 but for a nested child view. Diffs through
+%% Same idea as process_root_change/5 but for a nested child view. Diffs through
 %% the view-tracking path (diff/3) so a grandchild stateful descriptor in the
 %% child's template resolves to a child snapshot instead of crashing the bare
 %% diff (`bad_template_value`). NewViews is this child's freshly rendered
 %% descendant subtree; reconcile it against the old subtree (recorded on Snap0 as
 %% child_views): grandchildren the child no longer renders are unmounted, the rest
 %% merged back, and the child's own snapshot records the new transitive set.
-process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
+%%
+%% `Effects0` seeds the update-effects accumulator exactly like the root path:
+%% a grandchild whose props changed runs its handle_update/3 during this diff
+%% and folds its effects onto the accumulator; the drained result is the full
+%% list the caller ships (reply or push).
+process_child_change(H, B1, Resets, Effects0, ViewId, #{snapshot := Snap0} = View, #state{
     views = V0, sent_fps = Fps0
 }) ->
     Tmpl = arizona_stateful:call_render(H, B1),
+    ok = arizona_eval:set_update_effects(Effects0),
     {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0),
+    Effects1 = arizona_eval:drain_update_effects(),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
     NewDescendants = maps:keys(NewViews),
@@ -808,7 +817,7 @@ process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
     Snap2 = Snap1#{child_views => NewDescendants},
     V1 = maps:merge(maps:without(Removed, V0), NewViews),
     V2 = V1#{ViewId => View#{bindings => B3, snapshot => Snap2}},
-    {Ops1, V2, Fps1}.
+    {Ops1, V2, Fps1, Effects1}.
 
 clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),

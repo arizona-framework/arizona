@@ -24,6 +24,9 @@
     effect_push_event/1,
     effect_child_update_reaches_reply/1,
     effect_child_update_combines_with_event/1,
+    effect_grandchild_update_reaches_child_reply/1,
+    effect_grandchild_update_combines_with_child_event/1,
+    effect_grandchild_update_reaches_child_push/1,
     handle_update_child_event_then_parent/1,
     live_child_event/1,
     live_child_multiple_events/1,
@@ -155,7 +158,10 @@ groups() ->
             effect_child_event_with_effects,
             effect_child_event_no_effects,
             effect_child_update_reaches_reply,
-            effect_child_update_combines_with_event
+            effect_child_update_combines_with_event,
+            effect_grandchild_update_reaches_child_reply,
+            effect_grandchild_update_combines_with_child_event,
+            effect_grandchild_update_reaches_child_push
         ]},
         {navigation, [parallel], [
             live_navigate,
@@ -769,6 +775,53 @@ effect_child_update_combines_with_event(Config) when is_list(Config) ->
         [{arizona_effect, [0, <<"child_updated">>]}, {arizona_effect, [14, <<"titled">>]}],
         Effects
     ).
+
+effect_grandchild_update_reaches_child_reply(Config) when is_list(Config) ->
+    %% A CHILD-targeted event (root -> mid -> grandchild; the event hits the
+    %% mid) changes the grandchild's prop; the grandchild's handle_update/3
+    %% folds a push_event effect onto the accumulator during the child diff.
+    %% process_child_change must seed/drain the accumulator exactly like the
+    %% root path -- before the fix the effect was silently dropped (the child
+    %% reply carried only the mid's own effects).
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_root, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
+    %% op 0 = ?EFFECT_PUSH_EVENT (literal, matching this suite's effect assertions).
+    ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects).
+
+effect_grandchild_update_combines_with_child_event(Config) when is_list(Config) ->
+    %% The mid's own event effect (set_title) seeds the accumulator; the
+    %% grandchild's handle_update threads it, prepending its push_event. BOTH
+    %% ship on the child reply, in order -- the seed -> thread -> combine path
+    %% on the CHILD-targeted topology.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_root, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump_titled">>, #{}),
+    %% op 0 = ?EFFECT_PUSH_EVENT (grandchild, prepended), op 14 = ?EFFECT_SET_TITLE (seeded).
+    ?assertEqual(
+        [{arizona_effect, [0, <<"child_updated">>]}, {arizona_effect, [14, <<"titled">>]}],
+        Effects
+    ).
+
+effect_grandchild_update_reaches_child_push(Config) when is_list(Config) ->
+    %% Same topology via the CHILD info path: a ?send-routed message to the mid
+    %% changes the grandchild's prop; the grandchild's handle_update effect must
+    %% ride the resulting transport push.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_root, #{}, self(), []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    Pid ! {arizona_view, <<"uep">>, bump},
+    receive
+        {arizona_push, _Ops, Effects} ->
+            ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects)
+    after 1000 ->
+        error(timeout)
+    end.
 
 %% =============================================================================
 %% SPA navigation tests
