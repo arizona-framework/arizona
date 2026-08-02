@@ -207,7 +207,7 @@ Formats route-compilation errors into a human-readable message. Picked up by
     Reason :: term(),
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
-format_error(wildcard_in_method_list, _ST) ->
+format_error(wildcard_in_method_list, [{_M, _F, _Args, _Info} | _]) ->
     #{
         general =>
             "'*' (any method) is only valid as the whole method spec: "
