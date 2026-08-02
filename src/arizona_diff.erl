@@ -542,14 +542,34 @@ stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views
 stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
         #{Key := _} ->
-            Ref = move_after_ref(AfterKey),
-            MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref],
-            {RestOps, FinalSnap, Views1} =
-                diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0),
-            {[MoveOp | RestOps], FinalSnap, Views1};
+            case after_ref_in_dom(AfterKey, SnapAcc) of
+                true ->
+                    Ref = move_after_ref(AfterKey),
+                    MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref],
+                    {RestOps, FinalSnap, Views1} =
+                        diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0),
+                    {[MoveOp | RestOps], FinalSnap, Views1};
+                false ->
+                    %% The after-reference is a limit-hidden key the client DOM
+                    %% doesn't hold; a MOVE with a missing ref makes the client's
+                    %% moveItemEl fall back to appending, scrambling surviving
+                    %% order. Remove the item instead and let `apply_limit/5`'s
+                    %% left-to-right back-fill re-insert it at its exact final
+                    %% window index (or keep it out when it moved past the
+                    %% window). Only reachable on a limited stream -- an
+                    %% unlimited stream's SnapAcc holds every live key.
+                    RemOp = [?OP_REMOVE, Az, arizona_template:to_bin(Key)],
+                    NewSnapAcc = maps:remove(Key, SnapAcc),
+                    {RestOps, FinalSnap, Views1} =
+                        diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views0),
+                    {[RemOp | RestOps], FinalSnap, Views1}
+            end;
         #{} ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
+
+after_ref_in_dom(null, _SnapAcc) -> true;
+after_ref_in_dom(AfterKey, SnapAcc) -> is_map_key(AfterKey, SnapAcc).
 
 move_after_ref(null) -> null;
 move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
@@ -557,7 +577,7 @@ move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
 stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc),
+    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc),
     {RestOps, FinalSnap, Views1} =
         diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, VKeys, Views0),
     {MoveOps ++ RestOps, FinalSnap, Views1}.
@@ -573,7 +593,7 @@ stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
         smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept),
+    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps),
     {RestOps, FinalSnap, Views2} =
         diff_stream_pending(Az, Rest, SV, Tmpl, NewSnaps, VKeys, Views1),
     {RemOps ++ DiffOps ++ MoveOps ++ RestOps, FinalSnap, Views2}.
@@ -899,9 +919,15 @@ lis_backtrack(Idx, Parent, Acc) ->
         end,
     lis_backtrack(Next, Parent, Acc#{Idx => true}).
 
-compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept) ->
+%% `Kept` is the LIS base (keys the client held BEFORE this reconciliation --
+%% their old positions anchor the stable subsequence). `Present` is what the
+%% client DOM holds when the emitted moves apply: for a plain reorder the same
+%% as `Kept` (hidden keys are back-filled only later, by `apply_limit/5`); for
+%% a reset it also includes the keys `smart_reset_items/8` just inserted, whose
+%% tail (-1) inserts precede these moves on the wire.
+compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present) ->
     [];
-compute_reorder_ops(Az, OldOrder, NewOrder, Kept) ->
+compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present) ->
     KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],
     case KeptOld of
         [] ->
@@ -909,18 +935,29 @@ compute_reorder_ops(Az, OldOrder, NewOrder, Kept) ->
         _ ->
             OldPosMap = pos_map(KeptOld, 1),
             LISSet = lis_indices(NewOrder, OldPosMap),
-            emit_move_ops(Az, LISSet, NewOrder, 1, null)
+            emit_move_ops(Az, LISSet, NewOrder, 1, null, Present)
     end.
 
 pos_map([], _I) -> #{};
 pos_map([K | Rest], I) -> (pos_map(Rest, I + 1))#{K => I}.
 
-emit_move_ops(_Az, _LIS, [], _I, _Prev) ->
+%% Walk NewOrder left-to-right: LIS keys stay put, other PRESENT keys move to
+%% sit after the last present key placed (`Prev`). A key absent from `Present`
+%% (limit-hidden, back-filled later at its exact index) is skipped entirely:
+%% it neither gets a MOVE (the client has no node for it) nor becomes a ref --
+%% a MOVE whose ref is missing makes the client's moveItemEl fall back to
+%% appending, scrambling the surviving order. Skipping is sound because by the
+%% time a present key is placed, every present key to its left in NewOrder has
+%% already settled, so "after the last present key placed" IS its position
+%% among present keys; the back-fill then interleaves the hidden ones.
+emit_move_ops(_Az, _LIS, [], _I, _Prev, _Present) ->
     [];
-emit_move_ops(Az, LIS, [Key | Rest], I, Prev) ->
+emit_move_ops(Az, LIS, [Key | Rest], I, Prev, Present) ->
     case LIS of
         #{I := _} ->
-            emit_move_ops(Az, LIS, Rest, I + 1, Key);
+            emit_move_ops(Az, LIS, Rest, I + 1, Key, Present);
+        #{} when not is_map_key(Key, Present) ->
+            emit_move_ops(Az, LIS, Rest, I + 1, Prev, Present);
         #{} ->
             Ref =
                 case Prev of
@@ -929,7 +966,7 @@ emit_move_ops(Az, LIS, [Key | Rest], I, Prev) ->
                 end,
             [
                 [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref]
-                | emit_move_ops(Az, LIS, Rest, I + 1, Key)
+                | emit_move_ops(Az, LIS, Rest, I + 1, Key, Present)
             ]
     end.
 

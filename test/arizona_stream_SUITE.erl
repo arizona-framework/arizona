@@ -78,6 +78,8 @@
     stream_limit_hidden_delete/1,
     stream_limit_hidden_update/1,
     stream_limit_move_then_update_hidden_key/1,
+    stream_limit_move_after_hidden_key/1,
+    stream_limit_sort_ref_hidden_key/1,
     stream_upsert_unlimited_inserts_at_tail/1,
     stream_limit_halt_render/1,
     stream_limit_one/1,
@@ -239,6 +241,8 @@ groups() ->
             stream_limit_hidden_delete,
             stream_limit_hidden_update,
             stream_limit_move_then_update_hidden_key,
+            stream_limit_move_after_hidden_key,
+            stream_limit_sort_ref_hidden_key,
             stream_upsert_unlimited_inserts_at_tail,
             stream_limit_drop_delete,
             stream_limit_drop_insert,
@@ -1609,6 +1613,63 @@ stream_limit_move_then_update_hidden_key(Config) when is_list(Config) ->
     %% op referencing an absent key/position).
     ?assertEqual([3, 1], simulate_dom_ops([1, 2], Ops)).
 
+%% A move whose after-reference is a still-hidden key used to reach the client
+%% before that key existed in the DOM; the client's moveItemEl fallback appends
+%% on a missing ref, permanently scrambling surviving order (probe: client
+%% [2,5,4,3] vs server [2,5,3,4]). The differ now REMOVEs the moved item
+%% instead and lets apply_limit's left-to-right back-fill re-insert it at its
+%% exact final window index -- so every emitted INSERT/MOVE references only
+%% keys already present (the strict simulator crashes otherwise).
+stream_limit_move_after_hidden_key(Config) when is_list(Config) ->
+    Items = [
+        #{id => 1, text => <<"A">>},
+        #{id => 2, text => <<"B">>},
+        #{id => 3, text => <<"C">>},
+        #{id => 4, text => <<"D">>},
+        #{id => 5, text => <<"E">>}
+    ],
+    {Ops, #{order := Order}, _Stream} =
+        limit_stream_diff(
+            Items,
+            #{limit => 4, on_limit => halt},
+            fun(S0) ->
+                S1 = arizona_stream:delete(S0, 1),
+                S2 = arizona_stream:move(S1, 4, 3),
+                arizona_stream:move(S2, 3, 2)
+            end
+        ),
+    ?assertEqual([2, 5, 3, 4], Order),
+    ?assertEqual([2, 5, 3, 4], simulate_dom_ops([1, 2, 3, 4], Ops)).
+
+%% The reorder (sort) path had the same missing-reference hazard: a non-LIS
+%% present key whose NewOrder predecessor is a limit-hidden key got a MOVE
+%% whose ref the client DOM lacks (here: sorted window [1,5,4,2] emits
+%% MOVE 4 after 5 while 5 is still hidden). emit_move_ops now emits moves only
+%% for present keys, referencing the last PRESENT key placed -- sound because
+%% the walk settles present keys left-to-right and hidden keys are back-filled
+%% at exact indices afterwards.
+stream_limit_sort_ref_hidden_key(Config) when is_list(Config) ->
+    Rank = #{1 => 1, 5 => 2, 4 => 3, 2 => 4, 3 => 5},
+    Items = [
+        #{id => 1, text => <<"A">>},
+        #{id => 2, text => <<"B">>},
+        #{id => 3, text => <<"C">>},
+        #{id => 4, text => <<"D">>},
+        #{id => 5, text => <<"E">>}
+    ],
+    {Ops, #{order := Order}, _Stream} =
+        limit_stream_diff(
+            Items,
+            #{limit => 4, on_limit => halt},
+            fun(S) ->
+                arizona_stream:sort(S, fun(#{id := A}, #{id := B}) ->
+                    maps:get(A, Rank) =< maps:get(B, Rank)
+                end)
+            end
+        ),
+    ?assertEqual([1, 5, 4, 2], Order),
+    ?assertEqual([1, 5, 4, 2], simulate_dom_ops([1, 2, 3, 4], Ops)).
+
 %% An unlimited stream has no back-fill pass, so its missing-key update (the
 %% upsert of a brand-new key) still renders as a tail insert -- the upsert
 %% appends to `order`, making -1 exact.
@@ -1725,9 +1786,10 @@ stream_limit_halt_sort_order(Config) when is_list(Config) ->
             fun(S) -> arizona_stream:sort(S, fun(#{id := A}, #{id := B}) -> A >= B end) end
         ),
     %% Descending sort -> window [3,2]: item 1 removed, and item 3 (newly visible)
-    %% is INSERTed at the front (position 0), not appended at -1. A no-op MOVE for
-    %% the not-yet-visible key 3 may precede it (the client skips it); the load-
-    %% bearing assertion is the insert position.
+    %% is INSERTed at the front (position 0), not appended at -1. No MOVE is
+    %% emitted for the not-yet-visible key 3 (emit_move_ops skips keys the
+    %% client DOM doesn't hold); the load-bearing assertion is the insert
+    %% position.
     Inserts = [Op || [?OP_INSERT | _] = Op <- Ops],
     ?assertEqual([[?OP_REMOVE, <<"0">>, <<"1">>]], [Op || [?OP_REMOVE | _] = Op <- Ops]),
     ?assertMatch([[?OP_INSERT, <<"0">>, <<"3">>, 0, _]], Inserts),
