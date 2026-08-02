@@ -213,37 +213,38 @@ diff_dynamics_v([], [], [], _Changed, Views) ->
     {[], [], [], Views};
 diff_dynamics_v(
     [_Def | DR],
-    [{undefined, Old} | OR],
+    [{undefined, _} = OldD | OR],
     [ODeps | DepsR],
     Changed,
     Views0
 ) ->
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so skip it -- never re-evaluate, never emit an op.
-    skip_dynamic(undefined, Old, ODeps, DR, OR, DepsR, Changed, Views0);
+    skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
 diff_dynamics_v(
     [_Def | DR],
-    [{Az, #{diff := false} = Old} | OR],
+    [{_Az, #{diff := false}} = OldD | OR],
     [ODeps | DepsR],
     Changed,
     Views0
 ) ->
-    skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0);
-diff_dynamics_v([Def | DR], [{Az, Old} | OR], [ODeps | DepsR], Changed, Views0) ->
+    skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
+diff_dynamics_v([Def | DR], [{Az, Old} = OldD | OR], [ODeps | DepsR], Changed, Views0) ->
     case deps_changed(ODeps, Changed) of
         false ->
-            skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0);
+            skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
         true ->
             diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0)
     end.
 
 %% Skip a dynamic whose deps haven't changed: carry its child views to the
-%% new accumulator and continue with the original Az/Old/Deps.
-skip_dynamic(Az, Old, ODeps, DR, OR, DepsR, Changed, Views0) ->
+%% new accumulator and cons the original `{Az, Old}` tuple onto the new
+%% snapshot -- shared with the old one, not rebuilt.
+skip_dynamic({_Az, Old} = OldD, ODeps, DR, OR, DepsR, Changed, Views0) ->
     Views1 = carry_skipped_view(Old, Views0),
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {OpsRest, [{Az, Old} | DRest], [ODeps | DepsRest], Views2}.
+    {OpsRest, [OldD | DRest], [ODeps | DepsRest], Views2}.
 
 %% Re-evaluate a dynamic whose deps have changed. Each-containers take a
 %% special path because their child snapshots need merging; everything else
