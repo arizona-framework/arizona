@@ -32,6 +32,7 @@
     streaming_tool_holds_session/1,
     terminate_kills_streaming_worker/1,
     buffered_dispatch_runs_in_worker/1,
+    buffered_dispatch_survives_short_ttl/1,
     buffered_cancel_frees_caller/1,
     buffered_worker_crash_frees_caller/1,
     buffered_block_does_not_wedge_session/1,
@@ -85,6 +86,7 @@ all() ->
         streaming_tool_holds_session,
         terminate_kills_streaming_worker,
         buffered_dispatch_runs_in_worker,
+        buffered_dispatch_survives_short_ttl,
         buffered_cancel_frees_caller,
         buffered_worker_crash_frees_caller,
         buffered_block_does_not_wedge_session,
@@ -443,6 +445,24 @@ buffered_dispatch_runs_in_worker(_Config) ->
     ok = arizona_mcp_session:cancel(Pid, 7),
     ?assertMatch({reply, _}, arizona_mcp_session:dispatch(Pid, ~"ping", #{}, 8)).
 
+buffered_dispatch_survives_short_ttl(_Config) ->
+    {_Id, Pid} = start(100),
+    %% An actively-served buffered request holds the session open, like an
+    %% in-flight streaming request: with session_ttl_ms (100) below the tool's
+    %% runtime (the sleep tool, 300ms), the request must complete rather than
+    %% the session being idle-reaped mid-run ("Session ended" to its caller).
+    Result = arizona_mcp_session:dispatch(Pid, ~"tools/call", #{~"name" => ~"sleep"}, 7),
+    ?assertMatch(
+        {reply, #{~"result" := #{~"content" := [#{~"text" := ~"slept"}]}}}, Result
+    ),
+    %% With the dispatch done and nothing else holding it, the idle timer
+    %% re-arms and the session is reaped.
+    Ref = erlang:monitor(process, Pid),
+    receive
+        {'DOWN', Ref, process, Pid, normal} -> ok
+    after 5000 -> ct:fail(ttl_did_not_rearm)
+    end.
+
 buffered_cancel_frees_caller(_Config) ->
     {_Id, Pid} = start(60000),
     Self = self(),
@@ -475,8 +495,10 @@ buffered_worker_crash_frees_caller(_Config) ->
 buffered_block_does_not_wedge_session(_Config) ->
     {_Id, Pid} = start(100),
     Self = self(),
-    %% A never-returning buffered tool no longer wedges the session: with a 100ms
-    %% idle TTL the session is still reaped, and teardown kills the stuck worker.
+    %% A never-returning buffered tool does not wedge the session process (the
+    %% tool runs in a worker), and -- like an in-flight streaming request -- an
+    %% actively-served buffered request holds the session open past the 100ms
+    %% idle TTL rather than being reaped mid-run.
     Params = #{~"name" => ~"block", ~"arguments" => #{watch => Self}},
     _Caller = spawn(fun() ->
         Result = arizona_mcp_session:dispatch(Pid, ~"tools/call", Params, 7),
@@ -487,15 +509,24 @@ buffered_block_does_not_wedge_session(_Config) ->
             {block_started, W} -> W
         after 5000 -> ct:fail(block_did_not_start)
         end,
+    timer:sleep(250),
+    ?assert(is_process_alive(Pid)),
+    %% Cancelling the stuck request kills its worker, frees its caller, and
+    %% re-arms the idle timer, so the session is then reaped.
     SRef = erlang:monitor(process, Pid),
     WRef = erlang:monitor(process, Worker),
+    ok = arizona_mcp_session:cancel(Pid, 7),
     receive
-        {'DOWN', SRef, process, Pid, normal} -> ok
-    after 5000 -> ct:fail(session_wedged)
+        {caller_result, R} -> ?assertMatch({error, #{~"error" := #{~"code" := -32603}}}, R)
+    after 5000 -> ct:fail(caller_not_freed)
     end,
     receive
         {'DOWN', WRef, process, Worker, killed} -> ok
     after 5000 -> ct:fail(worker_not_killed)
+    end,
+    receive
+        {'DOWN', SRef, process, Pid, normal} -> ok
+    after 5000 -> ct:fail(ttl_did_not_rearm)
     end.
 
 buffered_requests_serialize(_Config) ->

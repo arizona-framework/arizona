@@ -664,10 +664,10 @@ demonitor_channel(Mon) ->
     true = erlang:demonitor(Mon, [flush]),
     ok.
 
-%% A session with a live SSE channel or an in-flight streaming request is kept
-%% alive by it; an otherwise connectionless session counts down to teardown.
-%% Cancel any pending timer, then arm a fresh one only when nothing holds it
-%% (so a streaming tool is never idle-reaped mid-run).
+%% A session with a live SSE channel or an in-flight request is kept alive by
+%% it; an otherwise connectionless session counts down to teardown. Cancel any
+%% pending timer, then arm a fresh one only when nothing holds it (so a tool is
+%% never idle-reaped mid-run).
 refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
     cancel_timer(Old),
     case held_open(State) of
@@ -678,9 +678,15 @@ refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
             State#state{ttl_timer = Ref}
     end.
 
-%% An attached channel or any in-flight streaming worker holds the session open.
-held_open(#state{channel = Channel, streams = Streams}) ->
-    Channel =/= undefined orelse Streams =/= #{}.
+%% An attached channel, any in-flight streaming worker, the active buffered
+%% dispatch, or a queued buffered request holds the session open -- a session
+%% actively serving a request is not idle, so a `session_ttl_ms` below a tool's
+%% runtime must not reap it mid-run ("Session ended" to a waiting caller).
+held_open(#state{
+    channel = Channel, streams = Streams, dispatch_active = Active, dispatch_q = Q
+}) ->
+    Channel =/= undefined orelse Streams =/= #{} orelse Active =/= undefined orelse
+        not queue:is_empty(Q).
 
 %% Arm the periodic keep-alive timer, but only when enabled and a channel is
 %% attached (there is nothing to keep alive otherwise).
