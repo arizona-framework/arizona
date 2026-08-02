@@ -25,6 +25,7 @@
 -export([resolve_tls_paths/1]).
 -export([resolve_leaves_routes_untouched/1]).
 -export([get_env_2_resolves/1]).
+-export([get_env_2_resolves_default/1]).
 -export([get_env_1_resolves/1]).
 -export([get_env_1_undefined/1]).
 
@@ -56,6 +57,7 @@ groups() ->
             resolve_tls_paths,
             resolve_leaves_routes_untouched,
             get_env_2_resolves,
+            get_env_2_resolves_default,
             get_env_1_resolves,
             get_env_1_undefined
         ]}
@@ -242,6 +244,22 @@ get_env_2_resolves(Config) when is_list(Config) ->
         with_app_env(some_test_key, {env, "AZ_CFG_GE2", 8080}, fun() ->
             ?assertEqual(7777, arizona_config:get_env(some_test_key, 0))
         end)
+    end).
+
+get_env_2_resolves_default(Config) when is_list(Config) ->
+    %% The default itself is resolved when `Key` is unset: an `{env, ...}`
+    %% reference used as a default reads the variable (or falls back to its own
+    %% fallback), rather than being returned as the raw reference tuple.
+    application:unset_env(arizona, nonexistent_test_key),
+    with_env("AZ_CFG_GE2_DEF", "1234", fun() ->
+        ?assertEqual(
+            1234, arizona_config:get_env(nonexistent_test_key, {env, "AZ_CFG_GE2_DEF", 8080})
+        )
+    end),
+    without_env("AZ_CFG_GE2_DEF", fun() ->
+        ?assertEqual(
+            8080, arizona_config:get_env(nonexistent_test_key, {env, "AZ_CFG_GE2_DEF", 8080})
+        )
     end).
 
 get_env_1_resolves(Config) when is_list(Config) ->
