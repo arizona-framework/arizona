@@ -88,6 +88,8 @@
     unmount_on_terminate/1,
     unmount_children_on_navigate/1,
     unmount_children_on_terminate/1,
+    removed_child_timer_cancelled/1,
+    fired_timer_ref_pruned/1,
     live_reaped_on_transport_disconnect/1,
     child_in_stream_survives_dep_skip/1,
     child_in_stream_removed_on_delete/1,
@@ -196,6 +198,8 @@ groups() ->
             unmount_on_terminate,
             unmount_children_on_navigate,
             unmount_children_on_terminate,
+            removed_child_timer_cancelled,
+            fired_timer_ref_pruned,
             live_reaped_on_transport_disconnect,
             child_in_stream_survives_dep_skip,
             child_in_stream_removed_on_delete,
@@ -1326,6 +1330,51 @@ unmount_children_on_terminate(Config) when is_list(Config) ->
         Msg2 -> ?assertEqual({root_unmounted, ~"uparent"}, Msg2)
     after 1000 -> error(timeout_root_unmount)
     end.
+
+removed_child_timer_cancelled(Config) when is_list(Config) ->
+    %% The dismissed-early toast: a child arms a ?send_after, then a parent
+    %% event removes the child before the timer fires. Removal must cancel the
+    %% removed view's timers (and flush any queued messages), or the late fire
+    %% routes {arizona_view, <<"toast">>, close} to a pruned view and crashes
+    %% the WHOLE live session with unknown_view.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_toast_parent, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"toast">>, <<"arm">>, #{~"delay" => 300}),
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"tp">>, <<"hide">>, #{}),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    receive
+        {'DOWN', Ref, process, Pid, Reason} -> error({live_process_crashed, Reason})
+    after 1000 -> ok
+    end,
+    ?assert(is_process_alive(Pid)).
+
+fired_timer_ref_pruned(Config) when is_list(Config) ->
+    %% A fired timer's ref must be pruned from the tracked set when its message
+    %% is delivered -- the re-arming tick idiom must not accumulate a dead ref
+    %% per fire for the lifetime of the page.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_toast, #{id => <<"toast">>}, self(), []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    ArmAndFire = fun() ->
+        {ok, _, _} = arizona_live:handle_event(Pid, <<"toast">>, <<"arm">>, #{~"delay" => 1}),
+        %% Each fire increments `closes`, so the push confirms the delivery
+        %% (and thus the prune) happened.
+        receive
+            {arizona_push, _, _} -> ok
+        after 1000 -> error(timeout_waiting_for_close_push)
+        end
+    end,
+    ok = ArmAndFire(),
+    ok = ArmAndFire(),
+    ok = ArmAndFire(),
+    {dictionary, Dict} = erlang:process_info(Pid, dictionary),
+    %% Tracked timers are keyed by view id; every fired ref has been pruned on
+    %% delivery, so after the last fire nothing is tracked at all.
+    ?assertEqual(#{}, proplists:get_value('$arizona_timers', Dict, #{})).
 
 live_reaped_on_transport_disconnect(Config) when is_list(Config) ->
     %% The live process is start_linked to its transport (the WS session

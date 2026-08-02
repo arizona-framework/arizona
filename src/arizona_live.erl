@@ -37,8 +37,11 @@ diff pipeline.
   read by `capabilities/0` / `capability/1`. A UI/effect hint only.
 - `$arizona_reconnected` -- `true` when this connection is a reconnection (vs the
   first connect); set while a transport is attached and read by `reconnected/0`.
-- `$arizona_timers` -- list of refs from `send_after/3`, drained on
-  `navigate/3,4` so stale timers don't fire after a page change.
+- `$arizona_timers` -- `#{ViewId => [Ref]}` from `send_after/3`. A fired
+  ref is pruned when its message is delivered; a removed child view's
+  timers are cancelled synchronously (and its queued view messages
+  flushed) on unmount; `navigate/3,4` cancels them all so stale timers
+  don't fire after a page change.
 - `$arizona_deps` -- per-dynamic dependency capture set, used by
   `arizona_eval` and `arizona_template:track/1`.
 
@@ -245,8 +248,10 @@ send(ViewId, Msg) ->
 
 -doc """
 Like `send/2` but delivers after `Time` milliseconds. Returns the timer
-ref, which is also tracked in the process dictionary so `navigate/4,5`
-can cancel pending timers on page change.
+ref, which is also tracked in the process dictionary (keyed by `ViewId`)
+so a removed child view's pending timers can be cancelled on unmount and
+`navigate/3,4` can cancel them all on page change. A fired ref is pruned
+from the tracked set when its message is delivered.
 """.
 -spec send_after(ViewId, Time, Msg) -> reference() when
     ViewId :: binary(),
@@ -256,10 +261,11 @@ send_after(ViewId, Time, Msg) ->
     Ref = erlang:send_after(Time, self(), {arizona_view, ViewId, Msg}),
     Timers =
         case erlang:get('$arizona_timers') of
-            undefined -> [];
+            undefined -> #{};
             T -> T
         end,
-    _ = erlang:put('$arizona_timers', [Ref | Timers]),
+    ViewRefs = maps:get(ViewId, Timers, []),
+    _ = erlang:put('$arizona_timers', Timers#{ViewId => [Ref | ViewRefs]}),
     Ref.
 
 -doc """
@@ -624,6 +630,7 @@ handle_info(
 handle_info(_Info, #state{snapshot = undefined} = State) ->
     {noreply, State};
 handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = State) ->
+    ok = prune_fired_timers(ViewId),
     case maps:get(id, B0) of
         ViewId ->
             handle_root_info(Msg, State);
@@ -828,27 +835,73 @@ clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
     maps:merge(B2, Resets).
 
+%% A removed view's in-flight ?send_after messages must die with it: cancel its
+%% timers synchronously and flush any of its already-queued view messages BEFORE
+%% unmounting, so a late `close`-style tick can never route to the pruned view
+%% and crash the session with unknown_view.
 unmount_removed_views(RemovedViews) ->
     maps:foreach(
-        fun(_Id, #{handler := H, bindings := B}) ->
+        fun(Id, #{handler := H, bindings := B}) ->
+            ok = cancel_view_timers(Id),
+            ok = flush_view_messages(Id),
             ok = arizona_stateful:call_unmount(H, B)
         end,
         RemovedViews
     ).
+
+%% Synchronous cancel: after this returns, each timer's message either was
+%% already delivered (and is flushed right after) or never will be. An async
+%% cancel could complete after the flush and deliver a stale message later.
+cancel_view_timers(ViewId) ->
+    case erlang:get('$arizona_timers') of
+        undefined ->
+            ok;
+        #{ViewId := Refs} = Timers ->
+            ok = cancel_timer_refs(Refs),
+            _ = erlang:put('$arizona_timers', maps:remove(ViewId, Timers)),
+            ok;
+        #{} ->
+            ok
+    end.
+
+cancel_timer_refs(Refs) ->
+    lists:foreach(fun(Ref) -> ok = erlang:cancel_timer(Ref, [{info, false}]) end, Refs).
 
 cancel_pending_timers() ->
     case erlang:erase('$arizona_timers') of
         undefined ->
             ok;
         Timers ->
-            _ = [erlang:cancel_timer(Ref, [{async, true}, {info, false}]) || Ref <- Timers],
-            ok
+            maps:foreach(fun(_ViewId, Refs) -> cancel_timer_refs(Refs) end, Timers)
     end,
     flush_view_messages().
+
+%% Drop the refs whose timer already fired for this view, called when one of
+%% its view-routed messages is delivered -- so the standard re-arming tick
+%% idiom stays bounded instead of accumulating a dead ref per fire.
+prune_fired_timers(ViewId) ->
+    case erlang:get('$arizona_timers') of
+        undefined ->
+            ok;
+        #{ViewId := Refs} = Timers ->
+            case [Ref || Ref <- Refs, erlang:read_timer(Ref) =/= false] of
+                [] -> _ = erlang:put('$arizona_timers', maps:remove(ViewId, Timers));
+                Live -> _ = erlang:put('$arizona_timers', Timers#{ViewId => Live})
+            end,
+            ok;
+        #{} ->
+            ok
+    end.
 
 flush_view_messages() ->
     receive
         {arizona_view, _, _} -> flush_view_messages()
+    after 0 -> ok
+    end.
+
+flush_view_messages(ViewId) ->
+    receive
+        {arizona_view, ViewId, _} -> flush_view_messages(ViewId)
     after 0 -> ok
     end.
 
