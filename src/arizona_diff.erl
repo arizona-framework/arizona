@@ -440,7 +440,7 @@ diff_stream_op(Az, {reset, OldItems}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) 
 %% stream record. An unlimited stream keeps every key, so it needs no set. The
 %% stream record is already the post-op state, so this is the *final* window --
 %% skipping an op for a key outside it is safe in both directions, since
-%% `apply_limit/5` back-fills any visible key missing from the snapshot at its
+%% `apply_limit/6` back-fills any visible key missing from the snapshot at its
 %% ordered position, so a key that slides into view later still lands.
 visible_set(#stream{limit = infinity}) ->
     all;
@@ -453,7 +453,7 @@ is_visible(Key, Vis) ->
     is_map_key(Key, Vis).
 
 %% An insert past the limit used to render the item, ship its HTML, and then have
-%% `apply_limit/5` remove it in the same batch -- payload the client mounts and
+%% `apply_limit/6` remove it in the same batch -- payload the client mounts and
 %% immediately destroys, firing a phantom `mounted()`/`destroyed()` pair.
 %%
 %% The `SnapAcc` guard makes a REPLAYED insert a no-op: the stream API refuses
@@ -528,9 +528,9 @@ stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, V
 %% An update whose key the client's DOM (`SnapAcc`) doesn't hold has nothing to
 %% patch. On an UNLIMITED stream that key can only be this frame's upsert of a
 %% brand-new key, which appended to `order` -- so render it as a tail insert
-%% (`-1`), the one rendering path an infinity stream has (its `apply_limit/5`
+%% (`-1`), the one rendering path an infinity stream has (its `apply_limit/6`
 %% clause does no back-fill). On a LIMITED stream the key is (or was)
-%% limit-hidden: leave it entirely to `apply_limit/5`, whose left-to-right
+%% limit-hidden: leave it entirely to `apply_limit/6`, whose left-to-right
 %% back-fill renders the item's CURRENT source state at its exact window index,
 %% or keeps it out when it is not in the final window. Inserting here at -1 put
 %% a newly-visible mid-window key at the tail and, being in `SnapAcc`, made the
@@ -564,7 +564,7 @@ stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
                     %% The after-reference is a limit-hidden key the client DOM
                     %% doesn't hold; a MOVE with a missing ref makes the client's
                     %% moveItemEl fall back to appending, scrambling surviving
-                    %% order. Remove the item instead and let `apply_limit/5`'s
+                    %% order. Remove the item instead and let `apply_limit/6`'s
                     %% left-to-right back-fill re-insert it at its exact final
                     %% window index (or keep it out when it moved past the
                     %% window). Only reachable on a limited stream -- an
@@ -960,7 +960,7 @@ lis_backtrack(Idx, Parent, Acc) ->
 %% `Kept` is the LIS base (keys the client held BEFORE this reconciliation --
 %% their old positions anchor the stable subsequence). `Present` is what the
 %% client DOM holds when the emitted moves apply: for a plain reorder the same
-%% as `Kept` (hidden keys are back-filled only later, by `apply_limit/5`); for
+%% as `Kept` (hidden keys are back-filled only later, by `apply_limit/6`); for
 %% a reset it also includes the keys `smart_reset_items/8` just inserted, whose
 %% tail (-1) inserts precede these moves on the wire.
 compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present) ->
