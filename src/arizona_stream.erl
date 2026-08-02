@@ -17,8 +17,16 @@ the differ knows exactly which keys to insert, remove, update, or move.
 - `infinity` (default) -- no cap, all items remain visible
 - `{Limit, halt}` -- once `Limit` items are present, further inserts
   are rejected (kept in `items` but not visible)
-- `{Limit, drop}` -- once `Limit` is reached, oldest items are dropped
-  to make room
+- `{Limit, drop}` -- a bounded tail -f buffer: an **append** (`insert/2`,
+  or the `update/3` upsert of a missing key) to a full stream evicts the
+  oldest (front-of-order) item from the source to make room, so the
+  visible window slides onto the new tail item. Only appends evict --
+  "oldest" is well-defined only for the append flow; a positional
+  `insert/3` declares a window position rather than an age, and
+  pre-population (`new/3`, `reset/2`) sets the whole order at once, so
+  those keep `halt`'s window semantics (items past the limit stay in the
+  source as a hidden tail). An append to such an overfull stream evicts
+  down to the limit, so the stream converges to `size =< Limit`.
 
 ## Pending operation shapes
 
@@ -173,6 +181,10 @@ new(KeyFun, Items, Opts) when is_function(KeyFun, 1), is_list(Items), is_map(Opt
 -doc """
 Appends `Item` to the end of the stream and queues an insert op.
 
+In `drop` limit mode an append to a full stream first evicts the oldest
+(front-of-order) item(s) from the source, so the visible window slides
+onto the new tail item (see the moduledoc's limit-modes section).
+
 Crashes with `{stream_duplicate_key, Key}` (carrying an `error_info`
 annotation that routes through `format_error/2`) if `Key` is already
 present -- inserting a duplicate key would duplicate it in `order` and
@@ -183,28 +195,25 @@ existing item.
     Stream :: stream(),
     Item :: item(),
     Stream1 :: stream().
-insert(
-    #stream{
-        key = KeyFun,
-        items = Items,
-        order = {Front, Back},
-        pending = Pending,
-        size = Size
-    } = S,
-    Item
-) ->
+insert(#stream{key = KeyFun, items = Items} = S0, Item) ->
     Key = KeyFun(Item),
     case Items of
         #{Key := _} ->
-            erlang:error({stream_duplicate_key, Key}, [S, Item], [
+            erlang:error({stream_duplicate_key, Key}, [S0, Item], [
                 {error_info, #{module => ?MODULE}}
             ]);
         #{} ->
+            #stream{
+                items = Items1,
+                order = {Front, Back},
+                pending = Pending,
+                size = Size
+            } = S = drop_oldest_for_append(S0),
             %% O(1): cons to BackRev instead of `Front ++ [Key]`. The buffer is
             %% flushed by the next non-insert/2 operation (or by visible_keys
             %% on read). For 1000 sequential inserts this turns O(N^2) into O(N).
             S#stream{
-                items = Items#{Key => Item},
+                items = Items1#{Key => Item},
                 order = {Front, [Key | Back]},
                 pending = queue:in({insert, Key, Item, -1}, Pending),
                 size = Size + 1
@@ -283,32 +292,35 @@ delete(
 Replaces the item at `Key` with `NewItem` and queues an update op.
 
 If `Key` is not present it is appended as a new item (an upsert): the
-differ already renders a queued update of an unseen key as an insert
-(`OP_INSERT` at the tail), so appending here keeps that op consistent
-with the items/order/size invariant.
+differ already renders a queued update of an unseen key as an insert,
+so appending here keeps that op consistent with the items/order/size
+invariant. Being an append, the upsert evicts in `drop` limit mode
+exactly like `insert/2`.
 """.
 -spec update(Stream, Key, NewItem) -> Stream1 when
     Stream :: stream(),
     Key :: key(),
     NewItem :: item(),
     Stream1 :: stream().
-update(
-    #stream{items = Items, order = {Front, Back}, pending = Pending, size = Size} = S,
-    Key,
-    NewItem
-) ->
+update(#stream{items = Items, pending = Pending} = S0, Key, NewItem) ->
     case Items of
         #{Key := OldItem} ->
             Changed = compute_item_changed(OldItem, NewItem),
-            S#stream{
+            S0#stream{
                 items = Items#{Key => NewItem},
                 pending = queue:in({update, Key, NewItem, Changed}, Pending)
             };
         #{} ->
+            #stream{
+                items = Items1,
+                order = {Front, Back},
+                pending = Pending1,
+                size = Size
+            } = S = drop_oldest_for_append(S0),
             S#stream{
-                items = Items#{Key => NewItem},
+                items = Items1#{Key => NewItem},
                 order = {Front, [Key | Back]},
-                pending = queue:in({update, Key, NewItem, #{}}, Pending),
+                pending = queue:in({update, Key, NewItem, #{}}, Pending1),
                 size = Size + 1
             }
     end.
@@ -580,6 +592,29 @@ format_error(missing_stream_key, [{_M, _F, [#stream{items = Items}, Key], _Info}
 %% `insert/2` (the bulk-append hot path) leaves the buffer non-empty.
 flat_order({Front, []}) -> Front;
 flat_order({Front, Back}) -> Front ++ lists:reverse(Back).
+
+%% `drop` limit mode, before an append: evict the oldest (front-of-order)
+%% item(s) so the appended item lands inside the visible window (the FIRST
+%% `Limit` keys of `order` -- evicting the front slides the window forward
+%% onto the new tail). Evicts down to `Limit - 1` so an overfull stream (a
+%% `new/3`/`reset/2` population or positional insert past the limit leaves a
+%% hidden tail, exactly like `halt`) converges to `size =< Limit`. No delete
+%% op is queued: the differ reconciles the visible window itself
+%% (`apply_limit` removes evicted keys from the DOM, and a pending op for an
+%% evicted key is window-skipped at drain).
+drop_oldest_for_append(#stream{limit = infinity} = S) ->
+    S;
+drop_oldest_for_append(#stream{on_limit = halt} = S) ->
+    S;
+drop_oldest_for_append(#stream{size = Size, limit = Limit} = S) when Size < Limit ->
+    S;
+drop_oldest_for_append(#stream{items = Items, order = Order, size = Size} = S) ->
+    [Oldest | RestOrder] = flat_order(Order),
+    drop_oldest_for_append(S#stream{
+        items = maps:remove(Oldest, Items),
+        order = {RestOrder, []},
+        size = Size - 1
+    }).
 
 key_items(_KeyFun, []) -> [];
 key_items(KeyFun, [I | Rest]) -> [{KeyFun(I), I} | key_items(KeyFun, Rest)].

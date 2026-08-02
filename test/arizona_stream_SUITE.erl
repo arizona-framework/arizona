@@ -67,8 +67,12 @@
     stream_keys/1,
     stream_limit_drop_delete/1,
     stream_limit_drop_insert/1,
+    stream_limit_drop_append_overfull/1,
+    stream_limit_drop_upsert_evicts/1,
+    stream_limit_drop_sort_after_append/1,
     stream_limit_halt_delete_backfills/1,
-    stream_limit_drop_sort_order/1,
+    stream_limit_halt_insert_at_window/1,
+    stream_limit_halt_sort_order/1,
     stream_limit_halt_diff/1,
     stream_limit_halt_insert_then_delete/1,
     stream_limit_hidden_delete/1,
@@ -234,8 +238,12 @@ groups() ->
             stream_limit_hidden_update,
             stream_limit_drop_delete,
             stream_limit_drop_insert,
+            stream_limit_drop_append_overfull,
+            stream_limit_drop_upsert_evicts,
+            stream_limit_drop_sort_after_append,
             stream_limit_halt_delete_backfills,
-            stream_limit_drop_sort_order,
+            stream_limit_halt_insert_at_window,
+            stream_limit_halt_sort_order,
             stream_move_op,
             stream_limit_ssr,
             stream_limit_reset,
@@ -1470,152 +1478,152 @@ stream_limit_hidden_update(Config) when is_list(Config) ->
     ?assertEqual([1, 2], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
 
+%% drop + append-at-limit then delete: the eviction and the delete compose.
+%% [1,2] -> append 3 evicts 1 (source [2,3]) -> delete 2 leaves source [3].
+%% Discriminating vs halt, where the append is hidden instead of evicting:
+%% halt would keep 1 and back-fill 3 (final window [1,3], no REMOVE of 1).
 stream_limit_drop_delete(Config) when is_list(Config) ->
-    %% on_limit => drop: delete visible item → next slides in
-    KeyFun = fun(#{id := Id}) -> Id end,
+    Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
+    {Ops, #{items := SnapItems, order := Order}, Stream} =
+        limit_stream_diff(
+            Items,
+            #{limit => 2, on_limit => drop},
+            fun(S) ->
+                arizona_stream:delete(
+                    arizona_stream:insert(S, #{id => 3, text => <<"C">>}), 2
+                )
+            end
+        ),
+    %% Source eviction: only item 3 survives.
+    ?assertEqual([#{id => 3, text => <<"C">>}], arizona_stream:to_list(Stream)),
+    ?assertEqual([3], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))),
+    %% Ops: append 3, remove the deleted 2, remove the evicted 1.
+    InsKeys = [K || [?OP_INSERT, _, K | _] <- Ops],
+    RemKeys = [K || [?OP_REMOVE, _, K] <- Ops],
+    ?assertEqual([<<"3">>], InsKeys),
+    ?assertEqual([<<"2">>, <<"1">>], RemKeys).
+
+%% drop + append-at-limit (the canonical tail -f case): the oldest item is
+%% evicted from the SOURCE (items + order), the window slides onto the new
+%% tail, and the ops deliver exactly that. Under halt this same append is
+%% invisible (no ops, source keeps a hidden tail) -- see stream_limit_halt_diff.
+stream_limit_drop_insert(Config) when is_list(Config) ->
+    Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
+    {Ops, #{items := SnapItems, order := Order}, Stream} =
+        limit_stream_diff(
+            Items,
+            #{limit => 2, on_limit => drop},
+            fun(S) -> arizona_stream:insert(S, #{id => 3, text => <<"C">>}) end
+        ),
+    %% Source eviction: item 1 is gone from the stream itself.
+    ?assertEqual(
+        [#{id => 2, text => <<"B">>}, #{id => 3, text => <<"C">>}],
+        arizona_stream:to_list(Stream)
+    ),
+    %% Ops: the new tail item is inserted and the evicted oldest removed.
+    ?assertMatch(
+        [[?OP_INSERT, <<"0">>, <<"3">>, -1, _], [?OP_REMOVE, <<"0">>, <<"1">>]], Ops
+    ),
+    ?assertEqual([2, 3], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))).
+
+%% drop + append to an OVERFULL stream (new/3 populated past the limit, so a
+%% hidden tail exists exactly like halt): the append evicts down to the limit,
+%% so the stream converges to `size =< limit` and the new tail item is visible.
+stream_limit_drop_append_overfull(Config) when is_list(Config) ->
     Items = [
         #{id => 1, text => <<"A">>},
         #{id => 2, text => <<"B">>},
         #{id => 3, text => <<"C">>}
     ],
-    S0 = arizona_stream:new(KeyFun, Items, #{limit => 2, on_limit => drop}),
-    Bindings0 = #{id => <<"test">>, items => S0},
-    Tmpl0 = #{
-        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
-        d => [
-            {<<"0">>, fun() ->
-                arizona_template:each(
-                    arizona_template:get(items, Bindings0),
-                    #{
-                        t => 0,
-                        s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
-                        d => fun(Item, Key) ->
-                            [
-                                {<<"0">>, fun() -> Key end},
-                                {<<"1">>, fun() -> maps:get(text, Item) end}
-                            ]
-                        end,
-                        f => <<"test">>
-                    }
-                )
-            end}
+    {Ops, #{items := SnapItems, order := Order}, Stream} =
+        limit_stream_diff(
+            Items,
+            #{limit => 2, on_limit => drop},
+            fun(S) -> arizona_stream:insert(S, #{id => 4, text => <<"D">>}) end
+        ),
+    ?assertEqual(
+        [#{id => 3, text => <<"C">>}, #{id => 4, text => <<"D">>}],
+        arizona_stream:to_list(Stream)
+    ),
+    ?assertEqual([3, 4], Order),
+    ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))),
+    %% DOM [1,2]: insert 4 (append), remove evicted 1 and 2, back-fill 3 at
+    %% its window position (front).
+    ?assertMatch(
+        [
+            [?OP_INSERT, <<"0">>, <<"4">>, -1, _],
+            [?OP_REMOVE, <<"0">>, <<"1">>],
+            [?OP_REMOVE, <<"0">>, <<"2">>],
+            [?OP_INSERT, <<"0">>, <<"3">>, 0, _]
         ],
-        f => <<"test">>
-    },
-    {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
-    B1 = arizona_stream:clear_stream_pending(Bindings0, arizona_stream:stream_keys(Bindings0)),
-    %% Delete item 1 -- visible window should now show items 2 and 3
-    S1 = arizona_stream:delete(maps:get(items, B1), 1),
-    B2 = B1#{items => S1},
-    Tmpl1 = #{
-        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
-        d => [
-            {<<"0">>, fun() ->
-                arizona_template:each(
-                    arizona_template:get(items, B2),
-                    #{
-                        t => 0,
-                        s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
-                        d => fun(Item, Key) ->
-                            [
-                                {<<"0">>, fun() -> Key end},
-                                {<<"1">>, fun() -> maps:get(text, Item) end}
-                            ]
-                        end,
-                        f => <<"test">>
-                    }
-                )
-            end}
-        ],
-        f => <<"test">>
-    },
-    Changed = arizona_live_compute_changed(B1, B2),
-    {Ops, _, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
-    %% Should have OP_REMOVE for item 1 and OP_INSERT for item 3 (slides in)
-    RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
-    InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
-    ?assert(length(RemOps) >= 1),
-    ?assert(length(InsOps) >= 1),
-    %% Item 3 should be inserted (it was not visible before, now it is)
-    InsKeys = [K || [?OP_INSERT, _, K | _] <- InsOps],
-    ?assert(lists:member(<<"3">>, InsKeys)).
+        Ops
+    ).
 
-stream_limit_drop_insert(Config) when is_list(Config) ->
-    %% on_limit => drop: insert at pos 0 → last visible item removed
-    KeyFun = fun(#{id := Id}) -> Id end,
+%% drop + upsert (update/3 of a missing key) is an append, so it evicts too.
+stream_limit_drop_upsert_evicts(Config) when is_list(Config) ->
     Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
-    S0 = arizona_stream:new(KeyFun, Items, #{limit => 2, on_limit => drop}),
-    Bindings0 = #{id => <<"test">>, items => S0},
-    Tmpl0 = #{
-        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
-        d => [
-            {<<"0">>, fun() ->
-                arizona_template:each(
-                    arizona_template:get(items, Bindings0),
-                    #{
-                        t => 0,
-                        s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
-                        d => fun(Item, Key) ->
-                            [
-                                {<<"0">>, fun() -> Key end},
-                                {<<"1">>, fun() -> maps:get(text, Item) end}
-                            ]
-                        end,
-                        f => <<"test">>
-                    }
-                )
-            end}
+    {Ops, #{order := Order}, Stream} =
+        limit_stream_diff(
+            Items,
+            #{limit => 2, on_limit => drop},
+            fun(S) -> arizona_stream:update(S, 3, #{id => 3, text => <<"C">>}) end
+        ),
+    ?assertEqual(
+        [#{id => 2, text => <<"B">>}, #{id => 3, text => <<"C">>}],
+        arizona_stream:to_list(Stream)
+    ),
+    ?assertEqual([2, 3], Order),
+    InsKeys = [K || [?OP_INSERT, _, K | _] <- Ops],
+    RemKeys = [K || [?OP_REMOVE, _, K] <- Ops],
+    ?assertEqual([<<"3">>], InsKeys),
+    ?assertEqual([<<"1">>], RemKeys).
+
+%% halt + positional insert INTO the window: pure window reconciliation -- the
+%% new item lands at its position and the item pushed past the window edge is
+%% removed from the DOM (but retained in the source as the hidden tail).
+stream_limit_halt_insert_at_window(Config) when is_list(Config) ->
+    Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
+    {Ops, #{order := Order}, Stream} =
+        limit_stream_diff(
+            Items,
+            #{limit => 2, on_limit => halt},
+            fun(S) -> arizona_stream:insert(S, #{id => 3, text => <<"C">>}, 0) end
+        ),
+    %% Source retains all three items (halt never evicts).
+    ?assertEqual(
+        [
+            #{id => 3, text => <<"C">>},
+            #{id => 1, text => <<"A">>},
+            #{id => 2, text => <<"B">>}
         ],
-        f => <<"test">>
-    },
-    {_, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
-    B1 = arizona_stream:clear_stream_pending(Bindings0, arizona_stream:stream_keys(Bindings0)),
-    %% Insert at pos 0 -- order becomes [3, 1, 2], visible [3, 1]
-    S1 = arizona_stream:insert(maps:get(items, B1), #{id => 3, text => <<"C">>}, 0),
-    B2 = B1#{items => S1},
-    Tmpl1 = #{
-        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
-        d => [
-            {<<"0">>, fun() ->
-                arizona_template:each(
-                    arizona_template:get(items, B2),
-                    #{
-                        t => 0,
-                        s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
-                        d => fun(Item, Key) ->
-                            [
-                                {<<"0">>, fun() -> Key end},
-                                {<<"1">>, fun() -> maps:get(text, Item) end}
-                            ]
-                        end,
-                        f => <<"test">>
-                    }
-                )
-            end}
-        ],
-        f => <<"test">>
-    },
-    Changed = arizona_live_compute_changed(B1, B2),
-    {Ops, _, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
-    %% Should have insert for item 3 and remove for item 2 (dropped)
-    InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
-    RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
-    InsKeys = [K || [?OP_INSERT, _, K | _] <- InsOps],
-    RemKeys = [K || [?OP_REMOVE, _, K] <- RemOps],
-    ?assert(lists:member(<<"3">>, InsKeys)),
-    ?assert(lists:member(<<"2">>, RemKeys)).
+        arizona_stream:to_list(Stream)
+    ),
+    ?assertEqual([3, 1], Order),
+    InsKeys = [K || [?OP_INSERT, _, K | _] <- Ops],
+    RemKeys = [K || [?OP_REMOVE, _, K] <- Ops],
+    ?assertEqual([<<"3">>], InsKeys),
+    ?assertEqual([<<"2">>], RemKeys).
 
 %% Build a limited stream of ids [1,2,3] with `Opts`, render it, apply `Mutate` to
 %% the stream, diff, and return {Ops, StreamSnap} where StreamSnap is the nested
 %% each snapshot (carrying `items`/`order`). Lets the limit tests below assert both
 %% the emitted ops and the resulting snapshot invariant (order subset of items).
 limit_stream_diff(Opts, Mutate) ->
-    KeyFun = fun(#{id := Id}) -> Id end,
     Items = [
         #{id => 1, text => <<"A">>},
         #{id => 2, text => <<"B">>},
         #{id => 3, text => <<"C">>}
     ],
+    {Ops, StreamSnap, _Stream} = limit_stream_diff(Items, Opts, Mutate),
+    {Ops, StreamSnap}.
+
+%% Like limit_stream_diff/2 but with caller-supplied initial `Items`, also
+%% returning the mutated source stream so drop-mode tests can assert eviction
+%% at the source (`to_list`), not just in the window ops.
+limit_stream_diff(Items, Opts, Mutate) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
     ItemTmpl = #{
         t => 0,
         s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
@@ -1646,7 +1654,7 @@ limit_stream_diff(Opts, Mutate) ->
     Changed = arizona_live_compute_changed(B1, B2),
     {Ops, Snap1, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     #{d := [{<<"0">>, StreamSnap}]} = Snap1,
-    {Ops, StreamSnap}.
+    {Ops, StreamSnap, maps:get(items, B2)}.
 
 %% halt + delete of a visible item back-fills the next hidden item into the freed
 %% slot. Previously the halt path never inserted it, so the DOM lost the item and
@@ -1662,12 +1670,15 @@ stream_limit_halt_delete_backfills(Config) when is_list(Config) ->
     ?assertEqual([2, 3], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
 
-%% drop + sort brings a hidden item into the window at its sorted position (front),
-%% not appended at the end (the corruption this fixes).
-stream_limit_drop_sort_order(Config) when is_list(Config) ->
+%% halt + sort brings a hidden item into the window at its sorted position
+%% (front), not appended at the end (the corruption this fixes). Previously
+%% named stream_limit_drop_sort_order: the behavior it pins is pure window
+%% reconciliation, identical in both modes, and the hidden tail it sorts over
+%% is halt's canonical state -- so it lives under the halt name now.
+stream_limit_halt_sort_order(Config) when is_list(Config) ->
     {Ops, #{items := Items, order := Order}} =
         limit_stream_diff(
-            #{limit => 2, on_limit => drop},
+            #{limit => 2, on_limit => halt},
             fun(S) -> arizona_stream:sort(S, fun(#{id := A}, #{id := B}) -> A >= B end) end
         ),
     %% Descending sort -> window [3,2]: item 1 removed, and item 3 (newly visible)
@@ -1679,6 +1690,37 @@ stream_limit_drop_sort_order(Config) when is_list(Config) ->
     ?assertMatch([[?OP_INSERT, <<"0">>, <<"3">>, 0, _]], Inserts),
     ?assertEqual([3, 2], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(Items))).
+
+%% drop + sort after an evicting append: the eviction happened at the source,
+%% so the sort has no hidden tail to bring in -- discriminating vs halt, where
+%% the same sequence keeps item 1 and yields window [3,2] with 1 removed only
+%% from the DOM.
+stream_limit_drop_sort_after_append(Config) when is_list(Config) ->
+    Items = [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}],
+    {Ops, #{order := Order}, Stream} =
+        limit_stream_diff(
+            Items,
+            #{limit => 2, on_limit => drop},
+            fun(S0) ->
+                S1 = arizona_stream:insert(S0, #{id => 3, text => <<"C">>}),
+                arizona_stream:sort(S1, fun(#{id := A}, #{id := B}) -> A >= B end)
+            end
+        ),
+    %% Source: append evicted 1 ([2,3]), sort reversed to [3,2].
+    ?assertEqual(
+        [#{id => 3, text => <<"C">>}, #{id => 2, text => <<"B">>}],
+        arizona_stream:to_list(Stream)
+    ),
+    ?assertEqual([3, 2], Order),
+    %% DOM [1,2]: append 3, move it to the front, remove evicted 1.
+    ?assertMatch(
+        [
+            [?OP_INSERT, <<"0">>, <<"3">>, -1, _],
+            [?OP_MOVE, <<"0">>, <<"3">>, null],
+            [?OP_REMOVE, <<"0">>, <<"1">>]
+        ],
+        Ops
+    ).
 
 stream_move_op(Config) when is_list(Config) ->
     %% stream_move generates OP_REMOVE + OP_INSERT pair
