@@ -426,6 +426,12 @@ format_error(local_in_raw_text) ->
     "for the client to address, so the value would never update";
 format_error(local_key_reused) ->
     "a ?local key cannot bind both content and an attribute on the same element";
+format_error(local_orphaned) ->
+    "?local must sit inside an element -- as a content child or an attribute "
+    "value. At a fragment top level, as a whole template body, or as a bare "
+    "conditional-branch value there is no enclosing element to carry the "
+    "az-local descriptor, so the client could never bind the key and "
+    "set/set_all would be silent no-ops";
 format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
@@ -1617,6 +1623,10 @@ compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
     compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend);
 compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend) ->
+    %% The slot's own markers anchor it (see below), but a marker is not an
+    %% ELEMENT, so it still cannot carry an `az-local` attribute -- an orphaned
+    %% ?local here stays a compile error.
+    ok = reject_orphaned_local(ExprAST),
     %% A whole-template bare dynamic (`?html(case ...)`, `?html(?get(x))`, a
     %% root `?stateless`/`?stateful` descriptor) sits inside no element, so no
     %% content slot would otherwise anchor it: wrap the slot in its own
@@ -1629,6 +1639,18 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend) ->
     Statics = [[{az_slot, ~"0"}], [Backend:text_slot_close()]],
     DynASTs = [make_esc_text_dynamic_ast(~"0", ExprAST, Module, line(ExprAST), Backend)],
     {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
+
+%% A ?local outside an element -- a whole template body, a fragment top-level
+%% item, or a conditional-branch tail -- gets a slot but no enclosing element
+%% to carry the `az-local` descriptor (only compile_element/5 injects it via
+%% maybe_inject_local_descriptor/6). The client binds keys by scanning that
+%% attribute, so the key would be unreachable and set/set_all silent no-ops.
+%% Reject at compile time.
+reject_orphaned_local(ExprAST) ->
+    case is_local_marker(ExprAST) of
+        true -> parse_error(local_orphaned, line(ExprAST));
+        false -> ok
+    end.
 
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
     Opts = prescan_directives(ElementASTs),
@@ -1675,6 +1697,7 @@ compile_mixed_non_static(Item, Module, State) ->
             {Attrs, _ElemOpts} = extract_directives(Attrs0),
             compile_element(Tag, Attrs, Children, ElemLine, State);
         false ->
+            ok = reject_orphaned_local(Item),
             compile_mixed_dynamic(Item, Module, State)
     end.
 
@@ -2335,16 +2358,28 @@ track_call_ast(KeyAST) ->
 %% renders as an escaped scalar, as before). The set of walked forms is shared
 %% with the live-render-root transform via map_tail_exprs/3.
 expand_block_element_tails(Expr, Module, Backend) ->
-    map_tail_exprs(
-        Expr,
-        fun(Leaf) -> expand_element_leaf(Leaf, Module, Backend) end,
-        fun(NonTail) -> NonTail end
-    ).
+    case is_local_marker(Expr) of
+        true ->
+            %% A direct ?local content child: a legit slot (the enclosing
+            %% element injects the az-local descriptor) with no tails to walk.
+            %% Any ?local reaching expand_element_leaf/3 below is therefore a
+            %% conditional-branch one -- orphaned by construction.
+            Expr;
+        false ->
+            map_tail_exprs(
+                Expr,
+                fun(Leaf) -> expand_element_leaf(Leaf, Module, Backend) end,
+                fun(NonTail) -> NonTail end
+            )
+    end.
 
 %% At a tail leaf, compile a bare element tuple / element list (or a mixed list
 %% that contains an element tuple) into a nested template, as a literal ?html
-%% there would; leave plain values (and pure value lists) untouched.
+%% there would; leave plain values (and pure value lists) untouched. A ?local
+%% leaf is rejected: a conditional-branch ?local emits no az-local descriptor
+%% (see reject_orphaned_local/1).
 expand_element_leaf(Expr, Module, Backend) ->
+    ok = reject_orphaned_local(Expr),
     case classify_body(Expr) of
         Class when Class =:= element_tuple; Class =:= element_list ->
             compile_template(Expr, line(Expr), Module, false, Backend);

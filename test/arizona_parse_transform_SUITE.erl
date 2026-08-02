@@ -286,6 +286,9 @@
     local_in_each_renders/1,
     local_atom_key/1,
     local_atom_binary_reuse_error/1,
+    local_orphaned_fragment_top_error/1,
+    local_orphaned_conditional_branch_error/1,
+    local_orphaned_whole_body_error/1,
     ssr_escapes_content_value/1,
     ssr_escapes_attr_value/1,
     ssr_escape_all_unsafe_chars/1,
@@ -417,7 +420,10 @@ groups() ->
             local_attr_in_raw_text_ok,
             local_in_each_renders,
             local_atom_key,
-            local_atom_binary_reuse_error
+            local_atom_binary_reuse_error,
+            local_orphaned_fragment_top_error,
+            local_orphaned_conditional_branch_error,
+            local_orphaned_whole_body_error
         ]},
         %% Tests 26-39: template/2 (each) tests
         {each, [parallel], [
@@ -1269,6 +1275,49 @@ local_atom_binary_reuse_error(Config) when is_list(Config) ->
         "            [arizona_template:local(<<\"x\">>, <<\"y\">>)]}"
         "    ). ",
         fun(R) -> R =:= local_key_reused end
+    ).
+
+%% A ?local at the top level of a fragment has no enclosing element to carry
+%% the az-local descriptor: the client could never bind the key, so
+%% set/set_all would be silent no-ops. Compile error (before the fix it
+%% rendered the init with no descriptor anywhere).
+local_orphaned_fragment_top_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_orphan_frag). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html([{'span', [], [<<\"x\">>]}, "
+        "        arizona_template:local(count, 0)]). ",
+        fun(R) -> R =:= local_orphaned end
+    ).
+
+%% A ?local as a bare conditional-branch value never reaches the enclosing
+%% element's descriptor scan (the child is the case expr, not the local), so
+%% the key would be unreachable -- and a conditionally-present local makes no
+%% sense against a static descriptor. Compile error.
+local_orphaned_conditional_branch_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_orphan_cond). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(open, Bindings) of"
+        "            true -> arizona_template:local(k, <<\"v\">>);"
+        "            false -> <<>>"
+        "        end"
+        "    ]}). ",
+        fun(R) -> R =:= local_orphaned end
+    ).
+
+%% A whole-template-body ?local (`?html(?local(...))`) is equally orphaned:
+%% no element wraps the slot, so no az-local descriptor is emitted.
+local_orphaned_whole_body_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_local_orphan_body). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html(arizona_template:local(k, <<\"v\">>)). ",
+        fun(R) -> R =:= local_orphaned end
     ).
 
 %% Test 1: Static-only element -- no dynamics, single static binary.
