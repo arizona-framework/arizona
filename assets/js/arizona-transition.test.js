@@ -259,6 +259,24 @@ describe('view transitions -- az-transition attribute', () => {
         _mock.simulateMessage([replaceOp('Detail')]);
         expect(fn).not.toHaveBeenCalled();
     });
+
+    it('stamps outgoing scroll and transition in ONE replaceState (Safari rate-limits)', () => {
+        document.body.innerHTML =
+            '<div id="page" az-view>' +
+            '<a id="lnk" href="/x" az-navigate az-transition="slide">go</a></div>';
+        const replaceSpy = vi.spyOn(history, 'replaceState');
+        document
+            .getElementById('lnk')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+        // One merged write: separate _azScroll and _azTransition replaceState
+        // calls double the history writes per nav, tripping Safari's ~100/30s
+        // SecurityError rate limit twice as fast.
+        expect(replaceSpy).toHaveBeenCalledTimes(1);
+        const state = replaceSpy.mock.calls[0][0];
+        expect(state._azScroll).toEqual({ x: window.scrollX, y: window.scrollY });
+        expect(state._azTransition).toEqual({ types: ['slide'], kind: 'replace' });
+        replaceSpy.mockRestore();
+    });
 });
 
 // ---------------------------------------------------------------------------

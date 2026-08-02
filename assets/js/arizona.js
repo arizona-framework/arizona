@@ -289,13 +289,17 @@ function applyScroll(p) {
  * (keeping the view) rather than the default navigate -- important when the
  * entry was a full page load, which carries no tag of its own. The server still
  * corrects the verb (a cross-handler patch falls back to navigate), so the tag
- * is only a hint.
+ * is only a hint. A pending view transition is stamped (`_azTransition`) in the
+ * SAME write, so back/forward across the edge replays it -- one replaceState per
+ * outgoing entry, not one per concern (Safari rate-limits history writes to
+ * ~100/30s, then throws SecurityError).
  * @param {string} [navKind]
  */
 function saveCurrentScroll(navKind) {
     const st = history.state || {};
     const next = { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } };
     if (navKind === 'patch') next._azNav = 'patch';
+    if (_pendingTransition) next._azTransition = _pendingTransition;
     history.replaceState(next, '', location.href);
 }
 
@@ -410,16 +414,6 @@ function withTransitionAttr(el, cmds) {
     return t ? [JS_TRANSITION, t, cmds] : cmds;
 }
 
-/**
- * Stamp the pending transition opts onto the current (outgoing) history entry,
- * preserving existing state (e.g. _azScroll), so back/forward across this edge
- * replays the transition.
- */
-function stampOutgoingTransition() {
-    const st = history.state || {};
-    history.replaceState({ ...st, _azTransition: _pendingTransition }, '', location.href);
-}
-
 // The user-facing query string carried to the worker for the next reconnect
 // after an SPA navigation: the navigated-to page qs plus the connection-level
 // `connect()` extras (constant across navigations). The worker replaces the
@@ -468,8 +462,9 @@ function navigateTo(path, qs, hash, opts) {
     if (opts.replace) {
         history.replaceState(state, '', fullUrl);
     } else {
+        // One replaceState: saveCurrentScroll stamps scroll, patch tag, AND any
+        // pending transition onto the outgoing entry together.
         saveCurrentScroll(kind);
-        if (_pendingTransition) stampOutgoingTransition();
         history.pushState(state, '', fullUrl);
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash, patch: kind === 'patch' };
     }
