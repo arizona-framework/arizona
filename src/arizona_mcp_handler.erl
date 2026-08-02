@@ -642,19 +642,33 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
             %% Stateless: a fresh per-request session; the worker frees the loop
             %% to push, and any state it mutates is per-request and discarded.
             %% page_size is irrelevant to a tools/call -- the default suffices.
-            {_ServerInfo, Session} = open_session(Mod, #{}, ?DEFAULT_PAGE_SIZE),
-            Ctx = #{token => Token, to => ConnPid},
-            %% Linked, so the worker dies with the connection it serves: the
-            %% clean disconnect below kills it explicitly, but a conn that dies
-            %% without running that path (the `exit(Pid, shutdown)` a listener
-            %% drain sends, a conn crash) has no other reaper -- a stateless
-            %% worker has no session, no monitor, and no TTL, so a blocking tool
-            %% would otherwise run for the life of the node.
-            Worker = spawn_link(fun() ->
-                ok = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
-            end),
-            %% Track the worker so a client disconnect kills it.
-            stream_loop(#{mcp_post_stream => true, worker => Worker});
+            %% A crashing `init/1` is guarded like every sibling path (the
+            %% buffered stateless leg via reply_dispatch's guard, the session
+            %% initialize via its own try/catch): answer `-32603` rather than
+            %% dropping the socket.
+            try open_session(Mod, #{}, ?DEFAULT_PAGE_SIZE) of
+                {_ServerInfo, Session} ->
+                    Ctx = #{token => Token, to => ConnPid},
+                    %% Linked, so the worker dies with the connection it serves:
+                    %% the clean disconnect below kills it explicitly, but a conn
+                    %% that dies without running that path (the
+                    %% `exit(Pid, shutdown)` a listener drain sends, a conn
+                    %% crash) has no other reaper -- a stateless worker has no
+                    %% session, no monitor, and no TTL, so a blocking tool would
+                    %% otherwise run for the life of the node.
+                    Worker = spawn_link(fun() ->
+                        ok = run_streaming_tool(Session, Name, Args, Id, Ctx, ConnPid)
+                    end),
+                    %% Track the worker so a client disconnect kills it.
+                    stream_loop(#{mcp_post_stream => true, worker => Worker})
+            catch
+                Class:Reason:Stacktrace ->
+                    logger:error(
+                        "MCP streaming init crashed: ~ts:~tp~n~tp",
+                        [Class, Reason, Stacktrace]
+                    ),
+                    json(arizona_jsonrpc:error(Id, -32603, ~"Internal error"))
+            end;
         true ->
             case roadrunner_req:header(~"mcp-session-id", Req) of
                 undefined ->

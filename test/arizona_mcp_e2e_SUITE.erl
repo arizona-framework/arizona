@@ -44,7 +44,8 @@
     session_max_sessions_503/1,
     auth_missing_token_401/1,
     auth_valid_token_ok/1,
-    session_init_crash_internal_error/1
+    session_init_crash_internal_error/1,
+    stateless_streaming_init_crash_internal_error/1
 ]).
 
 -define(LISTENER, arizona_mcp_e2e).
@@ -92,7 +93,8 @@ all() ->
         session_max_sessions_503,
         auth_missing_token_401,
         auth_valid_token_ok,
-        session_init_crash_internal_error
+        session_init_crash_internal_error,
+        stateless_streaming_init_crash_internal_error
     ].
 
 init_per_suite(Config) ->
@@ -115,6 +117,7 @@ init_per_suite(Config) ->
             origins => [?ALLOWED_ORIGIN],
             auth => Auth
         }},
+        {mcp, ~"/mcp-crash", arizona_mcp_crashing_server, #{origins => [?ALLOWED_ORIGIN]}},
         {mcp, ~"/mcp-session-crash", arizona_mcp_crashing_server, #{
             origins => [?ALLOWED_ORIGIN],
             sessions => true
@@ -699,6 +702,21 @@ session_init_crash_internal_error(Config) ->
     Resp = post(Config, "/mcp-session-crash", [], initialize_body()),
     ?assertEqual(200, status_code(Resp)),
     ?assertMatch(#{~"error" := #{~"code" := -32603}}, body_json(Resp)).
+
+%% A crashing init/1 on the stateless STREAMING leg (a token-bearing tools/call
+%% from an SSE-accepting client) must answer -32603 like every sibling path --
+%% the buffered stateless leg (reply_dispatch's guard) and the session
+%% initialize (its own try/catch) -- not drop the socket.
+stateless_streaming_init_crash_internal_error(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":50,"method":"tools/call",
+     "params":{"name":"block","arguments":{},"_meta":{"progressToken":"t"}}}
+    """,
+    Headers = ["Accept: application/json, text/event-stream\r\n"],
+    Resp = post(Config, "/mcp-crash", Headers, Body),
+    ?assertEqual(200, status_code(Resp)),
+    ?assertMatch(#{~"id" := 50, ~"error" := #{~"code" := -32603}}, body_json(Resp)).
 
 %% --------------------------------------------------------------------
 %% Helpers
