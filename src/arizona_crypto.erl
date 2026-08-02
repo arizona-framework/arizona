@@ -277,10 +277,16 @@ mac_message(Purpose, Tagged) ->
     <<(byte_size(Purpose)):32, Purpose/binary, Tagged/binary>>.
 
 %% The clock is injected so the expiry boundary is deterministically testable.
+%% The candidate keys are resolved OUTSIDE the try: a missing `secret_key` (or a
+%% broken `secret_key_previous` env reference) is a node misconfiguration that
+%% must raise loudly, exactly as the write paths (sign/encrypt) do -- swallowed
+%% into the tampered-value `error` it would silently sign every user out with
+%% nothing logged. Only failures on the attacker-controllable value map to `error`.
 do_decrypt(Purpose, Encrypted, Now) ->
+    Keys = candidate_keys(),
     try
         <<IV:?IV_SIZE/binary, Tag:?TAG_SIZE/binary, Cipher/binary>> = unb64(Encrypted),
-        case decrypt_candidates(candidate_keys(), Purpose, IV, Cipher, Tag) of
+        case decrypt_candidates(Keys, Purpose, IV, Cipher, Tag) of
             error -> error;
             Plaintext -> unwrap(Plaintext, Now)
         end
@@ -313,12 +319,14 @@ candidate_keys() ->
     [secret() | arizona_config:get_env(secret_key_previous, [])].
 
 %% The clock is injected so the expiry boundary is deterministically testable.
+%% Candidate keys resolved outside the try -- see `do_decrypt/3`.
 do_verify(Purpose, Signed, Now) ->
+    Keys = candidate_keys(),
     try
         [B64Tagged, B64Sig] = binary:split(Signed, ~"."),
         Tagged = unb64(B64Tagged),
         Sig = unb64(B64Sig),
-        case verify_candidates(candidate_keys(), mac_message(Purpose, Tagged), Sig) of
+        case verify_candidates(Keys, mac_message(Purpose, Tagged), Sig) of
             true -> unwrap(Tagged, Now);
             false -> error
         end
