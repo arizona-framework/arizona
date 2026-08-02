@@ -24,6 +24,9 @@
     effect_push_event/1,
     effect_child_update_reaches_reply/1,
     effect_child_update_combines_with_event/1,
+    effect_grandchild_update_reaches_child_reply/1,
+    effect_grandchild_update_combines_with_child_event/1,
+    effect_grandchild_update_reaches_child_push/1,
     handle_update_child_event_then_parent/1,
     live_child_event/1,
     live_child_multiple_events/1,
@@ -77,11 +80,16 @@
     nested_stateful_child_event/1,
     nested_stateful_grandchild_survives_root_skip/1,
     nested_stateful_grandchild_unmounted_on_removal/1,
+    child_diff_dep_skips_unchanged_grandchild/1,
     nested_local_diff_skipped/1,
     nested_local_set_effect/1,
     unmount_on_navigate/1,
     unmount_timer_cancelled_on_navigate/1,
     unmount_on_terminate/1,
+    unmount_children_on_navigate/1,
+    unmount_children_on_terminate/1,
+    removed_child_timer_cancelled/1,
+    fired_timer_ref_pruned/1,
     live_reaped_on_transport_disconnect/1,
     child_in_stream_survives_dep_skip/1,
     child_in_stream_removed_on_delete/1,
@@ -115,6 +123,7 @@ groups() ->
             nested_stateful_child_event,
             nested_stateful_grandchild_survives_root_skip,
             nested_stateful_grandchild_unmounted_on_removal,
+            child_diff_dep_skips_unchanged_grandchild,
             nested_local_diff_skipped,
             nested_local_set_effect,
             live_mount,
@@ -153,7 +162,10 @@ groups() ->
             effect_child_event_with_effects,
             effect_child_event_no_effects,
             effect_child_update_reaches_reply,
-            effect_child_update_combines_with_event
+            effect_child_update_combines_with_event,
+            effect_grandchild_update_reaches_child_reply,
+            effect_grandchild_update_combines_with_child_event,
+            effect_grandchild_update_reaches_child_push
         ]},
         {navigation, [parallel], [
             live_navigate,
@@ -184,6 +196,10 @@ groups() ->
             unmount_on_navigate,
             unmount_timer_cancelled_on_navigate,
             unmount_on_terminate,
+            unmount_children_on_navigate,
+            unmount_children_on_terminate,
+            removed_child_timer_cancelled,
+            fired_timer_ref_pruned,
             live_reaped_on_transport_disconnect,
             child_in_stream_survives_dep_skip,
             child_in_stream_removed_on_delete,
@@ -299,6 +315,26 @@ nested_stateful_grandchild_unmounted_on_removal(Config) when is_list(Config) ->
         error(timeout)
     end.
 
+child_diff_dep_skips_unchanged_grandchild(Config) when is_list(Config) ->
+    %% A CHILD-targeted event must diff through the dep-gated fast path like the
+    %% root does: an event changing only `label` leaves the grandchild slot's
+    %% deps (`value`) untouched, so the grandchild descriptor is skipped -- its
+    %% handle_update/3 must NOT run (observable: no folded push_event effect)
+    %% and the only op is the label slot's. Before the fix the child path used
+    %% the full re-eval diff/3, re-running every grandchild handle_update.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_root, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"relabel">>, #{}),
+    ?assertEqual([], Effects),
+    ?assertMatch([[?OP_TEXT, _, <<"relabelled">>]], Ops),
+    %% The skipped grandchild survived the dep skip: a value bump still reaches
+    %% it (handle_update runs, its effect ships, its slot re-renders).
+    {ok, BumpOps, BumpEffects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
+    ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], BumpEffects),
+    ?assertMatch([[<<"uep_child">>, [[?OP_TEXT, _, <<"1">>]]]], BumpOps).
+
 %% A ?local inside a stateful child is diff-skipped both when the child handles
 %% its own event AND when a parent update propagates new props down -- only the
 %% changed server-owned parts produce ops, never the client-owned slot.
@@ -404,7 +440,7 @@ live_connected_event(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% mount sends self() ! arizona_connected, handle_info pushes to transport
     receive
-        {arizona_push, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects} ->
             ?assertMatch([[?OP_TEXT, _, <<"Connected">>]], Ops),
             ?assertEqual([{arizona_effect, [14, <<"Welcome">>]}], Effects)
     after 1000 ->
@@ -766,6 +802,53 @@ effect_child_update_combines_with_event(Config) when is_list(Config) ->
         Effects
     ).
 
+effect_grandchild_update_reaches_child_reply(Config) when is_list(Config) ->
+    %% A CHILD-targeted event (root -> mid -> grandchild; the event hits the
+    %% mid) changes the grandchild's prop; the grandchild's handle_update/3
+    %% folds a push_event effect onto the accumulator during the child diff.
+    %% process_child_change must seed/drain the accumulator exactly like the
+    %% root path -- before the fix the effect was silently dropped (the child
+    %% reply carried only the mid's own effects).
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_root, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
+    %% op 0 = ?EFFECT_PUSH_EVENT (literal, matching this suite's effect assertions).
+    ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects).
+
+effect_grandchild_update_combines_with_child_event(Config) when is_list(Config) ->
+    %% The mid's own event effect (set_title) seeds the accumulator; the
+    %% grandchild's handle_update threads it, prepending its push_event. BOTH
+    %% ship on the child reply, in order -- the seed -> thread -> combine path
+    %% on the CHILD-targeted topology.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_root, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump_titled">>, #{}),
+    %% op 0 = ?EFFECT_PUSH_EVENT (grandchild, prepended), op 14 = ?EFFECT_SET_TITLE (seeded).
+    ?assertEqual(
+        [{arizona_effect, [0, <<"child_updated">>]}, {arizona_effect, [14, <<"titled">>]}],
+        Effects
+    ).
+
+effect_grandchild_update_reaches_child_push(Config) when is_list(Config) ->
+    %% Same topology via the CHILD info path: a ?send-routed message to the mid
+    %% changes the grandchild's prop; the grandchild's handle_update effect must
+    %% ride the resulting transport push.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_update_effect_root, #{}, self(), []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    Pid ! {arizona_view, <<"uep">>, bump},
+    receive
+        {arizona_push, _, _Ops, Effects} ->
+            ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects)
+    after 1000 ->
+        error(timeout)
+    end.
+
 %% =============================================================================
 %% SPA navigation tests
 %% =============================================================================
@@ -862,7 +945,7 @@ live_navigate_then_event(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain the arizona_connected push from page mount
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> ct:fail(timeout)
     end,
     %% Navigate to about
@@ -871,7 +954,7 @@ live_navigate_then_event(Config) when is_list(Config) ->
     ),
     %% About's mount sends arizona_connected via handle_info
     receive
-        {arizona_push, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects} ->
             %% About's connected doesn't change bindings, so no ops
             ?assertEqual([], Ops),
             %% But produces set_title effect
@@ -977,7 +1060,7 @@ live_handle_info(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {set_message, <<"hello">>},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"hello">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -990,7 +1073,7 @@ live_handle_info_with_effects(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {set_message_with_effect, <<"hi">>},
     receive
-        {arizona_push, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects} ->
             ?assertMatch([[?OP_TEXT, _, <<"hi">>]], Ops),
             ?assertEqual(
                 [
@@ -1010,7 +1093,7 @@ live_handle_info_no_callback(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! some_message,
     receive
-        {arizona_push, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1022,7 +1105,7 @@ live_handle_info_before_mount(Config) when is_list(Config) ->
     ),
     Pid ! {set_message, <<"hello">>},
     receive
-        {arizona_push, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1036,7 +1119,7 @@ live_handle_info_no_change(Config) when is_list(Config) ->
     %% Re-set message to the same default value
     Pid ! {set_message, <<"none">>},
     receive
-        {arizona_push, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1054,7 +1137,7 @@ live_handle_info_after_navigate(Config) when is_list(Config) ->
     %% Send message after navigate -- should still push
     Pid ! {set_message, <<"after_nav">>},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"after_nav">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1069,7 +1152,7 @@ live_handle_info_undefined_transport(Config) when is_list(Config) ->
     Pid ! {set_message, <<"hello">>},
     %% No crash, no push
     receive
-        {arizona_push, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1083,7 +1166,7 @@ live_send_to_root(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"via send">>}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"via send">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1096,13 +1179,13 @@ live_send_to_child(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push from page mount
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Send to child counter view
     Pid ! {arizona_view, <<"counter">>, {set_count, 99}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"99">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1143,7 +1226,7 @@ live_send_after_to_root(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"delayed">>}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"delayed">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1162,7 +1245,7 @@ unmount_on_navigate(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Navigate to page -- should not crash
@@ -1177,19 +1260,19 @@ unmount_timer_cancelled_on_navigate(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push (which also starts the tick timer)
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Navigate to page -- cancels pending timers
     {ok, _, _} = arizona_live:navigate(Pid, arizona_page, #{}),
     %% Drain page's arizona_connected push
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Wait -- no tick should arrive (timer was cancelled)
     receive
-        {arizona_push, _, _} -> error(unexpected_tick_push)
+        {arizona_push, _, _, _} -> error(unexpected_tick_push)
     after 1500 ->
         ok
     end.
@@ -1209,6 +1292,89 @@ unmount_on_terminate(Config) when is_list(Config) ->
     after 1000 ->
         error(timeout)
     end.
+
+unmount_children_on_navigate(Config) when is_list(Config) ->
+    %% Embedded child views' unmount/1 must fire on navigate: the old root's
+    %% children are discarded wholesale (the views map is wiped), which is a
+    %% removal -- the same contract as diff-removal. A child that subscribes in
+    %% mount/1 and unsubscribes in unmount/1 would otherwise leak its
+    %% subscription into the new page.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:navigate(Pid, arizona_root_counter, #{}),
+    %% Children unmount before the root, mirroring removal semantics.
+    receive
+        Msg1 -> ?assertEqual({child_unmounted, ~"uchild"}, Msg1)
+    after 1000 -> error(timeout_child_unmount)
+    end,
+    receive
+        Msg2 -> ?assertEqual({root_unmounted, ~"uparent"}, Msg2)
+    after 1000 -> error(timeout_root_unmount)
+    end.
+
+unmount_children_on_terminate(Config) when is_list(Config) ->
+    %% Same contract when the live process terminates (stop/1 -> terminate/2):
+    %% child unmounts fire before the root's, for any graceful exit.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    ok = arizona_live:stop(Pid),
+    receive
+        Msg1 -> ?assertEqual({child_unmounted, ~"uchild"}, Msg1)
+    after 1000 -> error(timeout_child_unmount)
+    end,
+    receive
+        Msg2 -> ?assertEqual({root_unmounted, ~"uparent"}, Msg2)
+    after 1000 -> error(timeout_root_unmount)
+    end.
+
+removed_child_timer_cancelled(Config) when is_list(Config) ->
+    %% The dismissed-early toast: a child arms a ?send_after, then a parent
+    %% event removes the child before the timer fires. Removal must cancel the
+    %% removed view's timers (and flush any queued messages), or the late fire
+    %% routes {arizona_view, <<"toast">>, close} to a pruned view and crashes
+    %% the WHOLE live session with unknown_view.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_toast_parent, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"toast">>, <<"arm">>, #{~"delay" => 300}),
+    {ok, _, _} = arizona_live:handle_event(Pid, <<"tp">>, <<"hide">>, #{}),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    receive
+        {'DOWN', Ref, process, Pid, Reason} -> error({live_process_crashed, Reason})
+    after 1000 -> ok
+    end,
+    ?assert(is_process_alive(Pid)).
+
+fired_timer_ref_pruned(Config) when is_list(Config) ->
+    %% A fired timer's ref must be pruned from the tracked set when its message
+    %% is delivered -- the re-arming tick idiom must not accumulate a dead ref
+    %% per fire for the lifetime of the page.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_toast, #{id => <<"toast">>}, self(), []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    ArmAndFire = fun() ->
+        {ok, _, _} = arizona_live:handle_event(Pid, <<"toast">>, <<"arm">>, #{~"delay" => 1}),
+        %% Each fire increments `closes`, so the push confirms the delivery
+        %% (and thus the prune) happened.
+        receive
+            {arizona_push, _, _, _} -> ok
+        after 1000 -> error(timeout_waiting_for_close_push)
+        end
+    end,
+    ok = ArmAndFire(),
+    ok = ArmAndFire(),
+    ok = ArmAndFire(),
+    {dictionary, Dict} = erlang:process_info(Pid, dictionary),
+    %% Tracked timers are keyed by view id; every fired ref has been pruned on
+    %% delivery, so after the last fire nothing is tracked at all.
+    ?assertEqual(#{}, proplists:get_value('$arizona_timers', Dict, #{})).
 
 live_reaped_on_transport_disconnect(Config) when is_list(Config) ->
     %% The live process is start_linked to its transport (the WS session
@@ -1261,7 +1427,7 @@ child_in_stream_survives_dep_skip(Config) when is_list(Config) ->
     %% Now send to the child inside the stream -- should NOT crash with unknown_view.
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 42}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"42">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1305,14 +1471,14 @@ multiple_children_in_stream_survive_dep_skip(Config) when is_list(Config) ->
     %% Both children should still be routable
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
-        {arizona_push, Ops1, []} ->
+        {arizona_push, _, Ops1, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"10">>]], Ops1)
     after 1000 ->
         error(timeout)
     end,
     Pid ! {arizona_view, <<"counter-2">>, {set_count, 20}},
     receive
-        {arizona_push, Ops2, []} ->
+        {arizona_push, _, Ops2, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"20">>]], Ops2)
     after 1000 ->
         error(timeout)
@@ -1327,7 +1493,7 @@ child_in_stream_survives_item_update(Config) when is_list(Config) ->
     %% Set counter-1 to 5
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 5}},
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Update item 1's label -- child should survive with count=5
@@ -1337,7 +1503,7 @@ child_in_stream_survives_item_update(Config) when is_list(Config) ->
     %% Verify counter-1 still has count=5 (handle_update merges, keeps count)
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 7}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"7">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1357,7 +1523,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     %% counter-1 should be routable
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
-        {arizona_push, Ops1, []} ->
+        {arizona_push, _, Ops1, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"10">>]], Ops1)
     after 1000 ->
         error(timeout)
@@ -1365,7 +1531,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     %% extra-1 should also be routable
     Pid ! {arizona_view, <<"extra-1">>, {set_count, 20}},
     receive
-        {arizona_push, Ops2, []} ->
+        {arizona_push, _, Ops2, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"20">>]], Ops2)
     after 1000 ->
         error(timeout)
@@ -1388,7 +1554,7 @@ on_mount_transforms_bindings(Config) when is_list(Config) ->
     %% For a stronger test, send set_message and verify the process is alive.
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"hello">>}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"hello">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1408,7 +1574,7 @@ on_mount_works_on_navigate(Config) when is_list(Config) ->
     %% Verify process is alive and functional
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"after_nav">>}},
     receive
-        {arizona_push, Ops, []} ->
+        {arizona_push, _, Ops, []} ->
             ?assertMatch([[?OP_TEXT, _, <<"after_nav">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1433,7 +1599,7 @@ on_mount_pipeline(Config) when is_list(Config) ->
     %% Both hooks ran -- step should be 2
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"ok">>}},
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 ->
         error(timeout)
     end.

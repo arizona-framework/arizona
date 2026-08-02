@@ -1205,7 +1205,7 @@ page_connected_event_skips_stream(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% Drain the arizona_connected push from mount
     receive
-        {arizona_push, _, _} -> ok
+        {arizona_push, _, _, _} -> ok
     after 1000 -> ct:fail(timeout)
     end,
     %% Add 1 todo
@@ -3033,7 +3033,7 @@ datatable_live_connected(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     %% mount sends self() ! arizona_connected, handle_info pushes to transport
     receive
-        {arizona_push, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects} ->
             ?assertEqual([], Ops),
             ?assertEqual([{arizona_effect, [14, <<"DataTable">>]}], Effects)
     after 1000 ->

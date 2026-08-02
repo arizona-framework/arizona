@@ -13,7 +13,7 @@ changes.
 
 It is parameterized by a driver module and an output function `t:out/0`
 (`fun((iodata()) -> ok)`). The owning process becomes the live view's transport: it
-must forward each `{arizona_push, _, Effects}` it receives to `handle_push/2`, key
+must forward each `{arizona_push, _, _, Effects}` it receives to `handle_push/2`, key
 reads to `handle_key/2`, and terminal resizes to `resize/3`.
 """.
 
@@ -108,7 +108,7 @@ handle_key(#session{driver = Driver, dstate = DState} = Session, Input) ->
     end.
 
 -doc """
-Handles a live-process push (the `Effects` from an `{arizona_push, _, Effects}` the
+Handles a live-process push (the `Effects` from an `{arizona_push, _, _, Effects}` the
 owning process received): repaints via the driver, returning `quit` if the driver
 stops.
 """.

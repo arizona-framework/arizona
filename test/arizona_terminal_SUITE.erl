@@ -166,7 +166,7 @@ broadcast_pushes_log_effect(Config) when is_list(Config) ->
     {ok, _ViewId} = arizona_live:mount(Pid),
     ok = arizona_pubsub:broadcast(demo, {chat, ~"hello there"}),
     receive
-        {arizona_push, _Ops, Effects} ->
+        {arizona_push, _, _Ops, Effects} ->
             ?assertEqual([~"hello there"], arizona_term_demo_driver:log_lines(Effects))
     after 2000 ->
         ct:fail(no_push_received)

@@ -787,7 +787,7 @@ Simplified gen_server wrapper:
   root handler. Returns `{ok, Ops, Effects}`
 - `handle_info/2` -- gen_server callback for Erlang messages (`Pid ! Msg`, `erlang:send_after`,
   etc.). If handler exports `handle_info/2`, calls it, diffs, and pushes
-  `{arizona_push, Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without
+  `{arizona_push, RootViewId, Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without
   `handle_info/2` are silently dropped. Empty ops+effects are not pushed
 - `navigate/3,4` -- `navigate(Pid, NewHandler, InitBindings [, OnMount])`. Mounts new
   handler (applying any `OnMount` hooks), resets gen_server state
@@ -812,8 +812,9 @@ fingerprints already shipped to the client for deduplication.
 
 `compute_changed/2` builds the Changed map by comparing old and new bindings key-by-key.
 
-`push/3` sends `{arizona_push, Ops, Effects}` to the transport PID. No-ops when PID is `undefined`
-or ops and effects are both empty.
+`push/4` sends `{arizona_push, RootViewId, Ops, Effects}` to the transport PID -- `RootViewId`
+names the emitting page's root view, so a transport can drop a push that raced a navigate.
+No-ops when PID is `undefined` or ops and effects are both empty.
 
 ## API -- `arizona_socket.erl`
 
@@ -829,10 +830,12 @@ lives here independent of the server.
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
   `["navigate", #{~"path" := Path, ~"qs" := Qs}]` (replace), `["patch", #{~"path", ~"qs"}]`
   (in-place, same-handler -> `patch/2`, else falls back to navigate), `[target, event, payload]`
-- `handle_info/2` -- handle `{arizona_push, Ops, Effects}` from `arizona_live` and `EXIT` signals.
-  On non-normal exit the socket closes with `?CLOSE_CRASH` (4500); on normal exit with 1000. The
-  client reconnects via backoff in `arizona-worker.js` -- crash remount is intentionally not
-  attempted server-side
+- `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live` (dropped
+  when `ViewId` is no longer the socket's current root -- a push that raced a navigate) and
+  `EXIT` signals. On non-normal exit the socket closes with `?CLOSE_CRASH` (4500); on normal
+  exit with 1000. The client reconnects via backoff in `arizona-worker.js` -- crash remount is
+  intentionally not attempted server-side. On a synchronous event/patch reply, pushes already
+  queued in the socket mailbox are folded into the reply frame first (causal wire order)
 
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{close, Code, Reason, Socket}`
@@ -840,8 +843,10 @@ lives here independent of the server.
 The `#socket{}` record carries `pid, view_id, handler, req, pending_flash` -- the post-mount
 state needed to dispatch events and navigate. `handler` is the current root handler (so a
 `patch` frame can tell same-handler in-place patch from a full navigate), and `pending_flash`
-holds a one-shot flash carried in-process across an SPA navigate/patch. The route adapter is
-recovered from `req` on demand.
+holds a one-shot flash carried in-process across an SPA navigate/patch. Flash over a WS
+navigate requires a live destination: a target that degrades to a full-page navigation
+destroys the socket (and a WS frame has no `Set-Cookie` leg), so the stashed flash is dropped
+with a logged warning. The route adapter is recovered from `req` on demand.
 
 Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply/3` (build
 `#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `close_crash/1` (crash close tuple),
@@ -936,7 +941,9 @@ adapter's behaviour callbacks on first access and cached in the returned request
   `undefined`
 - flash (one-request): `put_flash/3` (set), `flash/1` (read) -- signed messages cleared on read;
   survive a full-page HTTP redirect (signed `az_flash` cookie) and a WebSocket SPA navigate
-  (`arizona_socket` in-process carry, exactly-once, no cookie)
+  (`arizona_socket` in-process carry, exactly-once, no cookie). The WS carry needs a live
+  destination -- a navigate that degrades to a full-page navigation drops the flash with a
+  logged warning
 - session (durable): `put_session/3`, `delete_session/2`, `clear_session/1`, `session/1`,
   `get_session/2,3`, `read_session/1` -- encrypted state; a read does not consume, the response
   re-emits the cookie only on a write
@@ -1068,7 +1075,7 @@ correct handler's `handle_info/2` -- root or child. The root view ID is matched 
 backward compatibility. Delayed sends use `?send_after(Time, Msg)` /
 `arizona_live:send_after(ViewId, Time, Msg)`. PubSub subscriptions use `?subscribe(Topic)` /
 `?unsubscribe(Topic)`. After `handle_info/2` returns, the template is re-rendered and diffed, and
-ops+effects are sent as `{arizona_push, Ops, Effects}` to the transport PID.
+ops+effects are sent as `{arizona_push, RootViewId, Ops, Effects}` to the transport PID.
 
 **Events:** Client sends `[target, eventName, payload]` over WebSocket. `arizona_roadrunner_ws`
 dispatches to `arizona_live:handle_event/4`. The gen_server checks the views map -- if target is a

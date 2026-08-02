@@ -86,6 +86,9 @@ The live process is linked. Exits map to WebSocket close codes:
     %% frame has no `Set-Cookie` leg, so a flash set by a halting middleware (or an
     %% `arizona_js:navigate`/`patch` `flash` opt) rides the socket to the follow-up
     %% frame, where `take_pending_flash/2` injects it into the resolved request.
+    %% Delivery therefore requires the follow-up target to resolve to a LIVE
+    %% route: a target that degrades to a full-page navigation destroys the
+    %% socket, so the flash is dropped with a warning (`drop_pending_flash/2`).
     pending_flash = #{} :: arizona_req:flash()
 }).
 
@@ -203,7 +206,8 @@ handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
             ViewId = event_target(Target, RootViewId),
             try dispatch_event(Pid, ViewId, Event, Payload) of
                 {AllOps, AllEffects} ->
-                    encode_reply(AllOps, AllEffects, Socket)
+                    {PendOps, PendEffects} = drain_pending_pushes(Socket),
+                    encode_reply(PendOps ++ AllOps, PendEffects ++ AllEffects, Socket)
             catch
                 Class:Reason:Stacktrace ->
                     logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
@@ -231,15 +235,22 @@ live_pid(#socket{pid = Pid}) -> Pid.
 -doc """
 Handles inbox messages forwarded by the transport.
 
-Routes `{arizona_push, Ops, Effects}` from the live process into a
-reply frame. Handles `'EXIT'` from the linked live process per the
-mapping in this module's "Exit handling" section.
+Routes `{arizona_push, ViewId, Ops, Effects}` from the live process into
+a reply frame -- but only when `ViewId` (the emitting page's root view id)
+is still the socket's current one. A push emitted just before a navigate
+is processed after it; retagging it with the new page's id would deliver
+stale ops into the fresh view, so it is dropped instead. Handles `'EXIT'`
+from the linked live process per the mapping in this module's
+"Exit handling" section.
 """.
 -spec handle_info(Info, Socket) -> result() when
     Info :: term(),
     Socket :: socket().
-handle_info({arizona_push, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
+handle_info({arizona_push, ViewId, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
     encode_reply(flatten_ops(ViewId, Ops), Effects, Socket);
+handle_info({arizona_push, _StaleViewId, _Ops, _Effects}, Socket) ->
+    %% Emitted by a page this socket already navigated away from -- drop.
+    {ok, Socket};
 handle_info({'EXIT', Pid, {shutdown, drain}}, #socket{pid = Pid} = Socket) ->
     %% Drain-initiated graceful exit. Close with 1001 (going away) so the
     %% JS client's auto-reconnect path runs (Worker treats any non-1000
@@ -314,13 +325,31 @@ resolve_route(Path, Qs, Req) ->
 %% re-request it over the socket in a loop. Instead of crashing the live session,
 %% tell the client to do a real full-page navigation to the path -- the browser
 %% loads it normally (hitting the actual controller/asset or a 404 page).
-full_navigate(Path, Qs, Socket) ->
+full_navigate(Path, Qs, Socket0) ->
+    Socket = drop_pending_flash(Path, Socket0),
     Url =
         case Qs of
             <<>> -> Path;
             _ -> <<Path/binary, "?", Qs/binary>>
         end,
     encode_reply([], [arizona_js:navigate(Url, #{full => true})], Socket).
+
+%% A flash stashed for a WS-carried navigate can only reach a LIVE destination
+%% (do_navigate/do_patch inject it into the resolved request); a full-page
+%% navigation destroys this socket, and a WebSocket frame has no Set-Cookie leg
+%% for the signed flash cookie, so the flash cannot follow. Warn -- the
+%% app-visible symptom is a silently missing flash -- and clear the stash so it
+%% cannot leak into a later, unrelated navigate.
+drop_pending_flash(_Path, #socket{pending_flash = Flash} = Socket) when map_size(Flash) =:= 0 ->
+    Socket;
+drop_pending_flash(Path, Socket) ->
+    logger:warning(
+        "flash dropped on full-page navigation to ~s: a flash carried over a "
+        "WebSocket navigate needs a live route destination (a WS frame has no "
+        "Set-Cookie leg)",
+        [Path]
+    ),
+    Socket#socket{pending_flash = #{}}.
 
 do_navigate(H, RouteOpts, NewReq0, Socket0) ->
     {NewReq, #socket{pid = Pid, view_id = OldVId} = Socket} =
@@ -371,7 +400,10 @@ do_patch(RouteOpts, NewReq0, Socket0) ->
         {cont, _NewReq1, Bindings1} ->
             try arizona_live:patch(Pid, Bindings1) of
                 {ok, Ops, Effects} ->
-                    encode_reply(flatten_ops(ViewId, Ops), Effects, Socket)
+                    {PendOps, PendEffects} = drain_pending_pushes(Socket),
+                    encode_reply(
+                        PendOps ++ flatten_ops(ViewId, Ops), PendEffects ++ Effects, Socket
+                    )
             catch
                 %% Same drain/exit race as do_navigate (see there).
                 exit:{noproc, _} ->
@@ -429,6 +461,33 @@ event_target(_Target, RootViewId) -> RootViewId.
 dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
     {flatten_ops(ViewId, Ops), Effects}.
+
+%% Selectively receive the `{arizona_push, ...}` messages already queued in the
+%% socket process's mailbox, right after a synchronous event/patch call and
+%% BEFORE building its reply frame. Anything queued was necessarily emitted
+%% before the reply was computed (the live process pushes before returning from
+%% the call), so prepending it restores causal order on the wire: without this
+%% the reply ships first and the earlier push lands in a LATER frame, letting a
+%% stale value overwrite the reply's client-side (and keyed stream ops with
+%% relative refs can fail to apply outright). `after 0` drains only what is
+%% already queued; arrival order is preserved. A push from a page this socket
+%% already navigated away from is dropped, mirroring handle_info/2. The
+%% navigate path needs no drain: its OP_REPLACE supersedes old-page ops, and
+%% the stale-view-id drop disposes of them once processed after the reply.
+drain_pending_pushes(#socket{view_id = ViewId}) ->
+    drain_pending_pushes(ViewId, [], []).
+
+drain_pending_pushes(ViewId, OpsAcc, EffectsAcc) ->
+    receive
+        {arizona_push, ViewId, Ops, Effects} ->
+            drain_pending_pushes(
+                ViewId, [flatten_ops(ViewId, Ops) | OpsAcc], [Effects | EffectsAcc]
+            );
+        {arizona_push, _StaleViewId, _Ops, _Effects} ->
+            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc)
+    after 0 ->
+        {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc))}
+    end.
 
 %% Single chokepoint for every reply that carries effects. Before encoding, an
 %% in-view flash a handler set (an `arizona_js:navigate`/`patch` `flash` opt) is

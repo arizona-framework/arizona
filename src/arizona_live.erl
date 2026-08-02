@@ -17,7 +17,9 @@ diff pipeline.
    pushes ops back over the transport.
 3. **Info messages** -- `handle_info/2` invokes the handler's optional
    `handle_info/2` callback, diffs, and pushes the resulting ops.
-4. **Navigate** -- `navigate/3,4` unmounts the old root, cancels pending
+4. **Navigate** -- `navigate/3,4` unmounts the old page (embedded child
+   views first, then the root -- the same removal semantics as a diff
+   removal; `terminate/2` unmounts in the same order), cancels pending
    timers, and mounts the new handler. The previous root's final
    bindings are carried forward as the floor for the new mount's input
    -- `InitBindings` (route static config + middleware enrichments)
@@ -35,8 +37,11 @@ diff pipeline.
   read by `capabilities/0` / `capability/1`. A UI/effect hint only.
 - `$arizona_reconnected` -- `true` when this connection is a reconnection (vs the
   first connect); set while a transport is attached and read by `reconnected/0`.
-- `$arizona_timers` -- list of refs from `send_after/3`, drained on
-  `navigate/3,4` so stale timers don't fire after a page change.
+- `$arizona_timers` -- `#{ViewId => [Ref]}` from `send_after/3`. A fired
+  ref is pruned when its message is delivered; a removed child view's
+  timers are cancelled synchronously (and its queued view messages
+  flushed) on unmount; `navigate/3,4` cancels them all so stale timers
+  don't fire after a page change.
 - `$arizona_deps` -- per-dynamic dependency capture set, used by
   `arizona_eval` and `arizona_template:track/1`.
 
@@ -243,8 +248,10 @@ send(ViewId, Msg) ->
 
 -doc """
 Like `send/2` but delivers after `Time` milliseconds. Returns the timer
-ref, which is also tracked in the process dictionary so `navigate/4,5`
-can cancel pending timers on page change.
+ref, which is also tracked in the process dictionary (keyed by `ViewId`)
+so a removed child view's pending timers can be cancelled on unmount and
+`navigate/3,4` can cancel them all on page change. A fired ref is pruned
+from the tracked set when its message is delivered.
 """.
 -spec send_after(ViewId, Time, Msg) -> reference() when
     ViewId :: binary(),
@@ -254,17 +261,20 @@ send_after(ViewId, Time, Msg) ->
     Ref = erlang:send_after(Time, self(), {arizona_view, ViewId, Msg}),
     Timers =
         case erlang:get('$arizona_timers') of
-            undefined -> [];
+            undefined -> #{};
             T -> T
         end,
-    _ = erlang:put('$arizona_timers', [Ref | Timers]),
+    ViewRefs = maps:get(ViewId, Timers, []),
+    _ = erlang:put('$arizona_timers', Timers#{ViewId => [Ref | ViewRefs]}),
     Ref.
 
 -doc """
 Starts a live process for a route-level view `Handler`.
 
-The transport pid receives `{arizona_push, Ops, Effects}` messages when
-the live process diffs and emits updates. `OnMount` is the route's hook
+The transport pid receives `{arizona_push, RootViewId, Ops, Effects}`
+messages when the live process diffs and emits updates; `RootViewId` is
+the emitting page's root view id, so a transport can drop a push that
+raced a navigate. `OnMount` is the route's hook
 chain. Any request data the view needs is supplied as bindings by the
 transport layer (e.g. via `arizona_middleware:extract/1` middlewares); the live
 process is transport-agnostic and never sees a request.
@@ -547,9 +557,20 @@ handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0, bindings 
 handle_call(
     {navigate, NewHandler, NewIB, NewOnMount},
     _From,
-    #state{handler = OldH, bindings = OldB, transport_pid = TPid, sent_fps = Fps0} = _State
+    #state{
+        handler = OldH,
+        bindings = OldB,
+        views = OldV,
+        transport_pid = TPid,
+        sent_fps = Fps0
+    } = _State
 ) ->
     ok = cancel_pending_timers(),
+    %% The outgoing page's children are discarded wholesale (the views map is
+    %% wiped by do_mount below), which is a removal -- so unmount them exactly
+    %% like a diff removal would: children first, then the root, mirroring
+    %% removal semantics.
+    ok = unmount_removed_views(OldV),
     ok = arizona_stateful:call_unmount(OldH, OldB),
     %% Carry the previous root handler's final bindings forward as the floor;
     %% NewIB (route static config + middleware enrichments) overrides on
@@ -611,6 +632,7 @@ handle_info(
 handle_info(_Info, #state{snapshot = undefined} = State) ->
     {noreply, State};
 handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = State) ->
+    ok = prune_fired_timers(ViewId),
     case maps:get(id, B0) of
         ViewId ->
             handle_root_info(Msg, State);
@@ -633,7 +655,10 @@ handle_info({arizona_drain, Deadline}, #state{snapshot = Snap} = State) when
 handle_info(Info, State) ->
     handle_root_info(Info, State).
 
-terminate(_Reason, #state{handler = H, bindings = B}) ->
+terminate(_Reason, #state{handler = H, bindings = B, views = V}) ->
+    %% Unmount every child view, then the root -- the same children-first
+    %% removal semantics as navigate, for any exit reason terminate sees.
+    ok = unmount_removed_views(V),
     ok = arizona_stateful:call_unmount(H, B);
 terminate(_Reason, _State) ->
     ok.
@@ -690,8 +715,8 @@ handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
 handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
-    {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
-    {reply, {ok, Ops1, Effects}, State#state{views = V1, sent_fps = Fps1}}.
+    {Ops1, V1, Fps1, Effects1} = process_child_change(H, B1, Resets, Effects, ViewId, View, State),
+    {reply, {ok, Ops1, Effects1}, State#state{views = V1, sent_fps = Fps1}}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
     case arizona_stateful:call_handle_info(H, Info, B0) of
@@ -701,7 +726,7 @@ handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} 
             {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
                 H, B1, Resets, Effects, State
             ),
-            push(TPid, Ops1, Effects1),
+            push(TPid, root_view_id(State), Ops1, Effects1),
             {noreply, NewState#state{
                 bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
             }}
@@ -713,8 +738,10 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
         ok ->
             {noreply, State};
         {B1, Resets, Effects} ->
-            {Ops1, V1, Fps1} = process_child_change(H, B1, Resets, ViewId, View, State),
-            push(TPid, Ops1, Effects),
+            {Ops1, V1, Fps1, Effects1} = process_child_change(
+                H, B1, Resets, Effects, ViewId, View, State
+            ),
+            push(TPid, root_view_id(State), Ops1, Effects1),
             {noreply, State#state{views = V1, sent_fps = Fps1}}
     end.
 
@@ -731,13 +758,13 @@ handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = T
             %% auto-reconnects (vs `normal` which closes 1000 and stays
             %% disconnected). `terminate/2` still runs `unmount/1` as for
             %% any other graceful exit.
-            push(TPid, [], Effects),
+            push(TPid, root_view_id(State), [], Effects),
             {stop, {shutdown, drain}, State#state{bindings = B1}};
         {B1, Resets, Effects} ->
             {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
                 H, B1, Resets, Effects, State
             ),
-            push(TPid, Ops1, Effects1),
+            push(TPid, root_view_id(State), Ops1, Effects1),
             {noreply, NewState#state{
                 bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
             }}
@@ -771,18 +798,30 @@ process_root_change(
     B3 = clear_streams_and_apply_resets(B1, Resets),
     {Ops1, Snap1, V1, B3, Fps1, State, Effects1}.
 
-%% Same idea as process_root_change/4 but for a nested child view. Diffs through
-%% the view-tracking path (diff/3) so a grandchild stateful descriptor in the
-%% child's template resolves to a child snapshot instead of crashing the bare
+%% Same idea as process_root_change/5 but for a nested child view. Diffs through
+%% the dep-gated view-tracking path (diff/4, mirroring the root): only the
+%% dynamics whose deps intersect the child's changed bindings re-evaluate, so a
+%% grandchild stateful descriptor with untouched props is skipped (no spurious
+%% handle_update) and resolves to a child snapshot instead of crashing the bare
 %% diff (`bad_template_value`). NewViews is this child's freshly rendered
 %% descendant subtree; reconcile it against the old subtree (recorded on Snap0 as
 %% child_views): grandchildren the child no longer renders are unmounted, the rest
 %% merged back, and the child's own snapshot records the new transitive set.
-process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
-    views = V0, sent_fps = Fps0
-}) ->
+%%
+%% `Effects0` seeds the update-effects accumulator exactly like the root path:
+%% a grandchild whose props changed runs its handle_update/3 during this diff
+%% and folds its effects onto the accumulator; the drained result is the full
+%% list the caller ships (reply or push).
+process_child_change(
+    H, B1, Resets, Effects0, ViewId, #{bindings := B0, snapshot := Snap0} = View, #state{
+        views = V0, sent_fps = Fps0
+    }
+) ->
     Tmpl = arizona_stateful:call_render(H, B1),
-    {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0),
+    Changed = compute_changed(B0, B1),
+    ok = arizona_eval:set_update_effects(Effects0),
+    {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
+    Effects1 = arizona_eval:drain_update_effects(),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
     NewDescendants = maps:keys(NewViews),
@@ -792,33 +831,79 @@ process_child_change(H, B1, Resets, ViewId, #{snapshot := Snap0} = View, #state{
     Snap2 = Snap1#{child_views => NewDescendants},
     V1 = maps:merge(maps:without(Removed, V0), NewViews),
     V2 = V1#{ViewId => View#{bindings => B3, snapshot => Snap2}},
-    {Ops1, V2, Fps1}.
+    {Ops1, V2, Fps1, Effects1}.
 
 clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
     maps:merge(B2, Resets).
 
+%% A removed view's in-flight ?send_after messages must die with it: cancel its
+%% timers synchronously and flush any of its already-queued view messages BEFORE
+%% unmounting, so a late `close`-style tick can never route to the pruned view
+%% and crash the session with unknown_view.
 unmount_removed_views(RemovedViews) ->
     maps:foreach(
-        fun(_Id, #{handler := H, bindings := B}) ->
+        fun(Id, #{handler := H, bindings := B}) ->
+            ok = cancel_view_timers(Id),
+            ok = flush_view_messages(Id),
             ok = arizona_stateful:call_unmount(H, B)
         end,
         RemovedViews
     ).
+
+%% Synchronous cancel: after this returns, each timer's message either was
+%% already delivered (and is flushed right after) or never will be. An async
+%% cancel could complete after the flush and deliver a stale message later.
+cancel_view_timers(ViewId) ->
+    case erlang:get('$arizona_timers') of
+        undefined ->
+            ok;
+        #{ViewId := Refs} = Timers ->
+            ok = cancel_timer_refs(Refs),
+            _ = erlang:put('$arizona_timers', maps:remove(ViewId, Timers)),
+            ok;
+        #{} ->
+            ok
+    end.
+
+cancel_timer_refs(Refs) ->
+    lists:foreach(fun(Ref) -> ok = erlang:cancel_timer(Ref, [{info, false}]) end, Refs).
 
 cancel_pending_timers() ->
     case erlang:erase('$arizona_timers') of
         undefined ->
             ok;
         Timers ->
-            _ = [erlang:cancel_timer(Ref, [{async, true}, {info, false}]) || Ref <- Timers],
-            ok
+            maps:foreach(fun(_ViewId, Refs) -> cancel_timer_refs(Refs) end, Timers)
     end,
     flush_view_messages().
+
+%% Drop the refs whose timer already fired for this view, called when one of
+%% its view-routed messages is delivered -- so the standard re-arming tick
+%% idiom stays bounded instead of accumulating a dead ref per fire.
+prune_fired_timers(ViewId) ->
+    case erlang:get('$arizona_timers') of
+        undefined ->
+            ok;
+        #{ViewId := Refs} = Timers ->
+            case [Ref || Ref <- Refs, is_integer(erlang:read_timer(Ref))] of
+                [] -> _ = erlang:put('$arizona_timers', maps:remove(ViewId, Timers));
+                Live -> _ = erlang:put('$arizona_timers', Timers#{ViewId => Live})
+            end,
+            ok;
+        #{} ->
+            ok
+    end.
 
 flush_view_messages() ->
     receive
         {arizona_view, _, _} -> flush_view_messages()
+    after 0 -> ok
+    end.
+
+flush_view_messages(ViewId) ->
+    receive
+        {arizona_view, ViewId, _} -> flush_view_messages(ViewId)
     after 0 -> ok
     end.
 
@@ -835,13 +920,20 @@ key_changed(K, V, OldBindings) ->
         #{} -> true
     end.
 
-push(undefined, _Ops, _Effects) ->
+%% A push names the root view that owns it (the page's id at emit time), so a
+%% transport can drop a push that raced a navigate -- processed after the
+%% navigate it would otherwise be tagged with the NEW page's id and deliver
+%% stale ops into the fresh view.
+push(undefined, _ViewId, _Ops, _Effects) ->
     ok;
-push(_Pid, [], []) ->
+push(_Pid, _ViewId, [], []) ->
     ok;
-push(Pid, Ops, Effects) ->
-    Pid ! {arizona_push, Ops, Effects},
+push(Pid, ViewId, Ops, Effects) ->
+    Pid ! {arizona_push, ViewId, Ops, Effects},
     ok.
+
+root_view_id(#state{bindings = Bindings}) ->
+    maps:get(id, Bindings).
 
 -doc false.
 -spec merge_seed_fps(Fps, FpList) -> Fps1 when
