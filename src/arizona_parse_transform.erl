@@ -2469,13 +2469,15 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
 
-%% The raw-text clauses come FIRST, ahead of nodiff: both make the slot
+%% The `raw` raw-text clause comes FIRST, ahead of nodiff: both make the slot
 %% markerless and render-once (`undefined` az), so they agree on the diff
 %% question, but only the raw-text path applies the escaping policy the *element*
 %% demands. Matching nodiff first let an `az-nodiff` region -- a layout, which is
 %% exactly where an inline `<script>` lives -- skip the opt-out guard and
 %% HTML-escape inside raw text, so a marked value was spliced with no
-%% neutralization and an unmarked one drew no compile error.
+%% neutralization and an unmarked one drew no compile error. The `escapable`
+%% clause stays below nodiff because the two agree there: both HTML-escape the
+%% scalar through make_nodiff_dynamic_ast/4.
 emit_child_dynamic(
     Child,
     _ElemAz,

@@ -228,10 +228,11 @@ escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
 %% emitted verbatim -- HTML entity-escaping does not apply (the browser decodes
 %% nothing there) -- so a value spelling one of the sequences the HTML script-data
 %% tokenizer reacts to escapes the element (the classic JSON-in-script XSS).
-%% raw_text_breakout/1 below defines that set and what each `<` becomes; a value
+%% raw_text_breakout/2 below defines that set and what each `<` becomes; a value
 %% that legitimately needs one of them inside a raw-text element is a breakout by
-%% definition. Non-binary values (a nested template, an integer) cannot carry a
-%% sequence and pass through unchanged.
+%% definition. Everything that can carry bytes is covered -- a binary, a `?raw`
+%% opt-out, and chardata; a value that cannot (a nested template, an integer)
+%% passes through unchanged.
 -spec raw_text(atom(), term()) -> term().
 raw_text(Tag, Value) ->
     %% Resolve the element's tokenizer state ONCE per slot, then thread the answer

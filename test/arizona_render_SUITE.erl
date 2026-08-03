@@ -304,7 +304,7 @@ escape_clean_value_not_rebuilt(Config) when is_list(Config) ->
 
 %% P9: a dynamic value in a raw-text element (<script>) renders verbatim, but a
 %% `</script>` in the value would break out into HTML parsing. The backend's
-%% raw_text/1 neutralizes the close tag (inserting a backslash), transparently for
+%% raw_text/2 neutralizes the close tag (inserting a backslash), transparently for
 %% JSON, while a benign value is left byte-for-byte unchanged.
 raw_text_breakout_neutralized(Config) when is_list(Config) ->
     Payload = ~"{\"x\":\"</script><img src=x onerror=alert(1)>\"}",
