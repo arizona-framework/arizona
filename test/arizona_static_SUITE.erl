@@ -14,6 +14,7 @@
 -export([spec_opts_override_defaults/1]).
 -export([collects_failures/1]).
 -export([failure_carries_render_location/1]).
+-export([failed_entries_cover_every_spec_shape/1]).
 -export([collects_write_errors/1]).
 
 all() ->
@@ -32,6 +33,7 @@ groups() ->
             spec_opts_override_defaults,
             collects_failures,
             failure_carries_render_location,
+            failed_entries_cover_every_spec_shape,
             collects_write_errors
         ]}
     ].
@@ -134,6 +136,32 @@ failure_carries_render_location(Config) when is_list(Config) ->
             {arizona_template, to_bin, _Args, _Info} | _
         ]},
         Failure
+    ).
+
+failed_entries_cover_every_spec_shape(Config) when is_list(Config) ->
+    Dir = subdir(Config, "every_shape"),
+    Collide = filename:join(Dir, "collide"),
+    ok = filelib:ensure_dir(Collide),
+    ok = file:write_file(Collide, <<>>),
+    %% One batch with every failing shape at once: a crashing 2-tuple spec, a
+    %% crashing 3-tuple spec, and a write error. `Failed` must hold all three --
+    %% a reporter that matches the SPEC shape or a single failure kind drops the
+    %% ones it does not match and silently under-reports a broken build.
+    {[Good], Failed} = arizona_static:generate(Dir, [
+        {arizona_static_page, ~"ok.html"},
+        {nonexistent_handler, ~"crash2.html"},
+        {arizona_static_page, ~"crash3.html", #{bindings => #{title => [<<255>>]}}},
+        {arizona_static_page, ~"collide/page.html"}
+    ]),
+    ?assert(filelib:is_regular(Good)),
+    ?assertEqual(3, length(Failed)),
+    %% The pair shape the documented reporter destructures, for every entry...
+    Outfiles = [element(2, Spec) || {Spec, _Failure} <:- Failed],
+    ?assertEqual([~"crash2.html", ~"crash3.html", ~"collide/page.html"], Outfiles),
+    %% ...and each failure is one of the two documented kinds.
+    ?assertMatch(
+        [{error, undef, [_ | _]}, {error, {arizona_loc, _, _}, [_ | _]}, {error, _Posix}],
+        [Failure || {_Spec, Failure} <:- Failed]
     ).
 
 collects_write_errors(Config) when is_list(Config) ->

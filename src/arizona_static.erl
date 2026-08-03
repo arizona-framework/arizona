@@ -40,12 +40,25 @@ A crash is collected as the whole exception, `{Class, Reason, Stacktrace}` (see
 `t:failure/0`), so one bad page in a 200-page build still says *where* it broke
 -- the `{arizona_loc, {Module, Line}, _}` wrapper `arizona_render` attaches
 included. A write error keeps the `file` module's own `{error, Reason}`, which
-the tuple size tells apart from a crash. Render one:
+the tuple size tells apart from a crash.
+
+Every entry is a `{Spec, Failure}` pair whatever the spec's arity, so report them
+by matching that pair and dispatching on the failure -- match the *spec* shape or
+one failure kind and the report silently drops every 3-tuple spec or write error
+it does not match:
 
 ```erlang
 {_Written, Failed} = arizona_static:generate(~"_site", Specs),
-[io:format("~ts: ~ts~n", [Outfile, erl_error:format_exception(C, R, ST)])
- || {{_Handler, Outfile}, {C, R, ST}} <- Failed].
+[report(Spec, Failure) || {Spec, Failure} <:- Failed].
+
+%% `element(2, Spec)` is the Outfile in both `{Handler, Outfile}` and
+%% `{Handler, Outfile, Opts}`.
+report(Spec, {Class, Reason, Stacktrace}) ->
+    io:format("~ts: ~ts~n", [
+        element(2, Spec), erl_error:format_exception(Class, Reason, Stacktrace)
+    ]);
+report(Spec, {error, Reason}) ->
+    io:format("~ts: write failed: ~p~n", [element(2, Spec), Reason]).
 ```
 
 ## Caveats
