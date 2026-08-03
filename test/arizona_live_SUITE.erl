@@ -1182,11 +1182,13 @@ live_send_to_child(Config) when is_list(Config) ->
         {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
-    %% Send to child counter view
+    %% Send to child counter view. The push names the ROOT view (the transport's
+    %% stale-navigate check) but nests the child's ops under the CHILD's id, so
+    %% the transport scopes them to the emitting view rather than the root.
     Pid ! {arizona_view, <<"counter">>, {set_count, 99}},
     receive
         {arizona_push, _, Ops, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"99">>]], Ops)
+            ?assertMatch([[<<"counter">>, [[?OP_TEXT, _, <<"99">>]]]], Ops)
     after 1000 ->
         error(timeout)
     end.
@@ -1428,7 +1430,7 @@ child_in_stream_survives_dep_skip(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 42}},
     receive
         {arizona_push, _, Ops, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"42">>]], Ops)
+            ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"42">>]]]], Ops)
     after 1000 ->
         error(timeout)
     end.
@@ -1472,14 +1474,14 @@ multiple_children_in_stream_survive_dep_skip(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
         {arizona_push, _, Ops1, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"10">>]], Ops1)
+            ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"10">>]]]], Ops1)
     after 1000 ->
         error(timeout)
     end,
     Pid ! {arizona_view, <<"counter-2">>, {set_count, 20}},
     receive
         {arizona_push, _, Ops2, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"20">>]], Ops2)
+            ?assertMatch([[<<"counter-2">>, [[?OP_TEXT, _, <<"20">>]]]], Ops2)
     after 1000 ->
         error(timeout)
     end.
@@ -1504,7 +1506,7 @@ child_in_stream_survives_item_update(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 7}},
     receive
         {arizona_push, _, Ops, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"7">>]], Ops)
+            ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"7">>]]]], Ops)
     after 1000 ->
         error(timeout)
     end.
@@ -1524,7 +1526,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
         {arizona_push, _, Ops1, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"10">>]], Ops1)
+            ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"10">>]]]], Ops1)
     after 1000 ->
         error(timeout)
     end,
@@ -1532,7 +1534,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"extra-1">>, {set_count, 20}},
     receive
         {arizona_push, _, Ops2, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"20">>]], Ops2)
+            ?assertMatch([[<<"extra-1">>, [[?OP_TEXT, _, <<"20">>]]]], Ops2)
     after 1000 ->
         error(timeout)
     end.

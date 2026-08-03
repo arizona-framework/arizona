@@ -24,6 +24,7 @@
 -export([resync_on_dead_live_process_closes_going_away/1]).
 -export([drain_before_mount_closes_going_away/1]).
 -export([push_emitted_after_reply_not_folded/1]).
+-export([child_push_scoped_to_emitting_view/1]).
 
 all() ->
     [
@@ -43,7 +44,8 @@ all() ->
         resync_mount_crash_on_timeout_closes_crash,
         resync_on_dead_live_process_closes_going_away,
         drain_before_mount_closes_going_away,
-        push_emitted_after_reply_not_folded
+        push_emitted_after_reply_not_folded,
+        child_push_scoped_to_emitting_view
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -451,6 +453,40 @@ interleave_add_then_move(Socket0, [N | Rest]) ->
         error({move_push_never_arrived, Id})
     end,
     interleave_add_then_move(Socket, Rest).
+
+child_push_scoped_to_emitting_view(Config) when is_list(Config) ->
+    %% A `?send`/`?send_after`-driven update to an embedded child pushed the
+    %% child's own (child-relative) ops tagged with the ROOT view id, so the
+    %% socket scoped them `<root>:<childAz>`. `az` is fingerprint-derived, so
+    %% two instances of the same handler carry identical `az` values and only
+    %% the view id separates them -- a tick meant for one twin patched the
+    %% other. (The event path is already correct: it scopes with the child id
+    %% the frame named.)
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(arizona_twin_parent, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket),
+    TargetA = child_push_target(Pid, Socket, ~"twin_a"),
+    TargetB = child_push_target(Pid, Socket, ~"twin_b"),
+    [ViewIdA, AzA] = binary:split(TargetA, ~":"),
+    [ViewIdB, AzB] = binary:split(TargetB, ~":"),
+    %% The premise: identical handler, identical slot address.
+    ?assertEqual(AzA, AzB),
+    %% ...so the view id is the only thing that can route the patch.
+    ?assertEqual(~"twin_a", ViewIdA),
+    ?assertEqual(~"twin_b", ViewIdB).
+
+%% Drive one embedded child's handle_info/2 and return the scoped target its
+%% push produced on the wire.
+child_push_target(Pid, Socket, ViewId) ->
+    Pid ! {arizona_view, ViewId, close},
+    receive
+        {arizona_push, _, _, _} = Push ->
+            {reply, Frame, _Socket} = arizona_socket:handle_info(Push, Socket),
+            #{~"o" := [[?OP_TEXT, Target, _Value]]} = json:decode(iolist_to_binary(Frame)),
+            Target
+    after 2000 ->
+        error({no_child_push, ViewId})
+    end.
 
 %% A flagged-reconnect socket whose live process crashes the moment the deferred
 %% resync mounts it. `init/4` defers the mount, so the crash lands in the flush,

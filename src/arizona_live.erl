@@ -796,7 +796,7 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
             {Ops1, V1, Fps1, Effects1} = process_child_change(
                 H, B1, Resets, Effects, ViewId, View, State
             ),
-            push(TPid, root_view_id(State), Ops1, Effects1),
+            push(TPid, root_view_id(State), scope_child_ops(ViewId, Ops1), Effects1),
             {noreply, State#state{views = V1, sent_fps = Fps1}}
     end.
 
@@ -974,6 +974,27 @@ key_changed(K, V, OldBindings) ->
         #{K := V} -> false;
         #{} -> true
     end.
+
+%% A child view's diff ops are addressed relative to the CHILD, so they must be
+%% scoped by the child's view id -- while the push itself must keep naming the
+%% ROOT view, which is what the transport compares against its current page to
+%% drop a push that raced a navigate (see push/4). Both fit in the message
+%% unchanged: hand the ops over in the same `[ChildViewId, ChildOps]` nesting a
+%% root diff already uses for its embedded children, and the transport's
+%% flattening re-tags them with the child id.
+%%
+%% Pushed bare, they were scoped with the root's id instead. `az` is
+%% fingerprint-derived, so two instances of the same handler share it and only
+%% the view id separates them: a `?send`/`?send_after` tick meant for one
+%% instance patched whichever one the client resolved first. (The event path
+%% never had the bug -- the transport scopes an event's ops with the child id
+%% the frame named.)
+%%
+%% Empty stays empty so push/4 can still skip a no-op push.
+scope_child_ops(_ViewId, []) ->
+    [];
+scope_child_ops(ViewId, Ops) ->
+    [[ViewId, Ops]].
 
 %% A push names the root view that owns it (the page's id at emit time), so a
 %% transport can drop a push that raced a navigate -- processed after the
