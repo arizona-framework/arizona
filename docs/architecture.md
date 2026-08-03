@@ -1544,7 +1544,7 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | 0    | `OP_TEXT`        | `[target, value]`          | Replace marker content (text, nested tmpl, plain each) |
 | 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attribute                                          |
 | 2    | `OP_REM_ATTR`    | `[target, attr]`           | Remove attribute                                       |
-| 3    | `OP_UPDATE`      | `[target, html]`           | innerHTML replacement (stream container full render)   |
+| 3    | `OP_UPDATE`      | `[target, html]`           | innerHTML replacement. Implemented by all four clients, but **no longer emitted by the server** -- every container full render (plain-list and stream alike) is the marker-aware `OP_TEXT` |
 | 4    | `OP_REMOVE_NODE` | `[target]`                 | Remove element                                         |
 | 5    | `OP_INSERT`      | `[target, key, pos, html]` | Stream insert (pos=-1 -> append, otherwise index)      |
 | 6    | `OP_REMOVE`      | `[target, key]`            | Stream remove                                          |
