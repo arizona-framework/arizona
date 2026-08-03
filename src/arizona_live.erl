@@ -655,12 +655,25 @@ handle_info({arizona_drain, Deadline}, #state{snapshot = Snap} = State) when
 handle_info(Info, State) ->
     handle_root_info(Info, State).
 
-terminate(_Reason, #state{handler = H, bindings = B, views = V}) ->
+terminate(_Reason, #state{snapshot = Snap, handler = H, bindings = B, views = V}) when
+    Snap =/= undefined
+->
     %% Unmount every child view, then the root -- the same children-first
     %% removal semantics as navigate, for any exit reason terminate sees.
     ok = unmount_removed_views(V),
     ok = arizona_stateful:call_unmount(H, B);
 terminate(_Reason, _State) ->
+    %% Never mounted: `mount/1` has not run, so `bindings` are still the raw
+    %% route bindings the handler never produced (route static config plus
+    %% middleware enrichments -- session data included) and there is nothing
+    %% mounted to tear down. Unmounting here would hand `unmount/1` a foreign
+    %% map -- a handler head that destructures its own mount keys raises, and
+    %% the `{unhandled_unmount, ...}` term embeds those bindings in the crash
+    %% report -- while the cleanup the handler meant to do (paired with a mount
+    %% that never ran) is a no-op anyway. The window is the deferred reconnect
+    %% resync (`fps_follow`), where the view stays unmounted until the client's
+    %% `cached_fps` frame or the socket's backstop timer, so a transport that
+    %% goes away in it (a deploy-drain reconnect storm) lands right here.
     ok.
 
 -doc """

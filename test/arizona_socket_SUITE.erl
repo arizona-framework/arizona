@@ -16,6 +16,8 @@
 -export([deferred_resync_flushed_by_event_frame/1]).
 -export([deferred_resync_flushed_by_ping/1]).
 -export([deferred_resync_timeout_flushes_undeduped/1]).
+-export([unmount_skipped_when_never_mounted/1]).
+-export([unmount_runs_after_mount/1]).
 
 all() ->
     [
@@ -27,7 +29,9 @@ all() ->
         flagged_reconnect_defers_and_dedups_resync,
         deferred_resync_flushed_by_event_frame,
         deferred_resync_flushed_by_ping,
-        deferred_resync_timeout_flushes_undeduped
+        deferred_resync_timeout_flushes_undeduped,
+        unmount_skipped_when_never_mounted,
+        unmount_runs_after_mount
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -215,6 +219,92 @@ deferred_resync_flushed_by_ping(Config) when is_list(Config) ->
         #{~"o" := [[?OP_REPLACE, _, #{~"s" := [_ | _]}]]},
         json:decode(iolist_to_binary(ResyncFrame))
     ).
+
+unmount_skipped_when_never_mounted(Config) when is_list(Config) ->
+    %% A flagged reconnect leaves the live process UNMOUNTED for the whole
+    %% deferral window. If the transport goes away in that window (a
+    %% deploy-drain reconnect storm), the live process stops -- and its
+    %% terminate/2 must not run unmount/1 for a view that never mounted: the
+    %% bindings are still the raw route bindings (middleware-derived session
+    %% data), so the handler's unmount head does not match, the raised
+    %% `{unhandled_unmount, ...}` embeds those bindings in the crash report, and
+    %% the cleanup the handler actually wanted never runs anyway.
+    %%
+    %% A never-mounted view never calls its handler, so nothing else in this
+    %% case loads the module -- and `call_unmount/2` short-circuits on
+    %% `function_exported/3`, which answers `false` for an unloaded module. A
+    %% live server always has the handler loaded (its route resolved and its
+    %% page rendered), so load it here rather than let the assertion depend on
+    %% which case ran first.
+    {module, arizona_unmount_parent} = code:ensure_loaded(arizona_unmount_parent),
+    Self = self(),
+    Transport = spawn(fun() ->
+        Req = arizona_req_test_adapter:new(),
+        {ok, Socket} = arizona_socket:init(
+            arizona_unmount_parent,
+            #{notify => Self},
+            Req,
+            #{reconnect => true, fps_follow => true}
+        ),
+        Self ! {live_pid, arizona_socket:live_pid(Socket)},
+        receive
+            stop -> ok
+        end
+    end),
+    LivePid = await_live_pid(),
+    Ref = erlang:monitor(process, LivePid),
+    %% Transport exits normally mid-deferral -- the live process's transport
+    %% monitor reaps it, so terminate/2 runs on a never-mounted state.
+    Transport ! stop,
+    receive
+        {'DOWN', Ref, process, LivePid, Reason} ->
+            ?assertEqual(normal, Reason)
+    after 2000 ->
+        error(live_process_did_not_stop)
+    end,
+    %% Nothing was mounted, so nothing may be unmounted.
+    receive
+        {root_unmounted, _} = Msg -> error({spurious_unmount, Msg})
+    after 0 -> ok
+    end.
+
+unmount_runs_after_mount(Config) when is_list(Config) ->
+    %% Control for unmount_skipped_when_never_mounted: an unflagged reconnect
+    %% mounts at init, so the same transport exit MUST unmount -- children
+    %% first, then the root.
+    Self = self(),
+    Transport = spawn(fun() ->
+        Req = arizona_req_test_adapter:new(),
+        {reply, _Frame, Socket} = arizona_socket:init(
+            arizona_unmount_parent, #{notify => Self}, Req, #{reconnect => true}
+        ),
+        Self ! {live_pid, arizona_socket:live_pid(Socket)},
+        receive
+            stop -> ok
+        end
+    end),
+    LivePid = await_live_pid(),
+    Ref = erlang:monitor(process, LivePid),
+    Transport ! stop,
+    receive
+        {'DOWN', Ref, process, LivePid, Reason} -> ?assertEqual(normal, Reason)
+    after 2000 -> error(live_process_did_not_stop)
+    end,
+    ?assertEqual({child_unmounted, ~"uchild"}, await_unmount()),
+    ?assertEqual({root_unmounted, ~"uparent"}, await_unmount()).
+
+await_live_pid() ->
+    receive
+        {live_pid, Pid} -> Pid
+    after 2000 -> error(no_live_pid)
+    end.
+
+await_unmount() ->
+    receive
+        {child_unmounted, _} = Msg -> Msg;
+        {root_unmounted, _} = Msg -> Msg
+    after 2000 -> error(timeout_waiting_for_unmount)
+    end.
 
 deferred_resync_timeout_flushes_undeduped(Config) when is_list(Config) ->
     %% Backstop: a flagged client that never sends its promised announcement.
