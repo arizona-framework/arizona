@@ -35,6 +35,7 @@
     nested_stream_redrain_bounded_ops/1,
     nested_stream_redrain_reset_falls_back_to_full_drain/1,
     divergent_stream_forks_do_not_share_a_drain_mark/1,
+    drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt/1,
     derived_stream_bindings_ship_every_insert/1,
     page_add_todo_live/1,
     page_add_todo_then_title_change_then_add_todo/1,
@@ -320,6 +321,7 @@ groups() ->
             nested_stream_redrain_bounded_ops,
             nested_stream_redrain_reset_falls_back_to_full_drain,
             divergent_stream_forks_do_not_share_a_drain_mark,
+            drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt,
             derived_stream_bindings_ship_every_insert
         ]},
         %% DataTable handler tests
@@ -3044,6 +3046,35 @@ divergent_stream_forks_do_not_share_a_drain_mark(Config) when is_list(Config) ->
     ?assertEqual(
         [{insert, 1, #{id => 1, v => ~"a"}, -1}],
         arizona_stream:undrained_ops(SA, arizona_stream:drain_mark(SB))
+    ).
+
+%% The other ways a recorded mark can stop addressing the queue it was taken
+%% from. All must fall back to a FULL drain -- never a skip. The clear case is
+%% the common path: a TOP-LEVEL stream binding is emptied by the live process
+%% after every drain, so its next drain always starts from scratch exactly as it
+%% did before drain marks existed.
+drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:insert(arizona_stream:new(KeyFun, []), #{id => 1, v => ~"a"}),
+    Mark = arizona_stream:drain_mark(S0),
+    %% Cleared by the live process, then refilled: the mark's op is gone.
+    #{s := Cleared} = arizona_stream:clear_stream_pending(#{s => S0}, [s]),
+    ?assertEqual(none, arizona_stream:drain_mark(Cleared)),
+    Refilled = arizona_stream:insert(Cleared, #{id => 2, v => ~"b"}),
+    ?assertEqual(
+        [{insert, 2, #{id => 2, v => ~"b"}, -1}],
+        arizona_stream:undrained_ops(Refilled, Mark)
+    ),
+    %% A stream rebuilt from scratch in the same slot shares no stamps at all.
+    Fresh = arizona_stream:new(KeyFun, [#{id => 3, v => ~"c"}]),
+    ?assertEqual(
+        [{insert, 3, #{id => 3, v => ~"c"}, -1}],
+        arizona_stream:undrained_ops(Fresh, Mark)
+    ),
+    %% Rolled back to an ancestor: the mark names an op the ancestor never had.
+    ?assertEqual(
+        [{insert, 1, #{id => 1, v => ~"a"}, -1}],
+        arizona_stream:undrained_ops(S0, arizona_stream:drain_mark(Refilled))
     ).
 
 %% End-to-end version through a real parse-transformed view: bindings hold a
