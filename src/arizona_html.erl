@@ -31,7 +31,7 @@ identical to the previous inlined emission.
 -export([target/0]).
 -export([supports_local/0]).
 -export([escape/1]).
--export([raw_text/1]).
+-export([raw_text/2]).
 -export([render_attr/2]).
 
 -spec name(atom()) -> binary().
@@ -120,33 +120,57 @@ text_slot_open(Az) ->
 text_slot_close() ->
     ~"<!--/az-->".
 
+%% Every tag classification below matches on this, never on the atom as written:
+%% HTML tag names are ASCII case-insensitive, so `{'BR', ...}` is the void element
+%% `br` and `{'SCRIPT', ...}` is a script element as far as the browser is
+%% concerned. Classifying only the lowercase atom emitted `<BR></BR>` (malformed --
+%% a void element has no end tag) and handed an uppercase `<SCRIPT>` the
+%% ordinary-element treatment (comment markers in the script, no opt-out guard).
+%%
+%% Only the *classification* folds case. `name/1` still emits the tag exactly as
+%% written, which is what keeps a case-sensitive SVG attribute (`viewBox`) or a
+%% camelCase SVG element intact -- normalizing the output would break those.
+%%
+%% Both callers run in the parse transform, at compile time, so the lowercasing
+%% costs nothing at render. (`raw_text/2`'s own tag test is on the render path and
+%% uses a comparison that allocates nothing -- see script_data/1.)
+tag_name(Tag) ->
+    string:lowercase(atom_to_binary(Tag)).
+
 -spec is_void(atom()) -> boolean().
-is_void(area) -> true;
-is_void(base) -> true;
-is_void(br) -> true;
-is_void(col) -> true;
-is_void(embed) -> true;
-is_void(hr) -> true;
-is_void(img) -> true;
-is_void(input) -> true;
-is_void(link) -> true;
-is_void(meta) -> true;
-is_void(param) -> true;
-is_void(source) -> true;
-is_void(track) -> true;
-is_void(wbr) -> true;
-is_void(_) -> false.
+is_void(Tag) ->
+    is_void_name(tag_name(Tag)).
+
+is_void_name(~"area") -> true;
+is_void_name(~"base") -> true;
+is_void_name(~"br") -> true;
+is_void_name(~"col") -> true;
+is_void_name(~"embed") -> true;
+is_void_name(~"hr") -> true;
+is_void_name(~"img") -> true;
+is_void_name(~"input") -> true;
+is_void_name(~"link") -> true;
+is_void_name(~"meta") -> true;
+is_void_name(~"param") -> true;
+is_void_name(~"source") -> true;
+is_void_name(~"track") -> true;
+is_void_name(~"wbr") -> true;
+is_void_name(_Other) -> false.
 
 -spec raw_text_kind(atom()) -> none | raw | escapable.
-%% Raw-text elements: content is never parsed for comments or character
-%% references, so a dynamic slot must render verbatim and markerless.
-raw_text_kind(script) -> raw;
-raw_text_kind(style) -> raw;
-%% Escapable-raw-text elements: character references are decoded, so a scalar
-%% slot is HTML-escaped, but comments are still literal -- so still markerless.
-raw_text_kind(textarea) -> escapable;
-raw_text_kind(title) -> escapable;
-raw_text_kind(_) -> none.
+raw_text_kind(Tag) ->
+    case tag_name(Tag) of
+        %% Raw-text elements: content is never parsed for comments or character
+        %% references, so a dynamic slot must render verbatim and markerless.
+        ~"script" -> raw;
+        ~"style" -> raw;
+        %% Escapable-raw-text elements: character references are decoded, so a
+        %% scalar slot is HTML-escaped, but comments are still literal -- so still
+        %% markerless.
+        ~"textarea" -> escapable;
+        ~"title" -> escapable;
+        _Other -> none
+    end.
 
 %% Every framework-emitted `az` in a compiled static is `<Fp>-<id>` (the parse
 %% transform builds the marker from the id, so the fingerprint is always the
@@ -212,39 +236,139 @@ escape(<<"\"", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&quot;">>);
 escape(<<"'", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#39;">>);
 escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
 
-%% Neutralize a raw-text (script/style) close-tag breakout. Raw-text content is
+%% Neutralize a raw-text (script/style) tokenizer breakout. Raw-text content is
 %% emitted verbatim -- HTML entity-escaping does not apply (the browser decodes
-%% nothing there) -- but a value carrying `</script>`/`</style>` would still close
-%% the element and drop into HTML parsing (the classic JSON-in-script XSS). Insert
-%% a backslash after the `<` of a case-insensitive `</script`/`</style`, so the
-%% raw-text tokenizer never matches the end tag. `<\/script` is transparent in the
-%% string/JSON/CSS contexts such content lives in (`\/` decodes to `/`), and a
-%% value that legitimately needs a literal `</script` in a raw-text element is a
-%% breakout by definition. Only the two raw-text tag names close a raw-text
-%% element, so nothing else is touched. Non-binary values (a nested template, an
-%% integer) cannot carry the sequence and pass through unchanged.
--spec raw_text(term()) -> term().
-raw_text(Value) when is_binary(Value) ->
-    neutralize_raw_text(Value, <<>>);
-raw_text(Value) ->
+%% nothing there) -- so a value spelling one of the sequences the HTML script-data
+%% tokenizer reacts to escapes the element (the classic JSON-in-script XSS).
+%% raw_text_breakout/2 below defines that set and what each `<` becomes; a value
+%% that legitimately needs one of them inside a raw-text element is a breakout by
+%% definition.
+%%
+%% The covered shapes are every one `arizona_template:to_bin/1` can turn into
+%% attacker-chosen bytes: a **binary**, an **atom** (`to_bin` renders it with
+%% `atom_to_binary`, so an atom carries arbitrary bytes just like a binary),
+%% **chardata**, and a `?raw` opt-out wrapping any of those. An integer and a float
+%% stringify to digits and a sign, and an effect command's JSON is already
+%% HTML-escaped by `arizona_effect:encode/1` (`<` -> `&lt;`), so none of them can
+%% spell a sequence below; they pass through untouched, as does a map (a nested
+%% template renders structurally through the escaping path, not as bytes).
+%%
+%% **Known limit -- neutralization is per-slot.** Each dynamic is neutralized on its
+%% own, so two ADJACENT `?raw` slots whose halves are both attacker-controlled
+%% reassemble a sequence after both have been checked: `~"</scr"` then `~"ipt>..."`
+%% emits a working close tag, because neither half is a breakout by itself. Treat
+%% adjacent `?raw` slots in one raw-text element as a single trust boundary -- build
+%% the value in one slot instead. Two slots cannot reach the script-data-*escaped*
+%% states, since whichever of `<!--` / `<script` lands whole in a slot is
+%% neutralized there; three adjacent slots can (`~"<!"`, `~"--<scr"`, `~"ipt>"`),
+%% so the document-swallowing variant is reachable, just harder. Splicing the halves
+%% is inherent to per-slot neutralization: fixing it needs the whole element's
+%% content assembled before the check, which the render path does not do.
+-spec raw_text(atom(), term()) -> term().
+raw_text(Tag, Value) ->
+    %% Resolve the element's tokenizer state ONCE per slot, then thread the answer
+    %% (not the tag) through the byte loop, so the per-character path stays a plain
+    %% boolean test and no atom is built at render time.
+    raw_text_1(script_data(Tag), Value).
+
+raw_text_1(ScriptData, Value) when is_binary(Value) ->
+    neutralize_raw_text(ScriptData, Value, <<>>);
+raw_text_1(ScriptData, Value) when is_atom(Value) ->
+    %% `to_bin/1` renders an atom with `atom_to_binary`, so its name reaches the
+    %% output byte for byte -- an atom is as much a carrier as a binary. Normalize to
+    %% the binary it would have become and neutralize that; the rendered bytes are
+    %% identical either way.
+    neutralize_raw_text(ScriptData, atom_to_binary(Value), <<>>);
+raw_text_1(ScriptData, Value) ->
+    %% A `?raw` opt-out is the *only* shape a script/style content slot can carry
+    %% (the parse transform rejects an unmarked one), and it opts out of HTML
+    %% *escaping*, not out of the raw-text tokenizer: a trusted JSON blob's own
+    %% string data can still spell a breakout. Unwrap it, neutralize the payload,
+    %% and re-wrap, so the documented opt-out is not a hole around this check.
+    case arizona_template:classify_trusted(Value) of
+        {raw, Raw} -> arizona_template:raw(raw_text_1(ScriptData, Raw));
+        _Other -> raw_text_chardata(ScriptData, Value)
+    end.
+
+%% Does the tokenizer read this element's content in the **script data** states?
+%% Only `<script>` has them; `<style>` is plain RAWTEXT, whose sole exit is its own
+%% close tag. HTML tag names are ASCII case-insensitive, so the comparison is too.
+script_data(Tag) ->
+    string:equal(atom_to_binary(Tag), ~"script", true).
+
+%% The documented remedy is `?raw(json:encode(Data))`, and `json:encode/1` returns
+%% **iodata** -- so matching only binaries above would wave a breakout through on the
+%% exact form this module's own error message recommends. Flatten chardata (a
+%% charlist and a nested iolist alike) and neutralize the result, which is what the
+%% render boundary would have produced anyway (`to_bin/1` flattens with the same
+%% call). A list that is not chardata is returned untouched, leaving `to_bin/1` the
+%% single place that names a bad template value.
+raw_text_chardata(ScriptData, Value) when is_list(Value) ->
+    case unicode:characters_to_binary(Value) of
+        Bin when is_binary(Bin) -> neutralize_raw_text(ScriptData, Bin, <<>>);
+        _NotChardata -> Value
+    end;
+raw_text_chardata(_ScriptData, Value) ->
     Value.
 
-neutralize_raw_text(<<>>, Acc) ->
+neutralize_raw_text(_ScriptData, <<>>, Acc) ->
     Acc;
-neutralize_raw_text(<<"<", R/binary>>, Acc) ->
-    case raw_text_breakout(R) of
-        true -> neutralize_raw_text(R, <<Acc/binary, "<\\">>);
-        false -> neutralize_raw_text(R, <<Acc/binary, "<">>)
-    end;
-neutralize_raw_text(<<C, R/binary>>, Acc) ->
-    neutralize_raw_text(R, <<Acc/binary, C>>).
+neutralize_raw_text(ScriptData, <<"<", R/binary>>, Acc) ->
+    Lt = raw_text_breakout(ScriptData, R),
+    neutralize_raw_text(ScriptData, R, <<Acc/binary, Lt/binary>>);
+neutralize_raw_text(ScriptData, <<C, R/binary>>, Acc) ->
+    neutralize_raw_text(ScriptData, R, <<Acc/binary, C>>).
 
-%% Does the text right after a `<` begin a `/script` or `/style` end tag (ASCII
-%% case-insensitive)? Only these close a raw-text element.
-raw_text_breakout(<<$/, R/binary>>) ->
-    ci_prefix(R, <<"script">>) orelse ci_prefix(R, <<"style">>);
-raw_text_breakout(_) ->
-    false.
+%% What the `<` becomes, given the text right after it. Three sequences move the
+%% HTML tokenizer out of raw text, and each is defused where it starts:
+%%
+%%   `</script` / `</style` -- ends the element, dropping the rest of the value into
+%%       HTML parsing. An end tag only closes a raw-text element when it is the
+%%       *appropriate* one -- its name matches the element being parsed -- so
+%%       strictly only `</script` matters in `<script>` and only `</style` in
+%%       `<style>`; the other is ordinary text there. Both names are neutralized in
+%%       both elements anyway: it is a harmless superset (the rewrite decodes back to
+%%       the original in the string contexts this content lives in), and it keeps the
+%%       close-tag half of the rule tag-independent, so only the script-data half
+%%       below has to consult `ScriptData`. Do NOT narrow it on the belief that the
+%%       cross pair is load-bearing -- it is not; narrowing is safe but buys nothing.
+%%       A backslash after the `<` stops the end-tag match: `<\/script` is transparent
+%%       wherever such content lives (`\/` decodes to `/` in JSON, in a JavaScript
+%%       string, and in CSS).
+%%   `<!--` -- enters script-data-escaped state, where a following `<script`
+%%       reaches script-data-double-escaped and the element's OWN `</script>` no
+%%       longer closes it: the remainder of the document is swallowed, so
+%%       neutralizing only the close tag above is not enough.
+%%   `<script` -- inert from plain script-data state, but it is the second half of
+%%       that double escape, and the first half can come from the template's own
+%%       static text (the legacy `<script><!-- ... //--></script>` idiom), which is
+%%       spliced verbatim and never passes through here.
+%%
+%% The last two replace the `<` with the escape `\u003c` instead of inserting a
+%% backslash: `\!` and `\s` are not valid JSON escapes, and a JSON blob is the
+%% documented content of a `raw` raw-text slot, whereas `\u003c` is valid in both
+%% JSON and JavaScript strings and decodes back to `<`.
+%%
+%% They also apply ONLY in `<script>` (`ScriptData`). `<style>` content is RAWTEXT,
+%% which has no escaped state at all: rewriting these there would defend nothing
+%% and would corrupt the stylesheet, because that escape is a JS/JSON one which a
+%% CSS parser reads as the identifier bytes `u003c` -- and `<!--`/`-->` are
+%% themselves legitimate CSS tokens (CDO/CDC). Tag names match ASCII
+%% case-insensitively, as the tokenizer does; any other `<` keeps its own byte.
+raw_text_breakout(_ScriptData, <<$/, R/binary>>) ->
+    case ci_prefix(R, ~"script") orelse ci_prefix(R, ~"style") of
+        true -> ~"<\\";
+        false -> ~"<"
+    end;
+raw_text_breakout(true, <<"!--", _R/binary>>) ->
+    ~"\\u003c";
+raw_text_breakout(true, R) ->
+    case ci_prefix(R, ~"script") of
+        true -> ~"\\u003c";
+        false -> ~"<"
+    end;
+raw_text_breakout(false, _R) ->
+    ~"<".
 
 %% Case-insensitive (ASCII) prefix match; the pattern is always lowercase letters.
 ci_prefix(_Bin, <<>>) -> true;

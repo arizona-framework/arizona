@@ -69,6 +69,8 @@ mount(Bindings) ->
 
 Void elements (`br`, `img`, `input`, `hr`, `meta`, `link`, `base`, `col`, `embed`, `param`, `source`, `track`, `wbr`, `area`) self-close as `<tag />`.
 
+Tag **classification** in the `?html` target (void, raw-text) is ASCII case-insensitive, as HTML itself is -- `{'BR', [], []}` self-closes and `{'SCRIPT', ...}` is raw text. The tag is still *emitted* exactly as written, so a camelCase SVG element or a `viewBox` attribute is never rewritten. `?native` and `?terminal` tags are case-**sensitive**: their vocabularies are Arizona's own (native tags map to Compose/SwiftUI component names). `?terminal` goes further and **rejects an unknown tag at compile time**, the way it already rejects an unknown style/attribute -- its six tags are the whole vocabulary, so `{'Line', ...}` is a typo, not an extension point.
+
 ## Parse transform attribute forms
 
 | Form | Example | Output |
@@ -159,7 +161,7 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?stateless(Fun, Props)` | `arizona_template:stateless(fun Fun/1, Props)` |
 | `?stateless(Mod, Fun, Props)` | `arizona_template:stateless(Mod, Fun, Props)` |
 | `?local(Key, Init)` | `arizona_template:local(Key, Init)` -- client-owned slot: server renders `Init` once and never diffs it; the browser owns/updates the value via `Key` (a binary or atom literal; content -- one or many per element, mixed with static text -- or an attribute value, whole or interpolated with one local + static prefix/suffix) |
-| `?raw(Value)` | `arizona_template:raw(Value)` -- escape opt-out: splices a trusted, already-safe HTML fragment verbatim into a content slot or attribute value instead of HTML-escaping it. The parse transform only recognizes the opt-out when the `raw` call is **literal at the template site**, so wrap values here, never inside a helper. Never for user-controlled data |
+| `?raw(Value)` | `arizona_template:raw(Value)` -- escape opt-out: splices a trusted, already-safe HTML fragment verbatim into a content slot or attribute value instead of HTML-escaping it. The parse transform only recognizes the opt-out when the `raw` call is **literal at the template site**, so wrap values here, never inside a helper. Never for user-controlled data. A dynamic content slot inside `<script>`/`<style>` is spliced verbatim (raw text decodes no character references, so escaping cannot apply there) and therefore **must** carry it -- an unmarked value there is a compile error (`dynamic_in_raw_text`); serialize data first, e.g. `?raw(json:encode(Data))`. The breakout neutralization behind that opt-out is **per-slot**, so two adjacent `?raw` slots in one `<script>`/`<style>` can reassemble a close tag across the boundary (`~"</scr"` + `~"ipt>"`) -- build the value in one slot |
 | `?connected` | `arizona_live:connected()` -- true inside a connected live process, false during SSR |
 | `?reconnected` | `arizona_live:reconnected()` -- true when the connected live process is a reconnection (client re-opened the WS), false on first connect/SSR. Gate one-shot OS commands with `?connected andalso not ?reconnected` |
 | `?capability(Key)` | `arizona_live:capability(Key)` -- did the native shell advertise capability `Key`? `false` in a plain browser/SSR. A UI/effect hint, **never** authorization (see [docs/os.md](../../docs/os.md)) |

@@ -62,7 +62,7 @@ never sanitized.
 -export([text_slot_close/0]).
 -export([is_void/1]).
 -export([raw_text_kind/1]).
--export([raw_text/1]).
+-export([raw_text/2]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
@@ -79,9 +79,46 @@ name(Atom) ->
     atom_to_binary(Atom).
 
 -spec element_open(binary()) -> binary().
-element_open(_TagName) ->
-    %% No structural open in a terminal; styling comes from the attributes.
-    <<>>.
+element_open(TagName) ->
+    %% No structural open in a terminal; styling comes from the attributes. This is
+    %% still where the tag is checked, because it is the one callback every element
+    %% passes through exactly once -- the same place attr/2 and attr_boolean/1 police
+    %% attribute names.
+    %%
+    %% The vocabulary is closed, so an unrecognized tag is a typo, not an extension
+    %% point. Accepting it as a transparent container swallowed the author's intent
+    %% silently: `{'BR', [], []}` emitted a style reset instead of a newline and
+    %% `{'Line', ...}` dropped its newline, with nothing to notice at compile time --
+    %% while an unknown *attribute* right beside it was rejected outright. Reject it
+    %% the same way.
+    case is_known_tag(TagName) of
+        true ->
+            <<>>;
+        false ->
+            reject([
+                "unknown ?terminal element ",
+                quote(TagName),
+                " -- expected one of ",
+                tag_names(),
+                ". Tag names are case-sensitive here (the vocabulary is Arizona's own, "
+                "not HTML's), so `line` is not `Line`"
+            ])
+    end.
+
+%% The documented `?terminal` vocabulary: only `line` and `br` affect layout (see
+%% element_close/1 and element_void_close/0); the rest are transparent containers
+%% whose names are documentary. Kept as one list so the error message and the check
+%% can never drift apart.
+-spec tags() -> [binary()].
+tags() ->
+    [~"line", ~"col", ~"row", ~"text", ~"span", ~"br"].
+
+is_known_tag(TagName) ->
+    lists:member(TagName, tags()).
+
+-spec tag_names() -> iodata().
+tag_names() ->
+    lists:join(~", ", tags()).
 
 -spec az_attr(binary()) -> binary().
 az_attr(_Az) ->
@@ -251,8 +288,8 @@ escape(<<_C, R/binary>>, Acc) ->
 
 %% Terminal output has no raw-text elements (raw_text_kind/1 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
--spec raw_text(term()) -> term().
-raw_text(Value) -> Value.
+-spec raw_text(atom(), term()) -> term().
+raw_text(_Tag, Value) -> Value.
 
 %% Unreachable: attr_dyn_name/1 rejects dynamic attributes at compile time, so a
 %% ?terminal template never produces a dynamic-attr dynamic to render. Kept to

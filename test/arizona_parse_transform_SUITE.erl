@@ -73,6 +73,8 @@
     terminal_fg_attr/1,
     terminal_unknown_style_rejected/1,
     terminal_unknown_attr_rejected/1,
+    terminal_unknown_tag_rejected/1,
+    terminal_known_tags_accepted/1,
     terminal_event_command_rejected/1,
     terminal_dynamic_attr_rejected/1,
     terminal_each_renders/1,
@@ -256,6 +258,11 @@
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
     void_no_attrs/1,
+    void_tag_case_insensitive/1,
+    void_tag_case_insensitive_rejects_children/1,
+    reserved_attr_case_insensitive/1,
+    az_view_attr_case_insensitive/1,
+    nodiff_directive_case_insensitive/1,
     void_two_element_dynamic_attr/1,
     void_two_element_tuple/1,
     void_with_dynamic_children/1,
@@ -320,6 +327,19 @@
     static_binary_utf8_and_ascii_still_fold/1
 ]).
 -export([
+    raw_text_script_bare_dynamic_rejected/1,
+    raw_text_style_bare_dynamic_rejected/1,
+    raw_text_conditional_dynamic_rejected/1,
+    raw_text_helper_call_rejected/1,
+    raw_text_static_only_still_compiles/1,
+    raw_text_az_alias_raw_accepted/1,
+    raw_text_reject_message_renders/1,
+    raw_text_in_nodiff_bare_dynamic_rejected/1,
+    raw_text_in_nodiff_raw_neutralized/1,
+    raw_text_style_css_round_trip/1,
+    raw_text_style_close_tag_still_neutralized/1,
+    raw_text_hoisted_raw_boundary/1,
+    raw_text_uppercase_tag_classified/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -412,6 +432,11 @@ groups() ->
             dynamic_only_child,
             no_change_diff,
             void_no_attrs,
+            void_tag_case_insensitive,
+            void_tag_case_insensitive_rejects_children,
+            reserved_attr_case_insensitive,
+            az_view_attr_case_insensitive,
+            nodiff_directive_case_insensitive,
             static_after_dynamic_attr
         ]},
         %% Client-owned slots (?local)
@@ -554,6 +579,19 @@ groups() ->
         %% slot is markerless/render-once -- HTML comment diff markers would
         %% become literal content and corrupt the script/CSS/JSON-LD/title.
         {raw_text, [parallel], [
+            raw_text_script_bare_dynamic_rejected,
+            raw_text_style_bare_dynamic_rejected,
+            raw_text_conditional_dynamic_rejected,
+            raw_text_helper_call_rejected,
+            raw_text_static_only_still_compiles,
+            raw_text_az_alias_raw_accepted,
+            raw_text_reject_message_renders,
+            raw_text_in_nodiff_bare_dynamic_rejected,
+            raw_text_in_nodiff_raw_neutralized,
+            raw_text_style_css_round_trip,
+            raw_text_style_close_tag_still_neutralized,
+            raw_text_hoisted_raw_boundary,
+            raw_text_uppercase_tag_classified,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -751,6 +789,8 @@ groups() ->
             terminal_fg_attr,
             terminal_unknown_style_rejected,
             terminal_unknown_attr_rejected,
+            terminal_unknown_tag_rejected,
+            terminal_known_tags_accepted,
             terminal_event_command_rejected,
             terminal_dynamic_attr_rejected,
             terminal_each_renders
@@ -1911,6 +1951,255 @@ native_backend_not_escaped(Config) when is_list(Config) ->
     %% The backend's escape/1 is the identity: the value passes through unescaped.
     ?assertEqual(<<"<not-escaped>">>, arizona_template:escape_value(arizona_native, Fun())).
 
+%% A bare ?get inside <script> is spliced VERBATIM (raw text decodes no character
+%% references, so escaping cannot apply) -- the value could close the JS string it
+%% sits in and inject code. Every other slot kind escapes, so this is the one
+%% unmarked-value-reaches-output hole: it must be a compile error, not silent XSS.
+raw_text_script_bare_dynamic_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_bare_script). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [], ["
+        "        <<\"var user = \\\"\">>, arizona_template:get(v, Bindings), <<\"\\\";\">>"
+        "    ]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% Same rule for <style>: CSS is raw text too, so an unmarked value reaches the
+%% output verbatim and can close the element.
+raw_text_style_bare_dynamic_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_bare_style). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'style', [], [arizona_template:get(css, Bindings)]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% The opt-out must be literal at the slot, mirroring how the transform already
+%% recognizes ?raw everywhere else. A conditional that yields values is not a
+%% ?raw call, so it is rejected -- wrap the whole conditional instead.
+raw_text_conditional_dynamic_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_bare_cond). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [], ["
+        "        case arizona_template:get(env, Bindings) of "
+        "            prod -> <<\"prod()\">>; "
+        "            _ -> <<\"dev()\">> "
+        "        end"
+        "    ]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% A value computed outside the template (no binding read, so not inlined back
+%% into the slot) is the classic shape that smuggles an unmarked value into a
+%% script. It is rejected too -- ?raw is what states "already safe here".
+raw_text_helper_call_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_bare_call). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Json = erlang:atom_to_binary(ok), "
+        "    arizona_template:html({'script', [], [Json]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% The common case -- a <script>/<style> whose children are only literal JS/CSS
+%% text -- carries no dynamic slot at all and must stay untouched by the rule.
+raw_text_static_only_still_compiles(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_static_only). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {'script', [], [<<\"var a = 1 < 2 && 3 > 2;\">>]}, "
+        "        {'style', [], [<<\".a > .b { color: red }\">>]}"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(
+        <<
+            "<div><script>var a = 1 < 2 && 3 > 2;</script>"
+            "<style>.a > .b { color: red }</style></div>"
+        >>,
+        HTML
+    ).
+
+%% The `az:` alias of the opt-out is recognized exactly like arizona_template:raw.
+raw_text_az_alias_raw_accepted(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_az_alias). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [], [az:raw(az:get(js, Bindings))]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => ~"a && b"})),
+    ?assertEqual(<<"<script>a && b</script>">>, iolist_to_binary(HTML0)).
+
+%% The rejection reason renders through format_error/1 (what the compiler prints),
+%% and names the ?raw opt-out that unblocks the author.
+raw_text_reject_message_renders(Config) when is_list(Config) ->
+    Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
+    ?assert(is_list(Msg)),
+    ?assertNotEqual(nomatch, string:find(Msg, "?raw")),
+    ?assertNotEqual(nomatch, string:find(Msg, "script")).
+
+%% az-nodiff must not be an escape hatch out of the raw-text rule. The nodiff
+%% clause of emit_child_dynamic/4 once matched first, so an az-nodiff region
+%% (layouts, the very place inline <script> lives) skipped the opt-out guard
+%% entirely and HTML-escaped the value inside raw text -- broken JS, and the
+%% author got no compile signal at all.
+raw_text_in_nodiff_bare_dynamic_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_nodiff_bare). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "        {'script', [], [arizona_template:get(v, Bindings)]}"
+        "    ]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% ...and the marked value in an az-nodiff region must still reach raw_text/2.
+%% Skipping the raw-text clause sent it through the nodiff path, which neutralizes
+%% nothing, so a ?raw close tag broke straight out of the element.
+raw_text_in_nodiff_raw_neutralized(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_nodiff_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(v, Bindings))"
+        "        ]}"
+        "    ]}). "
+    ),
+    Hostile = ~"</script><img src=x onerror=alert(1)>",
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{v => Hostile})),
+    HTML = iolist_to_binary(HTML0),
+    %% The breakout is defused: only the element's own close tag survives.
+    ?assertEqual(nomatch, binary:match(HTML, ~"</script><img")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"</script>"))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<\\/script><img")),
+    %% Still verbatim (not HTML-escaped) and still markerless, as raw text requires.
+    ?assertEqual(nomatch, binary:match(HTML, ~"&lt;")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")).
+
+%% <style> is RAWTEXT: it has no script-data-escaped state, so `<!--`/`<script`
+%% neutralization protects nothing there and only corrupts the CSS -- `<` is
+%% a JS/JSON escape, and a CSS parser reads it as the identifier bytes `u003c`.
+%% (`<!--`/`-->` are legitimate CSS tokens, CDO/CDC.) A style slot must therefore
+%% round-trip byte for byte.
+raw_text_style_css_round_trip(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_style_css). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'style', [], ["
+        "        arizona_template:raw(arizona_template:get(css, Bindings))"
+        "    ]}). "
+    ),
+    Css = ~"<!-- .a > .b { color: red } --> .c:before { content: \"<script>\" }",
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{css => Css})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(<<"<style>", Css/binary, "</style>">>, HTML),
+    %% Specifically: no JS escape leaked into the stylesheet.
+    ?assertEqual(nomatch, binary:match(HTML, ~"u003c")).
+
+%% ...but the one sequence that DOES end a RAWTEXT element is still neutralized in
+%% <style>, and <script> keeps the full script-data treatment. The tag decides the
+%% policy; sharing one blanket policy is what corrupted the CSS above.
+raw_text_style_close_tag_still_neutralized(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_style_close). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {'style', [], [arizona_template:raw(arizona_template:get(css, Bindings))]}, "
+        "        {'script', [], [arizona_template:raw(arizona_template:get(js, Bindings))]}"
+        "    ]}). "
+    ),
+    Breakout = ~"</style><img src=x onerror=alert(1)>",
+    Double = ~"<!--<script>",
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{css => Breakout, js => Double})),
+    HTML = iolist_to_binary(HTML0),
+    %% style: the close tag is broken, so only the element's own survives.
+    ?assertEqual(nomatch, binary:match(HTML, ~"</style><img")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<\\/style><img")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"</style>"))),
+    %% script: both halves of the double escape are still rewritten.
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"\\u003c!--\\u003cscript>")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"<script"))).
+
+%% Where a hoisted ?raw is accepted is decided by the binding-read inlining, which
+%% splices a variable back into its slot only when its expression reads a binding.
+%% So `R = ?raw(?get(js))` reaches the slot as a literal ?raw and compiles, while
+%% `R = ?raw(<<"x">>)` never does and is rejected. Pin both sides so the accepted
+%% one is a documented boundary rather than an accident, and require the error to
+%% name the remedy (wrap at the slot) instead of leaving the author to guess.
+raw_text_hoisted_raw_boundary(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_hoist_read). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    R = arizona_template:raw(arizona_template:get(js, Bindings)), "
+        "    arizona_template:html({'script', [], [R]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => ~"a && b"})),
+    ?assertEqual(<<"<script>a && b</script>">>, iolist_to_binary(HTML0)),
+    %% No binding read in the hoisted expression -- not inlined, so not a literal
+    %% ?raw at the slot, so rejected.
+    assert_parse_error(
+        "-module(pt_rt_hoist_noread). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    R = arizona_template:raw(<<\"x\">>), "
+        "    arizona_template:html({'script', [], [R]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ),
+    %% The message must point at the fix that always works: wrap AT the slot.
+    Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
+    ?assertNotEqual(nomatch, string:find(Msg, "at the slot")),
+    ?assertNotEqual(nomatch, string:find(Msg, "variable")).
+
+%% HTML tag names are ASCII case-insensitive, so `<SCRIPT>` IS a script element to
+%% the browser. Classifying only the lowercase atom left an uppercase tag treated
+%% as an ordinary element: comment markers landed in the script (a SyntaxError for
+%% a module script) and the guard never fired.
+raw_text_uppercase_tag_classified(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_upper_bare). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'SCRIPT', [], [arizona_template:get(v, Bindings)]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ),
+    Mod = compile_module(
+        "-module(pt_rt_upper_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ScRiPt', [], ["
+        "        arizona_template:raw(arizona_template:get(v, Bindings))"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{v => ~"a</script>b"})),
+    HTML = iolist_to_binary(HTML0),
+    %% Markerless, verbatim, and the script-data policy applies (the tag is matched
+    %% case-insensitively on the way into the neutralizer too).
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    ?assertEqual(<<"<ScRiPt>a<\\/script>b</ScRiPt>">>, HTML),
+    %% The classifier itself, for every raw-text tag and a non-raw-text one.
+    ?assertEqual(raw, arizona_html:raw_text_kind('SCRIPT')),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Style')),
+    ?assertEqual(escapable, arizona_html:raw_text_kind('TEXTAREA')),
+    ?assertEqual(escapable, arizona_html:raw_text_kind('Title')),
+    ?assertEqual(none, arizona_html:raw_text_kind('DIV')).
+
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's
 %% HTML-comment tokens are a SyntaxError), so the slot must be markerless.
@@ -1920,7 +2209,7 @@ raw_text_script_markerless(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'script', [{type, <<\"module\">>}], ["
-        "        arizona_template:get(boot, Bindings)"
+        "        arizona_template:raw(arizona_template:get(boot, Bindings))"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{boot => <<"import x from \"/c\"">>})),
@@ -1938,7 +2227,9 @@ raw_text_script_not_escaped(Config) when is_list(Config) ->
         "-module(pt_rt_script_esc). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], [arizona_template:get(js, Bindings)]}). "
+        "    arizona_template:html({'script', [], ["
+        "        arizona_template:raw(arizona_template:get(js, Bindings))"
+        "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => <<"a < b && c > d">>})),
     HTML = iolist_to_binary(HTML0),
@@ -1953,7 +2244,9 @@ raw_text_style_markerless(Config) when is_list(Config) ->
         "-module(pt_rt_style). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'style', [], [arizona_template:get(css, Bindings)]}). "
+        "    arizona_template:html({'style', [], ["
+        "        arizona_template:raw(arizona_template:get(css, Bindings))"
+        "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{css => <<".a > .b { color: red }">>})),
     HTML = iolist_to_binary(HTML0),
@@ -2019,7 +2312,9 @@ raw_text_render_once_no_diff(Config) when is_list(Config) ->
         "-module(pt_rt_once). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], [arizona_template:get(boot, Bindings)]}). "
+        "    arizona_template:html({'script', [], ["
+        "        arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "    ]}). "
     ),
     T1 = Mod:render(#{boot => <<"a">>}),
     {_HTML, Snap0} = arizona_render:render(T1),
@@ -2075,7 +2370,9 @@ raw_text_sibling_after_restores_markers(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}, "
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}, "
         "        {'span', [], [arizona_template:get(x, Bindings)]}"
         "    ]}). "
     ),
@@ -2095,7 +2392,9 @@ raw_text_sibling_before_keeps_markers(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
         "        {'span', [], [arizona_template:get(x, Bindings)]}, "
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}"
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{boot => <<"BOOT">>, x => <<"XV">>})),
@@ -2114,7 +2413,9 @@ raw_text_between_normal_siblings_markers(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
         "        {'span', [], [arizona_template:get(a, Bindings)]}, "
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}, "
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}, "
         "        {'p', [], [arizona_template:get(b, Bindings)]}"
         "    ]}). "
     ),
@@ -2138,7 +2439,9 @@ raw_text_mixed_az_numbering_diffs(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}, "
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}, "
         "        {'span', [], [arizona_template:get(count, Bindings)]}"
         "    ]}). "
     ),
@@ -2168,7 +2471,8 @@ raw_text_two_content_slots(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'script', [], ["
-        "        arizona_template:get(a, Bindings), arizona_template:get(b, Bindings)"
+        "        arizona_template:raw(arizona_template:get(a, Bindings)), "
+        "        arizona_template:raw(arizona_template:get(b, Bindings))"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{a => <<"AA">>, b => <<"BB">>})),
@@ -2184,7 +2488,9 @@ raw_text_static_text_around_slot(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'script', [], ["
-        "        <<\"var x=\">>, arizona_template:get(url, Bindings), <<\"; init();\">>"
+        "        <<\"var x=\">>, "
+        "        arizona_template:raw(arizona_template:get(url, Bindings)), "
+        "        <<\"; init();\">>"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{url => <<"\"/u\"">>})),
@@ -2195,16 +2501,19 @@ raw_text_static_text_around_slot(Config) when is_list(Config) ->
 %% A control-flow value (case) in a raw-text slot flows through
 %% expand_block_element_tails: the selected branch renders verbatim and markerless,
 %% and diffing is a no-op even when the scrutinee binding changes (render-once).
+%% The conditional is wrapped in ?raw -- the opt-out marks the whole slot, so
+%% control flow inside it is unaffected by the raw-text opt-out requirement.
 raw_text_conditional_value_markerless(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_rt_cond). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'script', [], ["
-        "        case arizona_template:get(env, Bindings) of "
-        "            prod -> <<\"prod()\">>; "
-        "            _ -> <<\"dev()\">> "
-        "        end"
+        "        arizona_template:raw("
+        "            case arizona_template:get(env, Bindings) of "
+        "                prod -> <<\"prod()\">>; "
+        "                _ -> <<\"dev()\">> "
+        "            end)"
         "    ]}). "
     ),
     T1 = Mod:render(#{env => prod}),
@@ -2226,7 +2535,7 @@ raw_text_attr_diffs_content_render_once(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'script', "
         "        [{src, arizona_template:get(src, Bindings)}], "
-        "        [arizona_template:get(body, Bindings)]}). "
+        "        [arizona_template:raw(arizona_template:get(body, Bindings))]}). "
     ),
     T1 = Mod:render(#{src => <<"/a.js">>, body => <<"A">>}),
     {HTML0, Snap0} = arizona_render:render(T1),
@@ -2251,7 +2560,9 @@ raw_text_escapable_adjacent_to_raw(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'head', [], ["
         "        {'title', [], [arizona_template:get(t, Bindings)]}, "
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}, "
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}, "
         "        {'meta', [{name, arizona_template:get(m, Bindings)}]}"
         "    ]}). "
     ),
@@ -2881,6 +3192,165 @@ void_no_attrs(Config) when is_list(Config) ->
     T = Mod:render(#{}),
     ?assertEqual([<<"<br />">>], maps:get(s, T)),
     ?assertEqual([], maps:get(d, T)).
+
+%% HTML tag names are ASCII case-insensitive, so `{'BR', ...}` is the void element
+%% `br` to the browser. Classifying only the lowercase atom emitted `<BR></BR>` --
+%% malformed markup, since a void element has no end tag. The tag's own casing is
+%% preserved in the output (name/1 never rewrites it, which is what keeps a
+%% case-sensitive SVG attribute like viewBox intact); only the classification is
+%% case-insensitive.
+void_tag_case_insensitive(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_void_case). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {'BR', [], []}, "
+        "        {'Img', [{src, <<\"x\">>}], []}, "
+        "        {'br', [], []}"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(<<"<div><BR /><Img src=\"x\" /><br /></div>">>, HTML),
+    %% No end tag was emitted for any of them.
+    ?assertEqual(nomatch, binary:match(HTML, ~"</BR>")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"</Img>")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"</br>")),
+    %% The classifier itself, over the shapes the sweep covers.
+    ?assert(arizona_html:is_void('BR')),
+    ?assert(arizona_html:is_void('Img')),
+    ?assert(arizona_html:is_void(input)),
+    %% Control: a non-void tag stays non-void in every casing.
+    ?assertNot(arizona_html:is_void('DIV')),
+    ?assertNot(arizona_html:is_void('div')).
+
+%% ...and the void-with-children rejection follows the classification, so an
+%% uppercase void tag can no longer smuggle children past it.
+void_tag_case_insensitive_rejects_children(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_void_case_children). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'BR', [], [<<\"x\">>]}). ",
+        fun
+            ({void_with_children, 'BR'}) -> true;
+            (_) -> false
+        end
+    ).
+
+%% The reserved-name check exists because a template-authored `az` can collide with
+%% a genuine slot address and misroute a patch. HTML attribute names are ASCII
+%% case-insensitive, so `AZ="x"` IS an `az` attribute to the browser (the client
+%% resolves slots with querySelector('[az=...]'), which matches names
+%% case-insensitively) -- matching only the lowercase form let the exact harm the
+%% check prevents walk straight through it.
+reserved_attr_case_insensitive(Config) when is_list(Config) ->
+    Reserved = [
+        {"pt_res_AZ", "{'AZ', <<\"x\">>}"},
+        {"pt_res_azl", "{'Az-Local', <<\"x\">>}"},
+        {"pt_res_AZ_UND", "{'AZ_LOCAL', <<\"x\">>}"},
+        {"pt_res_bin", "{<<\"AZ\">>, <<\"x\">>}"},
+        %% Lowercase controls -- unchanged behaviour.
+        {"pt_res_az", "{az, <<\"x\">>}"},
+        {"pt_res_azl_low", "{'az-local', <<\"x\">>}"}
+    ],
+    lists:foreach(
+        fun({Mod, Attr}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(Bindings) -> ",
+                    "arizona_template:html({'p', [",
+                    Attr,
+                    "], []}). "
+                ]),
+                fun
+                    ({reserved_attr, _}) -> true;
+                    (_) -> false
+                end
+            )
+        end,
+        Reserved
+    ),
+    %% Control: every OTHER az-* name is the author's, in any casing.
+    Mod = compile_module(
+        "-module(pt_res_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [{'AZ-KEY', <<\"k\">>}, {az_click, <<\"c\">>}], []}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    ?assertEqual(<<"<p AZ-KEY=\"k\" az-click=\"c\"></p>">>, iolist_to_binary(HTML0)).
+
+%% az-view is injected on a live root and rejected anywhere else, for the same
+%% reason: the browser reads `AZ-VIEW="x"` as `az-view`.
+az_view_attr_case_insensitive(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Mod, Attr}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(Bindings) -> ",
+                    "arizona_template:html({'p', [",
+                    Attr,
+                    "], []}). "
+                ]),
+                fun(R) -> R =:= az_view_not_allowed end
+            )
+        end,
+        [
+            {"pt_azv_up", "{'AZ-VIEW', <<\"x\">>}"},
+            {"pt_azv_und", "{'AZ_VIEW', <<\"x\">>}"},
+            {"pt_azv_bare", "'Az-View'"},
+            {"pt_azv_bin", "<<\"AZ-VIEW\">>"},
+            %% Lowercase controls -- unchanged behaviour.
+            {"pt_azv_low", "{'az-view', <<\"x\">>}"},
+            {"pt_azv_low_bare", "az_view"}
+        ]
+    ).
+
+%% az-nodiff is the one where matching the lowercase form only produced the
+%% OPPOSITE of the request: unrecognized, the directive fell through as an ordinary
+%% boolean attribute, so the element kept its az and markers (still diffed) AND
+%% leaked `AZ-NODIFF` into the DOM. Assert the directive is HONORED, not just
+%% stripped.
+nodiff_directive_case_insensitive(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_case). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ['AZ-NODIFF'], [arizona_template:get(count, Bindings, 0)]}"
+        "    ). "
+    ),
+    T = Mod:render(#{count => 42}),
+    %% Honored: the compile unit is marked non-diffable...
+    ?assertEqual(false, maps:get(diff, T)),
+    %% ...its dynamic carries no diff address...
+    ?assertMatch([{undefined, _Spec, _Loc}], maps:get(d, T)),
+    {HTML0, _Snap} = arizona_render:render(T),
+    HTML = iolist_to_binary(HTML0),
+    %% ...and the rendered element has no az attribute, no slot markers, and no
+    %% trace of the directive itself.
+    ?assertEqual(<<"<div>42</div>">>, HTML),
+    ?assertEqual(nomatch, binary:match(HTML, ~"AZ-NODIFF")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"az-nodiff")),
+    ?assertEqual(nomatch, binary:match(HTML, ~" az=")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    %% The underscore spelling folds case too, and a nested one is still rejected
+    %% (the directive is whole-template, so recognizing it must reject it there).
+    assert_parse_error(
+        "-module(pt_nodiff_case_nested). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {'p', ['AZ_NODIFF'], [arizona_template:get(v, Bindings)]}"
+        "    ]}). ",
+        fun(R) -> R =:= nested_nodiff end
+    ).
 
 %% Test 25: Static attrs after dynamic attr.
 static_after_dynamic_attr(Config) when is_list(Config) ->
@@ -6155,6 +6625,54 @@ terminal_unknown_attr_rejected(Config) when is_list(Config) ->
             (_) -> false
         end
     ).
+
+%% The terminal backend rejects an unknown attribute name loudly but used to accept
+%% ANY tag as a transparent container, so a typo'd tag silently lost its meaning:
+%% `{'BR', [], []}` emitted a style reset instead of a newline, and `{'Line', ...}`
+%% dropped the newline the author asked for. The vocabulary is closed -- reject an
+%% unknown element the same way an unknown attribute is rejected.
+terminal_unknown_tag_rejected(Config) when is_list(Config) ->
+    Bad = [
+        {"pt_term_bad_tag", "{'div', [], [arizona_template:get(x, Bindings)]}"},
+        %% The exact silent-typo shapes: a terminal tag in the wrong case.
+        {"pt_term_upper_br", "{'BR', [], []}"},
+        {"pt_term_upper_line", "{'Line', [], [arizona_template:get(x, Bindings)]}"}
+    ],
+    lists:foreach(
+        fun({Mod, Elem}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(Bindings) -> ",
+                    "arizona_template:terminal({col, [], [",
+                    Elem,
+                    "]}). "
+                ]),
+                fun
+                    ({render_reject, _}) -> true;
+                    (_) -> false
+                end
+            )
+        end,
+        Bad
+    ).
+
+%% Control: every documented tag still compiles and keeps its emission -- `line`
+%% resets and breaks, `br` breaks, the rest are transparent containers.
+terminal_known_tags_accepted(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_term_tags_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal({col, [], ["
+        "        {row, [], [{text, [], [<<\"a\">>]}, {span, [], [<<\"b\">>]}]}, "
+        "        {line, [], [<<\"c\">>]}, "
+        "        {br, [], []}"
+        "    ]}). "
+    ),
+    {Output, _Snap} = arizona_render:render(Mod:render(#{})),
+    ?assertEqual(~"a\e[0mb\e[0m\e[0mc\e[0m\n\n\e[0m", iolist_to_binary(Output)).
 
 terminal_event_command_rejected(Config) when is_list(Config) ->
     assert_parse_error(

@@ -129,6 +129,10 @@ render(Bindings) ->
     %% must be emitted markerless and render-once -- HTML comment markers would
     %% become literal content there (script/style/textarea/title).
     raw_text_kind = none :: none | raw | escapable,
+    %% The tag that produced `raw_text_kind`, handed to the backend's `raw_text/2`:
+    %% the neutralization a value needs belongs to *that element's* tokenizer state
+    %% (`<script>` is script data, `<style>` is RAWTEXT), not to raw text at large.
+    raw_text_tag = undefined :: atom(),
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean(),
@@ -471,6 +475,17 @@ format_error(local_in_nodiff) ->
     "diff target for the client to address";
 format_error(local_unsupported) ->
     "?local is not supported by this render target";
+format_error(dynamic_in_raw_text) ->
+    "a dynamic content slot inside <script>/<style> is spliced verbatim -- the browser "
+    "decodes no character references in raw text, so HTML-escaping cannot apply there and "
+    "the value can close the JavaScript string it sits in, or the element itself (XSS). "
+    "Mark it with a literal ?raw(...) at the slot to state the value is already safe for "
+    "the script/CSS context, and only then -- serialize data first, e.g. "
+    "{script, [], [?raw(json:encode(Data))]}. The ?raw has to sit at the slot itself: a "
+    "variable holding one reaches the slot only when its expression reads a binding, so "
+    "compute the value into a variable and wrap it here (Json = json:encode(Data), then "
+    "{script, [], [?raw(Json)]}), not the other way round. Literal script/CSS text is "
+    "static, not a slot, and needs no wrapper";
 format_error(local_in_raw_text) ->
     "a content ?local cannot be used inside a raw-text element "
     "(script/style/textarea/title) -- raw-text content carries no slot markers "
@@ -1167,14 +1182,11 @@ maybe_inject_or_raise_az_view(Attrs, Line, _State) ->
         false -> Attrs
     end.
 
-is_az_view_attr({atom, _, Name}) ->
-    Name =:= az_view orelse Name =:= 'az-view';
-is_az_view_attr({tuple, _, [{atom, _, Name} | _]}) ->
-    Name =:= az_view orelse Name =:= 'az-view';
-is_az_view_attr({bin, _, [{bin_element, _, {string, _, "az-view"}, _, _}]}) ->
-    true;
-is_az_view_attr(_) ->
-    false.
+is_az_view_attr(Attr) ->
+    case attr_name(Attr) of
+        undefined -> false;
+        Name -> framework_attr_name(Name) =:= ~"az-view"
+    end.
 
 %% --------------------------------------------------------------------
 %% Binding-read inlining
@@ -2056,7 +2068,7 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             false -> {none, State1}
         end,
     TagBin = Backend:name(Tag),
-    State3 = buf_append(State2, Backend:element_open(TagBin)),
+    State3 = buf_append(State2, emit_backend(fun() -> Backend:element_open(TagBin) end, Line)),
     State4 =
         case ElemAz of
             none ->
@@ -2076,9 +2088,14 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             State6 = buf_append(State5, Backend:element_open_end()),
             %% Scope the raw-text context to this element's children, then restore
             %% the parent's so a following sibling is not treated as raw text.
-            State7 = compile_children(Children, ElemAz, State6#state{raw_text_kind = RawKind}),
+            State7 = compile_children(
+                Children, ElemAz, State6#state{raw_text_kind = RawKind, raw_text_tag = Tag}
+            ),
             State8 = buf_append(State7, Backend:element_close(TagBin)),
-            State8#state{raw_text_kind = State0#state.raw_text_kind}
+            State8#state{
+                raw_text_kind = State0#state.raw_text_kind,
+                raw_text_tag = State0#state.raw_text_tag
+            }
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
@@ -2090,7 +2107,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = extract_binary_value(Bin),
-    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
@@ -2100,7 +2117,7 @@ compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, ElemLine) 
 ->
     Backend = State0#state.backend,
     NameBin = extract_attr_name(Backend, NameAST),
-    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
@@ -2109,14 +2126,14 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     case is_static_binary(ValueAST) of
         true ->
             ValBin = extract_binary_value(ValueAST),
-            buf_append(State0, emit_attr(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
+            buf_append(State0, emit_backend(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
         false ->
             compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = Backend:name(Name),
-    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
         try
@@ -2126,12 +2143,14 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
         end,
     parse_error(invalid_attribute, AttrLine).
 
-%% Run a backend attribute-emitting callback, turning a backend's attribute
-%% rejection -- `error({arizona_render_reject, Message})` -- into a line-accurate
-%% parse error carrying the backend's message. Lets a render backend cleanly
-%% refuse attributes it cannot express (e.g. the terminal target rejecting an
-%% unknown style atom) instead of silently dropping them.
-emit_attr(Fun, Line) ->
+%% Run a backend byte-emitting callback, turning a backend's rejection --
+%% `error({arizona_render_reject, Message})` -- into a line-accurate parse error
+%% carrying the backend's message. Lets a render backend cleanly refuse what it
+%% cannot express (the terminal target rejecting an unknown style atom, or an
+%% element outside its vocabulary) instead of silently dropping or mis-rendering
+%% it. Wraps element emission as well as attributes, so a backend can police its
+%% tag vocabulary the same way it polices attribute names.
+emit_backend(Fun, Line) ->
     try
         Fun()
     catch
@@ -2157,11 +2176,13 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
     ValLine = line(ValueAST),
     case try_fold_arizona_js(ValueAST) of
         {ok, Cmd} ->
-            buf_append(State0, emit_attr(fun() -> Backend:attr_command(NameBin, Cmd) end, ValLine));
+            buf_append(
+                State0, emit_backend(fun() -> Backend:attr_command(NameBin, Cmd) end, ValLine)
+            );
         error when State0#state.nodiff ->
             Module = State0#state.module,
             State1 = buf_append(
-                State0, emit_attr(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
+                State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
             ),
             DynAST = make_nodiff_attr_dynamic_ast(
                 NameBin, ValueAST, Module, line(ValueAST)
@@ -2170,7 +2191,7 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
         error ->
             Module = State0#state.module,
             State1 = buf_append(
-                State0, emit_attr(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
+                State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
             ),
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(
@@ -2449,13 +2470,20 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
 
+%% The `raw` raw-text clause comes FIRST, ahead of nodiff: both make the slot
+%% markerless and render-once (`undefined` az), so they agree on the diff
+%% question, but only the raw-text path applies the escaping policy the *element*
+%% demands. Matching nodiff first let an `az-nodiff` region -- a layout, which is
+%% exactly where an inline `<script>` lives -- skip the opt-out guard and
+%% HTML-escape inside raw text, so a marked value was spliced with no
+%% neutralization and an unmarked one drew no compile error. The `escapable`
+%% clause stays below nodiff because the two agree there: both HTML-escape the
+%% scalar through make_nodiff_dynamic_ast/4.
 emit_child_dynamic(
-    Child, _ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
-) ->
-    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
-    {flush(State0, DynAST), Slot};
-emit_child_dynamic(
-    Child, _ElemAz, #state{raw_text_kind = raw, module = Module, backend = Backend} = State0, Slot
+    Child,
+    _ElemAz,
+    #state{raw_text_kind = raw, raw_text_tag = Tag, module = Module, backend = Backend} = State0,
+    Slot
 ) ->
     %% script/style: raw text, the browser decodes neither character references
     %% nor HTML comments here, so the value is emitted verbatim, markerless and
@@ -2463,7 +2491,13 @@ emit_child_dynamic(
     %% script/CSS (and a module script's HTML-comment tokens are a SyntaxError).
     %% Diffing is impossible by construction (no marker to patch), so the slot
     %% renders once -- the diff engine skips its `undefined` az.
-    DynAST = make_raw_text_dynamic_ast(Child, Module, line(Child), Backend),
+    ok = assert_raw_text_opt_out(Child),
+    DynAST = make_raw_text_dynamic_ast(Child, Tag, Module, line(Child), Backend),
+    {flush(State0, DynAST), Slot};
+emit_child_dynamic(
+    Child, _ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
+) ->
+    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(
     Child,
@@ -2484,6 +2518,26 @@ emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = S
     DynAST = make_esc_text_dynamic_ast(MarkerAz, Child, Module, line(Child), Backend),
     State2 = flush(State1, DynAST),
     {State2#state{buf = [Backend:text_slot_close()]}, Slot + 1}.
+
+%% Verbatim is the whole point of a `raw` raw-text slot (script/style) and also its
+%% danger: the browser decodes no character references there, so the escaping every
+%% other slot kind applies is *impossible* -- the value reaches the output byte for
+%% byte and can close the JS string it sits in, or the element. This is the only
+%% content position where an unmarked value would be spliced unescaped, so require
+%% the author to state the value is safe for the script/CSS context with a literal
+%% `?raw(...)` at the slot -- the same "literal at the template site" rule the
+%% escape opt-out already follows everywhere else. Static text children never reach
+%% here (compile_child/4 splices them from the template's own bytes).
+assert_raw_text_opt_out(Child) ->
+    case is_raw_call(Child) of
+        true -> ok;
+        false -> parse_error(dynamic_in_raw_text, line(Child))
+    end.
+
+is_raw_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, raw}}, [_Value]}) ->
+    Mod =:= arizona_template orelse Mod =:= az;
+is_raw_call(_Expr) ->
+    false.
 
 make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),
@@ -2774,13 +2828,17 @@ make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
 %% browser does not decode character references inside these, so HTML-escaping a
 %% scalar would corrupt it (`&` -> `&amp;`). `undefined` az makes it non-diffable
 %% -- there is no comment marker to patch.
-make_raw_text_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
+make_raw_text_dynamic_ast(ExprAST0, Tag, Module, ExprLine, Backend) ->
     ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
-    %% Neutralize a close-tag breakout (`</script>`) in the value: the content is
-    %% emitted verbatim, so the backend that owns raw-text elements sanitizes it.
+    %% Neutralize a tokenizer breakout (`</script>`, `<!--`) in the value: the
+    %% content is emitted verbatim, so the backend that owns raw-text elements
+    %% sanitizes it. The tag goes along because the sequences that break out are
+    %% the enclosing element's, not raw text's in general.
     GuardedAST =
-        {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, raw_text}}, [ExprAST]},
+        {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, raw_text}}, [
+            {atom, 0, Tag}, ExprAST
+        ]},
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [GuardedAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, FunAST, LocAST]}.
 
@@ -3083,8 +3141,11 @@ contains_inner_content(List) when is_list(List) ->
 contains_inner_content(_) ->
     false.
 
-directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
-directive_opts(_) -> false.
+directive_opts(Name) ->
+    directive_opts_1(framework_attr_name(Name)).
+
+directive_opts_1(~"az-nodiff") -> {ok, #{diff => false}};
+directive_opts_1(_Other) -> false.
 
 %% Attribute names the template author may not write, checked on the element's
 %% ORIGINAL attrs -- before az-view / az-local injection, so an injected name is
@@ -3143,9 +3204,16 @@ bare_attr_name(_) ->
 %% live root), and every other `az-*` name is user territory -- `az-key` keys stream
 %% items, `az-click`/`az-submit`/... carry effects, and an app is free to invent its
 %% own `az-*` attributes.
-reserved_attr_name(<<"az">>) -> true;
-reserved_attr_name(<<"az-local">>) -> true;
-reserved_attr_name(_) -> false.
+reserved_attr_name(undefined) ->
+    %% attr_name/1's "not a compile-time literal" answer (a dynamic attribute
+    %% name): there is no name to compare, so it is not a reserved one.
+    false;
+reserved_attr_name(Name) ->
+    is_reserved_attr_name(framework_attr_name(Name)).
+
+is_reserved_attr_name(~"az") -> true;
+is_reserved_attr_name(~"az-local") -> true;
+is_reserved_attr_name(_Other) -> false.
 
 reject_reserved_attrs(Attrs, Line) ->
     case [Name || Attr <- Attrs, Name <- [attr_name(Attr)], reserved_attr_name(Name)] of
@@ -3171,6 +3239,23 @@ attr_name(Attr) ->
 %% (`prescan_directives/1`) runs before any backend is resolved.
 directive_attr_name(Name) ->
     binary:replace(atom_to_binary(Name), <<"_">>, <<"-">>, [global]).
+
+%% The form every framework attribute NAME is compared in: lowercased, on top of
+%% the dash normalization above. HTML attribute names are ASCII case-insensitive,
+%% so `AZ="x"` is an `az` attribute to the browser and `AZ-VIEW` an `az-view` --
+%% the client reads them back with `querySelector('[az=...]')` / `getAttribute`,
+%% both of which fold case. Comparing only the lowercase spelling therefore let a
+%% capitalized copy slip past the very checks that exist to stop it: a template
+%% `AZ` could shadow a real slot address and misroute a patch, and an `AZ-NODIFF`
+%% was not recognized as the directive at all, so the element stayed diffable AND
+%% leaked the attribute into the DOM -- the opposite of what was asked for.
+%%
+%% Rejects strictly more than before and nothing a valid template writes: the
+%% names are reserved in every casing. The name is normalized only for the
+%% comparison; `attr_name/1` still returns it as authored, so an error message
+%% quotes what the author actually typed.
+framework_attr_name(Name) ->
+    string:lowercase(Name).
 
 extract_directives(Attrs) ->
     extract_directives(Attrs, #{}).

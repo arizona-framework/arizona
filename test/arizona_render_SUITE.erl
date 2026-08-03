@@ -32,6 +32,8 @@
     static_attr_escaped/1,
     escape_clean_value_not_rebuilt/1,
     raw_text_breakout_neutralized/1,
+    raw_text_breakout_neutralized_for_chardata/1,
+    raw_text_breakout_neutralized_for_atom/1,
     render_nested_sd/1,
     render_nodiff_layout_location_success/1,
     render_nodiff_layout_location_wrapping/1,
@@ -108,6 +110,8 @@ groups() ->
             static_attr_escaped,
             escape_clean_value_not_rebuilt,
             raw_text_breakout_neutralized,
+            raw_text_breakout_neutralized_for_chardata,
+            raw_text_breakout_neutralized_for_atom,
             render_nested_sd,
             render_with_views_no_children,
             repeated_stateless_distinct_az,
@@ -302,7 +306,7 @@ escape_clean_value_not_rebuilt(Config) when is_list(Config) ->
 
 %% P9: a dynamic value in a raw-text element (<script>) renders verbatim, but a
 %% `</script>` in the value would break out into HTML parsing. The backend's
-%% raw_text/1 neutralizes the close tag (inserting a backslash), transparently for
+%% raw_text/2 neutralizes the close tag (inserting a backslash), transparently for
 %% JSON, while a benign value is left byte-for-byte unchanged.
 raw_text_breakout_neutralized(Config) when is_list(Config) ->
     Payload = ~"{\"x\":\"</script><img src=x onerror=alert(1)>\"}",
@@ -322,7 +326,106 @@ raw_text_breakout_neutralized(Config) when is_list(Config) ->
     Benign = iolist_to_binary(
         element(1, arizona_render:render(arizona_raw_text_script:render(#{json => ~"{\"a\":1<2}"})))
     ),
-    ?assertNotEqual(nomatch, binary:match(Benign, ~"{\"a\":1<2}")).
+    ?assertNotEqual(nomatch, binary:match(Benign, ~"{\"a\":1<2}")),
+    %% The double-escape breakout, which neutralizing only the close tag misses:
+    %% `<!--` puts the tokenizer in script-data-escaped state and a following
+    %% `<script` in script-data-double-escaped, where the element's OWN
+    %% `</script>` no longer closes it -- the rest of the document (the Arizona
+    %% bootstrap script included) is swallowed and the view never connects.
+    %% Neither half may survive into the emitted bytes.
+    Nasty = ~"<!--<script>alert(1)</script>",
+    Double = render_json_script(json:encode(#{~"x" => Nasty})),
+    %% Exactly one open and one close tag -- the element's own. The payload's are gone.
+    ?assertEqual(1, length(binary:matches(Double, ~"<script"))),
+    ?assertEqual(1, length(binary:matches(Double, ~"</script>"))),
+    ?assertEqual([], binary:matches(Double, ~"<!--")),
+    %% ...and the rewrite stays transparent for the documented use: the emitted
+    %% bytes are still the same JSON value, so a legitimate blob that happens to
+    %% carry those sequences is neutralized without being corrupted.
+    ?assertEqual(#{~"x" => Nasty}, json:decode(script_content(Double))),
+    %% Tag names match case-insensitively, as the HTML tokenizer does. `<!--`
+    %% and `<script` become `<` rather than the close tag's `<\` because
+    %% `\!`/`\s` are not valid JSON escapes while `<` is (and both decode
+    %% back to `<` in a JSON or JavaScript string).
+    ?assertEqual(~"\\u003c!--", arizona_html:raw_text(script, ~"<!--")),
+    ?assertEqual(~"\\u003cSCRIPT>", arizona_html:raw_text(script, ~"<SCRIPT>")),
+    %% A lone `<` that begins none of those sequences is still left alone.
+    ?assertEqual(~"a < b <!x", arizona_html:raw_text(script, ~"a < b <!x")),
+    %% The tag picks the policy: <style> is RAWTEXT, so the script-data rewrites do
+    %% not apply there (they would defend nothing and corrupt the CSS), while its
+    %% own close tag still does.
+    ?assertEqual(~"<!--<script>", arizona_html:raw_text(style, ~"<!--<script>")),
+    ?assertEqual(~"a<\\/style>b", arizona_html:raw_text(style, ~"a</style>b")).
+
+%% Render the raw-text fixture and keep only the <script> element's content, so a
+%% breakout that survived would truncate the slice and fail the caller's decode.
+script_content(HTML) ->
+    [_Before, Rest] = binary:split(HTML, ~"<script type=\"application/json\">"),
+    [Content, _After] = binary:split(Rest, ~"</script>"),
+    Content.
+
+%% Bind the value EXACTLY as produced -- no iolist_to_binary. `json:encode/1` returns
+%% iodata, and `?raw(json:encode(Data))` is the remedy the compile error and both doc
+%% files hand the author, so the neutralizer has to meet it in that shape.
+render_json_script(Json) ->
+    Template = arizona_raw_text_script:render(#{json => Json}),
+    iolist_to_binary(element(1, arizona_render:render(Template))).
+
+%% The documented remedy is `?raw(json:encode(Data))`, and json:encode/1 returns
+%% IODATA, not a binary. A neutralizer that only matches binaries would wave the
+%% breakout straight through on the one form the framework tells users to write.
+%% Charlists and nested iolists must behave identically to the flat binary.
+raw_text_breakout_neutralized_for_chardata(Config) when is_list(Config) ->
+    Nasty = ~"</script><img src=x onerror=alert(1)>",
+    Encoded = json:encode(#{~"a" => Nasty}),
+    ?assertNot(is_binary(Encoded)),
+    HTML = render_json_script(Encoded),
+    %% The payload's close tag is gone; only the element's own remains.
+    ?assertEqual(nomatch, binary:match(HTML, ~"</script><img")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"</script>"))),
+    %% ...and the value still round-trips as the same JSON it was.
+    ?assertEqual(#{~"a" => Nasty}, json:decode(script_content(HTML))),
+    %% Byte-identical to the flat-binary path -- iodata is not a second policy.
+    ?assertEqual(render_json_script(iolist_to_binary(Encoded)), HTML),
+    %% A charlist and a deeply nested iolist neutralize the same way.
+    ?assertEqual(~"a<\\/script>b", arizona_html:raw_text(script, "a</script>b")),
+    ?assertEqual(~"a<\\/script>b", arizona_html:raw_text(script, [~"a", [~"</scr", "ipt>"], ~"b"])),
+    %% Through the ?raw opt-out, which is the only shape a script slot can carry.
+    ?assertEqual(
+        {arizona_raw, ~"x<\\/script>"},
+        arizona_html:raw_text(script, {arizona_raw, ["x", ~"</script>"]})
+    ),
+    %% Chardata that will not decode (invalid UTF-8) is handed back untouched rather
+    %% than swallowed here, so to_bin/1 stays the one place that names a bad value.
+    Undecodable = [<<255>>],
+    ?assertEqual(Undecodable, arizona_html:raw_text(script, Undecodable)),
+    ?assertError({bad_template_value, Undecodable}, arizona_template:to_bin(Undecodable)).
+
+%% An ATOM carries bytes too: to_bin/1 renders it via atom_to_binary, so an
+%% attacker-influenced atom in a `?raw` script slot is a real breakout. It is the
+%% one to_bin-able shape the binary/chardata clauses missed -- integers and floats
+%% stringify to digits, and an effect command's JSON is HTML-escaped by
+%% arizona_effect:encode/1, so neither can carry `<`.
+raw_text_breakout_neutralized_for_atom(Config) when is_list(Config) ->
+    Nasty = '</script><img src=x onerror=alert(1)>',
+    %% The shape that makes it dangerous: the atom's bytes reach the output.
+    ?assertEqual(~"</script><img src=x onerror=alert(1)>", arizona_template:to_bin(Nasty)),
+    %% Neutralized, and normalized to the binary it would have rendered as.
+    ?assertEqual(
+        ~"<\\/script><img src=x onerror=alert(1)>", arizona_html:raw_text(script, Nasty)
+    ),
+    HTML = render_json_script(Nasty),
+    ?assertEqual(nomatch, binary:match(HTML, ~"</script><img")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"</script>"))),
+    %% Byte-identical to binding the same bytes as a binary -- an atom is not a
+    %% second policy, exactly as chardata is not.
+    ?assertEqual(render_json_script(atom_to_binary(Nasty)), HTML),
+    %% The script-data half folds case and is tag-gated the same way.
+    ?assertEqual(~"\\u003c!--\\u003cscript>", arizona_html:raw_text(script, '<!--<script>')),
+    ?assertEqual(~"<!--<script>", arizona_html:raw_text(style, '<!--<script>')),
+    %% Shapes that cannot carry a metacharacter are still passed straight through.
+    ?assertEqual(123, arizona_html:raw_text(script, 123)),
+    ?assertEqual(1.5, arizona_html:raw_text(script, 1.5)).
 
 render_nested_sd(Config) when is_list(Config) ->
     T = #{

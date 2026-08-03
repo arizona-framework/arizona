@@ -148,8 +148,15 @@ carrying a close-tag sequence (`</script>`) would still break out of the element
 into HTML parsing. The parse transform wraps every raw-text dynamic in this
 callback, so the backend that owns raw-text elements neutralizes the breakout;
 backends without raw-text elements return the value unchanged.
+
+`Tag` is the enclosing element, because the neutralization a value needs is a
+property of *that element's* tokenizer state, not of raw text in general: HTML
+reads `<script>` content in the script-data states (which `<!--` and `<script`
+move) but `<style>` content as plain RAWTEXT (which only its own close tag ends).
+Rewriting the script-data sequences inside a `<style>` would defend nothing and
+corrupt valid CSS, so the backend needs the tag to pick the right policy.
 """.
--callback raw_text(Value :: term()) -> term().
+-callback raw_text(Tag :: atom(), Value :: term()) -> term().
 
 -doc """
 Render a dynamic attribute's evaluated value to this backend's output bytes.

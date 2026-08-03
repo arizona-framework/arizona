@@ -139,7 +139,13 @@ variants. For anything the atoms don't cover, use a valued attribute: `{sgr, Esc
 index). Styles **do not inherit** across containers (every element resets on close),
 so put the style on the `line`/`text` that needs it. An unknown style atom, an
 unknown valued attribute, a dynamic attribute value, or an event-command attribute
-is **rejected at compile time**, not silently dropped.
+is **rejected at compile time**, not silently dropped. So is an unknown **element**:
+the tag table above is the whole vocabulary, so a tag outside it is a typo rather than
+an extension point, and accepting it as a transparent container swallowed the author's
+intent silently (`{'BR', [], []}` emitted a style reset instead of a newline). Terminal
+tag names are **case-sensitive** -- the vocabulary is Arizona's own, not HTML's, so
+`Line` is not `line`. (This is the opposite of the `?html` target, whose tag
+*classification* folds case because the browser's parser does.)
 
 ```erlang
 render(Bindings) ->
@@ -1330,7 +1336,44 @@ The backend classifies the tag via the `arizona_renderer` `raw_text_kind/1` call
 renders the value **verbatim** (the browser decodes no character references there, so HTML-escaping
 would corrupt it -- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL
 correct); `escapable` (`textarea`/`title`) HTML-escapes a scalar (references *are* decoded there)
-but is still markerless. A dynamic *attribute* on a raw-text element stays fully diffable -- only
+but is still markerless. Because a `raw` slot is spliced byte for byte and escaping is *impossible*
+there, the parse transform **requires** the value to carry a literal `?raw(...)` at the slot
+(`dynamic_in_raw_text`): an unmarked `?get` in a `<script>` would otherwise be the one content
+position where user data reaches the output unescaped, free to close the JavaScript string it sits
+in. Literal script/CSS text is static, not a slot, so it is unaffected; `escapable` elements escape
+and so are not gated. The opt-out marks the value trusted for HTML *escaping*, not for the raw-text
+tokenizer -- a trusted JSON blob's own string data can still spell an element breakout -- so
+`arizona_html:raw_text/2` unwraps the `?raw` and neutralizes the payload anyway. It takes the
+**tag**, because which sequences break out is a property of that element's tokenizer state rather
+than of raw text at large. `</script`/`</style` becomes `<\/script` in both elements -- strictly
+only the *appropriate* end tag (the one whose name matches the element being parsed) closes a
+raw-text element, so `</style>` inside a `<script>` is ordinary text, but both names are
+neutralized in both as a harmless superset that keeps this half of the rule tag-independent.
+`<!--` and `<script` (which together reach script-data-**double**-escaped, where the
+element's own `</script>` stops closing it and the rest of the document is swallowed) have their
+`<` rewritten as `\u003c`, but **only inside `<script>`**: `<style>` content is RAWTEXT, which has
+no escaped state, so rewriting them there would defend nothing while corrupting the stylesheet
+(`\u003c` is a JS/JSON escape a CSS parser reads as `u003c`, and `<!--`/`-->` are legitimate CSS
+CDO/CDC tokens). Every rewrite therefore decodes back to the original in the context it is applied
+to. It covers every shape `to_bin/1` can turn into attacker-chosen bytes: a binary, an **atom**
+(rendered with `atom_to_binary`, so it carries bytes exactly like a binary), **chardata** -- the
+documented remedy `?raw(json:encode(Data))` hands it an iolist, not a binary, so a binary-only
+guard would wave a breakout through on the very form the compile error recommends -- and a `?raw`
+wrapping any of those. An integer, a float and an effect command (whose JSON `arizona_effect:encode/1`
+already HTML-escapes) cannot spell a sequence, so they pass through.
+
+**Known limit -- the check is per-slot.** Each dynamic is neutralized on its own, so two
+**adjacent** `?raw` slots in one raw-text element whose halves are both attacker-controlled
+reassemble a sequence after both have passed: `~"</scr"` followed by `~"ipt><img src=x ...>"`
+emits a working close tag, since neither half is a breakout by itself. Treat adjacent `?raw` slots
+in one `<script>`/`<style>` as a single trust boundary and build the value in one slot. Two slots
+cannot reach the script-data-*escaped* states (whichever of `<!--` / `<script` lands whole in a
+slot is neutralized there), but three can (`~"<!"`, `~"--<scr"`, `~"ipt>"`), so the
+document-swallowing variant is reachable, just harder. This is inherent to per-slot
+neutralization -- closing it needs the element's whole content assembled before the check, which
+the render path does not do.
+A dynamic *attribute* on a raw-text element
+stays fully diffable -- only
 the content slot is markerless. Limitation: the slot will not update after the initial render, and
 `?local` is unsupported inside a raw-text element (no marker to address); a live `?get` there
 silently freezes at its first value. Emitting `OP_UPDATE` for a marker-anchored slot is a bug: no
