@@ -77,6 +77,7 @@
     seed_fps_caps_growth/1,
     live_unknown_view_id_noop/1,
     child_stream_survives_next_root_diff/1,
+    child_event_leaves_root_snapshot_untouched/1,
     stateful_child_independent_state/1,
     nested_stateful_child_event/1,
     nested_stateful_grandchild_survives_root_skip/1,
@@ -144,6 +145,7 @@ groups() ->
             live_inc_then_dec,
             live_unknown_view_id_noop,
             child_stream_survives_next_root_diff,
+            child_event_leaves_root_snapshot_untouched,
             render_current_full_frame
         ]},
         {mount_and_render, [parallel], [
@@ -446,6 +448,49 @@ child_stream_survives_next_root_diff(Config) when is_list(Config) ->
         Pid, ~"csr", ~"relabel", #{~"label" => ~"L2"}
     ),
     ?assertMatch([[~"cs", [[?OP_TEXT, _, ~"L2"]]]], BumpOps2).
+
+child_event_leaves_root_snapshot_untouched(Config) when is_list(Config) ->
+    %% The root snapshot's copy of a child is settled LAZILY -- at the next root
+    %% diff, not on the child event -- so a child event costs nothing in the size
+    %% of the root snapshot.
+    %%
+    %% Settling it on the child event rebuilt every enclosing container, and for
+    %% a child inside a stream that is EVERY item's dynamics list plus the
+    %% container map, on every child event: linear in the row count on exactly
+    %% the shape the refresh exists for, so a list whose rows each tick made the
+    %% update cycle quadratic. `child_views` prunes at the container level only;
+    %% stream item snapshots carry no such annotation, so there is nothing to
+    %% prune per item.
+    %%
+    %% Asserting the root snapshot is byte-for-byte what it was before the child
+    %% event is the behavioural proxy for "not walked": the child's own count
+    %% changed, so any implementation that settled the copy here would differ.
+    %% (`child_stream_survives_next_root_diff` pins that the settle still
+    %% happens by the time it matters.)
+    {ok, Pid} = arizona_live:start_link(
+        arizona_stream_with_child, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(
+        Pid, ~"swc", ~"add_item", #{~"id" => 2, ~"label" => ~"Item 2"}
+    ),
+    Before = root_snapshot(Pid),
+    %% A stateful child inside the stream changes on its own.
+    {ok, ChildOps, _} = arizona_live:handle_event(Pid, ~"counter-1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"1"]], ChildOps),
+    ?assertEqual(Before, root_snapshot(Pid)).
+
+%% The live process's root snapshot, located by shape rather than by record
+%% position so the assertion does not encode #state{}'s field order: the
+%% snapshot is the only field that is a map carrying template statics.
+root_snapshot(Pid) ->
+    [Snapshot] = [
+        Field
+     || Field <- tuple_to_list(sys:get_state(Pid)),
+        is_map(Field),
+        is_map_key(s, Field)
+    ],
+    Snapshot.
 
 live_init_bindings(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(

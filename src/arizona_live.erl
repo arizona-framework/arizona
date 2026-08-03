@@ -178,7 +178,10 @@ fingerprints already shipped in the initial HTML.
     sent_fps :: map(),
     %% Does this transport fold queued pushes into synchronous replies? See
     %% push_barrier/1.
-    push_barrier :: boolean()
+    push_barrier :: boolean(),
+    %% Child views whose own diff has moved past the copy held in `snapshot`.
+    %% Settled lazily, at the next root diff. See apply_pending_refresh/3.
+    pending_refresh = #{} :: #{binary() => true}
 }).
 
 -type state() :: #state{}.
@@ -531,7 +534,10 @@ handle_call(
     #state{handler = H, bindings = B0, views = V0, on_mount = OM} = State
 ) ->
     {ViewId, _HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
-    {reply, {ok, ViewId}, State#state{bindings = B2, snapshot = Snap, views = V1}};
+    %% A full render already reflects every child, so nothing is pending on it.
+    {reply, {ok, ViewId}, State#state{
+        bindings = B2, snapshot = Snap, views = V1, pending_refresh = #{}
+    }};
 handle_call(
     mount_and_render,
     _From,
@@ -546,14 +552,14 @@ handle_call(
     {ViewId, HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, ViewId, PageContent1}, State#state{
-        bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1
+        bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1, pending_refresh = #{}
     }};
 handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
     Tmpl = arizona_stateful:call_render(H, B),
     {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
     {reply, {ok, iolist_to_binary(HTML)}, State};
-handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0, bindings = B0} = State) ->
-    ok = push_barrier(State),
+handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings = B0} = State) ->
+    ok = push_barrier(From, State),
     case V0 of
         #{ViewId := _} ->
             handle_child_event(ViewId, Event, Payload, State);
@@ -619,8 +625,8 @@ handle_call(
         sent_fps = Fps1,
         push_barrier = Barrier
     }};
-handle_call({patch, Params}, _From, #state{handler = H, bindings = B0} = State) ->
-    ok = push_barrier(State),
+handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) ->
+    ok = push_barrier(From, State),
     %% In-place navigation: the root view stays mounted. Deliver Params to its
     %% handle_update/3 (navigation as the root's prop source), then re-render
     %% and diff against the live snapshot -- no unmount, no remount, no timer
@@ -773,7 +779,7 @@ handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
     {Ops1, V1, Fps1, Effects1} = process_child_change(H, B1, Resets, Effects, ViewId, View, State),
-    NewState = refresh_root_snapshot(ViewId, State#state{views = V1, sent_fps = Fps1}),
+    NewState = mark_pending_refresh(ViewId, State#state{views = V1, sent_fps = Fps1}),
     {reply, {ok, Ops1, Effects1}, NewState}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
@@ -800,7 +806,7 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
                 H, B1, Resets, Effects, ViewId, View, State
             ),
             push(TPid, root_view_id(State), scope_child_ops(ViewId, Ops1), Effects1),
-            NewState = refresh_root_snapshot(ViewId, State#state{views = V1, sent_fps = Fps1}),
+            NewState = mark_pending_refresh(ViewId, State#state{views = V1, sent_fps = Fps1}),
             {noreply, NewState}
     end.
 
@@ -843,19 +849,20 @@ process_root_change(
     Resets,
     Effects0,
     #state{
-        bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0
+        bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0, pending_refresh = Pending
     } = State
 ) ->
+    Snap = apply_pending_refresh(Pending, V0, Snap0),
     Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
-    {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
+    {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap, V0, Changed),
     Effects1 = arizona_eval:drain_update_effects(),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
-    {Ops1, Snap1, V1, B3, Fps1, State, Effects1}.
+    {Ops1, Snap1, V1, B3, Fps1, State#state{pending_refresh = #{}}, Effects1}.
 
 %% Same idea as process_root_change/5 but for a nested child view. Diffs through
 %% the dep-gated view-tracking path (diff/4, mirroring the root): only the
@@ -892,8 +899,8 @@ process_child_change(
     V2 = V1#{ViewId => View#{bindings => B3, snapshot => Snap2}},
     {Ops1, V2, Fps1, Effects1}.
 
-%% Bring the ROOT snapshot's stored copy of child `ViewId`'s snapshot up to the
-%% child's own post-diff one.
+%% Note that child `ViewId`'s own diff has moved it past the copy the ROOT
+%% snapshot holds. O(1) -- the copy is settled later, by apply_pending_refresh/3.
 %%
 %% The root snapshot is the diff baseline for the child's slot, and a child that
 %% changes on its own (its own event, or a `?send`-driven `handle_info`) updates
@@ -905,47 +912,96 @@ process_child_change(
 %% diff after the child change did it (the one after re-seeded the baseline from
 %% its own fresh evaluation), which is exactly the diff a user is most likely to
 %% be interacting through.
-refresh_root_snapshot(ViewId, #state{snapshot = Snap, views = Views} = State) ->
-    #{ViewId := #{snapshot := ChildSnap}} = Views,
-    State#state{snapshot = refresh_view_snap(ViewId, ChildSnap, Snap)}.
+%%
+%% Settling it here, on the child event itself, would rebuild every enclosing
+%% container -- for a child inside a stream, every item's dynamics list plus the
+%% container map, on every child event. That is linear in the list length on the
+%% one shape this fix exists for, so a list whose rows each tick would make the
+%% update cycle quadratic. Nothing reads the root snapshot between a child change
+%% and the next root diff (`process_root_change/5` is its only reader), so the
+%% work belongs there, where an O(snapshot) diff is already being paid.
+mark_pending_refresh(ViewId, #state{pending_refresh = Pending} = State) ->
+    State#state{pending_refresh = Pending#{ViewId => true}}.
 
-%% Replace the copy of view `ViewId`'s snapshot held anywhere inside `Snap`. A
+%% Settle every child marked since the last root diff, in ONE walk -- so N
+%% children ticking before a root diff costs one traversal, not N.
+apply_pending_refresh(Pending, _Views, Snap) when map_size(Pending) =:= 0 ->
+    Snap;
+apply_pending_refresh(Pending, Views, Snap) ->
+    refresh_view_snap(fresh_child_snaps(Pending, Views), Snap).
+
+%% A marked view can have been removed since (a child's own diff can drop a
+%% grandchild), so read the set off `views` -- an id no longer mounted simply
+%% isn't in the result, and the walk then never matches it.
+fresh_child_snaps(Pending, Views) ->
+    #{
+        Id => ChildSnap
+     || Id := #{snapshot := ChildSnap} <:- Views, is_map_key(Id, Pending)
+    }.
+
+%% Replace every copy of a marked view's snapshot held anywhere inside `Snap`. A
 %% container records the transitive set of view ids rendered inside it
-%% (`child_views`), so a subtree that cannot hold this view is skipped whole and
-%% the walk follows one path; a container carrying no such annotation (the root
-%% snapshot itself) is descended into.
-refresh_view_snap(ViewId, ChildSnap, #{view_id := ViewId}) ->
-    ChildSnap;
-refresh_view_snap(ViewId, ChildSnap, #{t := ?EACH, items := Items} = Snap) ->
-    case holds_view(ViewId, Snap) of
-        true -> Snap#{items => refresh_each_items(ViewId, ChildSnap, Items)};
+%% (`child_views`), so a subtree that can hold none of them is skipped whole; a
+%% container carrying no such annotation (the root snapshot itself) is descended
+%% into. That prune has a precondition -- see holds_any_view/2.
+refresh_view_snap(Fresh, #{view_id := Id} = Snap) ->
+    case Fresh of
+        #{Id := ChildSnap} -> ChildSnap;
+        #{} -> refresh_container(Fresh, Snap)
+    end;
+refresh_view_snap(Fresh, Snap) ->
+    refresh_container(Fresh, Snap).
+
+refresh_container(Fresh, #{t := ?EACH, items := Items} = Snap) ->
+    case holds_any_view(Fresh, Snap) of
+        true -> Snap#{items => refresh_each_items(Fresh, Items)};
         false -> Snap
     end;
-refresh_view_snap(ViewId, ChildSnap, #{d := D} = Snap) when is_list(D) ->
-    case holds_view(ViewId, Snap) of
-        true -> Snap#{d => [refresh_dyn(ViewId, ChildSnap, Dyn) || Dyn <- D]};
+refresh_container(Fresh, #{d := D} = Snap) when is_list(D) ->
+    case holds_any_view(Fresh, Snap) of
+        true -> Snap#{d => [refresh_dyn(Fresh, Dyn) || Dyn <- D]};
         false -> Snap
     end;
-refresh_view_snap(_ViewId, _ChildSnap, Value) ->
+refresh_container(_Fresh, Value) ->
     Value.
 
-holds_view(ViewId, #{child_views := Ids}) -> lists:member(ViewId, Ids);
-holds_view(_ViewId, #{}) -> true.
+%% PRECONDITION: `child_views` is accurate as of the container's LAST
+%% EVALUATION, not as of now. A view that came into existence AFTER that -- a
+%% grandchild first rendered by a nested child's own `handle_event`/`handle_info`
+%% rather than by a root diff -- is not in the enclosing container's set yet, so
+%% this answers `false` and the walk skips a subtree that does hold it.
+%%
+%% Shape: root -> an intermediate container (a `case`-branch nested template, or
+%% a plain-list `?each`) -> child `c1`; `c1`'s own event renders grandchild `g1`;
+%% `g1`'s own event then cannot reach the root's copy through the intermediate
+%% container. The stale copy survives until the next root diff re-evaluates that
+%% container, which rebuilds the annotation and closes the window.
+%%
+%% Cost when it bites: the container gets the wholesale `?OP_UPDATE` this refresh
+%% exists to remove -- never a wrong render, and never a regression (with no
+%% refresh at all that container re-renders anyway, from a baseline that is
+%% staler still). Refreshing ancestors' `child_views` on the way down would fix
+%% it, but only by walking unpruned to find the target in the first place, which
+%% is exactly the linear cost the lazy settle above is here to avoid.
+holds_any_view(Fresh, #{child_views := Ids}) ->
+    lists:any(fun(Id) -> is_map_key(Id, Fresh) end, Ids);
+holds_any_view(_Fresh, #{}) ->
+    true.
 
 %% A stream/map-keyed `?each` holds its items in a map, a plain-list one in a
 %% list; either way an item is a list of `{Az, Value, Deps}` triples.
-refresh_each_items(ViewId, ChildSnap, Items) when is_map(Items) ->
-    #{Key => refresh_item_dyns(ViewId, ChildSnap, ItemD) || Key := ItemD <- Items};
-refresh_each_items(ViewId, ChildSnap, Items) when is_list(Items) ->
-    [refresh_item_dyns(ViewId, ChildSnap, ItemD) || ItemD <- Items].
+refresh_each_items(Fresh, Items) when is_map(Items) ->
+    #{Key => refresh_item_dyns(Fresh, ItemD) || Key := ItemD <- Items};
+refresh_each_items(Fresh, Items) when is_list(Items) ->
+    [refresh_item_dyns(Fresh, ItemD) || ItemD <- Items].
 
-refresh_item_dyns(ViewId, ChildSnap, ItemD) ->
-    [refresh_dyn(ViewId, ChildSnap, Dyn) || Dyn <- ItemD].
+refresh_item_dyns(Fresh, ItemD) ->
+    [refresh_dyn(Fresh, Dyn) || Dyn <- ItemD].
 
-refresh_dyn(ViewId, ChildSnap, {Az, Value}) ->
-    {Az, refresh_view_snap(ViewId, ChildSnap, Value)};
-refresh_dyn(ViewId, ChildSnap, {Az, Value, Deps}) ->
-    {Az, refresh_view_snap(ViewId, ChildSnap, Value), Deps}.
+refresh_dyn(Fresh, {Az, Value}) ->
+    {Az, refresh_view_snap(Fresh, Value)};
+refresh_dyn(Fresh, {Az, Value, Deps}) ->
+    {Az, refresh_view_snap(Fresh, Value), Deps}.
 
 clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
@@ -1087,10 +1143,19 @@ push(Pid, ViewId, Ops, Effects) ->
 %% marker (it is guaranteed present -- it was sent before the reply the
 %% transport has by then received) and leaves the rest for its own inbox path,
 %% which ships them in a later frame, in order.
-push_barrier(#state{push_barrier = true, transport_pid = Pid}) when is_pid(Pid) ->
+%%
+%% Emitted only when the CALLER is the folding transport itself. `handle_event/4`
+%% and `patch/2` are exported, so any process can call them on a live process
+%% whose transport folds -- and a marker sent for someone else's call is one
+%% nobody drains, which would offset the transport's drain by one from then on
+%% (every later drain eats the previous cycle's marker, folds nothing, and lets a
+%% stale push ship in a later frame over a newer value). Matching the caller
+%% against `transport_pid` means such a call emits no marker at all, so the
+%% transport's mailbox can never hold one it did not cause.
+push_barrier({Pid, _Tag}, #state{push_barrier = true, transport_pid = Pid}) ->
     Pid ! arizona_push_barrier,
     ok;
-push_barrier(#state{}) ->
+push_barrier(_From, #state{}) ->
     ok.
 
 root_view_id(#state{bindings = Bindings}) ->
