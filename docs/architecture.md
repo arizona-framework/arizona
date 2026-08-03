@@ -1363,7 +1363,6 @@ render(Bindings) ->
 ?stateless(render_card, #{label => ~"Hello", content => SomeTemplate})
 ```
 
-<<<<<<< HEAD
 Use the **macro**, not `maps:get(inner_content, Bindings)`: the parse transform recognizes
 `?inner_content` as a block, which is what marks the whole layout `az-nodiff` (a layout renders once
 at SSR and is never diffed, so it needs no `az` targets). A raw `maps:get` is invisible to it, so the
@@ -1376,26 +1375,6 @@ whole -- fine in a `case` tail or handed to a child as a prop, but `iolist_size/
 `badarg`, and in an **attribute** value it raises `bad_template_value` carrying the whole page in the
 error term. `az:inner_content/1` documents the full set of accepted and rejected placements;
 `arizona_render_SUITE`'s `ssr_inner_content_*` cases pin them.
-=======
-**Use the macro, not a bare `maps:get(inner_content, Bindings)`.** The parse transform decides
-value-vs-block by the *call itself*: `is_block_content_expr/1` matches only an `az:` /
-`arizona_template:` call from a fixed name list (`html`, `each`, `stateful`, `stateless`,
-`inner_content`, `local`, `raw`, ...). `?inner_content` expands to `az:inner_content(Bindings)` and
-so is classified a **block** -- spliced structurally, never escaped. A `maps:get/2` call matches
-nothing in that list, so it is classified a **value** and wrapped `{esc, Fun}`, i.e. handed to the
-backend's escaper at the render boundary. That HTML-escapes the entire wrapped page. The `maps:get`
-form only appears to work where the injected value happens to be a map, because
-`arizona_template:mark_esc/1` passes maps through unescaped (`mark_esc(V) when is_map(V) -> V`) --
-an accident of the value's shape, not recognition of the expression.
-
-The value is **opaque, and for a content slot only**: it is a nested template
-(`#{s := [Page], d := []}`), which is what lets the slot splice the page verbatim instead of
-copying and UTF-8-re-decoding it once per layout layer. So do not inspect or measure it
-(`iolist_size(az:inner_content(Bindings))` raises `badarg`), and do not put `?inner_content` in an
-**attribute** value -- like any other template value in attribute position it raises
-`bad_template_value`, here carrying the whole page in the error term. It errors with
-`{badkey, inner_content}` when the module was rendered as something other than a layout.
->>>>>>> ba797976 (Use the inner_content macro in the layout example and fix two generator examples)
 
 ## Handler callbacks
 
@@ -1544,7 +1523,7 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | 0    | `OP_TEXT`        | `[target, value]`          | Replace marker content (text, nested tmpl, plain each) |
 | 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attribute                                          |
 | 2    | `OP_REM_ATTR`    | `[target, attr]`           | Remove attribute                                       |
-| 3    | `OP_UPDATE`      | `[target, html]`           | innerHTML replacement. Implemented by all four clients, but **no longer emitted by the server** -- every container full render (plain-list and stream alike) is the marker-aware `OP_TEXT` |
+| 3    | `OP_UPDATE`      | `[target, html]`           | innerHTML replacement (no server emitter -- see below) |
 | 4    | `OP_REMOVE_NODE` | `[target]`                 | Remove element                                         |
 | 5    | `OP_INSERT`      | `[target, key, pos, html]` | Stream insert (pos=-1 -> append, otherwise index)      |
 | 6    | `OP_REMOVE`      | `[target, key]`            | Stream remove                                          |
@@ -1552,6 +1531,12 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | 8    | `OP_REPLACE`     | `[target, html]`           | Element swap (navigate); `target` is the OLD view id   |
 | 9    | `OP_MOVE`        | `[target, key, afterKey]`  | Stream move (afterKey=null -> prepend)                 |
 | 10   | `OP_LIST_PATCH`  | `[target, subOps]`         | Single-root plain-list `?each` positional item patch   |
+
+**`OP_UPDATE` has no server-side emitter.** All four clients still implement it, but every
+container full render (plain-list and stream alike) is now the marker-aware `OP_TEXT`: the
+container's `az` is not reliably carried by a dedicated element, so `innerHTML` on the resolved
+element destroys the slot's static siblings -- and the whole view when that element is the view
+root.
 
 A content-slot dynamic -- a value, a nested template, *or a plain-list `?each`* -- is anchored
 by `<!--az:X-->...<!--/az-->` comment markers in SSR (no wrapper element carries the slot `az`),

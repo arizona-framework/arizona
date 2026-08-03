@@ -50,9 +50,6 @@ itself (`arizona_terminal_ssh_SUITE` reads it back from `ssh:daemon_info/1`) nee
 
 Playwright, split into projects/directories, all served by
 `scripts/start_test_server.sh` on `$PORT` (default 4041):
-- `e2e/parallel/` -- `arizona_page.spec.js`, `arizona_datatable.spec.js`, `arizona_mixed_children.spec.js`, `arizona_os.spec.js` (run in parallel). `arizona_os.spec.js` drives the native-shell (OS) capability seam against the real client with a fake `window.__arizona_os__` installed via `page.addInitScript` (the Electron-preload equivalent).
-- `e2e/sequential/` -- `arizona_chat.spec.js`, `arizona_drain.spec.js`, `arizona_fetch_account.spec.js` (run with `workers: 1` so the drain spec, which soft-drains the whole listener and remounts every live view on the server, never overlaps the others). Serialization buys ordering, not state isolation: the e2e server is started once for the whole run, so anything keyed globally outlives every test. `arizona_chat` therefore scopes its pubsub channel to the `:room` path segment and each test visits a fresh random room.
-- `e2e/native/` -- the `?native` (JSON) wire e2e: a real WebSocket client (no browser, `e2e/utils/native_client.js`) drives the `/native/counter` view over the live server
 
 - `e2e/parallel/` -- 17 specs, `fullyParallel`: `arizona_page`, `arizona_datatable`,
   `arizona_mixed_children`, `arizona_inline`, `arizona_params`, `arizona_patch`,
