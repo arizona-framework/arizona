@@ -38,6 +38,17 @@ const SYS_PING = '0';
 const SYS_PONG = '1';
 const HEARTBEAT_MS = 30000;
 
+// Fingerprint-cache bound (mirrors FP_CACHE_MAX in assets/js/arizona-core.js).
+// A fingerprint hashes a template's statics, so every deploy mints a new key and
+// orphans the old one: unbounded, a long-lived client accumulates one generation
+// per deploy. Evicting is never wrong -- the cache is content-addressed, so the
+// server re-sends the statics for any key the client did not announce, and a miss
+// costs bytes only -- but it is only SAFE between connections: once a socket has
+// announced a key the server stops shipping that template's statics, so dropping
+// it mid-connection would leave a payload the client cannot resolve. The prune
+// therefore runs at announce time; the map is free to grow within a session.
+const FP_CACHE_MAX = 1000;
+
 // Reconnect backoff: step delays (ms) capped at 10s, with ±20% jitter (mirrors
 // assets/js/arizona-core.js).
 function backoff(attempt) {
@@ -54,7 +65,10 @@ export class NativeClient {
             '/ws?_az_path=' +
             encodeURIComponent(path) +
             '&_az_reconnect=1';
-        this.fpCache = new Map(); // fingerprint -> { s, t }
+        // fingerprint -> { s, t }, in least-recently-used FIRST order: a Map
+        // iterates by insertion order, and `_statics` re-inserts on every hit, so
+        // the announce-time prune just drops from the front (see FP_CACHE_MAX).
+        this.fpCache = new Map();
         // viewId -> (az -> raw node). Per-view so two instances of the same
         // stateful child (which share a fingerprint's az values) don't collide.
         this.views = new Map();
@@ -82,7 +96,7 @@ export class NativeClient {
     _open() {
         this.ws = new WebSocket(this.wsUrl);
         this.ws.onopen = () => {
-            this.ws.send(JSON.stringify(['cached_fps', []]));
+            this.ws.send(JSON.stringify(['cached_fps', this._cachedFps()]));
             this._startHeartbeat();
         };
         this.ws.onerror = (e) => {
@@ -215,69 +229,124 @@ export class NativeClient {
     _applyOps(ops) {
         // Top-level ops address nodes as "ViewId:az" via the per-view registry;
         // OP_REMOVE_NODE searches within the whole tree to splice the node out.
-        for (const op of ops) this._dispatch(op, (target) => this._resolve(target), this.root);
+        for (const op of ops) this._dispatch(op, this._viewScope(), this.root);
     }
 
-    // Apply one op, resolving its target node via `resolve`. Top-level ops pass
-    // "ViewId:az"; an OP_ITEM_PATCH's inner ops pass a bare az resolved within
-    // the patched item (mirrors the browser worker's applyItemOps). `scopeRoot`
-    // bounds OP_REMOVE_NODE's parent search (the whole tree, or one patched item).
-    _dispatch(op, resolve, scopeRoot) {
+    // How one batch addresses and re-indexes nodes. A scope is
+    // `{resolve, unindexChildren, reindex}`: `resolve` maps an op target to a
+    // node, and the other two keep the registry in step with the tree whenever an
+    // op discards a node's children or grafts a new subtree on. Three exist --
+    // this one (top-level "ViewId:az" over the per-view registry), the per-item
+    // one in `_applyInner`, and the child-view one in `_applyChildViewOps`.
+    //
+    // `viewId` names the registry a rebuilt subtree belongs to; nodes carry it as
+    // `__view` (stamped by indexByViews), so a nested `az_view` payload lands
+    // under its OWN id and its ops resolve.
+    _viewScope() {
+        return {
+            resolve: (target) => this._resolve(target),
+            unindexChildren: (node) => {
+                for (const c of node.children ?? []) unindexByViews(c, this.views);
+            },
+            reindex: (parent, child) =>
+                indexByViews(child, enclosingView(child, parent.__view), this.views),
+        };
+    }
+
+    // Apply one op, resolving its target node via `scope.resolve`. Top-level ops
+    // pass "ViewId:az"; an OP_ITEM_PATCH's inner ops pass a bare az resolved
+    // within the patched item (mirrors the browser worker's applyItemOps).
+    // `scopeRoot` bounds OP_REMOVE_NODE's parent search (the whole tree, or one
+    // patched item).
+    //
+    // Isolate each op: an unexpected wire shape (or a target this client cannot
+    // resolve) must degrade one slot, not take the whole client down. Mirrors the
+    // browser client's per-op try/catch in applyOps.
+    _dispatch(op, scope, scopeRoot) {
+        try {
+            this._dispatchOne(op, scope, scopeRoot);
+        } catch (err) {
+            console.warn(`[arizona] op ${op?.[0]} failed; skipping`, err);
+        }
+    }
+
+    _dispatchOne(op, scope, scopeRoot) {
+        // A child view's ops ride in a `[ChildViewId, ChildOps]` wrapper that
+        // `flatten_ops/2` unwraps only at TOP level -- so a ?stateful child inside
+        // a stream item ships the wrapper as an OP_ITEM_PATCH INNER op, where the
+        // first element is a view id string rather than an op code.
+        if (typeof op[0] === 'string') {
+            this._applyChildViewOps(op[0], op[1], scopeRoot);
+            return;
+        }
+        if (op[0] === OP_REPLACE) {
+            this.root = JSON.parse(this._interleave(op[2]));
+            // The live view id is the rendered root's `id` (== the server's
+            // socket.view_id, what it prefixes pushed ops with), NOT op[1] --
+            // after a navigate op[1] is the OLD id (the replace target). Mirrors
+            // the browser reading the new root's az-view id from the DOM.
+            this.viewId = this.root.id;
+            this.views = new Map();
+            indexByViews(this.root, this.viewId, this.views);
+            return;
+        }
+        const target = op[1];
+        const node = scope.resolve(target);
+        if (!node) {
+            // Loud like the browser client's missing-target warn: a silently
+            // dropped op reads as "nothing happened" and costs a debugging trip.
+            console.warn(`[arizona] op ${op[0]} target "${target}" not found; skipping`);
+            return;
+        }
         switch (op[0]) {
-            case OP_REPLACE: {
-                this.root = JSON.parse(this._interleave(op[2]));
-                // The live view id is the rendered root's `id` (== the server's
-                // socket.view_id, what it prefixes pushed ops with), NOT op[1] --
-                // after a navigate op[1] is the OLD id (the replace target). Mirrors
-                // the browser reading the new root's az-view id from the DOM.
-                this.viewId = this.root.id;
-                this.views = new Map();
-                indexByViews(this.root, this.viewId, this.views);
+            case OP_TEXT:
+            case OP_UPDATE: {
+                // OP_TEXT's value is usually a scalar, but a dynamic that is a
+                // nested template (e.g. a conditional subtree) ships a {f,s,d}
+                // payload; OP_UPDATE re-renders a node's content wholesale (e.g. a
+                // stream reset). Either way the node's children are REPLACED, so
+                // the registry has to follow: drop the destroyed subtree's entries
+                // and index the new one, or every az the payload introduced -- a
+                // nested child view's id included -- is unaddressable and the next
+                // op targeting it has nothing to hit.
+                scope.unindexChildren(node);
+                const child = this._decode(op[2]);
+                node.children = [child];
+                scope.reindex(node, child);
                 break;
             }
-            case OP_TEXT:
-                // The value is usually a scalar, but a dynamic that is a nested
-                // template (e.g. a conditional subtree) ships a {f,s,d} payload;
-                // _decode handles both (the browser runs OP_TEXT through resolveHtml).
-                resolve(op[1]).children = [this._decode(op[2])];
-                break;
-            case OP_UPDATE:
-                // Re-render a node's content (e.g. a stream reset rebuilds the
-                // whole each-list).
-                resolve(op[1]).children = [this._decode(op[2])];
-                break;
             case OP_REMOVE_NODE:
                 // A dynamic returned the `remove` sentinel: drop the node from its
                 // parent (the browser does el.remove()). One-way -- bringing it back
                 // needs a parent re-render, not an op on the removed az.
-                removeFromParent(scopeRoot, resolve(op[1]));
+                removeFromParent(scopeRoot, node);
                 break;
             case OP_SET_ATTR:
-                resolve(op[1])[op[2]] = op[3];
+                node[op[2]] = op[3];
                 break;
             case OP_REM_ATTR:
-                delete resolve(op[1])[op[2]];
+                delete node[op[2]];
                 break;
             case OP_INSERT: {
-                const items = itemList(resolve(op[1]));
+                const items = itemList(node);
                 const pos = op[3];
                 const item = this._decode(op[4]);
                 if (pos === -1 || pos >= items.length) items.push(item);
                 else items.splice(pos, 0, item);
-                // Note: the inserted item's `az`s are NOT added to the per-view
-                // registry. Safe only because stream items are diffed via
-                // OP_ITEM_PATCH (resolved item-locally below), never targeted by a
-                // top-level "ViewId:az" op.
+                // Index the new item, like OP_REPLACE already indexes the items it
+                // renders: a ?stateful child inside a stream item owns its own view
+                // id, and that view's ops arrive addressed to it.
+                scope.reindex(node, item);
                 break;
             }
             case OP_REMOVE: {
-                const items = itemList(resolve(op[1]));
+                const items = itemList(node);
                 const i = items.findIndex((it) => it.az_key === op[2]);
                 if (i !== -1) items.splice(i, 1);
                 break;
             }
             case OP_MOVE: {
-                const items = itemList(resolve(op[1]));
+                const items = itemList(node);
                 const i = items.findIndex((it) => it.az_key === op[2]);
                 if (i === -1) break;
                 const [item] = items.splice(i, 1);
@@ -292,37 +361,51 @@ export class NativeClient {
                 break;
             }
             case OP_ITEM_PATCH: {
-                const items = itemList(resolve(op[1]));
+                const items = itemList(node);
                 const item = items.find((it) => it.az_key === op[2]);
                 if (item) this._applyInner(item, op[3]);
                 break;
             }
             default:
-                throw new Error(`unhandled op code: ${op[0]}`);
+                console.warn(`[arizona] unhandled op code ${op[0]}; skipping`);
         }
     }
 
     // Resolve a top-level op's "ViewId:az" target within that view's own
     // registry, so two instances of the same stateful child (sharing a
     // fingerprint's az values) don't collide. Mirrors the browser scoping the az
-    // lookup to getElementById(ViewId).
+    // lookup to getElementById(ViewId). Undefined when unknown -- the caller
+    // warns and skips the op.
     _resolve(target) {
         const i = target.indexOf(':');
-        const viewId = target.slice(0, i);
-        const az = target.slice(i + 1);
-        const node = this.views.get(viewId)?.get(az);
-        if (!node) throw new Error(`unknown target: ${target}`);
-        return node;
+        return this.views.get(target.slice(0, i))?.get(target.slice(i + 1));
     }
 
     // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
-    // carry bare az indices resolved within the item's own subtree. The flat
-    // `az -> node` map assumes no nested `az_view` (a stateful child) inside a
-    // stream item — its azs would collide here. No current fixture nests one.
+    // carry bare az indices resolved within the item's own subtree.
     _applyInner(item, innerOps) {
         const reg = new Map();
         indexByAz(item, reg);
-        for (const op of innerOps) this._dispatch(op, (az) => reg.get(az) || item, item);
+        const scope = {
+            resolve: (az) => reg.get(az) || item,
+            unindexChildren: (node) => {
+                for (const c of node.children ?? []) unindexByAz(c, reg);
+            },
+            reindex: (_parent, child) => indexByAz(child, reg),
+        };
+        for (const op of innerOps) this._dispatch(op, scope, item);
+    }
+
+    // Apply a child view's ops (the `[ChildViewId, ChildOps]` wrapper): their
+    // targets are bare `az`s resolved inside that child's own registry, exactly
+    // as the top-level flattened `ChildViewId:az` form resolves. `scopeRoot` stays
+    // the enclosing item so OP_REMOVE_NODE's parent search still finds the node.
+    _applyChildViewOps(viewId, childOps, scopeRoot) {
+        const scope = {
+            ...this._viewScope(),
+            resolve: (az) => this.views.get(viewId)?.get(az),
+        };
+        for (const op of childOps) this._dispatch(op, scope, scopeRoot);
     }
 
     // Decode an op payload: a {t:0} each-list -> array, a {f,s,d} template ->
@@ -344,10 +427,26 @@ export class NativeClient {
     }
 
     _statics(payload) {
-        if (payload.s) this.fpCache.set(payload.f, { s: payload.s, t: payload.t });
-        const cached = this.fpCache.get(payload.f);
-        if (!cached) throw new Error(`uncached fingerprint: ${payload.f}`);
-        return cached.s;
+        const f = payload.f;
+        const entry = payload.s ? { s: payload.s, t: payload.t } : this.fpCache.get(f);
+        if (!entry) throw new Error(`uncached fingerprint: ${f}`);
+        // Re-insert so the Map's iteration order stays least-recently-used first.
+        this.fpCache.delete(f);
+        this.fpCache.set(f, entry);
+        return entry.s;
+    }
+
+    // The fingerprints this client holds statics for, announced on every socket
+    // open so the server can omit those statics from what it renders next (a
+    // reconnect mounts a fresh live process with an empty sent set, so without the
+    // announcement every reconnect re-ships every template's statics). Native
+    // deliberately does NOT pass `_az_fps_follow`: the server keeps the immediate
+    // resync, and this seeds the process for the frames after it.
+    _cachedFps() {
+        while (this.fpCache.size > FP_CACHE_MAX) {
+            this.fpCache.delete(this.fpCache.keys().next().value);
+        }
+        return [...this.fpCache.keys()];
     }
 
     _encodeValue(v) {
@@ -387,6 +486,20 @@ function indexByAz(node, reg) {
     }
 }
 
+// The inverse of indexByAz: drop `node`'s subtree from an item-scoped registry
+// before the ops discard it. Identity-checked (see unindexByViews).
+function unindexByAz(node, reg) {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+        for (const c of node) unindexByAz(c, reg);
+        return;
+    }
+    if (node.az && reg.get(node.az) === node) reg.delete(node.az);
+    if (node.children) {
+        for (const c of node.children) unindexByAz(c, reg);
+    }
+}
+
 // The view a node belongs to: a nested `az_view` child owns its subtree; anything
 // else stays in the parent's view. The top-level (root) view is always the live
 // process's id (the OP_REPLACE ViewId, what the server prefixes ops with) -- after
@@ -401,12 +514,16 @@ function enclosingView(node, parentView) {
 // Build per-view az -> node indices over the raw tree: each node is indexed under
 // its enclosing view, so a "ViewId:az" target resolves within the right view even
 // when sibling stateful-child instances share az values from a shared fingerprint.
+// Each node is also STAMPED with that view (`__view`), which is what lets a later
+// re-index of a rebuilt subtree know which registry it belongs to -- Android and
+// iOS keep the same field on their Node.
 function indexByViews(node, viewId, views) {
     if (node === null || typeof node !== 'object') return;
     if (Array.isArray(node)) {
         for (const c of node) indexByViews(c, viewId, views);
         return;
     }
+    node.__view = viewId;
     if (node.az) {
         let reg = views.get(viewId);
         if (!reg) {
@@ -417,6 +534,24 @@ function indexByViews(node, viewId, views) {
     }
     if (node.children)
         for (const c of node.children) indexByViews(c, enclosingView(c, viewId), views);
+}
+
+// The inverse: drop `node`'s subtree from the per-view registry before the ops
+// discard it, so a rebuilt slot leaves no entry pointing at a detached node.
+// Identity-checked -- stream items share az values (one fingerprint, many items),
+// so a destroyed item must never delete an entry that now names a surviving one.
+function unindexByViews(node, views) {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+        for (const c of node) unindexByViews(c, views);
+        return;
+    }
+    const reg = views.get(node.__view);
+    if (reg && node.az && reg.get(node.az) === node) {
+        reg.delete(node.az);
+        if (reg.size === 0) views.delete(node.__view);
+    }
+    if (node.children) for (const c of node.children) unindexByViews(c, views);
 }
 
 // A stream container (#slot) holds its keyed items as the single each-array

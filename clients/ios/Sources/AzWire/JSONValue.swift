@@ -48,6 +48,17 @@ extension JSONValue {
         }
     }
 
+    /// `parse`, but reporting a bad string as a recoverable `WireError` instead of
+    /// trapping -- used on the op-application path, where one malformed payload
+    /// must cost one slot rather than the whole app.
+    public static func parseChecked(_ json: String) throws -> JSONValue {
+        do {
+            return try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+        } catch {
+            throw WireError.malformed("invalid JSON: \(error) -- \(json)")
+        }
+    }
+
     public var stringValue: String? {
         if case let .string(s) = self { return s }
         return nil

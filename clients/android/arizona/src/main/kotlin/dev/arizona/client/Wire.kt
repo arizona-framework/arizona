@@ -39,13 +39,28 @@ object Effect {
 }
 
 /**
+ * Fingerprint-cache bound (mirrors `FP_CACHE_MAX` in assets/js/arizona-core.js).
+ * A fingerprint hashes a template's statics, so every deploy mints a new key and
+ * orphans the old one: unbounded, a long-lived client accumulates one generation
+ * per deploy. Evicting is never wrong -- the cache is content-addressed, so the
+ * server re-sends the statics for any key the client did not announce, and a miss
+ * costs bytes only -- but it is only SAFE between connections: once a socket has
+ * announced a key the server stops shipping that template's statics, so dropping
+ * it mid-connection would leave a payload the client cannot resolve. The prune
+ * therefore runs at announce time; the map is free to grow within a session.
+ */
+const val FP_CACHE_MAX = 1000
+
+/**
  * Caches a fingerprint's statics so later frames can omit them (the server
  * sends `{f, d}` once `{f, s, d}` has been seen, deduplicated by fingerprint).
  */
 class FingerprintCache {
     private data class Entry(val statics: List<String>, val t: Int?)
 
-    private val byFp = HashMap<String, Entry>()
+    // Access-ordered, so iteration is least-recently-used FIRST and the
+    // announce-time prune just drops from the front.
+    private val byFp = LinkedHashMap<String, Entry>(16, 0.75f, true)
 
     /** Statics for [payload], caching them if present, else from a prior frame. */
     fun statics(payload: JsonObject): List<String> {
@@ -57,6 +72,20 @@ class FingerprintCache {
             )
         }
         return byFp[f]?.statics ?: error("uncached fingerprint: $f")
+    }
+
+    /**
+     * The cached fingerprints, most-recently-used LAST, after pruning down to
+     * [limit]. Announced on every socket open so the server can omit statics this
+     * client already holds.
+     */
+    fun announce(limit: Int = FP_CACHE_MAX): List<String> {
+        val oldest = byFp.keys.iterator()
+        while (byFp.size > limit) {
+            oldest.next()
+            oldest.remove()
+        }
+        return byFp.keys.toList()
     }
 }
 

@@ -107,6 +107,24 @@ class InterleaverTest {
         assertEquals("Nine", slot.getValue("children").jsonArray[0].jsonPrimitive.content)
     }
 
+    // Unbounded, the cache accumulates one generation of fingerprints per deploy.
+    // The prune runs at announce time (the only point where dropping a key is safe)
+    // and keeps the most-recently-USED ones.
+    @Test
+    fun prunesTheCacheToTheMostRecentlyUsedOnAnnounce() {
+        val cache = FingerprintCache()
+        for (i in 0 until FP_CACHE_MAX + 3) {
+            cache.statics(Json.parseToJsonElement("""{"f":"fp$i","s":["x"]}""").jsonObject)
+        }
+        // Touch the oldest key so it survives the prune as most-recently-used.
+        cache.statics(Json.parseToJsonElement("""{"f":"fp0"}""").jsonObject)
+
+        val keys = cache.announce()
+        assertEquals(FP_CACHE_MAX, keys.size)
+        assertEquals("fp0", keys.last())
+        assertEquals(false, keys.contains("fp1"))
+    }
+
     @Test
     fun decodesNavigateCommandProp() {
         // A folded navigate command prop is a raw [10, path] array in the statics

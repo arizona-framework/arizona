@@ -2,17 +2,21 @@ package dev.arizona.client
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -41,6 +45,7 @@ fun backoffDelayMs(attempt: Int): Long {
 private const val SYS_PING = "0"
 private const val SYS_PONG = "1"
 private const val HEARTBEAT_MS = 30_000L
+private const val TAG = "AzClient"
 
 /**
  * Connects to an Arizona server's WebSocket and renders its `?native` view.
@@ -69,7 +74,8 @@ class AzClient(baseUrl: String, path: String) {
 
     // viewId -> (az -> node). Per-view so two instances of the same stateful
     // child (which share a fingerprint's az values) don't collide.
-    private val views = HashMap<String, MutableMap<String, Node>>()
+    @VisibleForTesting
+    internal val views = HashMap<String, MutableMap<String, Node>>()
     private val main = Handler(Looper.getMainLooper())
     private val http = OkHttpClient()
     private var ws: WebSocket? = null
@@ -104,26 +110,16 @@ class AzClient(baseUrl: String, path: String) {
             Request.Builder().url(wsUrl).build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    webSocket.send("""["cached_fps",[]]""")
-                    main.post { startHeartbeat() }
+                    // On main so the fingerprint cache is only ever read/written
+                    // from one thread (the op applier owns it).
+                    main.post {
+                        webSocket.send(cachedFpsFrame())
+                        startHeartbeat()
+                    }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    main.post { heartbeatPending = false } // any frame -> socket live
-                    if (text == SYS_PONG) return // pong
-                    val msg = Json.parseToJsonElement(text).jsonObject
-                    msg["o"]?.jsonArray?.let { ops ->
-                        main.post {
-                            applyOps(ops)
-                            status.value = ConnStatus.CONNECTED
-                            reconnectAttempt = 0 // healthy frame -> reset backoff
-                        }
-                    }
-                    // Handler-returned effects: dispatch the portable ones, skip
-                    // web-only effects (set_title, dispatch_event, ...).
-                    msg["e"]?.jsonArray?.let { effects ->
-                        main.post { for (eff in effects) runEffect(eff.jsonArray, strict = false) }
-                    }
+                    main.post { handleText(text) }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -137,6 +133,44 @@ class AzClient(baseUrl: String, path: String) {
             },
         )
     }
+
+    /**
+     * Apply one received text frame. Synchronous and UI-agnostic (Compose state
+     * writes aside), so the JVM unit tests drive it directly -- it is the unit of
+     * behavior the socket callbacks marshal onto the main thread. Mirrors iOS's
+     * `handleText`.
+     */
+    @VisibleForTesting
+    internal fun handleText(text: String) {
+        heartbeatPending = false // any frame -> socket live
+        if (text == SYS_PONG) return // pong
+        val msg = Json.parseToJsonElement(text).jsonObject
+        msg["o"]?.jsonArray?.let { ops ->
+            applyOps(ops)
+            status.value = ConnStatus.CONNECTED
+            reconnectAttempt = 0 // healthy frame -> reset backoff
+        }
+        // Handler-returned effects: dispatch the portable ones, skip web-only
+        // effects (set_title, dispatch_event, ...).
+        msg["e"]?.jsonArray?.let { effects ->
+            for (eff in effects) runEffect(eff.jsonArray, strict = false)
+        }
+    }
+
+    /**
+     * The `["cached_fps", [...]]` announcement: the fingerprints this client holds
+     * statics for, so the server can omit them from what it renders next (a
+     * reconnect mounts a fresh live process with an empty sent set, so without the
+     * announcement every reconnect re-ships every template's statics). Native
+     * deliberately does NOT pass `_az_fps_follow`: the server keeps the immediate
+     * resync, and this seeds the process for the frames after it.
+     */
+    @VisibleForTesting
+    internal fun cachedFpsFrame(): String =
+        buildJsonArray {
+            add("cached_fps")
+            add(buildJsonArray { cache.announce().forEach { add(it) } })
+        }.toString()
 
     // Flip to DISCONNECTED and, unless we closed on purpose (`closing`) or it was
     // a normal close (1000), reopen with backoff -- re-mounting via _az_reconnect=1.
@@ -242,97 +276,165 @@ class AzClient(baseUrl: String, path: String) {
     private fun applyOps(ops: JsonArray) {
         // Top-level ops address nodes as "ViewId:az" via the per-view registry;
         // OP_REMOVE_NODE searches the whole tree to splice the node out.
-        for (op in ops) dispatch(op.jsonArray, root.value) { target -> resolve(target) }
+        val scope = viewScope()
+        for (op in ops) dispatch(op, root.value, scope)
     }
 
-    // Apply one op, resolving its target via [resolveNode]. Top-level ops pass
-    // "ViewId:az"; an OP_ITEM_PATCH's inner ops pass a bare az resolved within
-    // the patched item (mirrors the browser worker's applyItemOps). [scopeRoot]
-    // bounds OP_REMOVE_NODE's parent search (the whole tree, or one patched item).
-    private fun dispatch(a: JsonArray, scopeRoot: Node?, resolveNode: (String) -> Node) {
-        when (a[0].jsonPrimitive.int) {
-            Op.REPLACE -> {
-                val json = Json.parseToJsonElement(interleaver.interleave(a[2].jsonObject))
-                // The live view id is the rendered root's `id` (== the server's
-                // socket.view_id, what it prefixes pushed ops with), NOT a[1] --
-                // after a navigate a[1] is the OLD id (the replace target). Mirrors
-                // the browser reading the new root's az-view id from the DOM.
-                viewId = json.jsonObject["id"]?.jsonPrimitive?.content
-                views.clear()
-                val node = buildTree(json, viewId)
-                indexByViews(node, views)
-                root.value = node
-            }
-            Op.TEXT -> {
-                // Usually a scalar, but a nested-template dynamic (e.g. a
-                // conditional subtree) ships a {f,s,d} payload; decode handles both.
-                val node = resolveNode(a[1].jsonPrimitive.content)
+    /**
+     * How one op batch addresses and re-indexes nodes: [resolve] maps an op target
+     * to a node (null when unknown), and [unindexChildren]/[reindex] keep the
+     * registry in step with the tree whenever an op discards a node's children or
+     * grafts a new subtree on. Three exist -- the top-level one ("ViewId:az" over
+     * the per-view registry), the per-item one in [applyInner], and the child-view
+     * one in [applyChildViewOps].
+     */
+    private class Scope(
+        val resolve: (String) -> Node?,
+        val unindexChildren: (Node) -> Unit,
+        val reindex: (Node) -> Unit,
+    )
+
+    private fun viewScope() = Scope(::resolve, ::unindexChildrenInViews, ::reindexInViews)
+
+    private fun unindexChildrenInViews(node: Node) {
+        for (child in node.children) if (child is Node) unindexByViews(child, views)
+    }
+
+    private fun reindexInViews(node: Node) = indexByViews(node, views)
+
+    // Apply one op through [scope]. Top-level ops pass "ViewId:az"; an
+    // OP_ITEM_PATCH's inner ops pass a bare az resolved within the patched item
+    // (mirrors the browser worker's applyItemOps). [scopeRoot] bounds
+    // OP_REMOVE_NODE's parent search (the whole tree, or one patched item).
+    //
+    // Each op is isolated: an unexpected wire shape (or a target this client
+    // cannot resolve) must degrade one slot, not take the process down. Mirrors
+    // the browser client's per-op try/catch in applyOps.
+    private fun dispatch(op: JsonElement, scopeRoot: Node?, scope: Scope) {
+        try {
+            dispatchOne(op.jsonArray, scopeRoot, scope)
+        } catch (e: Exception) {
+            Log.w(TAG, "op $op failed; skipping", e)
+        }
+    }
+
+    private fun dispatchOne(a: JsonArray, scopeRoot: Node?, scope: Scope) {
+        // A child view's ops ride in a `[ChildViewId, ChildOps]` wrapper that
+        // `flatten_ops/2` unwraps only at TOP level -- so a ?stateful child inside
+        // a stream item ships the wrapper as an OP_ITEM_PATCH INNER op, whose first
+        // element is a view-id string rather than an op code.
+        val head = a[0]
+        val code = if (head is JsonPrimitive && !head.isString) head.intOrNull else null
+        if (code == null) {
+            applyChildViewOps(head.jsonPrimitive.content, a[1].jsonArray, scopeRoot)
+            return
+        }
+        if (code == Op.REPLACE) {
+            val json = Json.parseToJsonElement(interleaver.interleave(a[2].jsonObject))
+            // The live view id is the rendered root's `id` (== the server's
+            // socket.view_id, what it prefixes pushed ops with), NOT a[1] --
+            // after a navigate a[1] is the OLD id (the replace target). Mirrors
+            // the browser reading the new root's az-view id from the DOM.
+            viewId = json.jsonObject["id"]?.jsonPrimitive?.content
+            views.clear()
+            val node = buildTree(json, viewId)
+            indexByViews(node, views)
+            root.value = node
+            return
+        }
+        val target = a[1].jsonPrimitive.content
+        val node = scope.resolve(target)
+        if (node == null) {
+            // Loud like the browser client's missing-target warn: a silently
+            // dropped op reads as "nothing happened" and costs a debugging trip.
+            Log.w(TAG, "op $code target \"$target\" not found; skipping")
+            return
+        }
+        when (code) {
+            Op.TEXT, Op.UPDATE -> {
+                // OP_TEXT is usually a scalar, but a nested-template dynamic (e.g.
+                // a conditional subtree) ships a {f,s,d} payload; OP_UPDATE
+                // re-renders a node's content wholesale (e.g. a stream reset).
+                // Either way the children are REPLACED, so the registry has to
+                // follow: drop the destroyed subtree's entries and index the new
+                // one, or every az the payload introduced -- a nested child view's
+                // id included -- is unaddressable.
+                scope.unindexChildren(node)
                 node.children.clear()
                 addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])), node.viewId)
-            }
-            Op.UPDATE -> {
-                // Re-render a node's content (e.g. a stream reset rebuilds the
-                // whole each-list).
-                val node = resolveNode(a[1].jsonPrimitive.content)
-                node.children.clear()
-                addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])), node.viewId)
+                scope.reindex(node)
             }
             Op.REMOVE_NODE -> {
                 // A dynamic returned the `remove` sentinel: drop the node from its
                 // parent. One-way -- bringing it back needs a parent re-render.
-                removeFromParent(scopeRoot, resolveNode(a[1].jsonPrimitive.content))
+                removeFromParent(scopeRoot, node)
             }
             Op.SET_ATTR -> {
-                resolveNode(a[1].jsonPrimitive.content).props[a[2].jsonPrimitive.content] = a[3]
+                node.props[a[2].jsonPrimitive.content] = a[3]
             }
             Op.REM_ATTR -> {
-                resolveNode(a[1].jsonPrimitive.content).props.remove(a[2].jsonPrimitive.content)
+                node.props.remove(a[2].jsonPrimitive.content)
             }
             Op.INSERT -> {
-                val container = resolveNode(a[1].jsonPrimitive.content)
                 val pos = a[3].jsonPrimitive.int
-                val item = buildTree(Json.parseToJsonElement(interleaver.decode(a[4])), container.viewId)
-                if (pos == -1 || pos >= container.children.size) container.children.add(item)
-                else container.children.add(pos, item)
-                // Note: the inserted item's `az`s are NOT added to the per-view
-                // registry. Safe only because stream items are diffed via
-                // OP_ITEM_PATCH (resolved item-locally), never by a top-level op.
+                val item = buildTree(Json.parseToJsonElement(interleaver.decode(a[4])), node.viewId)
+                if (pos == -1 || pos >= node.children.size) node.children.add(item)
+                else node.children.add(pos, item)
+                // Index the new item, like OP_REPLACE already indexes the items it
+                // renders: a ?stateful child inside a stream item owns its own view
+                // id, and that view's ops arrive addressed to it.
+                scope.reindex(item)
             }
             Op.REMOVE -> {
-                val container = resolveNode(a[1].jsonPrimitive.content)
-                val i = indexOfKey(container, a[2].jsonPrimitive.content)
-                if (i != -1) container.children.removeAt(i)
+                val i = indexOfKey(node, a[2].jsonPrimitive.content)
+                if (i != -1) node.children.removeAt(i)
             }
             Op.MOVE -> {
-                val container = resolveNode(a[1].jsonPrimitive.content)
-                val i = indexOfKey(container, a[2].jsonPrimitive.content)
+                val i = indexOfKey(node, a[2].jsonPrimitive.content)
                 if (i == -1) return
-                val item = container.children.removeAt(i)
+                val item = node.children.removeAt(i)
                 val afterKey = a[3]
                 if (afterKey is JsonNull) {
-                    container.children.add(0, item)
+                    node.children.add(0, item)
                 } else {
-                    val r = indexOfKey(container, afterKey.jsonPrimitive.content)
-                    if (r == -1) container.children.add(item) else container.children.add(r + 1, item)
+                    val r = indexOfKey(node, afterKey.jsonPrimitive.content)
+                    if (r == -1) node.children.add(item) else node.children.add(r + 1, item)
                 }
             }
             Op.ITEM_PATCH -> {
-                val container = resolveNode(a[1].jsonPrimitive.content)
-                val i = indexOfKey(container, a[2].jsonPrimitive.content)
-                if (i != -1) applyInner(container.children[i] as Node, a[3].jsonArray)
+                val i = indexOfKey(node, a[2].jsonPrimitive.content)
+                if (i != -1) applyInner(node.children[i] as Node, a[3].jsonArray)
             }
-            else -> error("unhandled op code: ${a[0]}")
+            else -> Log.w(TAG, "unhandled op code $code; skipping")
         }
     }
 
     // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
-    // carry bare az indices resolved within the item's own subtree. The flat
-    // `az -> node` map assumes no nested `az_view` (a stateful child) inside a
-    // stream item -- its azs would collide here. No current fixture nests one.
+    // carry bare az indices resolved within the item's own subtree.
     private fun applyInner(item: Node, innerOps: JsonArray) {
         val local = HashMap<String, Node>()
         indexByAz(item, local)
-        for (op in innerOps) dispatch(op.jsonArray, item) { az -> local[az] ?: item }
+        val scope = Scope(
+            resolve = { az -> local[az] ?: item },
+            unindexChildren = { node ->
+                for (child in node.children) if (child is Node) unindexByAz(child, local)
+            },
+            reindex = { node -> indexByAz(node, local) },
+        )
+        for (op in innerOps) dispatch(op, item, scope)
+    }
+
+    // Apply a child view's ops (the `[ChildViewId, ChildOps]` wrapper): their
+    // targets are bare `az`s resolved inside that child's own registry, exactly as
+    // the top-level flattened "ChildViewId:az" form resolves. [scopeRoot] stays the
+    // enclosing item so OP_REMOVE_NODE's parent search still finds the node.
+    private fun applyChildViewOps(childViewId: String, childOps: JsonArray, scopeRoot: Node?) {
+        val scope = Scope(
+            resolve = { az -> views[childViewId]?.get(az) },
+            unindexChildren = ::unindexChildrenInViews,
+            reindex = ::reindexInViews,
+        )
+        for (op in childOps) dispatch(op, scopeRoot, scope)
     }
 
     // Find [target] within [parent]'s subtree and remove it from its parent's
@@ -357,9 +459,7 @@ class AzClient(baseUrl: String, path: String) {
     // Resolve a top-level op's "ViewId:az" target within that view's own registry,
     // so two instances of the same stateful child (sharing a fingerprint's az
     // values) don't collide. Mirrors the browser scoping az to getElementById.
-    private fun resolve(target: String): Node {
-        val viewId = target.substringBefore(':')
-        val az = target.substringAfter(':')
-        return views[viewId]?.get(az) ?: error("unknown target: $target")
-    }
+    // Null when unknown -- the caller warns and skips the op.
+    private fun resolve(target: String): Node? =
+        views[target.substringBefore(':')]?.get(target.substringAfter(':'))
 }

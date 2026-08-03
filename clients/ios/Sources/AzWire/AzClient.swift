@@ -22,6 +22,13 @@ private let sysPing = "0"
 private let sysPong = "1"
 private let heartbeatMs = 30_000
 
+/// Diagnostics sink. AzWire has no logging dependency (it must build on any
+/// platform), so a skipped op is reported on stdout -- the counterpart of
+/// Android's `Log.w` and the reference client's `console.warn`.
+func azWarn(_ message: String) {
+    print("[arizona] \(message)")
+}
+
 /// Connects to an Arizona server's WebSocket and renders its `?native` view.
 ///
 /// Native has no SSR page, so we connect with `_az_reconnect=1` to make the live
@@ -50,8 +57,9 @@ public final class AzClient {
     private lazy var interleaver = Interleaver(cache)
 
     // viewId -> (az -> node). Per-view so two instances of the same stateful child
-    // (which share a fingerprint's az values) don't collide.
-    private var views: [String: [String: Node]] = [:]
+    // (which share a fingerprint's az values) don't collide. Internal (not
+    // private) so the logic tests can assert on it.
+    var views: [String: [String: Node]] = [:]
     private var viewId: String?
 
     private let makeTransport: (URL) -> WebSocketTransport
@@ -152,8 +160,19 @@ public final class AzClient {
 
     private func handleOpen(_ gen: Int) {
         guard gen == generation, let transport else { return }
-        transport.send("[\"cached_fps\",[]]")
+        transport.send(cachedFpsFrame())
         startHeartbeat()
+    }
+
+    /// The `["cached_fps", [...]]` announcement: the fingerprints this client holds
+    /// statics for, so the server can omit them from what it renders next (a
+    /// reconnect mounts a fresh live process with an empty sent set, so without the
+    /// announcement every reconnect re-ships every template's statics). Native
+    /// deliberately does NOT pass `_az_fps_follow`: the server keeps the immediate
+    /// resync, and this seeds the process for the frames after it.
+    func cachedFpsFrame() -> String {
+        JSONValue.array([.string("cached_fps"), .array(cache.announce().map { .string($0) })])
+            .serialized
     }
 
     private func handleFrame(_ text: String, _ gen: Int) {
@@ -209,74 +228,175 @@ public final class AzClient {
     private func applyOps(_ ops: [JSONValue]) {
         // Top-level ops address nodes as "ViewId:az" via the per-view registry;
         // OP_REMOVE_NODE searches the whole tree to splice the node out.
-        for op in ops {
-            dispatch(op.arrayValue ?? [], scopeRoot: root) { [unowned self] target in self.resolve(target) }
+        let scope = viewScope()
+        for op in ops { dispatch(op, scopeRoot: root, scope: scope) }
+    }
+
+    /// How one op batch addresses and re-indexes nodes: `resolve` maps an op
+    /// target to a node (nil when unknown), and `unindexChildren`/`reindex` keep
+    /// the registry in step with the tree whenever an op discards a node's children
+    /// or grafts a new subtree on. Three exist -- the top-level one ("ViewId:az"
+    /// over the per-view registry), the per-item one in `applyInner`, and the
+    /// child-view one in `applyChildViewOps`.
+    struct Scope {
+        let resolve: (String) -> Node?
+        let unindexChildren: (Node) -> Void
+        let reindex: (Node) -> Void
+    }
+
+    private func viewScope() -> Scope {
+        Scope(
+            resolve: { [unowned self] target in self.resolve(target) },
+            unindexChildren: { [unowned self] node in self.unindexChildrenInViews(node) },
+            reindex: { [unowned self] node in self.reindexInViews(node) }
+        )
+    }
+
+    private func unindexChildrenInViews(_ node: Node) {
+        for child in node.children {
+            if case let .node(n) = child { unindexByViews(n, &views) }
         }
     }
 
-    // Apply one op, resolving its target via `resolve`. Top-level ops pass
-    // "ViewId:az"; an OP_ITEM_PATCH's inner ops pass a bare az resolved within the
-    // patched item. `scopeRoot` bounds OP_REMOVE_NODE's search.
-    func dispatch(_ a: [JSONValue], scopeRoot: Node?, resolve: (String) -> Node) {
-        guard let code = a[0].intValue else { preconditionFailure("op code not an int: \(a)") }
-        switch code {
-        case Op.replace:
+    private func reindexInViews(_ node: Node) {
+        indexByViews(node, &views)
+    }
+
+    // Apply one op through `scope`. Top-level ops pass "ViewId:az"; an
+    // OP_ITEM_PATCH's inner ops pass a bare az resolved within the patched item.
+    // `scopeRoot` bounds OP_REMOVE_NODE's search.
+    //
+    // Each op is isolated: an unexpected wire shape (or a target this client
+    // cannot resolve) must degrade one slot, not take the app down. Mirrors the
+    // browser client's per-op try/catch in applyOps -- which is why the wire
+    // helpers on this path throw `WireError` instead of calling
+    // `preconditionFailure` (a trap is not catchable).
+    func dispatch(_ op: JSONValue, scopeRoot: Node?, scope: Scope) {
+        do {
+            try dispatchOne(op.arrayValue ?? [], scopeRoot: scopeRoot, scope: scope)
+        } catch {
+            azWarn("op \(op.serialized) failed; skipping: \(error)")
+        }
+    }
+
+    // Positional operand access that reports a short op as a recoverable wire
+    // error instead of trapping on the array bound.
+    private func operand(_ a: [JSONValue], _ i: Int) throws -> JSONValue {
+        guard i < a.count else { throw WireError.malformed("op \(a) has no operand \(i)") }
+        return a[i]
+    }
+
+    private func text(_ a: [JSONValue], _ i: Int) throws -> String {
+        guard let s = try operand(a, i).stringValue else {
+            throw WireError.malformed("op \(a) operand \(i) is not a string")
+        }
+        return s
+    }
+
+    private func dispatchOne(_ a: [JSONValue], scopeRoot: Node?, scope: Scope) throws {
+        guard a.count >= 2 else { throw WireError.malformed("op too short: \(a)") }
+        // A child view's ops ride in a `[ChildViewId, ChildOps]` wrapper that
+        // `flatten_ops/2` unwraps only at TOP level -- so a ?stateful child inside
+        // a stream item ships the wrapper as an OP_ITEM_PATCH INNER op, whose first
+        // element is a view-id string rather than an op code.
+        guard let code = a[0].intValue else {
+            guard let childViewId = a[0].stringValue else {
+                throw WireError.malformed("op head is neither an op code nor a view id: \(a[0])")
+            }
+            applyChildViewOps(childViewId, a[1].arrayValue ?? [], scopeRoot: scopeRoot)
+            return
+        }
+        if code == Op.replace {
             // The live view id is the rendered root's `id` (== the server's
             // socket.view_id, what it prefixes pushed ops with), NOT a[1] -- after
             // a navigate a[1] is the OLD id (the replace target).
-            let json = interleaver.interleave(a[2])
+            let raw = try operand(a, 2)
+            let json = try interleaver.interleave(raw)
+            guard case .object = json else {
+                throw WireError.malformed("replace payload is not a node: \(json)")
+            }
             viewId = json["id"]?.stringValue
             views = [:]
             let node = buildTree(json, view: viewId)
             indexByViews(node, &views)
             root = node
+            return
+        }
+        let target = try text(a, 1)
+        guard let node = scope.resolve(target) else {
+            // Loud like the browser client's missing-target warn: a silently
+            // dropped op reads as "nothing happened" and costs a debugging trip.
+            azWarn("op \(code) target \"\(target)\" not found; skipping")
+            return
+        }
+        switch code {
         case Op.text, Op.update:
-            // Usually a scalar, but a nested-template dynamic ships a {f,s,d}
-            // payload; decode handles both.
-            let node = resolve(a[1].stringValue!)
+            // OP_TEXT is usually a scalar, but a nested-template dynamic (e.g. a
+            // conditional subtree) ships a {f,s,d} payload; OP_UPDATE re-renders a
+            // node's content wholesale (e.g. a stream reset). Either way the
+            // children are REPLACED, so the registry has to follow: drop the
+            // destroyed subtree's entries and index the new one, or every az the
+            // payload introduced -- a nested child view's id included -- is
+            // unaddressable.
+            let raw = try operand(a, 2)
+            let payload = try interleaver.decode(raw)
+            scope.unindexChildren(node)
             node.children = []
-            addChild(node, interleaver.decode(a[2]), node.viewId)
+            addChild(node, payload, node.viewId)
+            scope.reindex(node)
         case Op.removeNode:
             // A dynamic returned the `remove` sentinel: drop the node from its
             // parent. One-way -- bringing it back needs a parent re-render.
-            removeFromParent(scopeRoot, resolve(a[1].stringValue!))
+            removeFromParent(scopeRoot, node)
         case Op.setAttr:
-            resolve(a[1].stringValue!).props[a[2].stringValue!] = a[3]
+            let name = try text(a, 2)
+            node.props[name] = try operand(a, 3)
         case Op.remAttr:
-            resolve(a[1].stringValue!).props[a[2].stringValue!] = nil
+            let name = try text(a, 2)
+            node.props[name] = nil
         case Op.insert:
-            let container = resolve(a[1].stringValue!)
-            let pos = a[3].intValue!
-            let item = buildTree(interleaver.decode(a[4]), view: container.viewId)
-            if pos == -1 || pos >= container.children.count {
-                container.children.append(.node(item))
-            } else {
-                container.children.insert(.node(item), at: pos)
+            let posValue = try operand(a, 3)
+            guard let pos = posValue.intValue else {
+                throw WireError.malformed("insert position is not an int: \(a)")
             }
-            // Note: the inserted item's `az`s are NOT added to the per-view
-            // registry. Safe only because stream items are diffed via
-            // OP_ITEM_PATCH (resolved item-locally), never by a top-level op.
-        case Op.remove:
-            let container = resolve(a[1].stringValue!)
-            if let i = indexOfKey(container, a[2].stringValue!) { container.children.remove(at: i) }
-        case Op.move:
-            let container = resolve(a[1].stringValue!)
-            guard let i = indexOfKey(container, a[2].stringValue!) else { return }
-            let item = container.children.remove(at: i)
-            if case .null = a[3] {
-                container.children.insert(item, at: 0)
-            } else if let r = indexOfKey(container, a[3].stringValue!) {
-                container.children.insert(item, at: r + 1)
+            let raw = try operand(a, 4)
+            let payload = try interleaver.decode(raw)
+            guard case .object = payload else {
+                throw WireError.malformed("insert payload is not a node: \(payload)")
+            }
+            let item = buildTree(payload, view: node.viewId)
+            if pos == -1 || pos >= node.children.count {
+                node.children.append(.node(item))
             } else {
-                container.children.append(item)
+                node.children.insert(.node(item), at: pos)
+            }
+            // Index the new item, like OP_REPLACE already indexes the items it
+            // renders: a ?stateful child inside a stream item owns its own view id,
+            // and that view's ops arrive addressed to it.
+            scope.reindex(item)
+        case Op.remove:
+            let key = try text(a, 2)
+            if let i = indexOfKey(node, key) { node.children.remove(at: i) }
+        case Op.move:
+            let key = try text(a, 2)
+            guard let i = indexOfKey(node, key) else { return }
+            let item = node.children.remove(at: i)
+            let afterKey = try operand(a, 3)
+            if case .null = afterKey {
+                node.children.insert(item, at: 0)
+            } else if let after = afterKey.stringValue, let r = indexOfKey(node, after) {
+                node.children.insert(item, at: r + 1)
+            } else {
+                node.children.append(item)
             }
         case Op.itemPatch:
-            let container = resolve(a[1].stringValue!)
-            if let i = indexOfKey(container, a[2].stringValue!), case let .node(item) = container.children[i] {
-                applyInner(item, a[3].arrayValue ?? [])
+            let key = try text(a, 2)
+            let inner = try operand(a, 3).arrayValue ?? []
+            if let i = indexOfKey(node, key), case let .node(item) = node.children[i] {
+                applyInner(item, inner)
             }
         default:
-            preconditionFailure("unhandled op code: \(code)")
+            azWarn("unhandled op code \(code); skipping")
         }
     }
 
@@ -285,9 +405,29 @@ public final class AzClient {
     private func applyInner(_ item: Node, _ innerOps: [JSONValue]) {
         var local: [String: Node] = [:]
         indexByAz(item, &local)
-        for op in innerOps {
-            dispatch(op.arrayValue ?? [], scopeRoot: item) { az in local[az] ?? item }
-        }
+        let scope = Scope(
+            resolve: { az in local[az] ?? item },
+            unindexChildren: { node in
+                for child in node.children {
+                    if case let .node(n) = child { unindexByAz(n, &local) }
+                }
+            },
+            reindex: { node in indexByAz(node, &local) }
+        )
+        for op in innerOps { dispatch(op, scopeRoot: item, scope: scope) }
+    }
+
+    // Apply a child view's ops (the `[ChildViewId, ChildOps]` wrapper): their
+    // targets are bare `az`s resolved inside that child's own registry, exactly as
+    // the top-level flattened "ChildViewId:az" form resolves. `scopeRoot` stays the
+    // enclosing item so OP_REMOVE_NODE's parent search still finds the node.
+    private func applyChildViewOps(_ childViewId: String, _ childOps: [JSONValue], scopeRoot: Node?) {
+        let scope = Scope(
+            resolve: { [unowned self] az in self.views[childViewId]?[az] },
+            unindexChildren: { [unowned self] node in self.unindexChildrenInViews(node) },
+            reindex: { [unowned self] node in self.reindexInViews(node) }
+        )
+        for op in childOps { dispatch(op, scopeRoot: scopeRoot, scope: scope) }
     }
 
     // Find `target` within `parent`'s subtree and remove it from its parent's
@@ -314,12 +454,12 @@ public final class AzClient {
     }
 
     // Resolve a top-level op's "ViewId:az" target within that view's own registry.
-    private func resolve(_ target: String) -> Node {
-        guard let colon = target.firstIndex(of: ":") else { preconditionFailure("bad target: \(target)") }
+    // Nil when unknown (or unscoped) -- the caller warns and skips the op.
+    private func resolve(_ target: String) -> Node? {
+        guard let colon = target.firstIndex(of: ":") else { return nil }
         let viewId = String(target[..<colon])
         let az = String(target[target.index(after: colon)...])
-        guard let node = views[viewId]?[az] else { preconditionFailure("unknown target: \(target)") }
-        return node
+        return views[viewId]?[az]
     }
 
     // Run one effect command (a tap prop or a server "e" entry). `strict` traps on

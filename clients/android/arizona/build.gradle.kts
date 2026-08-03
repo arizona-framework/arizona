@@ -25,6 +25,18 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        unitTests {
+            // The JVM unit tests drive AzClient's *op application* (handleText),
+            // which is pure -- but constructing the client touches the android.jar
+            // stubs (Handler/Looper for the main-thread marshalling). Returning
+            // defaults instead of throwing lets those tests exist without an
+            // emulator; the Handler-scheduled paths (heartbeat, reconnect backoff)
+            // are no-ops there and stay covered by the on-device e2e.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {

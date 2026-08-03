@@ -102,6 +102,146 @@ final class DispatchTests: XCTestCase {
     // form/input auto-collection, so the explicit payload is the only way to
     // attach data -- dropping it (defaulting to `{}`) makes a handler matching a
     // required key crash the live process.
+    // ----------------------------------------------------------------------
+    // The az -> node registry vs. nodes the DIFF creates. Mirrors
+    // clients/android .../DispatchTest.kt and e2e/utils/native_client.test.js.
+    // ----------------------------------------------------------------------
+
+    // A view root whose single `#slot` (az "R-0t0") holds the swappable content.
+    private let rootStatics = ##"["{\"type\":\"Column\",\"az\":\"R-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"R-0t0\",\"children\":[","]}]}"]"##
+
+    // A stateful CHILD view's subtree: its own `az_view` + `id`, so installing it
+    // introduces a whole new view id the server will address ops to.
+    private let childStatics = ##"["{\"type\":\"Column\",\"az\":\"C-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"C-0t0\",\"children\":[","]}]}"]"##
+
+    // A keyed stream item wrapping a stateful child view (the `?stateful` inside a
+    // stream `?each` shape).
+    private let itemStatics = ##"["{\"type\":\"Row\",\"az\":\"I-0\",\"az_key\":",",\"children\":[{\"type\":\"Column\",\"az\":\"C-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"C-0t0\",\"children\":[","]}]}]}"]"##
+
+    private func frame(_ ops: String) -> String { "{\"o\":[\(ops)]}" }
+
+    // OP_REPLACE of the root view with an empty content slot.
+    private func replaceRoot(_ client: AzClient) {
+        client.handleText(frame(##"[8,"native_x",{"f":"R","s":\##(rootStatics),"d":["native_x",""]}]"##))
+    }
+
+    // OP_REPLACE of a stream root holding one keyed item that wraps a child view.
+    private func replaceList(_ client: AzClient) {
+        client.handleText(
+            frame(
+                ##"[8,"native_l",{"f":"R","s":\##(rootStatics),"d":["native_l",{"t":0,"f":"I","s":\##(itemStatics),"d":[["k1","child_1","0"]]}]}]"##
+            ))
+    }
+
+    private func child(_ node: Node, _ i: Int) -> Node {
+        guard case let .node(n) = node.children[i] else { preconditionFailure("not a node child") }
+        return n
+    }
+
+    // The slot's only element child (the content the diff installed).
+    private func content(_ client: AzClient) -> Node { child(child(client.root!, 0), 0) }
+
+    // The three-frame repro: OP_REPLACE, an OP_TEXT that installs a subtree, then
+    // an op addressed INSIDE that subtree. The registry used to be built only at
+    // OP_REPLACE, so every az the second frame introduced was invisible and the
+    // third frame hit "unknown target".
+    func testAddressesANodeTheDiffCreatedViaOpText() {
+        let client = newClient(path: "/native/x")
+        replaceRoot(client)
+        client.handleText(
+            frame(
+                ##"[0,"native_x:R-0t0",{"f":"T","s":["{\"type\":\"Text\",\"az\":\"T-0\",\"children\":[\"a\"]}"],"d":[]}]"##
+            ))
+        client.handleText(frame(##"[1,"native_x:T-0","color","red"]"##))
+
+        let text = content(client)
+        XCTAssertEqual(text.type, "Text")
+        XCTAssertEqual(text.props["color"]?.stringValue, "red")
+    }
+
+    // The documented `case ?get(flag) of true -> ?stateful(child, ...)` pattern:
+    // the installed payload carries its OWN view id, which must be registered or
+    // the child's very first update crashes.
+    func testRegistersAChildViewIdIntroducedByAnOpTextPayload() {
+        let client = newClient(path: "/native/x")
+        replaceRoot(client)
+        client.handleText(
+            frame(##"[0,"native_x:R-0t0",{"f":"C","s":\##(childStatics),"d":["cond_child","0"]}]"##))
+        XCTAssertEqual(content(client).viewId, "cond_child")
+        XCTAssertEqual(flatText(content(client)), "0")
+
+        // An op addressed to the CHILD view, not the root.
+        client.handleText(frame(##"[0,"cond_child:C-0t0","1"]"##))
+        XCTAssertEqual(flatText(content(client)), "1")
+    }
+
+    // A rebuilt slot must not leave the destroyed subtree's azs in the registry,
+    // or the map retains detached nodes for the life of the connection.
+    func testDropsTheEntriesOfASubtreeAnOpTextReplaced() {
+        let client = newClient(path: "/native/x")
+        replaceRoot(client)
+        client.handleText(
+            frame(##"[0,"native_x:R-0t0",{"f":"C","s":\##(childStatics),"d":["cond_child","0"]}]"##))
+        XCTAssertNotNil(client.views["cond_child"])
+        client.handleText(frame(##"[0,"native_x:R-0t0",""]"##))
+        XCTAssertNil(client.views["cond_child"])
+    }
+
+    // A `?stateful` child inside a stream item is addressed by the server through
+    // a `[ChildViewId, ChildOps]` wrapper nested in the item patch (flatten_ops/2
+    // only unwraps that at top level), so the first element is a view-id STRING.
+    func testAppliesAChildViewOpWrapperNestedInAnItemPatch() {
+        let client = newClient(path: "/native/l")
+        replaceList(client)
+        let item = child(child(client.root!, 0), 0)
+        XCTAssertEqual(flatText(item), "0")
+
+        client.handleText(frame(##"[7,"native_l:R-0t0","k1",[["child_1",[[0,"C-0t0","9"]]]]]"##))
+        XCTAssertEqual(flatText(item), "9")
+    }
+
+    // An inserted stream item's child view is a new view id too -- OP_REPLACE
+    // already indexes the items it renders, so an insert must as well.
+    func testRegistersAChildViewInsideAnInsertedStreamItem() {
+        let client = newClient(path: "/native/l")
+        replaceList(client)
+        client.handleText(frame(##"[5,"native_l:R-0t0","k2",-1,{"f":"I","d":["k2","child_2","0"]}]"##))
+        client.handleText(frame(##"[0,"child_2:C-0t0","7"]"##))
+
+        XCTAssertEqual(flatText(child(child(client.root!, 0), 1)), "7")
+    }
+
+    // Per-op isolation: an unresolvable target and an op code this client does not
+    // implement (e.g. OP_LIST_PATCH) must degrade those slots only.
+    func testSkipsABadOpWithoutDroppingTheRestOfTheBatch() {
+        let client = newClient(path: "/native/x")
+        replaceRoot(client)
+        client.handleText(
+            frame(
+                ##"[0,"native_x:nope","ignored"],[10,"native_x:R-0t0","unimplemented op code"],[0,"native_x:R-0t0","applied"]"##
+            ))
+        XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
+    }
+
+    // A malformed payload throws inside the op body; the batch must survive it.
+    func testSkipsAnOpWhosePayloadIsMalformed() {
+        let client = newClient(path: "/native/x")
+        replaceRoot(client)
+        client.handleText(
+            frame(
+                ##"[0,"native_x:R-0t0",{"f":"never-cached","d":[]}],[0,"native_x:R-0t0","applied"]"##
+            ))
+        XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
+    }
+
+    // The announcement is what lets the server elide statics the client already
+    // holds; a hardcoded empty list re-ships every template on every reconnect.
+    func testAnnouncesTheFingerprintsItActuallyCached() {
+        let client = newClient(path: "/native/x")
+        replaceRoot(client)
+        XCTAssertEqual(client.cachedFpsFrame(), ##"["cached_fps",["R"]]"##)
+    }
+
     func testTapCarriesTheExplicitPayload() {
         var captured: MockTransport?
         let client = AzClient(

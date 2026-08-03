@@ -78,14 +78,43 @@ public func indexByAz(_ node: Node, _ registry: inout [String: Node]) {
     }
 }
 
+/// The inverse of `indexByAz`: drop `node`'s subtree from an item-scoped registry
+/// before the ops discard it. Identity-checked, like `unindexByViews`.
+public func unindexByAz(_ node: Node, _ registry: inout [String: Node]) {
+    if let az = node.az, registry[az] === node { registry[az] = nil }
+    for child in node.children {
+        if case let .node(n) = child { unindexByAz(n, &registry) }
+    }
+}
+
 /// Index nodes per enclosing view (`viewId` -> `az` -> node), so a "ViewId:az" op
 /// target resolves within the right view -- two instances of the same stateful
 /// child share az values (from a shared fingerprint) but live in distinct views.
+///
+/// Every (re)built subtree goes through here, not just the one `OP_REPLACE`
+/// renders: a node the DIFF creates (an `OP_TEXT` payload that is a nested
+/// template, an inserted stream item) is otherwise unaddressable, and a nested
+/// `az_view` in such a payload never gets its view id registered at all.
 public func indexByViews(_ node: Node, _ views: inout [String: [String: Node]]) {
     if let v = node.viewId, let az = node.az {
         views[v, default: [:]][az] = node
     }
     for child in node.children {
         if case let .node(n) = child { indexByViews(n, &views) }
+    }
+}
+
+/// The inverse of `indexByViews`: drop `node`'s subtree from the per-view registry
+/// before the ops discard it, so a rebuilt slot leaves no entry pointing at a
+/// detached node. Identity-checked -- stream items share az values (one
+/// fingerprint, many items), so a destroyed item must never delete an entry that
+/// now names a surviving one.
+public func unindexByViews(_ node: Node, _ views: inout [String: [String: Node]]) {
+    if let v = node.viewId, let az = node.az, views[v]?[az] === node {
+        views[v]?[az] = nil
+        if views[v]?.isEmpty == true { views[v] = nil }
+    }
+    for child in node.children {
+        if case let .node(n) = child { unindexByViews(n, &views) }
     }
 }

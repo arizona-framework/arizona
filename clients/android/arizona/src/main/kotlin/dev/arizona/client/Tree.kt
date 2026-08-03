@@ -82,12 +82,46 @@ fun indexByAz(node: Node, registry: MutableMap<String, Node>) {
 }
 
 /**
+ * The inverse of [indexByAz]: drop [node]'s subtree from an item-scoped registry
+ * before the ops discard it. Identity-checked, like [unindexByViews].
+ */
+fun unindexByAz(node: Node, registry: MutableMap<String, Node>) {
+    node.az?.let { if (registry[it] === node) registry.remove(it) }
+    for (child in node.children) if (child is Node) unindexByAz(child, registry)
+}
+
+/**
  * Index nodes per enclosing view (`viewId` -> `az` -> node), so a "ViewId:az" op
  * target resolves within the right view -- two instances of the same stateful
  * child share az values (from a shared fingerprint), but live in distinct views.
+ *
+ * Every (re)built subtree goes through here, not just the one `OP_REPLACE`
+ * renders: a node the DIFF creates (an `OP_TEXT` payload that is a nested
+ * template, an inserted stream item) is otherwise unaddressable, and a nested
+ * `az_view` in such a payload never gets its view id registered at all.
  */
 fun indexByViews(node: Node, views: MutableMap<String, MutableMap<String, Node>>) {
     val v = node.viewId
     if (v != null) node.az?.let { views.getOrPut(v) { HashMap() }[it] = node }
     for (child in node.children) if (child is Node) indexByViews(child, views)
+}
+
+/**
+ * The inverse of [indexByViews]: drop [node]'s subtree from the per-view registry
+ * before the ops discard it, so a rebuilt slot leaves no entry pointing at a
+ * detached node. Identity-checked -- stream items share az values (one
+ * fingerprint, many items), so a destroyed item must never delete an entry that
+ * now names a surviving one.
+ */
+fun unindexByViews(node: Node, views: MutableMap<String, MutableMap<String, Node>>) {
+    val v = node.viewId
+    val az = node.az
+    if (v != null && az != null) {
+        val registry = views[v]
+        if (registry != null && registry[az] === node) {
+            registry.remove(az)
+            if (registry.isEmpty()) views.remove(v)
+        }
+    }
+    for (child in node.children) if (child is Node) unindexByViews(child, views)
 }
