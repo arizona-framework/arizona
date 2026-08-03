@@ -227,7 +227,15 @@ escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
 raw_text(Value) when is_binary(Value) ->
     neutralize_raw_text(Value, <<>>);
 raw_text(Value) ->
-    Value.
+    %% A `?raw` opt-out is the *only* shape a script/style content slot can carry
+    %% (the parse transform rejects an unmarked one), and it opts out of HTML
+    %% *escaping*, not out of the raw-text tokenizer: a trusted JSON blob's own
+    %% string data can still spell a breakout. Unwrap it, neutralize the payload,
+    %% and re-wrap, so the documented opt-out is not a hole around this check.
+    case arizona_template:classify_trusted(Value) of
+        {raw, Raw} -> arizona_template:raw(raw_text(Raw));
+        _Other -> Value
+    end.
 
 neutralize_raw_text(<<>>, Acc) ->
     Acc;

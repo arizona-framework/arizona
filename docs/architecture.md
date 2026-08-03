@@ -1303,7 +1303,16 @@ The backend classifies the tag via the `arizona_renderer` `raw_text_kind/1` call
 renders the value **verbatim** (the browser decodes no character references there, so HTML-escaping
 would corrupt it -- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL
 correct); `escapable` (`textarea`/`title`) HTML-escapes a scalar (references *are* decoded there)
-but is still markerless. A dynamic *attribute* on a raw-text element stays fully diffable -- only
+but is still markerless. Because a `raw` slot is spliced byte for byte and escaping is *impossible*
+there, the parse transform **requires** the value to carry a literal `?raw(...)` at the slot
+(`dynamic_in_raw_text`): an unmarked `?get` in a `<script>` would otherwise be the one content
+position where user data reaches the output unescaped, free to close the JavaScript string it sits
+in. Literal script/CSS text is static, not a slot, so it is unaffected; `escapable` elements escape
+and so are not gated. The opt-out marks the value trusted for HTML *escaping*, not for the raw-text
+tokenizer -- a trusted JSON blob's own string data can still spell an element breakout -- so
+`arizona_html:raw_text/1` unwraps the `?raw` and neutralizes the payload anyway (it rewrites a
+`</script`/`</style` to `<\/script`, transparent in the JSON/JS/CSS contexts such content lives
+in). A dynamic *attribute* on a raw-text element stays fully diffable -- only
 the content slot is markerless. Limitation: the slot will not update after the initial render, and
 `?local` is unsupported inside a raw-text element (no marker to address); a live `?get` there
 silently freezes at its first value. Emitting `OP_UPDATE` for a marker-anchored slot is a bug: no

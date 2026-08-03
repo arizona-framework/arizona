@@ -471,6 +471,14 @@ format_error(local_in_nodiff) ->
     "diff target for the client to address";
 format_error(local_unsupported) ->
     "?local is not supported by this render target";
+format_error(dynamic_in_raw_text) ->
+    "a dynamic content slot inside <script>/<style> is spliced verbatim -- the browser "
+    "decodes no character references in raw text, so HTML-escaping cannot apply there and "
+    "the value can close the JavaScript string it sits in, or the element itself (XSS). "
+    "Mark it with a literal ?raw(...) at the slot to state the value is already safe for "
+    "the script/CSS context, and only then -- serialize data first, e.g. "
+    "{script, [], [?raw(json:encode(Data))]}. Literal script/CSS text is static, not a "
+    "slot, and needs no wrapper";
 format_error(local_in_raw_text) ->
     "a content ?local cannot be used inside a raw-text element "
     "(script/style/textarea/title) -- raw-text content carries no slot markers "
@@ -2463,6 +2471,7 @@ emit_child_dynamic(
     %% script/CSS (and a module script's HTML-comment tokens are a SyntaxError).
     %% Diffing is impossible by construction (no marker to patch), so the slot
     %% renders once -- the diff engine skips its `undefined` az.
+    ok = assert_raw_text_opt_out(Child),
     DynAST = make_raw_text_dynamic_ast(Child, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(
@@ -2484,6 +2493,26 @@ emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = S
     DynAST = make_esc_text_dynamic_ast(MarkerAz, Child, Module, line(Child), Backend),
     State2 = flush(State1, DynAST),
     {State2#state{buf = [Backend:text_slot_close()]}, Slot + 1}.
+
+%% Verbatim is the whole point of a `raw` raw-text slot (script/style) and also its
+%% danger: the browser decodes no character references there, so the escaping every
+%% other slot kind applies is *impossible* -- the value reaches the output byte for
+%% byte and can close the JS string it sits in, or the element. This is the only
+%% content position where an unmarked value would be spliced unescaped, so require
+%% the author to state the value is safe for the script/CSS context with a literal
+%% `?raw(...)` at the slot -- the same "literal at the template site" rule the
+%% escape opt-out already follows everywhere else. Static text children never reach
+%% here (compile_child/4 splices them from the template's own bytes).
+assert_raw_text_opt_out(Child) ->
+    case is_raw_call(Child) of
+        true -> ok;
+        false -> parse_error(dynamic_in_raw_text, line(Child))
+    end.
+
+is_raw_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, raw}}, [_Value]}) ->
+    Mod =:= arizona_template orelse Mod =:= az;
+is_raw_call(_Expr) ->
+    false.
 
 make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),

@@ -320,6 +320,13 @@
     static_binary_utf8_and_ascii_still_fold/1
 ]).
 -export([
+    raw_text_script_bare_dynamic_rejected/1,
+    raw_text_style_bare_dynamic_rejected/1,
+    raw_text_conditional_dynamic_rejected/1,
+    raw_text_helper_call_rejected/1,
+    raw_text_static_only_still_compiles/1,
+    raw_text_az_alias_raw_accepted/1,
+    raw_text_reject_message_renders/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -554,6 +561,13 @@ groups() ->
         %% slot is markerless/render-once -- HTML comment diff markers would
         %% become literal content and corrupt the script/CSS/JSON-LD/title.
         {raw_text, [parallel], [
+            raw_text_script_bare_dynamic_rejected,
+            raw_text_style_bare_dynamic_rejected,
+            raw_text_conditional_dynamic_rejected,
+            raw_text_helper_call_rejected,
+            raw_text_static_only_still_compiles,
+            raw_text_az_alias_raw_accepted,
+            raw_text_reject_message_renders,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -1911,6 +1925,103 @@ native_backend_not_escaped(Config) when is_list(Config) ->
     %% The backend's escape/1 is the identity: the value passes through unescaped.
     ?assertEqual(<<"<not-escaped>">>, arizona_template:escape_value(arizona_native, Fun())).
 
+%% A bare ?get inside <script> is spliced VERBATIM (raw text decodes no character
+%% references, so escaping cannot apply) -- the value could close the JS string it
+%% sits in and inject code. Every other slot kind escapes, so this is the one
+%% unmarked-value-reaches-output hole: it must be a compile error, not silent XSS.
+raw_text_script_bare_dynamic_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_bare_script). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [], ["
+        "        <<\"var user = \\\"\">>, arizona_template:get(v, Bindings), <<\"\\\";\">>"
+        "    ]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% Same rule for <style>: CSS is raw text too, so an unmarked value reaches the
+%% output verbatim and can close the element.
+raw_text_style_bare_dynamic_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_bare_style). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'style', [], [arizona_template:get(css, Bindings)]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% The opt-out must be literal at the slot, mirroring how the transform already
+%% recognizes ?raw everywhere else. A conditional that yields values is not a
+%% ?raw call, so it is rejected -- wrap the whole conditional instead.
+raw_text_conditional_dynamic_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_bare_cond). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [], ["
+        "        case arizona_template:get(env, Bindings) of "
+        "            prod -> <<\"prod()\">>; "
+        "            _ -> <<\"dev()\">> "
+        "        end"
+        "    ]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% A value computed outside the template (no binding read, so not inlined back
+%% into the slot) is the classic shape that smuggles an unmarked value into a
+%% script. It is rejected too -- ?raw is what states "already safe here".
+raw_text_helper_call_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_bare_call). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Json = erlang:atom_to_binary(ok), "
+        "    arizona_template:html({'script', [], [Json]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% The common case -- a <script>/<style> whose children are only literal JS/CSS
+%% text -- carries no dynamic slot at all and must stay untouched by the rule.
+raw_text_static_only_still_compiles(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_static_only). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {'script', [], [<<\"var a = 1 < 2 && 3 > 2;\">>]}, "
+        "        {'style', [], [<<\".a > .b { color: red }\">>]}"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(
+        <<
+            "<div><script>var a = 1 < 2 && 3 > 2;</script>"
+            "<style>.a > .b { color: red }</style></div>"
+        >>,
+        HTML
+    ).
+
+%% The `az:` alias of the opt-out is recognized exactly like arizona_template:raw.
+raw_text_az_alias_raw_accepted(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_az_alias). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', [], [az:raw(az:get(js, Bindings))]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => ~"a && b"})),
+    ?assertEqual(<<"<script>a && b</script>">>, iolist_to_binary(HTML0)).
+
+%% The rejection reason renders through format_error/1 (what the compiler prints),
+%% and names the ?raw opt-out that unblocks the author.
+raw_text_reject_message_renders(Config) when is_list(Config) ->
+    Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
+    ?assert(is_list(Msg)),
+    ?assertNotEqual(nomatch, string:find(Msg, "?raw")),
+    ?assertNotEqual(nomatch, string:find(Msg, "script")).
+
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's
 %% HTML-comment tokens are a SyntaxError), so the slot must be markerless.
@@ -1920,7 +2031,7 @@ raw_text_script_markerless(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'script', [{type, <<\"module\">>}], ["
-        "        arizona_template:get(boot, Bindings)"
+        "        arizona_template:raw(arizona_template:get(boot, Bindings))"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{boot => <<"import x from \"/c\"">>})),
@@ -1938,7 +2049,9 @@ raw_text_script_not_escaped(Config) when is_list(Config) ->
         "-module(pt_rt_script_esc). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], [arizona_template:get(js, Bindings)]}). "
+        "    arizona_template:html({'script', [], ["
+        "        arizona_template:raw(arizona_template:get(js, Bindings))"
+        "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => <<"a < b && c > d">>})),
     HTML = iolist_to_binary(HTML0),
@@ -1953,7 +2066,9 @@ raw_text_style_markerless(Config) when is_list(Config) ->
         "-module(pt_rt_style). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'style', [], [arizona_template:get(css, Bindings)]}). "
+        "    arizona_template:html({'style', [], ["
+        "        arizona_template:raw(arizona_template:get(css, Bindings))"
+        "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{css => <<".a > .b { color: red }">>})),
     HTML = iolist_to_binary(HTML0),
@@ -2019,7 +2134,9 @@ raw_text_render_once_no_diff(Config) when is_list(Config) ->
         "-module(pt_rt_once). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], [arizona_template:get(boot, Bindings)]}). "
+        "    arizona_template:html({'script', [], ["
+        "        arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "    ]}). "
     ),
     T1 = Mod:render(#{boot => <<"a">>}),
     {_HTML, Snap0} = arizona_render:render(T1),
@@ -2075,7 +2192,9 @@ raw_text_sibling_after_restores_markers(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}, "
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}, "
         "        {'span', [], [arizona_template:get(x, Bindings)]}"
         "    ]}). "
     ),
@@ -2095,7 +2214,9 @@ raw_text_sibling_before_keeps_markers(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
         "        {'span', [], [arizona_template:get(x, Bindings)]}, "
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}"
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{boot => <<"BOOT">>, x => <<"XV">>})),
@@ -2114,7 +2235,9 @@ raw_text_between_normal_siblings_markers(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
         "        {'span', [], [arizona_template:get(a, Bindings)]}, "
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}, "
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}, "
         "        {'p', [], [arizona_template:get(b, Bindings)]}"
         "    ]}). "
     ),
@@ -2138,7 +2261,9 @@ raw_text_mixed_az_numbering_diffs(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}, "
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}, "
         "        {'span', [], [arizona_template:get(count, Bindings)]}"
         "    ]}). "
     ),
@@ -2168,7 +2293,8 @@ raw_text_two_content_slots(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'script', [], ["
-        "        arizona_template:get(a, Bindings), arizona_template:get(b, Bindings)"
+        "        arizona_template:raw(arizona_template:get(a, Bindings)), "
+        "        arizona_template:raw(arizona_template:get(b, Bindings))"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{a => <<"AA">>, b => <<"BB">>})),
@@ -2184,7 +2310,9 @@ raw_text_static_text_around_slot(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'script', [], ["
-        "        <<\"var x=\">>, arizona_template:get(url, Bindings), <<\"; init();\">>"
+        "        <<\"var x=\">>, "
+        "        arizona_template:raw(arizona_template:get(url, Bindings)), "
+        "        <<\"; init();\">>"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{url => <<"\"/u\"">>})),
@@ -2195,16 +2323,19 @@ raw_text_static_text_around_slot(Config) when is_list(Config) ->
 %% A control-flow value (case) in a raw-text slot flows through
 %% expand_block_element_tails: the selected branch renders verbatim and markerless,
 %% and diffing is a no-op even when the scrutinee binding changes (render-once).
+%% The conditional is wrapped in ?raw -- the opt-out marks the whole slot, so
+%% control flow inside it is unaffected by the raw-text opt-out requirement.
 raw_text_conditional_value_markerless(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_rt_cond). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'script', [], ["
-        "        case arizona_template:get(env, Bindings) of "
-        "            prod -> <<\"prod()\">>; "
-        "            _ -> <<\"dev()\">> "
-        "        end"
+        "        arizona_template:raw("
+        "            case arizona_template:get(env, Bindings) of "
+        "                prod -> <<\"prod()\">>; "
+        "                _ -> <<\"dev()\">> "
+        "            end)"
         "    ]}). "
     ),
     T1 = Mod:render(#{env => prod}),
@@ -2226,7 +2357,7 @@ raw_text_attr_diffs_content_render_once(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'script', "
         "        [{src, arizona_template:get(src, Bindings)}], "
-        "        [arizona_template:get(body, Bindings)]}). "
+        "        [arizona_template:raw(arizona_template:get(body, Bindings))]}). "
     ),
     T1 = Mod:render(#{src => <<"/a.js">>, body => <<"A">>}),
     {HTML0, Snap0} = arizona_render:render(T1),
@@ -2251,7 +2382,9 @@ raw_text_escapable_adjacent_to_raw(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'head', [], ["
         "        {'title', [], [arizona_template:get(t, Bindings)]}, "
-        "        {'script', [], [arizona_template:get(boot, Bindings)]}, "
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "        ]}, "
         "        {'meta', [{name, arizona_template:get(m, Bindings)}]}"
         "    ]}). "
     ),
