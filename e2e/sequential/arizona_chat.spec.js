@@ -1,5 +1,18 @@
+import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { serverFrames } from '../utils/helpers.js';
+
+/**
+ * A private chat room for one test.
+ *
+ * `arizona_chat` scopes its pubsub channel to the `:room` path segment, so a
+ * fresh room is a fresh channel. That is the isolation: the e2e server is
+ * started once for the whole run (and reused across runs locally), so a shared
+ * channel would carry every other `/chat` client's messages into these counts
+ * -- another test, a second Playwright process on the same server, a page left
+ * open. Serializing the tests cannot fix that; only a per-test channel can.
+ */
+const chatUrl = () => `/chat/${randomUUID()}`;
 
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
@@ -21,8 +34,9 @@ test.describe
             const pageA = await ctx1.newPage();
             const pageB = await ctx2.newPage();
 
-            await pageA.goto('/chat');
-            await pageB.goto('/chat');
+            const room = chatUrl();
+            await pageA.goto(room);
+            await pageB.goto(room);
             await wsReady(pageA);
             await wsReady(pageB);
 
@@ -46,8 +60,9 @@ test.describe
             const pageB = await ctx2.newPage();
 
             const framesA = serverFrames(pageA);
-            await pageA.goto('/chat');
-            await pageB.goto('/chat');
+            const room = chatUrl();
+            await pageA.goto(room);
+            await pageB.goto(room);
             await wsReady(pageA);
             await wsReady(pageB);
 
@@ -68,7 +83,7 @@ test.describe
             const ctx = await browser.newContext();
             const page = await ctx.newPage();
 
-            await page.goto('/chat');
+            await page.goto(chatUrl());
             await wsReady(page);
 
             await sendMsg(page, 'hi there');
@@ -84,8 +99,9 @@ test.describe
             const pageA = await ctx1.newPage();
             const pageB = await ctx2.newPage();
 
-            await pageA.goto('/chat');
-            await pageB.goto('/chat');
+            const room = chatUrl();
+            await pageA.goto(room);
+            await pageB.goto(room);
             await wsReady(pageA);
             await wsReady(pageB);
 
@@ -115,7 +131,7 @@ test.describe
             const ctx = await browser.newContext();
             const page = await ctx.newPage();
 
-            await page.goto('/chat');
+            await page.goto(chatUrl());
             await wsReady(page);
 
             // Only one subscriber (self). broadcast_from excludes self,
@@ -134,8 +150,9 @@ test.describe
             const pageA = await ctx1.newPage();
             const pageB = await ctx2.newPage();
 
-            await pageA.goto('/chat');
-            await pageB.goto('/chat');
+            const room = chatUrl();
+            await pageA.goto(room);
+            await pageB.goto(room);
             await wsReady(pageA);
             await wsReady(pageB);
 
@@ -158,7 +175,7 @@ test.describe
             const ctx = await browser.newContext();
             const page = await ctx.newPage();
 
-            await page.goto('/chat');
+            await page.goto(chatUrl());
             await wsReady(page);
 
             await sendMsg(page, 'to delete');
@@ -177,8 +194,9 @@ test.describe
             const pageA = await ctx1.newPage();
             const pageB = await ctx2.newPage();
 
-            await pageA.goto('/chat');
-            await pageB.goto('/chat');
+            const room = chatUrl();
+            await pageA.goto(room);
+            await pageB.goto(room);
             await wsReady(pageA);
             await wsReady(pageB);
 

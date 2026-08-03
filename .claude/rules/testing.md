@@ -15,7 +15,7 @@ All unit tests use plain `_test()` functions (no generators/fixtures). Parse tra
 
 Playwright, split into projects/directories:
 - `e2e/parallel/` -- `arizona_page.spec.js`, `arizona_datatable.spec.js`, `arizona_mixed_children.spec.js`, `arizona_os.spec.js` (run in parallel). `arizona_os.spec.js` drives the native-shell (OS) capability seam against the real client with a fake `window.__arizona_os__` installed via `page.addInitScript` (the Electron-preload equivalent).
-- `e2e/sequential/` -- `arizona_chat.spec.js` (runs with `workers: 1` to avoid pg channel leaks between tests)
+- `e2e/sequential/` -- `arizona_chat.spec.js`, `arizona_drain.spec.js`, `arizona_fetch_account.spec.js` (run with `workers: 1` so the drain spec, which soft-drains the whole listener and remounts every live view on the server, never overlaps the others). Serialization buys ordering, not state isolation: the e2e server is started once for the whole run, so anything keyed globally outlives every test. `arizona_chat` therefore scopes its pubsub channel to the `:room` path segment and each test visits a fresh random room.
 - `e2e/native/` -- the `?native` (JSON) wire e2e: a real WebSocket client (no browser, `e2e/utils/native_client.js`) drives the `/native/counter` view over the live server
 
 ## Common Test suites
@@ -38,7 +38,7 @@ Handlers pick one of the two header forms:
 - `arizona_page.erl` -- page with 3 stateful counter children, connected status
 - `arizona_about.erl` -- about page with `handle_info/2` tick timer, `az-hook="Tick"`, SPA navigation
 - `arizona_crashable.erl` -- crash fixtures: `mount`, `handle_event`, and `handle_info` crash paths
-- `arizona_chat.erl` -- pubsub cross-tab messaging, stream-based, owner-guarded delete
+- `arizona_chat.erl` -- pubsub cross-tab messaging, stream-based, owner-guarded delete; channel scoped per `:room` path segment
 - `arizona_datatable.erl` -- stream sort/move/reset, 5 initial rows
 - `arizona_mixed_children.erl` -- stateless + dynamic children, az numbering correctness
 - `arizona_os_demo.erl` -- native-shell (OS) capability seam e2e fixture (route `/os`): capability-gated UI via the `?connected` binding pattern, server-emitted + client-triggered `arizona_os` commands, inbound OS events into `handle_event/3`

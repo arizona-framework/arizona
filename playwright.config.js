@@ -26,6 +26,11 @@ export default defineConfig({
             testDir: './e2e/parallel',
         },
         {
+            // One worker so the drain spec cannot overlap the others: it soft-drains
+            // the whole listener, which stops every live process on the server and
+            // forces every open page to remount. Isolation of per-test *state* is
+            // not this project's job -- `arizona_chat` scopes its pubsub channel to
+            // the room in the URL, so serializing is not what keeps it clean.
             name: 'sequential',
             testDir: './e2e/sequential',
             fullyParallel: false,

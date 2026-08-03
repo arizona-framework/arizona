@@ -1,14 +1,29 @@
 -module(arizona_chat).
+-moduledoc """
+Pubsub cross-tab chat fixture, scoped to the `:room` path segment.
+
+The channel is `{chat, Room}`, never a bare `chat`: the e2e server is
+started once for a whole Playwright run (and reused across runs locally),
+so a globally-named channel is shared by every `/chat` view the server has
+ever handed out. Any second client -- another test, a second Playwright
+process reusing the server, a page left open -- then broadcasts straight
+into the assertions of whatever else is on the channel. Keying the channel
+by room gives each test its own, which is what makes the spec deterministic
+(serializing the tests never isolated anything; the channel outlives them).
+""".
 -include("arizona_stateful.hrl").
 -export([mount/1, unmount/1, render/1, handle_event/3, handle_info/2]).
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
-    ?connected andalso ?subscribe(chat),
+    %% `room` arrives as a binary-keyed path binding (extract/1).
+    Room = maps:get(~"room", Bindings, ~"lobby"),
+    ?connected andalso ?subscribe({chat, Room}),
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end),
     {
         #{
             id => ~"page",
+            room => Room,
             title => maps:get(title, Bindings, ~"Chat"),
             messages => Stream
         },
@@ -16,8 +31,8 @@ mount(Bindings) ->
     }.
 
 -spec unmount(az:bindings()) -> ok.
-unmount(_Bindings) ->
-    _ = ?unsubscribe(chat),
+unmount(Bindings) ->
+    _ = ?unsubscribe({chat, maps:get(room, Bindings)}),
     ok.
 
 -spec render(az:bindings()) -> az:template().
@@ -75,7 +90,8 @@ handle_event(~"send", Payload, Bindings) ->
         Text ->
             MsgId = integer_to_binary(erlang:unique_integer([positive])),
             Msg = #{id => MsgId, text => Text, owner => self()},
-            arizona_pubsub:broadcast_from(self(), chat, {chat_msg, Msg}),
+            Channel = {chat, maps:get(room, Bindings)},
+            arizona_pubsub:broadcast_from(self(), Channel, {chat_msg, Msg}),
             S = arizona_stream:insert(maps:get(messages, Bindings), Msg),
             {Bindings#{messages => S}, #{}, []}
     end;
@@ -84,7 +100,8 @@ handle_event(~"delete", #{~"id" := Id}, Bindings) ->
     #{owner := Owner} = arizona_stream:get(Stream, Id),
     case Owner =:= self() of
         true ->
-            arizona_pubsub:broadcast_from(self(), chat, {chat_delete, Id}),
+            Channel = {chat, maps:get(room, Bindings)},
+            arizona_pubsub:broadcast_from(self(), Channel, {chat_delete, Id}),
             S = arizona_stream:delete(Stream, Id),
             {Bindings#{messages => S}, #{}, []};
         false ->

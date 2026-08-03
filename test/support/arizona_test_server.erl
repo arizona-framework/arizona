@@ -41,9 +41,12 @@ routes() ->
             bindings => #{title => <<"Inline">>},
             layouts => Layouts
         }},
-        {live, <<"/chat">>, arizona_chat, #{
+        %% Room-scoped: the pubsub channel is `{chat, Room}`, so each e2e test
+        %% gets a private channel on the long-lived shared test server.
+        {live, <<"/chat/:room">>, arizona_chat, #{
             bindings => #{title => <<"Chat">>},
-            layouts => Layouts
+            layouts => Layouts,
+            middlewares => [arizona_middleware:extract([path_bindings])]
         }},
         {live, <<"/local">>, arizona_local, #{
             bindings => #{title => <<"Local">>},
