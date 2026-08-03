@@ -427,4 +427,159 @@ describe('applyOps -- destructive ops on a marker-only target', () => {
         expect(warn).not.toHaveBeenCalled();
         warn.mockRestore();
     });
+
+    // A stream `?each` container op is resolved relative to the ELEMENT, so on a
+    // marker-only container the ops that place a node by container position land
+    // outside the slot: a tail OP_INSERT appends after the footer, an OP_MOVE
+    // prepend lands before the header. Silent misplacement is worse than the
+    // dropped-with-a-warning behaviour these had before the marker fallback
+    // existed, so they are refused too. The position-INDEPENDENT item ops
+    // (OP_REMOVE, OP_ITEM_PATCH) find their target by `az-key` and stay correct.
+    it('refuses a tail OP_INSERT on a marker-only stream container', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupSiblings();
+        const before = sibRoot().innerHTML;
+        applyOps([[OP.INSERT, `page:${SIB_EACH_AZ}`, '2', -1, sibItem('2', 'b')]]);
+        expect(sibRoot().innerHTML).toBe(before);
+        expect(warn).toHaveBeenCalledOnce();
+        warn.mockRestore();
+    });
+
+    it('refuses an OP_MOVE on a marker-only stream container', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        document.body.innerHTML =
+            `<div az="${SIB_ROOT_AZ}" az-view id="page">` +
+            `${sibBody(sibItem('1', 'a') + sibItem('2', 'b'))}</div>`;
+        const before = sibRoot().innerHTML;
+        applyOps([[OP.MOVE, `page:${SIB_EACH_AZ}`, '2', null]]);
+        expect(sibRoot().innerHTML).toBe(before);
+        expect(warn).toHaveBeenCalledOnce();
+        warn.mockRestore();
+    });
+
+    it('still applies the position-independent item ops', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        document.body.innerHTML =
+            `<div az="${SIB_ROOT_AZ}" az-view id="page">` +
+            `${sibBody(sibItem('1', 'a') + sibItem('2', 'b'))}</div>`;
+        applyOps([
+            [OP.ITEM_PATCH, `page:${SIB_EACH_AZ}`, '1', [[OP.TEXT, '1HWIIPK-0', 'A']]],
+            [OP.REMOVE, `page:${SIB_EACH_AZ}`, '2'],
+        ]);
+        expect(sibRoot().innerHTML).toBe(sibBody(sibItem('1', 'A')));
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// A slot walker must recognise a FRAMEWORK marker, not any `az:`-prefixed
+// comment.
+//
+// Static text is spliced verbatim (the raw-HTML seam) and `?raw` exists to
+// splice trusted stored HTML, so comments authored by a CMS/markdown pipeline
+// reach slot content as ordinary bytes. `arizona_html:scope_static/3` already
+// states the rule: every framework-emitted az is `<Fp>-<id>`, and the
+// fingerprint is what separates a real marker from user-authored bytes.
+// Counting a decoy as a nested opener makes the walker swallow the slot's OWN
+// closer, deleting the following siblings AND un-anchoring the slot for good.
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- decoy `az:` comments inside slot content', () => {
+    const decoyBody = (inner) => `<section az="V-2"><!--az:V-2-->${inner}<!--/az--></section>`;
+
+    function setupDecoy(inner) {
+        document.body.innerHTML = `<div id="v" az-view>${decoyBody(inner)}<span>sibling</span></div>`;
+    }
+
+    it('does not treat a non-fingerprint `az:` comment as a nested opener', () => {
+        setupDecoy('x<!--az:fake-->y');
+        applyOps([[OP.TEXT, 'v:V-2', 'NEW']]);
+        expect(document.querySelector('section').innerHTML).toBe('<!--az:V-2-->NEW<!--/az-->');
+        expect(document.querySelector('span')).not.toBeNull();
+    });
+
+    it('survives repeated re-renders with a decoy (slot stays anchored)', () => {
+        setupDecoy('x<!--az:fake-->y');
+        applyOps([[OP.TEXT, 'v:V-2', 'ONE']]);
+        applyOps([[OP.TEXT, 'v:V-2', 'TWO']]);
+        expect(document.querySelector('section').innerHTML).toBe('<!--az:V-2-->TWO<!--/az-->');
+    });
+
+    it.each([
+        ['lowercase word', '<!--az:fake-->'],
+        ['hyphenated word', '<!--az:foo-bar-->'],
+        ['spaced text', '<!--az: build 3-->'],
+        ['fingerprint with no id', '<!--az:1ABC-->'],
+        ['trailing punctuation', '<!--az:1ABC-0!-->'],
+    ])('rejects a decoy that only looks like a marker (%s)', (_name, decoy) => {
+        setupDecoy(`x${decoy}y`);
+        applyOps([[OP.TEXT, 'v:V-2', 'NEW']]);
+        expect(document.querySelector('section').innerHTML).toBe('<!--az:V-2-->NEW<!--/az-->');
+        expect(document.querySelector('span')).not.toBeNull();
+    });
+
+    it('still counts a real nested marker as an opener', () => {
+        // The control for the above: a genuine `<Fp>-<id>` nested pair must keep
+        // incrementing depth, or the walker under-walks again.
+        setupDecoy('x<!--az:1TLYFEV-0-->y<!--/az-->z');
+        applyOps([[OP.TEXT, 'v:V-2', 'NEW']]);
+        expect(document.querySelector('section').innerHTML).toBe('<!--az:V-2-->NEW<!--/az-->');
+        expect(document.querySelector('span')).not.toBeNull();
+    });
+
+    it('never mutates a slot it cannot delimit', () => {
+        // A decoy that DOES match the framework shape but has no closer (stored
+        // HTML carrying a real-looking marker) leaves the slot unterminated. The
+        // walk must abort without deleting anything rather than empty the parent.
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupDecoy('x<!--az:1TLYFEV-0-->y');
+        const before = document.querySelector('section').innerHTML;
+        applyOps([[OP.TEXT, 'v:V-2', 'NEW']]);
+        expect(document.querySelector('section').innerHTML).toBe(before);
+        expect(document.querySelector('span')).not.toBeNull();
+        expect(warn).toHaveBeenCalledOnce();
+        warn.mockRestore();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// A cached marker-only resolution must be re-validated within the batch.
+//
+// The memo keys on the resolved ELEMENT being connected, but a marker-only hit
+// resolves to the slot's PARENT -- which stays connected after an earlier op in
+// the same batch re-renders the enclosing slot and destroys the inner marker.
+// The stale hit then reaches `applyTextOp`, whose no-marker fallback writes
+// `el.textContent` and wipes the parent. OP_TEXT is exactly the op code the
+// marker-unsafe guard cannot cover, so the memo itself has to notice.
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- stale marker resolution within one batch', () => {
+    it('re-validates a cached marker hit instead of wiping the parent', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupPage(condBody('A'));
+        applyOps([
+            [OP.TEXT, `page:${CHILD_AZ}`, 'A'],
+            // Re-renders the OUTER slot, destroying the inner marker pair.
+            [OP.TEXT, `page:${PAGE_AZ}`, 'gone'],
+            // Stale memo hit: the <main> is still connected, the marker is not.
+            [OP.TEXT, `page:${CHILD_AZ}`, 'B'],
+        ]);
+        expect(pageBody()).toBe(`<h1>Title</h1><!--az:${PAGE_AZ}-->gone<!--/az-->`);
+        expect(document.querySelector('h1')).not.toBeNull();
+        expect(warn).toHaveBeenCalledOnce();
+        warn.mockRestore();
+    });
+
+    it('keeps re-using a cached marker hit that is still valid', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupPage(condBody('A'));
+        applyOps([
+            [OP.TEXT, `page:${CHILD_AZ}`, 'B'],
+            [OP.TEXT, `page:${CHILD_AZ}`, 'C'],
+        ]);
+        expect(pageBody()).toBe(condBody('C'));
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+    });
 });
