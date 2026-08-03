@@ -1550,7 +1550,7 @@ resolved element), removed once every container full render moved to the marker-
 -- a content slot's `az` is not reliably carried by an element, so `innerHTML` on whatever the
 client resolves destroys the slot's static siblings (the whole view when that element is the
 view root). Nothing emits it and no client claims it. It is free to reuse for a genuinely new
-op: codes 0..9 emit as a single byte (`arizona_socket:op_code_iodata/1`) and 10+ cost an extra
+op: codes 0..9 emit as a single byte (`arizona_socket`'s op-code encoder) and 10+ cost an extra
 one per op, so the cheap range is worth reclaiming -- but a reuse must land on the server and
 all four clients together, since a code means whatever both ends agree it means.
 
