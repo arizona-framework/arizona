@@ -921,7 +921,7 @@ function applyOps(ops) {
                     removeEl(el);
                     break;
                 case OP.INSERT:
-                    insertItemEl(el, op[2], op[3], op[4], streams);
+                    insertItemEl(el, op[2], op[3], op[4], streams, az);
                     break;
                 case OP.REMOVE:
                     removeItemEl(el, op[2], streams);
@@ -930,7 +930,7 @@ function applyOps(ops) {
                     applyItemPatch(el, op[2], op[3], streams);
                     break;
                 case OP.MOVE:
-                    moveItemEl(el, op[2], op[3], streams);
+                    moveItemEl(el, op[2], op[3], streams, az);
                     break;
                 case OP.LIST_PATCH:
                     applyListPatch(el, az, op[2]);
@@ -1381,6 +1381,46 @@ function get(a, b) {
  * @param {Element} el
  * @returns {Map<string, Element>}
  */
+/**
+ * Boundary of a stream container's slot when the container shares its parent's
+ * content slot with siblings. There the each's slot az is compound and carried by no
+ * element, so `resolveEl` falls back to the BASE az -- the enclosing element -- and
+ * `el` is that enclosing element, not the list. Appending or prepending to it puts the
+ * item outside the slot span (after a footer, before a header) instead of in the list.
+ *
+ * Lookup by key needs none of this: the items are real children of `el` either way.
+ * Only PLACEMENT does, so this is used solely to anchor inserts and moves.
+ *
+ * Returns null for the ordinary case (a container that owns its az), which keeps the
+ * plain element placement.
+ * @param {Element} el
+ * @param {string} [az]
+ * @returns {{start: Comment, end: Comment}|null}
+ */
+function slotBounds(el, az) {
+    const start = az ? findMarker(el, az) : null;
+    if (!start) return null;
+    const end = findSlotEnd(start);
+    return end ? { start, end } : null;
+}
+
+/**
+ * Keyed children of a stream container, restricted to its slot span when it has one.
+ * @param {Element} el
+ * @param {{start: Comment, end: Comment}|null} bounds
+ * @returns {Element[]}
+ */
+function keyedChildren(el, bounds) {
+    if (!bounds) return Array.from(el.querySelectorAll(':scope > [az-key]'));
+    const out = [];
+    for (let n = bounds.start.nextSibling; n && n !== bounds.end; n = n.nextSibling) {
+        if (n.nodeType === 1 && /** @type {Element} */ (n).getAttribute('az-key') !== null) {
+            out.push(/** @type {Element} */ (n));
+        }
+    }
+    return out;
+}
+
 function buildKeyMap(el) {
     const map = new Map();
     for (const child of el.children) {
@@ -1427,24 +1467,29 @@ function itemByKey(streams, el, key) {
  * @param {string} html
  * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function insertItemEl(el, key, pos, html, streams = null) {
+function insertItemEl(el, key, pos, html, streams = null, az = undefined) {
     const tpl = el.ownerDocument.createElement('template');
     tpl.innerHTML = html;
+    const bounds = slotBounds(el, az);
     // Grab the keyed item from the payload BEFORE inserting it: re-querying the
     // container by key afterwards would find a PRE-EXISTING element first under
     // a duplicate key, mounting hooks on the wrong element and skipping the new
     // item's own.
     const item = Array.from(tpl.content.children).find((e) => e.getAttribute('az-key') === key);
+    // Tail placement goes before the slot's CLOSING marker when there is one, so the
+    // item lands inside the list rather than after the slot's static siblings.
+    const atEnd = () =>
+        bounds ? el.insertBefore(tpl.content, bounds.end) : el.appendChild(tpl.content);
     if (pos === -1) {
-        el.appendChild(tpl.content);
+        atEnd();
     } else {
         // Positional: the live child list, not the key map -- MOVE ops change
         // DOM order without touching the map, so only the DOM knows position.
-        const children = el.querySelectorAll(':scope > [az-key]');
+        const children = keyedChildren(el, bounds);
         if (pos < children.length) {
             el.insertBefore(tpl.content, children[pos]);
         } else {
-            el.appendChild(tpl.content);
+            atEnd();
         }
     }
     if (item) {
@@ -1480,17 +1525,23 @@ function removeItemEl(el, key, streams = null) {
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
  * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
-function moveItemEl(el, key, afterKey, streams = null) {
+function moveItemEl(el, key, afterKey, streams = null, az = undefined) {
     const item = itemByKey(streams, el, key);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for move`);
         return;
     }
+    // Head and tail placement are relative to the slot span when there is one:
+    // `el.prepend` would put the item before the slot's static siblings (a header),
+    // and `el.appendChild` after them (a footer).
+    const bounds = slotBounds(el, az);
     if (afterKey === null) {
-        el.prepend(item);
+        if (bounds) bounds.start.after(item);
+        else el.prepend(item);
     } else {
         const ref = itemByKey(streams, el, afterKey);
         if (ref) ref.after(item);
+        else if (bounds) el.insertBefore(item, bounds.end);
         else el.appendChild(item);
     }
     notifyUpdated(item);
@@ -1588,7 +1639,7 @@ function applyItemOps(item, innerOps) {
                     break;
                 }
                 case OP.INSERT:
-                    insertItemEl(resolveInnerEl(item, az), op[2], op[3], op[4]);
+                    insertItemEl(resolveInnerEl(item, az), op[2], op[3], op[4], null, az);
                     break;
                 case OP.REMOVE:
                     removeItemEl(resolveInnerEl(item, az), op[2]);
@@ -1597,7 +1648,7 @@ function applyItemOps(item, innerOps) {
                     patchItemEl(item, az, op[2], op[3]);
                     break;
                 case OP.MOVE:
-                    moveItemEl(resolveInnerEl(item, az), op[2], op[3]);
+                    moveItemEl(resolveInnerEl(item, az), op[2], op[3], null, az);
                     break;
                 case OP.LIST_PATCH:
                     applyListPatch(resolveInnerEl(item, az), az, op[2]);
