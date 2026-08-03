@@ -1312,9 +1312,12 @@ element carries the slot `az`, so the client resolves the slot through its comme
 the view root, the whole view. **No** content-slot `?each` container render uses `OP_UPDATE`:
 both the plain-list clause and the `order`-keyed **stream** clause of `arizona_diff`'s
 `make_op/3` emit the marker-aware `OP_TEXT`, as do `full_update/5` and `diff_stream/4`'s
-no-`order` (type-switch) clause. A stream's *incremental* ops are unaffected -- they address
-items by `az-key`, never the slot az. The client refuses `OP_UPDATE`/`OP_REPLACE`/`OP_REMOVE_NODE`
-on a marker-resolved target outright, so a stray one warns and skips instead of destroying a view.
+no-`order` (type-switch) clause. A stream's *incremental* ops keep their own op codes: they carry
+the **same container az** as the target (the item is named by key in a later field) but mutate one
+keyed child instead of the container's whole content, so the full-render op code does not govern
+them -- their own limitation is placement, below. The client refuses
+`OP_UPDATE`/`OP_REPLACE`/`OP_REMOVE_NODE` on a marker-resolved target outright, so a stray one
+warns and skips instead of destroying a view.
 
 The **stream -> list** type switch is consistent with this: a binding that was an
 `arizona_stream` and becomes a plain list routes through `diff_list/4 -> full_update/5 -> OP_TEXT`,
@@ -1328,10 +1331,19 @@ The **list -> stream** switch and every other stream **container full render** n
 instead of clobbering them.
 
 **Known limitation -- stream *incremental* ops are not yet marker-relative.** `insertItemEl`
-appends keyed children to the resolved container element, which places a runtime-inserted item
-*after* the closing `<!--/az-->` marker when the each is not that element's sole content. A
-subsequent stream -> list `OP_TEXT` correctly re-renders the marker span but leaves that orphan
-behind. The fix is to anchor stream items between the slot markers (making insert/move
+appends keyed children to the resolved container element and `moveItemEl` prepends to it, so
+placement is relative to that ELEMENT rather than to the slot's marker span. Two consequences:
+
+- When the each is not the container's sole content, a runtime-inserted item lands *after* the
+  closing `<!--/az-->` marker. A subsequent stream -> list `OP_TEXT` correctly re-renders the
+  marker span but leaves that orphan behind.
+- On a **marker-only** container (no element carries the slot az) the client would place the node
+  outside the slot entirely -- after the trailing siblings, or before the leading ones. Rather
+  than misplace it silently, `applyOps` refuses `OP_INSERT`/`OP_MOVE` on a marker-resolved target
+  with a warning. The position-independent `OP_REMOVE`/`OP_ITEM_PATCH` find their target by
+  `az-key` and still apply.
+
+The fix for both is to anchor stream items between the slot markers (making insert/move
 marker-relative), tracked as a follow-up.
 
 ## Target scoping
