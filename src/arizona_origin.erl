@@ -96,7 +96,7 @@ same_origin(_Origin, undefined, _Scheme) ->
 same_origin(Origin, Host, Scheme) ->
     case binary:split(Origin, ~"://") of
         [OriginScheme, Authority] ->
-            same_scheme(OriginScheme, Scheme) andalso string:equal(Authority, Host, true);
+            same_scheme(OriginScheme, Scheme) andalso ascii_equal(Authority, Host);
         _ ->
             false
     end.
@@ -109,13 +109,13 @@ same_origin(Origin, Host, Scheme) ->
 same_scheme(_OriginScheme, http) ->
     true;
 same_scheme(OriginScheme, https) ->
-    string:equal(OriginScheme, ~"https", true).
+    ascii_equal(OriginScheme, ~"https").
 
 %% Match case-insensitively, consistent with `same_origin/2`: browser Origins are
 %% already lowercase, so an uppercase `csrf_origins` entry is an operator typo that
 %% should still match its lowercased origin, not silently 403.
 allowlisted(Origin) ->
-    lists:member(string:lowercase(Origin), allowlist()).
+    lists:member(ascii_lowercase(Origin), allowlist()).
 
 %% The lowercased allowlist, cached in persistent_term keyed by the RAW app-env
 %% value (a cheap read), so the `{env, ...}` resolution and per-entry lowercasing
@@ -131,7 +131,25 @@ allowlist() ->
         {Raw, Lowered} ->
             Lowered;
         _Other ->
-            Lowered = [string:lowercase(O) || O <- arizona_config:resolve(Raw)],
+            Lowered = [ascii_lowercase(O) || O <- arizona_config:resolve(Raw)],
             persistent_term:put({?MODULE, allowlist}, {Raw, Lowered}),
             Lowered
     end.
+
+%% Case-insensitive compare over BYTES, not Unicode codepoints. An origin is
+%% ASCII by RFC 6454, so Unicode casefolding buys nothing -- and it actively
+%% breaks here: `string:equal/3` and `string:lowercase/1` raise `badarg` on
+%% invalid UTF-8, which a client is free to put in an `Origin` header (the
+%% transport permits bytes >= 0x80 in header values). That turned a request
+%% that must simply be refused into a `500`. Byte-wise is also the cheaper
+%% compare on the per-request path.
+ascii_equal(A, A) ->
+    true;
+ascii_equal(A, B) ->
+    ascii_lowercase(A) =:= ascii_lowercase(B).
+
+ascii_lowercase(Bin) ->
+    <<<<(ascii_lower_byte(C))>> || <<C>> <= Bin>>.
+
+ascii_lower_byte(C) when C >= $A, C =< $Z -> C + 32;
+ascii_lower_byte(C) -> C.

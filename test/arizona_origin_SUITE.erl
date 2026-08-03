@@ -16,6 +16,10 @@
 -export([missing_origin_passes/1]).
 -export([scheme_less_origin_forbidden/1]).
 -export([null_origin_forbidden/1]).
+-export([mixed_case_origin_passes/1]).
+-export([invalid_utf8_authority_forbidden/1]).
+-export([invalid_utf8_scheme_forbidden/1]).
+-export([invalid_utf8_allowlist_compare_forbidden/1]).
 -export([allowlisted_origin_passes/1]).
 -export([allowlisted_origin_case_insensitive/1]).
 -export([allowlist_follows_env_change/1]).
@@ -39,6 +43,10 @@ groups() ->
             missing_origin_passes,
             scheme_less_origin_forbidden,
             null_origin_forbidden,
+            mixed_case_origin_passes,
+            invalid_utf8_authority_forbidden,
+            invalid_utf8_scheme_forbidden,
+            invalid_utf8_allowlist_compare_forbidden,
             allowlisted_origin_passes,
             allowlisted_origin_case_insensitive,
             allowlist_follows_env_change,
@@ -102,6 +110,45 @@ scheme_less_origin_forbidden(Config) when is_list(Config) ->
 
 null_origin_forbidden(Config) when is_list(Config) ->
     ?assertEqual(forbidden, arizona_origin:check(~"null", ~"app.example", https)).
+
+mixed_case_origin_passes(Config) when is_list(Config) ->
+    %% Scheme and authority both compare case-insensitively -- the property the
+    %% byte-wise ASCII compare has to keep after dropping `string:equal/3`.
+    ?assertEqual(ok, arizona_origin:check(~"HTTPS://App.Example", ~"app.example", https)),
+    ?assertEqual(ok, arizona_origin:check(~"https://app.example", ~"APP.EXAMPLE", https)).
+
+invalid_utf8_authority_forbidden(Config) when is_list(Config) ->
+    %% A client may put any byte in the `Origin` header (roadrunner permits
+    %% >= 0x80), and an origin is ASCII by RFC 6454 -- so an invalid-UTF-8
+    %% authority is simply not the request's own. It must read as a clean
+    %% `forbidden`, not raise `badarg` out of the middleware into a 500: the
+    %% Unicode casefold in the authority compare was the first of three such
+    %% raises, and the one on the primary path (hit before the allowlist).
+    ?assertEqual(
+        forbidden,
+        arizona_origin:check(<<"http://app.example", 16#FF>>, ~"app.example", http)
+    ).
+
+invalid_utf8_scheme_forbidden(Config) when is_list(Config) ->
+    %% Same on the scheme half, which an https request compares separately (and
+    %% reaches before the authority).
+    ?assertEqual(
+        forbidden,
+        arizona_origin:check(<<16#FF, "://app.example">>, ~"app.example", https)
+    ).
+
+invalid_utf8_allowlist_compare_forbidden(Config) when is_list(Config) ->
+    %% And on the allowlist fallback, reached when the same-origin compare says
+    %% no without ever touching the bad byte (a cross-origin request).
+    application:set_env(arizona, csrf_origins, [~"https://trusted.example"]),
+    try
+        ?assertEqual(
+            forbidden,
+            arizona_origin:check(<<"https://app.example", 16#FF>>, ~"other.example", https)
+        )
+    after
+        application:unset_env(arizona, csrf_origins)
+    end.
 
 allowlisted_origin_passes(Config) when is_list(Config) ->
     application:set_env(arizona, csrf_origins, [~"https://trusted.example"]),
