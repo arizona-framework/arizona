@@ -853,6 +853,20 @@ function applyOps(ops) {
  * Resolve a patch target to a DOM element. Bare targets (no colon) resolve to
  * the view root element itself -- used by OP_REPLACE for navigation. Scoped
  * targets ("viewId:az") find the view root, then the element within it.
+ *
+ * Three lookups, cheapest and most common first:
+ * 1. an element carrying the az (the view root itself, or a descendant);
+ * 2. for a compound "X:n" slot az, the base element `[az="X"]`;
+ * 3. the slot's `<!--az:X-->` comment marker, whose PARENT element is returned.
+ *
+ * (3) is what makes a MARKER-ONLY slot patchable: a template whose whole body is
+ * a bare dynamic -- `?html(case ... end)`, `?html(?get(x))`, `?html(?each(...))`,
+ * `?html(?stateless(...))`, or a mixed top-level fragment -- anchors its root slot
+ * with its own marker pair and NO element ever carries that az. The returned
+ * parent is exactly the element the marker is a direct child of, so the
+ * `findMarker(el, az)` every marker-aware op then runs finds it. Without it the
+ * op resolves to nothing and `applyOps` drops it, so such a component never
+ * updates after SSR.
  * @param {string} target
  * @returns {Element|null}
  */
@@ -864,12 +878,33 @@ function resolveEl(target) {
     const view = findViewRoot(viewId);
     if (!view) return null;
     if (view.getAttribute('az') === az) return view;
-    let el = view.querySelector(`[az="${az}"]`);
-    if (!el) {
-        const j = az.indexOf(':');
-        if (j !== -1) el = view.querySelector(`[az="${az.substring(0, j)}"]`);
+    const el = view.querySelector(`[az="${az}"]`);
+    if (el) return el;
+    const j = az.indexOf(':');
+    if (j !== -1) {
+        const base = view.querySelector(`[az="${az.substring(0, j)}"]`);
+        if (base) return base;
     }
-    return el;
+    return findMarkerDeep(view, az)?.parentElement ?? null;
+}
+
+/**
+ * Find the `<!--az:X-->` opening marker anywhere in `root`'s subtree. The
+ * fallback arm of `resolveEl` -- element lookups run first, so this walk only
+ * happens for a slot no element anchors, and `applyOps`' per-batch `els` memo
+ * keeps it to once per target per batch. Same view-wide scope as the
+ * `[az="..."]` query it backs up.
+ * @param {Element} root
+ * @param {string} az
+ * @returns {Comment|null}
+ */
+function findMarkerDeep(root, az) {
+    const data = `az:${az}`;
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_COMMENT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (/** @type {Comment} */ (node).data === data) return /** @type {Comment} */ (node);
+    }
+    return null;
 }
 
 /**

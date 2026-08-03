@@ -1,0 +1,144 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { applyOps, hooks, OP, resolveEl } from './arizona.js';
+
+// ---------------------------------------------------------------------------
+// Marker-anchored slots: targets that name NO element, and marker pairs that
+// nest inside one another.
+//
+// Every fixture below is REAL `arizona_render` SSR output paired with the REAL
+// `arizona_diff` op for the same state change (captured from the compiled
+// templates), so the client contract is pinned against the server rather than
+// against a hand-drawn DOM.
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+    document.body.innerHTML = '';
+    for (const k of Object.keys(hooks)) delete hooks[k];
+});
+
+// A page embedding a child component whose WHOLE body is a bare dynamic. The
+// child's root slot is anchored by its own marker pair NESTED inside the parent
+// slot's pair, and NO element carries the child slot's az -- so the server op
+// (`page:<childAz>`) has only a comment to aim at.
+const PAGE_AZ = '1YA8LBE-0';
+const CHILD_AZ = '1YA8LBE-0-9RDGCU-0';
+
+/** Put real SSR body markup inside the real live-root <main>. */
+function setupPage(body) {
+    document.body.innerHTML = `<main az="${PAGE_AZ}" az-view id="page">${body}</main>`;
+}
+
+/** The live root's current markup, minus the root element's own tag. */
+const pageBody = () => document.querySelector('main').innerHTML;
+
+/** `?html(case ?get(show) of true -> {p,...}; false -> <<>> end)` as a whole body. */
+const condBody = (inner) =>
+    `<h1>Title</h1><!--az:${PAGE_AZ}--><!--az:${CHILD_AZ}-->${inner}<!--/az--><!--/az-->`;
+
+describe('resolveEl -- marker-only slot targets', () => {
+    it('resolves a whole-template bare dynamic to the marker parent', () => {
+        setupPage(condBody(''));
+        // No element carries CHILD_AZ; the target is anchored by a comment only.
+        expect(document.querySelector(`[az="${CHILD_AZ}"]`)).toBeNull();
+        const el = resolveEl(`page:${CHILD_AZ}`);
+        expect(el).not.toBeNull();
+        expect(el).toBe(document.querySelector('main'));
+    });
+
+    it('returns null when neither an element nor a marker carries the az', () => {
+        setupPage(condBody(''));
+        expect(resolveEl('page:NOPE-0')).toBeNull();
+    });
+
+    it('keeps element lookup ahead of the marker scan', () => {
+        // `<p az="0">` both carries the az AND holds the slot marker. The
+        // element must win -- and no marker scan should even run.
+        document.body.innerHTML = '<div id="v" az-view><p az="0"><!--az:0-->x<!--/az--></p></div>';
+        const spy = vi.spyOn(document, 'createTreeWalker');
+        const el = resolveEl('v:0');
+        expect(el.tagName).toBe('P');
+        expect(el.getAttribute('az')).toBe('0');
+        expect(spy).not.toHaveBeenCalled();
+        spy.mockRestore();
+    });
+
+    it('still falls back to the base element for a compound az:n target', () => {
+        document.body.innerHTML =
+            '<div id="v" az-view><p az="0"><!--az:0-->A<!--/az--><!--az:0:1-->B<!--/az--></p></div>';
+        const el = resolveEl('v:0:1');
+        expect(el.getAttribute('az')).toBe('0');
+    });
+
+    it('resolves a marker-only target once per batch (per-batch els memo)', () => {
+        setupPage(condBody('A'));
+        const spy = vi.spyOn(document, 'createTreeWalker');
+        applyOps([
+            [OP.TEXT, `page:${CHILD_AZ}`, 'B'],
+            [OP.TEXT, `page:${CHILD_AZ}`, 'C'],
+        ]);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(pageBody()).toBe(condBody('C'));
+        spy.mockRestore();
+    });
+});
+
+describe('applyOps -- ops addressed to a marker-only slot', () => {
+    it('applies the conditional-only banner toggle in both directions', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupPage(condBody(''));
+
+        // hidden -> shown: the branch re-renders as an HTML fragment.
+        applyOps([[OP.TEXT, `page:${CHILD_AZ}`, '<p class="banner">Shown</p>', true]]);
+        expect(pageBody()).toBe(condBody('<p class="banner">Shown</p>'));
+
+        // shown -> hidden: the empty branch is a scalar.
+        applyOps([[OP.TEXT, `page:${CHILD_AZ}`, '']]);
+        expect(pageBody()).toBe(condBody(''));
+
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+    });
+
+    it('applies a value update to a `?html(?get(x))` body', () => {
+        setupPage(condBody('A'));
+        applyOps([[OP.TEXT, `page:${CHILD_AZ}`, 'B']]);
+        expect(pageBody()).toBe(condBody('B'));
+    });
+
+    it('applies a list re-render to a `?html(?each(...))` body', () => {
+        const item = (t) => `<li az="1Q5CICB-0"><!--az:1Q5CICB-0-->${t}<!--/az--></li>`;
+        setupPage(condBody(item('a')));
+        applyOps([[OP.TEXT, `page:${CHILD_AZ}`, item('a') + item('b'), true]]);
+        expect(pageBody()).toBe(condBody(item('a') + item('b')));
+    });
+
+    it('applies a wholesale re-render to a `?html(?stateless(...))` body', () => {
+        const leaf = (t) =>
+            `<span az="${CHILD_AZ}-B60BG2-0" class="leaf">` +
+            `<!--az:${CHILD_AZ}-B60BG2-0-->${t}<!--/az--></span>`;
+        setupPage(condBody(leaf('A')));
+        applyOps([[OP.TEXT, `page:${CHILD_AZ}`, leaf('B'), true]]);
+        expect(pageBody()).toBe(condBody(leaf('B')));
+    });
+
+    it('applies a value update inside a mixed top-level fragment', () => {
+        // `?html([~"head ", ?get(text), {b, [], [~"tail"]}])` -- the bare dynamic
+        // sits between static text and a sibling element, all inside the parent
+        // slot's marker pair.
+        const MIX_AZ = '1YA8LBE-0-1TLYFEV-0';
+        const mixedBody = (v) =>
+            `<h1>Title</h1><!--az:${PAGE_AZ}-->head <!--az:${MIX_AZ}-->${v}<!--/az--><b>tail</b><!--/az-->`;
+        setupPage(mixedBody('A'));
+        applyOps([[OP.TEXT, `page:${MIX_AZ}`, 'B']]);
+        expect(pageBody()).toBe(mixedBody('B'));
+    });
+
+    it('leaves element-anchored slots patching exactly as before', () => {
+        document.body.innerHTML =
+            '<div id="v" az-view><p az="0"><!--az:0-->A<!--/az--> and <!--az:0:1-->B<!--/az--></p></div>';
+        applyOps([[OP.TEXT, 'v:0:1', 'B2']]);
+        expect(document.querySelector('p').outerHTML).toBe(
+            '<p az="0"><!--az:0-->A<!--/az--> and <!--az:0:1-->B2<!--/az--></p>',
+        );
+    });
+});
