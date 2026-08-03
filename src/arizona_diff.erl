@@ -342,22 +342,41 @@ carry_skipped_view(_Old, Views) ->
 %%
 %% Runs during a root diff, which already walks the tree; nothing here touches
 %% the child-event path.
+%%
+%% The bulk `maps:with/2` seed is deliberate: it is the single operation this used
+%% to be, and the expansion below then only follows entries naming a descendant
+%% the seed did not already cover. In the ordinary case -- a container listing its
+%% children, none of which has grown since -- that is one lookup and one empty
+%% scan per id, with no per-id insert and no list building. Chaining every id
+%% unconditionally instead cost a single-key insert plus a `++` per entry on
+%% EVERY dep-skipped container, whether or not anything had changed.
 live_subtree(Ids, Old) ->
-    live_subtree(Ids, Old, #{}).
-
-live_subtree([], _Old, Acc) ->
-    Acc;
-live_subtree([Id | Rest], Old, Acc) when is_map_key(Id, Acc) ->
-    live_subtree(Rest, Old, Acc);
-live_subtree([Id | Rest], Old, Acc) ->
-    case Old of
-        #{Id := #{snapshot := #{child_views := ChildIds}} = View} ->
-            live_subtree(ChildIds ++ Rest, Old, Acc#{Id => View});
-        #{Id := View} ->
-            live_subtree(Rest, Old, Acc#{Id => View});
-        #{} ->
-            live_subtree(Rest, Old, Acc)
+    Seed = maps:with(Ids, Old),
+    LiveCount = map_size(Old),
+    case map_size(Seed) of
+        %% The seed already accounts for every live view, so it is closed by
+        %% construction -- there is nothing outside it that could need carrying,
+        %% and the expansion below cannot add anything. This is the shape that
+        %% matters most (one container holding the page's views), and skipping
+        %% the scan keeps it at the single bulk `maps:with/2` main paid.
+        LiveCount -> Seed;
+        _ -> expand_subtree(Ids, Old, Seed)
     end.
+
+expand_subtree([], _Old, Acc) ->
+    Acc;
+expand_subtree([Id | Rest], Old, Acc) ->
+    case Acc of
+        #{Id := #{snapshot := #{child_views := ChildIds}}} ->
+            expand_uncovered([C || C <- ChildIds, not is_map_key(C, Acc)], Rest, Old, Acc);
+        #{} ->
+            expand_subtree(Rest, Old, Acc)
+    end.
+
+expand_uncovered([], Rest, Old, Acc) ->
+    expand_subtree(Rest, Old, Acc);
+expand_uncovered(Missing, Rest, Old, Acc) ->
+    expand_subtree(Missing ++ Rest, Old, maps:merge(Acc, maps:with(Missing, Old))).
 
 %% Extract child view IDs from deleted stream items only. The result is
 %% used in list subtraction (`OldChildViews -- Deleted`), so order doesn't

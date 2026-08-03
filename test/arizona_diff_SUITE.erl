@@ -21,6 +21,7 @@
     diff_list_grew_full_update/1,
     diff_list_shrank_full_update/1,
     diff_list_no_change_no_ops/1,
+    diff_stream_unchanged_snapshot_pair_no_ops/1,
     diff_list_content_change_positional/1,
     diff_list_first_item_change_positional/1,
     diff_list_grew_positional/1,
@@ -93,6 +94,7 @@ groups() ->
             diff_list_grew_full_update,
             diff_list_shrank_full_update,
             diff_list_no_change_no_ops,
+            diff_stream_unchanged_snapshot_pair_no_ops,
             diff_list_content_change_positional,
             diff_list_first_item_change_positional,
             diff_list_grew_positional,
@@ -1415,3 +1417,51 @@ compute_changed(OldBindings, NewBindings) ->
         end,
         NewBindings
     ).
+
+diff_stream_unchanged_snapshot_pair_no_ops(Config) when is_list(Config) ->
+    %% Two stream-`?each` snapshots compared snapshot-against-snapshot rather
+    %% than against the each descriptor. That happens whenever an embedded child
+    %% view's inner dynamics are diffed from its parent: the freshly evaluated
+    %% side carries `source`, while the stored side does not -- the incremental
+    %% stream path settles its snapshot without it -- so the two never compare
+    %% term-equal even when they render identically. Emitting the container-level
+    %% `?OP_UPDATE` there innerHTML-replaces a list the client already holds,
+    %% destroying focus, scroll, uncontrolled input state and every `?local` in
+    %% the items, so an unchanged pair must produce nothing at all.
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(I, _Key) -> [{<<"0">>, maps:get(text, I)}] end,
+        f => <<"item">>
+    },
+    Tmpl = stream_each_tmpl(ItemTmpl, [
+        #{id => <<"a">>, text => <<"A">>}, #{id => <<"b">>, text => <<"B">>}
+    ]),
+    {Az, EachSnap, DepsList} = eval_stream_each(Tmpl),
+    Statics = maps:get(s, Tmpl),
+    %% Same items, same order, same item template -- only `source` differs.
+    Settled = maps:remove(source, EachSnap),
+    OldSnap = #{s => Statics, d => [{Az, Settled}], deps => DepsList},
+    ?assertEqual([], element(1, arizona_diff:diff(Tmpl, OldSnap, #{}))),
+    %% Control: a genuinely different list still re-renders the container.
+    OtherTmpl = stream_each_tmpl(ItemTmpl, [#{id => <<"a">>, text => <<"A">>}]),
+    {OtherAz, OtherEach, OtherDepsList} = eval_stream_each(OtherTmpl),
+    StaleSnap = #{
+        s => Statics, d => [{OtherAz, maps:remove(source, OtherEach)}], deps => OtherDepsList
+    },
+    ?assertMatch([[?OP_UPDATE, _, _]], element(1, arizona_diff:diff(Tmpl, StaleSnap, #{}))).
+
+stream_each_tmpl(ItemTmpl, Items) ->
+    Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
+    #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [{<<"0">>, fun() -> #{t => ?EACH, source => Stream, template => ItemTmpl} end}],
+        f => <<"parent">>
+    }.
+
+%% Evaluate the template's single each dynamic exactly as a render would, so the
+%% snapshot under test is the real thing rather than a hand-built lookalike.
+eval_stream_each(Tmpl) ->
+    {Triples, _Views} = arizona_eval:eval_dynamics_v(maps:get(d, Tmpl), {#{}, #{}}),
+    {[{Az, EachSnap}], DepsList} = arizona_template:split_triples(Triples),
+    {Az, EachSnap, DepsList}.
