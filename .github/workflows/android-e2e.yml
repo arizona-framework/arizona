@@ -7,19 +7,47 @@
 # are checked out together. Adjust OTP/Node versions and API level for your setup.
 name: android-e2e
 
+# Gated with `paths-ignore` (a denylist), NOT the `paths` allowlist that gates
+# tauri-shell.yml. The Tauri tests assert only the internal consistency of the
+# shell's own Rust constants, so its dependency surface really is one directory.
+# This job is the opposite: the emulator drives the LIVE server's `/native/*`
+# routes over a real WebSocket, and `scripts/start_test_server.sh` builds that
+# server from `src/`, `test/support/` (the native fixtures and the route table)
+# and the Vite bundle -- so nearly the whole repo is a genuine input. An
+# allowlist there fails unsafe (a new dependency directory silently loses
+# coverage); a denylist fails safe (an unlisted new directory still triggers).
+# So list only what provably cannot affect the run.
+#
+# `merge_group` is deliberately absent: GitHub does not support path filtering on
+# merge-queue events, so keeping it would boot an emulator on every queue entry
+# -- including docs-only merges -- and undo this gate at exactly the point where
+# most merges land. The PR-level run is the check, as for any path-filtered
+# workflow. Re-add it if cross-PR native regressions ever show up in practice.
+#
+# `branches: "**"` because a branch filter glob's `*` does not match `/`, so
+# `"*"` would skip a PR stacked on a `feat/...` base.
 "on":
   push:
     branches:
       - main
-  # Every PR base branch, not just main, plus the merge queue -- a PR stacked on
-  # a feature branch, or a merge-queue run, would otherwise get zero mobile CI.
-  # `**`, not `*`: a GitHub branch filter is a glob in which `*` does NOT match
-  # `/`, so `"*"` misses exactly the stacked case (a `feat/foo` base) this is for.
+    # Duplicated below rather than shared via a YAML anchor -- GitHub Actions
+    # does not expand anchors/aliases in workflow files. Keep the two in sync.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
+      - "clients/ios/**"
+      - "clients/tauri/**"
   pull_request:
     branches:
       - "**"
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
+      - "clients/ios/**"
+      - "clients/tauri/**"
   workflow_dispatch: {}
-  merge_group:
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}
