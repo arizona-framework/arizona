@@ -617,11 +617,16 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
 %% for good. Anything behind the marker stays queued for handle_info/2, which
 %% ships it in the next frame -- in order.
 %%
-%% The receive needs no timeout: the marker was sent before the reply the caller
-%% has already received, so it is in this mailbox. A push from a page this
-%% socket already navigated away from is dropped, mirroring handle_info/2. The
-%% navigate path needs no drain: its OP_REPLACE supersedes old-page ops, and the
-%% stale-view-id drop disposes of them once processed after the reply.
+%% The marker was sent before the reply the caller has already received, so it
+%% is in this mailbox and the `after 0` below is unreachable -- a `receive`
+%% cannot time out while a matching message is queued. It is there so that a
+%% broken invariant degrades to the old (merely mis-ordered) behaviour instead
+%% of wedging the connection on a receive that never returns.
+%%
+%% A push from a page this socket already navigated away from is dropped,
+%% mirroring handle_info/2. The navigate path needs no drain: its OP_REPLACE
+%% supersedes old-page ops, and the stale-view-id drop disposes of them once
+%% processed after the reply.
 drain_pending_pushes(#socket{view_id = ViewId}) ->
     drain_pending_pushes(ViewId, [], []).
 
@@ -634,8 +639,13 @@ drain_pending_pushes(ViewId, OpsAcc, EffectsAcc) ->
         {arizona_push, _StaleViewId, _Ops, _Effects} ->
             drain_pending_pushes(ViewId, OpsAcc, EffectsAcc);
         arizona_push_barrier ->
-            {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc))}
+            drained_pushes(OpsAcc, EffectsAcc)
+    after 0 ->
+        drained_pushes(OpsAcc, EffectsAcc)
     end.
+
+drained_pushes(OpsAcc, EffectsAcc) ->
+    {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc))}.
 
 %% Single chokepoint for every reply that carries effects. Before encoding, an
 %% in-view flash a handler set (an `arizona_js:navigate`/`patch` `flash` opt) is

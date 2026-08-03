@@ -261,9 +261,7 @@ unmount_skipped_when_never_mounted(Config) when is_list(Config) ->
             #{reconnect => true, fps_follow => true}
         ),
         Self ! {live_pid, arizona_socket:live_pid(Socket)},
-        receive
-            stop -> ok
-        end
+        await_stop()
     end),
     LivePid = await_live_pid(),
     Ref = erlang:monitor(process, LivePid),
@@ -293,9 +291,7 @@ unmount_runs_after_mount(Config) when is_list(Config) ->
             arizona_unmount_parent, #{notify => Self}, Req, #{reconnect => true}
         ),
         Self ! {live_pid, arizona_socket:live_pid(Socket)},
-        receive
-            stop -> ok
-        end
+        await_stop()
     end),
     LivePid = await_live_pid(),
     Ref = erlang:monitor(process, LivePid),
@@ -311,6 +307,15 @@ await_live_pid() ->
     receive
         {live_pid, Pid} -> Pid
     after 2000 -> error(no_live_pid)
+    end.
+
+%% Keeps a stand-in transport process alive until the case tells it to exit
+%% (normally, so the live process's transport monitor is what reaps the view).
+%% The timeout only bounds a case that fails before signalling.
+await_stop() ->
+    receive
+        stop -> ok
+    after 30000 -> ok
     end.
 
 await_unmount() ->
