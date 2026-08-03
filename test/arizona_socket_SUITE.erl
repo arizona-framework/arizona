@@ -22,6 +22,7 @@
 -export([resync_mount_crash_on_other_frame_closes_crash/1]).
 -export([resync_mount_crash_on_timeout_closes_crash/1]).
 -export([resync_on_dead_live_process_closes_going_away/1]).
+-export([drain_before_mount_closes_going_away/1]).
 
 all() ->
     [
@@ -39,7 +40,8 @@ all() ->
         resync_mount_crash_on_fps_frame_closes_crash,
         resync_mount_crash_on_other_frame_closes_crash,
         resync_mount_crash_on_timeout_closes_crash,
-        resync_on_dead_live_process_closes_going_away
+        resync_on_dead_live_process_closes_going_away,
+        drain_before_mount_closes_going_away
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -386,6 +388,28 @@ resync_on_dead_live_process_closes_going_away(Config) when is_list(Config) ->
     end,
     FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
     ?assertMatch({close, 1001, <<>>, _}, arizona_socket:handle_in(FpsFrame, Socket)).
+
+drain_before_mount_closes_going_away(Config) when is_list(Config) ->
+    %% A listener drain broadcast landing inside the deferred reconnect window
+    %% reaches a live process that has not mounted yet, where the catch-all
+    %% pre-mount drop swallowed it: `handle_drain/2` never ran, no
+    %% `{shutdown, drain}` exit reached the socket, so the client never got the
+    %% 1001 that runs its form-state-preserving reconnect -- while the transport
+    %% had already acknowledged the drain, leaving the listener to count it
+    %% handled and hard-kill the connection at the deadline.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+    ),
+    Pid = arizona_socket:live_pid(Socket),
+    Pid ! {arizona_drain, erlang:monotonic_time(millisecond) + 5000},
+    receive
+        {'EXIT', Pid, Reason} = Exit ->
+            ?assertEqual({shutdown, drain}, Reason),
+            ?assertMatch({close, 1001, <<>>, _}, arizona_socket:handle_info(Exit, Socket))
+    after 1000 ->
+        error(drain_swallowed_before_mount)
+    end.
 
 %% A flagged-reconnect socket whose live process crashes the moment the deferred
 %% resync mounts it. `init/4` defers the mount, so the crash lands in the flush,

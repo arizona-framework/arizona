@@ -629,6 +629,33 @@ handle_info(
     %% state's transport_pid means a DOWN for any other monitor the view set up
     %% falls through to the handler's handle_info below.
     {stop, normal, State};
+handle_info({arizona_drain, Deadline}, #state{snapshot = Snap} = State) when
+    Snap =/= undefined
+->
+    handle_drain_info(Deadline, State);
+handle_info({arizona_drain, _Deadline}, State) ->
+    %% Drain arriving before the view mounted -- the deferred reconnect resync
+    %% window, exactly when a deploy-drain reconnect storm makes it likely.
+    %% Falling through to the pre-mount drop below swallowed it: the transport
+    %% had already acknowledged the drain, so the listener counted it handled
+    %% and hard-killed the connection at the deadline, with no `{shutdown,
+    %% drain}` exit and therefore no 1001 close to run the client's
+    %% form-state-preserving reconnect.
+    %%
+    %% Stop with the drain reason rather than force a mount to run the
+    %% callback: `handle_drain/2` takes the handler's own bindings, and
+    %% pre-mount those are still the raw route bindings (route config plus
+    %% middleware enrichments) the handler never produced -- a callback head
+    %% that destructures its mount keys would raise `unhandled_drain` and close
+    %% 4500 instead of 1001. Mounting first to avoid that would run the
+    %% handler's mount side effects for a view that renders nothing and is
+    %% unmounted microseconds later (and a mount crash would close 4500 too).
+    %% There is also nothing for the callback to coordinate: nothing has been
+    %% rendered for this connection, and the client is mid-reconnect already.
+    %% So take the framework's documented default for a drain -- the same
+    %% `{stop, Bindings, []}` `call_handle_drain/3` returns for a handler that
+    %% does not export the callback.
+    {stop, {shutdown, drain}, State};
 handle_info(_Info, #state{snapshot = undefined} = State) ->
     {noreply, State};
 handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = State) ->
@@ -648,10 +675,6 @@ handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = Sta
                     )
             end
     end;
-handle_info({arizona_drain, Deadline}, #state{snapshot = Snap} = State) when
-    Snap =/= undefined
-->
-    handle_drain_info(Deadline, State);
 handle_info(Info, State) ->
     handle_root_info(Info, State).
 
