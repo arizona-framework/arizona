@@ -3717,7 +3717,12 @@ list_type_switch_stream_to_list(Config) when is_list(Config) ->
     [[0, <<"0">>, _HTML]] = Ops.
 
 list_type_switch_list_to_stream(Config) when is_list(Config) ->
-    %% Old was a plain list, new is a stream → OP_UPDATE
+    %% Old was a plain list, new is a stream -> marker-aware OP_TEXT, the same op
+    %% the reverse switch uses. A stream each is anchored by the identical
+    %% content-slot markers, and among static siblings no element carries the
+    %% slot az, so the container full render must patch the marker span
+    %% (OP_UPDATE's innerHTML would wipe the enclosing element's siblings -- see
+    %% arizona_diff_SUITE:diff_stream_among_siblings_uses_text_op).
     KeyFun = fun(#{id := Id}) -> Id end,
     Items0 = [#{id => 1, text => <<"A">>}],
     ListTmpl = #{
@@ -3762,7 +3767,7 @@ list_type_switch_list_to_stream(Config) when is_list(Config) ->
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     ?assertEqual(1, length(Ops)),
-    [[3, <<"0">>, _HTML]] = Ops.
+    [[0, <<"0">>, _HTML]] = Ops.
 
 %% Wrapper to call arizona_live's internal dedup_fps for unit testing
 arizona_live_dedup_fps(Ops, Fps) ->

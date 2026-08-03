@@ -33,6 +33,8 @@
     diff_map_no_change_no_ops/1,
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
+    diff_stream_among_siblings_uses_text_op/1,
+    diff_stream_among_siblings_child_view_uses_text_op/1,
     diff_text_op/1,
     no_diff_diff3/1,
     no_diff_diff4_top_level/1,
@@ -103,6 +105,8 @@ groups() ->
             diff_map_no_change_no_ops,
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
+            diff_stream_among_siblings_uses_text_op,
+            diff_stream_among_siblings_child_view_uses_text_op,
             diff_only_changed_emits_ops,
             diff_bool_attr_add,
             diff_bool_attr_remove,
@@ -683,6 +687,74 @@ diff_each_among_siblings_to_empty_uses_text_op(Config) when is_list(Config) ->
     ?assertNotMatch([[?OP_UPDATE, <<"strip:2">>, _]], Ops),
     [[?OP_TEXT, <<"strip:2">>, #{<<"d">> := ItemDs}]] = Ops,
     ?assertEqual([], ItemDs).
+
+%% The same rule for a STREAM `?each` among static siblings, against real
+%% compiled-template SSR (`arizona_stream_siblings`) rather than a hand-built
+%% snapshot. The container full-render is the one op the stream path emits at the
+%% slot's own az; it must be the marker-aware ?OP_TEXT.
+%%
+%% Why it matters here more than for a sole-child each: SSR gives the slot the
+%% COMPOUND az `<Root>:1` and no element carries it, so the client's element
+%% lookups both miss -- the compound base az is the view ROOT's own az, which a
+%% descendant-only `querySelector` cannot return -- and only the `<!--az:X-->`
+%% marker resolves, to the ROOT. An ?OP_UPDATE there innerHTML-wipes the header,
+%% the title slot's markers and the footer, and the view never recovers. The
+%% load-bearing assertions are that the op targets a marker SSR actually
+%% anchored, that NO element carries that az, and that the op is not ?OP_UPDATE.
+stream_siblings_ssr_and_ops(Old, New) ->
+    B = #{id => <<"siblings">>, title => <<"T">>},
+    T0 = arizona_stream_siblings:render(B#{items => Old}),
+    {HTML, Snap0, Views0} = arizona_render:render(T0, #{}),
+    T1 = arizona_stream_siblings:render(B#{items => New}),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(T1, Snap0, Views0, #{items => true}),
+    {iolist_to_binary(HTML), Ops}.
+
+%% First emitter: `diff_stream/4`'s no-`order` clause -- the old snapshot was a
+%% map-source each, so there is nothing to diff incrementally and the whole
+%% container re-renders.
+diff_stream_among_siblings_uses_text_op(Config) when is_list(Config) ->
+    Old = #{<<"1">> => #{id => 1, label => <<"a">>}},
+    New = arizona_stream:new(
+        fun(#{id := Id}) -> integer_to_binary(Id) end,
+        [#{id => 1, label => <<"a">>}, #{id => 2, label => <<"b">>}]
+    ),
+    {SSR, Ops} = stream_siblings_ssr_and_ops(Old, New),
+    ?assertMatch([[?OP_TEXT, _, #{<<"t">> := ?EACH}]], Ops),
+    [[?OP_TEXT, Az, _]] = Ops,
+    %% The slot is marker-anchored and element-less: the exact shape that makes
+    %% an ?OP_UPDATE resolve to (and wipe) the view root.
+    ?assertNotEqual(nomatch, binary:match(SSR, <<"<!--az:", Az/binary, "-->">>)),
+    ?assertEqual(nomatch, binary:match(SSR, <<" az=\"", Az/binary, "\"">>)),
+    %% The static siblings the wipe would have taken are really there.
+    ?assertNotEqual(nomatch, binary:match(SSR, <<"class=\"header\"">>)),
+    ?assertNotEqual(nomatch, binary:match(SSR, <<"class=\"footer\"">>)),
+    ?assertNotMatch([[?OP_UPDATE, _, _]], Ops),
+    %% ...and the re-render actually carries both items.
+    [[?OP_TEXT, _, #{<<"d">> := ItemDs}]] = Ops,
+    ?assertEqual(2, length(ItemDs)).
+
+%% Second emitter: `make_op/3`'s stream `?EACH` clause, reached through the
+%% child-view path (`diff_child_dynamics/2`) when the each lives in an embedded
+%% `?stateful` child. Same slot shape, same requirement.
+diff_stream_among_siblings_child_view_uses_text_op(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> integer_to_binary(Id) end,
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, label => <<"a">>}]),
+    S1 = arizona_stream:new(KeyFun, [#{id => 1, label => <<"a">>}, #{id => 2, label => <<"b">>}]),
+    B = #{id => <<"siblings-parent">>, title => <<"T">>},
+    T0 = arizona_stream_siblings_parent:render(B#{items => S0}),
+    {HTML, Snap0, Views0} = arizona_render:render(T0, #{}),
+    SSR = iolist_to_binary(HTML),
+    T1 = arizona_stream_siblings_parent:render(B#{title => <<"T2">>, items => S1}),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(
+        T1, Snap0, Views0, #{title => true, items => true}
+    ),
+    %% One child-view wrapper carrying the title patch plus the container
+    %% re-render; the latter must be marker-aware.
+    ?assertMatch([[<<"siblings">>, [[?OP_TEXT, _, <<"T2">>], [_, _, #{<<"t">> := ?EACH}]]]], Ops),
+    [[<<"siblings">>, [_TitleOp, [Code, Az, _]]]] = Ops,
+    ?assertEqual(?OP_TEXT, Code),
+    ?assertNotEqual(nomatch, binary:match(SSR, <<"<!--az:", Az/binary, "-->">>)),
+    ?assertEqual(nomatch, binary:match(SSR, <<" az=\"", Az/binary, "\"">>)).
 
 diff_only_changed_emits_ops(Config) when is_list(Config) ->
     OldSnap = #{
