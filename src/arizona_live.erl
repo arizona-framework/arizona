@@ -928,80 +928,176 @@ mark_pending_refresh(ViewId, #state{pending_refresh = Pending} = State) ->
 apply_pending_refresh(Pending, _Views, Snap) when map_size(Pending) =:= 0 ->
     Snap;
 apply_pending_refresh(Pending, Views, Snap) ->
-    refresh_view_snap(fresh_child_snaps(Pending, Views), Snap).
+    %% Every view on the path down to a changed one is refreshed, not just the
+    %% changed one itself: an ancestor's stored copy can predate the descendant's
+    %% very EXISTENCE (the root's copy of a child that later rendered a
+    %% grandchild holds the slot as it was before -- no grandchild in it at all),
+    %% so there is nothing there to replace and only taking the ancestor's own
+    %% live snapshot recovers the structure.
+    Holders = refresh_holders(Pending, Views),
+    refresh_into(fresh_child_snaps(Holders, Views), Holders, Snap).
 
-%% A marked view can have been removed since (a child's own diff can drop a
-%% grandchild), so read the set off `views` -- an id no longer mounted simply
-%% isn't in the result, and the walk then never matches it.
-fresh_child_snaps(Pending, Views) ->
+%% The ids on a path to a changed view: the changed ids themselves, plus --
+%% transitively -- every live view that records one of them among its
+%% descendants. Drives both the descent prune and the set of copies refreshed.
+%%
+%% It cannot test `child_views` against the changed ids directly, because that
+%% list is accurate only as of the container's LAST EVALUATION: a view created
+%% afterwards (a grandchild first rendered by a nested child's own event, with no
+%% enclosing container re-evaluated) is named only by its own parent. Chaining
+%% upward through the live views map recovers the rest of the path -- the parent
+%% names the grandchild, the container names the parent -- so the prune sees a
+%% changed view at any depth. Iterated to a fixpoint because that chain can be
+%% several levels long.
+%%
+%% Runs once per settle, which is once per root diff -- a walk the diff is about
+%% to do anyway. The child-event path never reaches here.
+refresh_holders(Pending, Views) ->
+    grow_holders(#{Id => true || Id := _ <- Pending}, Views).
+
+grow_holders(Holders, Views) ->
+    Grown = maps:merge(
+        Holders,
+        #{
+            Id => true
+         || Id := #{snapshot := #{child_views := Ids}} <:- Views,
+            lists:any(fun(Descendant) -> is_map_key(Descendant, Holders) end, Ids)
+        }
+    ),
+    Settled = map_size(Holders),
+    case map_size(Grown) of
+        Settled -> Holders;
+        _ -> grow_holders(Grown, Views)
+    end.
+
+%% The live snapshot of every id on a path to a change. An id can have been
+%% removed since it was marked (a child's own diff can drop a grandchild), so
+%% resolve each against `views` -- one no longer mounted simply isn't in the
+%% result, and the walk then never matches it. Driven off the id set (a handful)
+%% rather than off `views` (every live view on the page), so a page with
+%% thousands of stateful children pays nothing per settle for the ones that did
+%% not change; the single-element generator is the filter-and-bind.
+fresh_child_snaps(Holders, Views) ->
     #{
         Id => ChildSnap
-     || Id := #{snapshot := ChildSnap} <:- Views, is_map_key(Id, Pending)
+     || Id := _ <- Holders, #{Id := #{snapshot := ChildSnap}} <- [Views]
     }.
 
-%% Replace every copy of a marked view's snapshot held anywhere inside `Snap`. A
-%% container records the transitive set of view ids rendered inside it
-%% (`child_views`), so a subtree that can hold none of them is skipped whole; a
-%% container carrying no such annotation (the root snapshot itself) is descended
-%% into. That prune has a precondition -- see holds_any_view/2.
-refresh_view_snap(Fresh, #{view_id := Id} = Snap) ->
+%% Replace every copy of a changed view's snapshot held anywhere inside `Snap`.
+%% `Holders` is the set of ids on a path to one (see refresh_holders/2), so a
+%% container naming none of them is skipped whole and the walk follows only the
+%% paths that matter; a container carrying no `child_views` at all (the root
+%% snapshot itself) is descended into.
+%%
+%% Every step answers `unchanged` when nothing beneath it refers to a changed
+%% view, so the caller keeps its existing term and only the paths actually
+%% leading to one are rebuilt. Without that, settling a single child inside a
+%% list rebuilt every item's dynamics list and the container map -- linear
+%% allocation and garbage on every root diff, for a list the diff itself may well
+%% be dep-skipping. `refresh_into/3` is the entry point that turns the answer
+%% back into a plain snapshot.
+refresh_into(Fresh, Holders, Snap) ->
+    case refresh_container(Fresh, Holders, Snap) of
+        unchanged -> Snap;
+        {changed, Snap1} -> Snap1
+    end.
+
+refresh_view_snap(Fresh, Holders, #{view_id := Id} = Snap) ->
     case Fresh of
-        #{Id := ChildSnap} -> ChildSnap;
-        #{} -> refresh_container(Fresh, Snap)
+        #{Id := ChildSnap} ->
+            %% Take this view's live snapshot -- then keep going INTO it. A
+            %% view's snapshot is only rebuilt when that view itself diffs, so
+            %% its own copies of deeper views can be stale in turn; and having
+            %% just swapped in the live one, the annotation guiding the descent
+            %% is now current too.
+            {changed, refresh_into(Fresh, Holders, ChildSnap)};
+        #{} ->
+            refresh_container(Fresh, Holders, Snap)
     end;
-refresh_view_snap(Fresh, Snap) ->
-    refresh_container(Fresh, Snap).
+refresh_view_snap(Fresh, Holders, Snap) ->
+    refresh_container(Fresh, Holders, Snap).
 
-refresh_container(Fresh, #{t := ?EACH, items := Items} = Snap) ->
-    case holds_any_view(Fresh, Snap) of
-        true -> Snap#{items => refresh_each_items(Fresh, Items)};
-        false -> Snap
+refresh_container(Fresh, Holders, #{t := ?EACH, items := Items} = Snap) ->
+    case holds_any_view(Holders, Snap) of
+        true -> rewrap(refresh_each_items(Fresh, Holders, Items), items, Snap);
+        false -> unchanged
     end;
-refresh_container(Fresh, #{d := D} = Snap) when is_list(D) ->
-    case holds_any_view(Fresh, Snap) of
-        true -> Snap#{d => [refresh_dyn(Fresh, Dyn) || Dyn <- D]};
-        false -> Snap
+refresh_container(Fresh, Holders, #{d := D} = Snap) when is_list(D) ->
+    case holds_any_view(Holders, Snap) of
+        true -> rewrap(refresh_dyns(Fresh, Holders, D), d, Snap);
+        false -> unchanged
     end;
-refresh_container(_Fresh, Value) ->
-    Value.
+refresh_container(_Fresh, _Holders, _Value) ->
+    unchanged.
 
-%% PRECONDITION: `child_views` is accurate as of the container's LAST
-%% EVALUATION, not as of now. A view that came into existence AFTER that -- a
-%% grandchild first rendered by a nested child's own `handle_event`/`handle_info`
-%% rather than by a root diff -- is not in the enclosing container's set yet, so
-%% this answers `false` and the walk skips a subtree that does hold it.
-%%
-%% Shape: root -> an intermediate container (a `case`-branch nested template, or
-%% a plain-list `?each`) -> child `c1`; `c1`'s own event renders grandchild `g1`;
-%% `g1`'s own event then cannot reach the root's copy through the intermediate
-%% container. The stale copy survives until the next root diff re-evaluates that
-%% container, which rebuilds the annotation and closes the window.
-%%
-%% Cost when it bites: the container gets the wholesale `?OP_UPDATE` this refresh
-%% exists to remove -- never a wrong render, and never a regression (with no
-%% refresh at all that container re-renders anyway, from a baseline that is
-%% staler still). Refreshing ancestors' `child_views` on the way down would fix
-%% it, but only by walking unpruned to find the target in the first place, which
-%% is exactly the linear cost the lazy settle above is here to avoid.
-holds_any_view(Fresh, #{child_views := Ids}) ->
-    lists:any(fun(Id) -> is_map_key(Id, Fresh) end, Ids);
-holds_any_view(_Fresh, #{}) ->
+rewrap(unchanged, _Key, _Snap) -> unchanged;
+rewrap({changed, Value}, Key, Snap) -> {changed, Snap#{Key => Value}}.
+
+%% Tested against `Holders`, not against the changed ids: a container's
+%% `child_views` is only accurate as of its last evaluation, so it can name an
+%% ancestor of the changed view without naming the view itself. `Holders` carries
+%% those ancestors, which is what makes this exact at any depth. A container with
+%% no annotation is descended into rather than skipped.
+holds_any_view(Holders, #{child_views := Ids}) ->
+    lists:any(fun(Id) -> is_map_key(Id, Holders) end, Ids);
+holds_any_view(_Holders, #{}) ->
     true.
 
 %% A stream/map-keyed `?each` holds its items in a map, a plain-list one in a
-%% list; either way an item is a list of `{Az, Value, Deps}` triples.
-refresh_each_items(Fresh, Items) when is_map(Items) ->
-    #{Key => refresh_item_dyns(Fresh, ItemD) || Key := ItemD <- Items};
-refresh_each_items(Fresh, Items) when is_list(Items) ->
-    [refresh_item_dyns(Fresh, ItemD) || ItemD <- Items].
+%% list; either way an item is a list of `{Az, Value, Deps}` triples. The map
+%% form updates in place, so only the keys actually holding a changed view cost
+%% anything.
+refresh_each_items(Fresh, Holders, Items) when is_map(Items) ->
+    refresh_item_map(maps:keys(Items), Fresh, Holders, Items, unchanged);
+refresh_each_items(Fresh, Holders, Items) when is_list(Items) ->
+    refresh_item_list(Fresh, Holders, Items).
 
-refresh_item_dyns(Fresh, ItemD) ->
-    [refresh_dyn(Fresh, Dyn) || Dyn <- ItemD].
+refresh_item_map([], _Fresh, _Holders, _Items, unchanged) ->
+    unchanged;
+refresh_item_map([], _Fresh, _Holders, Items, changed) ->
+    {changed, Items};
+refresh_item_map([Key | Rest], Fresh, Holders, Items, Status) ->
+    #{Key := ItemD} = Items,
+    case refresh_dyns(Fresh, Holders, ItemD) of
+        unchanged ->
+            refresh_item_map(Rest, Fresh, Holders, Items, Status);
+        {changed, ItemD1} ->
+            refresh_item_map(Rest, Fresh, Holders, Items#{Key => ItemD1}, changed)
+    end.
 
-refresh_dyn(Fresh, {Az, Value}) ->
-    {Az, refresh_view_snap(Fresh, Value)};
-refresh_dyn(Fresh, {Az, Value, Deps}) ->
-    {Az, refresh_view_snap(Fresh, Value), Deps}.
+refresh_item_list(_Fresh, _Holders, []) ->
+    unchanged;
+refresh_item_list(Fresh, Holders, [ItemD | Rest]) ->
+    combine(
+        refresh_dyns(Fresh, Holders, ItemD),
+        ItemD,
+        refresh_item_list(Fresh, Holders, Rest),
+        Rest
+    ).
+
+refresh_dyns(_Fresh, _Holders, []) ->
+    unchanged;
+refresh_dyns(Fresh, Holders, [Dyn | Rest]) ->
+    combine(
+        refresh_dyn(Fresh, Holders, Dyn),
+        Dyn,
+        refresh_dyns(Fresh, Holders, Rest),
+        Rest
+    ).
+
+%% Rebuild a cons cell only when this element or the tail actually changed.
+combine(unchanged, _Head, unchanged, _Tail) -> unchanged;
+combine(unchanged, Head, {changed, Tail1}, _Tail) -> {changed, [Head | Tail1]};
+combine({changed, Head1}, _Head, unchanged, Tail) -> {changed, [Head1 | Tail]};
+combine({changed, Head1}, _Head, {changed, Tail1}, _Tail) -> {changed, [Head1 | Tail1]}.
+
+refresh_dyn(Fresh, Holders, {Az, Value}) ->
+    retag(refresh_view_snap(Fresh, Holders, Value), fun(V) -> {Az, V} end);
+refresh_dyn(Fresh, Holders, {Az, Value, Deps}) ->
+    retag(refresh_view_snap(Fresh, Holders, Value), fun(V) -> {Az, V, Deps} end).
+
+retag(unchanged, _Rebuild) -> unchanged;
+retag({changed, Value}, Rebuild) -> {changed, Rebuild(Value)}.
 
 clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
