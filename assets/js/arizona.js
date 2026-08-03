@@ -921,6 +921,11 @@ function applyOps(ops) {
                 case OP.LIST_PATCH:
                     applyListPatch(el, az, op[2]);
                     break;
+                default:
+                    // Silence here would let a version-skewed or retired op (code 3,
+                    // for one) diverge the DOM from server state with no symptom but
+                    // "it didn't update". Mirrors applyItemOps, which already warns.
+                    console.warn(`[arizona] op ${op[0]} not recognized; skipping`);
             }
         } catch (err) {
             console.error('[arizona] op %s failed; skipping', op[0], err);

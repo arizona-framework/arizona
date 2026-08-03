@@ -144,6 +144,18 @@ describe('OP constants', () => {
     it('leaves op code 3 unassigned', () => {
         expect(Object.values(OP)).not.toContain(3);
     });
+
+    it('warns on an unrecognized op instead of silently ignoring it', () => {
+        // The top-level switch used to have no `default:`, so an op the client did
+        // not know -- a retired code, or a newer server than client -- diverged the
+        // DOM from server state with no symptom at all. applyItemOps already warned.
+        setupView('v', '<div az="0">keep</div>');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        applyOps([[99, 'v:0', 'ignored']]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('op 99 not recognized'));
+        expect(document.querySelector('[az="0"]').textContent).toBe('keep');
+        warn.mockRestore();
+    });
 });
 
 // ---------------------------------------------------------------------------
