@@ -327,6 +327,8 @@
     raw_text_static_only_still_compiles/1,
     raw_text_az_alias_raw_accepted/1,
     raw_text_reject_message_renders/1,
+    raw_text_in_nodiff_bare_dynamic_rejected/1,
+    raw_text_in_nodiff_raw_neutralized/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -568,6 +570,8 @@ groups() ->
             raw_text_static_only_still_compiles,
             raw_text_az_alias_raw_accepted,
             raw_text_reject_message_renders,
+            raw_text_in_nodiff_bare_dynamic_rejected,
+            raw_text_in_nodiff_raw_neutralized,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -2021,6 +2025,47 @@ raw_text_reject_message_renders(Config) when is_list(Config) ->
     ?assert(is_list(Msg)),
     ?assertNotEqual(nomatch, string:find(Msg, "?raw")),
     ?assertNotEqual(nomatch, string:find(Msg, "script")).
+
+%% az-nodiff must not be an escape hatch out of the raw-text rule. The nodiff
+%% clause of emit_child_dynamic/4 once matched first, so an az-nodiff region
+%% (layouts, the very place inline <script> lives) skipped the opt-out guard
+%% entirely and HTML-escaped the value inside raw text -- broken JS, and the
+%% author got no compile signal at all.
+raw_text_in_nodiff_bare_dynamic_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_nodiff_bare). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "        {'script', [], [arizona_template:get(v, Bindings)]}"
+        "    ]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+%% ...and the marked value in an az-nodiff region must still reach raw_text/1.
+%% Skipping the raw-text clause sent it through the nodiff path, which neutralizes
+%% nothing, so a ?raw close tag broke straight out of the element.
+raw_text_in_nodiff_raw_neutralized(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_nodiff_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "        {'script', [], ["
+        "            arizona_template:raw(arizona_template:get(v, Bindings))"
+        "        ]}"
+        "    ]}). "
+    ),
+    Hostile = ~"</script><img src=x onerror=alert(1)>",
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{v => Hostile})),
+    HTML = iolist_to_binary(HTML0),
+    %% The breakout is defused: only the element's own close tag survives.
+    ?assertEqual(nomatch, binary:match(HTML, ~"</script><img")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"</script>"))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<\\/script><img")),
+    %% Still verbatim (not HTML-escaped) and still markerless, as raw text requires.
+    ?assertEqual(nomatch, binary:match(HTML, ~"&lt;")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's

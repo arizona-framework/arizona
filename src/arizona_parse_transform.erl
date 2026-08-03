@@ -2457,11 +2457,13 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
 
-emit_child_dynamic(
-    Child, _ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
-) ->
-    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
-    {flush(State0, DynAST), Slot};
+%% The raw-text clauses come FIRST, ahead of nodiff: both make the slot
+%% markerless and render-once (`undefined` az), so they agree on the diff
+%% question, but only the raw-text path applies the escaping policy the *element*
+%% demands. Matching nodiff first let an `az-nodiff` region -- a layout, which is
+%% exactly where an inline `<script>` lives -- skip the opt-out guard and
+%% HTML-escape inside raw text, so a marked value was spliced with no
+%% neutralization and an unmarked one drew no compile error.
 emit_child_dynamic(
     Child, _ElemAz, #state{raw_text_kind = raw, module = Module, backend = Backend} = State0, Slot
 ) ->
@@ -2473,6 +2475,11 @@ emit_child_dynamic(
     %% renders once -- the diff engine skips its `undefined` az.
     ok = assert_raw_text_opt_out(Child),
     DynAST = make_raw_text_dynamic_ast(Child, Module, line(Child), Backend),
+    {flush(State0, DynAST), Slot};
+emit_child_dynamic(
+    Child, _ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
+) ->
+    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(
     Child,
