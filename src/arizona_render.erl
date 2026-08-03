@@ -78,6 +78,18 @@ op-code targets.
 -ignore_xref([zip/2]).
 
 %% --------------------------------------------------------------------
+%% Macros
+%% --------------------------------------------------------------------
+
+%% Tag for iodata this module has ALREADY rendered and is handing back into the
+%% pipeline: the page an `?inner_content` layout slot wraps. Deliberately
+%% private to this module -- one producer (`apply_layouts/3`), two consumers
+%% (`render_ssr_val/2`, `render_dyn/2`) -- rather than a member of
+%% `arizona_template:classify_trusted/1`'s value vocabulary, which a user
+%% binding can carry and which would then splice unescaped.
+-define(RENDERED, arizona_rendered).
+
+%% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
@@ -266,6 +278,10 @@ render_dyn(Backend, #{az_local := _, v := V}) ->
     %% the escaped form to match -- and to keep a binding-seeded init from being
     %% an XSS vector. `?local` is HTML-only, so the html escaper applies.
     arizona_template:escape_value(Backend, V);
+render_dyn(_Backend, {?RENDERED, IoData}) ->
+    %% Already-rendered output (a layout's wrapped page): splice it into the
+    %% enclosing iolist verbatim -- no copy, no re-decode. See apply_layouts/3.
+    IoData;
 render_dyn(_Backend, #{s := InnerS, d := InnerD} = Nested) ->
     %% A nested template / child snapshot carries its own backend (a cross-target
     %% child is embedded as its own ?stateful/?stateless), so render its dynamics
@@ -402,11 +418,20 @@ finish_ssr(Handler, Bindings, Opts) ->
 %% Wraps `Inner` with each layer. List is outermost-first, so the page
 %% HTML ends up nested inside every layer in the order given:
 %% `apply_layouts([Root, Sub], Page, _)` → `Root(Sub(Page))`.
+%%
+%% The inner content is tagged `?RENDERED` so the layout's `?inner_content` slot
+%% splices it as the finished output it is. Untagged it is an ordinary list, and
+%% the slot would hand it to `arizona_template:to_bin/1`, whose list clause
+%% decodes chardata with `unicode:characters_to_binary/1` -- copying and
+%% full-UTF-8-validating the entire rendered page once per layer (twice for the
+%% nested `[Root, Section]` form), and turning a single non-UTF-8 byte anywhere
+%% on the page into a `bad_template_value` blamed on the innocent layout. That
+%% clause is right for a *user* value and stays; the page is not one.
 apply_layouts([], Inner, _Bindings) ->
     Inner;
 apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
     Wrapped = apply_layouts(Rest, Inner, Bindings),
-    Tmpl = Mod:Fun(Bindings#{inner_content => Wrapped}),
+    Tmpl = Mod:Fun(Bindings#{inner_content => {?RENDERED, Wrapped}}),
     render_to_iolist(Tmpl).
 
 %% Triple walker -- like zip/3 but consumes `[{Az, V, Deps}]` directly
@@ -523,6 +548,10 @@ render_ssr_val(_Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
         ]
     },
     arizona_template:maybe_propagate(Tmpl, Snap0);
+render_ssr_val(_Backend, {?RENDERED, _IoData} = Rendered) ->
+    %% Carried through the SSR walk untouched; `render_dyn/2` unwraps it into
+    %% the output iolist. See apply_layouts/3.
+    Rendered;
 render_ssr_val(_Backend, Val) ->
     arizona_template:to_bin(Val).
 

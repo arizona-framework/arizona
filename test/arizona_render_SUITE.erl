@@ -68,6 +68,8 @@
     nested_each_render/1,
     ssr_layouts_empty_list/1,
     ssr_layouts_nest_outer_first/1,
+    ssr_layout_splices_non_utf8_page_unchanged/1,
+    ssr_invalid_chardata_user_value_still_errors/1,
     ssr_page_with_child/1,
     ssr_nested_local/1,
     ssr_local_app/1,
@@ -137,6 +139,8 @@ groups() ->
             nested_each_render,
             ssr_layouts_nest_outer_first,
             ssr_layouts_empty_list,
+            ssr_layout_splices_non_utf8_page_unchanged,
+            ssr_invalid_chardata_user_value_still_errors,
             resolve_id_binary,
             resolve_id_template
         ]},
@@ -620,6 +624,35 @@ ssr_layouts_empty_list(Config) when is_list(Config) ->
     ),
     ?assertEqual(nomatch, binary:match(HTML, <<"<!DOCTYPE html>">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"about-page\"">>)).
+
+ssr_layout_splices_non_utf8_page_unchanged(Config) when is_list(Config) ->
+    %% By the time a layout wraps it, the page is framework-produced iodata, not
+    %% a user value -- so wrapping must splice it, never re-decode it as
+    %% chardata. It used to go through `to_bin/1`'s list clause
+    %% (`unicode:characters_to_binary/1`), which copies and full-UTF-8-validates
+    %% the whole page once per layer and turned a single non-UTF-8 byte anywhere
+    %% on it into `{bad_template_value, <the entire page>}` blamed on the
+    %% (innocent) layout -- while the identical page rendered WITHOUT a layout
+    %% was fine. Same bytes, layout or not.
+    Opts = #{bindings => #{title => <<255>>}},
+    Bare = iolist_to_binary(arizona_render:render_view_to_iolist(arizona_static_page, Opts)),
+    Wrapped = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_static_page, Opts#{layouts => [{arizona_outer_layout, render}]}
+        )
+    ),
+    ?assertEqual(<<"<outer>", Bare/binary, "</outer>">>, Wrapped).
+
+ssr_invalid_chardata_user_value_still_errors(Config) when is_list(Config) ->
+    %% The other half of the same boundary: `to_bin/1`'s list clause stays in
+    %% force for a genuine USER value, so a binding that is not valid chardata
+    %% still fails loudly rather than emitting mojibake.
+    ?assertError(
+        {arizona_loc, _, {bad_template_value, [<<255>>]}},
+        arizona_render:render_view_to_iolist(
+            arizona_static_page, #{bindings => #{title => [<<255>>]}}
+        )
+    ).
 
 ssr_each_map(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(arizona_each_map, #{})),
