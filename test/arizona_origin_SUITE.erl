@@ -22,6 +22,9 @@
 -export([invalid_utf8_allowlist_compare_forbidden/1]).
 -export([allowlisted_origin_passes/1]).
 -export([allowlisted_origin_case_insensitive/1]).
+-export([allowlisted_charlist_entry_passes/1]).
+-export([allowlist_mixes_binary_and_charlist_entries/1]).
+-export([allowlist_non_origin_entry_names_itself/1]).
 -export([allowlist_follows_env_change/1]).
 -export([allowlist_resolves_env_reference/1]).
 -export([disabled_allows_any_origin/1]).
@@ -49,6 +52,9 @@ groups() ->
             invalid_utf8_allowlist_compare_forbidden,
             allowlisted_origin_passes,
             allowlisted_origin_case_insensitive,
+            allowlisted_charlist_entry_passes,
+            allowlist_mixes_binary_and_charlist_entries,
+            allowlist_non_origin_entry_names_itself,
             allowlist_follows_env_change,
             allowlist_resolves_env_reference,
             disabled_allows_any_origin
@@ -164,6 +170,48 @@ allowlisted_origin_case_insensitive(Config) when is_list(Config) ->
     application:set_env(arizona, csrf_origins, [~"HTTPS://Trusted.Example"]),
     try
         ?assertEqual(ok, arizona_origin:check(~"https://trusted.example", ~"app.example", https))
+    after
+        application:unset_env(arizona, csrf_origins)
+    end.
+
+allowlisted_charlist_entry_passes(Config) when is_list(Config) ->
+    %% `"https://trusted.example"` is the easiest sys.config typo there is, and
+    %% it sits on the security path: a charlist entry used to build an allowlist
+    %% that could never match (`lists:member/2` against a binary Origin), so the
+    %% operator's allowlist silently did nothing. Accept every iodata spelling.
+    application:set_env(arizona, csrf_origins, ["https://trusted.example"]),
+    try
+        ?assertEqual(ok, arizona_origin:check(~"https://trusted.example", ~"app.example", https)),
+        ?assertEqual(
+            forbidden, arizona_origin:check(~"https://evil.example", ~"app.example", https)
+        )
+    after
+        application:unset_env(arizona, csrf_origins)
+    end.
+
+allowlist_mixes_binary_and_charlist_entries(Config) when is_list(Config) ->
+    %% A half-converted list is the realistic shape of that typo.
+    application:set_env(arizona, csrf_origins, [~"https://a.example", "https://b.example"]),
+    try
+        ?assertEqual(ok, arizona_origin:check(~"https://a.example", ~"app.example", https)),
+        ?assertEqual(ok, arizona_origin:check(~"https://b.example", ~"app.example", https)),
+        ?assertEqual(
+            forbidden, arizona_origin:check(~"https://c.example", ~"app.example", https)
+        )
+    after
+        application:unset_env(arizona, csrf_origins)
+    end.
+
+allowlist_non_origin_entry_names_itself(Config) when is_list(Config) ->
+    %% An entry that is not an origin in any spelling cannot be guessed at, so it
+    %% fails naming itself rather than as an opaque `bad_generator`/`badarg` from
+    %% somewhere inside the compare.
+    application:set_env(arizona, csrf_origins, [~"https://a.example", not_an_origin]),
+    try
+        ?assertError(
+            {invalid_csrf_origin, not_an_origin},
+            arizona_origin:check(~"https://evil.example", ~"app.example", https)
+        )
     after
         application:unset_env(arizona, csrf_origins)
     end.
