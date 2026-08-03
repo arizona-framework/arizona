@@ -75,8 +75,12 @@ check-lint:
 	rebar3 lint
 
 check-hank:
-	@set -o pipefail; rebar3 hank 2>&1 | tee /dev/stderr | \
-		(! grep -q "no longer needed")
+	@# NOT `| tee /dev/stderr |`: when stderr is a redirected regular file
+	@# (`make ci > build.log 2>&1`), tee opens it with O_TRUNC and wipes every
+	@# line logged before this point, leaving a NUL-filled hole. Capture instead,
+	@# so the output is both shown and grepped without touching the log's fd.
+	@set -o pipefail; out=$$(rebar3 hank 2>&1); printf '%s\n' "$$out"; \
+		printf '%s\n' "$$out" | (! grep -q "no longer needed")
 
 check-xref:
 	rebar3 xref
