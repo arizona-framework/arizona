@@ -25,6 +25,7 @@
 -export([drain_before_mount_closes_going_away/1]).
 -export([push_emitted_after_reply_not_folded/1]).
 -export([child_push_scoped_to_emitting_view/1]).
+-export([foreign_caller_does_not_desync_drain/1]).
 
 all() ->
     [
@@ -45,7 +46,8 @@ all() ->
         resync_on_dead_live_process_closes_going_away,
         drain_before_mount_closes_going_away,
         push_emitted_after_reply_not_folded,
-        child_push_scoped_to_emitting_view
+        child_push_scoped_to_emitting_view,
+        foreign_caller_does_not_desync_drain
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -491,6 +493,40 @@ child_push_target(Pid, Socket, ViewId) ->
             Target
     after 2000 ->
         error({no_child_push, ViewId})
+    end.
+
+foreign_caller_does_not_desync_drain(Config) when is_list(Config) ->
+    %% `arizona_live:handle_event/4` and `patch/2` are exported, so a process
+    %% other than the socket can call them on a live process whose transport
+    %% folds queued pushes. A marker emitted for such a call is one nobody
+    %% drains, and the offset would persist FOREVER: every later drain eats the
+    %% previous cycle's marker, folds nothing, and lets a queued push ship in a
+    %% later frame over a newer value. The marker is emitted only for a call made
+    %% by the transport itself, so the socket's mailbox never holds a stray one.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket0),
+    Self = self(),
+    %% A foreign process drives the same live process.
+    Foreign = spawn(fun() ->
+        {ok, _Ops, _Effects} = arizona_live:handle_event(Pid, ~"counter", ~"inc", #{}),
+        Self ! foreign_done
+    end),
+    receive
+        foreign_done -> ok
+    after 2000 -> error({foreign_caller_stuck, Foreign})
+    end,
+    %% The socket's own cycle still folds correctly: an info push emitted before
+    %% the reply is prepended to it, in causal order, in ONE frame.
+    Pid ! {set_count, 5},
+    EventFrame = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+    #{~"o" := Ops} = json:decode(iolist_to_binary(Frame)),
+    ?assertMatch([[?OP_TEXT, _, ~"5"], [?OP_TEXT, _, ~"6"]], Ops),
+    %% Nothing stray left behind for the next cycle to trip over.
+    receive
+        LeftOver -> error({unexpected_mailbox_message, LeftOver})
+    after 0 -> ok
     end.
 
 %% A flagged-reconnect socket whose live process crashes the moment the deferred
