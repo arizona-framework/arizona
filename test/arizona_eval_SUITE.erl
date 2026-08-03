@@ -22,6 +22,8 @@
     render_stream_item_skipping_full_eval_on_empty_deps/1,
     render_stream_item_skipping_short_circuits_on_empty_changed/1,
     child_stream_pending_cleared_on_eval_path/1,
+    child_stream_emits_no_op_on_unchanged_ticks/1,
+    child_stream_untouched_by_prop_bump_emits_nothing/1,
     child_stream_replayed_drain_emits_no_duplicate_insert/1
 ]).
 
@@ -59,6 +61,8 @@ groups() ->
         ]},
         {child_streams, [parallel], [
             child_stream_pending_cleared_on_eval_path,
+            child_stream_emits_no_op_on_unchanged_ticks,
+            child_stream_untouched_by_prop_bump_emits_nothing,
             child_stream_replayed_drain_emits_no_duplicate_insert
         ]}
     ].
@@ -76,23 +80,88 @@ child_stream_pending_cleared_on_eval_path(Config) when is_list(Config) ->
     Lens = child_stream_tick_cycles(1, 6, B0, Snap0, V0, []),
     ?assertEqual([0, 0, 0, 0, 0, 0], Lens).
 
-%% Correctness of the never-cleared queue rested entirely on the drain's insert
-%% dup guard, and nothing pinned it: with the guard removed a replay emits a
-%% second OP_INSERT under the same az-key (duplicate DOM nodes). Drain a queue
-%% that still holds an already-applied insert and assert only the new key emits.
+%% The drain's insert dup guard (`stream_insert`'s `not is_map_key(Key, SnapAcc)`)
+%% is what stops a REPLAYED insert becoming a second DOM node under one az-key.
+%% Reaching it needs a drain that actually replays: a linear re-drain no longer
+%% does, because the drain mark filters the replay before `stream_insert` runs.
+%% A DIVERGENT fork does -- its mark is absent, so the whole queue re-drains,
+%% including the insert of a key the snapshot already holds. With the guard
+%% removed this emits [~"a", ~"c2"] instead of [~"c2"].
 child_stream_replayed_drain_emits_no_duplicate_insert(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
-    S0 = arizona_stream:new(KeyFun, [#{id => ~"a", text => ~"A"}]),
-    B0 = #{id => ~"c", items => S0},
+    Base = arizona_stream:new(KeyFun, []),
+    ItemA = #{id => ~"a", text => ~"A"},
+    B0 = #{id => ~"c", items => arizona_stream:insert(Base, ItemA)},
     Tmpl0 = arizona_stateful:call_render(arizona_stream_child, B0),
     {_HTML, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
-    %% The queue was never cleared, so it still carries the insert of "a" that
-    %% the render above already reflected; appending "b" re-drains both.
-    S1 = arizona_stream:insert(S0, #{id => ~"b", text => ~"B"}),
-    B1 = B0#{items => S1},
+    %% Re-derive from the pristine base rather than from the rendered stream: a
+    %% divergent fork carrying its own insert of "a" plus a new key.
+    Forked = arizona_stream:insert(
+        arizona_stream:insert(Base, ItemA), #{id => ~"c2", text => ~"C"}
+    ),
+    B1 = B0#{items => Forked},
     Tmpl1 = arizona_stateful:call_render(arizona_stream_child, B1),
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, #{items => true}),
-    ?assertMatch([[?OP_INSERT, _, ~"b", -1, _]], Ops).
+    ?assertEqual([~"c2"], [K || [?OP_INSERT, _, K, _, _] <- Ops]).
+
+%% The stored child bindings and the snapshot built during the SAME eval must
+%% agree about the stream. Clearing the pending queue AFTER `call_render` left
+%% the snapshot holding the uncleared stream and the bindings the cleared one, so
+%% the next eval's source comparison differed purely because of the queue and the
+%% whole container re-rendered -- on every tick, including the ones where the
+%% child's stream did not change at all. That wholesale re-render destroys and
+%% recreates every item node: focus/selection lost, `?local` slots reset to their
+%% SSR initials, CSS transitions restarted, per-item child views re-mounted.
+child_stream_emits_no_op_on_unchanged_ticks(Config) when is_list(Config) ->
+    B0 = #{id => ~"p", tick => 0},
+    {_HTML, Snap0, V0} = arizona_render:render(child_stream_tmpl(B0), #{}),
+    %% arizona_stream_child mutates on ODD ticks only, so the even ticks are
+    %% genuinely unchanged and must emit nothing.
+    ?assertEqual(
+        [{1, true}, {2, false}, {3, true}, {4, false}, {5, true}, {6, false}],
+        child_stream_tick_ops(1, 6, B0, Snap0, V0, [])
+    ).
+
+%% The same defect seen from its sharpest angle: a child whose stream is
+%% pre-populated at mount (so its queue is non-empty from the very first eval)
+%% and NEVER mutated afterwards. Every parent prop bump must emit nothing at all.
+%% Only even ticks are used here, which arizona_stream_child leaves untouched.
+child_stream_untouched_by_prop_bump_emits_nothing(Config) when is_list(Config) ->
+    Seed = [#{id => 1, text => ~"one"}, #{id => 2, text => ~"two"}],
+    B0 = #{id => ~"p", tick => 0, seed => Seed},
+    {_HTML, Snap0, V0} = arizona_render:render(child_stream_seeded_tmpl(B0), #{}),
+    {Ops1, Snap1, V1} = arizona_diff:diff(
+        child_stream_seeded_tmpl(B0#{tick => 2}), Snap0, V0, #{tick => true}
+    ),
+    ?assertEqual([], Ops1),
+    {Ops2, _Snap2, _V2} = arizona_diff:diff(
+        child_stream_seeded_tmpl(B0#{tick => 4}), Snap1, V1, #{tick => true}
+    ),
+    ?assertEqual([], Ops2).
+
+%% Parent template that also forwards a mount-time `seed` to the child.
+child_stream_seeded_tmpl(B) ->
+    #{
+        s => [~"<div az=\"0\">", ~"</div>"],
+        d => [
+            {~"0", fun() ->
+                arizona_template:stateful(arizona_stream_child, #{
+                    id => ~"c",
+                    tick => arizona_template:get(tick, B),
+                    seed => arizona_template:get(seed, B)
+                })
+            end}
+        ],
+        f => ~"seeded"
+    }.
+
+%% Runs `Max` root update cycles, returning `{Tick, EmittedAnyOp}` per tick.
+child_stream_tick_ops(N, Max, _B, _Snap, _V, Acc) when N > Max ->
+    lists:reverse(Acc);
+child_stream_tick_ops(N, Max, B, Snap, V, Acc) ->
+    B1 = B#{tick => N},
+    {Ops, Snap1, V1} = arizona_diff:diff(child_stream_tmpl(B1), Snap, V, #{tick => true}),
+    child_stream_tick_ops(N + 1, Max, B1, Snap1, V1, [{N, Ops =/= []} | Acc]).
 
 %% Runs `Max` root update cycles, returning the child's pending queue length
 %% after each one. The parent's only changing binding is `tick`, delivered to
