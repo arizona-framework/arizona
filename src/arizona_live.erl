@@ -562,7 +562,7 @@ handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings =
     ok = push_barrier(From, State),
     case V0 of
         #{ViewId := _} ->
-            handle_child_event(ViewId, Event, Payload, State);
+            handle_child_event(ViewId, Event, Payload, From, State);
         #{} ->
             case maps:get(id, B0) of
                 ViewId ->
@@ -775,11 +775,11 @@ handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
     }}.
 
-handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
+handle_child_event(ViewId, Event, Payload, From, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
     {Ops1, V1, Fps1, Effects1} = process_child_change(H, B1, Resets, Effects, ViewId, View, State),
-    NewState = mark_pending_refresh(ViewId, State#state{views = V1, sent_fps = Fps1}),
+    NewState = mark_pending_refresh(ViewId, From, State#state{views = V1, sent_fps = Fps1}),
     {reply, {ok, Ops1, Effects1}, NewState}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
@@ -923,8 +923,26 @@ process_child_change(
 mark_pending_refresh(ViewId, #state{pending_refresh = Pending} = State) ->
     State#state{pending_refresh = Pending#{ViewId => true}}.
 
+%% Event-path variant: mark only when the TRANSPORT drove the event. A foreign
+%% caller of the exported `handle_event/4` takes the resulting ops itself, so the
+%% client never sees them -- settling the root's copy would then tell the diff the
+%% client holds a value it was never sent, and that slot would stay wrong for
+%% good. Left unmarked, the stale copy makes the next root diff re-emit it and the
+%% client catches up. Mirrors push_barrier/2's caller check; the `handle_info`
+%% path needs no such gate, since its ops always go to the transport.
+mark_pending_refresh(ViewId, {Pid, _Tag}, #state{transport_pid = Pid} = State) ->
+    mark_pending_refresh(ViewId, State);
+mark_pending_refresh(_ViewId, _From, State) ->
+    State.
+
 %% Settle every child marked since the last root diff, in ONE walk -- so N
 %% children ticking before a root diff costs one traversal, not N.
+%%
+%% SCOPE: ROOT diffs only. An intermediate stateful view's OWN diff still runs
+%% against its own stored copy of a grandchild, so in a three-level tree where the
+%% middle view takes the events, a grandchild that patched itself still gets the
+%% wholesale re-render from that middle diff. Unchanged from before this settle
+%% existed -- not a regression, and not a class this closes.
 apply_pending_refresh(Pending, _Views, Snap) when map_size(Pending) =:= 0 ->
     Snap;
 apply_pending_refresh(Pending, Views, Snap) ->
@@ -953,21 +971,28 @@ apply_pending_refresh(Pending, Views, Snap) ->
 %% Runs once per settle, which is once per root diff -- a walk the diff is about
 %% to do anyway. The child-event path never reaches here.
 refresh_holders(Pending, Views) ->
-    grow_holders(#{Id => true || Id := _ <- Pending}, Views).
+    grow_holders(#{Id => true || Id := _ <- Pending}, descendant_index(Views)).
 
-grow_holders(Holders, Views) ->
+%% Only a view that records descendants can put another view on a path, so index
+%% those once and let the fixpoint iterate the index instead of re-scanning every
+%% live view per round. On a page whose views are mostly leaves (a long list of
+%% simple children) the index is near-empty and the fixpoint settles immediately.
+descendant_index(Views) ->
+    #{Id => Ids || Id := #{snapshot := #{child_views := Ids}} <:- Views, Ids =/= []}.
+
+grow_holders(Holders, Index) ->
     Grown = maps:merge(
         Holders,
         #{
             Id => true
-         || Id := #{snapshot := #{child_views := Ids}} <:- Views,
+         || Id := Ids <- Index,
             lists:any(fun(Descendant) -> is_map_key(Descendant, Holders) end, Ids)
         }
     ),
     Settled = map_size(Holders),
     case map_size(Grown) of
         Settled -> Holders;
-        _ -> grow_holders(Grown, Views)
+        _ -> grow_holders(Grown, Index)
     end.
 
 %% The live snapshot of every id on a path to a change. An id can have been

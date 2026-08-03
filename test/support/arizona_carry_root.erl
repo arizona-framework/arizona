@@ -47,5 +47,5 @@ wrap(Bindings) ->
 handle_event(~"title_change", _Payload, Bindings) ->
     {Bindings#{title => ~"Changed"}, #{}, []};
 %% Changes a prop the CONTAINER reads, so its slot is re-evaluated and compared.
-handle_event(~"relabel", _Payload, Bindings) ->
-    {Bindings#{label => ~"relabelled"}, #{}, []}.
+handle_event(~"relabel", #{~"label" := Label}, Bindings) ->
+    {Bindings#{label => Label}, #{}, []}.

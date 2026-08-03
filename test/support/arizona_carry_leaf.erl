@@ -10,16 +10,35 @@
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Props) ->
-    {#{id => maps:get(id, Props), notify => maps:get(notify, Props), count => 0}, #{}}.
+    {
+        #{
+            id => maps:get(id, Props),
+            notify => maps:get(notify, Props),
+            count => 0,
+            %% A stream, so a stale copy of THIS view shows up as the destructive
+            %% wholesale `?OP_UPDATE` rather than a merely redundant text op.
+            items => arizona_stream:new(fun(#{id := Id}) -> Id end, [#{id => ~"a"}])
+        },
+        #{}
+    }.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
-    ?html({span, [{id, ?get(id)}], [?get(count)]}).
+    ?html(
+        {'div', [{id, ?get(id)}], [
+            {span, [], [?get(count)]},
+            {ul, [], [
+                ?each(fun(#{id := ItemId}, Key) -> {li, [{az_key, Key}], [ItemId]} end, ?get(items))
+            ]}
+        ]}
+    ).
 
 -spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
     az:handle_event_ret().
 handle_event(~"inc", _Payload, Bindings) ->
-    {Bindings#{count => maps:get(count, Bindings) + 1}, #{}, []}.
+    {Bindings#{count => maps:get(count, Bindings) + 1}, #{}, []};
+handle_event(~"add", #{~"id" := Id}, Bindings) ->
+    {Bindings#{items => arizona_stream:insert(maps:get(items, Bindings), #{id => Id})}, #{}, []}.
 
 -spec unmount(az:bindings()) -> ok.
 unmount(#{id := Id, notify := Notify}) ->

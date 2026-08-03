@@ -84,6 +84,7 @@
     nested_stateful_grandchild_unmounted_on_removal/1,
     grandchild_added_by_child_event_survives_root_skip/1,
     grandchild_refresh_reaches_through_container/1,
+    grandchild_refresh_reaches_a_view_no_container_names/1,
     child_diff_dep_skips_unchanged_grandchild/1,
     nested_local_diff_skipped/1,
     nested_local_set_effect/1,
@@ -129,6 +130,7 @@ groups() ->
             nested_stateful_grandchild_unmounted_on_removal,
             grandchild_added_by_child_event_survives_root_skip,
             grandchild_refresh_reaches_through_container,
+            grandchild_refresh_reaches_a_view_no_container_names,
             child_diff_dep_skips_unchanged_grandchild,
             nested_local_diff_skipped,
             nested_local_set_effect,
@@ -318,7 +320,7 @@ grandchild_added_by_child_event_survives_root_skip(Config) when is_list(Config) 
     %% silently swallowed.
     Self = self(),
     {ok, Pid} = arizona_live:start_link(
-        arizona_carry_root, #{notify => Self}, undefined, []
+        arizona_carry_root, #{notify => Self}, Self, []
     ),
     {ok, _} = arizona_live:mount(Pid),
     %% The child's own event brings the grandchild into existence.
@@ -349,7 +351,7 @@ grandchild_refresh_reaches_through_container(Config) when is_list(Config) ->
     %% grandchild had already patched.
     Self = self(),
     {ok, Pid} = arizona_live:start_link(
-        arizona_carry_root, #{notify => Self}, undefined, []
+        arizona_carry_root, #{notify => Self}, Self, []
     ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
@@ -359,8 +361,40 @@ grandchild_refresh_reaches_through_container(Config) when is_list(Config) ->
     %% A root change the CONTAINER reads, so its slot is re-evaluated and
     %% compared against the root's copy. Only the label changed, so that is the
     %% only op: no re-emission of the grandchild's own slot.
-    {ok, RelabelOps, _} = arizona_live:handle_event(Pid, ~"cr", ~"relabel", #{}),
-    ?assertMatch([[?OP_TEXT, _, ~"relabelled"]], RelabelOps).
+    {ok, RelabelOps, _} = arizona_live:handle_event(
+        Pid, ~"cr", ~"relabel", #{~"label" => ~"L1"}
+    ),
+    ?assertMatch([[?OP_TEXT, _, ~"L1"]], RelabelOps).
+
+grandchild_refresh_reaches_a_view_no_container_names(Config) when is_list(Config) ->
+    %% The case that needs the ancestor chain rather than just the marked id.
+    %%
+    %% The intermediate dep-skipping root diff in the middle is what makes this
+    %% non-vacuous: it settles (and clears) the mark on `m1`, while leaving the
+    %% CONTAINER's recorded `child_views` at `[m1]` -- it is dep-skipped, so it is
+    %% never re-evaluated and never learns about `g1`. The later event marks only
+    %% `g1`, an id NO container names. Testing the containers against the marked
+    %% ids alone therefore skips the whole subtree and the stale copy survives;
+    %% chaining up through the live views map (`m1` records `g1`, the container
+    %% records `m1`) is the only thing that reaches it.
+    Self = self(),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_carry_root, #{notify => Self}, Self, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    %% Root diff that DEP-SKIPS the container: settles and clears `m1`'s mark,
+    %% and leaves the container's annotation naming only `m1`.
+    {ok, _, _} = arizona_live:handle_event(Pid, ~"cr", ~"title_change", #{}),
+    %% Now the grandchild patches its own stream -- marking `g1` and nothing else.
+    {ok, AddOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"add", #{~"id" => ~"b"}),
+    ?assertMatch([[?OP_INSERT, _, ~"b", -1, _Item]], AddOps),
+    %% A root change the container reads. Only its own op may come out; a missed
+    %% settle shows up as the wholesale `?OP_UPDATE` over the grandchild's list.
+    {ok, RelabelOps, _} = arizona_live:handle_event(
+        Pid, ~"cr", ~"relabel", #{~"label" => ~"L2"}
+    ),
+    ?assertMatch([[?OP_TEXT, _, ~"L2"]], RelabelOps).
 
 %% When the mid conditionally stops rendering the leaf, the grandchild is
 %% unmounted and pruned from views -- a later message to it crashes unknown_view.
@@ -490,7 +524,7 @@ child_stream_survives_next_root_diff(Config) when is_list(Config) ->
     %% wholesale `?OP_UPDATE` (innerHTML), destroying focus, scroll, uncontrolled
     %% input state and every `?local` inside the items.
     {ok, Pid} = arizona_live:start_link(
-        arizona_child_stream_root, #{}, undefined, []
+        arizona_child_stream_root, #{}, self(), []
     ),
     {ok, _} = arizona_live:mount(Pid),
     %% The child patches its own stream: one incremental insert.
@@ -527,7 +561,7 @@ child_event_leaves_root_snapshot_untouched(Config) when is_list(Config) ->
     %% (`child_stream_survives_next_root_diff` pins that the settle still
     %% happens by the time it matters.)
     {ok, Pid} = arizona_live:start_link(
-        arizona_stream_with_child, #{}, undefined, []
+        arizona_stream_with_child, #{}, self(), []
     ),
     {ok, _} = arizona_live:mount(Pid),
     {ok, _, _} = arizona_live:handle_event(
