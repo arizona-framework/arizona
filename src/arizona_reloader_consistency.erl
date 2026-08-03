@@ -308,10 +308,17 @@ beam_facts(Mod) ->
             unreadable_facts()
     end.
 
-%% Resolve the table to its tid ONCE and use that for both the lookup and the
-%% insert, so the pair cannot straddle a table that goes away between them. No
-%% table at all (no arizona app running -- a direct call from a tool or a test)
-%% is not an error: the check just costs a beam read.
+%% No table at all -- no arizona app running, so a direct call from a tool or a
+%% test -- is not an error: the check just costs a beam read.
+%%
+%% This is NOT a guard against the table disappearing mid-read. Holding a tid
+%% does not keep a table alive: once the owner dies, a lookup by tid raises
+%% `badarg` exactly as a lookup by name would. What makes the read safe is the
+%% OWNER -- `arizona_sup` creates the table at boot and holds it for the node's
+%% lifetime, so the only window is the app shutting down, and the reload path
+%% runs inside `check/1`'s catch-all regardless. Resolving once still buys one
+%% thing: the lookup and the insert below address the same table, so the pair
+%% cannot span a re-created one.
 cached_beam_facts(Mod, Path, Mtime) ->
     case ets:whereis(?CACHE) of
         undefined -> read_beam_facts(Mod, Path);
