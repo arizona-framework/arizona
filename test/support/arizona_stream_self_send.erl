@@ -40,7 +40,10 @@ render(Bindings) ->
     az:handle_event_ret().
 handle_event(~"add_then_move", #{~"id" := Id}, Bindings) ->
     Stream = arizona_stream:insert(maps:get(items, Bindings), #{id => Id}),
-    ?send({move_to_front, Id}),
+    %% `?send` returns the message it queued on this view's own mailbox; match it
+    %% rather than drop it, and the match doubles as documentation of what lands
+    %% there while this callback is still running.
+    {arizona_view, _ViewId, {move_to_front, Id}} = ?send({move_to_front, Id}),
     {Bindings#{items => Stream}, #{}, []}.
 
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
