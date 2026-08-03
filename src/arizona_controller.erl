@@ -134,7 +134,7 @@ returned request carries, which is then still the pre-action copy.
 ```erlang
 handle(Req) ->
     ArzReq = arizona_req:clear_session(arizona_controller:req(Req)),
-    {arizona_controller:reply_effects([]), arizona_controller:put_req(ArzReq, Req)}.
+    {arizona_controller:reply_effects([]), arizona_controller:put_req(Req, ArzReq)}.
 ```
 
 Reading the body is the exception -- use `roadrunner_req:body/1` on the
@@ -151,6 +151,10 @@ req(RoadrunnerReq) ->
 Threads a mutated `arizona_req:request()` back onto the roadrunner request, so
 the dispatcher flushes **this** request rather than the pre-action one.
 
+Takes the roadrunner request first, pairing with `req/1` (`req(Req)` reads,
+`put_req(Req, ArzReq)` writes) and with every other arizona writer, which is
+subject-first too (`arizona_req:put_session/3`, `put_resp_cookie/4`).
+
 The writer half of `req/1`. Return the request it gives you from the action and
 the write is serialized and committed at flush: `arizona_req:put_session/3` /
 `clear_session/1` reach the browser as a `Set-Cookie` and (in store mode) the
@@ -162,10 +166,10 @@ Only meaningful on a request that came through a controller route (the same
 stash `req/1` reads); an action that never calls this keeps the read-only path,
 where the pipeline's own request is flushed.
 """.
--spec put_req(ArzReq, RoadrunnerReq) -> RoadrunnerReq when
-    ArzReq :: arizona_req:request(),
-    RoadrunnerReq :: roadrunner_req:request().
-put_req(ArzReq, RoadrunnerReq) ->
+-spec put_req(RoadrunnerReq, ArzReq) -> RoadrunnerReq when
+    RoadrunnerReq :: roadrunner_req:request(),
+    ArzReq :: arizona_req:request().
+put_req(RoadrunnerReq, ArzReq) ->
     roadrunner_req:put_private({arizona, req}, ArzReq, RoadrunnerReq).
 
 -doc """

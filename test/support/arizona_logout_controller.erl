@@ -23,7 +23,7 @@ is what gets flushed, so the write is dropped.
     Response :: roadrunner_handler:response().
 handle(Req) ->
     ArzReq = arizona_req:clear_session(arizona_controller:req(Req)),
-    {arizona_controller:reply_effects([]), arizona_controller:put_req(ArzReq, Req)}.
+    {arizona_controller:reply_effects([]), arizona_controller:put_req(Req, ArzReq)}.
 
 -spec handle_dropped(Req) -> {Response, Req} when
     Req :: roadrunner_req:request(),

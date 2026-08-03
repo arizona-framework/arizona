@@ -153,7 +153,7 @@ Durable, **encrypted** cookie-store session state: a small map carried across re
 ```erlang
 handle(Req) ->
     ArzReq = arizona_req:clear_session(arizona_controller:req(Req)),
-    {arizona_controller:reply_effects([]), arizona_controller:put_req(ArzReq, Req)}.
+    {arizona_controller:reply_effects([]), arizona_controller:put_req(Req, ArzReq)}.
 ```
 
 Config: `session_max_age` (seconds, default 7 days); `session_secure`/`flash_secure` (the `Secure` flag, default `false` -- **set `true` in production**; it defaults `false` because a `Secure` cookie is silently dropped over plain-HTTP dev, and a TLS-terminating proxy can't be auto-detected; enabling it also switches the cookie to its `__Host-` prefixed name -- `__Host-az_session`/`__Host-az_flash` -- whose browser-enforced Secure + `Path=/` + Domain-less rules close sibling-subdomain cookie tossing); and `session_max_bytes` (cap on the serialized `Set-Cookie` line -- name + value + attributes, what browsers count -- default 4096; `encode/1` errors `{session_too_large, ...}` past it rather than letting the browser drop the cookie). A CSRF double-submit token is **deliberately not built** (redundant with the default-on Origin check; see the CSRF section).

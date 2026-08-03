@@ -19,4 +19,4 @@ server-side entry to check.
     Response :: roadrunner_handler:response().
 handle(Req) ->
     ArzReq = arizona_req:put_session(arizona_controller:req(Req), user_id, ~"u42"),
-    {arizona_controller:reply_effects([]), arizona_controller:put_req(ArzReq, Req)}.
+    {arizona_controller:reply_effects([]), arizona_controller:put_req(Req, ArzReq)}.
