@@ -82,9 +82,19 @@ falls back to a full drain. See `undrained_ops/2`.
 **What it does not fix: memory.** The queue itself keeps growing -- it lives in
 app-owned bindings and the differ is pure, so nothing can truncate it. A nested
 stream therefore retains every op term (including items a `{Limit, drop}`
-window already evicted) for the lifetime of the view. Keep a stream that
-mutates over a long-lived session as a top-level binding, where the live
-process clears it.
+window already evicted) for the lifetime of the view.
+
+Per-cycle CPU does **not** grow with it: the resume searches backwards from the
+newest op and stops at the mark (or below it), so it costs O(ops added this
+cycle), not O(history). Returning a single new op measures ~0.1-0.3 us at 100,
+1k, 5k and 20k queued ops alike -- flat. (Searching forwards from the head, as
+this first did, cost 3.9 / 31 / 136 / 666 us at those sizes.) Draining a rebuilt
+queue -- a divergent fork, a `reset/1,2` -- is O(that queue), which is the work
+of the drain itself rather than of the search.
+
+So the residual cost is retained memory, one op term per mutation. Keep a stream
+that mutates over a long-lived session as a TOP-LEVEL binding, where the live
+process clears it after every drain and neither the memory nor the queue grows.
 
 ## Example
 
@@ -597,21 +607,34 @@ Dropping that prefix is therefore exactly what the previous drain consumed.
 Anything else -- a divergent fork of the same stream, a `reset/1,2`, a
 `clear_stream_pending/2`, a rebuilt or rolled-back stream -- simply does not
 contain the stamp and falls back to a full drain.
+
+The search runs BACKWARDS from the newest op and costs O(ops newer than `Mark`),
+not O(queue length): the mark is normally the previous drain's last op, so a
+re-drain walks only what this cycle actually added, however long the history
+behind it. Because stamps ascend along a queue, dropping below `Mark` proves it
+is absent and abandons the search there. Both exits are safe by construction --
+failing to find the mark yields a full drain, which never skips an op.
 """.
 -spec undrained_ops(Stream, Mark) -> Ops when
     Stream :: stream(),
     Mark :: mark(),
     Ops :: [term()].
+undrained_ops(#stream{pending = Pending}, none) ->
+    unstamp(Pending);
 undrained_ops(#stream{pending = Pending}, Mark) ->
-    %% `none` never matches a stamp, so a markless slot full-drains via the
-    %% not-found clause without needing a case of its own.
-    drop_through(Pending, Mark, Pending).
+    case newer_than(Pending, Mark, []) of
+        {ok, Ops} -> Ops;
+        rebuilt -> unstamp(Pending)
+    end.
 
-drop_through(Queue, Mark, Whole) ->
-    case queue:out(Queue) of
-        {{value, {Mark, _Op}}, Rest} -> unstamp(Rest);
-        {{value, {_Seq, _Op}}, Rest} -> drop_through(Rest, Mark, Whole);
-        {empty, _} -> unstamp(Whole)
+%% Popping the rear yields newest-first, so consing each op onto the accumulator
+%% rebuilds the undrained suffix oldest-first for free.
+newer_than(Queue, Mark, Acc) ->
+    case queue:out_r(Queue) of
+        {{value, {Mark, _Op}}, _Rest} -> {ok, Acc};
+        {{value, {Seq, _Op}}, _Rest} when Seq < Mark -> rebuilt;
+        {{value, {_Seq, Op}}, Rest} -> newer_than(Rest, Mark, [Op | Acc]);
+        {empty, _} -> rebuilt
     end.
 
 -doc """
@@ -717,9 +740,10 @@ drop_oldest_for_append(#stream{items = Items, order = Order, size = Size} = S) -
         size = Size - 1
     }).
 
-%% Append an op under a fresh stamp. The stamp only ever has to be UNIQUE --
-%% `undrained_ops/2` locates it by equality, never by ordering -- but minting it
-%% monotonically keeps a queue readable oldest-to-newest when debugging.
+%% Append an op under a fresh stamp. Uniqueness is what makes the resume EXACT
+%% (`undrained_ops/2` locates the mark by equality); monotonicity is what makes
+%% it FAST -- stamps then ascend along the queue, so the backwards search can
+%% stop as soon as it drops below the mark instead of walking the history.
 queue_op(Op, Pending) ->
     queue:in({erlang:unique_integer([monotonic]), Op}, Pending).
 

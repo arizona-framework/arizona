@@ -855,11 +855,14 @@ apply_limit(
             }
     end.
 
-%% The post-drain snapshot, watermarked so the NEXT drain of this slot skips the
-%% ops this one just consumed (`arizona_stream:undrained_pending/2`). The mark is
-%% what makes a re-drain of a never-cleared queue cheap and stale-patch free; it
-%% is taken from the post-op stream record, whose `qnext` counts every op the
-%% queue held, including the ones the window skipped.
+%% The post-drain snapshot, marked so the NEXT drain of this slot resumes past the
+%% ops this one just consumed (`arizona_stream:undrained_ops/2`). That is what
+%% makes a re-drain of a never-cleared queue cheap and stale-patch free. The mark
+%% is the stamp of the last op in the post-op queue, so it covers every op the
+%% drain walked, including the ones the visibility window skipped. Resuming
+%% locates that stamp rather than counting positions, so a queue the mark does not
+%% belong to (a divergent successor of the same stream, a reset, a clear) falls
+%% back to a full drain instead of dropping its ops.
 post_drain_snap(SnapItems, Order, Tmpl, Source) ->
     #{
         t => ?EACH,
