@@ -72,6 +72,9 @@
     ssr_layout_splice_adds_no_privileged_tag/1,
     ssr_inner_content_from_case_branch_unescaped/1,
     ssr_inner_content_as_stateless_prop_unescaped/1,
+    ssr_inner_content_macro_marks_layout_nodiff/1,
+    ssr_inner_content_rejects_attribute_value/1,
+    ssr_inner_content_rejects_being_measured/1,
     ssr_inner_content_rejects_raw_wrapper/1,
     ssr_inner_content_rejects_sibling_in_one_slot/1,
     ssr_invalid_chardata_user_value_still_errors/1,
@@ -148,6 +151,9 @@ groups() ->
             ssr_layout_splice_adds_no_privileged_tag,
             ssr_inner_content_from_case_branch_unescaped,
             ssr_inner_content_as_stateless_prop_unescaped,
+            ssr_inner_content_macro_marks_layout_nodiff,
+            ssr_inner_content_rejects_attribute_value,
+            ssr_inner_content_rejects_being_measured,
             ssr_inner_content_rejects_raw_wrapper,
             ssr_inner_content_rejects_sibling_in_one_slot,
             ssr_invalid_chardata_user_value_still_errors,
@@ -686,6 +692,32 @@ ssr_inner_content_as_stateless_prop_unescaped(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"<div az=")),
     ?assertEqual(nomatch, binary:match(HTML, ~"&lt;div")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"PAGE&lt;&amp;&gt;")).
+
+ssr_inner_content_macro_marks_layout_nodiff(Config) when is_list(Config) ->
+    %% Why the docs say to use the macro and not `maps:get(inner_content, B)`:
+    %% the parse transform recognizes `?inner_content` as a block, and that is
+    %% what marks the whole layout az-nodiff (rendered once at SSR, never
+    %% diffed, so no `az` targets). A raw `maps:get` is invisible to it, so the
+    %% layout keeps a diffable value slot -- visible as an extra marker pair
+    %% wrapping the page, on top of the page's own.
+    ?assertEqual(1, marker_count(layout_html(arizona_inner_content_layouts, branch))),
+    ?assertEqual(2, marker_count(layout_html(arizona_inner_content_layouts, maps_get))).
+
+marker_count(HTML) ->
+    length(binary:matches(HTML, ~"<!--az:")).
+
+ssr_inner_content_rejects_attribute_value(Config) when is_list(Config) ->
+    %% A rendered page inside an attribute has no meaning, and the opaque value
+    %% says so instead of emitting an escaped page as an attribute: the error
+    %% carries the whole page, which is the documented cost of that placement.
+    ?assertError(
+        {bad_template_value, #{s := [_Page], d := []}},
+        layout_html(arizona_inner_content_layouts, attr)
+    ).
+
+ssr_inner_content_rejects_being_measured(Config) when is_list(Config) ->
+    %% Not iodata: `iolist_size/1` (and anything else expecting iodata) raises.
+    ?assertError(badarg, layout_html(arizona_inner_content_layouts, measure)).
 
 ssr_inner_content_rejects_raw_wrapper(Config) when is_list(Config) ->
     %% `?raw(?inner_content)` has nothing to opt out of -- a content slot already
