@@ -166,6 +166,7 @@ routes() ->
         {live, <<"/native/nested">>, arizona_native_nested, #{}},
         {live, <<"/native/removable">>, arizona_native_removable, #{}},
         {live, <<"/native/conditional">>, arizona_native_conditional, #{}},
+        {live, <<"/native/stream-child">>, arizona_native_stream_child, #{}},
         {live, <<"/native/menu">>, arizona_native_menu, #{}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}},

@@ -114,9 +114,13 @@ final class DispatchTests: XCTestCase {
     // introduces a whole new view id the server will address ops to.
     private let childStatics = ##"["{\"type\":\"Column\",\"az\":\"C-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"C-0t0\",\"children\":[","]}]}"]"##
 
+    // A keyed stream item with an empty content slot -- where the `?stateful` a
+    // conditional in the item template switches on lands, via an item-patch INNER op.
+    private let slotItemStatics = ##"["{\"type\":\"Row\",\"az\":\"I-0\",\"az_key\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"I-0t0\",\"children\":[","]}]}"]"##
+
     // A keyed stream item wrapping a stateful child view (the `?stateful` inside a
     // stream `?each` shape).
-    private let itemStatics = ##"["{\"type\":\"Row\",\"az\":\"I-0\",\"az_key\":",",\"children\":[{\"type\":\"Column\",\"az\":\"C-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"C-0t0\",\"children\":[","]}]}]}"]"##
+    private let itemStatics =##"["{\"type\":\"Row\",\"az\":\"I-0\",\"az_key\":",",\"children\":[{\"type\":\"Column\",\"az\":\"C-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"C-0t0\",\"children\":[","]}]}]}"]"##
 
     private func frame(_ ops: String) -> String { "{\"o\":[\(ops)]}" }
 
@@ -200,6 +204,28 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(flatText(item), "9")
     }
 
+    // A conditional `?stateful` INSIDE a stream item installs the child through an
+    // item-patch INNER op, so its view id never appears in a top-level op -- but the
+    // child's own ops come back top-level. Indexing an inner rebuild only into the
+    // item-local map leaves it unaddressable and its slot frozen.
+    func testRegistersAChildViewAnItemPatchInnerOpInstalled() {
+        let client = newClient(path: "/native/l")
+        client.handleText(
+            frame(
+                ##"[8,"native_l",{"f":"R","s":\##(rootStatics),"d":["native_l",{"t":0,"f":"S","s":\##(slotItemStatics),"d":[["k1",""]]}]}]"##
+            ))
+        client.handleText(
+            frame(
+                ##"[7,"native_l:R-0t0","k1",[[0,"I-0t0",{"f":"C","s":\##(childStatics),"d":["inner_kid","0"]}]]]"##
+            ))
+        let item = child(child(client.root!, 0), 0)
+        XCTAssertEqual(flatText(item), "0")
+
+        // A TOP-LEVEL op addressed to the view the inner op created.
+        client.handleText(frame(##"[0,"inner_kid:C-0t0","5"]"##))
+        XCTAssertEqual(flatText(item), "5")
+    }
+
     // An inserted stream item's child view is a new view id too -- OP_REPLACE
     // already indexes the items it renders, so an insert must as well.
     func testRegistersAChildViewInsideAnInsertedStreamItem() {
@@ -230,6 +256,21 @@ final class DispatchTests: XCTestCase {
         client.handleText(
             frame(
                 ##"[0,"native_x:R-0t0",{"f":"never-cached","d":[]}],[0,"native_x:R-0t0","applied"]"##
+            ))
+        XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
+    }
+
+    // A payload whose statics yield something that is not a node (no `type`) fails
+    // inside `buildTree`, not the decoder. `buildTree`/`addChild` therefore throw
+    // instead of trapping: they run inside the per-op `do`/`catch`, and a Swift trap
+    // is not catchable, so a `preconditionFailure` there would kill the app over one
+    // slot (Kotlin's counterpart raises, and its catch already handles it).
+    func testSkipsAnOpWhosePayloadIsNotANode() {
+        let client = newClient(path: "/native/x")
+        replaceRoot(client)
+        client.handleText(
+            frame(
+                ##"[0,"native_x:R-0t0",{"f":"B","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}],[0,"native_x:R-0t0","applied"]"##
             ))
         XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
     }

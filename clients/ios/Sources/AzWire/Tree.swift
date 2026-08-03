@@ -39,17 +39,25 @@ extension Node: Equatable {
 /// ViewId) -- after a navigate that differs from the rendered root's `id`, so the
 /// root uses the passed `view`, not its own `id`; a nested `az_view` child
 /// switches to its own id (see `addChild`).
-public func buildTree(_ json: JSONValue, view: String?) -> Node {
+///
+/// Throws `WireError.malformed` (rather than trapping) on a payload that is not a
+/// node: this runs inside the op applier's per-op `do`/`catch`, and a Swift trap
+/// is not catchable -- one bad payload would take the app down instead of costing
+/// one slot. Mirrors Kotlin's `getValue`, whose exception the same catch handles.
+public func buildTree(_ json: JSONValue, view: String?) throws -> Node {
     guard case let .object(obj) = json else {
-        preconditionFailure("buildTree expects an object: \(json)")
+        throw WireError.malformed("buildTree expects an object: \(json)")
     }
-    let node = Node(type: obj["type"]!.stringValue!, az: obj["az"]?.stringValue)
+    guard let type = obj["type"]?.stringValue else {
+        throw WireError.malformed("node has no string `type`: \(json)")
+    }
+    let node = Node(type: type, az: obj["az"]?.stringValue)
     for (k, v) in obj where k != "type" && k != "az" && k != "children" {
         node.props[k] = v
     }
     node.viewId = view
     if let kids = obj["children"]?.arrayValue {
-        for child in kids { addChild(node, child, view) }
+        for child in kids { try addChild(node, child, view) }
     }
     return node
 }
@@ -57,14 +65,16 @@ public func buildTree(_ json: JSONValue, view: String?) -> Node {
 /// Append a child, splicing each-expansion arrays into the parent. `#slot`
 /// objects are kept as nodes; stream items (each-array entries) become keyed
 /// child nodes. A child that is itself a view root (`az_view`) owns its subtree;
-/// otherwise it stays in the parent's `view`.
-func addChild(_ parent: Node, _ child: JSONValue, _ view: String?) {
+/// otherwise it stays in the parent's `view`. Throws for the same reason
+/// `buildTree` does.
+func addChild(_ parent: Node, _ child: JSONValue, _ view: String?) throws {
     switch child {
     case let .array(arr):
-        for c in arr { addChild(parent, c, view) }
+        for c in arr { try addChild(parent, c, view) }
     case let .object(obj):
         let childView = obj["az_view"]?.boolValue == true ? (obj["id"]?.stringValue ?? view) : view
-        parent.children.append(.node(buildTree(child, view: childView)))
+        let node = try buildTree(child, view: childView)
+        parent.children.append(.node(node))
     default:
         parent.children.append(.text(child.contentString))
     }

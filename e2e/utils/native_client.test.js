@@ -80,6 +80,14 @@ const CHILD_STATICS = [
     ']}]}',
 ];
 
+// A keyed stream item with an empty content slot -- where the `?stateful` a
+// conditional in the item template switches on lands, via an item-patch INNER op.
+const SLOT_ITEM_STATICS = [
+    '{"type":"Row","az":"I-0","az_key":',
+    ',"children":[{"type":"#slot","az":"I-0t0","children":[',
+    ']}]}',
+];
+
 // A keyed stream item wrapping a stateful child view (the `?stateful` inside a
 // stream `?each` shape).
 const ITEM_STATICS = [
@@ -172,6 +180,38 @@ describe('native client op application', () => {
             [OP_ITEM_PATCH, 'native_l:R-0t0', 'k1', [['child_1', [[OP_TEXT, 'C-0t0', '9']]]]],
         ]);
         expect(client.tree().children[0].children[0].children).toEqual(['9']);
+    });
+
+    // A conditional `?stateful` INSIDE a stream item installs the child through an
+    // item-patch INNER op, so its view id never appears in a top-level op -- but
+    // the child's own ops come back top-level. Indexing an inner rebuild only into
+    // the item-local map leaves it unaddressable and its slot frozen.
+    it('registers a child view an item-patch inner op installed', () => {
+        const client = newClient();
+        client._applyOps([
+            [
+                OP_REPLACE,
+                'native_l',
+                {
+                    f: 'R',
+                    s: ROOT_STATICS,
+                    d: ['native_l', { t: 0, f: 'S', s: SLOT_ITEM_STATICS, d: [['k1', '']] }],
+                },
+            ],
+        ]);
+        client._applyOps([
+            [
+                OP_ITEM_PATCH,
+                'native_l:R-0t0',
+                'k1',
+                [[OP_TEXT, 'I-0t0', { f: 'C', s: CHILD_STATICS, d: ['inner_kid', '0'] }]],
+            ],
+        ]);
+        expect(client.tree().children[0].children[0].children).toEqual(['0']);
+
+        // A TOP-LEVEL op addressed to the view the inner op created.
+        client._applyOps([[OP_TEXT, 'inner_kid:C-0t0', '5']]);
+        expect(client.tree().children[0].children[0].children).toEqual(['5']);
     });
 
     // An inserted stream item's child view is a new view id too -- OP_REPLACE

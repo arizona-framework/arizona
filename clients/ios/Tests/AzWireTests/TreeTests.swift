@@ -8,9 +8,9 @@ final class TreeTests: XCTestCase {
     // The live view id is the rendered root's own `id`; buildTree stamps it on the
     // root + its non-view descendants, and indexByViews registers them under it,
     // so "rootId:az" targets (incl. server pushes) resolve.
-    func testRootSubtreeIndexedUnderTheRenderedRootId() {
+    func testRootSubtreeIndexedUnderTheRenderedRootId() throws {
         let json = JSONValue.parse(##"{"type":"Column","az":"F-0","az_view":true,"id":"native_ticker","children":[{"type":"#slot","az":"F-0t0","children":[]}]}"##)
-        let root = buildTree(json, view: "native_ticker") // OP_REPLACE passes the root's id
+        let root = try buildTree(json, view: "native_ticker") // OP_REPLACE passes the root's id
         guard case let .node(slot) = root.children[0] else { return XCTFail("expected a slot child") }
         XCTAssertEqual(root.viewId, "native_ticker")
         XCTAssertEqual(slot.viewId, "native_ticker")
@@ -22,9 +22,9 @@ final class TreeTests: XCTestCase {
 
     // A nested stateful child owns its subtree under its own id, while the root
     // stays its own id.
-    func testNestedAzViewChildSwitchesView() {
+    func testNestedAzViewChildSwitchesView() throws {
         let json = JSONValue.parse(##"{"type":"Column","az":"P-0","az_view":true,"id":"native_nested","children":[{"type":"Column","az":"C-0","az_view":true,"id":"child_a","children":[{"type":"#slot","az":"C-0t0","children":[]}]}]}"##)
-        let root = buildTree(json, view: "native_nested")
+        let root = try buildTree(json, view: "native_nested")
         guard case let .node(child) = root.children[0] else { return XCTFail("expected a child view") }
         guard case let .node(childSlot) = child.children[0] else { return XCTFail("expected a child slot") }
         XCTAssertEqual(root.viewId, "native_nested")

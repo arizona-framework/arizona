@@ -335,9 +335,11 @@ class AzClient(baseUrl: String, path: String) {
             // socket.view_id, what it prefixes pushed ops with), NOT a[1] --
             // after a navigate a[1] is the OLD id (the replace target). Mirrors
             // the browser reading the new root's az-view id from the DOM.
-            viewId = json.jsonObject["id"]?.jsonPrimitive?.content
+            // Build BEFORE committing: a malformed payload must leave the previous
+            // tree and registry intact, not half-cleared.
+            val node = buildTree(json, json.jsonObject["id"]?.jsonPrimitive?.content)
+            viewId = node.viewId
             views.clear()
-            val node = buildTree(json, viewId)
             indexByViews(node, views)
             root.value = node
             return
@@ -367,6 +369,14 @@ class AzClient(baseUrl: String, path: String) {
             Op.REMOVE_NODE -> {
                 // A dynamic returned the `remove` sentinel: drop the node from its
                 // parent. One-way -- bringing it back needs a parent re-render.
+                //
+                // The removed node's registry entries are deliberately left: a later
+                // op naming that az would still RESOLVE and would patch the detached
+                // node. That is unreachable only because the server never re-addresses
+                // a removed az (and addresses stream items by `az_key`, not
+                // "ViewId:az") -- a convention, not a check. Re-validating would mean
+                // walking to the root on every resolve, since nodes carry no parent
+                // link; if that convention ever changes, unindex here.
                 removeFromParent(scopeRoot, node)
             }
             Op.SET_ATTR -> {
@@ -411,6 +421,12 @@ class AzClient(baseUrl: String, path: String) {
 
     // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
     // carry bare az indices resolved within the item's own subtree.
+    //
+    // Addressing is item-local, but index MAINTENANCE is both: an inner op that
+    // rebuilds a subtree can introduce a nested `az_view` -- a `?stateful` child a
+    // conditional in the item template just switched on -- and that child's own ops
+    // arrive as TOP-LEVEL "ChildViewId:az" targets. Keeping them out of the
+    // per-view registry leaves the child unaddressable and its slot frozen.
     private fun applyInner(item: Node, innerOps: JsonArray) {
         val local = HashMap<String, Node>()
         indexByAz(item, local)
@@ -418,8 +434,12 @@ class AzClient(baseUrl: String, path: String) {
             resolve = { az -> local[az] ?: item },
             unindexChildren = { node ->
                 for (child in node.children) if (child is Node) unindexByAz(child, local)
+                unindexChildrenInViews(node)
             },
-            reindex = { node -> indexByAz(node, local) },
+            reindex = { node ->
+                indexByAz(node, local)
+                reindexInViews(node)
+            },
         )
         for (op in innerOps) dispatch(op, item, scope)
     }

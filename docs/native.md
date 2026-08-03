@@ -182,7 +182,18 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    `OP_REPLACE` fails the very next op. That includes a nested `az_view` the
    payload brings in — the documented
    `case ?get(flag) of true -> ?stateful(child, …)` pattern installs a whole child
-   **view id** through an `OP_TEXT`, and its first update is addressed to it.
+   **view id** through an `OP_TEXT`, and its first update is addressed to it. This
+   holds for an `OP_ITEM_PATCH`'s **inner** ops too: they *address* item-locally,
+   but a subtree they rebuild still has to reach the per-view registry, because the
+   child view it may introduce is addressed top-level (`/native/stream-child` is
+   exactly this shape).
+
+   Removal is the one asymmetry: `OP_REMOVE`/`OP_REMOVE_NODE` leave their entries
+   behind, so a later op naming a removed `az` would still resolve and patch a
+   detached node. That is unreachable only because the server never re-addresses a
+   removed `az` (and addresses stream items by `az_key`, never `"ViewId:az"`) — a
+   convention, not a check. Re-validating would cost a walk to the root on every
+   resolve, since these trees carry no parent links.
 
    **Isolate each op.** A batch's ops are independent, so an unexpected wire shape
    or an unresolvable target must log and skip that one op (as
@@ -213,8 +224,9 @@ The `native` e2e exercises each example over the real socket: a counter
 (`/native/tabs`), server-pushed ticks (`/native/ticker`), independent counters
 (`/native/multi`), nested stateful children with per-child event routing
 (`/native/nested`), a conditionally rendered stateful child whose view id only the
-diff ever ships (`/native/conditional`), navigation (`/native/menu`), and
-reconnect-after-drop. The in-repo Android
+diff ever ships (`/native/conditional`) and the same shape nested inside a stream
+item, where it arrives through an item-patch inner op (`/native/stream-child`),
+navigation (`/native/menu`), and reconnect-after-drop. The in-repo Android
 (`clients/android`) and iOS (`clients/ios`) samples are launchers that open `/native/menu` and
 navigate to each on a device or Simulator.
 
@@ -253,9 +265,11 @@ returns them won't crash a native client.
   vocabulary helper are possible future additions.
 - **A stateful child inside a stream item resolves through its own view.** The
   item's ordinary inner ops are applied via `OP_ITEM_PATCH` against a flat
-  item-local `az` map, but a child view's ops ride in a `[ChildViewId, ChildOps]`
-  wrapper *nested inside* that patch — `flatten_ops/2` (`arizona_socket`) unwraps
-  the wrapper only at top level — so its first element is a **view-id string, not
-  an op code**. The clients detect that and dispatch those ops against the child's
-  own per-view registry; `OP_INSERT` indexes the item it grafts in, so a child view
-  an insert brings along is reachable too.
+  item-local `az` map, but a child view reaches the clients three ways, all of which
+  land in the per-view registry: a `[ChildViewId, ChildOps]` wrapper *nested inside*
+  the item patch (`flatten_ops/2` in `arizona_socket` unwraps that wrapper only at
+  top level, so its first element is a **view-id string, not an op code**); an
+  `OP_INSERT` that grafts in an item already containing the child; and an item-patch
+  **inner** `OP_TEXT` that installs the child a conditional in the item template just
+  switched on. That last one is why an inner-op rebuild indexes into the per-view
+  registry as well as the item-local map — the child's own ops arrive top-level.

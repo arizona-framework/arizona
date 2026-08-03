@@ -312,12 +312,11 @@ public final class AzClient {
             // a navigate a[1] is the OLD id (the replace target).
             let raw = try operand(a, 2)
             let json = try interleaver.interleave(raw)
-            guard case .object = json else {
-                throw WireError.malformed("replace payload is not a node: \(json)")
-            }
-            viewId = json["id"]?.stringValue
+            // Build BEFORE committing: a malformed payload must leave the previous
+            // tree and registry intact, not half-cleared.
+            let node = try buildTree(json, view: json["id"]?.stringValue)
+            viewId = node.viewId
             views = [:]
-            let node = buildTree(json, view: viewId)
             indexByViews(node, &views)
             root = node
             return
@@ -342,11 +341,19 @@ public final class AzClient {
             let payload = try interleaver.decode(raw)
             scope.unindexChildren(node)
             node.children = []
-            addChild(node, payload, node.viewId)
+            try addChild(node, payload, node.viewId)
             scope.reindex(node)
         case Op.removeNode:
             // A dynamic returned the `remove` sentinel: drop the node from its
             // parent. One-way -- bringing it back needs a parent re-render.
+            //
+            // The removed node's registry entries are deliberately left: a later op
+            // naming that az would still RESOLVE and would patch the detached node.
+            // That is unreachable only because the server never re-addresses a removed
+            // az (and addresses stream items by `az_key`, not "ViewId:az") -- a
+            // convention, not a check. Re-validating would mean walking to the root on
+            // every resolve, since nodes carry no parent link; if that convention ever
+            // changes, unindex here.
             removeFromParent(scopeRoot, node)
         case Op.setAttr:
             let name = try text(a, 2)
@@ -361,10 +368,7 @@ public final class AzClient {
             }
             let raw = try operand(a, 4)
             let payload = try interleaver.decode(raw)
-            guard case .object = payload else {
-                throw WireError.malformed("insert payload is not a node: \(payload)")
-            }
-            let item = buildTree(payload, view: node.viewId)
+            let item = try buildTree(payload, view: node.viewId)
             if pos == -1 || pos >= node.children.count {
                 node.children.append(.node(item))
             } else {
@@ -402,17 +406,27 @@ public final class AzClient {
 
     // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
     // carry bare az indices resolved within the item's own subtree.
+    //
+    // Addressing is item-local, but index MAINTENANCE is both: an inner op that
+    // rebuilds a subtree can introduce a nested `az_view` -- a `?stateful` child a
+    // conditional in the item template just switched on -- and that child's own ops
+    // arrive as TOP-LEVEL "ChildViewId:az" targets. Keeping them out of the
+    // per-view registry leaves the child unaddressable and its slot frozen.
     private func applyInner(_ item: Node, _ innerOps: [JSONValue]) {
         var local: [String: Node] = [:]
         indexByAz(item, &local)
         let scope = Scope(
             resolve: { az in local[az] ?? item },
-            unindexChildren: { node in
+            unindexChildren: { [unowned self] node in
                 for child in node.children {
                     if case let .node(n) = child { unindexByAz(n, &local) }
                 }
+                self.unindexChildrenInViews(node)
             },
-            reindex: { node in indexByAz(node, &local) }
+            reindex: { [unowned self] node in
+                indexByAz(node, &local)
+                self.reindexInViews(node)
+            }
         )
         for op in innerOps { dispatch(op, scopeRoot: item, scope: scope) }
     }

@@ -319,6 +319,14 @@ export class NativeClient {
                 // A dynamic returned the `remove` sentinel: drop the node from its
                 // parent (the browser does el.remove()). One-way -- bringing it back
                 // needs a parent re-render, not an op on the removed az.
+                //
+                // The removed node's registry entries are deliberately left: a later
+                // op naming that az would still RESOLVE and would patch the detached
+                // node. That is unreachable only because the server never re-addresses
+                // a removed az (and addresses stream items by `az_key`, not
+                // "ViewId:az") -- a convention, not a check. Re-validating would mean
+                // walking to the root on every resolve, since nodes carry no parent
+                // link; if that convention ever changes, unindex here.
                 removeFromParent(scopeRoot, node);
                 break;
             case OP_SET_ATTR:
@@ -383,15 +391,26 @@ export class NativeClient {
 
     // Apply an OP_ITEM_PATCH's inner ops, scoped to one keyed item: inner ops
     // carry bare az indices resolved within the item's own subtree.
+    //
+    // Addressing is item-local, but index MAINTENANCE is both: an inner op that
+    // rebuilds a subtree can introduce a nested `az_view` -- a `?stateful` child
+    // a conditional in the item template just switched on -- and that child's own
+    // ops arrive as TOP-LEVEL "ChildViewId:az" targets. Keeping them out of the
+    // per-view registry leaves the child unaddressable and its slot frozen.
     _applyInner(item, innerOps) {
         const reg = new Map();
         indexByAz(item, reg);
+        const view = this._viewScope();
         const scope = {
             resolve: (az) => reg.get(az) || item,
             unindexChildren: (node) => {
                 for (const c of node.children ?? []) unindexByAz(c, reg);
+                view.unindexChildren(node);
             },
-            reindex: (_parent, child) => indexByAz(child, reg),
+            reindex: (parent, child) => {
+                indexByAz(child, reg);
+                view.reindex(parent, child);
+            },
         };
         for (const op of innerOps) this._dispatch(op, scope, item);
     }
