@@ -76,6 +76,7 @@
     seed_fps_unknown_fp_still_sends/1,
     seed_fps_caps_growth/1,
     live_unknown_view_id_noop/1,
+    child_stream_survives_next_root_diff/1,
     stateful_child_independent_state/1,
     nested_stateful_child_event/1,
     nested_stateful_grandchild_survives_root_skip/1,
@@ -142,6 +143,7 @@ groups() ->
             live_counter2_child_event,
             live_inc_then_dec,
             live_unknown_view_id_noop,
+            child_stream_survives_next_root_diff,
             render_current_full_frame
         ]},
         {mount_and_render, [parallel], [
@@ -418,6 +420,32 @@ live_unknown_view_id_noop(Config) when is_list(Config) ->
     %% Root state is untouched: the next real inc yields count 1, not 2.
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
+
+child_stream_survives_next_root_diff(Config) when is_list(Config) ->
+    %% A child that patches its own stream leaves the ROOT snapshot holding the
+    %% child's PRE-event copy -- and that copy is the diff baseline for the
+    %% child's slot. So the first root diff afterwards re-emitted what the child
+    %% had already patched incrementally, and for the stream container that is a
+    %% wholesale `?OP_UPDATE` (innerHTML), destroying focus, scroll, uncontrolled
+    %% input state and every `?local` inside the items.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_child_stream_root, #{}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% The child patches its own stream: one incremental insert.
+    {ok, AddOps, _} = arizona_live:handle_event(Pid, ~"cs", ~"add", #{~"id" => ~"i2"}),
+    ?assertMatch([[?OP_INSERT, _, ~"i2", -1, _Item]], AddOps),
+    %% The FIRST root diff after it: only the label slot the root actually
+    %% changed. No re-render of the container the child just patched.
+    {ok, BumpOps, _} = arizona_live:handle_event(
+        Pid, ~"csr", ~"relabel", #{~"label" => ~"L1"}
+    ),
+    ?assertMatch([[~"cs", [[?OP_TEXT, _, ~"L1"]]]], BumpOps),
+    %% ...and the one after it, which was already clean, stays clean.
+    {ok, BumpOps2, _} = arizona_live:handle_event(
+        Pid, ~"csr", ~"relabel", #{~"label" => ~"L2"}
+    ),
+    ?assertMatch([[~"cs", [[?OP_TEXT, _, ~"L2"]]]], BumpOps2).
 
 live_init_bindings(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(

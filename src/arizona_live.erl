@@ -55,6 +55,8 @@ fingerprints already shipped in the initial HTML.
 """.
 -behaviour(gen_server).
 
+-include("arizona.hrl").
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -771,7 +773,8 @@ handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
     {Ops1, V1, Fps1, Effects1} = process_child_change(H, B1, Resets, Effects, ViewId, View, State),
-    {reply, {ok, Ops1, Effects1}, State#state{views = V1, sent_fps = Fps1}}.
+    NewState = refresh_root_snapshot(ViewId, State#state{views = V1, sent_fps = Fps1}),
+    {reply, {ok, Ops1, Effects1}, NewState}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
     case arizona_stateful:call_handle_info(H, Info, B0) of
@@ -797,7 +800,8 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
                 H, B1, Resets, Effects, ViewId, View, State
             ),
             push(TPid, root_view_id(State), scope_child_ops(ViewId, Ops1), Effects1),
-            {noreply, State#state{views = V1, sent_fps = Fps1}}
+            NewState = refresh_root_snapshot(ViewId, State#state{views = V1, sent_fps = Fps1}),
+            {noreply, NewState}
     end.
 
 handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
@@ -887,6 +891,61 @@ process_child_change(
     V1 = maps:merge(maps:without(Removed, V0), NewViews),
     V2 = V1#{ViewId => View#{bindings => B3, snapshot => Snap2}},
     {Ops1, V2, Fps1, Effects1}.
+
+%% Bring the ROOT snapshot's stored copy of child `ViewId`'s snapshot up to the
+%% child's own post-diff one.
+%%
+%% The root snapshot is the diff baseline for the child's slot, and a child that
+%% changes on its own (its own event, or a `?send`-driven `handle_info`) updates
+%% only `views`. Left on the pre-event copy, the next root diff re-emits
+%% everything the child had already patched: a redundant op for a plain slot,
+%% and for a stream container a wholesale re-render of the list the child had
+%% just patched item-by-item -- innerHTML, so focus, scroll, uncontrolled input
+%% state and every `?local` inside the items are destroyed. Only the FIRST root
+%% diff after the child change did it (the one after re-seeded the baseline from
+%% its own fresh evaluation), which is exactly the diff a user is most likely to
+%% be interacting through.
+refresh_root_snapshot(ViewId, #state{snapshot = Snap, views = Views} = State) ->
+    #{ViewId := #{snapshot := ChildSnap}} = Views,
+    State#state{snapshot = refresh_view_snap(ViewId, ChildSnap, Snap)}.
+
+%% Replace the copy of view `ViewId`'s snapshot held anywhere inside `Snap`. A
+%% container records the transitive set of view ids rendered inside it
+%% (`child_views`), so a subtree that cannot hold this view is skipped whole and
+%% the walk follows one path; a container carrying no such annotation (the root
+%% snapshot itself) is descended into.
+refresh_view_snap(ViewId, ChildSnap, #{view_id := ViewId}) ->
+    ChildSnap;
+refresh_view_snap(ViewId, ChildSnap, #{t := ?EACH, items := Items} = Snap) ->
+    case holds_view(ViewId, Snap) of
+        true -> Snap#{items => refresh_each_items(ViewId, ChildSnap, Items)};
+        false -> Snap
+    end;
+refresh_view_snap(ViewId, ChildSnap, #{d := D} = Snap) when is_list(D) ->
+    case holds_view(ViewId, Snap) of
+        true -> Snap#{d => [refresh_dyn(ViewId, ChildSnap, Dyn) || Dyn <- D]};
+        false -> Snap
+    end;
+refresh_view_snap(_ViewId, _ChildSnap, Value) ->
+    Value.
+
+holds_view(ViewId, #{child_views := Ids}) -> lists:member(ViewId, Ids);
+holds_view(_ViewId, #{}) -> true.
+
+%% A stream/map-keyed `?each` holds its items in a map, a plain-list one in a
+%% list; either way an item is a list of `{Az, Value, Deps}` triples.
+refresh_each_items(ViewId, ChildSnap, Items) when is_map(Items) ->
+    #{Key => refresh_item_dyns(ViewId, ChildSnap, ItemD) || Key := ItemD <- Items};
+refresh_each_items(ViewId, ChildSnap, Items) when is_list(Items) ->
+    [refresh_item_dyns(ViewId, ChildSnap, ItemD) || ItemD <- Items].
+
+refresh_item_dyns(ViewId, ChildSnap, ItemD) ->
+    [refresh_dyn(ViewId, ChildSnap, Dyn) || Dyn <- ItemD].
+
+refresh_dyn(ViewId, ChildSnap, {Az, Value}) ->
+    {Az, refresh_view_snap(ViewId, ChildSnap, Value)};
+refresh_dyn(ViewId, ChildSnap, {Az, Value, Deps}) ->
+    {Az, refresh_view_snap(ViewId, ChildSnap, Value), Deps}.
 
 clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),

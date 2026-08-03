@@ -1113,6 +1113,25 @@ make_op(Az, New, _Old) ->
 %% an az prefix from the child's own fingerprint, neither of which a plain branch has.
 %% So a same-S Old is necessarily a plain inline template too; a child New is excluded
 %% here and handled by make_op/3's child-view clause (which requires `view_id` on both).
+%% A stream `?each` container whose rendered items, order, and item-template
+%% fingerprint are all unchanged needs no op: the container's HTML is exactly
+%% what the client already holds, so the wholesale `?OP_UPDATE` below would only
+%% innerHTML-replace an identical list -- destroying focus, scroll, uncontrolled
+%% input state and every `?local` in the items for nothing.
+%%
+%% Reached when the two sides are compared snapshot-against-snapshot rather than
+%% against the each descriptor (`diff_child_dynamics/3`, i.e. an embedded child
+%% view's inner dynamics diffed from its parent). There the freshly evaluated
+%% side carries `source` and the stored side does not -- the incremental stream
+%% path settles its snapshot without it -- so the two never compare term-equal
+%% even when they render identically.
+make_ops(
+    _Az,
+    #{t := ?EACH, items := Items, order := Order, template := #{f := Fp}},
+    #{t := ?EACH, items := Items, order := Order, template := #{f := Fp}},
+    Tail
+) ->
+    Tail;
 make_ops(_Az, #{s := S, d := NewD} = New, #{s := S, d := OldD}, Tail) when
     not is_map_key(view_id, New)
 ->
