@@ -311,24 +311,53 @@ merge_stream_child_views(Source, Old, LocalNew, Old0) ->
     carry_item_children(Surviving, Old0, LocalNew).
 
 %% When a dynamic is skipped (deps unchanged), carry its child views over
-%% from OldViews to NewViews so they aren't pruned. For a stateful child, carry
-%% the child AND its transitive descendants: the child's current (authoritative)
-%% snapshot in Old records them as `child_views`, so a depth-2+ grandchild under
-%% a skipped child is not dropped from the accumulator and then unmounted/reset.
-%% We read `child_views` from Old's live entry (not the possibly-stale cached
-%% snapshot passed in) so a grandchild added by the child's own event survives.
+%% from OldViews to NewViews so they aren't pruned.
+%%
+%% Both the stateful-child form and the container form (a nested template or an
+%% `?each`, which record the views rendered inside them as `child_views`) resolve
+%% what to carry through `live_subtree/2` rather than trusting the list on the
+%% snapshot they were handed. `child_views` on a SNAPSHOT is only accurate as of
+%% that snapshot's last evaluation, and a view can come into existence with no
+%% enclosing container re-evaluated at all: a grandchild first rendered by a
+%% CHILD's own event updates `views` and the child's own snapshot, and nothing
+%% above it. Carrying a container's recorded list verbatim therefore dropped that
+%% grandchild from the accumulator, and the next UNRELATED root diff then treated
+%% it as removed -- unmounting a live view (running its `unmount/1` side effects,
+%% releasing pubsub subscriptions and resources) while its DOM was still on the
+%% page, after which every event addressed to it was silently swallowed.
 carry_skipped_view(#{view_id := VId}, {Old, New}) ->
-    ToCarry =
-        case Old of
-            #{VId := #{snapshot := #{child_views := ChildIds}}} -> [VId | ChildIds];
-            #{VId := _} -> [VId];
-            #{} -> []
-        end,
-    {Old, maps:merge(New, maps:with(ToCarry, Old))};
+    {Old, maps:merge(New, live_subtree([VId], Old))};
 carry_skipped_view(#{child_views := ChildIds}, {Old, New}) ->
-    {Old, maps:merge(New, maps:with(ChildIds, Old))};
+    {Old, maps:merge(New, live_subtree(ChildIds, Old))};
 carry_skipped_view(_Old, Views) ->
     Views.
+
+%% The live entries of `Old` making up the subtrees rooted at `Ids`, following
+%% each entry's own recorded descendants transitively. Every view's snapshot in
+%% `Old` is authoritative for ITS subtree at the moment it last rendered, so
+%% chaining through them reaches a view created at any depth after the container
+%% above it was last evaluated -- one level of expansion is not enough, since a
+%% great-grandchild added by a grandchild's own event is recorded only on that
+%% grandchild. Ids absent from `Old` (already unmounted) simply drop out.
+%%
+%% Runs during a root diff, which already walks the tree; nothing here touches
+%% the child-event path.
+live_subtree(Ids, Old) ->
+    live_subtree(Ids, Old, #{}).
+
+live_subtree([], _Old, Acc) ->
+    Acc;
+live_subtree([Id | Rest], Old, Acc) when is_map_key(Id, Acc) ->
+    live_subtree(Rest, Old, Acc);
+live_subtree([Id | Rest], Old, Acc) ->
+    case Old of
+        #{Id := #{snapshot := #{child_views := ChildIds}} = View} ->
+            live_subtree(ChildIds ++ Rest, Old, Acc#{Id => View});
+        #{Id := View} ->
+            live_subtree(Rest, Old, Acc#{Id => View});
+        #{} ->
+            live_subtree(Rest, Old, Acc)
+    end.
 
 %% Extract child view IDs from deleted stream items only. The result is
 %% used in list subtraction (`OldChildViews -- Deleted`), so order doesn't

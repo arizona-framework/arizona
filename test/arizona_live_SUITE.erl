@@ -82,6 +82,8 @@
     nested_stateful_child_event/1,
     nested_stateful_grandchild_survives_root_skip/1,
     nested_stateful_grandchild_unmounted_on_removal/1,
+    grandchild_added_by_child_event_survives_root_skip/1,
+    grandchild_refresh_reaches_through_container/1,
     child_diff_dep_skips_unchanged_grandchild/1,
     nested_local_diff_skipped/1,
     nested_local_set_effect/1,
@@ -125,6 +127,8 @@ groups() ->
             nested_stateful_child_event,
             nested_stateful_grandchild_survives_root_skip,
             nested_stateful_grandchild_unmounted_on_removal,
+            grandchild_added_by_child_event_survives_root_skip,
+            grandchild_refresh_reaches_through_container,
             child_diff_dep_skips_unchanged_grandchild,
             nested_local_diff_skipped,
             nested_local_set_effect,
@@ -302,6 +306,61 @@ nested_stateful_grandchild_survives_root_skip(Config) when is_list(Config) ->
     %% Grandchild preserved: 1 -> 2 (would be 0 -> 1 had it been remounted).
     {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"2">>]], IncOps).
+
+grandchild_added_by_child_event_survives_root_skip(Config) when is_list(Config) ->
+    %% A grandchild first rendered by a CHILD's own event exists in `views`
+    %% without any enclosing container having been re-evaluated, so no
+    %% container's recorded `child_views` names it. Carrying a dep-skipped
+    %% subtree's views by that recorded list therefore dropped it: the next
+    %% UNRELATED root diff unmounted a live view -- running its `unmount/1`
+    %% side effects, so pubsub subscriptions and resources are released -- while
+    %% its DOM was still on the page, and every later event addressed to it was
+    %% silently swallowed.
+    Self = self(),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_carry_root, #{notify => Self}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% The child's own event brings the grandchild into existence.
+    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    {ok, IncOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"1"]], IncOps),
+    %% A root change that touches nothing in that subtree, so it is dep-skipped.
+    {ok, TitleOps, _} = arizona_live:handle_event(Pid, ~"cr", ~"title_change", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"Changed"]], TitleOps),
+    %% (b) it was not unmounted...
+    receive
+        {leaf_unmounted, UnmountedId} -> error({grandchild_unmounted, UnmountedId})
+    after 0 -> ok
+    end,
+    %% ...(a) it is still mounted and (c) still takes its own events, with its
+    %% state intact: 1 -> 2, not a fresh 0 -> 1 and not the `[]` of a dropped id.
+    {ok, IncOps2, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"2"]], IncOps2).
+
+grandchild_refresh_reaches_through_container(Config) when is_list(Config) ->
+    %% Same shape, the other consequence: the root snapshot's copy of a
+    %% grandchild that changed on its own must be settled before the next root
+    %% diff -- and the settle walk has to REACH it. It descends by asking each
+    %% container whether its recorded `child_views` names a changed view, and a
+    %% grandchild created after that container was last evaluated is named only
+    %% by its own parent, so the container answered "no" and its whole subtree
+    %% was skipped. The stale copy then made the diff re-emit what the
+    %% grandchild had already patched.
+    Self = self(),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_carry_root, #{notify => Self}, undefined, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    %% The grandchild patches itself, so the root's copy of it goes stale.
+    {ok, IncOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"1"]], IncOps),
+    %% A root change the CONTAINER reads, so its slot is re-evaluated and
+    %% compared against the root's copy. Only the label changed, so that is the
+    %% only op: no re-emission of the grandchild's own slot.
+    {ok, RelabelOps, _} = arizona_live:handle_event(Pid, ~"cr", ~"relabel", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"relabelled"]], RelabelOps).
 
 %% When the mid conditionally stops rendering the leaf, the grandchild is
 %% unmounted and pruned from views -- a later message to it crashes unknown_view.
