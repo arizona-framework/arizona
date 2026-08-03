@@ -1191,16 +1191,17 @@ reply tuple.
 Transport-agnostic upgrade bootstrap for WebSocket handlers.
 
 - `prepare/3(QS, Adapter, AdapterState)` -- accepts the pre-parsed upgrade query string
-  (`[{binary(), binary() | true}]`), reads the `_az_path`, `_az_reconnect`, and
-  `_az_fps_follow` framework keys,
-  strips them to compute the user-visible query string, resolves the target route via the
-  adapter's `resolve_route/3` callback, runs middlewares, and returns:
+  (`[{binary(), binary() | true}]`), reads the `_az_path`, `_az_reconnect`, `_az_fps_follow`, and
+  `_az_caps` framework keys (`_az_caps` is a JSON object of native-shell capabilities; an
+  undecodable or non-object value is treated as "no capabilities" rather than crashing the
+  upgrade), strips them to compute the user-visible query string, resolves the target route via
+  the adapter's `resolve_route/3` callback, runs middlewares, and returns:
   - `{halt, az:request()}` -- middleware blocked the upgrade; caller extracts the native raw
     via `arizona_req:raw/1` to emit its transport response
   - `not_found` -- the client-supplied `_az_path` did not resolve to a live route; the caller
     rejects the upgrade with `404` (never crashes on the attacker-controllable path)
   - `{cont, State}` -- `State` is a map carrying `handler`, `bindings`, `on_mount`, `req`,
-    `reconnect`, `fps_follow` that the caller threads into `arizona_socket:init/4`
+    `reconnect`, `fps_follow`, `capabilities` that the caller threads into `arizona_socket:init/4`
 
 `arizona_roadrunner_ws` collapses to a few lines that call `parse_qs`, invoke
 `arizona_ws:prepare/3`, and wire the result into roadrunner's callback contract.
@@ -1243,8 +1244,10 @@ renders to page HTML, then optionally injects the rendered page into mount bindi
 `inner_content` -- as an opaque nested template, not iodata (see **Slots** below)
 -- and passes the bindings to the layout's `render/1`. The layout uses `?html` with `az_nodiff` on
 the root element -- a stateless HTML shell (DOCTYPE, head, body, scripts) with no markers or `az`
-attributes. When layout is absent, the page is rendered directly without a wrapper. Route config
-provides `handler`, `layout`, `bindings`, `on_mount`, and `middlewares`. URL data (path bindings,
+attributes. `layouts` is always a list, applied outermost-first (`[Root, Section]` produces
+`Root(Section(Page))`); an empty list renders the page directly, with no wrapper. Route config
+provides `bindings`, `on_mount`, `layouts`, and `middlewares` -- the single canonical
+`t:arizona_live:route_opts/0`. URL data (path bindings,
 query params) does NOT flat-merge into Bindings -- a route opts into
 `arizona_middleware:extract/1` middlewares (or `arizona_middleware:put_request/2`) to project
 what its handler needs. Middleware halts that call
@@ -1296,11 +1299,14 @@ parity with HTTP init and WS upgrade). If middleware halts with `arizona_req:red
 emits `[arizona_js:navigate(Location)]` as a client effect -- no `arizona_live:navigate` call
 happens; the browser pushes the new URL and the fresh HTTP handshake runs middleware again on
 the redirect target. On `cont`, `arizona_live:navigate/4` is called. Before mounting the new
-handler, the framework cancels pending `send_after` timers and calls the old root handler's
-`unmount/1` callback (if exported). Propagation to children is opt-in -- the root can broadcast
-via pubsub in its `unmount/1`. Then the new handler is mounted and gen_server state is reset.
-Returns `{ok, NewViewId, PageHTML}`. WS handler sends `[OP_REPLACE, OldViewId, PageHTML]`.
-Browser back/forward also triggers navigate via `popstate`.
+handler it cancels every pending `send_after` timer (`cancel_pending_timers/0`, over the whole
+`$arizona_timers` registry) and then unmounts the outgoing page **children first, then the root**
+(`unmount_removed_views/1` over the old views map, then `arizona_stateful:call_unmount/2` on the
+old root). Discarding the page is a removal, so it unmounts exactly like a diff removal does, and
+`terminate/2` uses the same order for any exit reason -- a child's `unmount/1` always runs while
+its parent is still mounted, and no handler has to propagate unmount by hand. Then the new handler
+is mounted and gen_server state is reset. Returns `{ok, NewViewId, PageHTML}`. WS handler sends
+`[OP_REPLACE, OldViewId, PageHTML]`. Browser back/forward also triggers navigate via `popstate`.
 
 **SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS sends
 `["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for navigate, then
@@ -1696,6 +1702,11 @@ roadrunner's callbacks and Arizona's shared pipeline:
 - `arizona_roadrunner_http` -- HTTP handler; delegates to `arizona_http:render/3`
 - `arizona_roadrunner_ws` -- WebSocket handler; delegates the upgrade to `arizona_ws:prepare/3`
   and forwards frames to `arizona_socket`
+- `arizona_roadrunner_controller` -- controller-route handler; runs the middleware pipeline
+  (Origin check default-on), restores the route's `state` into the request, then dispatches
+  `Handler:Action/1` (the `action` opt, default `handle`)
+- `arizona_roadrunner_resp` -- response side; `flush/2` folds the request's stashed headers and
+  cookies onto any handler response shape, and calls `arizona_req:commit_session/1`
 - `arizona_roadrunner_reload` -- dev-mode SSE reload endpoint
 - `arizona_roadrunner_req` -- implements the `arizona_req` behaviour (the request abstraction
   consumed by handlers), including the optional `resolve_route/3` for SPA navigate
