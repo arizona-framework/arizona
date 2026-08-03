@@ -58,6 +58,11 @@ unchanged module costs one `stat` per wave, not repeated full reads. The wave's
 just-reloaded modules are evicted up front (their beams were rewritten, and an
 mtime has whole-second resolution), so their fresh facts are always re-read.
 
+The cache table is created and owned by `arizona_sup` (`create_table/0`), not by
+whichever process runs a check, so that "one stat" holds for **every** caller --
+including the dev MCP tools, whose checks run in a per-dispatch process that
+exits as soon as it has answered.
+
 The whole pass is **best-effort**: it runs only on a successful reload (dev
 mode), finds nothing and logs nothing on a clean wave, and never crashes or
 interferes with the reload -- `check/1` wraps everything in a catch-all.
@@ -67,6 +72,7 @@ interferes with the reload -- `check/1` wraps everything in a catch-all.
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([create_table/0]).
 -export([check/1]).
 -export([reloaded_modules/1]).
 -export([candidate_modules/0]).
@@ -82,6 +88,8 @@ interferes with the reload -- `check/1` wraps everything in a catch-all.
 %% stale_modules/1 need no entry -- arizona_dev_mcp's reloader_status calls them.)
 -ignore_xref([reloaded_modules/1]).
 -ignore_xref([broken_edges/2]).
+%% Called by `arizona_sup:init/1`.
+-ignore_xref([create_table/0]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -98,9 +106,10 @@ interferes with the reload -- `check/1` wraps everything in a catch-all.
 %% --------------------------------------------------------------------
 
 %% The cross-wave beam-facts cache: one row per module, keyed by the beam
-%% file's path + mtime. Created lazily by whichever process runs the first
-%% check (the watcher in dev mode) and owned by it -- losing the owner just
-%% drops a cache, rebuilt on the next wave.
+%% file's path + mtime. Created by `arizona_sup:init/1` (`create_table/0`) and
+%% owned by the supervisor, so it spans the node's lifetime -- see that
+%% function for why the owner has to be stable. With no arizona app running
+%% there is no table and the facts are simply read uncached.
 -define(CACHE, arizona_reloader_beam_cache).
 
 %% --------------------------------------------------------------------
@@ -117,6 +126,27 @@ interferes with the reload -- `check/1` wraps everything in a catch-all.
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
+
+-doc """
+Creates the beam-facts cache table. Called once by `arizona_sup:init/1`, so the
+**supervisor** owns it and the cache spans the node's lifetime.
+
+The owner has to be stable because the checks run from wherever the caller
+happens to be: the watcher process on a reload wave, but also a per-dispatch
+`spawn_link`ed MCP worker that exits as soon as it has answered. Creating the
+table on demand made the first such caller its owner, so the cache died with a
+worker that lived microseconds -- every MCP call then re-read every beam, and a
+concurrent caller could see the table disappear between its own existence check
+and its lookup.
+
+Not gated on the reloader being enabled: the dev MCP drift check calls in
+regardless, and an empty named table is a negligible footprint (the same
+reasoning `arizona_mcp_sup` applies to its registry).
+""".
+-spec create_table() -> ok.
+create_table() ->
+    ?CACHE = ets:new(?CACHE, [named_table, public, {read_concurrency, true}]),
+    ok.
 
 -doc """
 Runs the consistency pass over the wave described by `Files` (the changed
@@ -225,8 +255,10 @@ do_check(Files) ->
     end.
 
 evict(Mods) ->
-    ok = ensure_cache(),
-    lists:foreach(fun(Mod) -> true = ets:delete(?CACHE, Mod) end, Mods).
+    case ets:whereis(?CACHE) of
+        undefined -> ok;
+        Cache -> lists:foreach(fun(Mod) -> true = ets:delete(Cache, Mod) end, Mods)
+    end.
 
 log_broken_edges(Edges) ->
     lists:foreach(fun log_broken_edge/1, Edges).
@@ -276,14 +308,30 @@ beam_facts(Mod) ->
             unreadable_facts()
     end.
 
+%% No table at all -- no arizona app running, so a direct call from a tool or a
+%% test -- is not an error: the check just costs a beam read.
+%%
+%% This is NOT a guard against the table disappearing mid-read. Holding a tid
+%% does not keep a table alive: once the owner dies, a lookup by tid raises
+%% `badarg` exactly as a lookup by name would. What makes the read safe is the
+%% OWNER -- `arizona_sup` creates the table at boot and holds it for the node's
+%% lifetime, so the only window is the app shutting down, and the reload path
+%% runs inside `check/1`'s catch-all regardless. Resolving once still buys one
+%% thing: the lookup and the insert below address the same table, so the pair
+%% cannot span a re-created one.
 cached_beam_facts(Mod, Path, Mtime) ->
-    ok = ensure_cache(),
-    case ets:lookup(?CACHE, Mod) of
+    case ets:whereis(?CACHE) of
+        undefined -> read_beam_facts(Mod, Path);
+        Cache -> cached_beam_facts(Cache, Mod, Path, Mtime)
+    end.
+
+cached_beam_facts(Cache, Mod, Path, Mtime) ->
+    case ets:lookup(Cache, Mod) of
         [{Mod, Path, Mtime, Facts}] ->
             Facts;
         _StaleOrMissing ->
             Facts = read_beam_facts(Mod, Path),
-            true = ets:insert(?CACHE, {Mod, Path, Mtime, Facts}),
+            true = ets:insert(Cache, {Mod, Path, Mtime, Facts}),
             Facts
     end.
 
@@ -297,21 +345,6 @@ read_beam_facts(Mod, Path) ->
 
 unreadable_facts() ->
     #{imports => [], disk_vsn => unknown}.
-
-ensure_cache() ->
-    case ets:whereis(?CACHE) of
-        undefined ->
-            try
-                _ = ets:new(?CACHE, [named_table, public, {read_concurrency, true}]),
-                ok
-            catch
-                %% Lost the creation race to a concurrent wave; the winner's
-                %% table serves this one.
-                error:badarg -> ok
-            end;
-        _Tid ->
-            ok
-    end.
 
 module_vsns(Mod) ->
     {loaded_vsn(Mod), maps:get(disk_vsn, beam_facts(Mod))}.

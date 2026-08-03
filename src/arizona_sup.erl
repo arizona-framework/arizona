@@ -4,7 +4,10 @@ Top-level supervisor for the Arizona application.
 
 Always supervises `arizona_pubsub` (the `pg`-based pubsub scope) and
 `arizona_mcp_sup` (the MCP session supervisor, which owns the session
-registry and starts per-session processes on demand). Also supervises one
+registry and starts per-session processes on demand), and owns the hot
+reloader's beam-facts cache table (`arizona_reloader_consistency:create_table/0`,
+created in `init/1` so the cache outlives the short-lived processes that read
+it). Also supervises one
 `arizona_watcher` per rule when the dev-mode reloader is enabled via the
 `reloader` application env, and the configured server-side session store when
 the `session_store` env names a backend that exports `child_spec/0` (e.g.
@@ -68,6 +71,12 @@ start_link() ->
 init(#{}) ->
     Reloader = arizona_config:get_env(reloader, #{}),
     ok = log_reloader_state(Reloader),
+    %% Owned by this process so it spans the node's lifetime: the checks that
+    %% read it run from short-lived callers (the dev MCP dispatch worker), and a
+    %% cache owned by one of those dies with it. Ungated for the same reason
+    %% `arizona_mcp_sup`'s registry is -- an empty named table costs nothing and
+    %% the dev MCP drift check calls in whether the reloader is enabled or not.
+    ok = arizona_reloader_consistency:create_table(),
     Children =
         [pubsub_spec(), mcp_sup_spec()] ++ store_specs() ++ watcher_specs(Reloader),
     {ok, {#{strategy => one_for_one}, Children}}.

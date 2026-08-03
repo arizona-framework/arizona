@@ -18,10 +18,25 @@ Two utilities consumed across the framework:
 -ignore_xref([did_you_mean/2]).
 -ignore_xref([raise_or_propagate/6]).
 
+%% --------------------------------------------------------------------
+%% Macros
+%% --------------------------------------------------------------------
+
+%% Ceiling on the edit distance a suggestion may have, whatever the target's
+%% length. A typo is one or two edits; beyond that it is a different word, and
+%% letting the budget grow with the key (the old `Len div 4`) suggested keys 25%
+%% different for a long one.
+-define(MAX_DISTANCE, 2).
+
 -doc """
 Returns the candidate closest to `Target` by Levenshtein edit distance, or
-`undefined` when nothing is close enough. The threshold scales with the
-target length so very short keys must match almost exactly.
+`undefined` when nothing is close enough.
+
+The threshold is **at most half the target's length, and never more than
+`?MAX_DISTANCE` edits**, so a very short key must match almost exactly: a
+one-character key has no near miss at all (every other one is 100% different),
+and a two-character key tolerates one edit but not two. A key of four bytes or
+more gets the flat typo budget, which still suggests `counter` for `count`.
 """.
 -spec did_you_mean(Target, Candidates) -> Match | undefined when
     Target :: term(),
@@ -31,7 +46,7 @@ did_you_mean(_Target, []) ->
     undefined;
 did_you_mean(Target, Candidates) ->
     TargetBin = to_bin(Target),
-    Threshold = max(2, byte_size(TargetBin) div 4),
+    Threshold = min(byte_size(TargetBin) div 2, ?MAX_DISTANCE),
     Scored = [{distance(TargetBin, to_bin(C)), C} || C <- Candidates],
     case lists:sort(Scored) of
         [{D, Match} | _] when D =< Threshold, D > 0 -> Match;

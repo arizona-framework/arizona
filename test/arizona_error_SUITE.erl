@@ -8,7 +8,10 @@
     did_you_mean_no_match_returns_undefined/1,
     did_you_mean_empty_candidates_returns_undefined/1,
     did_you_mean_exact_match_returns_undefined/1,
-    did_you_mean_short_target_strict_threshold/1
+    did_you_mean_short_target_strict_threshold/1,
+    did_you_mean_one_char_target_never_matches/1,
+    did_you_mean_two_char_target_rejects_total_mismatch/1,
+    did_you_mean_prefix_typo_still_matches/1
 ]).
 -export([raise_or_propagate_retags_at_the_callback/1]).
 -export([raise_or_propagate_propagates_other_arity_of_same_name/1]).
@@ -29,7 +32,10 @@ groups() ->
             did_you_mean_no_match_returns_undefined,
             did_you_mean_empty_candidates_returns_undefined,
             did_you_mean_exact_match_returns_undefined,
-            did_you_mean_short_target_strict_threshold
+            did_you_mean_short_target_strict_threshold,
+            did_you_mean_one_char_target_never_matches,
+            did_you_mean_two_char_target_rejects_total_mismatch,
+            did_you_mean_prefix_typo_still_matches
         ]},
         {raise_or_propagate, [parallel], [
             raise_or_propagate_retags_at_the_callback,
@@ -70,6 +76,25 @@ did_you_mean_short_target_strict_threshold(Config) when is_list(Config) ->
     %% relative to the 5-char candidate -- it's too large for the 2-char
     %% target.
     ?assertEqual(undefined, arizona_error:did_you_mean(ab, [hello])).
+
+did_you_mean_one_char_target_never_matches(Config) when is_list(Config) ->
+    %% A one-character key has no near miss: every other one-character key is
+    %% 100% different. The old absolute floor of 2 swallowed the whole relative
+    %% term for any key up to 11 bytes, so `x` "meant" `y`.
+    ?assertEqual(undefined, arizona_error:did_you_mean(x, [y])),
+    ?assertEqual(undefined, arizona_error:did_you_mean(x, [y, z, a])).
+
+did_you_mean_two_char_target_rejects_total_mismatch(Config) when is_list(Config) ->
+    %% Same length, nothing in common -- distance 2 over a 2-char key. It used
+    %% to suggest `xy` for `id`; at most half a short key may differ.
+    ?assertEqual(undefined, arizona_error:did_you_mean(id, [xy])),
+    %% One of two characters still counts as a near miss.
+    ?assertEqual(is, arizona_error:did_you_mean(id, [is])).
+
+did_you_mean_prefix_typo_still_matches(Config) when is_list(Config) ->
+    %% The behavior worth keeping: a real key that is a two-character extension
+    %% of what was typed is still suggested.
+    ?assertEqual(counter, arizona_error:did_you_mean(count, [id, title, counter])).
 
 %% --- raise_or_propagate/6 ------------------------------------------------
 

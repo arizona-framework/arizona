@@ -23,7 +23,9 @@ them directly errors with `parse_transform_not_applied`.
 
 `inner_content/1` is the only function that does real runtime work
 not delegated to `arizona_template`. It extracts the `inner_content`
-binding, used by stateless layouts to render the wrapped page.
+binding, used by stateless layouts to render the wrapped page. The
+value is an opaque nested template for a content slot -- see the
+function's own docs.
 """.
 
 %% --------------------------------------------------------------------
@@ -155,10 +157,42 @@ with(Keys, Bindings) ->
     arizona_template:with(Keys, Bindings).
 
 -doc """
-Returns the `inner_content` binding from a layout's bindings map.
+Returns the `inner_content` binding from a layout's bindings map -- the rendered
+page this layout wraps. Used by stateless layout modules, normally through the
+`?inner_content` macro, to place the wrapped page content.
 
-Used by stateless layout modules to render the wrapped page content.
-Errors with `{badkey, inner_content}` if not present.
+**Opaque, and it goes in a content slot whole.** The value is a nested template
+(`#{s := [Page], d := []}`) -- not iodata, not a binary. That is what lets a
+content slot splice the page verbatim instead of copying and UTF-8-re-decoding
+it once per layout layer.
+
+Placements that work, whether the slot is the layout's own or one it hands the
+page on to (the page renders as itself, unescaped, in all of them):
+
+```erlang
+?html([~"<main>", ?inner_content, ~"</main>"])                      %% the slot
+?html([case Hide of true -> ~""; false -> ?inner_content end])      %% a case tail
+?html([?stateless(fun body/1, #{content => ?inner_content})])       %% a child's prop
+```
+
+Placements that raise, because the value is opaque:
+
+- an **attribute** value -- `bad_template_value`, carrying the whole page in the
+  error term (a rendered page inside an attribute has no meaning);
+- **measured or inspected** -- `iolist_size(az:inner_content(Bindings))` raises
+  `badarg`, as does anything else expecting iodata;
+- wrapped in `?raw/1` -- `bad_template_value`. There is nothing to opt out of:
+  a content slot already splices the page unescaped, so `?raw(?inner_content)`
+  is redundant. Drop the wrapper;
+- **beside other values in one slot** -- `[~"<hr>", ?inner_content]` raises
+  `badarg`. Give the page a slot of its own:
+  `?html([~"<hr>", ?inner_content])`.
+
+The value stays opaque rather than paying the per-layer copy that would make
+those degrade quietly.
+
+Errors with `{badkey, inner_content}` when the bindings carry no page, i.e. when
+the module was rendered as something other than a layout.
 """.
 -spec inner_content(Bindings) -> term() when
     Bindings :: map().

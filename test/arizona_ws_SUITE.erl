@@ -91,6 +91,9 @@
     controller_dispatches_action_by_verb/1,
     controller_missing_action_errors/1,
     controller_flushes_stash_onto_stream_response/1,
+    controller_put_req_commits_cookie_mode_session_write/1,
+    controller_put_req_commits_action_session_write/1,
+    controller_without_put_req_flushes_pre_action_req/1,
     bare_halt_is_forbidden_on_every_dispatcher/1,
     crash_event_closes/1,
     crash_info_closes/1,
@@ -190,7 +193,15 @@ groups() ->
         controller_dispatches_action_by_verb,
         controller_missing_action_errors,
         controller_flushes_stash_onto_stream_response,
+        controller_put_req_commits_cookie_mode_session_write,
         bare_halt_is_forbidden_on_every_dispatcher
+    ],
+    %% Store-mode session tests: their own group so the `session_store` app env
+    %% (and the store owner process) are set up and torn down around them
+    %% instead of leaking cookie-mode assumptions into the rest of the suite.
+    SessionStore = [
+        controller_put_req_commits_action_session_write,
+        controller_without_put_req_flushes_pre_action_req
     ],
     Crash = [
         crash_event_closes,
@@ -199,8 +210,11 @@ groups() ->
         normal_exit_closes
     ],
     [
-        {roadrunner, [sequence], [{group, basic}, {group, crash_recovery}]},
+        {roadrunner, [sequence], [
+            {group, basic}, {group, session_store}, {group, crash_recovery}
+        ]},
         {basic, [sequence], Basic},
+        {session_store, [sequence], SessionStore},
         {crash_recovery, [sequence], Crash}
     ].
 
@@ -422,6 +436,16 @@ init_per_group(roadrunner, Config) ->
         {post, <<"/_test/users">>, arizona_users_controller, #{action => create}},
         %% Route naming an action the controller does not export (error path).
         {get, <<"/_test/bad-action">>, arizona_users_controller, #{action => nope}},
+        %% Cookie-mode (no session_store) session write through the same
+        %% req/1 -> write -> put_req/2 round trip.
+        {post, <<"/_test/session-write">>, arizona_session_write_controller, #{}},
+        %% Store-mode logout: the action mutates the post-middleware arizona_req
+        %% and threads it back with arizona_controller:put_req/2 (`/logout`), or
+        %% deliberately does not (`/logout-dropped`), pinning the boundary.
+        {post, <<"/_test/logout">>, arizona_logout_controller, #{}},
+        {post, <<"/_test/logout-dropped">>, arizona_logout_controller, #{
+            action => handle_dropped
+        }},
         %% Non-buffered ({stream, ...}) controller response on a route whose
         %% middleware stashes a response cookie -- the flush must reach it.
         {get, <<"/_test/stream-cookie">>, arizona_stream_controller, #{
@@ -444,9 +468,22 @@ init_per_group(roadrunner, Config) ->
         routes => Routes
     }),
     [{port, Port}, {server_mod, ServerMod} | Config];
+init_per_group(session_store, Config) ->
+    %% Store mode for this group only: the mode switch is read per request
+    %% (`session_store` app env), and the ETS store's table needs a live owner.
+    application:set_env(arizona, session_store, arizona_session_store_ets),
+    {ok, Pid} = arizona_session_store_ets:start_link(),
+    %% Unlink so the store outlives this init process and stays reachable from
+    %% the per-testcase processes and the server's request processes.
+    true = unlink(Pid),
+    [{store, Pid} | Config];
 init_per_group(_Group, Config) ->
     Config.
 
+end_per_group(session_store, Config) ->
+    ok = gen_server:stop(proplists:get_value(store, Config)),
+    _ = application:unset_env(arizona, session_store),
+    ok;
 end_per_group(roadrunner, Config) ->
     ServerMod = ?config(server_mod, Config),
     _ = ServerMod:stop(ws_test),
@@ -855,6 +892,60 @@ controller_missing_action_errors(Config) ->
     %% clear missing_action error.
     Resp = http_req(Config, "GET", "/_test/bad-action", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)).
+
+controller_put_req_commits_cookie_mode_session_write(Config) ->
+    %% Cookie mode -- the default, and the mode the store-mode group's tests
+    %% cannot speak for. A session written on the post-middleware request and
+    %% threaded back with put_req/2 reaches the client as the encrypted
+    %% `Set-Cookie`; without the thread-back the response carries no session
+    %% cookie at all.
+    Resp = http_req(Config, "POST", "/_test/session-write", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, ~"200 OK")),
+    ?assertEqual(#{~"user_id" => ~"u42"}, arizona_session:decode(session_cookie_value(Resp))).
+
+%% The `az_session` cookie value carried by a raw HTTP response's Set-Cookie line.
+session_cookie_value(Resp) ->
+    Name = arizona_session:cookie_name(),
+    {Start, Len} = binary:match(Resp, <<Name/binary, "=">>),
+    Rest = binary:part(Resp, Start + Len, byte_size(Resp) - Start - Len),
+    [Value | _] = binary:split(Rest, ~";"),
+    Value.
+
+controller_put_req_commits_action_session_write(Config) ->
+    %% An action's OWN session write reaches the response and the store: the
+    %% logout controller clears the session on the post-middleware arizona_req
+    %% and threads it back with arizona_controller:put_req/2. Without the
+    %% writer the dispatcher recovered the PRE-action request from the stash,
+    %% so `clear_session/1` sent no clearing cookie and left the store entry
+    %% live for its full TTL -- a logout that revoked nothing.
+    Id = seed_stored_session(),
+    Resp = http_req(Config, "POST", "/_test/logout", [stored_session_cookie(Id)]),
+    ?assertNotEqual(nomatch, binary:match(Resp, ~"200 OK")),
+    ?assertNotEqual(nomatch, binary:match(Resp, ~"az_session=;")),
+    ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
+
+controller_without_put_req_flushes_pre_action_req(Config) ->
+    %% The boundary, pinned explicitly: an action that mutates the request but
+    %% returns the one it was given leaves the PRE-action request flushed -- no
+    %% clearing cookie, store entry untouched. The thread-back is the documented
+    %% opt-in, not an accident of how the action happens to return.
+    Id = seed_stored_session(),
+    Resp = http_req(Config, "POST", "/_test/logout-dropped", [stored_session_cookie(Id)]),
+    ?assertNotEqual(nomatch, binary:match(Resp, ~"200 OK")),
+    ?assertEqual(nomatch, binary:match(Resp, ~"az_session=")),
+    ?assertMatch({ok, #{~"user_id" := ~"u1"}}, arizona_session_store_ets:get(Id)).
+
+%% A live server-side session: a fresh id holding a marker map, put straight
+%% into the store the way a login action would.
+seed_stored_session() ->
+    Id = arizona_session:new_id(),
+    ok = arizona_session_store_ets:put(Id, #{~"user_id" => ~"u1"}, arizona_session:max_age()),
+    Id.
+
+%% The `Cookie:` header line a browser holding `Id`'s signed session cookie sends.
+stored_session_cookie(Id) ->
+    {Name, Value, _Opts} = arizona_session:set_cookie_id(Id),
+    ["Cookie: ", Name, "=", Value, "\r\n"].
 
 bare_halt_is_forbidden_on_every_dispatcher(Config) ->
     %% A shared auth-gate middleware that halts without stashing a redirect or a

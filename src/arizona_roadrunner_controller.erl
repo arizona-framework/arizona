@@ -70,10 +70,12 @@ handle(Req) ->
             %% Flush the action's OWN arizona_req, recovered from the request it
             %% returned: an action that writes the session/flash
             %% (`put_session/3`, `clear_session/1`, ...) through
-            %% `arizona_controller:req/1` must have those writes serialized and
-            %% committed, not silently dropped in favour of the pre-action copy.
-            %% An action that returns a request without the stash (a hand-built
-            %% one) falls back to the pipeline's own.
+            %% `arizona_controller:req/1` threads the mutated request back with
+            %% `arizona_controller:put_req/2`, and those writes are then
+            %% serialized and committed rather than dropped in favour of the
+            %% pre-action copy. An action that threads nothing back (or returns
+            %% a hand-built request without the stash) falls back to the
+            %% pipeline's own -- the read-only path.
             FlushReq = action_arizona_req(Req1, ArzReq1),
             %% Drop the stash before roadrunner sees the request again: it holds
             %% the DECRYPTED session, and a handler crash logs the request.

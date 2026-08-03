@@ -1086,8 +1086,9 @@ the native req in an `arizona_req:request()`, runs any route middlewares
 `arizona_render:render_view_to_iolist(Handler, Opts)` where Opts may contain
 `layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/2`
 mounts the page via `arizona_stateful:call_mount/2`, applies `on_mount` hooks,
-renders to page HTML, then optionally injects the page HTML into mount bindings as `inner_content`
-and passes the bindings to the layout's `render/1`. The layout uses `?html` with `az_nodiff` on
+renders to page HTML, then optionally injects the rendered page into mount bindings as
+`inner_content` -- as an opaque nested template, not iodata (see **Slots** below)
+-- and passes the bindings to the layout's `render/1`. The layout uses `?html` with `az_nodiff` on
 the root element -- a stateless HTML shell (DOCTYPE, head, body, scripts) with no markers or `az`
 attributes. When layout is absent, the page is rendered directly without a wrapper. Route config
 provides `handler`, `layout`, `bindings`, `on_mount`, and `middlewares`. URL data (path bindings,
@@ -1153,18 +1154,31 @@ templates are recursively rendered/diffed with their own snapshots. The views ma
 accumulates only children rendered this cycle. Children removed from the template (conditional
 rendering) are pruned from the views map and their `unmount/1` callback is called if exported.
 
-**Slots:** Slots are implemented via stateless children and bindings. A layout receives the page
-HTML via a configurable binding key (e.g. `inner_content`) in `render/1`. Stateless components
-receive props with arbitrary content:
+**Slots:** Slots are implemented via stateless children and bindings. A layout receives the
+rendered page under the `inner_content` binding, read with the `?inner_content` macro. Stateless
+components receive props with arbitrary content:
 
 ```erlang
-%% Layout slot -- inner_content is the page HTML (layout uses ?html with az_nodiff)
+%% Layout slot -- ?inner_content is the rendered page
 render(Bindings) ->
-    ?html({body, [az_nodiff], [maps:get(inner_content, Bindings)]}).
+    ?html({body, [], [?inner_content]}).
 
 %% Component slot -- via stateless child props
 ?stateless(render_card, #{label => ~"Hello", content => SomeTemplate})
 ```
+
+Use the **macro**, not `maps:get(inner_content, Bindings)`: the parse transform recognizes
+`?inner_content` as a block, which is what marks the whole layout `az-nodiff` (a layout renders once
+at SSR and is never diffed, so it needs no `az` targets). A raw `maps:get` is invisible to it, so the
+layout keeps diff markers and the page lands in an ordinary escaping value slot.
+
+The page arrives as an **opaque nested template** (`#{s := [Page], d := []}`), not iodata and not a
+binary. That is what lets a content slot splice it verbatim rather than copying and
+UTF-8-re-decoding the whole page once per layout layer. Consequences: it belongs in a content slot
+whole -- fine in a `case` tail or handed to a child as a prop, but `iolist_size/1` on it raises
+`badarg`, and in an **attribute** value it raises `bad_template_value` carrying the whole page in the
+error term. `az:inner_content/1` documents the full set of accepted and rejected placements;
+`arizona_render_SUITE`'s `ssr_inner_content_*` cases pin them.
 
 ## Handler callbacks
 

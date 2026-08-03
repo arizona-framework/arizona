@@ -402,11 +402,30 @@ finish_ssr(Handler, Bindings, Opts) ->
 %% Wraps `Inner` with each layer. List is outermost-first, so the page
 %% HTML ends up nested inside every layer in the order given:
 %% `apply_layouts([Root, Sub], Page, _)` → `Root(Sub(Page))`.
+%%
+%% The inner content is handed over as a single-static, no-dynamics template --
+%% which is what finished output *is* -- so the layout's `?inner_content` slot
+%% splices it verbatim: `zip_d/3` walks statics straight into the output iolist,
+%% no copy, no decode. As a bare list it would instead reach
+%% `arizona_template:to_bin/1`, whose list clause decodes chardata with
+%% `unicode:characters_to_binary/1` -- copying and full-UTF-8-validating the
+%% entire page once per layer (twice for the nested `[Root, Section]` form), and
+%% turning a single non-UTF-8 byte anywhere on the page into a
+%% `bad_template_value` blamed on the innocent layout. That clause is right for
+%% a *user* value and stays; the page is not one.
+%%
+%% Deliberately NOT a new tagged tuple. An escaping content slot escapes only
+%% what renders to a binary, so any tuple this module unwrapped back to raw
+%% output would be an escape bypass the moment a binding carried the same shape
+%% -- unlike `{arizona_raw, _}`/`{arizona_effect, _}`, which are safe precisely
+%% because `arizona_template:classify_trusted/1` knows them and re-escapes.
+%% The `#{s, d}` shape adds no surface: a binding holding one already splices
+%% raw (a nested template is exactly what it claims to be).
 apply_layouts([], Inner, _Bindings) ->
     Inner;
 apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
     Wrapped = apply_layouts(Rest, Inner, Bindings),
-    Tmpl = Mod:Fun(Bindings#{inner_content => Wrapped}),
+    Tmpl = Mod:Fun(Bindings#{inner_content => #{s => [Wrapped], d => []}}),
     render_to_iolist(Tmpl).
 
 %% Triple walker -- like zip/3 but consumes `[{Az, V, Deps}]` directly

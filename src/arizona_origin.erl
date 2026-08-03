@@ -30,7 +30,9 @@ deployment for no gain -- the hop the check can see is already unencrypted.
 
 - `check_origin` (`boolean()`, default `true`) -- global switch; `false` allows every origin.
 - `csrf_origins` (`[binary()]`, default `[]`) -- extra trusted origins beyond same-origin
-  (e.g. a reverse proxy that rewrites `Host`, or a known partner origin).
+  (e.g. a reverse proxy that rewrites `Host`, or a known partner origin). A string entry
+  (`"https://app.example"`) is accepted as well; anything that is not an origin in some
+  iodata spelling raises `{invalid_csrf_origin, Entry}` naming it.
 """.
 
 %% --------------------------------------------------------------------
@@ -38,6 +40,10 @@ deployment for no gain -- the hop the check can see is already unencrypted.
 %% --------------------------------------------------------------------
 
 -export([check/3]).
+-export([format_error/2]).
+
+%% Called by `erl_error` via the `error_info` annotation, not directly.
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -60,6 +66,25 @@ check(Origin, Host, Scheme) ->
         _Enabled ->
             do_check(Origin, Host, Scheme)
     end.
+
+-doc """
+Renders the error raised when a `csrf_origins` entry is not an origin. Picked up
+by `erl_error` via the `error_info` annotation.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({invalid_csrf_origin, Origin}, _ST) ->
+    #{
+        general => io_lib:format(
+            "the `csrf_origins` application env entry ~0tp is not an origin. Each entry "
+            "is an origin binary such as <<\"https://app.example\">> (a string like "
+            "\"https://app.example\" is accepted too); an entry that is neither can "
+            "never match a request's `Origin` header.",
+            [Origin]
+        )
+    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -96,7 +121,7 @@ same_origin(_Origin, undefined, _Scheme) ->
 same_origin(Origin, Host, Scheme) ->
     case binary:split(Origin, ~"://") of
         [OriginScheme, Authority] ->
-            same_scheme(OriginScheme, Scheme) andalso string:equal(Authority, Host, true);
+            same_scheme(OriginScheme, Scheme) andalso ascii_equal(Authority, Host);
         _ ->
             false
     end.
@@ -109,13 +134,13 @@ same_origin(Origin, Host, Scheme) ->
 same_scheme(_OriginScheme, http) ->
     true;
 same_scheme(OriginScheme, https) ->
-    string:equal(OriginScheme, ~"https", true).
+    ascii_equal(OriginScheme, ~"https").
 
 %% Match case-insensitively, consistent with `same_origin/2`: browser Origins are
 %% already lowercase, so an uppercase `csrf_origins` entry is an operator typo that
 %% should still match its lowercased origin, not silently 403.
 allowlisted(Origin) ->
-    lists:member(string:lowercase(Origin), allowlist()).
+    lists:member(ascii_lowercase(Origin), allowlist()).
 
 %% The lowercased allowlist, cached in persistent_term keyed by the RAW app-env
 %% value (a cheap read), so the `{env, ...}` resolution and per-entry lowercasing
@@ -131,7 +156,45 @@ allowlist() ->
         {Raw, Lowered} ->
             Lowered;
         _Other ->
-            Lowered = [string:lowercase(O) || O <- arizona_config:resolve(Raw)],
+            Lowered = [normalize_origin(O) || O <- arizona_config:resolve(Raw)],
             persistent_term:put({?MODULE, allowlist}, {Raw, Lowered}),
             Lowered
     end.
+
+%% Normalize one configured origin to the lowercased binary the compare needs.
+%% The documented type is `[binary()]`, but `"https://app.example"` is the single
+%% easiest sys.config typo and this is the security path, so every iodata
+%% spelling is accepted rather than left to misbehave: a charlist entry used to
+%% build an allowlist that could never match (`lists:member/2` compares it
+%% against a binary `Origin`), silently doing nothing an operator asked for. An
+%% entry that is not iodata at all cannot be guessed at, so it fails naming
+%% itself instead of surfacing as a `badarg` from inside the compare.
+normalize_origin(Origin) when is_binary(Origin) ->
+    ascii_lowercase(Origin);
+normalize_origin(Origin) ->
+    try
+        ascii_lowercase(iolist_to_binary(Origin))
+    catch
+        error:badarg ->
+            erlang:error({invalid_csrf_origin, Origin}, none, [
+                {error_info, #{module => ?MODULE}}
+            ])
+    end.
+
+%% Case-insensitive compare over BYTES, not Unicode codepoints. An origin is
+%% ASCII by RFC 6454, so Unicode casefolding buys nothing -- and it actively
+%% breaks here: `string:equal/3` and `string:lowercase/1` raise `badarg` on
+%% invalid UTF-8, which a client is free to put in an `Origin` header (the
+%% transport permits bytes >= 0x80 in header values). That turned a request
+%% that must simply be refused into a `500`. Byte-wise is also the cheaper
+%% compare on the per-request path.
+ascii_equal(A, A) ->
+    true;
+ascii_equal(A, B) ->
+    ascii_lowercase(A) =:= ascii_lowercase(B).
+
+ascii_lowercase(Bin) ->
+    <<<<(ascii_lower_byte(C))>> || <<C>> <= Bin>>.
+
+ascii_lower_byte(C) when C >= $A, C =< $Z -> C + 32;
+ascii_lower_byte(C) -> C.

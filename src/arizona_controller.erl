@@ -54,6 +54,7 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 -export([reply_effects/2]).
 -export([reply_redirect/1]).
 -export([req/1]).
+-export([put_req/2]).
 -export([bindings/1]).
 
 %% --------------------------------------------------------------------
@@ -64,6 +65,7 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 -ignore_xref([reply_effects/2]).
 -ignore_xref([reply_redirect/1]).
 -ignore_xref([req/1]).
+-ignore_xref([put_req/2]).
 -ignore_xref([bindings/1]).
 
 %% --------------------------------------------------------------------
@@ -122,18 +124,53 @@ route's `state` rides the request to `roadrunner_req:state/1`. Only set by the
 controller dispatcher, so calling it on a request that did not come through a
 controller route crashes.
 
-Writes are honored too: an action that returns the roadrunner request it was
-given (the usual shape) has this request's session/flash/cookie writes
-serialized and committed at flush, so `arizona_req:clear_session/1` in a logout
-action revokes for real. Reading the body is the exception -- use
-`roadrunner_req:body/1` on the roadrunner request, not `arizona_req:body/1` on
-this one, so the advanced body reader rides back out to the transport.
+Reading is the whole contract here. **Writes need the round trip**: read ->
+mutate -> `put_req/2` -> return that roadrunner request from the action. A
+mutated `arizona_req:request()` is an ordinary immutable value, so an action
+that keeps it in a local and returns the roadrunner request unchanged has its
+session/flash/cookie writes dropped -- the dispatcher flushes whatever the
+returned request carries, which is then still the pre-action copy.
+
+```erlang
+handle(Req) ->
+    ArzReq = arizona_req:clear_session(arizona_controller:req(Req)),
+    {arizona_controller:reply_effects([]), arizona_controller:put_req(Req, ArzReq)}.
+```
+
+Reading the body is the exception -- use `roadrunner_req:body/1` on the
+roadrunner request, not `arizona_req:body/1` on this one, so the advanced body
+reader rides back out to the transport.
 """.
 -spec req(RoadrunnerReq) -> arizona_req:request() when
     RoadrunnerReq :: roadrunner_req:request().
 req(RoadrunnerReq) ->
     #{{arizona, req} := ArzReq} = roadrunner_req:private(RoadrunnerReq),
     ArzReq.
+
+-doc """
+Threads a mutated `arizona_req:request()` back onto the roadrunner request, so
+the dispatcher flushes **this** request rather than the pre-action one.
+
+Takes the roadrunner request first, pairing with `req/1` (`req(Req)` reads,
+`put_req(Req, ArzReq)` writes) and with every other arizona writer, which is
+subject-first too (`arizona_req:put_session/3`, `put_resp_cookie/4`).
+
+The writer half of `req/1`. Return the request it gives you from the action and
+the write is serialized and committed at flush: `arizona_req:put_session/3` /
+`clear_session/1` reach the browser as a `Set-Cookie` and (in store mode) the
+server-side store, `put_flash/3` reaches the next request, and
+`put_resp_header/3` / `put_resp_cookie/4` land on the response. A logout action
+that clears the session and threads it back revokes for real.
+
+Only meaningful on a request that came through a controller route (the same
+stash `req/1` reads); an action that never calls this keeps the read-only path,
+where the pipeline's own request is flushed.
+""".
+-spec put_req(RoadrunnerReq, ArzReq) -> RoadrunnerReq when
+    RoadrunnerReq :: roadrunner_req:request(),
+    ArzReq :: arizona_req:request().
+put_req(RoadrunnerReq, ArzReq) ->
+    roadrunner_req:put_private({arizona, req}, ArzReq, RoadrunnerReq).
 
 -doc """
 The bindings the route's middleware pipeline produced -- e.g. `session` from

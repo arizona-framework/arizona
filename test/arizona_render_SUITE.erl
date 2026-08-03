@@ -68,6 +68,16 @@
     nested_each_render/1,
     ssr_layouts_empty_list/1,
     ssr_layouts_nest_outer_first/1,
+    ssr_layout_splices_non_utf8_page_unchanged/1,
+    ssr_layout_splice_adds_no_privileged_tag/1,
+    ssr_inner_content_from_case_branch_unescaped/1,
+    ssr_inner_content_as_stateless_prop_unescaped/1,
+    ssr_inner_content_macro_marks_layout_nodiff/1,
+    ssr_inner_content_rejects_attribute_value/1,
+    ssr_inner_content_rejects_being_measured/1,
+    ssr_inner_content_rejects_raw_wrapper/1,
+    ssr_inner_content_rejects_sibling_in_one_slot/1,
+    ssr_invalid_chardata_user_value_still_errors/1,
     ssr_page_with_child/1,
     ssr_nested_local/1,
     ssr_local_app/1,
@@ -137,6 +147,16 @@ groups() ->
             nested_each_render,
             ssr_layouts_nest_outer_first,
             ssr_layouts_empty_list,
+            ssr_layout_splices_non_utf8_page_unchanged,
+            ssr_layout_splice_adds_no_privileged_tag,
+            ssr_inner_content_from_case_branch_unescaped,
+            ssr_inner_content_as_stateless_prop_unescaped,
+            ssr_inner_content_macro_marks_layout_nodiff,
+            ssr_inner_content_rejects_attribute_value,
+            ssr_inner_content_rejects_being_measured,
+            ssr_inner_content_rejects_raw_wrapper,
+            ssr_inner_content_rejects_sibling_in_one_slot,
+            ssr_invalid_chardata_user_value_still_errors,
             resolve_id_binary,
             resolve_id_template
         ]},
@@ -620,6 +640,124 @@ ssr_layouts_empty_list(Config) when is_list(Config) ->
     ),
     ?assertEqual(nomatch, binary:match(HTML, <<"<!DOCTYPE html>">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"about-page\"">>)).
+
+ssr_layout_splices_non_utf8_page_unchanged(Config) when is_list(Config) ->
+    %% By the time a layout wraps it, the page is framework-produced iodata, not
+    %% a user value -- so wrapping must splice it, never re-decode it as
+    %% chardata. It used to go through `to_bin/1`'s list clause
+    %% (`unicode:characters_to_binary/1`), which copies and full-UTF-8-validates
+    %% the whole page once per layer and turned a single non-UTF-8 byte anywhere
+    %% on it into `{bad_template_value, <the entire page>}` blamed on the
+    %% (innocent) layout -- while the identical page rendered WITHOUT a layout
+    %% was fine. Same bytes, layout or not.
+    Opts = #{bindings => #{title => <<255>>}},
+    Bare = iolist_to_binary(arizona_render:render_view_to_iolist(arizona_static_page, Opts)),
+    Wrapped = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_static_page, Opts#{layouts => [{arizona_outer_layout, render}]}
+        )
+    ),
+    ?assertEqual(<<"<outer>", Bare/binary, "</outer>">>, Wrapped).
+
+ssr_layout_splice_adds_no_privileged_tag(Config) when is_list(Config) ->
+    %% Splicing the page must not mint a tagged tuple that a *binding* could
+    %% also carry: the escaping content slot only escapes when the value renders
+    %% to a binary, so a tuple the renderer unwraps to raw output is an escape
+    %% bypass reachable from user data. An unrecognized tagged tuple in a
+    %% content slot fails closed, `arizona_rendered` (the tag this splice once
+    %% used) included.
+    ?assertError(
+        {arizona_loc, _, {bad_template_value, {arizona_rendered, _}}},
+        arizona_render:render_view_to_iolist(arizona_static_page, #{
+            bindings => #{title => {arizona_rendered, ~"<script>alert(1)</script>"}}
+        })
+    ).
+
+ssr_inner_content_from_case_branch_unescaped(Config) when is_list(Config) ->
+    %% A layout that returns the page from a `case` tail lands it in a VALUE
+    %% slot, which escapes whatever renders to a binary. As iodata the page did
+    %% render to a binary, so the whole thing came out entity-escaped
+    %% (`&lt;div az=&quot;...`) -- markup on the page, not a page. An opaque
+    %% nested template renders as itself.
+    HTML = layout_html(arizona_inner_content_layouts, branch),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<b><div az=")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&lt;div")),
+    %% The page's own dynamic is still escaped -- only the page's markup is not.
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"PAGE&lt;&amp;&gt;")).
+
+ssr_inner_content_as_stateless_prop_unescaped(Config) when is_list(Config) ->
+    %% Same story one level down: handed to a stateless child as a prop, the
+    %% page came back escaped inside the child's slot.
+    HTML = layout_html(arizona_inner_content_layouts, prop),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<div az=")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&lt;div")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"PAGE&lt;&amp;&gt;")).
+
+ssr_inner_content_macro_marks_layout_nodiff(Config) when is_list(Config) ->
+    %% Why the docs say to use the macro and not `maps:get(inner_content, B)`:
+    %% the parse transform recognizes `?inner_content` as a block, and that is
+    %% what marks the whole layout az-nodiff (rendered once at SSR, never
+    %% diffed, so no `az` targets). A raw `maps:get` is invisible to it, so the
+    %% layout keeps a diffable value slot -- visible as an extra marker pair
+    %% wrapping the page, on top of the page's own.
+    ?assertEqual(1, marker_count(layout_html(arizona_inner_content_layouts, branch))),
+    ?assertEqual(2, marker_count(layout_html(arizona_inner_content_layouts, maps_get))).
+
+marker_count(HTML) ->
+    length(binary:matches(HTML, ~"<!--az:")).
+
+ssr_inner_content_rejects_attribute_value(Config) when is_list(Config) ->
+    %% A rendered page inside an attribute has no meaning, and the opaque value
+    %% says so instead of emitting an escaped page as an attribute: the error
+    %% carries the whole page, which is the documented cost of that placement.
+    ?assertError(
+        {bad_template_value, #{s := [_Page], d := []}},
+        layout_html(arizona_inner_content_layouts, attr)
+    ).
+
+ssr_inner_content_rejects_being_measured(Config) when is_list(Config) ->
+    %% Not iodata: `iolist_size/1` (and anything else expecting iodata) raises.
+    ?assertError(badarg, layout_html(arizona_inner_content_layouts, measure)).
+
+ssr_inner_content_rejects_raw_wrapper(Config) when is_list(Config) ->
+    %% `?raw(?inner_content)` has nothing to opt out of -- a content slot already
+    %% splices the page unescaped -- and the opaque value cannot be unwrapped, so
+    %% it raises rather than half-working.
+    ?assertError(
+        {arizona_loc, {arizona_inner_content_layouts, _}, {bad_template_value, _}},
+        layout_html(arizona_inner_content_layouts, raw)
+    ).
+
+ssr_inner_content_rejects_sibling_in_one_slot(Config) when is_list(Config) ->
+    %% The page beside other values in ONE slot makes the slot a chardata list,
+    %% which the opaque value is not part of. It raises; before it silently
+    %% escaped both the sibling and the page, which was not usable output either.
+    ?assertError(
+        {arizona_loc, {arizona_inner_content_layouts, _}, badarg},
+        layout_html(arizona_inner_content_layouts, sibling)
+    ).
+
+%% Renders arizona_static_page under one layout function, with a title carrying
+%% characters that must stay escaped, so a test can tell page markup (spliced)
+%% from page content (escaped) apart in the output.
+layout_html(Mod, Fun) ->
+    iolist_to_binary(
+        arizona_render:render_view_to_iolist(arizona_static_page, #{
+            bindings => #{title => ~"PAGE<&>"},
+            layouts => [{Mod, Fun}]
+        })
+    ).
+
+ssr_invalid_chardata_user_value_still_errors(Config) when is_list(Config) ->
+    %% The other half of the same boundary: `to_bin/1`'s list clause stays in
+    %% force for a genuine USER value, so a binding that is not valid chardata
+    %% still fails loudly rather than emitting mojibake.
+    ?assertError(
+        {arizona_loc, _, {bad_template_value, [<<255>>]}},
+        arizona_render:render_view_to_iolist(
+            arizona_static_page, #{bindings => #{title => [<<255>>]}}
+        )
+    ).
 
 ssr_each_map(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(arizona_each_map, #{})),

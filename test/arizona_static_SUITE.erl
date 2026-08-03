@@ -13,6 +13,8 @@
 -export([default_opts_apply_to_every_spec/1]).
 -export([spec_opts_override_defaults/1]).
 -export([collects_failures/1]).
+-export([failure_carries_render_location/1]).
+-export([failed_entries_cover_every_spec_shape/1]).
 -export([collects_write_errors/1]).
 
 all() ->
@@ -30,6 +32,8 @@ groups() ->
             default_opts_apply_to_every_spec,
             spec_opts_override_defaults,
             collects_failures,
+            failure_carries_render_location,
+            failed_entries_cover_every_spec_shape,
             collects_write_errors
         ]}
     ].
@@ -106,14 +110,59 @@ collects_failures(Config) when is_list(Config) ->
     Dir = subdir(Config, "failures"),
     %% A good spec is written; a spec whose handler does not exist is collected
     %% in Failed (its `mount/1` raises `undef`) without stopping the batch.
-    {[Good], [{BadSpec, Reason}]} = arizona_static:generate(Dir, [
+    {[Good], [{BadSpec, Failure}]} = arizona_static:generate(Dir, [
         {arizona_static_page, ~"ok.html"},
         {nonexistent_handler, ~"bad.html"}
     ]),
     ?assert(filelib:is_regular(Good)),
     ?assertEqual({nonexistent_handler, ~"bad.html"}, BadSpec),
-    ?assertEqual(undef, Reason),
+    %% Class AND stacktrace, not a bare `undef`: one failing page in a 200-page
+    %% build has to say what and where, so the entry keeps the whole exception.
+    ?assertMatch(
+        {error, undef, [{nonexistent_handler, mount, [_Bindings], _Info} | _]}, Failure
+    ),
     ?assertNot(filelib:is_regular(filename:join(Dir, "bad.html"))).
+
+failure_carries_render_location(Config) when is_list(Config) ->
+    Dir = subdir(Config, "failure_location"),
+    %% A render-time crash: the `arizona_loc` wrapper `arizona_render` attaches
+    %% (the template module + line that produced the bad value) must survive
+    %% into the `Failed` entry, alongside the frame that raised.
+    {[], [{_BadSpec, Failure}]} = arizona_static:generate(Dir, [
+        {arizona_static_page, ~"bad.html", #{bindings => #{title => [<<255>>]}}}
+    ]),
+    ?assertMatch(
+        {error, {arizona_loc, {arizona_static_page, _Line}, {bad_template_value, [<<255>>]}}, [
+            {arizona_template, to_bin, _Args, _Info} | _
+        ]},
+        Failure
+    ).
+
+failed_entries_cover_every_spec_shape(Config) when is_list(Config) ->
+    Dir = subdir(Config, "every_shape"),
+    Collide = filename:join(Dir, "collide"),
+    ok = filelib:ensure_dir(Collide),
+    ok = file:write_file(Collide, <<>>),
+    %% One batch with every failing shape at once: a crashing 2-tuple spec, a
+    %% crashing 3-tuple spec, and a write error. `Failed` must hold all three --
+    %% a reporter that matches the SPEC shape or a single failure kind drops the
+    %% ones it does not match and silently under-reports a broken build.
+    {[Good], Failed} = arizona_static:generate(Dir, [
+        {arizona_static_page, ~"ok.html"},
+        {nonexistent_handler, ~"crash2.html"},
+        {arizona_static_page, ~"crash3.html", #{bindings => #{title => [<<255>>]}}},
+        {arizona_static_page, ~"collide/page.html"}
+    ]),
+    ?assert(filelib:is_regular(Good)),
+    ?assertEqual(3, length(Failed)),
+    %% The pair shape the documented reporter destructures, for every entry...
+    Outfiles = [element(2, Spec) || {Spec, _Failure} <:- Failed],
+    ?assertEqual([~"crash2.html", ~"crash3.html", ~"collide/page.html"], Outfiles),
+    %% ...and each failure is one of the two documented kinds.
+    ?assertMatch(
+        [{error, undef, [_ | _]}, {error, {arizona_loc, _, _}, [_ | _]}, {error, _Posix}],
+        [Failure || {_Spec, Failure} <:- Failed]
+    ).
 
 collects_write_errors(Config) when is_list(Config) ->
     Dir = subdir(Config, "write_errors"),
