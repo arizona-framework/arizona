@@ -143,7 +143,17 @@ loop(Session) ->
                 {cont, Session1} -> loop(Session1)
             end;
         {'EXIT', _From, _Reason} ->
-            ok
+            ok;
+        _Other ->
+            %% Anything else is not ours to act on, but it must not accumulate:
+            %% an unmatched message would sit here for the life of the session,
+            %% making every selective receive above scan past a mailbox that
+            %% grows with each one. (The live process emits an ordering marker
+            %% per event for a transport that folds queued pushes into its
+            %% replies -- this one does not fold and so never asks for it, but
+            %% the SSH driver already tolerates the unexpected and this keeps
+            %% the two symmetrical.)
+            loop(Session)
     end.
 
 read_loop(Owner) ->

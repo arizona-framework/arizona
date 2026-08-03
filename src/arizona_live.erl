@@ -55,6 +55,8 @@ fingerprints already shipped in the initial HTML.
 """.
 -behaviour(gen_server).
 
+-include("arizona.hrl").
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -173,7 +175,13 @@ fingerprints already shipped in the initial HTML.
     on_mount :: on_mount(),
     transport_pid :: pid() | undefined,
     %% #{fingerprint_binary() => true}
-    sent_fps :: map()
+    sent_fps :: map(),
+    %% Does this transport fold queued pushes into synchronous replies? See
+    %% push_barrier/1.
+    push_barrier :: boolean(),
+    %% Child views whose own diff has moved past the copy held in `snapshot`.
+    %% Settled lazily, at the next root diff. See apply_pending_refresh/3.
+    pending_refresh = #{} :: #{binary() => true}
 }).
 
 -type state() :: #state{}.
@@ -291,9 +299,15 @@ start_link(Handler, InitBindings, TransportPid, OnMount) ->
 
 -doc """
 Like `start_link/4` but also threads the connection context the transport knows --
-`#{capabilities => map(), reconnect => boolean()}` -- into the live process, where
-`capability/1` and `reconnected/0` read it. Browser/SSR callers use `start_link/4`
-(empty context).
+`#{capabilities => map(), reconnect => boolean(), push_barrier => boolean()}` --
+into the live process, where `capability/1` and `reconnected/0` read the first
+two. Browser/SSR callers use `start_link/4` (empty context).
+
+`push_barrier` is the transport's own contract, not client data: set it when the
+transport folds queued `{arizona_push, ...}` messages into a synchronous
+event/patch reply, and the live process marks the boundary between the pushes
+that preceded that reply and anything emitted after it (see `push_barrier/1`).
+Transports that ship every push in its own frame leave it unset.
 """.
 -spec start_link(Handler, InitBindings, TransportPid, OnMount, ConnInfo) ->
     gen_server:start_ret()
@@ -302,7 +316,9 @@ when
     InitBindings :: map(),
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
-    ConnInfo :: #{capabilities => map(), reconnect => boolean()}.
+    ConnInfo :: #{
+        capabilities => map(), reconnect => boolean(), push_barrier => boolean()
+    }.
 start_link(Handler, InitBindings, TransportPid, OnMount, ConnInfo) ->
     %% Capture caller-side logger metadata (typically set by roadrunner
     %% with the per-conn request_id) so any ?LOG_* from inside the
@@ -470,12 +486,15 @@ when
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
     ParentMetadata :: logger:metadata() | undefined,
-    ConnInfo :: #{capabilities => map(), reconnect => boolean()}.
+    ConnInfo :: #{
+        capabilities => map(), reconnect => boolean(), push_barrier => boolean()
+    }.
 init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo}) ->
     proc_lib:set_label({arizona_live, Handler}),
     inherit_logger_metadata(ParentMetadata),
     Capabilities = maps:get(capabilities, ConnInfo, #{}),
     Reconnect = maps:get(reconnect, ConnInfo, false),
+    Barrier = maps:get(push_barrier, ConnInfo, false),
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
     TransportPid =/= undefined andalso erlang:put('$arizona_capabilities', Capabilities),
     TransportPid =/= undefined andalso erlang:put('$arizona_reconnected', Reconnect),
@@ -498,7 +517,8 @@ init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo}) -
         views = #{},
         on_mount = OnMount,
         transport_pid = TransportPid,
-        sent_fps = #{}
+        sent_fps = #{},
+        push_barrier = Barrier
     }}.
 
 %% Mirror the parent process's logger metadata (request_id, peer, etc.)
@@ -514,7 +534,10 @@ handle_call(
     #state{handler = H, bindings = B0, views = V0, on_mount = OM} = State
 ) ->
     {ViewId, _HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
-    {reply, {ok, ViewId}, State#state{bindings = B2, snapshot = Snap, views = V1}};
+    %% A full render already reflects every child, so nothing is pending on it.
+    {reply, {ok, ViewId}, State#state{
+        bindings = B2, snapshot = Snap, views = V1, pending_refresh = #{}
+    }};
 handle_call(
     mount_and_render,
     _From,
@@ -529,16 +552,17 @@ handle_call(
     {ViewId, HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, ViewId, PageContent1}, State#state{
-        bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1
+        bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1, pending_refresh = #{}
     }};
 handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
     Tmpl = arizona_stateful:call_render(H, B),
     {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
     {reply, {ok, iolist_to_binary(HTML)}, State};
-handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0, bindings = B0} = State) ->
+handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings = B0} = State) ->
+    ok = push_barrier(From, State),
     case V0 of
         #{ViewId := _} ->
-            handle_child_event(ViewId, Event, Payload, State);
+            handle_child_event(ViewId, Event, Payload, From, State);
         #{} ->
             case maps:get(id, B0) of
                 ViewId ->
@@ -562,7 +586,8 @@ handle_call(
         bindings = OldB,
         views = OldV,
         transport_pid = TPid,
-        sent_fps = Fps0
+        sent_fps = Fps0,
+        push_barrier = Barrier
     } = _State
 ) ->
     ok = cancel_pending_timers(),
@@ -597,9 +622,11 @@ handle_call(
         views = V1,
         on_mount = NewOnMount,
         transport_pid = TPid,
-        sent_fps = Fps1
+        sent_fps = Fps1,
+        push_barrier = Barrier
     }};
-handle_call({patch, Params}, _From, #state{handler = H, bindings = B0} = State) ->
+handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) ->
+    ok = push_barrier(From, State),
     %% In-place navigation: the root view stays mounted. Deliver Params to its
     %% handle_update/3 (navigation as the root's prop source), then re-render
     %% and diff against the live snapshot -- no unmount, no remount, no timer
@@ -629,6 +656,33 @@ handle_info(
     %% state's transport_pid means a DOWN for any other monitor the view set up
     %% falls through to the handler's handle_info below.
     {stop, normal, State};
+handle_info({arizona_drain, Deadline}, #state{snapshot = Snap} = State) when
+    Snap =/= undefined
+->
+    handle_drain_info(Deadline, State);
+handle_info({arizona_drain, _Deadline}, State) ->
+    %% Drain arriving before the view mounted -- the deferred reconnect resync
+    %% window, exactly when a deploy-drain reconnect storm makes it likely.
+    %% Falling through to the pre-mount drop below swallowed it: the transport
+    %% had already acknowledged the drain, so the listener counted it handled
+    %% and hard-killed the connection at the deadline, with no `{shutdown,
+    %% drain}` exit and therefore no 1001 close to run the client's
+    %% form-state-preserving reconnect.
+    %%
+    %% Stop with the drain reason rather than force a mount to run the
+    %% callback: `handle_drain/2` takes the handler's own bindings, and
+    %% pre-mount those are still the raw route bindings (route config plus
+    %% middleware enrichments) the handler never produced -- a callback head
+    %% that destructures its mount keys would raise `unhandled_drain` and close
+    %% 4500 instead of 1001. Mounting first to avoid that would run the
+    %% handler's mount side effects for a view that renders nothing and is
+    %% unmounted microseconds later (and a mount crash would close 4500 too).
+    %% There is also nothing for the callback to coordinate: nothing has been
+    %% rendered for this connection, and the client is mid-reconnect already.
+    %% So take the framework's documented default for a drain -- the same
+    %% `{stop, Bindings, []}` `call_handle_drain/3` returns for a handler that
+    %% does not export the callback.
+    {stop, {shutdown, drain}, State};
 handle_info(_Info, #state{snapshot = undefined} = State) ->
     {noreply, State};
 handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = State) ->
@@ -648,19 +702,28 @@ handle_info({arizona_view, ViewId, Msg}, #state{bindings = B0, views = V0} = Sta
                     )
             end
     end;
-handle_info({arizona_drain, Deadline}, #state{snapshot = Snap} = State) when
-    Snap =/= undefined
-->
-    handle_drain_info(Deadline, State);
 handle_info(Info, State) ->
     handle_root_info(Info, State).
 
-terminate(_Reason, #state{handler = H, bindings = B, views = V}) ->
+terminate(_Reason, #state{snapshot = Snap, handler = H, bindings = B, views = V}) when
+    Snap =/= undefined
+->
     %% Unmount every child view, then the root -- the same children-first
     %% removal semantics as navigate, for any exit reason terminate sees.
     ok = unmount_removed_views(V),
     ok = arizona_stateful:call_unmount(H, B);
 terminate(_Reason, _State) ->
+    %% Never mounted: `mount/1` has not run, so `bindings` are still the raw
+    %% route bindings the handler never produced (route static config plus
+    %% middleware enrichments -- session data included) and there is nothing
+    %% mounted to tear down. Unmounting here would hand `unmount/1` a foreign
+    %% map -- a handler head that destructures its own mount keys raises, and
+    %% the `{unhandled_unmount, ...}` term embeds those bindings in the crash
+    %% report -- while the cleanup the handler meant to do (paired with a mount
+    %% that never ran) is a no-op anyway. The window is the deferred reconnect
+    %% resync (`fps_follow`), where the view stays unmounted until the client's
+    %% `cached_fps` frame or the socket's backstop timer, so a transport that
+    %% goes away in it (a deploy-drain reconnect storm) lands right here.
     ok.
 
 -doc """
@@ -712,11 +775,12 @@ handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
     }}.
 
-handle_child_event(ViewId, Event, Payload, #state{views = V0} = State) ->
+handle_child_event(ViewId, Event, Payload, From, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
     {Ops1, V1, Fps1, Effects1} = process_child_change(H, B1, Resets, Effects, ViewId, View, State),
-    {reply, {ok, Ops1, Effects1}, State#state{views = V1, sent_fps = Fps1}}.
+    NewState = mark_pending_refresh(ViewId, From, State#state{views = V1, sent_fps = Fps1}),
+    {reply, {ok, Ops1, Effects1}, NewState}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
     case arizona_stateful:call_handle_info(H, Info, B0) of
@@ -741,8 +805,9 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
             {Ops1, V1, Fps1, Effects1} = process_child_change(
                 H, B1, Resets, Effects, ViewId, View, State
             ),
-            push(TPid, root_view_id(State), Ops1, Effects1),
-            {noreply, State#state{views = V1, sent_fps = Fps1}}
+            push(TPid, root_view_id(State), scope_child_ops(ViewId, Ops1), Effects1),
+            NewState = mark_pending_refresh(ViewId, State#state{views = V1, sent_fps = Fps1}),
+            {noreply, NewState}
     end.
 
 handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
@@ -784,19 +849,20 @@ process_root_change(
     Resets,
     Effects0,
     #state{
-        bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0
+        bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0, pending_refresh = Pending
     } = State
 ) ->
+    Snap = apply_pending_refresh(Pending, V0, Snap0),
     Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
-    {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
+    {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap, V0, Changed),
     Effects1 = arizona_eval:drain_update_effects(),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
-    {Ops1, Snap1, V1, B3, Fps1, State, Effects1}.
+    {Ops1, Snap1, V1, B3, Fps1, State#state{pending_refresh = #{}}, Effects1}.
 
 %% Same idea as process_root_change/5 but for a nested child view. Diffs through
 %% the dep-gated view-tracking path (diff/4, mirroring the root): only the
@@ -832,6 +898,231 @@ process_child_change(
     V1 = maps:merge(maps:without(Removed, V0), NewViews),
     V2 = V1#{ViewId => View#{bindings => B3, snapshot => Snap2}},
     {Ops1, V2, Fps1, Effects1}.
+
+%% Note that child `ViewId`'s own diff has moved it past the copy the ROOT
+%% snapshot holds. O(1) -- the copy is settled later, by apply_pending_refresh/3.
+%%
+%% The root snapshot is the diff baseline for the child's slot, and a child that
+%% changes on its own (its own event, or a `?send`-driven `handle_info`) updates
+%% only `views`. Left on the pre-event copy, the next root diff re-emits
+%% everything the child had already patched: a redundant op for a plain slot,
+%% and for a stream container a wholesale re-render of the list the child had
+%% just patched item-by-item -- innerHTML, so focus, scroll, uncontrolled input
+%% state and every `?local` inside the items are destroyed. Only the FIRST root
+%% diff after the child change did it (the one after re-seeded the baseline from
+%% its own fresh evaluation), which is exactly the diff a user is most likely to
+%% be interacting through.
+%%
+%% Settling it here, on the child event itself, would rebuild every enclosing
+%% container -- for a child inside a stream, every item's dynamics list plus the
+%% container map, on every child event. That is linear in the list length on the
+%% one shape this fix exists for, so a list whose rows each tick would make the
+%% update cycle quadratic. Nothing reads the root snapshot between a child change
+%% and the next root diff (`process_root_change/5` is its only reader), so the
+%% work belongs there, where an O(snapshot) diff is already being paid.
+mark_pending_refresh(ViewId, #state{pending_refresh = Pending} = State) ->
+    State#state{pending_refresh = Pending#{ViewId => true}}.
+
+%% Event-path variant: mark only when the TRANSPORT drove the event. A foreign
+%% caller of the exported `handle_event/4` takes the resulting ops itself, so the
+%% client never sees them -- settling the root's copy would then tell the diff the
+%% client holds a value it was never sent, and that slot would stay wrong for
+%% good. Left unmarked, the stale copy makes the next root diff re-emit it and the
+%% client catches up. Mirrors push_barrier/2's caller check; the `handle_info`
+%% path needs no such gate, since its ops always go to the transport.
+mark_pending_refresh(ViewId, {Pid, _Tag}, #state{transport_pid = Pid} = State) ->
+    mark_pending_refresh(ViewId, State);
+mark_pending_refresh(_ViewId, _From, State) ->
+    State.
+
+%% Settle every child marked since the last root diff, in ONE walk -- so N
+%% children ticking before a root diff costs one traversal, not N.
+%%
+%% SCOPE: ROOT diffs only. An intermediate stateful view's OWN diff still runs
+%% against its own stored copy of a grandchild, so in a three-level tree where the
+%% middle view takes the events, a grandchild that patched itself still gets the
+%% wholesale re-render from that middle diff. Unchanged from before this settle
+%% existed -- not a regression, and not a class this closes.
+apply_pending_refresh(Pending, _Views, Snap) when map_size(Pending) =:= 0 ->
+    Snap;
+apply_pending_refresh(Pending, Views, Snap) ->
+    %% Every view on the path down to a changed one is refreshed, not just the
+    %% changed one itself: an ancestor's stored copy can predate the descendant's
+    %% very EXISTENCE (the root's copy of a child that later rendered a
+    %% grandchild holds the slot as it was before -- no grandchild in it at all),
+    %% so there is nothing there to replace and only taking the ancestor's own
+    %% live snapshot recovers the structure.
+    Holders = refresh_holders(Pending, Views),
+    refresh_into(fresh_child_snaps(Holders, Views), Holders, Snap).
+
+%% The ids on a path to a changed view: the changed ids themselves, plus --
+%% transitively -- every live view that records one of them among its
+%% descendants. Drives both the descent prune and the set of copies refreshed.
+%%
+%% It cannot test `child_views` against the changed ids directly, because that
+%% list is accurate only as of the container's LAST EVALUATION: a view created
+%% afterwards (a grandchild first rendered by a nested child's own event, with no
+%% enclosing container re-evaluated) is named only by its own parent. Chaining
+%% upward through the live views map recovers the rest of the path -- the parent
+%% names the grandchild, the container names the parent -- so the prune sees a
+%% changed view at any depth. Iterated to a fixpoint because that chain can be
+%% several levels long.
+%%
+%% Runs once per settle, which is once per root diff -- a walk the diff is about
+%% to do anyway. The child-event path never reaches here.
+refresh_holders(Pending, Views) ->
+    grow_holders(#{Id => true || Id := _ <- Pending}, descendant_index(Views)).
+
+%% Only a view that records descendants can put another view on a path, so index
+%% those once and let the fixpoint iterate the index instead of re-scanning every
+%% live view per round. On a page whose views are mostly leaves (a long list of
+%% simple children) the index is near-empty and the fixpoint settles immediately.
+descendant_index(Views) ->
+    #{Id => Ids || Id := #{snapshot := #{child_views := Ids}} <:- Views, Ids =/= []}.
+
+grow_holders(Holders, Index) ->
+    Grown = maps:merge(
+        Holders,
+        #{
+            Id => true
+         || Id := Ids <- Index,
+            lists:any(fun(Descendant) -> is_map_key(Descendant, Holders) end, Ids)
+        }
+    ),
+    Settled = map_size(Holders),
+    case map_size(Grown) of
+        Settled -> Holders;
+        _ -> grow_holders(Grown, Index)
+    end.
+
+%% The live snapshot of every id on a path to a change. An id can have been
+%% removed since it was marked (a child's own diff can drop a grandchild), so
+%% resolve each against `views` -- one no longer mounted simply isn't in the
+%% result, and the walk then never matches it. Driven off the id set (a handful)
+%% rather than off `views` (every live view on the page), so a page with
+%% thousands of stateful children pays nothing per settle for the ones that did
+%% not change; the single-element generator is the filter-and-bind.
+fresh_child_snaps(Holders, Views) ->
+    #{
+        Id => ChildSnap
+     || Id := _ <- Holders, #{Id := #{snapshot := ChildSnap}} <- [Views]
+    }.
+
+%% Replace every copy of a changed view's snapshot held anywhere inside `Snap`.
+%% `Holders` is the set of ids on a path to one (see refresh_holders/2), so a
+%% container naming none of them is skipped whole and the walk follows only the
+%% paths that matter; a container carrying no `child_views` at all (the root
+%% snapshot itself) is descended into.
+%%
+%% Every step answers `unchanged` when nothing beneath it refers to a changed
+%% view, so the caller keeps its existing term and only the paths actually
+%% leading to one are rebuilt. Without that, settling a single child inside a
+%% list rebuilt every item's dynamics list and the container map -- linear
+%% allocation and garbage on every root diff, for a list the diff itself may well
+%% be dep-skipping. `refresh_into/3` is the entry point that turns the answer
+%% back into a plain snapshot.
+refresh_into(Fresh, Holders, Snap) ->
+    case refresh_container(Fresh, Holders, Snap) of
+        unchanged -> Snap;
+        {changed, Snap1} -> Snap1
+    end.
+
+refresh_view_snap(Fresh, Holders, #{view_id := Id} = Snap) ->
+    case Fresh of
+        #{Id := ChildSnap} ->
+            %% Take this view's live snapshot -- then keep going INTO it. A
+            %% view's snapshot is only rebuilt when that view itself diffs, so
+            %% its own copies of deeper views can be stale in turn; and having
+            %% just swapped in the live one, the annotation guiding the descent
+            %% is now current too.
+            {changed, refresh_into(Fresh, Holders, ChildSnap)};
+        #{} ->
+            refresh_container(Fresh, Holders, Snap)
+    end;
+refresh_view_snap(Fresh, Holders, Snap) ->
+    refresh_container(Fresh, Holders, Snap).
+
+refresh_container(Fresh, Holders, #{t := ?EACH, items := Items} = Snap) ->
+    case holds_any_view(Holders, Snap) of
+        true -> rewrap(refresh_each_items(Fresh, Holders, Items), items, Snap);
+        false -> unchanged
+    end;
+refresh_container(Fresh, Holders, #{d := D} = Snap) when is_list(D) ->
+    case holds_any_view(Holders, Snap) of
+        true -> rewrap(refresh_dyns(Fresh, Holders, D), d, Snap);
+        false -> unchanged
+    end;
+refresh_container(_Fresh, _Holders, _Value) ->
+    unchanged.
+
+rewrap(unchanged, _Key, _Snap) -> unchanged;
+rewrap({changed, Value}, Key, Snap) -> {changed, Snap#{Key => Value}}.
+
+%% Tested against `Holders`, not against the changed ids: a container's
+%% `child_views` is only accurate as of its last evaluation, so it can name an
+%% ancestor of the changed view without naming the view itself. `Holders` carries
+%% those ancestors, which is what makes this exact at any depth. A container with
+%% no annotation is descended into rather than skipped.
+holds_any_view(Holders, #{child_views := Ids}) ->
+    lists:any(fun(Id) -> is_map_key(Id, Holders) end, Ids);
+holds_any_view(_Holders, #{}) ->
+    true.
+
+%% A stream/map-keyed `?each` holds its items in a map, a plain-list one in a
+%% list; either way an item is a list of `{Az, Value, Deps}` triples. The map
+%% form updates in place, so only the keys actually holding a changed view cost
+%% anything.
+refresh_each_items(Fresh, Holders, Items) when is_map(Items) ->
+    refresh_item_map(maps:keys(Items), Fresh, Holders, Items, unchanged);
+refresh_each_items(Fresh, Holders, Items) when is_list(Items) ->
+    refresh_item_list(Fresh, Holders, Items).
+
+refresh_item_map([], _Fresh, _Holders, _Items, unchanged) ->
+    unchanged;
+refresh_item_map([], _Fresh, _Holders, Items, changed) ->
+    {changed, Items};
+refresh_item_map([Key | Rest], Fresh, Holders, Items, Status) ->
+    #{Key := ItemD} = Items,
+    case refresh_dyns(Fresh, Holders, ItemD) of
+        unchanged ->
+            refresh_item_map(Rest, Fresh, Holders, Items, Status);
+        {changed, ItemD1} ->
+            refresh_item_map(Rest, Fresh, Holders, Items#{Key => ItemD1}, changed)
+    end.
+
+refresh_item_list(_Fresh, _Holders, []) ->
+    unchanged;
+refresh_item_list(Fresh, Holders, [ItemD | Rest]) ->
+    combine(
+        refresh_dyns(Fresh, Holders, ItemD),
+        ItemD,
+        refresh_item_list(Fresh, Holders, Rest),
+        Rest
+    ).
+
+refresh_dyns(_Fresh, _Holders, []) ->
+    unchanged;
+refresh_dyns(Fresh, Holders, [Dyn | Rest]) ->
+    combine(
+        refresh_dyn(Fresh, Holders, Dyn),
+        Dyn,
+        refresh_dyns(Fresh, Holders, Rest),
+        Rest
+    ).
+
+%% Rebuild a cons cell only when this element or the tail actually changed.
+combine(unchanged, _Head, unchanged, _Tail) -> unchanged;
+combine(unchanged, Head, {changed, Tail1}, _Tail) -> {changed, [Head | Tail1]};
+combine({changed, Head1}, _Head, unchanged, Tail) -> {changed, [Head1 | Tail]};
+combine({changed, Head1}, _Head, {changed, Tail1}, _Tail) -> {changed, [Head1 | Tail1]}.
+
+refresh_dyn(Fresh, Holders, {Az, Value}) ->
+    retag(refresh_view_snap(Fresh, Holders, Value), fun(V) -> {Az, V} end);
+refresh_dyn(Fresh, Holders, {Az, Value, Deps}) ->
+    retag(refresh_view_snap(Fresh, Holders, Value), fun(V) -> {Az, V, Deps} end).
+
+retag(unchanged, _Rebuild) -> unchanged;
+retag({changed, Value}, Rebuild) -> {changed, Rebuild(Value)}.
 
 clear_streams_and_apply_resets(B1, Resets) ->
     B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
@@ -920,6 +1211,27 @@ key_changed(K, V, OldBindings) ->
         #{} -> true
     end.
 
+%% A child view's diff ops are addressed relative to the CHILD, so they must be
+%% scoped by the child's view id -- while the push itself must keep naming the
+%% ROOT view, which is what the transport compares against its current page to
+%% drop a push that raced a navigate (see push/4). Both fit in the message
+%% unchanged: hand the ops over in the same `[ChildViewId, ChildOps]` nesting a
+%% root diff already uses for its embedded children, and the transport's
+%% flattening re-tags them with the child id.
+%%
+%% Pushed bare, they were scoped with the root's id instead. `az` is
+%% fingerprint-derived, so two instances of the same handler share it and only
+%% the view id separates them: a `?send`/`?send_after` tick meant for one
+%% instance patched whichever one the client resolved first. (The event path
+%% never had the bug -- the transport scopes an event's ops with the child id
+%% the frame named.)
+%%
+%% Empty stays empty so push/4 can still skip a no-op push.
+scope_child_ops(_ViewId, []) ->
+    [];
+scope_child_ops(ViewId, Ops) ->
+    [[ViewId, Ops]].
+
 %% A push names the root view that owns it (the page's id at emit time), so a
 %% transport can drop a push that raced a navigate -- processed after the
 %% navigate it would otherwise be tagged with the NEW page's id and deliver
@@ -930,6 +1242,41 @@ push(_Pid, _ViewId, [], []) ->
     ok;
 push(Pid, ViewId, Ops, Effects) ->
     Pid ! {arizona_push, ViewId, Ops, Effects},
+    ok.
+
+%% Marks, in the transport's mailbox, the boundary between the pushes emitted
+%% BEFORE the reply this call is about to produce and anything emitted after it.
+%%
+%% A transport that folds queued pushes into a synchronous reply must fold only
+%% the former -- a push emitted before the reply is causally earlier, so it has
+%% to be applied first, but one emitted after it is later and prepending it
+%% inverts an order-dependent op pair (a stream MOVE landing in front of the
+%% INSERT that created its key; the client drops the move and the server's
+%% snapshot is wrong from then on). A transport cannot tell the two apart on its
+%% own: the documented `?send`/`?send_after` idiom has the handler enqueue to
+%% this process's own mailbox during `handle_event/3`, so the live process
+%% replies and only then dequeues that message and pushes for it -- typically
+%% before the transport is rescheduled to look at its own mailbox.
+%%
+%% Sending the marker from inside the call settles it: this process cannot push
+%% between here and the reply, so every push already in flight is ahead of the
+%% marker and every later one is behind it. The transport drains up to the
+%% marker (it is guaranteed present -- it was sent before the reply the
+%% transport has by then received) and leaves the rest for its own inbox path,
+%% which ships them in a later frame, in order.
+%%
+%% Emitted only when the CALLER is the folding transport itself. `handle_event/4`
+%% and `patch/2` are exported, so any process can call them on a live process
+%% whose transport folds -- and a marker sent for someone else's call is one
+%% nobody drains, which would offset the transport's drain by one from then on
+%% (every later drain eats the previous cycle's marker, folds nothing, and lets a
+%% stale push ship in a later frame over a newer value). Matching the caller
+%% against `transport_pid` means such a call emits no marker at all, so the
+%% transport's mailbox can never hold one it did not cause.
+push_barrier({Pid, _Tag}, #state{push_barrier = true, transport_pid = Pid}) ->
+    Pid ! arizona_push_barrier,
+    ok;
+push_barrier(_From, #state{}) ->
     ok.
 
 root_view_id(#state{bindings = Bindings}) ->

@@ -165,7 +165,11 @@ init(Handler, Bindings, Req, Opts) ->
     %% place) vs different-view (fall back to a full navigate/replace).
     Socket = #socket{req = Req, handler = Handler},
     safe_init(Handler, Socket, fun() ->
-        ConnInfo = #{capabilities => Capabilities, reconnect => Reconnect},
+        %% `push_barrier` opts this transport into the ordering marker the
+        %% event/patch drain below relies on -- see drain_pending_pushes/1.
+        ConnInfo = #{
+            capabilities => Capabilities, reconnect => Reconnect, push_barrier => true
+        },
         {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, ConnInfo),
         init_view(Reconnect, FpsFollow, Pid, Socket)
     end).
@@ -229,11 +233,9 @@ handle_in(Frame, #socket{pending_resync = TRef, pid = Pid} = Socket0) when
     case decode_cached_fps(Frame) of
         {ok, FpList} ->
             ok = arizona_live:seed_fps(Pid, FpList),
-            {Ops, Socket} = flush_resync(Socket1),
-            {reply, encode(#{?OPS => Ops}), Socket};
+            resync_reply(flush_resync(Socket1));
         error ->
-            {Ops, Socket} = flush_resync(Socket1),
-            resync_then(encode(#{?OPS => Ops}), handle_in(Frame, Socket))
+            resync_before_frame(flush_resync(Socket1), Frame)
     end;
 handle_in(?SYS_PING, Socket) ->
     {reply, ?SYS_PONG, Socket};
@@ -317,8 +319,7 @@ handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0) wh
     %% timeout message -- the resync already flushed by a frame that raced the
     %% firing timer -- has `pending_resync = undefined` and falls through to
     %% the catch-all below.)
-    {Ops, Socket} = flush_resync(Socket0#socket{pending_resync = undefined}),
-    {reply, encode(#{?OPS => Ops}), Socket};
+    resync_reply(flush_resync(Socket0#socket{pending_resync = undefined}));
 handle_info({arizona_push, ViewId, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
     encode_reply(flatten_ops(ViewId, Ops), Effects, Socket);
 handle_info({arizona_push, _StaleViewId, _Ops, _Effects}, Socket) ->
@@ -381,13 +382,45 @@ decode_cached_fps(Frame) ->
 %% Mount the live process and render the reconnect full-page replace. The
 %% dedup against `sent_fps` happens inside `mount_and_render` -- any
 %% fingerprints seeded before this call elide their statics from the payload.
+%%
+%% This is a mount, so it carries the same guards as every other mount path
+%% (`safe_init/3` at connect, the trys in do_navigate/do_patch/the event leg):
+%% a raise anywhere in `mount/1`, `on_mount`, or `render/1` becomes the 4500
+%% crash close the client's `crashReload()` guard is built for -- unguarded it
+%% escaped both `handle_in/2` and `handle_info/2`, killed the session with no
+%% close frame, and left the client backing off on a bare 1006 forever. The
+%% drain/exit race gets the same 1001 going-away close its siblings give it.
+%% Returns `{ok, Ops, Socket}` or a ready-made close result.
 flush_resync(#socket{pid = Pid} = Socket) ->
-    {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
-    {replace_ops(ViewId, PageHTML), Socket#socket{view_id = ViewId}}.
+    try arizona_live:mount_and_render(Pid) of
+        {ok, ViewId, PageHTML} ->
+            {ok, replace_ops(ViewId, PageHTML), Socket#socket{view_id = ViewId}}
+    catch
+        %% Same drain/exit race as do_navigate (see there).
+        exit:{noproc, _} ->
+            {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
+        exit:{{shutdown, drain}, _} ->
+            {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
+        Class:Reason:Stacktrace ->
+            logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+            close_crash(Socket)
+    end.
+
+resync_reply({ok, Ops, Socket}) ->
+    {reply, encode(#{?OPS => Ops}), Socket};
+resync_reply({close, _Code, _Reason, _Socket} = Close) ->
+    Close.
 
 %% Ship the resync frame BEFORE the triggering frame's own result: the client
 %% must apply the full-page replace first, then the frame's reply against the
-%% fresh DOM. A close outranks the resync -- the socket is going away.
+%% fresh DOM. A failed flush closes instead -- the frame must never reach a
+%% live process the flush left unmounted.
+resync_before_frame({ok, Ops, Socket}, Frame) ->
+    resync_then(encode(#{?OPS => Ops}), handle_in(Frame, Socket));
+resync_before_frame({close, _Code, _Reason, _Socket} = Close, _Frame) ->
+    Close.
+
+%% A close outranks the resync -- the socket is going away.
 resync_then(ResyncFrame, {ok, Socket}) ->
     {reply, ResyncFrame, Socket};
 resync_then(ResyncFrame, {reply, Frame, Socket}) ->
@@ -564,18 +597,36 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
     {flatten_ops(ViewId, Ops), Effects}.
 
-%% Selectively receive the `{arizona_push, ...}` messages already queued in the
-%% socket process's mailbox, right after a synchronous event/patch call and
-%% BEFORE building its reply frame. Anything queued was necessarily emitted
-%% before the reply was computed (the live process pushes before returning from
-%% the call), so prepending it restores causal order on the wire: without this
-%% the reply ships first and the earlier push lands in a LATER frame, letting a
-%% stale value overwrite the reply's client-side (and keyed stream ops with
-%% relative refs can fail to apply outright). `after 0` drains only what is
-%% already queued; arrival order is preserved. A push from a page this socket
-%% already navigated away from is dropped, mirroring handle_info/2. The
-%% navigate path needs no drain: its OP_REPLACE supersedes old-page ops, and
-%% the stale-view-id drop disposes of them once processed after the reply.
+%% Selectively receive the `{arizona_push, ...}` messages the live process
+%% emitted BEFORE the reply to a synchronous event/patch call, and fold them in
+%% front of that reply's own ops. Such a push is causally earlier, so it must be
+%% applied first: without this the reply ships first and the earlier push lands
+%% in a LATER frame, letting a stale value overwrite the reply's client-side
+%% (and keyed stream ops with relative refs can fail to apply outright).
+%%
+%% "Before the reply" is decided by the live process, not guessed here: it sends
+%% `arizona_push_barrier` from inside the call (`arizona_live:push_barrier/1`),
+%% so the marker sits behind every push that preceded the reply and ahead of
+%% every push emitted after it. Draining up to the marker is therefore exact --
+%% an `after 0` drain instead swept up whatever happened to have landed by the
+%% time this process was rescheduled, and the `?send` self-message idiom makes
+%% that a push emitted AFTER the reply (the handler enqueues to the live
+%% process's own mailbox during handle_event/3, so the live process replies,
+%% then dequeues and pushes). Prepending it inverted an order-dependent pair: a
+%% stream MOVE ahead of the INSERT that created its key, which the client drops
+%% for good. Anything behind the marker stays queued for handle_info/2, which
+%% ships it in the next frame -- in order.
+%%
+%% The marker was sent before the reply the caller has already received, so it
+%% is in this mailbox and the `after 0` below is unreachable -- a `receive`
+%% cannot time out while a matching message is queued. It is there so that a
+%% broken invariant degrades to the old (merely mis-ordered) behaviour instead
+%% of wedging the connection on a receive that never returns.
+%%
+%% A push from a page this socket already navigated away from is dropped,
+%% mirroring handle_info/2. The navigate path needs no drain: its OP_REPLACE
+%% supersedes old-page ops, and the stale-view-id drop disposes of them once
+%% processed after the reply.
 drain_pending_pushes(#socket{view_id = ViewId}) ->
     drain_pending_pushes(ViewId, [], []).
 
@@ -586,10 +637,15 @@ drain_pending_pushes(ViewId, OpsAcc, EffectsAcc) ->
                 ViewId, [flatten_ops(ViewId, Ops) | OpsAcc], [Effects | EffectsAcc]
             );
         {arizona_push, _StaleViewId, _Ops, _Effects} ->
-            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc)
+            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc);
+        arizona_push_barrier ->
+            drained_pushes(OpsAcc, EffectsAcc)
     after 0 ->
-        {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc))}
+        drained_pushes(OpsAcc, EffectsAcc)
     end.
+
+drained_pushes(OpsAcc, EffectsAcc) ->
+    {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc))}.
 
 %% Single chokepoint for every reply that carries effects. Before encoding, an
 %% in-view flash a handler set (an `arizona_js:navigate`/`patch` `flash` opt) is

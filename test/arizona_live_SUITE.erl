@@ -76,10 +76,15 @@
     seed_fps_unknown_fp_still_sends/1,
     seed_fps_caps_growth/1,
     live_unknown_view_id_noop/1,
+    child_stream_survives_next_root_diff/1,
+    child_event_leaves_root_snapshot_untouched/1,
     stateful_child_independent_state/1,
     nested_stateful_child_event/1,
     nested_stateful_grandchild_survives_root_skip/1,
     nested_stateful_grandchild_unmounted_on_removal/1,
+    grandchild_added_by_child_event_survives_root_skip/1,
+    grandchild_refresh_reaches_through_container/1,
+    grandchild_refresh_reaches_a_view_no_container_names/1,
     child_diff_dep_skips_unchanged_grandchild/1,
     nested_local_diff_skipped/1,
     nested_local_set_effect/1,
@@ -123,6 +128,9 @@ groups() ->
             nested_stateful_child_event,
             nested_stateful_grandchild_survives_root_skip,
             nested_stateful_grandchild_unmounted_on_removal,
+            grandchild_added_by_child_event_survives_root_skip,
+            grandchild_refresh_reaches_through_container,
+            grandchild_refresh_reaches_a_view_no_container_names,
             child_diff_dep_skips_unchanged_grandchild,
             nested_local_diff_skipped,
             nested_local_set_effect,
@@ -142,6 +150,8 @@ groups() ->
             live_counter2_child_event,
             live_inc_then_dec,
             live_unknown_view_id_noop,
+            child_stream_survives_next_root_diff,
+            child_event_leaves_root_snapshot_untouched,
             render_current_full_frame
         ]},
         {mount_and_render, [parallel], [
@@ -299,6 +309,93 @@ nested_stateful_grandchild_survives_root_skip(Config) when is_list(Config) ->
     {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"2">>]], IncOps).
 
+grandchild_added_by_child_event_survives_root_skip(Config) when is_list(Config) ->
+    %% A grandchild first rendered by a CHILD's own event exists in `views`
+    %% without any enclosing container having been re-evaluated, so no
+    %% container's recorded `child_views` names it. Carrying a dep-skipped
+    %% subtree's views by that recorded list therefore dropped it: the next
+    %% UNRELATED root diff unmounted a live view -- running its `unmount/1`
+    %% side effects, so pubsub subscriptions and resources are released -- while
+    %% its DOM was still on the page, and every later event addressed to it was
+    %% silently swallowed.
+    Self = self(),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_carry_root, #{notify => Self}, Self, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% The child's own event brings the grandchild into existence.
+    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    {ok, IncOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"1"]], IncOps),
+    %% A root change that touches nothing in that subtree, so it is dep-skipped.
+    {ok, TitleOps, _} = arizona_live:handle_event(Pid, ~"cr", ~"title_change", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"Changed"]], TitleOps),
+    %% (b) it was not unmounted...
+    receive
+        {leaf_unmounted, UnmountedId} -> error({grandchild_unmounted, UnmountedId})
+    after 0 -> ok
+    end,
+    %% ...(a) it is still mounted and (c) still takes its own events, with its
+    %% state intact: 1 -> 2, not a fresh 0 -> 1 and not the `[]` of a dropped id.
+    {ok, IncOps2, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"2"]], IncOps2).
+
+grandchild_refresh_reaches_through_container(Config) when is_list(Config) ->
+    %% Same shape, the other consequence: the root snapshot's copy of a
+    %% grandchild that changed on its own must be settled before the next root
+    %% diff -- and the settle walk has to REACH it. It descends by asking each
+    %% container whether its recorded `child_views` names a changed view, and a
+    %% grandchild created after that container was last evaluated is named only
+    %% by its own parent, so the container answered "no" and its whole subtree
+    %% was skipped. The stale copy then made the diff re-emit what the
+    %% grandchild had already patched.
+    Self = self(),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_carry_root, #{notify => Self}, Self, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    %% The grandchild patches itself, so the root's copy of it goes stale.
+    {ok, IncOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"1"]], IncOps),
+    %% A root change the CONTAINER reads, so its slot is re-evaluated and
+    %% compared against the root's copy. Only the label changed, so that is the
+    %% only op: no re-emission of the grandchild's own slot.
+    {ok, RelabelOps, _} = arizona_live:handle_event(
+        Pid, ~"cr", ~"relabel", #{~"label" => ~"L1"}
+    ),
+    ?assertMatch([[?OP_TEXT, _, ~"L1"]], RelabelOps).
+
+grandchild_refresh_reaches_a_view_no_container_names(Config) when is_list(Config) ->
+    %% The case that needs the ancestor chain rather than just the marked id.
+    %%
+    %% The intermediate dep-skipping root diff in the middle is what makes this
+    %% non-vacuous: it settles (and clears) the mark on `m1`, while leaving the
+    %% CONTAINER's recorded `child_views` at `[m1]` -- it is dep-skipped, so it is
+    %% never re-evaluated and never learns about `g1`. The later event marks only
+    %% `g1`, an id NO container names. Testing the containers against the marked
+    %% ids alone therefore skips the whole subtree and the stale copy survives;
+    %% chaining up through the live views map (`m1` records `g1`, the container
+    %% records `m1`) is the only thing that reaches it.
+    Self = self(),
+    {ok, Pid} = arizona_live:start_link(
+        arizona_carry_root, #{notify => Self}, Self, []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    %% Root diff that DEP-SKIPS the container: settles and clears `m1`'s mark,
+    %% and leaves the container's annotation naming only `m1`.
+    {ok, _, _} = arizona_live:handle_event(Pid, ~"cr", ~"title_change", #{}),
+    %% Now the grandchild patches its own stream -- marking `g1` and nothing else.
+    {ok, AddOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"add", #{~"id" => ~"b"}),
+    ?assertMatch([[?OP_INSERT, _, ~"b", -1, _Item]], AddOps),
+    %% A root change the container reads. Only its own op may come out; a missed
+    %% settle shows up as the wholesale `?OP_UPDATE` over the grandchild's list.
+    {ok, RelabelOps, _} = arizona_live:handle_event(
+        Pid, ~"cr", ~"relabel", #{~"label" => ~"L2"}
+    ),
+    ?assertMatch([[?OP_TEXT, _, ~"L2"]], RelabelOps).
+
 %% When the mid conditionally stops rendering the leaf, the grandchild is
 %% unmounted and pruned from views -- a later message to it crashes unknown_view.
 nested_stateful_grandchild_unmounted_on_removal(Config) when is_list(Config) ->
@@ -418,6 +515,75 @@ live_unknown_view_id_noop(Config) when is_list(Config) ->
     %% Root state is untouched: the next real inc yields count 1, not 2.
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
+
+child_stream_survives_next_root_diff(Config) when is_list(Config) ->
+    %% A child that patches its own stream leaves the ROOT snapshot holding the
+    %% child's PRE-event copy -- and that copy is the diff baseline for the
+    %% child's slot. So the first root diff afterwards re-emitted what the child
+    %% had already patched incrementally, and for the stream container that is a
+    %% wholesale `?OP_UPDATE` (innerHTML), destroying focus, scroll, uncontrolled
+    %% input state and every `?local` inside the items.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_child_stream_root, #{}, self(), []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    %% The child patches its own stream: one incremental insert.
+    {ok, AddOps, _} = arizona_live:handle_event(Pid, ~"cs", ~"add", #{~"id" => ~"i2"}),
+    ?assertMatch([[?OP_INSERT, _, ~"i2", -1, _Item]], AddOps),
+    %% The FIRST root diff after it: only the label slot the root actually
+    %% changed. No re-render of the container the child just patched.
+    {ok, BumpOps, _} = arizona_live:handle_event(
+        Pid, ~"csr", ~"relabel", #{~"label" => ~"L1"}
+    ),
+    ?assertMatch([[~"cs", [[?OP_TEXT, _, ~"L1"]]]], BumpOps),
+    %% ...and the one after it, which was already clean, stays clean.
+    {ok, BumpOps2, _} = arizona_live:handle_event(
+        Pid, ~"csr", ~"relabel", #{~"label" => ~"L2"}
+    ),
+    ?assertMatch([[~"cs", [[?OP_TEXT, _, ~"L2"]]]], BumpOps2).
+
+child_event_leaves_root_snapshot_untouched(Config) when is_list(Config) ->
+    %% The root snapshot's copy of a child is settled LAZILY -- at the next root
+    %% diff, not on the child event -- so a child event costs nothing in the size
+    %% of the root snapshot.
+    %%
+    %% Settling it on the child event rebuilt every enclosing container, and for
+    %% a child inside a stream that is EVERY item's dynamics list plus the
+    %% container map, on every child event: linear in the row count on exactly
+    %% the shape the refresh exists for, so a list whose rows each tick made the
+    %% update cycle quadratic. `child_views` prunes at the container level only;
+    %% stream item snapshots carry no such annotation, so there is nothing to
+    %% prune per item.
+    %%
+    %% Asserting the root snapshot is byte-for-byte what it was before the child
+    %% event is the behavioural proxy for "not walked": the child's own count
+    %% changed, so any implementation that settled the copy here would differ.
+    %% (`child_stream_survives_next_root_diff` pins that the settle still
+    %% happens by the time it matters.)
+    {ok, Pid} = arizona_live:start_link(
+        arizona_stream_with_child, #{}, self(), []
+    ),
+    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:handle_event(
+        Pid, ~"swc", ~"add_item", #{~"id" => 2, ~"label" => ~"Item 2"}
+    ),
+    Before = root_snapshot(Pid),
+    %% A stateful child inside the stream changes on its own.
+    {ok, ChildOps, _} = arizona_live:handle_event(Pid, ~"counter-1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"1"]], ChildOps),
+    ?assertEqual(Before, root_snapshot(Pid)).
+
+%% The live process's root snapshot, located by shape rather than by record
+%% position so the assertion does not encode #state{}'s field order: the
+%% snapshot is the only field that is a map carrying template statics.
+root_snapshot(Pid) ->
+    [Snapshot] = [
+        Field
+     || Field <- tuple_to_list(sys:get_state(Pid)),
+        is_map(Field),
+        is_map_key(s, Field)
+    ],
+    Snapshot.
 
 live_init_bindings(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
@@ -1182,11 +1348,13 @@ live_send_to_child(Config) when is_list(Config) ->
         {arizona_push, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
-    %% Send to child counter view
+    %% Send to child counter view. The push names the ROOT view (the transport's
+    %% stale-navigate check) but nests the child's ops under the CHILD's id, so
+    %% the transport scopes them to the emitting view rather than the root.
     Pid ! {arizona_view, <<"counter">>, {set_count, 99}},
     receive
         {arizona_push, _, Ops, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"99">>]], Ops)
+            ?assertMatch([[<<"counter">>, [[?OP_TEXT, _, <<"99">>]]]], Ops)
     after 1000 ->
         error(timeout)
     end.
@@ -1428,7 +1596,7 @@ child_in_stream_survives_dep_skip(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 42}},
     receive
         {arizona_push, _, Ops, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"42">>]], Ops)
+            ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"42">>]]]], Ops)
     after 1000 ->
         error(timeout)
     end.
@@ -1472,14 +1640,14 @@ multiple_children_in_stream_survive_dep_skip(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
         {arizona_push, _, Ops1, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"10">>]], Ops1)
+            ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"10">>]]]], Ops1)
     after 1000 ->
         error(timeout)
     end,
     Pid ! {arizona_view, <<"counter-2">>, {set_count, 20}},
     receive
         {arizona_push, _, Ops2, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"20">>]], Ops2)
+            ?assertMatch([[<<"counter-2">>, [[?OP_TEXT, _, <<"20">>]]]], Ops2)
     after 1000 ->
         error(timeout)
     end.
@@ -1504,7 +1672,7 @@ child_in_stream_survives_item_update(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 7}},
     receive
         {arizona_push, _, Ops, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"7">>]], Ops)
+            ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"7">>]]]], Ops)
     after 1000 ->
         error(timeout)
     end.
@@ -1524,7 +1692,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
         {arizona_push, _, Ops1, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"10">>]], Ops1)
+            ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"10">>]]]], Ops1)
     after 1000 ->
         error(timeout)
     end,
@@ -1532,7 +1700,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     Pid ! {arizona_view, <<"extra-1">>, {set_count, 20}},
     receive
         {arizona_push, _, Ops2, []} ->
-            ?assertMatch([[?OP_TEXT, _, <<"20">>]], Ops2)
+            ?assertMatch([[<<"extra-1">>, [[?OP_TEXT, _, <<"20">>]]]], Ops2)
     after 1000 ->
         error(timeout)
     end.

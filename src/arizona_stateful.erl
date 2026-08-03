@@ -68,6 +68,21 @@ explicitly chose to finish), return `{Bindings, Resets, Effects}`
 like a normal `handle_info/2`. Return `ok` to acknowledge without
 state change.
 
+**One exception -- a drain that lands before the view mounted.** A
+reconnecting client that promised its cached fingerprints
+(`_az_fps_follow`) leaves the live process deliberately unmounted until
+that frame arrives, and a deploy-drain broadcast is exactly what tends
+to land in that window. `handle_drain/2` does **not** run there: it
+takes the handler's own bindings, and pre-mount those are still the raw
+route bindings (route config plus middleware enrichments) that `mount/1`
+never turned into the handler's own state -- a callback head
+destructuring its mount keys would raise `unhandled_drain` and close
+`4500` instead of `1001`. The live process takes the same default an
+unexported callback gets (exit `{shutdown, drain}`), so the client's
+form-state-preserving reconnect still runs. Nothing is lost: nothing has
+been rendered for that connection to coordinate about, and the client is
+mid-reconnect already.
+
 ### `handle_drain/2` vs `unmount/1`
 
 Both run during a graceful shutdown, but they answer different

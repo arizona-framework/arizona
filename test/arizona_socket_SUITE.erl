@@ -16,6 +16,16 @@
 -export([deferred_resync_flushed_by_event_frame/1]).
 -export([deferred_resync_flushed_by_ping/1]).
 -export([deferred_resync_timeout_flushes_undeduped/1]).
+-export([unmount_skipped_when_never_mounted/1]).
+-export([unmount_runs_after_mount/1]).
+-export([resync_mount_crash_on_fps_frame_closes_crash/1]).
+-export([resync_mount_crash_on_other_frame_closes_crash/1]).
+-export([resync_mount_crash_on_timeout_closes_crash/1]).
+-export([resync_on_dead_live_process_closes_going_away/1]).
+-export([drain_before_mount_closes_going_away/1]).
+-export([push_emitted_after_reply_not_folded/1]).
+-export([child_push_scoped_to_emitting_view/1]).
+-export([foreign_caller_does_not_desync_drain/1]).
 
 all() ->
     [
@@ -27,7 +37,17 @@ all() ->
         flagged_reconnect_defers_and_dedups_resync,
         deferred_resync_flushed_by_event_frame,
         deferred_resync_flushed_by_ping,
-        deferred_resync_timeout_flushes_undeduped
+        deferred_resync_timeout_flushes_undeduped,
+        unmount_skipped_when_never_mounted,
+        unmount_runs_after_mount,
+        resync_mount_crash_on_fps_frame_closes_crash,
+        resync_mount_crash_on_other_frame_closes_crash,
+        resync_mount_crash_on_timeout_closes_crash,
+        resync_on_dead_live_process_closes_going_away,
+        drain_before_mount_closes_going_away,
+        push_emitted_after_reply_not_folded,
+        child_push_scoped_to_emitting_view,
+        foreign_caller_does_not_desync_drain
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -216,6 +236,97 @@ deferred_resync_flushed_by_ping(Config) when is_list(Config) ->
         json:decode(iolist_to_binary(ResyncFrame))
     ).
 
+unmount_skipped_when_never_mounted(Config) when is_list(Config) ->
+    %% A flagged reconnect leaves the live process UNMOUNTED for the whole
+    %% deferral window. If the transport goes away in that window (a
+    %% deploy-drain reconnect storm), the live process stops -- and its
+    %% terminate/2 must not run unmount/1 for a view that never mounted: the
+    %% bindings are still the raw route bindings (middleware-derived session
+    %% data), so the handler's unmount head does not match, the raised
+    %% `{unhandled_unmount, ...}` embeds those bindings in the crash report, and
+    %% the cleanup the handler actually wanted never runs anyway.
+    %%
+    %% A never-mounted view never calls its handler, so nothing else in this
+    %% case loads the module -- and `call_unmount/2` short-circuits on
+    %% `function_exported/3`, which answers `false` for an unloaded module. A
+    %% live server always has the handler loaded (its route resolved and its
+    %% page rendered), so load it here rather than let the assertion depend on
+    %% which case ran first.
+    {module, arizona_unmount_parent} = code:ensure_loaded(arizona_unmount_parent),
+    Self = self(),
+    Transport = spawn(fun() ->
+        Req = arizona_req_test_adapter:new(),
+        {ok, Socket} = arizona_socket:init(
+            arizona_unmount_parent,
+            #{notify => Self},
+            Req,
+            #{reconnect => true, fps_follow => true}
+        ),
+        Self ! {live_pid, arizona_socket:live_pid(Socket)},
+        await_stop()
+    end),
+    LivePid = await_live_pid(),
+    Ref = erlang:monitor(process, LivePid),
+    %% Transport exits normally mid-deferral -- the live process's transport
+    %% monitor reaps it, so terminate/2 runs on a never-mounted state.
+    Transport ! stop,
+    receive
+        {'DOWN', Ref, process, LivePid, Reason} ->
+            ?assertEqual(normal, Reason)
+    after 2000 ->
+        error(live_process_did_not_stop)
+    end,
+    %% Nothing was mounted, so nothing may be unmounted.
+    receive
+        {root_unmounted, _} = Msg -> error({spurious_unmount, Msg})
+    after 0 -> ok
+    end.
+
+unmount_runs_after_mount(Config) when is_list(Config) ->
+    %% Control for unmount_skipped_when_never_mounted: an unflagged reconnect
+    %% mounts at init, so the same transport exit MUST unmount -- children
+    %% first, then the root.
+    Self = self(),
+    Transport = spawn(fun() ->
+        Req = arizona_req_test_adapter:new(),
+        {reply, _Frame, Socket} = arizona_socket:init(
+            arizona_unmount_parent, #{notify => Self}, Req, #{reconnect => true}
+        ),
+        Self ! {live_pid, arizona_socket:live_pid(Socket)},
+        await_stop()
+    end),
+    LivePid = await_live_pid(),
+    Ref = erlang:monitor(process, LivePid),
+    Transport ! stop,
+    receive
+        {'DOWN', Ref, process, LivePid, Reason} -> ?assertEqual(normal, Reason)
+    after 2000 -> error(live_process_did_not_stop)
+    end,
+    ?assertEqual({child_unmounted, ~"uchild"}, await_unmount()),
+    ?assertEqual({root_unmounted, ~"uparent"}, await_unmount()).
+
+await_live_pid() ->
+    receive
+        {live_pid, Pid} -> Pid
+    after 2000 -> error(no_live_pid)
+    end.
+
+%% Keeps a stand-in transport process alive until the case tells it to exit
+%% (normally, so the live process's transport monitor is what reaps the view).
+%% The timeout only bounds a case that fails before signalling.
+await_stop() ->
+    receive
+        stop -> ok
+    after 30000 -> ok
+    end.
+
+await_unmount() ->
+    receive
+        {child_unmounted, _} = Msg -> Msg;
+        {root_unmounted, _} = Msg -> Msg
+    after 2000 -> error(timeout_waiting_for_unmount)
+    end.
+
 deferred_resync_timeout_flushes_undeduped(Config) when is_list(Config) ->
     %% Backstop: a flagged client that never sends its promised announcement.
     %% The armed timer targets the socket process (this test process), so the
@@ -238,3 +349,195 @@ deferred_resync_timeout_flushes_undeduped(Config) when is_list(Config) ->
     after 2000 ->
         error(resync_timeout_never_fired)
     end.
+
+resync_mount_crash_on_fps_frame_closes_crash(Config) when is_list(Config) ->
+    %% The deferred resync is the one mount path that ran outside a crash guard.
+    %% A raise in mount/1, on_mount, or render/1 escaped handle_in/2 and killed
+    %% the ws_session with no close frame, so the client saw a bare 1006 and
+    %% backed off forever instead of the 4500 close its purpose-built
+    %% `crashReload()` guard exists for. The conforming leg -- the promised
+    %% `cached_fps` frame -- must close 4500 like every sibling mount path.
+    Socket = crashing_flagged_socket(),
+    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
+    ?assertMatch({close, 4500, ~"server crash", _}, arizona_socket:handle_in(FpsFrame, Socket)).
+
+resync_mount_crash_on_other_frame_closes_crash(Config) when is_list(Config) ->
+    %% Protocol-violation leg: a non-`cached_fps` first frame flushes the resync
+    %% undeduped before its own reply. A crash there must close 4500 too -- and
+    %% the close outranks the frame's reply, so nothing is shipped alongside it.
+    Socket = crashing_flagged_socket(),
+    EventFrame = iolist_to_binary(
+        json:encode([~"crashable", ~"set_status", #{~"value" => ~"x"}])
+    ),
+    ?assertMatch({close, 4500, ~"server crash", _}, arizona_socket:handle_in(EventFrame, Socket)).
+
+resync_mount_crash_on_timeout_closes_crash(Config) when is_list(Config) ->
+    %% Backstop leg: the flagged client never announced, so the timer flushes
+    %% the resync from handle_info/2 -- equally unguarded before the fix.
+    Socket = crashing_flagged_socket(),
+    ?assertMatch(
+        {close, 4500, ~"server crash", _},
+        arizona_socket:handle_info(arizona_resync_timeout, Socket)
+    ).
+
+resync_on_dead_live_process_closes_going_away(Config) when is_list(Config) ->
+    %% Drain/exit race: the resync flush reaches a live process that already
+    %% exited (a listener drain landing inside the deferral window). Its sibling
+    %% mount paths (do_navigate/do_patch) translate that into a 1001 going-away
+    %% close so the client's form-state-preserving reconnect runs; the flush
+    %% raised a bare `{noproc, ...}` out of handle_in/2 instead.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+    ),
+    Pid = arizona_socket:live_pid(Socket),
+    Ref = erlang:monitor(process, Pid),
+    ok = gen_server:stop(Pid),
+    receive
+        {'DOWN', Ref, process, Pid, _Reason} -> ok
+    after 2000 -> error(live_process_did_not_stop)
+    end,
+    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
+    ?assertMatch({close, 1001, <<>>, _}, arizona_socket:handle_in(FpsFrame, Socket)).
+
+drain_before_mount_closes_going_away(Config) when is_list(Config) ->
+    %% A listener drain broadcast landing inside the deferred reconnect window
+    %% reaches a live process that has not mounted yet, where the catch-all
+    %% pre-mount drop swallowed it: `handle_drain/2` never ran, no
+    %% `{shutdown, drain}` exit reached the socket, so the client never got the
+    %% 1001 that runs its form-state-preserving reconnect -- while the transport
+    %% had already acknowledged the drain, leaving the listener to count it
+    %% handled and hard-kill the connection at the deadline.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+    ),
+    Pid = arizona_socket:live_pid(Socket),
+    Pid ! {arizona_drain, erlang:monotonic_time(millisecond) + 5000},
+    receive
+        {'EXIT', Pid, Reason} = Exit ->
+            ?assertEqual({shutdown, drain}, Reason),
+            ?assertMatch({close, 1001, <<>>, _}, arizona_socket:handle_info(Exit, Socket))
+    after 1000 ->
+        error(drain_swallowed_before_mount)
+    end.
+
+push_emitted_after_reply_not_folded(Config) when is_list(Config) ->
+    %% The drain folds queued pushes in FRONT of a synchronous reply, which is
+    %% only sound for pushes the live process emitted BEFORE that reply. The
+    %% `?send` self-message idiom breaks that assumption: the handler enqueues
+    %% to the live process's own mailbox inside handle_event/3, the live process
+    %% replies, and only then dequeues and pushes -- all before the socket
+    %% process is rescheduled to its `after 0`. Prepending that push inverts an
+    %% order-dependent op pair: the wire carried MOVE-then-INSERT where the
+    %% server meant INSERT-then-MOVE, and the client drops a move whose key it
+    %% has not seen, leaving the server's snapshot wrong for good.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} = arizona_socket:init(arizona_stream_self_send, #{}, Req, #{}),
+    %% Repeat the interleave: the race is what the fix removes, so one trial
+    %% only proves the fix when it happens to lose.
+    interleave_add_then_move(Socket0, lists:seq(1, 20)).
+
+interleave_add_then_move(_Socket, []) ->
+    ok;
+interleave_add_then_move(Socket0, [N | Rest]) ->
+    Id = <<"k", (integer_to_binary(N))/binary>>,
+    Frame = iolist_to_binary(
+        json:encode([~"self_send", ~"add_then_move", #{~"id" => Id}])
+    ),
+    {reply, ReplyFrame, Socket} = arizona_socket:handle_in(Frame, Socket0),
+    #{~"o" := ReplyOps} = json:decode(iolist_to_binary(ReplyFrame)),
+    %% The reply carries the INSERT alone -- the MOVE was emitted after it.
+    ?assertMatch([[?OP_INSERT, _, Id, _Pos, _HTML]], ReplyOps),
+    %% ...and is not lost: it follows in its own frame, after the insert, with a
+    %% `null` after-ref (move to the front).
+    receive
+        {arizona_push, _, _, _} = Push ->
+            {reply, PushFrame, _Socket1} = arizona_socket:handle_info(Push, Socket),
+            #{~"o" := PushOps} = json:decode(iolist_to_binary(PushFrame)),
+            ?assertMatch([[?OP_MOVE, _, Id, null]], PushOps)
+    after 2000 ->
+        error({move_push_never_arrived, Id})
+    end,
+    interleave_add_then_move(Socket, Rest).
+
+child_push_scoped_to_emitting_view(Config) when is_list(Config) ->
+    %% A `?send`/`?send_after`-driven update to an embedded child pushed the
+    %% child's own (child-relative) ops tagged with the ROOT view id, so the
+    %% socket scoped them `<root>:<childAz>`. `az` is fingerprint-derived, so
+    %% two instances of the same handler carry identical `az` values and only
+    %% the view id separates them -- a tick meant for one twin patched the
+    %% other. (The event path is already correct: it scopes with the child id
+    %% the frame named.)
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(arizona_twin_parent, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket),
+    TargetA = child_push_target(Pid, Socket, ~"twin_a"),
+    TargetB = child_push_target(Pid, Socket, ~"twin_b"),
+    [ViewIdA, AzA] = binary:split(TargetA, ~":"),
+    [ViewIdB, AzB] = binary:split(TargetB, ~":"),
+    %% The premise: identical handler, identical slot address.
+    ?assertEqual(AzA, AzB),
+    %% ...so the view id is the only thing that can route the patch.
+    ?assertEqual(~"twin_a", ViewIdA),
+    ?assertEqual(~"twin_b", ViewIdB).
+
+%% Drive one embedded child's handle_info/2 and return the scoped target its
+%% push produced on the wire.
+child_push_target(Pid, Socket, ViewId) ->
+    Pid ! {arizona_view, ViewId, close},
+    receive
+        {arizona_push, _, _, _} = Push ->
+            {reply, Frame, _Socket} = arizona_socket:handle_info(Push, Socket),
+            #{~"o" := [[?OP_TEXT, Target, _Value]]} = json:decode(iolist_to_binary(Frame)),
+            Target
+    after 2000 ->
+        error({no_child_push, ViewId})
+    end.
+
+foreign_caller_does_not_desync_drain(Config) when is_list(Config) ->
+    %% `arizona_live:handle_event/4` and `patch/2` are exported, so a process
+    %% other than the socket can call them on a live process whose transport
+    %% folds queued pushes. A marker emitted for such a call is one nobody
+    %% drains, and the offset would persist FOREVER: every later drain eats the
+    %% previous cycle's marker, folds nothing, and lets a queued push ship in a
+    %% later frame over a newer value. The marker is emitted only for a call made
+    %% by the transport itself, so the socket's mailbox never holds a stray one.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket0),
+    Self = self(),
+    %% A foreign process drives the same live process.
+    Foreign = spawn(fun() ->
+        {ok, _Ops, _Effects} = arizona_live:handle_event(Pid, ~"counter", ~"inc", #{}),
+        Self ! foreign_done
+    end),
+    receive
+        foreign_done -> ok
+    after 2000 -> error({foreign_caller_stuck, Foreign})
+    end,
+    %% The socket's own cycle still folds correctly: an info push emitted before
+    %% the reply is prepended to it, in causal order, in ONE frame.
+    Pid ! {set_count, 5},
+    EventFrame = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+    #{~"o" := Ops} = json:decode(iolist_to_binary(Frame)),
+    ?assertMatch([[?OP_TEXT, _, ~"5"], [?OP_TEXT, _, ~"6"]], Ops),
+    %% Nothing stray left behind for the next cycle to trip over.
+    receive
+        LeftOver -> error({unexpected_mailbox_message, LeftOver})
+    after 0 -> ok
+    end.
+
+%% A flagged-reconnect socket whose live process crashes the moment the deferred
+%% resync mounts it. `init/4` defers the mount, so the crash lands in the flush,
+%% never at init.
+crashing_flagged_socket() ->
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_crashable,
+        #{crash_on_mount => true},
+        Req,
+        #{reconnect => true, fps_follow => true}
+    ),
+    Socket.

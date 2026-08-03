@@ -19,6 +19,8 @@
     unknown_frame/1,
     malformed_json/1,
     reconnect_init/1,
+    reconnect_fps_follow_ships_resync_then_reply/1,
+    ws_decode_handles_every_length_form/1,
     connect_with_params/1,
     http_query_params/1,
     http_path_bindings/1,
@@ -116,6 +118,8 @@ groups() ->
         unknown_frame,
         malformed_json,
         reconnect_init,
+        reconnect_fps_follow_ships_resync_then_reply,
+        ws_decode_handles_every_length_form,
         connect_with_params,
         http_query_params,
         http_path_bindings,
@@ -1940,6 +1944,63 @@ reconnect_init(Config) ->
     ?assertMatch(#{~"o" := _}, Decoded),
     ws_close(Sock).
 
+reconnect_fps_follow_ships_resync_then_reply(Config) ->
+    %% A flagged reconnect (`_az_fps_follow=1`) defers the full-page resync until
+    %% the client's promised `cached_fps` frame. A DIFFERENT first frame settles
+    %% it anyway: the resync goes out first (undeduped -- nothing was announced)
+    %% and the frame's own reply follows it, both produced from one inbound frame
+    %% as a `reply_many`. Roadrunner batches the pair into a single `send`, so
+    %% this is exactly the shape a frame-at-a-time decoder used to truncate to
+    %% the resync alone -- meaning `reply_many` had never been driven end to end.
+    {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}, {fps_follow, true}]),
+    ok = ws_send_json(Sock, [~"crashable", ~"set_status", #{~"value" => ~"after_resync"}]),
+    %% Frame 1: the deferred resync, statics attached.
+    {text, ResyncFrame} = ws_recv(Sock),
+    #{~"o" := [[?OP_REPLACE, _ViewId, Payload]]} = json:decode(ResyncFrame),
+    ?assertMatch(#{~"f" := _, ~"s" := [_ | _]}, Payload),
+    %% Frame 2: the event's own reply, applied against the just-replaced DOM.
+    {text, ReplyFrame} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := [[?OP_TEXT, _, ~"after_resync"]]}, json:decode(ReplyFrame)),
+    ws_close(Sock).
+
+ws_decode_handles_every_length_form(Config) when is_list(Config) ->
+    %% The decoder backs every ws_recv/2 in this suite, so a length form it does
+    %% not know is not a decode error but a 5-second hang: the frame reads as
+    %% `more`, ws_recv/2 keeps waiting for bytes that already arrived, and the
+    %% case reports `timeout`. The 64-bit form is the one a real payload reaches
+    %% first (a resync for a page whose statics cross 64 KiB).
+    Tail = ~"trailing",
+    Small = binary:copy(~"a", 10),
+    Medium = binary:copy(~"b", 200),
+    Large = binary:copy(~"c", 70000),
+    ?assertEqual(
+        {{text, Small}, Tail}, ws_decode(<<(server_frame(1, Small))/binary, Tail/binary>>)
+    ),
+    ?assertEqual(
+        {{text, Medium}, Tail}, ws_decode(<<(server_frame(1, Medium))/binary, Tail/binary>>)
+    ),
+    ?assertEqual(
+        {{text, Large}, Tail}, ws_decode(<<(server_frame(1, Large))/binary, Tail/binary>>)
+    ),
+    %% A frame whose declared payload has not fully arrived yet asks for more.
+    Partial = binary:part(server_frame(1, Medium), 0, 50),
+    ?assertEqual(more, ws_decode(Partial)),
+    ?assertEqual(more, ws_decode(<<>>)),
+    %% Close frames: empty, code + reason, and the malformed 1-byte payload that
+    %% used to function_clause the decoder.
+    ?assertEqual({{close, 0, <<>>}, <<>>}, ws_decode(server_frame(8, <<>>))),
+    ?assertEqual({{close, 1001, <<>>}, <<>>}, ws_decode(server_frame(8, <<1001:16>>))),
+    ?assertEqual({{close, 0, <<>>}, <<>>}, ws_decode(server_frame(8, <<7>>))).
+
+%% Server-direction frame: FIN set, never masked (RFC 6455 §5.1).
+server_frame(Opcode, Payload) ->
+    Len = byte_size(Payload),
+    case Len of
+        L when L < 126 -> <<1:1, 0:3, Opcode:4, 0:1, L:7, Payload/binary>>;
+        L when L < 65536 -> <<1:1, 0:3, Opcode:4, 0:1, 126:7, L:16, Payload/binary>>;
+        L -> <<1:1, 0:3, Opcode:4, 0:1, 127:7, L:64, Payload/binary>>
+    end.
+
 %% --------------------------------------------------------------------
 %% Crash recovery tests
 %% --------------------------------------------------------------------
@@ -2023,7 +2084,10 @@ ws_handshake(Sock, Port, Path, Opts) ->
             {true, _} -> "&_az_reconnect=1";
             {false, _} -> ""
         end,
-    QS = [AzPathSeg, ReconSeg, ParamsQS, RawSuffix],
+    FpsSeg = fps_follow_seg(
+        proplists:get_value(fps_follow, Opts, false), AzPathSeg, ReconSeg
+    ),
+    QS = [AzPathSeg, ReconSeg, FpsSeg, ParamsQS, RawSuffix],
     Req = [
         "GET /ws?",
         QS,
@@ -2042,6 +2106,14 @@ ws_handshake(Sock, Port, Path, Opts) ->
     ok = gen_tcp:send(Sock, Req),
     {ok, {http_response, _Version, 101, _Reason}} = gen_tcp:recv(Sock, 0, 5000),
     drain_http_headers(Sock).
+
+%% `_az_fps_follow=1` is the client's promise that its `cached_fps` frame is the
+%% first frame after open, so the server defers the reconnect resync until it
+%% arrives. Only meaningful alongside `_az_reconnect`; the leading `&` follows
+%% whatever precedes it, exactly like the reconnect segment.
+fps_follow_seg(false, _AzPathSeg, _ReconSeg) -> "";
+fps_follow_seg(true, "", "") -> "_az_fps_follow=1";
+fps_follow_seg(true, _AzPathSeg, _ReconSeg) -> "&_az_fps_follow=1".
 
 drain_http_headers(Sock) ->
     case gen_tcp:recv(Sock, 0, 5000) of
@@ -2063,22 +2135,55 @@ ws_send_binary_frame(Sock, Payload) ->
 ws_recv(Sock) ->
     ws_recv(Sock, 5000).
 
+%% Roadrunner may batch several outbound frames into ONE `send` (a `reply_many`
+%% result -- e.g. a deferred reconnect resync followed by the triggering frame's
+%% own reply), and a read may equally deliver only part of a frame. So keep the
+%% undecoded tail per socket and consume it before touching the wire again:
+%% decoding just the first frame and discarding the rest made a multi-frame
+%% reply silently look like a single frame, which is why the `reply_many` path
+%% had never actually been driven through a real WebSocket.
 ws_recv(Sock, Timeout) ->
-    case gen_tcp:recv(Sock, 0, Timeout) of
-        {ok, Data} ->
-            ws_decode(Data);
-        {error, timeout} ->
-            timeout;
-        {error, closed} ->
-            {error, closed};
-        {error, Reason} ->
-            {error, Reason}
+    ws_recv_buffered(Sock, Timeout, ws_take_buffer(Sock)).
+
+ws_recv_buffered(Sock, Timeout, Buf) ->
+    case ws_decode(Buf) of
+        {Frame, Rest} ->
+            ok = ws_put_buffer(Sock, Rest),
+            Frame;
+        more ->
+            case gen_tcp:recv(Sock, 0, Timeout) of
+                {ok, Data} ->
+                    ws_recv_buffered(Sock, Timeout, <<Buf/binary, Data/binary>>);
+                {error, Reason} ->
+                    %% Put the partial frame back either way: a timeout is not
+                    %% terminal (the caller may read again with a longer one),
+                    %% and on a close it keeps the bytes available for a
+                    %% post-mortem read rather than silently dropping them.
+                    ok = ws_put_buffer(Sock, Buf),
+                    ws_recv_error(Reason)
+            end
     end.
+
+ws_recv_error(timeout) -> timeout;
+ws_recv_error(Reason) -> {error, Reason}.
+
+ws_take_buffer(Sock) ->
+    case erlang:erase({ws_buffer, Sock}) of
+        undefined -> <<>>;
+        Buf -> Buf
+    end.
+
+ws_put_buffer(_Sock, <<>>) ->
+    ok;
+ws_put_buffer(Sock, Buf) ->
+    _ = erlang:put({ws_buffer, Sock}, Buf),
+    ok.
 
 ws_close(Sock) ->
     Mask = crypto:strong_rand_bytes(4),
     Frame = <<1:1, 0:3, 8:4, 1:1, 0:7, Mask/binary>>,
     ok = gen_tcp:send(Sock, Frame),
+    _ = erlang:erase({ws_buffer, Sock}),
     ok = gen_tcp:close(Sock).
 
 %% Encode a text frame with masking (client must mask)
@@ -2112,22 +2217,44 @@ ws_mask(<<>>, _, _, _, _, Acc) ->
 ws_mask(<<B, Rest/binary>>, M0, M1, M2, M3, Acc) ->
     ws_mask(Rest, M1, M2, M3, M0, <<Acc/binary, (B bxor M0)>>).
 
-%% Decode a server frame (unmasked)
-ws_decode(<<_Fin:1, _Rsv:3, 8:4, _M:1, Len:7, Rest/binary>>) when Len < 126 ->
-    <<Code:16, Reason/binary>> =
-        case Len of
-            0 -> <<0:16>>;
-            _ -> binary:part(Rest, 0, min(Len, byte_size(Rest)))
-        end,
+%% Decode ONE server frame (unmasked) off the front of `Data`, returning it with
+%% the still-undecoded tail, or `more` when `Data` does not yet hold a whole
+%% frame. Never discards the tail -- see ws_recv/2. All three RFC 6455 length
+%% forms are handled: omitting the 64-bit one made any frame over 64 KiB (a
+%% resync payload for a large page) decode as `more` forever, so ws_recv/2 sat
+%% there until its timeout and reported `timeout` instead of failing on the
+%% frame.
+ws_decode(<<_Fin:1, _Rsv:3, 8:4, _M:1, Len:7, Rest/binary>>) when
+    Len < 126, byte_size(Rest) >= Len
+->
+    <<Payload:Len/binary, Tail/binary>> = Rest,
+    {ws_close_frame(Payload), Tail};
+ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, Len:7, Rest/binary>>) when
+    Len < 126, byte_size(Rest) >= Len
+->
+    ws_payload_frame(Opcode, Len, Rest);
+ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, 126:7, Len:16, Rest/binary>>) when
+    byte_size(Rest) >= Len
+->
+    ws_payload_frame(Opcode, Len, Rest);
+ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, 127:7, Len:64, Rest/binary>>) when
+    byte_size(Rest) >= Len
+->
+    ws_payload_frame(Opcode, Len, Rest);
+ws_decode(_Data) ->
+    more.
+
+ws_payload_frame(Opcode, Len, Rest) ->
+    <<Payload:Len/binary, Tail/binary>> = Rest,
+    {{ws_opcode_to_type(Opcode), Payload}, Tail}.
+
+%% A close frame carries either nothing or a 2-byte status code plus an optional
+%% UTF-8 reason (RFC 6455 §5.5.1). A 1-byte payload is a protocol violation, but
+%% report it as a close with no code rather than crash the decoder on it.
+ws_close_frame(<<Code:16, Reason/binary>>) ->
     {close, Code, Reason};
-ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, Len:7, Rest/binary>>) when Len < 126 ->
-    Payload = binary:part(Rest, 0, Len),
-    {ws_opcode_to_type(Opcode), Payload};
-ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, 126:7, Len:16, Rest/binary>>) ->
-    Payload = binary:part(Rest, 0, Len),
-    {ws_opcode_to_type(Opcode), Payload};
-ws_decode(Data) ->
-    {raw, Data}.
+ws_close_frame(_Short) ->
+    {close, 0, <<>>}.
 
 ws_opcode_to_type(1) -> text;
 ws_opcode_to_type(2) -> binary;
