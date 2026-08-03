@@ -20,6 +20,7 @@
     malformed_json/1,
     reconnect_init/1,
     reconnect_fps_follow_ships_resync_then_reply/1,
+    ws_decode_handles_every_length_form/1,
     connect_with_params/1,
     http_query_params/1,
     http_path_bindings/1,
@@ -118,6 +119,7 @@ groups() ->
         malformed_json,
         reconnect_init,
         reconnect_fps_follow_ships_resync_then_reply,
+        ws_decode_handles_every_length_form,
         connect_with_params,
         http_query_params,
         http_path_bindings,
@@ -1961,6 +1963,44 @@ reconnect_fps_follow_ships_resync_then_reply(Config) ->
     ?assertMatch(#{~"o" := [[?OP_TEXT, _, ~"after_resync"]]}, json:decode(ReplyFrame)),
     ws_close(Sock).
 
+ws_decode_handles_every_length_form(Config) when is_list(Config) ->
+    %% The decoder backs every ws_recv/2 in this suite, so a length form it does
+    %% not know is not a decode error but a 5-second hang: the frame reads as
+    %% `more`, ws_recv/2 keeps waiting for bytes that already arrived, and the
+    %% case reports `timeout`. The 64-bit form is the one a real payload reaches
+    %% first (a resync for a page whose statics cross 64 KiB).
+    Tail = ~"trailing",
+    Small = binary:copy(~"a", 10),
+    Medium = binary:copy(~"b", 200),
+    Large = binary:copy(~"c", 70000),
+    ?assertEqual(
+        {{text, Small}, Tail}, ws_decode(<<(server_frame(1, Small))/binary, Tail/binary>>)
+    ),
+    ?assertEqual(
+        {{text, Medium}, Tail}, ws_decode(<<(server_frame(1, Medium))/binary, Tail/binary>>)
+    ),
+    ?assertEqual(
+        {{text, Large}, Tail}, ws_decode(<<(server_frame(1, Large))/binary, Tail/binary>>)
+    ),
+    %% A frame whose declared payload has not fully arrived yet asks for more.
+    Partial = binary:part(server_frame(1, Medium), 0, 50),
+    ?assertEqual(more, ws_decode(Partial)),
+    ?assertEqual(more, ws_decode(<<>>)),
+    %% Close frames: empty, code + reason, and the malformed 1-byte payload that
+    %% used to function_clause the decoder.
+    ?assertEqual({{close, 0, <<>>}, <<>>}, ws_decode(server_frame(8, <<>>))),
+    ?assertEqual({{close, 1001, <<>>}, <<>>}, ws_decode(server_frame(8, <<1001:16>>))),
+    ?assertEqual({{close, 0, <<>>}, <<>>}, ws_decode(server_frame(8, <<7>>))).
+
+%% Server-direction frame: FIN set, never masked (RFC 6455 §5.1).
+server_frame(Opcode, Payload) ->
+    Len = byte_size(Payload),
+    case Len of
+        L when L < 126 -> <<1:1, 0:3, Opcode:4, 0:1, L:7, Payload/binary>>;
+        L when L < 65536 -> <<1:1, 0:3, Opcode:4, 0:1, 126:7, L:16, Payload/binary>>;
+        L -> <<1:1, 0:3, Opcode:4, 0:1, 127:7, L:64, Payload/binary>>
+    end.
+
 %% --------------------------------------------------------------------
 %% Crash recovery tests
 %% --------------------------------------------------------------------
@@ -2114,13 +2154,18 @@ ws_recv_buffered(Sock, Timeout, Buf) ->
             case gen_tcp:recv(Sock, 0, Timeout) of
                 {ok, Data} ->
                     ws_recv_buffered(Sock, Timeout, <<Buf/binary, Data/binary>>);
-                {error, timeout} ->
-                    ok = ws_put_buffer(Sock, Buf),
-                    timeout;
                 {error, Reason} ->
-                    {error, Reason}
+                    %% Put the partial frame back either way: a timeout is not
+                    %% terminal (the caller may read again with a longer one),
+                    %% and on a close it keeps the bytes available for a
+                    %% post-mortem read rather than silently dropping them.
+                    ok = ws_put_buffer(Sock, Buf),
+                    ws_recv_error(Reason)
             end
     end.
+
+ws_recv_error(timeout) -> timeout;
+ws_recv_error(Reason) -> {error, Reason}.
 
 ws_take_buffer(Sock) ->
     case erlang:erase({ws_buffer, Sock}) of
@@ -2174,7 +2219,11 @@ ws_mask(<<B, Rest/binary>>, M0, M1, M2, M3, Acc) ->
 
 %% Decode ONE server frame (unmasked) off the front of `Data`, returning it with
 %% the still-undecoded tail, or `more` when `Data` does not yet hold a whole
-%% frame. Never discards the tail -- see ws_recv/2.
+%% frame. Never discards the tail -- see ws_recv/2. All three RFC 6455 length
+%% forms are handled: omitting the 64-bit one made any frame over 64 KiB (a
+%% resync payload for a large page) decode as `more` forever, so ws_recv/2 sat
+%% there until its timeout and reported `timeout` instead of failing on the
+%% frame.
 ws_decode(<<_Fin:1, _Rsv:3, 8:4, _M:1, Len:7, Rest/binary>>) when
     Len < 126, byte_size(Rest) >= Len
 ->
@@ -2183,22 +2232,29 @@ ws_decode(<<_Fin:1, _Rsv:3, 8:4, _M:1, Len:7, Rest/binary>>) when
 ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, Len:7, Rest/binary>>) when
     Len < 126, byte_size(Rest) >= Len
 ->
-    <<Payload:Len/binary, Tail/binary>> = Rest,
-    {{ws_opcode_to_type(Opcode), Payload}, Tail};
+    ws_payload_frame(Opcode, Len, Rest);
 ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, 126:7, Len:16, Rest/binary>>) when
     byte_size(Rest) >= Len
 ->
-    <<Payload:Len/binary, Tail/binary>> = Rest,
-    {{ws_opcode_to_type(Opcode), Payload}, Tail};
+    ws_payload_frame(Opcode, Len, Rest);
+ws_decode(<<_Fin:1, _Rsv:3, Opcode:4, 0:1, 127:7, Len:64, Rest/binary>>) when
+    byte_size(Rest) >= Len
+->
+    ws_payload_frame(Opcode, Len, Rest);
 ws_decode(_Data) ->
     more.
 
+ws_payload_frame(Opcode, Len, Rest) ->
+    <<Payload:Len/binary, Tail/binary>> = Rest,
+    {{ws_opcode_to_type(Opcode), Payload}, Tail}.
+
 %% A close frame carries either nothing or a 2-byte status code plus an optional
-%% UTF-8 reason (RFC 6455 §5.5.1).
-ws_close_frame(<<>>) ->
-    {close, 0, <<>>};
+%% UTF-8 reason (RFC 6455 §5.5.1). A 1-byte payload is a protocol violation, but
+%% report it as a close with no code rather than crash the decoder on it.
 ws_close_frame(<<Code:16, Reason/binary>>) ->
-    {close, Code, Reason}.
+    {close, Code, Reason};
+ws_close_frame(_Short) ->
+    {close, 0, <<>>}.
 
 ws_opcode_to_type(1) -> text;
 ws_opcode_to_type(2) -> binary;
