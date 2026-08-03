@@ -236,3 +236,110 @@ describe('applyOps -- re-rendering a slot that contains a nested marker pair', (
         expect(pageBody()).toBe(`<h1>Title</h1><!--az:${PAGE_AZ}-->flat<!--/az-->`);
     });
 });
+
+// ---------------------------------------------------------------------------
+// A child view inside a stream item: OP_ITEM_PATCH carries the child-view
+// wrapper.
+//
+// `arizona_socket:flatten_ops/2` unwraps `[ChildViewId, ChildOps]` only at TOP
+// level, so a `?stateful` child inside a stream `?each` item ships that wrapper
+// INSIDE the item patch. Real captured op:
+//
+//   [7, "page:1MGI7U2-1", "1", [["c-1", [[0, "1MZMHYB-1", "ONE"]]]]]
+//
+// `op[0]` is a view-id STRING, so a switch on op codes alone silently drops it.
+// ---------------------------------------------------------------------------
+
+const STREAM_AZ = '1MGI7U2-1';
+const CHILD_LABEL_AZ = '1MZMHYB-1';
+
+/** Real SSR: a stream whose single keyed item wraps a `?stateful` child view. */
+function setupStreamWithChild(label) {
+    document.body.innerHTML =
+        '<div az="1MGI7U2-0" az-view id="page">' +
+        `<ul az="${STREAM_AZ}"><!--az:${STREAM_AZ}-->` +
+        '<li az="1HWIIPK-0" az-key="1"><!--az:1HWIIPK-0-->' +
+        '<div az="1MZMHYB-0" az-view id="c-1">' +
+        `<span az="${CHILD_LABEL_AZ}" class="label"><!--az:${CHILD_LABEL_AZ}-->${label}<!--/az--></span>` +
+        '</div>' +
+        '<!--/az--></li>' +
+        '<!--/az--></ul></div>';
+}
+
+describe('applyOps -- child-view ops inside OP.ITEM_PATCH', () => {
+    it('dispatches the wrapper against the named child view', () => {
+        setupStreamWithChild('one');
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                `page:${STREAM_AZ}`,
+                '1',
+                [['c-1', [[OP.TEXT, CHILD_LABEL_AZ, 'ONE']]]],
+            ],
+        ]);
+        expect(document.querySelector('#c-1 .label').textContent).toBe('ONE');
+    });
+
+    it('resolves the child view by id, not by position in the item', () => {
+        // Two child views under one item: the wrapper must reach the named one
+        // and leave the sibling untouched.
+        setupStreamWithChild('one');
+        document
+            .querySelector('#c-1')
+            .insertAdjacentHTML(
+                'afterend',
+                `<div az="1MZMHYB-0" az-view id="c-2"><span az="${CHILD_LABEL_AZ}" class="label"><!--az:${CHILD_LABEL_AZ}-->two<!--/az--></span></div>`,
+            );
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                `page:${STREAM_AZ}`,
+                '1',
+                [['c-2', [[OP.TEXT, CHILD_LABEL_AZ, 'TWO']]]],
+            ],
+        ]);
+        expect(document.querySelector('#c-1 .label').textContent).toBe('one');
+        expect(document.querySelector('#c-2 .label').textContent).toBe('TWO');
+    });
+
+    it('applies a nested grandchild wrapper', () => {
+        setupStreamWithChild('one');
+        document
+            .querySelector('#c-1 .label')
+            .insertAdjacentHTML(
+                'afterend',
+                '<div az="1GC-0" az-view id="g-1"><em az="1GC-1"><!--az:1GC-1-->deep<!--/az--></em></div>',
+            );
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                `page:${STREAM_AZ}`,
+                '1',
+                [['c-1', [['g-1', [[OP.TEXT, '1GC-1', 'DEEP']]]]]],
+            ],
+        ]);
+        expect(document.querySelector('#g-1 em').textContent).toBe('DEEP');
+    });
+
+    it('warns when the named child view is not in the DOM', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupStreamWithChild('one');
+        applyOps([
+            [OP.ITEM_PATCH, `page:${STREAM_AZ}`, '1', [['gone', [[OP.TEXT, CHILD_LABEL_AZ, 'X']]]]],
+        ]);
+        expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toContain('gone');
+        // The item is otherwise untouched.
+        expect(document.querySelector('#c-1 .label').textContent).toBe('one');
+        warn.mockRestore();
+    });
+
+    it('warns on an unrecognized item op code instead of dropping it silently', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupStreamWithChild('one');
+        applyOps([[OP.ITEM_PATCH, `page:${STREAM_AZ}`, '1', [[99, CHILD_LABEL_AZ]]]]);
+        expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toContain('99');
+        warn.mockRestore();
+    });
+});

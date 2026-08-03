@@ -1411,6 +1411,13 @@ function resolveInnerEl(parent, az) {
  * Per-op behaviour matches `applyOps` via the shared `apply*Op` helpers,
  * differing only in element resolution: bare `az` resolved against `item`
  * via `resolveInnerEl/2`, with a separate fallback for `REMOVE_NODE`.
+ *
+ * An op whose head is NOT an op code is the `[ChildViewId, ChildOps]` child-view
+ * wrapper: `arizona_socket:flatten_ops/2` unwraps it only at top level, so a
+ * `?stateful` child inside a stream `?each` item ships it here still wrapped. Its
+ * ops belong to the child's own view root, resolved by id like the top level does
+ * for `viewId:az` -- and they are the same bare-`az` shape, so they recurse
+ * through this function (which also covers a grandchild wrapper).
  * @param {Element} item
  * @param {Array<Array<*>>} innerOps
  */
@@ -1419,6 +1426,14 @@ function applyItemOps(item, innerOps) {
         // Same per-op isolation as applyOps: a throwing inner op must not abort
         // the rest of the item's patch batch.
         try {
+            if (typeof op[0] !== 'number') {
+                const childRoot = findViewRoot(op[0]);
+                // Loud like the top-level miss: a dropped child batch reads as
+                // "the child just stopped updating".
+                if (childRoot) applyItemOps(childRoot, op[1]);
+                else console.warn(`[arizona] item op child view "${op[0]}" not found; skipping`);
+                continue;
+            }
             const az = op[1];
             switch (op[0]) {
                 case OP.TEXT:
@@ -1453,6 +1468,8 @@ function applyItemOps(item, innerOps) {
                 case OP.LIST_PATCH:
                     applyListPatch(resolveInnerEl(item, az), az, op[2]);
                     break;
+                default:
+                    console.warn(`[arizona] item op ${op[0]} not recognized; skipping`);
             }
         } catch (err) {
             console.error(`[arizona] item op ${op[0]} failed; skipping`, err);
