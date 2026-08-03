@@ -873,9 +873,10 @@ Simplified gen_server wrapper:
   resets gen_server state (handler, snapshot, views), preserves `transport_pid` and `sent_fps`, and
   returns `{ok, NewViewId, PageContent}`. The previous root handler's final bindings are carried
   forward as the floor for the new handler's mount input, minus `arizona_eval:restricted_keys/0`
-  (`[id]`) -- those are route-bound, and `do_mount` requires the new handler's mount to keep them
+  -- those are route-bound, and `do_mount` requires the new handler's mount to keep them
   verbatim, so carrying them would force the new route to pretend it is the old one.
-  `InitBindings` (route static config + middleware enrichments) overrides on key overlap. Keys the new handler omits from its mount return
+  `InitBindings` (route static config + middleware enrichments) overrides on key overlap. Keys the
+new handler omits from its mount return
   value are dropped on the next navigate. Stateful children's state (in `views`) is wiped: a child
   that was alive on the old page is gone unless the new page re-embeds it
 - `patch/2` -- `patch(Pid, Params)`. In-place navigation: keeps the current root mounted, runs its
@@ -921,9 +922,9 @@ the cancel cannot race a timer the old page armed while it was still running.
 
 ### Process-dictionary keys
 
-Seven keys live in the live process's dictionary, all read through accessor functions rather than
-directly. The first four are `arizona_live`'s own connection and scheduling state; the last three
-are set by the render/diff, which runs in the same process:
+The live process's dictionary holds the keys below, all read through accessor functions rather
+than directly. Some are `arizona_live`'s own connection and scheduling state, the rest are set by
+the render/diff, which runs in the same process -- the "Set by" column is authoritative:
 
 | Key | Set by | Read by |
 | --- | ------ | ------- |

@@ -11,14 +11,13 @@ Four layers, in the order to reach for them:
 
 | Layer | Where | Run |
 |-------|-------|-----|
-| Common Test (default) | `test/*_SUITE.erl` (47 suites) | `make test-ct`, `rebar3 ct --suite=arizona_diff_SUITE` |
+| Common Test (default) | `test/*_SUITE.erl` | `make test-ct`, `rebar3 ct --suite=arizona_diff_SUITE` |
 | Inline EUnit (private fns only) | `-ifdef(TEST)` blocks in `src/*.erl` | `make test-eunit`, `rebar3 eunit --module=arizona_socket` |
 | Playwright E2E | `e2e/parallel`, `e2e/sequential`, `e2e/native` | `make test-e2e` |
 | Vitest (client JS) | `assets/js/*.test.js` | `make test-js` |
 
 **New tests go in a CT suite.** Inline EUnit exists only to reach module-private functions;
-today that is seven modules (`arizona_js`, `arizona_render`, `arizona_crypto`, `arizona_eval`,
-`arizona_error_page`, `arizona_socket`, `arizona_effect`). There is no `test/*_test.erl`
+grep `-ifdef(TEST)` in `src/` for the current set. There is no `test/*_test.erl`
 module -- parse-transform tests live in `test/arizona_parse_transform_SUITE.erl`, a CT suite.
 
 ## Suite conventions
@@ -51,28 +50,24 @@ itself (`arizona_terminal_ssh_SUITE` reads it back from `ssh:daemon_info/1`) nee
 Playwright, split into projects/directories, all served by
 `scripts/start_test_server.sh` on `$PORT` (default 4041):
 
-- `e2e/parallel/` -- 18 specs, `fullyParallel`: `arizona_page`, `arizona_datatable`,
-  `arizona_mixed_children`, `arizona_inline`, `arizona_params`, `arizona_patch`,
-  `arizona_session`, `arizona_transition`, `arizona_middleware_halt`,
-  `arizona_form_submitter`, `bfcache`, the fetch specs (`arizona_fetch_push`,
-  `arizona_fetch_error`), the `?local` specs (`arizona_local`, `arizona_local_app`,
-  `arizona_local_nested`), `arizona_stream_siblings` (a stream `?each` among static
-  siblings -- the shape whose container render must patch through the slot marker), and
-  `arizona_os` -- the native-shell (OS) capability seam, driven
-  against the real client with a fake `window.__arizona_os__` installed via
-  `page.addInitScript` (the Electron-preload equivalent).
-- `e2e/sequential/` -- 3 specs, `workers: 1`: `arizona_chat`, `arizona_drain`,
-  `arizona_fetch_account`. The serialization is for the **drain** spec, which soft-drains the
-  whole listener and remounts every live view on the server, so it must not overlap the
-  others. Serializing buys ordering, not state isolation: the e2e server starts once for the
-  whole run, so anything keyed globally outlives every test -- `arizona_chat` therefore scopes
-  its pubsub channel to the `:room` path segment and each test visits a fresh random room.
-- `e2e/native/` -- 11 specs: the `?native` (JSON) wire e2e. A real WebSocket client, no browser
+- `e2e/parallel/` -- `fullyParallel`. The default: a spec belongs here unless it mutates state
+  the whole server shares. Two worth knowing about because their setup is unobvious --
+  `arizona_os` drives the native-shell capability seam against the real client with a fake
+  `window.__arizona_os__` installed via `page.addInitScript` (the Electron-preload equivalent),
+  and `arizona_stream_siblings` covers a stream `?each` among static siblings, the shape whose
+  container render must patch through the slot marker rather than the enclosing element.
+- `e2e/sequential/` -- `workers: 1`. A spec belongs here only if it cannot tolerate overlap:
+  today that is the drain spec, which soft-drains the whole listener and remounts every live
+  view. Serializing buys ordering, **not** state isolation -- the e2e server starts once for the
+  whole run, so anything keyed globally outlives every test. A spec needing isolation must scope
+  its own state (the chat spec scopes its pubsub channel to the `:room` path segment and visits
+  a fresh random room per test); putting it here instead will not fix it.
+- `e2e/native/` -- the `?native` (JSON) wire e2e. A real WebSocket client, no browser
   (`e2e/utils/native_client.js`), driving the native views over the live server.
 
 `make test-e2e-parallel` / `test-e2e-sequential` / `test-e2e-native` run one project.
 
-## `test/support/` (128 modules)
+## `test/support/`
 
 Do not read it as a list -- read it as categories. A new fixture joins one of these and
 follows its naming.
