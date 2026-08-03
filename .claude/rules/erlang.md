@@ -69,6 +69,8 @@ mount(Bindings) ->
 
 Void elements (`br`, `img`, `input`, `hr`, `meta`, `link`, `base`, `col`, `embed`, `param`, `source`, `track`, `wbr`, `area`) self-close as `<tag />`.
 
+Tag **classification** in the `?html` target (void, raw-text) is ASCII case-insensitive, as HTML itself is -- `{'BR', [], []}` self-closes and `{'SCRIPT', ...}` is raw text. The tag is still *emitted* exactly as written, so a camelCase SVG element or a `viewBox` attribute is never rewritten. `?native` and `?terminal` tags are case-**sensitive**: their vocabularies are Arizona's own (native tags map to Compose/SwiftUI component names).
+
 ## Parse transform attribute forms
 
 | Form | Example | Output |

@@ -256,6 +256,8 @@
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
     void_no_attrs/1,
+    void_tag_case_insensitive/1,
+    void_tag_case_insensitive_rejects_children/1,
     void_two_element_dynamic_attr/1,
     void_two_element_tuple/1,
     void_with_dynamic_children/1,
@@ -425,6 +427,8 @@ groups() ->
             dynamic_only_child,
             no_change_diff,
             void_no_attrs,
+            void_tag_case_insensitive,
+            void_tag_case_insensitive_rejects_children,
             static_after_dynamic_attr
         ]},
         %% Client-owned slots (?local)
@@ -3178,6 +3182,52 @@ void_no_attrs(Config) when is_list(Config) ->
     T = Mod:render(#{}),
     ?assertEqual([<<"<br />">>], maps:get(s, T)),
     ?assertEqual([], maps:get(d, T)).
+
+%% HTML tag names are ASCII case-insensitive, so `{'BR', ...}` is the void element
+%% `br` to the browser. Classifying only the lowercase atom emitted `<BR></BR>` --
+%% malformed markup, since a void element has no end tag. The tag's own casing is
+%% preserved in the output (name/1 never rewrites it, which is what keeps a
+%% case-sensitive SVG attribute like viewBox intact); only the classification is
+%% case-insensitive.
+void_tag_case_insensitive(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_void_case). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {'BR', [], []}, "
+        "        {'Img', [{src, <<\"x\">>}], []}, "
+        "        {'br', [], []}"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(<<"<div><BR /><Img src=\"x\" /><br /></div>">>, HTML),
+    %% No end tag was emitted for any of them.
+    ?assertEqual(nomatch, binary:match(HTML, ~"</BR>")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"</Img>")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"</br>")),
+    %% The classifier itself, over the shapes the sweep covers.
+    ?assert(arizona_html:is_void('BR')),
+    ?assert(arizona_html:is_void('Img')),
+    ?assert(arizona_html:is_void(input)),
+    %% Control: a non-void tag stays non-void in every casing.
+    ?assertNot(arizona_html:is_void('DIV')),
+    ?assertNot(arizona_html:is_void('div')).
+
+%% ...and the void-with-children rejection follows the classification, so an
+%% uppercase void tag can no longer smuggle children past it.
+void_tag_case_insensitive_rejects_children(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_void_case_children). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'BR', [], [<<\"x\">>]}). ",
+        fun
+            ({void_with_children, 'BR'}) -> true;
+            (_) -> false
+        end
+    ).
 
 %% Test 25: Static attrs after dynamic attr.
 static_after_dynamic_attr(Config) when is_list(Config) ->

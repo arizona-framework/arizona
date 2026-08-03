@@ -120,34 +120,46 @@ text_slot_open(Az) ->
 text_slot_close() ->
     ~"<!--/az-->".
 
-%% Matched on the atom as written, unlike raw_text_kind/1 below: getting this wrong
-%% for an uppercase tag costs a `<BR></BR>` instead of `<BR />`, not an escaping
-%% decision, so the lowercase-only match stays until someone actually writes one.
+%% Every tag classification below matches on this, never on the atom as written:
+%% HTML tag names are ASCII case-insensitive, so `{'BR', ...}` is the void element
+%% `br` and `{'SCRIPT', ...}` is a script element as far as the browser is
+%% concerned. Classifying only the lowercase atom emitted `<BR></BR>` (malformed --
+%% a void element has no end tag) and handed an uppercase `<SCRIPT>` the
+%% ordinary-element treatment (comment markers in the script, no opt-out guard).
+%%
+%% Only the *classification* folds case. `name/1` still emits the tag exactly as
+%% written, which is what keeps a case-sensitive SVG attribute (`viewBox`) or a
+%% camelCase SVG element intact -- normalizing the output would break those.
+%%
+%% Both callers run in the parse transform, at compile time, so the lowercasing
+%% costs nothing at render. (`raw_text/2`'s own tag test is on the render path and
+%% uses a comparison that allocates nothing -- see script_data/1.)
+tag_name(Tag) ->
+    string:lowercase(atom_to_binary(Tag)).
+
 -spec is_void(atom()) -> boolean().
-is_void(area) -> true;
-is_void(base) -> true;
-is_void(br) -> true;
-is_void(col) -> true;
-is_void(embed) -> true;
-is_void(hr) -> true;
-is_void(img) -> true;
-is_void(input) -> true;
-is_void(link) -> true;
-is_void(meta) -> true;
-is_void(param) -> true;
-is_void(source) -> true;
-is_void(track) -> true;
-is_void(wbr) -> true;
-is_void(_) -> false.
+is_void(Tag) ->
+    is_void_name(tag_name(Tag)).
+
+is_void_name(~"area") -> true;
+is_void_name(~"base") -> true;
+is_void_name(~"br") -> true;
+is_void_name(~"col") -> true;
+is_void_name(~"embed") -> true;
+is_void_name(~"hr") -> true;
+is_void_name(~"img") -> true;
+is_void_name(~"input") -> true;
+is_void_name(~"link") -> true;
+is_void_name(~"meta") -> true;
+is_void_name(~"param") -> true;
+is_void_name(~"source") -> true;
+is_void_name(~"track") -> true;
+is_void_name(~"wbr") -> true;
+is_void_name(_Other) -> false.
 
 -spec raw_text_kind(atom()) -> none | raw | escapable.
-%% Matched on the ASCII-lowercased name, because HTML tag names are
-%% case-insensitive: `{'SCRIPT', ...}` is a script element to the browser, so
-%% classifying only the lowercase atom would hand it the ordinary-element
-%% treatment (comment markers inside the script, and no opt-out guard). Runs at
-%% compile time only, so the lowercasing costs nothing at render.
 raw_text_kind(Tag) ->
-    case string:lowercase(atom_to_binary(Tag)) of
+    case tag_name(Tag) of
         %% Raw-text elements: content is never parsed for comments or character
         %% references, so a dynamic slot must render verbatim and markerless.
         ~"script" -> raw;
