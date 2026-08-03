@@ -864,7 +864,15 @@ recv_until(Sock, Needle, Timeout, Acc) ->
                     Acc1
             end;
         {error, timeout} ->
-            Acc
+            %% A sub-recv timing out is NOT the end of the budget: `recv` is capped at
+            %% 500ms a call so the deadline stays responsive, but the caller asked for
+            %% `Timeout` total. Returning here made the advertised budget a 500ms one,
+            %% so any pause longer than that (CI scheduling, a GC hit) returned a short
+            %% Acc and failed the match -- the flake in
+            %% `session_buffered_cancel_frees_request`. Keep waiting until the real
+            %% deadline; the `Timeout =< 0` clause above is the only exit.
+            Elapsed = erlang:monotonic_time(millisecond) - T0,
+            recv_until(Sock, Needle, Timeout - Elapsed, Acc)
     end.
 
 session_header(SessionId) ->
