@@ -36,7 +36,7 @@ prop(Bindings) ->
 
 -spec body(az:bindings()) -> az:template().
 body(Bindings) ->
-    ?html({'main', [], [?get(content)]}).
+    ?html({main, [], [?get(content)]}).
 
 %% The raw binding read the `?inner_content` macro exists to replace: the parse
 %% transform cannot see it as a block, so it compiles to an escaping value slot.
