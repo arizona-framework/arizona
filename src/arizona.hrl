@@ -22,6 +22,14 @@
 %% operations except `insert/2` flush the buffer (Back -> []) before
 %% they need the full ordered list. `arizona_template:visible_keys/2`
 %% is the only external-facing reader and handles flushing internally.
+%%
+%% `ref`/`qbase`/`qnext` position the pending queue in a per-stream op sequence
+%% so a drain can tell how much of the queue it already consumed (see
+%% `arizona_stream:drain_mark/1` and `undrained_pending/2`). `ref` identifies
+%% the stream lineage, and the queue holds the ops numbered [qbase, qnext):
+%% appends bump `qnext`, while the two operations that REBUILD the queue --
+%% `reset/1,2` and `clear_stream_pending/2` -- move `qbase` up to `qnext`, so a
+%% watermark recorded against the old queue can never address the new one.
 -record(stream, {
     key      :: fun((term()) -> term()),
     items    :: #{term() => term()},      %% Key => Item (O(log n) lookup)
@@ -29,5 +37,8 @@
     pending  :: queue:queue(),            %% Ops in insertion order (O(1) amortized append)
     limit    :: pos_integer() | infinity, %% Max visible items
     on_limit :: halt | drop,              %% Limit mode
-    size     :: non_neg_integer()         %% Cached length(order)
+    size     :: non_neg_integer(),        %% Cached length(order)
+    ref      :: reference(),              %% Stream lineage identity
+    qbase    :: non_neg_integer(),        %% Op sequence number of pending's head
+    qnext    :: non_neg_integer()         %% Op sequence number the next append takes
 }).

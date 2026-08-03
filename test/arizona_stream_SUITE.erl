@@ -32,6 +32,8 @@
     navigate_with_stream_items/1,
     nested_stream_render/1,
     nested_stream_redrain_no_duplicate_inserts/1,
+    nested_stream_redrain_bounded_ops/1,
+    nested_stream_redrain_reset_falls_back_to_full_drain/1,
     page_add_todo_live/1,
     page_add_todo_then_title_change_then_add_todo/1,
     page_clear_todos_live/1,
@@ -312,7 +314,9 @@ groups() ->
         %% Nested stream tests
         {nested_stream, [parallel], [
             nested_stream_render,
-            nested_stream_redrain_no_duplicate_inserts
+            nested_stream_redrain_no_duplicate_inserts,
+            nested_stream_redrain_bounded_ops,
+            nested_stream_redrain_reset_falls_back_to_full_drain
         ]},
         %% DataTable handler tests
         {datatable, [parallel], [
@@ -2926,32 +2930,100 @@ nested_stream_render(Config) when is_list(Config) ->
 %% duplicate OP_INSERTs: duplicate DOM nodes under the same az-key.
 nested_stream_redrain_no_duplicate_inserts(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
-    Cells0 = arizona_stream:new(KeyFun, [#{id => <<"a">>, val => <<"X">>}]),
+    Cells0 = arizona_stream:new(KeyFun, [#{id => ~"a", val => ~"X"}]),
     Rows0 = arizona_stream:new(KeyFun, [#{id => 1, cells => Cells0}]),
-    B0 = #{id => <<"t">>, rows => Rows0},
+    B0 = #{id => ~"t", rows => Rows0},
     {_, Snap0, V0} = arizona_render:render(nested_stream_tmpl(B0), #{}),
     B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
     %% Cycle 1: mutate the inner stream (its pending still holds the initial
     %% insert of cell "a") and update the outer row so the slot re-drains.
-    Cells1 = arizona_stream:insert(Cells0, #{id => <<"b">>, val => <<"Y">>}),
+    Cells1 = arizona_stream:insert(Cells0, #{id => ~"b", val => ~"Y"}),
     Rows1 = arizona_stream:update(maps:get(rows, B1), 1, #{id => 1, cells => Cells1}),
     B2 = B1#{rows => Rows1},
     Changed1 = arizona_live_compute_changed(B1, B2),
     {Ops1, Snap1, V1} = arizona_diff:diff(nested_stream_tmpl(B2), Snap0, V0, Changed1),
-    [[?OP_ITEM_PATCH, _, <<"1">>, InnerOps1]] = Ops1,
+    [[?OP_ITEM_PATCH, _, ~"1", InnerOps1]] = Ops1,
     %% Only the new cell "b" is inserted -- the replayed insert of "a" is
-    %% recognized as already applied.
-    ?assertEqual([<<"b">>], [K || [?OP_INSERT, _, K | _] <- InnerOps1]),
+    %% recognized as already applied. Asserted on the WHOLE inner op list, not
+    %% just its OP_INSERT keys: the op count is the part that used to grow.
+    ?assertMatch([[?OP_INSERT, _, ~"b", -1, _]], InnerOps1),
     %% Cycle 2: mutate the inner stream again -- its pending now carries the
     %% inserts of "a", "b", and "c"; only "c" may emit.
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
-    Cells2 = arizona_stream:insert(Cells1, #{id => <<"c">>, val => <<"Z">>}),
+    Cells2 = arizona_stream:insert(Cells1, #{id => ~"c", val => ~"Z"}),
     Rows2 = arizona_stream:update(maps:get(rows, B3), 1, #{id => 1, cells => Cells2}),
     B4 = B3#{rows => Rows2},
     Changed2 = arizona_live_compute_changed(B3, B4),
     {Ops2, _Snap2, _V2} = arizona_diff:diff(nested_stream_tmpl(B4), Snap1, V1, Changed2),
-    [[?OP_ITEM_PATCH, _, <<"1">>, InnerOps2]] = Ops2,
-    ?assertEqual([<<"c">>], [K || [?OP_INSERT, _, K | _] <- InnerOps2]).
+    [[?OP_ITEM_PATCH, _, ~"1", InnerOps2]] = Ops2,
+    ?assertMatch([[?OP_INSERT, _, ~"c", -1, _]], InnerOps2).
+
+%% The insert dup guard only covers `{insert, ...}`. A replayed
+%% `{update, Key, StaleItem, Changed}` finds the key in the post-drain snapshot,
+%% re-renders the STALE item and emits a real OP_ITEM_PATCH -- so a nested
+%% stream's never-cleared queue made both the op count and the payload grow
+%% LINEARLY with lifetime mutation count (O(N^2) per session), and the client
+%% applied every historical intermediate value before the current one. Each
+%% cycle must emit exactly one patch, carrying the current value only.
+nested_stream_redrain_bounded_ops(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Cells0 = arizona_stream:new(KeyFun, [#{id => ~"a", val => ~"v0"}]),
+    Rows0 = arizona_stream:new(KeyFun, [#{id => 1, cells => Cells0}]),
+    B0 = #{id => ~"t", rows => Rows0},
+    {_, Snap0, V0} = arizona_render:render(nested_stream_tmpl(B0), #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    Emitted = nested_stream_update_cycles(1, 6, B1, Snap0, V0, Cells0, []),
+    ?assertEqual([[~"1"], [~"2"], [~"3"], [~"4"], [~"5"], [~"6"]], Emitted).
+
+%% Runs `Max` update cycles on the inner cell "a", returning the per-cycle list
+%% of values the emitted cell patches carry. Mirrors the live loop: mutate,
+%% diff, clear the TOP-LEVEL streams (which never reaches the nested one).
+nested_stream_update_cycles(N, Max, _B, _Snap, _V, _Cells, Acc) when N > Max ->
+    lists:reverse(Acc);
+nested_stream_update_cycles(N, Max, B, Snap, V, Cells, Acc) ->
+    Val = integer_to_binary(N),
+    Cells1 = arizona_stream:update(Cells, ~"a", #{id => ~"a", val => Val}),
+    Rows1 = arizona_stream:update(maps:get(rows, B), 1, #{id => 1, cells => Cells1}),
+    B1 = B#{rows => Rows1},
+    Changed = arizona_live_compute_changed(B, B1),
+    {Ops, Snap1, V1} = arizona_diff:diff(nested_stream_tmpl(B1), Snap, V, Changed),
+    [[?OP_ITEM_PATCH, _, ~"1", InnerOps]] = Ops,
+    Vals = [
+        Text
+     || [?OP_ITEM_PATCH, _, ~"a", CellOps] <- InnerOps,
+        [?OP_TEXT, _, Text] <- CellOps
+    ],
+    B2 = arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)),
+    nested_stream_update_cycles(N + 1, Max, B2, Snap1, V1, Cells1, [Vals | Acc]).
+
+%% `reset/1,2` REBUILDS the pending queue rather than appending to it, so a
+%% drain watermark recorded against the old queue must not address the new one:
+%% the reset has to fall back to a full drain. Guards the skip logic against
+%% silently swallowing a reset (stale items left in the client DOM).
+nested_stream_redrain_reset_falls_back_to_full_drain(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Cells0 = arizona_stream:new(KeyFun, [#{id => ~"a", val => ~"X"}, #{id => ~"b", val => ~"Y"}]),
+    Rows0 = arizona_stream:new(KeyFun, [#{id => 1, cells => Cells0}]),
+    B0 = #{id => ~"t", rows => Rows0},
+    {_, Snap0, V0} = arizona_render:render(nested_stream_tmpl(B0), #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    %% Cycle 1: a plain update, so a drain watermark is recorded.
+    Cells1 = arizona_stream:update(Cells0, ~"a", #{id => ~"a", val => ~"X1"}),
+    Rows1 = arizona_stream:update(maps:get(rows, B1), 1, #{id => 1, cells => Cells1}),
+    B2 = B1#{rows => Rows1},
+    {_Ops1, Snap1, V1} = arizona_diff:diff(
+        nested_stream_tmpl(B2), Snap0, V0, arizona_live_compute_changed(B1, B2)
+    ),
+    %% Cycle 2: reset the inner stream to a single new cell.
+    Cells2 = arizona_stream:reset(Cells1, [#{id => ~"c", val => ~"Z"}]),
+    Rows2 = arizona_stream:update(maps:get(rows, B2), 1, #{id => 1, cells => Cells2}),
+    B3 = B2#{rows => Rows2},
+    {Ops2, _Snap2, _V2} = arizona_diff:diff(
+        nested_stream_tmpl(B3), Snap1, V1, arizona_live_compute_changed(B2, B3)
+    ),
+    [[?OP_ITEM_PATCH, _, ~"1", InnerOps2]] = Ops2,
+    ?assertEqual([~"a", ~"b"], [K || [?OP_REMOVE, _, K] <- InnerOps2]),
+    ?assertMatch([[?OP_INSERT, _, ~"c", -1, _]], [Op || [?OP_INSERT | _] = Op <- InnerOps2]).
 
 %% Outer page template for the nested-stream re-drain test: a stream of rows
 %% whose item template embeds a per-row inner stream of cells.

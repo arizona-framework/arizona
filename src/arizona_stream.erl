@@ -54,6 +54,31 @@ reorder                  %% from sort/2 when order changes
 {reset, OldItems}        %% from reset/1,2 -- OldItems captured pre-mutation for per-item skipping
 ```
 
+## Drain watermark -- and the nested-stream memory limit
+
+The queue is drained by the differ but cleared by the live process, which
+only reaches streams stored as TOP-LEVEL bindings (`clear_stream_pending/2` /
+`stream_keys/1`). A stream nested inside another value -- a field of a parent
+stream's item, or a stream inside a map binding -- is out of that reach, so its
+queue survives every drain and is re-drained on each re-eval of the enclosing
+slot.
+
+Each stream therefore numbers its ops (`ref`/`qbase`/`qnext`, see the record in
+`arizona.hrl`): a drain records `drain_mark/1` in its snapshot and the next one
+asks `undrained_pending/2` for only the ops appended since. That makes the
+re-drain emit exactly the new ops instead of replaying the whole history --
+without it, a replayed `{update, ...}` re-rendered its STALE item and emitted a
+real patch, so op count and payload grew linearly with the stream's lifetime
+mutation count (quadratic per session) and the client applied every historical
+intermediate value before the current one.
+
+**What it does not fix: memory.** The queue itself keeps growing -- it lives in
+app-owned bindings and the differ is pure, so nothing can truncate it. A nested
+stream therefore retains every op term (including items a `{Limit, drop}`
+window already evicted) for the lifetime of the view. Keep a stream that
+mutates over a long-lived session as a top-level binding, where the live
+process clears it.
+
 ## Example
 
 ```erlang
@@ -88,6 +113,8 @@ reorder                  %% from sort/2 when order changes
 -export([get_lazy/3]).
 -export([clear_stream_pending/2]).
 -export([stream_keys/1]).
+-export([drain_mark/1]).
+-export([undrained_pending/2]).
 -export([compute_item_changed/2]).
 -export([format_error/2]).
 
@@ -154,7 +181,10 @@ new(KeyFun) when is_function(KeyFun, 1) ->
         pending = queue:new(),
         limit = infinity,
         on_limit = halt,
-        size = 0
+        size = 0,
+        ref = make_ref(),
+        qbase = 0,
+        qnext = 0
     }.
 
 -doc """
@@ -190,7 +220,10 @@ new(KeyFun, Items, Opts) when is_function(KeyFun, 1), is_list(Items), is_map(Opt
         pending = Pending,
         limit = Limit,
         on_limit = OnLimit,
-        size = map_size(ItemsMap)
+        size = map_size(ItemsMap),
+        ref = make_ref(),
+        qbase = 0,
+        qnext = length(Items)
     }.
 
 -doc """
@@ -238,7 +271,8 @@ insert(
         items = Items,
         order = Order,
         pending = Pending,
-        size = Size
+        size = Size,
+        qnext = QNext
     } = S,
     Item,
     Pos
@@ -255,7 +289,8 @@ insert(
                 items = Items#{Key => Item},
                 order = {order_insert_at(Flat, Key, Pos), []},
                 pending = queue:in({insert, Key, Item, Pos}, Pending),
-                size = Size + 1
+                size = Size + 1,
+                qnext = QNext + 1
             }
     end.
 
@@ -272,7 +307,8 @@ delete(
         items = Items,
         order = Order,
         pending = Pending,
-        size = Size
+        size = Size,
+        qnext = QNext
     } = S,
     Key
 ) ->
@@ -282,7 +318,8 @@ delete(
                 items = NewItems,
                 order = order_delete_split(Order, Key),
                 pending = queue:in({delete, Key}, Pending),
-                size = Size - 1
+                size = Size - 1,
+                qnext = QNext + 1
             };
         error ->
             S
@@ -302,13 +339,14 @@ exactly like `insert/2`.
     Key :: key(),
     NewItem :: item(),
     Stream1 :: stream().
-update(#stream{items = Items, pending = Pending} = S0, Key, NewItem) ->
+update(#stream{items = Items, pending = Pending, qnext = QNext} = S0, Key, NewItem) ->
     case Items of
         #{Key := OldItem} ->
             Changed = compute_item_changed(OldItem, NewItem),
             S0#stream{
                 items = Items#{Key => NewItem},
-                pending = queue:in({update, Key, NewItem, Changed}, Pending)
+                pending = queue:in({update, Key, NewItem, Changed}, Pending),
+                qnext = QNext + 1
             };
         #{} ->
             append_key(S0, Key, NewItem, {update, Key, NewItem, #{}})
@@ -356,7 +394,8 @@ move(
         items = Items,
         order = Order,
         pending = Pending,
-        size = Size
+        size = Size,
+        qnext = QNext
     } = S,
     Key,
     NewPos
@@ -369,7 +408,8 @@ move(
             AfterKey = key_before(Key, Order2),
             S#stream{
                 order = {Order2, []},
-                pending = queue:in({move, Key, AfterKey}, Pending)
+                pending = queue:in({move, Key, AfterKey}, Pending),
+                qnext = QNext + 1
             };
         #{} ->
             S
@@ -381,12 +421,14 @@ Empties the stream and queues a reset op.
 -spec reset(Stream) -> Stream1 when
     Stream :: stream(),
     Stream1 :: stream().
-reset(#stream{items = OldItems} = S) ->
+reset(#stream{items = OldItems, qnext = QNext} = S) ->
     S#stream{
         items = #{},
         order = {[], []},
         pending = queue:from_list([{reset, OldItems}]),
-        size = 0
+        size = 0,
+        qbase = QNext,
+        qnext = QNext + 1
     }.
 
 -doc """
@@ -398,7 +440,9 @@ for the actual delta.
     Stream :: stream(),
     NewItems :: [item()],
     Stream1 :: stream().
-reset(#stream{key = KeyFun, items = OldItems} = S, NewItems) when is_list(NewItems) ->
+reset(#stream{key = KeyFun, items = OldItems, qnext = QNext} = S, NewItems) when
+    is_list(NewItems)
+->
     Keyed = key_items(KeyFun, NewItems),
     ItemsMap = #{K => V || {K, V} <:- Keyed},
     Order = order_from_keyed(Keyed),
@@ -406,7 +450,9 @@ reset(#stream{key = KeyFun, items = OldItems} = S, NewItems) when is_list(NewIte
         items = ItemsMap,
         order = {Order, []},
         pending = queue:from_list([{reset, OldItems}]),
-        size = map_size(ItemsMap)
+        size = map_size(ItemsMap),
+        qbase = QNext,
+        qnext = QNext + 1
     }.
 
 -doc """
@@ -418,7 +464,7 @@ the resulting order actually differs.
     CompareFun :: fun((item(), item()) -> boolean()),
     Stream1 :: stream().
 sort(
-    #stream{items = Items, order = Order, pending = Pending} = S,
+    #stream{items = Items, order = Order, pending = Pending, qnext = QNext} = S,
     CompareFun
 ) ->
     Flat = flat_order(Order),
@@ -434,7 +480,8 @@ sort(
         false ->
             S#stream{
                 order = {NewOrder, []},
-                pending = queue:in(reorder, Pending)
+                pending = queue:in(reorder, Pending),
+                qnext = QNext + 1
             }
     end.
 
@@ -516,8 +563,9 @@ clear_stream_pending(Bindings, []) ->
     Bindings;
 clear_stream_pending(Bindings, [K | Rest]) ->
     case Bindings of
-        #{K := #stream{} = S} ->
-            clear_stream_pending(Bindings#{K => S#stream{pending = queue:new()}}, Rest);
+        #{K := #stream{qnext = QNext} = S} ->
+            Cleared = S#stream{pending = queue:new(), qbase = QNext},
+            clear_stream_pending(Bindings#{K => Cleared}, Rest);
         _ ->
             clear_stream_pending(Bindings, Rest)
     end.
@@ -529,6 +577,38 @@ Returns the binding keys whose values are streams.
     Bindings :: map().
 stream_keys(Bindings) when is_map(Bindings) ->
     [K || K := #stream{} <- Bindings].
+
+-doc """
+The watermark a drain records in its snapshot: this stream's lineage plus the
+sequence number one past the last op in `pending`. Feed it back to
+`undrained_pending/2` on the next drain of the same slot.
+""".
+-spec drain_mark(Stream) -> Mark when
+    Stream :: stream(),
+    Mark :: {reference(), non_neg_integer()}.
+drain_mark(#stream{ref = Ref, qnext = QNext}) ->
+    {Ref, QNext}.
+
+-doc """
+The suffix of `pending` a drain holding `Mark` has not consumed yet.
+
+`Mark` is `none` (no previous drain) or a `drain_mark/1` from one. A mark that
+does not address this queue -- a different stream in the slot, or a queue
+rebuilt by `reset/1,2` / `clear_stream_pending/2` since the mark was taken --
+yields the whole queue, i.e. a full drain.
+""".
+-spec undrained_pending(Stream, Mark) -> Pending when
+    Stream :: stream(),
+    Mark :: none | {reference(), non_neg_integer()},
+    Pending :: queue:queue().
+undrained_pending(
+    #stream{pending = Pending, ref = Ref, qbase = QBase, qnext = QNext}, {Ref, D}
+) when
+    D > QBase, D =< QNext
+->
+    drop_ops(D - QBase, Pending);
+undrained_pending(#stream{pending = Pending}, _Mark) ->
+    Pending.
 
 -doc """
 Formats `arizona_stream` runtime errors into a human-readable message.
@@ -592,13 +672,15 @@ append_key(S0, Key, Item, PendingOp) ->
         items = Items,
         order = {Front, Back},
         pending = Pending,
-        size = Size
+        size = Size,
+        qnext = QNext
     } = S = drop_oldest_for_append(S0),
     S#stream{
         items = Items#{Key => Item},
         order = {Front, [Key | Back]},
         pending = queue:in(PendingOp, Pending),
-        size = Size + 1
+        size = Size + 1,
+        qnext = QNext + 1
     }.
 
 %% `drop` limit mode, before an append: evict the oldest (front-of-order)
@@ -623,6 +705,12 @@ drop_oldest_for_append(#stream{items = Items, order = Order, size = Size} = S) -
         order = {RestOrder, []},
         size = Size - 1
     }).
+
+%% Guarded by undrained_pending/2's `D =< QNext`, so the queue always holds at
+%% least N ops -- a shorter one means the qbase/qnext invariant is broken and
+%% queue:drop/1 should crash rather than silently drain the wrong suffix.
+drop_ops(0, Q) -> Q;
+drop_ops(N, Q) -> drop_ops(N - 1, queue:drop(Q)).
 
 key_items(_KeyFun, []) -> [];
 key_items(KeyFun, [I | Rest]) -> [{KeyFun(I), I} | key_items(KeyFun, Rest)].

@@ -587,7 +587,12 @@ build_each_snap(ItemSnaps, Tmpl, ChildViews, {VKeys, Source}) ->
         order => VKeys,
         source => Source,
         template => Tmpl,
-        child_views => ChildViews
+        child_views => ChildViews,
+        %% This eval rendered the stream's whole post-op state, so every op
+        %% queued so far counts as consumed. A nested stream's snapshot comes
+        %% from here (the diff discards `diff_stream`'s own), so this is what
+        %% stops the next re-drain from replaying the history.
+        drained => arizona_stream:drain_mark(Source)
     }.
 
 eval_template(#{s := Statics, d := Dynamics} = Tmpl, {Old, New0}) ->
