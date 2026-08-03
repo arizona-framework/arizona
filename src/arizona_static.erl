@@ -8,8 +8,8 @@ module is the thin batch/file layer over it: mount a handler, render it, and
 write the result to disk.
 
 `generate/2,3` renders a list of specs under a base output directory and returns
-`{Written, Failed}`: the paths written and `{Spec, Reason}` for any spec that
-raised (one failing page does not stop the rest). `generate/3` also takes a
+`{Written, Failed}`: the paths written and `{Spec, Failure}` for any spec that
+failed (one failing page does not stop the rest). `generate/3` also takes a
 `DefaultOpts` map that each spec's own options override (key-wise), so a shared
 layout need not be repeated per page:
 
@@ -35,6 +35,18 @@ A spec that fails -- a `mount`/`render` crash, or a write error (a
 rather than stopping the batch; the caller decides what is fatal. A
 structurally-malformed spec (not a 2- or 3-tuple) still crashes -- that's a
 caller bug, not a per-page failure.
+
+A crash is collected as the whole exception, `{Class, Reason, Stacktrace}` (see
+`t:failure/0`), so one bad page in a 200-page build still says *where* it broke
+-- the `{arizona_loc, {Module, Line}, _}` wrapper `arizona_render` attaches
+included. A write error keeps the `file` module's own `{error, Reason}`, which
+the tuple size tells apart from a crash. Render one:
+
+```erlang
+{_Written, Failed} = arizona_static:generate(~"_site", Specs),
+[io:format("~ts: ~ts~n", [Outfile, erl_error:format_exception(C, R, ST)])
+ || {{_Handler, Outfile}, {C, R, ST}} <- Failed].
+```
 
 ## Caveats
 
@@ -66,6 +78,7 @@ previously generated file behind.
 
 -export_type([spec/0]).
 -export_type([opts/0]).
+-export_type([failure/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -82,6 +95,15 @@ previously generated file behind.
     {module(), file:filename_all()}
     | {module(), file:filename_all(), opts()}.
 
+%% Why one spec did not produce a file. The 3-tuple is a raised exception kept
+%% whole (an `erlang:raise/3`-shaped triple, so a caller can re-raise or hand it
+%% to `erl_error:format_exception/3`); the 2-tuple is a `file` module error
+%% returned rather than raised. The shapes are distinguishable by size, which a
+%% bare reason was not.
+-nominal failure() ::
+    {Class :: error | exit | throw, Reason :: term(), Stacktrace :: [tuple()]}
+    | {error, Reason :: term()}.
+
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
@@ -93,15 +115,15 @@ Equivalent to `generate(OutDir, Specs, #{})`.
     OutDir :: file:filename_all(),
     Specs :: [spec()],
     Written :: [file:filename_all()],
-    Failed :: [{spec(), term()}].
+    Failed :: [{spec(), failure()}].
 generate(OutDir, Specs) ->
     generate(OutDir, Specs, #{}).
 
 -doc """
 Renders each spec under `OutDir`, writes the HTML files, and returns
-`{Written, Failed}` -- the paths written (in `Specs` order) and `{Spec, Reason}`
-for any spec that raised. A failing spec is collected rather than stopping the
-batch; the caller decides what is fatal.
+`{Written, Failed}` -- the paths written (in `Specs` order) and
+`{Spec, t:failure/0}` for any spec that failed. A failing spec is collected
+rather than stopping the batch; the caller decides what is fatal.
 
 A spec is `{Handler, Outfile}` or `{Handler, Outfile, Opts}`, where `Outfile`
 is joined onto `OutDir` (an absolute `Outfile` bypasses `OutDir`, per standard
@@ -113,7 +135,7 @@ own `Opts` override `DefaultOpts` key-wise.
     Specs :: [spec()],
     DefaultOpts :: opts(),
     Written :: [file:filename_all()],
-    Failed :: [{spec(), term()}].
+    Failed :: [{spec(), failure()}].
 generate(OutDir, Specs, DefaultOpts) when is_list(Specs), is_map(DefaultOpts) ->
     generate_loop(Specs, OutDir, DefaultOpts, [], []).
 
@@ -127,8 +149,8 @@ generate_loop([Spec | T], OutDir, DefaultOpts, Written, Failed) ->
     case generate_spec(OutDir, DefaultOpts, Spec) of
         {ok, Filename} ->
             generate_loop(T, OutDir, DefaultOpts, [Filename | Written], Failed);
-        {error, Reason} ->
-            generate_loop(T, OutDir, DefaultOpts, Written, [{Spec, Reason} | Failed])
+        {failed, Failure} ->
+            generate_loop(T, OutDir, DefaultOpts, Written, [{Spec, Failure} | Failed])
     end.
 
 generate_spec(OutDir, DefaultOpts, {Handler, Outfile}) ->
@@ -136,18 +158,23 @@ generate_spec(OutDir, DefaultOpts, {Handler, Outfile}) ->
 generate_spec(OutDir, DefaultOpts, {Handler, Outfile, Opts}) ->
     safe_generate(Handler, OutDir, Outfile, maps:merge(DefaultOpts, Opts)).
 
+%% A raised failure is collected WHOLE -- class, reason, and stacktrace -- so one
+%% bad page in a large batch still says what failed and where (including the
+%% `{arizona_loc, {Module, Line}, _}` wrapper `arizona_render` attaches). The
+%% batch does not stop either way; the 3-tuple also tells a raise apart from a
+%% write error's `{error, Reason}`, which the bare-reason shape could not.
 safe_generate(Handler, OutDir, Outfile, Opts) ->
     try
         Filename = filename:join(OutDir, Outfile),
         case generate_one(Handler, Filename, Opts) of
             ok ->
                 {ok, Filename};
-            {error, _} = Error ->
-                Error
+            {error, _Reason} = Error ->
+                {failed, Error}
         end
     catch
-        _Class:Reason ->
-            {error, Reason}
+        Class:Reason:Stacktrace ->
+            {failed, {Class, Reason, Stacktrace}}
     end.
 
 generate_one(Handler, Filename, Opts) when is_atom(Handler), is_map(Opts) ->

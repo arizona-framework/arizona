@@ -184,7 +184,7 @@ Client JS: `arizona.set(viewId, key, value)` (always 3-arg -- the 2-arg `arizona
 ## Static generation
 
 `arizona_static:generate/2,3` renders route handlers to HTML files offline (no server/WS), building
-on the request-free SSR path, and returns `{Written, Failed}` (paths plus per-spec failures). A spec is `{Handler, Outfile}` or
+on the request-free SSR path, and returns `{Written, Failed}` (paths plus `{Spec, Failure}` per failed spec -- a crash keeps the whole `{Class, Reason, Stacktrace}`, `arizona_loc` wrapper included, so a bad page in a big batch is locatable; a write error keeps the `file` module's `{error, Reason}`). A spec is `{Handler, Outfile}` or
 `{Handler, Outfile, Opts}` (`Outfile` relative to `OutDir`; `Opts` = `bindings`/`on_mount`/`layouts`).
 `generate/3` takes a `DefaultOpts` map each spec's `Opts` override (e.g. a shared layout).
 
