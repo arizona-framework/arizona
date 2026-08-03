@@ -72,7 +72,8 @@ render(Bindings) ->
         ]}
     ).
 
--spec handle_event(binary(), az:payload(), az:bindings()) -> az:handle_event_ret().
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
 handle_event(~"add", _Payload, Bindings) ->
     %% Incremental: an `?OP_INSERT` addressed by key, not a container render.
     Items = arizona_stream:insert(?get(items), #{id => 9, label => ~"added"}),
