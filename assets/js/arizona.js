@@ -626,17 +626,52 @@ function destroyHooks(root) {
 }
 
 /**
- * Walk elements between a start marker and its closing <!--/az--> marker,
- * applying `fn` to each Element-typed node.
+ * Walk every sibling node inside the slot `startMarker` opens, stopping at the
+ * `<!--/az-->` that MATCHES it, and return that closing marker.
+ *
+ * Marker pairs nest: a template whose whole body is a bare dynamic anchors its
+ * root slot with its own pair inside the enclosing slot's pair, so a walk that
+ * stopped at the first `<!--/az-->` would stop at an INNER closer -- leaving the
+ * rest of the slot (a tail element, the real closer) behind. Every walker over a
+ * slot's contents goes through here so nesting is handled once: track depth,
+ * incrementing on a nested `az:` opener and decrementing on each closer, and stop
+ * at depth 0.
+ *
+ * `fn` may remove the node it is handed -- the next sibling is read first.
+ * @param {Comment} startMarker
+ * @param {(node: ChildNode) => void} fn
+ * @returns {Comment|null} the matching closing marker, or null if unterminated
+ */
+function forEachNodeInSlot(startMarker, fn) {
+    let depth = 0;
+    let node = startMarker.nextSibling;
+    while (node) {
+        if (node.nodeType === 8) {
+            const data = /** @type {Comment} */ (node).data;
+            if (data === '/az') {
+                if (depth === 0) return /** @type {Comment} */ (node);
+                depth--;
+            } else if (data.startsWith('az:')) {
+                depth++;
+            }
+        }
+        const next = node.nextSibling;
+        fn(node);
+        node = next;
+    }
+    return null;
+}
+
+/**
+ * Walk elements inside the slot `startMarker` opens (nesting-aware, see
+ * `forEachNodeInSlot`), applying `fn` to each Element-typed node.
  * @param {Comment} startMarker
  * @param {(el: Element) => void} fn
  */
 function forEachElementBetweenMarkers(startMarker, fn) {
-    let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+    forEachNodeInSlot(startMarker, (node) => {
         if (node.nodeType === 1) fn(/** @type {Element} */ (node));
-        node = node.nextSibling;
-    }
+    });
 }
 
 /**
@@ -971,12 +1006,7 @@ function updateMarkerContent(startMarker, value, isHtml) {
     // Scalar fast path: a lone text node is updated in place (no childList churn,
     // which would revert an in-progress scroll on WebKitGTK -- see updateLoneTextNode).
     if (!isHtml && updateLoneTextNode(startMarker, value)) return;
-    let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
-        const next = node.nextSibling;
-        node.remove();
-        node = next;
-    }
+    forEachNodeInSlot(startMarker, (node) => node.remove());
     // Insert new content before the closing marker
     if (isHtml) {
         const tpl = doc.createElement('template');
@@ -1006,12 +1036,7 @@ function setMarkerText(startMarker, value) {
     // Same in-place fast path as updateMarkerContent: avoid childList churn that
     // reverts an in-progress scroll on WebKitGTK (see updateLoneTextNode).
     if (updateLoneTextNode(startMarker, str)) return;
-    let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
-        const next = node.nextSibling;
-        node.remove();
-        node = next;
-    }
+    forEachNodeInSlot(startMarker, (node) => node.remove());
     startMarker.after(startMarker.ownerDocument.createTextNode(str));
 }
 
@@ -1069,11 +1094,11 @@ function readLocalValue(el, target) {
         const marker = findMarker(el, localMarkerAz(el, target[1]));
         if (!marker) return el.textContent;
         let text = '';
-        let node = marker.nextSibling;
-        while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
-            text += node.textContent ?? '';
-            node = node.nextSibling;
-        }
+        // Comment nodes are skipped: a nested slot's own markers are structure,
+        // never part of the value the browser owns.
+        forEachNodeInSlot(marker, (node) => {
+            if (node.nodeType !== 8) text += node.textContent ?? '';
+        });
         return text;
     }
     const name = target[1];
@@ -1459,13 +1484,11 @@ function applyListPatch(el, az, subOps) {
         return;
     }
     // Snapshot the item roots (Element children) and locate the end marker.
+    /** @type {Element[]} */
     const roots = [];
-    let node = marker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+    const endMarker = forEachNodeInSlot(marker, (node) => {
         if (node.nodeType === 1) roots.push(/** @type {Element} */ (node));
-        node = node.nextSibling;
-    }
-    const endMarker = node;
+    });
     for (const sub of subOps) {
         switch (sub[0]) {
             case OP.ITEM_PATCH: {
