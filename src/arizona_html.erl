@@ -212,17 +212,14 @@ escape(<<"\"", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&quot;">>);
 escape(<<"'", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#39;">>);
 escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
 
-%% Neutralize a raw-text (script/style) close-tag breakout. Raw-text content is
+%% Neutralize a raw-text (script/style) tokenizer breakout. Raw-text content is
 %% emitted verbatim -- HTML entity-escaping does not apply (the browser decodes
-%% nothing there) -- but a value carrying `</script>`/`</style>` would still close
-%% the element and drop into HTML parsing (the classic JSON-in-script XSS). Insert
-%% a backslash after the `<` of a case-insensitive `</script`/`</style`, so the
-%% raw-text tokenizer never matches the end tag. `<\/script` is transparent in the
-%% string/JSON/CSS contexts such content lives in (`\/` decodes to `/`), and a
-%% value that legitimately needs a literal `</script` in a raw-text element is a
-%% breakout by definition. Only the two raw-text tag names close a raw-text
-%% element, so nothing else is touched. Non-binary values (a nested template, an
-%% integer) cannot carry the sequence and pass through unchanged.
+%% nothing there) -- so a value spelling one of the sequences the HTML script-data
+%% tokenizer reacts to escapes the element (the classic JSON-in-script XSS).
+%% raw_text_breakout/1 below defines that set and what each `<` becomes; a value
+%% that legitimately needs one of them inside a raw-text element is a breakout by
+%% definition. Non-binary values (a nested template, an integer) cannot carry a
+%% sequence and pass through unchanged.
 -spec raw_text(term()) -> term().
 raw_text(Value) when is_binary(Value) ->
     neutralize_raw_text(Value, <<>>);
@@ -240,19 +237,44 @@ raw_text(Value) ->
 neutralize_raw_text(<<>>, Acc) ->
     Acc;
 neutralize_raw_text(<<"<", R/binary>>, Acc) ->
-    case raw_text_breakout(R) of
-        true -> neutralize_raw_text(R, <<Acc/binary, "<\\">>);
-        false -> neutralize_raw_text(R, <<Acc/binary, "<">>)
-    end;
+    Lt = raw_text_breakout(R),
+    neutralize_raw_text(R, <<Acc/binary, Lt/binary>>);
 neutralize_raw_text(<<C, R/binary>>, Acc) ->
     neutralize_raw_text(R, <<Acc/binary, C>>).
 
-%% Does the text right after a `<` begin a `/script` or `/style` end tag (ASCII
-%% case-insensitive)? Only these close a raw-text element.
+%% What the `<` becomes, given the text right after it. Three sequences move the
+%% HTML script-data tokenizer, and each is defused where it starts:
+%%
+%%   `</script` / `</style` -- ends the element, dropping the rest of the value
+%%       into HTML parsing. A backslash after the `<` stops the end-tag match:
+%%       `<\/script` is transparent wherever such content lives (`\/` decodes to
+%%       `/` in JSON and in a JavaScript string).
+%%   `<!--` -- enters script-data-escaped state, where a following `<script`
+%%       reaches script-data-double-escaped and the element's OWN `</script>` no
+%%       longer closes it: the remainder of the document is swallowed, so
+%%       neutralizing only the close tag above is not enough.
+%%   `<script` -- inert from plain script-data state, but it is the second half of
+%%       that double escape, and the first half can come from the template's own
+%%       static text (the legacy `<script><!-- ... //--></script>` idiom), which is
+%%       spliced verbatim and never passes through here.
+%%
+%% The last two replace the `<` with the escape `\u003c` instead of inserting a
+%% backslash: `\!` and `\s` are not valid JSON escapes, and a JSON blob is the
+%% documented content of a `raw` raw-text slot, whereas `\u003c` is valid in both
+%% JSON and JavaScript strings and decodes back to `<`. Tag names match ASCII
+%% case-insensitively, as the tokenizer does; any other `<` keeps its own byte.
 raw_text_breakout(<<$/, R/binary>>) ->
-    ci_prefix(R, <<"script">>) orelse ci_prefix(R, <<"style">>);
-raw_text_breakout(_) ->
-    false.
+    case ci_prefix(R, ~"script") orelse ci_prefix(R, ~"style") of
+        true -> ~"<\\";
+        false -> ~"<"
+    end;
+raw_text_breakout(<<"!--", _R/binary>>) ->
+    ~"\\u003c";
+raw_text_breakout(R) ->
+    case ci_prefix(R, ~"script") of
+        true -> ~"\\u003c";
+        false -> ~"<"
+    end.
 
 %% Case-insensitive (ASCII) prefix match; the pattern is always lowercase letters.
 ci_prefix(_Bin, <<>>) -> true;

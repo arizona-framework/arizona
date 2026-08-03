@@ -322,7 +322,42 @@ raw_text_breakout_neutralized(Config) when is_list(Config) ->
     Benign = iolist_to_binary(
         element(1, arizona_render:render(arizona_raw_text_script:render(#{json => ~"{\"a\":1<2}"})))
     ),
-    ?assertNotEqual(nomatch, binary:match(Benign, ~"{\"a\":1<2}")).
+    ?assertNotEqual(nomatch, binary:match(Benign, ~"{\"a\":1<2}")),
+    %% The double-escape breakout, which neutralizing only the close tag misses:
+    %% `<!--` puts the tokenizer in script-data-escaped state and a following
+    %% `<script` in script-data-double-escaped, where the element's OWN
+    %% `</script>` no longer closes it -- the rest of the document (the Arizona
+    %% bootstrap script included) is swallowed and the view never connects.
+    %% Neither half may survive into the emitted bytes.
+    Nasty = ~"<!--<script>alert(1)</script>",
+    Double = render_json_script(json:encode(#{~"x" => Nasty})),
+    %% Exactly one open and one close tag -- the element's own. The payload's are gone.
+    ?assertEqual(1, length(binary:matches(Double, ~"<script"))),
+    ?assertEqual(1, length(binary:matches(Double, ~"</script>"))),
+    ?assertEqual([], binary:matches(Double, ~"<!--")),
+    %% ...and the rewrite stays transparent for the documented use: the emitted
+    %% bytes are still the same JSON value, so a legitimate blob that happens to
+    %% carry those sequences is neutralized without being corrupted.
+    ?assertEqual(#{~"x" => Nasty}, json:decode(script_content(Double))),
+    %% Tag names match case-insensitively, as the HTML tokenizer does. `<!--`
+    %% and `<script` become `<` rather than the close tag's `<\` because
+    %% `\!`/`\s` are not valid JSON escapes while `<` is (and both decode
+    %% back to `<` in a JSON or JavaScript string).
+    ?assertEqual(~"\\u003c!--", arizona_html:raw_text(~"<!--")),
+    ?assertEqual(~"\\u003cSCRIPT>", arizona_html:raw_text(~"<SCRIPT>")),
+    %% A lone `<` that begins none of those sequences is still left alone.
+    ?assertEqual(~"a < b <!x", arizona_html:raw_text(~"a < b <!x")).
+
+%% Render the raw-text fixture and keep only the <script> element's content, so a
+%% breakout that survived would truncate the slice and fail the caller's decode.
+script_content(HTML) ->
+    [_Before, Rest] = binary:split(HTML, ~"<script type=\"application/json\">"),
+    [Content, _After] = binary:split(Rest, ~"</script>"),
+    Content.
+
+render_json_script(Json) ->
+    Template = arizona_raw_text_script:render(#{json => iolist_to_binary(Json)}),
+    iolist_to_binary(element(1, arizona_render:render(Template))).
 
 render_nested_sd(Config) when is_list(Config) ->
     T = #{

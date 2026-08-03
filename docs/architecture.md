@@ -1310,9 +1310,13 @@ position where user data reaches the output unescaped, free to close the JavaScr
 in. Literal script/CSS text is static, not a slot, so it is unaffected; `escapable` elements escape
 and so are not gated. The opt-out marks the value trusted for HTML *escaping*, not for the raw-text
 tokenizer -- a trusted JSON blob's own string data can still spell an element breakout -- so
-`arizona_html:raw_text/1` unwraps the `?raw` and neutralizes the payload anyway (it rewrites a
-`</script`/`</style` to `<\/script`, transparent in the JSON/JS/CSS contexts such content lives
-in). A dynamic *attribute* on a raw-text element stays fully diffable -- only
+`arizona_html:raw_text/1` unwraps the `?raw` and neutralizes the payload anyway. It defuses every
+sequence the script-data tokenizer reacts to: `</script`/`</style` (ends the element) becomes
+`<\/script`, and `<!--` / `<script` (which together reach script-data-**double**-escaped, where the
+element's own `</script>` stops closing it and the rest of the document is swallowed) have their
+`<` rewritten as `\u003c`. All three rewrites decode back to the original in the JSON and
+JavaScript-string contexts such content lives in. A dynamic *attribute* on a raw-text element
+stays fully diffable -- only
 the content slot is markerless. Limitation: the slot will not update after the initial render, and
 `?local` is unsupported inside a raw-text element (no marker to address); a live `?get` there
 silently freezes at its first value. Emitting `OP_UPDATE` for a marker-anchored slot is a bug: no
