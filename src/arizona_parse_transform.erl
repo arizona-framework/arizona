@@ -1182,14 +1182,11 @@ maybe_inject_or_raise_az_view(Attrs, Line, _State) ->
         false -> Attrs
     end.
 
-is_az_view_attr({atom, _, Name}) ->
-    Name =:= az_view orelse Name =:= 'az-view';
-is_az_view_attr({tuple, _, [{atom, _, Name} | _]}) ->
-    Name =:= az_view orelse Name =:= 'az-view';
-is_az_view_attr({bin, _, [{bin_element, _, {string, _, "az-view"}, _, _}]}) ->
-    true;
-is_az_view_attr(_) ->
-    false.
+is_az_view_attr(Attr) ->
+    case attr_name(Attr) of
+        undefined -> false;
+        Name -> framework_attr_name(Name) =:= ~"az-view"
+    end.
 
 %% --------------------------------------------------------------------
 %% Binding-read inlining
@@ -3140,8 +3137,11 @@ contains_inner_content(List) when is_list(List) ->
 contains_inner_content(_) ->
     false.
 
-directive_opts(<<"az-nodiff">>) -> {ok, #{diff => false}};
-directive_opts(_) -> false.
+directive_opts(Name) ->
+    directive_opts_1(framework_attr_name(Name)).
+
+directive_opts_1(~"az-nodiff") -> {ok, #{diff => false}};
+directive_opts_1(_Other) -> false.
 
 %% Attribute names the template author may not write, checked on the element's
 %% ORIGINAL attrs -- before az-view / az-local injection, so an injected name is
@@ -3200,9 +3200,16 @@ bare_attr_name(_) ->
 %% live root), and every other `az-*` name is user territory -- `az-key` keys stream
 %% items, `az-click`/`az-submit`/... carry effects, and an app is free to invent its
 %% own `az-*` attributes.
-reserved_attr_name(<<"az">>) -> true;
-reserved_attr_name(<<"az-local">>) -> true;
-reserved_attr_name(_) -> false.
+reserved_attr_name(undefined) ->
+    %% attr_name/1's "not a compile-time literal" answer (a dynamic attribute
+    %% name): there is no name to compare, so it is not a reserved one.
+    false;
+reserved_attr_name(Name) ->
+    is_reserved_attr_name(framework_attr_name(Name)).
+
+is_reserved_attr_name(~"az") -> true;
+is_reserved_attr_name(~"az-local") -> true;
+is_reserved_attr_name(_Other) -> false.
 
 reject_reserved_attrs(Attrs, Line) ->
     case [Name || Attr <- Attrs, Name <- [attr_name(Attr)], reserved_attr_name(Name)] of
@@ -3228,6 +3235,23 @@ attr_name(Attr) ->
 %% (`prescan_directives/1`) runs before any backend is resolved.
 directive_attr_name(Name) ->
     binary:replace(atom_to_binary(Name), <<"_">>, <<"-">>, [global]).
+
+%% The form every framework attribute NAME is compared in: lowercased, on top of
+%% the dash normalization above. HTML attribute names are ASCII case-insensitive,
+%% so `AZ="x"` is an `az` attribute to the browser and `AZ-VIEW` an `az-view` --
+%% the client reads them back with `querySelector('[az=...]')` / `getAttribute`,
+%% both of which fold case. Comparing only the lowercase spelling therefore let a
+%% capitalized copy slip past the very checks that exist to stop it: a template
+%% `AZ` could shadow a real slot address and misroute a patch, and an `AZ-NODIFF`
+%% was not recognized as the directive at all, so the element stayed diffable AND
+%% leaked the attribute into the DOM -- the opposite of what was asked for.
+%%
+%% Rejects strictly more than before and nothing a valid template writes: the
+%% names are reserved in every casing. The name is normalized only for the
+%% comparison; `attr_name/1` still returns it as authored, so an error message
+%% quotes what the author actually typed.
+framework_attr_name(Name) ->
+    string:lowercase(Name).
 
 extract_directives(Attrs) ->
     extract_directives(Attrs, #{}).

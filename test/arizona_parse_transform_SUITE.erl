@@ -258,6 +258,9 @@
     void_no_attrs/1,
     void_tag_case_insensitive/1,
     void_tag_case_insensitive_rejects_children/1,
+    reserved_attr_case_insensitive/1,
+    az_view_attr_case_insensitive/1,
+    nodiff_directive_case_insensitive/1,
     void_two_element_dynamic_attr/1,
     void_two_element_tuple/1,
     void_with_dynamic_children/1,
@@ -429,6 +432,9 @@ groups() ->
             void_no_attrs,
             void_tag_case_insensitive,
             void_tag_case_insensitive_rejects_children,
+            reserved_attr_case_insensitive,
+            az_view_attr_case_insensitive,
+            nodiff_directive_case_insensitive,
             static_after_dynamic_attr
         ]},
         %% Client-owned slots (?local)
@@ -3227,6 +3233,119 @@ void_tag_case_insensitive_rejects_children(Config) when is_list(Config) ->
             ({void_with_children, 'BR'}) -> true;
             (_) -> false
         end
+    ).
+
+%% The reserved-name check exists because a template-authored `az` can collide with
+%% a genuine slot address and misroute a patch. HTML attribute names are ASCII
+%% case-insensitive, so `AZ="x"` IS an `az` attribute to the browser (the client
+%% resolves slots with querySelector('[az=...]'), which matches names
+%% case-insensitively) -- matching only the lowercase form let the exact harm the
+%% check prevents walk straight through it.
+reserved_attr_case_insensitive(Config) when is_list(Config) ->
+    Reserved = [
+        {"pt_res_AZ", "{'AZ', <<\"x\">>}"},
+        {"pt_res_azl", "{'Az-Local', <<\"x\">>}"},
+        {"pt_res_AZ_UND", "{'AZ_LOCAL', <<\"x\">>}"},
+        {"pt_res_bin", "{<<\"AZ\">>, <<\"x\">>}"},
+        %% Lowercase controls -- unchanged behaviour.
+        {"pt_res_az", "{az, <<\"x\">>}"},
+        {"pt_res_azl_low", "{'az-local', <<\"x\">>}"}
+    ],
+    lists:foreach(
+        fun({Mod, Attr}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(Bindings) -> ",
+                    "arizona_template:html({'p', [",
+                    Attr,
+                    "], []}). "
+                ]),
+                fun
+                    ({reserved_attr, _}) -> true;
+                    (_) -> false
+                end
+            )
+        end,
+        Reserved
+    ),
+    %% Control: every OTHER az-* name is the author's, in any casing.
+    Mod = compile_module(
+        "-module(pt_res_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [{'AZ-KEY', <<\"k\">>}, {az_click, <<\"c\">>}], []}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    ?assertEqual(<<"<p AZ-KEY=\"k\" az-click=\"c\"></p>">>, iolist_to_binary(HTML0)).
+
+%% az-view is injected on a live root and rejected anywhere else, for the same
+%% reason: the browser reads `AZ-VIEW="x"` as `az-view`.
+az_view_attr_case_insensitive(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Mod, Attr}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(Bindings) -> ",
+                    "arizona_template:html({'p', [",
+                    Attr,
+                    "], []}). "
+                ]),
+                fun(R) -> R =:= az_view_not_allowed end
+            )
+        end,
+        [
+            {"pt_azv_up", "{'AZ-VIEW', <<\"x\">>}"},
+            {"pt_azv_und", "{'AZ_VIEW', <<\"x\">>}"},
+            {"pt_azv_bare", "'Az-View'"},
+            {"pt_azv_bin", "<<\"AZ-VIEW\">>"},
+            %% Lowercase controls -- unchanged behaviour.
+            {"pt_azv_low", "{'az-view', <<\"x\">>}"},
+            {"pt_azv_low_bare", "az_view"}
+        ]
+    ).
+
+%% az-nodiff is the one where matching the lowercase form only produced the
+%% OPPOSITE of the request: unrecognized, the directive fell through as an ordinary
+%% boolean attribute, so the element kept its az and markers (still diffed) AND
+%% leaked `AZ-NODIFF` into the DOM. Assert the directive is HONORED, not just
+%% stripped.
+nodiff_directive_case_insensitive(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_case). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ['AZ-NODIFF'], [arizona_template:get(count, Bindings, 0)]}"
+        "    ). "
+    ),
+    T = Mod:render(#{count => 42}),
+    %% Honored: the compile unit is marked non-diffable...
+    ?assertEqual(false, maps:get(diff, T)),
+    %% ...its dynamic carries no diff address...
+    ?assertMatch([{undefined, _Spec, _Loc}], maps:get(d, T)),
+    {HTML0, _Snap} = arizona_render:render(T),
+    HTML = iolist_to_binary(HTML0),
+    %% ...and the rendered element has no az attribute, no slot markers, and no
+    %% trace of the directive itself.
+    ?assertEqual(<<"<div>42</div>">>, HTML),
+    ?assertEqual(nomatch, binary:match(HTML, ~"AZ-NODIFF")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"az-nodiff")),
+    ?assertEqual(nomatch, binary:match(HTML, ~" az=")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    %% The underscore spelling folds case too, and a nested one is still rejected
+    %% (the directive is whole-template, so recognizing it must reject it there).
+    assert_parse_error(
+        "-module(pt_nodiff_case_nested). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {'p', ['AZ_NODIFF'], [arizona_template:get(v, Bindings)]}"
+        "    ]}). ",
+        fun(R) -> R =:= nested_nodiff end
     ).
 
 %% Test 25: Static attrs after dynamic attr.
