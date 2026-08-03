@@ -17,7 +17,9 @@ the differ knows exactly which keys to insert, remove, update, or move.
 `items` is a map (effectively O(1) per-key access); `order` is a list with
 an O(1) append buffer. Per mutation, over N = stream size:
 
-- `insert/2` (append) and `update/3` -- O(1) amortized
+- `insert/2` (append) and `update/3` -- O(1) amortized under `halt`/`infinity`. Under
+  `on_limit => drop` at capacity each append evicts, flattening the order and discarding the
+  append buffer, so it degrades to O(Limit)
 - `delete/2` -- O(position of Key in order), keeping the append buffer
 - positional `insert/3` and `move/3` -- O(N) list surgery on the order
 - `sort/2` -- O(N log N); `reset/1,2` -- O(N)

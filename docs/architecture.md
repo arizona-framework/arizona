@@ -460,7 +460,8 @@ append ships an `OP_INSERT`. A `?stateful` child also renders and diffs, but it 
 (`map_size(NewLocal1) =:= map_size(NewLocal0)`), because a child view must be re-mounted by a full
 re-render. A plain list bearing per-item `?stateful` children therefore falls back to the wholesale
 marker `OP_TEXT`, re-rendering every item on any change. When you want self-diffing children, use a
-**stream** `?each`: items are keyed by `az_key`, each `?stateful` item is its own live view process,
+**stream** `?each`: items are keyed by `az_key`, each `?stateful` item is its own self-diffing
+live view (an entry in the root live process's `views` map, not a process of its own),
 and `merge_stream_child_views/4` carries the child ids incrementally across diffs.
 
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_os` / `arizona_effect`)
@@ -844,8 +845,11 @@ Simplified gen_server wrapper:
   hook list. The transport PID receives `{arizona_push, ...}` updates; pass `undefined` for a
   standalone (non-pushing) process. The live process is transport-agnostic and takes no request
 - `start_link/5` -- as `/4` plus the connection context the transport knows,
-  `#{capabilities => map(), reconnect => boolean()}`, which is what `capability/1`,
-  `capabilities/0`, and `reconnected/0` read. Browser/SSR callers use `/4` (empty context)
+  `#{capabilities => map(), reconnect => boolean(), push_barrier => boolean()}` -- the first two
+  are what `capability/1`, `capabilities/0`, and `reconnected/0` read. `/5` is the **browser
+  WebSocket** path (`arizona_socket:init/4` is its only caller in `src/`, always with
+  `push_barrier => true`); `/4` is the **terminal** transport (`arizona_terminal_session`). SSR
+  starts no live process at all, so it calls neither
 - `mount/1` -- calls `Handler:mount(Bindings)`. Extracts `ViewId = maps:get(id, Bindings)`, calls
   `Handler:render(B1)` via `arizona_stateful:call_render/2`, builds a snapshot via
   `arizona_render:render/2`. Returns `{ok, ViewId}` (no HTML -- SSR is handled separately by
@@ -914,8 +918,8 @@ the cancel cannot race a timer the old page armed while it was still running.
 ### Process-dictionary keys
 
 Seven keys live in the live process's dictionary, all read through accessor functions rather than
-directly. The first five are `arizona_live`'s own connection and scheduling state; the last two are
-set by the render/diff, which runs in the same process:
+directly. The first four are `arizona_live`'s own connection and scheduling state; the last three
+are set by the render/diff, which runs in the same process:
 
 | Key | Set by | Read by |
 | --- | ------ | ------- |
@@ -927,7 +931,9 @@ set by the render/diff, which runs in the same process:
 | `$arizona_update_effects` | `arizona_eval:set_update_effects/1`, seeded with the originating callback's effects before a diff | `current_update_effects/0` while child `handle_update/3`s fold onto it; `drain_update_effects/0` erases and returns the final list. Threading it here is what lets a child's effects join the root's with no concatenation at the call site |
 | `{'$arizona_scoped_statics', Prefix, Fp}` | `scoped_statics/4` in `arizona_template` | itself -- a memo for the per-slot static prefixing (`scope_static/3` on the render backend, per element), keyed by scope prefix + template fingerprint |
 
-The scoped-statics memo is the one entry with **no erase path**. That is deliberate and safe --
+Only `$arizona_deps`, `$arizona_update_effects` and `$arizona_timers` are ever erased; the rest
+are set once and left. What makes the scoped-statics memo different is that it is the one entry
+that **grows unboundedly** rather than holding a fixed-size value. That is deliberate and safe --
 prefixing a static list is pure and deterministic in `(Prefix, statics)`, so a stale entry cannot be
 wrong, and the payoff is that a re-render or diff of the same slot (and every level of a deep
 stateless nest, whose inner statics would otherwise be re-walked once per ancestor) reuses the
@@ -1623,21 +1629,18 @@ The **list -> stream** switch and every other stream **container full render** n
 `OP_TEXT`, so a stream `?each` sharing a content slot with static siblings re-renders in place
 instead of clobbering them.
 
-**Known limitation -- stream *incremental* ops are not yet marker-relative.** `insertItemEl`
-appends keyed children to the resolved container element and `moveItemEl` prepends to it, so
-placement is relative to that ELEMENT rather than to the slot's marker span. Two consequences:
+**Stream incremental ops are anchored to the slot span**, and one case remains refused.
+`insertItemEl` and `moveItemEl` resolve `slotBounds(el, az)` and place relative to the slot's
+markers when the container has them -- a tail insert goes before the closing `<!--/az-->`, a
+move-to-head after the opening one, and `keyedChildren` restricts positional indexing to the span.
+So an each sharing its container with static siblings no longer strands items after a footer or
+before a header.
 
-- When the each is not the container's sole content, a runtime-inserted item lands *after* the
-  closing `<!--/az-->` marker. A subsequent stream -> list `OP_TEXT` correctly re-renders the
-  marker span but leaves that orphan behind.
-- On a **marker-only** container (no element carries the slot az) the client would place the node
-  outside the slot entirely -- after the trailing siblings, or before the leading ones. Rather
-  than misplace it silently, `applyOps` refuses `OP_INSERT`/`OP_MOVE` on a marker-resolved target
-  with a warning. The position-independent `OP_REMOVE`/`OP_ITEM_PATCH` find their target by
-  `az-key` and still apply.
-
-The fix for both is to anchor stream items between the slot markers (making insert/move
-marker-relative), tracked as a follow-up.
+What still does not work is the **marker-only** container (no element carries the slot az at all).
+There the client would have to place the node with no element to measure against, so `applyOps`
+refuses `OP_INSERT`/`OP_MOVE` on a marker-resolved target with a warning rather than misplace it
+silently. The position-independent `OP_REMOVE`/`OP_ITEM_PATCH` find their target by `az-key` and
+still apply. Lifting that refusal is the remaining follow-up.
 
 ## Target scoping
 

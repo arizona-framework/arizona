@@ -331,10 +331,12 @@ What stays stream-specific is the **incremental** ops (`?OP_INSERT`, `?OP_REMOVE
 `?OP_ITEM_PATCH`), which a plain list has no equivalent of. They carry the **container's** az as
 the op target and name the item by key in a later field (`[?OP_INSERT, Az, Key, Pos, HTML]`),
 mutating one keyed child rather than the container's whole content -- so the full-render op code
-does not govern them. Their own open limitation is placement: `?OP_INSERT`'s position and
-`?OP_MOVE`'s prepend are relative to the container ELEMENT rather than the marker span, so on a
-marker-only container the client refuses them (warn + skip) instead of misplacing the node.
-Making stream items marker-relative is tracked in [docs/architecture.md](../../docs/architecture.md).
+does not govern them. Placement is anchored to the slot span: the client
+resolves the slot's markers and inserts before the closing one (or after the opening one for a
+move-to-head), so an each sharing its container with static siblings keeps its items inside the
+slot. The remaining case is a **marker-only** container, where no element carries the slot az at
+all -- there the client refuses `?OP_INSERT`/`?OP_MOVE` (warn + skip) rather than misplace the
+node, and only the key-addressed `?OP_REMOVE`/`?OP_ITEM_PATCH` still apply.
 
 **Component as an `?each` item child.** A `?stateless` descriptor **inside** an item element
 (`{li, [], [?stateless(...)]}`) renders at SSR and diffs per-item like any other item content:
@@ -348,7 +350,9 @@ render added **no** child view (`map_size(NewLocal1) =:= map_size(NewLocal0)`), 
 child view must be re-mounted by a full re-render. A list bearing per-item `?stateful`
 children therefore falls back to the wholesale marker `?OP_TEXT` -- every item re-renders on
 any change. Use a **stream** `?each` when you want self-diffing children: a stream keys items
-by `az_key`, and each `?stateful` item is its own live view process that diffs independently.
+by `az_key`, and each `?stateful` item is its own self-diffing live view. "View", not
+process: a child stateful view is an entry in the root live process's `views` map, dispatched
+in-process -- only a route root is ever spawned.
 
 ## Where to read bindings
 

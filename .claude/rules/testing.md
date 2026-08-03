@@ -51,22 +51,28 @@ itself (`arizona_terminal_ssh_SUITE` reads it back from `ssh:daemon_info/1`) nee
 Playwright, split into projects/directories, all served by
 `scripts/start_test_server.sh` on `$PORT` (default 4041):
 
-- `e2e/parallel/` -- 17 specs, `fullyParallel`: `arizona_page`, `arizona_datatable`,
+- `e2e/parallel/` -- 18 specs, `fullyParallel`: `arizona_page`, `arizona_datatable`,
   `arizona_mixed_children`, `arizona_inline`, `arizona_params`, `arizona_patch`,
   `arizona_session`, `arizona_transition`, `arizona_middleware_halt`,
   `arizona_form_submitter`, `bfcache`, the fetch specs (`arizona_fetch_push`,
   `arizona_fetch_error`), the `?local` specs (`arizona_local`, `arizona_local_app`,
-  `arizona_local_nested`), and `arizona_os` -- the native-shell (OS) capability seam, driven
+  `arizona_local_nested`), `arizona_stream_siblings` (a stream `?each` among static
+  siblings -- the shape whose container render must patch through the slot marker), and
+  `arizona_os` -- the native-shell (OS) capability seam, driven
   against the real client with a fake `window.__arizona_os__` installed via
   `page.addInitScript` (the Electron-preload equivalent).
-- `e2e/sequential/` -- 3 specs, `workers: 1`: `arizona_chat` (avoids pg channel leaks between
-  tests), `arizona_drain`, `arizona_fetch_account`.
-- `e2e/native/` -- 9 specs: the `?native` (JSON) wire e2e. A real WebSocket client, no browser
+- `e2e/sequential/` -- 3 specs, `workers: 1`: `arizona_chat`, `arizona_drain`,
+  `arizona_fetch_account`. The serialization is for the **drain** spec, which soft-drains the
+  whole listener and remounts every live view on the server, so it must not overlap the
+  others. Serializing buys ordering, not state isolation: the e2e server starts once for the
+  whole run, so anything keyed globally outlives every test -- `arizona_chat` therefore scopes
+  its pubsub channel to the `:room` path segment and each test visits a fresh random room.
+- `e2e/native/` -- 11 specs: the `?native` (JSON) wire e2e. A real WebSocket client, no browser
   (`e2e/utils/native_client.js`), driving the native views over the live server.
 
 `make test-e2e-parallel` / `test-e2e-sequential` / `test-e2e-native` run one project.
 
-## `test/support/` (112 modules)
+## `test/support/` (128 modules)
 
 Do not read it as a list -- read it as categories. A new fixture joins one of these and
 follows its naming.
