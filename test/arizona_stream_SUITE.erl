@@ -34,6 +34,8 @@
     nested_stream_redrain_no_duplicate_inserts/1,
     nested_stream_redrain_bounded_ops/1,
     nested_stream_redrain_reset_falls_back_to_full_drain/1,
+    divergent_stream_forks_do_not_share_a_drain_mark/1,
+    derived_stream_bindings_ship_every_insert/1,
     page_add_todo_live/1,
     page_add_todo_then_title_change_then_add_todo/1,
     page_clear_todos_live/1,
@@ -316,7 +318,9 @@ groups() ->
             nested_stream_render,
             nested_stream_redrain_no_duplicate_inserts,
             nested_stream_redrain_bounded_ops,
-            nested_stream_redrain_reset_falls_back_to_full_drain
+            nested_stream_redrain_reset_falls_back_to_full_drain,
+            divergent_stream_forks_do_not_share_a_drain_mark,
+            derived_stream_bindings_ship_every_insert
         ]},
         %% DataTable handler tests
         {datatable, [parallel], [
@@ -2025,10 +2029,9 @@ stream_limit_reset(Config) when is_list(Config) ->
 update_pending_op_carries_changed(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"old">>, other => v}]),
-    #stream{pending = P1} =
-        arizona_stream:update(S0, 1, #{id => 1, text => <<"new">>, other => v}),
+    S1 = arizona_stream:update(S0, 1, #{id => 1, text => <<"new">>, other => v}),
     %% First op is the initial insert from new/2; the second is our update.
-    [_Insert, {update, 1, _NewItem, Changed}] = queue:to_list(P1),
+    [_Insert, {update, 1, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
     ?assert(maps:is_key(text, Changed)),
     ?assertNot(maps:is_key(other, Changed)),
     ?assertNot(maps:is_key(id, Changed)).
@@ -2037,9 +2040,8 @@ update_pending_op_carries_changed(Config) when is_list(Config) ->
 update_on_missing_key_yields_empty_changed(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun),
-    #stream{pending = P1} =
-        arizona_stream:update(S0, 999, #{id => 999, text => <<"new">>}),
-    [{update, 999, _NewItem, Changed}] = queue:to_list(P1),
+    S1 = arizona_stream:update(S0, 999, #{id => 999, text => <<"new">>}),
+    [{update, 999, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
     ?assertEqual(#{}, Changed).
 
 %% --- reset/1,2 captures the pre-mutation items map in the pending op -------
@@ -2049,14 +2051,12 @@ reset_pending_op_carries_old_items(Config) when is_list(Config) ->
     OldItem2 = #{id => 2, text => <<"B">>},
     S0 = arizona_stream:new(KeyFun, [OldItem1, OldItem2]),
     %% reset/2 with a fresh set
-    #stream{pending = P1} = arizona_stream:reset(S0, [#{id => 1, text => <<"A2">>}]),
-    %% Pending starts with two inserts (initial population) and ends with reset.
-    Ops1 = queue:to_list(P1),
+    Ops1 = arizona_stream:pending_ops(arizona_stream:reset(S0, [#{id => 1, text => <<"A2">>}])),
+    %% reset REBUILDS the queue, so the reset op is the only one left.
     {reset, OldItems1} = lists:last(Ops1),
     ?assertEqual(#{1 => OldItem1, 2 => OldItem2}, OldItems1),
     %% reset/1 (full clear) also captures old items
-    #stream{pending = P2} = arizona_stream:reset(S0),
-    Ops2 = queue:to_list(P2),
+    Ops2 = arizona_stream:pending_ops(arizona_stream:reset(S0)),
     {reset, OldItems2} = lists:last(Ops2),
     ?assertEqual(#{1 => OldItem1, 2 => OldItem2}, OldItems2).
 
@@ -3024,6 +3024,57 @@ nested_stream_redrain_reset_falls_back_to_full_drain(Config) when is_list(Config
     [[?OP_ITEM_PATCH, _, ~"1", InnerOps2]] = Ops2,
     ?assertEqual([~"a", ~"b"], [K || [?OP_REMOVE, _, K] <- InnerOps2]),
     ?assertMatch([[?OP_INSERT, _, ~"c", -1, _]], [Op || [?OP_INSERT | _] = Op <- InnerOps2]).
+
+%% Two DIVERGENT successors of one stream are neither a prefix nor a suffix of
+%% each other, so a mark taken while draining one must never certify the other's
+%% ops as consumed. A mark that counts positions off a per-stream counter cannot
+%% tell them apart (both branches sit at the same count), which silently DROPPED
+%% the sibling's op -- the client then never receives that item.
+divergent_stream_forks_do_not_share_a_drain_mark(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, []),
+    SA = arizona_stream:insert(S0, #{id => 1, v => ~"a"}),
+    SB = arizona_stream:insert(S0, #{id => 2, v => ~"b"}),
+    MarkA = arizona_stream:drain_mark(SA),
+    ?assertEqual(
+        [{insert, 2, #{id => 2, v => ~"b"}, -1}],
+        arizona_stream:undrained_ops(SB, MarkA)
+    ),
+    %% Symmetric: SA's op must equally survive a mark taken from SB.
+    ?assertEqual(
+        [{insert, 1, #{id => 1, v => ~"a"}, -1}],
+        arizona_stream:undrained_ops(SA, arizona_stream:drain_mark(SB))
+    ).
+
+%% End-to-end version through a real parse-transformed view: bindings hold a
+%% PRISTINE stream plus a rendered one derived from it, and each event re-derives
+%% (tab switch, undo/restore, filter reset). Consecutive events therefore render
+%% divergent forks of the same stream, and every event's insert must ship.
+derived_stream_bindings_ship_every_insert(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Base = arizona_stream:new(KeyFun, []),
+    B0 = #{id => ~"c", base => Base, items => Base},
+    {_, Snap0, V0} = arizona_render:render(derived_stream_tmpl(B0), #{}),
+    B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
+    {Ops1, Snap1, V1} = derived_stream_event(B1, 1, ~"one", Snap0, V0),
+    ?assertEqual([~"1"], [K || [?OP_INSERT, _, K, _, _] <- Ops1]),
+    B2 = derived_stream_bindings(B1, 1, ~"one"),
+    B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
+    {Ops2, _Snap2, _V2} = derived_stream_event(B3, 2, ~"two", Snap1, V1),
+    ?assertEqual([~"2"], [K || [?OP_INSERT, _, K, _, _] <- Ops2]).
+
+%% Re-derives `items` from the pristine `base` binding, exactly as a filter-reset
+%% or tab-switch handler would.
+derived_stream_bindings(B, Id, V) ->
+    B#{items => arizona_stream:insert(maps:get(base, B), #{id => Id, text => V})}.
+
+derived_stream_event(B, Id, V, Snap, Views) ->
+    B1 = derived_stream_bindings(B, Id, V),
+    Changed = arizona_live_compute_changed(B, B1),
+    arizona_diff:diff(derived_stream_tmpl(B1), Snap, Views, Changed).
+
+derived_stream_tmpl(B) ->
+    arizona_stateful:call_render(arizona_stream_child, B).
 
 %% Outer page template for the nested-stream re-drain test: a stream of rows
 %% whose item template embeds a per-row inner stream of cells.

@@ -306,7 +306,7 @@ diff_each(
 merge_stream_child_views(Source, Old, LocalNew, Old0) ->
     OldChildViews = maps:get(child_views, Old, []),
     #{items := OldItems} = Old,
-    Deleted = deleted_item_children(Source#stream.pending, OldItems),
+    Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
     Surviving = OldChildViews -- Deleted -- maps:keys(LocalNew),
     carry_item_children(Surviving, Old0, LocalNew).
 
@@ -333,10 +333,10 @@ carry_skipped_view(_Old, Views) ->
 %% Extract child view IDs from deleted stream items only. The result is
 %% used in list subtraction (`OldChildViews -- Deleted`), so order doesn't
 %% matter -- safe to use a flat comp instead of a fold-with-prepend.
-deleted_item_children(Pending, OldItems) ->
+deleted_item_children(PendingOps, OldItems) ->
     [
         VId
-     || {delete, Key} <- queue:to_list(Pending),
+     || {delete, Key} <- PendingOps,
         {_Az, #{view_id := VId}, _Deps} <-
             case OldItems of
                 #{Key := ItemD} -> ItemD;
@@ -391,12 +391,10 @@ diff_stream(
             %% live process cannot clear (nested inside another value) keeps its
             %% whole history in `pending`, and replaying it re-emitted every
             %% historical intermediate patch -- see arizona_stream's moduledoc.
-            Pending = arizona_stream:undrained_pending(
-                Source, maps:get(drained, OldSnap, none)
-            ),
+            Ops = arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none)),
             diff_stream_pending(
                 Az,
-                Pending,
+                Ops,
                 SV,
                 Tmpl,
                 OldItems,
@@ -428,14 +426,10 @@ diff_stream(
             {[[?OP_TEXT, Az, HTML]], NewSnap, Views1}
     end.
 
-diff_stream_pending(Az, Queue, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {Source, _Vis} = SV,
-    case queue:out(Queue) of
-        {empty, _} ->
-            apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
-        {{value, Op}, Rest} ->
-            diff_stream_op(Az, Op, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
-    end.
+diff_stream_pending(Az, [], {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
+    apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
+diff_stream_pending(Az, [Op | Rest], SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    diff_stream_op(Az, Op, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0).
 
 diff_stream_op(Az, {insert, Key, Item, Pos}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_insert(Az, Key, Item, Pos, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);

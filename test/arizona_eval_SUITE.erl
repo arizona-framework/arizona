@@ -102,8 +102,9 @@ child_stream_tick_cycles(N, Max, _B, _Snap, _V, Acc) when N > Max ->
 child_stream_tick_cycles(N, Max, B, Snap, V, Acc) ->
     B1 = B#{tick => N},
     {_Ops, Snap1, V1} = arizona_diff:diff(child_stream_tmpl(B1), Snap, V, #{tick => true}),
-    #{~"c" := #{bindings := #{items := #stream{pending = Pending}}}} = V1,
-    child_stream_tick_cycles(N + 1, Max, B1, Snap1, V1, [queue:len(Pending) | Acc]).
+    #{~"c" := #{bindings := #{items := Items}}} = V1,
+    Pending = length(arizona_stream:pending_ops(Items)),
+    child_stream_tick_cycles(N + 1, Max, B1, Snap1, V1, [Pending | Acc]).
 
 %% Parent template embedding arizona_stream_child and passing `tick` as a prop.
 child_stream_tmpl(B) ->
