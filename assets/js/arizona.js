@@ -1421,6 +1421,13 @@ function keyedChildren(el, bounds) {
     return out;
 }
 
+/**
+ * Build a key -> element map of a container's direct keyed (az-key) children,
+ * in DOM order. Under a duplicate key the FIRST child wins, matching what a
+ * `:scope > [az-key="..."]` query would return.
+ * @param {Element} el
+ * @returns {Map<string, Element>}
+ */
 function buildKeyMap(el) {
     const map = new Map();
     for (const child of el.children) {
@@ -1466,8 +1473,9 @@ function itemByKey(streams, el, key) {
  * @param {number} pos -- -1 means append, otherwise insert before child at index
  * @param {string} html
  * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
+ * @param {string} [az] -- the op's slot az, used to anchor placement to the slot span
  */
-function insertItemEl(el, key, pos, html, streams = null, az = undefined) {
+function insertItemEl(el, key, pos, html, streams = null, az) {
     const tpl = el.ownerDocument.createElement('template');
     tpl.innerHTML = html;
     const bounds = slotBounds(el, az);
@@ -1524,8 +1532,9 @@ function removeItemEl(el, key, streams = null) {
  * @param {string} key
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
  * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
+ * @param {string} [az] -- the op's slot az, used to anchor placement to the slot span
  */
-function moveItemEl(el, key, afterKey, streams = null, az = undefined) {
+function moveItemEl(el, key, afterKey, streams = null, az) {
     const item = itemByKey(streams, el, key);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for move`);
