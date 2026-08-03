@@ -331,6 +331,7 @@
     raw_text_in_nodiff_raw_neutralized/1,
     raw_text_style_css_round_trip/1,
     raw_text_style_close_tag_still_neutralized/1,
+    raw_text_hoisted_raw_boundary/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -576,6 +577,7 @@ groups() ->
             raw_text_in_nodiff_raw_neutralized,
             raw_text_style_css_round_trip,
             raw_text_style_close_tag_still_neutralized,
+            raw_text_hoisted_raw_boundary,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -2117,6 +2119,37 @@ raw_text_style_close_tag_still_neutralized(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"\\u003c!--\\u003cscript>")),
     ?assertEqual(1, length(binary:matches(HTML, ~"<script"))).
+
+%% Where a hoisted ?raw is accepted is decided by the binding-read inlining, which
+%% splices a variable back into its slot only when its expression reads a binding.
+%% So `R = ?raw(?get(js))` reaches the slot as a literal ?raw and compiles, while
+%% `R = ?raw(<<"x">>)` never does and is rejected. Pin both sides so the accepted
+%% one is a documented boundary rather than an accident, and require the error to
+%% name the remedy (wrap at the slot) instead of leaving the author to guess.
+raw_text_hoisted_raw_boundary(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_hoist_read). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    R = arizona_template:raw(arizona_template:get(js, Bindings)), "
+        "    arizona_template:html({'script', [], [R]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => ~"a && b"})),
+    ?assertEqual(<<"<script>a && b</script>">>, iolist_to_binary(HTML0)),
+    %% No binding read in the hoisted expression -- not inlined, so not a literal
+    %% ?raw at the slot, so rejected.
+    assert_parse_error(
+        "-module(pt_rt_hoist_noread). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    R = arizona_template:raw(<<\"x\">>), "
+        "    arizona_template:html({'script', [], [R]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ),
+    %% The message must point at the fix that always works: wrap AT the slot.
+    Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
+    ?assertNotEqual(nomatch, string:find(Msg, "at the slot")),
+    ?assertNotEqual(nomatch, string:find(Msg, "variable")).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's

@@ -481,8 +481,11 @@ format_error(dynamic_in_raw_text) ->
     "the value can close the JavaScript string it sits in, or the element itself (XSS). "
     "Mark it with a literal ?raw(...) at the slot to state the value is already safe for "
     "the script/CSS context, and only then -- serialize data first, e.g. "
-    "{script, [], [?raw(json:encode(Data))]}. Literal script/CSS text is static, not a "
-    "slot, and needs no wrapper";
+    "{script, [], [?raw(json:encode(Data))]}. The ?raw has to sit at the slot itself: a "
+    "variable holding one reaches the slot only when its expression reads a binding, so "
+    "compute the value into a variable and wrap it here (Json = json:encode(Data), then "
+    "{script, [], [?raw(Json)]}), not the other way round. Literal script/CSS text is "
+    "static, not a slot, and needs no wrapper";
 format_error(local_in_raw_text) ->
     "a content ?local cannot be used inside a raw-text element "
     "(script/style/textarea/title) -- raw-text content carries no slot markers "
