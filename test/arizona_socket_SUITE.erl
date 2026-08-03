@@ -18,6 +18,10 @@
 -export([deferred_resync_timeout_flushes_undeduped/1]).
 -export([unmount_skipped_when_never_mounted/1]).
 -export([unmount_runs_after_mount/1]).
+-export([resync_mount_crash_on_fps_frame_closes_crash/1]).
+-export([resync_mount_crash_on_other_frame_closes_crash/1]).
+-export([resync_mount_crash_on_timeout_closes_crash/1]).
+-export([resync_on_dead_live_process_closes_going_away/1]).
 
 all() ->
     [
@@ -31,7 +35,11 @@ all() ->
         deferred_resync_flushed_by_ping,
         deferred_resync_timeout_flushes_undeduped,
         unmount_skipped_when_never_mounted,
-        unmount_runs_after_mount
+        unmount_runs_after_mount,
+        resync_mount_crash_on_fps_frame_closes_crash,
+        resync_mount_crash_on_other_frame_closes_crash,
+        resync_mount_crash_on_timeout_closes_crash,
+        resync_on_dead_live_process_closes_going_away
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -328,3 +336,66 @@ deferred_resync_timeout_flushes_undeduped(Config) when is_list(Config) ->
     after 2000 ->
         error(resync_timeout_never_fired)
     end.
+
+resync_mount_crash_on_fps_frame_closes_crash(Config) when is_list(Config) ->
+    %% The deferred resync is the one mount path that ran outside a crash guard.
+    %% A raise in mount/1, on_mount, or render/1 escaped handle_in/2 and killed
+    %% the ws_session with no close frame, so the client saw a bare 1006 and
+    %% backed off forever instead of the 4500 close its purpose-built
+    %% `crashReload()` guard exists for. The conforming leg -- the promised
+    %% `cached_fps` frame -- must close 4500 like every sibling mount path.
+    Socket = crashing_flagged_socket(),
+    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
+    ?assertMatch({close, 4500, ~"server crash", _}, arizona_socket:handle_in(FpsFrame, Socket)).
+
+resync_mount_crash_on_other_frame_closes_crash(Config) when is_list(Config) ->
+    %% Protocol-violation leg: a non-`cached_fps` first frame flushes the resync
+    %% undeduped before its own reply. A crash there must close 4500 too -- and
+    %% the close outranks the frame's reply, so nothing is shipped alongside it.
+    Socket = crashing_flagged_socket(),
+    EventFrame = iolist_to_binary(
+        json:encode([~"crashable", ~"set_status", #{~"value" => ~"x"}])
+    ),
+    ?assertMatch({close, 4500, ~"server crash", _}, arizona_socket:handle_in(EventFrame, Socket)).
+
+resync_mount_crash_on_timeout_closes_crash(Config) when is_list(Config) ->
+    %% Backstop leg: the flagged client never announced, so the timer flushes
+    %% the resync from handle_info/2 -- equally unguarded before the fix.
+    Socket = crashing_flagged_socket(),
+    ?assertMatch(
+        {close, 4500, ~"server crash", _},
+        arizona_socket:handle_info(arizona_resync_timeout, Socket)
+    ).
+
+resync_on_dead_live_process_closes_going_away(Config) when is_list(Config) ->
+    %% Drain/exit race: the resync flush reaches a live process that already
+    %% exited (a listener drain landing inside the deferral window). Its sibling
+    %% mount paths (do_navigate/do_patch) translate that into a 1001 going-away
+    %% close so the client's form-state-preserving reconnect runs; the flush
+    %% raised a bare `{noproc, ...}` out of handle_in/2 instead.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+    ),
+    Pid = arizona_socket:live_pid(Socket),
+    Ref = erlang:monitor(process, Pid),
+    ok = gen_server:stop(Pid),
+    receive
+        {'DOWN', Ref, process, Pid, _Reason} -> ok
+    after 2000 -> error(live_process_did_not_stop)
+    end,
+    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
+    ?assertMatch({close, 1001, <<>>, _}, arizona_socket:handle_in(FpsFrame, Socket)).
+
+%% A flagged-reconnect socket whose live process crashes the moment the deferred
+%% resync mounts it. `init/4` defers the mount, so the crash lands in the flush,
+%% never at init.
+crashing_flagged_socket() ->
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket} = arizona_socket:init(
+        arizona_crashable,
+        #{crash_on_mount => true},
+        Req,
+        #{reconnect => true, fps_follow => true}
+    ),
+    Socket.

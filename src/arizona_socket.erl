@@ -229,11 +229,9 @@ handle_in(Frame, #socket{pending_resync = TRef, pid = Pid} = Socket0) when
     case decode_cached_fps(Frame) of
         {ok, FpList} ->
             ok = arizona_live:seed_fps(Pid, FpList),
-            {Ops, Socket} = flush_resync(Socket1),
-            {reply, encode(#{?OPS => Ops}), Socket};
+            resync_reply(flush_resync(Socket1));
         error ->
-            {Ops, Socket} = flush_resync(Socket1),
-            resync_then(encode(#{?OPS => Ops}), handle_in(Frame, Socket))
+            resync_before_frame(flush_resync(Socket1), Frame)
     end;
 handle_in(?SYS_PING, Socket) ->
     {reply, ?SYS_PONG, Socket};
@@ -317,8 +315,7 @@ handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0) wh
     %% timeout message -- the resync already flushed by a frame that raced the
     %% firing timer -- has `pending_resync = undefined` and falls through to
     %% the catch-all below.)
-    {Ops, Socket} = flush_resync(Socket0#socket{pending_resync = undefined}),
-    {reply, encode(#{?OPS => Ops}), Socket};
+    resync_reply(flush_resync(Socket0#socket{pending_resync = undefined}));
 handle_info({arizona_push, ViewId, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
     encode_reply(flatten_ops(ViewId, Ops), Effects, Socket);
 handle_info({arizona_push, _StaleViewId, _Ops, _Effects}, Socket) ->
@@ -381,13 +378,45 @@ decode_cached_fps(Frame) ->
 %% Mount the live process and render the reconnect full-page replace. The
 %% dedup against `sent_fps` happens inside `mount_and_render` -- any
 %% fingerprints seeded before this call elide their statics from the payload.
+%%
+%% This is a mount, so it carries the same guards as every other mount path
+%% (`safe_init/3` at connect, the trys in do_navigate/do_patch/the event leg):
+%% a raise anywhere in `mount/1`, `on_mount`, or `render/1` becomes the 4500
+%% crash close the client's `crashReload()` guard is built for -- unguarded it
+%% escaped both `handle_in/2` and `handle_info/2`, killed the session with no
+%% close frame, and left the client backing off on a bare 1006 forever. The
+%% drain/exit race gets the same 1001 going-away close its siblings give it.
+%% Returns `{ok, Ops, Socket}` or a ready-made close result.
 flush_resync(#socket{pid = Pid} = Socket) ->
-    {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
-    {replace_ops(ViewId, PageHTML), Socket#socket{view_id = ViewId}}.
+    try arizona_live:mount_and_render(Pid) of
+        {ok, ViewId, PageHTML} ->
+            {ok, replace_ops(ViewId, PageHTML), Socket#socket{view_id = ViewId}}
+    catch
+        %% Same drain/exit race as do_navigate (see there).
+        exit:{noproc, _} ->
+            {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
+        exit:{{shutdown, drain}, _} ->
+            {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
+        Class:Reason:Stacktrace ->
+            logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+            close_crash(Socket)
+    end.
+
+resync_reply({ok, Ops, Socket}) ->
+    {reply, encode(#{?OPS => Ops}), Socket};
+resync_reply({close, _Code, _Reason, _Socket} = Close) ->
+    Close.
 
 %% Ship the resync frame BEFORE the triggering frame's own result: the client
 %% must apply the full-page replace first, then the frame's reply against the
-%% fresh DOM. A close outranks the resync -- the socket is going away.
+%% fresh DOM. A failed flush closes instead -- the frame must never reach a
+%% live process the flush left unmounted.
+resync_before_frame({ok, Ops, Socket}, Frame) ->
+    resync_then(encode(#{?OPS => Ops}), handle_in(Frame, Socket));
+resync_before_frame({close, _Code, _Reason, _Socket} = Close, _Frame) ->
+    Close.
+
+%% A close outranks the resync -- the socket is going away.
 resync_then(ResyncFrame, {ok, Socket}) ->
     {reply, ResyncFrame, Socket};
 resync_then(ResyncFrame, {reply, Frame, Socket}) ->
