@@ -62,6 +62,15 @@ public func buildTree(_ json: JSONValue, view: String?) throws -> Node {
     return node
 }
 
+/// The view a child belongs to: a nested `az_view` object owns its subtree under
+/// its own `id`; anything else stays in `parentView`. Shared by `addChild` and the
+/// `OP_INSERT` path, so an item that is itself a view root registers under ITS id
+/// rather than the container's (mirrors `enclosingView` in the reference client).
+public func enclosingView(_ json: JSONValue, _ parentView: String?) -> String? {
+    guard case let .object(obj) = json, obj["az_view"]?.boolValue == true else { return parentView }
+    return obj["id"]?.stringValue ?? parentView
+}
+
 /// Append a child, splicing each-expansion arrays into the parent. `#slot`
 /// objects are kept as nodes; stream items (each-array entries) become keyed
 /// child nodes. A child that is itself a view root (`az_view`) owns its subtree;
@@ -71,9 +80,8 @@ func addChild(_ parent: Node, _ child: JSONValue, _ view: String?) throws {
     switch child {
     case let .array(arr):
         for c in arr { try addChild(parent, c, view) }
-    case let .object(obj):
-        let childView = obj["az_view"]?.boolValue == true ? (obj["id"]?.stringValue ?? view) : view
-        let node = try buildTree(child, view: childView)
+    case .object:
+        let node = try buildTree(child, view: enclosingView(child, view))
         parent.children.append(.node(node))
     default:
         parent.children.append(.text(child.contentString))

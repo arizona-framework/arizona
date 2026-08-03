@@ -9,7 +9,9 @@ const EFFECT_NAVIGATE = 10;
 // Diff op codes (mirror src/arizona.hrl).
 const OP_TEXT = 0;
 const OP_SET_ATTR = 1;
+const OP_REMOVE_NODE = 4;
 const OP_INSERT = 5;
+const OP_REMOVE = 6;
 const OP_ITEM_PATCH = 7;
 const OP_REPLACE = 8;
 
@@ -97,8 +99,74 @@ const ITEM_STATICS = [
     ']}]}]}',
 ];
 
+// A keyed stream item wrapping a nested each, so two CELLS inside one item share
+// an `az` -- the item-local registry's equivalent of two stream items sharing one.
+const NESTED_ITEM_STATICS = [
+    '{"type":"Row","az":"I-0","az_key":',
+    ',"children":[{"type":"#slot","az":"I-0t0","children":[',
+    ']}]}',
+];
+const CELL_STATICS = ['{"type":"Cell","az":"N-0","az_key":', ',"children":["x"]}'];
+
 function newClient() {
     return new NativeClient('http://localhost:4040', '/native/x');
+}
+
+// Swap in a recording WebSocket so a test can drive `_open()` end to end and
+// assert on what the client actually TRANSMITS (mirrors the browser client's
+// worker-integration stub).
+function installWebSocketStub() {
+    const instances = [];
+    class MockWS {
+        constructor(url) {
+            this.url = url;
+            this.sent = [];
+            instances.push(this);
+        }
+        send(data) {
+            this.sent.push(data);
+        }
+        close() {}
+        simulateOpen() {
+            if (this.onopen) this.onopen();
+        }
+        simulateMessage(data) {
+            if (this.onmessage) this.onmessage({ data });
+        }
+    }
+    const orig = globalThis.WebSocket;
+    globalThis.WebSocket = MockWS;
+    return {
+        latest: () => instances[instances.length - 1],
+        restore: () => {
+            globalThis.WebSocket = orig;
+        },
+    };
+}
+
+// OP_REPLACE of a stream root holding `keys`, all sharing one item fingerprint
+// (so every item carries the SAME az values -- the collision the identity check
+// in unindexByViews exists for).
+function replaceSharedAzList(client, keys) {
+    client._applyOps([
+        [
+            OP_REPLACE,
+            'native_l',
+            {
+                f: 'R',
+                s: ROOT_STATICS,
+                d: [
+                    'native_l',
+                    { t: 0, f: 'S', s: SLOT_ITEM_STATICS, d: keys.map((k) => [k, '']) },
+                ],
+            },
+        ],
+    ]);
+}
+
+// The raw (unflattened) stream items under the root's content slot.
+function rawItems(client) {
+    return client.root.children[0].children.find(Array.isArray);
 }
 
 // OP_REPLACE of the root view with an empty content slot.
@@ -257,6 +325,242 @@ describe('native client op application', () => {
         const client = newClient();
         replaceRoot(client);
         expect(client._cachedFps()).toEqual(['R']);
+    });
+
+    // ...and the socket must actually SEND them. Asserting `_cachedFps()` alone
+    // leaves the wiring untested: reverting the open handler to a hardcoded `[]`
+    // -- the exact bug -- keeps a helper-only test green.
+    it('transmits the cached fingerprints on every socket open', () => {
+        const ws = installWebSocketStub();
+        try {
+            const client = newClient();
+            client.connect();
+            ws.latest().simulateOpen();
+            // First open: nothing cached yet.
+            expect(JSON.parse(ws.latest().sent[0])).toEqual(['cached_fps', []]);
+
+            // A frame arrives and caches fingerprint "R" ...
+            ws.latest().simulateMessage(
+                JSON.stringify({
+                    o: [[OP_REPLACE, 'native_x', { f: 'R', s: ROOT_STATICS, d: ['native_x', ''] }]],
+                }),
+            );
+            // ... so the next open announces it instead of an empty list.
+            client._open();
+            ws.latest().simulateOpen();
+            expect(JSON.parse(ws.latest().sent[0])).toEqual(['cached_fps', ['R']]);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // A frame that will not parse, and a malformed effect command, are both
+    // server output arriving asynchronously: each must cost itself, not the
+    // client. (Kotlin proved the regression: `{"e":[[0]]}` threw
+    // IndexOutOfBoundsException straight out of the frame handler.)
+    it('survives an unparseable frame and a malformed effect command', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const ws = installWebSocketStub();
+        try {
+            const client = newClient();
+            client.connect();
+            ws.latest().simulateOpen();
+            expect(() => ws.latest().simulateMessage('not json')).not.toThrow();
+            // push_event with no event name.
+            expect(() => ws.latest().simulateMessage('{"e":[[0]]}')).not.toThrow();
+            expect(warn).toHaveBeenCalledTimes(2);
+
+            // Still live: a well-formed frame after both still applies.
+            ws.latest().simulateMessage(
+                JSON.stringify({
+                    o: [[OP_REPLACE, 'native_x', { f: 'R', s: ROOT_STATICS, d: ['native_x', ''] }]],
+                }),
+            );
+            expect(client.tree().id).toBe('native_x');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // Since OP_INSERT indexes what it grafts in, OP_REMOVE has to unindex what it
+    // drops -- otherwise a churning stream grows the registry (and pins every
+    // detached subtree) once per cycle, for the life of the connection. Each item
+    // here carries a child view with its own id, so the leak is unambiguous: one
+    // extra registry per cycle, reclaimed only by a reconnect.
+    it('does not grow the registry across insert/remove cycles', () => {
+        const client = newClient();
+        client._applyOps([
+            [
+                OP_REPLACE,
+                'native_l',
+                {
+                    f: 'R',
+                    s: ROOT_STATICS,
+                    d: ['native_l', { t: 0, f: 'I', s: ITEM_STATICS, d: [['k1', 'kid', '0']] }],
+                },
+            ],
+        ]);
+        const baseline = client.views.get('native_l').size;
+        for (let i = 0; i < 50; i++) {
+            client._applyOps([
+                [OP_INSERT, 'native_l:R-0t0', `x${i}`, -1, { f: 'I', d: [`x${i}`, `kid${i}`, ''] }],
+            ]);
+            client._applyOps([[OP_REMOVE, 'native_l:R-0t0', `x${i}`]]);
+        }
+        // Only the root view and the surviving item's child view are left.
+        expect([...client.views.keys()].sort()).toEqual(['kid', 'native_l']);
+        // The root view's own entries never grow either. (They can SHRINK: every
+        // item shares one fingerprint's az values, so the entry for a shared az
+        // names whichever item was indexed last, and removing that item drops it.
+        // Harmless -- a stream item is only ever addressed through its container
+        // by `az_key`, never by "ViewId:az" -- and true of OP_REPLACE on main too.)
+        expect(client.views.get('native_l').size).toBeLessThanOrEqual(baseline);
+    });
+
+    // A child view an inner op installed, then removed with its item, must not
+    // leave a live registry entry pointing into the detached subtree.
+    it('drops a removed item child view from the registry', () => {
+        const client = newClient();
+        replaceSharedAzList(client, ['k1']);
+        client._applyOps([
+            [
+                OP_ITEM_PATCH,
+                'native_l:R-0t0',
+                'k1',
+                [[OP_TEXT, 'I-0t0', { f: 'C', s: CHILD_STATICS, d: ['kid', '0'] }]],
+            ],
+        ]);
+        expect(client.views.get('kid')).toBeDefined();
+        client._applyOps([[OP_REMOVE, 'native_l:R-0t0', 'k1']]);
+        expect(client.views.get('kid')).toBeUndefined();
+    });
+
+    // The `remove` sentinel drops a node one-way, so its registry entries are
+    // dead the moment the splice lands -- including a whole child view's.
+    it('drops a node removed by the remove sentinel from the registry', () => {
+        const client = newClient();
+        replaceRoot(client);
+        client._applyOps([
+            [OP_TEXT, 'native_x:R-0t0', { f: 'C', s: CHILD_STATICS, d: ['cond_child', '0'] }],
+        ]);
+        expect(client.views.get('cond_child')).toBeDefined();
+
+        client._applyOps([[OP_REMOVE_NODE, 'cond_child:C-0']]);
+        expect(client.views.get('cond_child')).toBeUndefined();
+        expect(client.tree().children).toEqual([]);
+    });
+
+    // THE identity check, per-view half: stream items share az values (one
+    // fingerprint, many items), so the registry entry for a shared az names
+    // whichever item was indexed last. Unindexing a destroyed item by key alone
+    // would delete the entry naming a LIVE sibling.
+    it('keeps a surviving sibling registered when an item sharing its az is removed', () => {
+        const client = newClient();
+        replaceSharedAzList(client, ['k1', 'k2']);
+        const reg = client.views.get('native_l');
+        // Last-indexed wins: the entry names item k2's slot.
+        const survivorSlot = rawItems(client)[1].children[0];
+        expect(reg.get('I-0t0')).toBe(survivorSlot);
+
+        client._applyOps([[OP_REMOVE, 'native_l:R-0t0', 'k1']]);
+        expect(reg.get('I-0t0')).toBe(survivorSlot);
+        expect(reg.get('I-0')).toBe(rawItems(client)[0]);
+    });
+
+    // THE identity check, item-local half: two cells of a nested each inside one
+    // item share an az, so an inner OP_REMOVE must not unregister the survivor --
+    // a later inner op naming that az would then fall back to the ITEM and
+    // overwrite the whole row.
+    it('keeps a surviving nested cell resolvable when its az-sharing sibling is removed', () => {
+        const client = newClient();
+        client._applyOps([
+            [
+                OP_REPLACE,
+                'native_l',
+                {
+                    f: 'R',
+                    s: ROOT_STATICS,
+                    d: [
+                        'native_l',
+                        {
+                            t: 0,
+                            f: 'NI',
+                            s: NESTED_ITEM_STATICS,
+                            d: [['k1', { t: 0, f: 'CE', s: CELL_STATICS, d: [['n1'], ['n2']] }]],
+                        },
+                    ],
+                },
+            ],
+        ]);
+        client._applyOps([
+            [
+                OP_ITEM_PATCH,
+                'native_l:R-0t0',
+                'k1',
+                [
+                    [OP_REMOVE, 'I-0t0', 'n1'],
+                    [OP_TEXT, 'N-0', 'patched'],
+                ],
+            ],
+        ]);
+        const row = client.tree().children[0];
+        // The surviving cell took the patch, and the row is still a row.
+        expect(row.children[0].type).toBe('Cell');
+        expect(row.children[0].children).toEqual(['patched']);
+    });
+
+    // Build before committing: a malformed OP_REPLACE must leave the previous
+    // tree AND registry intact rather than half-clearing them. The payload has to
+    // fail LATE -- statics that interleave fine but do not parse -- since an
+    // uncached fingerprint dies before either ordering commits anything and so
+    // cannot tell them apart. (Android/iOS fail one step later still, inside the
+    // tree builder; this client has no tree builder to fail in.)
+    it('keeps the previous tree and registry when an OP_REPLACE payload is bad', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const client = newClient();
+        replaceRoot(client);
+        const before = client.root;
+
+        client._applyOps([[OP_REPLACE, 'native_x', { f: 'BAD', s: ['{"type":"X"'], d: [] }]]);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(client.root).toBe(before);
+        expect(client.viewId).toBe('native_x');
+        expect(client.views.get('native_x')).toBeDefined();
+
+        // The old registry still resolves, so the view keeps patching.
+        client._applyOps([[OP_TEXT, 'native_x:R-0t0', 'still here']]);
+        expect(client.tree().children).toEqual(['still here']);
+    });
+
+    // Spec parity across the three clients for an OP_INSERT position the server
+    // never sends: any out-of-range value appends. Left as `=== -1`, a raw
+    // negative index means "count from the end" to splice here, is an exception
+    // on Android, and TRAPS on iOS.
+    it('appends an insert whose position is out of range', () => {
+        const client = newClient();
+        replaceSharedAzList(client, ['k1']);
+        client._applyOps([[OP_INSERT, 'native_l:R-0t0', 'k2', -5, { f: 'S', d: ['k2', ''] }]]);
+        expect(rawItems(client).map((it) => it.az_key)).toEqual(['k1', 'k2']);
+    });
+
+    // Spec parity: an inserted item that is ITSELF a view root owns its subtree
+    // under its own id, rather than registering in the container's view.
+    it('registers an inserted item that is itself a view root', () => {
+        const client = newClient();
+        replaceSharedAzList(client, ['k1']);
+        client._applyOps([
+            [
+                OP_INSERT,
+                'native_l:R-0t0',
+                'solo',
+                -1,
+                { f: 'C', s: CHILD_STATICS, d: ['solo', '0'] },
+            ],
+        ]);
+        expect(client.views.get('solo')).toBeDefined();
+
+        client._applyOps([[OP_TEXT, 'solo:C-0t0', '7']]);
+        expect(client.tree().children[1].children).toEqual(['7']);
     });
 
     // Unbounded, the cache accumulates one generation of fingerprints per deploy.

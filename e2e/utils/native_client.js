@@ -110,11 +110,21 @@ export class NativeClient {
             // Reset the backoff only once a real frame arrives (a working session,
             // not a bare WS handshake) -- mirrors the worker + AzClient.
             this._reconnectAttempt = 0;
-            const msg = JSON.parse(e.data);
+            // A frame that will not parse is the same class of problem as an op
+            // that will not apply: it is the server's output, not the user's, and
+            // dropping it must cost one frame rather than the client.
+            let msg;
+            try {
+                msg = JSON.parse(e.data);
+            } catch (err) {
+                console.warn('[arizona] unparseable frame; skipping', err);
+                return;
+            }
             if (msg.o) this._applyOps(msg.o);
             // Handler-returned effects (the "e" array): dispatch the portable
             // ones, skip web-only effects (set_title, dispatch_event, ...).
-            if (msg.e) for (const cmd of msg.e) this._runEffect(cmd, false);
+            // Isolated per effect, like the ops.
+            if (msg.e) for (const cmd of msg.e) this._runEffectSafe(cmd);
             if (this.root) this._resolveConnect(this); // first frame applied (no-op after)
             this._flushWaiters();
         };
@@ -216,10 +226,27 @@ export class NativeClient {
     // effects in the "e" stream don't apply to native). `view` (a tap's enclosing
     // view id) routes the event; the server's "e" effects pass none -> root.
     _runEffect(cmd, strict, view) {
+        const arg = (i) => {
+            if (typeof cmd[i] !== 'string')
+                throw new Error(`malformed command: ${JSON.stringify(cmd)}`);
+            return cmd[i];
+        };
         if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT)
-            this.pushEvent(cmd[1], cmd[2] ?? {}, view);
-        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE) this.navigate(cmd[1]);
+            this.pushEvent(arg(1), cmd[2] ?? {}, view);
+        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE) this.navigate(arg(1));
         else if (strict) throw new Error(`unsupported command: ${JSON.stringify(cmd)}`);
+    }
+
+    // The server's "e" entries are wire input arriving asynchronously, so one
+    // malformed command must cost that command, not the client. A tap keeps the
+    // strict, throwing path: it is a synchronous call on the caller's stack and
+    // the throw is the development signal that a template built a bad command.
+    _runEffectSafe(cmd) {
+        try {
+            this._runEffect(cmd, false, undefined);
+        } catch (err) {
+            console.warn(`[arizona] effect ${JSON.stringify(cmd)} failed; skipping`, err);
+        }
     }
 
     _flushWaiters() {
@@ -233,11 +260,13 @@ export class NativeClient {
     }
 
     // How one batch addresses and re-indexes nodes. A scope is
-    // `{resolve, unindexChildren, reindex}`: `resolve` maps an op target to a
-    // node, and the other two keep the registry in step with the tree whenever an
-    // op discards a node's children or grafts a new subtree on. Three exist --
-    // this one (top-level "ViewId:az" over the per-view registry), the per-item
-    // one in `_applyInner`, and the child-view one in `_applyChildViewOps`.
+    // `{resolve, unindexSubtree, unindexChildren, reindex}`: `resolve` maps an op
+    // target to a node, and the rest keep the registry in step with the tree --
+    // every op that adds or destroys nodes has to say so, or the registry drifts
+    // from the tree in one direction or the other (unaddressable new nodes, or
+    // entries pinning detached ones). Three scopes exist -- this one (top-level
+    // "ViewId:az" over the per-view registry), the per-item one in `_applyInner`,
+    // and the child-view one in `_applyChildViewOps`.
     //
     // `viewId` names the registry a rebuilt subtree belongs to; nodes carry it as
     // `__view` (stamped by indexByViews), so a nested `az_view` payload lands
@@ -245,6 +274,7 @@ export class NativeClient {
     _viewScope() {
         return {
             resolve: (target) => this._resolve(target),
+            unindexSubtree: (node) => unindexByViews(node, this.views),
             unindexChildren: (node) => {
                 for (const c of node.children ?? []) unindexByViews(c, this.views);
             },
@@ -320,14 +350,9 @@ export class NativeClient {
                 // parent (the browser does el.remove()). One-way -- bringing it back
                 // needs a parent re-render, not an op on the removed az.
                 //
-                // The removed node's registry entries are deliberately left: a later
-                // op naming that az would still RESOLVE and would patch the detached
-                // node. That is unreachable only because the server never re-addresses
-                // a removed az (and addresses stream items by `az_key`, not
-                // "ViewId:az") -- a convention, not a check. Re-validating would mean
-                // walking to the root on every resolve, since nodes carry no parent
-                // link; if that convention ever changes, unindex here.
-                removeFromParent(scopeRoot, node);
+                // Unindex only on a successful splice: the registry must not lose a
+                // node that is still in the tree.
+                if (removeFromParent(scopeRoot, node)) scope.unindexSubtree(node);
                 break;
             case OP_SET_ATTR:
                 node[op[2]] = op[3];
@@ -339,7 +364,12 @@ export class NativeClient {
                 const items = itemList(node);
                 const pos = op[3];
                 const item = this._decode(op[4]);
-                if (pos === -1 || pos >= items.length) items.push(item);
+                // Any out-of-range position appends (the server's tail insert is
+                // -1). Spelled as a range test, not `=== -1`, so the three clients
+                // agree on a value none of them should ever see -- a raw negative
+                // index means "count from the end" to splice, an exception to
+                // Kotlin's List.add, and a TRAP to Swift's Array.insert.
+                if (pos < 0 || pos >= items.length) items.push(item);
                 else items.splice(pos, 0, item);
                 // Index the new item, like OP_REPLACE already indexes the items it
                 // renders: a ?stateful child inside a stream item owns its own view
@@ -350,7 +380,14 @@ export class NativeClient {
             case OP_REMOVE: {
                 const items = itemList(node);
                 const i = items.findIndex((it) => it.az_key === op[2]);
-                if (i !== -1) items.splice(i, 1);
+                if (i !== -1) {
+                    // Drop the item's entries: since OP_INSERT indexes what it
+                    // grafts in, not unindexing here would grow the registry -- and
+                    // pin the detached subtree -- once per insert/remove cycle for
+                    // the life of the connection.
+                    scope.unindexSubtree(items[i]);
+                    items.splice(i, 1);
+                }
                 break;
             }
             case OP_MOVE: {
@@ -403,6 +440,10 @@ export class NativeClient {
         const view = this._viewScope();
         const scope = {
             resolve: (az) => reg.get(az) || item,
+            unindexSubtree: (node) => {
+                unindexByAz(node, reg);
+                view.unindexSubtree(node);
+            },
             unindexChildren: (node) => {
                 for (const c of node.children ?? []) unindexByAz(c, reg);
                 view.unindexChildren(node);

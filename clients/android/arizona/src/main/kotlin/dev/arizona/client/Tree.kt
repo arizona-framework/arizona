@@ -55,6 +55,19 @@ fun buildTree(json: JsonElement, view: String? = null): Node {
     return node
 }
 
+/**
+ * The view a child belongs to: a nested `az_view` object owns its subtree under
+ * its own `id`; anything else stays in [parentView]. Shared by [addChild] and the
+ * `OP_INSERT` path, so an item that is itself a view root registers under ITS id
+ * rather than the container's (mirrors `enclosingView` in the reference client).
+ */
+fun enclosingView(json: JsonElement, parentView: String?): String? =
+    if (json is JsonObject && json["az_view"]?.jsonPrimitive?.booleanOrNull == true) {
+        json["id"]?.jsonPrimitive?.content ?: parentView
+    } else {
+        parentView
+    }
+
 // Append a child, splicing each-expansion arrays into the parent. #slot objects
 // are kept as Nodes; stream items (each-array entries) become keyed child Nodes.
 // A child that is itself a view root (az_view) owns its subtree; otherwise it
@@ -62,15 +75,7 @@ fun buildTree(json: JsonElement, view: String? = null): Node {
 internal fun addChild(parent: Node, child: JsonElement, view: String? = null) {
     when (child) {
         is JsonArray -> child.forEach { addChild(parent, it, view) }
-        is JsonObject -> {
-            val childView =
-                if (child["az_view"]?.jsonPrimitive?.booleanOrNull == true) {
-                    child["id"]?.jsonPrimitive?.content ?: view
-                } else {
-                    view
-                }
-            parent.children.add(buildTree(child, childView))
-        }
+        is JsonObject -> parent.children.add(buildTree(child, enclosingView(child, view)))
         is JsonPrimitive -> parent.children.add(child.content)
     }
 }

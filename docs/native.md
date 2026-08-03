@@ -188,18 +188,34 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    child view it may introduce is addressed top-level (`/native/stream-child` is
    exactly this shape).
 
-   Removal is the one asymmetry: `OP_REMOVE`/`OP_REMOVE_NODE` leave their entries
-   behind, so a later op naming a removed `az` would still resolve and patch a
-   detached node. That is unreachable only because the server never re-addresses a
-   removed `az` (and addresses stream items by `az_key`, never `"ViewId:az"`) — a
-   convention, not a check. Re-validating would cost a walk to the root on every
-   resolve, since these trees carry no parent links.
+   Removal is the same obligation in reverse: `OP_REMOVE`/`OP_REMOVE_NODE` must
+   drop the entries of what they detach. Skipping it is not merely untidy — because
+   `OP_INSERT` indexes what it grafts in, a churning stream would add one registry
+   (and pin one detached subtree) per insert/remove cycle, for the life of the
+   connection, reclaimed only by a reconnect. Unindexing is **identity-checked**
+   (`registry[az] === node`): stream items share `az` values from one fingerprint,
+   so deleting by key alone would unregister a *surviving* sibling. `OP_REMOVE_NODE`
+   unindexes only when the splice actually found the node, so the registry never
+   loses something still in the tree.
 
-   **Isolate each op.** A batch's ops are independent, so an unexpected wire shape
-   or an unresolvable target must log and skip that one op (as
-   `applyOps`/`applyItemOps` do in `assets/js/arizona.js`), degrading one slot
-   instead of taking the app down. That includes an op code the client does not
-   implement — `OP_LIST_PATCH` is browser-only today.
+   **Isolate each op — and each frame, and each effect.** A batch's ops are
+   independent, so an unexpected wire shape or an unresolvable target must log and
+   skip that one op (as `applyOps`/`applyItemOps` do in `assets/js/arizona.js`),
+   degrading one slot instead of taking the app down. That includes an op code the
+   client does not implement — `OP_LIST_PATCH` is browser-only today. The same
+   applies to the two paths *outside* the op loop, which are equally server-driven:
+   a frame whose JSON does not parse, and a malformed command in the `"e"` array.
+   Both run on the client's main thread, where an escaping error is process death,
+   not a lost frame. A **tap** keeps the strict, throwing path — it is a synchronous
+   call on the caller's stack and the throw is the signal that a template built a
+   bad command.
+
+   On iOS this shapes the code, not just the error handling: `preconditionFailure`
+   and `!` **trap**, and a Swift trap is not catchable. Every wire-facing failure on
+   the apply path therefore throws `WireError` (`FingerprintCache.statics`,
+   `Interleaver`, `buildTree`/`addChild`) or is guarded before the access
+   (`JSONValue.parseChecked`, the effect argument, the `OP_INSERT` position, which
+   traps `Array.insert` on a negative index).
 5. **Run effects and navigate.** A tap fires its node's command prop, routed to
    the node's nearest enclosing `az_view` (the root, or a nested `?stateful`
    child) — so events reach stateful children, not just the root. The server's

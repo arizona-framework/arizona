@@ -186,7 +186,14 @@ public final class AzClient {
         heartbeatPending = false // any frame proves the socket is live
         if text == sysPong { return }
         reconnectAttempt = 0 // a real frame -> reset backoff
-        let msg = JSONValue.parse(text)
+        // A frame that will not parse is the same class of problem as an op that
+        // will not apply: it is the server's output, not the user's, and dropping it
+        // must cost one frame rather than the app. `parse` TRAPS on bad JSON, so the
+        // checked variant is what makes that possible here.
+        guard let msg = try? JSONValue.parseChecked(text) else {
+            azWarn("unparseable frame; skipping")
+            return
+        }
         if let ops = msg["o"]?.arrayValue { applyOps(ops) }
         status = .connected
         // Handler-returned effects: dispatch the portable ones, skip web-only.
@@ -240,6 +247,7 @@ public final class AzClient {
     /// child-view one in `applyChildViewOps`.
     struct Scope {
         let resolve: (String) -> Node?
+        let unindexSubtree: (Node) -> Void
         let unindexChildren: (Node) -> Void
         let reindex: (Node) -> Void
     }
@@ -247,9 +255,14 @@ public final class AzClient {
     private func viewScope() -> Scope {
         Scope(
             resolve: { [unowned self] target in self.resolve(target) },
+            unindexSubtree: { [unowned self] node in self.unindexInViews(node) },
             unindexChildren: { [unowned self] node in self.unindexChildrenInViews(node) },
             reindex: { [unowned self] node in self.reindexInViews(node) }
         )
+    }
+
+    private func unindexInViews(_ node: Node) {
+        unindexByViews(node, &views)
     }
 
     private func unindexChildrenInViews(_ node: Node) {
@@ -347,14 +360,9 @@ public final class AzClient {
             // A dynamic returned the `remove` sentinel: drop the node from its
             // parent. One-way -- bringing it back needs a parent re-render.
             //
-            // The removed node's registry entries are deliberately left: a later op
-            // naming that az would still RESOLVE and would patch the detached node.
-            // That is unreachable only because the server never re-addresses a removed
-            // az (and addresses stream items by `az_key`, not "ViewId:az") -- a
-            // convention, not a check. Re-validating would mean walking to the root on
-            // every resolve, since nodes carry no parent link; if that convention ever
-            // changes, unindex here.
-            removeFromParent(scopeRoot, node)
+            // Unindex only on a successful splice: the registry must not lose a node
+            // that is still in the tree.
+            if removeFromParent(scopeRoot, node) { scope.unindexSubtree(node) }
         case Op.setAttr:
             let name = try text(a, 2)
             node.props[name] = try operand(a, 3)
@@ -368,8 +376,13 @@ public final class AzClient {
             }
             let raw = try operand(a, 4)
             let payload = try interleaver.decode(raw)
-            let item = try buildTree(payload, view: node.viewId)
-            if pos == -1 || pos >= node.children.count {
+            // `enclosingView`, not the container's view outright: an item that is
+            // itself a view root owns its subtree under its own id.
+            let item = try buildTree(payload, view: enclosingView(payload, node.viewId))
+            // Any out-of-range position appends (the server's tail insert is -1).
+            // Spelled as a range test, not `== -1`: a raw negative index TRAPS
+            // `Array.insert` here, so the guard is load-bearing, not just parity.
+            if pos < 0 || pos >= node.children.count {
                 node.children.append(.node(item))
             } else {
                 node.children.insert(.node(item), at: pos)
@@ -380,7 +393,14 @@ public final class AzClient {
             scope.reindex(item)
         case Op.remove:
             let key = try text(a, 2)
-            if let i = indexOfKey(node, key) { node.children.remove(at: i) }
+            if let i = indexOfKey(node, key) {
+                // Drop the item's entries: since OP_INSERT indexes what it grafts in,
+                // not unindexing here would grow the registry -- and pin the detached
+                // subtree -- once per insert/remove cycle for the life of the
+                // connection.
+                if case let .node(item) = node.children[i] { scope.unindexSubtree(item) }
+                node.children.remove(at: i)
+            }
         case Op.move:
             let key = try text(a, 2)
             guard let i = indexOfKey(node, key) else { return }
@@ -417,6 +437,10 @@ public final class AzClient {
         indexByAz(item, &local)
         let scope = Scope(
             resolve: { az in local[az] ?? item },
+            unindexSubtree: { [unowned self] node in
+                unindexByAz(node, &local)
+                self.unindexInViews(node)
+            },
             unindexChildren: { [unowned self] node in
                 for child in node.children {
                     if case let .node(n) = child { unindexByAz(n, &local) }
@@ -438,6 +462,7 @@ public final class AzClient {
     private func applyChildViewOps(_ childViewId: String, _ childOps: [JSONValue], scopeRoot: Node?) {
         let scope = Scope(
             resolve: { [unowned self] az in self.views[childViewId]?[az] },
+            unindexSubtree: { [unowned self] node in self.unindexInViews(node) },
             unindexChildren: { [unowned self] node in self.unindexChildrenInViews(node) },
             reindex: { [unowned self] node in self.reindexInViews(node) }
         )
@@ -486,10 +511,27 @@ public final class AzClient {
         }
         switch code {
         case Effect.pushEvent:
-            pushEvent(cmd[1].stringValue!, payload: cmd.count > 2 ? cmd[2] : .object([:]), target: target)
-        case Effect.navigate: navigate(cmd[1].stringValue!)
+            guard let name = effectArg(cmd) else { return }
+            pushEvent(name, payload: cmd.count > 2 ? cmd[2] : .object([:]), target: target)
+        case Effect.navigate:
+            guard let path = effectArg(cmd) else { return }
+            navigate(path)
         default: if strict { assertionFailure("unsupported command: \(cmd)") }
         }
+    }
+
+    // Both portable commands carry their event name / path at index 1. A command
+    // missing it is malformed wire input, not an unsupported effect: warn and skip.
+    // The server's "e" entries arrive asynchronously, and a bare `cmd[1]` subscript
+    // (or a `stringValue!`) would TRAP the app over one bad command -- the Kotlin
+    // client raises there and its per-effect catch handles it; Swift cannot catch,
+    // so the check has to happen before the access.
+    private func effectArg(_ cmd: [JSONValue]) -> String? {
+        guard cmd.count > 1, let arg = cmd[1].stringValue else {
+            azWarn("malformed command \(cmd); skipping")
+            return nil
+        }
+        return arg
     }
 
     // MARK: - Reconnect & heartbeat (main-thread timers; only armed once connected)

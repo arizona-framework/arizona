@@ -112,10 +112,7 @@ class AzClient(baseUrl: String, path: String) {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     // On main so the fingerprint cache is only ever read/written
                     // from one thread (the op applier owns it).
-                    main.post {
-                        webSocket.send(cachedFpsFrame())
-                        startHeartbeat()
-                    }
+                    main.post { handleOpen(webSocket::send) }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -144,17 +141,53 @@ class AzClient(baseUrl: String, path: String) {
     internal fun handleText(text: String) {
         heartbeatPending = false // any frame -> socket live
         if (text == SYS_PONG) return // pong
-        val msg = Json.parseToJsonElement(text).jsonObject
+        // A frame that will not parse is the same class of problem as an op that
+        // will not apply: it is the server's output, not the user's, and dropping
+        // it must cost one frame rather than the process. This runs on the main
+        // looper, where an escaping exception is not merely a lost frame -- it is
+        // the app dying.
+        val msg = try {
+            Json.parseToJsonElement(text).jsonObject
+        } catch (e: Exception) {
+            Log.w(TAG, "unparseable frame; skipping", e)
+            return
+        }
         msg["o"]?.jsonArray?.let { ops ->
             applyOps(ops)
             status.value = ConnStatus.CONNECTED
             reconnectAttempt = 0 // healthy frame -> reset backoff
         }
         // Handler-returned effects: dispatch the portable ones, skip web-only
-        // effects (set_title, dispatch_event, ...).
+        // effects (set_title, dispatch_event, ...). Isolated per effect, like the
+        // ops -- a malformed command must cost that command.
         msg["e"]?.jsonArray?.let { effects ->
-            for (eff in effects) runEffect(eff.jsonArray, strict = false)
+            for (eff in effects) runEffectSafe(eff)
         }
+    }
+
+    // The server's "e" entries are wire input arriving asynchronously, so one
+    // malformed command must cost that command, not the process. A tap keeps the
+    // strict, throwing path: it is a synchronous call on the caller's stack and the
+    // throw is the development signal that a template built a bad command.
+    private fun runEffectSafe(cmd: JsonElement) {
+        try {
+            runEffect(cmd.jsonArray, strict = false)
+        } catch (e: Exception) {
+            Log.w(TAG, "effect $cmd failed; skipping", e)
+        }
+    }
+
+    /**
+     * The socket-open handshake, as one testable unit: announce, then arm the
+     * heartbeat. [send] is the socket's send function -- taking it as a parameter
+     * is what lets a JVM test assert on what is actually TRANSMITTED rather than
+     * on what [cachedFpsFrame] returns, so the wiring between the two cannot
+     * silently revert to announcing an empty list.
+     */
+    @VisibleForTesting
+    internal fun handleOpen(send: (String) -> Unit) {
+        send(cachedFpsFrame())
+        startHeartbeat()
     }
 
     /**
@@ -165,8 +198,7 @@ class AzClient(baseUrl: String, path: String) {
      * deliberately does NOT pass `_az_fps_follow`: the server keeps the immediate
      * resync, and this seeds the process for the frames after it.
      */
-    @VisibleForTesting
-    internal fun cachedFpsFrame(): String =
+    private fun cachedFpsFrame(): String =
         buildJsonArray {
             add("cached_fps")
             add(buildJsonArray { cache.announce().forEach { add(it) } })
@@ -290,11 +322,15 @@ class AzClient(baseUrl: String, path: String) {
      */
     private class Scope(
         val resolve: (String) -> Node?,
+        val unindexSubtree: (Node) -> Unit,
         val unindexChildren: (Node) -> Unit,
         val reindex: (Node) -> Unit,
     )
 
-    private fun viewScope() = Scope(::resolve, ::unindexChildrenInViews, ::reindexInViews)
+    private fun viewScope() =
+        Scope(::resolve, ::unindexInViews, ::unindexChildrenInViews, ::reindexInViews)
+
+    private fun unindexInViews(node: Node) = unindexByViews(node, views)
 
     private fun unindexChildrenInViews(node: Node) {
         for (child in node.children) if (child is Node) unindexByViews(child, views)
@@ -370,14 +406,9 @@ class AzClient(baseUrl: String, path: String) {
                 // A dynamic returned the `remove` sentinel: drop the node from its
                 // parent. One-way -- bringing it back needs a parent re-render.
                 //
-                // The removed node's registry entries are deliberately left: a later
-                // op naming that az would still RESOLVE and would patch the detached
-                // node. That is unreachable only because the server never re-addresses
-                // a removed az (and addresses stream items by `az_key`, not
-                // "ViewId:az") -- a convention, not a check. Re-validating would mean
-                // walking to the root on every resolve, since nodes carry no parent
-                // link; if that convention ever changes, unindex here.
-                removeFromParent(scopeRoot, node)
+                // Unindex only on a successful splice: the registry must not lose a
+                // node that is still in the tree.
+                if (removeFromParent(scopeRoot, node)) scope.unindexSubtree(node)
             }
             Op.SET_ATTR -> {
                 node.props[a[2].jsonPrimitive.content] = a[3]
@@ -387,8 +418,16 @@ class AzClient(baseUrl: String, path: String) {
             }
             Op.INSERT -> {
                 val pos = a[3].jsonPrimitive.int
-                val item = buildTree(Json.parseToJsonElement(interleaver.decode(a[4])), node.viewId)
-                if (pos == -1 || pos >= node.children.size) node.children.add(item)
+                val json = Json.parseToJsonElement(interleaver.decode(a[4]))
+                // `enclosingView`, not the container's view outright: an item that is
+                // itself a view root owns its subtree under its own id.
+                val item = buildTree(json, enclosingView(json, node.viewId))
+                // Any out-of-range position appends (the server's tail insert is -1).
+                // Spelled as a range test, not `== -1`, so the three clients agree on
+                // a value none of them should ever see -- a raw negative index is an
+                // exception here, "count from the end" to JS splice, and a TRAP to
+                // Swift's Array.insert.
+                if (pos < 0 || pos >= node.children.size) node.children.add(item)
                 else node.children.add(pos, item)
                 // Index the new item, like OP_REPLACE already indexes the items it
                 // renders: a ?stateful child inside a stream item owns its own view
@@ -397,7 +436,14 @@ class AzClient(baseUrl: String, path: String) {
             }
             Op.REMOVE -> {
                 val i = indexOfKey(node, a[2].jsonPrimitive.content)
-                if (i != -1) node.children.removeAt(i)
+                if (i != -1) {
+                    // Drop the item's entries: since OP_INSERT indexes what it grafts
+                    // in, not unindexing here would grow the registry -- and pin the
+                    // detached subtree -- once per insert/remove cycle for the life
+                    // of the connection.
+                    scope.unindexSubtree(node.children[i] as Node)
+                    node.children.removeAt(i)
+                }
             }
             Op.MOVE -> {
                 val i = indexOfKey(node, a[2].jsonPrimitive.content)
@@ -432,6 +478,10 @@ class AzClient(baseUrl: String, path: String) {
         indexByAz(item, local)
         val scope = Scope(
             resolve = { az -> local[az] ?: item },
+            unindexSubtree = { node ->
+                unindexByAz(node, local)
+                unindexInViews(node)
+            },
             unindexChildren = { node ->
                 for (child in node.children) if (child is Node) unindexByAz(child, local)
                 unindexChildrenInViews(node)
@@ -451,6 +501,7 @@ class AzClient(baseUrl: String, path: String) {
     private fun applyChildViewOps(childViewId: String, childOps: JsonArray, scopeRoot: Node?) {
         val scope = Scope(
             resolve = { az -> views[childViewId]?.get(az) },
+            unindexSubtree = ::unindexInViews,
             unindexChildren = ::unindexChildrenInViews,
             reindex = ::reindexInViews,
         )
