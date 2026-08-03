@@ -5,7 +5,6 @@ public enum Op {
     public static let text = 0
     public static let setAttr = 1
     public static let remAttr = 2
-    public static let update = 3
     public static let removeNode = 4
     public static let insert = 5
     public static let remove = 6
@@ -106,7 +105,7 @@ public final class Interleaver {
 
     /// Decode an op payload to its JSON value: a `{t:0}` each-list -> a JSON
     /// array, a `{f, s, d}` template -> an object, a scalar -> itself. Used to
-    /// materialize OP_INSERT items and OP_TEXT/OP_UPDATE content. (Returns a
+    /// materialize OP_INSERT items and OP_TEXT content. (Returns a
     /// value directly rather than Android's JSON string, sidestepping top-level
     /// scalar-fragment parsing; behavior is identical.)
     public func decode(_ payload: JSONValue) throws -> JSONValue {

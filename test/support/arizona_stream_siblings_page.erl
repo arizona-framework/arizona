@@ -11,7 +11,7 @@
 %% Same shape, and it is the shape that matters: a stream `?each` sharing one content
 %% slot with static siblings. The each gets a COMPOUND slot az whose base is the view
 %% ROOT's own az, carried by no element of its own -- so the client can only reach it
-%% through the `<!--az:X-->` marker. An `?OP_UPDATE` container re-render resolves to the
+%% through the `<!--az:X-->` marker. A whole-element container re-render resolves to the
 %% root and innerHTML-wipes the header, the title and the footer; only the marker-aware
 %% `?OP_TEXT` patches the slot in place. The CT suites prove the server EMITS `?OP_TEXT`;
 %% this exists so a real browser proves the client APPLIES it without taking the

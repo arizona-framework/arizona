@@ -743,11 +743,12 @@ flatten_ops(ViewId, [Op | Rest]) ->
 %% but `ViewId` is the app-supplied `id` binding (root and `?stateful`
 %% props) and is NOT validated -- an id from user data containing `"`
 %% would break the ops frame, and a crafted value could inject ops
-%% (an injected `OP_REPLACE`/`OP_UPDATE` reaches `innerHTML`: stored XSS
-%% via the diff channel). So the scoped target is run through
-%% `json:encode/1`, which escapes the JSON-breaking bytes (`"`/`\`); on
-%% safe ids this is byte-identical to the previous raw emit. The SSR path
-%% already escapes the same id in HTML; this closes the ops channel.
+%% (an injected `OP_REPLACE`, or an `OP_TEXT` carrying an HTML payload,
+%% reaches `innerHTML`: stored XSS via the diff channel). So the scoped
+%% target is run through `json:encode/1`, which escapes the JSON-breaking
+%% bytes (`"`/`\`); on safe ids this is byte-identical to the previous raw
+%% emit. The SSR path already escapes the same id in HTML; this closes the
+%% ops channel.
 %% Op codes 0..9 emit as a single digit byte (`OpCode + $0`, skipping an
 %% `integer_to_binary/1` per op); codes 10+ use `integer_to_binary/1` (see
 %% `op_code_iodata/1`). Falls back to `json:encode_value/2` for everything
@@ -847,9 +848,10 @@ encode_list_patch_op_test() ->
 %% A view id is the app-supplied `id` binding and is NOT validated, so a value
 %% carrying a JSON metacharacter (`"`) must be escaped in the ops frame. An
 %% unescaped quote would terminate the target string early and inject ops
-%% (OP_REPLACE/OP_UPDATE -> innerHTML: XSS via the diff channel). op_encoder runs
-%% the scoped target through json:encode, so the quote is escaped rather than
-%% closing the string, and the frame stays valid JSON with the id intact.
+%% (OP_REPLACE, or an HTML-payload OP_TEXT -> innerHTML: XSS via the diff
+%% channel). op_encoder runs the scoped target through json:encode, so the quote
+%% is escaped rather than closing the string, and the frame stays valid JSON with
+%% the id intact.
 op_encoder_escapes_view_id_test() ->
     Op = [0, ~"0", ~"New"],
     Bytes = iolist_to_binary(encode(#{?OPS => flatten_ops(~"ev\"il", [Op])})),

@@ -21,24 +21,26 @@
 
 /**
  * Op codes -- each op is a flat array: [opcode, "viewId:az", ...args].
- * Codes match the server-side OP_* constants in arizona.erl.
+ * Codes match the server-side OP_* constants in arizona.hrl, 3 included: it is
+ * unassigned there too (the removed innerHTML op), so nothing emits it and no
+ * handler here claims it. Reusing it for a new op means changing both sides
+ * together.
  * @enum {number}
- * @property {number} TEXT - [0, target, value]
+ * @property {number} TEXT - [0, target, value, isHtml]
  * @property {number} SET_ATTR - [1, target, attr, value]
  * @property {number} REM_ATTR - [2, target, attr]
- * @property {number} UPDATE - [3, target, html] -- innerHTML
  * @property {number} REMOVE_NODE - [4, target]
  * @property {number} INSERT - [5, target, key, pos, html]
  * @property {number} REMOVE - [6, target, key]
  * @property {number} ITEM_PATCH - [7, target, key, innerOps]
  * @property {number} REPLACE - [8, target, html] -- outerHTML (navigate)
  * @property {number} MOVE - [9, target, key, afterKey] -- move keyed child
+ * @property {number} LIST_PATCH - [10, target, subOps] -- positional list patch
  */
 const OP = {
     TEXT: 0,
     SET_ATTR: 1,
     REM_ATTR: 2,
-    UPDATE: 3,
     REMOVE_NODE: 4,
     INSERT: 5,
     REMOVE: 6,
@@ -117,13 +119,12 @@ function crashReload() {
 //
 // Lifecycle:
 //   mounted()   -- element entered the DOM (SSR hydration, OP_INSERT,
-//                 OP_UPDATE, OP_REPLACE, or OP_TEXT with new content)
+//                 OP_REPLACE, or OP_TEXT with new content)
 //   updated()   -- element stayed in the DOM but its attributes or inner
-//                 content changed (OP_SET_ATTR, OP_REM_ATTR, OP_UPDATE,
-//                 OP_TEXT)
-//   destroyed() -- element is about to be removed (OP_REMOVE_NODE,
-//                 OP_REMOVE, OP_REPLACE, OP_UPDATE, OP_TEXT). Called
-//                 before the DOM mutation -- this.el is still attached
+//                 content changed (OP_SET_ATTR, OP_REM_ATTR, OP_TEXT)
+//   destroyed() -- element is about to be removed (OP_REMOVE_NODE, OP_REMOVE,
+//                 OP_REPLACE, OP_TEXT). Called before the DOM mutation --
+//                 this.el is still attached
 //
 // A hook's own methods are reachable as `this.method()` from any lifecycle
 // callback (the instance's prototype is the hook def), and state assigned to
@@ -609,7 +610,7 @@ function mountHooks(root) {
 
 /**
  * Destroy hooks on descendant [az-hook] elements only (not root itself).
- * Used by ops that replace inner content but keep the element (UPDATE, TEXT).
+ * Used by ops that replace inner content but keep the element (TEXT).
  * @param {Element} root
  */
 function destroyChildHooks(root) {
@@ -793,18 +794,6 @@ function applyRemAttrOp(el, name) {
 }
 
 /**
- * Apply an UPDATE op: replace innerHTML, walking hook lifecycle.
- * @param {Element} el
- * @param {string} html
- */
-function applyUpdateOp(el, html) {
-    destroyChildHooks(el);
-    el.innerHTML = html;
-    mountHooks(el);
-    notifyUpdated(el);
-}
-
-/**
  * Remove an element from the DOM, running its hook teardown first. The canonical
  * destroy+remove used by every node removal (diff `OP_REMOVE_NODE`, stream
  * `OP_REMOVE`, and plain-list `OP_LIST_PATCH` item removal) so teardown can never
@@ -826,8 +815,8 @@ function removeEl(el) {
  * subtree per op:
  * - `els` memoizes target -> resolution. Every hit is verified live
  *   (`isConnected`) before use: an op that replaced/re-rendered a subtree
- *   (REPLACE, UPDATE, TEXT) leaves the old elements disconnected, so a stale
- *   entry re-resolves itself -- no per-op invalidation bookkeeping. (A
+ *   (REPLACE, TEXT) leaves the old elements disconnected, so a stale entry
+ *   re-resolves itself -- no per-op invalidation bookkeeping. (A
  *   connected-but-wrong hit would need a duplicate az within one view, which the
  *   compiler prevents.) Nulls are not cached, so an element created mid-batch is
  *   found.
@@ -897,9 +886,6 @@ function applyOps(ops) {
                 case OP.REM_ATTR:
                     applyRemAttrOp(el, op[2]);
                     break;
-                case OP.UPDATE:
-                    applyUpdateOp(el, op[2]);
-                    break;
                 case OP.REPLACE: {
                     destroyHooks(el);
                     // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
@@ -935,6 +921,11 @@ function applyOps(ops) {
                 case OP.LIST_PATCH:
                     applyListPatch(el, az, op[2]);
                     break;
+                default:
+                    // Silence here would let a version-skewed or retired op (code 3,
+                    // for one) diverge the DOM from server state with no symptom but
+                    // "it didn't update". Mirrors applyItemOps, which already warns.
+                    console.warn(`[arizona] op ${op[0]} not recognized; skipping`);
             }
         } catch (err) {
             console.error('[arizona] op %s failed; skipping', op[0], err);
@@ -962,11 +953,11 @@ function applyOps(ops) {
  * applied to a marker-only resolution -- whose element is the slot's PARENT, not
  * the slot. Two kinds, both refused:
  *
- * - DESTRUCTIVE (`UPDATE`, `REPLACE`, `REMOVE_NODE`): `innerHTML` / `replaceWith`
- *   / `remove` on the parent takes the slot's static siblings with it, and when
- *   the parent is the live root, the whole view. The server never addresses these
- *   to a marker-anchored slot (the diff emits the marker-aware `?OP_TEXT`), so
- *   this is a guard against a stray op, not a supported path.
+ * - DESTRUCTIVE (`REPLACE`, `REMOVE_NODE`): `replaceWith` / `remove` on the
+ *   parent takes the slot's static siblings with it, and when the parent is the
+ *   live root, the whole view. The server never addresses these to a
+ *   marker-anchored slot (the diff emits the marker-aware `?OP_TEXT`), so this
+ *   is a guard against a stray op, not a supported path.
  * - CONTAINER-RELATIVE PLACEMENT (`INSERT`, `MOVE`): a tail insert appends to the
  *   parent and a null-`afterKey` move prepends to it, both landing OUTSIDE the
  *   slot's marker span (after the footer, before the header). Silent misplacement
@@ -978,7 +969,7 @@ function applyOps(ops) {
  *   are a strict gain over dropping every stream op at this shape.
  * @type {Set<number>}
  */
-const MARKER_UNSAFE_OPS = new Set([OP.UPDATE, OP.REPLACE, OP.REMOVE_NODE, OP.INSERT, OP.MOVE]);
+const MARKER_UNSAFE_OPS = new Set([OP.REPLACE, OP.REMOVE_NODE, OP.INSERT, OP.MOVE]);
 
 /**
  * The az half of a `"viewId:az"` patch target (the whole string when it carries
@@ -1456,8 +1447,8 @@ function buildKeyMap(el) {
  * map is maintained by the batch's inserts/removes, so an N-op stream batch is
  * O(N) instead of one full child scan per op. Without one (nested item ops) it
  * falls back to a direct query. A cached entry that went stale -- a non-stream
- * op (UPDATE/TEXT) rewrote the container's children under the map -- triggers
- * one rebuild and retry, so the cache can never return a disconnected element.
+ * op (TEXT) rewrote the container's children under the map -- triggers one
+ * rebuild and retry, so the cache can never return a disconnected element.
  * @param {Map<Element, Map<string, Element>>|null} streams
  * @param {Element} el
  * @param {string} key
@@ -1662,9 +1653,6 @@ function applyItemOps(item, innerOps) {
                     break;
                 case OP.REM_ATTR:
                     applyRemAttrOp(resolveInnerEl(item, az), op[2]);
-                    break;
-                case OP.UPDATE:
-                    applyUpdateOp(resolveInnerEl(item, az), op[2]);
                     break;
                 case OP.REMOVE_NODE: {
                     const innerEl = item.querySelector(`[az="${az}"]`);

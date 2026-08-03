@@ -199,7 +199,7 @@ describe('view transitions -- push_event', () => {
         const fn = document.startViewTransition;
         document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
         executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'load_more']]);
-        _mock.simulateMessage([[OP.UPDATE, 'page:0', 'new']]);
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']]);
         expect(fn).toHaveBeenCalledOnce();
         expect(document.querySelector('#page [az="0"]').innerHTML).toBe('new');
     });
@@ -213,7 +213,7 @@ describe('view transitions -- push_event', () => {
         _mock.simulateMessage(null, [[JS_SET_TITLE, 'x']]);
         expect(fn).not.toHaveBeenCalled();
         // A later, unrelated diff must NOT inherit the stale intent.
-        _mock.simulateMessage([[OP.UPDATE, 'page:0', 'new']]);
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']]);
         expect(fn).not.toHaveBeenCalled();
     });
 });

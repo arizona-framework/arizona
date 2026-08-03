@@ -2714,7 +2714,8 @@ cond_case_terminal_inherits_target(Config) when is_list(Config) ->
 
 %% Live diff: the conditional slot transitions empty (scalar) <-> element branch
 %% across renders -- the real login-error appear/disappear behaviour. make_op
-%% must handle scalar->template (OP_UPDATE) and template->scalar (OP_TEXT).
+%% must handle both directions, scalar->template and template->scalar, and both
+%% are the marker-aware OP_TEXT (the slot is anchored by comment markers).
 cond_case_diff_transition(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_cond_diff). "

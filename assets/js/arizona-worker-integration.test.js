@@ -358,7 +358,6 @@ describe('arizona-worker', () => {
                     'k1',
                     [
                         [0, 'v:0', 'text-payload'],
-                        [3, 'v:0', 'update-payload'],
                         [5, 'v:0', 'anchor', 'before', 'insert-payload'],
                         [7, 'v:0', 'k2', [[0, 'v:0', 'nested-text']]],
                     ],
@@ -368,9 +367,8 @@ describe('arizona-worker', () => {
         ws.latest().simulateMessage(JSON.stringify(msg));
         const resolved = slf.posted.find((m) => m[0] === 0);
         expect(resolved[1][0][3][0][2]).toBe('text-payload');
-        expect(resolved[1][0][3][1][2]).toBe('update-payload');
-        expect(resolved[1][0][3][2][4]).toBe('insert-payload');
-        expect(resolved[1][0][3][3][3][0][2]).toBe('nested-text');
+        expect(resolved[1][0][3][1][4]).toBe('insert-payload');
+        expect(resolved[1][0][3][2][3][0][2]).toBe('nested-text');
     });
 
     it('LIST_PATCH op resolves each sub-op payload (ITEM_PATCH inner ops + INSERT html)', () => {

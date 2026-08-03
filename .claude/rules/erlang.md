@@ -298,9 +298,9 @@ idiomatic `case ?get(flag) of true -> ?stateful(child, #{id => ~"c"}); false -> 
 A content slot is anchored by its `<!--az:X-->...<!--/az-->` comment markers in SSR, so
 any branch value (the empty string, a binary, a nested template, or a child descriptor)
 patches **in place** via `?OP_TEXT`, preserving the slot's siblings and the enclosing
-element. (`arizona_diff:make_op/3` always emits `?OP_TEXT`, never `?OP_UPDATE`, for a
-nested-template value -- an `?OP_UPDATE` would `innerHTML`-overwrite the enclosing element,
-which is catastrophic when the slot's `az` is that element's own `az`, e.g. a conditional
+element. (`arizona_diff:make_op/3` always emits `?OP_TEXT` for a nested-template value --
+a whole-element `innerHTML` write would overwrite the enclosing element, which is
+catastrophic when the slot's `az` is that element's own `az`, e.g. a conditional
 child rendered directly under the view root.)
 
 When the **same branch** re-renders (its statics are unchanged -- only an inner binding
@@ -314,20 +314,22 @@ transition, or any structure change.
 The same rule applies to a **plain-list `?each` in a content slot**: it is marker-anchored
 exactly like any other dynamic-text child (no wrapper element carries the slot `az`), so its
 container patch is the marker-aware `?OP_TEXT` -- `make_op/3` (the `?EACH` list clause) and
-`arizona_diff:full_update/5` emit `?OP_TEXT`, never `?OP_UPDATE`. This is what lets a
+`arizona_diff:full_update/5` both emit it. This is what lets a
 plain-list `?each` sit **among static sibling content** in one slot: re-rendering the list
-replaces only the each's marker span, leaving the siblings intact. An `?OP_UPDATE` here would
-`innerHTML`-wipe the enclosing element's static siblings (the client's `resolveEl` finds no
-element for the slot `az` and falls back to that enclosing element); a sole-child `?each` only
-appeared to work with `?OP_UPDATE` by coincidence.
+replaces only the each's marker span, leaving the siblings intact. A whole-element write here
+would `innerHTML`-wipe the enclosing element's static siblings (the client's `resolveEl` finds
+no element for the slot `az` and falls back to that enclosing element); a sole-child `?each`
+only appeared to work with one by coincidence. That is why op code 3 (the innerHTML op) is
+**removed** rather than kept for the cases where it happened to resolve correctly -- 3 is now
+unassigned in `arizona.hrl` and in every client.
 
 **A stream `?each` container full render follows the same rule.** SSR anchors a stream each by
 the identical content-slot markers, so every container-level full render is the marker-aware
 `?OP_TEXT` too -- the `order`-keyed `make_op/3` clause and `diff_stream/4`'s no-`order`
 (type-switch) clause, beside the plain-list clause and `full_update/5`. Among static siblings the
-stream's slot az is compound (`<Root>:N`) and carried by no element, so an `?OP_UPDATE` there
-would `innerHTML`-wipe the siblings exactly as it would for a list -- and when the enclosing
-element is the view root, the whole view.
+stream's slot az is compound (`<Root>:N`) and carried by no element, so a whole-element write
+there would `innerHTML`-wipe the siblings exactly as it would for a list -- and when the
+enclosing element is the view root, the whole view.
 
 What stays stream-specific is the **incremental** ops (`?OP_INSERT`, `?OP_REMOVE`, `?OP_MOVE`,
 `?OP_ITEM_PATCH`), which a plain list has no equivalent of. They carry the **container's** az as

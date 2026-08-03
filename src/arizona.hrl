@@ -1,8 +1,18 @@
-%% Op codes
+%% Op codes.
+%%
+%% 3 is unassigned: it was `OP_UPDATE` (innerHTML on the resolved element),
+%% removed once every container full render moved to the marker-aware
+%% `?OP_TEXT` -- a content slot's `az` is not reliably carried by an element,
+%% so innerHTML on whatever the client resolves destroys the slot's static
+%% siblings (the whole view when that element is the view root). It is free to
+%% reuse for a genuinely new op: codes 0..9 emit as a single byte in
+%% `arizona_socket:op_code_iodata/1` and 10+ cost an extra one per op, so the
+%% cheap range is worth reclaiming. All four clients (`assets/js`,
+%% `clients/android`, `clients/ios`, `e2e/utils/native_client.js`) live in this
+%% repo and are rebuilt from this tree, so a reuse lands everywhere at once.
 -define(OP_TEXT, 0).
 -define(OP_SET_ATTR, 1).
 -define(OP_REM_ATTR, 2).
--define(OP_UPDATE, 3).
 -define(OP_REMOVE_NODE, 4).
 -define(OP_INSERT, 5).
 -define(OP_REMOVE, 6).

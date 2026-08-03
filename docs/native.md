@@ -135,8 +135,8 @@ browser, so statics are sent once and never re-sent:
   connect), the server omits `s`: `{"f": F, "d": [...]}`.
 - `d` carries **raw** values (strings/numbers). The browser concatenates them;
   the native client `JSON.stringify`s each one as it interleaves.
-- Op codes (`OP_TEXT`, `OP_SET_ATTR`, `OP_UPDATE`, `OP_INSERT`/`OP_MOVE`/
-  `OP_REMOVE`/`OP_ITEM_PATCH`, `OP_REPLACE`, …) are identical; only the payload
+- Op codes (`OP_TEXT`, `OP_SET_ATTR`, `OP_INSERT`/`OP_MOVE`/`OP_REMOVE`/
+  `OP_ITEM_PATCH`, `OP_REPLACE`, …) are identical; only the payload
   *content* is a JSON widget skeleton instead of HTML.
 - There is no SSR/HTTP page for native: the first frame is the live process's
   `mount_and_render` output wrapped as `OP_REPLACE` over the WebSocket.
@@ -171,11 +171,11 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    needs a parent re-render), and the stream ops manage a container's keyed
    children — items keyed by `az_key`, with `OP_INSERT`/`OP_REMOVE`/`OP_MOVE`
    reordering the list, `OP_ITEM_PATCH` applying inner ops scoped to one item, and
-   `OP_UPDATE` re-rendering the whole list.
+   a container-level `OP_TEXT` re-rendering the whole list.
 
    **The registry is a derived index of the tree, not a snapshot of the first
-   frame.** Every op that (re)builds a subtree — `OP_TEXT`/`OP_UPDATE` replacing a
-   node's children, `OP_INSERT` grafting a stream item — must index the new nodes
+   frame.** Every op that (re)builds a subtree — `OP_TEXT` replacing a node's
+   children, `OP_INSERT` grafting a stream item — must index the new nodes
    and drop the destroyed ones, exactly as `OP_REPLACE` indexes what it renders.
    Otherwise every `az` the *diff* introduced is unaddressable: the browser
    re-queries the DOM each time and never sees this, but a registry built only at

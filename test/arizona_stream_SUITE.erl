@@ -3823,7 +3823,7 @@ insert_at([H | T], Key, Pos) when Pos > 0 -> [H | insert_at(T, Key, Pos - 1)].
 list_type_switch_stream_to_list(Config) when is_list(Config) ->
     %% Old was a stream, new is a plain list → marker-aware OP_TEXT (a plain-list
     %% each is anchored by content-slot comment markers, so the container patch
-    %% is OP_TEXT, not OP_UPDATE).
+    %% is OP_TEXT, never a whole-element write).
     KeyFun = fun(#{id := Id}) -> Id end,
     Stream0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"A">>}]),
     StreamTmpl = #{
@@ -3874,9 +3874,9 @@ list_type_switch_list_to_stream(Config) when is_list(Config) ->
     %% Old was a plain list, new is a stream -> marker-aware OP_TEXT, the same op
     %% the reverse switch uses. A stream each is anchored by the identical
     %% content-slot markers, and among static siblings no element carries the
-    %% slot az, so the container full render must patch the marker span
-    %% (OP_UPDATE's innerHTML would wipe the enclosing element's siblings -- see
-    %% arizona_diff_SUITE:diff_stream_among_siblings_uses_text_op).
+    %% slot az, so the container full render must patch the marker span (a
+    %% whole-element innerHTML write would wipe the enclosing element's siblings
+    %% -- see arizona_diff_SUITE:diff_stream_among_siblings_uses_text_op).
     KeyFun = fun(#{id := Id}) -> Id end,
     Items0 = [#{id => 1, text => <<"A">>}],
     ListTmpl = #{

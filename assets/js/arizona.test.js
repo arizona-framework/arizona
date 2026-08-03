@@ -129,13 +129,32 @@ describe('OP constants', () => {
         expect(OP.TEXT).toBe(0);
         expect(OP.SET_ATTR).toBe(1);
         expect(OP.REM_ATTR).toBe(2);
-        expect(OP.UPDATE).toBe(3);
         expect(OP.REMOVE_NODE).toBe(4);
         expect(OP.INSERT).toBe(5);
         expect(OP.REMOVE).toBe(6);
         expect(OP.ITEM_PATCH).toBe(7);
         expect(OP.REPLACE).toBe(8);
         expect(OP.MOVE).toBe(9);
+        expect(OP.LIST_PATCH).toBe(10);
+    });
+
+    // 3 was the removed innerHTML op. It must stay unassigned here as long as it
+    // is unassigned in arizona.hrl -- binding it to a different op on one side
+    // only would silently re-interpret the other side's operands.
+    it('leaves op code 3 unassigned', () => {
+        expect(Object.values(OP)).not.toContain(3);
+    });
+
+    it('warns on an unrecognized op instead of silently ignoring it', () => {
+        // The top-level switch used to have no `default:`, so an op the client did
+        // not know -- a retired code, or a newer server than client -- diverged the
+        // DOM from server state with no symptom at all. applyItemOps already warned.
+        setupView('v', '<div az="0">keep</div>');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        applyOps([[99, 'v:0', 'ignored']]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('op 99 not recognized'));
+        expect(document.querySelector('[az="0"]').textContent).toBe('keep');
+        warn.mockRestore();
     });
 });
 
@@ -482,13 +501,13 @@ describe('applyOps -- OP.REM_ATTR', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. applyOps -- OP.UPDATE
+// 6. applyOps -- OP.TEXT on an element-anchored slot (no marker)
 // ---------------------------------------------------------------------------
 
-describe('applyOps -- OP.UPDATE', () => {
-    it('replaces innerHTML of an element', () => {
+describe('applyOps -- OP.TEXT without a marker', () => {
+    it('replaces innerHTML of an element for an HTML payload', () => {
         setupView('v', '<div az="0"><span>old</span></div>');
-        applyOps([[OP.UPDATE, 'v:0', '<b>replaced</b>']]);
+        applyOps([[OP.TEXT, 'v:0', '<b>replaced</b>', true]]);
         const el = resolveEl('v:0');
         expect(el.innerHTML).toBe('<b>replaced</b>');
     });
@@ -501,9 +520,9 @@ describe('applyOps -- OP.UPDATE', () => {
 // between sibling element children -- there is NO element carrying az="strip:2".
 // resolveEl('v:strip:2') therefore finds no element, strips the trailing
 // ":<slot>" and falls back to the enclosing element az="strip". The container
-// op MUST be the marker-aware OP.TEXT (replace marker content); OP.UPDATE writes
-// innerHTML on the fallback element and wipes the static sibling .item divs.
-// Mirrors arizona_diff_SUITE:diff_each_among_siblings_uses_text_op.
+// op MUST be the marker-aware OP.TEXT (replace marker content); the removed
+// innerHTML op wrote the fallback element whole and wiped the static sibling
+// .item divs. Mirrors arizona_diff_SUITE:diff_each_among_siblings_uses_text_op.
 // ---------------------------------------------------------------------------
 
 describe('applyOps -- plain-list each among static siblings', () => {
@@ -543,18 +562,19 @@ describe('applyOps -- plain-list each among static siblings', () => {
         expect(strip.querySelector('[az="strip:2:0"]').textContent).toBe('k2');
     });
 
-    it('OP.UPDATE (the old buggy op) clobbers the static siblings', () => {
-        // Documents the failure mode the diff fix avoids: with no element
-        // carrying az="strip:2", resolveEl falls back to the .strip element and
-        // innerHTML wipes the static .item siblings.
+    it('op code 3 (the removed innerHTML op) is inert, not a sibling clobber', () => {
+        // The failure mode the diff fix avoided: with no element carrying
+        // az="strip:2", resolveEl falls back to the .strip element, and the old
+        // op code 3 innerHTML-wiped the static .item siblings there. Code 3 is
+        // now unassigned on both sides, so an op still carrying it must reach no
+        // handler at all -- proving the removal, not just that nothing emits it.
         setupView('v', stripHtml(''));
         const strip = document.querySelector('.strip');
-        applyOps([
-            [OP.UPDATE, 'v:strip:2', '<div class="item" az="strip:2:0"><span>k1</span></div>'],
-        ]);
-        // Only the each item remains; the two static siblings are gone.
-        expect(strip.querySelectorAll('.item').length).toBe(1);
-        expect(strip.textContent).toBe('k1');
+        const before = strip.innerHTML;
+        applyOps([[3, 'v:strip:2', '<div class="item" az="strip:2:0"><span>k1</span></div>']]);
+        // Nothing happened: both static siblings stand, no each item appeared.
+        expect(strip.innerHTML).toBe(before);
+        expect(strip.querySelectorAll('.item').length).toBe(2);
     });
 });
 
@@ -575,9 +595,9 @@ describe('applyOps -- plain-list each among static siblings', () => {
 // and replaces ONLY the span between the markers: the list renders as real
 // elements (NOT escaped text) and any static siblings of the slot survive.
 //
-// The reverse (list -> stream) stays on OP_UPDATE (innerHTML on the resolved
-// container), which is correct when the stream each is the addressable element
-// (sole child of its container). Mirrors arizona_stream_SUITE:
+// The reverse (list -> stream) uses the SAME OP_TEXT: a stream `?each` container
+// full render is marker-anchored too, so it patches the marker span rather than
+// writing the resolved container whole. Mirrors arizona_stream_SUITE:
 // list_type_switch_stream_to_list / list_type_switch_list_to_stream.
 // ---------------------------------------------------------------------------
 
@@ -651,7 +671,8 @@ describe('applyOps -- stream <-> plain-list type switch', () => {
         const strip = document.querySelector('.strip');
         // Switch stream -> list via the marker-aware OP_TEXT.
         applyOps([[OP.TEXT, 'v:strip:1', listItem('X'), true]]);
-        // The static <span> sibling survives (the OP_UPDATE fallback would wipe it).
+        // The static <span> sibling survives (a whole-element write on the
+        // fallback element would wipe it).
         expect(strip.querySelector('[az="strip:0"]')).not.toBeNull();
         expect(strip.querySelector('[az="strip:0"]').textContent).toBe('S');
         // The list item rendered as a real element inside the marker.
@@ -683,12 +704,13 @@ describe('applyOps -- stream <-> plain-list type switch', () => {
         expect(strip.innerHTML).toContain('<li az="L"');
     });
 
-    it('reverse list -> stream stays correct for a sole-child each (OP_UPDATE)', () => {
+    it('reverse list -> stream stays correct for a sole-child each (OP_TEXT)', () => {
         // SSR plain-list each, sole child of <ul az="0"> (resolveEl returns the
-        // <ul>, which IS the slot element). list -> stream emits OP_UPDATE.
+        // <ul>, which IS the slot element -- and the marker is still there, so
+        // OP_TEXT patches the marker span rather than the <ul> whole).
         setupView('v', `<ul az="0"><!--az:0-->${listItem('A')}<!--/az--></ul>`);
         const ul = document.querySelector('ul');
-        applyOps([[OP.UPDATE, 'v:0', '<li az="i" az-key="1"><!--az:i-->X<!--/az--></li>']]);
+        applyOps([[OP.TEXT, 'v:0', '<li az="i" az-key="1"><!--az:i-->X<!--/az--></li>', true]]);
         // Now keyed-by az-key, addressable by stream ops; renders real HTML.
         expect(ul.querySelector('[az-key="1"]').textContent).toBe('X');
         applyOps([
@@ -884,7 +906,7 @@ describe('applyOps -- OP.ITEM_PATCH', () => {
 
     it('replaces innerHTML within a keyed child', () => {
         setupView('v', '<div az="0"><div az-key="k1"><div az="0">old</div></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.UPDATE, '0', '<em>new</em>']]]]);
+        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '0', '<em>new</em>', true]]]]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="0"]').innerHTML).toBe('<em>new</em>');
     });
@@ -1010,13 +1032,13 @@ describe('applyOps -- per-batch resolution caches', () => {
         expect(document.querySelector('[az-key="d"]').textContent).toBe('D2');
     });
 
-    it('stream ops keep working after an UPDATE rewrites the container mid-batch', () => {
+    it('stream ops keep working after a TEXT rewrites the container mid-batch', () => {
         setupView('v', '<ul az="0"><li az-key="x">X</li></ul>');
         applyOps([
             // Primes any per-batch key map for the container.
             [OP.MOVE, 'v:0', 'x', null],
             // Rewrites the container's children wholesale.
-            [OP.UPDATE, 'v:0', '<li az-key="y">Y</li><li az-key="z">Z</li>'],
+            [OP.TEXT, 'v:0', '<li az-key="y">Y</li><li az-key="z">Z</li>', true],
             // Keyed lookups must see the fresh children, not stale entries.
             [OP.MOVE, 'v:0', 'z', null],
         ]);
@@ -1092,7 +1114,6 @@ describe('applyOps -- skip missing', () => {
             [OP.TEXT, 'missing:0', 'x'],
             [OP.SET_ATTR, 'v:999', 'class', 'x'],
             [OP.REM_ATTR, 'missing:0', 'class'],
-            [OP.UPDATE, 'missing:0', '<b>x</b>'],
             [OP.REMOVE_NODE, 'missing:0'],
             [OP.INSERT, 'missing:0', 'k', -1, '<p>x</p>'],
             [OP.REMOVE, 'missing:0', 'k'],
@@ -1824,13 +1845,13 @@ describe('applyOps -- OP.REM_ATTR edge cases', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 19. applyOps -- OP.UPDATE edge cases
+// 19. applyOps -- OP.TEXT markerless edge cases
 // ---------------------------------------------------------------------------
 
-describe('applyOps -- OP.UPDATE edge cases', () => {
-    it('clears innerHTML when value is empty string', () => {
+describe('applyOps -- OP.TEXT markerless edge cases', () => {
+    it('clears innerHTML when the HTML value is an empty string', () => {
         setupView('v', '<div az="0"><span>child</span></div>');
-        applyOps([[OP.UPDATE, 'v:0', '']]);
+        applyOps([[OP.TEXT, 'v:0', '', true]]);
         expect(resolveEl('v:0').innerHTML).toBe('');
     });
 });
@@ -2403,14 +2424,6 @@ describe('hooks -- mounted', () => {
         expect(mountedEl.parentElement).toBe(container);
     });
 
-    it('fires after OP_UPDATE innerHTML with az-hook element', () => {
-        const mounted = vi.fn();
-        hooks.Widget = { mounted };
-        setupView('v', '<div az="0">old</div>');
-        applyOps([[OP.UPDATE, 'v:0', '<span az-hook="Widget">new</span>']]);
-        expect(mounted).toHaveBeenCalledOnce();
-    });
-
     it('fires after OP_REPLACE with az-hook element', () => {
         const mounted = vi.fn();
         hooks.Page = { mounted };
@@ -2502,9 +2515,8 @@ describe('hooks -- mounted', () => {
     });
 
     // The markerless HTML fallback (no <!--az:X--> comment: the slot is the element's
-    // whole content) innerHTMLs the fragment. Like the marker path and OP_UPDATE, it
-    // must mount hooks on the inserted content, or an [az-hook] arriving that way never
-    // fires mounted().
+    // whole content) innerHTMLs the fragment. Like the marker path, it must mount hooks
+    // on the inserted content, or an [az-hook] arriving that way never fires mounted().
     it('fires after OP_TEXT markerless HTML fallback with az-hook', () => {
         const mounted = vi.fn();
         hooks.Inline = { mounted };
@@ -2553,7 +2565,7 @@ describe('hooks -- updated', () => {
         expect(updated).toHaveBeenCalledOnce();
     });
 
-    it('fires after OP_UPDATE on the target element itself (if hooked)', () => {
+    it('fires after a markerless OP_TEXT on the target element itself (if hooked)', () => {
         const mounted = vi.fn();
         const updated = vi.fn();
         const destroyed = vi.fn();
@@ -2561,7 +2573,7 @@ describe('hooks -- updated', () => {
         setupView('v', '<div az="0" az-hook="Container">old</div>');
         mountHooks(document);
         mounted.mockClear(); // clear initial mount
-        applyOps([[OP.UPDATE, 'v:0', '<p>new</p>']]);
+        applyOps([[OP.TEXT, 'v:0', '<p>new</p>', true]]);
         // Element stays -- only inner content replaced. No destroy/remount cycle.
         expect(destroyed).not.toHaveBeenCalled();
         expect(mounted).not.toHaveBeenCalled();
@@ -2605,12 +2617,12 @@ describe('hooks -- destroyed', () => {
         expect(destroyed).toHaveBeenCalledOnce();
     });
 
-    it('fires before OP_UPDATE for hooked descendants', () => {
+    it('fires before a markerless OP_TEXT for hooked descendants', () => {
         const destroyed = vi.fn();
         hooks.Inner = { mounted() {}, destroyed };
         setupView('v', '<div az="0"><span az-hook="Inner">child</span></div>');
         mountHooks(document);
-        applyOps([[OP.UPDATE, 'v:0', '<p>replaced</p>']]);
+        applyOps([[OP.TEXT, 'v:0', '<p>replaced</p>', true]]);
         expect(destroyed).toHaveBeenCalledOnce();
     });
 
@@ -2779,8 +2791,8 @@ describe('hooks -- edge cases', () => {
         setupView('v', '<div az="0" az-hook="A">old</div>');
         mountHooks(document);
         calls.length = 0; // clear initial mount
-        // UPDATE destroys old children, inserts new ones
-        applyOps([[OP.UPDATE, 'v:0', '<span az-hook="B">new</span>']]);
+        // A markerless TEXT destroys old children, inserts new ones
+        applyOps([[OP.TEXT, 'v:0', '<span az-hook="B">new</span>', true]]);
         // A's children are destroyed first, then B is mounted
         expect(calls).toContain('mount:B');
     });
@@ -2821,7 +2833,7 @@ describe('hooks -- edge cases', () => {
         expect(destroyed).toHaveBeenCalledOnce();
     });
 
-    it('OP_ITEM_PATCH inner UPDATE triggers destroy/mount hooks', () => {
+    it('OP_ITEM_PATCH inner markerless TEXT triggers destroy/mount hooks', () => {
         const destroyed = vi.fn();
         const mounted = vi.fn();
         hooks.Old = { mounted() {}, destroyed };
@@ -2832,7 +2844,7 @@ describe('hooks -- edge cases', () => {
         );
         mountHooks(document);
         applyOps([
-            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.UPDATE, '1', '<span az-hook="New">new</span>']]],
+            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<span az-hook="New">new</span>', true]]],
         ]);
         expect(destroyed).toHaveBeenCalledOnce();
         expect(mounted).toHaveBeenCalledOnce();
@@ -2939,9 +2951,9 @@ describe('pre-resolved ops', () => {
         expect(item.textContent).toBe('hello');
     });
 
-    it('OP_UPDATE with pre-resolved HTML sets innerHTML', () => {
+    it('markerless OP_TEXT with pre-resolved HTML sets innerHTML', () => {
         setupView('v', '<div az="0">old</div>');
-        applyOps([[OP.UPDATE, 'v:0', '<b>new</b>']]);
+        applyOps([[OP.TEXT, 'v:0', '<b>new</b>', true]]);
         expect(document.querySelector('[az="0"]').innerHTML).toBe('<b>new</b>');
     });
 
@@ -2986,9 +2998,11 @@ describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
         expect(item.querySelector('[az="1"]').innerHTML).toContain('<b>marked</b>');
     });
 
-    it('UPDATE inner op with pre-resolved HTML', () => {
+    it('markerless TEXT inner op with pre-resolved HTML', () => {
         setupView('v', '<div az="0"><div az-key="k1"><div az="1">old</div></div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.UPDATE, '1', '<strong>updated</strong>']]]]);
+        applyOps([
+            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.TEXT, '1', '<strong>updated</strong>', true]]],
+        ]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
         expect(item.querySelector('[az="1"]').innerHTML).toBe('<strong>updated</strong>');
     });
@@ -3385,7 +3399,7 @@ describe('?local -- multiple content slots in one element', () => {
 });
 
 describe('?local -- reset / isolation on server ops', () => {
-    it('OP_UPDATE of an enclosing element resets a contained ?local to its SSR initial', () => {
+    it('a wholesale OP_TEXT of an enclosing element resets a contained ?local', () => {
         setupView(
             'v',
             `<div az="0"><span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->init<!--/az--></span></div>`,
@@ -3395,9 +3409,10 @@ describe('?local -- reset / isolation on server ops', () => {
         // Server re-renders the whole region (innerHTML) carrying the SSR-initial slot.
         applyOps([
             [
-                OP.UPDATE,
+                OP.TEXT,
                 'v:0',
                 `<span az="1" az-local='{"c":{"0":"k"}}'><!--az:1-->init<!--/az--></span>`,
+                true,
             ],
         ]);
         expect(document.querySelector('[az-local]').textContent).toBe('init');

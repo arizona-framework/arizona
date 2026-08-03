@@ -3,8 +3,8 @@ import { NativeClient } from '../utils/native_client.js';
 
 // Native (JSON) conditional/subtree rendering: a tab switcher whose content
 // area swaps subtrees when `selected` changes (push_event -> OP_TEXT of the
-// content slot -- a marker-anchored slot re-renders through OP_TEXT, never
-// OP_UPDATE). Proves the native client applies a re-rendered subtree, which the
+// content slot -- a marker-anchored slot always re-renders through OP_TEXT).
+// Proves the native client applies a re-rendered subtree, which the
 // counter (text) and list (stream) specs don't cover.
 test.describe('native (JSON) wire -- tabs', () => {
     test('swaps the content subtree when a tab is selected', async ({ baseURL }) => {

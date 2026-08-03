@@ -11,16 +11,19 @@ Explain the `$ARGUMENTS` op code.
 
 | Code | Name | Args |
 |------|------|------|
-| 0 | OP_TEXT | [target, value] |
+| 0 | OP_TEXT | [target, value, isHtml] |
 | 1 | OP_SET_ATTR | [target, attr, value] |
 | 2 | OP_REM_ATTR | [target, attr] |
-| 3 | OP_UPDATE | [target, html] |
 | 4 | OP_REMOVE_NODE | [target] |
 | 5 | OP_INSERT | [target, key, pos, html] |
 | 6 | OP_REMOVE | [target, key] |
 | 7 | OP_ITEM_PATCH | [target, key, innerOps] |
 | 8 | OP_REPLACE | [target, html] |
 | 9 | OP_MOVE | [target, key, afterKey] |
+| 10 | OP_LIST_PATCH | [target, subOps] |
+
+Code 3 is **unassigned** -- it was `OP_UPDATE` (innerHTML), removed once every container
+full render became the marker-aware `OP_TEXT`. If asked about 3, say so.
 
 For the requested op, explain:
 

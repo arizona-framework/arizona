@@ -351,8 +351,8 @@ describe('applyOps -- child-view ops inside OP.ITEM_PATCH', () => {
 // COMPOUND (`10MBGFX-0:1`) and whose base az is the VIEW ROOT's own az -- which
 // `querySelector` cannot return (an element is not its own descendant). So the
 // element arms both miss and only the marker scan hits, returning the live root.
-// `OP_UPDATE` / `OP_REMOVE_NODE` on that hit would innerHTML-wipe or delete the
-// whole view; they must warn and skip instead. Marker-aware ops keep the hit.
+// `OP_REPLACE` / `OP_REMOVE_NODE` on that hit would swap out or delete the whole
+// view; they must warn and skip instead. Marker-aware ops keep the hit.
 // ---------------------------------------------------------------------------
 
 const SIB_ROOT_AZ = '10MBGFX-0';
@@ -377,35 +377,30 @@ const sibRoot = () => document.getElementById('page');
 const SIB_NEW_ITEMS = sibItem('1', 'a') + sibItem('2', 'b');
 
 describe('applyOps -- destructive ops on a marker-only target', () => {
-    it('refuses the real stream-among-siblings OP_UPDATE instead of wiping the view', () => {
+    it('refuses OP_REMOVE_NODE on a marker-only target', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         setupSiblings();
         const before = sibRoot().innerHTML;
-        applyOps([[OP.UPDATE, `page:${SIB_EACH_AZ}`, SIB_NEW_ITEMS]]);
+        applyOps([[OP.REMOVE_NODE, `page:${SIB_EACH_AZ}`]]);
         // Nothing destroyed: header, the sibling title slot's markers, and footer
         // all survive, exactly as on a target that never resolved at all.
+        expect(sibRoot()).not.toBeNull();
         expect(sibRoot().innerHTML).toBe(before);
         expect(warn).toHaveBeenCalledOnce();
         expect(String(warn.mock.calls[0][0])).toContain(SIB_EACH_AZ);
         warn.mockRestore();
     });
 
-    it('refuses OP_REMOVE_NODE on a marker-only target', () => {
+    it('refuses the real stream-among-siblings OP_REPLACE instead of wiping the view', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         setupSiblings();
-        applyOps([[OP.REMOVE_NODE, `page:${SIB_EACH_AZ}`]]);
-        expect(sibRoot()).not.toBeNull();
-        expect(warn).toHaveBeenCalledOnce();
-        warn.mockRestore();
-    });
-
-    it('refuses OP_REPLACE on a marker-only target', () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        setupSiblings();
+        const before = sibRoot().innerHTML;
         applyOps([[OP.REPLACE, `page:${SIB_EACH_AZ}`, '<section id="gone"></section>']]);
         expect(sibRoot()).not.toBeNull();
+        expect(sibRoot().innerHTML).toBe(before);
         expect(document.getElementById('gone')).toBeNull();
         expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toContain(SIB_EACH_AZ);
         warn.mockRestore();
     });
 
@@ -422,8 +417,8 @@ describe('applyOps -- destructive ops on a marker-only target', () => {
     it('leaves destructive ops on an element-anchored target working', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         document.body.innerHTML = '<div id="v" az-view><div az="0">old</div></div>';
-        applyOps([[OP.UPDATE, 'v:0', '<em>new</em>']]);
-        expect(document.querySelector('[az="0"]').innerHTML).toBe('<em>new</em>');
+        applyOps([[OP.REMOVE_NODE, 'v:0']]);
+        expect(document.querySelector('[az="0"]')).toBeNull();
         expect(warn).not.toHaveBeenCalled();
         warn.mockRestore();
     });

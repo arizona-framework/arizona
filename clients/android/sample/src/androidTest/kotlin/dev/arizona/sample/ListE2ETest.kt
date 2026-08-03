@@ -14,7 +14,7 @@ import org.junit.Test
  * On-device (emulator) e2e for the keyed list -- the Kotlin-renderer analogue of
  * e2e/native/list.spec.js. Navigate to /native/list, then drive the stream ops
  * directly via the client (the list view has no buttons), exercising
- * OP_INSERT / OP_REMOVE / OP_MOVE / OP_ITEM_PATCH / OP_UPDATE on the renderer.
+ * OP_INSERT / OP_REMOVE / OP_MOVE / OP_ITEM_PATCH / OP_TEXT on the renderer.
  * Payloads carry real JSON types (numeric `pos`, an array for `reset`), which
  * the Map<String,String> signature couldn't express.
  *
@@ -57,7 +57,7 @@ class ListE2ETest {
         rule.waitForText("Updated")
         rule.waitForNoText("Nine")
 
-        // OP_UPDATE (full re-render via reset) -- an array-of-objects payload.
+        // OP_TEXT container full re-render (via reset) -- an array-of-objects payload.
         client.pushEvent(
             "reset",
             buildJsonObject {
