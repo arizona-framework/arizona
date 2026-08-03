@@ -17,12 +17,13 @@ name: ios-e2e
   push:
     branches:
       - main
-  # Same trigger surface as the core workflows (erlang.yml / node-js.yml): every
-  # PR base branch, not just main, plus the merge queue -- a PR stacked on a
-  # feature branch, or a merge-queue run, would otherwise get zero mobile CI.
+  # Every PR base branch, not just main, plus the merge queue -- a PR stacked on
+  # a feature branch, or a merge-queue run, would otherwise get zero mobile CI.
+  # `**`, not `*`: a GitHub branch filter is a glob in which `*` does NOT match
+  # `/`, so `"*"` misses exactly the stacked case (a `feat/foo` base) this is for.
   pull_request:
     branches:
-      - "*"
+      - "**"
   workflow_dispatch: {}
   merge_group:
 

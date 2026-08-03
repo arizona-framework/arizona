@@ -857,11 +857,13 @@ Simplified gen_server wrapper:
   etc.). If handler exports `handle_info/2`, calls it, diffs, and pushes
   `{arizona_push, RootViewId, Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without
   `handle_info/2` are silently dropped. Empty ops+effects are not pushed
-- `navigate/3,4` -- `navigate(Pid, NewHandler, InitBindings [, OnMount])`. **Unmounts the old page
-  first -- embedded child views, then the root**, the same children-first order a diff removal and
-  `terminate/2` use, so a child's `unmount/1` always runs while its parent is still mounted. Then
-  **cancels every pending timer** in the `$arizona_timers` registry, so a `?send_after` armed by the
-  old page cannot fire into the new one. Then mounts the new handler (applying any `OnMount` hooks),
+- `navigate/3,4` -- `navigate(Pid, NewHandler, InitBindings [, OnMount])`. Tears the old page down
+  in this order: **cancel timers first** (`cancel_pending_timers/0` erases the whole
+  `$arizona_timers` registry, cancels every ref, then drains already-delivered
+  `{arizona_view, _, _}` messages from the mailbox), **then unmount -- embedded child views, then
+  the root**, the same children-first order a diff removal and `terminate/2` use, so a child's
+  `unmount/1` always runs while its parent is still mounted. Then mounts the new handler
+  (applying any `OnMount` hooks),
   resets gen_server state (handler, snapshot, views), preserves `transport_pid` and `sent_fps`, and
   returns `{ok, NewViewId, PageContent}`. The previous root handler's final bindings are carried
   forward as the floor for the new handler's mount input -- `InitBindings` (route static config +
@@ -896,11 +898,24 @@ it can never address an embedded child, so `?send`/`?send_after` are the API.
 `send_after/3` additionally registers its ref in the `$arizona_timers` process-dictionary map,
 `#{ViewId => [reference()]}`. A fired ref is pruned when its message is delivered; a removed child
 view's timers are cancelled synchronously (and its queued view messages flushed) on unmount; and
-`navigate/3,4` cancels them all, so a timer armed by one page cannot fire into the next.
+`navigate/3,4` cancels them all.
+
+**What the navigate sweep does and does not guarantee.** The sweep runs **before** the unmount
+callbacks, so it covers every timer armed during the old page's normal lifetime -- `mount/1`,
+`handle_event/3`, `handle_info/2` -- and none of those can fire into the new page. It does **not**
+cover a timer armed **inside** `unmount/1`: `cancel_pending_timers/0` has already erased the
+registry by then, `send_after/3` re-creates it, and nothing sweeps it again before the new mount.
+Such a ref survives, and when it fires the new page's root id and views map do not know the old view
+id, so `handle_info/2` raises `{unknown_view, OldViewId, Msg}` and the live process dies (or, if the
+new page happens to reuse the same view id, the stale message is delivered to a different handler).
+So **do not arm timers in `unmount/1`** -- it is a teardown callback, and the ordering is chosen so
+the cancel cannot race a timer the old page armed while it was still running.
 
 ### Process-dictionary keys
 
-The live process keeps five keys, all read through accessor functions rather than directly:
+Seven keys live in the live process's dictionary, all read through accessor functions rather than
+directly. The first five are `arizona_live`'s own connection and scheduling state; the last two are
+set by the render/diff, which runs in the same process:
 
 | Key | Set by | Read by |
 | --- | ------ | ------- |
@@ -909,6 +924,16 @@ The live process keeps five keys, all read through accessor functions rather tha
 | `$arizona_capabilities` | the `_az_caps` map the client advertised at connect | `capabilities/0` / `capability/1` (`?capabilities` / `?capability`). A UI/effect hint, **never** authorization |
 | `$arizona_timers` | `send_after/3` | unmount and `navigate/3,4`, to cancel |
 | `$arizona_deps` | the per-dynamic eval bracket | `arizona_eval`, `arizona_template:track/1` -- the dependency capture set |
+| `$arizona_update_effects` | `arizona_eval:set_update_effects/1`, seeded with the originating callback's effects before a diff | `current_update_effects/0` while child `handle_update/3`s fold onto it; `drain_update_effects/0` erases and returns the final list. Threading it here is what lets a child's effects join the root's with no concatenation at the call site |
+| `{'$arizona_scoped_statics', Prefix, Fp}` | `scoped_statics/4` in `arizona_template` | itself -- a memo for the per-slot static prefixing (`scope_static/3` on the render backend, per element), keyed by scope prefix + template fingerprint |
+
+The scoped-statics memo is the one entry with **no erase path**. That is deliberate and safe --
+prefixing a static list is pure and deterministic in `(Prefix, statics)`, so a stale entry cannot be
+wrong, and the payoff is that a re-render or diff of the same slot (and every level of a deep
+stateless nest, whose inner statics would otherwise be re-walked once per ancestor) reuses the
+cached result. It is bounded by the number of distinct `(slot prefix, fingerprint)` pairs the
+process ever renders, and dies with the process; note it when reasoning about a long-lived live
+process's memory, and do not expect a navigate to clear it.
 
 ## API -- `arizona_socket.erl`
 

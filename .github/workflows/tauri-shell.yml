@@ -14,15 +14,33 @@
 # part of CI either -- it needs app icons and produces artifacts nothing consumes.
 name: Tauri shell
 
+# Path-gated on purpose. Compiling the shell pulls in the whole gtk/webkit Rust
+# tree, so running it on every PR (a docs-only one included) would turn an
+# explicitly opt-in component into de-facto per-PR CI. `merge_group` is
+# deliberately absent: GitHub does not support `paths` on merge-queue events, so
+# including it would compile the tree on every queue entry and undo this gate --
+# the PR-level run is the check, exactly as for any other path-filtered workflow.
+# `branches: "**"` because a branch filter glob's `*` does not match `/`.
 "on":
   push:
     branches:
       - main
+    # Duplicated below rather than shared via a YAML anchor -- GitHub Actions
+    # does not expand anchors/aliases in workflow files. Keep the two in sync.
+    paths:
+      - "clients/tauri/**"
+      - ".github/workflows/tauri-shell.yml"
+      - ".tool-versions"
+      - "Makefile"
   pull_request:
     branches:
-      - "*"
+      - "**"
+    paths:
+      - "clients/tauri/**"
+      - ".github/workflows/tauri-shell.yml"
+      - ".tool-versions"
+      - "Makefile"
   workflow_dispatch: {}
-  merge_group:
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}
