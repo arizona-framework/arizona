@@ -5714,3 +5714,89 @@ describe('fetch + az-form-reset via the submit listener', () => {
         }
     });
 });
+
+// ---------------------------------------------------------------------------
+// Hook `updated()` on stream/list container mutations.
+//
+// Contract: `updated()` fires on a hooked element when the framework mutates THAT
+// element -- its attributes, its child list, or its position among its siblings. It
+// does not bubble. A container hook has no other channel (nothing bubbles, there is
+// no MutationObserver fallback), so without these the same logical change ("the list
+// changed") is observable only when the server happens to full-render -- making a
+// hook's correctness depend on the diff's op-code choice.
+// ---------------------------------------------------------------------------
+
+describe('hook updated() on container child-list changes', () => {
+    const ssrStream = (items) =>
+        '<ul az="0" az-hook="C"><!--az:0-->' +
+        items.map((t) => `<li az="i" az-key="${t}"><!--az:i-->${t}<!--/az--></li>`).join('') +
+        '<!--/az--></ul>';
+
+    let updated;
+    beforeEach(() => {
+        updated = vi.fn();
+        hooks.C = { updated };
+    });
+    afterEach(() => {
+        delete hooks.C;
+    });
+
+    const containerCalls = () => updated.mock.instances.filter((i) => i.el.tagName === 'UL').length;
+
+    // setupView only writes the DOM; a pre-existing `az-hook` mounts via mountHooks.
+    const view = (html) => {
+        setupView('v', html);
+        mountHooks(document);
+    };
+
+    it('fires on the container for a stream insert', () => {
+        view(ssrStream(['1']));
+        applyOps([
+            [OP.INSERT, 'v:0', '2', -1, '<li az="i" az-key="2"><!--az:i-->2<!--/az--></li>'],
+        ]);
+        expect(containerCalls()).toBe(1);
+    });
+
+    it('fires on the container for a stream remove', () => {
+        view(ssrStream(['1', '2']));
+        applyOps([[OP.REMOVE, 'v:0', '1']]);
+        expect(containerCalls()).toBe(1);
+    });
+
+    it('fires on both the moved item and the container for a stream move', () => {
+        // The items carry the hook too, so the item-level notification is observable.
+        view(
+            '<ul az="0" az-hook="C"><!--az:0-->' +
+                ['1', '2']
+                    .map(
+                        (t) =>
+                            `<li az="i" az-key="${t}" az-hook="C"><!--az:i-->${t}<!--/az--></li>`,
+                    )
+                    .join('') +
+                '<!--/az--></ul>',
+        );
+        applyOps([[OP.MOVE, 'v:0', '2', null]]);
+        // The item's position is its own observable state; the container's order changed.
+        expect(updated.mock.instances.some((i) => i.el.tagName === 'LI')).toBe(true);
+        expect(containerCalls()).toBe(1);
+    });
+
+    it('does not fire when the op mutated nothing (item not found)', () => {
+        view(ssrStream(['1']));
+        applyOps([[OP.REMOVE, 'v:0', 'nope']]);
+        expect(containerCalls()).toBe(0);
+    });
+
+    it('a plain-list patch fires once when the child list changed', () => {
+        view('<ul az="0" az-hook="C"><!--az:0--><li>a</li><!--/az--></ul>');
+        applyOps([[OP.LIST_PATCH, 'v:0', [[OP.INSERT, 1, '<li>b</li>']]]]);
+        expect(containerCalls()).toBe(1);
+    });
+
+    it('a plain-list patch does NOT fire for an empty batch', () => {
+        view('<ul az="0" az-hook="C"><!--az:0--><li>a</li><!--/az--></ul>');
+        applyOps([[OP.LIST_PATCH, 'v:0', []]]);
+        // Nothing was mutated, so this is not an update TO the container.
+        expect(containerCalls()).toBe(0);
+    });
+});

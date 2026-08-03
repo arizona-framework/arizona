@@ -1506,6 +1506,13 @@ function insertItemEl(el, key, pos, html, streams = null, az) {
     } else {
         console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
     }
+    // The container's child list changed, so a hook on it is notified -- after the
+    // new item's `mounted()`, matching applyUpdateOp/applyListPatch ordering. A
+    // container hook has no other channel: nothing bubbles and there is no
+    // MutationObserver fallback, so without this a stream container hook fires only
+    // when the server happens to full-render, making it depend on the diff's op-code
+    // choice for a change that is semantically identical.
+    notifyUpdated(el);
 }
 
 /**
@@ -1522,6 +1529,7 @@ function removeItemEl(el, key, streams = null) {
     }
     removeEl(item);
     streams?.get(el)?.delete(key);
+    notifyUpdated(el);
 }
 
 /**
@@ -1553,7 +1561,10 @@ function moveItemEl(el, key, afterKey, streams = null, az) {
         else if (bounds) el.insertBefore(item, bounds.end);
         else el.appendChild(item);
     }
+    // Both: the item's position among its siblings is its own observable state (a row
+    // hook may animate its move), and the container's child ORDER changed.
     notifyUpdated(item);
+    notifyUpdated(el);
 }
 
 /**
@@ -1706,6 +1717,7 @@ function applyListPatch(el, az, subOps) {
         console.warn(`[arizona] list-patch slot az:${az} has no closing marker; skipping`);
         return;
     }
+    let childListChanged = false;
     for (const sub of subOps) {
         switch (sub[0]) {
             case OP.ITEM_PATCH: {
@@ -1716,6 +1728,7 @@ function applyListPatch(el, az, subOps) {
             case OP.REMOVE: {
                 const item = roots[sub[1]];
                 if (item) removeEl(item);
+                childListChanged = true;
                 break;
             }
             case OP.INSERT: {
@@ -1728,11 +1741,15 @@ function applyListPatch(el, az, subOps) {
                 const ref = roots[sub[1]] ?? endMarker;
                 ref.before(tpl.content);
                 for (const e of added) mountHooks(e);
+                childListChanged = true;
                 break;
             }
         }
     }
-    notifyUpdated(el);
+    // Only when a sub-op actually changed the child list. A pure ITEM_PATCH batch
+    // mutated a descendant, not `el`, and an empty batch mutated nothing -- neither
+    // is an update TO the container.
+    if (childListChanged) notifyUpdated(el);
 }
 
 /**
