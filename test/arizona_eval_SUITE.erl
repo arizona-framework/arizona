@@ -1,5 +1,6 @@
 -module(arizona_eval_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include("arizona.hrl").
 -dialyzer({nowarn_function, eval_each_def_3tuple/1}).
 
 -export([all/0, groups/0]).
@@ -19,11 +20,18 @@
     render_stream_item_persists_deps/1,
     render_stream_item_skipping_reuses_unchanged/1,
     render_stream_item_skipping_full_eval_on_empty_deps/1,
-    render_stream_item_skipping_short_circuits_on_empty_changed/1
+    render_stream_item_skipping_short_circuits_on_empty_changed/1,
+    child_stream_pending_cleared_on_eval_path/1,
+    child_stream_replayed_drain_emits_no_duplicate_insert/1
 ]).
 
 all() ->
-    [{group, eval_api}, {group, dep_isolation}, {group, per_item_optimization}].
+    [
+        {group, eval_api},
+        {group, dep_isolation},
+        {group, per_item_optimization},
+        {group, child_streams}
+    ].
 
 groups() ->
     [
@@ -48,8 +56,68 @@ groups() ->
             stateless_inside_each_no_leak,
             stateless_callback_returning_fun_no_leak,
             stateful_mount_eager_read_no_leak
+        ]},
+        {child_streams, [parallel], [
+            child_stream_pending_cleared_on_eval_path,
+            child_stream_replayed_drain_emits_no_duplicate_insert
         ]}
     ].
+
+%% --- child streams ---
+
+%% A stateful CHILD's stream is fed by parent props, so its queue grows on the
+%% EVAL path (eval_stateful/3), which stored the post-handle_update bindings
+%% verbatim -- unlike arizona_live's root/child-event paths, which clear. One
+%% queue entry per ROOT update accumulated for the process lifetime (memory,
+%% plus a drain that then walks the whole history to emit a couple of ops).
+child_stream_pending_cleared_on_eval_path(Config) when is_list(Config) ->
+    B0 = #{id => ~"p", tick => 0},
+    {_HTML, Snap0, V0} = arizona_render:render(child_stream_tmpl(B0), #{}),
+    Lens = child_stream_tick_cycles(1, 6, B0, Snap0, V0, []),
+    ?assertEqual([0, 0, 0, 0, 0, 0], Lens).
+
+%% Correctness of the never-cleared queue rested entirely on the drain's insert
+%% dup guard, and nothing pinned it: with the guard removed a replay emits a
+%% second OP_INSERT under the same az-key (duplicate DOM nodes). Drain a queue
+%% that still holds an already-applied insert and assert only the new key emits.
+child_stream_replayed_drain_emits_no_duplicate_insert(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    S0 = arizona_stream:new(KeyFun, [#{id => ~"a", text => ~"A"}]),
+    B0 = #{id => ~"c", items => S0},
+    Tmpl0 = arizona_stateful:call_render(arizona_stream_child, B0),
+    {_HTML, Snap0, V0} = arizona_render:render(Tmpl0, #{}),
+    %% The queue was never cleared, so it still carries the insert of "a" that
+    %% the render above already reflected; appending "b" re-drains both.
+    S1 = arizona_stream:insert(S0, #{id => ~"b", text => ~"B"}),
+    B1 = B0#{items => S1},
+    Tmpl1 = arizona_stateful:call_render(arizona_stream_child, B1),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, #{items => true}),
+    ?assertMatch([[?OP_INSERT, _, ~"b", -1, _]], Ops).
+
+%% Runs `Max` root update cycles, returning the child's pending queue length
+%% after each one. The parent's only changing binding is `tick`, delivered to
+%% the child as a prop -- the child appends it to its stream in handle_update/3.
+child_stream_tick_cycles(N, Max, _B, _Snap, _V, Acc) when N > Max ->
+    lists:reverse(Acc);
+child_stream_tick_cycles(N, Max, B, Snap, V, Acc) ->
+    B1 = B#{tick => N},
+    {_Ops, Snap1, V1} = arizona_diff:diff(child_stream_tmpl(B1), Snap, V, #{tick => true}),
+    #{~"c" := #{bindings := #{items := #stream{pending = Pending}}}} = V1,
+    child_stream_tick_cycles(N + 1, Max, B1, Snap1, V1, [queue:len(Pending) | Acc]).
+
+%% Parent template embedding arizona_stream_child and passing `tick` as a prop.
+child_stream_tmpl(B) ->
+    #{
+        s => [~"<div az=\"0\">", ~"</div>"],
+        d => [
+            {~"0", fun() ->
+                arizona_template:stateful(arizona_stream_child, #{
+                    id => ~"c", tick => arizona_template:get(tick, B)
+                })
+            end}
+        ],
+        f => ~"parent"
+    }.
 
 %% --- eval API ---
 

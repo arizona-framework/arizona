@@ -501,7 +501,14 @@ eval_stateful(H, Props, {Old, New}) ->
         Descendants = maps:keys(LocalNew),
         Snap0 = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
         Snap = Snap0#{child_views => Descendants},
-        B2 = maps:merge(B1, Resets),
+        %% The eval above rendered the child's whole current state, so its queued
+        %% stream ops are consumed -- clear them, mirroring what arizona_live
+        %% does on the root and child-event paths. Without this a child whose
+        %% stream is fed by parent props accumulates one queue entry per ROOT
+        %% update for the lifetime of the process.
+        B2 = maps:merge(
+            arizona_stream:clear_stream_pending(B1, arizona_stream:stream_keys(B1)), Resets
+        ),
         ChildEntry = #{handler => H, bindings => B2, snapshot => Snap},
         New1 = maps:merge(New, LocalNew),
         {Snap, {Old, New1#{Id => ChildEntry}}}
