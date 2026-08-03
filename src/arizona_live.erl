@@ -173,7 +173,10 @@ fingerprints already shipped in the initial HTML.
     on_mount :: on_mount(),
     transport_pid :: pid() | undefined,
     %% #{fingerprint_binary() => true}
-    sent_fps :: map()
+    sent_fps :: map(),
+    %% Does this transport fold queued pushes into synchronous replies? See
+    %% push_barrier/1.
+    push_barrier :: boolean()
 }).
 
 -type state() :: #state{}.
@@ -291,9 +294,15 @@ start_link(Handler, InitBindings, TransportPid, OnMount) ->
 
 -doc """
 Like `start_link/4` but also threads the connection context the transport knows --
-`#{capabilities => map(), reconnect => boolean()}` -- into the live process, where
-`capability/1` and `reconnected/0` read it. Browser/SSR callers use `start_link/4`
-(empty context).
+`#{capabilities => map(), reconnect => boolean(), push_barrier => boolean()}` --
+into the live process, where `capability/1` and `reconnected/0` read the first
+two. Browser/SSR callers use `start_link/4` (empty context).
+
+`push_barrier` is the transport's own contract, not client data: set it when the
+transport folds queued `{arizona_push, ...}` messages into a synchronous
+event/patch reply, and the live process marks the boundary between the pushes
+that preceded that reply and anything emitted after it (see `push_barrier/1`).
+Transports that ship every push in its own frame leave it unset.
 """.
 -spec start_link(Handler, InitBindings, TransportPid, OnMount, ConnInfo) ->
     gen_server:start_ret()
@@ -302,7 +311,9 @@ when
     InitBindings :: map(),
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
-    ConnInfo :: #{capabilities => map(), reconnect => boolean()}.
+    ConnInfo :: #{
+        capabilities => map(), reconnect => boolean(), push_barrier => boolean()
+    }.
 start_link(Handler, InitBindings, TransportPid, OnMount, ConnInfo) ->
     %% Capture caller-side logger metadata (typically set by roadrunner
     %% with the per-conn request_id) so any ?LOG_* from inside the
@@ -470,12 +481,15 @@ when
     TransportPid :: pid() | undefined,
     OnMount :: on_mount(),
     ParentMetadata :: logger:metadata() | undefined,
-    ConnInfo :: #{capabilities => map(), reconnect => boolean()}.
+    ConnInfo :: #{
+        capabilities => map(), reconnect => boolean(), push_barrier => boolean()
+    }.
 init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo}) ->
     proc_lib:set_label({arizona_live, Handler}),
     inherit_logger_metadata(ParentMetadata),
     Capabilities = maps:get(capabilities, ConnInfo, #{}),
     Reconnect = maps:get(reconnect, ConnInfo, false),
+    Barrier = maps:get(push_barrier, ConnInfo, false),
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
     TransportPid =/= undefined andalso erlang:put('$arizona_capabilities', Capabilities),
     TransportPid =/= undefined andalso erlang:put('$arizona_reconnected', Reconnect),
@@ -498,7 +512,8 @@ init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo}) -
         views = #{},
         on_mount = OnMount,
         transport_pid = TransportPid,
-        sent_fps = #{}
+        sent_fps = #{},
+        push_barrier = Barrier
     }}.
 
 %% Mirror the parent process's logger metadata (request_id, peer, etc.)
@@ -536,6 +551,7 @@ handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} 
     {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
     {reply, {ok, iolist_to_binary(HTML)}, State};
 handle_call({event, ViewId, Event, Payload}, _From, #state{views = V0, bindings = B0} = State) ->
+    ok = push_barrier(State),
     case V0 of
         #{ViewId := _} ->
             handle_child_event(ViewId, Event, Payload, State);
@@ -562,7 +578,8 @@ handle_call(
         bindings = OldB,
         views = OldV,
         transport_pid = TPid,
-        sent_fps = Fps0
+        sent_fps = Fps0,
+        push_barrier = Barrier
     } = _State
 ) ->
     ok = cancel_pending_timers(),
@@ -597,9 +614,11 @@ handle_call(
         views = V1,
         on_mount = NewOnMount,
         transport_pid = TPid,
-        sent_fps = Fps1
+        sent_fps = Fps1,
+        push_barrier = Barrier
     }};
 handle_call({patch, Params}, _From, #state{handler = H, bindings = B0} = State) ->
+    ok = push_barrier(State),
     %% In-place navigation: the root view stays mounted. Deliver Params to its
     %% handle_update/3 (navigation as the root's prop source), then re-render
     %% and diff against the live snapshot -- no unmount, no remount, no timer
@@ -966,6 +985,32 @@ push(_Pid, _ViewId, [], []) ->
     ok;
 push(Pid, ViewId, Ops, Effects) ->
     Pid ! {arizona_push, ViewId, Ops, Effects},
+    ok.
+
+%% Marks, in the transport's mailbox, the boundary between the pushes emitted
+%% BEFORE the reply this call is about to produce and anything emitted after it.
+%%
+%% A transport that folds queued pushes into a synchronous reply must fold only
+%% the former -- a push emitted before the reply is causally earlier, so it has
+%% to be applied first, but one emitted after it is later and prepending it
+%% inverts an order-dependent op pair (a stream MOVE landing in front of the
+%% INSERT that created its key; the client drops the move and the server's
+%% snapshot is wrong from then on). A transport cannot tell the two apart on its
+%% own: the documented `?send`/`?send_after` idiom has the handler enqueue to
+%% this process's own mailbox during `handle_event/3`, so the live process
+%% replies and only then dequeues that message and pushes for it -- typically
+%% before the transport is rescheduled to look at its own mailbox.
+%%
+%% Sending the marker from inside the call settles it: this process cannot push
+%% between here and the reply, so every push already in flight is ahead of the
+%% marker and every later one is behind it. The transport drains up to the
+%% marker (it is guaranteed present -- it was sent before the reply the
+%% transport has by then received) and leaves the rest for its own inbox path,
+%% which ships them in a later frame, in order.
+push_barrier(#state{push_barrier = true, transport_pid = Pid}) when is_pid(Pid) ->
+    Pid ! arizona_push_barrier,
+    ok;
+push_barrier(#state{}) ->
     ok.
 
 root_view_id(#state{bindings = Bindings}) ->

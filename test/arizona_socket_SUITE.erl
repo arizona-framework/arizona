@@ -23,6 +23,7 @@
 -export([resync_mount_crash_on_timeout_closes_crash/1]).
 -export([resync_on_dead_live_process_closes_going_away/1]).
 -export([drain_before_mount_closes_going_away/1]).
+-export([push_emitted_after_reply_not_folded/1]).
 
 all() ->
     [
@@ -41,7 +42,8 @@ all() ->
         resync_mount_crash_on_other_frame_closes_crash,
         resync_mount_crash_on_timeout_closes_crash,
         resync_on_dead_live_process_closes_going_away,
-        drain_before_mount_closes_going_away
+        drain_before_mount_closes_going_away,
+        push_emitted_after_reply_not_folded
     ].
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
@@ -410,6 +412,45 @@ drain_before_mount_closes_going_away(Config) when is_list(Config) ->
     after 1000 ->
         error(drain_swallowed_before_mount)
     end.
+
+push_emitted_after_reply_not_folded(Config) when is_list(Config) ->
+    %% The drain folds queued pushes in FRONT of a synchronous reply, which is
+    %% only sound for pushes the live process emitted BEFORE that reply. The
+    %% `?send` self-message idiom breaks that assumption: the handler enqueues
+    %% to the live process's own mailbox inside handle_event/3, the live process
+    %% replies, and only then dequeues and pushes -- all before the socket
+    %% process is rescheduled to its `after 0`. Prepending that push inverts an
+    %% order-dependent op pair: the wire carried MOVE-then-INSERT where the
+    %% server meant INSERT-then-MOVE, and the client drops a move whose key it
+    %% has not seen, leaving the server's snapshot wrong for good.
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} = arizona_socket:init(arizona_stream_self_send, #{}, Req, #{}),
+    %% Repeat the interleave: the race is what the fix removes, so one trial
+    %% only proves the fix when it happens to lose.
+    interleave_add_then_move(Socket0, lists:seq(1, 20)).
+
+interleave_add_then_move(_Socket, []) ->
+    ok;
+interleave_add_then_move(Socket0, [N | Rest]) ->
+    Id = <<"k", (integer_to_binary(N))/binary>>,
+    Frame = iolist_to_binary(
+        json:encode([~"self_send", ~"add_then_move", #{~"id" => Id}])
+    ),
+    {reply, ReplyFrame, Socket} = arizona_socket:handle_in(Frame, Socket0),
+    #{~"o" := ReplyOps} = json:decode(iolist_to_binary(ReplyFrame)),
+    %% The reply carries the INSERT alone -- the MOVE was emitted after it.
+    ?assertMatch([[?OP_INSERT, _, Id, _Pos, _HTML]], ReplyOps),
+    %% ...and is not lost: it follows in its own frame, after the insert, with a
+    %% `null` after-ref (move to the front).
+    receive
+        {arizona_push, _, _, _} = Push ->
+            {reply, PushFrame, _Socket1} = arizona_socket:handle_info(Push, Socket),
+            #{~"o" := PushOps} = json:decode(iolist_to_binary(PushFrame)),
+            ?assertMatch([[?OP_MOVE, _, Id, null]], PushOps)
+    after 2000 ->
+        error({move_push_never_arrived, Id})
+    end,
+    interleave_add_then_move(Socket, Rest).
 
 %% A flagged-reconnect socket whose live process crashes the moment the deferred
 %% resync mounts it. `init/4` defers the mount, so the crash lands in the flush,

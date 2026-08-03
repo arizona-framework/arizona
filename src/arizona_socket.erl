@@ -165,7 +165,11 @@ init(Handler, Bindings, Req, Opts) ->
     %% place) vs different-view (fall back to a full navigate/replace).
     Socket = #socket{req = Req, handler = Handler},
     safe_init(Handler, Socket, fun() ->
-        ConnInfo = #{capabilities => Capabilities, reconnect => Reconnect},
+        %% `push_barrier` opts this transport into the ordering marker the
+        %% event/patch drain below relies on -- see drain_pending_pushes/1.
+        ConnInfo = #{
+            capabilities => Capabilities, reconnect => Reconnect, push_barrier => true
+        },
         {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, ConnInfo),
         init_view(Reconnect, FpsFollow, Pid, Socket)
     end).
@@ -593,18 +597,31 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
     {flatten_ops(ViewId, Ops), Effects}.
 
-%% Selectively receive the `{arizona_push, ...}` messages already queued in the
-%% socket process's mailbox, right after a synchronous event/patch call and
-%% BEFORE building its reply frame. Anything queued was necessarily emitted
-%% before the reply was computed (the live process pushes before returning from
-%% the call), so prepending it restores causal order on the wire: without this
-%% the reply ships first and the earlier push lands in a LATER frame, letting a
-%% stale value overwrite the reply's client-side (and keyed stream ops with
-%% relative refs can fail to apply outright). `after 0` drains only what is
-%% already queued; arrival order is preserved. A push from a page this socket
-%% already navigated away from is dropped, mirroring handle_info/2. The
-%% navigate path needs no drain: its OP_REPLACE supersedes old-page ops, and
-%% the stale-view-id drop disposes of them once processed after the reply.
+%% Selectively receive the `{arizona_push, ...}` messages the live process
+%% emitted BEFORE the reply to a synchronous event/patch call, and fold them in
+%% front of that reply's own ops. Such a push is causally earlier, so it must be
+%% applied first: without this the reply ships first and the earlier push lands
+%% in a LATER frame, letting a stale value overwrite the reply's client-side
+%% (and keyed stream ops with relative refs can fail to apply outright).
+%%
+%% "Before the reply" is decided by the live process, not guessed here: it sends
+%% `arizona_push_barrier` from inside the call (`arizona_live:push_barrier/1`),
+%% so the marker sits behind every push that preceded the reply and ahead of
+%% every push emitted after it. Draining up to the marker is therefore exact --
+%% an `after 0` drain instead swept up whatever happened to have landed by the
+%% time this process was rescheduled, and the `?send` self-message idiom makes
+%% that a push emitted AFTER the reply (the handler enqueues to the live
+%% process's own mailbox during handle_event/3, so the live process replies,
+%% then dequeues and pushes). Prepending it inverted an order-dependent pair: a
+%% stream MOVE ahead of the INSERT that created its key, which the client drops
+%% for good. Anything behind the marker stays queued for handle_info/2, which
+%% ships it in the next frame -- in order.
+%%
+%% The receive needs no timeout: the marker was sent before the reply the caller
+%% has already received, so it is in this mailbox. A push from a page this
+%% socket already navigated away from is dropped, mirroring handle_info/2. The
+%% navigate path needs no drain: its OP_REPLACE supersedes old-page ops, and the
+%% stale-view-id drop disposes of them once processed after the reply.
 drain_pending_pushes(#socket{view_id = ViewId}) ->
     drain_pending_pushes(ViewId, [], []).
 
@@ -615,9 +632,9 @@ drain_pending_pushes(ViewId, OpsAcc, EffectsAcc) ->
                 ViewId, [flatten_ops(ViewId, Ops) | OpsAcc], [Effects | EffectsAcc]
             );
         {arizona_push, _StaleViewId, _Ops, _Effects} ->
-            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc)
-    after 0 ->
-        {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc))}
+            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc);
+        arizona_push_barrier ->
+            {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc))}
     end.
 
 %% Single chokepoint for every reply that carries effects. Before encoding, an
