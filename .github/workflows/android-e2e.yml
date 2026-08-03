@@ -7,14 +7,18 @@
 # are checked out together. Adjust OTP/Node versions and API level for your setup.
 name: android-e2e
 
-on:
+"on":
   push:
     branches:
       - main
+  # Same trigger surface as the core workflows (erlang.yml / node-js.yml): every
+  # PR base branch, not just main, plus the merge queue -- a PR stacked on a
+  # feature branch, or a merge-queue run, would otherwise get zero mobile CI.
   pull_request:
     branches:
-      - main
+      - "*"
   workflow_dispatch: {}
+  merge_group:
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}
@@ -55,6 +59,15 @@ jobs:
               'clients/android/gradle.properties') }}
           restore-keys: |
             gradle-${{ runner.os }}-
+
+      # The other half of `make test-android`. These are the wire-protocol logic
+      # tests (Backoff/Tree/Interleaver) -- pure JVM, no emulator and no server,
+      # so run them here rather than inside the emulator step: they fail fast,
+      # they are attributed to logic rather than to a flaky device, and they do
+      # not burn emulator minutes.
+      - name: Run the Android library unit tests
+        working-directory: clients/android
+        run: gradle :arizona:testDebugUnitTest
 
       - name: Set up Erlang/OTP + rebar3
         uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24
