@@ -280,8 +280,8 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         stubPip(pip);
         await requestPip('player');
 
-        // OP.UPDATE on the root: innerHTML wipes the inline placeholder.
-        applyOps([[OP.UPDATE, 'root:0', 'wiped']]);
+        // A wholesale OP.TEXT on the root wipes the inline placeholder.
+        applyOps([[OP.TEXT, 'root:0', 'wiped', true]]);
         pip.fire('pagehide'); // user closes the floating window
 
         expect(document.getElementById('player')).toBeNull();

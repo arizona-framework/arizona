@@ -237,8 +237,8 @@ test.describe('Mixed children -- combined operations', () => {
 // .strip holds two static .item siblings (static-a, static-b) sharing the
 // content slot with a plain-list ?each(rows). Toggling rows on/off must patch
 // only the each's marker span; the two static .item siblings must survive every
-// toggle. The pre-fix OP_UPDATE wrote innerHTML on the resolved-by-fallback
-// .strip element and wiped the static siblings.
+// toggle. The pre-fix whole-element write wrote innerHTML on the
+// resolved-by-fallback .strip element and wiped the static siblings.
 // ---------------------------------------------------------------------------
 
 test.describe('Mixed children -- plain-list each among static siblings', () => {

@@ -20,7 +20,6 @@
 const OP_TEXT = 0;
 const OP_SET_ATTR = 1;
 const OP_REM_ATTR = 2;
-const OP_UPDATE = 3;
 const OP_REMOVE_NODE = 4;
 const OP_INSERT = 5;
 const OP_REMOVE = 6;
@@ -333,16 +332,16 @@ export class NativeClient {
             return;
         }
         switch (op[0]) {
-            case OP_TEXT:
-            case OP_UPDATE: {
+            case OP_TEXT: {
                 // OP_TEXT's value is usually a scalar, but a dynamic that is a
                 // nested template (e.g. a conditional subtree) ships a {f,s,d}
-                // payload; OP_UPDATE re-renders a node's content wholesale (e.g. a
-                // stream reset). Either way the node's children are REPLACED, so
-                // the registry has to follow: drop the destroyed subtree's entries
-                // and index the new one, or every az the payload introduced -- a
-                // nested child view's id included -- is unaddressable and the next
-                // op targeting it has nothing to hit.
+                // payload, and a container full render (a plain-list or stream
+                // `?each`) re-renders the node's content wholesale. Either way
+                // the node's children are REPLACED, so the registry has to
+                // follow: drop the destroyed subtree's entries and index the new
+                // one, or every az the payload introduced -- a nested child
+                // view's id included -- is unaddressable and the next op
+                // targeting it has nothing to hit.
                 scope.unindexChildren(node);
                 const child = this._decode(op[2]);
                 node.children = [child];

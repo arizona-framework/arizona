@@ -389,14 +389,14 @@ class AzClient(baseUrl: String, path: String) {
             return
         }
         when (code) {
-            Op.TEXT, Op.UPDATE -> {
+            Op.TEXT -> {
                 // OP_TEXT is usually a scalar, but a nested-template dynamic (e.g.
-                // a conditional subtree) ships a {f,s,d} payload; OP_UPDATE
-                // re-renders a node's content wholesale (e.g. a stream reset).
-                // Either way the children are REPLACED, so the registry has to
-                // follow: drop the destroyed subtree's entries and index the new
-                // one, or every az the payload introduced -- a nested child view's
-                // id included -- is unaddressable.
+                // a conditional subtree) ships a {f,s,d} payload, and a container
+                // full render (a plain-list or stream `?each`) re-renders a node's
+                // content wholesale. Either way the children are REPLACED, so the
+                // registry has to follow: drop the destroyed subtree's entries and
+                // index the new one, or every az the payload introduced -- a
+                // nested child view's id included -- is unaddressable.
                 scope.unindexChildren(node)
                 node.children.clear()
                 addChild(node, Json.parseToJsonElement(interleaver.decode(a[2])), node.viewId)

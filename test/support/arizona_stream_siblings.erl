@@ -7,7 +7,7 @@
 %% another dynamic. SSR gives the each a COMPOUND slot az (`<Root>:1`) carried by
 %% NO element -- the client can only reach it through its `<!--az:X-->` marker,
 %% and the compound base az (`<Root>`) is the view ROOT's own az, which a
-%% descendant-only `querySelector` cannot return. So an `?OP_UPDATE` container
+%% descendant-only `querySelector` cannot return. So a whole-element container
 %% re-render resolves to the root and innerHTML-wipes the header, the title slot
 %% and the footer; only the marker-aware `?OP_TEXT` patches the slot in place.
 %% Mirrors `arizona_mixed_children`, which pins the same rule for a plain list.

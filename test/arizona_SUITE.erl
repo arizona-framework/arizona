@@ -821,8 +821,9 @@ list_diff_same_length(Config) when is_list(Config) ->
     {Ops, _Snap1, _V1} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
     %% Plain lists are unkeyed and re-render whole on any change (keyed
     %% incremental per-item updates are arizona_stream's job), so a same-length
-    %% content change is a single marker-aware OP_TEXT (opcode 0) -- not
-    %% OP_UPDATE, which would innerHTML-clobber the slot's static siblings.
+    %% content change is a single marker-aware OP_TEXT (opcode 0) -- not a
+    %% whole-element write, which would innerHTML-clobber the slot's static
+    %% siblings.
     ?assertEqual(1, length(Ops)),
     [[0, <<"0">>, _HTML]] = Ops.
 

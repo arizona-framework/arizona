@@ -8,11 +8,11 @@ import { expect, test } from '@playwright/test';
 // `arizona_diff_SUITE` / `arizona_render_SUITE` pin that the server EMITS the
 // marker-aware OP_TEXT for a container full render. These assert the other half, in a
 // real browser: that applying it patches the slot in place and leaves the siblings
-// standing. An OP_UPDATE here resolves to the root and innerHTML-wipes header, title and
-// footer, which is the regression this shape exists to catch.
+// standing. A whole-element write here resolves to the root and innerHTML-wipes header,
+// title and footer, which is the regression this shape exists to catch.
 //
 // `arizona_datatable.spec.js` does not cover it: its each is the sole child of a tbody,
-// the one shape that survives either op.
+// the one shape that survives either way.
 
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
@@ -36,8 +36,8 @@ test('SSR anchors the each among its static siblings', async ({ page }) => {
 
 // THE discriminating case. A keyed reset stays incremental (per-item ops), so only the
 // stream-to-map type switch produces a wholesale container re-render addressed to the
-// each's compound slot az -- an az no element carries, whose base is `#host`. Under
-// OP_UPDATE the client resolves it to `#host` and innerHTML-wipes header, title and
+// each's compound slot az -- an az no element carries, whose base is `#host`. A
+// whole-element write would resolve to `#host` and innerHTML-wipe header, title and
 // footer; under the marker-aware OP_TEXT only the slot's own span is replaced.
 test('a container full render keeps the static siblings', async ({ page }) => {
     await page.locator('#switch').click();

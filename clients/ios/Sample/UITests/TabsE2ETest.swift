@@ -1,7 +1,7 @@
 import XCTest
 
 /// On-device conditional rendering: navigate to /native/tabs and switch tabs;
-/// the content subtree swaps (push_event -> OP_UPDATE). The Android analogue is
+/// the content subtree swaps (push_event -> OP_TEXT). The Android analogue is
 /// TabsE2ETest.
 final class TabsE2ETest: XCTestCase {
     private var app: XCUIApplication!

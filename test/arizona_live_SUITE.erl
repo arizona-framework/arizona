@@ -390,7 +390,8 @@ grandchild_refresh_reaches_a_view_no_container_names(Config) when is_list(Config
     {ok, AddOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"add", #{~"id" => ~"b"}),
     ?assertMatch([[?OP_INSERT, _, ~"b", -1, _Item]], AddOps),
     %% A root change the container reads. Only its own op may come out; a missed
-    %% settle shows up as the wholesale `?OP_UPDATE` over the grandchild's list.
+    %% settle shows up as a wholesale container re-render over the grandchild's
+    %% list.
     {ok, RelabelOps, _} = arizona_live:handle_event(
         Pid, ~"cr", ~"relabel", #{~"label" => ~"L2"}
     ),
@@ -521,7 +522,7 @@ child_stream_survives_next_root_diff(Config) when is_list(Config) ->
     %% child's PRE-event copy -- and that copy is the diff baseline for the
     %% child's slot. So the first root diff afterwards re-emitted what the child
     %% had already patched incrementally, and for the stream container that is a
-    %% wholesale `?OP_UPDATE` (innerHTML), destroying focus, scroll, uncontrolled
+    %% wholesale container re-render, destroying focus, scroll, uncontrolled
     %% input state and every `?local` inside the items.
     {ok, Pid} = arizona_live:start_link(
         arizona_child_stream_root, #{}, self(), []
@@ -664,8 +665,8 @@ live_parent_change_child_stable(Config) when is_list(Config) ->
 
 %% Regression: a conditional `?stateful` in a content slot, toggled from the
 %% empty string to the child descriptor, must patch only the slot via ?OP_TEXT
-%% -- never ?OP_UPDATE on the slot's az, which the client resolves to the
-%% enclosing element (when the slot's az is that element's own az, as for a
+%% -- never a whole-element write on the slot's az, which the client resolves to
+%% the enclosing element (when the slot's az is that element's own az, as for a
 %% conditional child directly under the view root) and innerHTML-wipes, taking
 %% every sibling with it. This is the `case ?get(flag) of true ->
 %% ?stateful(...); false -> ~"" end` pattern.
@@ -675,15 +676,11 @@ live_conditional_child_toggle_patches_slot(Config) when is_list(Config) ->
     ),
     {ok, _} = arizona_live:mount(Pid),
     %% Toggle false -> true: the child appears. Exactly one ?OP_TEXT on the
-    %% slot, carrying the child template -- not an ?OP_UPDATE (which would
-    %% clobber the <main> root and drop <header>/<footer>).
+    %% slot, carrying the child template -- not a whole-element write (which
+    %% would clobber the <main> root and drop <header>/<footer>).
     {ok, ShowOps, []} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
     ?assertMatch([[?OP_TEXT, _, #{<<"s">> := _, <<"d">> := _}]], ShowOps),
     [[_Op, SlotAz, _Payload]] = ShowOps,
-    %% No op may be an ?OP_UPDATE -- that is the bug's signature.
-    ?assertEqual(
-        [], [Op || [Op | _] <- ShowOps, Op =:= ?OP_UPDATE]
-    ),
     %% Toggle true -> false: the child is removed via an empty ?OP_TEXT on the
     %% same slot, leaving the siblings in place.
     {ok, HideOps, []} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),

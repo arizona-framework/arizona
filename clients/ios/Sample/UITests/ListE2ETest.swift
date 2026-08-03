@@ -4,7 +4,7 @@ import XCTest
 /// view has no buttons, so the stream ops are driven via the `-uitest` debug
 /// toolbar (each button calls client.pushEvent with the same payloads the Android
 /// test sends), exercising OP_INSERT / OP_REMOVE / OP_MOVE / OP_ITEM_PATCH /
-/// OP_UPDATE over a real socket. XCUITest is out-of-process and can't call the
+/// OP_TEXT over a real socket. XCUITest is out-of-process and can't call the
 /// client directly, so the toolbar is the stand-in.
 final class ListE2ETest: XCTestCase {
     private var app: XCUIApplication!
@@ -37,7 +37,7 @@ final class ListE2ETest: XCTestCase {
         waitForText(app, "Updated")
         waitForNoText(app, "Nine")
 
-        // OP_UPDATE (full re-render via reset) -- an array-of-objects payload.
+        // OP_TEXT container full re-render (via reset) -- an array-of-objects payload.
         tapButton(app, "dbg-reset")
         waitForText(app, "A")
         waitForText(app, "B")

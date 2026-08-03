@@ -16,8 +16,8 @@ in `arizona.hrl`; the rest are operands consumed by the JS client. The
 op codes:
 
 ```
-?OP_TEXT, ?OP_SET_ATTR, ?OP_REM_ATTR, ?OP_UPDATE, ?OP_REMOVE_NODE,
-?OP_INSERT, ?OP_REMOVE, ?OP_ITEM_PATCH, ?OP_REPLACE, ?OP_MOVE
+?OP_TEXT, ?OP_SET_ATTR, ?OP_REM_ATTR, ?OP_REMOVE_NODE, ?OP_INSERT,
+?OP_REMOVE, ?OP_ITEM_PATCH, ?OP_REPLACE, ?OP_MOVE, ?OP_LIST_PATCH
 ```
 
 ## `?each` list vs. stream diffing
@@ -26,9 +26,10 @@ A `?each` over a **plain list** is unkeyed: its items render as bare HTML
 with no `az-key`, so there is no per-item DOM address to patch. Any change
 (item content or list length) therefore re-renders the whole list with a
 single `?OP_TEXT` patching the slot's `<!--az:X-->...<!--/az-->` marker
-content; an unchanged list emits nothing. (`?OP_TEXT`, not `?OP_UPDATE`: a
-plain-list each is marker-anchored in a content slot, so innerHTML on the
-fallback enclosing element would clobber the slot's static siblings.)
+content; an unchanged list emits nothing. (The marker-aware `?OP_TEXT` is
+what every container full render uses: a plain-list each is anchored in a
+content slot, so an innerHTML write on the fallback enclosing element would
+clobber the slot's static siblings.)
 
 Use an `arizona_stream` when you need **keyed, incremental** updates --
 per-item `?OP_ITEM_PATCH`/`?OP_INSERT`/`?OP_REMOVE`/`?OP_MOVE` and stable
@@ -468,8 +469,8 @@ diff_stream(
                 drained => arizona_stream:drain_mark(Source)
             },
             %% Container full render (the slot did not previously hold a stream,
-            %% so there is no order to diff against). Marker-aware `?OP_TEXT`,
-            %% never `?OP_UPDATE` -- see `make_op/3`'s stream `?EACH` clause.
+            %% so there is no order to diff against). Marker-aware `?OP_TEXT`
+            %% -- see `make_op/3`'s stream `?EACH` clause.
             HTML = arizona_render:zip_stream_fp(Tmpl, ItemSnaps, VKeys),
             {[[?OP_TEXT, Az, HTML]], NewSnap, Views1}
     end.
@@ -766,9 +767,9 @@ list_changed(_NewTail, _OldTail, Views) ->
 
 %% A plain-list `?each` is marker-anchored in a content slot (no wrapper element
 %% carries the slot az), so the full re-render patches the marker content via
-%% `?OP_TEXT` -- never `?OP_UPDATE` (innerHTML), which clobbers the slot's static
-%% siblings when resolveEl falls back to the enclosing element. Mirrors the
-%% `make_op/3` plain-list each clause and the nested-template content-slot fix.
+%% `?OP_TEXT`. An innerHTML-style whole-element write would clobber the slot's
+%% static siblings when resolveEl falls back to the enclosing element. Mirrors
+%% the `make_op/3` plain-list each clause and the nested-template content-slot fix.
 %% The fallback for a non-single-root (multi-root/fragment) item, a list bearing
 %% per-item child views, or a slot that did not previously hold a list.
 full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
@@ -1107,8 +1108,8 @@ make_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := 
 %% slot's `<!--az:X-->...<!--/az-->` comment markers, whatever the slot held
 %% before (a binary, the empty string, or another template). `?OP_TEXT`
 %% replaces only the marker content, leaving the slot's siblings -- and the
-%% enclosing element -- intact. `?OP_UPDATE` (innerHTML) would be wrong: when
-%% the slot's `Az` is the enclosing element's own `az` (a conditional
+%% enclosing element -- intact. A whole-element innerHTML write would be wrong:
+%% when the slot's `Az` is the enclosing element's own `az` (a conditional
 %% `?stateful` child rendered directly under the view root), it overwrites the
 %% whole element and drops every sibling. That is the empty(`~""`) ->
 %% descriptor transition the idiomatic
@@ -1119,12 +1120,13 @@ make_op(Az, #{s := _, d := _} = NewNested, _Old) ->
 %% `<!--az:X-->...<!--/az-->` comment markers, exactly like the nested-template
 %% case above (every dynamic-text child is marker-wrapped in SSR -- see
 %% arizona_html:text_slot_open/1). There is no wrapper element carrying
-%% `az="X"`, so `?OP_TEXT` (replace marker content) is correct and `?OP_UPDATE`
-%% (innerHTML) is wrong: when the each sits among static siblings, the client's
-%% resolveEl finds no element for the slot az and falls back to the enclosing
-%% element, where innerHTML wipes every sibling. The marker is present whether
-%% or not the each is the sole child, so `?OP_TEXT` is uniformly correct (the
-%% old sole-child each only "worked" with `?OP_UPDATE` by coincidence).
+%% `az="X"`, so `?OP_TEXT` (replace marker content) is correct and a
+%% whole-element innerHTML write is wrong: when the each sits among static
+%% siblings, the client's resolveEl finds no element for the slot az and falls
+%% back to the enclosing element, where innerHTML wipes every sibling. The
+%% marker is present whether or not the each is the sole child, so `?OP_TEXT`
+%% is uniformly correct (a sole-child each only "worked" with the old
+%% innerHTML op by coincidence).
 make_op(Az, #{t := ?EACH, items := Items, template := Tmpl}, _Old) when
     is_list(Items)
 ->
@@ -1133,9 +1135,9 @@ make_op(Az, #{t := ?EACH, items := Items, template := Tmpl}, _Old) when
 %% marker rule governs as the plain-list clause above. SSR anchors a stream each
 %% by the identical content-slot markers, and among static siblings the slot az
 %% is compound (`<Root>:N`) and carried by no element -- so the client resolves it
-%% through the marker to the ENCLOSING element, where `?OP_UPDATE`'s innerHTML
-%% takes the siblings with it (when the enclosing element is the view root, the
-%% whole view). `?OP_TEXT` replaces only the marker content and is uniformly
+%% through the marker to the ENCLOSING element, where a whole-element innerHTML
+%% write takes the siblings with it (when the enclosing element is the view root,
+%% the whole view). `?OP_TEXT` replaces only the marker content and is uniformly
 %% correct, sole-child or not. The INCREMENTAL stream ops (`?OP_INSERT`,
 %% `?OP_REMOVE`, `?OP_MOVE`, `?OP_ITEM_PATCH`) keep their own op codes: they carry
 %% the SAME container az as the target and name the item by key in a later field,
@@ -1184,8 +1186,9 @@ make_op(Az, New, _Old) ->
 %% here and handled by make_op/3's child-view clause (which requires `view_id` on both).
 %% A stream `?each` container whose rendered items, order, and item-template
 %% fingerprint are all unchanged needs no op: the container's HTML is exactly
-%% what the client already holds, so the wholesale `?OP_UPDATE` below would only
-%% innerHTML-replace an identical list -- destroying focus, scroll, uncontrolled
+%% what the client already holds, so the wholesale container `?OP_TEXT` the last
+%% clause below would emit (via `make_op/3`'s stream `?EACH` clause) would only
+%% re-materialize an identical list -- destroying focus, scroll, uncontrolled
 %% input state and every `?local` in the items for nothing.
 %%
 %% Reached when the two sides are compared snapshot-against-snapshot rather than

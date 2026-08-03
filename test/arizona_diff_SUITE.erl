@@ -300,9 +300,9 @@ diff_remove_node_op(Config) when is_list(Config) ->
     ?assertEqual([[?OP_REMOVE_NODE, <<"0">>]], Ops).
 
 %% A content slot whose value changes from a plain binary to a nested template
-%% patches the slot's marker content with ?OP_TEXT -- never ?OP_UPDATE
-%% (innerHTML), which would clobber the enclosing element when the slot's az is
-%% the element's own az. See diff_empty_to_template_uses_text_op for the
+%% patches the slot's marker content with ?OP_TEXT -- never a whole-element
+%% innerHTML write, which would clobber the enclosing element when the slot's az
+%% is the element's own az. See diff_empty_to_template_uses_text_op for the
 %% empty(~"") -> ?stateful descriptor case this protects.
 diff_replace_with_template_op(Config) when is_list(Config) ->
     OldSnap = #{
@@ -341,7 +341,7 @@ diff_replace_with_template_op(Config) when is_list(Config) ->
 %% nested template -- the shape `case ?get(flag) of true -> ?stateful(...);
 %% false -> ~"" end` produces -- must patch the slot's marker content via
 %% ?OP_TEXT, leaving its siblings (and the enclosing element) intact. The bug
-%% was emitting ?OP_UPDATE here, whose innerHTML write clobbered the whole
+%% was emitting a whole-element innerHTML write here, which clobbered the whole
 %% enclosing element when the slot's az equalled the element's own az (a
 %% conditional ?stateful child directly under the view root).
 diff_empty_to_template_uses_text_op(Config) when is_list(Config) ->
@@ -368,20 +368,20 @@ diff_empty_to_template_uses_text_op(Config) when is_list(Config) ->
         f => <<"X">>
     },
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
-    %% Exactly one op, an ?OP_TEXT on the slot -- not an ?OP_UPDATE on X-0
-    %% (which the client resolves to the <main> root and would innerHTML-wipe).
+    %% Exactly one op, an ?OP_TEXT on the slot -- not a whole-element write on
+    %% X-0 (which the client resolves to the <main> root and would innerHTML-wipe).
     %% The nested template is namespaced by the slot az, so its fingerprint
     %% carries the `X-0-` prefix; the op still targets the unchanged slot az X-0.
-    ?assertMatch([[?OP_TEXT, <<"X-0">>, #{<<"f">> := <<"X-0-child_fp">>}]], Ops),
-    ?assertNotMatch([[?OP_UPDATE, <<"X-0">>, _]], Ops).
+    ?assertMatch([[?OP_TEXT, <<"X-0">>, #{<<"f">> := <<"X-0-child_fp">>}]], Ops).
 
 %% Plain-list `?each` FALLBACK diffing: a non-single-root item template (the
 %% `each_list_diff/2` fixture below omits `single_root`, modelling a
 %% multi-root/fragment item) re-renders the whole list with a single OP_TEXT (the
 %% marker-aware container patch) -- never a per-item OP_ITEM_PATCH (there is no
-%% per-position DOM node to address). OP_TEXT (not OP_UPDATE) because a plain-list
-%% each is anchored by content-slot comment markers; see
-%% diff_each_among_siblings_uses_text_op. A *single-root* list instead patches
+%% per-position DOM node to address). The marker-aware OP_TEXT (not a
+%% whole-element write) because a plain-list each is anchored by content-slot
+%% comment markers; see diff_each_among_siblings_uses_text_op. A *single-root*
+%% list instead patches
 %% items positionally with OP_LIST_PATCH -- see the `_positional` cases and
 %% `each_list_diff_sr/2`. These cover every fallback branch of the diff:
 %%   diff_list_positional:  InnerOps =/= [] (head)  |  rest (tail)  |  neither
@@ -612,10 +612,11 @@ diff_map_no_change_no_ops(Config) when is_list(Config) ->
 %% comment markers (like every dynamic-text child) -- there is NO wrapper element
 %% carrying `az="X"`. So the container op must be the marker-aware ?OP_TEXT: the
 %% client's resolveEl can't find an element for the each's marker az and falls
-%% back to the *enclosing* element, where ?OP_UPDATE's innerHTML would wipe the
-%% static sibling content. The mixed-siblings shape is what breaks; a sole-child
-%% each only "works" with ?OP_UPDATE by coincidence (the fallback element is the
-%% right one). diff_each_among_siblings_to_empty_uses_text_op covers the reverse
+%% back to the *enclosing* element, where a whole-element innerHTML write would
+%% wipe the static sibling content. The mixed-siblings shape is what breaks; a
+%% sole-child each only "works" with such a write by coincidence (the fallback
+%% element is the right one). diff_each_among_siblings_to_empty_uses_text_op
+%% covers the reverse
 %% (non-empty -> []) toggle. Build the snapshot/template with sibling dynamics
 %% before the each so the each's az is a marker slot distinct from the parent.
 
@@ -666,13 +667,12 @@ each_among_siblings_diff(Old, New) ->
     {Ops, _Snap, _Views} = arizona_diff:diff(NewTmpl, OldSnap, #{}, #{rows => true}),
     Ops.
 
-%% `[]` -> non-empty: the each must patch its marker slot via ?OP_TEXT, never
-%% ?OP_UPDATE (which would innerHTML-wipe the static sibling .item divs). The
-%% unchanged sibling dynamics (strip:0/strip:1) must emit no ops.
+%% `[]` -> non-empty: the each must patch its marker slot via ?OP_TEXT, never a
+%% whole-element write (which would innerHTML-wipe the static sibling .item
+%% divs). The unchanged sibling dynamics (strip:0/strip:1) must emit no ops.
 diff_each_among_siblings_uses_text_op(Config) when is_list(Config) ->
     Ops = each_among_siblings_diff([], [#{name => <<"k">>}]),
     ?assertMatch([[?OP_TEXT, <<"strip:2">>, #{<<"t">> := ?EACH}]], Ops),
-    ?assertNotMatch([[?OP_UPDATE, <<"strip:2">>, _]], Ops),
     %% Siblings untouched: no op targets strip:0 or strip:1.
     ?assertEqual(
         [],
@@ -686,7 +686,6 @@ diff_each_among_siblings_uses_text_op(Config) when is_list(Config) ->
 diff_each_among_siblings_to_empty_uses_text_op(Config) when is_list(Config) ->
     Ops = each_among_siblings_diff([#{name => <<"k">>}], []),
     ?assertMatch([[?OP_TEXT, <<"strip:2">>, #{<<"t">> := ?EACH}]], Ops),
-    ?assertNotMatch([[?OP_UPDATE, <<"strip:2">>, _]], Ops),
     [[?OP_TEXT, <<"strip:2">>, #{<<"d">> := ItemDs}]] = Ops,
     ?assertEqual([], ItemDs).
 
@@ -699,10 +698,10 @@ diff_each_among_siblings_to_empty_uses_text_op(Config) when is_list(Config) ->
 %% COMPOUND az `<Root>:1` and no element carries it, so the client's element
 %% lookups both miss -- the compound base az is the view ROOT's own az, which a
 %% descendant-only `querySelector` cannot return -- and only the `<!--az:X-->`
-%% marker resolves, to the ROOT. An ?OP_UPDATE there innerHTML-wipes the header,
-%% the title slot's markers and the footer, and the view never recovers. The
-%% load-bearing assertions are that the op targets a marker SSR actually
-%% anchored, that NO element carries that az, and that the op is not ?OP_UPDATE.
+%% marker resolves, to the ROOT. A whole-element innerHTML write there wipes the
+%% header, the title slot's markers and the footer, and the view never recovers.
+%% The load-bearing assertions are that the op is the marker-aware ?OP_TEXT, that
+%% it targets a marker SSR actually anchored, and that NO element carries that az.
 stream_siblings_ssr_and_ops(Old, New) ->
     B = #{id => <<"siblings">>, title => <<"T">>},
     T0 = arizona_stream_siblings:render(B#{items => Old}),
@@ -724,13 +723,12 @@ diff_stream_among_siblings_uses_text_op(Config) when is_list(Config) ->
     ?assertMatch([[?OP_TEXT, _, #{<<"t">> := ?EACH}]], Ops),
     [[?OP_TEXT, Az, _]] = Ops,
     %% The slot is marker-anchored and element-less: the exact shape that makes
-    %% an ?OP_UPDATE resolve to (and wipe) the view root.
+    %% a whole-element write resolve to (and wipe) the view root.
     ?assertNotEqual(nomatch, binary:match(SSR, <<"<!--az:", Az/binary, "-->">>)),
     ?assertEqual(nomatch, binary:match(SSR, <<" az=\"", Az/binary, "\"">>)),
     %% The static siblings the wipe would have taken are really there.
     ?assertNotEqual(nomatch, binary:match(SSR, <<"class=\"header\"">>)),
     ?assertNotEqual(nomatch, binary:match(SSR, <<"class=\"footer\"">>)),
-    ?assertNotMatch([[?OP_UPDATE, _, _]], Ops),
     %% ...and the re-render actually carries both items.
     [[?OP_TEXT, _, #{<<"d">> := ItemDs}]] = Ops,
     ?assertEqual(2, length(ItemDs)).

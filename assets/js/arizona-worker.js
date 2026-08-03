@@ -29,7 +29,6 @@ import {
 
 /** Op codes -- must match server and main thread. */
 const OP_TEXT = 0;
-const OP_UPDATE = 3;
 const OP_INSERT = 5;
 const OP_ITEM_PATCH = 7;
 const OP_REPLACE = 8;
@@ -234,7 +233,6 @@ function resolveOps(ops) {
                 op[3] = isHtml;
                 break;
             }
-            case OP_UPDATE:
             case OP_REPLACE:
                 op[2] = resolveHtml(op[2]);
                 break;

@@ -682,8 +682,8 @@ present, `false` => absent.
 Caveats (by design):
 
 - **Wholesale re-render resets it.** A `?local` value survives normal per-slot diffs, but
-  an enclosing region re-rendered as a unit (`OP_UPDATE` innerHTML, `OP_REPLACE`, an `?each`
-  item swap, a conditional template switch) recreates the slot at its SSR initial.
+  an enclosing region re-rendered as a unit (an `OP_TEXT` replacing a whole slot, `OP_REPLACE`,
+  an `?each` item swap, a conditional template switch) recreates the slot at its SSR initial.
 - **Inside `?each`, items share the slot key.** `?local` keys are compile-time literals (you
   can't build `?local(<<"open_", Id/binary>>, ...)` -- that errors `local_key_not_literal`), so
   every item rendered from the same template carries the **same** key and `set`/`set_all`
@@ -1537,7 +1537,6 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | 0    | `OP_TEXT`        | `[target, value]`          | Replace marker content (text, nested tmpl, plain each) |
 | 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attribute                                          |
 | 2    | `OP_REM_ATTR`    | `[target, attr]`           | Remove attribute                                       |
-| 3    | `OP_UPDATE`      | `[target, html]`           | innerHTML replacement (no server emitter -- see below) |
 | 4    | `OP_REMOVE_NODE` | `[target]`                 | Remove element                                         |
 | 5    | `OP_INSERT`      | `[target, key, pos, html]` | Stream insert (pos=-1 -> append, otherwise index)      |
 | 6    | `OP_REMOVE`      | `[target, key]`            | Stream remove                                          |
@@ -1546,11 +1545,14 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | 9    | `OP_MOVE`        | `[target, key, afterKey]`  | Stream move (afterKey=null -> prepend)                 |
 | 10   | `OP_LIST_PATCH`  | `[target, subOps]`         | Single-root plain-list `?each` positional item patch   |
 
-**`OP_UPDATE` has no server-side emitter.** All four clients still implement it, but every
-container full render (plain-list and stream alike) is now the marker-aware `OP_TEXT`: the
-container's `az` is not reliably carried by a dedicated element, so `innerHTML` on the resolved
-element destroys the slot's static siblings -- and the whole view when that element is the view
-root.
+**Code 3 is unassigned.** It was `OP_UPDATE` (`[target, html]`, an `innerHTML` write on the
+resolved element), removed once every container full render moved to the marker-aware `OP_TEXT`
+-- a content slot's `az` is not reliably carried by an element, so `innerHTML` on whatever the
+client resolves destroys the slot's static siblings (the whole view when that element is the
+view root). Nothing emits it and no client claims it. It is free to reuse for a genuinely new
+op: codes 0..9 emit as a single byte (`arizona_socket:op_code_iodata/1`) and 10+ cost an extra
+one per op, so the cheap range is worth reclaiming -- but a reuse must land on the server and
+all four clients together, since a code means whatever both ends agree it means.
 
 A content-slot dynamic -- a value, a nested template, *or a plain-list `?each`* -- is anchored
 by `<!--az:X-->...<!--/az-->` comment markers in SSR (no wrapper element carries the slot `az`),
@@ -1613,17 +1615,19 @@ A dynamic *attribute* on a raw-text element
 stays fully diffable -- only
 the content slot is markerless. Limitation: the slot will not update after the initial render, and
 `?local` is unsupported inside a raw-text element (no marker to address); a live `?get` there
-silently freezes at its first value. Emitting `OP_UPDATE` for a marker-anchored slot is a bug: no
-element carries the slot `az`, so the client resolves the slot through its comment marker to the
-*enclosing* element, where innerHTML clobbers its siblings -- and when the enclosing element is
-the view root, the whole view. **No** content-slot `?each` container render uses `OP_UPDATE`:
-both the plain-list clause and the `order`-keyed **stream** clause of `arizona_diff`'s
-`make_op/3` emit the marker-aware `OP_TEXT`, as do `full_update/5` and `diff_stream/4`'s
-no-`order` (type-switch) clause. A stream's *incremental* ops keep their own op codes: they carry
+silently freezes at its first value. Addressing a marker-anchored slot with an op that writes the
+resolved element **whole** is a bug: no element carries the slot `az`, so the client resolves the
+slot through its comment marker to the *enclosing* element, where such a write clobbers its
+siblings -- and when the enclosing element is the view root, the whole view. That is why **every**
+content-slot `?each` container render is the marker-aware `OP_TEXT`: both the plain-list clause
+and the `order`-keyed **stream** clause of `arizona_diff`'s `make_op/3` emit it, as do
+`full_update/5` and `diff_stream/4`'s no-`order` (type-switch) clause. It is also why the
+innerHTML op (code 3) was removed outright rather than kept for the cases that happened to
+resolve correctly. A stream's *incremental* ops keep their own op codes: they carry
 the **same container az** as the target (the item is named by key in a later field) but mutate one
 keyed child instead of the container's whole content, so the full-render op code does not govern
 them -- their own limitation is placement, below. The client refuses
-`OP_UPDATE`/`OP_REPLACE`/`OP_REMOVE_NODE` on a marker-resolved target outright, so a stray one
+`OP_REPLACE`/`OP_REMOVE_NODE` on a marker-resolved target outright, so a stray one
 warns and skips instead of destroying a view.
 
 The **stream -> list** type switch is consistent with this: a binding that was an

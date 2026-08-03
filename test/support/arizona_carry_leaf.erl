@@ -16,7 +16,8 @@ mount(Props) ->
             notify => maps:get(notify, Props),
             count => 0,
             %% A stream, so a stale copy of THIS view shows up as the destructive
-            %% wholesale `?OP_UPDATE` rather than a merely redundant text op.
+            %% wholesale container re-render rather than a merely redundant
+            %% per-slot text op.
             items => arizona_stream:new(fun(#{id := Id}) -> Id end, [#{id => ~"a"}])
         },
         #{}

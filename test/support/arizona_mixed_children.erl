@@ -70,8 +70,9 @@ render(Bindings) ->
             %% Mixed siblings: two static-ish .item divs (dynamic text inside)
             %% sharing the content slot with a plain-list ?each. Toggling `rows`
             %% must patch only the each's marker span; the static .item siblings
-            %% must survive. Before the OP_TEXT fix, the each emitted OP_UPDATE
-            %% which innerHTML-wiped the strip's static siblings.
+            %% must survive. Before the OP_TEXT fix, the each emitted a
+            %% whole-element write which innerHTML-wiped the strip's static
+            %% siblings.
             {'div', [{class, ~"strip"}], [
                 {'div', [{class, ~"item static-a"}], [{span, [], [?get(a)]}]},
                 {'div', [{class, ~"item static-b"}], [{span, [], [?get(b)]}]},
