@@ -448,13 +448,16 @@ directly (re-wrapping its `d`-list into the per-item `fun`). A wrapper as a **li
 (`[?html(...)]`) is **not** unwrapped -- only a whole-body wrapper -- so it stays rejected like
 a wrapped descriptor.
 
-A per-item **component** (`{li, [], [?stateless(...)]}`) compiles and renders but currently
-**crashes on the first diff**: the list-each diff in `arizona_diff` (`diff_list_zip/4`) keys a
-list item by `to_bin` of its first dynamic, which fails on a nested template/descriptor. So a
-component as an `?each`
-item child is not usable yet (the exception is a `?stateful` child in a **stream** `?each` --
-it is its own self-diffing view process). Fixing it means keying list items by position
-instead of by their first dynamic's value (server plus the client's `az-key` lookup).
+A per-item **component** -- a descriptor **inside** the item element, `{li, [], [?stateless(...)]}`
+-- compiles, renders, and diffs. A `?stateless` child keeps the positional per-item path: an inner
+value change ships one `OP_LIST_PATCH` carrying an `OP_ITEM_PATCH` for the affected index, and an
+append ships an `OP_INSERT`. A `?stateful` child also renders and diffs, but it costs that path:
+`diff_each_items/6` patches positionally only when the render added **no** child view
+(`map_size(NewLocal1) =:= map_size(NewLocal0)`), because a child view must be re-mounted by a full
+re-render. A plain list bearing per-item `?stateful` children therefore falls back to the wholesale
+marker `OP_TEXT`, re-rendering every item on any change. When you want self-diffing children, use a
+**stream** `?each`: items are keyed by `az_key`, each `?stateful` item is its own live view process,
+and `merge_stream_child_views/4` carries the child ids incrementally across diffs.
 
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_os` / `arizona_effect`)
 

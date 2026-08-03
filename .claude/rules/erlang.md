@@ -323,11 +323,19 @@ does not govern them. Their own open limitation is placement: `?OP_INSERT`'s pos
 marker-only container the client refuses them (warn + skip) instead of misplacing the node.
 Making stream items marker-relative is tracked in [docs/architecture.md](../../docs/architecture.md).
 
-**Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
-`?each` item child compiles and renders at SSR but **crashes on the first diff** -- the
-per-item diff keys a list item by `to_bin` of its first dynamic, which fails on a nested
-template/descriptor. So a per-item component is not usable yet. The exception is a
-`?stateful` child in a **stream** `?each` (it is its own self-diffing view process).
+**Component as an `?each` item child.** A `?stateless` descriptor **inside** an item element
+(`{li, [], [?stateless(...)]}`) renders at SSR and diffs per-item like any other item content:
+the list stays on the positional path, so an inner value change ships one `?OP_LIST_PATCH`
+carrying an `?OP_ITEM_PATCH` for the affected index, and an append ships an `?OP_INSERT`.
+(A **bare** descriptor as the whole callback body is still a compile error -- see above.)
+
+A `?stateful` child in a plain-list `?each` also renders and diffs without crashing, but it
+costs the per-item path: `arizona_diff:diff_each_items/6` only patches positionally when the
+render added **no** child view (`map_size(NewLocal1) =:= map_size(NewLocal0)`), because a
+child view must be re-mounted by a full re-render. A list bearing per-item `?stateful`
+children therefore falls back to the wholesale marker `?OP_TEXT` -- every item re-renders on
+any change. Use a **stream** `?each` when you want self-diffing children: a stream keys items
+by `az_key`, and each `?stateful` item is its own live view process that diffs independently.
 
 ## Where to read bindings
 
