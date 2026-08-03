@@ -2,6 +2,11 @@
 -include_lib("stdlib/include/assert.hrl").
 -include("arizona.hrl").
 -dialyzer({nowarn_function, fingerprint_absent_when_no_f/1}).
+%% These two feed `zip_list_fp/2` / `zip_stream_fp/3` a template that violates
+%% `each_template()` on purpose -- that the call now has no success typing IS the
+%% assertion, so dialyzer's "will never return" is the expected reading.
+-dialyzer({nowarn_function, zip_list_fp_requires_fingerprint/1}).
+-dialyzer({nowarn_function, zip_stream_fp_requires_fingerprint/1}).
 
 -export([all/0, groups/0]).
 -export([
@@ -86,7 +91,9 @@
     zip_nested_element/1,
     zip_nested_sd/1,
     zip_static_only/1,
-    zip_text_slot/1
+    zip_text_slot/1,
+    zip_list_fp_requires_fingerprint/1,
+    zip_stream_fp_requires_fingerprint/1
 ]).
 
 all() ->
@@ -168,7 +175,9 @@ groups() ->
             fingerprint_propagated_in_render,
             fingerprint_propagated_in_render2,
             fingerprint_propagated_in_diff,
-            fingerprint_absent_when_no_f
+            fingerprint_absent_when_no_f,
+            zip_list_fp_requires_fingerprint,
+            zip_stream_fp_requires_fingerprint
         ]},
         {error_page, [parallel], [
             error_page_typical_crash,
@@ -1188,6 +1197,52 @@ fingerprint_absent_when_no_f(Config) when is_list(Config) ->
     },
     {_HTML, Snap} = arizona_render:render(Tmpl),
     ?assertNot(maps:is_key(f, Snap)).
+
+%% `zip_list_fp/2` and `zip_stream_fp/3` produce ONLY the fingerprinted wire map.
+%% Both used to carry a second clause that zipped an `f`-less template into a flat
+%% HTML BINARY, and that fallback was silently wrong rather than merely unused: all
+%% four callers hand the result straight to `[?OP_TEXT, Az, Payload]`, and the client
+%% picks text-vs-markup by payload type alone (`isHtml = typeof op[2] !== 'string'`).
+%% A binary is a string on the wire, so the whole list/stream would have been written
+%% into a text node and rendered as visibly escaped markup, with nothing raising on
+%% either side. `each_template()` declares `f` and `t` required, so a compiled
+%% template always carries them; a malformed one must now fail at the match.
+zip_list_fp_requires_fingerprint(Config) when is_list(Config) ->
+    Items = [[{<<"0">>, <<"A">>, #{}}], [{<<"0">>, <<"B">>, #{}}]],
+    Statics = [<<"<li>">>, <<"</li>">>],
+    Good = #{t => 0, s => Statics, d => fun(_) -> [] end, f => <<"item_fp">>},
+    ?assertEqual(
+        #{
+            <<"t">> => 0,
+            <<"f">> => <<"item_fp">>,
+            <<"s">> => Statics,
+            <<"d">> => [[<<"A">>], [<<"B">>]]
+        },
+        arizona_render:zip_list_fp(Good, Items)
+    ),
+    NoFp = #{t => 0, s => Statics, d => fun(_) -> [] end},
+    ?assertError(function_clause, arizona_render:zip_list_fp(NoFp, Items)),
+    NoT = #{s => Statics, d => fun(_) -> [] end, f => <<"item_fp">>},
+    ?assertError(function_clause, arizona_render:zip_list_fp(NoT, Items)).
+
+zip_stream_fp_requires_fingerprint(Config) when is_list(Config) ->
+    Items = #{1 => [{<<"0">>, <<"A">>, #{}}], 2 => [{<<"0">>, <<"B">>, #{}}]},
+    Order = [2, 1],
+    Statics = [<<"<li>">>, <<"</li>">>],
+    Good = #{t => 0, s => Statics, d => fun(_, _) -> [] end, f => <<"item_fp">>},
+    ?assertEqual(
+        #{
+            <<"t">> => 0,
+            <<"f">> => <<"item_fp">>,
+            <<"s">> => Statics,
+            <<"d">> => [[<<"B">>], [<<"A">>]]
+        },
+        arizona_render:zip_stream_fp(Good, Items, Order)
+    ),
+    NoFp = #{t => 0, s => Statics, d => fun(_, _) -> [] end},
+    ?assertError(function_clause, arizona_render:zip_stream_fp(NoFp, Items, Order)),
+    NoT = #{s => Statics, d => fun(_, _) -> [] end, f => <<"item_fp">>},
+    ?assertError(function_clause, arizona_render:zip_stream_fp(NoT, Items, Order)).
 
 %% =============================================================================
 %% 8. Error page + render_ssr_one tests

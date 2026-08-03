@@ -307,11 +307,22 @@ zip_or_fp(#{s := S, d := D} = Snap) ->
     flat_zip(backend(Snap), S, [V || {_Az, V} <:- D]).
 
 -doc """
-Renders a list of item snapshots against a template, producing either a
-fingerprinted wire payload (if the template has `f`) or a flat HTML binary.
+Renders a list of item snapshots against a template as a fingerprinted wire
+payload -- a `~"t"`/`~"f"`/`~"s"`/`~"d"` map, `~"d"` being one dynamics list
+per item.
+
+A `t:arizona_template:each_template/0` declares `f` and `t` required and the
+parse transform is its only producer, so both are always present. There is
+deliberately **no** binary fallback for a template missing them: the four
+callers in `arizona_diff` put the result straight into `[?OP_TEXT, Az, Payload]`
+and the client decides text-vs-markup purely by payload type (`isHtml =
+typeof op[2] !== 'string'`). A map is an object and gets parsed as HTML; a
+binary is a *string* on the wire and would be written into a TEXT NODE, so the
+whole list would show up as visibly escaped markup with nothing raising
+anywhere. A malformed template fails loudly at the match instead.
 """.
--spec zip_list_fp(Template, Items) -> map() | binary() when
-    Template :: map(),
+-spec zip_list_fp(Template, Items) -> map() when
+    Template :: arizona_template:each_template(),
     Items :: [[{arizona_template:az(), term(), map()}]].
 zip_list_fp(#{f := F, s := S, t := T} = Tmpl, ItemsList) ->
     Backend = backend(Tmpl),
@@ -323,18 +334,15 @@ zip_list_fp(#{f := F, s := S, t := T} = Tmpl, ItemsList) ->
             [render_fp_val(Backend, V) || {_Az, V, _Deps} <:- D]
          || D <- ItemsList
         ]
-    };
-zip_list_fp(#{s := S} = Tmpl, ItemsList) ->
-    Backend = backend(Tmpl),
-    iolist_to_binary([zip_stream_item(Backend, S, D) || D <- ItemsList]).
+    }.
 
 -doc """
 Renders a stream's visible items (looked up from `Items` by `Order` keys)
-against a template, with the same fingerprint-vs-flat-HTML branching as
-`zip_list_fp/2`.
+against a template, producing the same fingerprinted wire payload as
+`zip_list_fp/2` -- and, for the same reason, only that shape.
 """.
--spec zip_stream_fp(Template, Items, Order) -> map() | binary() when
-    Template :: map(),
+-spec zip_stream_fp(Template, Items, Order) -> map() when
+    Template :: arizona_template:each_template(),
     Items :: #{term() => [{arizona_template:az(), term(), map()}]},
     Order :: [term()].
 zip_stream_fp(#{f := F, s := S, t := T} = Tmpl, Items, Order) ->
@@ -350,10 +358,7 @@ zip_stream_fp(#{f := F, s := S, t := T} = Tmpl, Items, Order) ->
             ]
          || K <- Order
         ]
-    };
-zip_stream_fp(#{s := S} = Tmpl, Items, Order) ->
-    Backend = backend(Tmpl),
-    iolist_to_binary([zip_stream_item(Backend, S, maps:get(K, Items)) || K <- Order]).
+    }.
 
 -doc """
 Builds the wire-format fingerprint payload for a snapshot.
@@ -582,6 +587,13 @@ render_fp_val(Backend, #{t := ?EACH, items := Items, template := #{f := F, t := 
          || D <- Items
         ]
     };
+%% No-`f` fallbacks are KEPT here, unlike the ones deleted from `zip_list_fp/2` and
+%% `zip_stream_fp/3`. Two differences: these return a LIST, which is an array on the
+%% wire, so the client parses it as HTML (the zip ones returned a binary -- a string --
+%% which the client wrote into a text node, rendering markup as visible escaped text);
+%% and `zip_*_fp` is typed over `each_template()`, where `f` is required and its absence
+%% is a contract violation, whereas `fingerprint_payload/1` walks arbitrary snapshot
+%% values. Do not "finish the job" by deleting these to match.
 render_fp_val(Backend, #{t := ?EACH, items := Items, template := #{s := S}}) when
     is_list(Items)
 ->
