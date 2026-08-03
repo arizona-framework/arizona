@@ -2068,7 +2068,7 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             false -> {none, State1}
         end,
     TagBin = Backend:name(Tag),
-    State3 = buf_append(State2, Backend:element_open(TagBin)),
+    State3 = buf_append(State2, emit_backend(fun() -> Backend:element_open(TagBin) end, Line)),
     State4 =
         case ElemAz of
             none ->
@@ -2107,7 +2107,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = extract_binary_value(Bin),
-    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
@@ -2117,7 +2117,7 @@ compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, ElemLine) 
 ->
     Backend = State0#state.backend,
     NameBin = extract_attr_name(Backend, NameAST),
-    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
@@ -2126,14 +2126,14 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     case is_static_binary(ValueAST) of
         true ->
             ValBin = extract_binary_value(ValueAST),
-            buf_append(State0, emit_attr(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
+            buf_append(State0, emit_backend(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
         false ->
             compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = Backend:name(Name),
-    buf_append(State0, emit_attr(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
         try
@@ -2143,12 +2143,14 @@ compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
         end,
     parse_error(invalid_attribute, AttrLine).
 
-%% Run a backend attribute-emitting callback, turning a backend's attribute
-%% rejection -- `error({arizona_render_reject, Message})` -- into a line-accurate
-%% parse error carrying the backend's message. Lets a render backend cleanly
-%% refuse attributes it cannot express (e.g. the terminal target rejecting an
-%% unknown style atom) instead of silently dropping them.
-emit_attr(Fun, Line) ->
+%% Run a backend byte-emitting callback, turning a backend's rejection --
+%% `error({arizona_render_reject, Message})` -- into a line-accurate parse error
+%% carrying the backend's message. Lets a render backend cleanly refuse what it
+%% cannot express (the terminal target rejecting an unknown style atom, or an
+%% element outside its vocabulary) instead of silently dropping or mis-rendering
+%% it. Wraps element emission as well as attributes, so a backend can police its
+%% tag vocabulary the same way it polices attribute names.
+emit_backend(Fun, Line) ->
     try
         Fun()
     catch
@@ -2174,11 +2176,13 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
     ValLine = line(ValueAST),
     case try_fold_arizona_js(ValueAST) of
         {ok, Cmd} ->
-            buf_append(State0, emit_attr(fun() -> Backend:attr_command(NameBin, Cmd) end, ValLine));
+            buf_append(
+                State0, emit_backend(fun() -> Backend:attr_command(NameBin, Cmd) end, ValLine)
+            );
         error when State0#state.nodiff ->
             Module = State0#state.module,
             State1 = buf_append(
-                State0, emit_attr(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
+                State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
             ),
             DynAST = make_nodiff_attr_dynamic_ast(
                 NameBin, ValueAST, Module, line(ValueAST)
@@ -2187,7 +2191,7 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
         error ->
             Module = State0#state.module,
             State1 = buf_append(
-                State0, emit_attr(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
+                State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
             ),
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(

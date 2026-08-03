@@ -73,6 +73,8 @@
     terminal_fg_attr/1,
     terminal_unknown_style_rejected/1,
     terminal_unknown_attr_rejected/1,
+    terminal_unknown_tag_rejected/1,
+    terminal_known_tags_accepted/1,
     terminal_event_command_rejected/1,
     terminal_dynamic_attr_rejected/1,
     terminal_each_renders/1,
@@ -787,6 +789,8 @@ groups() ->
             terminal_fg_attr,
             terminal_unknown_style_rejected,
             terminal_unknown_attr_rejected,
+            terminal_unknown_tag_rejected,
+            terminal_known_tags_accepted,
             terminal_event_command_rejected,
             terminal_dynamic_attr_rejected,
             terminal_each_renders
@@ -6621,6 +6625,54 @@ terminal_unknown_attr_rejected(Config) when is_list(Config) ->
             (_) -> false
         end
     ).
+
+%% The terminal backend rejects an unknown attribute name loudly but used to accept
+%% ANY tag as a transparent container, so a typo'd tag silently lost its meaning:
+%% `{'BR', [], []}` emitted a style reset instead of a newline, and `{'Line', ...}`
+%% dropped the newline the author asked for. The vocabulary is closed -- reject an
+%% unknown element the same way an unknown attribute is rejected.
+terminal_unknown_tag_rejected(Config) when is_list(Config) ->
+    Bad = [
+        {"pt_term_bad_tag", "{'div', [], [arizona_template:get(x, Bindings)]}"},
+        %% The exact silent-typo shapes: a terminal tag in the wrong case.
+        {"pt_term_upper_br", "{'BR', [], []}"},
+        {"pt_term_upper_line", "{'Line', [], [arizona_template:get(x, Bindings)]}"}
+    ],
+    lists:foreach(
+        fun({Mod, Elem}) ->
+            assert_parse_error(
+                lists:flatten([
+                    "-module(",
+                    Mod,
+                    "). -export([render/1]). render(Bindings) -> ",
+                    "arizona_template:terminal({col, [], [",
+                    Elem,
+                    "]}). "
+                ]),
+                fun
+                    ({render_reject, _}) -> true;
+                    (_) -> false
+                end
+            )
+        end,
+        Bad
+    ).
+
+%% Control: every documented tag still compiles and keeps its emission -- `line`
+%% resets and breaks, `br` breaks, the rest are transparent containers.
+terminal_known_tags_accepted(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_term_tags_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal({col, [], ["
+        "        {row, [], [{text, [], [<<\"a\">>]}, {span, [], [<<\"b\">>]}]}, "
+        "        {line, [], [<<\"c\">>]}, "
+        "        {br, [], []}"
+        "    ]}). "
+    ),
+    {Output, _Snap} = arizona_render:render(Mod:render(#{})),
+    ?assertEqual(~"a\e[0mb\e[0m\e[0mc\e[0m\n\n\e[0m", iolist_to_binary(Output)).
 
 terminal_event_command_rejected(Config) when is_list(Config) ->
     assert_parse_error(

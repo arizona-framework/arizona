@@ -139,7 +139,13 @@ variants. For anything the atoms don't cover, use a valued attribute: `{sgr, Esc
 index). Styles **do not inherit** across containers (every element resets on close),
 so put the style on the `line`/`text` that needs it. An unknown style atom, an
 unknown valued attribute, a dynamic attribute value, or an event-command attribute
-is **rejected at compile time**, not silently dropped.
+is **rejected at compile time**, not silently dropped. So is an unknown **element**:
+the tag table above is the whole vocabulary, so a tag outside it is a typo rather than
+an extension point, and accepting it as a transparent container swallowed the author's
+intent silently (`{'BR', [], []}` emitted a style reset instead of a newline). Terminal
+tag names are **case-sensitive** -- the vocabulary is Arizona's own, not HTML's, so
+`Line` is not `line`. (This is the opposite of the `?html` target, whose tag
+*classification* folds case because the browser's parser does.)
 
 ```erlang
 render(Bindings) ->
