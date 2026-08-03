@@ -54,6 +54,8 @@
     stale_beam_detected/1,
     fresh_beam_not_stale/1,
     beam_facts_cached_by_mtime/1,
+    beam_cache_owned_by_supervisor/1,
+    beam_cache_survives_transient_caller/1,
     candidate_modules_excludes_otp/1,
     check_reports_broken_edge/1,
     check_clean_reports_nothing/1,
@@ -101,6 +103,8 @@ groups() ->
             stale_beam_detected,
             fresh_beam_not_stale,
             beam_facts_cached_by_mtime,
+            beam_cache_owned_by_supervisor,
+            beam_cache_survives_transient_caller,
             candidate_modules_excludes_otp,
             check_reports_broken_edge,
             check_clean_reports_nothing,
@@ -124,11 +128,15 @@ init_per_group(integration, Config) ->
 init_per_group(compile, Config) ->
     Config;
 init_per_group(consistency, Config) ->
+    %% The beam-facts cache table is created and owned by `arizona_sup`, so the
+    %% consistency checks run against a started app exactly as they do in dev.
+    {ok, _} = application:ensure_all_started(arizona),
     Config.
 
 end_per_group(compile, _Config) ->
     ok;
 end_per_group(consistency, _Config) ->
+    _ = application:stop(arizona),
     ok;
 end_per_group(_Group, _Config) ->
     ensure_pg_stopped(),
@@ -449,6 +457,40 @@ beam_facts_cached_by_mtime(Config) ->
         [{Mod, LoadedVsn, DiskVsn}] when LoadedVsn =/= DiskVsn,
         arizona_reloader_consistency:stale_modules([Mod])
     ).
+
+%% The cache table has a stable owner: `arizona_sup` creates it at boot, so it
+%% spans the node's lifetime rather than being created by (and dying with)
+%% whichever process happened to run the first check.
+beam_cache_owned_by_supervisor(Config) when is_list(Config) ->
+    Cache = ets:whereis(arizona_reloader_beam_cache),
+    ?assertNotEqual(undefined, Cache),
+    ?assertEqual(erlang:whereis(arizona_sup), ets:info(Cache, owner)).
+
+%% The dev MCP tools call the checks from a per-dispatch `spawn_link`ed worker
+%% that dies immediately after answering. The cache used to be created BY that
+%% worker and die with it, so the documented "one stat per loaded module" was
+%% false for every MCP caller (each call re-read every beam) and the next caller
+%% raced a half-dead table. Rows written from a transient caller must outlive it.
+beam_cache_survives_transient_caller(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_cc_transient_a,
+    {Mod, _Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+    Cache = ets:whereis(arizona_reloader_beam_cache),
+    true = ets:delete(Cache, Mod),
+    ok = run_in_short_lived_process(fun() ->
+        [] = arizona_reloader_consistency:stale_modules([Mod])
+    end),
+    ?assertEqual(Cache, ets:whereis(arizona_reloader_beam_cache)),
+    ?assertMatch([{Mod, _Path, _Mtime, _Facts}], ets:lookup(Cache, Mod)).
+
+%% Runs `Fun` in a process that exits as soon as it returns, and waits for the
+%% exit -- the MCP dispatch worker's lifetime.
+run_in_short_lived_process(Fun) ->
+    {Pid, Ref} = erlang:spawn_monitor(Fun),
+    receive
+        {'DOWN', Ref, process, Pid, normal} -> ok
+    after 5000 -> ct:fail(worker_did_not_finish)
+    end.
 
 %% The candidate set is application code only: it includes a loaded module with a
 %% readable non-OTP beam and excludes OTP (a stdlib module).
