@@ -8,9 +8,8 @@ server-initiated messages); it rides the same roadrunner listener as the rest of
 
 Two shapes fall out of the same engine:
 
-- A **dev tool**, in the spirit of [Tidewave](https://github.com/tidewave-ai/tidewave_phoenix):
-  a coding agent introspects your *running* dev app (its routes, its docs) and runs code against
-  it. Localhost, single developer, trusted.
+- A **dev tool**: a coding agent introspects your *running* dev app (its routes, its docs) and
+  runs code against it. Localhost, single developer, trusted.
 - A **user-facing server**: your app exposes its features as tools to end-users' agents at
   runtime. Untrusted and concurrent, so the session, auth, and resource-limit features earn their
   keep.
