@@ -23,7 +23,9 @@ them directly errors with `parse_transform_not_applied`.
 
 `inner_content/1` is the only function that does real runtime work
 not delegated to `arizona_template`. It extracts the `inner_content`
-binding, used by stateless layouts to render the wrapped page.
+binding, used by stateless layouts to render the wrapped page. The
+value is an opaque nested template for a content slot -- see the
+function's own docs.
 """.
 
 %% --------------------------------------------------------------------
@@ -155,10 +157,23 @@ with(Keys, Bindings) ->
     arizona_template:with(Keys, Bindings).
 
 -doc """
-Returns the `inner_content` binding from a layout's bindings map.
+Returns the `inner_content` binding from a layout's bindings map -- the rendered
+page this layout wraps. Used by stateless layout modules, normally through the
+`?inner_content` macro, to place the wrapped page content.
 
-Used by stateless layout modules to render the wrapped page content.
-Errors with `{badkey, inner_content}` if not present.
+**Opaque, and for a content slot only.** The value is a nested template
+(`#{s := [Page], d := []}`) -- not iodata, not a binary. That is what lets the
+layout's content slot splice the page verbatim instead of copying and
+UTF-8-re-decoding it once per layout layer. So do not inspect or measure it
+(`iolist_size(az:inner_content(Bindings))` raises `badarg`), and do not put
+`?inner_content` in an **attribute** value: like any other template value in
+attribute position it raises `bad_template_value`, here carrying the whole page
+in the error term. Neither is a supported use -- a rendered page inside an
+attribute has no meaning -- so the value stays opaque rather than paying that
+per-layer copy to make them degrade quietly.
+
+Errors with `{badkey, inner_content}` when the bindings carry no page, i.e. when
+the module was rendered as something other than a layout.
 """.
 -spec inner_content(Bindings) -> term() when
     Bindings :: map().
