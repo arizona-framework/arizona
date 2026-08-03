@@ -1,0 +1,111 @@
+---
+# Reference Tauri shell CI (clients/tauri).
+#
+# The shell is the reference implementation of the Arizona native-shell (OS)
+# capability contract, and it carries real `#[test]` functions asserting that
+# contract -- that every advertised capability appears in the page's init script,
+# and that `window_maximize` maximizes rather than toggles. Nothing else in CI
+# compiles Rust, so without this job those tests never run and the shell can drift
+# from `arizona_os` silently.
+#
+# This is `make test-tauri`: it compiles the shell and runs its unit tests. No
+# display is needed. The full UI flow is still run manually (`make dev-tauri`
+# against a running `make start`); bundling the app (`make build-tauri`) is not
+# part of CI either -- it needs app icons and produces artifacts nothing consumes.
+name: Tauri shell
+
+# Path-gated on purpose. Compiling the shell pulls in the whole gtk/webkit Rust
+# tree, so running it on every PR (a docs-only one included) would turn an
+# explicitly opt-in component into de-facto per-PR CI. `merge_group` is
+# deliberately absent: GitHub does not support `paths` on merge-queue events, so
+# including it would compile the tree on every queue entry and undo this gate --
+# the PR-level run is the check, exactly as for any other path-filtered workflow.
+# `branches: "**"` because a branch filter glob's `*` does not match `/`.
+"on":
+  push:
+    branches:
+      - main
+    # Duplicated below rather than shared via a YAML anchor -- GitHub Actions
+    # does not expand anchors/aliases in workflow files. Keep the two in sync.
+    paths:
+      - "clients/tauri/**"
+      - ".github/workflows/tauri-shell.yml"
+      - ".tool-versions"
+      - "Makefile"
+  pull_request:
+    branches:
+      - "**"
+    paths:
+      - "clients/tauri/**"
+      - ".github/workflows/tauri-shell.yml"
+      - ".tool-versions"
+      - "Makefile"
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # NOT "Test" -- a status-check context is the job NAME, and erlang.yml already
+    # supplies a required `Test` context. Sharing the name from a path-filtered
+    # workflow would make that context appear and disappear per PR.
+    name: Tauri Shell
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Single source of truth: the Rust toolchain comes from .tool-versions
+      # (which already pinned `rust`, with nothing installing it until now), the
+      # same file setup-beam/setup-node read for OTP/Node. Scoped to rust so the
+      # other pins in that file are not built here.
+      - name: Set up Rust from .tool-versions
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        with:
+          install_args: rust
+          cache: true
+
+      # Tauri v2's Linux prerequisites. `cargo test` only compiles the crate (it
+      # does not bundle), but the `tauri` crate itself links against the system
+      # webview, so these are needed to compile at all.
+      # See https://v2.tauri.app/start/prerequisites/
+      - name: Install the Linux webview dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      # The dependency tree is large (tauri pulls in the whole gtk/webkit stack),
+      # so cache the registry and the build directory. Keyed on Cargo.toml since
+      # no lockfile is committed for this shell.
+      - name: Cache cargo registry and target
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/tauri/src-tauri/target
+          key: >-
+            tauri-cargo-${{ runner.os }}-${{ hashFiles(
+              'clients/tauri/src-tauri/Cargo.toml',
+              '.tool-versions') }}
+          restore-keys: |
+            tauri-cargo-${{ runner.os }}-
+
+      - name: Run the Tauri shell tests
+        run: make test-tauri

@@ -7,13 +7,53 @@
 # are checked out together. Adjust OTP/Node versions and API level for your setup.
 name: android-e2e
 
-on:
+# Gated with `paths-ignore` (a denylist), NOT the `paths` allowlist that gates
+# tauri-shell.yml. The Tauri tests assert only the internal consistency of the
+# shell's own Rust constants, so its dependency surface really is one directory.
+# This job is the opposite: the emulator drives the LIVE server's `/native/*`
+# routes over a real WebSocket, and `scripts/start_test_server.sh` builds that
+# server from `src/`, `test/support/` (the native fixtures and the route table)
+# and the Vite bundle -- so nearly the whole repo is a genuine input. An
+# allowlist there fails unsafe (a new dependency directory silently loses
+# coverage); a denylist fails safe (an unlisted new directory still triggers).
+# So list only what provably cannot affect the run.
+#
+# `merge_group` is deliberately absent: GitHub does not support path filtering on
+# merge-queue events, so keeping it would boot an emulator on every queue entry
+# -- including docs-only merges -- and undo this gate at exactly the point where
+# most merges land. The PR-level run is the check, as for any path-filtered
+# workflow. Re-add it if cross-PR native regressions ever show up in practice.
+#
+# `branches: "**"` is a deliberate NET COST INCREASE, not a saving -- be clear
+# about which way it cuts. A branch filter glob's `*` does not match `/`, so the
+# previous `[main]` filter gave a PR stacked on a `feat/...` base ZERO mobile CI.
+# Widening closes that hole, but it also means stacked PRs now boot an emulator
+# where they previously ran nothing at all, while `paths-ignore` only subtracts
+# docs-only runs. Accepted because a native wire-protocol regression caught on
+# the stacked PR is far cheaper than one found after several branches have
+# merged. Cheaper than the ios-e2e counterpart (ubuntu, not macOS minutes), so
+# if one of the two has to be narrowed, narrow that one first.
+"on":
   push:
     branches:
       - main
+    # Duplicated below rather than shared via a YAML anchor -- GitHub Actions
+    # does not expand anchors/aliases in workflow files. Keep the two in sync.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
+      - "clients/ios/**"
+      - "clients/tauri/**"
   pull_request:
     branches:
-      - main
+      - "**"
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
+      - "clients/ios/**"
+      - "clients/tauri/**"
   workflow_dispatch: {}
 
 concurrency:
@@ -55,6 +95,15 @@ jobs:
               'clients/android/gradle.properties') }}
           restore-keys: |
             gradle-${{ runner.os }}-
+
+      # The other half of `make test-android`. These are the wire-protocol logic
+      # tests (Backoff/Tree/Interleaver) -- pure JVM, no emulator and no server,
+      # so run them here rather than inside the emulator step: they fail fast,
+      # they are attributed to logic rather than to a flaky device, and they do
+      # not burn emulator minutes.
+      - name: Run the Android library unit tests
+        working-directory: clients/android
+        run: gradle :arizona:testDebugUnitTest
 
       - name: Set up Erlang/OTP + rebar3
         uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24

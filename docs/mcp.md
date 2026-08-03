@@ -8,9 +8,8 @@ server-initiated messages); it rides the same roadrunner listener as the rest of
 
 Two shapes fall out of the same engine:
 
-- A **dev tool**, in the spirit of [Tidewave](https://github.com/tidewave-ai/tidewave_phoenix):
-  a coding agent introspects your *running* dev app (its routes, its docs) and runs code against
-  it. Localhost, single developer, trusted.
+- A **dev tool**: a coding agent introspects your *running* dev app (its routes, its docs) and
+  runs code against it. Localhost, single developer, trusted.
 - A **user-facing server**: your app exposes its features as tools to end-users' agents at
   runtime. Untrusted and concurrent, so the session, auth, and resource-limit features earn their
   keep.
@@ -53,8 +52,19 @@ tools(_State) ->
     ].
 
 handle_tool(~"list_routes", _Args, _Ctx, State) ->
-    Lines = [io_lib:format("~p ~ts", [Type, Path]) || {Type, Path, _, _} <- my_app:routes()],
+    Lines = [format_route(R) || R <- my_app:routes()],
     {reply, iolist_to_binary(lists:join($\n, Lines)), State}.
+
+%% Route tuples are not all one shape: `{live|post|..., Path, Handler, Opts}` is a
+%% 4-tuple, `{ws|asset|reload, Path, Opts}` a 3-tuple, `{match, Spec, Path, Handler,
+%% Opts}` a 5-tuple. Destructuring a single shape in the generator head would
+%% silently drop every other route, so match per clause and keep a catch-all.
+format_route({Type, Path, Handler, _Opts}) when is_atom(Handler) ->
+    io_lib:format("~p ~ts -> ~p", [Type, Path, Handler]);
+format_route({Type, Path, _}) ->
+    io_lib:format("~p ~ts", [Type, Path]);
+format_route(Other) ->
+    io_lib:format("~p", [Other]).
 ```
 
 `handle_tool/4` returns `{reply, Result, State}` (a binary, or a map with `content` /
@@ -93,9 +103,16 @@ has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mc
 - `describe_component` -- a component's kind (stateful/stateless), its exports, and its moduledoc.
 - `get_docs` -- a module's or function's documentation via `code:get_doc/1` (EEP-48).
 - `get_source_location` -- where a module (or function) is defined.
-- `reloader_status` -- the dev reloader's current compile error via `arizona_reloader:get_error/0`.
+- `reloader_status` -- the dev reloader's current compile error (`arizona_reloader:get_error/0`)
+  **plus loaded-vs-disk drift**: the modules whose loaded code differs from their beam on disk. A
+  node serving stale code otherwise reads "ok", so the drift list is the useful half.
 - `app_info` -- `application:get_key/2`, `erlang:system_info/1`.
 - `render_component` -- render a view/component module to HTML with given bindings.
+- `reload` -- **force a compile+reload sync now**: recompile the project (via `rebar_agent` under
+  `rebar3 shell`) and reload every module whose beam on disk differs from the loaded code. This is
+  the action to take when `reloader_status` reports drift. It **swaps running code** in the live
+  node, so it sits behind the same localhost-only gate as `eval` (see below), not the read-only
+  introspection tools.
 - `eval` -- run Erlang in the live node (see below).
 
 ## `eval`: powerful, and a footgun

@@ -27,12 +27,18 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make fmt` | Format all (`fmt-erl` `fmt-js`) |
 | `make check` | All checks incl. dialyzer (`check-erl` `check-js` `check-md` `check-yaml` `check-actions`) |
 | `make check-fast` | Fast checks -- no dialyzer (`check-fmt` `check-js` `check-md`) |
+| `make check-dirty` | Fail if the build left tracked files modified (used by `ci`) |
+| `make check-hank` | Dead-code check (`rebar3 hank`); fails on "no longer needed" |
+| `make check-xref` | Cross-reference check (`rebar3 xref`) |
 | `make test` | All tests -- no coverage (`test-erl` `test-js` `test-e2e`) |
 | `make test-erl` | Common Test + EUnit |
 | `make test-ct` | Common Test only |
 | `make test-eunit` | EUnit only (inline private fn tests) |
 | `make test-js` | JS unit tests (Vitest) |
 | `make test-e2e` | Playwright E2E tests (incl. the `native` JSON-wire project) |
+| `make test-e2e-parallel` | Playwright `parallel` project only |
+| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`) |
+| `make test-e2e-native` | Playwright `native` project only (`?native` JSON wire, no browser) |
 | `make test-android` | Android client e2e (opt-in; needs Android SDK + emulator; **not** in `ci`) |
 | `make test-ios` | iOS client tests (opt-in; `swift test` anywhere + Simulator e2e on macOS; **not** in `ci`) |
 | `make build-tauri` | Build the reference Tauri desktop shell (opt-in; needs Rust + webview deps; **not** in `ci`) |
@@ -42,6 +48,9 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make cover-erl` | Erlang coverage (min 80% of the project total, not per module) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
 | `make doc-erl` | Erlang docs (ex_doc) |
+| `make bench` | Performance bench (`scripts/bench.escript`, `ARGS=...`); deliberately **not** in `ci` -- shared runners are too noisy |
+| `make prof` | eprof/fprof profile (`scripts/profile.escript`, `ARGS=...`); also **not** in `ci` |
+| `make prof-at REF=...` | Profile any commit-ish in a cached `git worktree`, for A/B comparisons |
 | `make setup-e2e` | Install E2E deps |
 | `make clean` | Remove build artifacts |
 
@@ -96,7 +105,7 @@ Response effects apply whenever the body parses **even on a `4xx`** (so the cont
 
 ### SPA navigation -- `navigate` (replace) vs `patch` (in-place)
 
-Two SPA navigation modes, chosen per-link by the caller. **`navigate`** (`az_navigate` attribute / `arizona_js:navigate/1,2`) *replaces* the root view: the live process unmounts the old root, mounts the new handler, and ships one `OP_REPLACE` of the whole view element -- a fresh page. **`patch`** (`az_patch` / `arizona_js:patch/1,2`) *keeps* the root view: the live process delivers the new route's params to the current root's `handle_update/3` and re-renders through the diff, shipping only the changed slots. The process, view id, child views, and DOM (live chrome, scroll position, open menus) all survive. `arizona_socket` decides per frame -- it tracks the current root `handler` and applies a patch in place (`arizona_live:patch/2`) only when the patched path resolves to the **same** handler; a patch to a **different** handler can't keep the view, so it degrades to a full navigate/replace.
+Two SPA navigation modes, chosen per-link by the caller. **`navigate`** (`az_navigate` attribute / `arizona_js:navigate/1,2`) *replaces* the root view: the live process **cancels every pending timer first** (erasing the whole `$arizona_timers` registry and draining queued view messages), **then unmounts the old page -- embedded child views first, then the root**, the same removal order a diff removal and `terminate/2` use, then mounts the new handler and ships one `OP_REPLACE` of the whole view element -- a fresh page. The cancel-before-unmount order means no timer armed during the old page's normal lifetime can fire into the new one; it also means a `?send_after` armed **inside** `unmount/1` is registered after the sweep, survives, and crashes the live process with `{unknown_view, OldViewId, Msg}` when it fires -- don't arm timers in `unmount/1`. The previous root's final bindings are carried forward as the floor for the new mount's input -- minus `arizona_eval:restricted_keys/0`, which are route-bound and would force the new route to pretend it is the old one -- with `InitBindings` (route static config + middleware enrichments) overriding on key overlap; child state in `views` is wiped. **`patch`** (`az_patch` / `arizona_js:patch/1,2`) *keeps* the root view: the live process delivers the new route's params to the current root's `handle_update/3` and re-renders through the diff, shipping only the changed slots. The process, view id, child views, and DOM (live chrome, scroll position, open menus) all survive. `arizona_socket` decides per frame -- it tracks the current root `handler` and applies a patch in place (`arizona_live:patch/2`) only when the patched path resolves to the **same** handler; a patch to a **different** handler can't keep the view, so it degrades to a full navigate/replace.
 
 So "persistent live chrome across navigation" (a sidebar with a live badge, a media player) is an ordinary app pattern, **not** a framework feature: write one view whose chrome is persistent and whose content is a swappable `?stateful(?get(page), ...)` child, point several routes at it, and link between them with `az_patch`. There is deliberately no `shell`/`?outlet` concept -- that would bake a UI shape into the framework; `patch` is the generic primitive. The client tags the history entry (`_azNav`) and stamps the outgoing entry so back/forward replays the patch. Demo: `arizona_patch_demo` (`/patch-demo/:section`).
 
@@ -146,7 +155,7 @@ This closes the WS-CSRF vector (a cross-origin page opening a WS as the victim).
 
 Durable, **encrypted** cookie-store session state: a small map carried across requests in the `az_session` cookie, encrypted with AES-256-GCM (via `arizona_crypto:encrypt/decrypt`, keyed off `secret_key` -- give it 32 random bytes, `arizona_crypto` warns below that) and stamped with an absolute expiry, so a client can neither read, forge, nor outlive it. It generalizes `arizona_flash` from a one-request message to durable state, but with the opposite read semantics: a **read never consumes** (the cookie is re-emitted only on a write). The cookie store is the default; keep these sessions small (an id plus light state, well under ~4KB), and note a cookie store cannot be revoked before its expiry. An opt-in server-side store (below) lifts both limits.
 
-`arizona_req` owns the stash + API: `put_session/3` / `delete_session/2` (write, fail-fast on missing `secret_key`; the first write seeds from the incoming cookie so writes merge onto existing state), `clear_session/1` (logout, no key needed), `session/1` (the effective map including this request's writes), `get_session/2` (`{ok, V} | error`) / `get_session/3` (with default), and `read_session/1` (lazy, idempotent, non-consuming). The response re-emits the cookie via `resp_cookies/1`: a written non-empty session sets it, a cleared one clears it, an untouched one emits nothing. The opt-in `{arizona_middleware, fetch_session}` step reads it into the `session` binding (`?get(session)`) and runs on both the GET render and the WS upgrade, so a live view is seeded at mount.
+`arizona_req` owns the stash + API: `put_session/3` / `delete_session/2` (write, fail-fast on missing `secret_key`; the first write seeds from the incoming cookie so writes merge onto existing state), `clear_session/1` (logout; needs no `secret_key` in cookie mode -- clearing encrypts nothing -- but store mode reads the signed id, so it needs the key store mode requires anyway), `session/1` (the effective map including this request's writes), `get_session/2` (`{ok, V} | error`) / `get_session/3` (with default), and `read_session/1` (lazy, idempotent, non-consuming). The response re-emits the cookie via `resp_cookies/1`: a written non-empty session sets it, a cleared one clears it, an untouched one emits nothing. The opt-in `{arizona_middleware, fetch_session}` step reads it into the `session` binding (`?get(session)`) and runs on both the GET render and the WS upgrade, so a live view is seeded at mount.
 
 **Read everywhere; write through a controller.** A live process holds a session *snapshot* and cannot `Set-Cookie` over the WebSocket. To change the session from a live view, submit via `arizona_js:fetch(~"/path", #{method => post})` to a controller route; the action reads the post-middleware request with `arizona_controller:req/1`, writes it (`arizona_req:put_session/3`, `clear_session/1`), and **threads it back** with `arizona_controller:put_req/2` -- the read -> mutate -> `put_req` -> return round trip. The dispatcher flushes the request the action *returned*, so an action that keeps the mutated `arizona_req` in a local and returns the roadrunner request unchanged has its writes dropped (the pre-action copy is what gets flushed). The view re-renders via the controller's `push_event`/pubsub (the `arizona_fetch_account` pattern).
 
@@ -182,6 +191,14 @@ Update it from an event attribute (or handler effect) -- never reaches the serve
 Client JS: `arizona.set(viewId, key, value)` (always 3-arg -- the 2-arg `arizona_js:set/2` is template-only), `arizona.setAll(key, value)`, `arizona.get(key)` / `arizona.get(viewId, key)`. `get` returns DOM strings (no type preservation; absent/bare boolean attrs read back as `false`/`true`).
 
 **Caveat:** a `?local` value survives normal per-slot diffs, but resets to its SSR initial if an enclosing region is re-rendered wholesale -- an `OP_TEXT` that replaces a whole slot with a fresh fragment (a conditional branch swap, a plain-list or stream `?each` container render), an `OP_REPLACE` navigate, or an `?each` item re-materialised by `OP_INSERT` -- or on a forced reconnect. Inside `?each`, every item shares the slot **key** -- keys are compile-time literals (no `?local(<<"open_", Id/binary>>, ...)`), so `set`/`set_all` updates **all** items at once; `?local` can't hold per-item independent client state in a list/stream (use server state for that). The server never reads it back -- to use it server-side, send it in a `push_event` payload. See [docs/architecture.md](docs/architecture.md).
+
+## Keyed lists -- `arizona_stream` and `on_limit`
+
+A stream is the keyed source for a 2-arg `?each` (`fun(Item, Key) -> Element end`): items carry a stable key (`new(KeyFun, ...)`), so the diff emits per-item `OP_INSERT`/`OP_REMOVE`/`OP_MOVE`/`OP_ITEM_PATCH` instead of re-rendering the list, and a `?stateful` child inside an item is its own self-diffing live view.
+
+`new/3` takes `#{limit => pos_integer() | infinity, on_limit => halt | drop}` (defaults `infinity`/`halt`) -- a **visible window**, not a hard cap. `halt` (the default) keeps items past `Limit` in the source but invisible: the window is the first `Limit` items in order. `drop` makes it a bounded tail -f buffer -- an **append** (`insert/2`, or the `update/3` upsert of a missing key) to a full stream evicts the oldest (front-of-order) item from the source so the window slides onto the new tail. Only appends evict: "oldest" is well-defined only for the append flow, so a positional `insert/3` (which declares a window position, not an age) and pre-population (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics even in `drop` mode -- an overfull `drop` stream then converges to `size =< Limit` on its next append.
+
+Cost note: `insert/2` and `update/3` are O(1) amortized under `halt`/`infinity`. Under **`on_limit => drop` at capacity** every append instead evicts, which flattens the order and discards the append buffer, so each one is O(Limit) rather than O(1) -- the cost grows with the limit, and that is the mode a bounded tail-buffer uses, so size the limit accordingly; `delete/2`, `insert/3`, `move/3` are O(N) list surgery on the order, so K per-item calls in one event are O(K*N). For bulk mutation build the list once and `reset/2` (one op -- the differ still patches only the real per-item delta) or reorder with one `sort/2`.
 
 ## Static generation
 

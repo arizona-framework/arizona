@@ -5,9 +5,12 @@ name: Lint
   push:
     branches:
       - main
+  # `**`, not `*`: a GitHub branch filter is a glob in which `*` does not match
+  # `/`, so `"*"` silently skips every PR whose base is a `feat/...`-style
+  # branch -- exactly the stacked-PR flow this repo uses.
   pull_request:
     branches:
-      - "*"
+      - "**"
   workflow_dispatch: {}
   merge_group:
 

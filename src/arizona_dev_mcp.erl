@@ -1,6 +1,6 @@
 -module(arizona_dev_mcp).
 -moduledoc """
-A dev-time MCP server for an Arizona app, in the spirit of Tidewave for Phoenix.
+A dev-time MCP server for an Arizona app: it exposes the running node to a coding agent.
 
 Mount it in your **dev** config and point a coding agent (Claude Code, Cursor,
 the MCP Inspector, ...) at it; the agent can then introspect and drive the

@@ -100,6 +100,8 @@ A route's static config is the single canonical type `arizona_live:route_opts/0`
     on_mount => on_mount(),
     layouts => [arizona_render:layout()],
     middlewares => [arizona_middleware:middleware()],
+    %% CSRF Origin check is on by default; set false to opt this route out.
+    check_origin => boolean(),
     _ => term()
 }.
 ```
@@ -140,14 +142,27 @@ lazy generator (`<-`).
 ```erlang
 %% Pattern LHS -- strict makes mismatches loud:
 [V || {_Az, V} <:- Snapshot]
-[K || K := _ <:- Map]
+[K || K := {ok, _} <:- Map]
 
 %% Bare-variable LHS -- lazy:
 [F || F <- Files]
 [Pid || Pid <- Subscribers, Pid =/= Self]
 ```
 
-Map comprehension generators are always strict (`<-` is not supported for maps).
+The same rule applies to **map** generators (`KeyPattern := ValuePattern` LHS). Both forms
+exist for maps -- `<-` and `<:-` -- so pick by whether the LHS can fail to match. Bare
+variables and `_` cannot, so they take lazy `<-`; that is the dominant form in this codebase
+(`arizona_config:resolve/1`, `arizona_diff`, `arizona_stream:compute_item_changed/2`). Reserve
+`<:-` for a failable **value** pattern, where lazy would silently skip the entries you meant to
+catch (`K := {ok, _} <:- Map` raises `{badmatch, {Key, Value}}` on the first non-`{ok, _}`).
+Note a *variable* key pattern does not pin a key -- `Bound := V <- Map` shadows `Bound` and
+matches every entry.
+
+```erlang
+%% Bare-variable / `_` LHS -- lazy:
+#{K => resolve(V) || K := V <- Map}
+#{K => true || K := _ <- All, key_changed(K, OldItem, NewItem)}
+```
 
 ## az-nodiff
 
@@ -318,16 +333,28 @@ What stays stream-specific is the **incremental** ops (`?OP_INSERT`, `?OP_REMOVE
 `?OP_ITEM_PATCH`), which a plain list has no equivalent of. They carry the **container's** az as
 the op target and name the item by key in a later field (`[?OP_INSERT, Az, Key, Pos, HTML]`),
 mutating one keyed child rather than the container's whole content -- so the full-render op code
-does not govern them. Their own open limitation is placement: `?OP_INSERT`'s position and
-`?OP_MOVE`'s prepend are relative to the container ELEMENT rather than the marker span, so on a
-marker-only container the client refuses them (warn + skip) instead of misplacing the node.
-Making stream items marker-relative is tracked in [docs/architecture.md](../../docs/architecture.md).
+does not govern them. Placement is anchored to the slot span: the client
+resolves the slot's markers and inserts before the closing one (or after the opening one for a
+move-to-head), so an each sharing its container with static siblings keeps its items inside the
+slot. The remaining case is a **marker-only** container, where no element carries the slot az at
+all -- there the client refuses `?OP_INSERT`/`?OP_MOVE` (warn + skip) rather than misplace the
+node, and only the key-addressed `?OP_REMOVE`/`?OP_ITEM_PATCH` still apply.
 
-**Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
-`?each` item child compiles and renders at SSR but **crashes on the first diff** -- the
-per-item diff keys a list item by `to_bin` of its first dynamic, which fails on a nested
-template/descriptor. So a per-item component is not usable yet. The exception is a
-`?stateful` child in a **stream** `?each` (it is its own self-diffing view process).
+**Component as an `?each` item child.** A `?stateless` descriptor **inside** an item element
+(`{li, [], [?stateless(...)]}`) renders at SSR and diffs per-item like any other item content:
+the list stays on the positional path, so an inner value change ships one `?OP_LIST_PATCH`
+carrying an `?OP_ITEM_PATCH` for the affected index, and an append ships an `?OP_INSERT`.
+(A **bare** descriptor as the whole callback body is still a compile error -- see above.)
+
+A `?stateful` child in a plain-list `?each` also renders and diffs without crashing, but it
+costs the per-item path: `arizona_diff:diff_each_items/6` only patches positionally when the
+render added **no** child view (`map_size(NewLocal1) =:= map_size(NewLocal0)`), because a
+child view must be re-mounted by a full re-render. A list bearing per-item `?stateful`
+children therefore falls back to the wholesale marker `?OP_TEXT` -- every item re-renders on
+any change. Use a **stream** `?each` when you want self-diffing children: a stream keys items
+by `az_key`, and each `?stateful` item is its own self-diffing live view. "View", not
+process: a child stateful view is an entry in the root live process's `views` map, dispatched
+in-process -- only a route root is ever spawned.
 
 ## Where to read bindings
 
