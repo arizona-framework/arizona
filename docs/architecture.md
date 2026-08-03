@@ -1310,12 +1310,16 @@ position where user data reaches the output unescaped, free to close the JavaScr
 in. Literal script/CSS text is static, not a slot, so it is unaffected; `escapable` elements escape
 and so are not gated. The opt-out marks the value trusted for HTML *escaping*, not for the raw-text
 tokenizer -- a trusted JSON blob's own string data can still spell an element breakout -- so
-`arizona_html:raw_text/1` unwraps the `?raw` and neutralizes the payload anyway. It defuses every
-sequence the script-data tokenizer reacts to: `</script`/`</style` (ends the element) becomes
-`<\/script`, and `<!--` / `<script` (which together reach script-data-**double**-escaped, where the
+`arizona_html:raw_text/2` unwraps the `?raw` and neutralizes the payload anyway. It takes the
+**tag**, because which sequences break out is a property of that element's tokenizer state rather
+than of raw text at large. `</script`/`</style` ends either element, so it becomes `<\/script` in
+both. `<!--` and `<script` (which together reach script-data-**double**-escaped, where the
 element's own `</script>` stops closing it and the rest of the document is swallowed) have their
-`<` rewritten as `\u003c`. All three rewrites decode back to the original in the JSON and
-JavaScript-string contexts such content lives in. It flattens **chardata** first, because the
+`<` rewritten as `\u003c`, but **only inside `<script>`**: `<style>` content is RAWTEXT, which has
+no escaped state, so rewriting them there would defend nothing while corrupting the stylesheet
+(`\u003c` is a JS/JSON escape a CSS parser reads as `u003c`, and `<!--`/`-->` are legitimate CSS
+CDO/CDC tokens). Every rewrite therefore decodes back to the original in the context it is applied
+to. It flattens **chardata** first, because the
 documented remedy `?raw(json:encode(Data))` hands it an iolist, not a binary -- a binary-only
 guard would wave a breakout through on the very form the compile error recommends.
 A dynamic *attribute* on a raw-text element

@@ -31,7 +31,7 @@ identical to the previous inlined emission.
 -export([target/0]).
 -export([supports_local/0]).
 -export([escape/1]).
--export([raw_text/1]).
+-export([raw_text/2]).
 -export([render_attr/2]).
 
 -spec name(atom()) -> binary().
@@ -220,19 +220,31 @@ escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
 %% that legitimately needs one of them inside a raw-text element is a breakout by
 %% definition. Non-binary values (a nested template, an integer) cannot carry a
 %% sequence and pass through unchanged.
--spec raw_text(term()) -> term().
-raw_text(Value) when is_binary(Value) ->
-    neutralize_raw_text(Value, <<>>);
-raw_text(Value) ->
+-spec raw_text(atom(), term()) -> term().
+raw_text(Tag, Value) ->
+    %% Resolve the element's tokenizer state ONCE per slot, then thread the answer
+    %% (not the tag) through the byte loop, so the per-character path stays a plain
+    %% boolean test and no atom is built at render time.
+    raw_text_1(script_data(Tag), Value).
+
+raw_text_1(ScriptData, Value) when is_binary(Value) ->
+    neutralize_raw_text(ScriptData, Value, <<>>);
+raw_text_1(ScriptData, Value) ->
     %% A `?raw` opt-out is the *only* shape a script/style content slot can carry
     %% (the parse transform rejects an unmarked one), and it opts out of HTML
     %% *escaping*, not out of the raw-text tokenizer: a trusted JSON blob's own
     %% string data can still spell a breakout. Unwrap it, neutralize the payload,
     %% and re-wrap, so the documented opt-out is not a hole around this check.
     case arizona_template:classify_trusted(Value) of
-        {raw, Raw} -> arizona_template:raw(raw_text(Raw));
-        _Other -> raw_text_chardata(Value)
+        {raw, Raw} -> arizona_template:raw(raw_text_1(ScriptData, Raw));
+        _Other -> raw_text_chardata(ScriptData, Value)
     end.
+
+%% Does the tokenizer read this element's content in the **script data** states?
+%% Only `<script>` has them; `<style>` is plain RAWTEXT, whose sole exit is its own
+%% close tag. HTML tag names are ASCII case-insensitive, so the comparison is too.
+script_data(Tag) ->
+    string:equal(atom_to_binary(Tag), ~"script", true).
 
 %% The documented remedy is `?raw(json:encode(Data))`, and `json:encode/1` returns
 %% **iodata** -- so matching only binaries above would wave a breakout through on the
@@ -241,29 +253,30 @@ raw_text(Value) ->
 %% render boundary would have produced anyway (`to_bin/1` flattens with the same
 %% call). A list that is not chardata is returned untouched, leaving `to_bin/1` the
 %% single place that names a bad template value.
-raw_text_chardata(Value) when is_list(Value) ->
+raw_text_chardata(ScriptData, Value) when is_list(Value) ->
     case unicode:characters_to_binary(Value) of
-        Bin when is_binary(Bin) -> neutralize_raw_text(Bin, <<>>);
+        Bin when is_binary(Bin) -> neutralize_raw_text(ScriptData, Bin, <<>>);
         _NotChardata -> Value
     end;
-raw_text_chardata(Value) ->
+raw_text_chardata(_ScriptData, Value) ->
     Value.
 
-neutralize_raw_text(<<>>, Acc) ->
+neutralize_raw_text(_ScriptData, <<>>, Acc) ->
     Acc;
-neutralize_raw_text(<<"<", R/binary>>, Acc) ->
-    Lt = raw_text_breakout(R),
-    neutralize_raw_text(R, <<Acc/binary, Lt/binary>>);
-neutralize_raw_text(<<C, R/binary>>, Acc) ->
-    neutralize_raw_text(R, <<Acc/binary, C>>).
+neutralize_raw_text(ScriptData, <<"<", R/binary>>, Acc) ->
+    Lt = raw_text_breakout(ScriptData, R),
+    neutralize_raw_text(ScriptData, R, <<Acc/binary, Lt/binary>>);
+neutralize_raw_text(ScriptData, <<C, R/binary>>, Acc) ->
+    neutralize_raw_text(ScriptData, R, <<Acc/binary, C>>).
 
 %% What the `<` becomes, given the text right after it. Three sequences move the
-%% HTML script-data tokenizer, and each is defused where it starts:
+%% HTML tokenizer out of raw text, and each is defused where it starts:
 %%
 %%   `</script` / `</style` -- ends the element, dropping the rest of the value
-%%       into HTML parsing. A backslash after the `<` stops the end-tag match:
-%%       `<\/script` is transparent wherever such content lives (`\/` decodes to
-%%       `/` in JSON and in a JavaScript string).
+%%       into HTML parsing. This is the only exit RAWTEXT has, so it is
+%%       neutralized for both elements. A backslash after the `<` stops the
+%%       end-tag match: `<\/script` is transparent wherever such content lives
+%%       (`\/` decodes to `/` in JSON, in a JavaScript string, and in CSS).
 %%   `<!--` -- enters script-data-escaped state, where a following `<script`
 %%       reaches script-data-double-escaped and the element's OWN `</script>` no
 %%       longer closes it: the remainder of the document is swallowed, so
@@ -276,20 +289,28 @@ neutralize_raw_text(<<C, R/binary>>, Acc) ->
 %% The last two replace the `<` with the escape `\u003c` instead of inserting a
 %% backslash: `\!` and `\s` are not valid JSON escapes, and a JSON blob is the
 %% documented content of a `raw` raw-text slot, whereas `\u003c` is valid in both
-%% JSON and JavaScript strings and decodes back to `<`. Tag names match ASCII
+%% JSON and JavaScript strings and decodes back to `<`.
+%%
+%% They also apply ONLY in `<script>` (`ScriptData`). `<style>` content is RAWTEXT,
+%% which has no escaped state at all: rewriting these there would defend nothing
+%% and would corrupt the stylesheet, because that escape is a JS/JSON one which a
+%% CSS parser reads as the identifier bytes `u003c` -- and `<!--`/`-->` are
+%% themselves legitimate CSS tokens (CDO/CDC). Tag names match ASCII
 %% case-insensitively, as the tokenizer does; any other `<` keeps its own byte.
-raw_text_breakout(<<$/, R/binary>>) ->
+raw_text_breakout(_ScriptData, <<$/, R/binary>>) ->
     case ci_prefix(R, ~"script") orelse ci_prefix(R, ~"style") of
         true -> ~"<\\";
         false -> ~"<"
     end;
-raw_text_breakout(<<"!--", _R/binary>>) ->
+raw_text_breakout(true, <<"!--", _R/binary>>) ->
     ~"\\u003c";
-raw_text_breakout(R) ->
+raw_text_breakout(true, R) ->
     case ci_prefix(R, ~"script") of
         true -> ~"\\u003c";
         false -> ~"<"
-    end.
+    end;
+raw_text_breakout(false, _R) ->
+    ~"<".
 
 %% Case-insensitive (ASCII) prefix match; the pattern is always lowercase letters.
 ci_prefix(_Bin, <<>>) -> true;

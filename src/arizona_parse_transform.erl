@@ -129,6 +129,10 @@ render(Bindings) ->
     %% must be emitted markerless and render-once -- HTML comment markers would
     %% become literal content there (script/style/textarea/title).
     raw_text_kind = none :: none | raw | escapable,
+    %% The tag that produced `raw_text_kind`, handed to the backend's `raw_text/2`:
+    %% the neutralization a value needs belongs to *that element's* tokenizer state
+    %% (`<script>` is script data, `<style>` is RAWTEXT), not to raw text at large.
+    raw_text_tag = undefined :: atom(),
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean(),
@@ -2084,9 +2088,14 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             State6 = buf_append(State5, Backend:element_open_end()),
             %% Scope the raw-text context to this element's children, then restore
             %% the parent's so a following sibling is not treated as raw text.
-            State7 = compile_children(Children, ElemAz, State6#state{raw_text_kind = RawKind}),
+            State7 = compile_children(
+                Children, ElemAz, State6#state{raw_text_kind = RawKind, raw_text_tag = Tag}
+            ),
             State8 = buf_append(State7, Backend:element_close(TagBin)),
-            State8#state{raw_text_kind = State0#state.raw_text_kind}
+            State8#state{
+                raw_text_kind = State0#state.raw_text_kind,
+                raw_text_tag = State0#state.raw_text_tag
+            }
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
@@ -2465,7 +2474,10 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
 %% HTML-escape inside raw text, so a marked value was spliced with no
 %% neutralization and an unmarked one drew no compile error.
 emit_child_dynamic(
-    Child, _ElemAz, #state{raw_text_kind = raw, module = Module, backend = Backend} = State0, Slot
+    Child,
+    _ElemAz,
+    #state{raw_text_kind = raw, raw_text_tag = Tag, module = Module, backend = Backend} = State0,
+    Slot
 ) ->
     %% script/style: raw text, the browser decodes neither character references
     %% nor HTML comments here, so the value is emitted verbatim, markerless and
@@ -2474,7 +2486,7 @@ emit_child_dynamic(
     %% Diffing is impossible by construction (no marker to patch), so the slot
     %% renders once -- the diff engine skips its `undefined` az.
     ok = assert_raw_text_opt_out(Child),
-    DynAST = make_raw_text_dynamic_ast(Child, Module, line(Child), Backend),
+    DynAST = make_raw_text_dynamic_ast(Child, Tag, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(
     Child, _ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
@@ -2810,13 +2822,17 @@ make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
 %% browser does not decode character references inside these, so HTML-escaping a
 %% scalar would corrupt it (`&` -> `&amp;`). `undefined` az makes it non-diffable
 %% -- there is no comment marker to patch.
-make_raw_text_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
+make_raw_text_dynamic_ast(ExprAST0, Tag, Module, ExprLine, Backend) ->
     ExprAST = expand_block_element_tails(ExprAST0, Module, Backend),
     LocAST = loc_ast(Module, ExprLine),
-    %% Neutralize a close-tag breakout (`</script>`) in the value: the content is
-    %% emitted verbatim, so the backend that owns raw-text elements sanitizes it.
+    %% Neutralize a tokenizer breakout (`</script>`, `<!--`) in the value: the
+    %% content is emitted verbatim, so the backend that owns raw-text elements
+    %% sanitizes it. The tag goes along because the sequences that break out are
+    %% the enclosing element's, not raw text's in general.
     GuardedAST =
-        {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, raw_text}}, [ExprAST]},
+        {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, raw_text}}, [
+            {atom, 0, Tag}, ExprAST
+        ]},
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [GuardedAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, FunAST, LocAST]}.
 

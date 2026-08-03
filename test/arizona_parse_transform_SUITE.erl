@@ -329,6 +329,8 @@
     raw_text_reject_message_renders/1,
     raw_text_in_nodiff_bare_dynamic_rejected/1,
     raw_text_in_nodiff_raw_neutralized/1,
+    raw_text_style_css_round_trip/1,
+    raw_text_style_close_tag_still_neutralized/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -572,6 +574,8 @@ groups() ->
             raw_text_reject_message_renders,
             raw_text_in_nodiff_bare_dynamic_rejected,
             raw_text_in_nodiff_raw_neutralized,
+            raw_text_style_css_round_trip,
+            raw_text_style_close_tag_still_neutralized,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -2066,6 +2070,53 @@ raw_text_in_nodiff_raw_neutralized(Config) when is_list(Config) ->
     %% Still verbatim (not HTML-escaped) and still markerless, as raw text requires.
     ?assertEqual(nomatch, binary:match(HTML, ~"&lt;")),
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")).
+
+%% <style> is RAWTEXT: it has no script-data-escaped state, so `<!--`/`<script`
+%% neutralization protects nothing there and only corrupts the CSS -- `<` is
+%% a JS/JSON escape, and a CSS parser reads it as the identifier bytes `u003c`.
+%% (`<!--`/`-->` are legitimate CSS tokens, CDO/CDC.) A style slot must therefore
+%% round-trip byte for byte.
+raw_text_style_css_round_trip(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_style_css). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'style', [], ["
+        "        arizona_template:raw(arizona_template:get(css, Bindings))"
+        "    ]}). "
+    ),
+    Css = ~"<!-- .a > .b { color: red } --> .c:before { content: \"<script>\" }",
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{css => Css})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertEqual(<<"<style>", Css/binary, "</style>">>, HTML),
+    %% Specifically: no JS escape leaked into the stylesheet.
+    ?assertEqual(nomatch, binary:match(HTML, ~"u003c")).
+
+%% ...but the one sequence that DOES end a RAWTEXT element is still neutralized in
+%% <style>, and <script> keeps the full script-data treatment. The tag decides the
+%% policy; sharing one blanket policy is what corrupted the CSS above.
+raw_text_style_close_tag_still_neutralized(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_style_close). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {'style', [], [arizona_template:raw(arizona_template:get(css, Bindings))]}, "
+        "        {'script', [], [arizona_template:raw(arizona_template:get(js, Bindings))]}"
+        "    ]}). "
+    ),
+    Breakout = ~"</style><img src=x onerror=alert(1)>",
+    Double = ~"<!--<script>",
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{css => Breakout, js => Double})),
+    HTML = iolist_to_binary(HTML0),
+    %% style: the close tag is broken, so only the element's own survives.
+    ?assertEqual(nomatch, binary:match(HTML, ~"</style><img")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<\\/style><img")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"</style>"))),
+    %% script: both halves of the double escape are still rewritten.
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"\\u003c!--\\u003cscript>")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"<script"))).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's
