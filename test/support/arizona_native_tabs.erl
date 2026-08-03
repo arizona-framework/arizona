@@ -5,9 +5,10 @@
 
 %% Native (JSON) tabs view: a Row of Buttons whose push_event switches the
 %% `selected` binding, and a content area that swaps subtrees via a stateless
-%% child. Switching tab emits an OP_UPDATE of the content slot -- the
-%% conditional/subtree-rendering path the counter (text) and list (stream) don't
-%% exercise.
+%% child. Switching tab emits an OP_TEXT of the content slot (the two clauses
+%% render different statics, so the slot re-renders wholesale, and a content slot
+%% is marker-anchored -- never OP_UPDATE) -- the conditional/subtree-rendering
+%% path the counter (text) and list (stream) don't exercise.
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->

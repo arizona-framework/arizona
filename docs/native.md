@@ -172,6 +172,50 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    children — items keyed by `az_key`, with `OP_INSERT`/`OP_REMOVE`/`OP_MOVE`
    reordering the list, `OP_ITEM_PATCH` applying inner ops scoped to one item, and
    `OP_UPDATE` re-rendering the whole list.
+
+   **The registry is a derived index of the tree, not a snapshot of the first
+   frame.** Every op that (re)builds a subtree — `OP_TEXT`/`OP_UPDATE` replacing a
+   node's children, `OP_INSERT` grafting a stream item — must index the new nodes
+   and drop the destroyed ones, exactly as `OP_REPLACE` indexes what it renders.
+   Otherwise every `az` the *diff* introduced is unaddressable: the browser
+   re-queries the DOM each time and never sees this, but a registry built only at
+   `OP_REPLACE` fails the very next op. That includes a nested `az_view` the
+   payload brings in — the documented
+   `case ?get(flag) of true -> ?stateful(child, …)` pattern installs a whole child
+   **view id** through an `OP_TEXT`, and its first update is addressed to it. This
+   holds for an `OP_ITEM_PATCH`'s **inner** ops too: they *address* item-locally,
+   but a subtree they rebuild still has to reach the per-view registry, because the
+   child view it may introduce is addressed top-level (`/native/stream-child` is
+   exactly this shape).
+
+   Removal is the same obligation in reverse: `OP_REMOVE`/`OP_REMOVE_NODE` must
+   drop the entries of what they detach. Skipping it is not merely untidy — because
+   `OP_INSERT` indexes what it grafts in, a churning stream would add one registry
+   (and pin one detached subtree) per insert/remove cycle, for the life of the
+   connection, reclaimed only by a reconnect. Unindexing is **identity-checked**
+   (`registry[az] === node`): stream items share `az` values from one fingerprint,
+   so deleting by key alone would unregister a *surviving* sibling. `OP_REMOVE_NODE`
+   unindexes only when the splice actually found the node, so the registry never
+   loses something still in the tree.
+
+   **Isolate each op — and each frame, and each effect.** A batch's ops are
+   independent, so an unexpected wire shape or an unresolvable target must log and
+   skip that one op (as `applyOps`/`applyItemOps` do in `assets/js/arizona.js`),
+   degrading one slot instead of taking the app down. That includes an op code the
+   client does not implement — `OP_LIST_PATCH` is browser-only today. The same
+   applies to the two paths *outside* the op loop, which are equally server-driven:
+   a frame whose JSON does not parse, and a malformed command in the `"e"` array.
+   Both run on the client's main thread, where an escaping error is process death,
+   not a lost frame. A **tap** keeps the strict, throwing path — it is a synchronous
+   call on the caller's stack and the throw is the signal that a template built a
+   bad command.
+
+   On iOS this shapes the code, not just the error handling: `preconditionFailure`
+   and `!` **trap**, and a Swift trap is not catchable. Every wire-facing failure on
+   the apply path therefore throws `WireError` (`FingerprintCache.statics`,
+   `Interleaver`, `buildTree`/`addChild`) or is guarded before the access
+   (`JSONValue.parseChecked`, the effect argument, the `OP_INSERT` position, which
+   traps `Array.insert` on a negative index).
 5. **Run effects and navigate.** A tap fires its node's command prop, routed to
    the node's nearest enclosing `az_view` (the root, or a nested `?stateful`
    child) — so events reach stateful children, not just the root. The server's
@@ -195,7 +239,10 @@ The `native` e2e exercises each example over the real socket: a counter
 (`/native/counter`), a keyed list (`/native/list`), conditional tab switching
 (`/native/tabs`), server-pushed ticks (`/native/ticker`), independent counters
 (`/native/multi`), nested stateful children with per-child event routing
-(`/native/nested`), navigation (`/native/menu`), and reconnect-after-drop. The in-repo Android
+(`/native/nested`), a conditionally rendered stateful child whose view id only the
+diff ever ships (`/native/conditional`) and the same shape nested inside a stream
+item, where it arrives through an item-patch inner op (`/native/stream-child`),
+navigation (`/native/menu`), and reconnect-after-drop. The in-repo Android
 (`clients/android`) and iOS (`clients/ios`) samples are launchers that open `/native/menu` and
 navigate to each on a device or Simulator.
 
@@ -232,8 +279,13 @@ returns them won't crash a native client.
 - **Props are string-encoded**; the client coerces. Typed props, opt-in
   per-platform compile-time validators, and a portable cross-platform
   vocabulary helper are possible future additions.
-- **Stateful children inside a stream item aren't supported.** A stream item's
-  ops are applied via `OP_ITEM_PATCH` against a flat item-local `az` map and its
-  inserted nodes aren't added to the per-view registry — both safe today because
-  no fixture nests an `az_view` (stateful child) inside an `?each` item. Doing so
-  would need the per-view scoping extended into item-local resolution.
+- **A stateful child inside a stream item resolves through its own view.** The
+  item's ordinary inner ops are applied via `OP_ITEM_PATCH` against a flat
+  item-local `az` map, but a child view reaches the clients three ways, all of which
+  land in the per-view registry: a `[ChildViewId, ChildOps]` wrapper *nested inside*
+  the item patch (`flatten_ops/2` in `arizona_socket` unwraps that wrapper only at
+  top level, so its first element is a **view-id string, not an op code**); an
+  `OP_INSERT` that grafts in an item already containing the child; and an item-patch
+  **inner** `OP_TEXT` that installs the child a conditional in the item template just
+  switched on. That last one is why an inner-op rebuild indexes into the per-view
+  registry as well as the item-local map — the child's own ops arrive top-level.

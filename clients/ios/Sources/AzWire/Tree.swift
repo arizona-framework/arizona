@@ -39,32 +39,50 @@ extension Node: Equatable {
 /// ViewId) -- after a navigate that differs from the rendered root's `id`, so the
 /// root uses the passed `view`, not its own `id`; a nested `az_view` child
 /// switches to its own id (see `addChild`).
-public func buildTree(_ json: JSONValue, view: String?) -> Node {
+///
+/// Throws `WireError.malformed` (rather than trapping) on a payload that is not a
+/// node: this runs inside the op applier's per-op `do`/`catch`, and a Swift trap
+/// is not catchable -- one bad payload would take the app down instead of costing
+/// one slot. Mirrors Kotlin's `getValue`, whose exception the same catch handles.
+public func buildTree(_ json: JSONValue, view: String?) throws -> Node {
     guard case let .object(obj) = json else {
-        preconditionFailure("buildTree expects an object: \(json)")
+        throw WireError.malformed("buildTree expects an object: \(json)")
     }
-    let node = Node(type: obj["type"]!.stringValue!, az: obj["az"]?.stringValue)
+    guard let type = obj["type"]?.stringValue else {
+        throw WireError.malformed("node has no string `type`: \(json)")
+    }
+    let node = Node(type: type, az: obj["az"]?.stringValue)
     for (k, v) in obj where k != "type" && k != "az" && k != "children" {
         node.props[k] = v
     }
     node.viewId = view
     if let kids = obj["children"]?.arrayValue {
-        for child in kids { addChild(node, child, view) }
+        for child in kids { try addChild(node, child, view) }
     }
     return node
+}
+
+/// The view a child belongs to: a nested `az_view` object owns its subtree under
+/// its own `id`; anything else stays in `parentView`. Shared by `addChild` and the
+/// `OP_INSERT` path, so an item that is itself a view root registers under ITS id
+/// rather than the container's (mirrors `enclosingView` in the reference client).
+public func enclosingView(_ json: JSONValue, _ parentView: String?) -> String? {
+    guard case let .object(obj) = json, obj["az_view"]?.boolValue == true else { return parentView }
+    return obj["id"]?.stringValue ?? parentView
 }
 
 /// Append a child, splicing each-expansion arrays into the parent. `#slot`
 /// objects are kept as nodes; stream items (each-array entries) become keyed
 /// child nodes. A child that is itself a view root (`az_view`) owns its subtree;
-/// otherwise it stays in the parent's `view`.
-func addChild(_ parent: Node, _ child: JSONValue, _ view: String?) {
+/// otherwise it stays in the parent's `view`. Throws for the same reason
+/// `buildTree` does.
+func addChild(_ parent: Node, _ child: JSONValue, _ view: String?) throws {
     switch child {
     case let .array(arr):
-        for c in arr { addChild(parent, c, view) }
-    case let .object(obj):
-        let childView = obj["az_view"]?.boolValue == true ? (obj["id"]?.stringValue ?? view) : view
-        parent.children.append(.node(buildTree(child, view: childView)))
+        for c in arr { try addChild(parent, c, view) }
+    case .object:
+        let node = try buildTree(child, view: enclosingView(child, view))
+        parent.children.append(.node(node))
     default:
         parent.children.append(.text(child.contentString))
     }
@@ -78,14 +96,43 @@ public func indexByAz(_ node: Node, _ registry: inout [String: Node]) {
     }
 }
 
+/// The inverse of `indexByAz`: drop `node`'s subtree from an item-scoped registry
+/// before the ops discard it. Identity-checked, like `unindexByViews`.
+public func unindexByAz(_ node: Node, _ registry: inout [String: Node]) {
+    if let az = node.az, registry[az] === node { registry[az] = nil }
+    for child in node.children {
+        if case let .node(n) = child { unindexByAz(n, &registry) }
+    }
+}
+
 /// Index nodes per enclosing view (`viewId` -> `az` -> node), so a "ViewId:az" op
 /// target resolves within the right view -- two instances of the same stateful
 /// child share az values (from a shared fingerprint) but live in distinct views.
+///
+/// Every (re)built subtree goes through here, not just the one `OP_REPLACE`
+/// renders: a node the DIFF creates (an `OP_TEXT` payload that is a nested
+/// template, an inserted stream item) is otherwise unaddressable, and a nested
+/// `az_view` in such a payload never gets its view id registered at all.
 public func indexByViews(_ node: Node, _ views: inout [String: [String: Node]]) {
     if let v = node.viewId, let az = node.az {
         views[v, default: [:]][az] = node
     }
     for child in node.children {
         if case let .node(n) = child { indexByViews(n, &views) }
+    }
+}
+
+/// The inverse of `indexByViews`: drop `node`'s subtree from the per-view registry
+/// before the ops discard it, so a rebuilt slot leaves no entry pointing at a
+/// detached node. Identity-checked -- stream items share az values (one
+/// fingerprint, many items), so a destroyed item must never delete an entry that
+/// now names a surviving one.
+public func unindexByViews(_ node: Node, _ views: inout [String: [String: Node]]) {
+    if let v = node.viewId, let az = node.az, views[v]?[az] === node {
+        views[v]?[az] = nil
+        if views[v]?.isEmpty == true { views[v] = nil }
+    }
+    for child in node.children {
+        if case let .node(n) = child { unindexByViews(n, &views) }
     }
 }

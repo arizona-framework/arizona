@@ -1408,7 +1408,10 @@ test.describe('List comprehension (about page tags)', () => {
         await expect(tagItems(page).nth(2)).toHaveText('arizona');
     });
 
-    test('add_tag appends a new tag via OP_UPDATE', async ({ page }) => {
+    // The tag list is a single-root plain-list each, so appending diffs
+    // positionally: one OP_LIST_PATCH carrying a tail OP_INSERT sub-op (verified
+    // on the wire), not a wholesale re-render of the container.
+    test('add_tag appends a new tag via OP_LIST_PATCH', async ({ page }) => {
         await page.goto('/about');
         await wsReady(page);
         await expect(tagItems(page)).toHaveCount(3);

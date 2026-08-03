@@ -3,8 +3,8 @@ import { NativeClient } from '../utils/native_client.js';
 
 // Native (JSON) stream e2e: a real WebSocket client drives a keyed list over the
 // live server, exercising the stream ops the counter spec can't reach --
-// OP_INSERT / OP_REMOVE / OP_MOVE / OP_ITEM_PATCH and the OP_UPDATE full
-// re-render. Proves the reference client applies the same keyed-list diff the
+// OP_INSERT / OP_REMOVE / OP_MOVE / OP_ITEM_PATCH, including the batch a reset
+// produces. Proves the reference client applies the same keyed-list diff the
 // browser does, against the real server.
 test.describe('native (JSON) wire -- stream list', () => {
     test('applies insert/remove/move/patch/update over the real socket', async ({ baseURL }) => {
@@ -59,7 +59,10 @@ test.describe('native (JSON) wire -- stream list', () => {
                 ['1', 'One'],
             ]);
 
-            // OP_UPDATE (full re-render via reset).
+            // Reset: `stream_reset/8` diffs the new key set against the old one
+            // and emits only incremental keyed ops -- here 3 OP_REMOVE (the keys
+            // that went away) plus 2 OP_INSERT (verified on the wire). It never
+            // re-renders the container.
             client.pushEvent('reset', {
                 items: [
                     { id: 'a', text: 'A' },

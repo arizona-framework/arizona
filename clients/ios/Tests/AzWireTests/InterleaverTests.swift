@@ -12,8 +12,8 @@ final class InterleaverTests: XCTestCase {
     // each-array of keyed Row items.
     let listFrame = ##"{"d":["native_list",{"d":[["1","One"],["2","Two"],["3","Three"]],"f":"O1M0B","s":["{\"type\":\"Row\",\"az\":\"O1M0B-0\",\"az_key\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"O1M0B-0t0\",\"children\":[","]}]}"],"t":0}],"f":"JW7VZ","s":["{\"type\":\"Column\",\"az\":\"JW7VZ-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"JW7VZ-0t0\",\"children\":[","]}]}"]}"##
 
-    func testInterleavesCounterFrameIntoValidWidgetTree() {
-        let tree = Interleaver(FingerprintCache()).interleave(JSONValue.parse(counterFrame))
+    func testInterleavesCounterFrameIntoValidWidgetTree() throws {
+        let tree = try Interleaver(FingerprintCache()).interleave(JSONValue.parse(counterFrame))
 
         XCTAssertEqual(tree["type"]?.stringValue, "Column")
         XCTAssertEqual(tree["id"]?.stringValue, "native_counter")
@@ -30,17 +30,17 @@ final class InterleaverTests: XCTestCase {
         XCTAssertEqual(children[1]["on_tap"]![1].stringValue, "inc")
     }
 
-    func testReusesStaticsCachedByFingerprint() {
+    func testReusesStaticsCachedByFingerprint() throws {
         let interleaver = Interleaver(FingerprintCache())
-        _ = interleaver.interleave(JSONValue.parse(counterFrame))
+        _ = try interleaver.interleave(JSONValue.parse(counterFrame))
         // A later frame sends only {f, d}; statics come from the cache.
-        let tree = interleaver.interleave(JSONValue.parse(##"{"f":"1M2KTR","d":["native_counter","5"]}"##))
+        let tree = try interleaver.interleave(JSONValue.parse(##"{"f":"1M2KTR","d":["native_counter","5"]}"##))
         let slot = tree["children"]![0]["children"]![1]
         XCTAssertEqual(slot["children"]!.arrayValue![0].stringValue, "5")
     }
 
-    func testInterleavesStreamFrameIntoKeyedRows() {
-        let tree = Interleaver(FingerprintCache()).interleave(JSONValue.parse(listFrame))
+    func testInterleavesStreamFrameIntoKeyedRows() throws {
+        let tree = try Interleaver(FingerprintCache()).interleave(JSONValue.parse(listFrame))
         XCTAssertEqual(tree["type"]?.stringValue, "Column")
         let container = tree["children"]![0]
         XCTAssertEqual(container["type"]?.stringValue, "#slot")
@@ -50,21 +50,45 @@ final class InterleaverTests: XCTestCase {
         XCTAssertEqual(rows[2]["children"]![0]["children"]![0].stringValue, "Three")
     }
 
-    func testDecodesStreamInsertItemFromCachedStatics() {
+    func testDecodesStreamInsertItemFromCachedStatics() throws {
         let interleaver = Interleaver(FingerprintCache())
-        _ = interleaver.interleave(JSONValue.parse(listFrame))
+        _ = try interleaver.interleave(JSONValue.parse(listFrame))
         // OP_INSERT ships only {f, d} for the new item; decode rebuilds the Row.
-        let item = interleaver.decode(JSONValue.parse(##"{"f":"O1M0B","d":["9","Nine"]}"##))
+        let item = try interleaver.decode(JSONValue.parse(##"{"f":"O1M0B","d":["9","Nine"]}"##))
         XCTAssertEqual(item["type"]?.stringValue, "Row")
         XCTAssertEqual(item["az_key"]?.stringValue, "9")
         XCTAssertEqual(item["children"]![0]["children"]![0].stringValue, "Nine")
     }
 
-    func testDecodesNavigateCommandProp() {
+    // Unbounded, the cache accumulates one generation of fingerprints per deploy.
+    // The prune runs at announce time (the only point where dropping a key is safe)
+    // and keeps the most-recently-USED ones.
+    func testPrunesTheCacheToTheMostRecentlyUsedOnAnnounce() throws {
+        let cache = FingerprintCache()
+        for i in 0..<(fpCacheMax + 3) {
+            _ = try cache.statics(["f": .string("fp\(i)"), "s": .array([.string("x")])])
+        }
+        // Touch the oldest key so it survives the prune as most-recently-used.
+        _ = try cache.statics(["f": .string("fp0")])
+
+        let keys = cache.announce()
+        XCTAssertEqual(keys.count, fpCacheMax)
+        XCTAssertEqual(keys.last, "fp0")
+        XCTAssertFalse(keys.contains("fp1"))
+    }
+
+    // An uncached fingerprint is a recoverable wire error, not a trap: the op
+    // applier skips that one op (a trap would take the app down).
+    func testThrowsOnAnUncachedFingerprint() {
+        let interleaver = Interleaver(FingerprintCache())
+        XCTAssertThrowsError(try interleaver.interleave(JSONValue.parse(##"{"f":"nope","d":[]}"##)))
+    }
+
+    func testDecodesNavigateCommandProp() throws {
         // A folded navigate command prop is a raw [10, path] array in the statics;
         // it survives interleaving as a JSON array the client dispatches on tap.
         let frame = ##"{"d":[],"f":"MENU1","s":["{\"type\":\"Button\",\"on_tap\":[10,\"/native/counter\"],\"children\":[\"Counter\"]}"]}"##
-        let node = Interleaver(FingerprintCache()).interleave(JSONValue.parse(frame))
+        let node = try Interleaver(FingerprintCache()).interleave(JSONValue.parse(frame))
         XCTAssertEqual(node["type"]?.stringValue, "Button")
         XCTAssertEqual(node["on_tap"]![0].intValue, 10)
         XCTAssertEqual(node["on_tap"]![1].stringValue, "/native/counter")
