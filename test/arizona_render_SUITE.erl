@@ -69,6 +69,7 @@
     ssr_layouts_empty_list/1,
     ssr_layouts_nest_outer_first/1,
     ssr_layout_splices_non_utf8_page_unchanged/1,
+    ssr_layout_splice_adds_no_privileged_tag/1,
     ssr_invalid_chardata_user_value_still_errors/1,
     ssr_page_with_child/1,
     ssr_nested_local/1,
@@ -140,6 +141,7 @@ groups() ->
             ssr_layouts_nest_outer_first,
             ssr_layouts_empty_list,
             ssr_layout_splices_non_utf8_page_unchanged,
+            ssr_layout_splice_adds_no_privileged_tag,
             ssr_invalid_chardata_user_value_still_errors,
             resolve_id_binary,
             resolve_id_template
@@ -642,6 +644,20 @@ ssr_layout_splices_non_utf8_page_unchanged(Config) when is_list(Config) ->
         )
     ),
     ?assertEqual(<<"<outer>", Bare/binary, "</outer>">>, Wrapped).
+
+ssr_layout_splice_adds_no_privileged_tag(Config) when is_list(Config) ->
+    %% Splicing the page must not mint a tagged tuple that a *binding* could
+    %% also carry: the escaping content slot only escapes when the value renders
+    %% to a binary, so a tuple the renderer unwraps to raw output is an escape
+    %% bypass reachable from user data. An unrecognized tagged tuple in a
+    %% content slot fails closed, `arizona_rendered` (the tag this splice once
+    %% used) included.
+    ?assertError(
+        {arizona_loc, _, {bad_template_value, {arizona_rendered, _}}},
+        arizona_render:render_view_to_iolist(arizona_static_page, #{
+            bindings => #{title => {arizona_rendered, ~"<script>alert(1)</script>"}}
+        })
+    ).
 
 ssr_invalid_chardata_user_value_still_errors(Config) when is_list(Config) ->
     %% The other half of the same boundary: `to_bin/1`'s list clause stays in
