@@ -587,6 +587,13 @@ render_fp_val(Backend, #{t := ?EACH, items := Items, template := #{f := F, t := 
          || D <- Items
         ]
     };
+%% No-`f` fallbacks are KEPT here, unlike the ones deleted from `zip_list_fp/2` and
+%% `zip_stream_fp/3`. Two differences: these return a LIST, which is an array on the
+%% wire, so the client parses it as HTML (the zip ones returned a binary -- a string --
+%% which the client wrote into a text node, rendering markup as visible escaped text);
+%% and `zip_*_fp` is typed over `each_template()`, where `f` is required and its absence
+%% is a contract violation, whereas `fingerprint_payload/1` walks arbitrary snapshot
+%% values. Do not "finish the job" by deleting these to match.
 render_fp_val(Backend, #{t := ?EACH, items := Items, template := #{s := S}}) when
     is_list(Items)
 ->
