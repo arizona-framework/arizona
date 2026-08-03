@@ -558,7 +558,10 @@ function runHookCallback(instance, cb, phase) {
     try {
         cb.call(instance);
     } catch (err) {
-        console.error(`[arizona] hook ${instance.__name} ${phase}() threw`, err);
+        // Static format string: a hook name / op code goes in an ARGUMENT, never in
+        // the format position, where a `%s` in it would consume the `err` that
+        // follows (and `%c` would restyle the line) -- see native_client.js.
+        console.error('[arizona] hook %s %s() threw', instance.__name, phase, err);
     }
 }
 
@@ -934,7 +937,7 @@ function applyOps(ops) {
                     break;
             }
         } catch (err) {
-            console.error(`[arizona] op ${op[0]} failed; skipping`, err);
+            console.error('[arizona] op %s failed; skipping', op[0], err);
         }
     }
     // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one).
@@ -1603,7 +1606,7 @@ function applyItemOps(item, innerOps) {
                     console.warn(`[arizona] item op ${op[0]} not recognized; skipping`);
             }
         } catch (err) {
-            console.error(`[arizona] item op ${op[0]} failed; skipping`, err);
+            console.error('[arizona] item op %s failed; skipping', op[0], err);
         }
     }
 }
