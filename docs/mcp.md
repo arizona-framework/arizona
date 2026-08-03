@@ -53,8 +53,19 @@ tools(_State) ->
     ].
 
 handle_tool(~"list_routes", _Args, _Ctx, State) ->
-    Lines = [io_lib:format("~p ~ts", [Type, Path]) || {Type, Path, _, _} <- my_app:routes()],
+    Lines = [format_route(R) || R <- my_app:routes()],
     {reply, iolist_to_binary(lists:join($\n, Lines)), State}.
+
+%% Route tuples are not all one shape: `{live|post|..., Path, Handler, Opts}` is a
+%% 4-tuple, `{ws|asset|reload, Path, Opts}` a 3-tuple, `{match, Spec, Path, Handler,
+%% Opts}` a 5-tuple. Destructuring a single shape in the generator head would
+%% silently drop every other route, so match per clause and keep a catch-all.
+format_route({Type, Path, Handler, _Opts}) when is_atom(Handler) ->
+    io_lib:format("~p ~ts -> ~p", [Type, Path, Handler]);
+format_route({Type, Path, _}) ->
+    io_lib:format("~p ~ts", [Type, Path]);
+format_route(Other) ->
+    io_lib:format("~p", [Other]).
 ```
 
 `handle_tool/4` returns `{reply, Result, State}` (a binary, or a map with `content` /

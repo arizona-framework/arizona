@@ -1349,19 +1349,21 @@ templates are recursively rendered/diffed with their own snapshots. The views ma
 accumulates only children rendered this cycle. Children removed from the template (conditional
 rendering) are pruned from the views map and their `unmount/1` callback is called if exported.
 
-**Slots:** Slots are implemented via stateless children and bindings. A layout receives the
-rendered page under the `inner_content` binding, read with the `?inner_content` macro. Stateless
-components receive props with arbitrary content:
+**Slots:** Slots are implemented via stateless children and bindings. A layout places the page it
+wraps with the **`?inner_content`** macro; the binding key is fixed (`apply_layouts/3` injects
+`inner_content` into the layout's bindings), not configurable. Stateless components receive props
+with arbitrary content:
 
 ```erlang
-%% Layout slot -- ?inner_content is the rendered page
+%% Layout slot -- ?inner_content places the wrapped page (layout uses ?html with az_nodiff)
 render(Bindings) ->
-    ?html({body, [], [?inner_content]}).
+    ?html({body, [az_nodiff], [?inner_content]}).
 
 %% Component slot -- via stateless child props
 ?stateless(render_card, #{label => ~"Hello", content => SomeTemplate})
 ```
 
+<<<<<<< HEAD
 Use the **macro**, not `maps:get(inner_content, Bindings)`: the parse transform recognizes
 `?inner_content` as a block, which is what marks the whole layout `az-nodiff` (a layout renders once
 at SSR and is never diffed, so it needs no `az` targets). A raw `maps:get` is invisible to it, so the
@@ -1374,6 +1376,26 @@ whole -- fine in a `case` tail or handed to a child as a prop, but `iolist_size/
 `badarg`, and in an **attribute** value it raises `bad_template_value` carrying the whole page in the
 error term. `az:inner_content/1` documents the full set of accepted and rejected placements;
 `arizona_render_SUITE`'s `ssr_inner_content_*` cases pin them.
+=======
+**Use the macro, not a bare `maps:get(inner_content, Bindings)`.** The parse transform decides
+value-vs-block by the *call itself*: `is_block_content_expr/1` matches only an `az:` /
+`arizona_template:` call from a fixed name list (`html`, `each`, `stateful`, `stateless`,
+`inner_content`, `local`, `raw`, ...). `?inner_content` expands to `az:inner_content(Bindings)` and
+so is classified a **block** -- spliced structurally, never escaped. A `maps:get/2` call matches
+nothing in that list, so it is classified a **value** and wrapped `{esc, Fun}`, i.e. handed to the
+backend's escaper at the render boundary. That HTML-escapes the entire wrapped page. The `maps:get`
+form only appears to work where the injected value happens to be a map, because
+`arizona_template:mark_esc/1` passes maps through unescaped (`mark_esc(V) when is_map(V) -> V`) --
+an accident of the value's shape, not recognition of the expression.
+
+The value is **opaque, and for a content slot only**: it is a nested template
+(`#{s := [Page], d := []}`), which is what lets the slot splice the page verbatim instead of
+copying and UTF-8-re-decoding it once per layout layer. So do not inspect or measure it
+(`iolist_size(az:inner_content(Bindings))` raises `badarg`), and do not put `?inner_content` in an
+**attribute** value -- like any other template value in attribute position it raises
+`bad_template_value`, here carrying the whole page in the error term. It errors with
+`{badkey, inner_content}` when the module was rendered as something other than a layout.
+>>>>>>> ba797976 (Use the inner_content macro in the layout example and fix two generator examples)
 
 ## Handler callbacks
 

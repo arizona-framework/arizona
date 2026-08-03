@@ -140,14 +140,27 @@ lazy generator (`<-`).
 ```erlang
 %% Pattern LHS -- strict makes mismatches loud:
 [V || {_Az, V} <:- Snapshot]
-[K || K := _ <:- Map]
+[K || K := {ok, _} <:- Map]
 
 %% Bare-variable LHS -- lazy:
 [F || F <- Files]
 [Pid || Pid <- Subscribers, Pid =/= Self]
 ```
 
-Map comprehension generators are always strict (`<-` is not supported for maps).
+The same rule applies to **map** generators (`KeyPattern := ValuePattern` LHS). Both forms
+exist for maps -- `<-` and `<:-` -- so pick by whether the LHS can fail to match. Bare
+variables and `_` cannot, so they take lazy `<-`; that is the dominant form in this codebase
+(`arizona_config:resolve/1`, `arizona_diff`, `arizona_stream:compute_item_changed/2`). Reserve
+`<:-` for a failable **value** pattern, where lazy would silently skip the entries you meant to
+catch (`K := {ok, _} <:- Map` raises `{badmatch, {Key, Value}}` on the first non-`{ok, _}`).
+Note a *variable* key pattern does not pin a key -- `Bound := V <- Map` shadows `Bound` and
+matches every entry.
+
+```erlang
+%% Bare-variable / `_` LHS -- lazy:
+#{K => resolve(V) || K := V <- Map}
+#{K => true || K := _ <- All, key_changed(K, OldItem, NewItem)}
+```
 
 ## az-nodiff
 
