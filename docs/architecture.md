@@ -1318,16 +1318,33 @@ and so are not gated. The opt-out marks the value trusted for HTML *escaping*, n
 tokenizer -- a trusted JSON blob's own string data can still spell an element breakout -- so
 `arizona_html:raw_text/2` unwraps the `?raw` and neutralizes the payload anyway. It takes the
 **tag**, because which sequences break out is a property of that element's tokenizer state rather
-than of raw text at large. `</script`/`</style` ends either element, so it becomes `<\/script` in
-both. `<!--` and `<script` (which together reach script-data-**double**-escaped, where the
+than of raw text at large. `</script`/`</style` becomes `<\/script` in both elements -- strictly
+only the *appropriate* end tag (the one whose name matches the element being parsed) closes a
+raw-text element, so `</style>` inside a `<script>` is ordinary text, but both names are
+neutralized in both as a harmless superset that keeps this half of the rule tag-independent.
+`<!--` and `<script` (which together reach script-data-**double**-escaped, where the
 element's own `</script>` stops closing it and the rest of the document is swallowed) have their
 `<` rewritten as `\u003c`, but **only inside `<script>`**: `<style>` content is RAWTEXT, which has
 no escaped state, so rewriting them there would defend nothing while corrupting the stylesheet
 (`\u003c` is a JS/JSON escape a CSS parser reads as `u003c`, and `<!--`/`-->` are legitimate CSS
 CDO/CDC tokens). Every rewrite therefore decodes back to the original in the context it is applied
-to. It flattens **chardata** first, because the
-documented remedy `?raw(json:encode(Data))` hands it an iolist, not a binary -- a binary-only
-guard would wave a breakout through on the very form the compile error recommends.
+to. It covers every shape `to_bin/1` can turn into attacker-chosen bytes: a binary, an **atom**
+(rendered with `atom_to_binary`, so it carries bytes exactly like a binary), **chardata** -- the
+documented remedy `?raw(json:encode(Data))` hands it an iolist, not a binary, so a binary-only
+guard would wave a breakout through on the very form the compile error recommends -- and a `?raw`
+wrapping any of those. An integer, a float and an effect command (whose JSON `arizona_effect:encode/1`
+already HTML-escapes) cannot spell a sequence, so they pass through.
+
+**Known limit -- the check is per-slot.** Each dynamic is neutralized on its own, so two
+**adjacent** `?raw` slots in one raw-text element whose halves are both attacker-controlled
+reassemble a sequence after both have passed: `~"</scr"` followed by `~"ipt><img src=x ...>"`
+emits a working close tag, since neither half is a breakout by itself. Treat adjacent `?raw` slots
+in one `<script>`/`<style>` as a single trust boundary and build the value in one slot. Two slots
+cannot reach the script-data-*escaped* states (whichever of `<!--` / `<script` lands whole in a
+slot is neutralized there), but three can (`~"<!"`, `~"--<scr"`, `~"ipt>"`), so the
+document-swallowing variant is reachable, just harder. This is inherent to per-slot
+neutralization -- closing it needs the element's whole content assembled before the check, which
+the render path does not do.
 A dynamic *attribute* on a raw-text element
 stays fully diffable -- only
 the content slot is markerless. Limitation: the slot will not update after the initial render, and

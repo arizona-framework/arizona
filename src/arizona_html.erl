@@ -242,9 +242,28 @@ escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
 %% tokenizer reacts to escapes the element (the classic JSON-in-script XSS).
 %% raw_text_breakout/2 below defines that set and what each `<` becomes; a value
 %% that legitimately needs one of them inside a raw-text element is a breakout by
-%% definition. Everything that can carry bytes is covered -- a binary, a `?raw`
-%% opt-out, and chardata; a value that cannot (a nested template, an integer)
-%% passes through unchanged.
+%% definition.
+%%
+%% The covered shapes are every one `arizona_template:to_bin/1` can turn into
+%% attacker-chosen bytes: a **binary**, an **atom** (`to_bin` renders it with
+%% `atom_to_binary`, so an atom carries arbitrary bytes just like a binary),
+%% **chardata**, and a `?raw` opt-out wrapping any of those. An integer and a float
+%% stringify to digits and a sign, and an effect command's JSON is already
+%% HTML-escaped by `arizona_effect:encode/1` (`<` -> `&lt;`), so none of them can
+%% spell a sequence below; they pass through untouched, as does a map (a nested
+%% template renders structurally through the escaping path, not as bytes).
+%%
+%% **Known limit -- neutralization is per-slot.** Each dynamic is neutralized on its
+%% own, so two ADJACENT `?raw` slots whose halves are both attacker-controlled
+%% reassemble a sequence after both have been checked: `~"</scr"` then `~"ipt>..."`
+%% emits a working close tag, because neither half is a breakout by itself. Treat
+%% adjacent `?raw` slots in one raw-text element as a single trust boundary -- build
+%% the value in one slot instead. Two slots cannot reach the script-data-*escaped*
+%% states, since whichever of `<!--` / `<script` lands whole in a slot is
+%% neutralized there; three adjacent slots can (`~"<!"`, `~"--<scr"`, `~"ipt>"`),
+%% so the document-swallowing variant is reachable, just harder. Splicing the halves
+%% is inherent to per-slot neutralization: fixing it needs the whole element's
+%% content assembled before the check, which the render path does not do.
 -spec raw_text(atom(), term()) -> term().
 raw_text(Tag, Value) ->
     %% Resolve the element's tokenizer state ONCE per slot, then thread the answer
@@ -254,6 +273,12 @@ raw_text(Tag, Value) ->
 
 raw_text_1(ScriptData, Value) when is_binary(Value) ->
     neutralize_raw_text(ScriptData, Value, <<>>);
+raw_text_1(ScriptData, Value) when is_atom(Value) ->
+    %% `to_bin/1` renders an atom with `atom_to_binary`, so its name reaches the
+    %% output byte for byte -- an atom is as much a carrier as a binary. Normalize to
+    %% the binary it would have become and neutralize that; the rendered bytes are
+    %% identical either way.
+    neutralize_raw_text(ScriptData, atom_to_binary(Value), <<>>);
 raw_text_1(ScriptData, Value) ->
     %% A `?raw` opt-out is the *only* shape a script/style content slot can carry
     %% (the parse transform rejects an unmarked one), and it opts out of HTML
@@ -297,11 +322,19 @@ neutralize_raw_text(ScriptData, <<C, R/binary>>, Acc) ->
 %% What the `<` becomes, given the text right after it. Three sequences move the
 %% HTML tokenizer out of raw text, and each is defused where it starts:
 %%
-%%   `</script` / `</style` -- ends the element, dropping the rest of the value
-%%       into HTML parsing. This is the only exit RAWTEXT has, so it is
-%%       neutralized for both elements. A backslash after the `<` stops the
-%%       end-tag match: `<\/script` is transparent wherever such content lives
-%%       (`\/` decodes to `/` in JSON, in a JavaScript string, and in CSS).
+%%   `</script` / `</style` -- ends the element, dropping the rest of the value into
+%%       HTML parsing. An end tag only closes a raw-text element when it is the
+%%       *appropriate* one -- its name matches the element being parsed -- so
+%%       strictly only `</script` matters in `<script>` and only `</style` in
+%%       `<style>`; the other is ordinary text there. Both names are neutralized in
+%%       both elements anyway: it is a harmless superset (the rewrite decodes back to
+%%       the original in the string contexts this content lives in), and it keeps the
+%%       close-tag half of the rule tag-independent, so only the script-data half
+%%       below has to consult `ScriptData`. Do NOT narrow it on the belief that the
+%%       cross pair is load-bearing -- it is not; narrowing is safe but buys nothing.
+%%       A backslash after the `<` stops the end-tag match: `<\/script` is transparent
+%%       wherever such content lives (`\/` decodes to `/` in JSON, in a JavaScript
+%%       string, and in CSS).
 %%   `<!--` -- enters script-data-escaped state, where a following `<script`
 %%       reaches script-data-double-escaped and the element's OWN `</script>` no
 %%       longer closes it: the remainder of the document is swallowed, so

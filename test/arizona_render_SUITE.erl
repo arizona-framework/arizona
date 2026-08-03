@@ -33,6 +33,7 @@
     escape_clean_value_not_rebuilt/1,
     raw_text_breakout_neutralized/1,
     raw_text_breakout_neutralized_for_chardata/1,
+    raw_text_breakout_neutralized_for_atom/1,
     render_nested_sd/1,
     render_nodiff_layout_location_success/1,
     render_nodiff_layout_location_wrapping/1,
@@ -110,6 +111,7 @@ groups() ->
             escape_clean_value_not_rebuilt,
             raw_text_breakout_neutralized,
             raw_text_breakout_neutralized_for_chardata,
+            raw_text_breakout_neutralized_for_atom,
             render_nested_sd,
             render_with_views_no_children,
             repeated_stateless_distinct_az,
@@ -398,6 +400,32 @@ raw_text_breakout_neutralized_for_chardata(Config) when is_list(Config) ->
     Undecodable = [<<255>>],
     ?assertEqual(Undecodable, arizona_html:raw_text(script, Undecodable)),
     ?assertError({bad_template_value, Undecodable}, arizona_template:to_bin(Undecodable)).
+
+%% An ATOM carries bytes too: to_bin/1 renders it via atom_to_binary, so an
+%% attacker-influenced atom in a `?raw` script slot is a real breakout. It is the
+%% one to_bin-able shape the binary/chardata clauses missed -- integers and floats
+%% stringify to digits, and an effect command's JSON is HTML-escaped by
+%% arizona_effect:encode/1, so neither can carry `<`.
+raw_text_breakout_neutralized_for_atom(Config) when is_list(Config) ->
+    Nasty = '</script><img src=x onerror=alert(1)>',
+    %% The shape that makes it dangerous: the atom's bytes reach the output.
+    ?assertEqual(~"</script><img src=x onerror=alert(1)>", arizona_template:to_bin(Nasty)),
+    %% Neutralized, and normalized to the binary it would have rendered as.
+    ?assertEqual(
+        ~"<\\/script><img src=x onerror=alert(1)>", arizona_html:raw_text(script, Nasty)
+    ),
+    HTML = render_json_script(Nasty),
+    ?assertEqual(nomatch, binary:match(HTML, ~"</script><img")),
+    ?assertEqual(1, length(binary:matches(HTML, ~"</script>"))),
+    %% Byte-identical to binding the same bytes as a binary -- an atom is not a
+    %% second policy, exactly as chardata is not.
+    ?assertEqual(render_json_script(atom_to_binary(Nasty)), HTML),
+    %% The script-data half folds case and is tag-gated the same way.
+    ?assertEqual(~"\\u003c!--\\u003cscript>", arizona_html:raw_text(script, '<!--<script>')),
+    ?assertEqual(~"<!--<script>", arizona_html:raw_text(style, '<!--<script>')),
+    %% Shapes that cannot carry a metacharacter are still passed straight through.
+    ?assertEqual(123, arizona_html:raw_text(script, 123)),
+    ?assertEqual(1.5, arizona_html:raw_text(script, 1.5)).
 
 render_nested_sd(Config) when is_list(Config) ->
     T = #{
