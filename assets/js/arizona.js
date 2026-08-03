@@ -781,12 +781,13 @@ function removeEl(el) {
  *
  * Two per-batch resolution caches keep a K-op batch from re-scanning the view
  * subtree per op:
- * - `els` memoizes target -> element. Every hit is verified live (`isConnected`)
- *   before use: an op that replaced/re-rendered a subtree (REPLACE, UPDATE,
- *   TEXT) leaves the old elements disconnected, so a stale entry re-resolves
- *   itself -- no per-op invalidation bookkeeping. (A connected-but-wrong hit
- *   would need a duplicate az within one view, which the compiler prevents.)
- *   Nulls are not cached, so an element created mid-batch is found.
+ * - `els` memoizes target -> resolution. Every hit is verified live
+ *   (`isConnected`) before use: an op that replaced/re-rendered a subtree
+ *   (REPLACE, UPDATE, TEXT) leaves the old elements disconnected, so a stale
+ *   entry re-resolves itself -- no per-op invalidation bookkeeping. (A
+ *   connected-but-wrong hit would need a duplicate az within one view, which the
+ *   compiler prevents.) Nulls are not cached, so an element created mid-batch is
+ *   found.
  * - `streams` maps a stream container to a key -> item map of its direct keyed
  *   children, built on first keyed lookup and maintained by the batch's
  *   INSERT/REMOVE ops -- an N-op reorder is O(N), not O(N^2) scans (mirrors
@@ -795,31 +796,46 @@ function removeEl(el) {
  */
 function applyOps(ops) {
     let didReplace = false;
-    /** @type {Map<string, Element>} */
+    /** @type {Map<string, Resolution>} */
     const els = new Map();
     /** @type {Map<Element, Map<string, Element>>} */
     const streams = new Map();
-    /** @param {string} target @returns {Element|null} */
+    /** @param {string} target @returns {Resolution|null} */
     const resolve = (target) => {
         const hit = els.get(target);
-        if (hit?.isConnected) return hit;
-        const el = resolveEl(target);
-        if (el) els.set(target, el);
-        return el;
+        if (hit?.el.isConnected) return hit;
+        const found = resolveOpTarget(target);
+        if (found) els.set(target, found);
+        return found;
     };
     for (const op of ops) {
         // Isolate each op: a bad selector or a throwing hook must not abort the
         // rest of the batch, or the DOM desyncs from the already-advanced server
         // snapshot until a reload.
         try {
-            const el = resolve(op[1]);
-            if (!el) {
+            const found = resolve(op[1]);
+            if (!found) {
                 // Loud like the stream-item warns: a silently dropped op (a
                 // server op addressed to a slot SSR never anchored) reads as
                 // "nothing happened" and costs a debugging round trip.
                 console.warn(`[arizona] op ${op[0]} target "${op[1]}" not found; skipping`);
                 continue;
             }
+            if (found.marker && DESTRUCTIVE_OPS.has(op[0])) {
+                // A marker-only hit is the slot's PARENT element, not the slot:
+                // it exists to give the marker-aware ops (TEXT, and the
+                // stream/list container ops that call `findMarker`) something to
+                // scan. An op that rewrites (`innerHTML`) or removes that element
+                // would take the slot's static siblings -- and possibly the whole
+                // live root -- with it, turning a dropped op into a destroyed
+                // view. Refuse it exactly as an unresolved target is refused.
+                console.warn(
+                    `[arizona] op ${op[0]} target "${op[1]}" resolves only to a slot marker; ` +
+                        `refusing a destructive op`,
+                );
+                continue;
+            }
+            const el = found.el;
             const az = op[1].substring(op[1].indexOf(':') + 1);
             switch (op[0]) {
                 case OP.TEXT:
@@ -885,6 +901,24 @@ function applyOps(ops) {
 }
 
 /**
+ * A resolved patch target. `marker` is true when NO element carries the az and
+ * `el` is only the element the slot's comment marker hangs under -- see
+ * `resolveOpTarget`. Callers must not treat such an `el` as the target itself.
+ * @typedef {{el: Element, marker: boolean}} Resolution
+ */
+
+/**
+ * Ops that rewrite or remove the element they resolve to (`innerHTML`,
+ * `replaceWith`, `remove`). They are refused on a marker-only resolution, whose
+ * element is the slot's PARENT: applying one there destroys the slot's siblings
+ * -- often the entire live root. The server never addresses these to a
+ * marker-anchored slot (the diff uses the marker-aware `?OP_TEXT` instead), so
+ * refusing is a guard, not a supported path.
+ * @type {Set<number>}
+ */
+const DESTRUCTIVE_OPS = new Set([OP.UPDATE, OP.REPLACE, OP.REMOVE_NODE]);
+
+/**
  * Resolve a patch target to a DOM element. Bare targets (no colon) resolve to
  * the view root element itself -- used by OP_REPLACE for navigation. Scoped
  * targets ("viewId:az") find the view root, then the element within it.
@@ -892,7 +926,8 @@ function applyOps(ops) {
  * Three lookups, cheapest and most common first:
  * 1. an element carrying the az (the view root itself, or a descendant);
  * 2. for a compound "X:n" slot az, the base element `[az="X"]`;
- * 3. the slot's `<!--az:X-->` comment marker, whose PARENT element is returned.
+ * 3. the slot's `<!--az:X-->` comment marker, whose PARENT element is returned
+ *    -- flagged `marker: true`, because that element is NOT the target.
  *
  * (3) is what makes a MARKER-ONLY slot patchable: a template whose whole body is
  * a bare dynamic -- `?html(case ... end)`, `?html(?get(x))`, `?html(?each(...))`,
@@ -902,25 +937,46 @@ function applyOps(ops) {
  * `findMarker(el, az)` every marker-aware op then runs finds it. Without it the
  * op resolves to nothing and `applyOps` drops it, so such a component never
  * updates after SSR.
+ *
+ * Arm 2 does not subsume arm 3 even for a compound az: `querySelector` searches
+ * DESCENDANTS, so when the base az belongs to the view root itself (a stream
+ * `?each` among static siblings under the root) it finds nothing. That is exactly
+ * the case where the marker's parent IS the root, which is why `applyOps` refuses
+ * the destructive ops on a marker hit.
  * @param {string} target
- * @returns {Element|null}
+ * @returns {Resolution|null}
  */
-function resolveEl(target) {
+function resolveOpTarget(target) {
     const i = target.indexOf(':');
-    if (i === -1) return findViewRoot(target);
+    if (i === -1) {
+        const root = findViewRoot(target);
+        return root && { el: root, marker: false };
+    }
     const viewId = target.substring(0, i);
     const az = target.substring(i + 1);
     const view = findViewRoot(viewId);
     if (!view) return null;
-    if (view.getAttribute('az') === az) return view;
+    if (view.getAttribute('az') === az) return { el: view, marker: false };
     const el = view.querySelector(`[az="${az}"]`);
-    if (el) return el;
+    if (el) return { el, marker: false };
     const j = az.indexOf(':');
     if (j !== -1) {
         const base = view.querySelector(`[az="${az.substring(0, j)}"]`);
-        if (base) return base;
+        if (base) return { el: base, marker: false };
     }
-    return findMarkerDeep(view, az)?.parentElement ?? null;
+    const parent = findMarkerDeep(view, az)?.parentElement;
+    return parent ? { el: parent, marker: true } : null;
+}
+
+/**
+ * The element a patch target resolves to, dropping the provenance flag. The
+ * exported form; `applyOps` uses `resolveOpTarget` so it can refuse a destructive
+ * op on a marker-only hit.
+ * @param {string} target
+ * @returns {Element|null}
+ */
+function resolveEl(target) {
+    return resolveOpTarget(target)?.el ?? null;
 }
 
 /**
