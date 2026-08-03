@@ -1196,9 +1196,22 @@ function localMarkerAz(el, slot) {
  */
 function writeLocalValue(el, target, value) {
     if (target[0] === 'content') {
+        // Both writes below drop whatever the slot held, so they run the same
+        // teardown applyTextOp does -- `destroyHooks` over the slot span, or
+        // `destroyChildHooks` when there is no marker to delimit and the write
+        // takes the element's whole content. A `?local` slot's SSR initial is a
+        // scalar and `set` only ever writes a text node, so the framework itself
+        // never puts an element in reach; a hook that renders into the element
+        // can, and it would otherwise be detached with its instance left in
+        // `_hooks` and `destroyed()` never called.
         const marker = findMarker(el, localMarkerAz(el, target[1]));
-        if (marker) setMarkerText(marker, value);
-        else el.textContent = value == null ? '' : String(value);
+        if (marker) {
+            forEachElementBetweenMarkers(marker, destroyHooks);
+            setMarkerText(marker, value);
+        } else {
+            destroyChildHooks(el);
+            el.textContent = value == null ? '' : String(value);
+        }
         notifyUpdated(el);
         return;
     }

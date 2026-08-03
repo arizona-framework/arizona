@@ -3078,6 +3078,72 @@ describe('?local -- set/get content', () => {
     });
 });
 
+// A `?local` write drops whatever the slot held, so it must run the same hook
+// teardown `applyTextOp` does -- otherwise an element hook inside is detached
+// while its instance stays in `_hooks` and `destroyed()` never fires.
+//
+// Honest scope: this is hardening, not a live bug. A `?local` slot's SSR initial
+// is a scalar and `set` only ever writes a text node, so nothing the framework
+// itself renders puts an element inside the slot span (SSR gives a stateful child
+// sharing the element its OWN slot, outside the local's marker pair). The shapes
+// below are what a hook that renders into a `?local` element produces, which is
+// exactly the case whose teardown was being skipped.
+describe('?local -- hook teardown on write', () => {
+    it('set destroys a hook inside the slot span before removing it', () => {
+        setupView(
+            'v',
+            `<span az="0" az-local='{"c":{"0":"k"}}'>` +
+                `<!--az:0--><i az-hook="H">old</i><!--/az--></span>`,
+        );
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        mountHooks(document.getElementById('v'));
+        set('v', 'k', 'new');
+        expect(destroyed).toHaveBeenCalledTimes(1);
+        expect(document.querySelector('[az="0"]').textContent).toBe('new');
+    });
+
+    it('setAll destroys a hook inside the slot span before removing it', () => {
+        setupView(
+            'v',
+            `<span az="0" az-local='{"c":{"0":"k"}}'>` +
+                `<!--az:0--><i az-hook="H">old</i><!--/az--></span>`,
+        );
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        mountHooks(document.getElementById('v'));
+        setAll('k', 'new');
+        expect(destroyed).toHaveBeenCalledTimes(1);
+    });
+
+    // No marker pair to delimit the slot, so the write takes the element's whole
+    // content -- the `destroyChildHooks` case, mirroring applyTextOp's else branch.
+    it('a markerless write destroys child hooks it wipes', () => {
+        setupView('v', `<span az="0" az-local='{"c":{"0":"k"}}'><i az-hook="H">old</i></span>`);
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        mountHooks(document.getElementById('v'));
+        set('v', 'k', 'new');
+        expect(destroyed).toHaveBeenCalledTimes(1);
+        expect(document.querySelector('[az="0"]').textContent).toBe('new');
+    });
+
+    // The slot has an opener but no closer, so nothing is written and nothing is
+    // removed -- the teardown must not fire either (same rule as applyTextOp).
+    it('an undelimited slot destroys nothing', () => {
+        setupView(
+            'v',
+            `<span az="0" az-local='{"c":{"0":"k"}}'><!--az:0--><i az-hook="H">old</i></span>`,
+        );
+        const destroyed = vi.fn();
+        hooks.H = { destroyed };
+        mountHooks(document.getElementById('v'));
+        set('v', 'k', 'new');
+        expect(destroyed).not.toHaveBeenCalled();
+        expect(document.querySelector('i')).not.toBeNull();
+    });
+});
+
 describe('?local -- set/get attribute', () => {
     function attrView(viewId, attr, key, extra = '') {
         setupView(viewId, `<div az="0" az-local='{"a":{"${attr}":"${key}"}}' ${extra}>x</div>`);
