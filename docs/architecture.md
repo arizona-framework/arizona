@@ -800,7 +800,7 @@ stream that mutates over a long-lived session as a top-level binding.
   (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics. An append to an
   overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`.
 
-**Window reconciliation is shared by both modes** (`arizona_diff:apply_limit/6`). By the time the
+**Window reconciliation is shared by both modes** (`apply_limit/6` in `arizona_diff`). By the time the
 diff runs, `order` already reflects the halt/drop retention decision, so reconciliation is purely:
 remove the DOM items that fell out of the window, and insert the newly-visible ones **at their
 ordered position**. Positional back-fill is what lets a delete slide the next hidden item into the
