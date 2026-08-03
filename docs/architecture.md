@@ -24,7 +24,7 @@
 | `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
 | `src/arizona_js.erl`                      | Web/browser command/effect builders -- `push_event`, `navigate`, `patch`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
 | `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
-| `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`                                                                |
+| `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`, drain marks (`drain_mark/1`, `undrained_ops/2`)               |
 | `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
 | `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `redirect`/`halted_redirect`                                                   |
 | `src/arizona_middleware.erl`              | Request-to-bindings middleware pipeline -- `apply_middlewares/3` runner + built-in `extract/1`/`put_request/2`/`fetch_flash/2`/`fetch_session/2`/`check_origin/2` steps                   |
@@ -744,6 +744,33 @@ in `src/arizona.hrl`. All rendering/diffing of streams stays in
 - `get_lazy/3` -- look up item by key, calls `Fun()` only if key is missing
 - `clear_stream_pending/2` -- clear pending ops for stream keys in bindings
 - `stream_keys/1` -- scan bindings for stream keys
+- `pending_ops/1` -- the queued ops, oldest first (stamps stripped)
+- `drain_mark/1` -- the mark a drain records in its snapshot: the stamp of the last queued op, or
+  `none` when the queue is empty
+- `undrained_ops/2` -- the ops a drain holding that mark has not consumed yet
+
+### Drain marks
+
+Each queued op carries a globally unique, monotonic stamp (`{Seq, Op}` inside `pending`). A drain
+records `drain_mark/1` on its snapshot (`drained` key) and the next drain of the same slot calls
+`undrained_ops/2` to resume just past it, so a queue that is re-drained emits only the new ops
+instead of replaying its history.
+
+This matters because the queue is drained by the differ but cleared by the live process, which only
+reaches streams held as **top-level** bindings. A stream nested inside another value -- a field of a
+parent stream's item, or a stream inside a map binding -- is never cleared, so every re-eval of the
+enclosing slot re-drains it.
+
+The resume **locates** the stamp rather than counting positions off the head. A stream is an
+immutable value and can have several divergent successors (a view that keeps a pristine stream and
+re-derives the rendered one per event), and position counting cannot tell such siblings apart --
+it would drop a sibling's genuine ops. A stamp the queue does not contain (a fork, `reset/1,2`,
+`clear_stream_pending/2`, a rebuilt or rolled-back stream) falls back to a full drain, which never
+skips. The search runs backwards from the newest op and stops at the mark, or the moment it drops
+below it, so it costs O(ops added this cycle) rather than O(queue length).
+
+The queue of an unclearable nested stream still grows, one retained op term per mutation. Keep a
+stream that mutates over a long-lived session as a top-level binding.
 
 ## API -- `arizona_watcher.erl`
 

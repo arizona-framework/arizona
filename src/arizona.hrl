@@ -22,11 +22,17 @@
 %% operations except `insert/2` flush the buffer (Back -> []) before
 %% they need the full ordered list. `arizona_template:visible_keys/2`
 %% is the only external-facing reader and handles flushing internally.
+%%
+%% Each queued op is stamped `{Seq, Op}` with a globally unique integer, so a
+%% drain can record which op it stopped at and the next one can resume exactly
+%% there (`arizona_stream:drain_mark/1` / `undrained_ops/2`). A stamp is minted
+%% once, at one append, onto one queue value, which is what lets the resume be
+%% exact even for divergent successors of the same stream.
 -record(stream, {
     key      :: fun((term()) -> term()),
     items    :: #{term() => term()},      %% Key => Item (O(log n) lookup)
     order    :: {[term()], [term()]},     %% {Front, BackRev} -- see header note
-    pending  :: queue:queue(),            %% Ops in insertion order (O(1) amortized append)
+    pending  :: queue:queue(),            %% Stamped {Seq, Op}, insertion order (O(1) append)
     limit    :: pos_integer() | infinity, %% Max visible items
     on_limit :: halt | drop,              %% Limit mode
     size     :: non_neg_integer()         %% Cached length(order)

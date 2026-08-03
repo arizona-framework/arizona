@@ -54,6 +54,48 @@ reorder                  %% from sort/2 when order changes
 {reset, OldItems}        %% from reset/1,2 -- OldItems captured pre-mutation for per-item skipping
 ```
 
+## Drain marks -- and the nested-stream memory limit
+
+The queue is drained by the differ but cleared by the live process, which
+only reaches streams stored as TOP-LEVEL bindings (`clear_stream_pending/2` /
+`stream_keys/1`). A stream nested inside another value -- a field of a parent
+stream's item, or a stream inside a map binding -- is out of that reach, so its
+queue survives every drain and is re-drained on each re-eval of the enclosing
+slot.
+
+Every queued op therefore carries a globally unique stamp. A drain records the
+last one it consumed (`drain_mark/1`) in its snapshot, and the next drain asks
+`undrained_ops/2` to resume just past it. That makes a re-drain emit exactly the
+new ops instead of replaying the whole history -- without it, a replayed
+`{update, ...}` re-rendered its STALE item and emitted a real patch, so op count
+and payload grew linearly with the stream's lifetime mutation count (quadratic
+per session) and the client applied every historical intermediate value before
+the current one.
+
+Resuming is by **locating** the stamp, never by counting positions: a stream is
+an immutable value, so it can have several divergent successors (a view that
+keeps a pristine stream and re-derives the rendered one per event -- tab switch,
+undo/restore, filter reset). Position counting cannot tell such siblings apart
+and would drop a sibling's genuine ops; a stamp a queue does not contain simply
+falls back to a full drain. See `undrained_ops/2`.
+
+**What it does not fix: memory.** The queue itself keeps growing -- it lives in
+app-owned bindings and the differ is pure, so nothing can truncate it. A nested
+stream therefore retains every op term (including items a `{Limit, drop}`
+window already evicted) for the lifetime of the view.
+
+Per-cycle CPU does **not** grow with it: the resume searches backwards from the
+newest op and stops at the mark (or below it), so it costs O(ops added this
+cycle), not O(history). Returning a single new op measures ~0.1-0.3 us at 100,
+1k, 5k and 20k queued ops alike -- flat. (Searching forwards from the head, as
+this first did, cost 3.9 / 31 / 136 / 666 us at those sizes.) Draining a rebuilt
+queue -- a divergent fork, a `reset/1,2` -- is O(that queue), which is the work
+of the drain itself rather than of the search.
+
+So the residual cost is retained memory, one op term per mutation. Keep a stream
+that mutates over a long-lived session as a TOP-LEVEL binding, where the live
+process clears it after every drain and neither the memory nor the queue grows.
+
 ## Example
 
 ```erlang
@@ -88,6 +130,9 @@ reorder                  %% from sort/2 when order changes
 -export([get_lazy/3]).
 -export([clear_stream_pending/2]).
 -export([stream_keys/1]).
+-export([drain_mark/1]).
+-export([undrained_ops/2]).
+-export([pending_ops/1]).
 -export([compute_item_changed/2]).
 -export([format_error/2]).
 
@@ -123,6 +168,7 @@ reorder                  %% from sort/2 when order changes
 -export_type([item/0]).
 -export_type([key_fun/0]).
 -export_type([opts/0]).
+-export_type([mark/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -136,6 +182,7 @@ reorder                  %% from sort/2 when order changes
     limit => pos_integer() | infinity,
     on_limit => halt | drop
 }.
+-nominal mark() :: none | integer().
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -254,7 +301,7 @@ insert(
             S#stream{
                 items = Items#{Key => Item},
                 order = {order_insert_at(Flat, Key, Pos), []},
-                pending = queue:in({insert, Key, Item, Pos}, Pending),
+                pending = queue_op({insert, Key, Item, Pos}, Pending),
                 size = Size + 1
             }
     end.
@@ -281,7 +328,7 @@ delete(
             S#stream{
                 items = NewItems,
                 order = order_delete_split(Order, Key),
-                pending = queue:in({delete, Key}, Pending),
+                pending = queue_op({delete, Key}, Pending),
                 size = Size - 1
             };
         error ->
@@ -308,7 +355,7 @@ update(#stream{items = Items, pending = Pending} = S0, Key, NewItem) ->
             Changed = compute_item_changed(OldItem, NewItem),
             S0#stream{
                 items = Items#{Key => NewItem},
-                pending = queue:in({update, Key, NewItem, Changed}, Pending)
+                pending = queue_op({update, Key, NewItem, Changed}, Pending)
             };
         #{} ->
             append_key(S0, Key, NewItem, {update, Key, NewItem, #{}})
@@ -369,7 +416,7 @@ move(
             AfterKey = key_before(Key, Order2),
             S#stream{
                 order = {Order2, []},
-                pending = queue:in({move, Key, AfterKey}, Pending)
+                pending = queue_op({move, Key, AfterKey}, Pending)
             };
         #{} ->
             S
@@ -385,7 +432,7 @@ reset(#stream{items = OldItems} = S) ->
     S#stream{
         items = #{},
         order = {[], []},
-        pending = queue:from_list([{reset, OldItems}]),
+        pending = queue_op({reset, OldItems}, queue:new()),
         size = 0
     }.
 
@@ -405,7 +452,7 @@ reset(#stream{key = KeyFun, items = OldItems} = S, NewItems) when is_list(NewIte
     S#stream{
         items = ItemsMap,
         order = {Order, []},
-        pending = queue:from_list([{reset, OldItems}]),
+        pending = queue_op({reset, OldItems}, queue:new()),
         size = map_size(ItemsMap)
     }.
 
@@ -434,7 +481,7 @@ sort(
         false ->
             S#stream{
                 order = {NewOrder, []},
-                pending = queue:in(reorder, Pending)
+                pending = queue_op(reorder, Pending)
             }
     end.
 
@@ -531,6 +578,75 @@ stream_keys(Bindings) when is_map(Bindings) ->
     [K || K := #stream{} <- Bindings].
 
 -doc """
+The mark a drain records in its snapshot: the stamp of the last op in `pending`,
+or `none` when the queue is empty. Feed it back to `undrained_ops/2` on the next
+drain of the same slot.
+""".
+-spec drain_mark(Stream) -> Mark when
+    Stream :: stream(),
+    Mark :: mark().
+drain_mark(#stream{pending = Pending}) ->
+    case queue:peek_r(Pending) of
+        {value, {Seq, _Op}} -> Seq;
+        empty -> none
+    end.
+
+-doc """
+The ops a drain holding `Mark` has not consumed yet, oldest first.
+
+`Mark` is `none` (no previous drain) or a `drain_mark/1` from one. The op it
+names is located in `pending` and everything up to and including it is dropped;
+if it is absent the WHOLE queue is returned, i.e. a full drain.
+
+Locating the mark (rather than counting positions off the head) is what keeps
+this exact for a stream with more than one successor. Stamps are minted once,
+at one append, onto one queue value, and a queue is only ever extended at the
+tail or replaced wholesale -- so any two queues containing the same stamp
+descend from the same value and share the identical prefix ending at it.
+Dropping that prefix is therefore exactly what the previous drain consumed.
+Anything else -- a divergent fork of the same stream, a `reset/1,2`, a
+`clear_stream_pending/2`, a rebuilt or rolled-back stream -- simply does not
+contain the stamp and falls back to a full drain.
+
+The search runs BACKWARDS from the newest op and costs O(ops newer than `Mark`),
+not O(queue length): the mark is normally the previous drain's last op, so a
+re-drain walks only what this cycle actually added, however long the history
+behind it. Because stamps ascend along a queue, dropping below `Mark` proves it
+is absent and abandons the search there. Both exits are safe by construction --
+failing to find the mark yields a full drain, which never skips an op.
+""".
+-spec undrained_ops(Stream, Mark) -> Ops when
+    Stream :: stream(),
+    Mark :: mark(),
+    Ops :: [term()].
+undrained_ops(#stream{pending = Pending}, none) ->
+    unstamp(Pending);
+undrained_ops(#stream{pending = Pending}, Mark) ->
+    case newer_than(Pending, Mark, []) of
+        {ok, Ops} -> Ops;
+        rebuilt -> unstamp(Pending)
+    end.
+
+%% Popping the rear yields newest-first, so consing each op onto the accumulator
+%% rebuilds the undrained suffix oldest-first for free.
+newer_than(Queue, Mark, Acc) ->
+    case queue:out_r(Queue) of
+        {{value, {Mark, _Op}}, _Rest} -> {ok, Acc};
+        {{value, {Seq, _Op}}, _Rest} when Seq < Mark -> rebuilt;
+        {{value, {_Seq, Op}}, Rest} -> newer_than(Rest, Mark, [Op | Acc]);
+        {empty, _} -> rebuilt
+    end.
+
+-doc """
+Every op currently in `pending`, oldest first.
+""".
+-spec pending_ops(Stream) -> Ops when
+    Stream :: stream(),
+    Ops :: [term()].
+pending_ops(#stream{pending = Pending}) ->
+    unstamp(Pending).
+
+-doc """
 Formats `arizona_stream` runtime errors into a human-readable message.
 Picked up by `erl_error:format_exception/3` via the `error_info`
 annotation attached at the raise site.
@@ -597,7 +713,7 @@ append_key(S0, Key, Item, PendingOp) ->
     S#stream{
         items = Items#{Key => Item},
         order = {Front, [Key | Back]},
-        pending = queue:in(PendingOp, Pending),
+        pending = queue_op(PendingOp, Pending),
         size = Size + 1
     }.
 
@@ -624,6 +740,16 @@ drop_oldest_for_append(#stream{items = Items, order = Order, size = Size} = S) -
         size = Size - 1
     }).
 
+%% Append an op under a fresh stamp. Uniqueness is what makes the resume EXACT
+%% (`undrained_ops/2` locates the mark by equality); monotonicity is what makes
+%% it FAST -- stamps then ascend along the queue, so the backwards search can
+%% stop as soon as it drops below the mark instead of walking the history.
+queue_op(Op, Pending) ->
+    queue:in({erlang:unique_integer([monotonic]), Op}, Pending).
+
+unstamp(Pending) ->
+    [Op || {_Seq, Op} <:- queue:to_list(Pending)].
+
 key_items(_KeyFun, []) -> [];
 key_items(KeyFun, [I | Rest]) -> [{KeyFun(I), I} | key_items(KeyFun, Rest)].
 
@@ -631,7 +757,7 @@ order_from_keyed([]) -> [];
 order_from_keyed([{K, _} | Rest]) -> [K | order_from_keyed(Rest)].
 
 pending_from_keyed([], Q) -> Q;
-pending_from_keyed([{K, I} | Rest], Q) -> pending_from_keyed(Rest, queue:in({insert, K, I, -1}, Q)).
+pending_from_keyed([{K, I} | Rest], Q) -> pending_from_keyed(Rest, queue_op({insert, K, I, -1}, Q)).
 
 order_insert_at(Order, Key, 0) -> [Key | Order];
 order_insert_at([], Key, _Pos) -> [Key];

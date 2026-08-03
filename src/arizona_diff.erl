@@ -306,7 +306,7 @@ diff_each(
 merge_stream_child_views(Source, Old, LocalNew, Old0) ->
     OldChildViews = maps:get(child_views, Old, []),
     #{items := OldItems} = Old,
-    Deleted = deleted_item_children(Source#stream.pending, OldItems),
+    Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
     Surviving = OldChildViews -- Deleted -- maps:keys(LocalNew),
     carry_item_children(Surviving, Old0, LocalNew).
 
@@ -333,10 +333,10 @@ carry_skipped_view(_Old, Views) ->
 %% Extract child view IDs from deleted stream items only. The result is
 %% used in list subtraction (`OldChildViews -- Deleted`), so order doesn't
 %% matter -- safe to use a flat comp instead of a fold-with-prepend.
-deleted_item_children(Pending, OldItems) ->
+deleted_item_children(PendingOps, OldItems) ->
     [
         VId
-     || {delete, Key} <- queue:to_list(Pending),
+     || {delete, Key} <- PendingOps,
         {_Az, #{view_id := VId}, _Deps} <-
             case OldItems of
                 #{Key := ItemD} -> ItemD;
@@ -387,9 +387,14 @@ diff_stream(
             %% helper's arity in bounds. The window (`Vis`) is computed once here
             %% rather than re-materialised on every insert/update op.
             SV = {Source, visible_set(Source)},
+            %% Only the ops queued since this slot's previous drain. A stream the
+            %% live process cannot clear (nested inside another value) keeps its
+            %% whole history in `pending`, and replaying it re-emitted every
+            %% historical intermediate patch -- see arizona_stream's moduledoc.
+            Ops = arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none)),
             diff_stream_pending(
                 Az,
-                Source#stream.pending,
+                Ops,
                 SV,
                 Tmpl,
                 OldItems,
@@ -409,7 +414,10 @@ diff_stream(
                 items => ItemSnaps,
                 order => VKeys,
                 source => Source,
-                template => Tmpl
+                template => Tmpl,
+                %% A full render reflects the whole post-op state, so every op
+                %% queued so far counts as consumed.
+                drained => arizona_stream:drain_mark(Source)
             },
             %% Container full render (the slot did not previously hold a stream,
             %% so there is no order to diff against). Marker-aware `?OP_TEXT`,
@@ -418,14 +426,10 @@ diff_stream(
             {[[?OP_TEXT, Az, HTML]], NewSnap, Views1}
     end.
 
-diff_stream_pending(Az, Queue, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {Source, _Vis} = SV,
-    case queue:out(Queue) of
-        {empty, _} ->
-            apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
-        {{value, Op}, Rest} ->
-            diff_stream_op(Az, Op, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
-    end.
+diff_stream_pending(Az, [], {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
+    apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
+diff_stream_pending(Az, [Op | Rest], SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    diff_stream_op(Az, Op, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0).
 
 diff_stream_op(Az, {insert, Key, Item, Pos}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_insert(Az, Key, Item, Pos, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
@@ -801,7 +805,7 @@ render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0) ->
 
 apply_limit(
     _Az,
-    #stream{limit = infinity, order = Order},
+    #stream{limit = infinity, order = Order} = Source,
     Tmpl,
     SnapItems,
     _OldOrder,
@@ -811,10 +815,10 @@ apply_limit(
     %% `order` is consumed by `arizona_render:zip/2` as a list iterator,
     %% not by `visible_keys/2`, so we need to materialise here.
     FlatOrder = arizona_template:visible_keys(Order, infinity),
-    {[], #{t => ?EACH, items => SnapItems, order => FlatOrder, template => Tmpl}, Views};
+    {[], post_drain_snap(SnapItems, FlatOrder, Tmpl, Source), Views};
 apply_limit(
     Az,
-    #stream{limit = Limit, items = ItemsMap, order = Order},
+    #stream{limit = Limit, items = ItemsMap, order = Order} = Source,
     Tmpl,
     SnapItems,
     OldOrder,
@@ -834,7 +838,7 @@ apply_limit(
             %% (e.g. a single visible-item content update): nothing fell out,
             %% nothing to back-fill, so skip the VSet/RemOps/Pruned passes and
             %% their map allocations entirely.
-            {[], #{t => ?EACH, items => SnapItems, order => VKeys, template => Tmpl}, Views0};
+            {[], post_drain_snap(SnapItems, VKeys, Tmpl, Source), Views0};
         false ->
             VSet = maps:from_keys(VKeys, true),
             RemOps = [
@@ -846,10 +850,27 @@ apply_limit(
                 snap_add_missing(Az, VKeys, Pruned, ItemsMap, Tmpl, Views0),
             {
                 RemOps ++ InsOps,
-                #{t => ?EACH, items => Final, order => VKeys, template => Tmpl},
+                post_drain_snap(Final, VKeys, Tmpl, Source),
                 Views1
             }
     end.
+
+%% The post-drain snapshot, marked so the NEXT drain of this slot resumes past the
+%% ops this one just consumed (`arizona_stream:undrained_ops/2`). That is what
+%% makes a re-drain of a never-cleared queue cheap and stale-patch free. The mark
+%% is the stamp of the last op in the post-op queue, so it covers every op the
+%% drain walked, including the ones the visibility window skipped. Resuming
+%% locates that stamp rather than counting positions, so a queue the mark does not
+%% belong to (a divergent successor of the same stream, a reset, a clear) falls
+%% back to a full drain instead of dropping its ops.
+post_drain_snap(SnapItems, Order, Tmpl, Source) ->
+    #{
+        t => ?EACH,
+        items => SnapItems,
+        order => Order,
+        template => Tmpl,
+        drained => arizona_stream:drain_mark(Source)
+    }.
 
 %% Allocation-light equality for the fast path: the new visible window must
 %% equal the pre-frame window (`OldOrder`) element-wise, every window key must

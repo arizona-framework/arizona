@@ -484,8 +484,19 @@ eval_stateful(H, Props, {Old, New}) ->
         %% and the post-diff drain. with_saved_deps/1 restores only
         %% $arizona_deps, so this key accumulates uninterrupted.
         Effects0 = current_update_effects(),
-        {B1, Resets, Effects1} = mount_or_update_stateful(H, Props, Id, Old, Effects0),
+        {B0, Resets, Effects1} = mount_or_update_stateful(H, Props, Id, Old, Effects0),
         ok = set_update_effects(Effects1),
+        %% Clear the child's queued stream ops BEFORE rendering, so the snapshot
+        %% built below and the bindings stored beside it hold the SAME stream.
+        %% (The eval path renders the whole current state rather than draining
+        %% the queue, so the ops are consumed either way -- this mirrors what
+        %% arizona_live does on the root and child-event paths, without which a
+        %% child whose stream is fed by parent props accumulates one queue entry
+        %% per ROOT update for the lifetime of the process.) Clearing AFTER the
+        %% render instead left the two disagreeing purely about the queue, so the
+        %% next eval's source comparison differed and re-rendered the whole
+        %% container on ticks where nothing had changed.
+        B1 = arizona_stream:clear_stream_pending(B0, arizona_stream:stream_keys(B0)),
         Tmpl = arizona_stateful:call_render(H, B1),
         %% Evaluate this child's dynamics against a FRESH accumulator (mirroring
         %% eval_template/eval_each): whatever lands in LocalNew is exactly its
@@ -501,6 +512,11 @@ eval_stateful(H, Props, {Old, New}) ->
         Descendants = maps:keys(LocalNew),
         Snap0 = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
         Snap = Snap0#{child_views => Descendants},
+        %% The eval above rendered the child's whole current state, so its queued
+        %% stream ops are consumed -- clear them, mirroring what arizona_live
+        %% does on the root and child-event paths. Without this a child whose
+        %% stream is fed by parent props accumulates one queue entry per ROOT
+        %% update for the lifetime of the process.
         B2 = maps:merge(B1, Resets),
         ChildEntry = #{handler => H, bindings => B2, snapshot => Snap},
         New1 = maps:merge(New, LocalNew),
@@ -587,7 +603,12 @@ build_each_snap(ItemSnaps, Tmpl, ChildViews, {VKeys, Source}) ->
         order => VKeys,
         source => Source,
         template => Tmpl,
-        child_views => ChildViews
+        child_views => ChildViews,
+        %% This eval rendered the stream's whole post-op state, so every op
+        %% queued so far counts as consumed. A nested stream's snapshot comes
+        %% from here (the diff discards `diff_stream`'s own), so this is what
+        %% stops the next re-drain from replaying the history.
+        drained => arizona_stream:drain_mark(Source)
     }.
 
 eval_template(#{s := Statics, d := Dynamics} = Tmpl, {Old, New0}) ->
