@@ -91,6 +91,7 @@
     controller_dispatches_action_by_verb/1,
     controller_missing_action_errors/1,
     controller_flushes_stash_onto_stream_response/1,
+    controller_put_req_commits_cookie_mode_session_write/1,
     controller_put_req_commits_action_session_write/1,
     controller_without_put_req_flushes_pre_action_req/1,
     bare_halt_is_forbidden_on_every_dispatcher/1,
@@ -192,6 +193,7 @@ groups() ->
         controller_dispatches_action_by_verb,
         controller_missing_action_errors,
         controller_flushes_stash_onto_stream_response,
+        controller_put_req_commits_cookie_mode_session_write,
         bare_halt_is_forbidden_on_every_dispatcher
     ],
     %% Store-mode session tests: their own group so the `session_store` app env
@@ -434,6 +436,9 @@ init_per_group(roadrunner, Config) ->
         {post, <<"/_test/users">>, arizona_users_controller, #{action => create}},
         %% Route naming an action the controller does not export (error path).
         {get, <<"/_test/bad-action">>, arizona_users_controller, #{action => nope}},
+        %% Cookie-mode (no session_store) session write through the same
+        %% req/1 -> write -> put_req/2 round trip.
+        {post, <<"/_test/session-write">>, arizona_session_write_controller, #{}},
         %% Store-mode logout: the action mutates the post-middleware arizona_req
         %% and threads it back with arizona_controller:put_req/2 (`/logout`), or
         %% deliberately does not (`/logout-dropped`), pinning the boundary.
@@ -887,6 +892,24 @@ controller_missing_action_errors(Config) ->
     %% clear missing_action error.
     Resp = http_req(Config, "GET", "/_test/bad-action", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)).
+
+controller_put_req_commits_cookie_mode_session_write(Config) ->
+    %% Cookie mode -- the default, and the mode the store-mode group's tests
+    %% cannot speak for. A session written on the post-middleware request and
+    %% threaded back with put_req/2 reaches the client as the encrypted
+    %% `Set-Cookie`; without the thread-back the response carries no session
+    %% cookie at all.
+    Resp = http_req(Config, "POST", "/_test/session-write", []),
+    ?assertNotEqual(nomatch, binary:match(Resp, ~"200 OK")),
+    ?assertEqual(#{~"user_id" => ~"u42"}, arizona_session:decode(session_cookie_value(Resp))).
+
+%% The `az_session` cookie value carried by a raw HTTP response's Set-Cookie line.
+session_cookie_value(Resp) ->
+    Name = arizona_session:cookie_name(),
+    {Start, Len} = binary:match(Resp, <<Name/binary, "=">>),
+    Rest = binary:part(Resp, Start + Len, byte_size(Resp) - Start - Len),
+    [Value | _] = binary:split(Rest, ~";"),
+    Value.
 
 controller_put_req_commits_action_session_write(Config) ->
     %% An action's OWN session write reaches the response and the store: the
