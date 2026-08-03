@@ -1425,9 +1425,9 @@ diff_stream_unchanged_snapshot_pair_no_ops(Config) when is_list(Config) ->
     %% side carries `source`, while the stored side does not -- the incremental
     %% stream path settles its snapshot without it -- so the two never compare
     %% term-equal even when they render identically. Emitting the container-level
-    %% `?OP_UPDATE` there innerHTML-replaces a list the client already holds,
-    %% destroying focus, scroll, uncontrolled input state and every `?local` in
-    %% the items, so an unchanged pair must produce nothing at all.
+    %% `?OP_TEXT` there re-renders a list the client already holds, destroying
+    %% focus, scroll, uncontrolled input state and every `?local` in the items,
+    %% so an unchanged pair must produce nothing at all.
     ItemTmpl = #{
         t => ?EACH,
         s => [<<"<li az=\"0\">">>, <<"</li>">>],
@@ -1449,7 +1449,7 @@ diff_stream_unchanged_snapshot_pair_no_ops(Config) when is_list(Config) ->
     StaleSnap = #{
         s => Statics, d => [{OtherAz, maps:remove(source, OtherEach)}], deps => OtherDepsList
     },
-    ?assertMatch([[?OP_UPDATE, _, _]], element(1, arizona_diff:diff(Tmpl, StaleSnap, #{}))).
+    ?assertMatch([[?OP_TEXT, _, _]], element(1, arizona_diff:diff(Tmpl, StaleSnap, #{}))).
 
 stream_each_tmpl(ItemTmpl, Items) ->
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
