@@ -1345,7 +1345,7 @@ via internal scoping. Child view ops use `[ChildViewId, ChildOps]` nesting and r
 Bare targets (no `:`) resolve to the view root via `document.getElementById(target)` -- used by
 `OP_REPLACE` during navigate.
 
-`arizona_socket:flatten_ops/2` unwraps the `[ChildViewId, ChildOps]` nesting only at the **top**
+The socket's op flattening unwraps the `[ChildViewId, ChildOps]` nesting only at the **top**
 level of an ops list, so a `?stateful` child inside a stream `?each` item ships the wrapper still
 nested inside its `OP_ITEM_PATCH` `innerOps`. The client tells the two apart by the head: an op
 code is a number, a wrapper's head is the child view id, whose ops it resolves against
