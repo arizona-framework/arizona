@@ -120,7 +120,7 @@ final class DispatchTests: XCTestCase {
 
     // A keyed stream item wrapping a stateful child view (the `?stateful` inside a
     // stream `?each` shape).
-    private let itemStatics =##"["{\"type\":\"Row\",\"az\":\"I-0\",\"az_key\":",",\"children\":[{\"type\":\"Column\",\"az\":\"C-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"C-0t0\",\"children\":[","]}]}]}"]"##
+    private let itemStatics = ##"["{\"type\":\"Row\",\"az\":\"I-0\",\"az_key\":",",\"children\":[{\"type\":\"Column\",\"az\":\"C-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"C-0t0\",\"children\":[","]}]}]}"]"##
 
     // A keyed stream item wrapping a nested each, so two CELLS inside one item share
     // an `az` -- the item-local registry's equivalent of two stream items sharing one.
