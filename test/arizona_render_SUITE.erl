@@ -70,6 +70,7 @@
     ssr_nested_local/1,
     ssr_local_app/1,
     ssr_local_init_escaped/1,
+    ssr_marker_az_shape/1,
     zip_nested_element/1,
     zip_nested_sd/1,
     zip_static_only/1,
@@ -126,6 +127,7 @@ groups() ->
             ssr_nested_local,
             ssr_local_app,
             ssr_local_init_escaped,
+            ssr_marker_az_shape,
             ssr_about_page,
             ssr_each_map,
             nested_each_render,
@@ -415,6 +417,40 @@ ssr_local_init_escaped(Config) when is_list(Config) ->
     ?assertNotEqual(
         nomatch, binary:match(HTML, <<"title=\"&lt;img src=x onerror=alert(1)&gt;\"">>)
     ).
+
+%% Cross-language contract: every `<!--az:X-->` slot marker SSR emits must match
+%% the `<Fp>-<id>` shape, repeated per nesting level and optionally suffixed
+%% `:<slot>`. The doctrine is `arizona_html:scope_static/3`'s -- the fingerprint
+%% is what separates a real marker from user-authored bytes -- and the web
+%% client now depends on it: its slot walkers track marker NESTING depth, so
+%% they must tell a framework opener from a decoy comment that stored HTML (a
+%% `?raw` CMS payload) happens to carry. A server change that emitted a marker
+%% outside this shape would make the client stop counting it as an opener and
+%% under-walk the slot, so pin the shape here rather than in the client alone.
+%% Covers the nesting-bearing fixtures: layouts, stateful children, inlined
+%% stateless children, `?local` slots, streams among siblings, and multi-slot
+%% elements.
+ssr_marker_az_shape(Config) when is_list(Config) ->
+    {ok, Re} = re:compile(<<"^[0-9A-Z]+-[0-9]+(-[0-9A-Z]+-[0-9]+)*(:[0-9]+)?$">>),
+    Pages = [
+        {arizona_page, #{bindings => #{title => <<"T">>}, layouts => [{arizona_layout, render}]}},
+        {arizona_mixed_children, #{}},
+        {arizona_local_nested, #{bindings => #{title => <<"N">>}}},
+        {arizona_stream_siblings, #{}},
+        {arizona_datatable, #{}}
+    ],
+    Markers = lists:flatmap(fun page_markers/1, Pages),
+    %% The fixtures really do carry markers (a silent [] would pass vacuously).
+    ?assert(length(Markers) >= 20),
+    Bad = [M || M <- Markers, re:run(M, Re) =:= nomatch],
+    ?assertEqual([], Bad).
+
+page_markers({Mod, Opts}) ->
+    HTML = iolist_to_binary(arizona_render:render_view_to_iolist(Mod, Opts)),
+    case re:run(HTML, <<"<!--az:(.*?)-->">>, [global, {capture, all_but_first, binary}]) of
+        {match, Matches} -> [M || [M] <- Matches];
+        nomatch -> []
+    end.
 
 ssr_nested_local(Config) when is_list(Config) ->
     HTML = iolist_to_binary(

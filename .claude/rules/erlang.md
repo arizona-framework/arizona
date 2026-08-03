@@ -295,9 +295,24 @@ plain-list `?each` sit **among static sibling content** in one slot: re-renderin
 replaces only the each's marker span, leaving the siblings intact. An `?OP_UPDATE` here would
 `innerHTML`-wipe the enclosing element's static siblings (the client's `resolveEl` finds no
 element for the slot `az` and falls back to that enclosing element); a sole-child `?each` only
-appeared to work with `?OP_UPDATE` by coincidence. (Stream `?each` -- the `order`-keyed clause
--- still uses `?OP_UPDATE` for its container full-render and `az-key`-addressed incremental
-ops; the unkeyed plain-list marker rule does not apply to it.)
+appeared to work with `?OP_UPDATE` by coincidence.
+
+**A stream `?each` container full render follows the same rule.** SSR anchors a stream each by
+the identical content-slot markers, so every container-level full render is the marker-aware
+`?OP_TEXT` too -- the `order`-keyed `make_op/3` clause and `diff_stream/4`'s no-`order`
+(type-switch) clause, beside the plain-list clause and `full_update/5`. Among static siblings the
+stream's slot az is compound (`<Root>:N`) and carried by no element, so an `?OP_UPDATE` there
+would `innerHTML`-wipe the siblings exactly as it would for a list -- and when the enclosing
+element is the view root, the whole view.
+
+What stays stream-specific is the **incremental** ops (`?OP_INSERT`, `?OP_REMOVE`, `?OP_MOVE`,
+`?OP_ITEM_PATCH`), which a plain list has no equivalent of. They carry the **container's** az as
+the op target and name the item by key in a later field (`[?OP_INSERT, Az, Key, Pos, HTML]`),
+mutating one keyed child rather than the container's whole content -- so the full-render op code
+does not govern them. Their own open limitation is placement: `?OP_INSERT`'s position and
+`?OP_MOVE`'s prepend are relative to the container ELEMENT rather than the marker span, so on a
+marker-only container the client refuses them (warn + skip) instead of misplacing the node.
+Making stream items marker-relative is tracked in [docs/architecture.md](../../docs/architecture.md).
 
 **Known limitation:** embedding a component (a `?stateless`/`?stateful` descriptor) as an
 `?each` item child compiles and renders at SSR but **crashes on the first diff** -- the

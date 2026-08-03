@@ -1306,13 +1306,18 @@ correct); `escapable` (`textarea`/`title`) HTML-escapes a scalar (references *ar
 but is still markerless. A dynamic *attribute* on a raw-text element stays fully diffable -- only
 the content slot is markerless. Limitation: the slot will not update after the initial render, and
 `?local` is unsupported inside a raw-text element (no marker to address); a live `?get` there
-silently freezes at its first value. `OP_UPDATE` (innerHTML on
-the resolved element) is reserved for the **stream** `?each` container full render, where the
-container is the addressable element and items carry `az-key` for incremental ops. Emitting
-`OP_UPDATE` for a marker-anchored slot is a bug: the client's `resolveEl` finds no element for
-the slot `az`, falls back to the enclosing element, and innerHTML clobbers its siblings. See
-`arizona_diff`'s `make_op/3` (the `?EACH` list clause vs. the `order`-keyed stream clause) and
-`full_update/5`.
+silently freezes at its first value. Emitting `OP_UPDATE` for a marker-anchored slot is a bug: no
+element carries the slot `az`, so the client resolves the slot through its comment marker to the
+*enclosing* element, where innerHTML clobbers its siblings -- and when the enclosing element is
+the view root, the whole view. **No** content-slot `?each` container render uses `OP_UPDATE`:
+both the plain-list clause and the `order`-keyed **stream** clause of `arizona_diff`'s
+`make_op/3` emit the marker-aware `OP_TEXT`, as do `full_update/5` and `diff_stream/4`'s
+no-`order` (type-switch) clause. A stream's *incremental* ops keep their own op codes: they carry
+the **same container az** as the target (the item is named by key in a later field) but mutate one
+keyed child instead of the container's whole content, so the full-render op code does not govern
+them -- their own limitation is placement, below. The client refuses
+`OP_UPDATE`/`OP_REPLACE`/`OP_REMOVE_NODE` on a marker-resolved target outright, so a stray one
+warns and skips instead of destroying a view.
 
 The **stream -> list** type switch is consistent with this: a binding that was an
 `arizona_stream` and becomes a plain list routes through `diff_list/4 -> full_update/5 -> OP_TEXT`,
@@ -1321,21 +1326,25 @@ siblings survive. The stream's keyed `az-key` items are element children, and st
 (insert/remove/move/patch query `:scope > [az-key]`) never delete the comment markers, so the
 marker is still present at switch time.
 
-**Known limitation -- the stream `?each` container is not yet marker-anchored for incremental
-ops.** Two consequences, both independent of the `OP_TEXT` content-slot fix:
+The **list -> stream** switch and every other stream **container full render** now use the same
+`OP_TEXT`, so a stream `?each` sharing a content slot with static siblings re-renders in place
+instead of clobbering them.
 
-- **list -> stream among static siblings:** the reverse switch stays on `OP_UPDATE`, which is
-  correct only when the stream each is the addressable element (its slot `az` is the enclosing
-  element, i.e. the each is the sole child of its container). When a stream each shares a content
-  slot with static siblings, `OP_UPDATE` falls back to the enclosing element and clobbers them --
-  the same class of bug the plain-list `OP_TEXT` change fixed for lists.
-- **runtime-inserted item orphaned on stream -> list:** `insertItemEl` appends keyed children to
-  the container element, which places a runtime-inserted item *after* the closing `<!--/az-->`
-  marker. A subsequent stream -> list `OP_TEXT` correctly re-renders the marker span but leaves
-  that orphan behind.
+**Known limitation -- stream *incremental* ops are not yet marker-relative.** `insertItemEl`
+appends keyed children to the resolved container element and `moveItemEl` prepends to it, so
+placement is relative to that ELEMENT rather than to the slot's marker span. Two consequences:
 
-The fix for both is to anchor stream items between the slot markers (and make stream
-insert/move marker-relative), tracked as a follow-up.
+- When the each is not the container's sole content, a runtime-inserted item lands *after* the
+  closing `<!--/az-->` marker. A subsequent stream -> list `OP_TEXT` correctly re-renders the
+  marker span but leaves that orphan behind.
+- On a **marker-only** container (no element carries the slot az) the client would place the node
+  outside the slot entirely -- after the trailing siblings, or before the leading ones. Rather
+  than misplace it silently, `applyOps` refuses `OP_INSERT`/`OP_MOVE` on a marker-resolved target
+  with a warning. The position-independent `OP_REMOVE`/`OP_ITEM_PATCH` find their target by
+  `az-key` and still apply.
+
+The fix for both is to anchor stream items between the slot markers (making insert/move
+marker-relative), tracked as a follow-up.
 
 ## Target scoping
 
@@ -1344,6 +1353,13 @@ view `<<"counter">>`: `"counter:0"`, `"counter:1"`. `arizona_socket` prefixes op
 via internal scoping. Child view ops use `[ChildViewId, ChildOps]` nesting and recurse into these.
 Bare targets (no `:`) resolve to the view root via `document.getElementById(target)` -- used by
 `OP_REPLACE` during navigate.
+
+The socket's op flattening unwraps the `[ChildViewId, ChildOps]` nesting only at the **top**
+level of an ops list, so a `?stateful` child inside a stream `?each` item ships the wrapper still
+nested inside its `OP_ITEM_PATCH` `innerOps`. The client tells the two apart by the head: an op
+code is a number, a wrapper's head is the child view id, whose ops it resolves against
+`getElementById(ChildViewId)` and applies with the same item-op dispatcher (so a grandchild
+wrapper recurses).
 
 ### Repeated stateless components -- per-instance az namespacing
 

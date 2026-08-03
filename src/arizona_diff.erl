@@ -411,8 +411,11 @@ diff_stream(
                 source => Source,
                 template => Tmpl
             },
+            %% Container full render (the slot did not previously hold a stream,
+            %% so there is no order to diff against). Marker-aware `?OP_TEXT`,
+            %% never `?OP_UPDATE` -- see `make_op/3`'s stream `?EACH` clause.
             HTML = arizona_render:zip_stream_fp(Tmpl, ItemSnaps, VKeys),
-            {[[?OP_UPDATE, Az, HTML]], NewSnap, Views1}
+            {[[?OP_TEXT, Az, HTML]], NewSnap, Views1}
     end.
 
 diff_stream_pending(Az, Queue, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
@@ -1057,13 +1060,24 @@ make_op(Az, #{t := ?EACH, items := Items, template := Tmpl}, _Old) when
     is_list(Items)
 ->
     [?OP_TEXT, Az, arizona_render:zip_list_fp(Tmpl, Items)];
-%% Stream (`order`-keyed) each: kept on `?OP_UPDATE` for the container-level
-%% full render. Streams address items by `az-key` for incremental ops and are
-%% used as a list container's content -- the unkeyed plain-list marker fix does
-%% not apply; an analogous mixed-siblings concern for streams is tracked
-%% separately (see docs/architecture.md).
+%% Stream (`order`-keyed) each: the container-level FULL render, which the same
+%% marker rule governs as the plain-list clause above. SSR anchors a stream each
+%% by the identical content-slot markers, and among static siblings the slot az
+%% is compound (`<Root>:N`) and carried by no element -- so the client resolves it
+%% through the marker to the ENCLOSING element, where `?OP_UPDATE`'s innerHTML
+%% takes the siblings with it (when the enclosing element is the view root, the
+%% whole view). `?OP_TEXT` replaces only the marker content and is uniformly
+%% correct, sole-child or not. The INCREMENTAL stream ops (`?OP_INSERT`,
+%% `?OP_REMOVE`, `?OP_MOVE`, `?OP_ITEM_PATCH`) keep their own op codes: they carry
+%% the SAME container az as the target and name the item by key in a later field,
+%% and they mutate one keyed child rather than the container's whole content, so
+%% the full-render op code does not govern them. They have their own open
+%% limitation -- placement (`?OP_INSERT`'s position, `?OP_MOVE`'s prepend) is
+%% relative to the container ELEMENT, not the marker span, so on a marker-only
+%% container the client refuses them rather than misplacing the node (see
+%% docs/architecture.md).
 make_op(Az, #{t := ?EACH, items := Items, order := Order, template := Tmpl}, _Old) ->
-    [?OP_UPDATE, Az, arizona_render:zip_stream_fp(Tmpl, Items, Order)];
+    [?OP_TEXT, Az, arizona_render:zip_stream_fp(Tmpl, Items, Order)];
 make_op(Az, remove, {attr, Attr, _}) ->
     [?OP_REM_ATTR, Az, Attr];
 make_op(Az, remove, _Old) ->

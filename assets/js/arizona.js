@@ -558,7 +558,10 @@ function runHookCallback(instance, cb, phase) {
     try {
         cb.call(instance);
     } catch (err) {
-        console.error(`[arizona] hook ${instance.__name} ${phase}() threw`, err);
+        // Static format string: a hook name / op code goes in an ARGUMENT, never in
+        // the format position, where a `%s` in it would consume the `err` that
+        // follows (and `%c` would restyle the line) -- see native_client.js.
+        console.error('[arizona] hook %s %s() threw', instance.__name, phase, err);
     }
 }
 
@@ -626,17 +629,86 @@ function destroyHooks(root) {
 }
 
 /**
- * Walk elements between a start marker and its closing <!--/az--> marker,
- * applying `fn` to each Element-typed node.
+ * A framework slot-opening comment: `az:` followed by an az of the shape the
+ * compiler emits.
+ *
+ * Every framework-emitted az is `<Fp>-<id>` -- a base-36 `phash2` fingerprint
+ * (upper-case alphanumerics) and a numeric id, repeated for each nesting level
+ * and optionally suffixed `:<slot>` for a second content slot on one element.
+ * The fingerprint is the anchor that separates a real marker from user-authored
+ * bytes, exactly as `arizona_html:scope_static/3` states for the server side:
+ * static text is spliced verbatim and `?raw` splices trusted stored HTML, so a
+ * comment written by a CMS or markdown pipeline reaches slot content as ordinary
+ * bytes. Matching bare `az:` would let such a decoy pose as a nested opener and
+ * make the walker below swallow the slot's own closer.
+ */
+const MARKER_OPEN = /^az:[0-9A-Z]+-\d+(?:-[0-9A-Z]+-\d+)*(?::\d+)?$/;
+
+/**
+ * The `<!--/az-->` closing the slot `startMarker` opens, or null when the slot is
+ * not terminated inside its parent.
+ *
+ * Marker pairs nest -- a template whose whole body is a bare dynamic anchors its
+ * root slot with its own pair inside the enclosing slot's pair -- so this tracks
+ * depth rather than stopping at the first closer, incrementing on a nested
+ * framework opener and decrementing on each closer.
+ * @param {Comment} startMarker
+ * @returns {Comment|null}
+ */
+function findSlotEnd(startMarker) {
+    let depth = 0;
+    for (let node = startMarker.nextSibling; node; node = node.nextSibling) {
+        if (node.nodeType !== 8) continue;
+        const data = /** @type {Comment} */ (node).data;
+        if (data === '/az') {
+            if (depth === 0) return /** @type {Comment} */ (node);
+            depth--;
+        } else if (MARKER_OPEN.test(data)) {
+            depth++;
+        }
+    }
+    return null;
+}
+
+/**
+ * Walk every sibling node inside the slot `startMarker` opens, applying `fn`, and
+ * return the slot's closing marker. Every walker over a slot's contents goes
+ * through here, so nesting is handled in one place.
+ *
+ * The delimiter is found FIRST and nothing is touched when it is missing: `fn`
+ * typically removes the node it is handed, so a walk that mutated as it searched
+ * would empty the rest of the parent whenever the slot could not be delimited --
+ * turning a mis-parse into data loss. Callers get null and skip instead.
+ *
+ * `fn` may remove the node it is handed -- the next sibling is read first.
+ * @param {Comment} startMarker
+ * @param {(node: ChildNode) => void} fn
+ * @returns {Comment|null} the matching closing marker, or null if unterminated
+ */
+function forEachNodeInSlot(startMarker, fn) {
+    const end = findSlotEnd(startMarker);
+    if (!end) return null;
+    // `end` is a following sibling of `startMarker`, so the walk always reaches
+    // it; the null check is the type-level stop.
+    let node = startMarker.nextSibling;
+    while (node && node !== end) {
+        const next = node.nextSibling;
+        fn(node);
+        node = next;
+    }
+    return end;
+}
+
+/**
+ * Walk elements inside the slot `startMarker` opens (nesting-aware, see
+ * `forEachNodeInSlot`), applying `fn` to each Element-typed node.
  * @param {Comment} startMarker
  * @param {(el: Element) => void} fn
  */
 function forEachElementBetweenMarkers(startMarker, fn) {
-    let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+    forEachNodeInSlot(startMarker, (node) => {
         if (node.nodeType === 1) fn(/** @type {Element} */ (node));
-        node = node.nextSibling;
-    }
+    });
 }
 
 /**
@@ -652,7 +724,13 @@ function applyTextOp(el, az, val, isHtml) {
     const marker = findMarker(el, az);
     if (marker) {
         forEachElementBetweenMarkers(marker, destroyHooks);
-        updateMarkerContent(marker, val, isHtml);
+        if (!updateMarkerContent(marker, val, isHtml)) {
+            // Undelimited slot (stored HTML carrying a marker-shaped comment with
+            // no closer). Nothing was touched -- say so rather than write the
+            // value somewhere arbitrary.
+            console.warn(`[arizona] slot az:${az} has no closing marker; skipping`);
+            return;
+        }
         forEachElementBetweenMarkers(marker, mountHooks);
     } else {
         destroyChildHooks(el);
@@ -746,12 +824,13 @@ function removeEl(el) {
  *
  * Two per-batch resolution caches keep a K-op batch from re-scanning the view
  * subtree per op:
- * - `els` memoizes target -> element. Every hit is verified live (`isConnected`)
- *   before use: an op that replaced/re-rendered a subtree (REPLACE, UPDATE,
- *   TEXT) leaves the old elements disconnected, so a stale entry re-resolves
- *   itself -- no per-op invalidation bookkeeping. (A connected-but-wrong hit
- *   would need a duplicate az within one view, which the compiler prevents.)
- *   Nulls are not cached, so an element created mid-batch is found.
+ * - `els` memoizes target -> resolution. Every hit is verified live
+ *   (`isConnected`) before use: an op that replaced/re-rendered a subtree
+ *   (REPLACE, UPDATE, TEXT) leaves the old elements disconnected, so a stale
+ *   entry re-resolves itself -- no per-op invalidation bookkeeping. (A
+ *   connected-but-wrong hit would need a duplicate az within one view, which the
+ *   compiler prevents.) Nulls are not cached, so an element created mid-batch is
+ *   found.
  * - `streams` maps a stream container to a key -> item map of its direct keyed
  *   children, built on first keyed lookup and maintained by the batch's
  *   INSERT/REMOVE ops -- an N-op reorder is O(N), not O(N^2) scans (mirrors
@@ -760,32 +839,54 @@ function removeEl(el) {
  */
 function applyOps(ops) {
     let didReplace = false;
-    /** @type {Map<string, Element>} */
+    /** @type {Map<string, Resolution>} */
     const els = new Map();
     /** @type {Map<Element, Map<string, Element>>} */
     const streams = new Map();
-    /** @param {string} target @returns {Element|null} */
+    /** @param {string} target @returns {Resolution|null} */
     const resolve = (target) => {
         const hit = els.get(target);
-        if (hit?.isConnected) return hit;
-        const el = resolveEl(target);
-        if (el) els.set(target, el);
-        return el;
+        // `isConnected` proves the resolved ELEMENT survived, which for a
+        // marker-only hit is only the slot's parent -- an earlier op in this very
+        // batch can re-render the enclosing slot and destroy the inner marker
+        // while leaving that parent connected. The stale hit would then reach a
+        // marker-aware op, find no marker, and fall through to its whole-element
+        // fallback (`textContent`), wiping the parent -- on `OP_TEXT`, the op code
+        // `MARKER_UNSAFE_OPS` deliberately does not cover. So re-check the marker
+        // itself; a failed check falls through to a fresh resolve, which finds
+        // nothing and warns exactly as an unresolvable target does.
+        if (hit?.el.isConnected && (!hit.marker || findMarker(hit.el, azOf(target)))) return hit;
+        const found = resolveOpTarget(target);
+        if (found) els.set(target, found);
+        return found;
     };
     for (const op of ops) {
         // Isolate each op: a bad selector or a throwing hook must not abort the
         // rest of the batch, or the DOM desyncs from the already-advanced server
         // snapshot until a reload.
         try {
-            const el = resolve(op[1]);
-            if (!el) {
+            const found = resolve(op[1]);
+            if (!found) {
                 // Loud like the stream-item warns: a silently dropped op (a
                 // server op addressed to a slot SSR never anchored) reads as
                 // "nothing happened" and costs a debugging round trip.
                 console.warn(`[arizona] op ${op[0]} target "${op[1]}" not found; skipping`);
                 continue;
             }
-            const az = op[1].substring(op[1].indexOf(':') + 1);
+            if (found.marker && MARKER_UNSAFE_OPS.has(op[0])) {
+                // A marker-only hit is the slot's PARENT element, not the slot:
+                // it exists to give the marker-aware ops something to scan. An op
+                // that rewrites the element or places a node by container position
+                // would destroy or misplace content outside the slot -- see
+                // MARKER_UNSAFE_OPS. Refuse it as an unresolved target is refused.
+                console.warn(
+                    `[arizona] op ${op[0]} target "${op[1]}" resolves only to a slot marker; ` +
+                        `refusing an op that acts on the enclosing element`,
+                );
+                continue;
+            }
+            const el = found.el;
+            const az = azOf(op[1]);
             switch (op[0]) {
                 case OP.TEXT:
                     applyTextOp(el, az, op[2], op[3]);
@@ -836,7 +937,7 @@ function applyOps(ops) {
                     break;
             }
         } catch (err) {
-            console.error(`[arizona] op ${op[0]} failed; skipping`, err);
+            console.error('[arizona] op %s failed; skipping', op[0], err);
         }
     }
     // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one).
@@ -850,26 +951,123 @@ function applyOps(ops) {
 }
 
 /**
+ * A resolved patch target. `marker` is true when NO element carries the az and
+ * `el` is only the element the slot's comment marker hangs under -- see
+ * `resolveOpTarget`. Callers must not treat such an `el` as the target itself.
+ * @typedef {{el: Element, marker: boolean}} Resolution
+ */
+
+/**
+ * Ops that act on the element they resolve to as a whole, so they cannot be
+ * applied to a marker-only resolution -- whose element is the slot's PARENT, not
+ * the slot. Two kinds, both refused:
+ *
+ * - DESTRUCTIVE (`UPDATE`, `REPLACE`, `REMOVE_NODE`): `innerHTML` / `replaceWith`
+ *   / `remove` on the parent takes the slot's static siblings with it, and when
+ *   the parent is the live root, the whole view. The server never addresses these
+ *   to a marker-anchored slot (the diff emits the marker-aware `?OP_TEXT`), so
+ *   this is a guard against a stray op, not a supported path.
+ * - CONTAINER-RELATIVE PLACEMENT (`INSERT`, `MOVE`): a tail insert appends to the
+ *   parent and a null-`afterKey` move prepends to it, both landing OUTSIDE the
+ *   slot's marker span (after the footer, before the header). Silent misplacement
+ *   is worse than the drop-and-warn these got before the marker fallback existed,
+ *   so they warn too. Making stream items marker-relative is the tracked
+ *   follow-up (see docs/architecture.md); until then this refuses rather than
+ *   corrupts. The position-INDEPENDENT item ops (`REMOVE`, `ITEM_PATCH`) find
+ *   their target by `az-key` and stay correct, so they are NOT refused -- they
+ *   are a strict gain over dropping every stream op at this shape.
+ * @type {Set<number>}
+ */
+const MARKER_UNSAFE_OPS = new Set([OP.UPDATE, OP.REPLACE, OP.REMOVE_NODE, OP.INSERT, OP.MOVE]);
+
+/**
+ * The az half of a `"viewId:az"` patch target (the whole string when it carries
+ * no view scope, which never names a slot).
+ * @param {string} target
+ * @returns {string}
+ */
+function azOf(target) {
+    return target.substring(target.indexOf(':') + 1);
+}
+
+/**
  * Resolve a patch target to a DOM element. Bare targets (no colon) resolve to
  * the view root element itself -- used by OP_REPLACE for navigation. Scoped
  * targets ("viewId:az") find the view root, then the element within it.
+ *
+ * Three lookups, cheapest and most common first:
+ * 1. an element carrying the az (the view root itself, or a descendant);
+ * 2. for a compound "X:n" slot az, the base element `[az="X"]`;
+ * 3. the slot's `<!--az:X-->` comment marker, whose PARENT element is returned
+ *    -- flagged `marker: true`, because that element is NOT the target.
+ *
+ * (3) is what makes a MARKER-ONLY slot patchable: a template whose whole body is
+ * a bare dynamic -- `?html(case ... end)`, `?html(?get(x))`, `?html(?each(...))`,
+ * `?html(?stateless(...))`, or a mixed top-level fragment -- anchors its root slot
+ * with its own marker pair and NO element ever carries that az. The returned
+ * parent is exactly the element the marker is a direct child of, so the
+ * `findMarker(el, az)` every marker-aware op then runs finds it. Without it the
+ * op resolves to nothing and `applyOps` drops it, so such a component never
+ * updates after SSR.
+ *
+ * Arm 2 does not subsume arm 3 even for a compound az: `querySelector` searches
+ * DESCENDANTS, so when the base az belongs to the view root itself (a stream
+ * `?each` among static siblings under the root) it finds nothing. That is exactly
+ * the case where the marker's parent IS the root, which is why `applyOps` refuses
+ * the destructive ops on a marker hit.
  * @param {string} target
- * @returns {Element|null}
+ * @returns {Resolution|null}
  */
-function resolveEl(target) {
+function resolveOpTarget(target) {
     const i = target.indexOf(':');
-    if (i === -1) return findViewRoot(target);
+    if (i === -1) {
+        const root = findViewRoot(target);
+        return root && { el: root, marker: false };
+    }
     const viewId = target.substring(0, i);
     const az = target.substring(i + 1);
     const view = findViewRoot(viewId);
     if (!view) return null;
-    if (view.getAttribute('az') === az) return view;
-    let el = view.querySelector(`[az="${az}"]`);
-    if (!el) {
-        const j = az.indexOf(':');
-        if (j !== -1) el = view.querySelector(`[az="${az.substring(0, j)}"]`);
+    if (view.getAttribute('az') === az) return { el: view, marker: false };
+    const el = view.querySelector(`[az="${az}"]`);
+    if (el) return { el, marker: false };
+    const j = az.indexOf(':');
+    if (j !== -1) {
+        const base = view.querySelector(`[az="${az.substring(0, j)}"]`);
+        if (base) return { el: base, marker: false };
     }
-    return el;
+    const parent = findMarkerDeep(view, az)?.parentElement;
+    return parent ? { el: parent, marker: true } : null;
+}
+
+/**
+ * The element a patch target resolves to, dropping the provenance flag. The
+ * exported form; `applyOps` uses `resolveOpTarget` so it can refuse a destructive
+ * op on a marker-only hit.
+ * @param {string} target
+ * @returns {Element|null}
+ */
+function resolveEl(target) {
+    return resolveOpTarget(target)?.el ?? null;
+}
+
+/**
+ * Find the `<!--az:X-->` opening marker anywhere in `root`'s subtree. The
+ * fallback arm of `resolveEl` -- element lookups run first, so this walk only
+ * happens for a slot no element anchors, and `applyOps`' per-batch `els` memo
+ * keeps it to once per target per batch. Same view-wide scope as the
+ * `[az="..."]` query it backs up.
+ * @param {Element} root
+ * @param {string} az
+ * @returns {Comment|null}
+ */
+function findMarkerDeep(root, az) {
+    const data = `az:${az}`;
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_COMMENT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (/** @type {Comment} */ (node).data === data) return /** @type {Comment} */ (node);
+    }
+    return null;
 }
 
 /**
@@ -927,21 +1125,18 @@ function updateLoneTextNode(startMarker, value) {
  * value), or a text node for a scalar value. A scalar is ALWAYS a text node -- never
  * sniffed for `<` -- so a `?get` value containing markup is shown as literal text and
  * cannot inject (matching SSR, which escapes the same value).
+ * Returns false (touching nothing) when the slot has no closing marker.
  * @param {Comment} startMarker
  * @param {string} value
  * @param {boolean} [isHtml]
+ * @returns {boolean}
  */
 function updateMarkerContent(startMarker, value, isHtml) {
     const doc = startMarker.ownerDocument;
     // Scalar fast path: a lone text node is updated in place (no childList churn,
     // which would revert an in-progress scroll on WebKitGTK -- see updateLoneTextNode).
-    if (!isHtml && updateLoneTextNode(startMarker, value)) return;
-    let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
-        const next = node.nextSibling;
-        node.remove();
-        node = next;
-    }
+    if (!isHtml && updateLoneTextNode(startMarker, value)) return true;
+    if (!forEachNodeInSlot(startMarker, (node) => node.remove())) return false;
     // Insert new content before the closing marker
     if (isHtml) {
         const tpl = doc.createElement('template');
@@ -950,6 +1145,7 @@ function updateMarkerContent(startMarker, value, isHtml) {
     } else {
         startMarker.after(doc.createTextNode(value));
     }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -962,22 +1158,20 @@ function updateMarkerContent(startMarker, value, isHtml) {
 /**
  * Replace the content between <!--az:X--> and <!--/az--> with a TEXT node.
  * Unlike updateMarkerContent it never interprets the value as HTML, so a
- * client-set value containing `<` can't inject markup.
+ * client-set value containing `<` can't inject markup. Returns false (touching
+ * nothing) when the slot has no closing marker.
  * @param {Comment} startMarker
  * @param {*} value
+ * @returns {boolean}
  */
 function setMarkerText(startMarker, value) {
     const str = value == null ? '' : String(value);
     // Same in-place fast path as updateMarkerContent: avoid childList churn that
     // reverts an in-progress scroll on WebKitGTK (see updateLoneTextNode).
-    if (updateLoneTextNode(startMarker, str)) return;
-    let node = startMarker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
-        const next = node.nextSibling;
-        node.remove();
-        node = next;
-    }
+    if (updateLoneTextNode(startMarker, str)) return true;
+    if (!forEachNodeInSlot(startMarker, (node) => node.remove())) return false;
     startMarker.after(startMarker.ownerDocument.createTextNode(str));
+    return true;
 }
 
 /**
@@ -1034,11 +1228,11 @@ function readLocalValue(el, target) {
         const marker = findMarker(el, localMarkerAz(el, target[1]));
         if (!marker) return el.textContent;
         let text = '';
-        let node = marker.nextSibling;
-        while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
-            text += node.textContent ?? '';
-            node = node.nextSibling;
-        }
+        // Comment nodes are skipped: a nested slot's own markers are structure,
+        // never part of the value the browser owns.
+        forEachNodeInSlot(marker, (node) => {
+            if (node.nodeType !== 8) text += node.textContent ?? '';
+        });
         return text;
     }
     const name = target[1];
@@ -1351,6 +1545,13 @@ function resolveInnerEl(parent, az) {
  * Per-op behaviour matches `applyOps` via the shared `apply*Op` helpers,
  * differing only in element resolution: bare `az` resolved against `item`
  * via `resolveInnerEl/2`, with a separate fallback for `REMOVE_NODE`.
+ *
+ * An op whose head is NOT an op code is the `[ChildViewId, ChildOps]` child-view
+ * wrapper: `arizona_socket:flatten_ops/2` unwraps it only at top level, so a
+ * `?stateful` child inside a stream `?each` item ships it here still wrapped. Its
+ * ops belong to the child's own view root, resolved by id like the top level does
+ * for `viewId:az` -- and they are the same bare-`az` shape, so they recurse
+ * through this function (which also covers a grandchild wrapper).
  * @param {Element} item
  * @param {Array<Array<*>>} innerOps
  */
@@ -1359,6 +1560,14 @@ function applyItemOps(item, innerOps) {
         // Same per-op isolation as applyOps: a throwing inner op must not abort
         // the rest of the item's patch batch.
         try {
+            if (typeof op[0] !== 'number') {
+                const childRoot = findViewRoot(op[0]);
+                // Loud like the top-level miss: a dropped child batch reads as
+                // "the child just stopped updating".
+                if (childRoot) applyItemOps(childRoot, op[1]);
+                else console.warn(`[arizona] item op child view "${op[0]}" not found; skipping`);
+                continue;
+            }
             const az = op[1];
             switch (op[0]) {
                 case OP.TEXT:
@@ -1393,9 +1602,11 @@ function applyItemOps(item, innerOps) {
                 case OP.LIST_PATCH:
                     applyListPatch(resolveInnerEl(item, az), az, op[2]);
                     break;
+                default:
+                    console.warn(`[arizona] item op ${op[0]} not recognized; skipping`);
             }
         } catch (err) {
-            console.error(`[arizona] item op ${op[0]} failed; skipping`, err);
+            console.error('[arizona] item op %s failed; skipping', op[0], err);
         }
     }
 }
@@ -1424,13 +1635,17 @@ function applyListPatch(el, az, subOps) {
         return;
     }
     // Snapshot the item roots (Element children) and locate the end marker.
+    /** @type {Element[]} */
     const roots = [];
-    let node = marker.nextSibling;
-    while (node && !(node.nodeType === 8 && /** @type {Comment} */ (node).data === '/az')) {
+    const endMarker = forEachNodeInSlot(marker, (node) => {
         if (node.nodeType === 1) roots.push(/** @type {Element} */ (node));
-        node = node.nextSibling;
+    });
+    if (!endMarker) {
+        // Undelimited slot: positions are meaningless and an insert would land
+        // outside the list. Same refusal as a missing opening marker.
+        console.warn(`[arizona] list-patch slot az:${az} has no closing marker; skipping`);
+        return;
     }
-    const endMarker = node;
     for (const sub of subOps) {
         switch (sub[0]) {
             case OP.ITEM_PATCH: {
@@ -1451,8 +1666,7 @@ function applyListPatch(el, az, subOps) {
                 // end marker for a tail insert (the server only inserts at the tail,
                 // but honoring idx keeps this correct for any sub-op ordering).
                 const ref = roots[sub[1]] ?? endMarker;
-                if (ref) ref.before(tpl.content);
-                else marker.after(tpl.content);
+                ref.before(tpl.content);
                 for (const e of added) mountHooks(e);
                 break;
             }
