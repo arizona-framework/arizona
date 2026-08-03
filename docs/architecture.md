@@ -24,6 +24,7 @@
 | `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
 | `src/arizona_js.erl`                      | Web/browser command/effect builders -- `push_event`, `navigate`, `patch`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
 | `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
+| `src/arizona_os.erl`                      | Native-shell (OS) capability command builders -- typed sugars (`set_title`, `focus`, `notify`, ...) plus the `command/2` escape hatch, all funnelled through the single `?EFFECT_OS` op   |
 | `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`, drain marks (`drain_mark/1`, `undrained_ops/2`)               |
 | `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
 | `src/arizona_req.erl`                     | Opaque request -- eager `method`/`path`, lazy `bindings`/`params`/`cookies`/`headers`/`body`/`user_agent`, `redirect`/`halted_redirect`                                                   |
@@ -55,11 +56,14 @@
 | `src/arizona_mcp_session.erl`             | Per-session `gen_server` -- holds the handler state, serializes a session's requests, owns the SSE channel and the resumability buffer                                                    |
 | `src/arizona_mcp_session_registry.erl`    | ETS registry mapping `Mcp-Session-Id` to a session pid; sweeps dead pids on lookup                                                                                                        |
 | `src/arizona_mcp_sup.erl`                 | `simple_one_for_one` supervisor owning the session processes (so a session outlives its connection) and the registry table                                                                |
+| `src/arizona_error.erl`                   | Error-reporting helpers -- `did_you_mean/2` (missing-key suggestions for `format_error/2`) and `raise_or_propagate/6` (re-tag a failure at the user's callback, propagate anything else)  |
 | `src/arizona_error_page.erl`              | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                                  |
 | `src/arizona_config.erl`                  | App-env reader with env-var resolution -- `get_env/1,2` (drop-in for `application:get_env`) + `resolve/1`; expands `{env, "VAR"}` / `{env, "VAR", Default}` refs, coerced by default type |
 | `src/arizona_app.erl`                     | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the roadrunner listener                                                                          |
 | `src/arizona_watcher.erl`                 | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub`                                                                          |
 | `src/arizona_reloader.erl`                | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic                                                               |
+| `src/arizona_reloader_consistency.erl`    | Post-reload call-consistency check -- `check/1` reports callers whose beam `imports` chunk names a function a just-reloaded module no longer exports, plus loaded-vs-disk stale modules   |
+| `src/arizona_dev_mcp.erl`                 | Dev-time MCP server exposing the running node to a coding agent -- introspection tools plus `eval`/`reload`; localhost-only by default (`allow_remote_access => false`); see docs/mcp.md  |
 | `src/arizona_pubsub.erl`                  | PubSub -- thin `pg` wrapper for cross-view communication                                                                                                                                  |
 | `src/arizona_sup.erl`                     | Supervisor -- always starts `arizona_pubsub`; additionally starts one `arizona_watcher` per configured reloader rule                                                                      |
 | `src/az.erl`                              | User-facing facade -- shared type aliases and short-form helpers re-exported from internal modules                                                                                        |
@@ -740,7 +744,7 @@ in `src/arizona.hrl`. All rendering/diffing of streams stays in
 `arizona_eval.erl`/`arizona_diff.erl`.
 
 - `new/1,2,3` -- create a stream with key function, optional initial items, and optional opts
-  (`#{limit => N}`)
+  (`#{limit => pos_integer() | infinity, on_limit => halt | drop}`; see "Limit modes" below)
 - `insert/2,3` -- insert item (append or at position)
 - `delete/2` -- delete item by key
 - `update/3` -- update item by key
@@ -781,6 +785,31 @@ below it, so it costs O(ops added this cycle) rather than O(queue length).
 The queue of an unclearable nested stream still grows, one retained op term per mutation. Keep a
 stream that mutates over a long-lived session as a top-level binding.
 
+### Limit modes -- `limit` + `on_limit`
+
+`limit` is a **visible window**, not a hard cap: items past it stay in the source, invisible.
+`on_limit` decides only what happens to the *source* when a full stream is appended to:
+
+- `infinity` (the default) -- no cap, every item visible.
+- `{Limit, halt}` (`on_limit => halt`, the default when `limit` is set) -- once `Limit` items are
+  present, further items are kept in `items` but stay outside the window.
+- `{Limit, drop}` -- a bounded tail -f buffer. An **append** (`insert/2`, or the `update/3` upsert
+  of a missing key) to a full stream evicts the oldest (front-of-order) item from the source, so
+  the window slides onto the new tail. **Only appends evict**: "oldest" is well-defined only for
+  the append flow, so a positional `insert/3` (a window position, not an age) and pre-population
+  (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics. An append to an
+  overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`.
+
+**Window reconciliation is shared by both modes** (`arizona_diff:apply_limit/6`). By the time the
+diff runs, `order` already reflects the halt/drop retention decision, so reconciliation is purely:
+remove the DOM items that fell out of the window, and insert the newly-visible ones **at their
+ordered position**. Positional back-fill is what lets a delete slide the next hidden item into the
+freed slot and a sort bring a hidden item into view at the right spot (appending at `-1` only
+happened to be right when the new item was last in the window). `window_unchanged/4` is the
+allocation-light fast path: when the new window equals the pre-frame one element-wise and the
+snapshot holds exactly those keys, the whole remove/back-fill pass is skipped -- the common case of
+a content update to an already-visible item.
+
 ## API -- `arizona_watcher.erl`
 
 File watcher gen_server -- subscribes to `fs` events for a directory, debounces, calls optional
@@ -814,6 +843,9 @@ Simplified gen_server wrapper:
 - `start_link/4` -- start with handler module, initial bindings, transport PID, and `on_mount`
   hook list. The transport PID receives `{arizona_push, ...}` updates; pass `undefined` for a
   standalone (non-pushing) process. The live process is transport-agnostic and takes no request
+- `start_link/5` -- as `/4` plus the connection context the transport knows,
+  `#{capabilities => map(), reconnect => boolean()}`, which is what `capability/1`,
+  `capabilities/0`, and `reconnected/0` read. Browser/SSR callers use `/4` (empty context)
 - `mount/1` -- calls `Handler:mount(Bindings)`. Extracts `ViewId = maps:get(id, Bindings)`, calls
   `Handler:render(B1)` via `arizona_stateful:call_render/2`, builds a snapshot via
   `arizona_render:render/2`. Returns `{ok, ViewId}` (no HTML -- SSR is handled separately by
@@ -825,15 +857,17 @@ Simplified gen_server wrapper:
   etc.). If handler exports `handle_info/2`, calls it, diffs, and pushes
   `{arizona_push, RootViewId, Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without
   `handle_info/2` are silently dropped. Empty ops+effects are not pushed
-- `navigate/3,4` -- `navigate(Pid, NewHandler, InitBindings [, OnMount])`. Mounts new
-  handler (applying any `OnMount` hooks), resets gen_server state
-  (handler, snapshot, views), preserves `transport_pid` and `sent_fps`, returns
-  `{ok, NewViewId, PageContent}`. The previous root handler's final bindings are carried
-  forward as the floor for the new handler's mount input -- `InitBindings` (route static
-  config + middleware enrichments) overrides on key overlap. Keys the new handler omits
-  from its mount return value are dropped on the next navigate. Stateful children's state
-  (in `views`) is wiped: a child that was alive on the old page is gone unless the new
-  page re-embeds it
+- `navigate/3,4` -- `navigate(Pid, NewHandler, InitBindings [, OnMount])`. **Unmounts the old page
+  first -- embedded child views, then the root**, the same children-first order a diff removal and
+  `terminate/2` use, so a child's `unmount/1` always runs while its parent is still mounted. Then
+  **cancels every pending timer** in the `$arizona_timers` registry, so a `?send_after` armed by the
+  old page cannot fire into the new one. Then mounts the new handler (applying any `OnMount` hooks),
+  resets gen_server state (handler, snapshot, views), preserves `transport_pid` and `sent_fps`, and
+  returns `{ok, NewViewId, PageContent}`. The previous root handler's final bindings are carried
+  forward as the floor for the new handler's mount input -- `InitBindings` (route static config +
+  middleware enrichments) overrides on key overlap. Keys the new handler omits from its mount return
+  value are dropped on the next navigate. Stateful children's state (in `views`) is wiped: a child
+  that was alive on the old page is gone unless the new page re-embeds it
 - `patch/2` -- `patch(Pid, Params)`. In-place navigation: keeps the current root mounted, runs its
   `handle_update/3` with `Params`, and re-renders through the diff (no unmount, no remount, no timer
   cancel, no `OP_REPLACE`). `handler`, view id, and child views all survive. Returns `{ok, Ops,
@@ -851,6 +885,30 @@ fingerprints already shipped to the client for deduplication.
 `push/4` sends `{arizona_push, RootViewId, Ops, Effects}` to the transport PID -- `RootViewId`
 names the emitting page's root view, so a transport can drop a push that raced a navigate.
 No-ops when PID is `undefined` or ops and effects are both empty.
+
+### Per-view messages and the timer registry
+
+`send/2` is `self() ! {arizona_view, ViewId, Msg}` -- messages are **view-id tagged**, so
+`handle_info/2` routes a tagged message to the matching root or child view (an unknown id raises
+`{unknown_view, ...}`). An untagged message still reaches the root through the catch-all clause, but
+it can never address an embedded child, so `?send`/`?send_after` are the API.
+
+`send_after/3` additionally registers its ref in the `$arizona_timers` process-dictionary map,
+`#{ViewId => [reference()]}`. A fired ref is pruned when its message is delivered; a removed child
+view's timers are cancelled synchronously (and its queued view messages flushed) on unmount; and
+`navigate/3,4` cancels them all, so a timer armed by one page cannot fire into the next.
+
+### Process-dictionary keys
+
+The live process keeps five keys, all read through accessor functions rather than directly:
+
+| Key | Set by | Read by |
+| --- | ------ | ------- |
+| `$arizona_connected` | set `true` while a transport is attached | `connected/0` (the `?connected` macro) -- SSR vs live |
+| `$arizona_reconnected` | set `true` when this connection is a reconnection | `reconnected/0` (the `?reconnected` macro) -- gate one-shot commands with `?connected andalso not ?reconnected` |
+| `$arizona_capabilities` | the `_az_caps` map the client advertised at connect | `capabilities/0` / `capability/1` (`?capabilities` / `?capability`). A UI/effect hint, **never** authorization |
+| `$arizona_timers` | `send_after/3` | unmount and `navigate/3,4`, to cancel |
+| `$arizona_deps` | the per-dynamic eval bracket | `arizona_eval`, `arizona_template:track/1` -- the dependency capture set |
 
 ## API -- `arizona_socket.erl`
 
@@ -874,25 +932,46 @@ lives here independent of the server.
   `["navigate", #{~"path" := Path, ~"qs" := Qs}]` (replace), `["patch", #{~"path", ~"qs"}]`
   (in-place, same-handler -> `patch/2`, else falls back to navigate), `[target, event, payload]`
 - `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live` (dropped
-  when `ViewId` is no longer the socket's current root -- a push that raced a navigate) and
-  `EXIT` signals. On non-normal exit the socket closes with `?CLOSE_CRASH` (4500); on normal
-  exit with 1000. The client reconnects via backoff in `arizona-worker.js` -- crash remount is
-  intentionally not attempted server-side. On a synchronous event/patch reply, pushes already
-  queued in the socket mailbox are folded into the reply frame first (causal wire order)
+  when `ViewId` is no longer the socket's current root -- a push that raced a navigate), the
+  `arizona_resync_timeout` backstop, and `EXIT` signals from the live process. On a synchronous
+  event/patch reply, pushes already queued in the socket mailbox are folded into the reply frame
+  first (causal wire order)
+
+**Exit reason to close code** -- four cases, and the difference matters because the JS worker
+treats **any non-1000 code as reconnectable**:
+
+| Exit reason | Close code | Client behaviour |
+| ----------- | ---------- | ---------------- |
+| `{shutdown, drain}` | `?CLOSE_GOING_AWAY` (1001) | **Reconnects** -- the deliberate drain path (RFC 6455 §7.4 "going away"); the main thread preserves form state |
+| `normal` | 1000 | No reconnect |
+| `shutdown` / `{shutdown, _}` (any other reason) | 1000 | No reconnect -- opt into the reconnect path by exiting `{shutdown, drain}` explicitly |
+| anything else (a crash) | `?CLOSE_CRASH` (4500) | Reconnects via backoff in `arizona-worker.js`; the reason is logged. Crash remount is deliberately not attempted server-side |
 
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
-`{close, Code, Reason, Socket}`
+`{reply_many, [iodata()], Socket}` | `{close, Code, Reason, Socket}`. `reply_many` exists for the
+deferred-resync flush: a non-`cached_fps` first frame produces the resync frame **and** its own
+reply, in that order, on one return.
 
-The `#socket{}` record carries `pid, view_id, handler, req, pending_flash` -- the post-mount
-state needed to dispatch events and navigate. `handler` is the current root handler (so a
-`patch` frame can tell same-handler in-place patch from a full navigate), and `pending_flash`
-holds a one-shot flash carried in-process across an SPA navigate/patch. Flash over a WS
-navigate requires a live destination: a target that degrades to a full-page navigation
-destroys the socket (and a WS frame has no `Set-Cookie` leg), so the stashed flash is dropped
-with a logged warning. The route adapter is recovered from `req` on demand.
+The `#socket{}` record carries `pid, view_id, handler, req, pending_flash, pending_resync` -- the
+post-mount state needed to dispatch events and navigate. `handler` is the current root handler (so
+a `patch` frame can tell same-handler in-place patch from a full navigate); `pending_flash` holds a
+one-shot flash carried in-process across an SPA navigate/patch; `pending_resync` holds the backstop
+timer ref while a flagged reconnect waits for its `cached_fps` frame (`undefined` once flushed, or
+when the connection never deferred). Flash over a WS navigate requires a live destination: a target
+that degrades to a full-page navigation destroys the socket (and a WS frame has no `Set-Cookie`
+leg), so the stashed flash is dropped with a logged warning. The route adapter is recovered from
+`req` on demand.
 
-Internal functions: `scope_ops/2` (prepend view ID to op targets), `encode_reply/3` (build
-`#{<<"o">> => Ops, <<"e">> => Effects}` JSON), `close_crash/1` (crash close tuple),
+**Op scoping happens at JSON-encode time, in two steps.** `flatten_ops/2` walks the nested
+`[[ChildViewId, ChildOps] | ...]` shape `arizona_live` produces and returns a flat list of
+`{ViewId, RawOp}` tuples, each tagged with its **owning** view -- it does no string surgery.
+`op_encoder/2`, the custom encoder passed to `json:encode/2`, then emits each op's target inline as
+`"<ViewId>:<Az>"`. Doing the scoping in the encoder means the target string is built once, straight
+into the output iodata, instead of allocating a rewritten op list first. Inner ops of an
+`OP_ITEM_PATCH` stay item-relative and are not scoped.
+
+Other internal functions: `encode_reply/3` (build the `#{<<"o">> => Ops, <<"e">> => Effects}` JSON),
+`flush_resync/1` + `resync_then/2` (the deferred-resync flush), `close_crash/1` (crash close tuple),
 `dispatch_event/4`, `handle_navigate/3` (drives SPA navigate by invoking the adapter's
 `resolve_route/3`).
 
@@ -964,6 +1043,10 @@ adapter's behaviour callbacks on first access and cached in the returned request
 - `path/1` -- the logical route path, no query string. On a WebSocket SPA-navigate or upgrade
   this is the resolved route path (from `_az_path`), **not** the `/ws` transport path -- so it
   matches a plain HTTP GET to the same route on both transports
+- `scheme/1` -- the connection's own scheme (`https` only on TLS); what `check_origin/2` compares
+  the `Origin` against, after folding in `X-Forwarded-Proto`
+- `request_id/1` -- the transport's request id, for log correlation
+- `adapter/1` -- the `arizona_req` adapter module backing this request
 - `raw/1` -- the native transport value the adapter wraps
 
 **Accessors** (lazy, return `{Value, Req1}`):
@@ -972,11 +1055,22 @@ adapter's behaviour callbacks on first access and cached in the returned request
 - `params/1` -- parsed query string as a proplist
 - `cookies/1` -- parsed cookies as a proplist
 - `headers/1` -- request headers as a map
+- `user_agent/1` -- the `User-Agent` header (pairs with `arizona_user_agent:browser/1` etc.)
 - `body/1` -- the request body
+
+**Response stash** (a live view and a middleware cannot reply directly, so they stash):
+
+- `put_resp_header/3`, `put_resp_cookie/4`, `put_resp_status/2` -- accumulate onto the request
+- `resp_headers/1`, `resp_cookies/1`, `resp_status/1` -- pure getters the transport reads at flush;
+  `resp_cookies/1` only *builds* the cookie list, it performs no side effect
+- `commit_session/1` -- called by the transports at response flush. In server-side store mode this
+  is the write that persists the session, so the persist is **commit-on-success**: a handler that
+  crashes after `put_session/3` leaves the store untouched
 
 **Other:**
 
 - `set_raw/2` -- swap the native raw value, clear all lazy caches
+- `call_resolve_route/4` -- invoke the adapter's optional `resolve_route/3` (SPA navigate)
 - `redirect/2(Req, Location)` / `redirect/3(Req, Status, Location)` -- stash a 3xx redirect
   intent in the request. Transports pick it up on halt and translate uniformly (HTTP 3xx
   reply, or `arizona_js:navigate` effect on WS navigate)
@@ -986,10 +1080,66 @@ adapter's behaviour callbacks on first access and cached in the returned request
   survive a full-page HTTP redirect (signed `az_flash` cookie) and a WebSocket SPA navigate
   (`arizona_socket` in-process carry, exactly-once, no cookie). The WS carry needs a live
   destination -- a navigate that degrades to a full-page navigation drops the flash with a
-  logged warning
+  logged warning. `flash_out/1`, `consume_flash/1`, `seed_flash/2` are the transport-side plumbing
 - session (durable): `put_session/3`, `delete_session/2`, `clear_session/1`, `session/1`,
   `get_session/2,3`, `read_session/1` -- encrypted state; a read does not consume, the response
-  re-emits the cookie only on a write
+  re-emits the cookie only on a write. `session_id/1` returns the opaque id in server-side store
+  mode (`undefined` in cookie mode or before there is a session), so an app can record it to
+  revoke later; `session_error/1` reports a store read failure, kept distinct from a genuinely
+  absent session
+
+### Session and flash cookie security
+
+Both cookies are keyed off the `secret_key` app env (`arizona_crypto` warns below 32 random
+bytes). Flash is **signed** (`arizona_flash`, HMAC-SHA256 + a baked-in TTL, so a cookie replayed
+past its `Max-Age` is rejected rather than merely soft-expired); the session is **encrypted**
+(`arizona_session`, AES-256-GCM) with an absolute expiry stamped inside, so a client can neither
+read, forge, nor outlive it.
+
+| App env | Default | Effect |
+| ------- | ------- | ------ |
+| `session_max_age` | 604800 (7 days) | Session cookie `Max-Age` and the expiry baked into the ciphertext (or, in store mode, into the signed id) |
+| `session_max_bytes` | 4096 | Cap on the **serialized `Set-Cookie` line** -- name + value + attributes, what browsers actually count. `arizona_session:encode/1` errors `{session_too_large, ...}` past it instead of letting the browser silently drop the cookie |
+| `session_secure` | `false` | The session cookie's `Secure` flag |
+| `flash_secure` | `false` | The flash cookie's `Secure` flag |
+| `session_store` | unset (cookie mode) | An `arizona_session_store` module; must be set **before the app boots** (`arizona_sup` reads it at init) |
+| `session_store_sweep_ms` | 60000 | `arizona_session_store_ets` periodic sweep interval (plus lazy expiry) |
+
+`session_secure`/`flash_secure` default `false` **because a `Secure` cookie is silently dropped
+over plain-HTTP dev** and a TLS-terminating proxy cannot be auto-detected -- set them `true` in
+production. Enabling one also switches that cookie to its `__Host-` prefixed name
+(`__Host-az_session` / `__Host-az_flash`), whose browser-enforced Secure + `Path=/` + Domain-less
+rules close sibling-subdomain cookie tossing.
+
+## API -- `arizona_controller.erl`
+
+Reply helpers for **controller routes** -- plain HTTP handlers (a verb tag like `{post, ...}`, or
+`{match, ...}`) that the browser reaches through `arizona_js:fetch/2`. Because a controller answers
+a real HTTP request, its response can carry a `Set-Cookie` (HttpOnly honored) that the WebSocket
+transport cannot, which is what makes it the right place to rotate a session cookie while the page
+stays put. The route dispatches through `arizona_roadrunner_controller`, which runs the middleware
+pipeline (Origin check default-on) and then calls `Handler:Action/1` -- the `action` option,
+default `handle` -- with the route's `state` restored into the request.
+
+- `reply_effects/1(Effects)` -- a `200` whose body is the `{"e": [...]}` effects wire payload, the
+  same shape the WebSocket sends. A fetch form auto-resets on this leg (`az-form-reset` fires only
+  on a 2xx)
+- `reply_effects/2(Status, Effects)` -- the same with an explicit status. The `fetch` command
+  applies response effects on **any** status, so an error leg returns a real `422`: the effects
+  still run (inline validation) while the form's typed fields survive
+- `reply_redirect/1(Location)` -- sugar for `reply_effects([arizona_js:navigate(Location)])`. A
+  fetch-followed HTTP 3xx cannot drive a SPA navigation (`redirect: 'manual'` yields an
+  opaque-redirect whose `Location` is unreadable), so a redirect is delivered as an effect
+- `req/1(RoadrunnerReq)` -- the **post-middleware** `arizona_req:request()`, so an action can call
+  `arizona_req:get_session/2,3` after a `fetch_session` step
+- `bindings/1(RoadrunnerReq)` -- the bindings the middleware pipeline produced
+
+The response is deliberately **effects-only, no ops**: a stateless controller holds no diff
+snapshot to make ops from (hence the `accept: application/json` request header). To re-render the
+**submitting** view, return an `arizona_js:push_event` -- the client relays it over the existing
+WebSocket and the view re-renders through its own `handle_event/3`. To reach **other** views or
+users, broadcast over `arizona_pubsub` with a topic scoped by user/session. Either way the view
+renders from its own state; the response effects are for request-local imperative UI only.
 
 The behaviour expects adapters to implement `parse_bindings/1`, `parse_params/1`,
 `parse_cookies/1`, `parse_headers/1`, `read_body/1`, `scheme/1` against their native request
@@ -1102,15 +1252,26 @@ what its handler needs. Middleware halts that call
 emits as a 3xx reply.
 
 **WebSocket mount:** `arizona_roadrunner_ws:handle/1` delegates to `arizona_ws:prepare/3`, which
-reads `_az_path`/`_az_reconnect`, resolves the route, runs middlewares, and returns the state
-for the transport to hand to `arizona_socket:init/4`. The socket calls
-`arizona_live:start_link/4` (passing `self()` as transport PID and route `on_mount`
-hooks) then `arizona_live:mount/1`. Mount establishes the
+reads the framework query keys -- `_az_path`, `_az_reconnect`, `_az_fps_follow`, `_az_caps` --
+resolves the route, runs middlewares (so the Origin check gates the upgrade too), and returns the
+state for the transport to hand to `arizona_socket:init/4`. The socket calls
+`arizona_live:start_link/5` (passing `self()` as transport PID, the route `on_mount` hooks, and the
+connection context `#{capabilities, reconnect}`) then `arizona_live:mount/1`. Mount establishes the
 server-side snapshot (matching SSR). Returns `{ok, ViewId}` where ViewId comes from
-`maps:get(id, MountBindings)`. Handlers detect the connected context via `?connected` macro
-(delegates to `arizona_live:connected()`) which reads a process dictionary flag set in
-`arizona_live:init/1`. For post-connection effects, handlers use `?send(arizona_connected)` in mount
-and handle it in `handle_info/2`.
+`maps:get(id, MountBindings)`.
+
+A **flagged reconnect** (`_az_fps_follow=1`, which the worker sets on every reconnect open) defers
+that whole mount+render until the client's promised `cached_fps` frame arrives, so the resync
+`OP_REPLACE` dedups its statics against the announced fingerprints -- see `arizona_socket:init/4`
+above for the full handshake and its 1 s backstop.
+
+Handlers detect the connected context via the `?connected` macro (delegates to
+`arizona_live:connected()`), which reads a process-dictionary flag set in `arizona_live:init/1`;
+`?reconnected` (`arizona_live:reconnected()`) additionally distinguishes a re-opened socket from a
+first connect, so a **one-shot** command (`notify`, `focus`) can be gated with `?connected andalso
+not ?reconnected` while a **declarative** one (`set_title`, `fullscreen`) is re-asserted on every
+connect. For post-connection effects, handlers use `?send(arizona_connected)` in mount and handle it
+in `handle_info/2`.
 
 **Server push (`handle_info`) -- per-view routing:** Messages sent via `?send(Msg)` /
 `arizona_live:send(ViewId, Msg)` are tagged as `{arizona_view, ViewId, Msg}` and routed to the
@@ -1201,8 +1362,15 @@ Two handler kinds, each with its own header:
 -include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
+%% Construct a fresh map -- never `maps:merge(Defaults, Bindings)` or `Bindings#{...}`.
+%% A navigate carries arbitrary keys forward from previously visited pages, so
+%% merging lets a foreign key collide with a handler-owned default. Pull each
+%% accepted override out explicitly.
 mount(Bindings) ->
-    {maps:merge(#{id => ~"page", count => 0}, Bindings), #{}}.
+    {#{
+        id => ~"page",
+        count => maps:get(count, Bindings, 0)
+    }, #{}}.
 
 render(Bindings) ->
     ?html({'div', [], [?get(count, 0)]}).
@@ -1435,11 +1603,17 @@ marker-relative), tracked as a follow-up.
 
 ## Target scoping
 
-Patch targets are `"viewId:relativeTarget"`. Root view `<<"page">>`: `"page:0"`, `"page:1"`. Child
-view `<<"counter">>`: `"counter:0"`, `"counter:1"`. `arizona_socket` prefixes ops with the view id
-via internal scoping. Child view ops use `[ChildViewId, ChildOps]` nesting and recurse into these.
-Bare targets (no `:`) resolve to the view root via `document.getElementById(target)` -- used by
-`OP_REPLACE` during navigate.
+Patch targets on the wire are `"viewId:relativeTarget"`. Root view `<<"page">>`: `"page:0"`,
+`"page:1"`. Child view `<<"counter">>`: `"counter:0"`, `"counter:1"`. Bare targets (no `:`) resolve
+to the view root via `document.getElementById(target)` -- used by `OP_REPLACE` during navigate.
+
+`arizona_live` emits ops with **relative** targets, nesting a child view's ops as
+`[ChildViewId, ChildOps]`. `arizona_socket` applies the view id in two steps, both at
+JSON-encode time: `flatten_ops/2` walks that nesting and returns a flat list of `{ViewId, RawOp}`
+tuples, each tagged with its owning view (no string surgery); the custom encoder `op_encoder/2`,
+passed to `json:encode/2`, then writes each target inline as `"<ViewId>:<Az>"`. Building the scoped
+target straight into the output iodata avoids allocating a rewritten op list first. Inner ops of an
+`OP_ITEM_PATCH` are item-relative and are deliberately **not** scoped.
 
 The socket's op flattening unwraps the `[ChildViewId, ChildOps]` nesting only at the **top**
 level of an ops list, so a `?stateful` child inside a stream `?each` item ships the wrapper still

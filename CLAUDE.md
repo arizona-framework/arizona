@@ -27,12 +27,18 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make fmt` | Format all (`fmt-erl` `fmt-js`) |
 | `make check` | All checks incl. dialyzer (`check-erl` `check-js` `check-md` `check-yaml` `check-actions`) |
 | `make check-fast` | Fast checks -- no dialyzer (`check-fmt` `check-js` `check-md`) |
+| `make check-dirty` | Fail if the build left tracked files modified (used by `ci`) |
+| `make check-hank` | Dead-code check (`rebar3 hank`); fails on "no longer needed" |
+| `make check-xref` | Cross-reference check (`rebar3 xref`) |
 | `make test` | All tests -- no coverage (`test-erl` `test-js` `test-e2e`) |
 | `make test-erl` | Common Test + EUnit |
 | `make test-ct` | Common Test only |
 | `make test-eunit` | EUnit only (inline private fn tests) |
 | `make test-js` | JS unit tests (Vitest) |
 | `make test-e2e` | Playwright E2E tests (incl. the `native` JSON-wire project) |
+| `make test-e2e-parallel` | Playwright `parallel` project only |
+| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`) |
+| `make test-e2e-native` | Playwright `native` project only (`?native` JSON wire, no browser) |
 | `make test-android` | Android client e2e (opt-in; needs Android SDK + emulator; **not** in `ci`) |
 | `make test-ios` | iOS client tests (opt-in; `swift test` anywhere + Simulator e2e on macOS; **not** in `ci`) |
 | `make build-tauri` | Build the reference Tauri desktop shell (opt-in; needs Rust + webview deps; **not** in `ci`) |
@@ -42,6 +48,9 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make cover-erl` | Erlang coverage (min 80% of the project total, not per module) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
 | `make doc-erl` | Erlang docs (ex_doc) |
+| `make bench` | Performance bench (`scripts/bench.escript`, `ARGS=...`); deliberately **not** in `ci` -- shared runners are too noisy |
+| `make prof` | eprof/fprof profile (`scripts/profile.escript`, `ARGS=...`); also **not** in `ci` |
+| `make prof-at REF=...` | Profile any commit-ish in a cached `git worktree`, for A/B comparisons |
 | `make setup-e2e` | Install E2E deps |
 | `make clean` | Remove build artifacts |
 
@@ -96,7 +105,7 @@ Response effects apply whenever the body parses **even on a `4xx`** (so the cont
 
 ### SPA navigation -- `navigate` (replace) vs `patch` (in-place)
 
-Two SPA navigation modes, chosen per-link by the caller. **`navigate`** (`az_navigate` attribute / `arizona_js:navigate/1,2`) *replaces* the root view: the live process unmounts the old root, mounts the new handler, and ships one `OP_REPLACE` of the whole view element -- a fresh page. **`patch`** (`az_patch` / `arizona_js:patch/1,2`) *keeps* the root view: the live process delivers the new route's params to the current root's `handle_update/3` and re-renders through the diff, shipping only the changed slots. The process, view id, child views, and DOM (live chrome, scroll position, open menus) all survive. `arizona_socket` decides per frame -- it tracks the current root `handler` and applies a patch in place (`arizona_live:patch/2`) only when the patched path resolves to the **same** handler; a patch to a **different** handler can't keep the view, so it degrades to a full navigate/replace.
+Two SPA navigation modes, chosen per-link by the caller. **`navigate`** (`az_navigate` attribute / `arizona_js:navigate/1,2`) *replaces* the root view: the live process unmounts the old page -- **embedded child views first, then the root**, the same removal order a diff removal and `terminate/2` use -- **cancels every pending timer** (the whole `$arizona_timers` registry, so a `?send_after` armed by the old page can't fire into the new one), mounts the new handler, and ships one `OP_REPLACE` of the whole view element -- a fresh page. The previous root's final bindings are carried forward as the floor for the new mount's input, with `InitBindings` (route static config + middleware enrichments) overriding on key overlap; child state in `views` is wiped. **`patch`** (`az_patch` / `arizona_js:patch/1,2`) *keeps* the root view: the live process delivers the new route's params to the current root's `handle_update/3` and re-renders through the diff, shipping only the changed slots. The process, view id, child views, and DOM (live chrome, scroll position, open menus) all survive. `arizona_socket` decides per frame -- it tracks the current root `handler` and applies a patch in place (`arizona_live:patch/2`) only when the patched path resolves to the **same** handler; a patch to a **different** handler can't keep the view, so it degrades to a full navigate/replace.
 
 So "persistent live chrome across navigation" (a sidebar with a live badge, a media player) is an ordinary app pattern, **not** a framework feature: write one view whose chrome is persistent and whose content is a swappable `?stateful(?get(page), ...)` child, point several routes at it, and link between them with `az_patch`. There is deliberately no `shell`/`?outlet` concept -- that would bake a UI shape into the framework; `patch` is the generic primitive. The client tags the history entry (`_azNav`) and stamps the outgoing entry so back/forward replays the patch. Demo: `arizona_patch_demo` (`/patch-demo/:section`).
 
@@ -182,6 +191,14 @@ Update it from an event attribute (or handler effect) -- never reaches the serve
 Client JS: `arizona.set(viewId, key, value)` (always 3-arg -- the 2-arg `arizona_js:set/2` is template-only), `arizona.setAll(key, value)`, `arizona.get(key)` / `arizona.get(viewId, key)`. `get` returns DOM strings (no type preservation; absent/bare boolean attrs read back as `false`/`true`).
 
 **Caveat:** a `?local` value survives normal per-slot diffs, but resets to its SSR initial if an enclosing region is re-rendered wholesale -- an `OP_TEXT` that replaces a whole slot with a fresh fragment (a conditional branch swap, a plain-list or stream `?each` container render), an `OP_REPLACE` navigate, or an `?each` item re-materialised by `OP_INSERT` -- or on a forced reconnect. Inside `?each`, every item shares the slot **key** -- keys are compile-time literals (no `?local(<<"open_", Id/binary>>, ...)`), so `set`/`set_all` updates **all** items at once; `?local` can't hold per-item independent client state in a list/stream (use server state for that). The server never reads it back -- to use it server-side, send it in a `push_event` payload. See [docs/architecture.md](docs/architecture.md).
+
+## Keyed lists -- `arizona_stream` and `on_limit`
+
+A stream is the keyed source for a 2-arg `?each` (`fun(Item, Key) -> Element end`): items carry a stable key (`new(KeyFun, ...)`), so the diff emits per-item `OP_INSERT`/`OP_REMOVE`/`OP_MOVE`/`OP_ITEM_PATCH` instead of re-rendering the list, and a `?stateful` child inside an item is its own self-diffing live view.
+
+`new/3` takes `#{limit => pos_integer() | infinity, on_limit => halt | drop}` (defaults `infinity`/`halt`) -- a **visible window**, not a hard cap. `halt` (the default) keeps items past `Limit` in the source but invisible: the window is the first `Limit` items in order. `drop` makes it a bounded tail -f buffer -- an **append** (`insert/2`, or the `update/3` upsert of a missing key) to a full stream evicts the oldest (front-of-order) item from the source so the window slides onto the new tail. Only appends evict: "oldest" is well-defined only for the append flow, so a positional `insert/3` (which declares a window position, not an age) and pre-population (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics even in `drop` mode -- an overfull `drop` stream then converges to `size =< Limit` on its next append.
+
+Cost note: `insert/2` and `update/3` are O(1) amortized; `delete/2`, `insert/3`, `move/3` are O(N) list surgery on the order, so K per-item calls in one event are O(K*N). For bulk mutation build the list once and `reset/2` (one op -- the differ still patches only the real per-item delta) or reorder with one `sort/2`.
 
 ## Static generation
 

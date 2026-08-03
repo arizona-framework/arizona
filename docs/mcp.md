@@ -93,9 +93,16 @@ has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mc
 - `describe_component` -- a component's kind (stateful/stateless), its exports, and its moduledoc.
 - `get_docs` -- a module's or function's documentation via `code:get_doc/1` (EEP-48).
 - `get_source_location` -- where a module (or function) is defined.
-- `reloader_status` -- the dev reloader's current compile error via `arizona_reloader:get_error/0`.
+- `reloader_status` -- the dev reloader's current compile error (`arizona_reloader:get_error/0`)
+  **plus loaded-vs-disk drift**: the modules whose loaded code differs from their beam on disk. A
+  node serving stale code otherwise reads "ok", so the drift list is the useful half.
 - `app_info` -- `application:get_key/2`, `erlang:system_info/1`.
 - `render_component` -- render a view/component module to HTML with given bindings.
+- `reload` -- **force a compile+reload sync now**: recompile the project (via `rebar_agent` under
+  `rebar3 shell`) and reload every module whose beam on disk differs from the loaded code. This is
+  the action to take when `reloader_status` reports drift. It **swaps running code** in the live
+  node, so it sits behind the same localhost-only gate as `eval` (see below), not the read-only
+  introspection tools.
 - `eval` -- run Erlang in the live node (see below).
 
 ## `eval`: powerful, and a footgun
