@@ -865,13 +865,17 @@ Simplified gen_server wrapper:
   in this order: **cancel timers first** (`cancel_pending_timers/0` erases the whole
   `$arizona_timers` registry, cancels every ref, then drains already-delivered
   `{arizona_view, _, _}` messages from the mailbox), **then unmount -- embedded child views, then
-  the root**, the same children-first order a diff removal and `terminate/2` use, so a child's
-  `unmount/1` always runs while its parent is still mounted. Then mounts the new handler
+  the root**, the same children-first order a diff removal and `terminate/2` use, so every child's
+  `unmount/1` runs while the ROOT is still mounted. That guarantee is against the root only:
+  `views` is a flat map walked with `maps:foreach`, so among nested views the order is the map's
+  key order -- a nested parent may unmount before its own child. Then mounts the new handler
   (applying any `OnMount` hooks),
   resets gen_server state (handler, snapshot, views), preserves `transport_pid` and `sent_fps`, and
   returns `{ok, NewViewId, PageContent}`. The previous root handler's final bindings are carried
-  forward as the floor for the new handler's mount input -- `InitBindings` (route static config +
-  middleware enrichments) overrides on key overlap. Keys the new handler omits from its mount return
+  forward as the floor for the new handler's mount input, minus `arizona_eval:restricted_keys/0`
+  (`[id]`) -- those are route-bound, and `do_mount` requires the new handler's mount to keep them
+  verbatim, so carrying them would force the new route to pretend it is the old one.
+  `InitBindings` (route static config + middleware enrichments) overrides on key overlap. Keys the new handler omits from its mount return
   value are dropped on the next navigate. Stateful children's state (in `views`) is wiped: a child
   that was alive on the old page is gone unless the new page re-embeds it
 - `patch/2` -- `patch(Pid, Params)`. In-place navigation: keeps the current root mounted, runs its
@@ -1273,11 +1277,12 @@ the native req in an `arizona_req:request()`, runs any route middlewares
 mounts the page via `arizona_stateful:call_mount/2`, applies `on_mount` hooks,
 renders to page HTML, then optionally injects the rendered page into mount bindings as
 `inner_content` -- as an opaque nested template, not iodata (see **Slots** below)
--- and passes the bindings to the layout's `render/1`. The layout uses `?html` with `az_nodiff` on
-the root element -- a stateless HTML shell (DOCTYPE, head, body, scripts) with no markers or `az`
-attributes. `layouts` is always a list, applied outermost-first (`[Root, Section]` produces
+-- and passes the bindings to the layout's `render/1`. A layout is a stateless HTML shell (DOCTYPE,
+head, body, scripts) with no markers or `az` attributes: `?inner_content` is itself what marks the
+whole layout `az-nodiff`, so an explicit `az_nodiff` attribute is redundant and no layout fixture
+in the repo writes one. `layouts` is always a list, applied outermost-first (`[Root, Section]` produces
 `Root(Section(Page))`); an empty list renders the page directly, with no wrapper. Route config
-provides `bindings`, `on_mount`, `layouts`, and `middlewares` -- the single canonical
+provides `bindings`, `on_mount`, `layouts`, `middlewares`, and `check_origin` -- the single canonical
 `t:arizona_live:route_opts/0`. URL data (path bindings,
 query params) does NOT flat-merge into Bindings -- a route opts into
 `arizona_middleware:extract/1` middlewares (or `arizona_middleware:put_request/2`) to project
@@ -1334,8 +1339,10 @@ handler it cancels every pending `send_after` timer (`cancel_pending_timers/0`, 
 `$arizona_timers` registry) and then unmounts the outgoing page **children first, then the root**
 (`unmount_removed_views/1` over the old views map, then `arizona_stateful:call_unmount/2` on the
 old root). Discarding the page is a removal, so it unmounts exactly like a diff removal does, and
-`terminate/2` uses the same order for any exit reason -- a child's `unmount/1` always runs while
-its parent is still mounted, and no handler has to propagate unmount by hand. Then the new handler
+`terminate/2` uses the same order for any exit reason -- every child's `unmount/1` runs while the
+root is still mounted, and no handler has to propagate unmount by hand. Note the guarantee is
+against the root: `views` is flat and walked with `maps:foreach`, so nested views unmount in key
+order, not parent-before-child. Then the new handler
 is mounted and gen_server state is reset. Returns `{ok, NewViewId, PageHTML}`. WS handler sends
 `[OP_REPLACE, OldViewId, PageHTML]`. Browser back/forward also triggers navigate via `popstate`.
 
@@ -1361,9 +1368,9 @@ wraps with the **`?inner_content`** macro; the binding key is fixed (`apply_layo
 with arbitrary content:
 
 ```erlang
-%% Layout slot -- ?inner_content places the wrapped page (layout uses ?html with az_nodiff)
+%% Layout slot -- ?inner_content places the wrapped page AND marks the layout az-nodiff
 render(Bindings) ->
-    ?html({body, [az_nodiff], [?inner_content]}).
+    ?html({body, [], [?inner_content]}).
 
 %% Component slot -- via stateless child props
 ?stateless(render_card, #{label => ~"Hello", content => SomeTemplate})

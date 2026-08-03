@@ -111,7 +111,7 @@ Evicting is never wrong: the cache is content-addressed, so the server re-sends 
 
 Server-side: handlers use the `?connected` macro (delegates to `arizona_live:connected()`) in `mount/1` to detect WS vs SSR context, and `?reconnected` (`arizona_live:reconnected()`) to tell a re-opened socket from a first connect. No `az-connect` HTML attribute -- connection is fully server-driven.
 
-To run something on connect, self-send and handle it in `handle_info/2`. Use the **`?send` macro**, not a bare `self() ! Msg`: live-process messages are view-id tagged (`arizona_live:send/2` sends `{arizona_view, ViewId, Msg}`) and `handle_info/2` routes a tagged message to the matching root **or child** view. A bare untagged message still reaches the root through the catch-all clause, but it can never address an embedded child, and any message arriving before the first render (`snapshot = undefined`) is dropped.
+To run something on connect, self-send and handle it in `handle_info/2`. Use the **`?send` macro**, not a bare `self() ! Msg`: live-process messages are view-id tagged (`arizona_live:send/2` sends `{arizona_view, ViewId, Msg}`) and `handle_info/2` routes a tagged message to the matching root **or child** view. A bare untagged message still reaches the root through the catch-all clause, but it can never address an embedded child, and a message arriving before the first render (`snapshot = undefined`) is dropped -- with two exceptions matched by earlier clauses: the transport's `{'DOWN', ...}` monitor and `{arizona_drain, _}`, whose pre-mount leg deliberately stops with `{shutdown, drain}`.
 
 ```erlang
 mount(Bindings0) ->

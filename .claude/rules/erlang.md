@@ -100,6 +100,8 @@ A route's static config is the single canonical type `arizona_live:route_opts/0`
     on_mount => on_mount(),
     layouts => [arizona_render:layout()],
     middlewares => [arizona_middleware:middleware()],
+    %% CSRF Origin check is on by default; set false to opt this route out.
+    check_origin => boolean(),
     _ => term()
 }.
 ```
