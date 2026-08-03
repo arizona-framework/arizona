@@ -32,8 +32,18 @@ name: ios-e2e
 # repo, so this matters more here than anywhere else. The PR-level run is the
 # check, as for any path-filtered workflow.
 #
-# `branches: "**"` because a branch filter glob's `*` does not match `/`, so
-# `"*"` would skip a PR stacked on a `feat/...` base.
+# `branches: "**"` is a deliberate NET COST INCREASE, not a saving -- be clear
+# about which way it cuts. A branch filter glob's `*` does not match `/`, so the
+# previous `[main]` filter gave a PR stacked on a `feat/...` base ZERO mobile CI.
+# Widening closes that hole, but it also means stacked PRs now boot a macOS
+# Simulator where they previously ran nothing at all, while `paths-ignore` only
+# subtracts docs-only runs. For a repo that stacks PRs the way this one does,
+# expect macOS minutes to go UP on net. Accepted because a native wire-protocol
+# regression caught on the stacked PR is far cheaper than one found after several
+# branches have merged, and because a client change on a feature branch otherwise
+# goes untested until that branch retargets main. Narrow it (e.g. back to
+# `[main]`, or add a job-level `if` on the base ref) if the minutes prove not
+# worth it; `workflow_dispatch` stays available either way.
 "on":
   push:
     branches:

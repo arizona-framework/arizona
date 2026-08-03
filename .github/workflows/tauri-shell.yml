@@ -51,7 +51,10 @@ permissions:
 
 jobs:
   test:
-    name: Test
+    # NOT "Test" -- a status-check context is the job NAME, and erlang.yml already
+    # supplies a required `Test` context. Sharing the name from a path-filtered
+    # workflow would make that context appear and disappear per PR.
+    name: Tauri Shell
 
     runs-on: ubuntu-24.04
 
