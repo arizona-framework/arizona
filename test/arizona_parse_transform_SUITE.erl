@@ -332,6 +332,7 @@
     raw_text_style_css_round_trip/1,
     raw_text_style_close_tag_still_neutralized/1,
     raw_text_hoisted_raw_boundary/1,
+    raw_text_uppercase_tag_classified/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -578,6 +579,7 @@ groups() ->
             raw_text_style_css_round_trip,
             raw_text_style_close_tag_still_neutralized,
             raw_text_hoisted_raw_boundary,
+            raw_text_uppercase_tag_classified,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -2150,6 +2152,39 @@ raw_text_hoisted_raw_boundary(Config) when is_list(Config) ->
     Msg = arizona_parse_transform:format_error(dynamic_in_raw_text),
     ?assertNotEqual(nomatch, string:find(Msg, "at the slot")),
     ?assertNotEqual(nomatch, string:find(Msg, "variable")).
+
+%% HTML tag names are ASCII case-insensitive, so `<SCRIPT>` IS a script element to
+%% the browser. Classifying only the lowercase atom left an uppercase tag treated
+%% as an ordinary element: comment markers landed in the script (a SyntaxError for
+%% a module script) and the guard never fired.
+raw_text_uppercase_tag_classified(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_rt_upper_bare). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'SCRIPT', [], [arizona_template:get(v, Bindings)]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ),
+    Mod = compile_module(
+        "-module(pt_rt_upper_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ScRiPt', [], ["
+        "        arizona_template:raw(arizona_template:get(v, Bindings))"
+        "    ]}). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{v => ~"a</script>b"})),
+    HTML = iolist_to_binary(HTML0),
+    %% Markerless, verbatim, and the script-data policy applies (the tag is matched
+    %% case-insensitively on the way into the neutralizer too).
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    ?assertEqual(<<"<ScRiPt>a<\\/script>b</ScRiPt>">>, HTML),
+    %% The classifier itself, for every raw-text tag and a non-raw-text one.
+    ?assertEqual(raw, arizona_html:raw_text_kind('SCRIPT')),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Style')),
+    ?assertEqual(escapable, arizona_html:raw_text_kind('TEXTAREA')),
+    ?assertEqual(escapable, arizona_html:raw_text_kind('Title')),
+    ?assertEqual(none, arizona_html:raw_text_kind('DIV')).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's

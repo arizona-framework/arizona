@@ -120,6 +120,9 @@ text_slot_open(Az) ->
 text_slot_close() ->
     ~"<!--/az-->".
 
+%% Matched on the atom as written, unlike raw_text_kind/1 below: getting this wrong
+%% for an uppercase tag costs a `<BR></BR>` instead of `<BR />`, not an escaping
+%% decision, so the lowercase-only match stays until someone actually writes one.
 -spec is_void(atom()) -> boolean().
 is_void(area) -> true;
 is_void(base) -> true;
@@ -138,15 +141,24 @@ is_void(wbr) -> true;
 is_void(_) -> false.
 
 -spec raw_text_kind(atom()) -> none | raw | escapable.
-%% Raw-text elements: content is never parsed for comments or character
-%% references, so a dynamic slot must render verbatim and markerless.
-raw_text_kind(script) -> raw;
-raw_text_kind(style) -> raw;
-%% Escapable-raw-text elements: character references are decoded, so a scalar
-%% slot is HTML-escaped, but comments are still literal -- so still markerless.
-raw_text_kind(textarea) -> escapable;
-raw_text_kind(title) -> escapable;
-raw_text_kind(_) -> none.
+%% Matched on the ASCII-lowercased name, because HTML tag names are
+%% case-insensitive: `{'SCRIPT', ...}` is a script element to the browser, so
+%% classifying only the lowercase atom would hand it the ordinary-element
+%% treatment (comment markers inside the script, and no opt-out guard). Runs at
+%% compile time only, so the lowercasing costs nothing at render.
+raw_text_kind(Tag) ->
+    case string:lowercase(atom_to_binary(Tag)) of
+        %% Raw-text elements: content is never parsed for comments or character
+        %% references, so a dynamic slot must render verbatim and markerless.
+        ~"script" -> raw;
+        ~"style" -> raw;
+        %% Escapable-raw-text elements: character references are decoded, so a
+        %% scalar slot is HTML-escaped, but comments are still literal -- so still
+        %% markerless.
+        ~"textarea" -> escapable;
+        ~"title" -> escapable;
+        _Other -> none
+    end.
 
 %% Every framework-emitted `az` in a compiled static is `<Fp>-<id>` (the parse
 %% transform builds the marker from the id, so the fingerprint is always the
