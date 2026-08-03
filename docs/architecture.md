@@ -1315,7 +1315,10 @@ sequence the script-data tokenizer reacts to: `</script`/`</style` (ends the ele
 `<\/script`, and `<!--` / `<script` (which together reach script-data-**double**-escaped, where the
 element's own `</script>` stops closing it and the rest of the document is swallowed) have their
 `<` rewritten as `\u003c`. All three rewrites decode back to the original in the JSON and
-JavaScript-string contexts such content lives in. A dynamic *attribute* on a raw-text element
+JavaScript-string contexts such content lives in. It flattens **chardata** first, because the
+documented remedy `?raw(json:encode(Data))` hands it an iolist, not a binary -- a binary-only
+guard would wave a breakout through on the very form the compile error recommends.
+A dynamic *attribute* on a raw-text element
 stays fully diffable -- only
 the content slot is markerless. Limitation: the slot will not update after the initial render, and
 `?local` is unsupported inside a raw-text element (no marker to address); a live `?get` there

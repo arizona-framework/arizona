@@ -231,8 +231,23 @@ raw_text(Value) ->
     %% and re-wrap, so the documented opt-out is not a hole around this check.
     case arizona_template:classify_trusted(Value) of
         {raw, Raw} -> arizona_template:raw(raw_text(Raw));
-        _Other -> Value
+        _Other -> raw_text_chardata(Value)
     end.
+
+%% The documented remedy is `?raw(json:encode(Data))`, and `json:encode/1` returns
+%% **iodata** -- so matching only binaries above would wave a breakout through on the
+%% exact form this module's own error message recommends. Flatten chardata (a
+%% charlist and a nested iolist alike) and neutralize the result, which is what the
+%% render boundary would have produced anyway (`to_bin/1` flattens with the same
+%% call). A list that is not chardata is returned untouched, leaving `to_bin/1` the
+%% single place that names a bad template value.
+raw_text_chardata(Value) when is_list(Value) ->
+    case unicode:characters_to_binary(Value) of
+        Bin when is_binary(Bin) -> neutralize_raw_text(Bin, <<>>);
+        _NotChardata -> Value
+    end;
+raw_text_chardata(Value) ->
+    Value.
 
 neutralize_raw_text(<<>>, Acc) ->
     Acc;

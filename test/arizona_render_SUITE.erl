@@ -32,6 +32,7 @@
     static_attr_escaped/1,
     escape_clean_value_not_rebuilt/1,
     raw_text_breakout_neutralized/1,
+    raw_text_breakout_neutralized_for_chardata/1,
     render_nested_sd/1,
     render_nodiff_layout_location_success/1,
     render_nodiff_layout_location_wrapping/1,
@@ -108,6 +109,7 @@ groups() ->
             static_attr_escaped,
             escape_clean_value_not_rebuilt,
             raw_text_breakout_neutralized,
+            raw_text_breakout_neutralized_for_chardata,
             render_nested_sd,
             render_with_views_no_children,
             repeated_stateless_distinct_az,
@@ -355,9 +357,41 @@ script_content(HTML) ->
     [Content, _After] = binary:split(Rest, ~"</script>"),
     Content.
 
+%% Bind the value EXACTLY as produced -- no iolist_to_binary. `json:encode/1` returns
+%% iodata, and `?raw(json:encode(Data))` is the remedy the compile error and both doc
+%% files hand the author, so the neutralizer has to meet it in that shape.
 render_json_script(Json) ->
-    Template = arizona_raw_text_script:render(#{json => iolist_to_binary(Json)}),
+    Template = arizona_raw_text_script:render(#{json => Json}),
     iolist_to_binary(element(1, arizona_render:render(Template))).
+
+%% The documented remedy is `?raw(json:encode(Data))`, and json:encode/1 returns
+%% IODATA, not a binary. A neutralizer that only matches binaries would wave the
+%% breakout straight through on the one form the framework tells users to write.
+%% Charlists and nested iolists must behave identically to the flat binary.
+raw_text_breakout_neutralized_for_chardata(Config) when is_list(Config) ->
+    Nasty = ~"</script><img src=x onerror=alert(1)>",
+    Encoded = json:encode(#{~"a" => Nasty}),
+    ?assertNot(is_binary(Encoded)),
+    Html = render_json_script(Encoded),
+    %% The payload's close tag is gone; only the element's own remains.
+    ?assertEqual(nomatch, binary:match(Html, ~"</script><img")),
+    ?assertEqual(1, length(binary:matches(Html, ~"</script>"))),
+    %% ...and the value still round-trips as the same JSON it was.
+    ?assertEqual(#{~"a" => Nasty}, json:decode(script_content(Html))),
+    %% Byte-identical to the flat-binary path -- iodata is not a second policy.
+    ?assertEqual(render_json_script(iolist_to_binary(Encoded)), Html),
+    %% A charlist and a deeply nested iolist neutralize the same way.
+    ?assertEqual(~"a<\\/script>b", arizona_html:raw_text("a</script>b")),
+    ?assertEqual(~"a<\\/script>b", arizona_html:raw_text([~"a", [~"</scr", "ipt>"], ~"b"])),
+    %% Through the ?raw opt-out, which is the only shape a script slot can carry.
+    ?assertEqual(
+        {arizona_raw, ~"x<\\/script>"}, arizona_html:raw_text({arizona_raw, ["x", ~"</script>"]})
+    ),
+    %% Chardata that will not decode (invalid UTF-8) is handed back untouched rather
+    %% than swallowed here, so to_bin/1 stays the one place that names a bad value.
+    Undecodable = [<<255>>],
+    ?assertEqual(Undecodable, arizona_html:raw_text(Undecodable)),
+    ?assertError({bad_template_value, Undecodable}, arizona_template:to_bin(Undecodable)).
 
 render_nested_sd(Config) when is_list(Config) ->
     T = #{
