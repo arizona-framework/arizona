@@ -245,7 +245,11 @@ export class NativeClient {
         try {
             this._runEffect(cmd, false, undefined);
         } catch (err) {
-            console.warn(`[arizona] effect ${JSON.stringify(cmd)} failed; skipping`, err);
+            // Static format string: the payload goes in an ARGUMENT, never in the
+            // format position. Interpolated there, a `%s` in wire data consumes the
+            // `err` that follows and drops it from the log -- the one thing this
+            // line exists to show.
+            console.warn('[arizona] effect %s failed; skipping', JSON.stringify(cmd), err);
         }
     }
 
@@ -296,7 +300,7 @@ export class NativeClient {
         try {
             this._dispatchOne(op, scope, scopeRoot);
         } catch (err) {
-            console.warn(`[arizona] op ${op?.[0]} failed; skipping`, err);
+            console.warn('[arizona] op %s failed; skipping', op?.[0], err);
         }
     }
 
