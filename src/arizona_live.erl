@@ -890,9 +890,9 @@ process_child_change(
     Effects1 = arizona_eval:drain_update_effects(),
     {Ops1, Fps1} = dedup_fps(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
-    NewDescendants = maps:keys(NewViews),
-    OldDescendants = maps:get(child_views, Snap0, []),
-    Removed = [K || K <- OldDescendants, not is_map_key(K, NewViews)],
+    NewDescendants = arizona_eval:child_view_set(NewViews),
+    OldDescendants = maps:get(child_views, Snap0, #{}),
+    Removed = [K || K := _ <- OldDescendants, not is_map_key(K, NewViews)],
     ok = unmount_removed_views(maps:with(Removed, V0)),
     Snap2 = Snap1#{child_views => NewDescendants},
     V1 = maps:merge(maps:without(Removed, V0), NewViews),
@@ -952,15 +952,15 @@ apply_pending_refresh(Pending, Views, Snap) ->
     %% grandchild holds the slot as it was before -- no grandchild in it at all),
     %% so there is nothing there to replace and only taking the ancestor's own
     %% live snapshot recovers the structure.
-    Holders = refresh_holders(Pending, Views),
-    refresh_into(fresh_child_snaps(Holders, Views), Holders, Snap).
+    HolderIds = refresh_holders(Pending, Views),
+    refresh_into(fresh_child_snaps(HolderIds, Views), HolderIds, Snap).
 
 %% The ids on a path to a changed view: the changed ids themselves, plus --
 %% transitively -- every live view that records one of them among its
 %% descendants. Drives both the descent prune and the set of copies refreshed.
 %%
 %% It cannot test `child_views` against the changed ids directly, because that
-%% list is accurate only as of the container's LAST EVALUATION: a view created
+%% set is accurate only as of the container's LAST EVALUATION: a view created
 %% afterwards (a grandchild first rendered by a nested child's own event, with no
 %% enclosing container re-evaluated) is named only by its own parent. Chaining
 %% upward through the live views map recovers the rest of the path -- the parent
@@ -968,26 +968,30 @@ apply_pending_refresh(Pending, Views, Snap) ->
 %% changed view at any depth. Iterated to a fixpoint because that chain can be
 %% several levels long.
 %%
+%% Returned as a LIST, because that is how the walk consumes it: `holds_any_view/2`
+%% scans these ids (a handful) against a container's `child_views` set rather than
+%% the other way round, so the prune check is O(holders) instead of O(child_views).
+%%
 %% Runs once per settle, which is once per root diff -- a walk the diff is about
 %% to do anyway. The child-event path never reaches here.
 refresh_holders(Pending, Views) ->
-    grow_holders(#{Id => true || Id := _ <- Pending}, descendant_index(Views)).
+    maps:keys(grow_holders(#{Id => true || Id := _ <- Pending}, descendant_index(Views))).
 
 %% Only a view that records descendants can put another view on a path, so index
 %% those once and let the fixpoint iterate the index instead of re-scanning every
 %% live view per round. On a page whose views are mostly leaves (a long list of
 %% simple children) the index is near-empty and the fixpoint settles immediately.
 descendant_index(Views) ->
-    #{Id => Ids || Id := #{snapshot := #{child_views := Ids}} <:- Views, Ids =/= []}.
+    #{
+        Id => Ids
+     || Id := #{snapshot := #{child_views := Ids}} <:- Views, map_size(Ids) =/= 0
+    }.
 
 grow_holders(Holders, Index) ->
+    HolderIds = maps:keys(Holders),
     Grown = maps:merge(
         Holders,
-        #{
-            Id => true
-         || Id := Ids <- Index,
-            lists:any(fun(Descendant) -> is_map_key(Descendant, Holders) end, Ids)
-        }
+        #{Id => true || Id := Ids <- Index, holds_any(HolderIds, Ids)}
     ),
     Settled = map_size(Holders),
     case map_size(Grown) of
@@ -1002,14 +1006,14 @@ grow_holders(Holders, Index) ->
 %% rather than off `views` (every live view on the page), so a page with
 %% thousands of stateful children pays nothing per settle for the ones that did
 %% not change; the single-element generator is the filter-and-bind.
-fresh_child_snaps(Holders, Views) ->
+fresh_child_snaps(HolderIds, Views) ->
     #{
         Id => ChildSnap
-     || Id := _ <- Holders, #{Id := #{snapshot := ChildSnap}} <- [Views]
+     || Id <- HolderIds, #{Id := #{snapshot := ChildSnap}} <- [Views]
     }.
 
 %% Replace every copy of a changed view's snapshot held anywhere inside `Snap`.
-%% `Holders` is the set of ids on a path to one (see refresh_holders/2), so a
+%% `HolderIds` is the list of ids on a path to one (see refresh_holders/2), so a
 %% container naming none of them is skipped whole and the walk follows only the
 %% paths that matter; a container carrying no `child_views` at all (the root
 %% snapshot itself) is descended into.
@@ -1021,13 +1025,13 @@ fresh_child_snaps(Holders, Views) ->
 %% allocation and garbage on every root diff, for a list the diff itself may well
 %% be dep-skipping. `refresh_into/3` is the entry point that turns the answer
 %% back into a plain snapshot.
-refresh_into(Fresh, Holders, Snap) ->
-    case refresh_container(Fresh, Holders, Snap) of
+refresh_into(Fresh, HolderIds, Snap) ->
+    case refresh_container(Fresh, HolderIds, Snap) of
         unchanged -> Snap;
         {changed, Snap1} -> Snap1
     end.
 
-refresh_view_snap(Fresh, Holders, #{view_id := Id} = Snap) ->
+refresh_view_snap(Fresh, HolderIds, #{view_id := Id} = Snap) ->
     case Fresh of
         #{Id := ChildSnap} ->
             %% Take this view's live snapshot -- then keep going INTO it. A
@@ -1035,78 +1039,93 @@ refresh_view_snap(Fresh, Holders, #{view_id := Id} = Snap) ->
             %% its own copies of deeper views can be stale in turn; and having
             %% just swapped in the live one, the annotation guiding the descent
             %% is now current too.
-            {changed, refresh_into(Fresh, Holders, ChildSnap)};
+            {changed, refresh_into(Fresh, HolderIds, ChildSnap)};
         #{} ->
-            refresh_container(Fresh, Holders, Snap)
+            refresh_container(Fresh, HolderIds, Snap)
     end;
-refresh_view_snap(Fresh, Holders, Snap) ->
-    refresh_container(Fresh, Holders, Snap).
+refresh_view_snap(Fresh, HolderIds, Snap) ->
+    refresh_container(Fresh, HolderIds, Snap).
 
-refresh_container(Fresh, Holders, #{t := ?EACH, items := Items} = Snap) ->
-    case holds_any_view(Holders, Snap) of
-        true -> rewrap(refresh_each_items(Fresh, Holders, Items), items, Snap);
+refresh_container(Fresh, HolderIds, #{t := ?EACH, items := Items} = Snap) ->
+    case holds_any_view(HolderIds, Snap) of
+        true -> rewrap(refresh_each_items(Fresh, HolderIds, Items), items, Snap);
         false -> unchanged
     end;
-refresh_container(Fresh, Holders, #{d := D} = Snap) when is_list(D) ->
-    case holds_any_view(Holders, Snap) of
-        true -> rewrap(refresh_dyns(Fresh, Holders, D), d, Snap);
+refresh_container(Fresh, HolderIds, #{d := D} = Snap) when is_list(D) ->
+    case holds_any_view(HolderIds, Snap) of
+        true -> rewrap(refresh_dyns(Fresh, HolderIds, D), d, Snap);
         false -> unchanged
     end;
-refresh_container(_Fresh, _Holders, _Value) ->
+refresh_container(_Fresh, _HolderIds, _Value) ->
     unchanged.
 
 rewrap(unchanged, _Key, _Snap) -> unchanged;
 rewrap({changed, Value}, Key, Snap) -> {changed, Snap#{Key => Value}}.
 
-%% Tested against `Holders`, not against the changed ids: a container's
+%% Tested against `HolderIds`, not against the changed ids: a container's
 %% `child_views` is only accurate as of its last evaluation, so it can name an
-%% ancestor of the changed view without naming the view itself. `Holders` carries
+%% ancestor of the changed view without naming the view itself. `HolderIds` carries
 %% those ancestors, which is what makes this exact at any depth. A container with
 %% no annotation is descended into rather than skipped.
-holds_any_view(Holders, #{child_views := Ids}) ->
-    lists:any(fun(Id) -> is_map_key(Id, Holders) end, Ids);
-holds_any_view(_Holders, #{}) ->
+%%
+%% The scan runs over `HolderIds` (the handful of views on a path to a change) and
+%% probes the container's `child_views` SET, never the reverse. `child_views` is
+%% page-sized -- a list container names every child it rendered -- so scanning it
+%% made each prune check O(rows), and the walk does one per container; probing a
+%% set makes it O(holders), flat in the page size. That is the whole reason
+%% `child_views` is a set rather than a list: nothing reads it in order, and
+%% everything asks it for membership.
+holds_any_view(HolderIds, #{child_views := Ids}) ->
+    holds_any(HolderIds, Ids);
+holds_any_view(_HolderIds, #{}) ->
     true.
+
+%% Empty first, so a leaf view (which records no descendants but is still asked)
+%% answers on the guard instead of walking the holder ids.
+holds_any(_HolderIds, Ids) when map_size(Ids) =:= 0 ->
+    false;
+holds_any(HolderIds, Ids) ->
+    lists:any(fun(Id) -> is_map_key(Id, Ids) end, HolderIds).
 
 %% A stream/map-keyed `?each` holds its items in a map, a plain-list one in a
 %% list; either way an item is a list of `{Az, Value, Deps}` triples. The map
 %% form updates in place, so only the keys actually holding a changed view cost
 %% anything.
-refresh_each_items(Fresh, Holders, Items) when is_map(Items) ->
-    refresh_item_map(maps:keys(Items), Fresh, Holders, Items, unchanged);
-refresh_each_items(Fresh, Holders, Items) when is_list(Items) ->
-    refresh_item_list(Fresh, Holders, Items).
+refresh_each_items(Fresh, HolderIds, Items) when is_map(Items) ->
+    refresh_item_map(maps:keys(Items), Fresh, HolderIds, Items, unchanged);
+refresh_each_items(Fresh, HolderIds, Items) when is_list(Items) ->
+    refresh_item_list(Fresh, HolderIds, Items).
 
-refresh_item_map([], _Fresh, _Holders, _Items, unchanged) ->
+refresh_item_map([], _Fresh, _HolderIds, _Items, unchanged) ->
     unchanged;
-refresh_item_map([], _Fresh, _Holders, Items, changed) ->
+refresh_item_map([], _Fresh, _HolderIds, Items, changed) ->
     {changed, Items};
-refresh_item_map([Key | Rest], Fresh, Holders, Items, Status) ->
+refresh_item_map([Key | Rest], Fresh, HolderIds, Items, Status) ->
     #{Key := ItemD} = Items,
-    case refresh_dyns(Fresh, Holders, ItemD) of
+    case refresh_dyns(Fresh, HolderIds, ItemD) of
         unchanged ->
-            refresh_item_map(Rest, Fresh, Holders, Items, Status);
+            refresh_item_map(Rest, Fresh, HolderIds, Items, Status);
         {changed, ItemD1} ->
-            refresh_item_map(Rest, Fresh, Holders, Items#{Key => ItemD1}, changed)
+            refresh_item_map(Rest, Fresh, HolderIds, Items#{Key => ItemD1}, changed)
     end.
 
-refresh_item_list(_Fresh, _Holders, []) ->
+refresh_item_list(_Fresh, _HolderIds, []) ->
     unchanged;
-refresh_item_list(Fresh, Holders, [ItemD | Rest]) ->
+refresh_item_list(Fresh, HolderIds, [ItemD | Rest]) ->
     combine(
-        refresh_dyns(Fresh, Holders, ItemD),
+        refresh_dyns(Fresh, HolderIds, ItemD),
         ItemD,
-        refresh_item_list(Fresh, Holders, Rest),
+        refresh_item_list(Fresh, HolderIds, Rest),
         Rest
     ).
 
-refresh_dyns(_Fresh, _Holders, []) ->
+refresh_dyns(_Fresh, _HolderIds, []) ->
     unchanged;
-refresh_dyns(Fresh, Holders, [Dyn | Rest]) ->
+refresh_dyns(Fresh, HolderIds, [Dyn | Rest]) ->
     combine(
-        refresh_dyn(Fresh, Holders, Dyn),
+        refresh_dyn(Fresh, HolderIds, Dyn),
         Dyn,
-        refresh_dyns(Fresh, Holders, Rest),
+        refresh_dyns(Fresh, HolderIds, Rest),
         Rest
     ).
 
@@ -1116,10 +1135,10 @@ combine(unchanged, Head, {changed, Tail1}, _Tail) -> {changed, [Head | Tail1]};
 combine({changed, Head1}, _Head, unchanged, Tail) -> {changed, [Head1 | Tail]};
 combine({changed, Head1}, _Head, {changed, Tail1}, _Tail) -> {changed, [Head1 | Tail1]}.
 
-refresh_dyn(Fresh, Holders, {Az, Value}) ->
-    retag(refresh_view_snap(Fresh, Holders, Value), fun(V) -> {Az, V} end);
-refresh_dyn(Fresh, Holders, {Az, Value, Deps}) ->
-    retag(refresh_view_snap(Fresh, Holders, Value), fun(V) -> {Az, V, Deps} end).
+refresh_dyn(Fresh, HolderIds, {Az, Value}) ->
+    retag(refresh_view_snap(Fresh, HolderIds, Value), fun(V) -> {Az, V} end);
+refresh_dyn(Fresh, HolderIds, {Az, Value, Deps}) ->
+    retag(refresh_view_snap(Fresh, HolderIds, Value), fun(V) -> {Az, V, Deps} end).
 
 retag(unchanged, _Rebuild) -> unchanged;
 retag({changed, Value}, Rebuild) -> {changed, Rebuild(Value)}.

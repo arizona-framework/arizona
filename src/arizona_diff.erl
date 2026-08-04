@@ -272,7 +272,7 @@ diff_each(
     {StreamOps, NewSnap0, {_, LocalNew}} =
         diff_stream(Az, EachDesc, Old, {Old0, #{}}),
     LocalNew1 = merge_stream_child_views(Source, Old, LocalNew, Old0),
-    NewSnap = NewSnap0#{child_views => maps:keys(LocalNew1)},
+    NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew1)},
     Views1 = {Old0, maps:merge(New0, LocalNew1)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
@@ -283,7 +283,7 @@ diff_each(
     {Old0, New0} = Views0,
     {ListOps, NewSnap0, {_, LocalNew}} =
         diff_list(Az, EachDesc, Old, {Old0, #{}}),
-    NewSnap = NewSnap0#{child_views => maps:keys(LocalNew)},
+    NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew)},
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
@@ -297,7 +297,7 @@ diff_each(
     {Old0, New0} = Views0,
     {MapOps, NewSnap0, {_, LocalNew}} =
         diff_map(Az, EachDesc, Old, {Old0, #{}}),
-    NewSnap = NewSnap0#{child_views => maps:keys(LocalNew)},
+    NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew)},
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
@@ -305,10 +305,10 @@ diff_each(
 
 %% Incremental stream child_views: old - deleted + rendered.
 merge_stream_child_views(Source, Old, LocalNew, Old0) ->
-    OldChildViews = maps:get(child_views, Old, []),
+    OldChildViews = maps:get(child_views, Old, #{}),
     #{items := OldItems} = Old,
     Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
-    Surviving = OldChildViews -- Deleted -- maps:keys(LocalNew),
+    Surviving = maps:without(Deleted, OldChildViews),
     carry_item_children(Surviving, Old0, LocalNew).
 
 %% When a dynamic is skipped (deps unchanged), carry its child views over
@@ -316,18 +316,18 @@ merge_stream_child_views(Source, Old, LocalNew, Old0) ->
 %%
 %% Both the stateful-child form and the container form (a nested template or an
 %% `?each`, which record the views rendered inside them as `child_views`) resolve
-%% what to carry through `live_subtree/2` rather than trusting the list on the
+%% what to carry through `live_subtree/2` rather than trusting the set on the
 %% snapshot they were handed. `child_views` on a SNAPSHOT is only accurate as of
 %% that snapshot's last evaluation, and a view can come into existence with no
 %% enclosing container re-evaluated at all: a grandchild first rendered by a
 %% CHILD's own event updates `views` and the child's own snapshot, and nothing
-%% above it. Carrying a container's recorded list verbatim therefore dropped that
+%% above it. Carrying a container's recorded set verbatim therefore dropped that
 %% grandchild from the accumulator, and the next UNRELATED root diff then treated
 %% it as removed -- unmounting a live view (running its `unmount/1` side effects,
 %% releasing pubsub subscriptions and resources) while its DOM was still on the
 %% page, after which every event addressed to it was silently swallowed.
 carry_skipped_view(#{view_id := VId}, {Old, New}) ->
-    {Old, maps:merge(New, live_subtree([VId], Old))};
+    {Old, maps:merge(New, live_subtree(#{VId => true}, Old))};
 carry_skipped_view(#{child_views := ChildIds}, {Old, New}) ->
     {Old, maps:merge(New, live_subtree(ChildIds, Old))};
 carry_skipped_view(_Old, Views) ->
@@ -344,32 +344,61 @@ carry_skipped_view(_Old, Views) ->
 %% Runs during a root diff, which already walks the tree; nothing here touches
 %% the child-event path.
 %%
-%% The bulk `maps:with/2` seed is deliberate: it is the single operation this used
-%% to be, and the expansion below then only follows entries naming a descendant
-%% the seed did not already cover. In the ordinary case -- a container listing its
-%% children, none of which has grown since -- that is one lookup and one empty
-%% scan per id, with no per-id insert and no list building. Chaining every id
-%% unconditionally instead cost a single-key insert plus a `++` per entry on
-%% EVERY dep-skipped container, whether or not anything had changed.
+%% `Ids` naming every live view is the shape that matters most -- one container
+%% holding the page's views -- and there the answer is `Old` itself: the seed
+%% `maps:with(Ids, Old)` is a subset of `Old`, so a seed the size of `Old` IS
+%% `Old`, and the expansion below can add nothing to a set that already holds
+%% everything. Deciding that by MEMBERSHIP rather than by building the seed and
+%% comparing sizes is what the `child_views` set buys here: probing a live id
+%% against `Ids` is O(1), so the whole test is one pass over `Old` with no
+%% allocation, where building the seed first cost an N-entry map on every
+%% dep-skipped container of every root diff -- the single largest line item in a
+%% root diff that follows a child change. The size guard runs first because it
+%% settles the common negative (a container holding SOME of the page's views)
+%% without touching a key.
+%%
+%% Off that path the bulk `maps:with/2` seed is deliberate: it is the single
+%% operation this used to be, and the expansion then only follows entries naming
+%% a descendant the seed did not already cover. In the ordinary case -- a
+%% container listing its children, none of which has grown since -- that is one
+%% lookup and one empty scan per id, with no per-id insert and no list building.
+%% Chaining every id unconditionally instead cost a single-key insert plus a `++`
+%% per entry on EVERY dep-skipped container, whether or not anything had changed.
 live_subtree(Ids, Old) ->
-    Seed = maps:with(Ids, Old),
-    LiveCount = map_size(Old),
-    case map_size(Seed) of
-        %% The seed already accounts for every live view, so it is closed by
-        %% construction -- there is nothing outside it that could need carrying,
-        %% and the expansion below cannot add anything. This is the shape that
-        %% matters most (one container holding the page's views), and skipping
-        %% the scan keeps it at the single bulk `maps:with/2` main paid.
-        LiveCount -> Seed;
-        _ -> expand_subtree(Ids, Old, Seed)
+    case names_every_live_view(Ids, Old) of
+        true ->
+            Old;
+        false ->
+            IdList = maps:keys(Ids),
+            expand_subtree(IdList, Old, maps:with(IdList, Old))
+    end.
+
+%% `Ids` can name a view that is no longer mounted, so a count alone does not
+%% settle it -- but a count SHORTER than `Old` rules it out for free.
+names_every_live_view(Ids, Old) when map_size(Ids) < map_size(Old) ->
+    false;
+names_every_live_view(Ids, Old) ->
+    all_named(maps:next(maps:iterator(Old)), Ids).
+
+all_named(none, _Ids) ->
+    true;
+all_named({Id, _View, Iter}, Ids) ->
+    case Ids of
+        #{Id := _} -> all_named(maps:next(Iter), Ids);
+        #{} -> false
     end.
 
 expand_subtree([], _Old, Acc) ->
     Acc;
 expand_subtree([Id | Rest], Old, Acc) ->
     case Acc of
+        %% A leaf -- most of the ids on a list page -- records no descendants, so
+        %% it can add nothing. Answering that on the guard skips setting up an
+        %% iterator over an empty set once per id.
+        #{Id := #{snapshot := #{child_views := ChildIds}}} when map_size(ChildIds) =:= 0 ->
+            expand_subtree(Rest, Old, Acc);
         #{Id := #{snapshot := #{child_views := ChildIds}}} ->
-            expand_uncovered([C || C <- ChildIds, not is_map_key(C, Acc)], Rest, Old, Acc);
+            expand_uncovered([C || C := _ <- ChildIds, not is_map_key(C, Acc)], Rest, Old, Acc);
         #{} ->
             expand_subtree(Rest, Old, Acc)
     end.
@@ -380,8 +409,9 @@ expand_uncovered(Missing, Rest, Old, Acc) ->
     expand_subtree(Missing ++ Rest, Old, maps:merge(Acc, maps:with(Missing, Old))).
 
 %% Extract child view IDs from deleted stream items only. The result is
-%% used in list subtraction (`OldChildViews -- Deleted`), so order doesn't
-%% matter -- safe to use a flat comp instead of a fold-with-prepend.
+%% only ever `maps:without/2`'s key list (`OldChildViews` minus these), so
+%% neither order nor duplicates matter -- safe to use a flat comp instead of
+%% a fold-with-prepend.
 deleted_item_children(PendingOps, OldItems) ->
     [
         VId
@@ -394,8 +424,12 @@ deleted_item_children(PendingOps, OldItems) ->
     ].
 
 %% Copy child views from OldViews to NewViews for children not already present.
+%% `maps:intersect/2` takes its values from the SECOND map, so this is
+%% `maps:with(maps:keys(ChildViewIds), Old)` without materializing the key list
+%% -- and it iterates whichever map is smaller. `New` is merged on top so a
+%% freshly rendered child always beats the carried-over copy of itself.
 carry_item_children(ChildViewIds, Old, New) ->
-    maps:merge(New, maps:with(ChildViewIds, Old)).
+    maps:merge(maps:intersect(ChildViewIds, Old), New).
 
 -doc """
 Returns `true` when any key in `Deps` also appears in `Changed`. Used by
