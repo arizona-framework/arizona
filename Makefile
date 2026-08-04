@@ -234,8 +234,11 @@ cover-js:
 doc: doc-erl doc-js
 
 doc-erl:
-	@set -o pipefail; rebar3 doc 2>&1 | tee /dev/stderr | \
-		(! grep -q "warning")
+	@# Same O_TRUNC hazard as check-hank -- and worse here, because `doc` is the
+	@# LAST stage of `ci`, so a redirected full-CI log kept only these few lines
+	@# and read like the pipeline had short-circuited. Capture instead of tee.
+	@set -o pipefail; out=$$(rebar3 doc 2>&1); printf '%s\n' "$$out"; \
+		printf '%s\n' "$$out" | (! grep -q "warning")
 
 doc-js:
 	@echo "No JS docs configured yet"
