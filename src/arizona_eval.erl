@@ -60,6 +60,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([render_map_items_simple/2]).
 -export([check_restricted_keys/3]).
 -export([restricted_keys/0]).
+-export([child_view_set/1]).
 -export([set_update_effects/1]).
 -export([drain_update_effects/0]).
 -export([format_error/2]).
@@ -301,6 +302,24 @@ restricted_keys() ->
     ?RESTRICTED_KEYS.
 
 -doc """
+Projects a views accumulator down to the `child_views` annotation stored on a
+snapshot: the set of the view ids it rendered, with the view entries themselves
+dropped (keeping them would pin every descendant's bindings and snapshot alive
+inside its ancestors').
+
+A SET rather than a list, because every consumer asks only "is this id in
+there?" -- so the annotation is on the small side of the membership test and the
+prune in `arizona_live`'s root-snapshot settle iterates the handful of ids on a
+path to a change instead of scanning a page-sized `child_views` per container.
+Nothing reads it in order.
+""".
+-spec child_view_set(Views) -> ChildViews when
+    Views :: #{binary() => term()},
+    ChildViews :: #{binary() => true}.
+child_view_set(Views) ->
+    #{Id => true || Id := _ <- Views}.
+
+-doc """
 Seeds the update-effects accumulator before a diff with the originating
 callback's effects (e.g. the root event's). Child `handle_update/3`
 callbacks fold onto this during the diff; `drain_update_effects/0` reads
@@ -509,7 +528,7 @@ eval_stateful(H, Props, {Old, New}) ->
         %% dropped from the views map and unmounted/reset.
         {ChildTriples, {Old, LocalNew}} = eval_dynamics_v(maps:get(d, Tmpl), {Old, #{}}),
         {ChildD, ChildDeps} = arizona_template:split_triples(ChildTriples),
-        Descendants = maps:keys(LocalNew),
+        Descendants = child_view_set(LocalNew),
         Snap0 = arizona_template:make_child_snap(Tmpl, ChildD, ChildDeps, Id),
         Snap = Snap0#{child_views => Descendants},
         %% The eval above rendered the child's whole current state, so its queued
@@ -590,7 +609,7 @@ render_map_items(Map, #{d := DFun}, Views) ->
 
 eval_each(RenderFun, Tmpl, {Old, New0}, StreamExtra) ->
     {ItemSnaps, {_, LocalNew}} = with_saved_deps(fun() -> RenderFun(Old) end),
-    ChildViews = maps:keys(LocalNew),
+    ChildViews = child_view_set(LocalNew),
     Snap = build_each_snap(ItemSnaps, Tmpl, ChildViews, StreamExtra),
     {Snap, {Old, maps:merge(New0, LocalNew)}}.
 
@@ -614,7 +633,7 @@ build_each_snap(ItemSnaps, Tmpl, ChildViews, {VKeys, Source}) ->
 eval_template(#{s := Statics, d := Dynamics} = Tmpl, {Old, New0}) ->
     {Triples, {_, LocalNew}} = with_saved_deps(fun() -> eval_dynamics_v(Dynamics, {Old, #{}}) end),
     {D, DepsList} = arizona_template:split_triples(Triples),
-    ChildViews = maps:keys(LocalNew),
+    ChildViews = child_view_set(LocalNew),
     Snap0 = #{s => Statics, d => D, deps => DepsList},
     Snap1 = arizona_template:maybe_propagate(Tmpl, Snap0),
     {Snap1#{child_views => ChildViews}, {Old, maps:merge(New0, LocalNew)}}.

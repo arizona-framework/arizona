@@ -371,8 +371,8 @@ grandchild_refresh_reaches_a_view_no_container_names(Config) when is_list(Config
     %%
     %% The intermediate dep-skipping root diff in the middle is what makes this
     %% non-vacuous: it settles (and clears) the mark on `m1`, while leaving the
-    %% CONTAINER's recorded `child_views` at `[m1]` -- it is dep-skipped, so it is
-    %% never re-evaluated and never learns about `g1`. The later event marks only
+    %% CONTAINER's recorded `child_views` at `#{m1 => true}` -- it is dep-skipped,
+    %% so it is never re-evaluated and never learns about `g1`. The later event marks only
     %% `g1`, an id NO container names. Testing the containers against the marked
     %% ids alone therefore skips the whole subtree and the stale copy survives;
     %% chaining up through the live views map (`m1` records `g1`, the container
