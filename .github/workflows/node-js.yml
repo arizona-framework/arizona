@@ -22,8 +22,14 @@ permissions:
   contents: read
 
 jobs:
+  # Job names are the status-check CONTEXT, so they must be unique across every
+  # workflow, not just within this one. `Check` and `Verify artifacts` collided
+  # with erlang.yml's jobs of the same name: indistinguishable in the checks UI,
+  # and if either workflow were ever path-filtered the shared context could go
+  # unreported and leave a PR blocked. Keep the `JS ` qualifier (matching `Unit
+  # Test` below) and update the branch ruleset if you rename either.
   check:
-    name: Check
+    name: JS Check
 
     runs-on: ubuntu-24.04
 
@@ -63,7 +69,7 @@ jobs:
         run: make cover-js
 
   artifacts:
-    name: Verify artifacts
+    name: JS Verify artifacts
 
     runs-on: ubuntu-24.04
 
