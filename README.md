@@ -50,7 +50,7 @@ across upgrades.
 
 ## Requirements
 
-- Erlang/OTP 28+
+- Erlang/OTP 29+
 
 ## Installation
 
