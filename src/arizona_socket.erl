@@ -524,6 +524,13 @@ resolve_route(Path, Qs, Req) ->
 %% A pending flash cannot cross that navigation on the socket (the WS frame has
 %% no `Set-Cookie` leg), so it goes one of two ways: replayed if it can be, and
 %% otherwise dropped loudly.
+%%
+%% The `full` opt is browser-only. The Android and iOS clients read only the
+%% path off a navigate effect and send the frame straight back, so a `full`
+%% reply to one would resolve, differ again, and re-emit -- a loop, not a page
+%% load. Held off today only by native routes declaring no `layouts` (they wrap
+%% no HTTP page), a convention nothing enforces; the unresolvable-route case
+%% above has carried the same latent loop all along.
 full_navigate(Path, Qs, Socket0) ->
     Url = url(Path, Qs),
     case flash_replay(Url, Socket0) of
@@ -686,9 +693,12 @@ stash_halt_flash(Requested, Location, HaltReq, Socket) ->
 
 %% A navigate frame carries path + query only (the client parses the URL and
 %% sends `u.pathname`/`u.search`), so a fragment on the redirect Location would
-%% never match the follow-up and would silently disable the replay. An absolute
-%% Location is left as-is and simply never matches, which is the right answer:
-%% a cross-origin redirect cannot carry our flash cookie anyway.
+%% never match the follow-up and would silently disable the replay. Two other
+%% Location forms miss for the same reason and are deliberately left to: an
+%% absolute URL (a cross-origin redirect cannot carry our flash cookie anyway),
+%% and a relative one with no leading slash, which the client resolves against
+%% the origin so `target` arrives as `/target`. Both degrade to the
+%% drop-with-warning, never to a wrong destination.
 strip_fragment(Location) ->
     [Base | _Fragment] = binary:split(Location, ~"#"),
     Base.
