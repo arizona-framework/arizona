@@ -17,6 +17,7 @@
 -export([patch_changing_layouts_forces_full_load/1]).
 -export([patch_to_other_handler_changing_layouts_forces_full_load/1]).
 -export([middleware_flash_replays_requested_path_on_full_load/1]).
+-export([flash_replay_does_not_hijack_an_unrelated_navigation/1]).
 -export([unflagged_reconnect_replies_immediately/1]).
 -export([flagged_reconnect_defers_and_dedups_resync/1]).
 -export([deferred_resync_flushed_by_event_frame/1]).
@@ -44,6 +45,7 @@ all() ->
         patch_changing_layouts_forces_full_load,
         patch_to_other_handler_changing_layouts_forces_full_load,
         middleware_flash_replays_requested_path_on_full_load,
+        flash_replay_does_not_hijack_an_unrelated_navigation,
         unflagged_reconnect_replies_immediately,
         flagged_reconnect_defers_and_dedups_resync,
         deferred_resync_flushed_by_event_frame,
@@ -288,6 +290,57 @@ middleware_flash_replays_requested_path_on_full_load(Config) when is_list(Config
         receive
             {arizona_test_log_handler, Unexpected} -> error({unexpected_warning, Unexpected})
         after 200 -> ok
+        end
+    after
+        ok = application:unset_env(arizona, secret_key),
+        ok = logger:remove_handler(HandlerId)
+    end.
+
+flash_replay_does_not_hijack_an_unrelated_navigation(Config) when is_list(Config) ->
+    %% The replay is good for exactly one destination: the redirect the halt
+    %% issued. If a second navigate beats the follow-up frame, the user is going
+    %% somewhere else -- routing them back through the gate to save a flash would
+    %% send them to a page they did not ask for, which is worse than losing the
+    %% message. So an unrelated full navigation goes where it was asked to go and
+    %% the flash drops loudly.
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning, config => #{pid => self()}
+    }),
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        Gate = fun(Req0, _B) ->
+            Req1 = arizona_req:put_flash(Req0, error, ~"Please sign in first."),
+            {halt, arizona_req:redirect(Req1, ~"/target")}
+        end,
+        Req = arizona_req_test_adapter:new(#{
+            routes => #{
+                ~"/gate" =>
+                    {arizona_root_counter, #{
+                        layouts => [{arizona_layout, render}],
+                        middlewares => [Gate]
+                    }},
+                ~"/elsewhere" =>
+                    {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+            }
+        }),
+        {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+            layouts => [{arizona_layout, render}]
+        }),
+        {reply, _HaltFrame, Socket1} =
+            arizona_socket:handle_in(navigate_frame(~"/gate"), Socket0),
+        %% Not the redirect target: the user asked for /elsewhere, so that is
+        %% where they go -- NOT back through /gate.
+        {reply, FullFrame, _Socket2} =
+            arizona_socket:handle_in(navigate_frame(~"/elsewhere"), Socket1),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/elsewhere", #{~"full" := true}]], effects(FullFrame)),
+        %% The undeliverable flash is dropped loudly rather than silently.
+        receive
+            {arizona_test_log_handler, #{level := warning, msg := {Fmt, Args}}} ->
+                Msg = iolist_to_binary(io_lib:format(Fmt, Args)),
+                ?assertMatch({_, _}, binary:match(Msg, ~"/elsewhere"))
+        after 1000 ->
+            error(no_flash_drop_warning)
         end
     after
         ok = application:unset_env(arizona, secret_key),

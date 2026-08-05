@@ -998,9 +998,11 @@ kind can tell an in-place swap from one needing the whole page rebuilt; `flash_r
 path whose middlewares produced `pending_flash`, when they did. Flash over a WS navigate requires
 a destination that stays on the socket: a target degrading to a full-page navigation destroys it
 (and a WS frame has no `Set-Cookie` leg), so a middleware-set flash is replayed by navigating to
-`flash_replay` instead of the target -- the halt re-runs over HTTP and redirects with a real flash
-cookie -- and a handler-set one, which nothing reproduces, is dropped with a logged warning. The
-route adapter is recovered from `req` on demand.
+the stashed requested path instead of the target -- the halt re-runs over HTTP and redirects with a
+real flash cookie. `flash_replay` holds the redirect target beside that path so the reroute fires
+only for the redirect it belongs to, never hijacking an unrelated navigation. A handler-set flash,
+which nothing reproduces, is dropped with a logged warning. The route adapter is recovered from
+`req` on demand.
 
 **Op scoping happens at JSON-encode time, in two steps.** `flatten_ops/2` walks the nested
 `[[ChildViewId, ChildOps] | ...]` shape `arizona_live` produces and returns a flat list of

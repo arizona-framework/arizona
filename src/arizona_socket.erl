@@ -108,15 +108,20 @@ The live process is linked. Exits map to WebSocket close codes:
     %% then either replays (see `flash_replay`) or is dropped with a warning
     %% (`drop_pending_flash/2`).
     pending_flash = #{} :: arizona_req:flash(),
-    %% The path whose middlewares PRODUCED `pending_flash`, when they did. A
-    %% middleware flash is reproducible: re-requesting that path over HTTP runs
-    %% the same middlewares, and the HTTP leg has the `Set-Cookie` the socket
-    %% lacks. So a full-page navigation that would otherwise drop the flash
-    %% navigates HERE instead and lets the halt replay properly
-    %% (`full_navigate/3`). `undefined` for a flash an in-view handler set via an
+    %% `{RedirectTarget, RequestedPath}` for a `pending_flash` a halting
+    %% middleware produced. Such a flash is reproducible: re-requesting
+    %% `RequestedPath` over HTTP runs the same middlewares, and the HTTP leg has
+    %% the `Set-Cookie` the socket lacks. So a full-page navigation heading for
+    %% `RedirectTarget` that would otherwise drop the flash navigates to
+    %% `RequestedPath` instead and lets the halt replay properly
+    %% (`full_navigate/3`). The target is held so the replay fires ONLY for the
+    %% redirect it belongs to -- a full navigation elsewhere is the user going
+    %% elsewhere, and rerouting it would hijack the navigation.
+    %%
+    %% `undefined` for a flash an in-view handler set via an
     %% `arizona_js:navigate`/`patch` `flash` opt -- that one is live-process
     %% state with no request-side generator, so it cannot be replayed.
-    flash_replay = undefined :: undefined | binary(),
+    flash_replay = undefined :: undefined | {binary(), binary()},
     %% Deferred reconnect resync (`_az_fps_follow`): the backstop timer ref
     %% while the socket waits for the client's `cached_fps` frame before
     %% mounting + rendering the full-page replace, so the payload dedups
@@ -519,23 +524,41 @@ resolve_route(Path, Qs, Req) ->
 %% A pending flash cannot cross that navigation on the socket (the WS frame has
 %% no `Set-Cookie` leg), so it goes one of two ways: replayed if it can be, and
 %% otherwise dropped loudly.
-full_navigate(_Path, _Qs, #socket{pending_flash = Flash, flash_replay = Replay} = Socket) when
-    map_size(Flash) > 0, Replay =/= undefined
-->
-    %% The flash came from a halting middleware, so the HTTP request that
-    %% produced it reproduces it: navigate to THAT path instead of the target and
-    %% let the halt replay over a channel that has a `Set-Cookie`. The middleware
-    %% redirects again from there, this time as a real 3xx carrying the signed
-    %% flash cookie, and the browser lands on the target with both its own
-    %% layouts and the message. Costs a re-run of that path's middlewares.
-    encode_reply(
-        [],
-        [arizona_js:navigate(Replay, #{full => true})],
-        Socket#socket{pending_flash = #{}, flash_replay = undefined}
-    );
 full_navigate(Path, Qs, Socket0) ->
-    Socket = drop_pending_flash(Path, Socket0),
-    encode_reply([], [arizona_js:navigate(url(Path, Qs), #{full => true})], Socket).
+    Url = url(Path, Qs),
+    case flash_replay(Url, Socket0) of
+        {ok, Replay} ->
+            %% The flash came from a halting middleware, so the HTTP request that
+            %% produced it reproduces it: navigate to THAT path instead of the
+            %% target and let the halt replay over a channel that has a
+            %% `Set-Cookie`. The middleware redirects again from there, this time
+            %% as a real 3xx carrying the signed flash cookie, and the browser
+            %% lands on the target with both its own layouts and the message.
+            %% Costs a re-run of that path's middlewares -- acceptable because any
+            %% GET route's middlewares already have to tolerate repetition (a
+            %% refresh, a prefetch, back/forward all re-run them).
+            encode_reply(
+                [],
+                [arizona_js:navigate(Replay, #{full => true})],
+                Socket0#socket{pending_flash = #{}, flash_replay = undefined}
+            );
+        error ->
+            Socket = drop_pending_flash(Path, Socket0),
+            encode_reply([], [arizona_js:navigate(Url, #{full => true})], Socket)
+    end.
+
+%% The stashed replay is good for exactly ONE destination: the redirect the halt
+%% issued. A full navigation anywhere else is the user going somewhere else --
+%% sending them back through the gate would hijack it, which is worse than any
+%% flash outcome -- so only the matching target replays and everything else falls
+%% through to the drop. Reachable whenever a second navigate beats the follow-up
+%% frame for the redirect.
+flash_replay(Target, #socket{pending_flash = Flash, flash_replay = {Target, Replay}}) when
+    map_size(Flash) > 0
+->
+    {ok, Replay};
+flash_replay(_Url, _Socket) ->
+    error.
 
 url(Path, <<>>) -> Path;
 url(Path, Qs) -> <<Path/binary, "?", Qs/binary>>.
@@ -635,7 +658,7 @@ halt_navigate(Requested, HaltReq, Socket) ->
             encode_reply(
                 [],
                 [arizona_js:navigate(Location)],
-                stash_halt_flash(Requested, HaltReq, Socket)
+                stash_halt_flash(Requested, Location, HaltReq, Socket)
             );
         undefined ->
             close_crash(Socket)
@@ -649,7 +672,7 @@ halt_navigate(Requested, HaltReq, Socket) ->
 %% (see `full_navigate/3`). Stashing it here rather than as a `flash` opt on the
 %% outgoing effect is what keeps the two origins distinguishable: everything
 %% reaching `capture_nav_flash/5` is by construction handler-set.
-stash_halt_flash(Requested, HaltReq, Socket) ->
+stash_halt_flash(Requested, Location, HaltReq, Socket) ->
     case arizona_req:flash_out(HaltReq) of
         Flash when map_size(Flash) =:= 0 ->
             Socket;
@@ -657,9 +680,18 @@ stash_halt_flash(Requested, HaltReq, Socket) ->
             #socket{pending_flash = Pending} = Socket,
             Socket#socket{
                 pending_flash = maps:merge(Pending, Flash),
-                flash_replay = Requested
+                flash_replay = {strip_fragment(Location), Requested}
             }
     end.
+
+%% A navigate frame carries path + query only (the client parses the URL and
+%% sends `u.pathname`/`u.search`), so a fragment on the redirect Location would
+%% never match the follow-up and would silently disable the replay. An absolute
+%% Location is left as-is and simply never matches, which is the right answer:
+%% a cross-origin redirect cannot carry our flash cookie anyway.
+strip_fragment(Location) ->
+    [Base | _Fragment] = binary:split(Location, ~"#"),
+    Base.
 
 %% Inject a one-shot in-process flash into the resolved navigate/patch request and
 %% clear it from the socket (consumed once). Empty is a no-op so a real incoming
