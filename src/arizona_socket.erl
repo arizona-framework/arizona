@@ -89,14 +89,34 @@ The live process is linked. Exits map to WebSocket close codes:
     view_id :: binary() | undefined,
     handler :: module() | undefined,
     req :: az:request(),
+    %% The layouts that wrapped the page this socket is attached to. Only the
+    %% root VIEW is replaceable over the wire (`?OP_REPLACE`); the layouts around
+    %% it rendered once at SSR and no frame can re-render them. So a navigate to
+    %% a route whose layouts differ cannot be served in place at all -- it
+    %% degrades to a full-page navigation (`layout_changed/2`).
+    %%
+    %% Set once at connect and never refreshed, which is exact rather than
+    %% convenient: the only navigate that could change it is the one that forces
+    %% a full page load, and that destroys this socket.
+    layouts = [] :: [arizona_render:layout()],
     %% One-shot flash carried in-process across an SPA navigate/patch. A WebSocket
     %% frame has no `Set-Cookie` leg, so a flash set by a halting middleware (or an
     %% `arizona_js:navigate`/`patch` `flash` opt) rides the socket to the follow-up
     %% frame, where `take_pending_flash/2` injects it into the resolved request.
-    %% Delivery therefore requires the follow-up target to resolve to a LIVE
-    %% route: a target that degrades to a full-page navigation destroys the
-    %% socket, so the flash is dropped with a warning (`drop_pending_flash/2`).
+    %% Delivery therefore requires the follow-up target to stay on this socket: a
+    %% target that degrades to a full-page navigation destroys it, and the flash
+    %% then either replays (see `flash_replay`) or is dropped with a warning
+    %% (`drop_pending_flash/2`).
     pending_flash = #{} :: arizona_req:flash(),
+    %% The path whose middlewares PRODUCED `pending_flash`, when they did. A
+    %% middleware flash is reproducible: re-requesting that path over HTTP runs
+    %% the same middlewares, and the HTTP leg has the `Set-Cookie` the socket
+    %% lacks. So a full-page navigation that would otherwise drop the flash
+    %% navigates HERE instead and lets the halt replay properly
+    %% (`full_navigate/3`). `undefined` for a flash an in-view handler set via an
+    %% `arizona_js:navigate`/`patch` `flash` opt -- that one is live-process
+    %% state with no request-side generator, so it cannot be replayed.
+    flash_replay = undefined :: undefined | binary(),
     %% Deferred reconnect resync (`_az_fps_follow`): the backstop timer ref
     %% while the socket waits for the client's `cached_fps` frame before
     %% mounting + rendering the full-page replace, so the payload dedups
@@ -147,6 +167,10 @@ and starts its live process.
   client, any non-announcing one) keeps the immediate resync -- zero
   penalty.
 - `on_mount` -- list of `t:arizona_live:on_mount/0` hooks
+- `layouts` -- the route's `t:arizona_render:layout/0` list, i.e. what
+  wrapped this page at SSR. A later navigate/patch to a route whose
+  layouts differ cannot be served over the wire and degrades to a
+  full-page navigation
 
 The route adapter (used by SPA navigate to resolve new routes) is
 recovered from `Req` itself via `arizona_req:adapter/1`.
@@ -161,9 +185,12 @@ init(Handler, Bindings, Req, Opts) ->
     FpsFollow = maps:get(fps_follow, Opts, false),
     OnMount = maps:get(on_mount, Opts, []),
     Capabilities = maps:get(capabilities, Opts, #{}),
+    Layouts = maps:get(layouts, Opts, []),
     %% Track the root handler so a `patch` frame can decide same-view (patch in
-    %% place) vs different-view (fall back to a full navigate/replace).
-    Socket = #socket{req = Req, handler = Handler},
+    %% place) vs different-view (fall back to a full navigate/replace), and the
+    %% layouts so either can tell an in-place swap from one that needs the whole
+    %% page rebuilt.
+    Socket = #socket{req = Req, handler = Handler, layouts = Layouts},
     safe_init(Handler, Socket, fun() ->
         %% `push_barrier` opts this transport into the ordering marker the
         %% event/patch drain below relies on -- see drain_pending_pushes/1.
@@ -431,7 +458,12 @@ resync_then(_ResyncFrame, {close, _Code, _Reason, _Socket} = Close) ->
 handle_navigate(Path, Qs, #socket{req = Req} = Socket) ->
     case resolve_route(Path, Qs, Req) of
         {ok, H, RouteOpts, NewReq} ->
-            do_navigate(H, RouteOpts, NewReq, Socket);
+            case layout_changed(RouteOpts, Socket) of
+                true ->
+                    full_navigate(Path, Qs, Socket);
+                false ->
+                    do_navigate(H, RouteOpts, NewReq, url(Path, Qs), Socket)
+            end;
         error ->
             full_navigate(Path, Qs, Socket)
     end.
@@ -440,53 +472,95 @@ handle_navigate(Path, Qs, #socket{req = Req} = Socket) ->
 %% root handler; otherwise it can't (a different view needs a real mount), so it
 %% degrades to a full navigate/replace. Resolves once and reuses the result for
 %% either branch. A path that resolves to no live route degrades further to a
-%% full-page navigation.
-handle_patch(Path, Qs, #socket{handler = CurrentHandler, req = Req} = Socket) ->
+%% full-page navigation -- as does one whose layouts differ, which neither
+%% branch can serve (a patch keeps the shell, and a replace only swaps what is
+%% inside it).
+handle_patch(Path, Qs, #socket{req = Req} = Socket) ->
     case resolve_route(Path, Qs, Req) of
-        {ok, CurrentHandler, RouteOpts, NewReq} ->
-            do_patch(RouteOpts, NewReq, Socket);
         {ok, H, RouteOpts, NewReq} ->
-            do_navigate(H, RouteOpts, NewReq, Socket);
+            case layout_changed(RouteOpts, Socket) of
+                true ->
+                    full_navigate(Path, Qs, Socket);
+                false ->
+                    patch_or_navigate(H, RouteOpts, NewReq, url(Path, Qs), Socket)
+            end;
         error ->
             full_navigate(Path, Qs, Socket)
+    end.
+
+patch_or_navigate(H, RouteOpts, NewReq, Requested, #socket{handler = H} = Socket) ->
+    do_patch(RouteOpts, NewReq, Requested, Socket);
+patch_or_navigate(H, RouteOpts, NewReq, Requested, Socket) ->
+    do_navigate(H, RouteOpts, NewReq, Requested, Socket).
+
+%% Does the target route wrap its page in different layouts than the ones
+%% already on screen? Term equality on the whole list, deliberately: a
+%% difference at ANY depth is disqualifying, since `arizona_render:apply_layouts/3`
+%% nests them (`[Root, Section]` renders `Root(Section(Page))`), so an inner
+%% layer wraps the replaced view exactly as the outer one does.
+layout_changed(RouteOpts, #socket{layouts = Layouts}) ->
+    case maps:get(layouts, RouteOpts, []) of
+        Layouts -> false;
+        _Different -> true
     end.
 
 resolve_route(Path, Qs, Req) ->
     Adapter = arizona_req:adapter(Req),
     arizona_req:call_resolve_route(Adapter, Path, Qs, arizona_req:raw(Req)).
 
-%% A navigate/patch target that doesn't resolve to a live route (a typo, a
-%% controller/asset path, a 404) can't be SPA-navigated: the client would just
-%% re-request it over the socket in a loop. Instead of crashing the live session,
-%% tell the client to do a real full-page navigation to the path -- the browser
-%% loads it normally (hitting the actual controller/asset or a 404 page).
+%% A navigate/patch target this socket cannot serve in place -- one that doesn't
+%% resolve to a live route (a typo, a controller/asset path, a 404), or one whose
+%% layouts differ from the ones already rendered. Neither can be SPA-navigated:
+%% the first would have the client re-request it over the socket in a loop, and
+%% the second would drop the new page into the old page's shell. Instead of
+%% crashing the live session, tell the client to do a real full-page navigation
+%% -- the browser loads it normally, layouts and all.
+%%
+%% A pending flash cannot cross that navigation on the socket (the WS frame has
+%% no `Set-Cookie` leg), so it goes one of two ways: replayed if it can be, and
+%% otherwise dropped loudly.
+full_navigate(_Path, _Qs, #socket{pending_flash = Flash, flash_replay = Replay} = Socket) when
+    map_size(Flash) > 0, Replay =/= undefined
+->
+    %% The flash came from a halting middleware, so the HTTP request that
+    %% produced it reproduces it: navigate to THAT path instead of the target and
+    %% let the halt replay over a channel that has a `Set-Cookie`. The middleware
+    %% redirects again from there, this time as a real 3xx carrying the signed
+    %% flash cookie, and the browser lands on the target with both its own
+    %% layouts and the message. Costs a re-run of that path's middlewares.
+    encode_reply(
+        [],
+        [arizona_js:navigate(Replay, #{full => true})],
+        Socket#socket{pending_flash = #{}, flash_replay = undefined}
+    );
 full_navigate(Path, Qs, Socket0) ->
     Socket = drop_pending_flash(Path, Socket0),
-    Url =
-        case Qs of
-            <<>> -> Path;
-            _ -> <<Path/binary, "?", Qs/binary>>
-        end,
-    encode_reply([], [arizona_js:navigate(Url, #{full => true})], Socket).
+    encode_reply([], [arizona_js:navigate(url(Path, Qs), #{full => true})], Socket).
+
+url(Path, <<>>) -> Path;
+url(Path, Qs) -> <<Path/binary, "?", Qs/binary>>.
 
 %% A flash stashed for a WS-carried navigate can only reach a LIVE destination
 %% (do_navigate/do_patch inject it into the resolved request); a full-page
 %% navigation destroys this socket, and a WebSocket frame has no Set-Cookie leg
-%% for the signed flash cookie, so the flash cannot follow. Warn -- the
-%% app-visible symptom is a silently missing flash -- and clear the stash so it
-%% cannot leak into a later, unrelated navigate.
+%% for the signed flash cookie, so the flash cannot follow. Reached only when the
+%% flash is NOT replayable (an in-view handler set it, so no request reproduces
+%% it -- see `flash_replay`). Warn, since the app-visible symptom is a silently
+%% missing flash, and clear the stash so it cannot leak into a later, unrelated
+%% navigate.
 drop_pending_flash(_Path, #socket{pending_flash = Flash} = Socket) when map_size(Flash) =:= 0 ->
     Socket;
 drop_pending_flash(Path, Socket) ->
     logger:warning(
-        "flash dropped on full-page navigation to ~s: a flash carried over a "
-        "WebSocket navigate needs a live route destination (a WS frame has no "
-        "Set-Cookie leg)",
+        "flash dropped on full-page navigation to ~s: a flash set by a live "
+        "handler cannot cross a full page load (a WS frame has no Set-Cookie "
+        "leg, and nothing on the new request reproduces it). Set it from a "
+        "middleware on the requested path, or store it in the session",
         [Path]
     ),
     Socket#socket{pending_flash = #{}}.
 
-do_navigate(H, RouteOpts, NewReq0, Socket0) ->
+do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
     {NewReq, #socket{pid = Pid, view_id = OldVId} = Socket} =
         take_pending_flash(NewReq0, Socket0),
     IB = maps:get(bindings, RouteOpts, #{}),
@@ -494,7 +568,7 @@ do_navigate(H, RouteOpts, NewReq0, Socket0) ->
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
-            halt_navigate(HaltReq, Socket);
+            halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
             try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
                 {ok, NewVId, PageHTML} ->
@@ -524,14 +598,14 @@ do_navigate(H, RouteOpts, NewReq0, Socket0) ->
 %% replace, no remount). Runs the route middlewares first, exactly like navigate
 %% -- but deliberately does NOT read `on_mount` (contrast do_navigate): on_mount
 %% is a mount-phase hook and a patch does not remount (see arizona_live:patch/2).
-do_patch(RouteOpts, NewReq0, Socket0) ->
+do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
     {NewReq, #socket{pid = Pid, view_id = ViewId} = Socket} =
         take_pending_flash(NewReq0, Socket0),
     IB = maps:get(bindings, RouteOpts, #{}),
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
-            halt_navigate(HaltReq, Socket);
+            halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
             try arizona_live:patch(Pid, Bindings1) of
                 {ok, Ops, Effects} ->
@@ -551,31 +625,49 @@ do_patch(RouteOpts, NewReq0, Socket0) ->
 %% Middleware halt during WS navigate -- there is no HTTP response channel
 %% mid-session, so we translate an `arizona_req:redirect/2` halt into an
 %% `arizona_js:navigate` client effect. A flash the middleware set via `put_flash/3`
-%% before halting has no `Set-Cookie` leg to ride here, so it rides the navigate
-%% effect through the same `capture_pending_flash/2` path as an in-view handler
-%% flash: stashed on the socket for the follow-up frame (`take_pending_flash/2`),
-%% delivered exactly once with no cookie. Halts without a stashed redirect close the
-%% socket so the client reconnects and the next HTTP handshake receives the full
-%% middleware response.
-halt_navigate(HaltReq, Socket) ->
+%% before halting has no `Set-Cookie` leg to ride here, so it is stashed on the
+%% socket for the follow-up frame (`take_pending_flash/2`), delivered exactly once
+%% with no cookie. Halts without a stashed redirect close the socket so the client
+%% reconnects and the next HTTP handshake receives the full middleware response.
+halt_navigate(Requested, HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
-            Effect = navigate_effect(Location, arizona_req:flash_out(HaltReq)),
-            encode_reply([], [Effect], Socket);
+            encode_reply(
+                [],
+                [arizona_js:navigate(Location)],
+                stash_halt_flash(Requested, HaltReq, Socket)
+            );
         undefined ->
             close_crash(Socket)
     end.
 
-navigate_effect(Location, Flash) when map_size(Flash) > 0 ->
-    arizona_js:navigate(Location, #{flash => Flash});
-navigate_effect(Location, _Flash) ->
-    arizona_js:navigate(Location).
+%% Stash the halting middleware's flash BESIDE the path that produced it. Unlike
+%% an in-view handler's flash, this one is reproducible: any later request to
+%% `Requested` runs the same middlewares and sets it again. That is what lets a
+%% follow-up frame which must go full-page replay the halt over HTTP -- where the
+%% signed flash cookie can actually be set -- instead of dropping the message
+%% (see `full_navigate/3`). Stashing it here rather than as a `flash` opt on the
+%% outgoing effect is what keeps the two origins distinguishable: everything
+%% reaching `capture_nav_flash/5` is by construction handler-set.
+stash_halt_flash(Requested, HaltReq, Socket) ->
+    case arizona_req:flash_out(HaltReq) of
+        Flash when map_size(Flash) =:= 0 ->
+            Socket;
+        Flash ->
+            #socket{pending_flash = Pending} = Socket,
+            Socket#socket{
+                pending_flash = maps:merge(Pending, Flash),
+                flash_replay = Requested
+            }
+    end.
 
 %% Inject a one-shot in-process flash into the resolved navigate/patch request and
 %% clear it from the socket (consumed once). Empty is a no-op so a real incoming
 %% cookie flash on `NewReq` is never masked.
 take_pending_flash(Req, #socket{pending_flash = Flash} = Socket) when map_size(Flash) > 0 ->
-    {arizona_req:seed_flash(Req, Flash), Socket#socket{pending_flash = #{}}};
+    {arizona_req:seed_flash(Req, Flash), Socket#socket{
+        pending_flash = #{}, flash_replay = undefined
+    }};
 take_pending_flash(Req, Socket) ->
     {Req, Socket}.
 
@@ -650,9 +742,10 @@ drained_pushes(OpsAcc, EffectsAcc) ->
 %% Single chokepoint for every reply that carries effects. Before encoding, an
 %% in-view flash a handler set (an `arizona_js:navigate`/`patch` `flash` opt) is
 %% moved onto the socket's one-shot pending flash and stripped from the outgoing
-%% effect, so the flow is identical whether the flash came from a halting middleware
-%% (`halt_navigate/2`) or a live handler -- the follow-up navigate frame injects it
-%% via `take_pending_flash/2`.
+%% effect, so delivery is identical whether the flash came from a halting
+%% middleware (`stash_halt_flash/3`) or a live handler -- the follow-up
+%% navigate frame injects it via `take_pending_flash/2`. The two differ only in
+%% whether a full-page navigation can recover them (see `flash_replay`).
 encode_reply(Ops, Effects0, Socket0) ->
     {Effects, Socket} = capture_pending_flash(Effects0, Socket0),
     encode_reply_1(Ops, Effects, Socket).
@@ -679,7 +772,17 @@ capture_pending_flash([], Socket) ->
     {[], Socket};
 capture_pending_flash(Effects, #socket{pending_flash = Pending0} = Socket) ->
     {Effects1, Pending} = lists:mapfoldl(fun capture_flash_effect/2, Pending0, Effects),
-    {Effects1, Socket#socket{pending_flash = Pending}}.
+    {Effects1, captured_flash(Pending0, Pending, Socket)}.
+
+%% Nothing captured -- the stash, and any halt replay armed for it, stand.
+captured_flash(Pending, Pending, Socket) ->
+    Socket;
+%% A handler-set flash joined the stash. No request reproduces that one, so a
+%% replay armed by `stash_halt_flash/3` can no longer regenerate the whole of it.
+%% Disarm: a full-page navigation should drop the flash loudly rather than replay
+%% a silently partial one.
+captured_flash(_Pending0, Pending, Socket) ->
+    Socket#socket{pending_flash = Pending, flash_replay = undefined}.
 
 capture_flash_effect(
     {arizona_effect, [?EFFECT_NAVIGATE, Path, #{flash := Flash} = Opts]}, Pending

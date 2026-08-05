@@ -1,6 +1,7 @@
 -module(arizona_socket_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 -include("arizona.hrl").
+-include("arizona_effect.hrl").
 
 %% Drives arizona_socket directly (init/handle_in/handle_info) with the stub
 %% request adapter -- the calling test process IS the socket process, so live
@@ -11,6 +12,11 @@
 -export([queued_push_prepended_to_event_reply/1]).
 -export([queued_push_prepended_to_patch_reply/1]).
 -export([full_navigate_drops_pending_flash/1]).
+-export([navigate_keeping_layouts_stays_on_the_socket/1]).
+-export([navigate_changing_layouts_forces_full_load/1]).
+-export([patch_changing_layouts_forces_full_load/1]).
+-export([patch_to_other_handler_changing_layouts_forces_full_load/1]).
+-export([middleware_flash_replays_requested_path_on_full_load/1]).
 -export([unflagged_reconnect_replies_immediately/1]).
 -export([flagged_reconnect_defers_and_dedups_resync/1]).
 -export([deferred_resync_flushed_by_event_frame/1]).
@@ -33,6 +39,11 @@ all() ->
         queued_push_prepended_to_event_reply,
         queued_push_prepended_to_patch_reply,
         full_navigate_drops_pending_flash,
+        navigate_keeping_layouts_stays_on_the_socket,
+        navigate_changing_layouts_forces_full_load,
+        patch_changing_layouts_forces_full_load,
+        patch_to_other_handler_changing_layouts_forces_full_load,
+        middleware_flash_replays_requested_path_on_full_load,
         unflagged_reconnect_replies_immediately,
         flagged_reconnect_defers_and_dedups_resync,
         deferred_resync_flushed_by_event_frame,
@@ -162,6 +173,124 @@ full_navigate_drops_pending_flash(Config) when is_list(Config) ->
         after 200 -> ok
         end
     after
+        ok = logger:remove_handler(HandlerId)
+    end.
+
+%% The layouts around the root view render once, at SSR, and no frame can
+%% re-render them -- `?OP_REPLACE` swaps only the view INSIDE them. So a navigate
+%% is servable on the socket exactly when the target keeps the same layouts, and
+%% must degrade to a full page load when it doesn't. The four cases below pin
+%% both sides of that line across `navigate` and `patch`.
+
+navigate_keeping_layouts_stays_on_the_socket(Config) when is_list(Config) ->
+    Layouts = [{arizona_layout, render}],
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/next" => {arizona_root_counter, #{layouts => Layouts}}}
+    }),
+    {ok, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{layouts => Layouts}),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
+    %% Same shell: the root view is replaced in place, no page load.
+    ?assertMatch([[?OP_REPLACE, _ViewId, _HTML]], ops(Frame)).
+
+navigate_changing_layouts_forces_full_load(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/next" => {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+        }
+    }),
+    {ok, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{
+        layouts => [{arizona_layout, render}]
+    }),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
+    %% Different shell: replacing the view in place would drop the new page into
+    %% the old page's layout, so the client is told to load the URL for real.
+    ?assertMatch(
+        [[?EFFECT_NAVIGATE, ~"/next", #{~"full" := true}]],
+        effects(Frame)
+    ),
+    %% ...and emphatically NOT an in-place replace.
+    ?assertEqual(error, maps:find(~"o", decode(Frame))).
+
+patch_changing_layouts_forces_full_load(Config) when is_list(Config) ->
+    %% A patch keeps the view, so it keeps the shell too -- which makes a
+    %% layout-changing patch even less servable than a layout-changing navigate.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/rc" => {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+        }
+    }),
+    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+        layouts => [{arizona_layout, render}]
+    }),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(patch_frame(~"/rc"), Socket0),
+    ?assertMatch([[?EFFECT_NAVIGATE, ~"/rc", #{~"full" := true}]], effects(Frame)).
+
+patch_to_other_handler_changing_layouts_forces_full_load(Config) when is_list(Config) ->
+    %% A patch to a DIFFERENT handler already degrades to a navigate. That
+    %% navigate is a real root replace, so it has to clear the layout bar too --
+    %% checking only the `navigate` frame would leave this path serving the wrong
+    %% shell.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/other" => {arizona_timer, #{layouts => [{arizona_outer_layout, render}]}}}
+    }),
+    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+        layouts => [{arizona_layout, render}]
+    }),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(patch_frame(~"/other"), Socket0),
+    ?assertMatch([[?EFFECT_NAVIGATE, ~"/other", #{~"full" := true}]], effects(Frame)).
+
+middleware_flash_replays_requested_path_on_full_load(Config) when is_list(Config) ->
+    %% A halting middleware's flash rides the socket to the redirect target. When
+    %% that target needs a full page load, the in-process carry dies with the
+    %% socket -- but this flash is REPRODUCIBLE: re-requesting the gated path over
+    %% HTTP runs the same middleware, which redirects again with a real
+    %% `Set-Cookie`. So the full navigation goes to the gated path, not the
+    %% target, and the message survives instead of being dropped.
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning, config => #{pid => self()}
+    }),
+    %% put_flash/3 signs, so the middleware needs a key even though nothing here
+    %% ever reads the cookie back.
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        Gate = fun(Req0, _B) ->
+            Req1 = arizona_req:put_flash(Req0, error, ~"Please sign in first."),
+            {halt, arizona_req:redirect(Req1, ~"/target")}
+        end,
+        Req = arizona_req_test_adapter:new(#{
+            routes => #{
+                ~"/gate" =>
+                    {arizona_root_counter, #{
+                        layouts => [{arizona_layout, render}],
+                        middlewares => [Gate]
+                    }},
+                ~"/target" =>
+                    {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+            }
+        }),
+        {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+            layouts => [{arizona_layout, render}]
+        }),
+        %% The gate shares the current shell, so the navigate is served here and
+        %% the middleware halts. The client gets a bare navigate -- the flash is
+        %% stashed server-side and never reaches the browser.
+        {reply, HaltFrame, Socket1} =
+            arizona_socket:handle_in(navigate_frame(~"/gate"), Socket0),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/target"]], effects(HaltFrame)),
+        %% The follow-up frame for the redirect target crosses shells. Rather
+        %% than drop the flash, the socket sends the browser back through the
+        %% gate over HTTP, where the redirect can carry the flash cookie.
+        {reply, FullFrame, _Socket2} =
+            arizona_socket:handle_in(navigate_frame(~"/target"), Socket1),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/gate", #{~"full" := true}]], effects(FullFrame)),
+        %% Nothing was dropped, so nothing was warned about.
+        receive
+            {arizona_test_log_handler, Unexpected} -> error({unexpected_warning, Unexpected})
+        after 200 -> ok
+        end
+    after
+        ok = application:unset_env(arizona, secret_key),
         ok = logger:remove_handler(HandlerId)
     end.
 
@@ -528,6 +657,23 @@ foreign_caller_does_not_desync_drain(Config) when is_list(Config) ->
         LeftOver -> error({unexpected_mailbox_message, LeftOver})
     after 0 -> ok
     end.
+
+navigate_frame(Path) ->
+    iolist_to_binary(json:encode([~"navigate", #{~"path" => Path, ~"qs" => <<>>}])).
+
+patch_frame(Path) ->
+    iolist_to_binary(json:encode([~"patch", #{~"path" => Path, ~"qs" => <<>>}])).
+
+decode(Frame) ->
+    json:decode(iolist_to_binary(Frame)).
+
+ops(Frame) ->
+    #{~"o" := Ops} = decode(Frame),
+    Ops.
+
+effects(Frame) ->
+    #{~"e" := Effects} = decode(Frame),
+    Effects.
 
 %% A flagged-reconnect socket whose live process crashes the moment the deferred
 %% resync mounts it. `init/4` defers the mount, so the crash lands in the flush,
