@@ -110,6 +110,8 @@ Used in route declarations, `arizona_render:render_view_to_iolist/2`, `arizona_h
 
 `layouts` is always a list, applied outermost-first: `[Root, Section]` produces `Root(Section(Page))`. Empty list = no wrap.
 
+Layouts render **once, at SSR** -- a live navigate/patch replaces only the view *inside* them, so no frame can re-render one. `arizona_socket` therefore compares a navigate/patch target's `layouts` against the ones already on screen and degrades to a full page load (`arizona_js:navigate(Url, #{full => true})`) when they differ, instead of dropping the new page into the old page's shell. Whole-list term equality: a difference at any depth disqualifies an in-place swap, since an inner layer wraps the replaced view exactly as the outer one does. Crossing layout families therefore needs no hand-written `<a href>` -- `az_navigate`/`az_patch` degrade themselves, including on a server-issued redirect.
+
 ### CSRF Origin check
 
 `check_origin` is a built-in middleware step (`{arizona_middleware, check_origin}`) the router **prepends by default** to `{live, ...}` and controller (verb-tag / `match`) routes -- it rejects a cross-origin request/upgrade with `403` (`arizona_origin:check/3`: same-origin -- authority **and** scheme, so an HTTPS request refuses a plain-`http` Origin -- or `csrf_origins` allowlist; a missing `Origin` is allowed). Off by exception: `check_origin => false` in a route's `Opts`, or the global `check_origin` app env (which logs a warning once when disabled). It covers the WS upgrade too (`arizona_ws:prepare/3` runs the route's middlewares).

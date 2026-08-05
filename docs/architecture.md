@@ -993,9 +993,15 @@ post-mount state needed to dispatch events and navigate. `handler` is the curren
 a `patch` frame can tell same-handler in-place patch from a full navigate); `pending_flash` holds a
 one-shot flash carried in-process across an SPA navigate/patch; `pending_resync` holds the backstop
 timer ref while a flagged reconnect waits for its `cached_fps` frame (`undefined` once flushed, or
-when the connection never deferred). Flash over a WS navigate requires a live destination: a target
-that degrades to a full-page navigation destroys the socket (and a WS frame has no `Set-Cookie`
-leg), so the stashed flash is dropped with a logged warning. The route adapter is recovered from
+when the connection never deferred); `layouts` holds the connect route's layouts, so either frame
+kind can tell an in-place swap from one needing the whole page rebuilt; `flash_replay` holds the
+path whose middlewares produced `pending_flash`, when they did. Flash over a WS navigate requires
+a destination that stays on the socket: a target degrading to a full-page navigation destroys it
+(and a WS frame has no `Set-Cookie` leg), so a middleware-set flash is replayed by navigating to
+the stashed requested path instead of the target -- the halt re-runs over HTTP and redirects with a
+real flash cookie. `flash_replay` holds the redirect target beside that path so the reroute fires
+only for the redirect it belongs to, never hijacking an unrelated navigation. A handler-set flash,
+which nothing reproduces, is dropped with a logged warning. The route adapter is recovered from
 `req` on demand.
 
 **Op scoping happens at JSON-encode time, in two steps.** `flatten_ops/2` walks the nested
@@ -1063,6 +1069,17 @@ route, a non-live route (controller/asset/ws), or a method mismatch. A WS upgrad
 is rejected with `404`; an in-session navigate/patch degrades to a full-page navigation
 (`arizona_js:navigate(Path, #{full => true})`) rather than tearing down the live session.
 
+A target that *does* resolve degrades the same way when its `layouts` differ from the ones
+already on screen. Layouts render once, at SSR: `?OP_REPLACE` swaps only the view *inside* them
+and a patch keeps the shell outright, so no frame can re-render one, and serving such a target
+in place would drop the new page into the old page's shell. `arizona_socket` tracks the connect
+route's `layouts` (threaded `arizona_ws:prepare/3` -> `arizona_socket:init/4`) and compares by
+whole-list term equality -- `apply_layouts/3` nests the list, so an inner layer wraps the
+replaced view exactly as the outer one does and a difference at any depth disqualifies an
+in-place swap. The check sits on both frame handlers, which also covers the middleware
+halt-redirect path: that halt emits a navigate effect the client replays as an ordinary
+navigate frame.
+
 **Shipped implementation:** `arizona_roadrunner_req` exports the optional `resolve_route/3` and
 runs `roadrunner_router:match/3` against the compiled dispatch stored by
 `arizona_roadrunner_router`.
@@ -1114,9 +1131,13 @@ adapter's behaviour callbacks on first access and cached in the returned request
   `undefined`
 - flash (one-request): `put_flash/3` (set), `flash/1` (read) -- signed messages cleared on read;
   survive a full-page HTTP redirect (signed `az_flash` cookie) and a WebSocket SPA navigate
-  (`arizona_socket` in-process carry, exactly-once, no cookie). The WS carry needs a live
-  destination -- a navigate that degrades to a full-page navigation drops the flash with a
-  logged warning. `flash_out/1`, `consume_flash/1`, `seed_flash/2` are the transport-side plumbing
+  (`arizona_socket` in-process carry, exactly-once, no cookie). The WS carry needs a destination
+  that stays on the socket, so a navigate degrading to a full-page navigation splits by origin:
+  a flash a **halting middleware** set is reproducible, and the socket sends the full navigation
+  to the gated path instead of the target so the halt replays over HTTP and redirects with a
+  real flash cookie; a flash an **in-view handler** set has no request-side generator and is
+  dropped with a logged warning. `flash_out/1`, `consume_flash/1`, `seed_flash/2` are the
+  transport-side plumbing
 - session (durable): `put_session/3`, `delete_session/2`, `clear_session/1`, `session/1`,
   `get_session/2,3`, `read_session/1` -- encrypted state; a read does not consume, the response
   re-emits the cookie only on a write. `session_id/1` returns the opaque id in server-side store

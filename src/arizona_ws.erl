@@ -44,6 +44,7 @@ via `arizona_req:raw/1`.
     handler := module(),
     bindings := map(),
     on_mount := arizona_live:on_mount(),
+    layouts := [arizona_render:layout()],
     req := az:request(),
     reconnect := boolean(),
     fps_follow := boolean(),
@@ -70,8 +71,8 @@ and emits its own response. Returns `not_found` when the client-supplied
 controller/asset/ws route); the transport rejects the upgrade with a 404
 rather than crashing on an attacker-controllable path. Returns `{cont,
 State}` otherwise; the transport passes `State` (which carries `handler`,
-`bindings`, `on_mount`, `req`, `reconnect`, `fps_follow`) on through to
-`arizona_socket:init/4`.
+`bindings`, `on_mount`, `layouts`, `req`, `reconnect`, `fps_follow`) on
+through to `arizona_socket:init/4`.
 """.
 -spec prepare(QS, Adapter, AdapterState) -> result() when
     QS :: qs(),
@@ -96,6 +97,10 @@ prepare(QS, Adapter, AdapterState) ->
             IB = maps:get(bindings, RouteOpts, #{}),
             OnMount = maps:get(on_mount, RouteOpts, []),
             Middlewares = maps:get(middlewares, RouteOpts, []),
+            %% The layouts that wrapped THIS page at SSR. The socket keeps them to
+            %% compare against a navigate/patch target's, since only the page
+            %% inside them can be replaced over the wire (see arizona_socket).
+            Layouts = maps:get(layouts, RouteOpts, []),
             case arizona_middleware:apply_middlewares(Middlewares, ArzReq, IB) of
                 {halt, HaltReq} ->
                     {halt, HaltReq};
@@ -104,6 +109,7 @@ prepare(QS, Adapter, AdapterState) ->
                         handler => H,
                         bindings => Bindings1,
                         on_mount => OnMount,
+                        layouts => Layouts,
                         req => ArzReq1,
                         reconnect => Reconnect,
                         fps_follow => FpsFollow,
