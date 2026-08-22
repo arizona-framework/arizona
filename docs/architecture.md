@@ -1302,8 +1302,16 @@ renders to page HTML, then optionally injects the rendered page into mount bindi
 -- and passes the bindings to the layout's `render/1`. A layout is a stateless HTML shell (DOCTYPE,
 head, body, scripts) with no markers or `az` attributes: `?inner_content` is itself what marks the
 whole layout `az-nodiff`, so an explicit `az_nodiff` attribute is redundant and no layout fixture
-in the repo writes one. `layouts` is always a list, applied outermost-first (`[Root, Section]` produces
-`Root(Section(Page))`); an empty list renders the page directly, with no wrapper. Route config
+in the repo writes one. A `?stateful` inside a layout is a **render-time error**
+(`stateful_in_layout`): layouts render on the request-free SSR path, which has no `views`
+accumulator, so the child is mounted and discarded while its `az-view` marker -- baked into the
+module's compiled statics, so it cannot be stripped here -- still reaches the DOM naming a view the
+server never registered. The check is at render rather than compile time because the disqualifying
+property is the *path*, not the template: a `?stateful` under a user `az-nodiff` renders on the live
+path, is registered, and works. Use `?stateless` for layout chrome; chrome that must stay live across
+navigation belongs in a view the routes share, linked with `az_patch`. `layouts` is always a list,
+applied outermost-first (`[Root, Section]` produces `Root(Section(Page))`); an empty list renders
+the page directly, with no wrapper. Route config
 provides `bindings`, `on_mount`, `layouts`, `middlewares`, and `check_origin` -- the single canonical
 `t:arizona_live:route_opts/0`. URL data (path bindings,
 query params) does NOT flat-merge into Bindings -- a route opts into

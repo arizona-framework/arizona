@@ -75,6 +75,9 @@
     ssr_layouts_nest_outer_first/1,
     ssr_layout_splices_non_utf8_page_unchanged/1,
     ssr_layout_splice_adds_no_privileged_tag/1,
+    ssr_layout_rejects_stateful/1,
+    ssr_layout_rejects_stateful_via_stateless/1,
+    ssr_layout_stateful_guard_leaves_no_residue/1,
     ssr_inner_content_from_case_branch_unescaped/1,
     ssr_inner_content_as_stateless_prop_unescaped/1,
     ssr_inner_content_macro_marks_layout_nodiff/1,
@@ -156,6 +159,9 @@ groups() ->
             ssr_layouts_empty_list,
             ssr_layout_splices_non_utf8_page_unchanged,
             ssr_layout_splice_adds_no_privileged_tag,
+            ssr_layout_rejects_stateful,
+            ssr_layout_rejects_stateful_via_stateless,
+            ssr_layout_stateful_guard_leaves_no_residue,
             ssr_inner_content_from_case_branch_unescaped,
             ssr_inner_content_as_stateless_prop_unescaped,
             ssr_inner_content_macro_marks_layout_nodiff,
@@ -639,6 +645,62 @@ ssr_layouts_nest_outer_first(Config) when is_list(Config) ->
     ?assert(OuterOpenAt < InnerOpenAt),
     ?assert(InnerCloseAt < OuterCloseAt),
     ?assert(InnerOpenAt < InnerCloseAt).
+
+ssr_layout_rejects_stateful(Config) when is_list(Config) ->
+    %% A layout renders once at SSR and never joins the live view tree, so a
+    %% ?stateful inside one is mounted, rendered and then discarded. Its az-view
+    %% marker would still reach the DOM and name a view the server never
+    %% registered, and the client reads that marker to pick an event target --
+    %% so every event under it would be dropped with no diagnostic. Refuse.
+    ?assertError(
+        {arizona_loc, _, {stateful_in_layout, arizona_stateful_layout, render, arizona_counter}},
+        arizona_render:render_view_to_iolist(
+            arizona_about,
+            #{
+                bindings => #{title => <<"Reject">>},
+                layouts => [{arizona_stateful_layout, render}]
+            }
+        )
+    ).
+
+ssr_layout_rejects_stateful_via_stateless(Config) when is_list(Config) ->
+    %% Reached through a ?stateless in its own compile unit, so the layout's
+    %% nodiff flag never sees the ?stateful. Only a render-time guard catches
+    %% this, which is why the check cannot live in the parse transform.
+    ?assertError(
+        {arizona_loc, _,
+            {stateful_in_layout, arizona_stateful_layout_indirect, render, arizona_counter}},
+        arizona_render:render_view_to_iolist(
+            arizona_about,
+            #{
+                bindings => #{title => <<"Reject">>},
+                layouts => [{arizona_stateful_layout_indirect, render}]
+            }
+        )
+    ).
+
+ssr_layout_stateful_guard_leaves_no_residue(Config) when is_list(Config) ->
+    %% The guard is scoped to the layout layer only. A page's OWN stateful
+    %% children are rendered before the layout wraps them, so they must be
+    %% unaffected -- including right after a rejection, which exercises the
+    %% cleanup on the raising path.
+    ?assertError(
+        {arizona_loc, _, {stateful_in_layout, _, _, _}},
+        arizona_render:render_view_to_iolist(
+            arizona_about,
+            #{
+                bindings => #{title => <<"Reject">>},
+                layouts => [{arizona_stateful_layout, render}]
+            }
+        )
+    ),
+    HTML = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_page,
+            #{bindings => #{title => <<"After">>}, layouts => [{arizona_layout, render}]}
+        )
+    ),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"counter\"">>)).
 
 ssr_layouts_empty_list(Config) when is_list(Config) ->
     HTML = iolist_to_binary(

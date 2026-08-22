@@ -47,6 +47,9 @@ op-code targets.
 
 -include("arizona.hrl").
 
+%% Set while a layout layer renders (see render_layout/3).
+-define(IN_LAYOUT, '$arizona_in_layout').
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -67,6 +70,7 @@ op-code targets.
 -export([zip_list_fp/2]).
 -export([zip_stream_fp/3]).
 -export([fingerprint_payload/1]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -76,6 +80,7 @@ op-code targets.
 -ignore_xref([render_to_iolist/2]).
 -ignore_xref([resolve_id/1]).
 -ignore_xref([zip/2]).
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -378,6 +383,30 @@ fingerprint_payload(#{f := F, s := S, d := D} = Snap) ->
 fingerprint_payload(#{s := S, d := D} = Snap) ->
     flat_zip(backend(Snap), S, [V || {_Az, V} <:- D]).
 
+-doc """
+Formats the layout errors raised by `render_ssr_val/2`.
+
+Picked up by `erl_error:format_exception/3` via the `error_info`
+annotation, so the dev error page (and crash log) reads a sentence
+naming the offending layout and the way out.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({stateful_in_layout, Mod, Fun, Handler}, _ST) ->
+    #{
+        general => io_lib:format(
+            "layout ~s:~s/1 embeds ?stateful(~s, ...), but a layout renders once "
+            "at SSR and never joins the live view tree, so the component would "
+            "emit an az-view marker for a view the server never registers and "
+            "every event under it would be dropped. Use ?stateless for layout "
+            "chrome; chrome that must stay live across navigation belongs in a "
+            "view the routes share, linked with az_patch.",
+            [Mod, Fun, Handler]
+        )
+    }.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -431,7 +460,35 @@ apply_layouts([], Inner, _Bindings) ->
 apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
     Wrapped = apply_layouts(Rest, Inner, Bindings),
     Tmpl = Mod:Fun(Bindings#{inner_content => #{s => [Wrapped], d => []}}),
-    render_to_iolist(Tmpl).
+    render_layout(Mod, Fun, Tmpl).
+
+%% Mark the layer so `render_ssr_val/2` can refuse a `?stateful` inside it. The
+%% inner layers have already rendered into `Wrapped` by the time this runs, and
+%% `inner_content` is handed over as a no-dynamics template, so the flag never
+%% spans a nested layout or the page itself -- only this layer's own dynamics.
+render_layout(Mod, Fun, Tmpl) ->
+    erlang:put(?IN_LAYOUT, {Mod, Fun}),
+    try
+        render_to_iolist(Tmpl)
+    after
+        erlang:erase(?IN_LAYOUT)
+    end.
+
+%% A layout renders once at SSR, outside any live process, so nothing it renders
+%% is registered in the live `views` map. The `az-view` marker is baked into a
+%% stateful module's compiled statics, so it cannot be stripped here -- and the
+%% client reads that marker to decide which view handles an event. A layout-borne
+%% marker therefore claims a view the server never knows about, and every event
+%% under it is dropped. Refuse before mounting rather than emit it.
+refuse_stateful_in_layout(H) ->
+    case erlang:get(?IN_LAYOUT) of
+        undefined ->
+            ok;
+        {Mod, Fun} ->
+            erlang:error(
+                {stateful_in_layout, Mod, Fun, H}, none, [{error_info, #{module => ?MODULE}}]
+            )
+    end.
 
 %% Triple walker -- like zip/3 but consumes `[{Az, V, Deps}]` directly
 %% (the snapshot shape `arizona_eval:render_list_items_simple/2` and
@@ -508,6 +565,7 @@ render_ssr_val(_Backend, #{t := ?EACH, source := Source, template := Tmpl}) when
     ItemSnaps = arizona_eval:render_map_items_simple(Source, Tmpl),
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
 render_ssr_val(Backend, #{stateful := H, props := Props}) ->
+    ok = refuse_stateful_in_layout(H),
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
     %% Enforce restricted keys (e.g. `id`) at SSR too -- the live child-mount path
     %% (arizona_eval:fresh_mount_stateful) already does, so a handler that rewrites
