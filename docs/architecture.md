@@ -855,8 +855,16 @@ Simplified gen_server wrapper:
   `arizona_render:render/2`. Returns `{ok, ViewId}` (no HTML -- SSR is handled separately by
   `arizona_roadrunner_http`)
 - `handle_event/4` -- unified event dispatch: `handle_event(Pid, ViewId, Event, Payload)`. Checks
-  views map -- if `ViewId` is a known child, dispatches to child handler; otherwise dispatches to
-  root handler. Returns `{ok, Ops, Effects}`
+  views map -- if `ViewId` is a known child, dispatches to the child handler; if it is the root's
+  id, to the root handler. Returns `{ok, Ops, Effects}`. An id that is **neither** is dropped
+  (`{ok, [], []}`) rather than falling through to the root, so a crafted frame cannot address the
+  root via a bogus id -- and **logged as a warning**, because the drop is otherwise invisible from
+  both ends (no frame back, no view run). Legitimate causes: an in-flight frame for a view a diff
+  just removed, an `az-target` naming a view that does not exist, or an `az-view` marker for a view
+  that was never registered. The client never has to guess: it sends `null` for "the root view" and
+  `arizona_socket`'s `event_target/2` resolves it against the root id the socket tracks, so a
+  `push_event` handler effect, a hook outside any view, or `arizona.pushEvent/2` is always
+  recoverable -- a DOM-derived guess would not be
 - `handle_info/2` -- gen_server callback for Erlang messages (`Pid ! Msg`, `erlang:send_after`,
   etc.). If handler exports `handle_info/2`, calls it, diffs, and pushes
   `{arizona_push, RootViewId, Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without
@@ -1302,8 +1310,16 @@ renders to page HTML, then optionally injects the rendered page into mount bindi
 -- and passes the bindings to the layout's `render/1`. A layout is a stateless HTML shell (DOCTYPE,
 head, body, scripts) with no markers or `az` attributes: `?inner_content` is itself what marks the
 whole layout `az-nodiff`, so an explicit `az_nodiff` attribute is redundant and no layout fixture
-in the repo writes one. `layouts` is always a list, applied outermost-first (`[Root, Section]` produces
-`Root(Section(Page))`); an empty list renders the page directly, with no wrapper. Route config
+in the repo writes one. A `?stateful` inside a layout is a **render-time error**
+(`stateful_in_layout`): layouts render on the request-free SSR path, which has no `views`
+accumulator, so the child is mounted and discarded while its `az-view` marker -- baked into the
+module's compiled statics, so it cannot be stripped here -- still reaches the DOM naming a view the
+server never registered. The check is at render rather than compile time because the disqualifying
+property is the *path*, not the template: a `?stateful` under a user `az-nodiff` renders on the live
+path, is registered, and works. Use `?stateless` for layout chrome; chrome that must stay live across
+navigation belongs in a view the routes share, linked with `az_patch`. `layouts` is always a list,
+applied outermost-first (`[Root, Section]` produces `Root(Section(Page))`); an empty list renders
+the page directly, with no wrapper. Route config
 provides `bindings`, `on_mount`, `layouts`, `middlewares`, and `check_origin` -- the single canonical
 `t:arizona_live:route_opts/0`. URL data (path bindings,
 query params) does NOT flat-merge into Bindings -- a route opts into

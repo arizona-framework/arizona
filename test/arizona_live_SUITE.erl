@@ -76,6 +76,7 @@
     seed_fps_unknown_fp_still_sends/1,
     seed_fps_caps_growth/1,
     live_unknown_view_id_noop/1,
+    live_unknown_view_id_warns/1,
     child_stream_survives_next_root_diff/1,
     child_event_leaves_root_snapshot_untouched/1,
     stateful_child_independent_state/1,
@@ -118,11 +119,17 @@ all() ->
         {group, unmount},
         {group, on_mount},
         {group, fingerprint_dedup},
-        {group, seed_fps}
+        {group, seed_fps},
+        {group, diagnostics}
     ].
 
 groups() ->
     [
+        %% Not parallel: installs a global log handler, so a concurrent test
+        %% logging a warning would race into this one's mailbox.
+        {diagnostics, [], [
+            live_unknown_view_id_warns
+        ]},
         {gen_server, [parallel], [
             stateful_child_independent_state,
             nested_stateful_child_event,
@@ -501,6 +508,33 @@ live_dec_event(Config) when is_list(Config) ->
     {ok, _} = arizona_live:mount(Pid),
     {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"-1">>]], Ops).
+
+live_unknown_view_id_warns(Config) when is_list(Config) ->
+    %% The drop is correct but invisible from both ends -- the client gets no
+    %% frame back and no view runs -- so an event that silently does nothing
+    %% forever was the only symptom. Warn, naming the target and the root.
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning, config => #{pid => self()}
+    }),
+    try
+        {ok, Pid} = arizona_live:start_link(arizona_root_counter, #{}, undefined, []),
+        {ok, _} = arizona_live:mount(Pid),
+        ?assertEqual({ok, [], []}, arizona_live:handle_event(Pid, <<"nope">>, <<"inc">>, #{})),
+        receive
+            {arizona_test_log_handler, #{level := warning, msg := {Fmt, Args}}} ->
+                Msg = iolist_to_binary(io_lib:format(Fmt, Args)),
+                %% Names the event, the rejected target and the real root, so the
+                %% message alone is enough to find the mistake.
+                ?assertMatch({_, _}, binary:match(Msg, <<"inc">>)),
+                ?assertMatch({_, _}, binary:match(Msg, <<"nope">>)),
+                ?assertMatch({_, _}, binary:match(Msg, <<"counter">>))
+        after 1000 ->
+            ct:fail("no warning logged for a dropped event")
+        end
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.
 
 live_unknown_view_id_noop(Config) when is_list(Config) ->
     %% An event addressed to a view id that is neither the root nor a known child

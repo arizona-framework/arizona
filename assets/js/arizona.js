@@ -538,10 +538,7 @@ function mountHook(el) {
     instance.__name = name;
     /** @param {string} eventName @param {*} payload */
     instance.pushEvent = (eventName, payload) => {
-        workerPost(
-            W_SEND,
-            JSON.stringify([sendTarget(resolveTarget(el)), eventName, payload || {}]),
-        );
+        workerPost(W_SEND, JSON.stringify([resolveTarget(el), eventName, payload || {}]));
     };
     _hooks.set(el, instance);
     if (def.mounted) runHookCallback(instance, def.mounted, 'mounted');
@@ -1765,23 +1762,33 @@ function applyEffects(effects) {
 }
 
 /**
- * Send an event to the root view (first [az-view] element).
+ * Send an event to the root view. The target goes out as null and the server
+ * resolves it against the root view id it already holds -- see pushEventTo.
  * @param {string} event
  * @param {*} [payload]
  */
 function pushEvent(event, payload) {
-    const view = document.querySelector('[az-view]')?.id;
-    pushEventTo(view, event, payload);
+    pushEventTo(null, event, payload);
 }
 
 /**
- * Send an event to a specific view by id.
+ * Send an event to a specific view by id, or to the root view when `view` is
+ * null/undefined.
+ *
+ * A null target is the wire value for "the root view", NOT a missing value: the
+ * server maps a non-binary target to the root view id it is already tracking
+ * (`arizona_socket:event_target/2`). Resolving it here from the DOM instead
+ * would be a guess -- `document.querySelector('[az-view]')` returns the FIRST
+ * marker in document order, which is not the root view when the page carries a
+ * marker for a component that was never registered as a live view (a ?stateful
+ * rendered outside the live tree). Such a guess sends a plausible-looking id the
+ * server cannot recognize, and it drops the event; null is always recoverable.
  * @param {string|null|undefined} view
  * @param {string} event
  * @param {*} [payload]
  */
 function pushEventTo(view, event, payload) {
-    workerPost(W_SEND, JSON.stringify([sendTarget(view), event, payload]));
+    workerPost(W_SEND, JSON.stringify([view ?? null, event, payload]));
 }
 
 /**
@@ -1792,20 +1799,6 @@ function pushEventTo(view, event, payload) {
  */
 function resolveTarget(el) {
     return el.getAttribute('az-target') || el.closest('[az-view]')?.id || null;
-}
-
-/**
- * A view target for an outgoing WS event frame: the resolved target, or the root
- * view id when it is null/undefined. A `push_event` handler effect (no enclosing
- * element -- applied against document.documentElement), or a hook/element outside
- * any [az-view], resolves to null; sending null would tag the server's diff ops
- * with null, which it cannot encode (it crashes the transport). Fall back to the
- * root view (the first, outermost [az-view]).
- * @param {string|null|undefined} target
- * @returns {string|null}
- */
-function sendTarget(target) {
-    return target ?? document.querySelector('[az-view]')?.id ?? null;
 }
 
 /**
@@ -2011,7 +2004,7 @@ function execOne(el, event, cmd) {
             const evt = cmd[1];
             const payload =
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
-            const msg = JSON.stringify([sendTarget(resolveTarget(el)), evt, payload]);
+            const msg = JSON.stringify([resolveTarget(el), evt, payload]);
             if (event) {
                 scheduleSend(el, event, () => {
                     workerPost(W_SEND, msg);

@@ -110,6 +110,16 @@ Used in route declarations, `arizona_render:render_view_to_iolist/2`, `arizona_h
 
 `layouts` is always a list, applied outermost-first: `[Root, Section]` produces `Root(Section(Page))`. Empty list = no wrap.
 
+A layout is stateless chrome. A `?stateful` inside one is a render-time error
+(`stateful_in_layout`), directly or through a `?stateless` helper: layouts render on the
+request-free SSR path, which keeps no `views` map, so the child is mounted and thrown away
+while its `az-view` marker still lands in the DOM naming a view the server never registered
+-- and the client picks event targets off those markers. Use `?stateless`; for chrome that
+must stay live across navigation, put it in a view the routes share and link with `az_patch`.
+(A `?stateful` under a user `az-nodiff` is fine -- that renders on the live path and is
+registered. The disqualifying property is the render path, not the nodiff flag, which is why
+this is not a compile-time check.)
+
 Layouts render **once, at SSR** -- a live navigate/patch replaces only the view *inside* them, so no frame can re-render one. `arizona_socket` therefore compares a navigate/patch target's `layouts` against the ones already on screen and degrades to a full page load (`arizona_js:navigate(Url, #{full => true})`) when they differ, instead of dropping the new page into the old page's shell. Whole-list term equality: a difference at any depth disqualifies an in-place swap, since an inner layer wraps the replaced view exactly as the outer one does. Crossing layout families therefore needs no hand-written `<a href>` -- `az_navigate`/`az_patch` degrade themselves, including on a server-issued redirect.
 
 ### CSRF Origin check

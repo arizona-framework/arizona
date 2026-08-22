@@ -567,7 +567,7 @@ handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings =
             case maps:get(id, B0) of
                 ViewId ->
                     handle_root_event(Event, Payload, State);
-                _ ->
+                RootId ->
                     %% Unknown view id -- neither the root nor a known child. Drop
                     %% it (no ops, no effects) instead of dispatching to the root,
                     %% so a crafted frame can't route an arbitrary event to the
@@ -575,6 +575,21 @@ handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings =
                     %% maps a null/non-binary target to the root's real id, so a
                     %% legitimate push_event with no enclosing element still matches
                     %% the root here.
+                    %%
+                    %% Warn, because dropping is invisible from both ends: the
+                    %% client gets no frame back and the view never runs. Without
+                    %% this the only symptom is an event that silently does
+                    %% nothing, forever.
+                    logger:warning(
+                        "event ~ts dropped: target view ~ts is neither the root "
+                        "view (~ts) nor a child view. Usually an in-flight frame "
+                        "for a view a diff has just removed, which is harmless; "
+                        "otherwise an az-target naming a view that does not "
+                        "exist, or a ?stateful rendered outside the live tree so "
+                        "its az-view marker names a view that was never "
+                        "registered",
+                        [Event, ViewId, RootId]
+                    ),
                     {reply, {ok, [], []}, State}
             end
     end;

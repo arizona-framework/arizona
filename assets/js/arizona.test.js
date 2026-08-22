@@ -1236,39 +1236,72 @@ describe('applyEffects', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 12b. push_event target fallback -- never send a null target
+// 12b. push_event targeting -- null is the wire value for "the root view"
 // ---------------------------------------------------------------------------
 
-describe('push_event target fallback (null -> root)', () => {
+describe('push_event targeting (null means the root view)', () => {
     let mock;
     afterEach(() => {
         if (mock) mock.restore();
     });
 
-    it('a push_event handler effect resolves to the root view id, never null', async () => {
+    // The client must NOT resolve "the root view" from the DOM. The server maps a
+    // non-binary target to the root view id it already tracks, so null is always
+    // recoverable; a DOM-derived guess is not (see the ghost test below).
+
+    it('a push_event handler effect sends a null target', async () => {
         // op 0 in the effects channel is JS_PUSH_EVENT. A handler effect is applied
-        // against document.documentElement (no enclosing [az-view]), so the target
-        // resolves to null -- it must fall back to the root view id. Sending null
-        // makes the server tag its diff ops with null, which it cannot encode.
+        // against document.documentElement, which has no enclosing [az-view].
         vi.resetModules();
         const mod = await import('./arizona.js');
         document.body.innerHTML = '<div id="root" az-view></div>';
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         mod.applyEffects([[0, 'refresh', { a: 1 }]]);
-        const sends = mock.getSentMessages();
-        expect(sends).toContainEqual(['root', 'refresh', { a: 1 }]);
-        expect(sends.some((s) => s[0] === null)).toBe(false);
+        expect(mock.getSentMessages()).toContainEqual([null, 'refresh', { a: 1 }]);
     });
 
-    it('pushEventTo with a null view falls back to the root view id', async () => {
+    it('pushEventTo with a null view sends a null target', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         document.body.innerHTML = '<div id="root" az-view></div>';
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         mod.pushEventTo(null, 'ev', { x: 1 });
-        expect(mock.getSentMessages()).toContainEqual(['root', 'ev', { x: 1 }]);
+        expect(mock.getSentMessages()).toContainEqual([null, 'ev', { x: 1 }]);
+    });
+
+    it('does not target a ghost az-view that precedes the real root', async () => {
+        // A ?stateful rendered outside the live tree (e.g. in a layout) emits an
+        // az-view marker that is never registered in the server's views map. It
+        // sits BEFORE the page view in document order, so resolving the root with
+        // document.querySelector('[az-view]') would pick it and the server would
+        // drop the event. Regression guard: the target stays null.
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        document.body.innerHTML = '<nav id="ghost" az-view></nav><main id="page" az-view></main>';
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        mod.applyEffects([[0, 'refresh', {}]]);
+        mod.pushEvent('ping', { b: 2 });
+        const sends = mock.getSentMessages();
+        expect(sends).toContainEqual([null, 'refresh', {}]);
+        expect(sends).toContainEqual([null, 'ping', { b: 2 }]);
+        expect(sends.some((m) => m[0] === 'ghost')).toBe(false);
+    });
+
+    it('still targets the enclosing view for an element inside one', async () => {
+        // Only the root fallback changed; walking up to the nearest az-view is
+        // unaffected, including when a ghost marker precedes it.
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        document.body.innerHTML =
+            '<nav id="ghost" az-view></nav>' +
+            '<main id="page" az-view><button az="0" az-click=\'[0,"go"]\'></button></main>';
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        document.querySelector('button').click();
+        expect(mock.getSentMessages()).toContainEqual(['page', 'go', {}]);
     });
 });
 
@@ -4298,10 +4331,11 @@ describe('native-shell contract (__arizona_os__)', () => {
         };
         const { posted, disconnect } = connectWith(mod);
         expect(globalThis.__arizona_os__.onEvent).toHaveBeenCalledTimes(1);
-        // The shell injects an OS event -> relayed as a WS send to the root view.
+        // The shell injects an OS event -> relayed as a WS send to the root view,
+        // addressed by the null sentinel the server resolves (see pushEventTo).
         injected('window_blurred', { x: 1 });
         const sends = posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
-        expect(sends).toContainEqual(['page', 'window_blurred', { x: 1 }]);
+        expect(sends).toContainEqual([null, 'window_blurred', { x: 1 }]);
         disconnect();
     });
 
@@ -4329,7 +4363,7 @@ describe('pushEvent', () => {
         if (mock) mock.restore();
     });
 
-    it('sends event targeting the root az-view with null payload when omitted', async () => {
+    it('sends a null target for the root view, with null payload when omitted', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView('page', '<span az="0">hi</span>');
@@ -4339,7 +4373,7 @@ describe('pushEvent', () => {
         mod.pushEvent('my_event');
 
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['page', 'my_event', null]);
+        expect(msgs).toContainEqual([null, 'my_event', null]);
     });
 
     it('sends event with provided payload', async () => {
@@ -4352,7 +4386,7 @@ describe('pushEvent', () => {
         mod.pushEvent('my_event', { key: 'value' });
 
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['page', 'my_event', { key: 'value' }]);
+        expect(msgs).toContainEqual([null, 'my_event', { key: 'value' }]);
     });
 
     it('sends null target when no az-view element exists', async () => {
