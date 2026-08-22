@@ -29,6 +29,7 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([receive_branch/1]).
 -export([get_lazy_branch/1]).
 -export([with_branch/1]).
+-export([with_macro_branch/1]).
 -export([computed_key/1]).
 -export([two_slot/1]).
 -export([nested_element/1]).
@@ -290,6 +291,20 @@ with_branch(Bindings) ->
         {'div', [{id, ~"x"}], [
             case ?get(flag) of
                 true -> {p, [], [maps:get(val, az:with([val], Bindings))]};
+                false -> <<>>
+            end
+        ]}
+    ).
+
+%% The same projection through the `?with` macro, which expands to
+%% `arizona_template:with/2` rather than the `az` alias: the macro must land in the
+%% shape collect_call_keys matches, so a change to `val` re-renders the slot.
+-spec with_macro_branch(az:bindings()) -> az:template().
+with_macro_branch(Bindings) ->
+    ?html(
+        {'div', [{id, ~"x"}], [
+            case ?get(flag) of
+                true -> {p, [], [maps:get(val, ?with([val]))]};
                 false -> <<>>
             end
         ]}

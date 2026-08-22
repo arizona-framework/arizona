@@ -57,6 +57,7 @@
     conditional_receive_branch_tracks/1,
     conditional_get_lazy_branch_tracks/1,
     conditional_with_branch_tracks/1,
+    conditional_with_macro_branch_tracks/1,
     conditional_computed_key_not_tracked/1,
     conditional_two_slot_fine_grained/1,
     conditional_nested_element_recurses/1,
@@ -138,6 +139,7 @@ groups() ->
             conditional_receive_branch_tracks,
             conditional_get_lazy_branch_tracks,
             conditional_with_branch_tracks,
+            conditional_with_macro_branch_tracks,
             conditional_computed_key_not_tracked,
             conditional_two_slot_fine_grained,
             conditional_nested_element_recurses
@@ -1173,6 +1175,15 @@ conditional_with_branch_tracks(Config) when is_list(Config) ->
     B0 = #{flag => true, val => <<"A">>},
     B1 = #{flag => true, val => <<"B">>},
     Ops = cond_diff(with_branch, B0, B1, #{val => true}),
+    ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% The same projection written with the `?with` macro (expanding to
+%% `arizona_template:with/2`, not the `az` alias): the macro must expand into the shape
+%% collect_call_keys matches, so a `val` change re-renders the slot here too.
+conditional_with_macro_branch_tracks(Config) when is_list(Config) ->
+    B0 = #{flag => true, val => <<"A">>},
+    B1 = #{flag => true, val => <<"B">>},
+    Ops = cond_diff(with_macro_branch, B0, B1, #{val => true}),
     ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
 
 %% Documents the known limitation: a computed-key branch read (`?get(Key)`, Key a variable)

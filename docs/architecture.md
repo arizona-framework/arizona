@@ -384,7 +384,8 @@ closures, isolated by `with_saved_deps`), so the outer slot captures empty deps 
 the diff engine skips it forever. Idiomatic composition is `?stateful`/`?stateless`,
 whose props expressions read on the parent slot; an inline nested *element* is also
 fine (it flattens into the parent template). When you must hand a bindings subset to
-a sub-context, `arizona_template:with([keys], Bindings)` is the explicit fix: it
+a sub-context, `?with([keys])` (`arizona_template:with([keys], Bindings)`, or the
+`az:with/2` alias when `Bindings` isn't in scope) is the explicit fix: it
 `track/1`s each key (so the outer slot re-renders when any listed key changes) and
 returns `maps:with(Keys, Bindings)` (so the sub-context cannot silently depend on an
 untracked key -- an omitted key raises `missing_binding` rather than freezing). No
