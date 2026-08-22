@@ -18,6 +18,11 @@
 -define(get(Key, Default), arizona_template:get(Key, Bindings, Default)).
 -define(get_lazy(Key, Fun), arizona_template:get_lazy(Key, Bindings, Fun)).
 
+%% Bindings subset for a sub-context -- tracks each key as a dependency of the
+%% enclosing slot, then projects to only those keys, so the sub-context cannot
+%% silently read an untracked one. Requires `Bindings` variable in scope.
+-define(with(Keys), arizona_template:with(Keys, Bindings)).
+
 %% Layout inner content -- requires `Bindings` variable in scope
 -define(inner_content, az:inner_content(Bindings)).
 

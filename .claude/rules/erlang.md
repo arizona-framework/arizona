@@ -187,11 +187,13 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?get(Key)` | `arizona_template:get(Key, Bindings)` |
 | `?get(Key, Default)` | `arizona_template:get(Key, Bindings, Default)` |
 | `?get_lazy(Key, Fun)` | `arizona_template:get_lazy(Key, Bindings, Fun)` |
+| `?with(Keys)` | `arizona_template:with(Keys, Bindings)` -- tracks each key on the enclosing slot, then projects `Bindings` to just those keys (see "Handing a bindings subset to a sub-context") |
 | `?html(Elems)` | `arizona_template:html(Elems)` |
+| `?native(Elems)` | `arizona_template:native(Elems)` -- `?native` JSON render target (Android/iOS clients) |
 | `?terminal(Elems)` | `arizona_template:terminal(Elems)` -- ANSI render target; tags `line`/`col`/`row`/`text`/`span`/`br` + bare-atom style attrs (see docs/architecture.md "Terminal render target") |
 | `?each(Fun, Source)` | `arizona_template:each(Fun, Source)` -- 1-arg for lists, 2-arg for streams/maps. The callback must return an element (see "?each body must return an element") |
 | `?stateful(Handler, Props)` | `arizona_template:stateful(Handler, Props)` |
-| `?stateless(Fun, Props)` | `arizona_template:stateless(fun Fun/1, Props)` |
+| `?stateless(Fun, Props)` | `arizona_template:stateless(Fun, Props)` -- `Fun` is a fun reference (`fun bar/1`); a literal atom is sugar the transform rewrites to `fun Atom/1` |
 | `?stateless(Mod, Fun, Props)` | `arizona_template:stateless(Mod, Fun, Props)` |
 | `?local(Key, Init)` | `arizona_template:local(Key, Init)` -- client-owned slot: server renders `Init` once and never diffs it; the browser owns/updates the value via `Key` (a binary or atom literal; content -- one or many per element, mixed with static text -- or an attribute value, whole or interpolated with one local + static prefix/suffix) |
 | `?raw(Value)` | `arizona_template:raw(Value)` -- escape opt-out: splices a trusted, already-safe HTML fragment verbatim into a content slot or attribute value instead of HTML-escaping it. The parse transform only recognizes the opt-out when the `raw` call is **literal at the template site**, so wrap values here, never inside a helper. Never for user-controlled data. A dynamic content slot inside `<script>`/`<style>` is spliced verbatim (raw text decodes no character references, so escaping cannot apply there) and therefore **must** carry it -- an unmarked value there is a compile error (`dynamic_in_raw_text`); serialize data first, e.g. `?raw(json:encode(Data))`. The breakout neutralization behind that opt-out is **per-slot**, so two adjacent `?raw` slots in one `<script>`/`<style>` can reassemble a close tag across the boundary (`~"</scr"` + `~"ipt>"`) -- build the value in one slot |
@@ -200,10 +202,12 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?reconnected` | `arizona_live:reconnected()` -- true when the connected live process is a reconnection (client re-opened the WS), false on first connect/SSR. Gate one-shot OS commands with `?connected andalso not ?reconnected` |
 | `?capability(Key)` | `arizona_live:capability(Key)` -- did the native shell advertise capability `Key`? `false` in a plain browser/SSR. A UI/effect hint, **never** authorization (see [docs/os.md](../../docs/os.md)) |
 | `?capabilities` | `arizona_live:capabilities()` -- the negotiated native-shell capability map (`#{}` in a plain browser/SSR) |
-| `?send(Msg)` | `arizona_live:send(?get(id), Msg)` -- send to current view (stateful only) |
+| `?send(Msg)` | `arizona_live:send(map_get(id, Bindings), Msg)` -- send to current view (stateful only). Reads `id` with the `map_get` BIF, not `?get`, so it records no dependency |
 | `?send(ViewId, Msg)` | `arizona_live:send(ViewId, Msg)` -- send to specific view (stateful only) |
-| `?send_after(Time, Msg)` | `arizona_live:send_after(?get(id), Time, Msg)` -- delayed send to current view (stateful only) |
+| `?send_after(Time, Msg)` | `arizona_live:send_after(map_get(id, Bindings), Time, Msg)` -- delayed send to current view (stateful only). Reads `id` with the `map_get` BIF, not `?get`, so it records no dependency |
 | `?send_after(ViewId, Time, Msg)` | `arizona_live:send_after(ViewId, Time, Msg)` -- delayed send to specific view (stateful only) |
+| `?subscribe(Topic)` | `arizona_pubsub:subscribe(Topic, self())` -- subscribe the live process to `Topic` (stateful only) |
+| `?unsubscribe(Topic)` | `arizona_pubsub:unsubscribe(Topic, self())` -- unsubscribe the live process from `Topic` (stateful only) |
 
 ## `?each` body must return an element
 
@@ -468,11 +472,11 @@ non-variable/repeated/`_` parameters (`helper_params_not_vars`), statements befo
 the element (`helper_body_not_single_expr`), and recursion (`helper_recursive`).
 The same shapes with a whole-body `?html` wrapper are **not** rejected -- they
 already render as a runtime nested template and keep doing so (body reads frozen;
-hand a subset over with `az:with` below). Genuinely remote calls (`mod:helper()`),
+hand a subset over with `?with` below). Genuinely remote calls (`mod:helper()`),
 imported functions, and variable-bound fun calls are not resolvable at compile
 time and keep today's behavior (an element-returning one still crashes at render).
 
-### Handing a bindings subset to a sub-context -- `az:with`
+### Handing a bindings subset to a sub-context -- `?with`
 
 A child template embedded via a **raw function call** that the helper inlining
 above cannot resolve (a multi-statement `?html`-wrapped helper, a remote helper)
@@ -483,16 +487,18 @@ composition is `?stateful`/`?stateless` (props reads track on the parent slot); 
 inline nested *element* is also fine (it flattens into the parent template).
 
 When you must hand a bindings subset to a sub-context (a helper, a passed-through
-map), declare the dependency with `az:with([keys], Bindings)` -- it tracks each key
-on the enclosing slot (fixing the freeze) and projects to only those keys via
+map), declare the dependency with `?with([keys])` -- it tracks each key on the
+enclosing slot (fixing the freeze) and projects to only those keys via
 `maps:with/2`, so the sub-context can't silently read an untracked key (an omitted
-key fails loudly with `missing_binding` instead of freezing).
+key fails loudly with `missing_binding` instead of freezing). The macro needs
+`Bindings` in scope like `?get`; the underlying `arizona_template:with/2` (or the
+`az:with/2` alias) takes the map explicitly when it isn't.
 
 ```erlang
 %% Frozen: outer slot has empty deps, never re-renders.
 ?html({p, [], [row(Bindings)]}).
 %% Tracked: `id`/`name` recorded on the outer slot; projection hides the rest.
-?html({p, [], [row(az:with([id, name], Bindings))]}).
+?html({p, [], [row(?with([id, name]))]}).
 ```
 
 There is deliberately no `with_all` -- tracking every key makes the slot depend on
