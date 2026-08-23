@@ -14,6 +14,8 @@
     get_logs_rejects_non_string_grep/1,
     get_logs_rejects_invalid_grep/1,
     get_logs_reports_no_matches/1,
+    get_logs_emits_a_cursor_naming_its_argument/1,
+    get_logs_rejects_negative_since/1,
     describe_component_stateful/1,
     describe_component_stateless/1,
     describe_component_other/1,
@@ -59,6 +61,8 @@ all() ->
         get_logs_rejects_non_string_grep,
         get_logs_rejects_invalid_grep,
         get_logs_reports_no_matches,
+        get_logs_emits_a_cursor_naming_its_argument,
+        get_logs_rejects_negative_since,
         describe_component_stateful,
         describe_component_stateless,
         describe_component_other,
@@ -353,9 +357,22 @@ get_logs_rejects_invalid_grep(_Config) ->
     ?assertMatch({_, _}, binary:match(Message, ~"invalid grep pattern")).
 
 get_logs_reports_no_matches(_Config) ->
-    %% An empty reply would read as a broken tool; say it in words instead.
+    %% An empty reply would read as a broken tool; say it in words instead. The
+    %% cursor still rides along so a polling loop keeps advancing.
     {reply, Text, _} = call(~"get_logs", #{~"grep" => ~"zzz-no-such-entry-zzz"}),
-    ?assertEqual(~"(no matching log entries)", Text).
+    ?assertMatch({0, _}, binary:match(Text, ~"(no matching log entries)")),
+    ?assertMatch({_, _}, binary:match(Text, ~"[cursor: ")).
+
+get_logs_emits_a_cursor_naming_its_argument(_Config) ->
+    %% The reply is the only place an agent can discover the cursor exists, so it
+    %% has to name the argument that consumes it.
+    {reply, Text, _} = call(~"get_logs", #{}),
+    ?assertMatch({_, _}, binary:match(Text, ~"[cursor: ")),
+    ?assertMatch({_, _}, binary:match(Text, ~"since")).
+
+get_logs_rejects_negative_since(_Config) ->
+    {error, Message, _} = call(~"get_logs", #{~"since" => -1}),
+    ?assertMatch({_, _}, binary:match(Message, ~"non-negative integer")).
 
 app_info_reports_version(_Config) ->
     {reply, Text, _} = call(~"app_info", #{}),
