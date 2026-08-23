@@ -603,6 +603,11 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
             try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
                 {ok, NewVId, PageHTML} ->
                     Ops = replace_ops(OldVId, PageHTML),
+                    %% No effects: a navigate remounts, and mount/1 has no
+                    %% effects channel (it also runs at SSR, where no client
+                    %% exists to receive one). A view that wants one self-casts
+                    %% from mount/1 and answers in handle_info/2, which pushes
+                    %% its own frame rather than riding this reply.
                     encode_reply(Ops, [], Socket#socket{view_id = NewVId, handler = H})
             catch
                 %% Live process exited between the navigate frame arriving and

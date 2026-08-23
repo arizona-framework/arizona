@@ -41,6 +41,36 @@ form fields or transient flags after they've been processed.
 `Effects` is a list of `t:arizona_effect:cmd/0` to run client-side after
 the diff is applied (e.g. focus a field, dispatch a custom event).
 
+**Only the live-only callbacks carry effects.** An effect is a command sent
+over the WebSocket, so it needs a connected client to receive it -- and
+`mount/1` and `render/1` also run on the request-free SSR path, where there is
+none. The split follows from that: `handle_event/3`, `handle_info/2`,
+`handle_update/3` and `handle_drain/2` never run at SSR and all return effects;
+`mount/1` runs on both paths and returns none (`t:mount_ret/0` is
+`{Bindings, Resets}`).
+
+For a **mount-time** effect, self-cast from `mount/1` and answer in
+`handle_info/2`, which is live-only and does carry effects:
+
+```erlang
+mount(_Bindings0) ->
+    Bindings = #{id => ~"page"},
+    ?connected andalso ?send(arizona_connected),
+    {Bindings, #{}}.
+
+handle_info(arizona_connected, Bindings) ->
+    {Bindings, #{}, [arizona_js:set_title(~"Ready")]}.
+```
+
+The `?connected` guard is load-bearing. `?send` is `self() ! Msg`: inside a live
+process that self-delivers and reaches `handle_info/2`, but at SSR `self()` is
+the request process, whose mailbox nothing ever reads -- so an unguarded send is
+silently dropped, with no crash to point at it.
+
+This is also how a `navigate` gets a mount-time effect. A navigate remounts, and
+`mount/1` has no effects slot, so the effect arrives as its own pushed frame
+rather than folded into the navigate reply.
+
 ## Graceful drain
 
 When the transport adapter receives a drain signal (e.g.
@@ -196,6 +226,8 @@ handler's template churns often.
 -type event_name() :: binary().
 -type event_payload() :: map().
 
+%% No effects slot: `mount/1` also runs at SSR, where there is no client to
+%% receive one (see "Resets and effects" in the module doc).
 -type mount_ret() :: {bindings(), resets()}.
 -type render_ret() :: arizona_template:template().
 -type handle_event_ret() :: {bindings(), resets(), effects()}.
@@ -218,6 +250,11 @@ mounts the handler.
 Returns `{Bindings, Resets}` where `Resets` is reapplied after every
 subsequent `handle_event/3` / `handle_info/2` to clear transient
 fields. Use the empty map `#{}` if you have nothing to reset.
+
+There is no effects channel here, because `mount/1` also runs on the
+request-free SSR path where no client exists to receive one. Self-cast to
+`handle_info/2` for a mount-time effect -- see "Resets and effects" in the
+module doc.
 """.
 -callback mount(Bindings :: bindings()) -> mount_ret().
 
