@@ -88,7 +88,8 @@ usually what you want, since that is where a crash surfaces.
 -nominal opts() :: #{
     count => pos_integer(),
     level => logger:level(),
-    grep => binary()
+    grep => binary(),
+    since => non_neg_integer()
 }.
 
 %% --------------------------------------------------------------------
@@ -156,28 +157,42 @@ mark_self() ->
     logger:update_process_metadata(#{?SKIP => true}).
 
 -doc """
-The buffered events, oldest first, after filtering.
+The buffered events, oldest first, after filtering, plus a cursor.
 
-`count` (default 50) takes from the newest end. `level` keeps
-events at least as severe as the one given. `grep` keeps events matching a
-case-insensitive regular expression. A malformed `grep` answers `{error, _}`
-rather than raising, so the tool can report it in-band.
+`count` (default 50) takes from the newest end. `level` keeps events at least as
+severe as the one given. `grep` keeps events matching a case-insensitive regular
+expression. A malformed `grep` answers `{error, _}` rather than raising, so the
+tool can report it in-band.
+
+`since` keeps only events newer than a cursor from an earlier call, which is what
+makes a repeated read cheap: an agent polling after each action would otherwise
+re-read the same entries every time and have to spot the new ones by eye.
+
+The returned cursor is the newest sequence **observed by this call**, before
+`level`/`grep` filtering, so passing it back skips everything this call could have
+seen rather than only what it returned. Deriving it from the rows actually read
+(rather than the live counter) is what keeps a concurrent write from being either
+skipped or repeated.
 """.
--spec tail(Opts) -> {ok, [binary()]} | {error, binary()} when Opts :: opts().
+-spec tail(Opts) -> {ok, [binary()], Cursor} | {error, binary()} when
+    Opts :: opts(),
+    Cursor :: non_neg_integer().
 tail(Opts) ->
     case compile_grep(maps:get(grep, Opts, undefined)) of
         {ok, Re} ->
             Count = maps:get(count, Opts, ?DEFAULT_COUNT),
             Level = maps:get(level, Opts, undefined),
+            Since = maps:get(since, Opts, 0),
             %% Only the 4-tuples are entries; the counter row is `{seq, N}`.
             Rows = lists:keysort(2, ets:match_object(?TABLE, {'_', '_', '_', '_'})),
             Matching = [
                 Bin
-             || {_Slot, _Seq, EventLevel, Bin} <- Rows,
+             || {_Slot, Seq, EventLevel, Bin} <- Rows,
+                Seq > Since,
                 level_at_least(EventLevel, Level),
                 matches(Bin, Re)
             ],
-            {ok, last(Matching, Count)};
+            {ok, last(Matching, Count), newest_seq(Rows, Since)};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -250,6 +265,15 @@ level_at_least(_EventLevel, undefined) ->
     true;
 level_at_least(EventLevel, Level) ->
     logger:compare_levels(EventLevel, Level) =/= lt.
+
+%% Rows are sorted, so the newest sequence is the last one. An empty buffer
+%% carries the caller's cursor forward rather than resetting it to 0, which would
+%% replay everything on the next call.
+newest_seq([], Since) ->
+    Since;
+newest_seq(Rows, _Since) ->
+    {_Slot, Seq, _Level, _Bin} = lists:last(Rows),
+    Seq.
 
 last(List, Count) ->
     lists:nthtail(max(0, length(List) - Count), List).

@@ -106,7 +106,10 @@ has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mc
 - `reloader_status` -- the dev reloader's current compile error (`arizona_reloader:get_error/0`)
   **plus loaded-vs-disk drift**: the modules whose loaded code differs from their beam on disk. A
   node serving stale code otherwise reads "ok", so the drift list is the useful half.
-- `get_logs` -- recent log output from the running node, filtered by `tail`, `level` and `grep`.
+- `get_logs` -- recent log output from the running node, filtered by `tail`, `level`, `grep` and
+  `since`. Each reply ends with a cursor; passing it back as `since` returns only what was logged
+  after that read, so a loop that checks the logs after every action stops re-reading its own
+  previous window.
   An agent driving the node has no terminal, so without this a crash report -- the one artifact
   naming the module and line -- is unreadable, and a live process dying on every interaction reads
   back as a healthy app. Output produced by the MCP's own tool calls is excluded, so an `eval` that

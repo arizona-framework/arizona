@@ -14,6 +14,8 @@
 -export([excludes_a_marked_process/1]).
 -export([captures_a_process_the_marked_one_spawned/1]).
 -export([install_is_idempotent/1]).
+-export([since_returns_only_newer_entries/1]).
+-export([cursor_holds_position_when_nothing_matched/1]).
 -export([ring_keeps_the_newest_when_full/1]).
 
 all() ->
@@ -31,7 +33,9 @@ groups() ->
             count_takes_the_newest,
             excludes_a_marked_process,
             captures_a_process_the_marked_one_spawned,
-            install_is_idempotent
+            install_is_idempotent,
+            since_returns_only_newer_entries,
+            cursor_holds_position_when_nothing_matched
         ]},
         %% Sequential and last: filling the ring evicts everything else, which
         %% would pull entries out from under a parallel case mid-assertion.
@@ -68,18 +72,18 @@ filters_by_level(Config) when is_list(Config) ->
     logger:error("err ~ts", [Token]),
     logger:notice("note ~ts", [Token]),
     %% `level` keeps events at least as severe, so `error` drops the notice.
-    {ok, Errors} = arizona_dev_log:tail(#{grep => Token, level => error, count => 100}),
+    {ok, Errors, _} = arizona_dev_log:tail(#{grep => Token, level => error, count => 100}),
     ?assertMatch([_], Errors),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Errors), ~"err ")),
     ?assertEqual(nomatch, binary:match(iolist_to_binary(Errors), ~"note ")),
     %% `notice` is less severe, so it keeps both.
-    {ok, Both} = arizona_dev_log:tail(#{grep => Token, level => notice, count => 100}),
+    {ok, Both, _} = arizona_dev_log:tail(#{grep => Token, level => notice, count => 100}),
     ?assertMatch([_, _], Both).
 
 filters_by_grep_case_insensitively(Config) when is_list(Config) ->
     Token = token(),
     logger:error("MiXeDcAsE ~ts", [Token]),
-    {ok, Found} = arizona_dev_log:tail(#{grep => ~"mixedcase", count => 100}),
+    {ok, Found, _} = arizona_dev_log:tail(#{grep => ~"mixedcase", count => 100}),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Found), Token)).
 
 invalid_grep_reports_in_band(Config) when is_list(Config) ->
@@ -95,7 +99,7 @@ count_takes_the_newest(Config) when is_list(Config) ->
     logger:error("first ~ts", [Token]),
     logger:error("second ~ts", [Token]),
     logger:error("third ~ts", [Token]),
-    {ok, Newest} = arizona_dev_log:tail(#{grep => Token, count => 1}),
+    {ok, Newest, _} = arizona_dev_log:tail(#{grep => Token, count => 1}),
     ?assertMatch([_], Newest),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Newest), ~"third")).
 
@@ -127,6 +131,37 @@ install_is_idempotent(Config) when is_list(Config) ->
     %% Every MCP session calls it, so a second call must not fail.
     ?assertEqual(ok, arizona_dev_log:install()),
     ?assertEqual(ok, arizona_dev_log:install()).
+
+since_returns_only_newer_entries(Config) when is_list(Config) ->
+    Token = token(),
+    Self = self(),
+    Log = fun(Text) ->
+        _Pid = spawn(fun() ->
+            logger:error("~ts ~ts", [Text, Token]),
+            Self ! logged
+        end),
+        receive
+            logged -> ok
+        after 5000 -> ct:fail(never_logged)
+        end
+    end,
+    Log(~"before"),
+    {ok, First, Cursor} = arizona_dev_log:tail(#{grep => Token, count => 100}),
+    ?assertMatch([_], First),
+    Log(~"after"),
+    %% The whole point of the cursor: a second read returns only what is new,
+    %% instead of the caller re-reading its own previous window every poll.
+    {ok, Second, _} = arizona_dev_log:tail(#{grep => Token, count => 100, since => Cursor}),
+    ?assertMatch([_], Second),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Second), ~"after")),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Second), ~"before")).
+
+cursor_holds_position_when_nothing_matched(Config) when is_list(Config) ->
+    %% A read past the end must carry the cursor forward, not reset it: returning
+    %% 0 would make the caller's next poll replay the entire buffer.
+    {ok, _Entries, Cursor} = arizona_dev_log:tail(#{count => 1}),
+    {ok, [], Same} = arizona_dev_log:tail(#{count => 1, since => Cursor, grep => ~"zzz-nope"}),
+    ?assert(Same >= Cursor).
 
 %% --------------------------------------------------------------------
 %% bounds
@@ -174,5 +209,5 @@ fill(N, Token) ->
     iolist_to_binary(io_lib:format("fill ~p ~ts", [N, Token])).
 
 entries(Token) ->
-    {ok, Entries} = arizona_dev_log:tail(#{grep => Token, count => 5000}),
+    {ok, Entries, _Cursor} = arizona_dev_log:tail(#{grep => Token, count => 5000}),
     Entries.

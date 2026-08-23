@@ -162,11 +162,12 @@ base_tools() ->
         #{
             name => ~"get_logs",
             description =>
-                ~"Recent log output from the node; excludes this MCP's own tool-call output",
+                ~"Recent node logs with a cursor for new-only reads; excludes this MCP's output",
             input_schema => #{
                 type => ~"object",
                 properties => #{
                     tail => #{type => ~"integer"},
+                    since => #{type => ~"integer"},
                     level => #{type => ~"string", enum => level_names()},
                     grep => #{type => ~"string"}
                 }
@@ -367,17 +368,25 @@ level_names() ->
 %% Entries already carry logger_formatter's trailing newline, so they are
 %% concatenated rather than joined. An empty result says so in words: an agent
 %% reading back "" cannot tell a quiet node from a broken tool.
+%%
+%% The cursor trails the entries and names the argument that consumes it, because
+%% the tool's own output is the only place an agent can learn the value exists. It
+%% is emitted even when nothing matched, so a polling loop still advances instead
+%% of re-reading the same window every call.
 get_logs(Args) ->
     case logs_opts(Args) of
         {ok, Opts} ->
             case arizona_dev_log:tail(Opts) of
-                {ok, []} -> {ok, ~"(no matching log entries)"};
-                {ok, Entries} -> {ok, iolist_to_binary(Entries)};
+                {ok, [], Cursor} -> {ok, with_cursor(~"(no matching log entries)\n", Cursor)};
+                {ok, Entries, Cursor} -> {ok, with_cursor(iolist_to_binary(Entries), Cursor)};
                 {error, Message} -> {error, Message}
             end;
         {error, Message} ->
             {error, Message}
     end.
+
+with_cursor(Text, Cursor) ->
+    fmt("~ts[cursor: ~p -- pass as \"since\" to read only newer entries]", [Text, Cursor]).
 
 %% Every option is checked the same way, and a bad one answers in-band. Silently
 %% ignoring the ones that are easy to check would be worse than rejecting them:
@@ -386,13 +395,26 @@ get_logs(Args) ->
 logs_opts(Args) ->
     case logs_tail_opt(Args, #{}) of
         {ok, WithTail} ->
-            case logs_grep_opt(Args, WithTail) of
-                {ok, WithGrep} -> logs_level_opt(Args, WithGrep);
+            case logs_since_opt(Args, WithTail) of
+                {ok, WithSince} -> logs_grep_and_level_opts(Args, WithSince);
                 {error, Message} -> {error, Message}
             end;
         {error, Message} ->
             {error, Message}
     end.
+
+logs_grep_and_level_opts(Args, Opts) ->
+    case logs_grep_opt(Args, Opts) of
+        {ok, WithGrep} -> logs_level_opt(Args, WithGrep);
+        {error, Message} -> {error, Message}
+    end.
+
+logs_since_opt(#{~"since" := Since}, Opts) when is_integer(Since), Since >= 0 ->
+    {ok, Opts#{since => Since}};
+logs_since_opt(#{~"since" := Since}, _Opts) ->
+    {error, fmt("since must be a non-negative integer, got: ~tp", [Since])};
+logs_since_opt(#{}, Opts) ->
+    {ok, Opts}.
 
 logs_tail_opt(#{~"tail" := Tail}, Opts) when is_integer(Tail), Tail > 0 ->
     {ok, Opts#{count => Tail}};
