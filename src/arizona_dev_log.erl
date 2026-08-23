@@ -120,6 +120,10 @@ create_table() ->
 -doc """
 Installs the `logger` handler. Idempotent, so every MCP session can call it
 without checking whether an earlier one already did.
+
+Expects `create_table/0` to have run, which `arizona_sup:init/1` does: the
+handler writes on every log event, so installing it without the table would
+leave `logger` removing it again at the first one.
 """.
 -spec install() -> ok.
 install() ->
@@ -192,6 +196,10 @@ log(#{level := Level} = LogEvent, _Config) ->
     %% then just a filter, and nothing in the event (pids, refs, a report's
     %% closure over process state) is retained past the moment it was logged.
     Bin = format(LogEvent),
+    %% Claiming the sequence and filling the slot are two steps, so two writers
+    %% exactly ?SIZE apart can land out of order and leave the older one in the
+    %% slot. Reads sort by sequence, so ordering still holds -- the cost is one
+    %% stale entry in a buffer that is lossy by construction anyway.
     Seq = ets:update_counter(?TABLE, seq, 1),
     true = ets:insert(?TABLE, {Seq rem ?SIZE, Seq, Level, Bin}),
     ok.
@@ -206,8 +214,18 @@ log(#{level := Level} = LogEvent, _Config) ->
 %% is the part an agent most needs to read.
 format(LogEvent) ->
     case unicode:characters_to_binary(logger_formatter:format(LogEvent, #{})) of
-        Bin when is_binary(Bin) -> Bin;
-        Error -> error({log_not_encodable, Error})
+        Bin when is_binary(Bin) ->
+            Bin;
+        %% Degrade rather than raise. A handler that crashes is removed by
+        %% `logger`, which would silently end capture for the life of the node --
+        %% the worst failure mode for the one tool an agent reaches for when
+        %% something is already wrong. Keep the part that did convert, and say so
+        %% in-band; the reply is also JSON-encoded downstream, where a bare high
+        %% byte closes the connection instead of answering.
+        {error, Converted, _Rest} ->
+            <<Converted/binary, " ... [truncated: undecodable log event]\n">>;
+        {incomplete, Converted, _Rest} ->
+            <<Converted/binary, " ... [truncated: incomplete log event]\n">>
     end.
 
 compile_grep(undefined) ->

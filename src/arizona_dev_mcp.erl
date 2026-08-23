@@ -119,8 +119,10 @@ init(_InitParams) ->
     %% `eval` is always available; the dev route's localhost-only gate
     %% (`allow_remote_access => false`, enforced by the MCP handler) is what keeps
     %% its RCE off the network, so there is nothing to configure here.
-    %% Installed here rather than at boot so only an app that mounts this route
-    %% pays the per-event write. Idempotent, so every session can call it.
+    %%
+    %% The log ring's handler is installed here rather than at boot so only an
+    %% app that mounts this route pays the per-event write. Idempotent, so every
+    %% session can call it.
     ok = arizona_dev_log:install(),
     {ok, #{name => ~"arizona_dev", version => ~"0.1.0"}, #{tools => #{}}, #{
         bindings => erl_eval:new_bindings()
@@ -377,23 +379,36 @@ get_logs(Args) ->
             {error, Message}
     end.
 
+%% Every option is checked the same way, and a bad one answers in-band. Silently
+%% ignoring the ones that are easy to check would be worse than rejecting them:
+%% an agent that sends `"50"` for `tail` would get 50 entries by coincidence and
+%% no signal that its argument was dropped.
 logs_opts(Args) ->
-    Opts0 =
-        case Args of
-            #{~"tail" := Tail} when is_integer(Tail), Tail > 0 -> #{count => Tail};
-            #{} -> #{}
-        end,
-    Opts =
-        case Args of
-            #{~"grep" := Grep} when is_binary(Grep) -> Opts0#{grep => Grep};
-            #{} -> Opts0
-        end,
-    case Args of
-        #{~"level" := Level} -> logs_level_opt(Level, Opts);
-        #{} -> {ok, Opts}
+    case logs_tail_opt(Args, #{}) of
+        {ok, WithTail} ->
+            case logs_grep_opt(Args, WithTail) of
+                {ok, WithGrep} -> logs_level_opt(Args, WithGrep);
+                {error, Message} -> {error, Message}
+            end;
+        {error, Message} ->
+            {error, Message}
     end.
 
-logs_level_opt(Level, Opts) ->
+logs_tail_opt(#{~"tail" := Tail}, Opts) when is_integer(Tail), Tail > 0 ->
+    {ok, Opts#{count => Tail}};
+logs_tail_opt(#{~"tail" := Tail}, _Opts) ->
+    {error, fmt("tail must be a positive integer, got: ~tp", [Tail])};
+logs_tail_opt(#{}, Opts) ->
+    {ok, Opts}.
+
+logs_grep_opt(#{~"grep" := Grep}, Opts) when is_binary(Grep) ->
+    {ok, Opts#{grep => Grep}};
+logs_grep_opt(#{~"grep" := Grep}, _Opts) ->
+    {error, fmt("grep must be a string, got: ~tp", [Grep])};
+logs_grep_opt(#{}, Opts) ->
+    {ok, Opts}.
+
+logs_level_opt(#{~"level" := Level}, Opts) ->
     case lists:member(Level, level_names()) of
         true ->
             %% Every name in level_names/0 is an existing atom (they are
@@ -401,10 +416,12 @@ logs_level_opt(Level, Opts) ->
             {ok, Opts#{level => binary_to_existing_atom(Level)}};
         false ->
             {error,
-                fmt("unknown level ~ts; expected one of: ~ts", [
+                fmt("unknown level ~tp; expected one of: ~ts", [
                     Level, lists:join(", ", level_names())
                 ])}
-    end.
+    end;
+logs_level_opt(#{}, Opts) ->
+    {ok, Opts}.
 
 app_info() ->
     Vsn =

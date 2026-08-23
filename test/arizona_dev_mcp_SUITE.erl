@@ -10,6 +10,8 @@
     list_routes_env_unset/1,
     get_logs_returns_captured_output/1,
     get_logs_rejects_unknown_level/1,
+    get_logs_rejects_non_integer_tail/1,
+    get_logs_rejects_non_string_grep/1,
     get_logs_rejects_invalid_grep/1,
     get_logs_reports_no_matches/1,
     describe_component_stateful/1,
@@ -53,6 +55,8 @@ all() ->
         list_routes_env_unset,
         get_logs_returns_captured_output,
         get_logs_rejects_unknown_level,
+        get_logs_rejects_non_integer_tail,
+        get_logs_rejects_non_string_grep,
         get_logs_rejects_invalid_grep,
         get_logs_reports_no_matches,
         describe_component_stateful,
@@ -332,6 +336,17 @@ get_logs_rejects_unknown_level(_Config) ->
     {error, Message, _} = call(~"get_logs", #{~"level" => ~"loud"}),
     ?assertMatch({_, _}, binary:match(Message, ~"unknown level")),
     ?assertMatch({_, _}, binary:match(Message, ~"emergency")).
+
+get_logs_rejects_non_integer_tail(_Config) ->
+    %% A silently-ignored bad argument is worse than a rejected one: the agent
+    %% would get the default 50 entries and no signal that its `tail` was
+    %% dropped. JSON has no integer/string distinction agents reliably honour.
+    {error, Message, _} = call(~"get_logs", #{~"tail" => ~"50"}),
+    ?assertMatch({_, _}, binary:match(Message, ~"positive integer")).
+
+get_logs_rejects_non_string_grep(_Config) ->
+    {error, Message, _} = call(~"get_logs", #{~"grep" => 7}),
+    ?assertMatch({_, _}, binary:match(Message, ~"must be a string")).
 
 get_logs_rejects_invalid_grep(_Config) ->
     {error, Message, _} = call(~"get_logs", #{~"grep" => ~"[oops"}),

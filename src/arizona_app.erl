@@ -85,6 +85,7 @@ prep_stop(State) ->
 -spec stop(State) -> ok when
     State :: term().
 stop(_State) ->
+    ok = arizona_dev_log:uninstall(),
     stop_server().
 
 %% --------------------------------------------------------------------
