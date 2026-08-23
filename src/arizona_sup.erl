@@ -7,7 +7,8 @@ Always supervises `arizona_pubsub` (the `pg`-based pubsub scope) and
 registry and starts per-session processes on demand), and owns the hot
 reloader's beam-facts cache table (`arizona_reloader_consistency:create_table/0`,
 created in `init/1` so the cache outlives the short-lived processes that read
-it). Also supervises one
+it) and the dev MCP's log ring table (`arizona_dev_log:create_table/0`, for the
+same reason). Also supervises one
 `arizona_watcher` per rule when the dev-mode reloader is enabled via the
 `reloader` application env, and the configured server-side session store when
 the `session_store` env names a backend that exports `child_spec/0` (e.g.
@@ -77,6 +78,12 @@ init(#{}) ->
     %% `arizona_mcp_sup`'s registry is -- an empty named table costs nothing and
     %% the dev MCP drift check calls in whether the reloader is enabled or not.
     ok = arizona_reloader_consistency:create_table(),
+    %% Same ownership reason: the dev MCP's log ring is written by whatever
+    %% process logged and read by a short-lived tool dispatch, so it needs an
+    %% owner that outlives both. Only the empty table is created here -- the
+    %% handler that writes to it is installed by `arizona_dev_mcp:init/1`, so a
+    %% node that never mounts the dev MCP route pays nothing per log event.
+    ok = arizona_dev_log:create_table(),
     Children =
         [pubsub_spec(), mcp_sup_spec()] ++ store_specs() ++ watcher_specs(Reloader),
     {ok, {#{strategy => one_for_one}, Children}}.

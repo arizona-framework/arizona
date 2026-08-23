@@ -20,6 +20,10 @@ Tools:
 - `reloader_status` -- the dev reloader's current compile error, if any, plus
   loaded-vs-disk drift: modules whose loaded code differs from their beam on
   disk (a node serving stale code otherwise reads "ok").
+- `get_logs` -- recent log output from the running node (`tail`, `level`,
+  `grep`). The one diagnostic an agent cannot otherwise reach: it has no
+  terminal, so a crash report -- the artifact naming the module and line -- is
+  invisible without it. See `arizona_dev_log`.
 - `app_info` -- Arizona version, OTP release, node, process count.
 - `render_component` -- render a component to HTML with given bindings.
 - `reload` -- **force a compile+reload sync now** (recompile via `rebar_agent`
@@ -31,10 +35,9 @@ Tools:
 `eval` is arbitrary remote code execution, so the dev route is **localhost-only
 by default**: `route/1,2` set `allow_remote_access => false`, and the MCP handler
 refuses any request whose peer is not a loopback address -- no matter which
-interface the server bound. That peer check is the primary guard (it mirrors
-Tidewave, which is localhost-only by default rather than gated by a per-tool
-switch), together with the `Origin` check and keeping this a **dev-only**
-dependency. Only relax it on a network you trust, ideally behind an `auth` hook:
+interface the server bound. That peer check is the primary guard -- the route
+protects itself rather than being gated per tool -- together with the `Origin`
+check and keeping this a **dev-only** dependency. Only relax it on a network you trust, ideally behind an `auth` hook:
 
 ```erlang
 %% localhost-only (default) -- safe for eval
@@ -115,6 +118,11 @@ init(_InitParams) ->
     %% `eval` is always available; the dev route's localhost-only gate
     %% (`allow_remote_access => false`, enforced by the MCP handler) is what keeps
     %% its RCE off the network, so there is nothing to configure here.
+    %%
+    %% The log ring's handler is installed here rather than at boot so only an
+    %% app that mounts this route pays the per-event write. Idempotent, so every
+    %% session can call it.
+    ok = arizona_dev_log:install(),
     {ok, #{name => ~"arizona_dev", version => ~"0.1.0"}, #{tools => #{}}, #{
         bindings => erl_eval:new_bindings()
     }}.
@@ -149,6 +157,19 @@ base_tools() ->
             description =>
                 ~"The dev reloader's compile error and any loaded-vs-disk stale modules",
             input_schema => #{type => ~"object", properties => #{}}
+        },
+        #{
+            name => ~"get_logs",
+            description =>
+                ~"Recent log output from the node; excludes this MCP's own tool-call output",
+            input_schema => #{
+                type => ~"object",
+                properties => #{
+                    tail => #{type => ~"integer"},
+                    level => #{type => ~"string", enum => level_names()},
+                    grep => #{type => ~"string"}
+                }
+            }
         },
         #{
             name => ~"app_info",
@@ -194,30 +215,41 @@ eval_tools() ->
         }
     ].
 
-handle_tool(~"list_routes", _Args, _Ctx, State) ->
+%% One entry point so every tool call is marked before it runs: anything the
+%% call logs (an `eval` that prints, a `render_component` that warns) is then
+%% skipped by the log ring, and `get_logs` shows the app's behaviour rather than
+%% the agent's own. Marking here rather than per-clause is what makes that
+%% unmissable when a tool is added.
+handle_tool(Tool, Args, Ctx, State) ->
+    ok = arizona_dev_log:mark_self(),
+    dispatch_tool(Tool, Args, Ctx, State).
+
+dispatch_tool(~"list_routes", _Args, _Ctx, State) ->
     {reply, list_routes(), State};
-handle_tool(~"describe_component", #{~"module" := ModBin}, _Ctx, State) ->
+dispatch_tool(~"describe_component", #{~"module" := ModBin}, _Ctx, State) ->
     outcome(with_module(ModBin, fun describe_component/1), State);
-handle_tool(~"get_docs", #{~"module" := ModBin} = Args, _Ctx, State) ->
+dispatch_tool(~"get_docs", #{~"module" := ModBin} = Args, _Ctx, State) ->
     outcome(with_module(ModBin, fun(Mod) -> get_docs(Mod, Args) end), State);
-handle_tool(~"get_source_location", #{~"module" := ModBin} = Args, _Ctx, State) ->
+dispatch_tool(~"get_source_location", #{~"module" := ModBin} = Args, _Ctx, State) ->
     outcome(with_module(ModBin, fun(Mod) -> get_source_location(Mod, Args) end), State);
-handle_tool(~"reloader_status", _Args, _Ctx, State) ->
+dispatch_tool(~"reloader_status", _Args, _Ctx, State) ->
     {reply, reloader_status(), State};
-handle_tool(~"reload", _Args, _Ctx, State) ->
+dispatch_tool(~"reload", _Args, _Ctx, State) ->
     outcome(reload(), State);
-handle_tool(~"app_info", _Args, _Ctx, State) ->
+dispatch_tool(~"app_info", _Args, _Ctx, State) ->
     {reply, app_info(), State};
-handle_tool(~"render_component", #{~"module" := ModBin} = Args, _Ctx, State) ->
+dispatch_tool(~"render_component", #{~"module" := ModBin} = Args, _Ctx, State) ->
     Bindings = maps:get(~"bindings", Args, #{}),
     outcome(with_module(ModBin, fun(Mod) -> render_component(Mod, Bindings) end), State);
-handle_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State) ->
+dispatch_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State) ->
     case eval_code(Code, Bindings) of
         {ok, Value, NewBindings} ->
             {reply, format_value(Value), State#{bindings := NewBindings}};
         {error, Message} ->
             {error, Message, State}
-    end.
+    end;
+dispatch_tool(~"get_logs", Args, _Ctx, State) ->
+    outcome(get_logs(Args), State).
 
 %% --------------------------------------------------------------------
 %% Internal functions -- tool implementations
@@ -316,6 +348,79 @@ agent_note(true) ->
     ~"project recompiled via rebar_agent";
 agent_note(false) ->
     ~"no rebar_agent -- not running under rebar3 shell, so sources were not recompiled".
+
+%% The level names, shared between the `get_logs` schema and its validation so
+%% the advertised enum and the accepted set cannot drift apart.
+level_names() ->
+    [
+        ~"emergency",
+        ~"alert",
+        ~"critical",
+        ~"error",
+        ~"warning",
+        ~"notice",
+        ~"info",
+        ~"debug"
+    ].
+
+%% Entries already carry logger_formatter's trailing newline, so they are
+%% concatenated rather than joined. An empty result says so in words: an agent
+%% reading back "" cannot tell a quiet node from a broken tool.
+get_logs(Args) ->
+    case logs_opts(Args) of
+        {ok, Opts} ->
+            case arizona_dev_log:tail(Opts) of
+                {ok, []} -> {ok, ~"(no matching log entries)"};
+                {ok, Entries} -> {ok, iolist_to_binary(Entries)};
+                {error, Message} -> {error, Message}
+            end;
+        {error, Message} ->
+            {error, Message}
+    end.
+
+%% Every option is checked the same way, and a bad one answers in-band. Silently
+%% ignoring the ones that are easy to check would be worse than rejecting them:
+%% an agent that sends `"50"` for `tail` would get 50 entries by coincidence and
+%% no signal that its argument was dropped.
+logs_opts(Args) ->
+    case logs_tail_opt(Args, #{}) of
+        {ok, WithTail} ->
+            case logs_grep_opt(Args, WithTail) of
+                {ok, WithGrep} -> logs_level_opt(Args, WithGrep);
+                {error, Message} -> {error, Message}
+            end;
+        {error, Message} ->
+            {error, Message}
+    end.
+
+logs_tail_opt(#{~"tail" := Tail}, Opts) when is_integer(Tail), Tail > 0 ->
+    {ok, Opts#{count => Tail}};
+logs_tail_opt(#{~"tail" := Tail}, _Opts) ->
+    {error, fmt("tail must be a positive integer, got: ~tp", [Tail])};
+logs_tail_opt(#{}, Opts) ->
+    {ok, Opts}.
+
+logs_grep_opt(#{~"grep" := Grep}, Opts) when is_binary(Grep) ->
+    {ok, Opts#{grep => Grep}};
+logs_grep_opt(#{~"grep" := Grep}, _Opts) ->
+    {error, fmt("grep must be a string, got: ~tp", [Grep])};
+logs_grep_opt(#{}, Opts) ->
+    {ok, Opts}.
+
+logs_level_opt(#{~"level" := Level}, Opts) ->
+    case lists:member(Level, level_names()) of
+        true ->
+            %% Every name in level_names/0 is an existing atom (they are
+            %% `logger:level()` values), so this cannot mint one.
+            {ok, Opts#{level => binary_to_existing_atom(Level)}};
+        false ->
+            {error,
+                fmt("unknown level ~tp; expected one of: ~ts", [
+                    Level, lists:join(", ", level_names())
+                ])}
+    end;
+logs_level_opt(#{}, Opts) ->
+    {ok, Opts}.
 
 app_info() ->
     Vsn =

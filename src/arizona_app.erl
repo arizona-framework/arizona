@@ -74,6 +74,9 @@ start(_Type, _Args) ->
     State :: term().
 prep_stop(State) ->
     ok = stop_server(),
+    %% Before the tree goes down, so the dev log handler stops writing while the
+    %% table it writes to is still alive.
+    ok = arizona_dev_log:uninstall(),
     State.
 
 %% Runs after the supervision tree is down. The listener is already stopped by
@@ -82,6 +85,7 @@ prep_stop(State) ->
 -spec stop(State) -> ok when
     State :: term().
 stop(_State) ->
+    ok = arizona_dev_log:uninstall(),
     stop_server().
 
 %% --------------------------------------------------------------------
