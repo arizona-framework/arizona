@@ -16,6 +16,11 @@
     get_logs_reports_no_matches/1,
     get_logs_emits_a_cursor_naming_its_argument/1,
     get_logs_rejects_negative_since/1,
+    view_state_lists_live_views/1,
+    view_state_returns_root_bindings/1,
+    view_state_returns_child_bindings/1,
+    view_state_reports_unknown_id/1,
+    view_state_rejects_non_string_id/1,
     describe_component_stateful/1,
     describe_component_stateless/1,
     describe_component_other/1,
@@ -63,6 +68,11 @@ all() ->
         get_logs_reports_no_matches,
         get_logs_emits_a_cursor_naming_its_argument,
         get_logs_rejects_negative_since,
+        view_state_lists_live_views,
+        view_state_returns_root_bindings,
+        view_state_returns_child_bindings,
+        view_state_reports_unknown_id,
+        view_state_rejects_non_string_id,
         describe_component_stateful,
         describe_component_stateless,
         describe_component_other,
@@ -128,6 +138,7 @@ tools_list(_Config) ->
         ~"get_source_location",
         ~"reloader_status",
         ~"get_logs",
+        ~"view_state",
         ~"app_info",
         ~"render_component",
         ~"eval",
@@ -374,6 +385,44 @@ get_logs_rejects_negative_since(_Config) ->
     {error, Message, _} = call(~"get_logs", #{~"since" => -1}),
     ?assertMatch({_, _}, binary:match(Message, ~"non-negative integer")).
 
+%% The question an agent cannot otherwise ask: what does this view believe right
+%% now. Diagnosing a slot that renders once and never updates means comparing the
+%% binding against what was rendered, and without this the binding is unreachable.
+view_state_lists_live_views(_Config) ->
+    with_live_view(fun() ->
+        {reply, Text, _} = call(~"view_state", #{}),
+        ?assertMatch({_, _}, binary:match(Text, ~"page")),
+        ?assertMatch({_, _}, binary:match(Text, ~"arizona_page")),
+        %% Embedded children are listed too, since they are addressable ids.
+        ?assertMatch({_, _}, binary:match(Text, ~"counter"))
+    end).
+
+view_state_returns_root_bindings(_Config) ->
+    with_live_view(fun() ->
+        {reply, Text, _} = call(~"view_state", #{~"view_id" => ~"page"}),
+        ?assertMatch({_, _}, binary:match(Text, ~"arizona_page")),
+        ?assertMatch({_, _}, binary:match(Text, ~"title"))
+    end).
+
+view_state_returns_child_bindings(_Config) ->
+    %% A child stateful view is an entry in the root's `views` map, not its own
+    %% process, so it is reachable only by decoding the root's state.
+    with_live_view(fun() ->
+        {reply, Text, _} = call(~"view_state", #{~"view_id" => ~"counter"}),
+        ?assertMatch({_, _}, binary:match(Text, ~"arizona_counter")),
+        ?assertMatch({_, _}, binary:match(Text, ~"count"))
+    end).
+
+view_state_reports_unknown_id(_Config) ->
+    %% Names the call that lists the ids, so a wrong guess is one step from right.
+    {error, Message, _} = call(~"view_state", #{~"view_id" => ~"no-such-view"}),
+    ?assertMatch({_, _}, binary:match(Message, ~"no live view")),
+    ?assertMatch({_, _}, binary:match(Message, ~"list them")).
+
+view_state_rejects_non_string_id(_Config) ->
+    {error, Message, _} = call(~"view_state", #{~"view_id" => 7}),
+    ?assertMatch({_, _}, binary:match(Message, ~"must be a string")).
+
 app_info_reports_version(_Config) ->
     {reply, Text, _} = call(~"app_info", #{}),
     ?assertMatch({_, _}, binary:match(Text, ~"arizona")),
@@ -470,6 +519,17 @@ state() ->
 
 ctx() ->
     #{token => undefined, to => undefined}.
+
+%% A live view exists only while something holds it: start_link/4 links it to the
+%% calling process, so it dies with the test case and cannot leak into the next.
+with_live_view(Fun) ->
+    {ok, Pid} = arizona_live:start_link(arizona_page, #{id => ~"page"}, self(), []),
+    _ = arizona_live:mount_and_render(Pid),
+    try
+        Fun()
+    after
+        arizona_live:stop(Pid)
+    end.
 
 call(Tool, Args) ->
     call(Tool, Args, state()).

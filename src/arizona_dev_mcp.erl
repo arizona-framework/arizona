@@ -24,6 +24,11 @@ Tools:
   `grep`). The one diagnostic an agent cannot otherwise reach: it has no
   terminal, so a crash report -- the artifact naming the module and line -- is
   invisible without it. See `arizona_dev_log`.
+- `view_state` -- what a live view currently believes: its bindings, by view id
+  (omit the id to list the live views and their embedded children). The
+  counterpart to `get_logs`: that answers what happened, this answers what the
+  view thinks now, which is how a slot rendering a stale value gets separated
+  from a slot with no dependency.
 - `app_info` -- Arizona version, OTP release, node, process count.
 - `render_component` -- render a component to HTML with given bindings.
 - `reload` -- **force a compile+reload sync now** (recompile via `rebar_agent`
@@ -174,6 +179,15 @@ base_tools() ->
             }
         },
         #{
+            name => ~"view_state",
+            description =>
+                ~"What a live view currently believes: its bindings. Omit view_id to list views",
+            input_schema => #{
+                type => ~"object",
+                properties => #{view_id => #{type => ~"string"}}
+            }
+        },
+        #{
             name => ~"app_info",
             description => ~"Arizona version, OTP release, node, and process count",
             input_schema => #{type => ~"object", properties => #{}}
@@ -251,7 +265,9 @@ dispatch_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State
             {error, Message, State}
     end;
 dispatch_tool(~"get_logs", Args, _Ctx, State) ->
-    outcome(get_logs(Args), State).
+    outcome(get_logs(Args), State);
+dispatch_tool(~"view_state", Args, _Ctx, State) ->
+    outcome(view_state(Args), State).
 
 %% --------------------------------------------------------------------
 %% Internal functions -- tool implementations
@@ -444,6 +460,88 @@ logs_level_opt(#{~"level" := Level}, Opts) ->
     end;
 logs_level_opt(#{}, Opts) ->
     {ok, Opts}.
+
+%% Live views are found by scanning processes rather than through a registry,
+%% because none exists: a live process is spawned per WebSocket connection and
+%% linked to it, never registered by view id. A dev-only scan is the honest
+%% trade -- it adds no production bookkeeping to every connection for the sake of
+%% a tool that runs a handful of times in a session.
+view_state(#{~"view_id" := ViewId}) when is_binary(ViewId) ->
+    case [Info || Info <- live_infos(), holds_view(Info, ViewId)] of
+        [] ->
+            {error,
+                fmt("no live view ~tp; call view_state with no arguments to list them", [
+                    ViewId
+                ])};
+        [Info | _] ->
+            {ok, render_view(Info, ViewId)}
+    end;
+view_state(#{~"view_id" := ViewId}) ->
+    {error, fmt("view_id must be a string, got: ~tp", [ViewId])};
+view_state(#{}) ->
+    case live_infos() of
+        [] ->
+            %% Distinguish "nothing mounted" from a broken tool: a live view
+            %% exists only while a browser holds the WebSocket open.
+            {ok, ~"(no live views -- a view exists only while a page holds its WebSocket)"};
+        Infos ->
+            {ok, fmt("~ts", [[summarize_view(Info) || Info <- Infos]])}
+    end.
+
+summarize_view(#{id := Id, handler := Handler, children := Children}) ->
+    fmt("~ts (~ts)~ts~n", [Id, Handler, summarize_children(Children)]).
+
+summarize_children(Children) when map_size(Children) =:= 0 ->
+    ~"";
+summarize_children(Children) ->
+    fmt(" -- children: ~ts", [lists:join(", ", maps:keys(Children))]).
+
+holds_view(#{id := Id}, Id) ->
+    true;
+holds_view(#{children := Children}, ViewId) ->
+    is_map_key(ViewId, Children).
+
+render_view(#{id := Id, handler := Handler, bindings := Bindings}, Id) ->
+    format_view(Id, Handler, Bindings);
+render_view(#{children := Children}, ViewId) ->
+    #{ViewId := #{handler := Handler, bindings := Bindings}} = Children,
+    format_view(ViewId, Handler, Bindings).
+
+%% Bounded: a binding can hold a whole stream or a large map, and an agent pays
+%% for every character of it.
+format_view(ViewId, Handler, Bindings) ->
+    fmt("view ~ts (~ts) bindings:~n~tp~n", [ViewId, Handler, Bindings], [
+        {chars_limit, 4000}
+    ]).
+
+live_infos() ->
+    [Info || Pid <- erlang:processes(), {ok, Info} <- [live_info(Pid)]].
+
+%% A scan races every process it inspects: one can exit between `processes/0` and
+%% the read, and a view busy in a long callback will not answer within the call's
+%% timeout. Neither is a bug in the view being looked at, so skip it rather than
+%% failing the whole listing -- the other views are still worth reporting.
+live_info(Pid) ->
+    case erlang:process_info(Pid, dictionary) of
+        {dictionary, Dict} -> live_info_if_live(Pid, Dict);
+        undefined -> error
+    end.
+
+live_info_if_live(Pid, Dict) ->
+    case lists:keyfind('$initial_call', 1, Dict) of
+        {'$initial_call', {arizona_live, init, 1}} ->
+            try
+                %% The view id is the root's `id` binding. `arizona_live` has no
+                %% reason to know this tool addresses views by it, so the lookup
+                %% belongs here rather than in its reply.
+                #{bindings := Bindings} = ViewState = arizona_live:view_state(Pid),
+                {ok, ViewState#{id => maps:get(id, Bindings)}}
+            catch
+                _:_ -> error
+            end;
+        _ ->
+            error
+    end.
 
 app_info() ->
     Vsn =
@@ -642,7 +740,10 @@ format_value(Value) ->
 %% loudly on it: the MCP transport answers a crash with an in-band `-32603`,
 %% while the tuple itself would flow on as if it were the formatted text.
 fmt(Format, Args) ->
-    case unicode:characters_to_binary(io_lib:format(Format, Args)) of
+    fmt(Format, Args, []).
+
+fmt(Format, Args, Opts) ->
+    case unicode:characters_to_binary(io_lib:format(Format, Args, Opts)) of
         Bin when is_binary(Bin) -> Bin;
         Error -> error({format_not_encodable, Format, Error})
     end.

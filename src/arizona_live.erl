@@ -82,6 +82,7 @@ fingerprints already shipped in the initial HTML.
 -export([dedup_fps/2]).
 -export([apply_on_mount/2]).
 -export([format_error/2]).
+-export([view_state/1]).
 
 %% --------------------------------------------------------------------
 %% gen_server callback exports
@@ -458,6 +459,30 @@ seed_fps(Pid, FpList) ->
     gen_server:cast(Pid, {seed_fps, FpList}).
 
 -doc """
+The state of the views this process holds: the root's handler and bindings, and
+the same for each embedded child view.
+
+`snapshot` is deliberately not included. It is the diff engine's bookkeeping --
+the last rendered structure, kept to diff the next render against -- not part of
+what a view holds, and it is large.
+""".
+-spec view_state(Pid) ->
+    #{
+        handler := module(),
+        bindings := arizona_template:bindings(),
+        children := #{
+            binary() => #{handler := module(), bindings := arizona_template:bindings()}
+        }
+    }
+when
+    Pid :: pid().
+view_state(Pid) ->
+    %% Finite, unlike the `infinity` the render calls use: this is an
+    %% introspection read, and a view busy in a long callback should time the
+    %% reader out rather than block it for as long as the callback runs.
+    gen_server:call(Pid, view_state, 5000).
+
+-doc """
 Folds an `on_mount` hook chain over `Bindings`. Each hook is either a
 1-arity fun or a `{Module, Function}` tuple whose target has arity 1.
 Used both internally and exposed for SSR-style rendering paths in
@@ -654,7 +679,14 @@ handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) -
     ),
     {reply, {ok, Ops1, Effects1}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
-    }}.
+    }};
+handle_call(view_state, _From, #state{handler = H, bindings = B, views = V} = State) ->
+    Children =
+        #{
+            ViewId => #{handler => ChildH, bindings => ChildB}
+         || ViewId := #{handler := ChildH, bindings := ChildB} <- V
+        },
+    {reply, #{handler => H, bindings => B, children => Children}, State}.
 
 handle_cast({seed_fps, FpList}, #state{sent_fps = Fps0} = State) ->
     {noreply, State#state{sent_fps = merge_seed_fps(Fps0, FpList)}};
