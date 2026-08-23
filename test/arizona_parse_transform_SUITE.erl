@@ -209,6 +209,7 @@
     inline_hoisted_each_renders_and_tracks/1,
     inline_hoisted_stateless_atom_renders_and_tracks/1,
     inline_hoisted_html_each_body_single_root/1,
+    each_param_rename_avoids_shadow_warning/1,
     inline_hoisted_html_unrelated_key_skipped/1,
     helper_zero_arity_inlines/1,
     helper_with_args_renders_and_tracks/1,
@@ -660,6 +661,7 @@ groups() ->
             inline_hoisted_each_renders_and_tracks,
             inline_hoisted_stateless_atom_renders_and_tracks,
             inline_hoisted_html_each_body_single_root,
+            each_param_rename_avoids_shadow_warning,
             inline_hoisted_html_unrelated_key_skipped
         ]},
         %% Local element-returning helper calls inlined at the template call site
@@ -7257,6 +7259,51 @@ inline_hoisted_stateless_atom_renders_and_tracks(Config) when is_list(Config) ->
 %% must keep both rendering AND the per-item `single_root` flag (positional
 %% list patching) -- a fix that splices an already-compiled template map here
 %% would silently drop the flag.
+each_param_rename_avoids_shadow_warning(Config) when is_list(Config) ->
+    %% The per-item fun is inlined into the CALLER, so its parameters bind in the
+    %% caller's scope. An item parameter named `Bindings` -- which a callback
+    %% reading the item with get/2 is forced to use, since a tracked read is
+    %% rejected in a scope without it -- shadowed the caller's `Bindings`, and the
+    %% warning named the callee's head rather than the caller. The parameters are
+    %% alpha-renamed to avoid that; compile_module_strict compiles
+    %% warnings_as_errors, so a regression fails here rather than warning quietly.
+    %% `_` and `_I` cover the two ignore forms: `_` binds nothing and must be left
+    %% alone, `_I` must keep its underscore or the rename creates an unused_var.
+    Mod = compile_module_strict(
+        "-module(pt_each_param_rename). "
+        "-export([shadow/1, ignored/1, underscored/1]). "
+        "shadow(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "        fun(Bindings) -> {'li', [], [arizona_template:get(nm, Bindings)]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+        "ignored(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "        fun(_) -> {'li', [], [arizona_template:get(x, Bindings)]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+        "underscored(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "        fun(_I) -> {'li', [], [arizona_template:get(x, Bindings)]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+    ),
+    %% The item's bindings still win over a same-named caller binding.
+    Shadowed = iolist_to_binary(
+        arizona_render:render_to_iolist(
+            Mod:shadow(#{nm => ~"caller", items => [#{nm => ~"ada"}, #{nm => ~"bob"}]})
+        )
+    ),
+    ?assertNotEqual(nomatch, binary:match(Shadowed, ~"ada")),
+    ?assertNotEqual(nomatch, binary:match(Shadowed, ~"bob")),
+    ?assertEqual(nomatch, binary:match(Shadowed, ~"caller")),
+    %% An ignored item parameter leaves the caller's bindings reachable.
+    Ignored = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:ignored(#{x => ~"cx", items => [1, 2]}))
+    ),
+    ?assertNotEqual(nomatch, binary:match(Ignored, ~"cx")),
+    Underscored = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:underscored(#{x => ~"ux", items => [1, 2]}))
+    ),
+    ?assertNotEqual(nomatch, binary:match(Underscored, ~"ux")).
+
 inline_hoisted_html_each_body_single_root(Config) when is_list(Config) ->
     Mod = compile_module_strict(
         "-module(pt_inline_hoisteachbody). "

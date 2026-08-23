@@ -87,9 +87,10 @@ render(Bindings) ->
 %% literals that look structurally similar but represent different shapes.
 -elvis([{elvis_style, dont_repeat_yourself, disable}]).
 
-%% fresh_helper_var/1 mints compile-time variable names via list_to_atom --
-%% fresh names are the point (no caller expression may contain them), so
-%% list_to_existing_atom cannot apply; growth is bounded by helper call sites.
+%% fresh_helper_var/1 and fresh_each_var/2 mint compile-time variable names via
+%% list_to_atom -- fresh names are the point (no source expression may contain
+%% them), so list_to_existing_atom cannot apply; growth is bounded by helper call
+%% sites and ?each call sites.
 -elvis([{elvis_style, no_common_caveats_call, disable}]).
 
 %% --------------------------------------------------------------------
@@ -1844,8 +1845,12 @@ is_compiled_template_map(Fields) ->
 %% matches the bare-element form.
 build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, {map, MapLine, Fields}) ->
     DListAST = template_map_field(d, Fields),
+    Fingerprint = extract_binary_value(template_map_field(f, Fields)),
+    {Vars1, Guards1, Prefix1, DListAST1} = rename_each_params(
+        Fingerprint, Vars, Guards, Prefix, DListAST
+    ),
     DFunAST =
-        {'fun', Line, {clauses, [{clause, Line, Vars, Guards, Prefix ++ [DListAST]}]}},
+        {'fun', Line, {clauses, [{clause, Line, Vars1, Guards1, Prefix1 ++ [DListAST1]}]}},
     TField = {map_field_assoc, MapLine, {atom, MapLine, t}, {integer, MapLine, 0}},
     NewFields = [TField | [set_template_map_d_field(Field, DFunAST) || Field <- Fields]],
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
@@ -2949,12 +2954,63 @@ build_template_ast(Line, Statics, DynASTs, Fingerprint, Opts) ->
     ],
     {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)}.
 
+%% The per-item fun is inlined into the CALLER, so it binds the callback's own
+%% parameter names in the caller's scope. A callback that reads the item with
+%% `?get` must name that parameter `Bindings` -- `?get` expands to the literal
+%% identifier and a tracked read in a scope without it is rejected outright
+%% (tracked_get_on_non_bindings_map) -- so it shadows the caller's `Bindings` and
+%% the compiler warns. Worse, the inlined clause carries the CALLEE's annotation,
+%% so the warning names the callback's head rather than the caller where the fun
+%% is actually built, sending anyone who investigates to an innocent function.
+%%
+%% Alpha-rename the bound parameters to names no source can contain. The item's
+%% bindings still win inside the item template (that shadowing was always
+%% correct); only the name changes, so nothing about the render differs. The
+%% rename is a blind substitution over the clause, which is alpha-equivalent even
+%% where a nested fun rebinds the same name: renaming binder and references
+%% together preserves the shadowing that was there.
+%%
+%% Keyed by the template fingerprint rather than a counter so the output stays
+%% byte-identical across compiles -- these names reach the abstract-code chunk.
+rename_each_params(Fingerprint, Vars, Guards, Prefix, Body) ->
+    Renames = [
+        {Name, fresh_each_var(Fingerprint, Name)}
+     || {var, _, Name} <- Vars, Name =/= '_'
+    ],
+    Rename = fun(Term) -> lists:foldl(fun rename_var/2, Term, Renames) end,
+    {Rename(Vars), Rename(Guards), Rename(Prefix), Rename(Body)}.
+
+fresh_each_var(Fingerprint, Name) ->
+    Chars = atom_to_list(Name),
+    Base = "AzItem@" ++ binary_to_list(Fingerprint) ++ "@" ++ Chars,
+    case Chars of
+        %% A `_`-prefixed parameter is the author declaring the item unused. Keep
+        %% the prefix, or the rename turns that into an unused_var warning -- the
+        %% same class of noise this rename exists to remove.
+        [$_ | _] -> list_to_atom([$_ | Base]);
+        _ -> list_to_atom(Base)
+    end.
+
+%% `{var, _, Name}` is the only variable form in the abstract format, so a blind
+%% structural walk renames every occurrence -- binder and reference alike.
+rename_var({Old, New}, {var, L, Old}) ->
+    {var, L, New};
+rename_var({_Old, _New} = R, Term) when is_tuple(Term) ->
+    list_to_tuple([rename_var(R, E) || E <- tuple_to_list(Term)]);
+rename_var({_Old, _New} = R, Terms) when is_list(Terms) ->
+    [rename_var(R, E) || E <- Terms];
+rename_var({_Old, _New}, Term) ->
+    Term.
+
 build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerprint, Opts) ->
     {StaticsAST, DynamicsAST, FpAST} = compile_parts_ast(Statics, DynASTs, Fingerprint),
+    {Vars1, Guards1, Prefix1, DynamicsAST1} = rename_each_params(
+        Fingerprint, Vars, Guards, Prefix, DynamicsAST
+    ),
     DFunAST =
         {'fun', Line,
             {clauses, [
-                {clause, Line, Vars, Guards, Prefix ++ [DynamicsAST]}
+                {clause, Line, Vars1, Guards1, Prefix1 ++ [DynamicsAST1]}
             ]}},
     BaseFields = [
         {map_field_assoc, Line, {atom, Line, t}, {integer, Line, 0}},
