@@ -96,8 +96,8 @@ usually what you want, since that is where a crash surfaces.
 %% --------------------------------------------------------------------
 
 -define(TABLE, ?MODULE).
-%% Matches the size Tidewave's equivalent settled on. Bounded is the point: the
-%% cost of always-on capture has to be a constant, not a function of uptime.
+%% Bounded is the point: the cost of capture has to be a constant, not a
+%% function of uptime.
 -define(SIZE, 1024).
 -define(DEFAULT_COUNT, 50).
 %% Metadata key marking an event as the MCP's own tool-call output.

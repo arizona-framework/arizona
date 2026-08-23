@@ -170,8 +170,8 @@ with_gate(Req, Opts, Fun) ->
 %% `allow_remote_access => true`, refuse a request whose peer is not a loopback
 %% address -- regardless of which interface the listener bound. This is the
 %% primary guard for a dev MCP's `eval` (RCE): the tool self-protects at the
-%% application layer rather than trusting the operator to bind loopback (mirrors
-%% Tidewave). Default `false` matches the sibling `origins`/`check_origin` gates
+%% application layer rather than trusting the operator to bind loopback.
+%% Default `false` matches the sibling `origins`/`check_origin` gates
 %% (a genuinely-remote MCP opts in explicitly) rather than leaning on the mount
 %% helper to close the hole.
 %%

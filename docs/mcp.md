@@ -142,8 +142,8 @@ This is what makes a dev tool genuinely useful -- the agent can inspect any stat
 function. It is also **arbitrary remote code execution**, so `eval` is always available but the dev
 route is **localhost-only by default**: `arizona_dev_mcp:route/1,2` set `allow_remote_access => false`,
 and the MCP handler refuses any request whose peer is not a loopback address -- regardless of which
-interface the listener bound. That peer check (mirroring Tidewave, which is localhost-only by default
-rather than gated by a per-tool switch) is the primary guard, alongside the `Origin` check and
+interface the listener bound. That peer check -- the route protecting itself rather than
+being gated per tool -- is the primary guard, alongside the `Origin` check and
 keeping this a dev-only dependency; set `allow_remote_access => true` only on a network you trust.
 
 **The peer check is void behind a proxy or tunnel.** It trusts the immediate TCP peer, so a same-host
