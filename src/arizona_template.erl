@@ -243,6 +243,15 @@ Records `Key` as a dependency of the dynamic element currently being rendered.
 
 Called automatically by `get/2,3` and `get_lazy/3`. Public so render code
 can attribute dependencies that bypass binding access.
+
+It is a no-op outside a dynamic's evaluation, since that is where the
+dependency scope is opened. **Do not read that as "a `?get` in the body of
+`render/1` records nothing"** -- what a slot depends on is decided at *compile
+time*, not here. The parse transform inlines a fresh read into the slot's own
+closure, so the body-level call is the one that no-ops while the inlined one
+records. `erlc -P` shows which reads ended up inside which closure, and is the
+only reliable way to answer "why does this slot not update". See "The
+invariant" in `docs/architecture.md`.
 """.
 -spec track(Key) -> ok when
     Key :: term().

@@ -209,6 +209,7 @@
     inline_hoisted_each_renders_and_tracks/1,
     inline_hoisted_stateless_atom_renders_and_tracks/1,
     inline_hoisted_html_each_body_single_root/1,
+    slot_tracks_only_reads_in_its_own_closure/1,
     each_param_rename_avoids_shadow_warning/1,
     inline_hoisted_html_unrelated_key_skipped/1,
     helper_zero_arity_inlines/1,
@@ -661,6 +662,7 @@ groups() ->
             inline_hoisted_each_renders_and_tracks,
             inline_hoisted_stateless_atom_renders_and_tracks,
             inline_hoisted_html_each_body_single_root,
+            slot_tracks_only_reads_in_its_own_closure,
             each_param_rename_avoids_shadow_warning,
             inline_hoisted_html_unrelated_key_skipped
         ]},
@@ -7303,6 +7305,38 @@ each_param_rename_avoids_shadow_warning(Config) when is_list(Config) ->
         arizona_render:render_to_iolist(Mod:underscored(#{x => ~"ux", items => [1, 2]}))
     ),
     ?assertNotEqual(nomatch, binary:match(Underscored, ~"ux")).
+
+slot_tracks_only_reads_in_its_own_closure(Config) when is_list(Config) ->
+    %% Pins both halves of the invariant, because only the contrast is
+    %% informative. `Hoisted` reaches its slot through a bare variable, so the
+    %% transform inlines a fresh read into the closure and the slot tracks.
+    %% `Derived` arrives through a map pattern over a computed value, so the
+    %% closure captures a plain term, reads nothing, and the slot is frozen after
+    %% SSR -- silently, which is what makes it read as a diff bug. If the second
+    %% assertion ever starts failing the limitation was fixed, and the docs in
+    %% docs/architecture.md ("The invariant") need to change with it.
+    Mod = compile_module_strict(
+        "-module(pt_slot_closure_reads). "
+        "-export([hoisted/1, derived/1, side/1]). "
+        "hoisted(Bindings) -> "
+        "    Instrument = arizona_template:get(instrument, Bindings), "
+        "    arizona_template:html({'div', [{class, Instrument}], [<<\"x\">>]}). "
+        "derived(Bindings) -> "
+        "    Instrument = arizona_template:get(instrument, Bindings), "
+        "    #{side := Side} = side(Instrument), "
+        "    arizona_template:html({'div', [{class, Side}], [<<\"x\">>]}). "
+        "side(<<\"a\">>) -> #{side => <<\"buy\">>}; "
+        "side(_) -> #{side => <<\"sell\">>}. "
+    ),
+    B0 = #{instrument => ~"a"},
+    B1 = #{instrument => ~"b"},
+    Changed = compute_changed(B0, B1),
+    {_H1, Snap1, V1} = arizona_render:render(Mod:hoisted(B0), #{}),
+    {HoistedOps, _, _} = arizona_diff:diff(Mod:hoisted(B1), Snap1, V1, Changed),
+    ?assertNotEqual([], HoistedOps),
+    {_H2, Snap2, V2} = arizona_render:render(Mod:derived(B0), #{}),
+    {DerivedOps, _, _} = arizona_diff:diff(Mod:derived(B1), Snap2, V2, Changed),
+    ?assertEqual([], DerivedOps).
 
 inline_hoisted_html_each_body_single_root(Config) when is_list(Config) ->
     Mod = compile_module_strict(
