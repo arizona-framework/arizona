@@ -460,7 +460,7 @@ seed_fps(Pid, FpList) ->
 
 -doc """
 The state of the views this process holds: the root's handler and bindings, and
-the same for each embedded child view.
+the same for each child view under `views`, keyed the way the process keys them.
 
 `snapshot` is deliberately not included. It is the diff engine's bookkeeping --
 the last rendered structure, kept to diff the next render against -- not part of
@@ -470,7 +470,7 @@ what a view holds, and it is large.
     #{
         handler := module(),
         bindings := arizona_template:bindings(),
-        children := #{
+        views := #{
             binary() => #{handler := module(), bindings := arizona_template:bindings()}
         }
     }
@@ -681,12 +681,12 @@ handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) -
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
     }};
 handle_call(view_state, _From, #state{handler = H, bindings = B, views = V} = State) ->
-    Children =
+    Views =
         #{
             ViewId => #{handler => ChildH, bindings => ChildB}
          || ViewId := #{handler := ChildH, bindings := ChildB} <- V
         },
-    {reply, #{handler => H, bindings => B, children => Children}, State}.
+    {reply, #{handler => H, bindings => B, views => Views}, State}.
 
 handle_cast({seed_fps, FpList}, #state{sent_fps = Fps0} = State) ->
     {noreply, State#state{sent_fps = merge_seed_fps(Fps0, FpList)}};

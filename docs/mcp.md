@@ -120,7 +120,7 @@ has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mc
   changing the system in order to observe it. Crash reports are `error`, so the case this exists
   for is unaffected.
 - `view_state` -- a live view's current bindings, by `view_id`; omit it to list the live views
-  and their embedded children. Where `get_logs` answers "what happened", this answers "what does
+  and their child views. Where `get_logs` answers "what happened", this answers "what does
   this view believe now", which is what separates a slot rendering a stale value from a slot that
   has no dependency at all (see "The invariant" in [architecture.md](architecture.md)). Live views
   are found by scanning processes, not through a registry: a live process is spawned per WebSocket

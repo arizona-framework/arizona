@@ -25,7 +25,7 @@ Tools:
   terminal, so a crash report -- the artifact naming the module and line -- is
   invisible without it. See `arizona_dev_log`.
 - `view_state` -- what a live view currently believes: its bindings, by view id
-  (omit the id to list the live views and their embedded children). The
+  (omit the id to list the live views and their child views). The
   counterpart to `get_logs`: that answers what happened, this answers what the
   view thinks now, which is how a slot rendering a stale value gets separated
   from a slot with no dependency.
@@ -488,23 +488,23 @@ view_state(#{}) ->
             {ok, fmt("~ts", [[summarize_view(Info) || Info <- Infos]])}
     end.
 
-summarize_view(#{id := Id, handler := Handler, children := Children}) ->
-    fmt("~ts (~ts)~ts~n", [Id, Handler, summarize_children(Children)]).
+summarize_view(#{id := Id, handler := Handler, views := Views}) ->
+    fmt("~ts (~ts)~ts~n", [Id, Handler, summarize_child_views(Views)]).
 
-summarize_children(Children) when map_size(Children) =:= 0 ->
+summarize_child_views(Views) when map_size(Views) =:= 0 ->
     ~"";
-summarize_children(Children) ->
-    fmt(" -- children: ~ts", [lists:join(", ", maps:keys(Children))]).
+summarize_child_views(Views) ->
+    fmt(" -- child views: ~ts", [lists:join(", ", maps:keys(Views))]).
 
 holds_view(#{id := Id}, Id) ->
     true;
-holds_view(#{children := Children}, ViewId) ->
-    is_map_key(ViewId, Children).
+holds_view(#{views := Views}, ViewId) ->
+    is_map_key(ViewId, Views).
 
 render_view(#{id := Id, handler := Handler, bindings := Bindings}, Id) ->
     format_view(Id, Handler, Bindings);
-render_view(#{children := Children}, ViewId) ->
-    #{ViewId := #{handler := Handler, bindings := Bindings}} = Children,
+render_view(#{views := Views}, ViewId) ->
+    #{ViewId := #{handler := Handler, bindings := Bindings}} = Views,
     format_view(ViewId, Handler, Bindings).
 
 %% Bounded: a binding can hold a whole stream or a large map, and an agent pays
