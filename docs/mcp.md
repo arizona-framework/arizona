@@ -106,6 +106,16 @@ has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mc
 - `reloader_status` -- the dev reloader's current compile error (`arizona_reloader:get_error/0`)
   **plus loaded-vs-disk drift**: the modules whose loaded code differs from their beam on disk. A
   node serving stale code otherwise reads "ok", so the drift list is the useful half.
+- `get_logs` -- recent log output from the running node, filtered by `tail`, `level` and `grep`.
+  An agent driving the node has no terminal, so without this a crash report -- the one artifact
+  naming the module and line -- is unreadable, and a live process dying on every interaction reads
+  back as a healthy app. Output produced by the MCP's own tool calls is excluded, so an `eval` that
+  logs does not come back as the app's behaviour. Backed by a bounded ring
+  (`arizona_dev_log`) installed on the first MCP session, so a node that never mounts this route
+  captures nothing. It shows whatever the app's own logger level already allows: `logger` applies
+  the primary level before any handler, so capturing below it would mean raising the app's level --
+  changing the system in order to observe it. Crash reports are `error`, so the case this exists
+  for is unaffected.
 - `app_info` -- `application:get_key/2`, `erlang:system_info/1`.
 - `render_component` -- render a view/component module to HTML with given bindings.
 - `reload` -- **force a compile+reload sync now**: recompile the project (via `rebar_agent` under

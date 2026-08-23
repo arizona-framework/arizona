@@ -8,6 +8,10 @@
     list_routes_lists_mcp_route/1,
     list_routes_formats_shapes/1,
     list_routes_env_unset/1,
+    get_logs_returns_captured_output/1,
+    get_logs_rejects_unknown_level/1,
+    get_logs_rejects_invalid_grep/1,
+    get_logs_reports_no_matches/1,
     describe_component_stateful/1,
     describe_component_stateless/1,
     describe_component_other/1,
@@ -47,6 +51,10 @@ all() ->
         list_routes_lists_mcp_route,
         list_routes_formats_shapes,
         list_routes_env_unset,
+        get_logs_returns_captured_output,
+        get_logs_rejects_unknown_level,
+        get_logs_rejects_invalid_grep,
+        get_logs_reports_no_matches,
         describe_component_stateful,
         describe_component_stateless,
         describe_component_other,
@@ -111,6 +119,7 @@ tools_list(_Config) ->
         ~"get_docs",
         ~"get_source_location",
         ~"reloader_status",
+        ~"get_logs",
         ~"app_info",
         ~"render_component",
         ~"eval",
@@ -297,6 +306,41 @@ reload_syncs_stale_module(_Config) ->
     after
         _ = file:del_dir_r(Dir)
     end.
+
+%% The tool an agent reaches for when a live view crashed: it has no terminal,
+%% so this is the only path to the report that names the module and line.
+get_logs_returns_captured_output(_Config) ->
+    ok = arizona_dev_log:install(),
+    Token = ~"devmcp-logs-token-end",
+    Self = self(),
+    %% From an unmarked process: handle_tool/4 marks its caller, and a marked
+    %% writer is excluded by design.
+    _Pid = spawn(fun() ->
+        logger:error("boom ~ts", [Token]),
+        Self ! logged
+    end),
+    receive
+        logged -> ok
+    after 5000 -> ct:fail(never_logged)
+    end,
+    {reply, Text, _} = call(~"get_logs", #{~"grep" => Token}),
+    ?assertMatch({_, _}, binary:match(Text, Token)).
+
+get_logs_rejects_unknown_level(_Config) ->
+    %% Agent input, so it answers in-band and names the accepted set rather than
+    %% crashing the dispatch.
+    {error, Message, _} = call(~"get_logs", #{~"level" => ~"loud"}),
+    ?assertMatch({_, _}, binary:match(Message, ~"unknown level")),
+    ?assertMatch({_, _}, binary:match(Message, ~"emergency")).
+
+get_logs_rejects_invalid_grep(_Config) ->
+    {error, Message, _} = call(~"get_logs", #{~"grep" => ~"[oops"}),
+    ?assertMatch({_, _}, binary:match(Message, ~"invalid grep pattern")).
+
+get_logs_reports_no_matches(_Config) ->
+    %% An empty reply would read as a broken tool; say it in words instead.
+    {reply, Text, _} = call(~"get_logs", #{~"grep" => ~"zzz-no-such-entry-zzz"}),
+    ?assertEqual(~"(no matching log entries)", Text).
 
 app_info_reports_version(_Config) ->
     {reply, Text, _} = call(~"app_info", #{}),
