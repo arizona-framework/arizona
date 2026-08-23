@@ -31,6 +31,12 @@ An `{asset, ...}` route's optional `Opts` is `#{cache_control => binary()}` -- a
 `Cache-Control` header set verbatim on cacheable responses (off by default); use it
 only for content-hashed assets, never arizona's own stable bundle filenames.
 
+An `{asset, Path, ...}` route compiles to `Path/*path`, so the catch-all is generated
+rather than written and is invisible in the route list. Matching is first-match-wins
+in list order, which makes an asset path listed ahead of a longer one it prefixes
+swallow that one -- `~"/static"` before `~"/static/arizona"` serves, and 404s, every
+request meant for the latter. Order the longer prefix first.
+
 `{reload, ...}` also stashes the path in the `arizona_reload_url`
 persistent term so the dev error page can build the SSE connect URL.
 """.

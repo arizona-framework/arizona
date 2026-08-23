@@ -36,9 +36,52 @@ controller, and a WebSocket upgrade.
   trusted (see `arizona_origin`). The router applies it to `live`/`controller` routes by
   default, so you rarely list it by hand.
 
+## Declaring steps
+
+A step is either a fun of two arguments or a `{Module, Function}` pair naming a
+2-arity function. Which of the two you can write depends on where the route is
+declared.
+
+A route declared in Erlang takes both forms, so it can call a builder like
+`extract/1` inline:
+
 ```erlang
 #{middlewares => [arizona_middleware:extract([path_bindings, params])]}
 ```
+
+A route declared in `config/sys.config` takes only the pair. An application
+config file is read by `file:consult/1`, which parses *terms*, and
+`arizona_middleware:extract([path_bindings])` is a function call rather than a
+term -- so the file fails to parse and the node refuses to boot:
+
+```text
+===> Error reading file .../config/sys.config: 1: bad term
+```
+
+The reported line is always 1, because the whole file is a single term, so it
+points nowhere near the offending expression. Note that `fun Module:Function/Arity`
+with literal parts *is* a term (which is why the reloader's
+`callback => fun arizona_reloader:reload_erl/1` consults fine); it is specifically
+the call that is not.
+
+So a parameterised step -- `extract/1`, or a builder of your own -- needs a named
+2-arity function for a config file to spell:
+
+```erlang
+%% config/sys.config -- an entry in the server's `routes` list
+{live, ~"/users/:id", user_page, #{middlewares => [{my_app_mw, path_bindings}]}}
+```
+
+```erlang
+%% src/my_app_mw.erl
+path_bindings(Req, Bindings) ->
+    Extract = arizona_middleware:extract([path_bindings]),
+    Extract(Req, Bindings).
+```
+
+`{arizona_middleware, extract}` is not that wrapper. It type-checks, then fails at
+request time with `undef`: the pair names `extract/2`, and `extract/1` is the
+builder.
 """.
 
 %% --------------------------------------------------------------------
@@ -74,6 +117,9 @@ controller, and a WebSocket upgrade.
 %% Types definitions
 %% --------------------------------------------------------------------
 
+%% A pipeline step. The `{Module, Function}` pair names a 2-arity function and is
+%% the only form writable as a term, so it is what a `sys.config` route must use;
+%% see "Declaring steps" in the module doc.
 -nominal middleware() ::
     fun((arizona_req:request(), az:bindings()) -> middleware_result()) | {module(), atom()}.
 -nominal middleware_result() ::
@@ -118,6 +164,10 @@ Each key targets a binding:
 ```erlang
 #{middlewares => [arizona_middleware:extract([path_bindings, params])]}
 ```
+
+That call builds the middleware where the route is declared, so it can only be
+written in Erlang. A route declared in `config/sys.config` must name a 2-arity
+wrapper around it instead -- see "Declaring steps" in the module doc.
 """.
 -spec extract(Keys) -> middleware() when Keys :: [extract_key()].
 extract(Keys) ->

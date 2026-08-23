@@ -727,6 +727,9 @@ build-opts variant supports hot-reload-safe rebuilds.
 - `{asset, Path, {priv_dir, App, SubDir}}` -- static asset from priv (served via zero-copy
   sendfile by roadrunner's built-in `roadrunner_static`)
 - `{asset, Path, {dir, Dir}}` -- static asset from absolute directory
+- Either asset form compiles to `Path/*path`, so the catch-all is generated and never appears
+  in the route list. Matching is first-match-wins in list order, so a shorter asset path listed
+  ahead of a longer one it prefixes swallows it -- order the longer prefix first.
 - `{Verb, Path, Handler, Opts}` (`Verb` = `get`/`post`/`put`/`patch`/`delete`/`head`/`options`) --
   single-verb controller; `{match, Spec, Path, Handler, Opts}` covers multi/custom/any-method
   (`Spec` = a verb, a list of verbs, a custom uppercase binary like `~"PROPFIND"`, or `'*'`). Behind
@@ -1223,7 +1226,9 @@ request/transport coupling.
   stops on the first halt. Run by the HTTP and WS transports before mounting a view.
 - `extract/1(Keys)` -- builds a middleware copying selected request data into bindings so a
   handler reads it with `?get(Key)`. Keys: `path_bindings`, `params`, `headers`, `cookies`,
-  `body`, `method`, `user_agent`.
+  `body`, `method`, `user_agent`. Being a call rather than a term, it is writable only where
+  routes are declared in Erlang; a route declared in `config/sys.config` is parsed by
+  `file:consult/1` and must name a 2-arity wrapper (`{my_app_mw, path_bindings}`) instead.
 - `put_request/2` -- escape-hatch middleware exposing the whole request under the `request`
   binding for lazy access; prefer `extract/1` for specific data.
 - `fetch_flash/2` / `fetch_session/2` -- read the flash (consuming) / session (non-consuming)
