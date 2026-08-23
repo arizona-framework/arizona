@@ -908,6 +908,9 @@ new handler omits from its mount return
   cancel, no `OP_REPLACE`). `handler`, view id, and child views all survive. Returns `{ok, Ops,
   Effects}` -- the diff ops plus the reaction's effects (`handle_update`'s, folded with any child's).
   Mirrors `handle_root_event`, but the reaction is `handle_update` instead of `handle_event`
+- `dev_info/1(Pid)` -- a live process's current view state for dev-time introspection (root
+  handler/bindings plus each child view's), read via `sys:get_state/1` so a wedged view still
+  answers and nothing is added to the process's own protocol. Backs the dev MCP's `view_state`.
 - `apply_on_mount/2` -- folds the `on_mount` hook chain: `apply_on_mount(OnMount, Bindings)`.
   Each hook is `fun((Bindings) -> Bindings)` or `{Module, Function}`
 

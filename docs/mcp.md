@@ -119,6 +119,13 @@ has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mc
   the primary level before any handler, so capturing below it would mean raising the app's level --
   changing the system in order to observe it. Crash reports are `error`, so the case this exists
   for is unaffected.
+- `view_state` -- a live view's current bindings, by `view_id`; omit it to list the live views
+  and their child views. Where `get_logs` answers "what happened", this answers "what does
+  this view believe now", which is what separates a slot rendering a stale value from a slot that
+  has no dependency at all (see "The invariant" in [architecture.md](architecture.md)). Live views
+  are found by scanning processes, not through a registry: a live process is spawned per WebSocket
+  and linked to it, never registered by id, and a dev-only scan avoids adding bookkeeping to every
+  connection for a tool used a handful of times. A view exists only while a page holds its socket.
 - `app_info` -- `application:get_key/2`, `erlang:system_info/1`.
 - `render_component` -- render a view/component module to HTML with given bindings.
 - `reload` -- **force a compile+reload sync now**: recompile the project (via `rebar_agent` under
