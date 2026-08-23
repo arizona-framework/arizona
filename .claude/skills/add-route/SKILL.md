@@ -26,6 +26,10 @@ Choose the appropriate route type based on the user's intent:
   - `layout => {LayoutMod, LayoutFun}` -- layout to wrap the page (optional)
   - `on_mount => [Hook]` -- `on_mount` hooks run before the handler's `mount/1`
   - `middlewares => [fun((az:request(), map()) -> {cont, az:request(), map()} | {halt, az:request()})]`
+    or `[{Module, Function}]` naming a 2-arity step. Only the pair is a term, so a route declared
+    in `config/sys.config` (read by `file:consult/1`) cannot call a builder like
+    `arizona_middleware:extract([...])` -- it must name a 2-arity wrapper around it, or the node
+    fails to boot with `bad term`.
 
 **WebSocket endpoint:**
 ```erlang
@@ -37,6 +41,8 @@ Choose the appropriate route type based on the user's intent:
 {asset, Path, {priv_dir, App, SubDir}}
 {asset, Path, {dir, AbsoluteDir}}
 ```
+Compiles to `Path/*path`. Matching is first-match-wins, so list a longer asset path before
+a shorter one that prefixes it (`~"/static/arizona"` before `~"/static"`).
 
 **Controller (HTTP, method-gated; reached via `arizona_js:fetch/2`):**
 ```erlang

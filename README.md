@@ -218,6 +218,13 @@ Replace `yourapp` with your project's app name. Then declare routes in `config/s
 ]}].
 ```
 
+A config file is read by `file:consult/1`, so every route entry must be a literal **term**. That
+becomes visible once a route needs `middlewares`: a `{Module, Function}` pair is a term, but a
+call such as `arizona_middleware:extract([path_bindings])` is not, and the node refuses to boot
+with `bad term` -- reported at line 1 whatever line the expression is on, since the whole file is
+one term. Wrap a parameterised step in a named 2-arity function, or declare the routes in Erlang
+instead; see _Declaring steps_ in `arizona_middleware`.
+
 ### 5. Run it
 
 ```bash
