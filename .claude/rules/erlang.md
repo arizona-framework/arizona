@@ -412,6 +412,15 @@ re-renders when they change. A hoisted `?html` used as a whole `?each` callback
 body (`fun(_I) -> Row end`) keeps the per-item element path and its `single_root`
 flag.
 
+The invariant behind all of this: a slot tracks only the reads performed **inside
+its own closure**. The transform arranges that for a `?get` reaching the slot through
+a bare variable (it inlines a fresh read into the closure). It cannot when the value
+is bound through a non-bare-var pattern or derived by intermediate computation --
+`#{side := Side} = f(?get(k))` compiles the slot to `fun() -> Side end`, which reads
+nothing. That slot never updates, and nothing says so: the view re-renders and its
+sibling slots move, so it looks like a diff bug. When a slot's value is computed
+rather than read, put the read inside the slot (`f(?get(k))`).
+
 Exceptions that stay un-tracked (slot frozen after SSR): a binding destructured
 in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
 (`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a variable

@@ -335,6 +335,17 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
 - A now-template-only match is underscore-prefixed so `warnings_as_errors`
   (unused variable) stays satisfied.
 
+**The invariant:** a slot tracks only the reads performed *inside its own closure*.
+The transform arranges that automatically when a `?get` result reaches the slot
+through a bare variable -- it rewrites the body binding to `_ = get(...)` and inlines
+a fresh read into the closure, so the read re-runs inside the dependency bracket. It
+cannot when the value arrives any other way: bound through a non-bare-var pattern, or
+derived by intermediate computation (`Side` in `#{side := Side} = f(?get(k))`, which
+compiles to `fun() -> Side end`). Such a slot renders once at SSR and never updates,
+and nothing says so -- the view re-renders normally and its sibling slots move, so it
+reads as a diff bug rather than a missing dependency. When the slot's value is
+*computed* rather than read, put the read in the slot itself (`f(?get(k))`).
+
 **Reads that do not inline** (left captured, slot stays static): a binding
 destructured in the function head (`render(#{foo := Foo})`) or through any
 non-bare-var pattern (`{ok, V} = ?get(...)`) -- a pattern match is an untracked
