@@ -37,7 +37,8 @@ by default**: `route/1,2` set `allow_remote_access => false`, and the MCP handle
 refuses any request whose peer is not a loopback address -- no matter which
 interface the server bound. That peer check is the primary guard -- the route
 protects itself rather than being gated per tool -- together with the `Origin`
-check and keeping this a **dev-only** dependency. Only relax it on a network you trust, ideally behind an `auth` hook:
+check and keeping this a **dev-only** dependency. Only relax it on a network
+you trust, ideally behind an `auth` hook:
 
 ```erlang
 %% localhost-only (default) -- safe for eval
