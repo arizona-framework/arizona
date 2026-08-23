@@ -21,6 +21,36 @@ in the per-platform modules (e.g. `arizona_android`) for `?native` views.
     arizona_js:toggle(~"#modal")
 ]}], [~"Both"]}
 ```
+
+## Two lifetimes -- attribute vs handler effect
+
+The same builder means different things depending on where it is placed:
+
+- In an **event attribute** (`az_click`, `az_submit`, ...) it is markup. It
+  renders at SSR and sits in the DOM, so a purely client-side command
+  (`toggle`, the class ops, `set/2,3`) runs on its trigger with no round trip
+  at all. `push_event` and `fetch` are the ones that do reach the server.
+- Returned from a **handler callback** it is a command sent over the
+  WebSocket, so it cannot exist at SSR -- an SSR render is an HTTP response
+  with no client attached yet. Which callbacks can return effects, and why
+  `mount/1` cannot, is covered by "Resets and effects" in `arizona_stateful`.
+
+## Appearance is rendered, not commanded
+
+A class or attribute derived from state belongs in the template, where the
+diff engine owns it:
+
+```erlang
+{'div', [{id, ?get(id)}, {class, [~"app ", ?get(tint)]}], [...]}
+```
+
+Driving that same class from a handler with `add_class/2` paints the wrong
+value on a cold load and only corrects itself once connected -- never, if no
+event ever fires. Effects are for imperative one-shots the DOM cannot derive
+from state: focus a field, set the title, start a transition, copy to the
+clipboard. It is the same reasoning behind there being deliberately no
+`set_text`/`set_html` -- writing content from an effect would fight the diff
+engine, which is authoritative for what a view shows.
 """.
 
 -include("arizona_effect.hrl").
