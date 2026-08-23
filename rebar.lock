@@ -2,7 +2,7 @@
 [{<<"fs">>,{pkg,<<"fs">>,<<"11.4.1">>},0},
  {<<"roadrunner">>,
   {git,"https://github.com/arizona-framework/roadrunner.git",
-       {ref,"319130fe6b45011585ed05ff4d2e017fe453b08f"}},
+       {ref,"91dbf9844503405e0bf919222aa69ff696e9cded"}},
   0},
  {<<"telemetry">>,{pkg,<<"telemetry">>,<<"1.4.2">>},1}]}.
 [
