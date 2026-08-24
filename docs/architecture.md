@@ -1623,13 +1623,29 @@ The wholesale marker-aware `OP_TEXT` re-render is the fallback -- used when posi
 unsound (the old slot was not a list, the item is not a single root element, or the list rendered a
 per-item child view). A scalar value or a nested template still patches via that `OP_TEXT`.
 
+**Context -- inside `<svg>` a `<title>` is not raw text.** The classification takes the content
+context (`raw_text_kind/2`, second argument `html | foreign`), threaded through the transform by
+`content_context/2`: `<svg>` opens foreign content and `<foreignObject>` switches back. In foreign
+content an element is ordinary parsed markup -- comments really are comments -- so `title` is
+classified `none` there and its slot keeps markers and stays diffable. It is the only tag that
+differs: `script`/`style` stay `raw` in both, and `textarea` cannot appear in foreign content.
+This matters because an SVG `<title>` is a graphic's accessible name, so a bound one would
+otherwise freeze after SSR with no symptom. MathML is deliberately not tracked -- it would need
+its own integration points to be correct, and leaving it in `html` keeps existing behaviour rather
+than half-handling it.
+
+The context is per-template, so it does **not** cross a component boundary: a `<title>` inside a
+`?stateless`/`?stateful` child embedded in an `<svg>` compiles with its own `html` context and
+stays render-once, since the child cannot know its call site at compile time. An inlined `?each`
+callback or element helper is spliced into the caller's compile, so it does carry the context.
+
 **Exception -- raw-text elements (`script`/`style`/`textarea`/`title`).** The browser does not
 parse HTML comments inside these, so a comment marker becomes literal content and corrupts it (an
 inline module script's `<!--` is even a `SyntaxError`). A dynamic content slot inside a raw-text
 element is therefore emitted **markerless and render-once**: the value renders at SSR with `Az =
 undefined`, and the diff engine skips any `undefined`-`Az` dynamic (`diff_dynamics/3`
 and `diff_dynamics_v/5`), so no `OP_TEXT` is ever produced (there would be no marker to target).
-The backend classifies the tag via the `arizona_renderer` `raw_text_kind/1` callback: `raw` (`script`/`style`)
+The backend classifies the tag via the `arizona_renderer` `raw_text_kind/2` callback: `raw` (`script`/`style`)
 renders the value **verbatim** (the browser decodes no character references there, so HTML-escaping
 would corrupt it -- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL
 correct); `escapable` (`textarea`/`title`) HTML-escapes a scalar (references *are* decoded there)

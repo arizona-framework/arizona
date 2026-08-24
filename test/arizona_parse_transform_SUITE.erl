@@ -344,6 +344,7 @@
     raw_text_style_close_tag_still_neutralized/1,
     raw_text_hoisted_raw_boundary/1,
     raw_text_uppercase_tag_classified/1,
+    raw_text_svg_title_diffable/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -597,6 +598,7 @@ groups() ->
             raw_text_style_close_tag_still_neutralized,
             raw_text_hoisted_raw_boundary,
             raw_text_uppercase_tag_classified,
+            raw_text_svg_title_diffable,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -2202,11 +2204,45 @@ raw_text_uppercase_tag_classified(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
     ?assertEqual(<<"<ScRiPt>a<\\/script>b</ScRiPt>">>, HTML),
     %% The classifier itself, for every raw-text tag and a non-raw-text one.
-    ?assertEqual(raw, arizona_html:raw_text_kind('SCRIPT')),
-    ?assertEqual(raw, arizona_html:raw_text_kind('Style')),
-    ?assertEqual(escapable, arizona_html:raw_text_kind('TEXTAREA')),
-    ?assertEqual(escapable, arizona_html:raw_text_kind('Title')),
-    ?assertEqual(none, arizona_html:raw_text_kind('DIV')).
+    ?assertEqual(raw, arizona_html:raw_text_kind('SCRIPT', html)),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Style', html)),
+    ?assertEqual(escapable, arizona_html:raw_text_kind('TEXTAREA', html)),
+    ?assertEqual(escapable, arizona_html:raw_text_kind('Title', html)),
+    ?assertEqual(none, arizona_html:raw_text_kind('DIV', html)).
+
+%% Inside `<svg>` the parser is in foreign content, where an element is ordinary
+%% parsed markup: comments really are comments, so a slot keeps its markers and
+%% stays diffable. `title` is the tag that differs -- HTML's makes markers literal
+%% text, SVG's does not -- and an SVG `<title>` is a graphic's accessible name, so
+%% classifying it as escapable raw text froze a bound one after SSR.
+%% `<foreignObject>` switches back, so its `<title>` keeps the HTML treatment.
+raw_text_svg_title_diffable(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_title). "
+        "-export([svg/1, fo/1]). "
+        "svg(Bindings) -> "
+        "    arizona_template:html({svg, [], [{title, [], "
+        "        [arizona_template:get(t, Bindings)]}]}). "
+        "fo(Bindings) -> "
+        "    arizona_template:html({svg, [], [{foreignObject, [], [{title, [], "
+        "        [arizona_template:get(t, Bindings)]}]}]}). "
+    ),
+    %% SVG: marked, and a changed value produces an op.
+    {SvgHTML0, SvgSnap} = arizona_render:render(Mod:svg(#{t => ~"A"})),
+    SvgHTML = iolist_to_binary(SvgHTML0),
+    ?assertMatch({_, _}, binary:match(SvgHTML, ~"<!--az:")),
+    {SvgOps, _} = arizona_diff:diff(Mod:svg(#{t => ~"B"}), SvgSnap),
+    ?assertMatch([[_Op, _Az, ~"B"]], SvgOps),
+    %% foreignObject: back to HTML rules -- markerless and render-once.
+    {FoHTML0, FoSnap} = arizona_render:render(Mod:fo(#{t => ~"A"})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(FoHTML0), ~"<!--az:")),
+    ?assertEqual([], element(1, arizona_diff:diff(Mod:fo(#{t => ~"B"}), FoSnap))),
+    %% The classifier itself, in both contexts.
+    ?assertEqual(none, arizona_html:raw_text_kind('Title', foreign)),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Style', foreign)),
+    ?assertEqual(foreign, arizona_html:content_context('SVG', html)),
+    ?assertEqual(html, arizona_html:content_context('FOREIGNOBJECT', foreign)),
+    ?assertEqual(foreign, arizona_html:content_context(g, foreign)).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's

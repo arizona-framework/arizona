@@ -126,7 +126,7 @@ render(Bindings) ->
     az = 0 :: az(),
     nodiff = false :: boolean(),
     %% Raw-text context of the enclosing element while compiling its children
-    %% (Backend:raw_text_kind/1). `raw`/`escapable` mean a dynamic content slot
+    %% (Backend:raw_text_kind/2). `raw`/`escapable` mean a dynamic content slot
     %% must be emitted markerless and render-once -- HTML comment markers would
     %% become literal content there (script/style/textarea/title).
     raw_text_kind = none :: none | raw | escapable,
@@ -134,6 +134,11 @@ render(Bindings) ->
     %% the neutralization a value needs belongs to *that element's* tokenizer state
     %% (`<script>` is script data, `<style>` is RAWTEXT), not to raw text at large.
     raw_text_tag = undefined :: atom(),
+    %% Content context of the enclosing element while compiling its children
+    %% (Backend:content_context/2). `foreign` is inside `<svg>`, where an element
+    %% is ordinary parsed content, so a tag HTML treats as escapable raw text
+    %% (`title`) keeps its markers and stays diffable.
+    content_ctx = html :: arizona_renderer:content_context(),
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean(),
@@ -2060,7 +2065,8 @@ extract_element(Node) ->
 compile_element(Tag, Attrs0, Children, Line, State0) ->
     ok = reject_framework_attrs(Attrs0, Line),
     Backend = State0#state.backend,
-    RawKind = Backend:raw_text_kind(Tag),
+    RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
+    ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
     Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, RawKind, Line, State0),
     State1 = State0#state{root = false},
@@ -2096,12 +2102,17 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             %% Scope the raw-text context to this element's children, then restore
             %% the parent's so a following sibling is not treated as raw text.
             State7 = compile_children(
-                Children, ElemAz, State6#state{raw_text_kind = RawKind, raw_text_tag = Tag}
+                Children,
+                ElemAz,
+                State6#state{
+                    raw_text_kind = RawKind, raw_text_tag = Tag, content_ctx = ChildCtx
+                }
             ),
             State8 = buf_append(State7, Backend:element_close(TagBin)),
             State8#state{
                 raw_text_kind = State0#state.raw_text_kind,
-                raw_text_tag = State0#state.raw_text_tag
+                raw_text_tag = State0#state.raw_text_tag,
+                content_ctx = State0#state.content_ctx
             }
     end.
 

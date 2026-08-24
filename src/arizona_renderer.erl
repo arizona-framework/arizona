@@ -91,7 +91,21 @@ references ARE decoded, so a scalar slot is HTML-escaped, but it is still
 markerless and render-once. Non-HTML backends return `none` -- their wire format
 does not use HTML comment markers.
 """.
--callback raw_text_kind(Tag :: atom()) -> none | raw | escapable.
+-callback raw_text_kind(Tag :: atom(), Context :: content_context()) -> none | raw | escapable.
+
+-doc """
+The content context an element's children are parsed in.
+
+`foreign` is the HTML parser's foreign-content mode (inside `<svg>`), where an
+element is ordinary parsed content -- comments are comments, so a slot keeps its
+markers and stays diffable. The distinction only matters for a tag classified
+differently in each: an HTML `<title>` makes comment markers literal text, an SVG
+`<title>` does not. Backends with no such mode return `Parent` unchanged.
+""".
+-callback content_context(Tag :: atom(), Parent :: content_context()) -> content_context().
+
+-type content_context() :: html | foreign.
+-export_type([content_context/0]).
 
 -doc """
 Prefix a static's embedded `az` references with `Prefix`, so a child template
@@ -141,7 +155,7 @@ fragments.
 -callback escape(Value :: binary()) -> binary().
 
 -doc """
-Neutralize a dynamic value spliced into a **raw-text** element (`raw_text_kind/1
+Neutralize a dynamic value spliced into a **raw-text** element (`raw_text_kind/2
 =:= raw` -- HTML `script`/`style`). Such content is emitted verbatim (the browser
 decodes nothing there), so HTML entity-escaping does not apply, yet a value
 carrying a close-tag sequence (`</script>`) would still break out of the element
