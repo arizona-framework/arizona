@@ -25,7 +25,8 @@ identical to the previous inlined emission.
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
--export([raw_text_kind/1]).
+-export([raw_text_kind/2]).
+-export([content_context/2]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
@@ -157,20 +158,46 @@ is_void_name(~"track") -> true;
 is_void_name(~"wbr") -> true;
 is_void_name(_Other) -> false.
 
--spec raw_text_kind(atom()) -> none | raw | escapable.
-raw_text_kind(Tag) ->
-    case tag_name(Tag) of
-        %% Raw-text elements: content is never parsed for comments or character
-        %% references, so a dynamic slot must render verbatim and markerless.
-        ~"script" -> raw;
-        ~"style" -> raw;
-        %% Escapable-raw-text elements: character references are decoded, so a
-        %% scalar slot is HTML-escaped, but comments are still literal -- so still
-        %% markerless.
-        ~"textarea" -> escapable;
-        ~"title" -> escapable;
-        _Other -> none
-    end.
+-spec raw_text_kind(atom(), arizona_renderer:content_context()) -> none | raw | escapable.
+raw_text_kind(Tag, Context) ->
+    raw_text_kind_name(tag_name(Tag), Context).
+
+%% Raw-text elements: content is never parsed for comments or character
+%% references, so a dynamic slot must render verbatim and markerless. `script`
+%% and `style` keep that in foreign content too -- their content is still not
+%% ordinary parsed markup there.
+raw_text_kind_name(~"script", _Context) ->
+    raw;
+raw_text_kind_name(~"style", _Context) ->
+    raw;
+%% Escapable-raw-text elements: character references are decoded, so a scalar
+%% slot is HTML-escaped, but comments are still literal -- so still markerless.
+%% Only in HTML: inside `<svg>` a `<title>` is ordinary parsed content whose
+%% comments really are comments, so its slot can keep markers and stay diffable.
+%% That matters because an SVG `<title>` is a graphic's accessible name, and
+%% classifying it here would freeze a bound one after SSR.
+raw_text_kind_name(~"textarea", html) ->
+    escapable;
+raw_text_kind_name(~"title", html) ->
+    escapable;
+raw_text_kind_name(_Other, _Context) ->
+    none.
+
+-spec content_context(atom(), arizona_renderer:content_context()) ->
+    arizona_renderer:content_context().
+content_context(Tag, Parent) ->
+    content_context_name(tag_name(Tag), Parent).
+
+%% `<svg>` switches the parser into foreign content; `<foreignObject>` switches
+%% back for its children. MathML is deliberately not tracked: it would need its
+%% own integration points (`mtext` and friends) to be correct, and leaving it in
+%% `html` keeps today's behaviour rather than half-handling it.
+content_context_name(~"svg", _Parent) ->
+    foreign;
+content_context_name(~"foreignobject", foreign) ->
+    html;
+content_context_name(_Other, Parent) ->
+    Parent.
 
 %% Every framework-emitted `az` in a compiled static is `<Fp>-<id>` (the parse
 %% transform builds the marker from the id, so the fingerprint is always the

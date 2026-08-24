@@ -61,7 +61,8 @@ never sanitized.
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
--export([raw_text_kind/1]).
+-export([raw_text_kind/2]).
+-export([content_context/2]).
 -export([raw_text/2]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
@@ -218,11 +219,17 @@ text_slot_close() ->
 is_void(br) -> true;
 is_void(_) -> false.
 
--spec raw_text_kind(atom()) -> none | raw | escapable.
-raw_text_kind(_Tag) ->
+-spec raw_text_kind(atom(), arizona_renderer:content_context()) -> none | raw | escapable.
+raw_text_kind(_Tag, _Context) ->
     %% Terminal output is plain styled text, not HTML -- no comment markers, so
     %% the raw-text corruption does not apply.
     none.
+
+-spec content_context(atom(), arizona_renderer:content_context()) ->
+    arizona_renderer:content_context().
+content_context(_Tag, Parent) ->
+    %% No foreign-content mode here -- the context never changes.
+    Parent.
 
 -spec scope_static(binary(), binary(), binary()) -> binary().
 scope_static(_Fp, _Prefix, S0) ->
@@ -286,7 +293,7 @@ escape(<<_C, R/binary>>, Acc) ->
     %% Any other C0 control (incl. ESC 0x1B, BEL 0x07) or DEL 0x7F: drop it.
     escape(R, Acc).
 
-%% Terminal output has no raw-text elements (raw_text_kind/1 is always `none`), so
+%% Terminal output has no raw-text elements (raw_text_kind/2 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
 -spec raw_text(atom(), term()) -> term().
 raw_text(_Tag, Value) -> Value.

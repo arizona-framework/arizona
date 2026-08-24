@@ -36,7 +36,8 @@ form valid JSON.
 -export([text_slot_open/1]).
 -export([text_slot_close/0]).
 -export([is_void/1]).
--export([raw_text_kind/1]).
+-export([raw_text_kind/2]).
+-export([content_context/2]).
 -export([raw_text/2]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
@@ -121,11 +122,17 @@ text_slot_close() ->
 is_void(_Tag) ->
     false.
 
--spec raw_text_kind(atom()) -> none | raw | escapable.
-raw_text_kind(_Tag) ->
+-spec raw_text_kind(atom(), arizona_renderer:content_context()) -> none | raw | escapable.
+raw_text_kind(_Tag, _Context) ->
     %% The native wire is JSON, not HTML -- dynamic slots are `#slot` objects,
     %% not comment markers, so the raw-text corruption does not apply.
     none.
+
+-spec content_context(atom(), arizona_renderer:content_context()) ->
+    arizona_renderer:content_context().
+content_context(_Tag, Parent) ->
+    %% No foreign-content mode here -- the context never changes.
+    Parent.
 
 %% Anchored on the fingerprint: every framework-emitted `az` in a compiled
 %% static is `<Fp>-<id>`, so `"az":"<Fp>` cannot be confused with a JSON `az`
@@ -152,7 +159,7 @@ supports_local() -> false.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) -> Bin.
 
-%% The native wire has no raw-text elements (raw_text_kind/1 is always `none`), so
+%% The native wire has no raw-text elements (raw_text_kind/2 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
 -spec raw_text(atom(), term()) -> term().
 raw_text(_Tag, Value) -> Value.
