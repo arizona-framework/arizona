@@ -20,7 +20,8 @@ the dev watcher reports a successful recompile.
 
 For known reason shapes, the renderer produces a richer summary:
 
-- `{compile_error, Errors}` -- formatted as a per-file error list
+- `{compile_error, Errors}` -- formatted as a per-file error list; an empty
+  list means the diagnostics went to the console, and says so
 - `{arizona_loc, {Mod, Line}, Reason}` -- prefixes the title with the
   source location captured by `arizona_render` during dynamic eval
 
@@ -281,6 +282,20 @@ take_summary([], Acc) ->
 skip_spaces([$\s | Rest]) -> skip_spaces(Rest);
 skip_spaces(Other) -> Other.
 
+%% A compile failed but no diagnostics survived: `arizona_reloader` recovers
+%% structured errors by recompiling the files the watcher reported, so a failure
+%% anywhere else -- a dependency, or a file outside this wave -- collects nothing.
+%% rebar's own return is `{throw, rebar_abort}`, which carries no diagnostics
+%% either, and the real output went to the console. Say that, rather than render
+%% an empty box that reads as a bug in the error page.
+format_reason(_Class, {compile_error, []}, _Stacktrace) ->
+    unicode:characters_to_binary([
+        "The compile failed, but none of the files that changed reproduce the error,\n",
+        "so there is nothing to show here.\n\n",
+        "The failure is in a file this reload did not compile -- a dependency, or a\n",
+        "file the watcher did not report. Its diagnostics went to the console running\n",
+        "the server; read them there."
+    ]);
 format_reason(_Class, {compile_error, Errors}, _Stacktrace) ->
     unicode:characters_to_binary(
         lists:join("\n\n", [format_file_errors(F, Es) || {F, Es} <:- Errors])
@@ -355,6 +370,12 @@ format_reason_compile_error_test() ->
     Bin = format_reason(error, {compile_error, Errors}, []),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"src/foo.erl">>)),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"line 10">>)).
+
+format_reason_compile_error_empty_test() ->
+    %% No diagnostics recovered -- the body must still say where they are.
+    Bin = format_reason(error, {compile_error, []}, []),
+    ?assertNotEqual(nomatch, binary:match(Bin, ~"console")),
+    ?assertNotEqual(<<>>, Bin).
 
 format_reason_arizona_loc_test() ->
     %% arizona_loc wraps another reason -- the wrapper is stripped for body
