@@ -2241,7 +2241,7 @@ raw_text_svg_title_diffable(Config) when is_list(Config) ->
     ?assertEqual(none, arizona_html:raw_text_kind('Title', foreign)),
     ?assertEqual(raw, arizona_html:raw_text_kind('Style', foreign)),
     ?assertEqual(foreign, arizona_html:content_context('SVG', html)),
-    ?assertEqual(html, arizona_html:content_context('foreignObject', foreign)),
+    ?assertEqual(html, arizona_html:content_context('FOREIGNOBJECT', foreign)),
     ?assertEqual(foreign, arizona_html:content_context(g, foreign)).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
