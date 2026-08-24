@@ -46,6 +46,14 @@
     deleted_file_alongside_good_compiles_good/1
 ]).
 
+%% blacklist group tests
+-export([
+    blacklisted_app_module_not_reloaded/1,
+    unblacklisted_app_module_reloaded/1,
+    blacklist_scoped_to_named_app/1,
+    module_without_app_reloaded/1
+]).
+
 %% consistency group tests
 -export([
     broken_edge_detected/1,
@@ -67,7 +75,13 @@
 %% ============================================================================
 
 all() ->
-    [{group, pubsub}, {group, integration}, {group, compile}, {group, consistency}].
+    [
+        {group, pubsub},
+        {group, integration},
+        {group, compile},
+        {group, consistency},
+        {group, blacklist}
+    ].
 
 groups() ->
     [
@@ -95,6 +109,12 @@ groups() ->
             mixed_files_only_compile_erl,
             deleted_file_skips_compile,
             deleted_file_alongside_good_compiles_good
+        ]},
+        {blacklist, [sequence], [
+            blacklisted_app_module_not_reloaded,
+            unblacklisted_app_module_reloaded,
+            blacklist_scoped_to_named_app,
+            module_without_app_reloaded
         ]},
         {consistency, [sequence], [
             broken_edge_detected,
@@ -127,6 +147,10 @@ init_per_group(integration, Config) ->
     Config;
 init_per_group(compile, Config) ->
     Config;
+init_per_group(blacklist, Config) ->
+    %% The sweep reads the beam-facts cache table that `arizona_sup` owns.
+    {ok, _} = application:ensure_all_started(arizona),
+    Config;
 init_per_group(consistency, Config) ->
     %% The beam-facts cache table is created and owned by `arizona_sup`, so the
     %% consistency checks run against a started app exactly as they do in dev.
@@ -134,6 +158,9 @@ init_per_group(consistency, Config) ->
     Config.
 
 end_per_group(compile, _Config) ->
+    ok;
+end_per_group(blacklist, _Config) ->
+    _ = application:stop(arizona),
     ok;
 end_per_group(consistency, _Config) ->
     _ = application:stop(arizona),
@@ -157,6 +184,7 @@ init_per_testcase(TC, Config) ->
     end.
 
 end_per_testcase(_TC, Config) ->
+    ok = application:unset_env(rebar, refresh_paths_blacklist),
     _ =
         case proplists:get_value(tmp_dir, Config) of
             undefined -> ok;
@@ -545,8 +573,84 @@ check_best_effort_never_crashes(Config) when is_list(Config) ->
     ?assertEqual(ok, arizona_reloader_consistency:check(Bad)).
 
 %% ============================================================================
+%% blacklist group tests
+%% ============================================================================
+
+%% A stale module whose owning app is blacklisted keeps its loaded code.
+%% Reloading purges the old code, which kills any process still lingering in it
+%% -- the listener that makes the option necessary in the first place.
+blacklisted_app_module_not_reloaded(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_bl_skipped,
+    App = az_bl_skipped_app,
+    ok = stale_module(Mod, Dir),
+    ok = own_app(App, [Mod]),
+    ok = application:set_env(rebar, refresh_paths_blacklist, [App]),
+    {ok, #{reloaded := Reloaded}} = arizona_reloader:sync(),
+    ?assertNot(lists:member(Mod, Reloaded)),
+    ?assertEqual(1, Mod:value()).
+
+%% The same module reloads when nothing is blacklisted, so the skip above is the
+%% blacklist and not some unrelated reason the sweep passed the module over.
+unblacklisted_app_module_reloaded(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_bl_reloaded,
+    App = az_bl_reloaded_app,
+    ok = stale_module(Mod, Dir),
+    ok = own_app(App, [Mod]),
+    {ok, #{reloaded := Reloaded}} = arizona_reloader:sync(),
+    ?assert(lists:member(Mod, Reloaded)),
+    ?assertEqual(2, Mod:value()).
+
+%% The blacklist only covers the apps it names.
+blacklist_scoped_to_named_app(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_bl_other,
+    App = az_bl_other_app,
+    ok = stale_module(Mod, Dir),
+    ok = own_app(App, [Mod]),
+    ok = application:set_env(rebar, refresh_paths_blacklist, [az_bl_unrelated_app]),
+    {ok, #{reloaded := Reloaded}} = arizona_reloader:sync(),
+    ?assert(lists:member(Mod, Reloaded)),
+    ?assertEqual(2, Mod:value()).
+
+%% A module owned by no app cannot be matched against the blacklist at all, so a
+%% blacklist that is set does not stop it reloading.
+module_without_app_reloaded(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Mod = az_bl_appless,
+    ok = stale_module(Mod, Dir),
+    ?assertEqual(undefined, application:get_application(Mod)),
+    ok = application:set_env(rebar, refresh_paths_blacklist, [az_bl_unrelated_app]),
+    {ok, #{reloaded := Reloaded}} = arizona_reloader:sync(),
+    ?assert(lists:member(Mod, Reloaded)),
+    ?assertEqual(2, Mod:value()).
+
+%% ============================================================================
 %% Helpers
 %% ============================================================================
+
+%% Load Mod at version 1, then rewrite its beam to version 2 without reloading
+%% it -- leaving exactly the staleness the sweep looks for.
+stale_module(Mod, Dir) ->
+    {Mod, Beam} = compile_and_load(Mod, versioned_src(Mod, 1), Dir),
+    file:write_file(Beam, compile_only(Mod, versioned_src(Mod, 2), Dir)).
+
+%% Register Mods as belonging to App, so `application:get_application/1` resolves
+%% them: the sweep decides by owning app, not by module name.
+own_app(App, Mods) ->
+    Spec =
+        {application, App, [
+            {description, "blacklist test app"},
+            {vsn, "1"},
+            {modules, Mods},
+            {registered, []},
+            {applications, [kernel, stdlib]}
+        ]},
+    case application:load(Spec) of
+        ok -> ok;
+        {error, {already_loaded, App}} -> ok
+    end.
 
 pubsub_tests() ->
     [
