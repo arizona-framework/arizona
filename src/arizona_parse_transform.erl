@@ -3018,6 +3018,16 @@ rename_var({_Old, _New}, Term) ->
 %%
 %% Keyed by the callee's name/arity rather than a counter so the output stays
 %% byte-identical across compiles -- these names reach the abstract-code chunk.
+%%
+%% Runtime attribution: inlining flattens the whole chain into the OUTERMOST
+%% template function's generated fun, so a crash inside an inlined callback
+%% reports the callee's line under a fun named for that outermost function --
+%% neither the callee nor necessarily the function holding the `?each`. With
+%% `render/1` -> `?each(fun section/1)` -> `?each(fun row/1)`, a failure in
+%% `row/1` surfaces as `-render/1-fun-0-` at `row/1`'s line, and neither callee
+%% is a compiled function any more. Element-helper hops flatten identically. The
+%% compiler derives a fun's name from the function it is written in, and a
+%% `named_fun` does not change it, so the transform cannot relabel these frames.
 rename_inlined_clause(Name, Arity, Clause) ->
     rename_inlined_body(Name, Arity, [], Clause).
 
