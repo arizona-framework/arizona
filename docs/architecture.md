@@ -1639,6 +1639,16 @@ The context is per-template, so it does **not** cross a component boundary: a `<
 stays render-once, since the child cannot know its call site at compile time. An inlined `?each`
 callback or element helper is spliced into the caller's compile, so it does carry the context.
 
+**So factor SVG chrome through a local element helper, not a `?stateless` child.** That is
+already the documented split -- a helper factors *markup*, `?stateless` is for a component with
+its own props -- and here it is also the difference between a `<title>` that keeps updating and
+one frozen at its SSR value. This is not fixable by classifying `title` as `none` everywhere and
+special-casing `<head>`: that inverts which side fails silently, and the other side fails worse.
+Comment markers inside a real HTML `<title>` are literal text, so a layout's page title would
+render `<!--az:0-->Home<!--/az-->` in the browser tab -- visible corruption traded for an
+invisible frozen accessible name. A compile warning is no better: the only available signal is
+"a `<title>` holding a dynamic", which is exactly what a legitimate `<head>` title looks like.
+
 **Exception -- raw-text elements (`script`/`style`/`textarea`/`title`).** The browser does not
 parse HTML comments inside these, so a comment marker becomes literal content and corrupts it (an
 inline module script's `<!--` is even a `SyntaxError`). A dynamic content slot inside a raw-text

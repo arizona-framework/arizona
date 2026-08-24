@@ -345,6 +345,7 @@
     raw_text_hoisted_raw_boundary/1,
     raw_text_uppercase_tag_classified/1,
     raw_text_svg_title_diffable/1,
+    raw_text_svg_title_factoring/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -599,6 +600,7 @@ groups() ->
             raw_text_hoisted_raw_boundary,
             raw_text_uppercase_tag_classified,
             raw_text_svg_title_diffable,
+            raw_text_svg_title_factoring,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -2243,6 +2245,36 @@ raw_text_svg_title_diffable(Config) when is_list(Config) ->
     ?assertEqual(foreign, arizona_html:content_context('SVG', html)),
     ?assertEqual(html, arizona_html:content_context('FOREIGNOBJECT', foreign)),
     ?assertEqual(foreign, arizona_html:content_context(g, foreign)).
+
+%% The content context is per-template, so how SVG chrome is factored decides
+%% whether its `<title>` keeps updating. An element helper is inlined into the
+%% caller's compile and carries the context; a `?stateless` child compiles with
+%% its own `html` context and stays render-once, since it cannot know its call
+%% site. Pinned because the difference is invisible in the markup -- both spell
+%% the same `<title>` -- and the component form fails silently.
+raw_text_svg_title_factoring(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_factor). "
+        "-export([helper/1, component/1, icon/1]). "
+        "helper(Bindings) -> "
+        "    arizona_template:html({svg, [], [badge(arizona_template:get(t, Bindings))]}). "
+        "badge(T) -> {title, [], [T]}. "
+        "component(Bindings) -> "
+        "    arizona_template:html({svg, [], [arizona_template:stateless(fun icon/1, "
+        "        #{t => arizona_template:get(t, Bindings)})]}). "
+        "icon(Bindings) -> "
+        "    arizona_template:html({title, [], [arizona_template:get(t, Bindings)]}). "
+    ),
+    %% Helper: spliced into the caller, so the `<svg>` context reaches it.
+    {HelperHTML, HelperSnap} = arizona_render:render(Mod:helper(#{t => ~"A"})),
+    ?assertMatch({_, _}, binary:match(iolist_to_binary(HelperHTML), ~"<!--az:")),
+    ?assertMatch(
+        [[_Op, _Az, ~"B"]],
+        element(1, arizona_diff:diff(Mod:helper(#{t => ~"B"}), HelperSnap))
+    ),
+    %% Component: its own template, its own `html` context -- render-once.
+    {_CompHTML, CompSnap} = arizona_render:render(Mod:component(#{t => ~"A"})),
+    ?assertEqual([], element(1, arizona_diff:diff(Mod:component(#{t => ~"B"}), CompSnap))).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's
