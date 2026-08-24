@@ -31,8 +31,8 @@ mount(Init) ->
 render(Bindings) ->
     ?html(
         {'div', [{id, ?get(id)}], [
-            {'button', [{id, ~"add"}, {az_click, arizona_js:push_event(~"add")}], [~"Add"]},
-            {svg, [{id, ~"chart"}, {'viewBox', ~"0 0 100 20"}, {width, ~"100"}, {height, ~"20"}], [
+            {button, [{id, ~"add"}, {az_click, arizona_js:push_event(~"add")}], [~"Add"]},
+            {svg, [{id, ~"chart"}, {viewBox, ~"0 0 100 20"}, {width, ~"100"}, {height, ~"20"}], [
                 {g, [{id, ~"bars"}], ?each(fun bar/1, ?get(bars))}
             ]}
         ]}
