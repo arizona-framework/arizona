@@ -37,6 +37,10 @@ routes() ->
             bindings => #{title => <<"StreamSiblings">>},
             layouts => Layouts
         }},
+        {live, <<"/svg-each">>, arizona_svg_each_page, #{
+            bindings => #{title => <<"SvgEach">>},
+            layouts => Layouts
+        }},
         {live, <<"/mixed">>, arizona_mixed_children, #{
             bindings => #{title => <<"Mixed">>},
             layouts => Layouts

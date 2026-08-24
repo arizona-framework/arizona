@@ -784,6 +784,59 @@ describe('applyOps -- OP.INSERT', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 8b. SVG namespace: nodes the diff creates must land in the namespace their
+// parent implies.
+//
+// A detached <template> always parses in HTML context, so an SVG child created
+// by a patch came out an HTMLUnknownElement in the XHTML namespace -- correct
+// attributes, renders nothing. SSR content is unaffected (the page parser
+// namespace-adjusts inside <svg>), so this only ever showed for a list that is
+// empty at mount and fills in later, which reads as bad data rather than a DOM
+// bug. parseFragmentIn parses into a shallow clone of the real parent instead.
+// ---------------------------------------------------------------------------
+
+describe('SVG namespace on diff-created nodes', () => {
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const XHTML_NS = 'http://www.w3.org/1999/xhtml';
+
+    it('OP.INSERT creates an SVG child in the SVG namespace', () => {
+        setupView('v', '<svg><g az="0"></g></svg>');
+        applyOps([[OP.INSERT, 'v:0', 'k1', -1, '<rect az-key="k1" x="1" width="2"></rect>']]);
+        const child = resolveEl('v:0').querySelector('[az-key="k1"]');
+        expect(child.namespaceURI).toBe(SVG_NS);
+    });
+
+    it('OP.TEXT fills an SVG slot in the SVG namespace', () => {
+        setupView('v', '<svg><g az="0"><!--az:0--><!--/az--></g></svg>');
+        applyOps([[OP.TEXT, 'v:0', '<rect x="1"></rect>', true]]);
+        expect(resolveEl('v:0').querySelector('rect').namespaceURI).toBe(SVG_NS);
+    });
+
+    it("OP.REPLACE creates in the namespace of the replaced node's parent", () => {
+        setupView('v', '<svg><g az="0"><circle az="1"></circle></g></svg>');
+        applyOps([[OP.REPLACE, 'v:1', '<rect x="1"></rect>']]);
+        expect(resolveEl('v:0').querySelector('rect').namespaceURI).toBe(SVG_NS);
+    });
+
+    it('a foreignObject parent still yields HTML children', () => {
+        // foreignObject is itself in the SVG namespace but its children are HTML,
+        // so a synthetic <svg> parse container would get this wrong. Cloning the
+        // real parent gets it right with no special case.
+        setupView('v', '<svg><foreignObject az="0"></foreignObject></svg>');
+        applyOps([[OP.INSERT, 'v:0', 'k1', -1, '<div az-key="k1">x</div>']]);
+        const child = resolveEl('v:0').querySelector('[az-key="k1"]');
+        expect(child.namespaceURI).toBe(XHTML_NS);
+    });
+
+    it('an HTML parent is unchanged', () => {
+        setupView('v', '<div az="0"></div>');
+        applyOps([[OP.INSERT, 'v:0', 'k1', -1, '<p az-key="k1">x</p>']]);
+        const child = resolveEl('v:0').querySelector('[az-key="k1"]');
+        expect(child.namespaceURI).toBe(XHTML_NS);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 9. applyOps -- OP.REMOVE
 // ---------------------------------------------------------------------------
 

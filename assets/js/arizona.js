@@ -889,10 +889,9 @@ function applyOps(ops) {
                     // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
                     // view) after the swap finds nothing and the destination's hooks would
                     // never mount. Same parse-then-mount shape as OP_INSERT.
-                    const tpl = el.ownerDocument.createElement('template');
-                    tpl.innerHTML = op[2];
-                    const added = Array.from(tpl.content.children);
-                    el.replaceWith(tpl.content);
+                    const frag = parseFragmentIn(el.parentNode, op[2]);
+                    const added = Array.from(frag.children);
+                    el.replaceWith(frag);
                     for (const e of added) mountHooks(e);
                     // A popped-out (PiP) view whose placeholder just went with
                     // the outgoing subtree is orphaned -- close its window.
@@ -1106,6 +1105,49 @@ function updateLoneTextNode(startMarker, value) {
     return false;
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * Parse `html` into a fragment, using the element the nodes will land INSIDE as
+ * the parsing context.
+ *
+ * A detached `<template>` always parses in HTML context, so a `<rect>` inserted
+ * by a patch comes out an `HTMLUnknownElement` in the XHTML namespace and renders
+ * nothing -- with every attribute correct, which is why it reads as bad data
+ * rather than a DOM bug. SSR markup escapes this because the page parser
+ * namespace-adjusts inside `<svg>`; only nodes the diff creates are affected, so
+ * it surfaces exactly when a list is empty at mount and fills in later.
+ *
+ * Parsing into a shallow clone of the real parent fixes it without a tag list:
+ * the fragment-parsing algorithm takes its namespace from the context element,
+ * and `<a>`/`<title>`/`<script>` are legal in both namespaces so the tag alone
+ * cannot decide. Cloning the ACTUAL parent (rather than a synthetic `<svg>`
+ * container) is what makes `<foreignObject>` come out right too: it sits in the
+ * SVG namespace but its children are HTML, and using it as the context yields
+ * exactly that, with no special case.
+ *
+ * HTML parents keep the `<template>` path. Cloning is scoped to SVG because a
+ * shallow clone upgrades a custom element, running its constructor for a node
+ * that exists only to be thrown away.
+ *
+ * @param {Node|null} parent -- the node the parsed content is inserted into
+ * @param {string} html
+ * @returns {DocumentFragment}
+ */
+function parseFragmentIn(parent, html) {
+    const doc = parent?.ownerDocument ?? document;
+    if (parent instanceof Element && parent.namespaceURI === SVG_NS) {
+        const ctx = /** @type {Element} */ (parent.cloneNode(false));
+        ctx.innerHTML = html;
+        const frag = doc.createDocumentFragment();
+        frag.append(...ctx.childNodes);
+        return frag;
+    }
+    const tpl = doc.createElement('template');
+    tpl.innerHTML = html;
+    return tpl.content;
+}
+
 /**
  * Replace everything between <!--az:X--> and <!--/az--> with new content.
  * `isHtml` (carried on the op by the worker) selects the renderer: a <template> that
@@ -1127,9 +1169,7 @@ function updateMarkerContent(startMarker, value, isHtml) {
     if (!forEachNodeInSlot(startMarker, (node) => node.remove())) return false;
     // Insert new content before the closing marker
     if (isHtml) {
-        const tpl = doc.createElement('template');
-        tpl.innerHTML = value;
-        startMarker.after(tpl.content);
+        startMarker.after(parseFragmentIn(startMarker.parentNode, value));
     } else {
         startMarker.after(doc.createTextNode(value));
     }
@@ -1477,18 +1517,16 @@ function itemByKey(streams, el, key) {
  * @param {string} [az] -- the op's slot az, used to anchor placement to the slot span
  */
 function insertItemEl(el, key, pos, html, streams = null, az) {
-    const tpl = el.ownerDocument.createElement('template');
-    tpl.innerHTML = html;
+    const frag = parseFragmentIn(el, html);
     const bounds = slotBounds(el, az);
     // Grab the keyed item from the payload BEFORE inserting it: re-querying the
     // container by key afterwards would find a PRE-EXISTING element first under
     // a duplicate key, mounting hooks on the wrong element and skipping the new
     // item's own.
-    const item = Array.from(tpl.content.children).find((e) => e.getAttribute('az-key') === key);
+    const item = Array.from(frag.children).find((e) => e.getAttribute('az-key') === key);
     // Tail placement goes before the slot's CLOSING marker when there is one, so the
     // item lands inside the list rather than after the slot's static siblings.
-    const atEnd = () =>
-        bounds ? el.insertBefore(tpl.content, bounds.end) : el.appendChild(tpl.content);
+    const atEnd = () => (bounds ? el.insertBefore(frag, bounds.end) : el.appendChild(frag));
     if (pos === -1) {
         atEnd();
     } else {
@@ -1496,7 +1534,7 @@ function insertItemEl(el, key, pos, html, streams = null, az) {
         // DOM order without touching the map, so only the DOM knows position.
         const children = keyedChildren(el, bounds);
         if (pos < children.length) {
-            el.insertBefore(tpl.content, children[pos]);
+            el.insertBefore(frag, children[pos]);
         } else {
             atEnd();
         }
@@ -1730,14 +1768,13 @@ function applyListPatch(el, az, subOps) {
                 break;
             }
             case OP.INSERT: {
-                const tpl = el.ownerDocument.createElement('template');
-                tpl.innerHTML = sub[2];
-                const added = Array.from(tpl.content.children);
+                const frag = parseFragmentIn(el, sub[2]);
+                const added = Array.from(frag.children);
                 // Insert at position idx -- before the item currently there, or the
                 // end marker for a tail insert (the server only inserts at the tail,
                 // but honoring idx keeps this correct for any sub-op ordering).
                 const ref = roots[sub[1]] ?? endMarker;
-                ref.before(tpl.content);
+                ref.before(frag);
                 for (const e of added) mountHooks(e);
                 childListChanged = true;
                 break;
