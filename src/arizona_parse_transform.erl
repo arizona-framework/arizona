@@ -927,7 +927,8 @@ ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch) ->
                 #{{Name, Arity} := _} -> parse_error({helper_recursive, Name, Arity}, L);
                 #{} -> ok
             end,
-            Spliced = mark_targets(subst_helper_args(BodyExpr, Params, Args), Target),
+            BodyExpr1 = rename_inlined_body(Name, Arity, Params, BodyExpr),
+            Spliced = mark_targets(subst_helper_args(BodyExpr1, Params, Args), Target),
             Ctx1 = {Module, FunDefs, Target, Stack#{{Name, Arity} => true}},
             {Spliced1, true} = ih(Spliced, Ctx1, true),
             {Spliced1, true}
@@ -1736,7 +1737,8 @@ compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
             %% unwrap_each_body does for an inline fun), run mark_targets with this
             %% each's render-target context, then the bottom-up transform.
             UnwrappedBody = unwrap_last_wrapper(Body, Backend:target()),
-            Clause1 = {clause, CL, Vars, Guards, UnwrappedBody},
+            Clause0 = {clause, CL, Vars, Guards, UnwrappedBody},
+            Clause1 = rename_inlined_clause(Name, Arity, Clause0),
             FunAST0 = mark_targets({'fun', L, {clauses, [Clause1]}}, Backend:target()),
             {FunAST1, _HelperCh} = inline_helper_calls(
                 FunAST0, Module, FunDefs, Backend:target()
@@ -3001,6 +3003,58 @@ rename_var({_Old, _New} = R, Terms) when is_list(Terms) ->
     [rename_var(R, E) || E <- Terms];
 rename_var({_Old, _New}, Term) ->
     Term.
+
+%% A named `fun Name/Arity` ?each callback and a local element helper are both
+%% top-level functions, so the only free variables in their bodies are their
+%% parameters -- every other name is bound inside them. Inlining splices those
+%% binders into the caller's scope, where a caller that already bound the same
+%% name turns the callee's binding into an equality test against it: the item
+%% renders for as long as the two values agree, then fails the first time they
+%% differ, naming a value and no variable.
+%% Blind-renaming every variable is alpha-equivalent for a body with no free
+%% variables, so the callee's names cannot collide with the caller's. This does
+%% not apply to an inline `fun(Item) -> ... end`, whose body legitimately closes
+%% over the caller's variables.
+%%
+%% Keyed by the callee's name/arity rather than a counter so the output stays
+%% byte-identical across compiles -- these names reach the abstract-code chunk.
+rename_inlined_clause(Name, Arity, Clause) ->
+    rename_inlined_body(Name, Arity, [], Clause).
+
+%% `Keep` are names the caller substitutes itself (an element helper's
+%% parameters, replaced with the caller's argument expressions by
+%% subst_helper_args/3). Renaming those here would rewrite the caller's own
+%% variables once the arguments are spliced in, so leave them to that pass and
+%% run this before it.
+rename_inlined_body(Name, Arity, Keep, Term) ->
+    Renames = [
+        {Var, fresh_inline_var(Name, Arity, Var)}
+     || Var <- lists:usort(collect_var_names(Term)), not lists:member(Var, Keep)
+    ],
+    lists:foldl(fun rename_var/2, Term, Renames).
+
+%% `_` binds nothing, so renaming it would put a variable where the author wrote
+%% a discard.
+collect_var_names({var, _, '_'}) ->
+    [];
+collect_var_names({var, _, Name}) ->
+    [Name];
+collect_var_names(Term) when is_tuple(Term) ->
+    collect_var_names(tuple_to_list(Term));
+collect_var_names(Terms) when is_list(Terms) ->
+    lists:append([collect_var_names(Term) || Term <- Terms]);
+collect_var_names(_Term) ->
+    [].
+
+fresh_inline_var(Name, Arity, Var) ->
+    Chars = atom_to_list(Var),
+    Base = "AzFun@" ++ atom_to_list(Name) ++ "@" ++ integer_to_list(Arity) ++ "@" ++ Chars,
+    case Chars of
+        %% Keep a `_` prefix, or the rename turns a deliberately-unused variable
+        %% into an unused_var warning.
+        [$_ | _] -> list_to_atom([$_ | Base]);
+        _ -> list_to_atom(Base)
+    end.
 
 build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerprint, Opts) ->
     {StaticsAST, DynamicsAST, FpAST} = compile_parts_ast(Statics, DynASTs, Fingerprint),
