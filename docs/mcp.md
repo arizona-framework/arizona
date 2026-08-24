@@ -129,10 +129,11 @@ has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mc
 - `app_info` -- `application:get_key/2`, `erlang:system_info/1`.
 - `render_component` -- render a view/component module to HTML with given bindings.
 - `reload` -- **force a compile+reload sync now**: recompile the project (via `rebar_agent` under
-  `rebar3 shell`) and reload every module whose beam on disk differs from the loaded code. This is
-  the action to take when `reloader_status` reports drift. It **swaps running code** in the live
-  node, so it sits behind the same localhost-only gate as `eval` (see below), not the read-only
-  introspection tools.
+  `rebar3 shell`) and reload every module whose beam on disk differs from the loaded code, except
+  modules of an app listed in rebar3's `app_reload_blacklist` -- reloading purges the old code,
+  which kills any process still lingering in it. This is the action to take when `reloader_status`
+  reports drift. It **swaps running code** in the live node, so it sits behind the same
+  localhost-only gate as `eval` (see below), not the read-only introspection tools.
 - `eval` -- run Erlang in the live node (see below).
 
 ## `eval`: powerful, and a footgun

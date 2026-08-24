@@ -225,6 +225,12 @@ with `bad term` -- reported at line 1 whatever line the expression is on, since 
 one term. Wrap a parameterised step in a named 2-arity function, or declare the routes in Erlang
 instead; see _Declaring steps_ in `arizona_middleware`.
 
+`rebar3 shell` reloads dependency modules on recompile. If that logs a `SUPERVISOR REPORT` for
+the listener every time you save, add `{app_reload_blacklist, [roadrunner]}` to the `shell` block:
+reloading a module purges its old code, which kills any process still lingering in it -- a
+listener sits blocked in its own loop, so it is exactly that. Arizona's own reloader reads the
+same option.
+
 ### 5. Run it
 
 ```bash

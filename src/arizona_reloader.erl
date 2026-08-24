@@ -22,6 +22,13 @@ recompile and broadcasts a reload message:
    stashed in a persistent term so the dev error page can render them
    on the next request. Subsequent successful compiles clear the error.
 
+After the compile, a sweep reloads any module whose loaded code no longer
+matches its beam on disk. Apps listed in rebar3's `app_reload_blacklist` shell
+option (or the `rebar` `refresh_paths_blacklist` env that overrides it) are
+skipped: reloading a module purges the old code, which kills any process still
+lingering in it -- a listener blocked in its own loop, typically -- so every
+recompile would otherwise log a supervisor report.
+
 ## Public reload API
 
 - `join/1` -- subscribe a pid to the reloader topic (idempotent)
@@ -52,6 +59,7 @@ recompile and broadcasts a reload message:
 
 -ignore_xref([broadcast/0, reload_erl/1, reload_css/0, reload_css/1, compile/1, clear_error/0]).
 -ignore_xref({rebar_agent, do, 1}).
+-ignore_xref({rebar_state, get, 3}).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -245,7 +253,13 @@ agent_compile() ->
 reload_stale_modules() ->
     Candidates = arizona_reloader_consistency:candidate_modules(),
     Stale = arizona_reloader_consistency:stale_modules(Candidates),
-    [Mod || {Mod, _LoadedVsn, _DiskVsn} <:- Stale, reload_from_disk(Mod)].
+    Blacklist = reload_blacklist(),
+    [
+        Mod
+     || {Mod, _LoadedVsn, _DiskVsn} <:- Stale,
+        not blacklisted(Mod, Blacklist),
+        reload_from_disk(Mod)
+    ].
 
 reload_from_disk(Mod) ->
     case code:which(Mod) of
@@ -256,6 +270,50 @@ reload_from_disk(Mod) ->
                 {error, _Reason} -> false
             end;
         _NonPath ->
+            false
+    end.
+
+%% Apps whose modules this sweep leaves alone, read from the same
+%% `app_reload_blacklist` rebar3's own shell reloader honors. A listener process
+%% sits blocked in its own loop, so reloading its module leaves it lingering in
+%% old code and the next `code:purge/1` kills it -- turning every recompile into
+%% a supervisor report. rebar3 applies the option only to the reload it performs
+%% itself, so this sweep has to read it too or it purges the very module rebar3
+%% was told to skip.
+reload_blacklist() ->
+    case application:get_env(rebar, refresh_paths_blacklist) of
+        {ok, Blacklist} ->
+            Blacklist;
+        undefined ->
+            shell_blacklist()
+    end.
+
+%% The option lives in the running `rebar3 shell` state, which exposes no
+%% accessor for it -- read it the way the agent stores it, and treat any other
+%% shape as no blacklist so a rebar3 that reorganizes its state degrades to
+%% today's behaviour instead of crashing the reload.
+shell_blacklist() ->
+    case erlang:whereis(rebar_agent) of
+        undefined ->
+            [];
+        _Pid ->
+            try
+                {state, RState, _Cwd, _ShowWarning} = sys:get_state(rebar_agent),
+                ShellOpts = erlang:apply(rebar_state, get, [RState, shell, []]),
+                proplists:get_value(app_reload_blacklist, ShellOpts, [])
+            catch
+                _Class:_Reason ->
+                    []
+            end
+    end.
+
+blacklisted(_Mod, []) ->
+    false;
+blacklisted(Mod, Blacklist) ->
+    case application:get_application(Mod) of
+        {ok, App} ->
+            lists:member(App, Blacklist);
+        undefined ->
             false
     end.
 
