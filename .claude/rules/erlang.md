@@ -248,6 +248,15 @@ body not visible to inline, `each_remote_fun_ref`), an **imported** function use
 and a **multi-clause** function (can't map to one shared per-item template,
 `each_named_fun_multi_clause`; collapse the clauses into a `case` inside the returned element).
 
+A crash inside an inlined callback is attributed to the **outermost** template function -- the
+one whose `?html` the whole chain flattened into, which is neither the callee nor necessarily
+the function holding the `?each`. Take `render/1`, whose `?each` calls `section/1`, whose own
+`?each` calls `row/1`: a failure in `row/1` surfaces as `-render/1-fun-0-` at `row/1`'s line,
+and neither `section/1` nor `row/1` is a compiled function any more. Searching the named
+function for that line finds nothing, and `arizona_loc` names a third place again (the `?each`
+site). Read the line, not the name -- the compiler derives a fun's name from the function it is
+written in, so this is not relabelable.
+
 - Plain values: use a list comprehension or `lists:map/2` (no per-item diffing, fine for
   small or static lists).
 - A conditional: put it **inside** an element as a text/value child. Only the `?each`
@@ -475,7 +484,8 @@ slot's dependency bracket, so the slot stays reactive. Same-module explicit call
 recursively; a helper call as a whole `?each` callback body
 (`fun(I) -> item(I) end`) inlines into the per-item element. The now-orphaned
 definition is covered by auto-injected `nowarn_unused_function` / `-ignore_xref`,
-mirroring `?each` named-fun refs. An element-**list** body compiles into a
+mirroring `?each` named-fun refs; crashes are attributed to the enclosing
+template function, as for `?each` named refs above. An element-**list** body compiles into a
 nested-template child whose literal reads are tracked on the slot -- the same
 tracking a literal element-list child gets.
 
