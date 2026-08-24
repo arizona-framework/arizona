@@ -15,6 +15,7 @@
     each_named_fun_ref_pattern_param/1,
     each_named_fun_ref_guard/1,
     each_named_fun_ref_prefix_body/1,
+    each_named_fun_ref_shadows_caller_var/1,
     each_named_fun_ref_nested_each/1,
     each_named_fun_ref_nested_macros_render/1,
     each_named_fun_multi_clause_rejected/1,
@@ -215,6 +216,7 @@
     helper_zero_arity_inlines/1,
     helper_with_args_renders_and_tracks/1,
     helper_body_read_tracks/1,
+    helper_body_var_shadows_caller_var/1,
     helper_whole_body_html_unwraps_and_tracks/1,
     helper_nested_calls_inline/1,
     helper_element_list_body_tracks/1,
@@ -495,6 +497,7 @@ groups() ->
             each_named_fun_ref_pattern_param,
             each_named_fun_ref_guard,
             each_named_fun_ref_prefix_body,
+            each_named_fun_ref_shadows_caller_var,
             each_named_fun_ref_nested_each,
             each_named_fun_ref_nested_macros_render,
             each_named_fun_multi_clause_rejected,
@@ -671,6 +674,7 @@ groups() ->
             helper_zero_arity_inlines,
             helper_with_args_renders_and_tracks,
             helper_body_read_tracks,
+            helper_body_var_shadows_caller_var,
             helper_whole_body_html_unwraps_and_tracks,
             helper_nested_calls_inline,
             helper_element_list_body_tracks,
@@ -5236,6 +5240,29 @@ each_named_fun_ref_prefix_body(Config) when is_list(Config) ->
     ),
     ?assert(is_map(Mod:render(#{ns => [1, 2]}))).
 
+%% A named-ref callback that hoists a variable whose name the CALLER also bound.
+%% Inlining spliced the callee's binder into the caller's scope, where it stopped
+%% being a binding and became an equality test against the caller's value: the item
+%% rendered for as long as the two agreed and raised `badmatch` the first time they
+%% differed. The callee's variables are alpha-renamed, so the scopes stay separate
+%% and each side keeps its own `side`.
+each_named_fun_ref_shadows_caller_var(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_named_shadow). "
+        "-export([render/1, row/1]). "
+        "row(Bindings) -> Side = arizona_template:get(side, Bindings), {'li', [], [Side]}. "
+        "render(Bindings) -> "
+        "    Side = arizona_template:get(side, Bindings), "
+        "    arizona_template:html({'ul', [{class, Side}], [arizona_template:each(fun row/1, "
+        "        arizona_template:get(rows, Bindings))]}). "
+    ),
+    T = Mod:render(#{side => ~"buy", rows => [#{side => ~"sell"}]}),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    %% The caller's `side` reaches the class, the item's reaches the row.
+    ?assertMatch({_, _}, binary:match(HTMLBin, ~"class=\"buy\"")),
+    ?assertMatch({_, _}, binary:match(HTMLBin, ~"sell")).
+
 %% A named-ref callback whose body itself contains a nested ?each (with its own named ref):
 %% both resolve via the module-global lookup and the recursive compile path.
 each_named_fun_ref_nested_each(Config) when is_list(Config) ->
@@ -7477,6 +7504,29 @@ helper_whole_body_html_unwraps_and_tracks(Config) when is_list(Config) ->
 
 %% A helper body may itself call another helper: nested calls inline
 %% recursively.
+%% An element helper whose body binds a variable -- here through a case-clause
+%% pattern, the shape that survives the single-expression-body guard -- whose name
+%% the CALLER also bound. Inlining spliced the helper's binder into the caller's
+%% scope, where the pattern became a match against the caller's value and raised
+%% `case_clause` the first time the two differed. The helper's own variables are
+%% alpha-renamed; its parameters are left to the argument substitution.
+helper_body_var_shadows_caller_var(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_helper_shadow). "
+        "-export([render/1]). "
+        "badge(B) -> {'span', [], [case maps:get(side, B) of Side -> Side end]}. "
+        "render(Bindings) -> "
+        "    Side = arizona_template:get(side, Bindings), "
+        "    arizona_template:html({'div', [{class, Side}], "
+        "        [badge(arizona_template:get(entry, Bindings))]}). "
+    ),
+    T = Mod:render(#{side => ~"buy", entry => #{side => ~"sell"}}),
+    {HTML, _Snap} = arizona_render:render(T),
+    HTMLBin = iolist_to_binary(HTML),
+    %% The caller's `side` reaches the class, the helper's reaches the span.
+    ?assertMatch({_, _}, binary:match(HTMLBin, ~"class=\"buy\"")),
+    ?assertMatch({_, _}, binary:match(HTMLBin, ~"sell")).
+
 helper_nested_calls_inline(Config) when is_list(Config) ->
     Mod = compile_module_strict(
         "-module(pt_helper_nested). "

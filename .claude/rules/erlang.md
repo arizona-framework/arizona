@@ -235,8 +235,13 @@ or `fun row/2` for a stream/map): the parse transform resolves the reference to 
 body and inlines it exactly like an anonymous fun, so the **same** element-body rules apply (a
 non-element body still raises `each_body_not_element`/`each_stream_body_not_element`). The named
 function's now-orphaned definition is covered by auto-injected `nowarn_unused_function` /
-`-ignore_xref`, so it needn't be exported or otherwise used. A **same-module** explicit ref
-(`fun ?MODULE:row/1`) resolves to the local body just like `fun row/1`. Rejected: a
+`-ignore_xref`, so it needn't be exported or otherwise used. One way it is **not** like an
+anonymous fun: a named function is top-level, so it closes over nothing, and its body's own
+variables are alpha-renamed at the inline site. Hoisting a name the caller also bound (`Side =
+?get(side)` in both) is therefore safe -- without the rename the callee's binding degrades into
+an equality test against the caller's value, rendering correctly until the two first differ.
+A **same-module** explicit ref (`fun ?MODULE:row/1`) resolves to the local body just like
+`fun row/1`. Rejected: a
 **genuinely remote** reference (`fun other_mod:row/1`, or a variable module `fun M:row/1` --
 body not visible to inline, `each_remote_fun_ref`), an **imported** function used as a bare
 `fun row/1` (its body lives in another module, so it isn't found -- `each_named_fun_undefined`),
@@ -460,7 +465,10 @@ header(Bindings) -> {h1, [], [?get(title)]}.
 
 The body replaces the call (a whole-body `?html(...)` wrapper unwraps first,
 exactly as `?each` callbacks do), each parameter is substituted with its argument
-expression, and the spliced element compiles like a literal one -- it flattens into
+expression, the helper's own body variables are alpha-renamed so a name the caller
+also bound cannot collide (its parameters excepted -- those are what the arguments
+replace; a `case` pattern inside the element is the shape that would otherwise bite),
+and the spliced element compiles like a literal one -- it flattens into
 the template, and `?get` reads in the body or the arguments land in the enclosing
 slot's dependency bracket, so the slot stays reactive. Same-module explicit calls
 (`?MODULE:brand()`) resolve like bare local calls; nested helper calls inline
