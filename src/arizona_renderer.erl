@@ -104,6 +104,17 @@ differently in each: an HTML `<title>` makes comment markers literal text, an SV
 """.
 -callback content_context(Tag :: atom(), Parent :: content_context()) -> content_context().
 
+-doc """
+The `arizona_template` function that names an `?each` compiled for `Context`.
+
+The transform renames every `?each` call to this, so a backend decides how its
+own eaches are marked instead of the transform hardcoding one name per target.
+A backend with a single content context returns the same marker for every
+`Context`, which makes the renaming inert for it by its own answer rather than
+by a target check in the transform.
+""".
+-callback each_marker(Context :: content_context()) -> atom().
+
 -type content_context() :: html | foreign.
 -export_type([content_context/0]).
 

@@ -2281,12 +2281,11 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
     %% Component: its own template, its own `html` context -- render-once.
     {_CompHTML, CompSnap} = arizona_render:render(Mod:component(#{t => ~"A"})),
     ?assertEqual([], element(1, arizona_diff:diff(Mod:component(#{t => ~"B"}), CompSnap))),
-    %% `?each` does NOT carry it either: the bottom-up transform reduces the each
-    %% to its own per-item template before the enclosing `<svg>` is compiled, so
-    %% the per-item state starts at `html`. Pinned so the helper/each difference
-    %% is not flattened back into "inlined constructs carry the context".
+    %% `?each` DOES carry it: the top-down pass renames the each to the marker the
+    %% backend names for the enclosing context, and the per-item template compiles
+    %% in that context. Pinned against the component case above, which cannot.
     {EachHTML, _} = arizona_render:render(Mod:each(#{rows => [~"A"]})),
-    ?assertEqual(nomatch, binary:match(iolist_to_binary(EachHTML), ~"<title az=")).
+    ?assertMatch({_, _}, binary:match(iolist_to_binary(EachHTML), ~"<title az=")).
 
 %% A content `?local` under a raw-text element is a compile error -- the client
 %% resolves a local slot through its markers, and raw-text content has none. An
