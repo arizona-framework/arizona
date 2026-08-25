@@ -1634,10 +1634,22 @@ otherwise freeze after SSR with no symptom. MathML is deliberately not tracked -
 its own integration points to be correct, and leaving it in `html` keeps existing behaviour rather
 than half-handling it.
 
-The context is per-template, so it does **not** cross a component boundary: a `<title>` inside a
-`?stateless`/`?stateful` child embedded in an `<svg>` compiles with its own `html` context and
-stays render-once, since the child cannot know its call site at compile time. An inlined `?each`
-callback or element helper is spliced into the caller's compile, so it does carry the context.
+The context reaches a construct compiled elsewhere through the top-down marking pass. A **local
+element helper** is spliced into the caller's element AST before that element compiles, so it
+carries the context directly. A **`?each`** is compiled bottom-up, before the enclosing element,
+so the pass renames it to the marker its backend names for the context it sits in
+(`each_marker/1`; `arizona_html` answers `foreign_each` inside `<svg>`), and the per-item template
+compiles in that context. Because the rename happens at the *call site*, a `fun row/1` callback
+defined elsewhere in the module inherits it too.
+
+A **`?stateless`/`?stateful` child** is the one construct that cannot: it is a separate template
+with no call site at compile time, so a `<title>` there is classified `html` and stays
+render-once. That is a real limitation, not an oversight -- the same child may be used in both
+contexts, and nothing in its own source says which.
+
+Backends name their own markers, so the transform holds no target vocabulary: a backend with one
+content context returns the same marker for every context, which makes the renaming inert for it
+by its own answer rather than by a target check in the pass.
 
 **So factor SVG chrome through a local element helper, not a `?stateless` child.** That is
 already the documented split -- a helper factors *markup*, `?stateless` is for a component with

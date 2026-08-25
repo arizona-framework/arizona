@@ -63,6 +63,7 @@ render(Bindings) ->
 -export([each/2]).
 -export([native_each/2]).
 -export([terminal_each/2]).
+-export([foreign_each/2]).
 -export([to_bin/1]).
 -export([raw/1]).
 -export([classify_trusted/1]).
@@ -89,6 +90,7 @@ render(Bindings) ->
 %% never called directly (no az alias, unlike each/2).
 -ignore_xref([native_each/2]).
 -ignore_xref([terminal_each/2]).
+-ignore_xref([foreign_each/2]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
 
@@ -372,6 +374,18 @@ not applied.
 """.
 -spec native_each(term(), term()) -> no_return().
 native_each(_Fun, _Source) ->
+    erlang:error(parse_transform_not_applied, [], [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
+-doc """
+Compile-time stub for an each in a non-default content context (an `?each`
+inside `<svg>`, whose per-item template must be compiled as foreign content).
+The parse transform replaces every such call with a compiled each-container. If
+this function runs, the parse transform was not applied.
+""".
+-spec foreign_each(term(), term()) -> no_return().
+foreign_each(_Fun, _Source) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).

@@ -316,50 +316,64 @@ is_module_attr(_) -> false.
 %% only one literally nested in the other errors. Cross-target nesting via a
 %% `?stateful`/`?stateless` child *module* is invisible at this AST level and
 %% stays a documented "one target per tree" rule.
-mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, _}, Ctx) when
+mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, _}, Ctx, _CCtx) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
         (Target =:= html orelse Target =:= native orelse Target =:= terminal) andalso
         (Ctx =:= html orelse Ctx =:= native orelse Ctx =:= terminal) andalso
         Ctx =/= Target
 ->
     parse_error(cross_target_nesting, L);
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [Arg]}, _Ctx) when
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [Arg]}, _Ctx, _CCtx) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
         (Target =:= html orelse Target =:= native orelse Target =:= terminal)
 ->
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [mark_targets(Arg, Target)]};
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, native) when
-    Mod =:= arizona_template orelse Mod =:= az
-->
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, native_each}}, [
-        mark_targets(A, native)
-     || A <- unwrap_each_body(Args, native)
-    ]};
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, terminal) when
-    Mod =:= arizona_template orelse Mod =:= az
-->
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, terminal_each}}, [
-        mark_targets(A, terminal)
-     || A <- unwrap_each_body(Args, terminal)
+    %% Entering a target resets the content context to that backend's default.
+    Default = (target_backend(Target)):content_context(undefined, html),
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [
+        mark_targets(Arg, Target, Default)
     ]};
 %% `?each` under `?html` (or standalone -- `none`) keeps the name `each` (the
 %% bottom-up transform compiles it with the default `html` target), but
 %% we still unwrap an inline `?html(...)` callback body here. The guard lets any
 %% other (future) `Ctx` fall through to the generic tuple recursion below.
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, Ctx) when
-    (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (Ctx =:= html orelse Ctx =:= none)
+mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, Ctx, CCtx) when
+    Mod =:= arizona_template orelse Mod =:= az
 ->
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, [
-        mark_targets(A, Ctx)
-     || A <- unwrap_each_body(Args, html)
+    %% The backend names its own each marker for this content context, so the
+    %% transform hardcodes neither a target nor a context vocabulary. A backend
+    %% with one context answers the same marker every time, which makes this
+    %% inert for it without a target check here.
+    Backend = ctx_backend(Ctx),
+    Marker = Backend:each_marker(CCtx),
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Marker}}, [
+        mark_targets(A, Ctx, CCtx)
+     || A <- unwrap_each_body(Args, Backend:target())
     ]};
-mark_targets(Node, Ctx) when is_tuple(Node) ->
-    list_to_tuple([mark_targets(E, Ctx) || E <- tuple_to_list(Node)]);
-mark_targets(Nodes, Ctx) when is_list(Nodes) ->
-    [mark_targets(E, Ctx) || E <- Nodes];
-mark_targets(Node, _Ctx) ->
+%% An element tuple: its children may sit in a different content context (the
+%% backend decides -- `<svg>` opens foreign content for `?html`). Matched on the
+%% element shape only, so a plain data tuple a user writes cannot shift it.
+mark_targets({tuple, L, [{atom, _, Tag}, _Attrs] = Parts}, Ctx, CCtx) ->
+    mark_element_children(L, Tag, Parts, Ctx, CCtx);
+mark_targets({tuple, L, [{atom, _, Tag}, _Attrs, _Children] = Parts}, Ctx, CCtx) ->
+    mark_element_children(L, Tag, Parts, Ctx, CCtx);
+mark_targets(Node, Ctx, CCtx) when is_tuple(Node) ->
+    list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]);
+mark_targets(Nodes, Ctx, CCtx) when is_list(Nodes) ->
+    [mark_targets(E, Ctx, CCtx) || E <- Nodes];
+mark_targets(Node, _Ctx, _CCtx) ->
     Node.
+
+mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
+    ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
+    {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- Parts]}.
+
+%% The backend for a marking context. `none` (no target entered yet) uses the
+%% default target's backend so the two callbacks above always have an answer.
+ctx_backend(none) -> target_backend(html);
+ctx_backend(Ctx) -> target_backend(Ctx).
+
+mark_targets(Node, Ctx) ->
+    mark_targets(Node, Ctx, (ctx_backend(Ctx)):content_context(undefined, html)).
 
 %% Unwrap a whole-body backend wrapper (`?html`/`?native`/`?terminal`, spelled
 %% `Wrapper`) in an each's INLINE single-clause callback: rewrite the body's last
@@ -741,7 +755,8 @@ transform_node(Node, Module, Inline, FunDefs) ->
             compile_template(Arg3, L, Module, false, target_backend(Target));
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, EachFn}}, [FunArg, SourceArg]} when
             (Mod =:= arizona_template orelse Mod =:= az) andalso
-                (EachFn =:= each orelse EachFn =:= native_each orelse EachFn =:= terminal_each)
+                (EachFn =:= each orelse EachFn =:= foreign_each orelse
+                    EachFn =:= native_each orelse EachFn =:= terminal_each)
         ->
             case is_compiled_each_pairing(EachFn, SourceArg) of
                 true ->
@@ -765,6 +780,7 @@ transform_node(Node, Module, Inline, FunDefs) ->
                         L,
                         Module,
                         target_backend(each_target(EachFn)),
+                        each_content_ctx(EachFn),
                         FunDefs
                     )
             end;
@@ -1689,15 +1705,15 @@ compile_template(Arg, Line, Module, LiveRender, Backend) ->
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
 
-compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
+compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs) ->
     case FunAST of
         {'fun', _, {clauses, [{clause, _, [ItemVar, KeyVar], Guards, Body}]}} ->
             compile_each_clause(
-                stream, [ItemVar, KeyVar], Guards, Body, SourceAST, Line, Module, Backend
+                stream, [ItemVar, KeyVar], Guards, Body, SourceAST, Line, Module, Backend, CCtx
             );
         {'fun', _, {clauses, [{clause, _, [ItemVar], Guards, Body}]}} ->
             compile_each_clause(
-                list, [ItemVar], Guards, Body, SourceAST, Line, Module, Backend
+                list, [ItemVar], Guards, Body, SourceAST, Line, Module, Backend, CCtx
             );
         %% Local `fun Name/1` or `fun Name/2` ref: resolve its single clause and compile
         %% it exactly like an inline fun, so the same element-body validation runs. The
@@ -1705,7 +1721,7 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
         %% path expects. (Its now-orphaned definition is covered by the injected
         %% nowarn_unused_function / ignore_xref attributes.)
         {'fun', L, {function, Name, Arity}} when Arity =:= 1; Arity =:= 2 ->
-            compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs);
+            compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, CCtx, FunDefs);
         %% A local ref of any other arity isn't a valid callback (1 = list, 2 = stream/map).
         {'fun', L, {function, _Name, _Arity}} ->
             parse_error(invalid_each_fun, L);
@@ -1715,7 +1731,7 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
         %% arity/multi-clause/undefined errors).
         {'fun', L, {function, {atom, _, Module}, {atom, _, Name}, {integer, _, Arity}}} ->
             compile_each(
-                {'fun', L, {function, Name, Arity}}, SourceAST, Line, Module, Backend, FunDefs
+                {'fun', L, {function, Name, Arity}}, SourceAST, Line, Module, Backend, CCtx, FunDefs
             );
         %% A remote `fun Mod:Name/Arity` ref to another module: its body isn't visible at
         %% compile time, so it can't be inlined into the per-item template.
@@ -1728,7 +1744,7 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs) ->
 %% Resolve a local `Name/Arity` callback (from a bare `fun Name/Arity` or a same-module
 %% `fun ?MODULE:Name/Arity`) to its single clause and compile it via the inline-fun path.
 %% `L` is the fun-ref location (for the error/synthesized clause); `Line` the each call site.
-compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
+compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, CCtx, FunDefs) ->
     case FunDefs of
         #{{Name, Arity} := [{clause, CL, Vars, Guards, Body}]} ->
             %% FunDefs holds the ORIGINAL, untransformed clause. The inline-fun path
@@ -1749,7 +1765,7 @@ compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
                 FunAST0, Module, FunDefs, Backend:target()
             ),
             FunAST = transform_expr(FunAST1, Module, #{}, FunDefs),
-            compile_each(FunAST, SourceAST, Line, Module, Backend, FunDefs);
+            compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs);
         #{{Name, Arity} := [_ | _]} ->
             parse_error(each_named_fun_multi_clause, L);
         #{} ->
@@ -1764,7 +1780,7 @@ compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, FunDefs) ->
 %% per-item template the bare element would build -- `?html` and `?each` share
 %% `compile_body_parts`/`scope_az` with the same fingerprint. Anything else falls through to
 %% `validate_each_body` (element path or reject).
-compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend) ->
+compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, CCtx) ->
     {Prefix, LastExpr} = split_fun_body(Body),
     case each_body_unwrap(LastExpr, Backend) of
         {compiled, Map} ->
@@ -1772,8 +1788,12 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend) 
         {element, ElemAST} ->
             Classification = classify_body(ElemAST),
             ok = validate_each_body(Kind, Classification, ElemAST),
+            %% The per-item template compiles in the content context its `?each`
+            %% sits in, so an element the backend classifies differently there
+            %% (an SVG `<title>`) is treated the same as if it were written
+            %% literally at that position.
             {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
-                ElemAST, Module, false, Backend
+                ElemAST, Module, false, Backend, CCtx
             ),
             Opts1 = Opts0#{backend => Backend},
             Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
@@ -1834,8 +1854,14 @@ target_backend(terminal) -> arizona_terminal.
 
 %% The render target a `?each`/`?native_each`/`?terminal_each` macro compiles for.
 each_target(each) -> html;
+each_target(foreign_each) -> html;
 each_target(native_each) -> native;
 each_target(terminal_each) -> terminal.
+
+%% The content context the marker was chosen for, inverting `each_marker/1` so
+%% the per-item template compiles in the context its `?each` sits in.
+each_content_ctx(foreign_each) -> foreign;
+each_content_ctx(_Marker) -> html.
 
 %% A compiled template map literal carries all three of the `s`/`d`/`f` assoc keys (from
 %% build_template_ast). A user map or a ?stateful/?stateless descriptor (a runtime call, not
@@ -1914,7 +1940,10 @@ is_fragile_each_item(_Item) ->
     false.
 
 compile_body_parts(ExprAST, Module, LiveRender, Backend) ->
-    compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender, Backend).
+    compile_body_parts(ExprAST, Module, LiveRender, Backend, html).
+
+compile_body_parts(ExprAST, Module, LiveRender, Backend, CCtx) ->
+    compile_classified_body(classify_body(ExprAST), ExprAST, Module, LiveRender, Backend, CCtx).
 
 classify_body(AST) ->
     case is_static_binary(AST) of
@@ -1940,16 +1969,16 @@ classify_other_body(AST) ->
         false -> text_dynamic
     end.
 
-compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, _Backend) ->
+compile_classified_body(static_binary, ExprAST, _Module, _LiveRender, _Backend, _CCtx) ->
     Statics = [[extract_binary_value(ExprAST)]],
     {Statics, [], generate_fingerprint(Statics), #{}};
-compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend) ->
-    compile_fragment_parts([ExprAST], Module, LiveRender, Backend);
-compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend) ->
-    compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender, Backend);
-compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend) ->
-    compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend);
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend) ->
+compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend, CCtx) ->
+    compile_fragment_parts([ExprAST], Module, LiveRender, Backend, CCtx);
+compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend, CCtx) ->
+    compile_fragment_parts(ast_list_to_list(ExprAST), Module, LiveRender, Backend, CCtx);
+compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx) ->
+    compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend, CCtx);
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, _CCtx) ->
     %% The slot's own markers anchor it (see below), but a marker is not an
     %% ELEMENT, so it still cannot carry an `az-local` attribute -- an orphaned
     %% ?local here stays a compile error.
@@ -1979,14 +2008,15 @@ reject_orphaned_local(ExprAST) ->
         false -> ok
     end.
 
-compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
+compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx) ->
     Opts = prescan_directives(ElementASTs),
     State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
         live_render = LiveRender,
         root = LiveRender,
-        backend = Backend
+        backend = Backend,
+        content_ctx = CCtx
     },
     State1 = lists:foldl(
         fun(Elem, State) ->
@@ -2001,9 +2031,14 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend) ->
     Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
 
-compile_mixed_items(Items, Module, Backend) ->
+compile_mixed_items(Items, Module, Backend, CCtx) ->
     Opts = prescan_directives(Items),
-    State0 = #state{module = Module, nodiff = maps:is_key(diff, Opts), backend = Backend},
+    State0 = #state{
+        module = Module,
+        nodiff = maps:is_key(diff, Opts),
+        backend = Backend,
+        content_ctx = CCtx
+    },
     State1 = lists:foldl(
         fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
     ),

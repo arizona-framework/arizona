@@ -27,6 +27,7 @@ identical to the previous inlined emission.
 -export([is_void/1]).
 -export([raw_text_kind/2]).
 -export([content_context/2]).
+-export([each_marker/1]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
@@ -182,6 +183,10 @@ raw_text_kind_name(~"title", html) ->
     escapable;
 raw_text_kind_name(_Other, _Context) ->
     none.
+
+-spec each_marker(arizona_renderer:content_context()) -> atom().
+each_marker(html) -> each;
+each_marker(foreign) -> foreign_each.
 
 -spec content_context(atom(), arizona_renderer:content_context()) ->
     arizona_renderer:content_context().
