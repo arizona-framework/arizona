@@ -352,17 +352,20 @@ mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, C
 %% An element tuple: its children may sit in a different content context (the
 %% backend decides -- `<svg>` opens foreign content for `?html`). Matched on the
 %% element shape only, so a plain data tuple a user writes cannot shift it.
-mark_targets({tuple, L, [{atom, _, Tag} | _] = Parts}, Ctx, CCtx) when
-    length(Parts) =:= 2; length(Parts) =:= 3
-->
-    ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
-    {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- Parts]};
+mark_targets({tuple, L, [{atom, _, Tag}, _Attrs] = Parts}, Ctx, CCtx) ->
+    mark_element_children(L, Tag, Parts, Ctx, CCtx);
+mark_targets({tuple, L, [{atom, _, Tag}, _Attrs, _Children] = Parts}, Ctx, CCtx) ->
+    mark_element_children(L, Tag, Parts, Ctx, CCtx);
 mark_targets(Node, Ctx, CCtx) when is_tuple(Node) ->
     list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]);
 mark_targets(Nodes, Ctx, CCtx) when is_list(Nodes) ->
     [mark_targets(E, Ctx, CCtx) || E <- Nodes];
 mark_targets(Node, _Ctx, _CCtx) ->
     Node.
+
+mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
+    ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
+    {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- Parts]}.
 
 %% The backend for a marking context. `none` (no target entered yet) uses the
 %% default target's backend so the two callbacks above always have an answer.
