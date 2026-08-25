@@ -346,6 +346,7 @@
     raw_text_uppercase_tag_classified/1,
     raw_text_svg_title_diffable/1,
     raw_text_svg_title_factoring/1,
+    raw_text_svg_title_local/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -601,6 +602,7 @@ groups() ->
             raw_text_uppercase_tag_classified,
             raw_text_svg_title_diffable,
             raw_text_svg_title_factoring,
+            raw_text_svg_title_local,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -2255,7 +2257,7 @@ raw_text_svg_title_diffable(Config) when is_list(Config) ->
 raw_text_svg_title_factoring(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_rt_svg_factor). "
-        "-export([helper/1, component/1, icon/1]). "
+        "-export([helper/1, component/1, icon/1, each/1]). "
         "helper(Bindings) -> "
         "    arizona_template:html({svg, [], [badge(arizona_template:get(t, Bindings))]}). "
         "badge(T) -> {title, [], [T]}. "
@@ -2264,6 +2266,10 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
         "        #{t => arizona_template:get(t, Bindings)})]}). "
         "icon(Bindings) -> "
         "    arizona_template:html({title, [], [arizona_template:get(t, Bindings)]}). "
+        "each(Bindings) -> "
+        "    arizona_template:html({svg, [], [arizona_template:each("
+        "        fun(R) -> {g, [], [{title, [], [R]}]} end, "
+        "        arizona_template:get(rows, Bindings))]}). "
     ),
     %% Helper: spliced into the caller, so the `<svg>` context reaches it.
     {HelperHTML, HelperSnap} = arizona_render:render(Mod:helper(#{t => ~"A"})),
@@ -2274,7 +2280,39 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
     ),
     %% Component: its own template, its own `html` context -- render-once.
     {_CompHTML, CompSnap} = arizona_render:render(Mod:component(#{t => ~"A"})),
-    ?assertEqual([], element(1, arizona_diff:diff(Mod:component(#{t => ~"B"}), CompSnap))).
+    ?assertEqual([], element(1, arizona_diff:diff(Mod:component(#{t => ~"B"}), CompSnap))),
+    %% `?each` does NOT carry it either: the bottom-up transform reduces the each
+    %% to its own per-item template before the enclosing `<svg>` is compiled, so
+    %% the per-item state starts at `html`. Pinned so the helper/each difference
+    %% is not flattened back into "inlined constructs carry the context".
+    {EachHTML, _} = arizona_render:render(Mod:each(#{rows => [~"A"]})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(EachHTML), ~"<title az=")).
+
+%% A content `?local` under a raw-text element is a compile error -- the client
+%% resolves a local slot through its markers, and raw-text content has none. An
+%% SVG `<title>` is not raw text, so it carries markers and a `?local` there is
+%% legal and resolvable. Pinned because the rule now depends on the content
+%% context, not the tag alone.
+raw_text_svg_title_local(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_local). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({svg, [], [{title, [], "
+        "        [arizona_template:local(~\"t\", ~\"A\")]}]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertMatch({_, _}, binary:match(HTML, ~"az-local=")),
+    ?assertMatch({_, _}, binary:match(HTML, ~"<!--az:")),
+    %% The HTML `<title>` form stays rejected.
+    assert_parse_error(
+        "-module(pt_rt_html_local). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'head', [], [{title, [], "
+        "        [arizona_template:local(~\"t\", ~\"A\")]}]}). ",
+        fun(R) -> R =:= local_in_raw_text end
+    ).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
 %% browser would treat <!--az:...--> as literal script bytes (a module script's

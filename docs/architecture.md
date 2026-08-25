@@ -1634,10 +1634,20 @@ otherwise freeze after SSR with no symptom. MathML is deliberately not tracked -
 its own integration points to be correct, and leaving it in `html` keeps existing behaviour rather
 than half-handling it.
 
-The context is per-template, so it does **not** cross a component boundary: a `<title>` inside a
-`?stateless`/`?stateful` child embedded in an `<svg>` compiles with its own `html` context and
-stays render-once, since the child cannot know its call site at compile time. An inlined `?each`
-callback or element helper is spliced into the caller's compile, so it does carry the context.
+The context is per-template, and what counts as a template is decided by *when* a construct is
+compiled. A **local element helper** is spliced into the caller's element AST before that element
+compiles, so it carries the context. A **`?each` callback** does not, named or inline: the
+bottom-up transform reduces the `?each` to its own per-item template before the enclosing element
+is compiled, so the per-item state starts at `html` (`compile_fragment_parts` builds it fresh).
+A **`?stateless`/`?stateful` child** does not either -- it is a separate template that cannot know
+its call site. So a `<title>` in an `?each` item inside an `<svg>` is still render-once.
+
+That is narrower than it sounds: a newly inserted item ships its full HTML, so its title is
+correct on arrival. Only an **in-place** title change on an item that already exists is lost.
+Carrying the context into `?each` would mean threading it through the top-down `mark_targets`
+pre-pass -- the only pass that runs before the bottom-up compile -- and teaching that pass to
+descend into element tuples, which it currently has no reason to understand. Not done: the payoff
+is one narrow case, the cost is a second job for a pass whose first job is target marking.
 
 **So factor SVG chrome through a local element helper, not a `?stateless` child.** That is
 already the documented split -- a helper factors *markup*, `?stateless` is for a component with
