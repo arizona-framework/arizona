@@ -23,7 +23,7 @@
     diff_list_no_change_no_ops/1,
     diff_stream_unchanged_snapshot_pair_no_ops/1,
     diff_stream_nested_in_template_is_incremental/1,
-    diff_stream_nested_with_cleared_log_falls_back/1,
+    diff_stream_nested_with_cleared_log_reconciles/1,
     diff_list_content_change_positional/1,
     diff_list_first_item_change_positional/1,
     diff_list_grew_positional/1,
@@ -99,7 +99,7 @@ groups() ->
             diff_list_no_change_no_ops,
             diff_stream_unchanged_snapshot_pair_no_ops,
             diff_stream_nested_in_template_is_incremental,
-            diff_stream_nested_with_cleared_log_falls_back,
+            diff_stream_nested_with_cleared_log_reconciles,
             diff_list_content_change_positional,
             diff_list_first_item_change_positional,
             diff_list_grew_positional,
@@ -1507,9 +1507,10 @@ diff_stream_nested_in_template_is_incremental(Config) when is_list(Config) ->
 %% prop-fed child accumulating one entry per root update -- so draining yields
 %% NOTHING while the order has in fact changed, and the container silently never
 %% updates. That is worse than the wholesale render it replaced: zero delivered
-%% rather than everything delivered expensively. Fall back whenever the log
-%% cannot account for the order difference.
-diff_stream_nested_with_cleared_log_falls_back(Config) when is_list(Config) ->
+%% rather than everything delivered expensively. When the log cannot account for
+%% the order difference, reconcile the two key orders instead -- semantically a
+%% reset to the current state -- so the change is delivered AND stays per-item.
+diff_stream_nested_with_cleared_log_reconciles(Config) when is_list(Config) ->
     ItemTmpl = #{
         t => ?EACH,
         s => [<<"<li az=\"0\">">>, <<"</li>">>],
@@ -1539,9 +1540,10 @@ diff_stream_nested_with_cleared_log_falls_back(Config) when is_list(Config) ->
         f => maps:get(f, Grown)
     },
     {Ops, _, _} = arizona_diff:diff(Nest(Tmpl), Snap, #{}),
-    %% Must deliver the new item somehow -- a wholesale container render is fine,
-    %% emitting nothing is not.
-    ?assertNotEqual([], Ops).
+    %% Delivered, and delivered per item: one insert for the key the client
+    %% lacks, not a re-render of the whole container.
+    ?assertMatch([[?OP_INSERT, _, <<"b">>, -1, _] | _], Ops),
+    ?assertEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_TEXT]).
 
 stream_each_tmpl(ItemTmpl, Items) ->
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),

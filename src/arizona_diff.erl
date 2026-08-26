@@ -232,11 +232,29 @@ diff_dynamics(
             LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
             {StreamOps ++ RestOps, {Old0, maps:merge(New0, LocalNew1)}};
         false ->
-            make_ops(Az, New, Old, RestOps, Views1)
+            stream_relist(Az, Src, Tmpl, New, Old, RestOps, Views1)
     end;
 diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
     make_ops(Az, New, Old, RestOps, Views1).
+
+%% The log could not explain the change, but the two key orders can: this is
+%% semantically a reset to the stream's current state, so reconcile it as one.
+%% `stream_reset/8` needs no pending log -- it removes dropped keys, patches kept
+%% ones only where their dynamics differ, inserts new ones, and emits the minimal
+%% LIS moves. Passing `#{}` for the previous item VALUES costs the dep-skip that a
+%% real reset gets (each kept item's dynamics are re-evaluated rather than
+%% skipped), but the WIRE stays proportional to what actually changed, which is
+%% the cost that was hurting. Falls back to the wholesale render only when the old
+%% snapshot is not stream-shaped, where there is no order to reconcile against.
+stream_relist(Az, Src, Tmpl, _New, #{items := OldItems, order := OldOrder}, Tail, Views) ->
+    {Old0, New0} = Views,
+    SV = {Src, visible_set(Src)},
+    {Ops, _NewSnap, {_, LocalNew}} =
+        stream_reset(Az, #{}, [], SV, Tmpl, OldItems, OldOrder, {Old0, #{}}),
+    {Ops ++ Tail, {Old0, maps:merge(New0, LocalNew)}};
+stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
+    make_ops(Az, New, Old, Tail, Views).
 
 %% Can this stream's change be expressed as per-item ops from here?
 %%
