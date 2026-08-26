@@ -26,6 +26,7 @@
     diff_stream_nested_with_cleared_log_reconciles/1,
     diff_stream_pure_append_emits_no_moves/1,
     diff_stream_nested_content_change_delivers/1,
+    diff_stream_nested_renders_items_once/1,
     diff_list_content_change_positional/1,
     diff_list_first_item_change_positional/1,
     diff_list_grew_positional/1,
@@ -104,6 +105,7 @@ groups() ->
             diff_stream_nested_with_cleared_log_reconciles,
             diff_stream_pure_append_emits_no_moves,
             diff_stream_nested_content_change_delivers,
+            diff_stream_nested_renders_items_once,
             diff_list_content_change_positional,
             diff_list_first_item_change_positional,
             diff_list_grew_positional,
@@ -1628,6 +1630,50 @@ diff_stream_nested_content_change_delivers(Config) when is_list(Config) ->
     },
     {Ops, _, _} = arizona_diff:diff(Nest(Tmpl), Snap, #{}),
     ?assertMatch([[?OP_ITEM_PATCH, _, <<"b">>, [[?OP_TEXT, _, <<"B2">>]]]], Ops).
+
+%% The nested walk already renders every item to build the new value, so the
+%% reconciliation must diff against THAT rather than render the list a second
+%% time. The second render was not just wasted work: it re-ran every item child's
+%% `mount/1` / `handle_update/3`, so a child that subscribes or arms a timer in
+%% mount did it twice per diff.
+diff_stream_nested_renders_items_once(Config) when is_list(Config) ->
+    Counter = counters:new(1, []),
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(I, _Key) ->
+            counters:add(Counter, 1, 1),
+            [{<<"0">>, maps:get(text, I)}]
+        end,
+        f => <<"item">>
+    },
+    Items = [
+        #{id => <<"a">>, text => <<"A">>},
+        #{id => <<"b">>, text => <<"B">>},
+        #{id => <<"c">>, text => <<"C">>}
+    ],
+    Nest = fun(T) ->
+        #{
+            s => [<<"<div az=\"n\">">>, <<"</div>">>],
+            d => [{<<"n">>, fun() -> T end}],
+            f => <<"outer">>
+        }
+    end,
+    {_, Snap, _} = arizona_render:render(Nest(stream_each_tmpl(ItemTmpl, Items)), #{}),
+    Grown = stream_each_tmpl(ItemTmpl, Items ++ [#{id => <<"d">>, text => <<"D">>}]),
+    #{d := [{_, F}]} = Grown,
+    Src = maps:get(source, F()),
+    #{st := Drained} = arizona_stream:clear_stream_pending(#{st => Src}, [st]),
+    Tmpl = #{
+        s => maps:get(s, Grown),
+        d => [{<<"0">>, fun() -> #{t => ?EACH, source => Drained, template => ItemTmpl} end}],
+        f => maps:get(f, Grown)
+    },
+    counters:put(Counter, 1, 0),
+    {Ops, _, _} = arizona_diff:diff(Nest(Tmpl), Snap, #{}),
+    %% Four items, rendered once each by the enclosing eval -- not eight.
+    ?assertEqual(4, counters:get(Counter, 1)),
+    ?assertMatch([[?OP_INSERT, _, <<"d">>, -1, _] | _], Ops).
 
 stream_each_tmpl(ItemTmpl, Items) ->
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
