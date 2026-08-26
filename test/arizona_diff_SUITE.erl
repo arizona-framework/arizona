@@ -45,6 +45,7 @@
     diff_map_late_insert_stays_positional/1,
     diff_map_tail_removal_patches_positionally/1,
     diff_list_head_insert_falls_back_to_wholesale/1,
+    diff_list_small_head_insert_stays_positional/1,
     diff_list_late_insert_stays_positional/1,
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
@@ -133,6 +134,7 @@ groups() ->
             diff_map_late_insert_stays_positional,
             diff_map_tail_removal_patches_positionally,
             diff_list_head_insert_falls_back_to_wholesale,
+            diff_list_small_head_insert_stays_positional,
             diff_list_late_insert_stays_positional,
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
@@ -677,7 +679,11 @@ diff_map_grew(Config) when is_list(Config) ->
 %% with its neighbour's content -- one op per item, against wholesale's one op
 %% total. Erlang iterates a small map in term order, so "0" sorts in front of "a".
 diff_map_head_insert_falls_back_to_wholesale(Config) when is_list(Config) ->
-    Base = maps:from_list([{K, K} || K <- [~"a", ~"b", ~"c", ~"d", ~"e", ~"f", ~"g", ~"h"]]),
+    %% Wide enough for the wholesale saving to clear the gate's absolute margin.
+    Base = maps:from_list([
+        {integer_to_binary(I), integer_to_binary(I)}
+     || I <- lists:seq(100, 300)
+    ]),
     Ops = each_map_diff(Base, Base#{~"0" => ~"0"}),
     ?assertMatch([[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]], Ops).
 
@@ -705,9 +711,22 @@ diff_map_tail_removal_patches_positionally(Config) when is_list(Config) ->
 %% is caught the same way: by how much of the list the positional walk had to
 %% patch. This is the case a key-order gate could never cover for a list.
 diff_list_head_insert_falls_back_to_wholesale(Config) when is_list(Config) ->
-    Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 10)],
+    %% Big enough that the saving is real: the gate weighs bytes and also requires an
+    %% absolute margin, so a short container stays positional even when re-rendering
+    %% it would be relatively cheaper (see diff_list_small_head_insert_stays_positional).
+    Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 200)],
     Ops = each_list_diff_sr(Old, [#{name => ~"0"} | Old]),
     ?assertMatch([[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]], Ops).
+
+%% A DOM teardown costs focus, scroll position and every `?local` in the container.
+%% That is not worth a hundred-odd bytes, so a short container keeps its per-item ops
+%% even where the wholesale render would be smaller.
+diff_list_small_head_insert_stays_positional(Config) when is_list(Config) ->
+    Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 10)],
+    ?assertMatch(
+        [[?OP_LIST_PATCH, <<"0">>, _]],
+        each_list_diff_sr(Old, [#{name => ~"0"} | Old])
+    ).
 
 %% And a late insert into the same list stays positional.
 diff_list_late_insert_stays_positional(Config) when is_list(Config) ->
