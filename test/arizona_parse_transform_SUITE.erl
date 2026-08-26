@@ -11,8 +11,8 @@
     each_with_named_fun_ref_arity_2/1,
     each_named_fun_ref_non_element_rejected/1,
     each_named_fun_ref_arity_2_non_element_rejected/1,
-    each_stream_conditional_body_rejected_with_wrapper_advice/1,
-    each_stream_conditional_wrapper_fix_keys_per_item/1,
+    each_stream_control_flow_body_rejected_with_wrapper_advice/1,
+    each_stream_control_flow_wrapper_fix_keys_per_item/1,
     each_with_remote_fun_ref/1,
     each_named_fun_ref_diffs/1,
     each_named_fun_ref_pattern_param/1,
@@ -500,8 +500,8 @@ groups() ->
             each_with_named_fun_ref_arity_2,
             each_named_fun_ref_non_element_rejected,
             each_named_fun_ref_arity_2_non_element_rejected,
-            each_stream_conditional_body_rejected_with_wrapper_advice,
-            each_stream_conditional_wrapper_fix_keys_per_item,
+            each_stream_control_flow_body_rejected_with_wrapper_advice,
+            each_stream_control_flow_wrapper_fix_keys_per_item,
             each_with_remote_fun_ref,
             each_named_fun_ref_diffs,
             each_named_fun_ref_pattern_param,
@@ -5334,7 +5334,7 @@ each_named_fun_ref_arity_2_non_element_rejected(Config) when is_list(Config) ->
 %% A conditional body is a distinct mistake from a bare value: "wrap the value in an
 %% element" would have the author pick a tag, which for branches already returning
 %% different elements changes the markup rather than fixing it.
-each_stream_conditional_body_rejected_with_wrapper_advice(Config) when is_list(Config) ->
+each_stream_control_flow_body_rejected_with_wrapper_advice(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_each_stream_cond). "
         "-export([render/1]). "
@@ -5345,12 +5345,12 @@ each_stream_conditional_body_rejected_with_wrapper_advice(Config) when is_list(C
         "            _ -> {'strong', [{az_key, Key}], [Item]} "
         "        end "
         "    end, arizona_template:get(items, Bindings, [])). ",
-        fun(R) -> R =:= each_stream_body_conditional end
+        fun(R) -> R =:= each_stream_body_control_flow end
     ).
 
 %% The shape that error tells the author to write must actually work: one stable keyed
 %% item element with the branch as a child, still diffing per item by key.
-each_stream_conditional_wrapper_fix_keys_per_item(Config) when is_list(Config) ->
+each_stream_control_flow_wrapper_fix_keys_per_item(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_stream_cond_fix). "
         "-export([render/1]). "

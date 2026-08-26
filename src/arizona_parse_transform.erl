@@ -443,9 +443,10 @@ format_error(each_stream_body_not_element) ->
     "diffing, which a single-value body throws away. Unlike a list there is no comprehension "
     "fallback (a comprehension has no stream/keyed semantics): wrap the value in an element, "
     "e.g. fun(Item, Key) -> {li, [], [Item]} end";
-format_error(each_stream_body_conditional) ->
+format_error(each_stream_body_control_flow) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
-    "case/if body is not one: every item shares ONE compiled per-item template, so the "
+    "control-flow body (case, if, begin, try, receive) is not one: every item shares ONE "
+    "compiled per-item template, so the "
     "item's outer tag is fixed at compile time (that shared template is what makes "
     "per-item diffing cheap -- statics once, dynamics per item). The branches themselves "
     "can be entirely different elements; put them inside one stable item element that "
@@ -1945,26 +1946,17 @@ validate_each_body(Kind, list_ast, LastExpr) ->
 validate_each_body(_Kind, _Classification, _LastExpr) ->
     ok.
 
-%% A conditional body is a different mistake from a bare value, and only the keyed
+%% A control-flow body is a different mistake from a bare value, and only the keyed
 %% path needs telling apart: "wrap the value in an element" reads as advice to pick a
 %% tag, which for branches that already return different elements changes the markup
 %% instead of fixing it. The list message names the conditional case already.
 each_body_error(list, _LastExpr) ->
     each_body_not_element;
 each_body_error(stream, LastExpr) ->
-    case is_conditional(LastExpr) of
-        true -> each_stream_body_conditional;
+    case is_control_flow_ast(LastExpr) of
+        true -> each_stream_body_control_flow;
         false -> each_stream_body_not_element
     end.
-
-is_conditional({'case', _, _, _}) -> true;
-is_conditional({'if', _, _}) -> true;
-is_conditional({'receive', _, _}) -> true;
-is_conditional({'receive', _, _, _, _}) -> true;
-is_conditional({'try', _, _, _, _, _}) -> true;
-is_conditional({'maybe', _, _}) -> true;
-is_conditional({'maybe', _, _, _}) -> true;
-is_conditional(_Other) -> false.
 
 walk_each_list_items(Kind, {cons, _, Item, Tail}) ->
     case is_fragile_each_item(Item) of

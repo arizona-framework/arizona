@@ -223,7 +223,7 @@ transform rejects all of these at compile time (`each_body_not_element`). A 2-ar
 callback is rejected the same way but with `each_stream_body_not_element`: a stream/map keys
 each item for per-item diffing and has **no comprehension fallback**, so the body must be an
 element (wrap the value: `fun(Item, Key) -> {li, [], [Item]} end`). When that body is a
-**conditional**, the error is `each_stream_body_conditional` and the fix is different. Every item
+**conditional**, the error is `each_stream_body_control_flow` and the fix is different. Every item
 shares ONE compiled per-item template, so an item's **outer tag is fixed at compile time** -- that
 is what makes per-item diffing cheap (statics once, dynamics per item). The branches may be
 entirely different elements; put them inside one stable item element carrying `az_key`

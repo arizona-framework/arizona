@@ -434,7 +434,7 @@ template/descriptor and raises `bad_template_value`. So `compile_each` rejects a
 `each_stream_body_not_element` for a 2-arg/stream-or-map callback -- the two differ only in fix
 advice, since a list has a comprehension fallback and a stream/map, keyed per item, does not)
 at compile time. A keyed callback whose body is a *conditional* raises
-`each_stream_body_conditional` instead, because the fix is different: "wrap the value in an
+`each_stream_body_control_flow` instead, because the fix is different: "wrap the value in an
 element" reads as advice to pick a tag, when the real constraint is that every item shares ONE
 compiled per-item template, so an item's **outer tag is fixed at compile time**. That shared
 template is exactly what makes per-item diffing cheap (statics once, dynamics per item). The
