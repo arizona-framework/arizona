@@ -22,6 +22,7 @@
     diff_list_shrank_full_update/1,
     diff_list_no_change_no_ops/1,
     diff_stream_unchanged_snapshot_pair_no_ops/1,
+    diff_stream_nested_in_template_is_incremental/1,
     diff_list_content_change_positional/1,
     diff_list_first_item_change_positional/1,
     diff_list_grew_positional/1,
@@ -96,6 +97,7 @@ groups() ->
             diff_list_shrank_full_update,
             diff_list_no_change_no_ops,
             diff_stream_unchanged_snapshot_pair_no_ops,
+            diff_stream_nested_in_template_is_incremental,
             diff_list_content_change_positional,
             diff_list_first_item_change_positional,
             diff_list_grew_positional,
@@ -1452,13 +1454,50 @@ diff_stream_unchanged_snapshot_pair_no_ops(Config) when is_list(Config) ->
     Settled = maps:remove(source, EachSnap),
     OldSnap = #{s => Statics, d => [{Az, Settled}], deps => DepsList},
     ?assertEqual([], element(1, arizona_diff:diff(Tmpl, OldSnap, #{}))),
-    %% Control: a genuinely different list still re-renders the container.
+    %% Control: a genuinely different list produces the real per-item delta, not a
+    %% container re-render. This pair reaches the nested-template walk, which used
+    %% to have no stream route and fell back to `?OP_TEXT` -- the very re-render
+    %% the comment above argues against. One `?OP_INSERT` for the item the stale
+    %% snapshot lacks is both cheaper and non-destructive.
     OtherTmpl = stream_each_tmpl(ItemTmpl, [#{id => <<"a">>, text => <<"A">>}]),
     {OtherAz, OtherEach, OtherDepsList} = eval_stream_each(OtherTmpl),
     StaleSnap = #{
         s => Statics, d => [{OtherAz, maps:remove(source, OtherEach)}], deps => OtherDepsList
     },
-    ?assertMatch([[?OP_TEXT, _, _]], element(1, arizona_diff:diff(Tmpl, StaleSnap, #{}))).
+    ?assertMatch(
+        [[?OP_INSERT, _, <<"b">>, -1, _]], element(1, arizona_diff:diff(Tmpl, StaleSnap, #{}))
+    ).
+
+%% A stream `?each` sitting inside a NESTED template -- what a `?stateless` child
+%% renders to -- must still diff per item. The incremental path was wired only
+%% into a template's own top-level dynamics (`diff_changed_dynamic`) and into
+%% stream items; the nested walk had no stream route, so it fell through to the
+%% container `?OP_TEXT` and re-sent the whole list. That is O(N) on the wire for
+%% an O(1) change, with no symptom except payload size, and it silently degrades
+%% the documented habit of factoring a container into a `?stateless`.
+diff_stream_nested_in_template_is_incremental(Config) when is_list(Config) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(I, _Key) -> [{<<"0">>, maps:get(text, I)}] end,
+        f => <<"item">>
+    },
+    Items = [#{id => <<"a">>, text => <<"A">>}, #{id => <<"b">>, text => <<"B">>}],
+    Inner = stream_each_tmpl(ItemTmpl, Items),
+    %% Wrap the each's template in an outer template, so its dynamics are reached
+    %% through the nested-template walk rather than the top-level one.
+    Nest = fun(T) ->
+        #{
+            s => [<<"<div az=\"n\">">>, <<"</div>">>],
+            d => [{<<"n">>, fun() -> T end}],
+            f => <<"outer">>
+        }
+    end,
+    {_, Snap, _} = arizona_render:render(Nest(Inner), #{}),
+    %% Append one item and diff: one insert, not a container re-render.
+    Grown = stream_each_tmpl(ItemTmpl, Items ++ [#{id => <<"c">>, text => <<"C">>}]),
+    {Ops, _, _} = arizona_diff:diff(Nest(Grown), Snap, #{}),
+    ?assertMatch([[?OP_INSERT, _, <<"c">>, -1, _]], Ops).
 
 stream_each_tmpl(ItemTmpl, Items) ->
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),

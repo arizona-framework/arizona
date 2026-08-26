@@ -192,24 +192,46 @@ preserve_view_id(#{}, Snap) -> Snap.
 %% --------------------------------------------------------------------
 
 diff_dynamics(NewEvals, OldEvals) ->
-    diff_dynamics(NewEvals, OldEvals, []).
+    {Ops, _Views} = diff_dynamics(NewEvals, OldEvals, [], {#{}, #{}}),
+    Ops.
 
 %% Tail-accumulator (difference-list) form: each op is consed straight onto `Tail`,
 %% so there is no `++` copying. This matters for the fine-grained nested-template path
 %% (`make_ops/4` recurses back here), where a `++` would re-copy the inner ops at every
 %% nesting level. `Tail` is the ops that follow these dynamics; order is preserved.
-diff_dynamics([], [], Tail) ->
-    Tail;
-diff_dynamics([{undefined, _} | NR], [{undefined, _} | OR], Tail) ->
+diff_dynamics([], [], Tail, Views) ->
+    {Tail, Views};
+diff_dynamics([{undefined, _} | NR], [{undefined, _} | OR], Tail, Views) ->
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so never emit an op -- carry it forward as-is.
-    diff_dynamics(NR, OR, Tail);
-diff_dynamics([{Az, _} | NR], [{Az, #{diff := false}} | OR], Tail) ->
-    diff_dynamics(NR, OR, Tail);
-diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail) ->
-    diff_dynamics(NR, OR, Tail);
-diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail) ->
-    make_ops(Az, New, Old, diff_dynamics(NR, OR, Tail)).
+    diff_dynamics(NR, OR, Tail, Views);
+diff_dynamics([{Az, _} | NR], [{Az, #{diff := false}} | OR], Tail, Views) ->
+    diff_dynamics(NR, OR, Tail, Views);
+diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail, Views) ->
+    diff_dynamics(NR, OR, Tail, Views);
+%% A stream each nested inside another template (what a `?stateless` child
+%% renders to) reaches here rather than `diff_changed_dynamic`, which is where
+%% the incremental path is wired for a template's own top-level dynamics. Route
+%% it the same way, or the generic clause below re-renders the whole container
+%% through `?OP_TEXT` -- O(N) on the wire for an O(1) change, with no symptom but
+%% payload size. Only a STREAM snapshot carries `source` (see
+%% `diff_item_dynamics_v/3`, which reconstructs the descriptor the same way), so
+%% list- and map-source eaches fall through untouched.
+diff_dynamics(
+    [{Az, #{t := ?EACH, source := #stream{} = Src, template := Tmpl}} | NR],
+    [{Az, #{t := ?EACH} = Old} | OR],
+    Tail,
+    Views0
+) ->
+    {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
+    {Old0, New0} = Views1,
+    {StreamOps, _NewSnap, {_, LocalNew}} =
+        diff_stream(Az, #{source => Src, template => Tmpl}, Old, {Old0, #{}}),
+    LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
+    {StreamOps ++ RestOps, {Old0, maps:merge(New0, LocalNew1)}};
+diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
+    {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
+    make_ops(Az, New, Old, RestOps, Views1).
 
 diff_dynamics_v([], [], [], _Changed, Views) ->
     {[], [], [], Views};
@@ -260,10 +282,11 @@ diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0) ->
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
     Ops =
         case New of
-            Old -> OpsRest;
-            _ -> make_ops(Az, New, Old, OpsRest)
+            Old -> {OpsRest, Views2};
+            _ -> make_ops(Az, New, Old, OpsRest, Views2)
         end,
-    {Ops, [{Az, New} | DRest], [NewDeps | DepsRest], Views2}.
+    {OpsFinal, ViewsFinal} = Ops,
+    {OpsFinal, [{Az, New} | DRest], [NewDeps | DepsRest], ViewsFinal}.
 
 diff_each(
     Az, #{source := #stream{} = Source} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
@@ -1235,23 +1258,26 @@ make_ops(
     _Az,
     #{t := ?EACH, items := Items, order := Order, template := #{f := Fp}},
     #{t := ?EACH, items := Items, order := Order, template := #{f := Fp}},
-    Tail
+    Tail,
+    Views
 ) ->
-    Tail;
-make_ops(_Az, #{s := S, d := NewD} = New, #{s := S, d := OldD}, Tail) when
+    {Tail, Views};
+make_ops(_Az, #{s := S, d := NewD} = New, #{s := S, d := OldD}, Tail, Views) when
     not is_map_key(view_id, New)
 ->
-    diff_dynamics(NewD, OldD, Tail);
-make_ops(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}, Tail) ->
+    diff_dynamics(NewD, OldD, Tail, Views);
+make_ops(
+    _Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}, Tail, Views
+) ->
     %% Child view: diff its inner dynamics like make_op/3's child clause, but
     %% suppress the wrapper when no inner op survives (e.g. only a markerless
     %% raw-text slot changed) -- an empty `[VId, []]` op is wire noise.
     case diff_child_dynamics(NewD, OldD) of
-        [] -> Tail;
-        ChildOps -> [[VId, ChildOps] | Tail]
+        [] -> {Tail, Views};
+        ChildOps -> {[[VId, ChildOps] | Tail], Views}
     end;
-make_ops(Az, New, Old, Tail) ->
-    [make_op(Az, New, Old) | Tail].
+make_ops(Az, New, Old, Tail, Views) ->
+    {[make_op(Az, New, Old) | Tail], Views}.
 
 %% Walks an item's dynamics, returning `{Ops, Markerless, Views}`. `Markerless`
 %% is true when a markerless slot (raw-text element content, `Az = undefined`)
@@ -1284,7 +1310,8 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             {EachOps ++ RestOps, Markerless, Views2};
         _ ->
             {RestOps, Markerless, Views1} = diff_item_dynamics_v(NR, OR, Views0),
-            {make_ops(Az, New, Old, RestOps), Markerless, Views1}
+            {NewOps, Views2} = make_ops(Az, New, Old, RestOps, Views1),
+            {NewOps, Markerless, Views2}
     end.
 
 diff_child_dynamics(NewD, OldD) ->
@@ -1301,4 +1328,5 @@ diff_child_dynamics([{Az, _New} | NR], [{Az, #{diff := false}} | OR], Tail) ->
 diff_child_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail) ->
     diff_child_dynamics(NR, OR, Tail);
 diff_child_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail) ->
-    make_ops(Az, New, Old, diff_child_dynamics(NR, OR, Tail)).
+    {Ops, _Views} = make_ops(Az, New, Old, diff_child_dynamics(NR, OR, Tail), {#{}, #{}}),
+    Ops.
