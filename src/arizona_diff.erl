@@ -960,8 +960,7 @@ list_changed(_NewTail, _OldTail, Views) ->
 %% `?local` inside it for nothing. A value can differ as a term yet render the
 %% same: `to_bin/1` formats floats to 10 decimals, so accumulated error past that
 %% (0.1 + 0.2 against 0.3) renders "0.3" either way, and an integer against its
-%% binary, or a value against the same value wrapped in an escape marker, are the
-%% same bytes too.
+%% binary is the same bytes too.
 %%
 %% The byte comparison only runs once the terms already differ, so it costs
 %% nothing on the common path, and only for values `to_bin/1` renders without
@@ -987,7 +986,12 @@ item_changed(_NewTail, _OldTail) ->
 %% and `integer_to_binary`/`atom_to_binary` are injective, so two distinct ones
 %% cannot print the same. That covers nearly every slot without rendering either
 %% side, leaving the render for the pairs that genuinely can collapse -- two floats
-%% (the 10-decimal format), or a value against a different type or an escape marker.
+%% (the 10-decimal format), or a value against a different type.
+%% Same marker both sides: unwrap and compare the payloads. The parse transform
+%% wraps every content slot value, so without this a real template never reaches the
+%% type fast paths below at all -- only hand-built templates do.
+collapses_to_same_bytes({arizona_esc, New}, {arizona_esc, Old}) ->
+    collapses_to_same_bytes(New, Old);
 collapses_to_same_bytes(New, Old) when is_binary(New), is_binary(Old) ->
     false;
 collapses_to_same_bytes(New, Old) when is_integer(New), is_integer(Old) ->
@@ -998,10 +1002,14 @@ collapses_to_same_bytes(New, Old) ->
     byte_comparable(New) andalso byte_comparable(Old) andalso
         arizona_template:to_bin(New) =:= arizona_template:to_bin(Old).
 
+%% An escape marker is deliberately NOT comparable. `to_bin/1` unwraps it, so
+%% `{arizona_esc, ~"<b>"}` and a bare `~"<b>"` look identical to it -- but the
+%% wholesale re-render escapes the wrapped one (`&lt;b&gt;`) and not the bare one, so
+%% treating them as equal would drop a visible change, and in one direction leave
+%% unescaped markup on screen. A pair SHARING the marker is unwrapped above; a mixed
+%% pair reaches here and counts as changed.
 byte_comparable(V) when is_binary(V); is_integer(V); is_float(V); is_atom(V) ->
     true;
-byte_comparable({arizona_esc, V}) ->
-    byte_comparable(V);
 byte_comparable(_Other) ->
     false.
 
