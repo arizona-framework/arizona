@@ -222,7 +222,14 @@ template or descriptor wrapped in a bare list (`[?stateless(...)]`) is the same 
 transform rejects all of these at compile time (`each_body_not_element`). A 2-arg (stream/map)
 callback is rejected the same way but with `each_stream_body_not_element`: a stream/map keys
 each item for per-item diffing and has **no comprehension fallback**, so the body must be an
-element (wrap the value: `fun(Item, Key) -> {li, [], [Item]} end`).
+element (wrap the value: `fun(Item, Key) -> {li, [], [Item]} end`). When that body is a
+**conditional**, the error is `each_stream_body_conditional` and the fix is different. Every item
+shares ONE compiled per-item template, so an item's **outer tag is fixed at compile time** -- that
+is what makes per-item diffing cheap (statics once, dynamics per item). The branches may be
+entirely different elements; put them inside one stable item element carrying `az_key`
+(`fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end`), where a conditional child
+may return bare element tuples. Containers whose child tag is fixed anyway (`ul`/`ol`, `table`,
+`select`) lose nothing; elsewhere the wrapper can be a `div` with `display: contents`.
 
 A whole-body `?html(...)` (or `?native`/`?terminal`) **is** accepted: it's unwrapped to the
 element it wraps and compiled identically to returning that element bare -- so a helper that

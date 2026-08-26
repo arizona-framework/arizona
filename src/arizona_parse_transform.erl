@@ -443,6 +443,17 @@ format_error(each_stream_body_not_element) ->
     "diffing, which a single-value body throws away. Unlike a list there is no comprehension "
     "fallback (a comprehension has no stream/keyed semantics): wrap the value in an element, "
     "e.g. fun(Item, Key) -> {li, [], [Item]} end";
+format_error(each_stream_body_conditional) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
+    "case/if body is not one: every item shares ONE compiled per-item template, so the "
+    "item's outer tag is fixed at compile time (that shared template is what makes "
+    "per-item diffing cheap -- statics once, dynamics per item). The branches themselves "
+    "can be entirely different elements; put them inside one stable item element that "
+    "carries az_key: fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end. "
+    "A conditional child may return bare element tuples, so <em> vs <strong> vs a whole "
+    "subtree all work there. Containers whose child tag is fixed anyway (ul/ol, table, "
+    "select) lose nothing; elsewhere the wrapper can be a div with display: contents to "
+    "stay out of layout";
 format_error(each_named_fun_multi_clause) ->
     "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
     "single clause -- ?each inlines the function's body into one shared per-item template, so "
@@ -1924,7 +1935,7 @@ set_template_map_d_field(Field, _DFunAST) ->
 %% from the callback arity (1-arg = list, 2-arg = stream/map): the error it raises tailors the
 %% fix advice, since a list has a comprehension fallback and a stream does not.
 validate_each_body(Kind, text_dynamic, LastExpr) ->
-    parse_error(each_body_error(Kind), line(LastExpr));
+    parse_error(each_body_error(Kind, LastExpr), line(LastExpr));
 validate_each_body(Kind, list_ast, LastExpr) ->
     %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
     %% ?html/?native/?terminal map literal) or a ?stateful/?stateless descriptor: those land
@@ -1934,12 +1945,30 @@ validate_each_body(Kind, list_ast, LastExpr) ->
 validate_each_body(_Kind, _Classification, _LastExpr) ->
     ok.
 
-each_body_error(list) -> each_body_not_element;
-each_body_error(stream) -> each_stream_body_not_element.
+%% A conditional body is a different mistake from a bare value, and only the keyed
+%% path needs telling apart: "wrap the value in an element" reads as advice to pick a
+%% tag, which for branches that already return different elements changes the markup
+%% instead of fixing it. The list message names the conditional case already.
+each_body_error(list, _LastExpr) ->
+    each_body_not_element;
+each_body_error(stream, LastExpr) ->
+    case is_conditional(LastExpr) of
+        true -> each_stream_body_conditional;
+        false -> each_stream_body_not_element
+    end.
+
+is_conditional({'case', _, _, _}) -> true;
+is_conditional({'if', _, _}) -> true;
+is_conditional({'receive', _, _}) -> true;
+is_conditional({'receive', _, _, _, _}) -> true;
+is_conditional({'try', _, _, _, _, _}) -> true;
+is_conditional({'maybe', _, _}) -> true;
+is_conditional({'maybe', _, _, _}) -> true;
+is_conditional(_Other) -> false.
 
 walk_each_list_items(Kind, {cons, _, Item, Tail}) ->
     case is_fragile_each_item(Item) of
-        true -> parse_error(each_body_error(Kind), line(Item));
+        true -> parse_error(each_body_error(Kind, Item), line(Item));
         false -> walk_each_list_items(Kind, Tail)
     end;
 walk_each_list_items(_Kind, _Nil) ->

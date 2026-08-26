@@ -433,7 +433,17 @@ template/descriptor and raises `bad_template_value`. So `compile_each` rejects a
 `text_dynamic` body (`each_body_not_element` for a 1-arg/list callback,
 `each_stream_body_not_element` for a 2-arg/stream-or-map callback -- the two differ only in fix
 advice, since a list has a comprehension fallback and a stream/map, keyed per item, does not)
-at compile time. It also rejects a bare list whose item is a
+at compile time. A keyed callback whose body is a *conditional* raises
+`each_stream_body_conditional` instead, because the fix is different: "wrap the value in an
+element" reads as advice to pick a tag, when the real constraint is that every item shares ONE
+compiled per-item template, so an item's **outer tag is fixed at compile time**. That shared
+template is exactly what makes per-item diffing cheap (statics once, dynamics per item). The
+branches themselves may be entirely different elements -- they go inside one stable item element
+carrying `az_key`, where a conditional child may return bare element tuples. Containers whose
+child tag is fixed anyway (`ul`/`ol`, `table`, `select`) lose nothing; elsewhere the wrapper can
+be a `div` with `display: contents` to stay out of layout. Supporting a varying item tag would
+mean a distinct template per item, giving up the shared statics and reducing a branch swap to a
+full item re-render. It also rejects a bare list whose item is a
 template or descriptor (`[?html(...)]`, `[?stateless(...)]`) -- the item lands in the same
 fragile value slot -- while keeping a list of elements or a static/dynamic-text fragment.
 Map plain values with a list comprehension / `lists:map` (no per-item diffing); put a
