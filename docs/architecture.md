@@ -440,12 +440,22 @@ compiled per-item template, so an item's **outer tag is fixed at compile time**.
 template is exactly what makes per-item diffing cheap (statics once, dynamics per item). The
 branches themselves may be entirely different elements -- they go inside one stable item element
 carrying `az_key`, where a conditional child may return bare element tuples. Containers whose
-child tag is fixed anyway (`ul`/`ol`, `table`, `select`) lose nothing; elsewhere the wrapper can
-be a `div` with `display: contents` to stay out of layout. Supporting a varying item tag would
-mean a distinct template per item, giving up the shared statics and reducing a branch swap to a
-full item re-render. It also rejects a bare list whose item is a
-template or descriptor (`[?html(...)]`, `[?stateless(...)]`) -- the item lands in the same
-fragile value slot -- while keeping a list of elements or a static/dynamic-text fragment.
+child tag is fixed anyway (`ul`/`ol`) lose nothing, and a `div` with `display: contents` keeps
+the wrapper out of layout elsewhere.
+
+That wrapper is not legal in every container, and the two where it is not are the two where a
+varying sibling tag is most legitimate. Inside `table`/`tr` the parser foster-parents a wrapper
+out of the table entirely -- the `th`/`td` land in the row, the `az-key` ends up on a stray
+`div` before the `<table>`. Inside `select`, Firefox drops it while Chromium keeps it, so the
+idiom silently works in one browser and freezes the list in the other. Both verified in real
+browsers. `ul`/`ol` is the only container whose child tag genuinely was never free.
+
+Supporting a varying item tag would mean a distinct template per item, giving up the shared
+statics and reducing a branch swap to a full item re-render.
+
+`compile_each` also rejects a bare list whose item is a template or descriptor
+(`[?html(...)]`, `[?stateless(...)]`) -- the item lands in the same fragile value slot --
+while keeping a list of elements or a static/dynamic-text fragment.
 Map plain values with a list comprehension / `lists:map` (no per-item diffing); put a
 conditional inside an element child (`{li, [], [case ... end]}`).
 
