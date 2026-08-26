@@ -1692,6 +1692,15 @@ render `<!--az:0-->Home<!--/az-->` in the browser tab -- visible corruption trad
 invisible frozen accessible name. A compile warning is no better: the only available signal is
 "a `<title>` holding a dynamic", which is exactly what a legitimate `<head>` title looks like.
 
+**Raw text is an HTML-only classification.** All four tags are raw text in HTML, but inside
+`<svg>` the parser is in foreign content where `script` and `style` content is ordinary parsed
+markup: a comment there is a real comment node and a bare `<` starts an element. They are
+therefore `none` in `foreign`, which makes the slot both escaped and diffable -- the parser
+decodes the references straight back, so `a &gt; b` reaches CSS as `a > b` unchanged. Classifying
+them `raw` there had forced the author to mark the value `?raw`, splicing it verbatim into a
+context that parses markup, where the `</script>`/`</style>` neutralization behind that opt-out
+is not the breakout available.
+
 **Exception -- raw-text elements (`script`/`style`/`textarea`/`title`).** The browser does not
 parse HTML comments inside these, so a comment marker becomes literal content and corrupts it (an
 inline module script's `<!--` is even a `SyntaxError`). A dynamic content slot inside a raw-text

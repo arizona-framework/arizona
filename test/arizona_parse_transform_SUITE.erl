@@ -347,6 +347,7 @@
     raw_text_svg_title_diffable/1,
     raw_text_svg_title_factoring/1,
     raw_text_svg_title_local/1,
+    raw_text_foreign_script_style_escaped/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
     raw_text_style_markerless/1,
@@ -603,6 +604,7 @@ groups() ->
             raw_text_svg_title_diffable,
             raw_text_svg_title_factoring,
             raw_text_svg_title_local,
+            raw_text_foreign_script_style_escaped,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
             raw_text_style_markerless,
@@ -2243,7 +2245,14 @@ raw_text_svg_title_diffable(Config) when is_list(Config) ->
     ?assertEqual([], element(1, arizona_diff:diff(Mod:fo(#{t => ~"B"}), FoSnap))),
     %% The classifier itself, in both contexts.
     ?assertEqual(none, arizona_html:raw_text_kind('Title', foreign)),
-    ?assertEqual(raw, arizona_html:raw_text_kind('Style', foreign)),
+    %% `style`/`script` are raw text ONLY in HTML. Inside `<svg>` their content is
+    %% ordinary parsed markup (a comment is a comment, a bare `<` starts an
+    %% element), so classifying them `raw` there both froze the slot and forced a
+    %% verbatim `?raw` splice into a context that parses markup.
+    ?assertEqual(none, arizona_html:raw_text_kind('Style', foreign)),
+    ?assertEqual(none, arizona_html:raw_text_kind('Script', foreign)),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Style', html)),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Script', html)),
     ?assertEqual(foreign, arizona_html:content_context('SVG', html)),
     ?assertEqual(html, arizona_html:content_context('FOREIGNOBJECT', foreign)),
     ?assertEqual(foreign, arizona_html:content_context(g, foreign)).
@@ -2311,6 +2320,37 @@ raw_text_svg_title_local(Config) when is_list(Config) ->
         "    arizona_template:html({'head', [], [{title, [], "
         "        [arizona_template:local(~\"t\", ~\"A\")]}]}). ",
         fun(R) -> R =:= local_in_raw_text end
+    ).
+
+%% A dynamic inside `<svg><style>` needs no `?raw` and is ESCAPED. In foreign
+%% content the parser treats script/style as ordinary markup, so it decodes the
+%% references straight back (`a &lt; b` reaches CSS as `a < b`) while a bare `<`
+%% in the value can no longer start an element. The HTML form still demands
+%% `?raw`, because there the browser decodes nothing and escaping would corrupt.
+raw_text_foreign_script_style_escaped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_foreign_style). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({svg, [], [{style, [], "
+        "        [arizona_template:get(v, Bindings)]}]}). "
+    ),
+    HTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:render(#{v => ~"a<img src=x>b"}))
+    ),
+    %% Escaped, so the value cannot start an element.
+    ?assertEqual(nomatch, binary:match(HTML, ~"<img")),
+    ?assertMatch({_, _}, binary:match(HTML, ~"a&lt;img src=x&gt;b")),
+    %% Marker-anchored, so the slot is diffable rather than render-once.
+    ?assertMatch({_, _}, binary:match(HTML, ~"<!--az:")),
+    %% The HTML form is unchanged: still a compile error without ?raw.
+    assert_parse_error(
+        "-module(pt_rt_html_style). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [{style, [], "
+        "        [arizona_template:get(v, Bindings)]}]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
     ).
 
 %% A dynamic content slot inside <script> renders WITHOUT comment markers: the
