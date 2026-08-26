@@ -1136,14 +1136,26 @@ lis_backtrack(Idx, Parent, Acc) ->
 compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present) ->
     [];
 compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present) ->
-    KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],
-    case KeptOld of
-        [] ->
+    %% Pure tail append: every old key kept, in order, with the new ones after
+    %% them. `smart_reset_items/8` inserts each missing key at -1 walking the new
+    %% order, so they land at the tail in that order and the DOM already equals
+    %% `NewOrder` -- every move the LIS would emit is a node moved onto itself.
+    %% Worth the check: an append-only list (a log, a growing series) hits this on
+    %% every update, and the LIS treats each inserted key as unplaced, so it was
+    %% emitting one redundant move per insert (360 inserts -> 360 extra moves).
+    case lists:prefix(OldOrder, NewOrder) of
+        true ->
             [];
-        _ ->
-            OldPosMap = pos_map(KeptOld, 1),
-            LISSet = lis_indices(NewOrder, OldPosMap),
-            emit_move_ops(Az, LISSet, NewOrder, 1, null, Present)
+        false ->
+            KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],
+            case KeptOld of
+                [] ->
+                    [];
+                _ ->
+                    OldPosMap = pos_map(KeptOld, 1),
+                    LISSet = lis_indices(NewOrder, OldPosMap),
+                    emit_move_ops(Az, LISSet, NewOrder, 1, null, Present)
+            end
     end.
 
 pos_map([], _I) -> #{};

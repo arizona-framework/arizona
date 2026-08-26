@@ -24,6 +24,7 @@
     diff_stream_unchanged_snapshot_pair_no_ops/1,
     diff_stream_nested_in_template_is_incremental/1,
     diff_stream_nested_with_cleared_log_reconciles/1,
+    diff_stream_pure_append_emits_no_moves/1,
     diff_list_content_change_positional/1,
     diff_list_first_item_change_positional/1,
     diff_list_grew_positional/1,
@@ -100,6 +101,7 @@ groups() ->
             diff_stream_unchanged_snapshot_pair_no_ops,
             diff_stream_nested_in_template_is_incremental,
             diff_stream_nested_with_cleared_log_reconciles,
+            diff_stream_pure_append_emits_no_moves,
             diff_list_content_change_positional,
             diff_list_first_item_change_positional,
             diff_list_grew_positional,
@@ -1544,6 +1546,48 @@ diff_stream_nested_with_cleared_log_reconciles(Config) when is_list(Config) ->
     %% lacks, not a re-render of the whole container.
     ?assertMatch([[?OP_INSERT, _, <<"b">>, -1, _] | _], Ops),
     ?assertEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_TEXT]).
+
+%% A pure tail append needs inserts and nothing else: the inserts land at the tail
+%% in the new order, so the DOM already matches and every move the LIS would emit
+%% is a node moved onto itself. The reconciliation treats an inserted key as
+%% unplaced, so without the prefix check an append-only list paid one redundant
+%% move per insert. A genuine reorder must still move.
+diff_stream_pure_append_emits_no_moves(Config) when is_list(Config) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(I, _Key) -> [{<<"0">>, maps:get(text, I)}] end,
+        f => <<"item">>
+    },
+    Item = fun(K) -> #{id => K, text => K} end,
+    Nest = fun(T) ->
+        #{
+            s => [<<"<div az=\"n\">">>, <<"</div>">>],
+            d => [{<<"n">>, fun() -> T end}],
+            f => <<"outer">>
+        }
+    end,
+    Drained = fun(Tmpl) ->
+        #{d := [{_, F}]} = Tmpl,
+        Src = maps:get(source, F()),
+        #{st := D} = arizona_stream:clear_stream_pending(#{st => Src}, [st]),
+        #{
+            s => maps:get(s, Tmpl),
+            d => [{<<"0">>, fun() -> #{t => ?EACH, source => D, template => ItemTmpl} end}],
+            f => maps:get(f, Tmpl)
+        }
+    end,
+    Base = [Item(<<"a">>), Item(<<"b">>)],
+    {_, Snap, _} = arizona_render:render(Nest(stream_each_tmpl(ItemTmpl, Base)), #{}),
+    %% Append: inserts only, no moves.
+    Appended = Drained(stream_each_tmpl(ItemTmpl, Base ++ [Item(<<"c">>), Item(<<"d">>)])),
+    {AppendOps, _, _} = arizona_diff:diff(Nest(Appended), Snap, #{}),
+    ?assertEqual([], [Op || Op <- AppendOps, hd(Op) =:= ?OP_MOVE]),
+    ?assertEqual(2, length([Op || Op <- AppendOps, hd(Op) =:= ?OP_INSERT])),
+    %% Reorder: moves are still required.
+    Reordered = Drained(stream_each_tmpl(ItemTmpl, [Item(<<"b">>), Item(<<"a">>)])),
+    {ReorderOps, _, _} = arizona_diff:diff(Nest(Reordered), Snap, #{}),
+    ?assertNotEqual([], [Op || Op <- ReorderOps, hd(Op) =:= ?OP_MOVE]).
 
 stream_each_tmpl(ItemTmpl, Items) ->
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
