@@ -2143,11 +2143,11 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
     Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, RawKind, Line, State0),
     State1 = State0#state{root = false},
-    %% A dynamic content slot inside a raw-text element is markerless/render-once
-    %% (see emit_child_dynamic/4), so it never needs an element-level `az` target.
-    %% Only dynamic *attributes* (still diffable) force one there.
+    %% A raw-text element's dynamic children fold into ONE nested template carried at
+    %% the ELEMENT's own az (see compile_element_children/7), so it needs one too --
+    %% not only dynamic attributes force one there.
     HasDyn =
-        has_dynamic_attr(Attrs) orelse (RawKind =:= none andalso has_dynamic_child(Children)),
+        has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
     {ElemAz, State2} =
         case HasDyn andalso (not State1#state.nodiff) of
             true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
@@ -2174,12 +2174,8 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             State6 = buf_append(State5, Backend:element_open_end()),
             %% Scope the raw-text context to this element's children, then restore
             %% the parent's so a following sibling is not treated as raw text.
-            State7 = compile_children(
-                Children,
-                ElemAz,
-                State6#state{
-                    raw_text_kind = RawKind, raw_text_tag = Tag, content_ctx = ChildCtx
-                }
+            State7 = compile_element_children(
+                Children, ElemAz, RawKind, Tag, ChildCtx, Line, State6
             ),
             State8 = buf_append(State7, Backend:element_close(TagBin)),
             State8#state{
@@ -2187,6 +2183,65 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
                 raw_text_tag = State0#state.raw_text_tag,
                 content_ctx = State0#state.content_ctx
             }
+    end.
+
+%% A raw-text element (script/style/textarea/title) cannot carry comment markers
+%% inside it -- a comment there is literal text, so a `<head>` title would render
+%% `<!--az:0-->Home<!--/az-->` in the browser tab. Its dynamic children are therefore
+%% markerless, and before this fold the diff had no target for them at all: the value
+%% silently never updated, in the same template where a sibling `<p>` patched fine.
+%%
+%% The address does not have to live INSIDE the element. Fold the whole content --
+%% statics and dynamics both -- into one nested template held at the element's own
+%% `az`, which raw text permits. Any inner change then re-renders that element's
+%% content, shipped as a single `?OP_TEXT` against that az by `make_ops/5`'s
+%% markerless escalation. That escalation's granularity is what makes this safe: one
+%% raw-text element, not the enclosing template, so a `<textarea>` is untouched when
+%% a sibling `<title>` changes.
+%%
+%% Escaping is preserved structurally rather than reimplemented: the children compile
+%% through the ordinary `compile_children/3` walk, so each dynamic keeps its own
+%% policy -- `raw` (script/style) goes verbatim through `Backend:raw_text/2` breakout
+%% neutralization, `escapable` (textarea/title) is HTML-escaped via `esc_spec`.
+%% Nothing here rewrites that path.
+compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0) ->
+    ChildState = State0#state{
+        raw_text_kind = RawKind, raw_text_tag = Tag, content_ctx = ChildCtx
+    },
+    Fold =
+        RawKind =/= none andalso ElemAz =/= none andalso has_dynamic_child(Children) andalso
+            (not State0#state.nodiff),
+    case Fold of
+        false ->
+            compile_children(Children, ElemAz, ChildState);
+        true ->
+            Backend = State0#state.backend,
+            Inner0 = #state{
+                module = State0#state.module,
+                backend = Backend,
+                raw_text_kind = RawKind,
+                raw_text_tag = Tag,
+                content_ctx = ChildCtx
+            },
+            Inner1 = compile_children(Children, none, Inner0),
+            {Statics, DynASTs} = finalize(Inner1),
+            Fp = generate_fingerprint(Statics),
+            {S1, D1} = scope_az(Backend, Fp, Statics, DynASTs),
+            TmplAST = build_template_ast(Line, S1, D1, Fp, #{backend => Backend}),
+            %% The folded content is a nested template, so its inner `?get` reads
+            %% are isolated from THIS slot's dependency bracket -- without touches
+            %% the dep-aware diff skips the slot and the element freezes exactly as
+            %% it did before the fold. Same remedy as branch_track_touches/1.
+            Keys = dedup_keys(collect_read_keys(Children, [])),
+            Body = [track_call_ast(K) || K <- Keys] ++ [TmplAST],
+            FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], Body}]}},
+            DynAST =
+                {tuple, 0, [
+                    ast_binary(integer_to_binary(ElemAz)),
+                    FunAST,
+                    loc_ast(State0#state.module, Line)
+                ]},
+            flush(State0, DynAST)
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->

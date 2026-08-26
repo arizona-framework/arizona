@@ -358,7 +358,8 @@
     raw_text_json_ld_raw_verbatim/1,
     raw_text_title_escaped_markerless/1,
     raw_text_textarea_markerless/1,
-    raw_text_render_once_no_diff/1,
+    raw_text_content_diffs_against_element_az/1,
+    raw_text_nodiff_keeps_script_render_once/1,
     raw_text_dynamic_attr_still_diffable/1,
     normal_element_keeps_markers/1,
     raw_text_sibling_after_restores_markers/1,
@@ -618,7 +619,8 @@ groups() ->
             raw_text_json_ld_raw_verbatim,
             raw_text_title_escaped_markerless,
             raw_text_textarea_markerless,
-            raw_text_render_once_no_diff,
+            raw_text_content_diffs_against_element_az,
+            raw_text_nodiff_keeps_script_render_once,
             raw_text_dynamic_attr_still_diffable,
             normal_element_keeps_markers,
             raw_text_sibling_after_restores_markers,
@@ -2061,7 +2063,7 @@ raw_text_az_alias_raw_accepted(Config) when is_list(Config) ->
         "    arizona_template:html({'script', [], [az:raw(az:get(js, Bindings))]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => ~"a && b"})),
-    ?assertEqual(<<"<script>a && b</script>">>, iolist_to_binary(HTML0)).
+    ?assertEqual(<<"<script az=\"11AQ3M-0\">a && b</script>">>, iolist_to_binary(HTML0)).
 
 %% The rejection reason renders through format_error/1 (what the compiler prints),
 %% and names the ?raw opt-out that unblocks the author.
@@ -2129,7 +2131,7 @@ raw_text_style_css_round_trip(Config) when is_list(Config) ->
     Css = ~"<!-- .a > .b { color: red } --> .c:before { content: \"<script>\" }",
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{css => Css})),
     HTML = iolist_to_binary(HTML0),
-    ?assertEqual(<<"<style>", Css/binary, "</style>">>, HTML),
+    ?assertEqual(<<"<style az=\"1PLA63N-0\">", Css/binary, "</style>">>, HTML),
     %% Specifically: no JS escape leaked into the stylesheet.
     ?assertEqual(nomatch, binary:match(HTML, ~"u003c")).
 
@@ -2174,7 +2176,7 @@ raw_text_hoisted_raw_boundary(Config) when is_list(Config) ->
         "    arizona_template:html({'script', [], [R]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => ~"a && b"})),
-    ?assertEqual(<<"<script>a && b</script>">>, iolist_to_binary(HTML0)),
+    ?assertEqual(<<"<script az=\"11AQ3M-0\">a && b</script>">>, iolist_to_binary(HTML0)),
     %% No binding read in the hoisted expression -- not inlined, so not a literal
     %% ?raw at the slot, so rejected.
     assert_parse_error(
@@ -2215,7 +2217,7 @@ raw_text_uppercase_tag_classified(Config) when is_list(Config) ->
     %% Markerless, verbatim, and the script-data policy applies (the tag is matched
     %% case-insensitively on the way into the neutralizer too).
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
-    ?assertEqual(<<"<ScRiPt>a<\\/script>b</ScRiPt>">>, HTML),
+    ?assertEqual(<<"<ScRiPt az=\"1KL9229-0\">a<\\/script>b</ScRiPt>">>, HTML),
     %% The classifier itself, for every raw-text tag and a non-raw-text one.
     ?assertEqual(raw, arizona_html:raw_text_kind('SCRIPT', html)),
     ?assertEqual(raw, arizona_html:raw_text_kind('Style', html)),
@@ -2249,7 +2251,13 @@ raw_text_svg_title_diffable(Config) when is_list(Config) ->
     %% foreignObject: back to HTML rules -- markerless and render-once.
     {FoHTML0, FoSnap} = arizona_render:render(Mod:fo(#{t => ~"A"})),
     ?assertEqual(nomatch, binary:match(iolist_to_binary(FoHTML0), ~"<!--az:")),
-    ?assertEqual([], element(1, arizona_diff:diff(Mod:fo(#{t => ~"B"}), FoSnap))),
+    %% `<foreignObject>` switches back to html, so `title` IS raw text there and its
+    %% slot stays markerless -- but the element carries an az, so the value still
+    %% reaches the DOM as a whole-content re-render rather than freezing.
+    ?assertMatch(
+        [[_Op, <<"1BEHNP5-0">>, #{~"d" := [~"B"]}]],
+        element(1, arizona_diff:diff(Mod:fo(#{t => ~"B"}), FoSnap))
+    ),
     %% The classifier itself, in both contexts.
     ?assertEqual(none, arizona_html:raw_text_kind('Title', foreign)),
     %% `style`/`script` are raw text ONLY in HTML. Inside `<svg>` their content is
@@ -2299,8 +2307,11 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
     %% component's OWN slot in the caller still has markers, so the change escalates
     %% to a whole re-render of that nested template instead of being dropped.
     {_CompHTML, CompSnap} = arizona_render:render(Mod:component(#{t => ~"A"})),
+    %% The `<title>` inside the child now carries its own az and its content folds
+    %% into one nested template, so the patch is scoped to that element rather than
+    %% re-rendering the whole child.
     ?assertMatch(
-        [[_Op, _Az, #{~"s" := [~"<title>", ~"</title>"], ~"d" := [~"B"]}]],
+        [[_Op, _Az, #{~"s" := [<<>>, <<>>], ~"d" := [~"B"]}]],
         element(1, arizona_diff:diff(Mod:component(#{t => ~"B"}), CompSnap))
     ),
     %% `?each` DOES carry it: the top-down pass renames the each to the marker the
@@ -2383,7 +2394,7 @@ raw_text_script_markerless(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--/az-->")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"import x from \"/c\"")),
-    ?assertEqual(<<"<script type=\"module\">import x from \"/c\"</script>">>, HTML).
+    ?assertEqual(<<"<script az=\"1C9RHX-0\" type=\"module\">import x from \"/c\"</script>">>, HTML).
 
 %% A scalar inside <script> is emitted verbatim (NOT HTML-escaped): the parser
 %% never decodes character references in raw text, so escaping `&`/`<` would
@@ -2473,7 +2484,33 @@ raw_text_textarea_markerless(Config) when is_list(Config) ->
 %% binding changes between renders, the diff emits no op -- there is no comment
 %% marker for the client to patch. Covers both the bare diff/2 (child-view path)
 %% and the production deps-aware diff/4, where the slot's binding is in `Changed`.
-raw_text_render_once_no_diff(Config) when is_list(Config) ->
+%% Patching an EXECUTABLE script is the one raw-text case where updating is
+%% questionable: the browser does not re-run a script whose text changes in place
+%% (its "already started" flag is set), so the element's source would say one thing
+%% while the code in effect says another. `az-nodiff` is the author-facing opt-out
+%% and the fold honours it -- no az, no op, render-once exactly as before.
+raw_text_nodiff_keeps_script_render_once(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_nodiff). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'script', ['az-nodiff'], ["
+        "        arizona_template:raw(arizona_template:get(boot, Bindings))"
+        "    ]}). "
+    ),
+    T1 = Mod:render(#{boot => <<"a">>}),
+    {HTML0, Snap0} = arizona_render:render(T1),
+    HTML = iolist_to_binary(HTML0),
+    %% No az on the element and no markers inside it.
+    ?assertEqual(<<"<script>a</script>">>, HTML),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
+    T2 = Mod:render(#{boot => <<"b">>}),
+    ?assertEqual([], element(1, arizona_diff:diff(T2, Snap0))),
+    {_Ops0, DepsSnap, _V0} = arizona_diff:diff(T1, Snap0, #{}),
+    {Ops4, _S4, _V1} = arizona_diff:diff(T2, DepsSnap, #{}, #{boot => true}),
+    ?assertEqual([], Ops4).
+
+raw_text_content_diffs_against_element_az(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_rt_once). "
         "-export([render/1]). "
@@ -2486,12 +2523,12 @@ raw_text_render_once_no_diff(Config) when is_list(Config) ->
     {_HTML, Snap0} = arizona_render:render(T1),
     T2 = Mod:render(#{boot => <<"b">>}),
     {Ops, _Snap2} = arizona_diff:diff(T2, Snap0),
-    ?assertEqual([], Ops),
+    ?assertMatch([[_Op, <<"11AQ3M-0">>, #{~"d" := [~"b"]}]], Ops),
     %% Production path: build a deps-carrying snapshot (as the live process does on
     %% mount), then diff/4 with the slot's binding explicitly marked changed.
     {_Ops0, DepsSnap, _V0} = arizona_diff:diff(T1, Snap0, #{}),
     {Ops4, _Snap4, _V1} = arizona_diff:diff(T2, DepsSnap, #{}, #{boot => true}),
-    ?assertEqual([], Ops4).
+    ?assertMatch([[_Op4, <<"11AQ3M-0">>, #{~"d" := [~"b"]}]], Ops4).
 
 %% A dynamic *attribute* on a raw-text element stays fully diffable -- attribute
 %% values are not raw-text content, so they keep the element az and emit an op
@@ -2545,7 +2582,7 @@ raw_text_sibling_after_restores_markers(Config) when is_list(Config) ->
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{boot => <<"BOOT">>, x => <<"XV">>})),
     HTML = iolist_to_binary(HTML0),
     %% The script content is markerless; the span (after it) keeps its markers.
-    ?assertNotEqual(nomatch, binary:match(HTML, ~"<script>BOOT</script>")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~">BOOT</script>")),
     ?assertEqual(1, length(binary:matches(HTML, ~"<!--az:"))),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"-->XV<!--/az-->")).
 
@@ -2567,7 +2604,7 @@ raw_text_sibling_before_keeps_markers(Config) when is_list(Config) ->
     HTML = iolist_to_binary(HTML0),
     ?assertEqual(1, length(binary:matches(HTML, ~"<!--az:"))),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"-->XV<!--/az-->")),
-    ?assertNotEqual(nomatch, binary:match(HTML, ~"<script>BOOT</script>")).
+    ?assertNotEqual(nomatch, binary:match(HTML, ~">BOOT</script>")).
 
 %% A raw-text element BETWEEN two normal elements: both neighbours get markers
 %% (two marked slots), the script in the middle is markerless, and the az indices
@@ -2591,7 +2628,7 @@ raw_text_between_normal_siblings_markers(Config) when is_list(Config) ->
     HTML = iolist_to_binary(HTML0),
     %% Exactly two marked slots (span + p), none for the middle script.
     ?assertEqual(2, length(binary:matches(HTML, ~"<!--az:"))),
-    ?assertNotEqual(nomatch, binary:match(HTML, ~"<script>BOOT</script>")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~">BOOT</script>")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"-->AV<!--/az-->")),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"-->BV<!--/az-->")).
 
@@ -2616,8 +2653,9 @@ raw_text_mixed_az_numbering_diffs(Config) when is_list(Config) ->
     %% diff/2: changing the span binding emits an op; changing only the script does not.
     {OpsCount, _} = arizona_diff:diff(Mod:render(#{boot => <<"a">>, count => <<"2">>}), Snap0),
     ?assertNotEqual([], OpsCount),
+    %% The raw-text slot diffs too now, addressed by its element's az.
     {OpsBoot, _} = arizona_diff:diff(Mod:render(#{boot => <<"b">>, count => <<"1">>}), Snap0),
-    ?assertEqual([], OpsBoot),
+    ?assertNotEqual([], OpsBoot),
     %% diff/4 (production): same, keyed by the dirty binding set.
     {_Ops0, DepsSnap, _V0} = arizona_diff:diff(T1, Snap0, #{}),
     {OpsCount4, _, _} = arizona_diff:diff(
@@ -2627,7 +2665,8 @@ raw_text_mixed_az_numbering_diffs(Config) when is_list(Config) ->
     {OpsBoot4, _, _} = arizona_diff:diff(
         Mod:render(#{boot => <<"b">>, count => <<"1">>}), DepsSnap, #{}, #{boot => true}
     ),
-    ?assertEqual([], OpsBoot4).
+    %% Dep-aware too: the fold injects track/1 touches, so the slot is not skipped.
+    ?assertNotEqual([], OpsBoot4).
 
 %% Two dynamic content slots in one raw-text element: both render verbatim, both
 %% markerless (the whole element's content is raw text).
@@ -2644,7 +2683,7 @@ raw_text_two_content_slots(Config) when is_list(Config) ->
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{a => <<"AA">>, b => <<"BB">>})),
     HTML = iolist_to_binary(HTML0),
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
-    ?assertEqual(<<"<script>AABB</script>">>, HTML).
+    ?assertEqual(<<"<script az=\"11AQ3M-0\">AABB</script>">>, HTML).
 
 %% Static text around a dynamic slot inside a raw-text element survives in order,
 %% markerless -- the computed value is spliced between the literal script bytes.
@@ -2662,7 +2701,7 @@ raw_text_static_text_around_slot(Config) when is_list(Config) ->
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{url => <<"\"/u\"">>})),
     HTML = iolist_to_binary(HTML0),
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
-    ?assertEqual(<<"<script>var x=\"/u\"; init();</script>">>, HTML).
+    ?assertEqual(<<"<script az=\"11AQ3M-0\">var x=\"/u\"; init();</script>">>, HTML).
 
 %% A control-flow value (case) in a raw-text slot flows through
 %% expand_block_element_tails: the selected branch renders verbatim and markerless,
@@ -2686,10 +2725,11 @@ raw_text_conditional_value_markerless(Config) when is_list(Config) ->
     {HTML0, Snap0} = arizona_render:render(T1),
     HTML = iolist_to_binary(HTML0),
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
-    ?assertEqual(<<"<script>prod()</script>">>, HTML),
-    %% Render-once: switching the scrutinee emits no op (no marker to patch).
+    ?assertEqual(<<"<script az=\"11AQ3M-0\">prod()</script>">>, HTML),
+    %% The SLOT carries no markers (asserted above), but the ELEMENT carries an az,
+    %% so switching the scrutinee re-renders the element's content against it.
     {Ops, _} = arizona_diff:diff(Mod:render(#{env => dev}), Snap0),
-    ?assertEqual([], Ops).
+    ?assertMatch([[_Op, <<"11AQ3M-0">>, #{~"d" := [~"dev()"]}]], Ops).
 
 %% A raw-text element with BOTH a dynamic attribute and dynamic content: the
 %% attribute stays diffable (the element keeps its az and the attr emits an op when
@@ -2710,11 +2750,12 @@ raw_text_attr_diffs_content_render_once(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"src=\"/a.js\"")),
     %% The body is markerless content even though the element has an az for the attr.
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
-    %% Changing the attribute emits a patch; changing only the content does not.
+    %% Attribute and content are addressed separately: the attribute by its own
+    %% ?OP_SET_ATTR, the content by an ?OP_TEXT against the element's az.
     {OpsSrc, _} = arizona_diff:diff(Mod:render(#{src => <<"/b.js">>, body => <<"A">>}), Snap0),
     ?assertNotEqual([], OpsSrc),
     {OpsBody, _} = arizona_diff:diff(Mod:render(#{src => <<"/a.js">>, body => <<"B">>}), Snap0),
-    ?assertEqual([], OpsBody).
+    ?assertMatch([[_Op, <<"QP3ZUD-0">>, #{~"d" := [~"B"]}]], OpsBody).
 
 %% Escapable (<title>) and raw (<script>) raw-text elements adjacent under <head>,
 %% followed by a normal element: both kinds restore context, so the trailing
@@ -2738,8 +2779,8 @@ raw_text_escapable_adjacent_to_raw(Config) when is_list(Config) ->
     HTML = iolist_to_binary(HTML0),
     %% Neither raw-text slot is marked.
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
-    ?assertNotEqual(nomatch, binary:match(HTML, ~"<title>Hi</title>")),
-    ?assertNotEqual(nomatch, binary:match(HTML, ~"<script>go()</script>")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~">Hi</title>")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~">go()</script>")),
     %% The trailing <meta> still carries its az (its dynamic attr is diffable).
     ?assertNotEqual(nomatch, binary:match(HTML, ~"<meta az=")).
 

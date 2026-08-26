@@ -180,6 +180,8 @@ matches every entry.
 
 Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time directive. The parse transform strips it from HTML and emits `diff => false`. All dynamics in that compile unit get `undefined` Az (pre-scanned via `prescan_directives/1`). Children in separate `?html` calls are not affected at compile time, but safe because the parent's `diff => false` short-circuits before their dynamics are reached by the diff engine.
 
+**It is also the opt-out for an executable `<script>`.** A dynamic inside a raw-text element (`script`/`style`/`textarea`/`title`) is markerless -- a comment marker there would be literal content -- but the ELEMENT carries an `az` and its whole content folds into one nested template held there, so the value does update. That is what you want for the sanctioned case, a `?raw(json:encode(Data))` data island whose consumer reads `textContent`, and for a `<textarea>`, an SVG `<title>` or a `<style>` (whose CSSOM genuinely re-parses). It is questionable for an *executable* script: a script element carries an "already started" flag, so the browser does not re-run it when its text changes, and the element's source would then disagree with the code in effect. That is a browser rule, not a framework choice. Put `az-nodiff` on such a script to keep it render-once.
+
 ## Macros
 
 | Macro | Expands to |
