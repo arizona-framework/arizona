@@ -1725,7 +1725,7 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs) ->
         %% path expects. (Its now-orphaned definition is covered by the injected
         %% nowarn_unused_function / ignore_xref attributes.)
         {'fun', L, {function, Name, Arity}} when Arity =:= 1; Arity =:= 2 ->
-            compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, CCtx, FunDefs);
+            compile_named_each(Name, Arity, SourceAST, L, Module, Backend, CCtx, FunDefs);
         %% A local ref of any other arity isn't a valid callback (1 = list, 2 = stream/map).
         {'fun', L, {function, _Name, _Arity}} ->
             parse_error(invalid_each_fun, L);
@@ -1747,8 +1747,8 @@ compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs) ->
 
 %% Resolve a local `Name/Arity` callback (from a bare `fun Name/Arity` or a same-module
 %% `fun ?MODULE:Name/Arity`) to its single clause and compile it via the inline-fun path.
-%% `L` is the fun-ref location (for the error/synthesized clause); `Line` the each call site.
-compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, CCtx, FunDefs) ->
+%% `L` is the fun-ref location, used for the error and the synthesized clause.
+compile_named_each(Name, Arity, SourceAST, L, Module, Backend, CCtx, FunDefs) ->
     case FunDefs of
         #{{Name, Arity} := [{clause, CL, Vars, Guards, Body}]} ->
             %% FunDefs holds the ORIGINAL, untransformed clause. The inline-fun path
@@ -1769,7 +1769,15 @@ compile_named_each(Name, Arity, SourceAST, Line, L, Module, Backend, CCtx, FunDe
                 FunAST0, Module, FunDefs, Backend:target()
             ),
             FunAST = transform_expr(FunAST1, Module, #{}, FunDefs),
-            compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs);
+            %% Stamp the each with the CALLEE's clause line, not the `?each` call
+            %% site: the whole per-item template comes from that clause, so a crash
+            %% in it reports a stack line inside the callee while `arizona_loc` named
+            %% a different function entirely. The error page reconciles the two from
+            %% the stack, but raw surfaces cannot -- the dev MCP's `render_component`
+            %% catches with no stacktrace at all, so this line is the only one an
+            %% agent ever sees. The source expression is unaffected: it evaluates in
+            %% the enclosing slot's closure, which carries the call site's line.
+            compile_each(FunAST, SourceAST, CL, Module, Backend, CCtx, FunDefs);
         #{{Name, Arity} := [_ | _]} ->
             parse_error(each_named_fun_multi_clause, L);
         #{} ->

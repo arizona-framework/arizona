@@ -124,7 +124,30 @@ render(Bindings) ->
 %% the inner crash site. The stack tells the truth, so prefer it.
 format_title(_Class, {compile_error, _Errors}, _Stacktrace) ->
     ~"Compilation Error";
+format_title(Class, {arizona_loc, {LocMod, _}, _} = Reason, Stacktrace) ->
+    %% `arizona_loc` names the template module by construction, so prefer a frame
+    %% from THAT module over the generic "first non-framework" walk. Two shapes the
+    %% generic walk gets wrong: an app module named `arizona_*` (every fixture in
+    %% test/support) is dropped as framework and the title falls back to the
+    %% wrapper's own -- outer -- line; and a value that fails AFTER its closure
+    %% returned (`bad_template_value` from a map in a slot) has no template frame
+    %% left on the stack, so the walk keeps going and names the CALLER, which on a
+    %% live server is a roadrunner internal.
+    case strict_user_frame(Stacktrace) of
+        {ok, Mod, Line} ->
+            %% A genuine user frame is the most precise answer -- keep it, so a
+            %% crash inside a helper module still names that module's line.
+            fmt_mod_line(Mod, Line);
+        error ->
+            case frame_from(LocMod, Stacktrace) of
+                {ok, Line} -> fmt_mod_line(LocMod, Line);
+                error -> fallback_title(Class, Reason)
+            end
+    end;
 format_title(Class, Reason, Stacktrace) ->
+    format_title_generic(Class, Reason, Stacktrace).
+
+format_title_generic(Class, Reason, Stacktrace) ->
     case first_user_frame(Stacktrace) of
         none ->
             fallback_title(Class, Reason);
@@ -134,6 +157,35 @@ format_title(Class, Reason, Stacktrace) ->
                 Line -> fmt_mod_line(Mod, Line)
             end
     end.
+
+%% Like `first_user_frame/1` but with no framework fallback: `error` when every
+%% frame is framework or OTP. That happens when the value failed AFTER its closure
+%% returned (a map reaching `to_bin/1`), leaving no template frame at all -- there
+%% the lexical `arizona_loc` is the only real answer, and the generic walk's
+%% topmost-frame fallback would name an arizona internal instead.
+strict_user_frame([]) ->
+    error;
+strict_user_frame(Stack) ->
+    case lists:dropwhile(fun is_framework_frame/1, Stack) of
+        [] ->
+            error;
+        [{Mod, _Fn, _A, Info} | _] ->
+            case proplists:get_value(line, Info) of
+                undefined -> error;
+                Line -> {ok, Mod, Line}
+            end
+    end.
+
+%% The topmost line from `Mod`, or `error` when it has no frame carrying one.
+frame_from(_Mod, []) ->
+    error;
+frame_from(Mod, [{Mod, _Fn, _A, Info} | Rest]) ->
+    case proplists:get_value(line, Info) of
+        undefined -> frame_from(Mod, Rest);
+        Line -> {ok, Line}
+    end;
+frame_from(Mod, [_Frame | Rest]) ->
+    frame_from(Mod, Rest).
 
 fallback_title(_Class, {arizona_loc, {Mod, Line}, _}) ->
     fmt_mod_line(Mod, Line);
@@ -364,6 +416,39 @@ format_title_arizona_loc_test() ->
     %% Empty stack -> fallback uses arizona_loc's captured location.
     Title = format_title(error, {arizona_loc, {my_mod, 42}, badarg}, []),
     ?assertEqual(<<"my_mod:42">>, Title).
+
+format_title_prefers_template_module_frame_test() ->
+    %% An app module named `arizona_*` is dropped by the name-prefix framework
+    %% test, so the generic walk finds no user frame and used to fall back to the
+    %% wrapper's own (outer) line. The loc names the template module, so a frame
+    %% from THAT module is the right answer.
+    Reason = {arizona_loc, {arizona_userapp, 7}, badarg},
+    Stack = [
+        {arizona_template, to_bin, 1, [{line, 400}]},
+        {arizona_userapp, '-render/1-fun-0-', 1, [{line, 9}]}
+    ],
+    ?assertEqual(~"arizona_userapp:9", format_title(error, Reason, Stack)).
+
+format_title_all_framework_stack_uses_loc_test() ->
+    %% A value that fails AFTER its closure returned leaves no template frame at
+    %% all. The generic walk's topmost-frame fallback would name an arizona
+    %% internal; the lexical loc is the only real answer.
+    Reason = {arizona_loc, {my_page, 5}, {bad_template_value, #{}}},
+    Stack = [
+        {arizona_template, to_bin, 1, [{line, 447}]},
+        {arizona_render, zip, 3, [{line, 253}]}
+    ],
+    ?assertEqual(~"my_page:5", format_title(error, Reason, Stack)).
+
+format_title_keeps_genuine_user_frame_test() ->
+    %% A crash inside a helper module still names that module -- the loc-module
+    %% preference must not cost precision where the stack already has the answer.
+    Reason = {arizona_loc, {my_page, 5}, badarg},
+    Stack = [
+        {my_helper, fmt, 1, [{line, 42}]},
+        {my_page, '-render/1-fun-0-', 1, [{line, 5}]}
+    ],
+    ?assertEqual(~"my_helper:42", format_title(error, Reason, Stack)).
 
 format_reason_compile_error_test() ->
     Errors = [{"src/foo.erl", [{{10, 1}, erl_lint, {unused_var, 'X'}}]}],

@@ -16,6 +16,7 @@
     each_named_fun_ref_guard/1,
     each_named_fun_ref_prefix_body/1,
     each_named_fun_ref_shadows_caller_var/1,
+    each_named_fun_ref_loc_names_callee/1,
     each_named_fun_ref_nested_each/1,
     each_named_fun_ref_nested_macros_render/1,
     each_named_fun_multi_clause_rejected/1,
@@ -502,6 +503,7 @@ groups() ->
             each_named_fun_ref_guard,
             each_named_fun_ref_prefix_body,
             each_named_fun_ref_shadows_caller_var,
+            each_named_fun_ref_loc_names_callee,
             each_named_fun_ref_nested_each,
             each_named_fun_ref_nested_macros_render,
             each_named_fun_multi_clause_rejected,
@@ -5410,6 +5412,29 @@ each_named_fun_ref_shadows_caller_var(Config) when is_list(Config) ->
 
 %% A named-ref callback whose body itself contains a nested ?each (with its own named ref):
 %% both resolve via the module-global lookup and the recursive compile path.
+each_named_fun_ref_loc_names_callee(Config) when is_list(Config) ->
+    %% The callee is inlined, so it is not a compiled function any more and the
+    %% crash carries no frame of its own. The `arizona_loc` wrapper is therefore
+    %% the only lexical hint, and surfaces that catch without a stacktrace (the
+    %% dev MCP's render_component) show nothing else -- so it must name the
+    %% callee's clause, not the `?each` call site in the caller.
+    Mod = compile_module(
+        "-module(pt_each_named_loc).\n"
+        "-export([render/1]).\n"
+        "row(Bindings) ->\n"
+        "    Side = arizona_template:get(side, Bindings),\n"
+        "    {'li', [], [erlang:error({boom, Side})]}.\n"
+        "render(Bindings) ->\n"
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1,\n"
+        "        arizona_template:get(rows, Bindings))]}).\n"
+    ),
+    T = Mod:render(#{rows => [#{side => ~"sell"}]}),
+    %% row/1's clause head is line 3; the ?each call site is line 7.
+    ?assertError(
+        {arizona_loc, {pt_each_named_loc, 3}, {boom, ~"sell"}},
+        arizona_render:render_to_iolist(T)
+    ).
+
 each_named_fun_ref_nested_each(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_named_nested). "
