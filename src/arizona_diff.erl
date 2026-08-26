@@ -1404,10 +1404,22 @@ make_ops(
     Views
 ) ->
     {Tail, Views};
-make_ops(_Az, #{s := S, d := NewD} = New, #{s := S, d := OldD}, Tail, Views) when
+make_ops(Az, #{s := S, d := NewD} = New, #{s := S, d := OldD} = Old, Tail, Views) when
     not is_map_key(view_id, New)
 ->
-    diff_dynamics(NewD, OldD, Tail, Views);
+    %% A markerless slot has no op target of its own, so `diff_dynamics/4` skips it.
+    %% At a template's TOP level that is right -- raw-text content is render-once,
+    %% and there is nothing to patch it with. Inside a nested template it is not:
+    %% this slot has an `Az` and its own `<!--az:X-->...<!--/az-->` markers, so the
+    %% change is deliverable by re-rendering the nested template whole. Without the
+    %% escalation the change is dropped silently, which is how an SVG `<title>` in a
+    %% `?stateless` child freezes: the child compiles on its own, so it cannot know
+    %% it renders in foreign content, classifies `title` as escapable raw text, and
+    %% its slot comes out markerless.
+    case markerless_changed(NewD, OldD) of
+        false -> diff_dynamics(NewD, OldD, Tail, Views);
+        true -> {[make_op(Az, New, Old) | Tail], Views}
+    end;
 make_ops(
     _Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}, Tail, Views
 ) ->
@@ -1420,6 +1432,18 @@ make_ops(
     end;
 make_ops(Az, New, Old, Tail, Views) ->
     {[make_op(Az, New, Old) | Tail], Views}.
+
+%% Did a markerless slot at THIS nesting level change value? Only this level: a
+%% markerless slot deeper down sits in its own nested template, whose `make_ops/5`
+%% escalates it against its own `Az`, which is the tighter patch.
+markerless_changed([], []) ->
+    false;
+markerless_changed([{undefined, Same} | NR], [{undefined, Same} | OR]) ->
+    markerless_changed(NR, OR);
+markerless_changed([{undefined, _New} | _NR], [{undefined, _Old} | _OR]) ->
+    true;
+markerless_changed([_New | NR], [_Old | OR]) ->
+    markerless_changed(NR, OR).
 
 %% Walks an item's dynamics, returning `{Ops, Markerless, Views}`. `Markerless`
 %% is true when a markerless slot (raw-text element content, `Az = undefined`)

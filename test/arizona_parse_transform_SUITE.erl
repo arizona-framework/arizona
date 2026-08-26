@@ -2289,9 +2289,15 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
         [[_Op, _Az, ~"B"]],
         element(1, arizona_diff:diff(Mod:helper(#{t => ~"B"}), HelperSnap))
     ),
-    %% Component: its own template, its own `html` context -- render-once.
+    %% Component: its own template, its own `html` context, so it classifies `title`
+    %% as escapable raw text and the slot inside it comes out markerless. The
+    %% component's OWN slot in the caller still has markers, so the change escalates
+    %% to a whole re-render of that nested template instead of being dropped.
     {_CompHTML, CompSnap} = arizona_render:render(Mod:component(#{t => ~"A"})),
-    ?assertEqual([], element(1, arizona_diff:diff(Mod:component(#{t => ~"B"}), CompSnap))),
+    ?assertMatch(
+        [[_Op, _Az, #{~"s" := [~"<title>", ~"</title>"], ~"d" := [~"B"]}]],
+        element(1, arizona_diff:diff(Mod:component(#{t => ~"B"}), CompSnap))
+    ),
     %% `?each` DOES carry it: the top-down pass renames the each to the marker the
     %% backend names for the enclosing context, and the per-item template compiles
     %% in that context. Pinned against the component case above, which cannot.
