@@ -25,6 +25,7 @@
     diff_stream_nested_in_template_is_incremental/1,
     diff_stream_nested_with_cleared_log_reconciles/1,
     diff_stream_pure_append_emits_no_moves/1,
+    diff_stream_nested_content_change_delivers/1,
     diff_list_content_change_positional/1,
     diff_list_first_item_change_positional/1,
     diff_list_grew_positional/1,
@@ -102,6 +103,7 @@ groups() ->
             diff_stream_nested_in_template_is_incremental,
             diff_stream_nested_with_cleared_log_reconciles,
             diff_stream_pure_append_emits_no_moves,
+            diff_stream_nested_content_change_delivers,
             diff_list_content_change_positional,
             diff_list_first_item_change_positional,
             diff_list_grew_positional,
@@ -1588,6 +1590,44 @@ diff_stream_pure_append_emits_no_moves(Config) when is_list(Config) ->
     Reordered = Drained(stream_each_tmpl(ItemTmpl, [Item(<<"b">>), Item(<<"a">>)])),
     {ReorderOps, _, _} = arizona_diff:diff(Nest(Reordered), Snap, #{}),
     ?assertNotEqual([], [Op || Op <- ReorderOps, hd(Op) =:= ?OP_MOVE]).
+
+%% An item whose CONTENT changed in place leaves the key order identical. The
+%% empty-log guard used to read that as "no ops needed" and hand the slot to the
+%% drain, which found nothing and emitted nothing -- the server snapshot advanced
+%% while the client kept the old value forever, with no self-heal. An empty log
+%% carries no information about WHETHER anything changed (it is cleared before a
+%% `?stateful` child renders), so it must go to the reconciliation, which compares
+%% item dynamics and patches exactly what differs.
+diff_stream_nested_content_change_delivers(Config) when is_list(Config) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(I, _Key) -> [{<<"0">>, maps:get(text, I)}] end,
+        f => <<"item">>
+    },
+    Items = fun(BText) ->
+        [#{id => <<"a">>, text => <<"A">>}, #{id => <<"b">>, text => BText}]
+    end,
+    Nest = fun(T) ->
+        #{
+            s => [<<"<div az=\"n\">">>, <<"</div>">>],
+            d => [{<<"n">>, fun() -> T end}],
+            f => <<"outer">>
+        }
+    end,
+    {_, Snap, _} = arizona_render:render(Nest(stream_each_tmpl(ItemTmpl, Items(<<"B">>))), #{}),
+    %% Same keys, same order, one item's text changed, and an empty log.
+    Changed = stream_each_tmpl(ItemTmpl, Items(<<"B2">>)),
+    #{d := [{_, F}]} = Changed,
+    Src = maps:get(source, F()),
+    #{st := Drained} = arizona_stream:clear_stream_pending(#{st => Src}, [st]),
+    Tmpl = #{
+        s => maps:get(s, Changed),
+        d => [{<<"0">>, fun() -> #{t => ?EACH, source => Drained, template => ItemTmpl} end}],
+        f => maps:get(f, Changed)
+    },
+    {Ops, _, _} = arizona_diff:diff(Nest(Tmpl), Snap, #{}),
+    ?assertMatch([[?OP_ITEM_PATCH, _, <<"b">>, [[?OP_TEXT, _, <<"B2">>]]]], Ops).
 
 stream_each_tmpl(ItemTmpl, Items) ->
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
