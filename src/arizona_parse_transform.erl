@@ -450,9 +450,12 @@ format_error(each_stream_body_control_flow) ->
     "is fixed at compile time. The branches can still be entirely different elements -- "
     "put them inside one stable item element carrying az_key, e.g. fun(Item, Key) -> "
     "{li, [{az_key, Key}], [case Item of ... end]} end, where a conditional child may "
-    "return bare element tuples (<em> vs <strong> vs a whole subtree all work). "
-    "Containers whose child tag is fixed anyway (ul/ol, table, select) lose nothing; "
-    "elsewhere the wrapper can be a div with display: contents to stay out of layout";
+    "return bare element tuples (<em> vs <strong> vs a whole subtree all work), and a div "
+    "with display: contents keeps the wrapper out of layout. NOT inside table/tr or "
+    "select: the parser foster-parents a wrapper out of a table and Firefox drops one "
+    "inside a select, so the keyed element lands where the client cannot address it. A "
+    "varying sibling tag is legitimate in exactly those two (th/td, option/optgroup) and "
+    "has no workaround today";
 format_error(each_named_fun_multi_clause) ->
     "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
     "single clause -- ?each inlines the function's body into one shared per-item template, so "

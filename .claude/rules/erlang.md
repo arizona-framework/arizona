@@ -228,8 +228,15 @@ shares ONE compiled per-item template, so an item's **outer tag is fixed at comp
 is what makes per-item diffing cheap (statics once, dynamics per item). The branches may be
 entirely different elements; put them inside one stable item element carrying `az_key`
 (`fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end`), where a conditional child
-may return bare element tuples. Containers whose child tag is fixed anyway (`ul`/`ol`, `table`,
-`select`) lose nothing; elsewhere the wrapper can be a `div` with `display: contents`.
+may return bare element tuples. `ul`/`ol` lose nothing (their child tag was never free), and a
+`div` with `display: contents` keeps the wrapper out of layout elsewhere.
+
+**The wrapper is not legal everywhere.** Inside `table`/`tr` the HTML parser foster-parents it out
+of the table, and inside `select` Firefox drops it while Chromium keeps it, so the keyed element
+lands somewhere the client cannot address and every item op no-ops. Verified in both browsers. A
+varying sibling tag is legitimate in exactly those containers (`th`/`td` in a row,
+`option`/`optgroup` in a select) and has no workaround today, so `ul`/`ol` is the only container
+where "the child tag was never free anyway" actually holds.
 
 A whole-body `?html(...)` (or `?native`/`?terminal`) **is** accepted: it's unwrapped to the
 element it wraps and compiled identically to returning that element bare -- so a helper that
