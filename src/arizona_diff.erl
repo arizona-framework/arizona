@@ -247,14 +247,57 @@ diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
 %% skipped), but the WIRE stays proportional to what actually changed, which is
 %% the cost that was hurting. Falls back to the wholesale render only when the old
 %% snapshot is not stream-shaped, where there is no order to reconcile against.
-stream_relist(Az, Src, Tmpl, _New, #{items := OldItems, order := OldOrder}, Tail, Views) ->
-    {Old0, New0} = Views,
-    SV = {Src, visible_set(Src)},
-    {Ops, _NewSnap, {_, LocalNew}} =
-        stream_reset(Az, #{}, [], SV, Tmpl, OldItems, OldOrder, {Old0, #{}}),
-    {Ops ++ Tail, {Old0, maps:merge(New0, LocalNew)}};
+stream_relist(
+    Az,
+    _Src,
+    Tmpl,
+    #{items := NewItems, order := NewOrder},
+    #{items := OldItems, order := OldOrder},
+    Tail,
+    Views
+) ->
+    %% `New` is the freshly evaluated state: the enclosing walk already rendered
+    %% every item to build it. Diff against `Old` directly rather than handing the
+    %% source to `stream_reset/8`, which would render the whole list a SECOND time
+    %% -- twice the work, and it re-runs each item child's `mount/1` /
+    %% `handle_update/3`, so a child that subscribes or arms a timer does it twice
+    %% per diff.
+    NewSet = maps:from_keys(NewOrder, true),
+    RemOps = [
+        [?OP_REMOVE, Az, arizona_template:to_bin(K)]
+     || K <- OldOrder, not is_map_key(K, NewSet)
+    ],
+    {ItemOps, Views1} = relist_items(Az, NewOrder, NewItems, OldItems, Tmpl, Views),
+    Kept = maps:with(NewOrder, OldItems),
+    MoveOps = compute_reorder_ops(Az, OldOrder, NewOrder, Kept, NewItems),
+    {RemOps ++ ItemOps ++ MoveOps ++ Tail, Views1};
 stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views).
+
+%% Per-key walk for `stream_relist/7`: a key the client already holds is patched
+%% only where its dynamics differ, one it lacks is inserted at the tail. Mirrors
+%% `smart_reset_items/8`'s op shapes exactly, minus the re-render -- the item
+%% dynamics are taken from the already-evaluated `New`.
+relist_items(_Az, [], _NewItems, _OldItems, _Tmpl, Views) ->
+    {[], Views};
+relist_items(Az, [K | Rest], NewItems, OldItems, Tmpl, Views0) ->
+    NewD = maps:get(K, NewItems),
+    {Ops, Views1} =
+        case OldItems of
+            #{K := OldD} ->
+                {InnerOps, _Markerless, ViewsA} = diff_item_dynamics_v(NewD, OldD, Views0),
+                case InnerOps of
+                    [] ->
+                        {[], ViewsA};
+                    _ ->
+                        {[[?OP_ITEM_PATCH, Az, arizona_template:to_bin(K), InnerOps]], ViewsA}
+                end;
+            #{} ->
+                HTML = arizona_render:zip_item(Tmpl, NewD),
+                {[[?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML]], Views0}
+        end,
+    {RestOps, Views2} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views1),
+    {Ops ++ RestOps, Views2}.
 
 %% Can this stream's change be expressed by draining its pending log?
 %%
