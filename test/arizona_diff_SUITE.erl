@@ -41,11 +41,13 @@
     diff_map_value_change/1,
     diff_map_grew/1,
     diff_map_no_change_no_ops/1,
-    diff_map_head_insert_falls_back_to_wholesale/1,
+    diff_map_single_insert_is_one_op/1,
     diff_map_late_insert_stays_positional/1,
     diff_map_tail_removal_patches_positionally/1,
-    diff_list_head_insert_falls_back_to_wholesale/1,
-    diff_list_small_head_insert_stays_positional/1,
+    diff_list_head_insert_is_one_op/1,
+    diff_list_large_shrink_falls_back_to_wholesale/1,
+    diff_list_small_shrink_stays_positional/1,
+    diff_list_ops_round_trip_every_shape/1,
     diff_list_late_insert_stays_positional/1,
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
@@ -130,11 +132,13 @@ groups() ->
             diff_map_value_change,
             diff_map_grew,
             diff_map_no_change_no_ops,
-            diff_map_head_insert_falls_back_to_wholesale,
+            diff_map_single_insert_is_one_op,
             diff_map_late_insert_stays_positional,
             diff_map_tail_removal_patches_positionally,
-            diff_list_head_insert_falls_back_to_wholesale,
-            diff_list_small_head_insert_stays_positional,
+            diff_list_head_insert_is_one_op,
+            diff_list_large_shrink_falls_back_to_wholesale,
+            diff_list_small_shrink_stays_positional,
+            diff_list_ops_round_trip_every_shape,
             diff_list_late_insert_stays_positional,
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
@@ -597,13 +601,9 @@ diff_list_middle_insert_positional(Config) when is_list(Config) ->
     Ops = each_list_diff_sr([#{name => <<"a">>}, #{name => <<"c">>}], [
         #{name => <<"a">>}, #{name => <<"x">>}, #{name => <<"c">>}
     ]),
-    ?assertMatch(
-        [
-            [?OP_ITEM_PATCH, 1, [[?OP_TEXT, <<"0">>, <<"x">>]]],
-            [?OP_INSERT, 2, #{<<"d">> := [<<"c">>]}]
-        ],
-        assert_list_patch(Ops)
-    ).
+    %% The unchanged head and tail are stripped first, so this is ONE insert at the
+    %% position the item actually goes -- not "patch every later item, then append".
+    ?assertMatch([[?OP_INSERT, 1, #{<<"d">> := [<<"x">>]}]], assert_list_patch(Ops)).
 
 %% Middle delete: a content-patch cascade plus ONE tail REMOVE. [a,b,c] -> [a,c]:
 %% patch index 1 (b->c), remove index 2.
@@ -611,13 +611,7 @@ diff_list_middle_delete_positional(Config) when is_list(Config) ->
     Ops = each_list_diff_sr([#{name => <<"a">>}, #{name => <<"b">>}, #{name => <<"c">>}], [
         #{name => <<"a">>}, #{name => <<"c">>}
     ]),
-    ?assertEqual(
-        [
-            [?OP_ITEM_PATCH, 1, [[?OP_TEXT, <<"0">>, <<"c">>]]],
-            [?OP_REMOVE, 2]
-        ],
-        assert_list_patch(Ops)
-    ).
+    ?assertEqual([[?OP_REMOVE, 1]], assert_list_patch(Ops)).
 
 %% No item changed and same length -> no ops at all (empty sub-ops -> no LIST_PATCH).
 diff_list_no_change_positional_no_ops(Config) when is_list(Config) ->
@@ -678,14 +672,16 @@ diff_map_grew(Config) when is_list(Config) ->
 %% A key inserted at the HEAD shifts every later position, so each one would patch
 %% with its neighbour's content -- one op per item, against wholesale's one op
 %% total. Erlang iterates a small map in term order, so "0" sorts in front of "a".
-diff_map_head_insert_falls_back_to_wholesale(Config) when is_list(Config) ->
-    %% Wide enough for the wholesale saving to clear the gate's absolute margin.
+%% One added key is one op wherever it lands. Past 32 keys a map is a hashmap, so
+%% iteration is hash order rather than term order and the insert position is not
+%% predictable -- which is exactly why the position is left unasserted here.
+diff_map_single_insert_is_one_op(Config) when is_list(Config) ->
     Base = maps:from_list([
         {integer_to_binary(I), integer_to_binary(I)}
      || I <- lists:seq(100, 300)
     ]),
     Ops = each_map_diff(Base, Base#{~"0" => ~"0"}),
-    ?assertMatch([[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]], Ops).
+    ?assertMatch([[?OP_INSERT, _Idx, _]], assert_list_patch(Ops)).
 
 %% The same insert near the TAIL shifts almost nothing, so it stays on the cheap
 %% path -- re-sending every item to patch the last one is the amplification the
@@ -693,10 +689,7 @@ diff_map_head_insert_falls_back_to_wholesale(Config) when is_list(Config) ->
 diff_map_late_insert_stays_positional(Config) when is_list(Config) ->
     Base = maps:from_list([{K, K} || K <- [~"a", ~"b", ~"c", ~"d", ~"e", ~"f", ~"g", ~"h"]]),
     Ops = each_map_diff(Base, Base#{~"g0" => ~"x"}),
-    ?assertMatch(
-        [[?OP_ITEM_PATCH, 7, _], [?OP_INSERT, 8, _]],
-        assert_list_patch(Ops)
-    ).
+    ?assertMatch([[?OP_INSERT, 7, _]], assert_list_patch(Ops)).
 
 %% Dropping the tail key leaves the survivors' positions intact, so the shared
 %% head needs no ops and the tail is a positional remove.
@@ -710,32 +703,114 @@ diff_map_tail_removal_patches_positionally(Config) when is_list(Config) ->
 %% A list has no per-item key to compare, so the same head-insert amplification
 %% is caught the same way: by how much of the list the positional walk had to
 %% patch. This is the case a key-order gate could never cover for a list.
-diff_list_head_insert_falls_back_to_wholesale(Config) when is_list(Config) ->
-    %% Big enough that the saving is real: the gate weighs bytes and also requires an
-    %% absolute margin, so a short container stays positional even when re-rendering
-    %% it would be relatively cheaper (see diff_list_small_head_insert_stays_positional).
+%% A head insert used to be the worst case -- every item shifted, so every item was
+%% patched with its neighbour's content and the whole container was re-rendered
+%% instead. Stripping the common suffix makes it one op, at any container size.
+diff_list_head_insert_is_one_op(Config) when is_list(Config) ->
     Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 200)],
     Ops = each_list_diff_sr(Old, [#{name => ~"0"} | Old]),
-    ?assertMatch([[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]], Ops).
+    ?assertMatch([[?OP_INSERT, 0, #{<<"d">> := [~"0"]}]], assert_list_patch(Ops)).
 
 %% A DOM teardown costs focus, scroll position and every `?local` in the container.
 %% That is not worth a hundred-odd bytes, so a short container keeps its per-item ops
 %% even where the wholesale render would be smaller.
-diff_list_small_head_insert_stays_positional(Config) when is_list(Config) ->
+%% The invariant that matters, over every mutation shape rather than a hand-picked
+%% few: applying the ops to the OLD list must reproduce the NEW list exactly. The
+%% expectation is the new list itself, so a wrong op cannot make its own assertion
+%% pass, and the ops are generated live here so this cannot go stale against the diff.
+%%
+%% `replay_list_patch/2` models `applyListPatch` in arizona.js: indices address the
+%% OLD positions because the client snapshots the item roots before applying anything,
+%% an INSERT lands before whatever was at that index (or at the end past it), and
+%% repeated inserts at one index keep their emitted order. Those client semantics are
+%% pinned separately by the non-tail insert/remove tests in arizona-slots.test.js.
+diff_list_ops_round_trip_every_shape(Config) when is_list(Config) ->
+    L = [integer_to_binary(I) || I <- lists:seq(1, 6)],
+    L20 = [integer_to_binary(I) || I <- lists:seq(1, 20)],
+    Cases =
+        [
+            {insert, P, L, lists:sublist(L, P) ++ [~"NEW"] ++ lists:nthtail(P, L)}
+         || P <- lists:seq(0, 6)
+        ] ++
+            [{remove, P, L, lists:sublist(L, P) ++ lists:nthtail(P + 1, L)} || P <- lists:seq(0, 5)] ++
+            [
+                {change, P, L, lists:sublist(L, P) ++ [~"CH"] ++ lists:nthtail(P + 1, L)}
+             || P <- lists:seq(0, 5)
+            ] ++
+            [
+                {reverse, 0, L, lists:reverse(L)},
+                {swap_ends, 0, L, [lists:last(L)] ++ tl(lists:droplast(L)) ++ [hd(L)]},
+                {shrink, 0, L20, lists:sublist(L20, 2)},
+                {grow, 0, L20, L20 ++ [~"x", ~"y", ~"z"]},
+                {empty_to_3, 0, [], [~"a", ~"b", ~"c"]},
+                {to_empty, 0, [~"a", ~"b", ~"c"], []},
+                {two_mid, 0, L, lists:sublist(L, 3) ++ [~"X", ~"Y"] ++ lists:nthtail(3, L)},
+                {insert_and_change, 0, L, [~"Q", ~"CH"] ++ tl(L)},
+                {no_change, 0, L, L}
+            ],
+    [
+        begin
+            Ops = each_list_diff_sr(vals_to_items(Old), vals_to_items(New)),
+            ?assertEqual(
+                {Kind, Pos, New},
+                {Kind, Pos, replay_list_patch(Old, Ops)}
+            )
+        end
+     || {Kind, Pos, Old, New} <- Cases
+    ].
+
+vals_to_items(Vs) -> [#{name => V} || V <- Vs].
+
+%% Model of the client. `[]` means nothing changed; a wholesale `?OP_TEXT` re-render
+%% replaces the container outright, so the new list is whatever the payload carries.
+replay_list_patch(Old, []) ->
+    Old;
+replay_list_patch(_Old, [[?OP_TEXT, _Az, #{~"d" := Rows}]]) ->
+    [V || [V] <- Rows];
+replay_list_patch(Old, [[?OP_LIST_PATCH, _Az, Subs]]) ->
+    Removed = [I || [?OP_REMOVE, I] <- Subs],
+    Patched = #{I => V || [?OP_ITEM_PATCH, I, [[?OP_TEXT, _, V]]] <- Subs},
+    Inserts = lists:foldl(
+        fun([?OP_INSERT, I, #{~"d" := [V]}], Acc) ->
+            maps:update_with(I, fun(Vs) -> Vs ++ [V] end, [V], Acc)
+        end,
+        #{},
+        [Op || [?OP_INSERT, _, _] = Op <- Subs]
+    ),
+    Len = length(Old),
+    Body = [
+        maps:get(I, Inserts, []) ++
+            case lists:member(I, Removed) of
+                true -> [];
+                false -> [maps:get(I, Patched, lists:nth(I + 1, Old))]
+            end
+     || I <- lists:seq(0, Len - 1)
+    ],
+    lists:append(Body) ++ maps:get(Len, Inserts, []).
+
+%% Where the gate still hands over: a large shrink is a long run of removes, which
+%% no amount of prefix/suffix stripping collapses, and one re-render of the few
+%% survivors is smaller.
+diff_list_large_shrink_falls_back_to_wholesale(Config) when is_list(Config) ->
+    Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 200)],
+    ?assertMatch(
+        [[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]],
+        each_list_diff_sr(Old, lists:sublist(Old, 2))
+    ).
+
+%% And where it does not: a short container is not torn down for a trivial saving.
+diff_list_small_shrink_stays_positional(Config) when is_list(Config) ->
     Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 10)],
     ?assertMatch(
         [[?OP_LIST_PATCH, <<"0">>, _]],
-        each_list_diff_sr(Old, [#{name => ~"0"} | Old])
+        each_list_diff_sr(Old, lists:sublist(Old, 2))
     ).
 
 %% And a late insert into the same list stays positional.
 diff_list_late_insert_stays_positional(Config) when is_list(Config) ->
     Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 10)],
     New = lists:sublist(Old, 9) ++ [#{name => ~"x"}] ++ lists:nthtail(9, Old),
-    ?assertMatch(
-        [[?OP_ITEM_PATCH, 9, _], [?OP_INSERT, 10, _]],
-        assert_list_patch(each_list_diff_sr(Old, New))
-    ).
+    ?assertMatch([[?OP_INSERT, 9, _]], assert_list_patch(each_list_diff_sr(Old, New))).
 
 %% Same map twice: no ops.
 diff_map_no_change_no_ops(Config) when is_list(Config) ->

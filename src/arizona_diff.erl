@@ -1091,23 +1091,67 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% Returns `{{SubOps, ValueBytes}, Views}`. `ValueBytes` is the size of every NEW
 %% item's values, accumulated here because this walk already visits them -- it is
 %% what `outgrows_re_render/3` prices the wholesale alternative with.
-diff_list_positional(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
+%% Entry point. Strip the unchanged head and tail FIRST, then diff only the middle.
+%% Without that, a head insert reads as "every position differs" and emits one item
+%% patch per item plus a tail append -- each patch carrying the value of the item that
+%% merely shifted along. The change is one item, so the patch should be one op.
+%%
+%% Sub-op indices address the OLD positions, which is exactly what the client resolves
+%% them against: `applyListPatch` snapshots the item roots before applying anything, so
+%% an `?OP_INSERT` at index N lands before the item that was at N (or the end marker
+%% past the end), and repeated inserts at one index keep their emitted order because
+%% each lands immediately before the same unmoved reference node.
+diff_list_positional(Tmpl, NewItems, OldItems, Idx0, Views0) ->
+    AllBytes = lists:foldl(fun(D, A) -> A + item_value_bytes(D) end, 0, NewItems),
+    {Common, NewRest, OldRest} = strip_common_prefix(NewItems, OldItems, 0),
+    {NewMid, OldMid} = maybe_strip_common_suffix(NewRest, OldRest),
+    {Ops, Views1} = diff_list_middle(Tmpl, NewMid, OldMid, Idx0 + Common, Views0),
+    {{Ops, AllBytes}, Views1}.
+
+strip_common_prefix([Same | NR], [Same | OR], N) ->
+    strip_common_prefix(NR, OR, N + 1);
+strip_common_prefix(NewRest, OldRest, N) ->
+    {N, NewRest, OldRest}.
+
+%% The tail matters as much as the head: a HEAD insert differs at position 0, so the
+%% prefix strip finds nothing, while every remaining item matches one position along.
+%% Stripping that shared tail turns it into an empty old middle -- one insert. The
+%% middle's starting index is unaffected, since the shared tail sits past it.
+%%
+%% Only worth doing when the lengths DIFFER. Stripping costs a reverse of both lists,
+%% and at equal length it cannot produce a pure insert or remove -- the middle still
+%% goes through the lockstep walk, which already skips matching items for nothing. The
+%% common case is a value changing in place, so paying two reverses there is the whole
+%% cost of this optimisation with none of its benefit.
+maybe_strip_common_suffix(New, Old) ->
+    case length(New) =:= length(Old) of
+        true -> {New, Old};
+        false -> strip_common_suffix(New, Old)
+    end.
+
+strip_common_suffix(New, Old) ->
+    {_N, RevNew, RevOld} = strip_common_prefix(lists:reverse(New), lists:reverse(Old), 0),
+    {lists:reverse(RevNew), lists:reverse(RevOld)}.
+
+%% A pure insertion: the old list is exhausted at the same point the new one still has
+%% items, and everything before matched. One `?OP_INSERT` per added item, all at the
+%% same old index, instead of dragging every later item through a patch.
+diff_list_middle(Tmpl, NewRest, [], Idx, Views) ->
+    {[[?OP_INSERT, Idx, arizona_render:zip_item(Tmpl, D)] || D <- NewRest], Views};
+%% A pure removal: nothing new remains, so drop the old tail by index.
+diff_list_middle(_Tmpl, [], OldRest, Idx, Views) ->
+    {[[?OP_REMOVE, I] || I <- lists:seq(Idx, Idx + length(OldRest) - 1)], Views};
+%% Both sides still have items: an edit rather than a clean insert or remove. Walk them
+%% in lockstep, which is what a same-length content change wants anyway.
+diff_list_middle(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
     %% Markerless slots never reach this walk: `diff_each_items/6` routes any
     %% template carrying one to the wholesale fallback.
     {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
-    {{RestOps, RestBytes}, Views2} = diff_list_positional(Tmpl, NR, OR, Idx + 1, Views1),
-    Bytes = RestBytes + item_value_bytes(NewD),
+    {RestOps, Views2} = diff_list_middle(Tmpl, NR, OR, Idx + 1, Views1),
     case InnerOps of
-        [] -> {{RestOps, Bytes}, Views2};
-        _ -> {{[[?OP_ITEM_PATCH, Idx, InnerOps] | RestOps], Bytes}, Views2}
-    end;
-diff_list_positional(Tmpl, [NewD | NR], [], Idx, Views0) ->
-    HTML = arizona_render:zip_item(Tmpl, NewD),
-    {{RestOps, RestBytes}, Views1} = diff_list_positional(Tmpl, NR, [], Idx + 1, Views0),
-    Bytes = RestBytes + item_value_bytes(NewD),
-    {{[[?OP_INSERT, Idx, HTML] | RestOps], Bytes}, Views1};
-diff_list_positional(_Tmpl, [], OldTail, Idx, Views) ->
-    {{[[?OP_REMOVE, I] || I <- lists:seq(Idx, Idx + length(OldTail) - 1)], 0}, Views}.
+        [] -> {RestOps, Views2};
+        _ -> {[[?OP_ITEM_PATCH, Idx, InnerOps] | RestOps], Views2}
+    end.
 
 item_value_bytes(ItemD) ->
     lists:foldl(fun({_Az, V, _Deps}, A) -> A + wire_bytes(V) end, 0, ItemD).
