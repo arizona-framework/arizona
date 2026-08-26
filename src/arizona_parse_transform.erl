@@ -314,8 +314,9 @@ is_module_attr(_) -> false.
 %% Each target call resets `Ctx` for its own argument, so sibling targets (e.g. a
 %% dual-serve render with `?html` and `?native` in different clauses) are fine --
 %% only one literally nested in the other errors. Cross-target nesting via a
-%% `?stateful`/`?stateless` child *module* is invisible at this AST level and
-%% stays a documented "one target per tree" rule.
+%% `?stateful`/`?stateless` child *module* is invisible at this AST level, so it
+%% is caught at render instead (`arizona_render:assert_same_target/2`); it used to
+%% pass silently and emit a payload the client could not parse.
 mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, _}, Ctx, _CCtx) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
         (Target =:= html orelse Target =:= native orelse Target =:= terminal) andalso
@@ -536,8 +537,11 @@ format_error(nested_nodiff) ->
     "carries az-nodiff";
 format_error(cross_target_nesting) ->
     "cannot nest ?html, ?native and ?terminal in one template -- they produce "
-    "incompatible statics. Render cross-target content via a separate "
-    "stateful/stateless child of the matching target";
+    "incompatible statics. A ?stateful/?stateless child does NOT bridge them: the "
+    "child's target is invisible here, so the mismatch survives compilation and "
+    "is caught at render instead (cross_target_child), where the payload would "
+    "otherwise be unparseable. One target per template tree -- render the other "
+    "target from its own tree";
 format_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
     "the view bindings, so their map argument must be the bindings -- a parameter or a "
