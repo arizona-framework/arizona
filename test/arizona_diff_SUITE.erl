@@ -20,6 +20,8 @@
     diff_list_first_item_change_full_update/1,
     diff_list_grew_full_update/1,
     diff_list_shrank_full_update/1,
+    diff_list_invisible_change_emits_no_ops/1,
+    diff_list_visible_change_still_full_updates/1,
     diff_list_no_change_no_ops/1,
     diff_stream_unchanged_snapshot_pair_no_ops/1,
     diff_stream_nested_in_template_is_incremental/1,
@@ -104,6 +106,8 @@ groups() ->
             diff_list_first_item_change_full_update,
             diff_list_grew_full_update,
             diff_list_shrank_full_update,
+            diff_list_invisible_change_emits_no_ops,
+            diff_list_visible_change_still_full_updates,
             diff_list_no_change_no_ops,
             diff_stream_unchanged_snapshot_pair_no_ops,
             diff_stream_nested_in_template_is_incremental,
@@ -469,6 +473,23 @@ diff_list_shrank_full_update(Config) when is_list(Config) ->
     ?assertEqual([[<<"a">>]], assert_full_update(Ops)).
 
 %% No item changed and same length -> no ops (every boolean false).
+%% `to_bin/1` formats floats to 10 decimals, so 0.1 + 0.2 and 0.3 both render
+%% "0.3". Answering "changed" on term inequality alone would re-render the whole
+%% container, tearing down the DOM to rebuild byte-identical markup and losing
+%% focus, scroll position and every `?local` inside it for nothing.
+diff_list_invisible_change_emits_no_ops(Config) when is_list(Config) ->
+    %% Summed through a call so the compiler cannot constant-fold the drift away.
+    Drift = lists:sum([0.1, 0.2]),
+    ?assertNotEqual(Drift, 0.3),
+    ?assertEqual([], each_list_diff([#{name => 0.3}], [#{name => Drift}])).
+
+%% The suppression must not swallow a change that does alter the bytes.
+diff_list_visible_change_still_full_updates(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]],
+        each_list_diff([#{name => 0.3}], [#{name => 0.4}])
+    ).
+
 diff_list_no_change_no_ops(Config) when is_list(Config) ->
     Items = [#{name => <<"a">>}, #{name => <<"b">>}],
     ?assertEqual([], each_list_diff(Items, Items)).
