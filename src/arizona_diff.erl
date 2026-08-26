@@ -256,20 +256,25 @@ stream_relist(Az, Src, Tmpl, _New, #{items := OldItems, order := OldOrder}, Tail
 stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views).
 
-%% Can this stream's change be expressed as per-item ops from here?
+%% Can this stream's change be expressed by draining its pending log?
 %%
-%% `diff_stream/4` derives its ops purely by draining the stream's pending log.
-%% That log is cleared before a `?stateful` child renders (arizona_eval, to stop a
-%% prop-fed child accumulating one entry per root update), so a container reached
-%% through such a child has an empty log while its order HAS changed -- draining
-%% then yields no ops at all and the container silently never updates. Only take
-%% the incremental path when the log can actually account for the difference: an
-%% unchanged order needs no ops, and a changed order needs a non-empty log.
-%% Otherwise fall through to the wholesale re-render, which always delivers.
-stream_drainable(#stream{order = Order, limit = Limit} = Src, Old) ->
+%% `diff_stream/4` derives its ops purely by draining that log, and the log is
+%% cleared before a `?stateful` child renders (arizona_eval, to stop a prop-fed
+%% child accumulating one entry per root update). So an empty log carries NO
+%% information about whether the container changed: it means either "nothing
+%% happened" or "the log was wiped and anything may have happened". Draining it
+%% yields no ops either way, which loses a real change silently.
+%%
+%% Comparing key ORDERS is not enough to tell those apart -- an item whose content
+%% changed in place leaves the order identical, so treating an unchanged order as
+%% "no ops needed" drops that change and the client never self-heals. Only a
+%% non-empty log is evidence the drain can account for the difference; an empty
+%% one goes to `stream_relist/7`, which reconciles against the old snapshot and
+%% emits an `?OP_ITEM_PATCH` for exactly the items whose dynamics differ.
+stream_drainable(#stream{} = Src, Old) ->
     case arizona_stream:undrained_ops(Src, maps:get(drained, Old, none)) of
-        [] -> arizona_template:visible_keys(Order, Limit) =:= maps:get(order, Old, undefined);
-        [_ | _] -> true
+        [_ | _] -> true;
+        [] -> false
     end.
 
 diff_dynamics_v([], [], [], _Changed, Views) ->
