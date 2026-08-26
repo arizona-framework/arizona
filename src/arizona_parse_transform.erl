@@ -445,16 +445,14 @@ format_error(each_stream_body_not_element) ->
     "e.g. fun(Item, Key) -> {li, [], [Item]} end";
 format_error(each_stream_body_control_flow) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
-    "control-flow body (case, if, begin, try, receive) is not one: every item shares ONE "
-    "compiled per-item template, so the "
-    "item's outer tag is fixed at compile time (that shared template is what makes "
-    "per-item diffing cheap -- statics once, dynamics per item). The branches themselves "
-    "can be entirely different elements; put them inside one stable item element that "
-    "carries az_key: fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end. "
-    "A conditional child may return bare element tuples, so <em> vs <strong> vs a whole "
-    "subtree all work there. Containers whose child tag is fixed anyway (ul/ol, table, "
-    "select) lose nothing; elsewhere the wrapper can be a div with display: contents to "
-    "stay out of layout";
+    "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
+    "compiled per-item template (statics once, dynamics per item), so an item's outer tag "
+    "is fixed at compile time. The branches can still be entirely different elements -- "
+    "put them inside one stable item element carrying az_key, e.g. fun(Item, Key) -> "
+    "{li, [{az_key, Key}], [case Item of ... end]} end, where a conditional child may "
+    "return bare element tuples (<em> vs <strong> vs a whole subtree all work). "
+    "Containers whose child tag is fixed anyway (ul/ol, table, select) lose nothing; "
+    "elsewhere the wrapper can be a div with display: contents to stay out of layout";
 format_error(each_named_fun_multi_clause) ->
     "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
     "single clause -- ?each inlines the function's body into one shared per-item template, so "
