@@ -1,5 +1,6 @@
 -module(arizona_parse_transform_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include("arizona.hrl").
 -dialyzer({nowarn_function, to_bin_crash/1}).
 
 -export([all/0, groups/0]).
@@ -10,6 +11,8 @@
     each_with_named_fun_ref_arity_2/1,
     each_named_fun_ref_non_element_rejected/1,
     each_named_fun_ref_arity_2_non_element_rejected/1,
+    each_stream_control_flow_body_rejected_with_wrapper_advice/1,
+    each_stream_control_flow_wrapper_fix_keys_per_item/1,
     each_with_remote_fun_ref/1,
     each_named_fun_ref_diffs/1,
     each_named_fun_ref_pattern_param/1,
@@ -497,6 +500,8 @@ groups() ->
             each_with_named_fun_ref_arity_2,
             each_named_fun_ref_non_element_rejected,
             each_named_fun_ref_arity_2_non_element_rejected,
+            each_stream_control_flow_body_rejected_with_wrapper_advice,
+            each_stream_control_flow_wrapper_fix_keys_per_item,
             each_with_remote_fun_ref,
             each_named_fun_ref_diffs,
             each_named_fun_ref_pattern_param,
@@ -5325,6 +5330,54 @@ each_named_fun_ref_arity_2_non_element_rejected(Config) when is_list(Config) ->
         "        arizona_template:get(items, Bindings, [])). ",
         fun(R) -> R =:= each_stream_body_not_element end
     ).
+
+%% A conditional body is a distinct mistake from a bare value: "wrap the value in an
+%% element" would have the author pick a tag, which for branches already returning
+%% different elements changes the markup rather than fixing it.
+each_stream_control_flow_body_rejected_with_wrapper_advice(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_stream_cond). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:each(fun(Item, Key) -> "
+        "        case Item of "
+        "            note -> {'em', [{az_key, Key}], [Item]}; "
+        "            _ -> {'strong', [{az_key, Key}], [Item]} "
+        "        end "
+        "    end, arizona_template:get(items, Bindings, [])). ",
+        fun(R) -> R =:= each_stream_body_control_flow end
+    ).
+
+%% The shape that error tells the author to write must actually work: one stable keyed
+%% item element with the branch as a child, still diffing per item by key.
+each_stream_control_flow_wrapper_fix_keys_per_item(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_stream_cond_fix). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item, Key) -> "
+        "        {'li', [{az_key, Key}], [case Item of "
+        "            #{kind := note, t := T} -> {'em', [], [T]}; "
+        "            #{t := T} -> {'strong', [], [T]} "
+        "        end]} "
+        "    end, arizona_template:get(items, Bindings))]}). "
+    ),
+    Key = fun(I) -> maps:get(id, I) end,
+    S0 = arizona_stream:new(Key, [
+        #{id => 1, kind => note, t => ~"A"}, #{id => 2, kind => row, t => ~"B"}
+    ]),
+    T0 = Mod:render(#{items => S0}),
+    %% Each branch renders under its own key, so the two items differ structurally.
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(T0)),
+    ?assertMatch({_, _}, binary:match(HTML, ~"az-key=\"1\"")),
+    ?assertMatch({_, _}, binary:match(HTML, ~"<em")),
+    ?assertMatch({_, _}, binary:match(HTML, ~"<strong")),
+    {_H, Snap0} = arizona_render:render(T0),
+    {_, Snap1, _} = arizona_diff:diff(T0, Snap0, #{}),
+    S1 = arizona_stream:update(S0, 2, #{id => 2, kind => row, t => ~"CHANGED"}),
+    {Ops, _, _} = arizona_diff:diff(Mod:render(#{items => S1}), Snap1, #{}, #{items => true}),
+    %% Keyed per-item patch addressing only the changed item's inner slot.
+    ?assertMatch([[?OP_ITEM_PATCH, _Container, ~"2", [[?OP_TEXT, _Inner, ~"CHANGED"]]]], Ops).
 
 %% each/2 rejects `fun Mod:Name/Arity` remote references: the body isn't visible to inline.
 each_with_remote_fun_ref(Config) when is_list(Config) ->
