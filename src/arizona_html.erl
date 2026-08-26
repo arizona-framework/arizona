@@ -164,12 +164,21 @@ raw_text_kind(Tag, Context) ->
     raw_text_kind_name(tag_name(Tag), Context).
 
 %% Raw-text elements: content is never parsed for comments or character
-%% references, so a dynamic slot must render verbatim and markerless. `script`
-%% and `style` keep that in foreign content too -- their content is still not
-%% ordinary parsed markup there.
-raw_text_kind_name(~"script", _Context) ->
+%% references, so a dynamic slot must render verbatim and markerless.
+%%
+%% Only in HTML. Inside `<svg>` the parser is in foreign content, where `script`
+%% and `style` content IS ordinary parsed markup: a comment there is a real
+%% comment node, and a bare `<` starts an element. Classifying them `raw` there
+%% was wrong twice over. It froze the slot for no reason, and -- the part that
+%% matters -- `raw` forces the author to mark the value `?raw`, which splices it
+%% verbatim; the neutralization behind that opt-out guards the `</script>` /
+%% `</style>` breakout, which is not the breakout available in foreign content.
+%% As `none` the slot is escaped instead, and the parser decodes the references
+%% straight back (`a &gt; b` reaches CSS as `a > b`), so the content is unchanged
+%% and the value can no longer escape its element.
+raw_text_kind_name(~"script", html) ->
     raw;
-raw_text_kind_name(~"style", _Context) ->
+raw_text_kind_name(~"style", html) ->
     raw;
 %% Escapable-raw-text elements: character references are decoded, so a scalar
 %% slot is HTML-escaped, but comments are still literal -- so still markerless.
