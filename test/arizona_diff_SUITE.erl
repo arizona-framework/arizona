@@ -23,6 +23,7 @@
     diff_list_no_change_no_ops/1,
     diff_stream_unchanged_snapshot_pair_no_ops/1,
     diff_stream_nested_in_template_is_incremental/1,
+    diff_stream_nested_with_cleared_log_falls_back/1,
     diff_list_content_change_positional/1,
     diff_list_first_item_change_positional/1,
     diff_list_grew_positional/1,
@@ -98,6 +99,7 @@ groups() ->
             diff_list_no_change_no_ops,
             diff_stream_unchanged_snapshot_pair_no_ops,
             diff_stream_nested_in_template_is_incremental,
+            diff_stream_nested_with_cleared_log_falls_back,
             diff_list_content_change_positional,
             diff_list_first_item_change_positional,
             diff_list_grew_positional,
@@ -1498,6 +1500,48 @@ diff_stream_nested_in_template_is_incremental(Config) when is_list(Config) ->
     Grown = stream_each_tmpl(ItemTmpl, Items ++ [#{id => <<"c">>, text => <<"C">>}]),
     {Ops, _, _} = arizona_diff:diff(Nest(Grown), Snap, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"c">>, -1, _]], Ops).
+
+%% The nested-template stream route derives its ops purely by draining the
+%% stream's pending log. A container reached through a `?stateful` child has an
+%% empty log -- `arizona_eval` clears it before the child renders, to stop a
+%% prop-fed child accumulating one entry per root update -- so draining yields
+%% NOTHING while the order has in fact changed, and the container silently never
+%% updates. That is worse than the wholesale render it replaced: zero delivered
+%% rather than everything delivered expensively. Fall back whenever the log
+%% cannot account for the order difference.
+diff_stream_nested_with_cleared_log_falls_back(Config) when is_list(Config) ->
+    ItemTmpl = #{
+        t => ?EACH,
+        s => [<<"<li az=\"0\">">>, <<"</li>">>],
+        d => fun(I, _Key) -> [{<<"0">>, maps:get(text, I)}] end,
+        f => <<"item">>
+    },
+    Inner = stream_each_tmpl(ItemTmpl, [#{id => <<"a">>, text => <<"A">>}]),
+    Nest = fun(T) ->
+        #{
+            s => [<<"<div az=\"n\">">>, <<"</div>">>],
+            d => [{<<"n">>, fun() -> T end}],
+            f => <<"outer">>
+        }
+    end,
+    {_, Snap, _} = arizona_render:render(Nest(Inner), #{}),
+    %% A stream whose order grew but whose pending log is empty -- exactly the
+    %% state a `?stateful` child hands down.
+    Grown = stream_each_tmpl(ItemTmpl, [
+        #{id => <<"a">>, text => <<"A">>}, #{id => <<"b">>, text => <<"B">>}
+    ]),
+    #{d := [{_, GrownFun}]} = Grown,
+    Cleared = maps:get(source, GrownFun()),
+    #{st := Drained} = arizona_stream:clear_stream_pending(#{st => Cleared}, [st]),
+    Tmpl = #{
+        s => maps:get(s, Grown),
+        d => [{<<"0">>, fun() -> #{t => ?EACH, source => Drained, template => ItemTmpl} end}],
+        f => maps:get(f, Grown)
+    },
+    {Ops, _, _} = arizona_diff:diff(Nest(Tmpl), Snap, #{}),
+    %% Must deliver the new item somehow -- a wholesale container render is fine,
+    %% emitting nothing is not.
+    ?assertNotEqual([], Ops).
 
 stream_each_tmpl(ItemTmpl, Items) ->
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),

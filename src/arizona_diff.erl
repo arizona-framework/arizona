@@ -218,20 +218,41 @@ diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail, Views) ->
 %% `diff_item_dynamics_v/3`, which reconstructs the descriptor the same way), so
 %% list- and map-source eaches fall through untouched.
 diff_dynamics(
-    [{Az, #{t := ?EACH, source := #stream{} = Src, template := Tmpl}} | NR],
+    [{Az, #{t := ?EACH, source := #stream{} = Src, template := Tmpl} = New} | NR],
     [{Az, #{t := ?EACH} = Old} | OR],
     Tail,
     Views0
 ) ->
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
-    {Old0, New0} = Views1,
-    {StreamOps, _NewSnap, {_, LocalNew}} =
-        diff_stream(Az, #{source => Src, template => Tmpl}, Old, {Old0, #{}}),
-    LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
-    {StreamOps ++ RestOps, {Old0, maps:merge(New0, LocalNew1)}};
+    case stream_drainable(Src, Old) of
+        true ->
+            {Old0, New0} = Views1,
+            {StreamOps, _NewSnap, {_, LocalNew}} =
+                diff_stream(Az, #{source => Src, template => Tmpl}, Old, {Old0, #{}}),
+            LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
+            {StreamOps ++ RestOps, {Old0, maps:merge(New0, LocalNew1)}};
+        false ->
+            make_ops(Az, New, Old, RestOps, Views1)
+    end;
 diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
     make_ops(Az, New, Old, RestOps, Views1).
+
+%% Can this stream's change be expressed as per-item ops from here?
+%%
+%% `diff_stream/4` derives its ops purely by draining the stream's pending log.
+%% That log is cleared before a `?stateful` child renders (arizona_eval, to stop a
+%% prop-fed child accumulating one entry per root update), so a container reached
+%% through such a child has an empty log while its order HAS changed -- draining
+%% then yields no ops at all and the container silently never updates. Only take
+%% the incremental path when the log can actually account for the difference: an
+%% unchanged order needs no ops, and a changed order needs a non-empty log.
+%% Otherwise fall through to the wholesale re-render, which always delivers.
+stream_drainable(#stream{order = Order, limit = Limit} = Src, Old) ->
+    case arizona_stream:undrained_ops(Src, maps:get(drained, Old, none)) of
+        [] -> arizona_template:visible_keys(Order, Limit) =:= maps:get(order, Old, undefined);
+        [_ | _] -> true
+    end.
 
 diff_dynamics_v([], [], [], _Changed, Views) ->
     {[], [], [], Views};
