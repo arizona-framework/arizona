@@ -477,6 +477,28 @@ marker `OP_TEXT`, re-rendering every item on any change. When you want self-diff
 live view (an entry in the root live process's `views` map, not a process of its own),
 and `merge_stream_child_views/4` carries the child ids incrementally across diffs.
 
+**Two further shapes fall back to the wholesale render, both deliberately.**
+
+A stream `?each` whose container sits in a **`?stateful` child** re-renders wholesale even though
+its items are keyed. `diff_stream/4` emits ops by draining the stream's pending op log, and
+`arizona_eval` clears that log *before* rendering a child (`clear_stream_pending/2`), so the
+child's stream arrives with no history to drain. That clearing is what stops a child fed a stream
+through props from accumulating one queue entry per root update for the life of the process, and
+clearing after the render instead made unchanged ticks re-render the container. Incremental
+stream diffing needs the mutation log of the view that **owns** the stream; a child handed one as
+a prop has none. Keep a keyed container in the owning view, or in a `?stateless` child or element
+helper -- both of those diff per item.
+
+A **map-source** `?each` always re-renders wholesale too. Its items are positional rather than
+keyed by an op log, so its only incremental path is `diff_each_items/6`'s positional walk, gated
+on the compile-time `single_root` flag that `maybe_single_root_opt/4` sets only for the 1-arg
+(list) each. Flagging the 2-arg each is safe for streams (a stream source never reaches that
+walk) and does make a value-only change O(1) -- but Erlang map iteration order shifts on
+insertion, so adding one entry then repositions nearly every item. Measured at 400 entries: a
+value change falls from 12.741 to 84 bytes while an insert rises from 12.768 to 23.091. The
+wholesale render is the cheaper worst case for an unordered container, and the differ holds
+rendered item lists rather than keys, so it cannot detect a stable order and decide per call.
+
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_os` / `arizona_effect`)
 
 Client effect commands, built per platform -- `arizona_js` (web), `arizona_android` (native),
