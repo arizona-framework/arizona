@@ -52,6 +52,19 @@ test('a patched-in SVG child is created in the SVG namespace and lays out', asyn
     expect(probe.height).toBeGreaterThan(0);
 });
 
+test('an SVG <title> in a stateless child updates on a patch', async ({ page }) => {
+    // The child is a separate template with no call site, so it classifies `title`
+    // as HTML raw text and its slot comes out markerless -- no marker to patch. The
+    // update has to arrive by re-rendering the child whole against its own slot.
+    // An SVG `<title>` is the accessible name, so a frozen one shows nothing on
+    // screen; only reading the text catches it.
+    const caption = () => page.evaluate(() => document.querySelector('#chart > title').textContent);
+
+    expect(await caption()).toBe('Chart');
+    await page.locator('#rename').click();
+    await expect.poll(caption).toBe('Renamed');
+});
+
 test('further inserts keep the namespace', async ({ page }) => {
     await page.locator('#add').click();
     await page.locator('#add').click();

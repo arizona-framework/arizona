@@ -1692,18 +1692,26 @@ compiles in that context. Because the rename happens at the *call site*, a `fun 
 defined elsewhere in the module inherits it too.
 
 A **`?stateless`/`?stateful` child** is the one construct that cannot: it is a separate template
-with no call site at compile time, so a `<title>` there is classified `html` and stays
-render-once. That is a real limitation, not an oversight -- the same child may be used in both
-contexts, and nothing in its own source says which.
+with no call site at compile time, so a `<title>` there is classified `html` and its slot comes
+out markerless. That much is not fixable -- the same child may be used in both contexts, and
+nothing in its own source says which.
+
+The *update* still lands, though, because the child's own slot in the caller does have markers.
+`make_ops/5` checks whether a markerless slot inside a nested template changed value, and
+escalates to a whole re-render of that template (`markerless_changed/2`) rather than dropping the
+change the way `diff_dynamics/4` does at a template's top level. The distinction is capability,
+not policy: a top-level markerless slot has no enclosing target to patch against, a nested one
+does.
 
 Backends name their own markers, so the transform holds no target vocabulary: a backend with one
 content context returns the same marker for every context, which makes the renaming inert for it
 by its own answer rather than by a target check in the pass.
 
-**So factor SVG chrome through a local element helper, not a `?stateless` child.** That is
-already the documented split -- a helper factors *markup*, `?stateless` is for a component with
-its own props -- and here it is also the difference between a `<title>` that keeps updating and
-one frozen at its SSR value. This is not fixable by classifying `title` as `none` everywhere and
+**A local element helper is still the better factoring for SVG chrome.** That is already the
+documented split -- a helper factors *markup*, `?stateless` is for a component with its own
+props -- and the helper keeps the fine-grained patch (one slot, one value) where the child pays a
+re-render of its whole template for the same change. The child is correct either way now, just
+coarser. None of this is fixable by classifying `title` as `none` everywhere and
 special-casing `<head>`: that inverts which side fails silently, and the other side fails worse.
 Comment markers inside a real HTML `<title>` are literal text, so a layout's page title would
 render `<!--az:0-->Home<!--/az-->` in the browser tab -- visible corruption traded for an
