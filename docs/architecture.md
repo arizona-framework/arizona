@@ -492,7 +492,10 @@ The synthesized reset pays for that in server CPU, not on the wire. It has no pr
 *values* to compare, so it loses the dep-skip a real reset gets and re-evaluates every kept item's
 dynamics rather than skipping unchanged ones -- O(N) evaluation per update, while the payload
 stays proportional to what actually changed. Measured on a container under a `?stateful` ancestor:
-258 bytes flat at 100 items and at 400.
+258 bytes flat at 100 items and at 400, and roughly 2 ms per diff at 400 heavy items against
+0,4 ms for the same list on the drainable path. Restoring the skip would mean keeping the previous
+item VALUES on the snapshot, trading memory proportional to the list for that few ms -- not worth
+it at these sizes, but the number is the thing to re-measure before concluding that again.
 
 A **map-source** `?each` is the one shape that still re-renders wholesale. Its items are
 positional rather than keyed by an op log, so its only incremental path is
