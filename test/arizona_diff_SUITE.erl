@@ -732,7 +732,10 @@ diff_list_ops_round_trip_every_shape(Config) when is_list(Config) ->
             {insert, P, L, lists:sublist(L, P) ++ [~"NEW"] ++ lists:nthtail(P, L)}
          || P <- lists:seq(0, 6)
         ] ++
-            [{remove, P, L, lists:sublist(L, P) ++ lists:nthtail(P + 1, L)} || P <- lists:seq(0, 5)] ++
+            [
+                {remove, P, L, lists:sublist(L, P) ++ lists:nthtail(P + 1, L)}
+             || P <- lists:seq(0, 5)
+            ] ++
             [
                 {change, P, L, lists:sublist(L, P) ++ [~"CH"] ++ lists:nthtail(P + 1, L)}
              || P <- lists:seq(0, 5)

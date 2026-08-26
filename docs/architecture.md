@@ -539,7 +539,23 @@ when staying positional was 4.5x smaller; and a shrink whose surviving prefix is
 produces no item patches at all, so no threshold could ever trip it, leaving a 200-item container
 shipping 198 removes where one re-render was 2.2x cheaper.
 
-**So both sides are estimated in bytes.** The wholesale side costs nothing extra to obtain:
+**Before any of that, the walk strips what did not change.** `diff_list_positional/5`
+removes the common prefix and, when the lengths differ, the common suffix, and diffs only
+the middle. Without it a head insert reads as "every position differs" and emits one item
+patch per item plus a tail append -- each patch carrying the value of an item that merely
+shifted along. With it the same change is a single `?OP_INSERT` at the position the item
+actually goes, at any container size, and a single delete is one `?OP_REMOVE`. Sub-op
+indices address the OLD positions, which is what the client resolves them against:
+`applyListPatch` snapshots the item roots before applying anything, so an insert at N
+lands before whatever was at N, and repeated inserts at one index keep their emitted
+order. The suffix strip is skipped at equal lengths, where it costs two reverses and
+cannot produce a pure insert or remove.
+
+That mostly retires the fallback for insertions -- one op is never worth re-rendering a
+container for. What still reaches it is a long run of removes, which no amount of
+stripping collapses.
+
+**Both sides are then estimated in bytes.** The wholesale side costs nothing extra to obtain:
 `diff_list_positional/5` already visits every new item, so it accumulates their value bytes as it
 walks and returns them beside the ops. `wire_bytes/1` approximates the JSON size of the ops
 without encoding them -- only the ratio matters.
