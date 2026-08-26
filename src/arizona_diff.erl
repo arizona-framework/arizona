@@ -972,14 +972,29 @@ item_changed([], []) ->
 item_changed([{_NewAz, Same, _} | NR], [{_OldAz, Same, _} | OR]) ->
     item_changed(NR, OR);
 item_changed([{_NewAz, New, _} | NR], [{_OldAz, Old, _} | OR]) ->
-    case renders_same(New, Old) of
+    case collapses_to_same_bytes(New, Old) of
         true -> item_changed(NR, OR);
         false -> true
     end;
 item_changed(_NewTail, _OldTail) ->
     true.
 
-renders_same(New, Old) ->
+%% Do two values KNOWN to differ still render to the same bytes? Asked only from
+%% `item_changed/2`, which has already matched the equal case, so these clauses
+%% never see equal inputs (hence the name -- "collapses", not "renders same").
+%%
+%% Same-type scalars collapse for nothing: `to_bin/1` is the identity on binaries,
+%% and `integer_to_binary`/`atom_to_binary` are injective, so two distinct ones
+%% cannot print the same. That covers nearly every slot without rendering either
+%% side, leaving the render for the pairs that genuinely can collapse -- two floats
+%% (the 10-decimal format), or a value against a different type or an escape marker.
+collapses_to_same_bytes(New, Old) when is_binary(New), is_binary(Old) ->
+    false;
+collapses_to_same_bytes(New, Old) when is_integer(New), is_integer(Old) ->
+    false;
+collapses_to_same_bytes(New, Old) when is_atom(New), is_atom(Old) ->
+    false;
+collapses_to_same_bytes(New, Old) ->
     byte_comparable(New) andalso byte_comparable(Old) andalso
         arizona_template:to_bin(New) =:= arizona_template:to_bin(Old).
 
