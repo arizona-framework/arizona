@@ -21,6 +21,8 @@
     diff_list_grew_full_update/1,
     diff_list_shrank_full_update/1,
     diff_list_invisible_change_emits_no_ops/1,
+    diff_list_esc_marker_mismatch_not_suppressed/1,
+    diff_list_esc_wrapped_invisible_change_suppressed/1,
     diff_list_visible_change_still_full_updates/1,
     diff_list_no_change_no_ops/1,
     diff_stream_unchanged_snapshot_pair_no_ops/1,
@@ -107,6 +109,8 @@ groups() ->
             diff_list_grew_full_update,
             diff_list_shrank_full_update,
             diff_list_invisible_change_emits_no_ops,
+            diff_list_esc_marker_mismatch_not_suppressed,
+            diff_list_esc_wrapped_invisible_change_suppressed,
             diff_list_visible_change_still_full_updates,
             diff_list_no_change_no_ops,
             diff_stream_unchanged_snapshot_pair_no_ops,
@@ -482,6 +486,30 @@ diff_list_invisible_change_emits_no_ops(Config) when is_list(Config) ->
     Drift = lists:sum([0.1, 0.2]),
     ?assertNotEqual(Drift, 0.3),
     ?assertEqual([], each_list_diff([#{name => 0.3}], [#{name => Drift}])).
+
+%% `to_bin/1` unwraps an escape marker, so an esc-wrapped value and a bare one look
+%% identical to it -- but the wholesale re-render ESCAPES the wrapped one and not the
+%% bare one. Suppressing that would drop a visible change, and in this direction leave
+%% unescaped markup on screen.
+diff_list_esc_marker_mismatch_not_suppressed(Config) when is_list(Config) ->
+    Esc = {arizona_esc, ~"<b>"},
+    Bare = ~"<b>",
+    ?assertEqual(arizona_template:to_bin(Esc), arizona_template:to_bin(Bare)),
+    ?assertMatch(
+        [[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]],
+        each_list_diff([#{name => Esc}], [#{name => Bare}])
+    ).
+
+%% A pair sharing the marker IS unwrapped and compared, so the float suppression
+%% still applies to what the parse transform actually emits (every content slot
+%% value is marker-wrapped).
+diff_list_esc_wrapped_invisible_change_suppressed(Config) when is_list(Config) ->
+    Drift = lists:sum([0.1, 0.2]),
+    ?assertNotEqual(Drift, 0.3),
+    ?assertEqual(
+        [],
+        each_list_diff([#{name => {arizona_esc, 0.3}}], [#{name => {arizona_esc, Drift}}])
+    ).
 
 %% The suppression must not swallow a change that does alter the bytes.
 diff_list_visible_change_still_full_updates(Config) when is_list(Config) ->
