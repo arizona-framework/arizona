@@ -488,14 +488,13 @@ ops, a changed order needs a non-empty log -- and otherwise reconciles the two k
 `stream_reset/8`, which needs no log at all: dropped keys are removed, kept keys patched only
 where their dynamics differ, new keys inserted, and the minimal moves emitted from the LIS.
 
-The synthesized reset pays for that in server CPU, not on the wire. It has no previous item
-*values* to compare, so it loses the dep-skip a real reset gets and re-evaluates every kept item's
-dynamics rather than skipping unchanged ones -- O(N) evaluation per update, while the payload
-stays proportional to what actually changed. Measured on a container under a `?stateful` ancestor:
-258 bytes flat at 100 items and at 400, and roughly 2 ms per diff at 400 heavy items against
-0,4 ms for the same list on the drainable path. Restoring the skip would mean keeping the previous
-item VALUES on the snapshot, trading memory proportional to the list for that few ms -- not worth
-it at these sizes, but the number is the thing to re-measure before concluding that again.
+The reconciliation diffs against the state the enclosing walk already evaluated, so it renders
+nothing extra: dropped keys are removed, kept keys patched only where their dynamics differ, new
+keys inserted, and moves emitted from the LIS. An earlier version handed the source to
+`stream_reset/8` instead, which rendered the whole list a SECOND time -- twice the work, and it
+re-ran every item child's `mount/1` / `handle_update/3`, so a child that subscribes or arms a
+timer in mount did it twice per diff. Measured on a container under a `?stateful` ancestor: 258
+bytes flat at 100 items and at 400, and 1,2 ms per diff at 400 heavy items.
 
 A **map-source** `?each` is the one shape that still re-renders wholesale. Its items are
 positional rather than keyed by an op log, so its only incremental path is
