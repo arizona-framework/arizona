@@ -1682,6 +1682,23 @@ per-item child view), and also when it would be sound but larger (the container 
 that per-item patches outgrow one re-render -- see `shifted/3` above). A scalar value or a nested
 template still patches via that `OP_TEXT`.
 
+That fallback re-renders the whole container, so `list_changed/3` decides whether it is warranted
+by whether a slot RENDERS differently (`item_changed/2`), not by term inequality. A value can
+differ as a term yet render the same bytes: `to_bin/1` formats floats to 10 decimals, so error
+accumulated past that (`0.1 + 0.2` against `0.3`, both `"0.3"`) is invisible, as is an integer
+against its binary or a value against the same value wrapped in an escape marker. Answering on
+term inequality tore the container down to rebuild byte-identical markup, losing focus, scroll
+position and every `?local` inside it for nothing.
+
+Nothing is rendered to answer it in the common case. `collapses_to_same_bytes/2` runs only once
+the terms already differ, and two same-type scalars are settled by their types alone: `to_bin/1`
+is the identity on binaries and `integer_to_binary`/`atom_to_binary` are injective, so two
+distinct ones cannot print the same. Only the pairs that genuinely can collapse are rendered --
+two floats, or a value against a different type or an escape marker. A map (nested template, each
+snapshot, child view) or a descriptor tuple is never rendered either: it counts as changed, the
+conservative answer. The snapshot is still advanced to the new values when the re-render is
+suppressed, so nothing drifts.
+
 **Context -- inside `<svg>` a `<title>` is not raw text.** The classification takes the content
 context (`raw_text_kind/2`, second argument `html | foreign`), threaded through the transform by
 `content_context/2`: `<svg>` opens foreign content and `<foreignObject>` switches back. In foreign

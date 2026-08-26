@@ -939,18 +939,71 @@ diff_list_full(Az, Tmpl, NewItemsList, _OldItemsList, NewSnap, Views0) ->
     full_update(Az, Tmpl, NewItemsList, NewSnap, Views0).
 
 %% Lockstep change detection for the wholesale fallback -- mirrors the per-item
-%% walk but emits no ops, just whether any item changed (an inner diff =/= [] or
-%% a length difference), threading child views through.
+%% walk but emits no ops, just whether any item changed (a slot that renders
+%% differently, or a length difference), threading child views through.
 list_changed([NewD | NR], [OldD | OR], Views0) ->
-    %% A changed markerless slot emits no inner op but IS a change: the
-    %% wholesale re-render is exactly what delivers it.
-    {InnerOps, Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    %% The walk still runs for its Views accumulation (this fallback is where a
+    %% list bearing per-item child views lands); its ops are discarded, since only
+    %% the boolean matters here. A changed markerless slot emits no inner op but IS
+    %% a change, and `item_changed/2` sees it like any other slot.
+    {_InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
     {RestChanged, Views2} = list_changed(NR, OR, Views1),
-    {InnerOps =/= [] orelse Markerless orelse RestChanged, Views2};
+    {item_changed(NewD, OldD) orelse RestChanged, Views2};
 list_changed([], [], Views) ->
     {false, Views};
 list_changed(_NewTail, _OldTail, Views) ->
     {true, Views}.
+
+%% Did any of this item's slots RENDER differently? The fallback re-renders the
+%% whole container, so answering on term inequality alone tears the container down
+%% and rebuilds byte-identical markup, losing focus, scroll position and every
+%% `?local` inside it for nothing. A value can differ as a term yet render the
+%% same: `to_bin/1` formats floats to 10 decimals, so accumulated error past that
+%% (0.1 + 0.2 against 0.3) renders "0.3" either way, and an integer against its
+%% binary, or a value against the same value wrapped in an escape marker, are the
+%% same bytes too.
+%%
+%% The byte comparison only runs once the terms already differ, so it costs
+%% nothing on the common path, and only for values `to_bin/1` renders without
+%% raising. A map (a nested template, each snapshot or child view) or a descriptor
+%% tuple is not compared: it counts as changed, which is the conservative answer.
+item_changed([], []) ->
+    false;
+item_changed([{_NewAz, Same, _} | NR], [{_OldAz, Same, _} | OR]) ->
+    item_changed(NR, OR);
+item_changed([{_NewAz, New, _} | NR], [{_OldAz, Old, _} | OR]) ->
+    case collapses_to_same_bytes(New, Old) of
+        true -> item_changed(NR, OR);
+        false -> true
+    end;
+item_changed(_NewTail, _OldTail) ->
+    true.
+
+%% Do two values KNOWN to differ still render to the same bytes? Asked only from
+%% `item_changed/2`, which has already matched the equal case, so these clauses
+%% never see equal inputs (hence the name -- "collapses", not "renders same").
+%%
+%% Same-type scalars collapse for nothing: `to_bin/1` is the identity on binaries,
+%% and `integer_to_binary`/`atom_to_binary` are injective, so two distinct ones
+%% cannot print the same. That covers nearly every slot without rendering either
+%% side, leaving the render for the pairs that genuinely can collapse -- two floats
+%% (the 10-decimal format), or a value against a different type or an escape marker.
+collapses_to_same_bytes(New, Old) when is_binary(New), is_binary(Old) ->
+    false;
+collapses_to_same_bytes(New, Old) when is_integer(New), is_integer(Old) ->
+    false;
+collapses_to_same_bytes(New, Old) when is_atom(New), is_atom(Old) ->
+    false;
+collapses_to_same_bytes(New, Old) ->
+    byte_comparable(New) andalso byte_comparable(Old) andalso
+        arizona_template:to_bin(New) =:= arizona_template:to_bin(Old).
+
+byte_comparable(V) when is_binary(V); is_integer(V); is_float(V); is_atom(V) ->
+    true;
+byte_comparable({arizona_esc, V}) ->
+    byte_comparable(V);
+byte_comparable(_Other) ->
+    false.
 
 %% A plain-list `?each` is marker-anchored in a content slot (no wrapper element
 %% carries the slot az), so the full re-render patches the marker content via
