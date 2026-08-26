@@ -68,6 +68,7 @@
     ssr_about_page/1,
     ssr_counter_custom_id/1,
     ssr_counter/1,
+    ssr_cross_target_child_raises/1,
     ssr_counter_with_bindings/1,
     ssr_each_map/1,
     nested_each_render/1,
@@ -145,6 +146,7 @@ groups() ->
         ]},
         {ssr, [parallel], [
             ssr_counter,
+            ssr_cross_target_child_raises,
             ssr_counter_with_bindings,
             ssr_counter_custom_id,
             ssr_page_with_child,
@@ -490,6 +492,30 @@ render_nested_sd(Config) when is_list(Config) ->
 %% =============================================================================
 %% 3. SSR tests -- render_to_iolist
 %% =============================================================================
+
+%% A `?html` child inside a `?native` parent used to render silently, splicing
+%% HTML bytes into the JSON envelope and producing a frame no client can parse.
+%% The compile-time `cross_target_nesting` guard only sees targets nested in ONE
+%% template, so a child module slips past it -- and its message used to recommend
+%% exactly that route. Caught at render instead. Templates are built by hand here
+%% because this suite is not parse-transformed.
+ssr_cross_target_child_raises(Config) when is_list(Config) ->
+    HtmlChild = #{
+        s => [<<"<div>">>, <<"</div>">>],
+        d => [{<<"0">>, <<"x">>}],
+        f => <<"child">>,
+        backend => arizona_html
+    },
+    NativeParent = #{
+        s => [<<"{\"type\":\"Column\",\"children\":[">>, <<"]}">>],
+        d => [{<<"0">>, fun() -> #{callback => fun(_) -> HtmlChild end, props => #{}} end}],
+        f => <<"parent">>,
+        backend => arizona_native
+    },
+    ?assertError(
+        {cross_target_child, arizona_native, arizona_html},
+        arizona_render:render(NativeParent, #{})
+    ).
 
 ssr_counter(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(arizona_counter, #{})),

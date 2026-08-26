@@ -271,11 +271,11 @@ render_dyn(Backend, #{az_local := _, v := V}) ->
     %% the escaped form to match -- and to keep a binding-seeded init from being
     %% an XSS vector. `?local` is HTML-only, so the html escaper applies.
     arizona_template:escape_value(Backend, V);
-render_dyn(_Backend, #{s := InnerS, d := InnerD} = Nested) ->
-    %% A nested template / child snapshot carries its own backend (a cross-target
-    %% child is embedded as its own ?stateful/?stateless), so render its dynamics
-    %% through the nested backend, mirroring render_ssr_val/1's nested clause.
-    zip_d(backend(Nested), InnerS, InnerD);
+render_dyn(Backend, #{s := InnerS, d := InnerD} = Nested) ->
+    %% Mirrors render_ssr_val/2's nested clause, including the same-target check.
+    NestedBackend = backend(Nested),
+    ok = assert_same_target(Backend, NestedBackend),
+    zip_d(NestedBackend, InnerS, InnerD);
 render_dyn(_Backend, V) when is_binary(V) ->
     V;
 render_dyn(_Backend, V) ->
@@ -390,10 +390,44 @@ Picked up by `erl_error:format_exception/3` via the `error_info`
 annotation, so the dev error page (and crash log) reads a sentence
 naming the offending layout and the way out.
 """.
+%% The macro that spells a backend's target, asked of the backend rather than
+%% mapped here -- a registry in this module would have to be edited for every new
+%% backend, and would be a second place for the answer to drift from.
+macro_of(Backend) ->
+    [$?, atom_to_list(Backend:target())].
+
+%% A nested template must render through the same target as its parent. Mixing
+%% them produces a payload no client can read, and it produced one silently: the
+%% compile-time `cross_target_nesting` guard only sees literal nesting, and its
+%% own message recommends the child-module route that lands here.
+assert_same_target(Backend, Backend) ->
+    ok;
+assert_same_target(_Parent, undefined) ->
+    %% Not every nested snapshot records a backend (`backend/1` defaults to
+    %% `undefined`); an unrecorded one is inherited, not a mismatch.
+    ok;
+assert_same_target(undefined, _Child) ->
+    ok;
+assert_same_target(Parent, Child) ->
+    error({cross_target_child, Parent, Child}, none, [{error_info, #{module => ?MODULE}}]).
+
 -spec format_error(Reason, Stacktrace) -> ErrorInfo when
     Reason :: term(),
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
+format_error({cross_target_child, Parent, Child}, _ST) ->
+    #{
+        general => io_lib:format(
+            "a ~s child was embedded in a ~s template. The render targets emit "
+            "incompatible statics -- HTML bytes spliced into a ~s payload cannot "
+            "be parsed by the client -- so a template tree must use one target "
+            "throughout. The compile-time check only sees targets nested in ONE "
+            "template; reached through a ?stateful/?stateless child module the "
+            "mismatch is invisible until render, which is here. Give the child "
+            "the same target as its parent, or render it from a separate tree.",
+            [macro_of(Child), macro_of(Parent), macro_of(Parent)]
+        )
+    };
 format_error({stateful_in_layout, Mod, Fun, Handler}, _ST) ->
     #{
         general => io_lib:format(
@@ -592,11 +626,14 @@ render_ssr_val(Backend, #{az_local := _, v := V}) ->
     %% Escape the content `?local` init to match the client's text-node semantics
     %% (see render_dyn/2); a raw splice here is an XSS vector for a seeded init.
     arizona_template:escape_value(Backend, V);
-render_ssr_val(_Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
-    %% A nested template carries its own backend (cross-target children are
-    %% embedded as their own ?stateful/?stateless), so render its dynamics
-    %% through the nested backend rather than the enclosing one.
+render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
+    %% A nested template carries its own backend, so render its dynamics through
+    %% that rather than the enclosing one -- but only when the two agree. They
+    %% cannot be mixed: the targets emit incompatible statics, so an `?html` child
+    %% under a `?native` parent splices HTML bytes into the JSON envelope and the
+    %% client cannot parse the frame at all.
     NestedBackend = backend(Tmpl),
+    ok = assert_same_target(Backend, NestedBackend),
     Snap0 = #{
         s => Statics,
         d => [
