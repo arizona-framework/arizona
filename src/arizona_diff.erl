@@ -854,11 +854,54 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
                 [] ->
                     {[], NewSnap, Views2};
                 _ ->
-                    {[[?OP_LIST_PATCH, Az, SubOps]], NewSnap, Views2}
+                    maybe_list_patch(
+                        Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, Views2
+                    )
             end;
         false ->
             diff_list_full(Az, Tmpl, NewItemsList, OldItemsList, NewSnap, Views1)
     end.
+
+%% Positional patching is always CORRECT (position N is item N in both the DOM and
+%% the new render), but it is not always the SMALLER patch. A shift is what makes it
+%% lose: insert or remove anywhere but the tail and every later item patches with
+%% its neighbour's content, so the ops grow with the list while the wholesale
+%% re-render stays one op.
+%%
+%% The walk's own output names that case without any per-item identity, so it works
+%% for a list (which has none) as well as a map. A length change means items were
+%% appended or removed; an item patch BESIDE one is the signature of a shift, since
+%% those patches are items wearing their neighbour's content. Equal lengths cannot
+%% have shifted, so their patches are genuine value changes and always ship.
+%%
+%% How FAR the list shifted is what decides, and the patch count measures it: an
+%% edit at the tail shifts nothing, one at the head shifts everything. That keeps a
+%% late insert into a long list on the cheap path -- shipping 1000 items to patch
+%% the last two would be the very amplification this guards against.
+%%
+%% The bias is deliberately toward staying positional, because those ops also
+%% preserve the DOM: the container is never torn down, so focus, scroll position
+%% and `?local` values inside it survive -- the whole reason `?OP_LIST_PATCH`
+%% exists. Measured against the wholesale encoding, the two cross at about half the
+%% list shifted, but there they are within ~1% of each other and trading the DOM
+%% for that would be a bad deal. Three quarters shifted is where positional turns
+%% decisively bigger (30-40% more bytes at 10 and 40 items) while touching nearly
+%% every node anyway, so that is where it hands over.
+maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, Views2) ->
+    case shifted(SubOps, NewItemsList, OldItemsList) of
+        false ->
+            {[[?OP_LIST_PATCH, Az, SubOps]], NewSnap, Views2};
+        true ->
+            diff_list_full(Az, Tmpl, NewItemsList, OldItemsList, NewSnap, Views1)
+    end.
+
+shifted(SubOps, NewItemsList, OldItemsList) ->
+    NewLen = length(NewItemsList),
+    NewLen =/= length(OldItemsList) andalso
+        count_item_patches(SubOps) * 4 >= NewLen * 3.
+
+count_item_patches(SubOps) ->
+    length([Op || [?OP_ITEM_PATCH | _] = Op <- SubOps]).
 
 is_single_root(#{single_root := true}) -> true;
 is_single_root(#{}) -> false.

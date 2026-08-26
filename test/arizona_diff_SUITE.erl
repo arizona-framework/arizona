@@ -37,6 +37,11 @@
     diff_map_value_change/1,
     diff_map_grew/1,
     diff_map_no_change_no_ops/1,
+    diff_map_head_insert_falls_back_to_wholesale/1,
+    diff_map_late_insert_stays_positional/1,
+    diff_map_tail_removal_patches_positionally/1,
+    diff_list_head_insert_falls_back_to_wholesale/1,
+    diff_list_late_insert_stays_positional/1,
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
     diff_stream_among_siblings_uses_text_op/1,
@@ -116,6 +121,11 @@ groups() ->
             diff_map_value_change,
             diff_map_grew,
             diff_map_no_change_no_ops,
+            diff_map_head_insert_falls_back_to_wholesale,
+            diff_map_late_insert_stays_positional,
+            diff_map_tail_removal_patches_positionally,
+            diff_list_head_insert_falls_back_to_wholesale,
+            diff_list_late_insert_stays_positional,
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
             diff_stream_among_siblings_uses_text_op,
@@ -613,6 +623,51 @@ diff_map_grew(Config) when is_list(Config) ->
         #{<<"a">> => <<"1">>, <<"b">> => <<"2">>}
     ),
     ?assertMatch([[?OP_INSERT, 1, _]], assert_list_patch(Ops)).
+
+%% A key inserted at the HEAD shifts every later position, so each one would patch
+%% with its neighbour's content -- one op per item, against wholesale's one op
+%% total. Erlang iterates a small map in term order, so "0" sorts in front of "a".
+diff_map_head_insert_falls_back_to_wholesale(Config) when is_list(Config) ->
+    Base = maps:from_list([{K, K} || K <- [~"a", ~"b", ~"c", ~"d", ~"e", ~"f", ~"g", ~"h"]]),
+    Ops = each_map_diff(Base, Base#{~"0" => ~"0"}),
+    ?assertMatch([[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]], Ops).
+
+%% The same insert near the TAIL shifts almost nothing, so it stays on the cheap
+%% path -- re-sending every item to patch the last one is the amplification the
+%% head-insert fallback exists to avoid, not a rule to apply everywhere.
+diff_map_late_insert_stays_positional(Config) when is_list(Config) ->
+    Base = maps:from_list([{K, K} || K <- [~"a", ~"b", ~"c", ~"d", ~"e", ~"f", ~"g", ~"h"]]),
+    Ops = each_map_diff(Base, Base#{~"g0" => ~"x"}),
+    ?assertMatch(
+        [[?OP_ITEM_PATCH, 7, _], [?OP_INSERT, 8, _]],
+        assert_list_patch(Ops)
+    ).
+
+%% Dropping the tail key leaves the survivors' positions intact, so the shared
+%% head needs no ops and the tail is a positional remove.
+diff_map_tail_removal_patches_positionally(Config) when is_list(Config) ->
+    Ops = each_map_diff(
+        #{<<"a">> => <<"1">>, <<"b">> => <<"2">>},
+        #{<<"a">> => <<"1">>}
+    ),
+    ?assertEqual([[?OP_REMOVE, 1]], assert_list_patch(Ops)).
+
+%% A list has no per-item key to compare, so the same head-insert amplification
+%% is caught the same way: by how much of the list the positional walk had to
+%% patch. This is the case a key-order gate could never cover for a list.
+diff_list_head_insert_falls_back_to_wholesale(Config) when is_list(Config) ->
+    Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 10)],
+    Ops = each_list_diff_sr(Old, [#{name => ~"0"} | Old]),
+    ?assertMatch([[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]], Ops).
+
+%% And a late insert into the same list stays positional.
+diff_list_late_insert_stays_positional(Config) when is_list(Config) ->
+    Old = [#{name => integer_to_binary(I)} || I <- lists:seq(1, 10)],
+    New = lists:sublist(Old, 9) ++ [#{name => ~"x"}] ++ lists:nthtail(9, Old),
+    ?assertMatch(
+        [[?OP_ITEM_PATCH, 9, _], [?OP_INSERT, 10, _]],
+        assert_list_patch(each_list_diff_sr(Old, New))
+    ).
 
 %% Same map twice: no ops.
 diff_map_no_change_no_ops(Config) when is_list(Config) ->
