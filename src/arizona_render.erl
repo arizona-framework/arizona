@@ -390,6 +390,12 @@ Picked up by `erl_error:format_exception/3` via the `error_info`
 annotation, so the dev error page (and crash log) reads a sentence
 naming the offending layout and the way out.
 """.
+%% The macro that spells a backend's target, asked of the backend rather than
+%% mapped here -- a registry in this module would have to be edited for every new
+%% backend, and would be a second place for the answer to drift from.
+macro_of(Backend) ->
+    [$?, atom_to_list(Backend:target())].
+
 %% A nested template must render through the same target as its parent. Mixing
 %% them produces a payload no client can read, and it produced one silently: the
 %% compile-time `cross_target_nesting` guard only sees literal nesting, and its
@@ -405,11 +411,6 @@ assert_same_target(undefined, _Child) ->
 assert_same_target(Parent, Child) ->
     error({cross_target_child, Parent, Child}, none, [{error_info, #{module => ?MODULE}}]).
 
-target_name(arizona_html) -> "?html";
-target_name(arizona_native) -> "?native";
-target_name(arizona_terminal) -> "?terminal";
-target_name(Other) -> atom_to_list(Other).
-
 -spec format_error(Reason, Stacktrace) -> ErrorInfo when
     Reason :: term(),
     Stacktrace :: [tuple()],
@@ -424,7 +425,7 @@ format_error({cross_target_child, Parent, Child}, _ST) ->
             "template; reached through a ?stateful/?stateless child module the "
             "mismatch is invisible until render, which is here. Give the child "
             "the same target as its parent, or render it from a separate tree.",
-            [target_name(Child), target_name(Parent), target_name(Parent)]
+            [macro_of(Child), macro_of(Parent), macro_of(Parent)]
         )
     };
 format_error({stateful_in_layout, Mod, Fun, Handler}, _ST) ->
