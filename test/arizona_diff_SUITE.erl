@@ -79,7 +79,7 @@
     markerless_stream_item_update_no_dangling_op/1,
     markerless_list_item_falls_back_to_full_update/1,
     markerless_list_no_change_no_ops/1,
-    markerless_stateful_child_update_no_dangling_op/1
+    markerless_stateful_child_update_targets_element_az/1
 ]).
 
 all() ->
@@ -177,7 +177,7 @@ groups() ->
             markerless_stream_item_update_no_dangling_op,
             markerless_list_item_falls_back_to_full_update,
             markerless_list_no_change_no_ops,
-            markerless_stateful_child_update_no_dangling_op
+            markerless_stateful_child_update_targets_element_az
         ]}
     ].
 
@@ -1445,7 +1445,7 @@ markerless_list_no_change_no_ops(Config) when is_list(Config) ->
 %% ops at all -- render-once, same as a root-level raw-text slot. Previously
 %% the child walker emitted `[ViewId, [[?OP_TEXT, undefined, _]]]` and the
 %% client dropped the dangling update with a console warning.
-markerless_stateful_child_update_no_dangling_op(Config) when is_list(Config) ->
+markerless_stateful_child_update_targets_element_az(Config) when is_list(Config) ->
     B0 = #{text => <<"one">>},
     T0 = #{
         s => [<<"<main az=\"0\"><!--az:0-->">>, <<"<!--/az--></main>">>],
@@ -1472,7 +1472,10 @@ markerless_stateful_child_update_no_dangling_op(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _Snap1, _V1} = arizona_diff:diff(T1, Snap0, V0),
-    ?assertEqual([], Ops).
+    %% The `<textarea>` carries no markers, so before raw-text elements were given
+    %% their own az there was nothing to target and the change was dropped. Now the
+    %% child ships one op scoped to that element, not a re-render of the whole child.
+    ?assertMatch([[~"c", [[?OP_TEXT, _Az, #{~"d" := [~"two"]}]]]], Ops).
 
 %% =============================================================================
 %% Helpers

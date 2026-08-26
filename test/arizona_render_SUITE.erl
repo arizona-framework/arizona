@@ -396,8 +396,12 @@ raw_text_breakout_neutralized(Config) when is_list(Config) ->
 
 %% Render the raw-text fixture and keep only the <script> element's content, so a
 %% breakout that survived would truncate the slice and fail the caller's decode.
+%% Split on the open tag's closing `>` rather than a literal attribute list: a
+%% raw-text element holding a dynamic now carries an `az`, and the point of these
+%% tests is the CONTENT's neutralization, not the tag's attributes.
 script_content(HTML) ->
-    [_Before, Rest] = binary:split(HTML, ~"<script type=\"application/json\">"),
+    [_Before, Rest0] = binary:split(HTML, ~"<script"),
+    [_OpenTagAttrs, Rest] = binary:split(Rest0, ~">"),
     [Content, _After] = binary:split(Rest, ~"</script>"),
     Content.
 

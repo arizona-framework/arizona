@@ -1767,9 +1767,30 @@ is not the breakout available.
 **Exception -- raw-text elements (`script`/`style`/`textarea`/`title`).** The browser does not
 parse HTML comments inside these, so a comment marker becomes literal content and corrupts it (an
 inline module script's `<!--` is even a `SyntaxError`). A dynamic content slot inside a raw-text
-element is therefore emitted **markerless and render-once**: the value renders at SSR with `Az =
-undefined`, and the diff engine skips any `undefined`-`Az` dynamic (`diff_dynamics/3`
-and `diff_dynamics_v/5`), so no `OP_TEXT` is ever produced (there would be no marker to target).
+element is therefore **markerless**: it renders at SSR with `Az = undefined`, and the diff engine
+skips any `undefined`-`Az` dynamic (`diff_dynamics/3` and `diff_dynamics_v/5`).
+
+**The address goes on the element instead.** Markers cannot live *inside* a raw-text element, but
+an attribute *on* it is fine, so `compile_element/5` gives such an element its own `az` and
+`compile_element_children/7` folds its whole content -- statics and dynamics both -- into one
+nested template held there. Any inner change re-renders that element's content, shipped as a
+single `?OP_TEXT` against its az by `make_ops/5`'s markerless escalation. Without this the value
+silently never updated, in the same template where a sibling `<p>` patched normally, and a
+`<textarea>` or an SVG `<title>` inside a `?stateless`/`?stateful` child froze at its SSR value
+with no diagnostic. The escalation's granularity is what makes it safe: one raw-text element, not
+the enclosing template, so a `<textarea>` is untouched when a sibling `<title>` changes.
+
+Escaping is preserved structurally rather than reimplemented -- the children compile through the
+ordinary `compile_children/3` walk, so each dynamic keeps its own policy (`raw` verbatim through
+`raw_text/2` neutralization, `escapable` HTML-escaped via `esc_spec`).
+
+**An executable `<script>` is the one case where updating is questionable, and `az-nodiff` is the
+answer.** A script element carries an "already started" flag, so mutating its text after it has
+run does not re-execute it: the element's source would read one thing while the code in effect
+says another. That is a browser rule, not a framework choice. The update is still right for the
+sanctioned use -- a `?raw(json:encode(Data))` data island, whose consumer reads `textContent`
+later -- so the fold applies by default and the fold guard honours `az-nodiff`, which keeps an
+executable script markerless and render-once exactly as before.
 The backend classifies the tag via the `arizona_renderer` `raw_text_kind/2` callback: `raw` (`script`/`style`)
 renders the value **verbatim** (the browser decodes no character references there, so HTML-escaping
 would corrupt it -- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL
