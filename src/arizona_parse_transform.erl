@@ -1821,9 +1821,13 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
 %% is the backend's call, asked at compile time via the `supports_list_patch/0`
 %% renderer callback (the web client implements it; native/terminal don't, and keep
 %% the wholesale re-render). Multi-root/fragment items have no unambiguous
-%% per-position DOM node, and stream items are keyed by `az-key`, so neither is
-%% flagged regardless of backend.
-maybe_single_root_opt(Backend, list, element_tuple, Opts) ->
+%% per-position DOM node, so they are never flagged.
+%%
+%% The flag describes the item BODY, not the source kind, so a 2-arg callback gets
+%% it too: that one template serves both a stream and a map, and a MAP source needs
+%% it to patch positionally. A stream never reads it -- it keys items by `az-key`
+%% and diffs through `diff_stream/4`, which has no positional walk to gate.
+maybe_single_root_opt(Backend, _Kind, element_tuple, Opts) ->
     case Backend:supports_list_patch() of
         true -> Opts#{single_root => true};
         false -> Opts

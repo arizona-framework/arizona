@@ -6173,7 +6173,12 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
     Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, [#{id => 1, name => <<"A">>}]),
     Result = Mod:render(#{stream => Stream}),
     Tmpl = maps:get(template, Result),
-    ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
+    %% `single_root` describes the item BODY (one top-level element), not the
+    %% source kind -- and a 2-arg callback compiles to one template that serves
+    %% both a stream and a map. A map source needs the flag to patch positionally
+    %% (`arizona_diff:diff_map/4`); a stream ignores it outright, since it keys
+    %% items by `az-key` and never reaches the positional walk.
+    ?assertEqual(true, maps:get(single_root, Tmpl, undefined)).
 
 %% A `?native` single-root list each is NOT flagged single_root: the gate is the
 %% backend's `supports_list_patch/0` callback (asked at compile time), and

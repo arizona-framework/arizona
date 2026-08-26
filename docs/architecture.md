@@ -496,16 +496,33 @@ re-ran every item child's `mount/1` / `handle_update/3`, so a child that subscri
 timer in mount did it twice per diff. Measured on a container under a `?stateful` ancestor: 258
 bytes flat at 100 items and at 400, and 1,2 ms per diff at 400 heavy items.
 
-A **map-source** `?each` is the one shape that still re-renders wholesale. Its items are
-positional rather than keyed by an op log, so its only incremental path is
-`diff_each_items/6`'s positional walk, gated on the compile-time `single_root` flag that
-`maybe_single_root_opt/4` sets only for the 1-arg (list) each. Flagging the 2-arg each is safe
-for streams (a stream source never reaches that walk) and does make a value-only change O(1) --
-but Erlang map iteration order shifts on insertion, so adding one entry then repositions nearly
-every item. Measured at 400 entries: a value change falls from 12.741 to 84 bytes while an
-insert rises from 12.768 to 23.091. The wholesale render is the cheaper worst case for an
-unordered container, and the differ holds rendered item lists rather than keys, so it cannot
-detect a stable order and decide per call.
+A **map-source** `?each` patches positionally like a list. `maybe_single_root_opt/4` stamps
+`single_root` by the item BODY (one top-level element) rather than the source kind, so the 2-arg
+each carries it too -- that one compiled template serves both a stream and a map, and a stream
+never reads the flag (it keys items by `az-key` and diffs through `diff_stream/4`, which has no
+positional walk to gate).
+
+Positional patching is always *correct* -- position N is item N in both the DOM and the new
+render -- but not always the *smaller* patch, and that is what `shifted/3` decides. Insert or
+remove anywhere but the tail and every later item patches with its neighbour's content, so the
+ops grow with the list while the wholesale re-render stays one op. Erlang iterates a small map in
+term order, so a mid-container insert is the common case there, not the exotic one.
+
+The gate reads the positional walk's own output, so it needs no per-item identity and covers a
+plain list (which has none) as well as a map: a length change means items were appended or
+removed, and an item patch beside one is the signature of a shift. The patch count measures how
+far the container shifted -- an edit at the tail shifts nothing, one at the head shifts
+everything -- so a late insert into a long list stays on the cheap path instead of re-sending
+every item to patch the last one.
+
+The bias is deliberately toward staying positional, because those ops also preserve the DOM: the
+container is never torn down, so focus, scroll position and `?local` values inside it survive.
+The two encodings cross at about half the container shifted, but there they are within ~1% of
+each other, so the fallback waits until three quarters shifted, where positional turns decisively
+bigger while touching nearly every node anyway. Measured on a 3-key map and a 10-item list: a map
+value-only change falls from 287 to 62 bytes and a mid insert from 344 to 324, while a list head
+insert falls from 606 (positional, pre-gate) to 401 (wholesale) and a late insert into a 200-item
+list stays at 296 against a 4.488-byte wholesale render.
 
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_os` / `arizona_effect`)
 
@@ -1651,7 +1668,9 @@ and the enclosing element intact. A single-root plain-list `?each` patches in pl
 `[OP_INSERT, idx, html]` inserts), so an item change never touches the container's `childList`.
 The wholesale marker-aware `OP_TEXT` re-render is the fallback -- used when positional patching is
 unsound (the old slot was not a list, the item is not a single root element, or the list rendered a
-per-item child view). A scalar value or a nested template still patches via that `OP_TEXT`.
+per-item child view), and also when it would be sound but larger (the container shifted far enough
+that per-item patches outgrow one re-render -- see `shifted/3` above). A scalar value or a nested
+template still patches via that `OP_TEXT`.
 
 **Context -- inside `<svg>` a `<title>` is not raw text.** The classification takes the content
 context (`raw_text_kind/2`, second argument `html | foreign`), threaded through the transform by
