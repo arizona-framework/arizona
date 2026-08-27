@@ -64,10 +64,13 @@ mount(Bindings) ->
 | Form | Example | Description |
 |------|---------|-------------|
 | `{Tag, Attrs, Children}` | `{'div', [], [?get(x)]}` | Standard element with children list |
+| `{<<"tag">>, Attrs, Children}` | `{~"my-widget_v2", [], []}` | Tag as a binary -- taken **verbatim** |
 | `{Tag, Attrs, Expr}` | `{'span', [], ?get(x)}` | Single expression as children (wrapped in list) |
 | `{Tag, Attrs}` | `{'br', []}` | Void element shorthand (no children) |
 
 Void elements (`br`, `img`, `input`, `hr`, `meta`, `link`, `base`, `col`, `embed`, `param`, `source`, `track`, `wbr`, `area`) self-close as `<tag />`.
+
+A tag may be an **atom** or a **binary**, the same pair as an attribute name and for the same reason. The atom form goes through the backend's `name/1`, which for `?html` translates `_` to `-` so `az_click` and `my_widget` need no quoting; the binary form is taken verbatim. That matters for a name that really does contain an underscore: `{'my-widget_v2', [], []}` emits `<my-widget-v2>` (a different element, silently), while `{~"my-widget_v2", [], []}` emits what it says. Both forms resolve identically through the tag-keyed callbacks (`is_void/1`, `raw_text_kind/2`, `content_context/2`), so classification does not depend on which you write. A tag that is neither -- a number, or an expression evaluated at runtime -- is a compile error.
 
 Tag **classification** in the `?html` target (void, raw-text) is ASCII case-insensitive, as HTML itself is -- `{'BR', [], []}` self-closes and `{'SCRIPT', ...}` is raw text. The tag is still *emitted* exactly as written, so a camelCase SVG element or a `viewBox` attribute is never rewritten. `?native` and `?terminal` tags are case-**sensitive**: their vocabularies are Arizona's own (native tags map to Compose/SwiftUI component names). `?terminal` goes further and **rejects an unknown tag at compile time**, the way it already rejects an unknown style/attribute -- its six tags are the whole vocabulary, so `{'Line', ...}` is a typo, not an extension point.
 

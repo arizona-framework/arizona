@@ -11,7 +11,7 @@ other formats while reusing the same walker, diff engine, and transport.
 """.
 
 -doc "Tag or attribute atom -> wire name.".
--callback name(atom()) -> binary().
+-callback name(tag()) -> binary().
 
 -doc "Start of an element's open tag for the given wire tag name.".
 -callback element_open(TagName :: binary()) -> binary().
@@ -75,7 +75,7 @@ shares one flat registry.
 -callback text_slot_close() -> binary().
 
 -doc "Whether the tag is a void element (no children / self-closing).".
--callback is_void(Tag :: atom()) -> boolean().
+-callback is_void(Tag :: tag()) -> boolean().
 
 -doc """
 Raw-text classification of a tag, governing how a dynamic content slot inside it
@@ -91,7 +91,7 @@ references ARE decoded, so a scalar slot is HTML-escaped, but it is still
 markerless and render-once. Non-HTML backends return `none` -- their wire format
 does not use HTML comment markers.
 """.
--callback raw_text_kind(Tag :: atom(), Context :: content_context()) -> none | raw | escapable.
+-callback raw_text_kind(Tag :: tag(), Context :: content_context()) -> raw_text_kind().
 
 -doc """
 The content context an element's children are parsed in.
@@ -102,7 +102,7 @@ markers and stays diffable. The distinction only matters for a tag classified
 differently in each: an HTML `<title>` makes comment markers literal text, an SVG
 `<title>` does not. Backends with no such mode return `Parent` unchanged.
 """.
--callback content_context(Tag :: atom(), Parent :: content_context()) -> content_context().
+-callback content_context(Tag :: tag(), Parent :: content_context()) -> content_context().
 
 -doc """
 The `arizona_template` function that names an `?each` compiled for `Context`.
@@ -117,6 +117,32 @@ by a target check in the transform.
 
 -type content_context() :: html | foreign.
 -export_type([content_context/0]).
+
+-doc """
+An element tag or attribute name as written in a template.
+
+The **atom** form goes through `name/1`, which a backend may translate -- `?html`
+replaces `_` with `-`, so `az_click` needs no quoting. The **binary** form is taken
+verbatim, which is the only way to write a name that genuinely contains an
+underscore: `'my-widget_v2'` reaches the output as `my-widget-v2`, a different
+element, silently. Every tag-keyed callback accepts both and normalises before
+classifying, so which form is written never changes how a tag is classified.
+""".
+-type tag() :: atom() | binary().
+-export_type([tag/0]).
+
+-doc """
+How a dynamic content slot inside an element must be rendered.
+
+`none` is an ordinary parsed-markup element: the slot is comment-anchored and
+diffable. `raw` (`script`/`style` in HTML) is emitted verbatim, since the browser
+decodes no character references there, so escaping would corrupt it. `escapable`
+(`textarea`/`title`) escapes a scalar because references ARE decoded, but comments
+are still literal, so the slot carries no markers either way. Non-HTML backends
+answer `none` for every tag -- their wire format has no comment markers to corrupt.
+""".
+-type raw_text_kind() :: none | raw | escapable.
+-export_type([raw_text_kind/0]).
 
 -doc """
 Prefix a static's embedded `az` references with `Prefix`, so a child template
