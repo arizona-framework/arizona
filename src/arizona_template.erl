@@ -68,6 +68,7 @@ render(Bindings) ->
 -export([raw/1]).
 -export([classify_trusted/1]).
 -export([escape_value/2]).
+-export([escape_marked/2]).
 -export([mark_esc/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
@@ -552,6 +553,20 @@ escape_value(Backend, V0) ->
         {effect, Cmd} -> to_bin(Cmd);
         value -> Backend:escape(to_bin(V0))
     end.
+
+-doc """
+Escape the inner value of an `{arizona_esc, _}` marker.
+
+The marker itself is the classification: `mark_esc/1` is its only producer and it
+wraps only what already came back as a plain `value`, so re-asking
+`classify_trusted/1` here can only ever get the same answer. Escapable content is
+most of what a template renders, so that second ask is paid per value per render.
+""".
+-spec escape_marked(Backend, Value) -> binary() when
+    Backend :: module(),
+    Value :: term().
+escape_marked(Backend, V) ->
+    Backend:escape(to_bin(V)).
 
 -doc """
 Marks an evaluated value for HTML escaping at output. Only scalars are marked --

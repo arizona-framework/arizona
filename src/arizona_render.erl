@@ -174,7 +174,7 @@ server response before any client is attached.
     Template :: arizona_template:template().
 render_to_iolist(#{s := Statics, d := Dynamics} = Tmpl) ->
     Backend = backend(Tmpl),
-    zip(Backend, Statics, render_ssr_dynamics(Backend, Dynamics)).
+    zip_ssr(Backend, Statics, Dynamics).
 
 -doc """
 SSR render for a stateful handler (embedded-component style).
@@ -256,7 +256,7 @@ zip(Backend, [S | Statics], [D | Dynamics]) ->
 %% (the triple-walking variant) can share the same dispatch without duplicating
 %% the case clauses.
 render_dyn(Backend, {arizona_esc, V}) ->
-    arizona_template:escape_value(Backend, V);
+    arizona_template:escape_marked(Backend, V);
 render_dyn(Backend, #{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) ->
     #{s := ItemS} = Tmpl,
     [zip_stream_item(Backend, ItemS, ItemD) || ItemD <- Items];
@@ -461,9 +461,7 @@ flat_zip(Backend, Statics, Vals) ->
 finish_ssr(Handler, Bindings, Opts) ->
     PageTmpl = arizona_stateful:call_render(Handler, Bindings),
     Backend = backend(PageTmpl),
-    PageHTML = zip(
-        Backend, maps:get(s, PageTmpl), render_ssr_dynamics(Backend, maps:get(d, PageTmpl))
-    ),
+    PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
     Layouts = maps:get(layouts, Opts, []),
     apply_layouts(Layouts, PageHTML, Bindings).
 
@@ -549,8 +547,13 @@ render_v(Backend, V) -> render_dyn(Backend, V).
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly. `Backend` is the enclosing
 %% template's render backend, used to escape scalar leaves and render attributes.
-render_ssr_dynamics(Backend, Dynamics) ->
-    [render_ssr_one(Backend, D) || D <- Dynamics].
+%% SSR pair walker: renders each dynamic and splices it between the statics in ONE
+%% pass. Building the rendered list first (a comprehension) and zipping it after cost
+%% an N-element list per template that nothing else ever reads.
+zip_ssr(_Backend, [S], []) ->
+    [S];
+zip_ssr(Backend, [S | Statics], [D | Dynamics]) ->
+    [S, render_dyn(Backend, render_ssr_one(Backend, D)) | zip_ssr(Backend, Statics, Dynamics)].
 
 render_ssr_one(Backend, {_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     render_ssr_attr(Backend, Name, Fun());
