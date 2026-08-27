@@ -1663,6 +1663,7 @@ function applyItemPatch(container, key, innerOps, streams = null) {
  * @param {string} az -- az attribute to find the container within parentEl
  * @param {string} key -- az-key of the item to patch
  * @param {Array<Array<*>>} innerOps -- ops scoped to the item
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
 function patchItemEl(parentEl, az, key, innerOps, streams = null) {
     applyItemPatch(resolveInnerEl(parentEl, az), key, innerOps, streams);
@@ -1697,6 +1698,7 @@ function resolveInnerEl(parent, az) {
  * through this function (which also covers a grandchild wrapper).
  * @param {Element} item
  * @param {Array<Array<*>>} innerOps
+ * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
  */
 function applyItemOps(item, innerOps, streams = null) {
     // Same memo as `applyOps`' `els`, for the same reason: two ops in one item batch
