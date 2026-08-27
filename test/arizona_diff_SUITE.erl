@@ -5,6 +5,9 @@
 -export([all/0, groups/0]).
 -export([
     diff_attr_op/1,
+    diff_slot_invisible_change_emits_no_op/1,
+    diff_attr_invisible_change_emits_no_op/1,
+    diff_attr_boolean_vs_string_still_emits/1,
     diff_bool_attr_add/1,
     diff_bool_attr_remove/1,
     diff_bool_attr_no_change/1,
@@ -104,6 +107,9 @@ groups() ->
         {basic_ops, [parallel], [
             diff_text_op,
             diff_attr_op,
+            diff_slot_invisible_change_emits_no_op,
+            diff_attr_invisible_change_emits_no_op,
+            diff_attr_boolean_vs_string_still_emits,
             diff_no_change_op,
             diff_nested_text_op,
             diff_mixed_op,
@@ -212,6 +218,64 @@ diff_text_op(Config) when is_list(Config) ->
     {Ops, NewSnap} = arizona_diff:diff(NewTmpl, OldSnap),
     ?assertEqual([[?OP_TEXT, <<"0">>, <<"Alice">>]], Ops),
     ?assertEqual([{<<"0">>, <<"Alice">>}], maps:get(d, NewSnap)).
+
+%% A slot whose value changed as a TERM has not necessarily changed on screen:
+%% `to_bin/1` formats floats to 10 decimals, so drift past that renders identically.
+%% Writing it again is not free -- see the attribute case below -- so it is skipped.
+diff_slot_invisible_change_emits_no_op(Config) when is_list(Config) ->
+    %% Summed through a call so the compiler cannot fold the drift away.
+    Drift = lists:sum([0.1, 0.2]),
+    ?assertNotEqual(Drift, 0.3),
+    ?assertEqual([], element(1, scalar_diff(0.3, Drift))),
+    %% ...while a change that does alter the bytes still ships.
+    ?assertEqual(
+        [[?OP_TEXT, <<"0">>, <<"0.4">>]],
+        element(1, scalar_diff(0.3, 0.4))
+    ).
+
+%% Same for an attribute, where a redundant write costs more than a text one: it is
+%% a style-recalc trigger, and `applySetAttrOp` also assigns the live property for
+%% `value`, which can move a caret in an input the user is typing in.
+diff_attr_invisible_change_emits_no_op(Config) when is_list(Config) ->
+    Drift = lists:sum([0.1, 0.2]),
+    ?assertEqual([], element(1, attr_diff(0.3, Drift))),
+    ?assertEqual(
+        [[?OP_SET_ATTR, <<"0">>, <<"data-v">>, <<"0.4">>]],
+        element(1, attr_diff(0.3, 0.4))
+    ).
+
+%% The exception that makes the attribute case not just "compare the bytes": a
+%% boolean is not a value. `true` renders as a BARE attribute and `false` removes it
+%% outright, so neither may be called equal to a string that prints the same.
+diff_attr_boolean_vs_string_still_emits(Config) when is_list(Config) ->
+    ?assertEqual(<<"true">>, arizona_template:to_bin(true)),
+    ?assertMatch([[?OP_SET_ATTR, <<"0">>, <<"data-v">>, _]], element(1, attr_diff(true, ~"true"))),
+    ?assertMatch([[?OP_SET_ATTR, <<"0">>, <<"data-v">>, _]], element(1, attr_diff(~"true", true))),
+    %% And `false` is a removal, never a value comparison.
+    ?assertEqual([[?OP_REM_ATTR, <<"0">>, <<"data-v">>]], element(1, attr_diff(~"x", false))).
+
+scalar_diff(Old, New) ->
+    arizona_diff:diff(
+        #{
+            s => [<<"<div az=\"0\">">>, <<"</div>">>],
+            d => [{<<"0">>, fun() -> New end}],
+            f => <<"test">>
+        },
+        #{s => [<<"<div az=\"0\">">>, <<"</div>">>], d => [{<<"0">>, Old}]}
+    ).
+
+attr_diff(Old, New) ->
+    arizona_diff:diff(
+        #{
+            s => [<<"<div az=\"0\" data-v=\"">>, <<"\">ok</div>">>],
+            d => [{<<"0">>, {attr, <<"data-v">>, fun() -> New end}}],
+            f => <<"test">>
+        },
+        #{
+            s => [<<"<div az=\"0\" data-v=\"">>, <<"\">ok</div>">>],
+            d => [{<<"0">>, {attr, <<"data-v">>, Old}}]
+        }
+    ).
 
 diff_attr_op(Config) when is_list(Config) ->
     OldSnap = #{
