@@ -5053,6 +5053,58 @@ describe('scheduleSend -- debounce / throttle', () => {
         expect(mock.getSentMessages()).toHaveLength(1);
     });
 
+    // The trailing send used to clear the window BEFORE firing, so the throttle was
+    // idle the instant it landed and the very next event took the leading edge with
+    // no gap at all. On a pointer drag that produced two sends stamped at the same
+    // millisecond, the first already stale when it left.
+    it('throttle stays armed across the trailing send', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<input id="inp" az-change='[[0,"change"]]' az-throttle="200" />`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        const fire = () => inp.dispatchEvent(new Event('change', { bubbles: true }));
+
+        fire(); // leading edge
+        fire(); // suppressed, becomes the trailing send
+        expect(mock.getSentMessages()).toHaveLength(1);
+
+        vi.advanceTimersByTime(200); // trailing fires
+        expect(mock.getSentMessages()).toHaveLength(2);
+
+        // Still inside the window the trailing send opened: this must be suppressed,
+        // not sent back to back with it.
+        fire();
+        expect(mock.getSentMessages()).toHaveLength(2);
+
+        // ...and land as the next trailing send once the window elapses.
+        vi.advanceTimersByTime(200);
+        expect(mock.getSentMessages()).toHaveLength(3);
+    });
+
+    // A quiet window must let the throttle go idle, or the next event would be
+    // delayed by a window that nothing is using.
+    it('throttle goes idle when the trailing tick finds nothing pending', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<input id="inp" az-change='[[0,"change"]]' az-throttle="200" />`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        const fire = () => inp.dispatchEvent(new Event('change', { bubbles: true }));
+
+        fire();
+        expect(mock.getSentMessages()).toHaveLength(1);
+        vi.advanceTimersByTime(1000); // nothing pending; window should close
+        expect(mock.getSentMessages()).toHaveLength(1);
+
+        fire(); // a fresh leading edge, immediately
+        expect(mock.getSentMessages()).toHaveLength(2);
+    });
+
     it('throttle sends immediately then suppresses within window', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
