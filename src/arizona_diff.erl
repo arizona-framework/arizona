@@ -246,7 +246,24 @@ diff_dynamics(
     end;
 diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
-    make_ops(Az, New, Old, RestOps, Views1).
+    maybe_make_ops(Az, New, Old, RestOps, Views1).
+
+%% A slot whose value changed as a TERM has not necessarily changed on screen, and
+%% `?OP_TEXT`/`?OP_SET_ATTR` for a value the DOM already holds is not free: an
+%% attribute write is a style-recalc trigger, and `applySetAttrOp` additionally
+%% assigns the live property for `value`, which can move a caret or drop a selection
+%% in an input the user is working in. `collapses_to_same_bytes/2` already answers
+%% this for the container fallback; the same question belongs here, on every slot.
+%%
+%% Equality is matched first so the byte comparison is only ever asked about values
+%% that really do differ, which is the precondition it is named for.
+maybe_make_ops(_Az, Same, Same, Tail, Views) ->
+    {Tail, Views};
+maybe_make_ops(Az, New, Old, Tail, Views) ->
+    case collapses_to_same_bytes(New, Old) of
+        true -> {Tail, Views};
+        false -> make_ops(Az, New, Old, Tail, Views)
+    end.
 
 %% The log could not explain the change, but the two key orders can: this is
 %% semantically a reset to the stream's current state, so reconcile it as one.
@@ -377,12 +394,7 @@ diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0) ->
     {Az, New, NewDeps, Views1} = arizona_eval:eval_one_v_flat(Def, Views0),
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    Ops =
-        case New of
-            Old -> {OpsRest, Views2};
-            _ -> make_ops(Az, New, Old, OpsRest, Views2)
-        end,
-    {OpsFinal, ViewsFinal} = Ops,
+    {OpsFinal, ViewsFinal} = maybe_make_ops(Az, New, Old, OpsRest, Views2),
     {OpsFinal, [{Az, New} | DRest], [NewDeps | DepsRest], ViewsFinal}.
 
 diff_each(
@@ -1085,6 +1097,17 @@ item_changed(_NewTail, _OldTail) ->
 %% type fast paths below at all -- only hand-built templates do.
 collapses_to_same_bytes({arizona_esc, New}, {arizona_esc, Old}) ->
     collapses_to_same_bytes(New, Old);
+%% An attribute's value compares like any other, EXCEPT that a boolean is not a
+%% value here: `true` renders as a bare attribute and `false` removes it outright
+%% (`?OP_REM_ATTR`), so neither may be called equal to a string that happens to print
+%% the same -- `true` against `~"true"` really is a change, from a bare attribute to
+%% `name="true"`. A differing NAME is a different attribute and never collapses.
+collapses_to_same_bytes({attr, Name, New}, {attr, Name, Old}) when
+    not is_boolean(New), not is_boolean(Old)
+->
+    collapses_to_same_bytes(New, Old);
+collapses_to_same_bytes({attr, _N1, _V1}, {attr, _N2, _V2}) ->
+    false;
 collapses_to_same_bytes(New, Old) when is_binary(New), is_binary(Old) ->
     false;
 collapses_to_same_bytes(New, Old) when is_integer(New), is_integer(Old) ->
