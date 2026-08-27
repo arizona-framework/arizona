@@ -497,12 +497,24 @@ append_ops(Ops, Tail) ->
     Ops ++ Tail.
 
 %% Incremental stream child_views: old - deleted + rendered.
+%%
+%% A stream holding no child views -- items of plain markup, which most streams are --
+%% has nothing to carry: removing deleted keys from an empty set leaves it empty, and
+%% carrying an empty set leaves `LocalNew` exactly as it is. Settling that from the set
+%% skips naming the deleted item children, and naming them means draining the stream's
+%% ENTIRE pending queue (`pending_ops/1`, not the undrained suffix) into a list and
+%% walking it. A stream nested inside another value is never cleared, so that queue
+%% holds one op per mutation for the life of the view -- the walk grew with the
+%% session while the answer stayed `LocalNew`.
 merge_stream_child_views(Source, Old, LocalNew, Old0) ->
-    OldChildViews = maps:get(child_views, Old, #{}),
-    #{items := OldItems} = Old,
-    Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
-    Surviving = maps:without(Deleted, OldChildViews),
-    carry_item_children(Surviving, Old0, LocalNew).
+    case Old of
+        #{child_views := OldChildViews} when map_size(OldChildViews) > 0 ->
+            #{items := OldItems} = Old,
+            Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
+            carry_item_children(maps:without(Deleted, OldChildViews), Old0, LocalNew);
+        #{} ->
+            LocalNew
+    end.
 
 %% When a dynamic is skipped (deps unchanged), carry its child views over
 %% from OldViews to NewViews so they aren't pruned.
