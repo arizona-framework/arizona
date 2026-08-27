@@ -622,7 +622,9 @@ descend from the same value and share the identical prefix ending at it.
 Dropping that prefix is therefore exactly what the previous drain consumed.
 Anything else -- a divergent fork of the same stream, a `reset/1,2`, a
 `clear_stream_pending/2`, a rebuilt or rolled-back stream -- simply does not
-contain the stamp and falls back to a full drain.
+contain the stamp and falls back to a full drain. A queue whose every stamp is
+NEWER than the mark needs no fallback: the backwards search has already read
+every op by the time it runs out, so its accumulator is that full drain.
 
 The search runs BACKWARDS from the newest op and costs O(ops newer than `Mark`),
 not O(queue length): the mark is normally the previous drain's last op, so a
@@ -650,7 +652,14 @@ newer_than(Queue, Mark, Acc) ->
         {{value, {Mark, _Op}}, _Rest} -> {ok, Acc};
         {{value, {Seq, _Op}}, _Rest} when Seq < Mark -> rebuilt;
         {{value, {_Seq, Op}}, Rest} -> newer_than(Rest, Mark, [Op | Acc]);
-        {empty, _} -> rebuilt
+        %% Exhausted without meeting the mark, and without ever dropping below it: the
+        %% queue is wholly newer, so every op was popped and consed and `Acc` already
+        %% IS the full drain, oldest-first. Saying `rebuilt` here threw that away and
+        %% had `unstamp/1` walk the queue a second time to rebuild the same list --
+        %% and this is the ordinary path, not a rare one: a top-level stream binding
+        %% is cleared after every cycle, so the next drain always meets a queue whose
+        %% every stamp is newer than the mark left by the wiped one.
+        {empty, _} -> {ok, Acc}
     end.
 
 -doc """
