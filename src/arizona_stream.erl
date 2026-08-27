@@ -757,13 +757,23 @@ drop_oldest_for_append(#stream{on_limit = halt} = S) ->
     S;
 drop_oldest_for_append(#stream{size = Size, limit = Limit} = S) when Size < Limit ->
     S;
-drop_oldest_for_append(#stream{items = Items, order = Order, size = Size} = S) ->
-    [Oldest | RestOrder] = flat_order(Order),
+%% The oldest key is the head of the logical order, which is the head of `Front`
+%% whenever `Front` has one -- so dropping it is a cons pop, and the append buffer
+%% stays a buffer. Flattening the order to find that head instead copied the whole
+%% window AND emptied the buffer into it, so the next append had nowhere O(1) to land
+%% and re-flattened: every append at capacity paid O(Limit), which is exactly the
+%% bounded tail-buffer shape `drop` exists for. Refilling `Front` from `Back` only
+%% when it runs dry moves each key across once, so an append is amortized O(1) again.
+drop_oldest_for_append(
+    #stream{items = Items, order = {[Oldest | RestFront], Back}, size = Size} = S
+) ->
     drop_oldest_for_append(S#stream{
         items = maps:remove(Oldest, Items),
-        order = {RestOrder, []},
+        order = {RestFront, Back},
         size = Size - 1
-    }).
+    });
+drop_oldest_for_append(#stream{order = {[], Back}} = S) ->
+    drop_oldest_for_append(S#stream{order = {lists:reverse(Back), []}}).
 
 %% Append an op under a fresh stamp. Uniqueness is what makes the resume EXACT
 %% (`undrained_ops/2` locates the mark by equality); monotonicity is what makes
