@@ -578,3 +578,89 @@ describe('applyOps -- stale marker resolution within one batch', () => {
         warn.mockRestore();
     });
 });
+
+// ---------------------------------------------------------------------------
+// Non-tail list inserts and removes.
+//
+// The server used to express a head insert as "patch every item, then append
+// one", so `applyListPatch` only ever saw an INSERT at the end. It now strips the
+// common prefix and suffix first and emits a single op at the real position, so
+// these index-addressed shapes are exercised for the first time.
+//
+// Indices address the OLD positions: `applyListPatch` snapshots the item roots
+// before applying anything, so an INSERT at N lands before whatever was at N.
+// Ops below are REAL `arizona_diff` output for the stated change.
+// ---------------------------------------------------------------------------
+
+const LIST_AZ = 'L';
+const listDom = () =>
+    `<main id="page" az-view><ul az="${LIST_AZ}"><!--az:${LIST_AZ}-->` +
+    `<li az="0">a</li><li az="0">b</li><li az="0">c</li>` +
+    `<!--/az--></ul></main>`;
+// Ops reach `applyOps` after the Worker has resolved each payload to HTML, so the
+// fixture supplies the resolved string rather than the `{s,d,f}` map the server sent.
+const item = (v) => `<li az="0">${v}</li>`;
+const texts = () => Array.from(document.querySelectorAll('li')).map((e) => e.textContent);
+
+describe('applyOps -- non-tail list inserts and removes', () => {
+    beforeEach(() => {
+        document.body.innerHTML = listDom();
+    });
+
+    it('inserts at the head, before the item that was first', () => {
+        applyOps([[OP.LIST_PATCH, `page:${LIST_AZ}`, [[OP.INSERT, 0, item('z')]]]]);
+        expect(texts()).toEqual(['z', 'a', 'b', 'c']);
+    });
+
+    it('inserts in the middle, before the item at that index', () => {
+        applyOps([[OP.LIST_PATCH, `page:${LIST_AZ}`, [[OP.INSERT, 1, item('z')]]]]);
+        expect(texts()).toEqual(['a', 'z', 'b', 'c']);
+    });
+
+    it('still appends when the index is past the end', () => {
+        applyOps([[OP.LIST_PATCH, `page:${LIST_AZ}`, [[OP.INSERT, 3, item('z')]]]]);
+        expect(texts()).toEqual(['a', 'b', 'c', 'z']);
+    });
+
+    it('removes by old index', () => {
+        applyOps([[OP.LIST_PATCH, `page:${LIST_AZ}`, [[OP.REMOVE, 1]]]]);
+        expect(texts()).toEqual(['a', 'c']);
+    });
+
+    it('removes the head by old index', () => {
+        applyOps([[OP.LIST_PATCH, `page:${LIST_AZ}`, [[OP.REMOVE, 0]]]]);
+        expect(texts()).toEqual(['b', 'c']);
+    });
+
+    // Several inserts at one index keep their emitted order: each lands
+    // immediately before the same unmoved reference node.
+    it('keeps emitted order for repeated inserts at one index', () => {
+        applyOps([
+            [
+                OP.LIST_PATCH,
+                `page:${LIST_AZ}`,
+                [
+                    [OP.INSERT, 1, item('x')],
+                    [OP.INSERT, 1, item('y')],
+                ],
+            ],
+        ]);
+        expect(texts()).toEqual(['a', 'x', 'y', 'b', 'c']);
+    });
+
+    // Indices are OLD positions, so a remove and an insert in one batch do not
+    // have to compensate for each other.
+    it('mixes a remove and an insert against the pre-op snapshot', () => {
+        applyOps([
+            [
+                OP.LIST_PATCH,
+                `page:${LIST_AZ}`,
+                [
+                    [OP.REMOVE, 0],
+                    [OP.INSERT, 2, item('z')],
+                ],
+            ],
+        ]);
+        expect(texts()).toEqual(['b', 'z', 'c']);
+    });
+});

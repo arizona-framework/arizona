@@ -523,26 +523,50 @@ never reads the flag (it keys items by `az-key` and diffs through `diff_stream/4
 positional walk to gate).
 
 Positional patching is always *correct* -- position N is item N in both the DOM and the new
-render -- but not always the *smaller* patch, and that is what `shifted/3` decides. Insert or
-remove anywhere but the tail and every later item patches with its neighbour's content, so the
-ops grow with the list while the wholesale re-render stays one op. Erlang iterates a small map in
-term order, so a mid-container insert is the common case there, not the exotic one.
+render -- but not always the *smaller* patch, and that is what `outgrows_re_render/3` decides.
+Insert or remove anywhere but the tail and every later item patches with its neighbour's content,
+so the ops grow with the list while the wholesale re-render stays one op. Erlang iterates a small
+map in term order, so a mid-container insert is the common case there, not the exotic one.
 
-The gate reads the positional walk's own output, so it needs no per-item identity and covers a
-plain list (which has none) as well as a map: a length change means items were appended or
-removed, and an item patch beside one is the signature of a shift. The patch count measures how
-far the container shifted -- an edit at the tail shifts nothing, one at the head shifts
-everything -- so a late insert into a long list stays on the cheap path instead of re-sending
-every item to patch the last one.
+**Counting how much of the container changed cannot decide it.** The three per-op costs are
+structurally different: an `?OP_INSERT` carries a whole rendered item, statics included; an
+`?OP_ITEM_PATCH` carries values plus framing; an `?OP_REMOVE` is a couple of integers. Wholesale
+ships the statics ONCE plus every item's values. A count therefore assumes a statics-to-value
+ratio, and the real crossover moves from a few percent to nearly all of the container across
+ordinary shapes. Two concrete failures of the count form: a constant tuned on inserts overcharges
+positional-on-remove by exactly one statics block, so an early remove was re-rendered wholesale
+when staying positional was 4.5x smaller; and a shrink whose surviving prefix is unchanged
+produces no item patches at all, so no threshold could ever trip it, leaving a 200-item container
+shipping 198 removes where one re-render was 2.2x cheaper.
 
-The bias is deliberately toward staying positional, because those ops also preserve the DOM: the
+**Before any of that, the walk strips what did not change.** `diff_list_positional/5`
+removes the common prefix and, when the lengths differ, the common suffix, and diffs only
+the middle. Without it a head insert reads as "every position differs" and emits one item
+patch per item plus a tail append -- each patch carrying the value of an item that merely
+shifted along. With it the same change is a single `?OP_INSERT` at the position the item
+actually goes, at any container size, and a single delete is one `?OP_REMOVE`. Sub-op
+indices address the OLD positions, which is what the client resolves them against:
+`applyListPatch` snapshots the item roots before applying anything, so an insert at N
+lands before whatever was at N, and repeated inserts at one index keep their emitted
+order. The suffix strip is skipped at equal lengths, where it costs two reverses and
+cannot produce a pure insert or remove.
+
+That mostly retires the fallback for insertions -- one op is never worth re-rendering a
+container for. What still reaches it is a long run of removes, which no amount of
+stripping collapses.
+
+**Both sides are then estimated in bytes.** The wholesale side costs nothing extra to obtain:
+`diff_list_positional/5` already visits every new item, so it accumulates their value bytes as it
+walks and returns them beside the ops. `wire_bytes/1` approximates the JSON size of the ops
+without encoding them -- only the ratio matters.
+
+The comparison is biased toward staying positional, because those ops also preserve the DOM: the
 container is never torn down, so focus, scroll position and `?local` values inside it survive.
-The two encodings cross at about half the container shifted, but there they are within ~1% of
-each other, so the fallback waits until three quarters shifted, where positional turns decisively
-bigger while touching nearly every node anyway. Measured on a 3-key map and a 10-item list: a map
-value-only change falls from 287 to 62 bytes and a mid insert from 344 to 324, while a list head
-insert falls from 606 (positional, pre-gate) to 401 (wholesale) and a late insert into a 200-item
-list stays at 296 against a 4.488-byte wholesale render.
+Wholesale has to be **clearly** smaller (a 3:2 ratio) and to save something worth having in
+absolute terms (`?RE_RENDER_MIN_SAVING`). The absolute floor matters because a short container can
+be twice as cheap to re-render while the saving is a hundred-odd bytes, which is not a trade worth
+losing an in-progress selection over -- so a 10-item list keeps its per-item ops and a 200-item one
+does not.
 
 ## API -- effect commands (`arizona_js` / `arizona_android` / `arizona_os` / `arizona_effect`)
 
@@ -1689,8 +1713,8 @@ and the enclosing element intact. A single-root plain-list `?each` patches in pl
 The wholesale marker-aware `OP_TEXT` re-render is the fallback -- used when positional patching is
 unsound (the old slot was not a list, the item is not a single root element, or the list rendered a
 per-item child view), and also when it would be sound but larger (the container shifted far enough
-that per-item patches outgrow one re-render -- see `shifted/3` above). A scalar value or a nested
-template still patches via that `OP_TEXT`.
+that per-item patches outgrow one re-render -- see `outgrows_re_render/3` above). A scalar value
+or a nested template still patches via that `OP_TEXT`.
 
 That fallback re-renders the whole container, so `list_changed/3` decides whether it is warranted
 by whether a slot RENDERS differently (`item_changed/2`), not by term inequality. A value can

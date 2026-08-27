@@ -848,14 +848,21 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
             not has_markerless_slot(NewItemsList),
     case Patchable of
         true ->
-            {SubOps, Views2} =
+            {{SubOps, ValueBytes}, Views2} =
                 diff_list_positional(Tmpl, NewItemsList, OldItemsList, 0, Views1),
             case SubOps of
                 [] ->
                     {[], NewSnap, Views2};
                 _ ->
                     maybe_list_patch(
-                        Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, Views2
+                        Az,
+                        Tmpl,
+                        {SubOps, ValueBytes},
+                        NewItemsList,
+                        OldItemsList,
+                        NewSnap,
+                        Views1,
+                        Views2
                     )
             end;
         false ->
@@ -888,20 +895,66 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
 %% decisively bigger (30-40% more bytes at 10 and 40 items) while touching nearly
 %% every node anyway, so that is where it hands over.
 maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, Views2) ->
-    case shifted(SubOps, NewItemsList, OldItemsList) of
+    case outgrows_re_render(SubOps, Tmpl, NewItemsList) of
         false ->
-            {[[?OP_LIST_PATCH, Az, SubOps]], NewSnap, Views2};
+            {[[?OP_LIST_PATCH, Az, element(1, SubOps)]], NewSnap, Views2};
         true ->
             diff_list_full(Az, Tmpl, NewItemsList, OldItemsList, NewSnap, Views1)
     end.
 
-shifted(SubOps, NewItemsList, OldItemsList) ->
-    NewLen = length(NewItemsList),
-    NewLen =/= length(OldItemsList) andalso
-        count_item_patches(SubOps) * 4 >= NewLen * 3.
+%% Positional patching is always CORRECT -- position N is item N in both the DOM and
+%% the new render -- but not always the SMALLER patch, and this is where that is
+%% decided. Insert or remove anywhere but the tail and every later item patches with
+%% its neighbour's content, so the ops grow with the list while the wholesale
+%% re-render stays one op.
+%%
+%% Counting how much of the container changed cannot decide it, because the three
+%% per-op costs are structurally different: an `?OP_INSERT` carries a whole rendered
+%% item (statics included), an `?OP_ITEM_PATCH` carries values plus framing, and an
+%% `?OP_REMOVE` is a couple of integers. Wholesale, by contrast, ships the statics
+%% ONCE plus every item's values. A count therefore assumes a statics-to-value ratio,
+%% and the real crossover moves across ordinary shapes -- so a constant tuned on
+%% inserts overcharges removes by exactly one statics block, and a shrink whose
+%% surviving prefix is unchanged produces no item patches at all and could never trip
+%% a count at any threshold.
+%%
+%% Estimate both sides in bytes instead. The wholesale side costs nothing extra to
+%% obtain: `diff_list_positional/5` already visits every new item, so it accumulates
+%% their value bytes as it walks.
+%%
+%% The comparison is biased toward staying positional, because those ops also
+%% preserve the DOM: the container is never torn down, so focus, scroll position and
+%% `?local` values inside it survive -- the whole reason `?OP_LIST_PATCH` exists.
+%% Wholesale has to be clearly smaller, not merely smaller, before it is worth that,
+%% and it has to save something worth having in absolute terms too. A small container
+%% can be 2x cheaper to re-render while the saving is a hundred-odd bytes, which is
+%% not a trade worth losing an in-progress selection over.
+-define(RE_RENDER_BIAS_NUM, 3).
+-define(RE_RENDER_BIAS_DEN, 2).
+-define(RE_RENDER_MIN_SAVING, 512).
 
-count_item_patches(SubOps) ->
-    length([Op || [?OP_ITEM_PATCH | _] = Op <- SubOps]).
+outgrows_re_render({SubOps, ValueBytes}, Tmpl, NewItemsList) ->
+    Positional = wire_bytes(SubOps),
+    Whole = re_render_bytes(Tmpl, ValueBytes, length(NewItemsList)),
+    Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
+        Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM.
+
+%% Statics once, every item's values, plus per-item list framing.
+re_render_bytes(#{s := Statics}, ValueBytes, Count) ->
+    iolist_size(Statics) + ValueBytes + Count * 4.
+
+%% Rough JSON-encoded size of a term, without encoding it. Only the ratio against
+%% `re_render_bytes/3` matters, so constants approximate quoting and separators.
+wire_bytes(B) when is_binary(B) ->
+    byte_size(B) + 2;
+wire_bytes(I) when is_integer(I) ->
+    4;
+wire_bytes(L) when is_list(L) ->
+    lists:foldl(fun(E, A) -> A + wire_bytes(E) + 1 end, 2, L);
+wire_bytes(M) when is_map(M) ->
+    maps:fold(fun(K, V, A) -> A + wire_bytes(K) + wire_bytes(V) + 2 end, 2, M);
+wire_bytes(_Other) ->
+    8.
 
 is_single_root(#{single_root := true}) -> true;
 is_single_root(#{}) -> false.
@@ -1035,21 +1088,73 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% plus a single tail insert/remove -- correct (the new list is reproduced
 %% exactly) and minimal in childList churn; identity across reorders is the keyed
 %% `arizona_stream`'s job, not a plain list's.
-diff_list_positional(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
+%% Returns `{{SubOps, ValueBytes}, Views}`. `ValueBytes` is the size of every NEW
+%% item's values, accumulated here because this walk already visits them -- it is
+%% what `outgrows_re_render/3` prices the wholesale alternative with.
+%% Entry point. Strip the unchanged head and tail FIRST, then diff only the middle.
+%% Without that, a head insert reads as "every position differs" and emits one item
+%% patch per item plus a tail append -- each patch carrying the value of the item that
+%% merely shifted along. The change is one item, so the patch should be one op.
+%%
+%% Sub-op indices address the OLD positions, which is exactly what the client resolves
+%% them against: `applyListPatch` snapshots the item roots before applying anything, so
+%% an `?OP_INSERT` at index N lands before the item that was at N (or the end marker
+%% past the end), and repeated inserts at one index keep their emitted order because
+%% each lands immediately before the same unmoved reference node.
+diff_list_positional(Tmpl, NewItems, OldItems, Idx0, Views0) ->
+    AllBytes = lists:foldl(fun(D, A) -> A + item_value_bytes(D) end, 0, NewItems),
+    {Common, NewRest, OldRest} = strip_common_prefix(NewItems, OldItems, 0),
+    {NewMid, OldMid} = maybe_strip_common_suffix(NewRest, OldRest),
+    {Ops, Views1} = diff_list_middle(Tmpl, NewMid, OldMid, Idx0 + Common, Views0),
+    {{Ops, AllBytes}, Views1}.
+
+strip_common_prefix([Same | NR], [Same | OR], N) ->
+    strip_common_prefix(NR, OR, N + 1);
+strip_common_prefix(NewRest, OldRest, N) ->
+    {N, NewRest, OldRest}.
+
+%% The tail matters as much as the head: a HEAD insert differs at position 0, so the
+%% prefix strip finds nothing, while every remaining item matches one position along.
+%% Stripping that shared tail turns it into an empty old middle -- one insert. The
+%% middle's starting index is unaffected, since the shared tail sits past it.
+%%
+%% Only worth doing when the lengths DIFFER. Stripping costs a reverse of both lists,
+%% and at equal length it cannot produce a pure insert or remove -- the middle still
+%% goes through the lockstep walk, which already skips matching items for nothing. The
+%% common case is a value changing in place, so paying two reverses there is the whole
+%% cost of this optimisation with none of its benefit.
+maybe_strip_common_suffix(New, Old) ->
+    case length(New) =:= length(Old) of
+        true -> {New, Old};
+        false -> strip_common_suffix(New, Old)
+    end.
+
+strip_common_suffix(New, Old) ->
+    {_N, RevNew, RevOld} = strip_common_prefix(lists:reverse(New), lists:reverse(Old), 0),
+    {lists:reverse(RevNew), lists:reverse(RevOld)}.
+
+%% A pure insertion: the old list is exhausted at the same point the new one still has
+%% items, and everything before matched. One `?OP_INSERT` per added item, all at the
+%% same old index, instead of dragging every later item through a patch.
+diff_list_middle(Tmpl, NewRest, [], Idx, Views) ->
+    {[[?OP_INSERT, Idx, arizona_render:zip_item(Tmpl, D)] || D <- NewRest], Views};
+%% A pure removal: nothing new remains, so drop the old tail by index.
+diff_list_middle(_Tmpl, [], OldRest, Idx, Views) ->
+    {[[?OP_REMOVE, I] || I <- lists:seq(Idx, Idx + length(OldRest) - 1)], Views};
+%% Both sides still have items: an edit rather than a clean insert or remove. Walk them
+%% in lockstep, which is what a same-length content change wants anyway.
+diff_list_middle(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
     %% Markerless slots never reach this walk: `diff_each_items/6` routes any
     %% template carrying one to the wholesale fallback.
     {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
-    {RestOps, Views2} = diff_list_positional(Tmpl, NR, OR, Idx + 1, Views1),
+    {RestOps, Views2} = diff_list_middle(Tmpl, NR, OR, Idx + 1, Views1),
     case InnerOps of
         [] -> {RestOps, Views2};
         _ -> {[[?OP_ITEM_PATCH, Idx, InnerOps] | RestOps], Views2}
-    end;
-diff_list_positional(Tmpl, [NewD | NR], [], Idx, Views0) ->
-    HTML = arizona_render:zip_item(Tmpl, NewD),
-    {RestOps, Views1} = diff_list_positional(Tmpl, NR, [], Idx + 1, Views0),
-    {[[?OP_INSERT, Idx, HTML] | RestOps], Views1};
-diff_list_positional(_Tmpl, [], OldTail, Idx, Views) ->
-    {[[?OP_REMOVE, I] || I <- lists:seq(Idx, Idx + length(OldTail) - 1)], Views}.
+    end.
+
+item_value_bytes(ItemD) ->
+    lists:foldl(fun({_Az, V, _Deps}, A) -> A + wire_bytes(V) end, 0, ItemD).
 
 smart_reset_items(_Az, [], _Kept, _OldItems, _ItemsMap, _Tmpl, Views, Snaps) ->
     {[], Snaps, Views};
