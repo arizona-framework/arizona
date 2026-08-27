@@ -609,7 +609,7 @@ diff_stream(
             Ops = arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none)),
             {StreamOps, NewSnap, Views1} = diff_stream_pending(
                 Az,
-                Ops,
+                drainable_ops(Ops),
                 SV,
                 Tmpl,
                 OldItems,
@@ -674,6 +674,20 @@ stream_outgrows_by_bytes(Ops, Tmpl, OldItems, Source) when map_size(OldItems) > 
         Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM;
 stream_outgrows_by_bytes(_Ops, _Tmpl, _OldItems, _Source) ->
     false.
+
+%% An empty drain carries no information about whether the container changed -- it
+%% means either "nothing happened" or "the log was wiped and anything may have
+%% happened". Draining nothing silently answers "no change" to both. `diff_dynamics/4`
+%% guards against that by asking `stream_drainable/2` first and reconciling through
+%% `stream_relist/7`, but the dep-aware walk (`diff_each/9`) and the
+%% stream-inside-a-stream-item walk (`diff_item_dynamics_v/3`) call here straight, so
+%% on those paths a wiped log dropped the change: replacing a populated stream binding
+%% with a cleared one emitted ZERO ops where `diff/3` emitted the removals. Reconcile
+%% instead -- a reset against the CURRENT source is the answer the log cannot give, and
+%% it costs nothing when nothing did change, since every kept item's dynamics compare
+%% equal and emit no op.
+drainable_ops([]) -> [{reset, #{}}];
+drainable_ops(Ops) -> Ops.
 
 diff_stream_pending(Az, [], {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
     apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);

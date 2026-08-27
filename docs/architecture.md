@@ -906,6 +906,29 @@ it would drop a sibling's genuine ops. A stamp the queue does not contain (a for
 skips. The search runs backwards from the newest op and stops at the mark, or the moment it drops
 below it, so it costs O(ops added this cycle) rather than O(queue length).
 
+That guard sits at one call site, so the other two ways into `diff_stream/4` -- the dep-aware walk
+(`diff_each/9`, which `diff/4` uses, i.e. production) and the stream-inside-a-stream-item walk
+(`diff_item_dynamics_v/3`) -- reached the drain straight and dropped the change: on identical
+input `diff/3` emitted the removals and `diff/4` emitted nothing. `diff_stream/4` now reconciles
+an empty drain itself (`drainable_ops/1` substitutes a `{reset, #{}}`), so every entry point
+agrees. The two mechanisms are complementary rather than redundant: `stream_relist/7` diffs
+against the state the enclosing walk already evaluated, which `diff_each/9` does not have.
+
+**What a full drain assumes -- and the genesis reset that keeps it true.** A drain replays a log
+against what the client actually holds, so a full drain is correct only when the queue's own
+starting point IS that state. It is for the flow the fallback was written for: the live process
+clears a top-level binding's queue right after each drain, so the queue restarts exactly where the
+client is. A **constructed** stream is the case where it is not -- `new/1,2,3` starts from an empty
+collection, so queueing its items as pending INSERTS described the delta from empty. Bind such a
+stream over a slot that already holds one (rather than mutating the stream that is there) and
+those inserts were all the differ had: keys the new stream dropped were never mentioned, and keys
+present in both were skipped as replays, so a shrink, a reorder and an in-place content change
+each diffed to NOTHING and the stale list stayed on screen with no self-heal. The constructors
+therefore open the queue with a **genesis reset** (`{reset, #{}}`) -- the op that already means
+"reconcile the client to my current state" -- which makes the log truthful for any consumer.
+It costs the incremental path nothing: a resume that finds its mark skips past it, and replaying
+it in a re-drain is idempotent.
+
 The queue of an unclearable nested stream still grows, one retained op term per mutation. Keep a
 stream that mutates over a long-lived session as a top-level binding.
 

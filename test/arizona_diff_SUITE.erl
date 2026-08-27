@@ -55,6 +55,12 @@
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
     diff_stream_among_siblings_uses_text_op/1,
+    diff_stream_replaced_by_fresh_shrink_removes/1,
+    diff_stream_replaced_by_fresh_content_change_patches/1,
+    diff_stream_replaced_by_fresh_reorder_moves/1,
+    diff_stream_replaced_by_fresh_identical_emits_nothing/1,
+    diff_stream_empty_log_agrees_across_entry_points/1,
+    diff_stream_constructed_then_mutated_still_reconciles/1,
     diff_stream_bulk_grow_collapses/1,
     diff_stream_bulk_append_stays_incremental/1,
     diff_stream_child_views_never_collapse/1,
@@ -152,6 +158,12 @@ groups() ->
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
             diff_stream_among_siblings_uses_text_op,
+            diff_stream_replaced_by_fresh_shrink_removes,
+            diff_stream_replaced_by_fresh_content_change_patches,
+            diff_stream_replaced_by_fresh_reorder_moves,
+            diff_stream_replaced_by_fresh_identical_emits_nothing,
+            diff_stream_empty_log_agrees_across_entry_points,
+            diff_stream_constructed_then_mutated_still_reconciles,
             diff_stream_bulk_grow_collapses,
             diff_stream_bulk_append_stays_incremental,
             diff_stream_child_views_never_collapse,
@@ -1033,6 +1045,88 @@ bulk_stream_diff(Mod, From, To) ->
     T1 = Mod:render(#{id => ~"x", items => S1}),
     {Ops, _S, _V} = arizona_diff:diff(T1, Snap0, Views0, #{items => true}),
     Ops.
+
+diff_stream_replaced_by_fresh_shrink_removes(Config) when is_list(Config) ->
+    Ops = stream_replaced_by_fresh(
+        [stream_item(1, ~"a"), stream_item(2, ~"a"), stream_item(3, ~"a")],
+        [stream_item(1, ~"a")]
+    ),
+    ?assertEqual([~"2", ~"3"], [K || [?OP_REMOVE, _, K] <- Ops]),
+    ?assertEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_TEXT]).
+
+diff_stream_replaced_by_fresh_content_change_patches(Config) when is_list(Config) ->
+    Ops = stream_replaced_by_fresh(
+        [stream_item(1, ~"a"), stream_item(2, ~"a")],
+        [stream_item(1, ~"a"), stream_item(2, ~"b")]
+    ),
+    ?assertMatch([[?OP_ITEM_PATCH, _, ~"2", [[?OP_TEXT, _, ~"b"]]]], Ops).
+
+diff_stream_replaced_by_fresh_reorder_moves(Config) when is_list(Config) ->
+    Ops = stream_replaced_by_fresh(
+        [stream_item(1, ~"a"), stream_item(2, ~"a"), stream_item(3, ~"a")],
+        [stream_item(3, ~"a"), stream_item(2, ~"a"), stream_item(1, ~"a")]
+    ),
+    ?assertNotEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_MOVE]),
+    ?assertEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_REMOVE]).
+
+%% ...and an unchanged replacement stays silent, so the reconciliation is not
+%% just a re-render in disguise.
+diff_stream_replaced_by_fresh_identical_emits_nothing(Config) when is_list(Config) ->
+    Items = [stream_item(1, ~"a"), stream_item(2, ~"b")],
+    ?assertEqual([], stream_replaced_by_fresh(Items, Items)).
+
+%% An EMPTY drain says nothing about whether the container changed: the log is
+%% wiped before a `?stateful` child renders, so "no ops" means either "nothing
+%% happened" or "anything may have happened". `diff_dynamics/4` guards that by
+%% reconciling instead, but the dep-aware walk (`diff_each/9`) called the drain
+%% straight -- so the two entry points disagreed on identical input, and the
+%% production one (`diff/4`) was the one that dropped the change.
+diff_stream_empty_log_agrees_across_entry_points(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> integer_to_binary(Id) end,
+    B = #{id => ~"siblings", title => ~"T"},
+    Old = arizona_stream:new(KeyFun, [stream_item(1, ~"a"), stream_item(2, ~"a")]),
+    #{s := New} = arizona_stream:clear_stream_pending(
+        #{s => arizona_stream:new(KeyFun, [stream_item(1, ~"a")])}, [s]
+    ),
+    ?assertEqual([], arizona_stream:pending_ops(New)),
+    {_HTML, Snap0, Views0} = arizona_render:render(
+        arizona_stream_siblings:render(B#{items => Old}), #{}
+    ),
+    T1 = arizona_stream_siblings:render(B#{items => New}),
+    {Ops3, _, _} = arizona_diff:diff(T1, Snap0, Views0),
+    {Ops4, _, _} = arizona_diff:diff(T1, Snap0, Views0, #{items => true}),
+    ?assertMatch([[?OP_REMOVE, _, ~"2"]], Ops4),
+    ?assertEqual(Ops3, Ops4).
+
+%% The case that shows the genesis reset is load-bearing rather than belt-and-braces.
+%% A CONSTRUCTED stream that then has an op applied has a NON-empty queue, so the
+%% empty-drain reconciliation cannot rescue it: the drain sees only that one op and
+%% replays it, and without the constructor's own reset in front the items the new
+%% stream never had are never reconciled away. Verified by mutation: drop the genesis
+%% reset and this reconciles 5 items down to 3 with a single op instead of five.
+diff_stream_constructed_then_mutated_still_reconciles(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> integer_to_binary(Id) end,
+    Old = arizona_stream:new(KeyFun, [stream_item(I, ~"a") || I <- lists:seq(1, 5)]),
+    New = arizona_stream:insert(
+        arizona_stream:new(KeyFun, [stream_item(1, ~"a"), stream_item(2, ~"a")]),
+        stream_item(9, ~"n")
+    ),
+    %% Non-empty queue, so `drainable_ops/1` passes it through untouched.
+    ?assertNotEqual([], arizona_stream:pending_ops(New)),
+    {_SSR, Ops} = stream_siblings_ssr_and_ops(Old, New),
+    %% Keys 3..5 are gone and key 9 arrived.
+    ?assertEqual([~"3", ~"4", ~"5"], lists:sort([K || [?OP_REMOVE, _, K] <- Ops])),
+    ?assertNotEqual([], [Op || Op <- Ops, hd(Op) =:= ?OP_INSERT]).
+
+stream_replaced_by_fresh(Old, New) ->
+    KeyFun = fun(#{id := Id}) -> integer_to_binary(Id) end,
+    {_SSR, Ops} = stream_siblings_ssr_and_ops(
+        arizona_stream:new(KeyFun, Old), arizona_stream:new(KeyFun, New)
+    ),
+    Ops.
+
+stream_item(Id, Label) ->
+    #{id => Id, label => Label}.
 
 %% First emitter: `diff_stream/4`'s no-`order` clause -- the old snapshot was a
 %% map-source each, so there is nothing to diff incrementally and the whole
