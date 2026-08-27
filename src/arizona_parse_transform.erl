@@ -416,6 +416,16 @@ Called by the compiler when `parse_transform/2` returns an error tuple.
     Reason :: term().
 format_error({render_reject, Message}) ->
     unicode:characters_to_list(Message);
+format_error(computed_element_tag) ->
+    "an element's tag must be a literal atom. The tag is baked into the template's "
+    "statics at compile time, which is what lets a later change ship only the values, "
+    "so a tag chosen at runtime has no single set of statics to bake. Put the CHOICE "
+    "inside a stable element instead of choosing the element: {'div', [], [case Kind "
+    "of note -> {'em', [], [X]}; _ -> {'strong', [], [X]} end]} -- a conditional in a "
+    "content slot may return bare element tuples, so the branches can differ "
+    "completely. Inside an ?each the stable element is the item itself and carries "
+    "az_key, which is also what keeps its identity across a change: "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end";
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
     "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
@@ -2132,8 +2142,31 @@ extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
         false ->
             parse_error(invalid_element, line(Node))
     end;
+%% Shaped like an element but with a tag that is not a literal atom.
+extract_element({tuple, _, [TagAST, _Attrs]} = Node) ->
+    element_tag_error(TagAST, Node);
+extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node) ->
+    element_tag_error(TagAST, Node);
 extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
+
+%% A tag written as a literal of the WRONG TYPE (a binary, a string) is a malformed
+%% element form, and the form error says exactly what the accepted shapes are. A tag
+%% that is EVALUATED is a different mistake with a different answer -- the author is
+%% choosing the element at runtime -- so it gets advice instead of a restatement.
+element_tag_error(TagAST, Node) ->
+    case is_literal_tag(TagAST) of
+        true -> parse_error(invalid_element, line(Node));
+        false -> parse_error(computed_element_tag, line(Node))
+    end.
+
+is_literal_tag({atom, _, _}) -> true;
+is_literal_tag({bin, _, _}) -> true;
+is_literal_tag({string, _, _}) -> true;
+is_literal_tag({integer, _, _}) -> true;
+is_literal_tag({float, _, _}) -> true;
+is_literal_tag({char, _, _}) -> true;
+is_literal_tag(_Evaluated) -> false.
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
     ok = reject_framework_attrs(Attrs0, Line),
