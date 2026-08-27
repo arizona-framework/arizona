@@ -832,10 +832,12 @@ keyed_items(KeyFun, [Item | Rest], Map0) ->
 %% Walked with an accumulator rather than body-recursively: the prefix is rebuilt
 %% either way, but `lists:reverse/2` splices it back in C instead of unwinding one
 %% stack frame per element. ~20% faster at a mid-list position on a long order.
+%% Only ever called with `Pos` strictly inside the order -- `insert/3` answers an
+%% at-or-past-the-end position from the append buffer before reaching here -- so the
+%% walk always meets `Pos` before it runs out of list, and there is no run-off clause.
 order_insert_at(Order, Key, Pos) -> order_insert_at(Order, Key, Pos, []).
 
 order_insert_at(Rest, Key, 0, Acc) -> lists:reverse(Acc, [Key | Rest]);
-order_insert_at([], Key, _Pos, Acc) -> lists:reverse(Acc, [Key]);
 order_insert_at([H | T], Key, Pos, Acc) -> order_insert_at(T, Key, Pos - 1, [H | Acc]).
 
 order_delete([], _Key) -> [];
