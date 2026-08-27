@@ -1735,6 +1735,17 @@ against its binary. Answering on
 term inequality tore the container down to rebuild byte-identical markup, losing focus, scroll
 position and every `?local` inside it for nothing.
 
+The same question is asked of EVERY slot, not only a container's, by
+`maybe_make_ops/5` -- one decision point shared by the plain and the dep-aware walk.
+A value that changed as a term has not necessarily changed on screen, and the write is
+not free: an `?OP_SET_ATTR` is a style-recalc trigger, and the client's
+`applySetAttrOp` additionally assigns the live property for `value`, which can move a
+caret or drop a selection in an input the user is working in. An attribute is compared
+like any other value with one exception -- a boolean is not a value there. `true`
+renders as a bare attribute and `false` removes it outright, so neither may be called
+equal to a string that happens to print the same: `true` against `~"true"` really is a
+change, from a bare attribute to `name="true"`.
+
 Nothing is rendered to answer it in the common case. `collapses_to_same_bytes/2` runs only once
 the terms already differ, and two same-type scalars are settled by their types alone: `to_bin/1`
 is the identity on binaries and `integer_to_binary`/`atom_to_binary` are injective, so two
