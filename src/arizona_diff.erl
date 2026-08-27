@@ -240,6 +240,9 @@ diff_dynamics(
             {StreamOps, _NewSnap, {_, LocalNew}} =
                 diff_stream(Az, #{source => Src, template => Tmpl}, Old, {Old0, #{}}),
             LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
+            %% A drain takes no tail. Threading one through every stream helper
+            %% would buy this site alone: the other two stream containers drain
+            %% BEFORE their siblings, so they have no tail to hand it.
             {StreamOps ++ RestOps, {Old0, maps:merge(New0, LocalNew1)}};
         false ->
             stream_relist(Az, Src, Tmpl, New, Old, RestOps, Views1)
@@ -439,6 +442,9 @@ diff_each(
     Views1 = {Old0, maps:merge(New0, LocalNew1)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+    %% The drain runs first because the sibling walk consumes the views it rendered,
+    %% so there is no tail here to cons onto. Diffing the siblings first to make one
+    %% would run their child `mount/1`s ahead of this container's.
     {StreamOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
 diff_each(
     Az, #{source := Items} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
@@ -1801,6 +1807,8 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             EachDesc = #{source => Src, template => Tmpl},
             {EachOps, _NewSnap, Views1} = diff_stream(Az, EachDesc, Old, Views0),
             {RestOps, Markerless, Views2} = diff_item_dynamics_v(NR, OR, Views1),
+            %% Same ordering as `diff_each/9`'s stream clause: the drain feeds the
+            %% rest of the walk its views, so its ops have no tail to cons onto.
             {EachOps ++ RestOps, Markerless, Views2};
         _ ->
             {RestOps, Markerless, Views1} = diff_item_dynamics_v(NR, OR, Views0),
