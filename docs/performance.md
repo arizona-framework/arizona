@@ -63,13 +63,22 @@ any profile row, divide its time by its call count and ask whether that per-call
 figure is physically plausible for what the function does; a per-byte walker and a
 BIF call in the same table are not on the same scale.
 
-**Benchmarking a function THROUGH A CALLER invents effects.** Driving a changed clause
-through a realistic-looking 3-element list showed a 74 ns regression that vanished
-entirely once the clause was measured on its own -- its real cost was 8-13 ns. The same
-setup produced a second phantom when the caller was a whole request. Both times the
-surrounding walk contributed enough variance to manufacture a delta several times the
-size of the thing under test, and both times isolating to the single function killed
-it. Calling through a caller is the tell: measure the function you changed.
+**The benchmark's call graph must match production's.** Every direction this can go
+wrong has produced a wrong number in practice:
+
+- *An extra caller.* Driving a changed clause through a realistic-looking 3-element
+  list showed a 74 ns regression that vanished once the clause was measured alone --
+  real cost 8-13 ns. The same setup produced a second phantom with a whole request as
+  the caller. The surrounding walk contributes enough variance to manufacture a delta
+  several times the size of the thing under test.
+- *An extra callee.* A benchmark had the fast-path function delegate to the general one
+  on a miss, a hop production does not make -- there the general clause is inline in the
+  same function. That inflated the measured miss cost from ~1 ns to ~9 ns, and the wrong
+  figure was quoted onward before anyone caught it.
+
+"Isolate the function" is the usual fix, but it is the symptom rather than the rule: a
+benchmark can be perfectly isolated and still measure a call graph production never
+executes. Check both ends -- what calls it, and what it calls.
 
 **A result does not transfer between modules without re-measuring, and the reason is
 not just input size.** Two builders asked the same question -- is a tail-recursive
