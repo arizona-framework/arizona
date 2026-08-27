@@ -188,6 +188,13 @@ test-e2e-native:
 bench: compile-test
 	./scripts/bench.escript $(ARGS)
 
+# Paired A/B of one workload across two commits. Builds each ref in its own
+# worktree (so neither can silently measure the other's beams), interleaves the
+# rounds, and reports the minimum each ref reached. Also not in ci.
+#   make bench-ab REFS="main HEAD" ARGS="--only stream_update_field_100"
+bench-ab:
+	./scripts/bench_ab.sh $(REFS) $(ARGS)
+
 # Interactive terminal demo: a live Arizona view rendered in an ANSI terminal
 # with no HTTP server. Needs a real TTY; not wired into ci. Press q to quit.
 # Compile under the test profile so the demo view fixture is on the path.

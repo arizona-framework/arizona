@@ -49,6 +49,7 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
 | `make doc-erl` | Erlang docs (ex_doc) |
 | `make bench` | Performance bench (`scripts/bench.escript`, `ARGS=...`); deliberately **not** in `ci` -- shared runners are too noisy |
+| `make bench-ab REFS="<a> <b>"` | Paired A/B of one workload across two commits, each built in its own worktree; also **not** in `ci` |
 | `make prof` | eprof/fprof profile (`scripts/profile.escript`, `ARGS=...`); also **not** in `ci` |
 | `make prof-at REF=...` | Profile any commit-ish in a cached `git worktree`, for A/B comparisons |
 | `make setup-e2e` | Install E2E deps |
@@ -57,6 +58,11 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 ## Architecture reference
 
 Full architecture documentation (modules, APIs, data flow, op codes, etc.) is in [docs/architecture.md](docs/architecture.md).
+
+Performance: how to measure without fooling yourself (benchmark noise floor, the
+recompile trap, eprof's bias), what tuning has already found, what was tried and
+rejected, and what is still open, is in [docs/performance.md](docs/performance.md).
+Read it before optimising anything -- several plausible changes measured *worse*.
 
 ## Clients
 
