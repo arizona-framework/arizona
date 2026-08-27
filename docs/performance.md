@@ -63,6 +63,51 @@ any profile row, divide its time by its call count and ask whether that per-call
 figure is physically plausible for what the function does; a per-byte walker and a
 BIF call in the same table are not on the same scale.
 
+**Benchmarking a function THROUGH A CALLER invents effects.** Driving a changed clause
+through a realistic-looking 3-element list showed a 74 ns regression that vanished
+entirely once the clause was measured on its own -- its real cost was 8-13 ns. The same
+setup produced a second phantom when the caller was a whole request. Both times the
+surrounding walk contributed enough variance to manufacture a delta several times the
+size of the thing under test, and both times isolating to the single function killed
+it. Calling through a caller is the tell: measure the function you changed.
+
+**A result does not transfer between modules without re-measuring, and the reason is
+not just input size.** Two builders asked the same question -- is a tail-recursive
+`<<Acc/binary, B>>` accumulator faster than consing an iolist and flattening once? --
+and got different answers, both correct. Both curves cross, but at different places and
+with different stakes:
+
+| input size | `arizona_html:escape/2` | lowercasing header names (roadrunner) |
+| ---------- | ----------------------- | ------------------------------------- |
+| 5B | iolist | iolist |
+| 10B | iolist | iolist |
+| 20B | append (marginal) | iolist |
+| 30B | -- | crossover |
+| 50-100B | -- | append |
+| 200B | append | append |
+| 500B | append | append |
+
+Two differences, and the second is the one that would have misled. The crossover sits
+near 20 bytes for one and 30-50 for the other. And past it `escape/2`'s append pulls
+away to roughly **twice** as fast (1170 ns against 2261 at 200 bytes) where the
+lowercase walk's never exceeds ~16%. The reason is what each builder emits PER INPUT
+BYTE: `escape/2` writes a multi-byte entity for a metacharacter, `ascii_lowercase_walk`
+conses exactly one cell per byte. Same question, same winner past the crossover,
+completely different stakes -- reading either curve off the other predicts the wrong
+shape. Re-measure per function, not per question.
+
+The full `escape/2` numbers, including a third variant that batches runs of ordinary
+bytes into slices:
+
+| input | binary append | iolist | iolist, sliced runs |
+| ----- | ------------- | ------ | ------------------- |
+| 1 metachar in 5B | 93 ns | **56** | 90 |
+| 1 metachar in 10B | 116 ns | **86** | 115 |
+| 1 metachar in 20B | 169 ns | 178 | **148** |
+| 1 metachar in 200B | 1170 ns | 2261 | **558** |
+| dense 200B | **1867 ns** | 3421 | 7582 |
+| markup-ish 500B | **3267 ns** | 6190 | 6050 |
+
 **What to do instead.** Prefer the minimum over the mean: the machine is usually
 contended, and the minimum is the run that was least disturbed. Interleave the two
 variants round by round so drift hits both. Pin with `taskset`. And when the
@@ -197,6 +242,15 @@ names walked four times -- 46 of 81 per-request calls), but it lives in the
 `roadrunner` dependency and is worth low single digits of the HTTP path, not the
 11.5% the profile suggested. Its `check_header_safe/3` is the least inflated of the
 four AND the security check: leave that one alone.
+
+**Rewriting `arizona_html:escape/2`'s accumulator.** Prompted by a neighbouring
+codebase measuring the opposite shape faster; see the transfer note above. The current
+tail-recursive binary append is the right choice HERE and stays: it beats a per-byte
+iolist everywhere past ~20 bytes, which is where template values live. A third variant
+that batches runs of ordinary bytes into slices is genuinely faster for a long value
+holding ONE metacharacter (1170 -> 558 ns at 200 bytes) but 4x slower on dense markup
+(1867 -> 7582), and escape-dense values are exactly what escaping exists for. Note the
+`first_meta/2` guard means none of this runs at all for a clean value.
 
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
