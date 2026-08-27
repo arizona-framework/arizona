@@ -27,7 +27,7 @@ render(Bindings) ->
     %% patch payload is an object (a `f`/`s`/`d` zip map) rather than a bare string.
     %% That is what makes the payload need resolving before it can be applied.
     ?html(
-        {'span', [{id, ?get(id)}], [
+        {span, [{id, ?get(id)}], [
             case ?get(label) of
                 ~"" -> <<>>;
                 Label -> {em, [], [~"badge:", Label]}

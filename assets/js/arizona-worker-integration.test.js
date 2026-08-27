@@ -386,7 +386,12 @@ describe('arizona-worker', () => {
                     7,
                     'sic:0',
                     'k1',
-                    [['badge-1', [[0, 'v:0', { f: 'wrapped_fp', s: ['<em>', '</em>'], d: ['hi'] }]]]],
+                    [
+                        [
+                            'badge-1',
+                            [[0, 'v:0', { f: 'wrapped_fp', s: ['<em>', '</em>'], d: ['hi'] }]],
+                        ],
+                    ],
                 ],
             ],
         };
