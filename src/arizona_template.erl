@@ -796,5 +796,21 @@ flushes the buffer to a flat oldest-first list and applies the limit.
     Order1 :: [term()].
 visible_keys({Front, []}, infinity) -> Front;
 visible_keys({Front, Back}, infinity) -> Front ++ lists:reverse(Back);
-visible_keys({Front, []}, Limit) -> lists:sublist(Front, Limit);
-visible_keys({Front, Back}, Limit) -> lists:sublist(Front ++ lists:reverse(Back), Limit).
+visible_keys({Front, Back}, Limit) -> take_visible(Front, Limit, Back).
+
+%% The window is the first `Limit` keys, so flattening the WHOLE order to then
+%% sublist it copies the hidden tail for nothing -- and on a `halt` stream that tail
+%% is every key ever appended past the limit, so the copy grew with the session while
+%% the answer stayed `Limit` long. Take from the front and stop; the append buffer is
+%% touched only if the front runs out first, and then only for the keys still wanted
+%% (`nthtail/2` walks cons cells without allocating any).
+take_visible(_Front, 0, _Back) ->
+    [];
+take_visible([Key | Rest], Limit, Back) ->
+    [Key | take_visible(Rest, Limit - 1, Back)];
+take_visible([], Limit, Back) ->
+    %% The first `Limit` of `reverse(Back)` is the last `Limit` OF `Back`, reversed.
+    case length(Back) - Limit of
+        Drop when Drop > 0 -> lists:reverse(lists:nthtail(Drop, Back));
+        _ -> lists:reverse(Back)
+    end.
