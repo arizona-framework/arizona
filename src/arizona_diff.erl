@@ -665,15 +665,30 @@ stream_outgrows_re_render(Ops, Tmpl, OldSnap, Source) ->
         stream_outgrows_by_bytes(Ops, Tmpl, maps:get(items, OldSnap), Source).
 
 stream_outgrows_by_bytes(Ops, Tmpl, OldItems, Source) when map_size(OldItems) > 0 ->
-    NewCount = length(arizona_template:visible_keys(Source#stream.order, Source#stream.limit)),
-    AvgItem =
-        lists:sum([item_value_bytes(D) || D <- maps:values(OldItems)]) div map_size(OldItems),
+    NewCount = visible_count(Source),
+    AvgItem = sum_item_value_bytes(maps:next(maps:iterator(OldItems)), 0) div map_size(OldItems),
     Whole = re_render_bytes(Tmpl, AvgItem * NewCount, NewCount),
     Positional = wire_bytes(Ops),
     Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
         Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM;
 stream_outgrows_by_bytes(_Ops, _Tmpl, _OldItems, _Source) ->
     false.
+
+%% How many keys the visible window holds, from the stream's cached size. The window
+%% is the first `Limit` keys of `order`, so its size is settled by two integers --
+%% `visible_keys/2` would flatten the append buffer and copy the whole list, only for
+%% it to be counted and dropped.
+visible_count(#stream{limit = infinity, size = Size}) ->
+    Size;
+visible_count(#stream{limit = Limit, size = Size}) ->
+    min(Size, Limit).
+
+%% Total value bytes over an item map, walked through its iterator: `maps:values/1`
+%% would materialise every item snapshot into a list just to sum over it.
+sum_item_value_bytes(none, Acc) ->
+    Acc;
+sum_item_value_bytes({_Key, ItemD, Iter}, Acc) ->
+    sum_item_value_bytes(maps:next(Iter), Acc + item_value_bytes(ItemD)).
 
 %% An empty drain carries no information about whether the container changed -- it
 %% means either "nothing happened" or "the log was wiped and anything may have
