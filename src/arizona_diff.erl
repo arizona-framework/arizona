@@ -730,14 +730,27 @@ stream_outgrows_re_render(Ops, Tmpl, OldSnap, Source) ->
         stream_outgrows_by_bytes(Ops, Tmpl, maps:get(items, OldSnap), Source).
 
 stream_outgrows_by_bytes(Ops, Tmpl, OldItems, Source) when map_size(OldItems) > 0 ->
+    stream_outgrows_measured(wire_bytes(Ops), Tmpl, OldItems, Source);
+stream_outgrows_by_bytes(_Ops, _Tmpl, _OldItems, _Source) ->
+    false.
+
+%% The wholesale side is never negative, so a patch no bigger than the floor cannot
+%% beat it BY the floor, whatever the items turn out to weigh -- the answer is `false`
+%% before the estimate is even formed. Worth splitting out because that estimate is
+%% not cheap: it weighs every value of every OLD item, which for a hundred rows of
+%% twenty fields is two thousand `wire_bytes/1` calls -- and it was paid on every
+%% drain, including the overwhelmingly common one that patches a single field and
+%% could never have been in the running.
+stream_outgrows_measured(Positional, _Tmpl, _OldItems, _Source) when
+    Positional =< ?RE_RENDER_MIN_SAVING
+->
+    false;
+stream_outgrows_measured(Positional, Tmpl, OldItems, Source) ->
     NewCount = visible_count(Source),
     AvgItem = sum_item_value_bytes(maps:values(OldItems), 0) div map_size(OldItems),
     Whole = re_render_bytes(Tmpl, AvgItem * NewCount, NewCount),
-    Positional = wire_bytes(Ops),
     Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
-        Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM;
-stream_outgrows_by_bytes(_Ops, _Tmpl, _OldItems, _Source) ->
-    false.
+        Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM.
 
 %% How many keys the visible window holds, from the stream's cached size. The window
 %% is the first `Limit` keys of `order`, so its size is settled by two integers --
