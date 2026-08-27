@@ -56,7 +56,6 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([render_stream_item_skipping/6]).
 -export([render_stream_items_simple/3]).
 -export([render_list_items/3]).
--export([render_list_items_simple/2]).
 -export([render_map_items/3]).
 -export([render_map_items_simple/2]).
 -export([check_restricted_keys/3]).
@@ -257,9 +256,11 @@ Renders list items with view tracking. Returns `{[ItemD], Views1}`.
 render_list_items(Items, #{d := DFun}, Views) ->
     render_list_items1(Items, DFun, Views).
 
--doc """
-Renders list items without view tracking. Returns `[ItemD]`.
-""".
+%% Renders list items without view tracking. Returns `[ItemD]`.
+%%
+%% Not exported: the SSR path renders a plain-list each straight to output and keeps no
+%% snapshot, so `eval_val/1` -- the live evaluator, whose snapshot the next diff reads
+%% -- is the only caller left.
 -spec render_list_items_simple(Items, Template) -> ItemDs when
     Items :: [term()],
     Template :: map(),
