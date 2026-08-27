@@ -78,6 +78,7 @@
     stream_limit_drop_append_overfull/1,
     stream_limit_drop_upsert_evicts/1,
     stream_limit_drop_sort_after_append/1,
+    stream_limit_drop_append_past_front/1,
     stream_limit_halt_delete_backfills/1,
     stream_limit_halt_insert_at_window/1,
     stream_limit_halt_sort_order/1,
@@ -259,6 +260,7 @@ groups() ->
             stream_limit_drop_append_overfull,
             stream_limit_drop_upsert_evicts,
             stream_limit_drop_sort_after_append,
+            stream_limit_drop_append_past_front,
             stream_limit_halt_delete_backfills,
             stream_limit_halt_insert_at_window,
             stream_limit_halt_sort_order,
@@ -1554,6 +1556,39 @@ stream_limit_drop_insert(Config) when is_list(Config) ->
     ),
     ?assertEqual([2, 3], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))).
+
+%% drop + MORE appends than the limit, which is what a real tail -f buffer does.
+%% Eviction pops the front of the order and leaves the append buffer alone, so
+%% after `Limit` appends the front is exhausted and the next eviction has to refill
+%% it from the buffer. That refill is the step a flatten-every-time eviction never
+%% needed, so it gets its own case: append well past it and the window must still be
+%% exactly the last `Limit` keys, in order.
+stream_limit_drop_append_past_front(Config) when is_list(Config) ->
+    Limit = 3,
+    Seed = [#{id => I} || I <- lists:seq(1, Limit)],
+    Stream0 = arizona_stream:new(
+        fun(#{id := Id}) -> Id end, Seed, #{limit => Limit, on_limit => drop}
+    ),
+    %% 10 appends over a front of 3: the front empties (and refills) three times.
+    Stream = lists:foldl(
+        fun(I, S) -> arizona_stream:insert(S, #{id => I}) end,
+        Stream0,
+        lists:seq(Limit + 1, Limit + 10)
+    ),
+    ?assertEqual([#{id => 11}, #{id => 12}, #{id => 13}], arizona_stream:to_list(Stream)),
+    %% The window agrees with the source, and nothing outlived the limit.
+    #stream{order = Order, size = Size} = Stream,
+    ?assertEqual([11, 12, 13], arizona_template:visible_keys(Order, Limit)),
+    %% The buffer really was refilled rather than flattened away on every eviction.
+    ?assertMatch({[_ | _], _}, Order),
+    ?assertEqual(3, Size),
+    %% A delete straight after a refill still names the right oldest key.
+    Deleted = arizona_stream:delete(Stream, 12),
+    ?assertEqual([#{id => 11}, #{id => 13}], arizona_stream:to_list(Deleted)),
+    Appended = arizona_stream:insert(Deleted, #{id => 99}),
+    ?assertEqual(
+        [#{id => 11}, #{id => 13}, #{id => 99}], arizona_stream:to_list(Appended)
+    ).
 
 %% drop + append to an OVERFULL stream (new/3 populated past the limit, so a
 %% hidden tail exists exactly like halt): the append evicts down to the limit,
