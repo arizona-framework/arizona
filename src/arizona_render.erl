@@ -137,10 +137,11 @@ snapshot.
 render(#{s := Statics, d := Dynamics} = Tmpl) ->
     EvalDynamics = arizona_eval:eval_dynamics(Dynamics),
     Backend = backend(Tmpl),
-    HTML = zip(Backend, Statics, [
-        arizona_template:unwrap_val(Backend, V)
-     || {_Az, V} <:- EvalDynamics
-    ]),
+    %% `zip_d/3` walks the `{Az, V}` pairs directly. Unwrapping them into a list of
+    %% values first and zipping that built an N-element list per template for nothing:
+    %% `render_v/2` makes the same call `unwrap_val/2` would (`render_attr/2` for an
+    %% attribute, whose result is a binary that `render_dyn/2` hands straight back).
+    HTML = zip_d(Backend, Statics, EvalDynamics),
     Snap0 = #{s => Statics, d => EvalDynamics},
     Snap = arizona_template:maybe_propagate(Tmpl, Snap0),
     {HTML, Snap}.
