@@ -53,6 +53,16 @@ it pointed at `arizona_template:track/1`, which turned out to already no-op when
 dependency collection is off. Use eprof to find *candidates*, then confirm with a
 micro-benchmark of that function in isolation.
 
+**Per-BYTE recursion is the extreme form of that, and it reads as a hot spot.** A
+function that recurses one byte at a time emits one trace event per byte, so eprof
+charges it per byte at trace-event prices. Profiling an HTTP GET made header parsing
+look like ~11.5% of the request -- more than the whole framework above it. Dividing
+gives it away: eprof attributed **41 ns to each byte-step** of a scan whose real cost
+is 1-2 ns, an inflation of 20-40x. The true share was well under 1%. Before believing
+any profile row, divide its time by its call count and ask whether that per-call
+figure is physically plausible for what the function does; a per-byte walker and a
+BIF call in the same table are not on the same scale.
+
 **What to do instead.** Prefer the minimum over the mean: the machine is usually
 contended, and the minimum is the run that was least disturbed. Interleave the two
 variants round by round so drift hits both. Pin with `taskset`. And when the
@@ -112,6 +122,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Key a stream's items and order in one walk | `reset/2`/`new/3` -30% at 100 items |
 | Skip clearing a stream queue that is already empty | -8% per untouched stream, and no record rebuilt |
 | Render a plain-list `?each` straight to output during SSR | `render_each_100` -18% |
+| Guard the client's per-element hook scans | a 500-item slot re-render stops doing 1000 subtree queries |
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:
@@ -178,10 +189,70 @@ on `map_size > 32` was measured too and is exactly where the +139% lands. Left a
 iterator from Erlang is not. Only the narrower half of that idea survived -- skipping
 the rebuild when the queue is already empty.
 
+**Shrinking the wire payload, and the roadrunner header walkers.** Both came out of
+reading eprof percentages as wall clock; see the per-byte trap above. The header
+walkers do contain real redundancy (a compile-time-lowercase literal being lowercased
+on every request, a value walked once to validate and again to lowercase, Title-Case
+names walked four times -- 46 of 81 per-request calls), but it lives in the
+`roadrunner` dependency and is worth low single digits of the HTTP path, not the
+11.5% the profile suggested. Its `check_header_safe/3` is the least inflated of the
+four AND the security check: leave that one alone.
+
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
 1000; the comprehension plus `lists:sum/1` it replaced was the slowest of the three
 (~30% worse at 100). Summing a `maps:values/1` walk directly is the shape that won.
+
+## The client
+
+The client had never been measured. It has **no layout thrashing** anywhere -- the only
+geometry reads are one `scrollTo` per batch, after the op loop -- and its per-batch
+caches (`els`, and the stream key maps) are well built. What was left was work
+happening in the gaps between those caches, all of it per op rather than per batch:
+
+- **Hook scans.** `mountHooks`/`destroyChildHooks` ran `querySelectorAll('[az-hook]')`
+  per ELEMENT per op. A slot re-render of a 500-item list is 1000 subtree queries for
+  one op, and an app with no hooks paid every one. Both now answer from the registry
+  (`_hooks.size`, and a `for...in` over the defs) before scanning.
+- **Discarded work.** `moveItemEl` computed `slotBounds` -- a walk over every child of
+  the container -- unconditionally, and the dominant move (an `afterKey` whose element
+  resolves) never read it. Now resolved in the branches that use it.
+- **Nested containers had no cache.** Item ops passed `streams = null` down, so a
+  stream inside a stream item fell back to `querySelector` per op: the O(N^2) the
+  top-level key map exists to prevent. The batch's maps are keyed by container element,
+  so threading them down is safe and gives nested containers their own entries.
+- **No memo for inner lookups.** `applyItemOps` re-ran `resolveInnerEl` (a subtree
+  `querySelector`, two on a miss) per op, where two ops on one item commonly target the
+  same az. It now memoises like `applyOps` does, re-verifying `isConnected` on a hit.
+- **`findMarker` built its comparison string inside the loop**, once per child visited.
+
+Measured with jsdom, so treat the absolute numbers as inflated -- jsdom's
+`querySelectorAll` is JS, a browser's is native -- but the shapes are structural. The
+hook guard took a 500-item slot re-render from 3.2 ms of scanning to ~1 us.
+
+**Measured and NOT taken:** `Date.now()` per resolved template in `touchFp` costs 23 ns
+(11.7 us for a message carrying 500 templates). One reading per message would remove
+it, but `resolveHtml` is called directly by tests as well as by the worker, so any
+refresh entry point can be bypassed -- and a stale clock silently skews the fingerprint
+cache's MRU eviction. Not worth that for 23 ns.
+
+## Where the time actually goes
+
+Profiling the two paths a user experiences, rather than a synthetic workload, bounds
+all of this. `arizona_*` modules are **14.1%** of a WebSocket event and **9.8%** of a
+page load; the rest is the socket write, JSON, the HTTP server and gen_server
+plumbing. Even an infinitely fast framework would remove only that much. Two
+consequences, both measured:
+
+- **The socket write is per-call, not per-byte** -- 3.55 us/call for a 59-byte patch
+  against 3.20 us/call for a whole-view replace, at one write per event. Shrinking
+  ops does not buy CPU. (It still buys client bandwidth: a one-field patch is 59
+  bytes of which 27 are the two `az` strings.)
+- **Broadcast is BEAM's message copy.** `arizona_pubsub:send_each/2` is 82% of the
+  broadcast profile and is already `Pid ! Data` in a loop.
+
+The remaining server-side candidates are all small, and the largest single
+`arizona_*` function on the event path is 1.88%.
 
 ## Still open
 
