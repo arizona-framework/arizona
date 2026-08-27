@@ -296,8 +296,8 @@ stream_relist(
     ],
     {ItemOps, Views1} = relist_items(Az, NewOrder, NewItems, OldItems, Tmpl, Views),
     Kept = maps:with(NewOrder, OldItems),
-    MoveOps = compute_reorder_ops(Az, OldOrder, NewOrder, Kept, NewItems),
-    {RemOps ++ ItemOps ++ MoveOps ++ Tail, Views1};
+    MoveOps = compute_reorder_ops(Az, OldOrder, NewOrder, Kept, NewItems, Tail),
+    {RemOps ++ ItemOps ++ MoveOps, Views1};
 stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views).
 
@@ -878,10 +878,10 @@ move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
 stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc),
+    %% Drain what follows first, so the moves cons straight onto it.
     {RestOps, FinalSnap, Views1} =
         diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, VKeys, Views0),
-    {MoveOps ++ RestOps, FinalSnap, Views1}.
+    {compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc, RestOps), FinalSnap, Views1}.
 
 stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
@@ -894,10 +894,10 @@ stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
         smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps),
     {RestOps, FinalSnap, Views2} =
         diff_stream_pending(Az, Rest, SV, Tmpl, NewSnaps, VKeys, Views1),
-    {RemOps ++ DiffOps ++ MoveOps ++ RestOps, FinalSnap, Views2}.
+    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps, RestOps),
+    {RemOps ++ DiffOps ++ MoveOps, FinalSnap, Views2}.
 
 diff_list(Az, #{source := Items, template := Tmpl}, OldSnap, Views0) ->
     {NewItemsList, Views1} = arizona_eval:render_list_items(Items, Tmpl, Views0),
@@ -1513,9 +1513,11 @@ lis_backtrack(Idx, Parent, Acc) ->
 %% as `Kept` (hidden keys are back-filled only later, by `apply_limit/6`); for
 %% a reset it also includes the keys `smart_reset_items/8` just inserted, whose
 %% tail (-1) inserts precede these moves on the wire.
-compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present) ->
-    [];
-compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present) ->
+%% The moves cons onto `Tail` -- the ops that follow them on the wire -- so a
+%% reorder never materialises its own list to append.
+compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present, Tail) ->
+    Tail;
+compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present, Tail) ->
     %% Pure tail append: every old key kept, in order, with the new ones after
     %% them. `smart_reset_items/8` inserts each missing key at -1 walking the new
     %% order, so they land at the tail in that order and the DOM already equals
@@ -1525,16 +1527,16 @@ compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present) ->
     %% emitting one redundant move per insert (360 inserts -> 360 extra moves).
     case lists:prefix(OldOrder, NewOrder) of
         true ->
-            [];
+            Tail;
         false ->
             KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],
             case KeptOld of
                 [] ->
-                    [];
+                    Tail;
                 _ ->
                     OldPosMap = pos_map(KeptOld, 1),
                     LISSet = lis_indices(NewOrder, OldPosMap),
-                    emit_move_ops(Az, LISSet, NewOrder, 1, null, Present)
+                    emit_move_ops(Az, LISSet, NewOrder, 1, null, Present, Tail)
             end
     end.
 
@@ -1550,14 +1552,14 @@ pos_map([K | Rest], I) -> (pos_map(Rest, I + 1))#{K => I}.
 %% time a present key is placed, every present key to its left in NewOrder has
 %% already settled, so "after the last present key placed" IS its position
 %% among present keys; the back-fill then interleaves the hidden ones.
-emit_move_ops(_Az, _LIS, [], _I, _Prev, _Present) ->
-    [];
-emit_move_ops(Az, LIS, [Key | Rest], I, Prev, Present) ->
+emit_move_ops(_Az, _LIS, [], _I, _Prev, _Present, Tail) ->
+    Tail;
+emit_move_ops(Az, LIS, [Key | Rest], I, Prev, Present, Tail) ->
     case LIS of
         #{I := _} ->
-            emit_move_ops(Az, LIS, Rest, I + 1, Key, Present);
+            emit_move_ops(Az, LIS, Rest, I + 1, Key, Present, Tail);
         #{} when not is_map_key(Key, Present) ->
-            emit_move_ops(Az, LIS, Rest, I + 1, Prev, Present);
+            emit_move_ops(Az, LIS, Rest, I + 1, Prev, Present, Tail);
         #{} ->
             Ref =
                 case Prev of
@@ -1566,7 +1568,7 @@ emit_move_ops(Az, LIS, [Key | Rest], I, Prev, Present) ->
                 end,
             [
                 [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref]
-                | emit_move_ops(Az, LIS, Rest, I + 1, Key, Present)
+                | emit_move_ops(Az, LIS, Rest, I + 1, Key, Present, Tail)
             ]
     end.
 
