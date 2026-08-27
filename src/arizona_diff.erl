@@ -243,7 +243,7 @@ diff_dynamics(
             %% A drain takes no tail. Threading one through every stream helper
             %% would buy this site alone: the other two stream containers drain
             %% BEFORE their siblings, so they have no tail to hand it.
-            {StreamOps ++ RestOps, {Old0, maps:merge(New0, LocalNew1)}};
+            {append_ops(StreamOps, RestOps), {Old0, maps:merge(New0, LocalNew1)}};
         false ->
             stream_relist(Az, Src, Tmpl, New, Old, RestOps, Views1)
     end;
@@ -444,8 +444,9 @@ diff_each(
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
     %% The drain runs first because the sibling walk consumes the views it rendered,
     %% so there is no tail here to cons onto. Diffing the siblings first to make one
-    %% would run their child `mount/1`s ahead of this container's.
-    {StreamOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
+    %% would reorder both their child `mount/1`s and the `$arizona_update_effects`
+    %% accumulator, which ships in evaluation order.
+    {append_ops(StreamOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
 diff_each(
     Az, #{source := Items} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
 ) when is_list(Items) ->
@@ -481,6 +482,19 @@ prepend_each_op([], Tail) ->
     Tail;
 prepend_each_op([Op], Tail) ->
     [Op | Tail].
+
+%% A stream container's ops LEAD the ops of whatever follows it, and the drain that
+%% built them cannot take a tail to cons onto (its ops exist only once it has run, and
+%% at two of the three call sites the walk that would supply the tail has not run yet
+%% -- it consumes the views the drain rendered). So they are appended. But `++` reaches
+%% its second argument by rebuilding the first cell by cell, so `Ops ++ []` copies the
+%% whole list to produce a list equal to itself -- and an empty tail is the ordinary
+%% case, not an edge one: it means the container is the last dynamic, or every later
+%% one was dep-skipped. Answer that before `++` sees it.
+append_ops(Ops, []) ->
+    Ops;
+append_ops(Ops, Tail) ->
+    Ops ++ Tail.
 
 %% Incremental stream child_views: old - deleted + rendered.
 merge_stream_child_views(Source, Old, LocalNew, Old0) ->
@@ -736,9 +750,8 @@ visible_count(#stream{limit = Limit, size = Size}) ->
 
 %% Total value bytes over the item snapshots. Summing the walk directly saves the
 %% intermediate list of per-item sizes that a comprehension plus `lists:sum/1` builds
-%% (~30% over 100 items). The values themselves still come from `maps:values/1`:
-%% stepping the map's own iterator would save that list too, but costs more per entry
-%% -- measured slower at 10 items and level at 1000.
+%% -- but the values still come from `maps:values/1`, which is one pass in C: stepping
+%% the map's own iterator instead measured ~10% slower over a 100-item stream.
 sum_item_value_bytes([], Acc) ->
     Acc;
 sum_item_value_bytes([ItemD | Rest], Acc) ->
@@ -945,7 +958,8 @@ stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     %% post-reset snapshot, which only the item walk above can produce -- so the
     %% walk's ops cannot cons onto a tail that does not exist when it runs. The
     %% removals lead everything, and those do cons.
-    ResetOps = DiffOps ++ compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps, RestOps),
+    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps, RestOps),
+    ResetOps = append_ops(DiffOps, MoveOps),
     {pruned_key_ops(Az, maps:iterator(SnapAcc), Kept, ResetOps), FinalSnap, Views2}.
 
 diff_list(Az, #{source := Items, template := Tmpl}, OldSnap, Views0) ->
@@ -1812,7 +1826,7 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             {RestOps, Markerless, Views2} = diff_item_dynamics_v(NR, OR, Views1),
             %% Same ordering as `diff_each/9`'s stream clause: the drain feeds the
             %% rest of the walk its views, so its ops have no tail to cons onto.
-            {EachOps ++ RestOps, Markerless, Views2};
+            {append_ops(EachOps, RestOps), Markerless, Views2};
         _ ->
             {RestOps, Markerless, Views1} = diff_item_dynamics_v(NR, OR, Views0),
             {NewOps, Views2} = make_ops(Az, New, Old, RestOps, Views1),
