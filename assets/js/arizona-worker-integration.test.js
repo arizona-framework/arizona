@@ -371,6 +371,33 @@ describe('arizona-worker', () => {
         expect(resolved[1][0][3][2][3][0][2]).toBe('nested-text');
     });
 
+    it('ITEM_PATCH inner ops resolve through a child-view wrapper', () => {
+        // `arizona_diff:make_ops/5`'s child-view clause emits `[ChildViewId, ChildOps]`
+        // INSIDE an item's inner ops when a `?stateful` in a stream item re-renders --
+        // its head is the view id, a string, not an op code. Unresolved, the `{f,s,d}`
+        // payload below reaches the main thread as an object and a text write renders
+        // it as "[object Object]".
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        const msg = {
+            o: [
+                [
+                    7,
+                    'sic:0',
+                    'k1',
+                    [['badge-1', [[0, 'v:0', { f: 'wrapped_fp', s: ['<em>', '</em>'], d: ['hi'] }]]]],
+                ],
+            ],
+        };
+        ws.latest().simulateMessage(JSON.stringify(msg));
+        const resolved = slf.posted.find((m) => m[0] === 0);
+        const childOp = resolved[1][0][3][0][1][0];
+        expect(childOp[2]).toBe('<em>hi</em>');
+        // and flagged as HTML, so the main thread innerHTMLs it rather than text-noding
+        expect(childOp[3]).toBe(true);
+    });
+
     it('LIST_PATCH op resolves each sub-op payload (ITEM_PATCH inner ops + INSERT html)', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

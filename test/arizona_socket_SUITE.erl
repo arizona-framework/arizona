@@ -9,6 +9,7 @@
 
 -export([all/0]).
 -export([push_racing_navigate_dropped/1]).
+-export([item_patch_carries_child_view_wrapper/1]).
 -export([queued_push_prepended_to_event_reply/1]).
 -export([queued_push_prepended_to_patch_reply/1]).
 -export([full_navigate_drops_pending_flash/1]).
@@ -37,6 +38,7 @@
 all() ->
     [
         push_racing_navigate_dropped,
+        item_patch_carries_child_view_wrapper,
         queued_push_prepended_to_event_reply,
         queued_push_prepended_to_patch_reply,
         full_navigate_drops_pending_flash,
@@ -62,6 +64,33 @@ all() ->
         child_push_scoped_to_emitting_view,
         foreign_caller_does_not_desync_drain
     ].
+
+%% A `?stateful` inside a stream item re-renders when the item updates, so the item's
+%% inner ops carry a `[ChildViewId, ChildOps]` wrapper -- a head that is a VIEW ID, not
+%% an op code. The client's worker resolves op payloads by switching on that head, so it
+%% needs a case for this shape; pin the shape here, because if the diff ever stops
+%% emitting it the client's handling becomes dead code nothing would notice.
+%%
+%% The wrapper only appears when the child's own dynamics differ: a child fed a constant
+%% re-renders identically and `make_ops/5` suppresses the empty `[VId, []]`.
+item_patch_carries_child_view_wrapper(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {ok, Socket0} = arizona_socket:init(arizona_stream_item_child, #{}, Req, #{}),
+    %% Empty the label, then refill it: the child's slot holds a conditional, so its
+    %% statics change and the patch carries the whole nested template rather than a
+    %% bare scalar -- the payload shape that has to be resolved before it can be applied.
+    {reply, _Cleared, Socket1} = arizona_socket:handle_in(relabel(1, <<>>), Socket0),
+    {reply, Frame, _Socket2} = arizona_socket:handle_in(relabel(1, ~"TWO"), Socket1),
+    ItemPatch = [Op || [?OP_ITEM_PATCH | _] = Op <- ops(Frame)],
+    ?assertMatch([[?OP_ITEM_PATCH, _Az, ~"1", [[~"badge-1", [_ | _]]]]], ItemPatch),
+    [[?OP_ITEM_PATCH, _, _, [[_ChildId, ChildOps]]]] = ItemPatch,
+    %% The child's own op, and a payload that is a template map rather than a scalar.
+    ?assertMatch([[?OP_TEXT, _, #{~"f" := _}]], ChildOps).
+
+relabel(Id, Label) ->
+    iolist_to_binary(
+        json:encode([~"sic", ~"relabel", #{~"id" => Id, ~"label" => Label}])
+    ).
 
 push_racing_navigate_dropped(Config) when is_list(Config) ->
     %% A push the live process emits just before serving a navigate is
