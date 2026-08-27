@@ -22,8 +22,12 @@ render(Bindings) ->
                         {li,
                             [
                                 {az_key, Key},
-                                {class,
-                                    ~"bulk-row bulk-row--wide bulk-row--striped bulk-row--compact bulk-row--bordered bulk-row--elevated bulk-row--interactive bulk-row--selectable bulk-row--dense bulk-row--framed"},
+                                {class, <<
+                                    "bulk-row bulk-row--wide bulk-row--striped "
+                                    "bulk-row--compact bulk-row--bordered "
+                                    "bulk-row--elevated bulk-row--interactive "
+                                    "bulk-row--selectable bulk-row--dense bulk-row--framed"
+                                >>},
                                 {~"data-role", ~"listitem"},
                                 {~"data-section", ~"bulk-section-main-primary-content-region"},
                                 {~"data-testid", ~"bulk-row-item-element-under-test"}
