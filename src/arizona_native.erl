@@ -47,7 +47,9 @@ form valid JSON.
 -export([escape/1]).
 -export([render_attr/2]).
 
--spec name(atom()) -> binary().
+-spec name(arizona_renderer:tag()) -> binary().
+name(Bin) when is_binary(Bin) ->
+    Bin;
 name(Atom) ->
     atom_to_binary(Atom).
 
@@ -119,11 +121,12 @@ text_slot_open(Az) ->
 text_slot_close() ->
     ~"]}".
 
--spec is_void(atom()) -> boolean().
+-spec is_void(arizona_renderer:tag()) -> boolean().
 is_void(_Tag) ->
     false.
 
--spec raw_text_kind(atom(), arizona_renderer:content_context()) -> none | raw | escapable.
+-spec raw_text_kind(arizona_renderer:tag(), arizona_renderer:content_context()) ->
+    arizona_renderer:raw_text_kind().
 raw_text_kind(_Tag, _Context) ->
     %% The native wire is JSON, not HTML -- dynamic slots are `#slot` objects,
     %% not comment markers, so the raw-text corruption does not apply.
@@ -135,7 +138,7 @@ each_marker(_Context) ->
     %% renaming is inert here by this answer, not by a target check.
     native_each.
 
--spec content_context(atom(), arizona_renderer:content_context()) ->
+-spec content_context(arizona_renderer:tag(), arizona_renderer:content_context()) ->
     arizona_renderer:content_context().
 content_context(_Tag, Parent) ->
     %% No foreign-content mode here -- the context never changes.

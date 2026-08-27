@@ -129,7 +129,7 @@ render(Bindings) ->
     %% (Backend:raw_text_kind/2). `raw`/`escapable` mean a dynamic content slot
     %% must be emitted markerless and render-once -- HTML comment markers would
     %% become literal content there (script/style/textarea/title).
-    raw_text_kind = none :: none | raw | escapable,
+    raw_text_kind = none :: arizona_renderer:raw_text_kind(),
     %% The tag that produced `raw_text_kind`, handed to the backend's `raw_text/2`:
     %% the neutralization a value needs belongs to *that element's* tokenizer state
     %% (`<script>` is script data, `<style>` is RAWTEXT), not to raw text at large.
@@ -2140,21 +2140,22 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     State3 = flush(State2, DynAST),
     State3#state{buf = [Backend:text_slot_close()]}.
 
+%% A BINARY tag is taken verbatim, exactly as a binary attribute name is
+%% (`extract_attr_name/2`). The atom form is translated `_` -> `-` by the backend's
+%% `name/1` so `my_widget` needs no quoting, which leaves a tag whose name really
+%% does contain an underscore unwritable -- `{'my-widget_v2', ...}` silently emitted
+%% `<my-widget-v2>`. The two forms are the same pair, and mean the same thing, for a
+%% tag as for an attribute name.
+extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST, ChildrenAST]} = Node) ->
+    extract_element_parts(extract_binary_value(TagAST), AttrsAST, ChildrenAST, Node);
+extract_element({tuple, _, [{bin, _, _} = TagAST, AttrsAST]} = Node) ->
+    extract_element_parts(extract_binary_value(TagAST), AttrsAST, {nil, 0}, Node);
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST, ChildrenAST]} = Node) ->
-    case is_list_ast(AttrsAST) of
-        true ->
-            {Tag, ast_list_to_list(AttrsAST), normalize_children(ChildrenAST), line(Node)};
-        false ->
-            parse_error(invalid_element, line(Node))
-    end;
+    extract_element_parts(Tag, AttrsAST, ChildrenAST, Node);
 extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
-    case is_list_ast(AttrsAST) of
-        true ->
-            {Tag, ast_list_to_list(AttrsAST), [], line(Node)};
-        false ->
-            parse_error(invalid_element, line(Node))
-    end;
-%% Shaped like an element but with a tag that is not a literal atom.
+    extract_element_parts(Tag, AttrsAST, {nil, 0}, Node);
+%% Shaped like an element but with a tag that is neither a literal atom nor a
+%% literal binary.
 extract_element({tuple, _, [TagAST, _Attrs]} = Node) ->
     parse_error(element_tag_reason(TagAST), line(Node));
 extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node) ->
@@ -2162,10 +2163,20 @@ extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node) ->
 extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
 
-%% A tag written as a literal of the WRONG TYPE (a binary, a string) is a malformed
-%% element form, and the form error says exactly what the accepted shapes are. A tag
-%% that is EVALUATED is a different mistake with a different answer -- the author is
-%% choosing the element at runtime -- so it gets advice instead of a restatement.
+%% A tag written as a literal of a type that is not a name (a string, a number) is a
+%% malformed element form, and the form error says exactly what the accepted shapes
+%% are. A tag that is EVALUATED is a different mistake with a different answer -- the
+%% author is choosing the element at runtime -- so it gets advice instead.
+%% Shared by both tag forms: the attrs must still be a literal list, and a void
+%% element's `{Tag, Attrs}` shorthand is the same as an empty child list.
+extract_element_parts(Tag, AttrsAST, ChildrenAST, Node) ->
+    case is_list_ast(AttrsAST) of
+        true ->
+            {Tag, ast_list_to_list(AttrsAST), normalize_children(ChildrenAST), line(Node)};
+        false ->
+            parse_error(invalid_element, line(Node))
+    end.
+
 element_tag_reason(TagAST) ->
     case is_literal_tag(TagAST) of
         true -> invalid_element;
@@ -2173,7 +2184,6 @@ element_tag_reason(TagAST) ->
     end.
 
 is_literal_tag({atom, _, _}) -> true;
-is_literal_tag({bin, _, _}) -> true;
 is_literal_tag({string, _, _}) -> true;
 is_literal_tag({integer, _, _}) -> true;
 is_literal_tag({float, _, _}) -> true;

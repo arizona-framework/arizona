@@ -104,7 +104,9 @@
     invalid_each_fun_arity/1,
     invalid_each_multi_clause/1,
     invalid_each_not_fun/1,
-    invalid_element_binary_tag/1,
+    binary_element_tag_is_verbatim/1,
+    binary_element_tag_classifies/1,
+    non_name_literal_tag_still_invalid/1,
     invalid_element_four/1,
     invalid_element_single/1,
     iolist_dynamic_child/1,
@@ -787,7 +789,9 @@ groups() ->
             void_nested_child_with_children,
             void_in_each_with_children,
             invalid_attribute_nested,
-            invalid_element_binary_tag,
+            binary_element_tag_is_verbatim,
+            binary_element_tag_classifies,
+            non_name_literal_tag_still_invalid,
             invalid_each_fun_arity,
             invalid_each_not_fun,
             invalid_attribute_name,
@@ -5310,18 +5314,58 @@ invalid_attribute_nested(Config) when is_list(Config) ->
     ).
 
 %% Test 96: Non-atom element tag raises compile-time error.
-invalid_element_binary_tag(Config) when is_list(Config) ->
-    assert_parse_error(
-        "-module(pt_invalid_elem_bin). "
+%% A binary tag is accepted and taken VERBATIM, which is the point: the atom form
+%% goes through the backend's `name/1`, and for `?html` that translates `_` to `-`
+%% so `az_click` needs no quoting. That translation left a tag whose name really
+%% contains an underscore unwritable -- `{'my-widget_v2', ...}` silently emitted
+%% `<my-widget-v2>`, a different element. Same two forms, same rule, as an attribute
+%% name.
+binary_element_tag_is_verbatim(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_bin_tag). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {<<\"my-widget_v2\">>, [], [<<\"a\">>]}, "
+        "        {'my-widget_v2', [], [<<\"b\">>]}"
+        "    ]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<my-widget_v2>a</my-widget_v2>")),
+    %% The atom form still translates, which is what it is for.
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<my-widget-v2>b</my-widget-v2>")).
+
+%% A binary tag resolves through the tag-keyed backend callbacks exactly as an atom
+%% does -- void detection, raw-text classification and the foreign-content switch.
+binary_element_tag_classifies(Config) when is_list(Config) ->
+    ?assertEqual(arizona_html:is_void(input), arizona_html:is_void(~"input")),
+    ?assertEqual(arizona_html:is_void('BR'), arizona_html:is_void(~"BR")),
+    ?assertEqual(
+        arizona_html:raw_text_kind(script, html), arizona_html:raw_text_kind(~"script", html)
+    ),
+    ?assertEqual(
+        arizona_html:content_context(svg, html), arizona_html:content_context(~"svg", html)
+    ),
+    Mod = compile_module(
+        "-module(pt_bin_tag_cls). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
-        "        {<<\"div\">>, [], [<<\"hi\">>]}"
-        "    ). ",
-        fun
-            (invalid_element) -> true;
-            (_) -> false
-        end
+        "    arizona_template:html({<<\"svg\">>, [], ["
+        "        {<<\"title\">>, [], [arizona_template:get(t, Bindings)]}"
+        "    ]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{t => ~"Hi"}))),
+    %% Inside `<svg>` a `<title>` is parsed markup, so its slot keeps markers.
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<!--az:")).
+
+%% A literal that is not a name at all is still a malformed element form.
+non_name_literal_tag_still_invalid(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_num_tag). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({42, [], [<<\"hi\">>]}). ",
+        fun(R) -> R =:= invalid_element end
     ).
 
 %% each/2 rejects `fun name/arity` references -- a reference can't be checked to return

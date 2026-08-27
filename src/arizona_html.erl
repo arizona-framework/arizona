@@ -36,7 +36,14 @@ identical to the previous inlined emission.
 -export([raw_text/2]).
 -export([render_attr/2]).
 
--spec name(atom()) -> binary().
+-spec name(arizona_renderer:tag()) -> binary().
+%% An ATOM name is translated `_` -> `-` so `az_click` needs no quoting. A BINARY
+%% name is taken verbatim, which is the only way to write a name that really does
+%% contain an underscore -- `~"my-widget_v2"` would otherwise come out
+%% `my-widget-v2`, a different element, silently. Same two forms, same rule, for a
+%% tag as for an attribute.
+name(Bin) when is_binary(Bin) ->
+    Bin;
 name(Atom) ->
     binary:replace(atom_to_binary(Atom), ~"_", ~"-", [global]).
 
@@ -136,10 +143,12 @@ text_slot_close() ->
 %% Both callers run in the parse transform, at compile time, so the lowercasing
 %% costs nothing at render. (`raw_text/2`'s own tag test is on the render path and
 %% uses a comparison that allocates nothing -- see script_data/1.)
+tag_name(Tag) when is_binary(Tag) ->
+    string:lowercase(Tag);
 tag_name(Tag) ->
     string:lowercase(atom_to_binary(Tag)).
 
--spec is_void(atom()) -> boolean().
+-spec is_void(arizona_renderer:tag()) -> boolean().
 is_void(Tag) ->
     is_void_name(tag_name(Tag)).
 
@@ -159,7 +168,8 @@ is_void_name(~"track") -> true;
 is_void_name(~"wbr") -> true;
 is_void_name(_Other) -> false.
 
--spec raw_text_kind(atom(), arizona_renderer:content_context()) -> none | raw | escapable.
+-spec raw_text_kind(arizona_renderer:tag(), arizona_renderer:content_context()) ->
+    arizona_renderer:raw_text_kind().
 raw_text_kind(Tag, Context) ->
     raw_text_kind_name(tag_name(Tag), Context).
 
@@ -197,7 +207,7 @@ raw_text_kind_name(_Other, _Context) ->
 each_marker(html) -> each;
 each_marker(foreign) -> foreign_each.
 
--spec content_context(atom(), arizona_renderer:content_context()) ->
+-spec content_context(arizona_renderer:tag(), arizona_renderer:content_context()) ->
     arizona_renderer:content_context().
 content_context(Tag, Parent) ->
     content_context_name(tag_name(Tag), Parent).
@@ -334,6 +344,8 @@ raw_text_1(ScriptData, Value) ->
 %% Does the tokenizer read this element's content in the **script data** states?
 %% Only `<script>` has them; `<style>` is plain RAWTEXT, whose sole exit is its own
 %% close tag. HTML tag names are ASCII case-insensitive, so the comparison is too.
+script_data(Tag) when is_binary(Tag) ->
+    string:equal(Tag, ~"script", true);
 script_data(Tag) ->
     string:equal(atom_to_binary(Tag), ~"script", true).
 

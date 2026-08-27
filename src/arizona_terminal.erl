@@ -76,7 +76,9 @@ never sanitized.
 %% whole-reset helper, only per-attribute `*_off` and `default_color`.
 -define(RESET, ~"\e[0m").
 
--spec name(atom()) -> binary().
+-spec name(arizona_renderer:tag()) -> binary().
+name(Bin) when is_binary(Bin) ->
+    Bin;
 name(Atom) ->
     atom_to_binary(Atom).
 
@@ -216,11 +218,13 @@ text_slot_open(_Az) ->
 text_slot_close() ->
     <<>>.
 
--spec is_void(atom()) -> boolean().
+-spec is_void(arizona_renderer:tag()) -> boolean().
 is_void(br) -> true;
+is_void(~"br") -> true;
 is_void(_) -> false.
 
--spec raw_text_kind(atom(), arizona_renderer:content_context()) -> none | raw | escapable.
+-spec raw_text_kind(arizona_renderer:tag(), arizona_renderer:content_context()) ->
+    arizona_renderer:raw_text_kind().
 raw_text_kind(_Tag, _Context) ->
     %% Terminal output is plain styled text, not HTML -- no comment markers, so
     %% the raw-text corruption does not apply.
@@ -232,7 +236,7 @@ each_marker(_Context) ->
     %% renaming is inert here by this answer, not by a target check.
     terminal_each.
 
--spec content_context(atom(), arizona_renderer:content_context()) ->
+-spec content_context(arizona_renderer:tag(), arizona_renderer:content_context()) ->
     arizona_renderer:content_context().
 content_context(_Tag, Parent) ->
     %% No foreign-content mode here -- the context never changes.
