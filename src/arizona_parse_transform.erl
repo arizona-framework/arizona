@@ -416,6 +416,16 @@ Called by the compiler when `parse_transform/2` returns an error tuple.
     Reason :: term().
 format_error({render_reject, Message}) ->
     unicode:characters_to_list(Message);
+format_error(computed_element_tag) ->
+    "an element's tag must be a literal atom. The tag is baked into the template's "
+    "statics at compile time, which is what lets a later change ship only the values, "
+    "so a tag chosen at runtime has no single set of statics to bake. Put the CHOICE "
+    "inside a stable element instead of choosing the element: {'div', [], [case Kind "
+    "of note -> {'em', [], [X]}; _ -> {'strong', [], [X]} end]} -- a conditional in a "
+    "content slot may return bare element tuples, so the branches can differ "
+    "completely. Inside an ?each the stable element is the item itself and carries "
+    "az_key, which is also what keeps its identity across a change: "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [case Item of ... end]} end";
 format_error(invalid_element) ->
     "invalid element form, expected {Tag, Attrs, Children}, "
     "{Tag, Attrs, Expr}, or {Tag, Attrs} where Tag is an atom";
@@ -430,47 +440,6 @@ format_error(invalid_attribute) ->
     "<<\"Name\">> (binary), or {Name, true|false}";
 format_error(invalid_each_fun) ->
     "each/2 expects a fun with a single clause and one or two parameters";
-format_error(each_body_not_element) ->
-    "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
-    "list of elements -- ?each builds a per-item template for fine-grained diffing, so a "
-    "single-value body defeats its purpose (and a template or descriptor value crashes on "
-    "the first diff, keyed by to_bin of the first dynamic). For a list of plain values use a "
-    "list comprehension or lists:map/2. For a conditional, put it inside an element as a "
-    "text/value child: {li, [], [case ... of ... end]}";
-format_error(each_stream_body_not_element) ->
-    "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
-    "Attrs, Children}) or a list of elements -- a stream/map keys each item for per-item "
-    "diffing, which a single-value body throws away. Unlike a list there is no comprehension "
-    "fallback (a comprehension has no stream/keyed semantics): wrap the value in an element, "
-    "e.g. fun(Item, Key) -> {li, [], [Item]} end";
-format_error(each_stream_body_control_flow) ->
-    "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
-    "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
-    "compiled per-item template (statics once, dynamics per item), so an item's outer tag "
-    "is fixed at compile time. The branches can still be entirely different elements -- "
-    "put them inside one stable item element carrying az_key, e.g. fun(Item, Key) -> "
-    "{li, [{az_key, Key}], [case Item of ... end]} end, where a conditional child may "
-    "return bare element tuples (<em> vs <strong> vs a whole subtree all work), and a div "
-    "with display: contents keeps the wrapper out of layout. NOT inside table/tr or "
-    "select: the parser foster-parents a wrapper out of a table and Firefox drops one "
-    "inside a select, so the keyed element lands where the client cannot address it. A "
-    "varying sibling tag is legitimate in exactly those two (th/td, option/optgroup) and "
-    "has no workaround today";
-format_error(each_named_fun_multi_clause) ->
-    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
-    "single clause -- ?each inlines the function's body into one shared per-item template, so "
-    "multiple clauses (which would select different per-item structures) can't be compiled to "
-    "a single template. Collapse them into one clause with a case inside the returned element: "
-    "name(I) -> {li, [], [case I of ... end]}";
-format_error(each_named_fun_undefined) ->
-    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not defined "
-    "in this module. Define it as a single-clause function returning an element, or inline the "
-    "callback (fun(I) -> {li, [], [...]} end)";
-format_error(each_remote_fun_ref) ->
-    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each inlines "
-    "the callback body to build a per-item template, which is impossible across a module "
-    "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
-    "local function and pass fun name/1";
 format_error(live_render_not_single_element) ->
     "arizona_stateful render/1 must return a single root element, not a list";
 format_error(live_render_missing_id) ->
@@ -555,6 +524,17 @@ format_error(cross_target_nesting) ->
     "is caught at render instead (cross_target_child), where the payload would "
     "otherwise be unparseable. One target per template tree -- render the other "
     "target from its own tree";
+%% The `?each` callback errors live in their own function: they are a related family
+%% and, together, they carried `format_error/1` past the cyclomatic limit.
+format_error(Reason) when
+    Reason =:= each_body_not_element;
+    Reason =:= each_stream_body_not_element;
+    Reason =:= each_stream_body_control_flow;
+    Reason =:= each_named_fun_multi_clause;
+    Reason =:= each_named_fun_undefined;
+    Reason =:= each_remote_fun_ref
+->
+    format_each_error(Reason);
 format_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
     "the view bindings, so their map argument must be the bindings -- a parameter or a "
@@ -562,6 +542,48 @@ format_error(tracked_get_on_non_bindings_map) ->
     "nested map, read it with maps:get/2 (`User = arizona_template:get(user, Bindings), "
     "Name = maps:get(name, User)`); if it is a bindings value reached through a "
     "case/merge the transform cannot see into, alias it directly with `B = Bindings` first".
+
+format_each_error(each_body_not_element) ->
+    "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
+    "list of elements -- ?each builds a per-item template for fine-grained diffing, so a "
+    "single-value body defeats its purpose (and a template or descriptor value crashes on "
+    "the first diff, keyed by to_bin of the first dynamic). For a list of plain values use a "
+    "list comprehension or lists:map/2. For a conditional, put it inside an element as a "
+    "text/value child: {li, [], [case ... of ... end]}";
+format_each_error(each_stream_body_not_element) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
+    "Attrs, Children}) or a list of elements -- a stream/map keys each item for per-item "
+    "diffing, which a single-value body throws away. Unlike a list there is no comprehension "
+    "fallback (a comprehension has no stream/keyed semantics): wrap the value in an element, "
+    "e.g. fun(Item, Key) -> {li, [], [Item]} end";
+format_each_error(each_stream_body_control_flow) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
+    "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
+    "compiled per-item template (statics once, dynamics per item), so an item's outer tag "
+    "is fixed at compile time. The branches can still be entirely different elements -- "
+    "put them inside one stable item element carrying az_key, e.g. fun(Item, Key) -> "
+    "{li, [{az_key, Key}], [case Item of ... end]} end, where a conditional child may "
+    "return bare element tuples (<em> vs <strong> vs a whole subtree all work), and a div "
+    "with display: contents keeps the wrapper out of layout. NOT inside table/tr or "
+    "select: the parser foster-parents a wrapper out of a table and Firefox drops one "
+    "inside a select, so the keyed element lands where the client cannot address it. A "
+    "varying sibling tag is legitimate in exactly those two (th/td, option/optgroup) and "
+    "has no workaround today";
+format_each_error(each_named_fun_multi_clause) ->
+    "an ?each callback given as a local fun reference (fun name/1 or fun name/2) must have a "
+    "single clause -- ?each inlines the function's body into one shared per-item template, so "
+    "multiple clauses (which would select different per-item structures) can't be compiled to "
+    "a single template. Collapse them into one clause with a case inside the returned element: "
+    "name(I) -> {li, [], [case I of ... end]}";
+format_each_error(each_named_fun_undefined) ->
+    "the ?each callback references a local fun (fun name/1 or fun name/2) that is not defined "
+    "in this module. Define it as a single-clause function returning an element, or inline the "
+    "callback (fun(I) -> {li, [], [...]} end)";
+format_each_error(each_remote_fun_ref) ->
+    "an ?each callback cannot be a remote fun reference (fun mod:name/arity) -- ?each inlines "
+    "the callback body to build a per-item template, which is impossible across a module "
+    "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
+    "local function and pass fun name/1".
 
 format_helper_error(helper_multi_clause, Name, Arity) ->
     lists:flatten(
@@ -2132,8 +2154,31 @@ extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
         false ->
             parse_error(invalid_element, line(Node))
     end;
+%% Shaped like an element but with a tag that is not a literal atom.
+extract_element({tuple, _, [TagAST, _Attrs]} = Node) ->
+    parse_error(element_tag_reason(TagAST), line(Node));
+extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node) ->
+    parse_error(element_tag_reason(TagAST), line(Node));
 extract_element(Node) ->
     parse_error(invalid_element, line(Node)).
+
+%% A tag written as a literal of the WRONG TYPE (a binary, a string) is a malformed
+%% element form, and the form error says exactly what the accepted shapes are. A tag
+%% that is EVALUATED is a different mistake with a different answer -- the author is
+%% choosing the element at runtime -- so it gets advice instead of a restatement.
+element_tag_reason(TagAST) ->
+    case is_literal_tag(TagAST) of
+        true -> invalid_element;
+        false -> computed_element_tag
+    end.
+
+is_literal_tag({atom, _, _}) -> true;
+is_literal_tag({bin, _, _}) -> true;
+is_literal_tag({string, _, _}) -> true;
+is_literal_tag({integer, _, _}) -> true;
+is_literal_tag({float, _, _}) -> true;
+is_literal_tag({char, _, _}) -> true;
+is_literal_tag(_Evaluated) -> false.
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
     ok = reject_framework_attrs(Attrs0, Line),

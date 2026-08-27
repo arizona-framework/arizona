@@ -453,6 +453,11 @@ browsers. `ul`/`ol` is the only container whose child tag genuinely was never fr
 Supporting a varying item tag would mean a distinct template per item, giving up the shared
 statics and reducing a branch swap to a full item re-render.
 
+A tag written as an expression rather than a literal atom reaches this from the other side, and
+earlier: `extract_element/1` raises `computed_element_tag` (a literal of the wrong type, a binary
+say, still gets the form error `invalid_element`). It carries the same idiom, because it is the
+same constraint seen from the tag rather than from the callback body.
+
 `compile_each` also rejects a bare list whose item is a template or descriptor
 (`[?html(...)]`, `[?stateless(...)]`) -- the item lands in the same fragile value slot --
 while keeping a list of elements or a static/dynamic-text fragment.

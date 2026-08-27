@@ -12,6 +12,8 @@
     each_named_fun_ref_non_element_rejected/1,
     each_named_fun_ref_arity_2_non_element_rejected/1,
     each_stream_control_flow_body_rejected_with_wrapper_advice/1,
+    computed_element_tag_rejected_with_idiom/1,
+    malformed_element_still_invalid_element/1,
     each_stream_control_flow_wrapper_fix_keys_per_item/1,
     each_with_remote_fun_ref/1,
     each_named_fun_ref_diffs/1,
@@ -502,6 +504,8 @@ groups() ->
             each_named_fun_ref_non_element_rejected,
             each_named_fun_ref_arity_2_non_element_rejected,
             each_stream_control_flow_body_rejected_with_wrapper_advice,
+            computed_element_tag_rejected_with_idiom,
+            malformed_element_still_invalid_element,
             each_stream_control_flow_wrapper_fix_keys_per_item,
             each_with_remote_fun_ref,
             each_named_fun_ref_diffs,
@@ -5375,6 +5379,38 @@ each_named_fun_ref_arity_2_non_element_rejected(Config) when is_list(Config) ->
 %% A conditional body is a distinct mistake from a bare value: "wrap the value in an
 %% element" would have the author pick a tag, which for branches already returning
 %% different elements changes the markup rather than fixing it.
+%% A variable or computed tag is the OTHER route to "conditional tag" -- reached
+%% before the ?each body check, and previously answered only with the accepted forms
+%% and no idiom, even inside an ?each item where the body error would have taught it.
+computed_element_tag_rejected_with_idiom(Config) when is_list(Config) ->
+    Bare =
+        "-module(pt_ct_var). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Tag = arizona_template:get(tag, Bindings), "
+        "    arizona_template:html({'div', [], [{Tag, [], [~\"x\"]}]}). ",
+    assert_parse_error(Bare, fun(R) -> R =:= computed_element_tag end),
+    %% Computed in place, and inside an ?each item -- same answer.
+    Computed =
+        "-module(pt_ct_call). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "        fun(I, K) -> {maps:get(tag, I), [{az_key, K}], [~\"x\"]} end, "
+        "        arizona_template:get(items, Bindings))]}). ",
+    assert_parse_error(Computed, fun(R) -> R =:= computed_element_tag end).
+
+%% The shape the old error was actually about still gets it: a tuple that is not an
+%% element form at all, rather than one whose tag is merely not literal.
+malformed_element_still_invalid_element(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_ct_bad). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [], [{'p', [], [~\"x\"], extra}]}). ",
+        fun(R) -> R =:= invalid_element end
+    ).
+
 each_stream_control_flow_body_rejected_with_wrapper_advice(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_each_stream_cond). "

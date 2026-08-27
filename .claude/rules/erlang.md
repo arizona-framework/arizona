@@ -233,6 +233,12 @@ entirely different elements; put them inside one stable item element carrying `a
 may return bare element tuples. `ul`/`ol` lose nothing (their child tag was never free), and a
 `div` with `display: contents` keeps the wrapper out of layout elsewhere.
 
+A tag chosen at RUNTIME is the other route to the same goal and hits a different
+error, `computed_element_tag`: an element's tag is baked into the template's statics
+at compile time, which is what lets a later change ship only the values, so there is
+no single set of statics to bake. The answer is the same idiom -- put the choice
+inside a stable element rather than choosing the element.
+
 **The wrapper is not legal everywhere.** Inside `table`/`tr` the HTML parser foster-parents it out
 of the table, and inside `select` Firefox drops it while Chromium keeps it, so the keyed element
 lands somewhere the client cannot address and every item op no-ops. Verified in both browsers. A
