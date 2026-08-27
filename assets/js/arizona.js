@@ -2438,12 +2438,23 @@ function scheduleSend(el, event, sendFn) {
         if (t.id) return;
         sendFn();
         t.pending = null;
-        t.id = setTimeout(() => {
+        // The tick re-arms itself while events are still arriving, and only goes
+        // idle when it finds nothing pending. Clearing the window BEFORE the
+        // trailing send instead left the throttle idle the instant that send
+        // landed, so the very next event took the leading edge with no gap at
+        // all -- on a pointer drag, two sends stamped at the same millisecond,
+        // the first already stale when it left.
+        const tick = () => {
             const pending = t.pending;
-            t.id = undefined;
             t.pending = null;
-            if (pending) pending();
-        }, throttleMs);
+            if (pending) {
+                pending();
+                t.id = setTimeout(tick, throttleMs);
+            } else {
+                t.id = undefined;
+            }
+        };
+        t.id = setTimeout(tick, throttleMs);
     }
     // Auto-flush on blur so pending data isn't lost when focus leaves.
     if (!t.blurBound) {
