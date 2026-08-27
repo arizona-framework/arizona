@@ -237,6 +237,8 @@ to my current state", so opening with it makes the log truthful for that
 caller without costing the incremental path anything: `undrained_ops/2`
 resumes past it, and a re-drain that replays it is idempotent.
 """.
+%% Crashes with `{stream_duplicate_key_in_list, Key}` when `Items` names a key more
+%% than once -- the bulk counterpart of `insert/2`'s duplicate refusal.
 -spec new(KeyFun, Items, Opts) -> stream() when
     KeyFun :: key_fun(),
     Items :: [item()],
@@ -244,7 +246,8 @@ resumes past it, and a re-drain that replays it is idempotent.
 new(KeyFun, Items, Opts) when is_function(KeyFun, 1), is_list(Items), is_map(Opts) ->
     Limit = maps:get(limit, Opts, infinity),
     OnLimit = maps:get(on_limit, Opts, halt),
-    {ItemsMap, Order} = keyed_items(KeyFun, Items),
+    {ItemsMap, Order, Count} = keyed_items(KeyFun, Items),
+    ok = reject_repeated_key(ItemsMap, Count, Order, [KeyFun, Items, Opts]),
     #stream{
         key = KeyFun,
         items = ItemsMap,
@@ -471,13 +474,17 @@ reset(#stream{items = OldItems} = S) ->
 Replaces all items with `NewItems` and queues a reset op. The differ
 will reuse client-side keys that are still present, only emitting ops
 for the actual delta.
+
+Crashes with `{stream_duplicate_key_in_list, Key}` when `NewItems` names a key
+more than once -- the bulk counterpart of `insert/2`'s duplicate refusal.
 """.
 -spec reset(Stream, NewItems) -> Stream1 when
     Stream :: stream(),
     NewItems :: [item()],
     Stream1 :: stream().
 reset(#stream{key = KeyFun, items = OldItems} = S, NewItems) when is_list(NewItems) ->
-    {ItemsMap, Order} = keyed_items(KeyFun, NewItems),
+    {ItemsMap, Order, Count} = keyed_items(KeyFun, NewItems),
+    ok = reject_repeated_key(ItemsMap, Count, Order, [S, NewItems]),
     S#stream{
         items = ItemsMap,
         order = {Order, []},
@@ -711,6 +718,14 @@ format_error({stream_order_stale_key, K, Order, ItemKeys}, _ST) ->
             [K, Order, ItemKeys]
         )
     };
+format_error({stream_duplicate_key_in_list, Key}, _ST) ->
+    #{
+        general => io_lib:format(
+            "the item list names stream key ~0tp more than once. Keys must be "
+            "unique; de-duplicate the list before passing it to new/3 or reset/2.",
+            [Key]
+        )
+    };
 format_error({stream_duplicate_key, Key}, _ST) ->
     #{
         general => io_lib:format(
@@ -826,13 +841,36 @@ genesis_pending() ->
 %% keyed list is reversed back into source order before it is handed over -- the same
 %% rule the map comprehension this replaced followed.
 keyed_items(KeyFun, Items) ->
-    keyed_items(KeyFun, Items, [], []).
+    keyed_items(KeyFun, Items, [], [], 0).
 
-keyed_items(_KeyFun, [], Keyed, Order) ->
-    {maps:from_list(lists:reverse(Keyed)), lists:reverse(Order)};
-keyed_items(KeyFun, [Item | Rest], Keyed, Order) ->
+keyed_items(_KeyFun, [], Keyed, Order, Count) ->
+    {maps:from_list(lists:reverse(Keyed)), lists:reverse(Order), Count};
+keyed_items(KeyFun, [Item | Rest], Keyed, Order, Count) ->
     Key = KeyFun(Item),
-    keyed_items(KeyFun, Rest, [{Key, Item} | Keyed], [Key | Order]).
+    keyed_items(KeyFun, Rest, [{Key, Item} | Keyed], [Key | Order], Count + 1).
+
+%% A repeated key would leave `order` holding one entry per OCCURRENCE while `items`
+%% holds one per key, so `size` (map-derived) stops matching `length(order)` -- the
+%% record's stated invariant -- and `to_list/1` returns the item once per occurrence.
+%% Everything downstream reads that invariant, so the list is refused rather than
+%% quietly turned into a stream that renders wrong. `insert/2` already refuses the same
+%% mistake; this is the bulk half of that rule.
+%%
+%% Costs one integer comparison on the way through: the count comes free from the walk
+%% and the map already knows its own size. Only a list that IS bad pays for naming the
+%% key.
+reject_repeated_key(ItemsMap, Count, _Order, _Args) when map_size(ItemsMap) =:= Count ->
+    ok;
+reject_repeated_key(_ItemsMap, _Count, Order, Args) ->
+    erlang:error({stream_duplicate_key_in_list, first_repeated_key(Order, #{})}, Args, [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
+first_repeated_key([Key | Rest], Seen) ->
+    case Seen of
+        #{Key := _} -> Key;
+        #{} -> first_repeated_key(Rest, Seen#{Key => true})
+    end.
 
 %% Walked with an accumulator rather than body-recursively: the prefix is rebuilt
 %% either way, but `lists:reverse/2` splices it back in C instead of unwinding one
