@@ -202,9 +202,7 @@ re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied
 1000; the comprehension plus `lists:sum/1` it replaced was the slowest of the three
 (~30% worse at 100). Summing a `maps:values/1` walk directly is the shape that won.
 
-## Still open
-
-### Where the time actually goes
+## Where the time actually goes
 
 Profiling the two paths a user experiences, rather than a synthetic workload, bounds
 all of this. `arizona_*` modules are **14.1%** of a WebSocket event and **9.8%** of a
@@ -222,7 +220,7 @@ consequences, both measured:
 The remaining server-side candidates are all small, and the largest single
 `arizona_*` function on the event path is 1.88%.
 
-### Still open
+## Still open
 
 Ranked by expected value. Nothing here has been measured end to end.
 
