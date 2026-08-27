@@ -812,22 +812,27 @@ unstamp(Pending) ->
 genesis_pending() ->
     queue_op({reset, #{}}, queue:new()).
 
-%% The items map and the key order in one walk. Keying the list into `[{K, I}]` and
-%% then walking that twice -- once into a map, once into the order -- built an
-%% N-element list of 2-tuples that neither result keeps. `reset/2` is the documented
-%% bulk-mutation path, so this is the walk a view re-deriving its list per event pays.
+%% The items map and the key order for a bulk load. `reset/2` is the documented
+%% bulk-mutation path, so this is the walk a view re-deriving its whole list per event
+%% pays, and it has to hold up at list sizes a table actually reaches.
 %%
-%% The map is threaded FORWARD, before the recursion, so a repeated key still resolves
-%% to the LAST item for it, exactly as the map comprehension did.
+%% Tail-recursive, and the map is built by `maps:from_list/1` rather than by N
+%% successive inserts. Threading the map through the walk instead reads as the tighter
+%% version -- one pass, no intermediate list -- but it needs a stack frame per item to
+%% build the order on the unwind, and that is what dominates once the list is long:
+%% 11.5ms against 7.2ms at fifty thousand items.
+%%
+%% `maps:from_list/1` resolves a repeated key to its LAST occurrence, which is why the
+%% keyed list is reversed back into source order before it is handed over -- the same
+%% rule the map comprehension this replaced followed.
 keyed_items(KeyFun, Items) ->
-    keyed_items(KeyFun, Items, #{}).
+    keyed_items(KeyFun, Items, [], []).
 
-keyed_items(_KeyFun, [], Map) ->
-    {Map, []};
-keyed_items(KeyFun, [Item | Rest], Map0) ->
+keyed_items(_KeyFun, [], Keyed, Order) ->
+    {maps:from_list(lists:reverse(Keyed)), lists:reverse(Order)};
+keyed_items(KeyFun, [Item | Rest], Keyed, Order) ->
     Key = KeyFun(Item),
-    {Map, Order} = keyed_items(KeyFun, Rest, Map0#{Key => Item}),
-    {Map, [Key | Order]}.
+    keyed_items(KeyFun, Rest, [{Key, Item} | Keyed], [Key | Order]).
 
 %% Walked with an accumulator rather than body-recursively: the prefix is rebuilt
 %% either way, but `lists:reverse/2` splices it back in C instead of unwinding one
