@@ -219,6 +219,17 @@ setOnPersist(
  */
 function resolveOps(ops) {
     for (const op of ops) {
+        // A child-view wrapper: `[ChildViewId, ChildOps]`, which `arizona_diff`'s
+        // child-view clause emits inside an ITEM_PATCH's inner ops when a `?stateful`
+        // in a stream item re-renders. Its head is the view id, a STRING, so the
+        // op-code switch below matches nothing and the child's payloads would reach
+        // the main thread unresolved -- `applyItemOps` then hands an `{f,s,d}` object
+        // to a text write, which renders as "[object Object]". (A child view at the
+        // ROOT level needs nothing here: its ops arrive az-prefixed, as ordinary ops.)
+        if (typeof op[0] !== 'number') {
+            resolveOps(op[1]);
+            continue;
+        }
         switch (op[0]) {
             case OP_TEXT: {
                 // A scalar text value arrives as a bare string; an HTML fragment (a
