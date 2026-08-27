@@ -600,9 +600,25 @@ function notifyUpdated(el) {
  * @param {Element|Document} root
  */
 function mountHooks(root) {
+    // Nothing to mount against: `mountHook` no-ops without a def, so the scan below can
+    // only find elements it will ignore. Worth answering first because this runs per
+    // ELEMENT per op -- a slot re-render of a 500-item list is 500 subtree queries for
+    // one op, and an app with no hooks at all pays every one of them.
+    if (!anyHookDefs()) return;
     if (root.nodeType === 1 && /** @type {Element} */ (root).hasAttribute('az-hook'))
         mountHook(/** @type {Element} */ (root));
     root.querySelectorAll('[az-hook]').forEach(mountHook);
+}
+
+/**
+ * Is any hook definition registered? `hooks` is a plain object apps assign onto, so
+ * there is nothing to cache against; `for...in` over an empty object allocates nothing
+ * and returns immediately.
+ * @returns {boolean}
+ */
+function anyHookDefs() {
+    for (const _name in hooks) return true;
+    return false;
 }
 
 /**
@@ -611,6 +627,10 @@ function mountHooks(root) {
  * @param {Element} root
  */
 function destroyChildHooks(root) {
+    // `destroyHook` only acts on elements present in `_hooks`, so with nothing mounted
+    // the scan cannot find anything to destroy. Same per-element-per-op frequency as
+    // `mountHooks`.
+    if (_hooks.size === 0) return;
     root.querySelectorAll('[az-hook]').forEach((el) => {
         destroyHook(el);
     });
@@ -1066,8 +1086,12 @@ function findMarkerDeep(root, az) {
  * @returns {Comment|null}
  */
 function findMarker(el, az) {
-    for (const node of el.childNodes) {
-        if (node.nodeType === 8 && /** @type {Comment} */ (node).data === `az:${az}`) {
+    // `want` is built once, not once per child: this walks every child of the container
+    // (a stream container has as many as it has items) and is the innermost helper of
+    // the marker lookups that run per op.
+    const want = `az:${az}`;
+    for (let node = el.firstChild; node !== null; node = node.nextSibling) {
+        if (node.nodeType === 8 && /** @type {Comment} */ (node).data === want) {
             return /** @type {Comment} */ (node);
         }
     }
@@ -1590,15 +1614,24 @@ function moveItemEl(el, key, afterKey, streams = null, az) {
     // Head and tail placement are relative to the slot span when there is one:
     // `el.prepend` would put the item before the slot's static siblings (a header),
     // and `el.appendChild` after them (a footer).
-    const bounds = slotBounds(el, az);
+    //
+    // Resolved lazily: `slotBounds` walks every child of the container looking for the
+    // slot's marker, and the dominant move -- one with an `afterKey` whose element is
+    // present -- never reads it. Computing it up front made a reorder pay that walk
+    // once per moved item for a result it discarded.
     if (afterKey === null) {
+        const bounds = slotBounds(el, az);
         if (bounds) bounds.start.after(item);
         else el.prepend(item);
     } else {
         const ref = itemByKey(streams, el, afterKey);
-        if (ref) ref.after(item);
-        else if (bounds) el.insertBefore(item, bounds.end);
-        else el.appendChild(item);
+        if (ref) {
+            ref.after(item);
+        } else {
+            const bounds = slotBounds(el, az);
+            if (bounds) el.insertBefore(item, bounds.end);
+            else el.appendChild(item);
+        }
     }
     // Both: the item's position among its siblings is its own observable state (a row
     // hook may animate its move), and the container's child ORDER changed.
@@ -1620,7 +1653,7 @@ function applyItemPatch(container, key, innerOps, streams = null) {
         console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
         return;
     }
-    applyItemOps(item, innerOps);
+    applyItemOps(item, innerOps, streams);
 }
 
 /**
@@ -1631,8 +1664,8 @@ function applyItemPatch(container, key, innerOps, streams = null) {
  * @param {string} key -- az-key of the item to patch
  * @param {Array<Array<*>>} innerOps -- ops scoped to the item
  */
-function patchItemEl(parentEl, az, key, innerOps) {
-    applyItemPatch(resolveInnerEl(parentEl, az), key, innerOps);
+function patchItemEl(parentEl, az, key, innerOps, streams = null) {
+    applyItemPatch(resolveInnerEl(parentEl, az), key, innerOps, streams);
 }
 
 /**
@@ -1665,7 +1698,22 @@ function resolveInnerEl(parent, az) {
  * @param {Element} item
  * @param {Array<Array<*>>} innerOps
  */
-function applyItemOps(item, innerOps) {
+function applyItemOps(item, innerOps, streams = null) {
+    // Same memo as `applyOps`' `els`, for the same reason: two ops in one item batch
+    // commonly target the same az (a TEXT plus a SET_ATTR), and each `resolveInnerEl`
+    // is a full subtree `querySelector` -- two on a miss.
+    /** @type {Map<string, Element>} */
+    const innerEls = new Map();
+    /** @param {string} az @returns {Element} */
+    const inner = (az) => {
+        const hit = innerEls.get(az);
+        // A hit is only reusable while it is still in the document: an earlier op in
+        // this batch can re-render the slot that held it.
+        if (hit?.isConnected) return hit;
+        const found = resolveInnerEl(item, az);
+        innerEls.set(az, found);
+        return found;
+    };
     for (const op of innerOps) {
         // Same per-op isolation as applyOps: a throwing inner op must not abort
         // the rest of the item's patch batch.
@@ -1674,20 +1722,20 @@ function applyItemOps(item, innerOps) {
                 const childRoot = findViewRoot(op[0]);
                 // Loud like the top-level miss: a dropped child batch reads as
                 // "the child just stopped updating".
-                if (childRoot) applyItemOps(childRoot, op[1]);
+                if (childRoot) applyItemOps(childRoot, op[1], streams);
                 else console.warn(`[arizona] item op child view "${op[0]}" not found; skipping`);
                 continue;
             }
             const az = op[1];
             switch (op[0]) {
                 case OP.TEXT:
-                    applyTextOp(resolveInnerEl(item, az), az, op[2], op[3]);
+                    applyTextOp(inner(az), az, op[2], op[3]);
                     break;
                 case OP.SET_ATTR:
-                    applySetAttrOp(resolveInnerEl(item, az), op[2], op[3]);
+                    applySetAttrOp(inner(az), op[2], op[3]);
                     break;
                 case OP.REM_ATTR:
-                    applyRemAttrOp(resolveInnerEl(item, az), op[2]);
+                    applyRemAttrOp(inner(az), op[2]);
                     break;
                 case OP.REMOVE_NODE: {
                     const innerEl = item.querySelector(`[az="${az}"]`);
@@ -1695,19 +1743,19 @@ function applyItemOps(item, innerOps) {
                     break;
                 }
                 case OP.INSERT:
-                    insertItemEl(resolveInnerEl(item, az), op[2], op[3], op[4], null, az);
+                    insertItemEl(inner(az), op[2], op[3], op[4], streams, az);
                     break;
                 case OP.REMOVE:
-                    removeItemEl(resolveInnerEl(item, az), op[2]);
+                    removeItemEl(inner(az), op[2], streams);
                     break;
                 case OP.ITEM_PATCH:
-                    patchItemEl(item, az, op[2], op[3]);
+                    patchItemEl(item, az, op[2], op[3], streams);
                     break;
                 case OP.MOVE:
-                    moveItemEl(resolveInnerEl(item, az), op[2], op[3], null, az);
+                    moveItemEl(inner(az), op[2], op[3], streams, az);
                     break;
                 case OP.LIST_PATCH:
-                    applyListPatch(resolveInnerEl(item, az), az, op[2]);
+                    applyListPatch(inner(az), az, op[2]);
                     break;
                 default:
                     console.warn(`[arizona] item op ${op[0]} not recognized; skipping`);
