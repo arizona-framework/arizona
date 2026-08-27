@@ -294,37 +294,39 @@ stream_relist(
         [?OP_REMOVE, Az, arizona_template:to_bin(K)]
      || K <- OldOrder, not is_map_key(K, NewSet)
     ],
-    {ItemOps, Views1} = relist_items(Az, NewOrder, NewItems, OldItems, Tmpl, Views),
     Kept = maps:with(NewOrder, OldItems),
     MoveOps = compute_reorder_ops(Az, OldOrder, NewOrder, Kept, NewItems, Tail),
-    {RemOps ++ ItemOps ++ MoveOps, Views1};
+    {ItemOps, Views1} = relist_items(Az, NewOrder, NewItems, OldItems, Tmpl, Views, MoveOps),
+    {RemOps ++ ItemOps, Views1};
 stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views).
 
 %% Per-key walk for `stream_relist/7`: a key the client already holds is patched
 %% only where its dynamics differ, one it lacks is inserted at the tail. Mirrors
 %% `smart_reset_items/8`'s op shapes exactly, minus the re-render -- the item
-%% dynamics are taken from the already-evaluated `New`.
-relist_items(_Az, [], _NewItems, _OldItems, _Tmpl, Views) ->
-    {[], Views};
-relist_items(Az, [K | Rest], NewItems, OldItems, Tmpl, Views0) ->
+%% dynamics are taken from the already-evaluated `New` -- and its difference-list
+%% shape too: each op conses onto `Tail`, the ops that follow this walk.
+relist_items(_Az, [], _NewItems, _OldItems, _Tmpl, Views, Tail) ->
+    {Tail, Views};
+relist_items(Az, [K | Rest], NewItems, OldItems, Tmpl, Views0, Tail) ->
     NewD = maps:get(K, NewItems),
-    {Ops, Views1} =
-        case OldItems of
-            #{K := OldD} ->
-                {InnerOps, _Markerless, ViewsA} = diff_item_dynamics_v(NewD, OldD, Views0),
-                case InnerOps of
-                    [] ->
-                        {[], ViewsA};
-                    _ ->
-                        {[[?OP_ITEM_PATCH, Az, arizona_template:to_bin(K), InnerOps]], ViewsA}
-                end;
-            #{} ->
-                HTML = arizona_render:zip_item(Tmpl, NewD),
-                {[[?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML]], Views0}
-        end,
-    {RestOps, Views2} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views1),
-    {Ops ++ RestOps, Views2}.
+    case OldItems of
+        #{K := OldD} ->
+            {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+            {RestOps, Views2} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views1, Tail),
+            case InnerOps of
+                [] ->
+                    {RestOps, Views2};
+                _ ->
+                    PatchOp = [?OP_ITEM_PATCH, Az, arizona_template:to_bin(K), InnerOps],
+                    {[PatchOp | RestOps], Views2}
+            end;
+        #{} ->
+            HTML = arizona_render:zip_item(Tmpl, NewD),
+            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML],
+            {RestOps, Views1} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views0, Tail),
+            {[InsOp | RestOps], Views1}
+    end.
 
 %% Can this stream's change be expressed by draining its pending log?
 %%
