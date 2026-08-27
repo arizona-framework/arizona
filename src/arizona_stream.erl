@@ -17,9 +17,10 @@ the differ knows exactly which keys to insert, remove, update, or move.
 `items` is a map (effectively O(1) per-key access); `order` is a list with
 an O(1) append buffer. Per mutation, over N = stream size:
 
-- `insert/2` (append) and `update/3` -- O(1) amortized under `halt`/`infinity`. Under
-  `on_limit => drop` at capacity each append evicts, flattening the order and discarding the
-  append buffer, so it degrades to O(Limit)
+- `insert/2` (append) and `update/3` -- O(1) amortized, including under
+  `on_limit => drop` at capacity, where each append also evicts: the eviction pops the
+  front of the order and leaves the append buffer alone, so each key crosses from
+  buffer to front at most once
 - `delete/2` -- O(position of Key in order), keeping the append buffer
 - positional `insert/3` and `move/3` -- O(N) list surgery on the order
 - `sort/2` -- O(N log N); `reset/1,2` -- O(N)
@@ -622,7 +623,9 @@ descend from the same value and share the identical prefix ending at it.
 Dropping that prefix is therefore exactly what the previous drain consumed.
 Anything else -- a divergent fork of the same stream, a `reset/1,2`, a
 `clear_stream_pending/2`, a rebuilt or rolled-back stream -- simply does not
-contain the stamp and falls back to a full drain.
+contain the stamp and falls back to a full drain. A queue whose every stamp is
+NEWER than the mark needs no fallback: the backwards search has already read
+every op by the time it runs out, so its accumulator is that full drain.
 
 The search runs BACKWARDS from the newest op and costs O(ops newer than `Mark`),
 not O(queue length): the mark is normally the previous drain's last op, so a
@@ -650,7 +653,14 @@ newer_than(Queue, Mark, Acc) ->
         {{value, {Mark, _Op}}, _Rest} -> {ok, Acc};
         {{value, {Seq, _Op}}, _Rest} when Seq < Mark -> rebuilt;
         {{value, {_Seq, Op}}, Rest} -> newer_than(Rest, Mark, [Op | Acc]);
-        {empty, _} -> rebuilt
+        %% Exhausted without meeting the mark, and without ever dropping below it: the
+        %% queue is wholly newer, so every op was popped and consed and `Acc` already
+        %% IS the full drain, oldest-first. Saying `rebuilt` here threw that away and
+        %% had `unstamp/1` walk the queue a second time to rebuild the same list --
+        %% and this is the ordinary path, not a rare one: a top-level stream binding
+        %% is cleared after every cycle, so the next drain always meets a queue whose
+        %% every stamp is newer than the mark left by the wiped one.
+        {empty, _} -> {ok, Acc}
     end.
 
 -doc """
@@ -748,13 +758,23 @@ drop_oldest_for_append(#stream{on_limit = halt} = S) ->
     S;
 drop_oldest_for_append(#stream{size = Size, limit = Limit} = S) when Size < Limit ->
     S;
-drop_oldest_for_append(#stream{items = Items, order = Order, size = Size} = S) ->
-    [Oldest | RestOrder] = flat_order(Order),
+%% The oldest key is the head of the logical order, which is the head of `Front`
+%% whenever `Front` has one -- so dropping it is a cons pop, and the append buffer
+%% stays a buffer. Flattening the order to find that head instead copied the whole
+%% window AND emptied the buffer into it, so the next append had nowhere O(1) to land
+%% and re-flattened: every append at capacity paid O(Limit), which is exactly the
+%% bounded tail-buffer shape `drop` exists for. Refilling `Front` from `Back` only
+%% when it runs dry moves each key across once, so an append is amortized O(1) again.
+drop_oldest_for_append(
+    #stream{items = Items, order = {[Oldest | RestFront], Back}, size = Size} = S
+) ->
     drop_oldest_for_append(S#stream{
         items = maps:remove(Oldest, Items),
-        order = {RestOrder, []},
+        order = {RestFront, Back},
         size = Size - 1
-    }).
+    });
+drop_oldest_for_append(#stream{order = {[], Back}} = S) ->
+    drop_oldest_for_append(S#stream{order = {lists:reverse(Back), []}}).
 
 %% Append an op under a fresh stamp. Uniqueness is what makes the resume EXACT
 %% (`undrained_ops/2` locates the mark by equality); monotonicity is what makes

@@ -49,6 +49,7 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
 | `make doc-erl` | Erlang docs (ex_doc) |
 | `make bench` | Performance bench (`scripts/bench.escript`, `ARGS=...`); deliberately **not** in `ci` -- shared runners are too noisy |
+| `make bench-ab REFS="<a> <b>"` | Paired A/B of one workload across two commits, each built in its own worktree; also **not** in `ci` |
 | `make prof` | eprof/fprof profile (`scripts/profile.escript`, `ARGS=...`); also **not** in `ci` |
 | `make prof-at REF=...` | Profile any commit-ish in a cached `git worktree`, for A/B comparisons |
 | `make setup-e2e` | Install E2E deps |
@@ -57,6 +58,11 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 ## Architecture reference
 
 Full architecture documentation (modules, APIs, data flow, op codes, etc.) is in [docs/architecture.md](docs/architecture.md).
+
+Performance: how to measure without fooling yourself (benchmark noise floor, the
+recompile trap, eprof's bias), what tuning has already found, what was tried and
+rejected, and what is still open, is in [docs/performance.md](docs/performance.md).
+Read it before optimising anything -- several plausible changes measured *worse*.
 
 ## Clients
 
@@ -204,7 +210,7 @@ A stream is the keyed source for a 2-arg `?each` (`fun(Item, Key) -> Element end
 
 `new/3` takes `#{limit => pos_integer() | infinity, on_limit => halt | drop}` (defaults `infinity`/`halt`) -- a **visible window**, not a hard cap. `halt` (the default) keeps items past `Limit` in the source but invisible: the window is the first `Limit` items in order. `drop` makes it a bounded tail -f buffer -- an **append** (`insert/2`, or the `update/3` upsert of a missing key) to a full stream evicts the oldest (front-of-order) item from the source so the window slides onto the new tail. Only appends evict: "oldest" is well-defined only for the append flow, so a positional `insert/3` (which declares a window position, not an age) and pre-population (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics even in `drop` mode -- an overfull `drop` stream then converges to `size =< Limit` on its next append.
 
-Cost note: `insert/2` and `update/3` are O(1) amortized under `halt`/`infinity`. Under **`on_limit => drop` at capacity** every append instead evicts, which flattens the order and discards the append buffer, so each one is O(Limit) rather than O(1) -- the cost grows with the limit, and that is the mode a bounded tail-buffer uses, so size the limit accordingly; `delete/2`, `insert/3`, `move/3` are O(N) list surgery on the order, so K per-item calls in one event are O(K*N). For bulk mutation build the list once and `reset/2` (one op -- the differ still patches only the real per-item delta) or reorder with one `sort/2`.
+Cost note: `insert/2` and `update/3` are O(1) amortized in every mode, including **`on_limit => drop` at capacity**, where each append also evicts -- the eviction pops the front of the order and leaves the append buffer intact, so a key crosses from buffer to front at most once. `delete/2`, `insert/3`, `move/3` are O(N) list surgery on the order, so K per-item calls in one event are O(K*N). For bulk mutation build the list once and `reset/2` (one op -- the differ still patches only the real per-item delta) or reorder with one `sort/2`.
 
 ## Static generation
 

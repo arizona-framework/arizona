@@ -240,7 +240,10 @@ diff_dynamics(
             {StreamOps, _NewSnap, {_, LocalNew}} =
                 diff_stream(Az, #{source => Src, template => Tmpl}, Old, {Old0, #{}}),
             LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
-            {StreamOps ++ RestOps, {Old0, maps:merge(New0, LocalNew1)}};
+            %% A drain takes no tail. Threading one through every stream helper
+            %% would buy this site alone: the other two stream containers drain
+            %% BEFORE their siblings, so they have no tail to hand it.
+            {append_ops(StreamOps, RestOps), {Old0, maps:merge(New0, LocalNew1)}};
         false ->
             stream_relist(Az, Src, Tmpl, New, Old, RestOps, Views1)
     end;
@@ -290,41 +293,72 @@ stream_relist(
     %% `handle_update/3`, so a child that subscribes or arms a timer does it twice
     %% per diff.
     NewSet = maps:from_keys(NewOrder, true),
-    RemOps = [
-        [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K <- OldOrder, not is_map_key(K, NewSet)
-    ],
-    {ItemOps, Views1} = relist_items(Az, NewOrder, NewItems, OldItems, Tmpl, Views),
     Kept = maps:with(NewOrder, OldItems),
-    MoveOps = compute_reorder_ops(Az, OldOrder, NewOrder, Kept, NewItems),
-    {RemOps ++ ItemOps ++ MoveOps ++ Tail, Views1};
+    MoveOps = compute_reorder_ops(Az, OldOrder, NewOrder, Kept, NewItems, Tail),
+    {ItemOps, Views1} = relist_items(Az, NewOrder, NewItems, OldItems, Tmpl, Views, MoveOps),
+    {dropped_key_ops(Az, OldOrder, NewSet, ItemOps), Views1};
 stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views).
 
 %% Per-key walk for `stream_relist/7`: a key the client already holds is patched
 %% only where its dynamics differ, one it lacks is inserted at the tail. Mirrors
 %% `smart_reset_items/8`'s op shapes exactly, minus the re-render -- the item
-%% dynamics are taken from the already-evaluated `New`.
-relist_items(_Az, [], _NewItems, _OldItems, _Tmpl, Views) ->
-    {[], Views};
-relist_items(Az, [K | Rest], NewItems, OldItems, Tmpl, Views0) ->
+%% dynamics are taken from the already-evaluated `New` -- and its difference-list
+%% shape too: each op conses onto `Tail`, the ops that follow this walk.
+relist_items(_Az, [], _NewItems, _OldItems, _Tmpl, Views, Tail) ->
+    {Tail, Views};
+relist_items(Az, [K | Rest], NewItems, OldItems, Tmpl, Views0, Tail) ->
     NewD = maps:get(K, NewItems),
-    {Ops, Views1} =
-        case OldItems of
-            #{K := OldD} ->
-                {InnerOps, _Markerless, ViewsA} = diff_item_dynamics_v(NewD, OldD, Views0),
-                case InnerOps of
-                    [] ->
-                        {[], ViewsA};
-                    _ ->
-                        {[[?OP_ITEM_PATCH, Az, arizona_template:to_bin(K), InnerOps]], ViewsA}
-                end;
-            #{} ->
-                HTML = arizona_render:zip_item(Tmpl, NewD),
-                {[[?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML]], Views0}
-        end,
-    {RestOps, Views2} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views1),
-    {Ops ++ RestOps, Views2}.
+    case OldItems of
+        #{K := OldD} ->
+            {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+            {RestOps, Views2} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views1, Tail),
+            case InnerOps of
+                [] ->
+                    {RestOps, Views2};
+                _ ->
+                    PatchOp = [?OP_ITEM_PATCH, Az, arizona_template:to_bin(K), InnerOps],
+                    {[PatchOp | RestOps], Views2}
+            end;
+        #{} ->
+            HTML = arizona_render:zip_item(Tmpl, NewD),
+            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML],
+            {RestOps, Views1} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views0, Tail),
+            {[InsOp | RestOps], Views1}
+    end.
+
+%% An `?OP_REMOVE` for every old key `Keys` no longer holds, consed onto `Tail` --
+%% the ops that follow the removals on the wire. They lead, so a comprehension would
+%% have to build the whole list only to append it to what comes after.
+dropped_key_ops(_Az, [], _Keys, Tail) ->
+    Tail;
+dropped_key_ops(Az, [K | Rest], Keys, Tail) ->
+    case Keys of
+        #{K := _} ->
+            dropped_key_ops(Az, Rest, Keys, Tail);
+        #{} ->
+            [
+                [?OP_REMOVE, Az, arizona_template:to_bin(K)]
+                | dropped_key_ops(Az, Rest, Keys, Tail)
+            ]
+    end.
+
+%% The same removals over a SNAPSHOT map instead of an order list. The restriction of
+%% that map to the visible window (`Kept`) already answers "did this key fall out?",
+%% so probing it needs no separate visible-key set. Walked through an iterator: a map
+%% comprehension would materialise the list these ops lead.
+pruned_key_ops(Az, Iter, Kept, Tail) ->
+    case maps:next(Iter) of
+        none ->
+            Tail;
+        {K, _ItemD, Iter1} when is_map_key(K, Kept) ->
+            pruned_key_ops(Az, Iter1, Kept, Tail);
+        {K, _ItemD, Iter1} ->
+            [
+                [?OP_REMOVE, Az, arizona_template:to_bin(K)]
+                | pruned_key_ops(Az, Iter1, Kept, Tail)
+            ]
+    end.
 
 %% Can this stream's change be expressed by draining its pending log?
 %%
@@ -408,7 +442,11 @@ diff_each(
     Views1 = {Old0, maps:merge(New0, LocalNew1)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {StreamOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
+    %% The drain runs first because the sibling walk consumes the views it rendered,
+    %% so there is no tail here to cons onto. Diffing the siblings first to make one
+    %% would reorder both their child `mount/1`s and the `$arizona_update_effects`
+    %% accumulator, which ships in evaluation order.
+    {append_ops(StreamOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
 diff_each(
     Az, #{source := Items} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
 ) when is_list(Items) ->
@@ -419,7 +457,7 @@ diff_each(
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {ListOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
+    {prepend_each_op(ListOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
 diff_each(
     Az, #{source := Source} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
 ) when is_map(Source) ->
@@ -433,15 +471,50 @@ diff_each(
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {MapOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
+    {prepend_each_op(MapOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
+
+%% A list- or map-source `?each` container answers with exactly one op or none -- a
+%% positional patch, a wholesale re-render, or nothing at all -- so its result reaches
+%% the ops that follow it by consing. `++` would call out to walk a list that is never
+%% longer than a single cell. A stream container is the one that can answer with many,
+%% and it appends (see `diff_each/9`'s stream clause).
+prepend_each_op([], Tail) ->
+    Tail;
+prepend_each_op([Op], Tail) ->
+    [Op | Tail].
+
+%% A stream container's ops LEAD the ops of whatever follows it, and the drain that
+%% built them cannot take a tail to cons onto (its ops exist only once it has run, and
+%% at two of the three call sites the walk that would supply the tail has not run yet
+%% -- it consumes the views the drain rendered). So they are appended. But `++` reaches
+%% its second argument by rebuilding the first cell by cell, so `Ops ++ []` copies the
+%% whole list to produce a list equal to itself -- and an empty tail is the ordinary
+%% case, not an edge one: it means the container is the last dynamic, or every later
+%% one was dep-skipped. Answer that before `++` sees it.
+append_ops(Ops, []) ->
+    Ops;
+append_ops(Ops, Tail) ->
+    Ops ++ Tail.
 
 %% Incremental stream child_views: old - deleted + rendered.
+%%
+%% A stream holding no child views -- items of plain markup, which most streams are --
+%% has nothing to carry: removing deleted keys from an empty set leaves it empty, and
+%% carrying an empty set leaves `LocalNew` exactly as it is. Settling that from the set
+%% skips naming the deleted item children, and naming them means draining the stream's
+%% ENTIRE pending queue (`pending_ops/1`, not the undrained suffix) into a list and
+%% walking it. A stream nested inside another value is never cleared, so that queue
+%% holds one op per mutation for the life of the view -- the walk grew with the
+%% session while the answer stayed `LocalNew`.
 merge_stream_child_views(Source, Old, LocalNew, Old0) ->
-    OldChildViews = maps:get(child_views, Old, #{}),
-    #{items := OldItems} = Old,
-    Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
-    Surviving = maps:without(Deleted, OldChildViews),
-    carry_item_children(Surviving, Old0, LocalNew).
+    case Old of
+        #{child_views := OldChildViews} when map_size(OldChildViews) > 0 ->
+            #{items := OldItems} = Old,
+            Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
+            carry_item_children(maps:without(Deleted, OldChildViews), Old0, LocalNew);
+        #{} ->
+            LocalNew
+    end.
 
 %% When a dynamic is skipped (deps unchanged), carry its child views over
 %% from OldViews to NewViews so they aren't pruned.
@@ -494,8 +567,8 @@ carry_skipped_view(_Old, Views) ->
 %% a descendant the seed did not already cover. In the ordinary case -- a
 %% container listing its children, none of which has grown since -- that is one
 %% lookup and one empty scan per id, with no per-id insert and no list building.
-%% Chaining every id unconditionally instead cost a single-key insert plus a `++`
-%% per entry on EVERY dep-skipped container, whether or not anything had changed.
+%% Chaining every id unconditionally instead cost a single-key insert plus a
+%% worklist entry per id on EVERY dep-skipped container, changed or not.
 live_subtree(Ids, Old) ->
     case names_every_live_view(Ids, Old) of
         true ->
@@ -538,7 +611,11 @@ expand_subtree([Id | Rest], Old, Acc) ->
 expand_uncovered([], Rest, Old, Acc) ->
     expand_subtree(Rest, Old, Acc);
 expand_uncovered(Missing, Rest, Old, Acc) ->
-    expand_subtree(Missing ++ Rest, Old, maps:merge(Acc, maps:with(Missing, Old))).
+    %% The worklist is a set to exhaust, not a queue to honour: covering the newly
+    %% found ids to fixpoint and then resuming `Rest` reaches the same closure as
+    %% splicing them in front of it, without copying a list to say so.
+    Acc1 = expand_subtree(Missing, Old, maps:merge(Acc, maps:with(Missing, Old))),
+    expand_subtree(Rest, Old, Acc1).
 
 %% Extract child view IDs from deleted stream items only. The result is
 %% only ever `maps:without/2`'s key list (`OldChildViews` minus these), so
@@ -665,15 +742,45 @@ stream_outgrows_re_render(Ops, Tmpl, OldSnap, Source) ->
         stream_outgrows_by_bytes(Ops, Tmpl, maps:get(items, OldSnap), Source).
 
 stream_outgrows_by_bytes(Ops, Tmpl, OldItems, Source) when map_size(OldItems) > 0 ->
-    NewCount = length(arizona_template:visible_keys(Source#stream.order, Source#stream.limit)),
-    AvgItem =
-        lists:sum([item_value_bytes(D) || D <- maps:values(OldItems)]) div map_size(OldItems),
-    Whole = re_render_bytes(Tmpl, AvgItem * NewCount, NewCount),
-    Positional = wire_bytes(Ops),
-    Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
-        Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM;
+    stream_outgrows_measured(wire_bytes(Ops), Tmpl, OldItems, Source);
 stream_outgrows_by_bytes(_Ops, _Tmpl, _OldItems, _Source) ->
     false.
+
+%% The wholesale side is never negative, so a patch no bigger than the floor cannot
+%% beat it BY the floor, whatever the items turn out to weigh -- the answer is `false`
+%% before the estimate is even formed. Worth splitting out because that estimate is
+%% not cheap: it weighs every value of every OLD item, which for a hundred rows of
+%% twenty fields is two thousand `wire_bytes/1` calls -- and it was paid on every
+%% drain, including the overwhelmingly common one that patches a single field and
+%% could never have been in the running.
+stream_outgrows_measured(Positional, _Tmpl, _OldItems, _Source) when
+    Positional =< ?RE_RENDER_MIN_SAVING
+->
+    false;
+stream_outgrows_measured(Positional, Tmpl, OldItems, Source) ->
+    NewCount = visible_count(Source),
+    AvgItem = sum_item_value_bytes(maps:values(OldItems), 0) div map_size(OldItems),
+    Whole = re_render_bytes(Tmpl, AvgItem * NewCount, NewCount),
+    Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
+        Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM.
+
+%% How many keys the visible window holds, from the stream's cached size. The window
+%% is the first `Limit` keys of `order`, so its size is settled by two integers --
+%% `visible_keys/2` would flatten the append buffer and copy the whole list, only for
+%% it to be counted and dropped.
+visible_count(#stream{limit = infinity, size = Size}) ->
+    Size;
+visible_count(#stream{limit = Limit, size = Size}) ->
+    min(Size, Limit).
+
+%% Total value bytes over the item snapshots. Summing the walk directly saves the
+%% intermediate list of per-item sizes that a comprehension plus `lists:sum/1` builds
+%% -- but the values still come from `maps:values/1`, which is one pass in C: stepping
+%% the map's own iterator instead measured ~10% slower over a 100-item stream.
+sum_item_value_bytes([], Acc) ->
+    Acc;
+sum_item_value_bytes([ItemD | Rest], Acc) ->
+    sum_item_value_bytes(Rest, Acc + item_value_bytes(ItemD)).
 
 %% An empty drain carries no information about whether the container changed -- it
 %% means either "nothing happened" or "the log was wiped and anything may have
@@ -859,26 +966,26 @@ move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
 stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc),
+    %% Drain what follows first, so the moves cons straight onto it.
     {RestOps, FinalSnap, Views1} =
         diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, VKeys, Views0),
-    {MoveOps ++ RestOps, FinalSnap, Views1}.
+    {compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc, RestOps), FinalSnap, Views1}.
 
 stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
-    VSet = maps:from_keys(VKeys, true),
-    RemOps = [
-        [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <- SnapAcc, not is_map_key(K, VSet)
-    ],
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
         smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps),
     {RestOps, FinalSnap, Views2} =
         diff_stream_pending(Az, Rest, SV, Tmpl, NewSnaps, VKeys, Views1),
-    {RemOps ++ DiffOps ++ MoveOps ++ RestOps, FinalSnap, Views2}.
+    %% This append is structural: the moves and the rest of the drain both need the
+    %% post-reset snapshot, which only the item walk above can produce -- so the
+    %% walk's ops cannot cons onto a tail that does not exist when it runs. The
+    %% removals lead everything, and those do cons.
+    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps, RestOps),
+    ResetOps = append_ops(DiffOps, MoveOps),
+    {pruned_key_ops(Az, maps:iterator(SnapAcc), Kept, ResetOps), FinalSnap, Views2}.
 
 diff_list(Az, #{source := Items, template := Tmpl}, OldSnap, Views0) ->
     {NewItemsList, Views1} = arizona_eval:render_list_items(Items, Tmpl, Views0),
@@ -918,7 +1025,7 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
             not has_markerless_slot(NewItemsList),
     case Patchable of
         true ->
-            {{SubOps, ValueBytes}, Views2} =
+            {SubOps, Views2} =
                 diff_list_positional(Tmpl, NewItemsList, OldItemsList, 0, Views1),
             case SubOps of
                 [] ->
@@ -927,7 +1034,7 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
                     maybe_list_patch(
                         Az,
                         Tmpl,
-                        {SubOps, ValueBytes},
+                        SubOps,
                         NewItemsList,
                         OldItemsList,
                         NewSnap,
@@ -967,7 +1074,7 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
 maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, Views2) ->
     case outgrows_re_render(SubOps, Tmpl, NewItemsList) of
         false ->
-            {[[?OP_LIST_PATCH, Az, element(1, SubOps)]], NewSnap, Views2};
+            {[[?OP_LIST_PATCH, Az, SubOps]], NewSnap, Views2};
         true ->
             diff_list_full(Az, Tmpl, NewItemsList, OldItemsList, NewSnap, Views1)
     end.
@@ -989,8 +1096,8 @@ maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, 
 %% a count at any threshold.
 %%
 %% Estimate both sides in bytes instead. The wholesale side costs nothing extra to
-%% obtain: `diff_list_positional/5` already visits every new item, so it accumulates
-%% their value bytes as it walks.
+%% obtain, but it is not free: it weighs every value of every new item. So it is asked
+%% only once the patch is big enough to have a chance -- see `list_outgrows_measured/3`.
 %%
 %% The comparison is biased toward staying positional, because those ops also
 %% preserve the DOM: the container is never torn down, so focus, scroll position and
@@ -999,9 +1106,21 @@ maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, 
 %% and it has to save something worth having in absolute terms too. A small container
 %% can be 2x cheaper to re-render while the saving is a hundred-odd bytes, which is
 %% not a trade worth losing an in-progress selection over.
-outgrows_re_render({SubOps, ValueBytes}, Tmpl, NewItemsList) ->
-    Positional = wire_bytes(SubOps),
-    Whole = re_render_bytes(Tmpl, ValueBytes, length(NewItemsList)),
+outgrows_re_render(SubOps, Tmpl, NewItemsList) ->
+    list_outgrows_measured(wire_bytes(SubOps), Tmpl, NewItemsList).
+
+%% Same short-circuit as the stream's estimate, and it earns more here: this walk was
+%% not merely paid on every drain, it was paid on every plain-list diff whether or not
+%% its result was ever read -- an unchanged list weighed all its items to produce a
+%% number that was then thrown away with the empty op list. Now nothing is weighed
+%% until a patch exists AND is big enough to have a chance of losing.
+list_outgrows_measured(Positional, _Tmpl, _NewItemsList) when
+    Positional =< ?RE_RENDER_MIN_SAVING
+->
+    false;
+list_outgrows_measured(Positional, Tmpl, NewItemsList) ->
+    {Count, ValueBytes} = count_value_bytes(NewItemsList, 0, 0),
+    Whole = re_render_bytes(Tmpl, ValueBytes, Count),
     Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
         Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM.
 
@@ -1165,9 +1284,7 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% plus a single tail insert/remove -- correct (the new list is reproduced
 %% exactly) and minimal in childList churn; identity across reorders is the keyed
 %% `arizona_stream`'s job, not a plain list's.
-%% Returns `{{SubOps, ValueBytes}, Views}`. `ValueBytes` is the size of every NEW
-%% item's values, accumulated here because this walk already visits them -- it is
-%% what `outgrows_re_render/3` prices the wholesale alternative with.
+%% Returns `{SubOps, Views}`.
 %% Entry point. Strip the unchanged head and tail FIRST, then diff only the middle.
 %% Without that, a head insert reads as "every position differs" and emits one item
 %% patch per item plus a tail append -- each patch carrying the value of the item that
@@ -1179,11 +1296,16 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% past the end), and repeated inserts at one index keep their emitted order because
 %% each lands immediately before the same unmoved reference node.
 diff_list_positional(Tmpl, NewItems, OldItems, Idx0, Views0) ->
-    AllBytes = lists:foldl(fun(D, A) -> A + item_value_bytes(D) end, 0, NewItems),
     {Common, NewRest, OldRest} = strip_common_prefix(NewItems, OldItems, 0),
     {NewMid, OldMid} = maybe_strip_common_suffix(NewRest, OldRest),
-    {Ops, Views1} = diff_list_middle(Tmpl, NewMid, OldMid, Idx0 + Common, Views0),
-    {{Ops, AllBytes}, Views1}.
+    diff_list_middle(Tmpl, NewMid, OldMid, Idx0 + Common, Views0).
+
+%% The wholesale estimate needs the item count beside the value bytes, and one pass
+%% yields both -- so the count never costs a `length/1` walk of its own.
+count_value_bytes([], Count, Bytes) ->
+    {Count, Bytes};
+count_value_bytes([ItemD | Rest], Count, Bytes) ->
+    count_value_bytes(Rest, Count + 1, Bytes + item_value_bytes(ItemD)).
 
 strip_common_prefix([Same | NR], [Same | OR], N) ->
     strip_common_prefix(NR, OR, N + 1);
@@ -1201,10 +1323,20 @@ strip_common_prefix(NewRest, OldRest, N) ->
 %% common case is a value changing in place, so paying two reverses there is the whole
 %% cost of this optimisation with none of its benefit.
 maybe_strip_common_suffix(New, Old) ->
-    case length(New) =:= length(Old) of
+    case same_length(New, Old) of
         true -> {New, Old};
         false -> strip_common_suffix(New, Old)
     end.
+
+%% Comparing two `length/1` calls walks BOTH lists to the end, even when one ran out
+%% a hundred items ago. The lockstep walk stops at the shorter one, and that is the
+%% side this guard cares about -- it asks whether the lengths differ, not by how much.
+same_length([], []) ->
+    true;
+same_length([_New | NR], [_Old | OR]) ->
+    same_length(NR, OR);
+same_length(_New, _Old) ->
+    false.
 
 strip_common_suffix(New, Old) ->
     {_N, RevNew, RevOld} = strip_common_prefix(lists:reverse(New), lists:reverse(Old), 0),
@@ -1217,7 +1349,7 @@ diff_list_middle(Tmpl, NewRest, [], Idx, Views) ->
     {[[?OP_INSERT, Idx, arizona_render:zip_item(Tmpl, D)] || D <- NewRest], Views};
 %% A pure removal: nothing new remains, so drop the old tail by index.
 diff_list_middle(_Tmpl, [], OldRest, Idx, Views) ->
-    {[[?OP_REMOVE, I] || I <- lists:seq(Idx, Idx + length(OldRest) - 1)], Views};
+    {remove_ops(OldRest, Idx), Views};
 %% Both sides still have items: an edit rather than a clean insert or remove. Walk them
 %% in lockstep, which is what a same-length content change wants anyway.
 diff_list_middle(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
@@ -1229,6 +1361,14 @@ diff_list_middle(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
         [] -> {RestOps, Views2};
         _ -> {[[?OP_ITEM_PATCH, Idx, InnerOps] | RestOps], Views2}
     end.
+
+%% One `?OP_REMOVE` per dropped item, indexed from `Idx`. Walking the items
+%% themselves keeps this one pass: `lists:seq/2` needs the tail's length first --
+%% another walk -- and then builds a list of integers only to walk that too.
+remove_ops([], _Idx) ->
+    [];
+remove_ops([_OldD | Rest], Idx) ->
+    [[?OP_REMOVE, Idx] | remove_ops(Rest, Idx + 1)].
 
 item_value_bytes(ItemD) ->
     lists:foldl(fun({_Az, V, _Deps}, A) -> A + wire_bytes(V) end, 0, ItemD).
@@ -1315,20 +1455,17 @@ apply_limit(
         true ->
             %% Fast path -- the frame didn't touch window membership or order
             %% (e.g. a single visible-item content update): nothing fell out,
-            %% nothing to back-fill, so skip the VSet/RemOps/Pruned passes and
-            %% their map allocations entirely.
+            %% nothing to back-fill, so skip the pruning passes and their map
+            %% allocations entirely.
             {[], post_drain_snap(SnapItems, VKeys, Tmpl, Source), Views0};
         false ->
-            VSet = maps:from_keys(VKeys, true),
-            RemOps = [
-                [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-             || K := _ <- SnapItems, not is_map_key(K, VSet)
-            ],
-            Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
+            %% The window's survivors, which double as the "did this key fall out?"
+            %% probe the removals need.
+            Pruned = maps:with(VKeys, SnapItems),
             {InsOps, Final, Views1} =
                 snap_add_missing(Az, VKeys, Pruned, ItemsMap, Tmpl, Views0),
             {
-                RemOps ++ InsOps,
+                pruned_key_ops(Az, maps:iterator(SnapItems), Pruned, InsOps),
                 post_drain_snap(Final, VKeys, Tmpl, Source),
                 Views1
             }
@@ -1467,9 +1604,11 @@ lis_backtrack(Idx, Parent, Acc) ->
 %% as `Kept` (hidden keys are back-filled only later, by `apply_limit/6`); for
 %% a reset it also includes the keys `smart_reset_items/8` just inserted, whose
 %% tail (-1) inserts precede these moves on the wire.
-compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present) ->
-    [];
-compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present) ->
+%% The moves cons onto `Tail` -- the ops that follow them on the wire -- so a
+%% reorder never materialises its own list to append.
+compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present, Tail) ->
+    Tail;
+compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present, Tail) ->
     %% Pure tail append: every old key kept, in order, with the new ones after
     %% them. `smart_reset_items/8` inserts each missing key at -1 walking the new
     %% order, so they land at the tail in that order and the DOM already equals
@@ -1479,16 +1618,16 @@ compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present) ->
     %% emitting one redundant move per insert (360 inserts -> 360 extra moves).
     case lists:prefix(OldOrder, NewOrder) of
         true ->
-            [];
+            Tail;
         false ->
             KeptOld = [K || K <- OldOrder, is_map_key(K, Kept)],
             case KeptOld of
                 [] ->
-                    [];
+                    Tail;
                 _ ->
                     OldPosMap = pos_map(KeptOld, 1),
                     LISSet = lis_indices(NewOrder, OldPosMap),
-                    emit_move_ops(Az, LISSet, NewOrder, 1, null, Present)
+                    emit_move_ops(Az, LISSet, NewOrder, 1, null, Present, Tail)
             end
     end.
 
@@ -1504,14 +1643,14 @@ pos_map([K | Rest], I) -> (pos_map(Rest, I + 1))#{K => I}.
 %% time a present key is placed, every present key to its left in NewOrder has
 %% already settled, so "after the last present key placed" IS its position
 %% among present keys; the back-fill then interleaves the hidden ones.
-emit_move_ops(_Az, _LIS, [], _I, _Prev, _Present) ->
-    [];
-emit_move_ops(Az, LIS, [Key | Rest], I, Prev, Present) ->
+emit_move_ops(_Az, _LIS, [], _I, _Prev, _Present, Tail) ->
+    Tail;
+emit_move_ops(Az, LIS, [Key | Rest], I, Prev, Present, Tail) ->
     case LIS of
         #{I := _} ->
-            emit_move_ops(Az, LIS, Rest, I + 1, Key, Present);
+            emit_move_ops(Az, LIS, Rest, I + 1, Key, Present, Tail);
         #{} when not is_map_key(Key, Present) ->
-            emit_move_ops(Az, LIS, Rest, I + 1, Prev, Present);
+            emit_move_ops(Az, LIS, Rest, I + 1, Prev, Present, Tail);
         #{} ->
             Ref =
                 case Prev of
@@ -1520,7 +1659,7 @@ emit_move_ops(Az, LIS, [Key | Rest], I, Prev, Present) ->
                 end,
             [
                 [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref]
-                | emit_move_ops(Az, LIS, Rest, I + 1, Key, Present)
+                | emit_move_ops(Az, LIS, Rest, I + 1, Key, Present, Tail)
             ]
     end.
 
@@ -1716,7 +1855,9 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             EachDesc = #{source => Src, template => Tmpl},
             {EachOps, _NewSnap, Views1} = diff_stream(Az, EachDesc, Old, Views0),
             {RestOps, Markerless, Views2} = diff_item_dynamics_v(NR, OR, Views1),
-            {EachOps ++ RestOps, Markerless, Views2};
+            %% Same ordering as `diff_each/9`'s stream clause: the drain feeds the
+            %% rest of the walk its views, so its ops have no tail to cons onto.
+            {append_ops(EachOps, RestOps), Markerless, Views2};
         _ ->
             {RestOps, Markerless, Views1} = diff_item_dynamics_v(NR, OR, Views0),
             {NewOps, Views2} = make_ops(Az, New, Old, RestOps, Views1),

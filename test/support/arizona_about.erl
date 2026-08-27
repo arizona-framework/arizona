@@ -12,7 +12,9 @@ mount(Init) ->
         id => ~"about-page",
         title => maps:get(title, Init, ~"About"),
         tick => 0,
-        tags => [~"erlang", ~"otp", ~"arizona"]
+        %% Accepted as an override so a caller can size the list (the `render_each_100`
+        %% bench asks for 100); the default is what every test and the e2e page expect.
+        tags => maps:get(tags, Init, [~"erlang", ~"otp", ~"arizona"])
     },
     ?connected andalso ?send(arizona_connected),
     {Bindings, #{}}.

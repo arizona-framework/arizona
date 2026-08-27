@@ -68,6 +68,7 @@ render(Bindings) ->
 -export([raw/1]).
 -export([classify_trusted/1]).
 -export([escape_value/2]).
+-export([escape_marked/2]).
 -export([mark_esc/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
@@ -554,6 +555,20 @@ escape_value(Backend, V0) ->
     end.
 
 -doc """
+Escape the inner value of an `{arizona_esc, _}` marker.
+
+The marker itself is the classification: `mark_esc/1` is its only producer and it
+wraps only what already came back as a plain `value`, so re-asking
+`classify_trusted/1` here can only ever get the same answer. Escapable content is
+most of what a template renders, so that second ask is paid per value per render.
+""".
+-spec escape_marked(Backend, Value) -> binary() when
+    Backend :: module(),
+    Value :: term().
+escape_marked(Backend, V) ->
+    Backend:escape(to_bin(V)).
+
+-doc """
 Marks an evaluated value for HTML escaping at output. Only scalars are marked --
 nested templates/descriptors and stateless-child snapshots (all maps) and
 effects pass through untouched so they render structurally (their own inner
@@ -657,10 +672,30 @@ and is scoped by the same `#{s, d}` path as an inline nested template.
     Az :: az(),
     Value :: term().
 scope_slot(Az, Value) when is_binary(Az) ->
-    scope_val(colon_free(Az), Value);
+    %% Ask the VALUE first. Only a nested snapshot is ever prefixed -- every other
+    %% shape `scope_val/2` can be handed comes back untouched -- and a scalar is what
+    %% nearly every content slot holds. Building the prefix regardless meant
+    %% `binary:replace/4` on every one of them: a pure-Erlang wrapper that compiles
+    %% the pattern, allocates a closure and copies the `az` into a fresh binary, all
+    %% to hand back a namespace nothing would read. That is ~125ns a slot, per
+    %% evaluation, on every render and every re-evaluated dynamic.
+    case scopable(Value) of
+        true -> scope_val(colon_free(Az), Value);
+        false -> Value
+    end;
 scope_slot(_Az, Value) ->
     %% Undefined slot az (an az-nodiff slot): no target to namespace against.
     Value.
+
+%% Mirrors `scope_val/2` clause for clause: `true` exactly where that function does
+%% something other than hand its argument back. Keep the two in step -- a shape that
+%% answers `false` here can never be prefixed, however `scope_val/2` treats it.
+scopable({arizona_esc, Val}) -> scopable(Val);
+scopable(#{view_id := _}) -> false;
+scopable(#{t := ?EACH}) -> false;
+scopable(#{az_local := _}) -> false;
+scopable(#{s := _, d := _}) -> true;
+scopable(_Val) -> false.
 
 colon_free(Az) ->
     binary:replace(Az, ~":", ~"-", [global]).
@@ -776,5 +811,21 @@ flushes the buffer to a flat oldest-first list and applies the limit.
     Order1 :: [term()].
 visible_keys({Front, []}, infinity) -> Front;
 visible_keys({Front, Back}, infinity) -> Front ++ lists:reverse(Back);
-visible_keys({Front, []}, Limit) -> lists:sublist(Front, Limit);
-visible_keys({Front, Back}, Limit) -> lists:sublist(Front ++ lists:reverse(Back), Limit).
+visible_keys({Front, Back}, Limit) -> take_visible(Front, Limit, Back).
+
+%% The window is the first `Limit` keys, so flattening the WHOLE order to then
+%% sublist it copies the hidden tail for nothing -- and on a `halt` stream that tail
+%% is every key ever appended past the limit, so the copy grew with the session while
+%% the answer stayed `Limit` long. Take from the front and stop; the append buffer is
+%% touched only if the front runs out first, and then only for the keys still wanted
+%% (`nthtail/2` walks cons cells without allocating any).
+take_visible(_Front, 0, _Back) ->
+    [];
+take_visible([Key | Rest], Limit, Back) ->
+    [Key | take_visible(Rest, Limit - 1, Back)];
+take_visible([], Limit, Back) ->
+    %% The first `Limit` of `reverse(Back)` is the last `Limit` OF `Back`, reversed.
+    case length(Back) - Limit of
+        Drop when Drop > 0 -> lists:reverse(lists:nthtail(Drop, Back));
+        _ -> lists:reverse(Back)
+    end.
