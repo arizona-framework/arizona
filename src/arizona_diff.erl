@@ -65,6 +65,16 @@ list to that fallback instead of a per-item patch).
 
 -include("arizona.hrl").
 
+%% How much smaller a wholesale container re-render must be before it is worth
+%% giving up per-item ops. Those ops preserve the DOM -- the container is never torn
+%% down, so focus, scroll position and `?local` values inside it survive -- so
+%% wholesale has to be clearly smaller (the ratio) AND save something worth having
+%% (the floor). A short container can be twice as cheap to re-render while the saving
+%% is a hundred-odd bytes, which is not a trade worth losing a selection over.
+-define(RE_RENDER_BIAS_NUM, 3).
+-define(RE_RENDER_BIAS_DEN, 2).
+-define(RE_RENDER_MIN_SAVING, 512).
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -585,7 +595,7 @@ diff_stream(
             %% whole history in `pending`, and replaying it re-emitted every
             %% historical intermediate patch -- see arizona_stream's moduledoc.
             Ops = arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none)),
-            diff_stream_pending(
+            {StreamOps, NewSnap, Views1} = diff_stream_pending(
                 Az,
                 Ops,
                 SV,
@@ -593,31 +603,65 @@ diff_stream(
                 OldItems,
                 OldOrder,
                 Views0
-            );
-        #{} ->
-            VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
-            {ItemSnaps, Views1} = arizona_eval:eval_stream_items(
-                VKeys,
-                Source#stream.items,
-                Tmpl,
-                Views0
             ),
-            NewSnap = #{
-                t => ?EACH,
-                items => ItemSnaps,
-                order => VKeys,
-                source => Source,
-                template => Tmpl,
-                %% A full render reflects the whole post-op state, so every op
-                %% queued so far counts as consumed.
-                drained => arizona_stream:drain_mark(Source)
-            },
-            %% Container full render (the slot did not previously hold a stream,
-            %% so there is no order to diff against). Marker-aware `?OP_TEXT`
-            %% -- see `make_op/3`'s stream `?EACH` clause.
-            HTML = arizona_render:zip_stream_fp(Tmpl, ItemSnaps, VKeys),
-            {[[?OP_TEXT, Az, HTML]], NewSnap, Views1}
+            case stream_outgrows_re_render(StreamOps, Tmpl, OldSnap, Source) of
+                false -> {StreamOps, NewSnap, Views1};
+                true -> stream_full_render(Az, Source, Tmpl, Views0)
+            end;
+        #{} ->
+            %% The slot did not previously hold a stream, so there is no order to
+            %% diff against.
+            stream_full_render(Az, Source, Tmpl, Views0)
     end.
+
+%% Container full render. Marker-aware `?OP_TEXT` -- see `make_op/3`'s stream
+%% `?EACH` clause.
+stream_full_render(Az, Source, Tmpl, Views0) ->
+    VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
+    {ItemSnaps, Views1} = arizona_eval:eval_stream_items(
+        VKeys,
+        Source#stream.items,
+        Tmpl,
+        Views0
+    ),
+    NewSnap = #{
+        t => ?EACH,
+        items => ItemSnaps,
+        order => VKeys,
+        source => Source,
+        template => Tmpl,
+        %% A full render reflects the whole post-op state, so every op queued so
+        %% far counts as consumed.
+        drained => arizona_stream:drain_mark(Source)
+    },
+    HTML = arizona_render:zip_stream_fp(Tmpl, ItemSnaps, VKeys),
+    {[[?OP_TEXT, Az, HTML]], NewSnap, Views1}.
+
+%% The same question `outgrows_re_render/3` asks for a list, with two differences.
+%%
+%% A stream carrying CHILD VIEWS is never collapsed. The incremental path keeps their
+%% bookkeeping (`merge_stream_child_views/4`: old minus deleted plus rendered); the
+%% full render has none, so re-rendering would re-mount every child and reset its
+%% state. Bytes are not worth that.
+%%
+%% And the drain does not visit every item, so unlike the list walk there is nothing
+%% free to accumulate. The wholesale side is estimated from the OLD items' average
+%% size against the NEW visible count, which is close whenever items are alike -- and
+%% the bias and the absolute floor absorb the error either way.
+stream_outgrows_re_render(Ops, Tmpl, OldSnap, Source) ->
+    maps:get(child_views, OldSnap, #{}) =:= #{} andalso
+        stream_outgrows_by_bytes(Ops, Tmpl, maps:get(items, OldSnap), Source).
+
+stream_outgrows_by_bytes(Ops, Tmpl, OldItems, Source) when map_size(OldItems) > 0 ->
+    NewCount = length(arizona_template:visible_keys(Source#stream.order, Source#stream.limit)),
+    AvgItem =
+        lists:sum([item_value_bytes(D) || D <- maps:values(OldItems)]) div map_size(OldItems),
+    Whole = re_render_bytes(Tmpl, AvgItem * NewCount, NewCount),
+    Positional = wire_bytes(Ops),
+    Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
+        Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM;
+stream_outgrows_by_bytes(_Ops, _Tmpl, _OldItems, _Source) ->
+    false.
 
 diff_stream_pending(Az, [], {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
     apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
@@ -929,10 +973,6 @@ maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, 
 %% and it has to save something worth having in absolute terms too. A small container
 %% can be 2x cheaper to re-render while the saving is a hundred-odd bytes, which is
 %% not a trade worth losing an in-progress selection over.
--define(RE_RENDER_BIAS_NUM, 3).
--define(RE_RENDER_BIAS_DEN, 2).
--define(RE_RENDER_MIN_SAVING, 512).
-
 outgrows_re_render({SubOps, ValueBytes}, Tmpl, NewItemsList) ->
     Positional = wire_bytes(SubOps),
     Whole = re_render_bytes(Tmpl, ValueBytes, length(NewItemsList)),
