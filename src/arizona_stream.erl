@@ -192,6 +192,8 @@ process clears it after every drain and neither the memory nor the queue grows.
 
 -doc """
 Creates an empty stream with the given key function.
+
+The queue opens with a genesis reset (see `new/3`).
 """.
 -spec new(KeyFun) -> stream() when
     KeyFun :: key_fun().
@@ -200,7 +202,7 @@ new(KeyFun) when is_function(KeyFun, 1) ->
         key = KeyFun,
         items = #{},
         order = {[], []},
-        pending = queue:new(),
+        pending = genesis_pending(),
         limit = infinity,
         on_limit = halt,
         size = 0
@@ -218,8 +220,21 @@ new(KeyFun, Items) when is_function(KeyFun, 1), is_list(Items) ->
 
 -doc """
 Creates a stream pre-populated with `Items` and the given options.
-Each item is queued as a pending insert so the first render emits
-the corresponding ops.
+
+The queue opens with a **genesis reset** -- a `{reset, #{}}` op -- so the
+first render emits the ops for `Items`. A constructor states a whole
+collection, not a delta from one; queueing the items as pending INSERTS
+instead described the delta from empty, which is only a truthful log when
+the slot the stream lands in is itself empty. Bind a freshly constructed
+stream over a slot that already holds one (rather than mutating the stream
+already there) and those inserts are all the differ has to go on: the keys
+the client still holds but the new stream dropped are never mentioned, and
+a key present in both is skipped as a replay -- so a shrink, a reorder and
+an in-place content change all diffed to NOTHING and the stale list stayed
+on screen. The reset op is the one that already means "reconcile the client
+to my current state", so opening with it makes the log truthful for that
+caller without costing the incremental path anything: `undrained_ops/2`
+resumes past it, and a re-drain that replays it is idempotent.
 """.
 -spec new(KeyFun, Items, Opts) -> stream() when
     KeyFun :: key_fun(),
@@ -231,12 +246,11 @@ new(KeyFun, Items, Opts) when is_function(KeyFun, 1), is_list(Items), is_map(Opt
     Keyed = key_items(KeyFun, Items),
     ItemsMap = #{K => V || {K, V} <:- Keyed},
     Order = order_from_keyed(Keyed),
-    Pending = pending_from_keyed(Keyed, queue:new()),
     #stream{
         key = KeyFun,
         items = ItemsMap,
         order = {Order, []},
-        pending = Pending,
+        pending = genesis_pending(),
         limit = Limit,
         on_limit = OnLimit,
         size = map_size(ItemsMap)
@@ -752,14 +766,16 @@ queue_op(Op, Pending) ->
 unstamp(Pending) ->
     [Op || {_Seq, Op} <:- queue:to_list(Pending)].
 
+%% A constructed stream's queue opens from genesis: the same op `reset/1,2`
+%% queues, with `#{}` for the pre-reset items because nothing preceded it.
+genesis_pending() ->
+    queue_op({reset, #{}}, queue:new()).
+
 key_items(_KeyFun, []) -> [];
 key_items(KeyFun, [I | Rest]) -> [{KeyFun(I), I} | key_items(KeyFun, Rest)].
 
 order_from_keyed([]) -> [];
 order_from_keyed([{K, _} | Rest]) -> [K | order_from_keyed(Rest)].
-
-pending_from_keyed([], Q) -> Q;
-pending_from_keyed([{K, I} | Rest], Q) -> pending_from_keyed(Rest, queue_op({insert, K, I, -1}, Q)).
 
 order_insert_at(Order, Key, 0) -> [Key | Order];
 order_insert_at([], Key, _Pos) -> [Key];

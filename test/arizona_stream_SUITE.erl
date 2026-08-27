@@ -36,6 +36,7 @@
     nested_stream_redrain_reset_falls_back_to_full_drain/1,
     divergent_stream_forks_do_not_share_a_drain_mark/1,
     drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt/1,
+    constructed_stream_queues_a_genesis_reset/1,
     derived_stream_bindings_ship_every_insert/1,
     page_add_todo_live/1,
     page_add_todo_then_title_change_then_add_todo/1,
@@ -322,6 +323,7 @@ groups() ->
             nested_stream_redrain_reset_falls_back_to_full_drain,
             divergent_stream_forks_do_not_share_a_drain_mark,
             drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt,
+            constructed_stream_queues_a_genesis_reset,
             derived_stream_bindings_ship_every_insert
         ]},
         %% DataTable handler tests
@@ -2032,8 +2034,8 @@ update_pending_op_carries_changed(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"old">>, other => v}]),
     S1 = arizona_stream:update(S0, 1, #{id => 1, text => <<"new">>, other => v}),
-    %% First op is the initial insert from new/2; the second is our update.
-    [_Insert, {update, 1, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
+    %% First op is new/2's genesis reset; the second is our update.
+    [{reset, #{}}, {update, 1, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
     ?assert(maps:is_key(text, Changed)),
     ?assertNot(maps:is_key(other, Changed)),
     ?assertNot(maps:is_key(id, Changed)).
@@ -2043,7 +2045,7 @@ update_on_missing_key_yields_empty_changed(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun),
     S1 = arizona_stream:update(S0, 999, #{id => 999, text => <<"new">>}),
-    [{update, 999, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
+    [{reset, #{}}, {update, 999, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
     ?assertEqual(#{}, Changed).
 
 %% --- reset/1,2 captures the pre-mutation items map in the pending op -------
@@ -3038,13 +3040,16 @@ divergent_stream_forks_do_not_share_a_drain_mark(Config) when is_list(Config) ->
     SA = arizona_stream:insert(S0, #{id => 1, v => ~"a"}),
     SB = arizona_stream:insert(S0, #{id => 2, v => ~"b"}),
     MarkA = arizona_stream:drain_mark(SA),
+    %% The full drain each fork falls back to opens with `S0`'s genesis reset --
+    %% these are raw stream values, so nothing cleared it. What matters is that
+    %% the fork's OWN insert is in there.
     ?assertEqual(
-        [{insert, 2, #{id => 2, v => ~"b"}, -1}],
+        [{reset, #{}}, {insert, 2, #{id => 2, v => ~"b"}, -1}],
         arizona_stream:undrained_ops(SB, MarkA)
     ),
     %% Symmetric: SA's op must equally survive a mark taken from SB.
     ?assertEqual(
-        [{insert, 1, #{id => 1, v => ~"a"}, -1}],
+        [{reset, #{}}, {insert, 1, #{id => 1, v => ~"a"}, -1}],
         arizona_stream:undrained_ops(SA, arizona_stream:drain_mark(SB))
     ).
 
@@ -3065,17 +3070,45 @@ drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt(Config) when is_list(C
         [{insert, 2, #{id => 2, v => ~"b"}, -1}],
         arizona_stream:undrained_ops(Refilled, Mark)
     ),
-    %% A stream rebuilt from scratch in the same slot shares no stamps at all.
+    %% A stream rebuilt from scratch in the same slot shares no stamps at all,
+    %% so its full drain is its genesis reset -- the op that reconciles whatever
+    %% the client still holds for the slot to the new stream's contents.
     Fresh = arizona_stream:new(KeyFun, [#{id => 3, v => ~"c"}]),
     ?assertEqual(
-        [{insert, 3, #{id => 3, v => ~"c"}, -1}],
+        [{reset, #{}}],
         arizona_stream:undrained_ops(Fresh, Mark)
     ),
     %% Rolled back to an ancestor: the mark names an op the ancestor never had.
+    %% `S0`'s queue was never cleared, so its full drain still opens with the
+    %% genesis reset it was constructed with.
     ?assertEqual(
-        [{insert, 1, #{id => 1, v => ~"a"}, -1}],
+        [{reset, #{}}, {insert, 1, #{id => 1, v => ~"a"}, -1}],
         arizona_stream:undrained_ops(S0, arizona_stream:drain_mark(Refilled))
     ).
+
+%% A constructor states a whole collection; it is not a delta from one. Queueing
+%% its items as pending INSERTS described the delta from an EMPTY collection,
+%% which is a truthful log only when the slot the stream lands in is also empty --
+%% and a stream bound over a slot that already holds one is exactly the case where
+%% it is not. Opening the queue with the reset op instead keeps the log truthful
+%% for every consumer, at no cost to the incremental path.
+constructed_stream_queues_a_genesis_reset(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    ?assertEqual([{reset, #{}}], arizona_stream:pending_ops(arizona_stream:new(KeyFun))),
+    ?assertEqual([{reset, #{}}], arizona_stream:pending_ops(arizona_stream:new(KeyFun, []))),
+    Items = [#{id => 1, v => ~"a"}, #{id => 2, v => ~"b"}],
+    Populated = arizona_stream:new(KeyFun, Items),
+    ?assertEqual([{reset, #{}}], arizona_stream:pending_ops(Populated)),
+    %% The items themselves are in the collection, not the log.
+    ?assertEqual(Items, arizona_stream:to_list(Populated)),
+    %% Later mutations still append behind it.
+    ?assertEqual(
+        [{reset, #{}}, {insert, 3, #{id => 3, v => ~"c"}, -1}],
+        arizona_stream:pending_ops(arizona_stream:insert(Populated, #{id => 3, v => ~"c"}))
+    ),
+    %% And the live process still clears it, so the incremental path is unchanged.
+    #{s := Cleared} = arizona_stream:clear_stream_pending(#{s => Populated}, [s]),
+    ?assertEqual([], arizona_stream:pending_ops(Cleared)).
 
 %% End-to-end version through a real parse-transformed view: bindings hold a
 %% PRISTINE stream plus a rendered one derived from it, and each event re-derives
