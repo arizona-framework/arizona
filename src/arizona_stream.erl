@@ -244,9 +244,7 @@ resumes past it, and a re-drain that replays it is idempotent.
 new(KeyFun, Items, Opts) when is_function(KeyFun, 1), is_list(Items), is_map(Opts) ->
     Limit = maps:get(limit, Opts, infinity),
     OnLimit = maps:get(on_limit, Opts, halt),
-    Keyed = key_items(KeyFun, Items),
-    ItemsMap = #{K => V || {K, V} <:- Keyed},
-    Order = order_from_keyed(Keyed),
+    {ItemsMap, Order} = keyed_items(KeyFun, Items),
     #stream{
         key = KeyFun,
         items = ItemsMap,
@@ -463,9 +461,7 @@ for the actual delta.
     NewItems :: [item()],
     Stream1 :: stream().
 reset(#stream{key = KeyFun, items = OldItems} = S, NewItems) when is_list(NewItems) ->
-    Keyed = key_items(KeyFun, NewItems),
-    ItemsMap = #{K => V || {K, V} <:- Keyed},
-    Order = order_from_keyed(Keyed),
+    {ItemsMap, Order} = keyed_items(KeyFun, NewItems),
     S#stream{
         items = ItemsMap,
         order = {Order, []},
@@ -580,8 +576,17 @@ clear_stream_pending(Bindings, []) ->
     Bindings;
 clear_stream_pending(Bindings, [K | Rest]) ->
     case Bindings of
-        #{K := #stream{} = S} ->
-            clear_stream_pending(Bindings#{K => S#stream{pending = queue:new()}}, Rest);
+        %% Already empty: hand the bindings back untouched rather than rebuilding the
+        %% stream record and the map around it to store a queue equal to the one there.
+        %% A view's streams are mostly untouched by any given event, so this is the
+        %% ordinary case, and it runs per stateful child per evaluation.
+        #{K := #stream{pending = Pending} = S} ->
+            case queue:is_empty(Pending) of
+                true ->
+                    clear_stream_pending(Bindings, Rest);
+                false ->
+                    clear_stream_pending(Bindings#{K => S#stream{pending = queue:new()}}, Rest)
+            end;
         _ ->
             clear_stream_pending(Bindings, Rest)
     end.
@@ -791,11 +796,22 @@ unstamp(Pending) ->
 genesis_pending() ->
     queue_op({reset, #{}}, queue:new()).
 
-key_items(_KeyFun, []) -> [];
-key_items(KeyFun, [I | Rest]) -> [{KeyFun(I), I} | key_items(KeyFun, Rest)].
+%% The items map and the key order in one walk. Keying the list into `[{K, I}]` and
+%% then walking that twice -- once into a map, once into the order -- built an
+%% N-element list of 2-tuples that neither result keeps. `reset/2` is the documented
+%% bulk-mutation path, so this is the walk a view re-deriving its list per event pays.
+%%
+%% The map is threaded FORWARD, before the recursion, so a repeated key still resolves
+%% to the LAST item for it, exactly as the map comprehension did.
+keyed_items(KeyFun, Items) ->
+    keyed_items(KeyFun, Items, #{}).
 
-order_from_keyed([]) -> [];
-order_from_keyed([{K, _} | Rest]) -> [K | order_from_keyed(Rest)].
+keyed_items(_KeyFun, [], Map) ->
+    {Map, []};
+keyed_items(KeyFun, [Item | Rest], Map0) ->
+    Key = KeyFun(Item),
+    {Map, Order} = keyed_items(KeyFun, Rest, Map0#{Key => Item}),
+    {Map, [Key | Order]}.
 
 order_insert_at(Order, Key, 0) -> [Key | Order];
 order_insert_at([], Key, _Pos) -> [Key];
