@@ -551,6 +551,17 @@ lands before whatever was at N, and repeated inserts at one index keep their emi
 order. The suffix strip is skipped at equal lengths, where it costs two reverses and
 cannot produce a pure insert or remove.
 
+The same question is asked of a keyed **stream**, which had no size decision at all:
+every `?OP_INSERT` carries a whole rendered item, so a bulk grow re-sends the item
+statics once per item where one container re-render sends them once in total. Measured
+on a 554-item stream, a grow from 31 items shipped 85.046 bytes against a 14.325-byte
+re-render. Two differences from the list case. The drain does not visit every item, so
+there is nothing free to accumulate and the wholesale side is estimated from the old
+items' average size against the new visible count. And a stream carrying **child views
+is never collapsed**: the incremental path keeps their bookkeeping
+(`merge_stream_child_views/4`) while the container re-render has none, so collapsing
+would re-mount every child and reset its state.
+
 That mostly retires the fallback for insertions -- one op is never worth re-rendering a
 container for. What still reaches it is a long run of removes, which no amount of
 stripping collapses.

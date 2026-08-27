@@ -52,6 +52,9 @@
     diff_each_among_siblings_uses_text_op/1,
     diff_each_among_siblings_to_empty_uses_text_op/1,
     diff_stream_among_siblings_uses_text_op/1,
+    diff_stream_bulk_grow_collapses/1,
+    diff_stream_bulk_append_stays_incremental/1,
+    diff_stream_child_views_never_collapse/1,
     diff_stream_among_siblings_child_view_uses_text_op/1,
     diff_text_op/1,
     no_diff_diff3/1,
@@ -143,6 +146,9 @@ groups() ->
             diff_each_among_siblings_uses_text_op,
             diff_each_among_siblings_to_empty_uses_text_op,
             diff_stream_among_siblings_uses_text_op,
+            diff_stream_bulk_grow_collapses,
+            diff_stream_bulk_append_stays_incremental,
+            diff_stream_child_views_never_collapse,
             diff_stream_among_siblings_child_view_uses_text_op,
             diff_only_changed_emits_ops,
             diff_bool_attr_add,
@@ -922,6 +928,47 @@ stream_siblings_ssr_and_ops(Old, New) ->
     T1 = arizona_stream_siblings:render(B#{items => New}),
     {Ops, _Snap1, _Views1} = arizona_diff:diff(T1, Snap0, Views0, #{items => true}),
     {iolist_to_binary(HTML), Ops}.
+
+%% A keyed stream ships one op per changed item, which is right until the change is
+%% most of the container: every `?OP_INSERT` carries a whole rendered item, so a bulk
+%% grow re-sends the item statics once per item where a container re-render sends
+%% them once in total. `arizona_stream_bulk`'s item template has substantial statics
+%% against a tiny value, which is the shape that amplifies.
+diff_stream_bulk_grow_collapses(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_TEXT, _, #{~"t" := ?EACH}]],
+        bulk_stream_diff(arizona_stream_bulk, 20, 400)
+    ).
+
+%% The common case must not pay for it.
+diff_stream_bulk_append_stays_incremental(Config) when is_list(Config) ->
+    ?assertMatch(
+        %% A stream insert is key-addressed: [?OP_INSERT, Az, Key, Pos, HTML].
+        [[?OP_INSERT, _Az, _Key, _Pos, _HTML]],
+        bulk_stream_diff(arizona_stream_bulk, 400, 401)
+    ).
+
+%% The safety condition, and the reason the two fixtures exist as a pair: they share
+%% an item template and differ only in carrying a `?stateful` child. The incremental
+%% path keeps child-view bookkeeping (`merge_stream_child_views/4`); the container
+%% re-render has none, so collapsing would re-mount every child and reset its state.
+%% The identical change collapses without children and must not with them.
+diff_stream_child_views_never_collapse(Config) when is_list(Config) ->
+    Ops = bulk_stream_diff(arizona_stream_bulk_child, 20, 400),
+    ?assertNotMatch([[?OP_TEXT, _, #{~"t" := ?EACH}]], Ops),
+    ?assertMatch([[?OP_INSERT, _Az, _Key, _Pos, _HTML] | _], Ops).
+
+%% Grow or shrink a keyed stream through `reset/2`, the documented bulk path.
+bulk_stream_diff(Mod, From, To) ->
+    KeyFun = fun(#{id := Id}) -> integer_to_binary(Id) end,
+    Mk = fun(N) -> [#{id => I, label => integer_to_binary(I)} || I <- lists:seq(1, N)] end,
+    S0 = arizona_stream:new(KeyFun, Mk(From)),
+    T0 = Mod:render(#{id => ~"x", items => S0}),
+    {_HTML, Snap0, Views0} = arizona_render:render(T0, #{}),
+    S1 = arizona_stream:reset(S0, Mk(To)),
+    T1 = Mod:render(#{id => ~"x", items => S1}),
+    {Ops, _S, _V} = arizona_diff:diff(T1, Snap0, Views0, #{items => true}),
+    Ops.
 
 %% First emitter: `diff_stream/4`'s no-`order` clause -- the old snapshot was a
 %% map-source each, so there is nothing to diff incrementally and the whole
