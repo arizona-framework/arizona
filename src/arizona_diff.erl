@@ -933,16 +933,16 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
             not has_markerless_slot(NewItemsList),
     case Patchable of
         true ->
-            {{SubOps, ValueBytes}, Views2} =
+            {Sized, Views2} =
                 diff_list_positional(Tmpl, NewItemsList, OldItemsList, 0, Views1),
-            case SubOps of
-                [] ->
+            case Sized of
+                {[], _ValueBytes, _Count} ->
                     {[], NewSnap, Views2};
                 _ ->
                     maybe_list_patch(
                         Az,
                         Tmpl,
-                        {SubOps, ValueBytes},
+                        Sized,
                         NewItemsList,
                         OldItemsList,
                         NewSnap,
@@ -979,10 +979,11 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
 %% for that would be a bad deal. Three quarters shifted is where positional turns
 %% decisively bigger (30-40% more bytes at 10 and 40 items) while touching nearly
 %% every node anyway, so that is where it hands over.
-maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, Views2) ->
-    case outgrows_re_render(SubOps, Tmpl, NewItemsList) of
+maybe_list_patch(Az, Tmpl, Sized, NewItemsList, OldItemsList, NewSnap, Views1, Views2) ->
+    case outgrows_re_render(Sized, Tmpl) of
         false ->
-            {[[?OP_LIST_PATCH, Az, element(1, SubOps)]], NewSnap, Views2};
+            {SubOps, _ValueBytes, _Count} = Sized,
+            {[[?OP_LIST_PATCH, Az, SubOps]], NewSnap, Views2};
         true ->
             diff_list_full(Az, Tmpl, NewItemsList, OldItemsList, NewSnap, Views1)
     end.
@@ -1014,9 +1015,9 @@ maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, 
 %% and it has to save something worth having in absolute terms too. A small container
 %% can be 2x cheaper to re-render while the saving is a hundred-odd bytes, which is
 %% not a trade worth losing an in-progress selection over.
-outgrows_re_render({SubOps, ValueBytes}, Tmpl, NewItemsList) ->
+outgrows_re_render({SubOps, ValueBytes, Count}, Tmpl) ->
     Positional = wire_bytes(SubOps),
-    Whole = re_render_bytes(Tmpl, ValueBytes, length(NewItemsList)),
+    Whole = re_render_bytes(Tmpl, ValueBytes, Count),
     Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
         Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM.
 
@@ -1180,9 +1181,9 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% plus a single tail insert/remove -- correct (the new list is reproduced
 %% exactly) and minimal in childList churn; identity across reorders is the keyed
 %% `arizona_stream`'s job, not a plain list's.
-%% Returns `{{SubOps, ValueBytes}, Views}`. `ValueBytes` is the size of every NEW
-%% item's values, accumulated here because this walk already visits them -- it is
-%% what `outgrows_re_render/3` prices the wholesale alternative with.
+%% Returns `{{SubOps, ValueBytes, Count}, Views}`. `ValueBytes` and `Count` describe
+%% every NEW item, accumulated here because this walk already visits them -- they are
+%% what `outgrows_re_render/2` prices the wholesale alternative with.
 %% Entry point. Strip the unchanged head and tail FIRST, then diff only the middle.
 %% Without that, a head insert reads as "every position differs" and emits one item
 %% patch per item plus a tail append -- each patch carrying the value of the item that
@@ -1194,11 +1195,19 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% past the end), and repeated inserts at one index keep their emitted order because
 %% each lands immediately before the same unmoved reference node.
 diff_list_positional(Tmpl, NewItems, OldItems, Idx0, Views0) ->
-    AllBytes = lists:foldl(fun(D, A) -> A + item_value_bytes(D) end, 0, NewItems),
+    {AllCount, AllBytes} = count_value_bytes(NewItems, 0, 0),
     {Common, NewRest, OldRest} = strip_common_prefix(NewItems, OldItems, 0),
     {NewMid, OldMid} = maybe_strip_common_suffix(NewRest, OldRest),
     {Ops, Views1} = diff_list_middle(Tmpl, NewMid, OldMid, Idx0 + Common, Views0),
-    {{Ops, AllBytes}, Views1}.
+    {{Ops, AllBytes, AllCount}, Views1}.
+
+%% The wholesale estimate needs the item count beside the value bytes, and this walk
+%% is already the one pass over every new item -- so it carries the count out too,
+%% rather than leaving `length/1` to walk the same list again for it.
+count_value_bytes([], Count, Bytes) ->
+    {Count, Bytes};
+count_value_bytes([ItemD | Rest], Count, Bytes) ->
+    count_value_bytes(Rest, Count + 1, Bytes + item_value_bytes(ItemD)).
 
 strip_common_prefix([Same | NR], [Same | OR], N) ->
     strip_common_prefix(NR, OR, N + 1);
