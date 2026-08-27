@@ -90,11 +90,10 @@ prof_render_view_page(Label, Opts) ->
     %% stateful children). Exercises the multi-child snapshot path:
     %% arizona_template:stateful, arizona_render:make_ssr_child_snap, and
     %% child-view fingerprint propagation.
-    Req = arizona_req_test_adapter:new(),
-    Sample = arizona_render:render_view_to_iolist(arizona_page, Req, #{}),
+    Sample = arizona_render:render_view_to_iolist(arizona_page, #{}),
     sanity_render(arizona_page, Sample),
     Op = fun() ->
-        arizona_render:render_view_to_iolist(arizona_page, Req, #{})
+        arizona_render:render_view_to_iolist(arizona_page, #{})
     end,
     profile_loop(Label, Op, Opts).
 
@@ -105,11 +104,10 @@ prof_render_each_100(Label, Opts) ->
     %% the per-item iteration path real apps rely on.
     Tags = [iolist_to_binary(io_lib:format("tag~b", [I])) || I <- lists:seq(1, 100)],
     Bindings = #{bindings => #{tags => Tags}},
-    Req = arizona_req_test_adapter:new(),
-    Sample = arizona_render:render_view_to_iolist(arizona_about, Req, Bindings),
+    Sample = arizona_render:render_view_to_iolist(arizona_about, Bindings),
     sanity_render(arizona_about, Sample),
     Op = fun() ->
-        arizona_render:render_view_to_iolist(arizona_about, Req, Bindings)
+        arizona_render:render_view_to_iolist(arizona_about, Bindings)
     end,
     profile_loop(Label, Op, Opts).
 
@@ -230,11 +228,10 @@ prof_render_view_page_dyn_js(Label, Opts) ->
         ]
     ),
     RenderOpts = #{bindings => #{todos => Todos}},
-    Req = arizona_req_test_adapter:new(),
-    Sample = arizona_render:render_view_to_iolist(arizona_page, Req, RenderOpts),
+    Sample = arizona_render:render_view_to_iolist(arizona_page, RenderOpts),
     sanity_render(arizona_page, Sample),
     Op = fun() ->
-        arizona_render:render_view_to_iolist(arizona_page, Req, RenderOpts)
+        arizona_render:render_view_to_iolist(arizona_page, RenderOpts)
     end,
     profile_loop(Label, Op, Opts).
 
@@ -250,11 +247,10 @@ prof_render_nested_each(Label, Opts) ->
     %% render, dominating the profile.
     Sections = generate_nested_sections(),
     RenderOpts = #{bindings => #{sections => Sections}},
-    Req = arizona_req_test_adapter:new(),
-    Sample = arizona_render:render_view_to_iolist(arizona_bench_nested_each, Req, RenderOpts),
+    Sample = arizona_render:render_view_to_iolist(arizona_bench_nested_each, RenderOpts),
     sanity_render(arizona_bench_nested_each, Sample),
     Op = fun() ->
-        arizona_render:render_view_to_iolist(arizona_bench_nested_each, Req, RenderOpts)
+        arizona_render:render_view_to_iolist(arizona_bench_nested_each, RenderOpts)
     end,
     profile_loop(Label, Op, Opts).
 
@@ -282,11 +278,10 @@ prof_render_stateful_chain(Label, Opts) ->
     %% recursive `arizona_render:render_ssr_val/1` propagation through
     %% nested `?stateful(...)` descriptors -- something the flat
     %% `render_view_page` (single-level stateful children) can't show.
-    Req = arizona_req_test_adapter:new(),
-    Sample = arizona_render:render_view_to_iolist(arizona_bench_chain_a, Req, #{}),
+    Sample = arizona_render:render_view_to_iolist(arizona_bench_chain_a, #{}),
     sanity_render(arizona_bench_chain_a, Sample),
     Op = fun() ->
-        arizona_render:render_view_to_iolist(arizona_bench_chain_a, Req, #{})
+        arizona_render:render_view_to_iolist(arizona_bench_chain_a, #{})
     end,
     profile_loop(Label, Op, Opts).
 
@@ -455,7 +450,7 @@ prof_stream_with_child_100(Label, Opts) ->
     %% stateful) nor `render_stateful_chain` (3-level chain, no
     %% stream) covers.
     %%
-    %% `render_view_to_iolist/3` can't drive this -- inline stateful
+    %% `render_view_to_iolist/2` can't drive this -- inline stateful
     %% descriptors inside `?each` aren't unfolded by the standalone
     %% render path; only the live process's SSR snapshot path handles
     %% them. So we route through `mount_and_render/1` and seed eprof
