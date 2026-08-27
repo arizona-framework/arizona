@@ -717,7 +717,7 @@ stream_outgrows_re_render(Ops, Tmpl, OldSnap, Source) ->
 
 stream_outgrows_by_bytes(Ops, Tmpl, OldItems, Source) when map_size(OldItems) > 0 ->
     NewCount = visible_count(Source),
-    AvgItem = sum_item_value_bytes(maps:next(maps:iterator(OldItems)), 0) div map_size(OldItems),
+    AvgItem = sum_item_value_bytes(maps:values(OldItems), 0) div map_size(OldItems),
     Whole = re_render_bytes(Tmpl, AvgItem * NewCount, NewCount),
     Positional = wire_bytes(Ops),
     Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
@@ -734,12 +734,15 @@ visible_count(#stream{limit = infinity, size = Size}) ->
 visible_count(#stream{limit = Limit, size = Size}) ->
     min(Size, Limit).
 
-%% Total value bytes over an item map, walked through its iterator: `maps:values/1`
-%% would materialise every item snapshot into a list just to sum over it.
-sum_item_value_bytes(none, Acc) ->
+%% Total value bytes over the item snapshots. Summing the walk directly saves the
+%% intermediate list of per-item sizes that a comprehension plus `lists:sum/1` builds
+%% (~30% over 100 items). The values themselves still come from `maps:values/1`:
+%% stepping the map's own iterator would save that list too, but costs more per entry
+%% -- measured slower at 10 items and level at 1000.
+sum_item_value_bytes([], Acc) ->
     Acc;
-sum_item_value_bytes({_Key, ItemD, Iter}, Acc) ->
-    sum_item_value_bytes(maps:next(Iter), Acc + item_value_bytes(ItemD)).
+sum_item_value_bytes([ItemD | Rest], Acc) ->
+    sum_item_value_bytes(Rest, Acc + item_value_bytes(ItemD)).
 
 %% An empty drain carries no information about whether the container changed -- it
 %% means either "nothing happened" or "the log was wiped and anything may have
