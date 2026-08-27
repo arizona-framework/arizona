@@ -290,14 +290,10 @@ stream_relist(
     %% `handle_update/3`, so a child that subscribes or arms a timer does it twice
     %% per diff.
     NewSet = maps:from_keys(NewOrder, true),
-    RemOps = [
-        [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K <- OldOrder, not is_map_key(K, NewSet)
-    ],
     Kept = maps:with(NewOrder, OldItems),
     MoveOps = compute_reorder_ops(Az, OldOrder, NewOrder, Kept, NewItems, Tail),
     {ItemOps, Views1} = relist_items(Az, NewOrder, NewItems, OldItems, Tmpl, Views, MoveOps),
-    {RemOps ++ ItemOps, Views1};
+    {dropped_key_ops(Az, OldOrder, NewSet, ItemOps), Views1};
 stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views).
 
@@ -326,6 +322,22 @@ relist_items(Az, [K | Rest], NewItems, OldItems, Tmpl, Views0, Tail) ->
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML],
             {RestOps, Views1} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views0, Tail),
             {[InsOp | RestOps], Views1}
+    end.
+
+%% An `?OP_REMOVE` for every old key `Keys` no longer holds, consed onto `Tail` --
+%% the ops that follow the removals on the wire. They lead, so a comprehension would
+%% have to build the whole list only to append it to what comes after.
+dropped_key_ops(_Az, [], _Keys, Tail) ->
+    Tail;
+dropped_key_ops(Az, [K | Rest], Keys, Tail) ->
+    case Keys of
+        #{K := _} ->
+            dropped_key_ops(Az, Rest, Keys, Tail);
+        #{} ->
+            [
+                [?OP_REMOVE, Az, arizona_template:to_bin(K)]
+                | dropped_key_ops(Az, Rest, Keys, Tail)
+            ]
     end.
 
 %% Can this stream's change be expressed by draining its pending log?
