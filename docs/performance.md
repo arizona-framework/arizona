@@ -63,20 +63,41 @@ any profile row, divide its time by its call count and ask whether that per-call
 figure is physically plausible for what the function does; a per-byte walker and a
 BIF call in the same table are not on the same scale.
 
-**A microbench over a small collection can invent an effect.** Benchmarking a change
-by driving it through a realistic-looking 3-element list showed a 74 ns regression
-that vanished entirely once the changed clause was measured on its own -- its real
-cost was 8-13 ns. The surrounding walk contributes enough variance to manufacture a
-delta several times the size of the thing under test. Isolate to the one function you
-changed before believing any number from a collection-shaped benchmark.
+**Benchmarking a function THROUGH A CALLER invents effects.** Driving a changed clause
+through a realistic-looking 3-element list showed a 74 ns regression that vanished
+entirely once the clause was measured on its own -- its real cost was 8-13 ns. The same
+setup produced a second phantom when the caller was a whole request. Both times the
+surrounding walk contributed enough variance to manufacture a delta several times the
+size of the thing under test, and both times isolating to the single function killed
+it. Calling through a caller is the tell: measure the function you changed.
 
-**A result does not transfer between modules without re-measuring.** Two modules asked
-the same question -- is a tail-recursive `<<Acc/binary, B>>` accumulator faster than
-consing an iolist and flattening once? -- and got opposite answers, both correct.
-Building lowercased HTTP header names (4-30 bytes) the iolist wins; escaping a template
-value the binary append wins, and by 2x from 200 bytes up. The crossover is around 20
-bytes, so the answer is decided entirely by each module's input length distribution.
-Numbers below are from `arizona_html:escape/2`:
+**A result does not transfer between modules without re-measuring, and the reason is
+not just input size.** Two builders asked the same question -- is a tail-recursive
+`<<Acc/binary, B>>` accumulator faster than consing an iolist and flattening once? --
+and got different answers, both correct. Both curves cross, but at different places and
+with different stakes:
+
+| input size | `arizona_html:escape/2` | lowercasing header names (roadrunner) |
+| ---------- | ----------------------- | ------------------------------------- |
+| 5B | iolist | iolist |
+| 10B | iolist | iolist |
+| 20B | append (marginal) | iolist |
+| 30B | -- | crossover |
+| 50-100B | -- | append |
+| 200B | append | append |
+| 500B | append | append |
+
+Two differences, and the second is the one that would have misled. The crossover sits
+near 20 bytes for one and 30-50 for the other. And past it `escape/2`'s append pulls
+away to roughly **twice** as fast (1170 ns against 2261 at 200 bytes) where the
+lowercase walk's never exceeds ~16%. The reason is what each builder emits PER INPUT
+BYTE: `escape/2` writes a multi-byte entity for a metacharacter, `ascii_lowercase_walk`
+conses exactly one cell per byte. Same question, same winner past the crossover,
+completely different stakes -- reading either curve off the other predicts the wrong
+shape. Re-measure per function, not per question.
+
+The full `escape/2` numbers, including a third variant that batches runs of ordinary
+bytes into slices:
 
 | input | binary append | iolist | iolist, sliced runs |
 | ----- | ------------- | ------ | ------------------- |
