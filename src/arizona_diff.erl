@@ -450,7 +450,7 @@ diff_each(
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {ListOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
+    {prepend_each_op(ListOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
 diff_each(
     Az, #{source := Source} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
 ) when is_map(Source) ->
@@ -464,7 +464,17 @@ diff_each(
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
-    {MapOps ++ OpsRest, [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
+    {prepend_each_op(MapOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
+
+%% A list- or map-source `?each` container answers with exactly one op or none -- a
+%% positional patch, a wholesale re-render, or nothing at all -- so its result reaches
+%% the ops that follow it by consing. `++` would call out to walk a list that is never
+%% longer than a single cell. A stream container is the one that can answer with many,
+%% and it appends (see `diff_each/9`'s stream clause).
+prepend_each_op([], Tail) ->
+    Tail;
+prepend_each_op([Op], Tail) ->
+    [Op | Tail].
 
 %% Incremental stream child_views: old - deleted + rendered.
 merge_stream_child_views(Source, Old, LocalNew, Old0) ->
