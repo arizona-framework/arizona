@@ -109,6 +109,8 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Skip the second `classify_trusted/1` per escaped value | (measured together with the fuse above) |
 | Keep the drain's accumulator when it exhausts the queue | halves `undrained_ops/2` on the ordinary path |
 | Carry a stream's child views only when it has any | avoids draining the whole pending queue per stream diff |
+| Key a stream's items and order in one walk | `reset/2`/`new/3` -30% at 100 items |
+| Skip clearing a stream queue that is already empty | -8% per untouched stream, and no record rebuilt |
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:
@@ -149,6 +151,20 @@ allocation bites (1000 of 1000: 28.6us vs 16.2us). Op builders here usually emit
 ops, so body recursion stayed. Worth re-measuring for any builder whose output is
 dense.
 
+**Decorate-sort-undecorate in `arizona_stream:sort/2`.** Replacing the comparator's
+two `maps:get/2` per comparison (~2*N*log2(N) lookups) with one lookup per element
+wins only for large streams: **-37%** at N=1000, but **+139%** at N=33 and **+4%** at
+N=100. The crossover is where the items map stops being a flat array and the lookups
+start to cost, which is not a boundary worth encoding as a magic threshold -- gating
+on `map_size > 32` was measured too and is exactly where the +139% lands. Left alone.
+
+**Rewriting `clear_stream_pending/2` as a single iterator pass.** Replacing the
+`stream_keys/1` comprehension plus the keyed walk with one `maps:next/1` walk measured
+**+27% to +47%** across every shape tried, for the same reason as
+`compute_item_changed/2`: a map comprehension is a compiled generator, stepping an
+iterator from Erlang is not. Only the narrower half of that idea survived -- skipping
+the rebuild when the queue is already empty.
+
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
 1000; the comprehension plus `lists:sum/1` it replaced was the slowest of the three
@@ -164,19 +180,13 @@ Ranked by expected value. Nothing here has been measured end to end.
    directly per item would remove it, but the tree is load-bearing for nested
    snapshots and `maybe_propagate/2`, so this is a redesign of the SSR path rather
    than a local change.
-2. **`arizona_stream:clear_stream_pending/2`** -- called as
-   `clear_stream_pending(B, stream_keys(B))`, which walks the bindings map twice and
-   rebuilds every stream record even when its queue is already empty. Runs per
-   stateful child per evaluation.
-3. **`arizona_stream:sort/2`** -- `lists:sort/2` with a comparator that does two
-   `maps:get/2` per comparison, so ~2*N*log2(N) lookups. Decorate-sort-undecorate
-   makes it N.
-4. **`arizona_stream:reset/2` and `new/3`** -- build an intermediate `[{Key, Item}]`
-   list and walk it twice. `reset/2` is the documented bulk-mutation path.
-5. **`arizona_render:render/1`** -- builds a list of unwrapped values and then zips
-   it, although `zip_d/3` already walks pairs in one pass. On the connect/navigate
-   path, not per event.
-6. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+2. **`arizona_render:render/2`** -- `unzip_triples/2` builds three lists in one walk
+   and `zip/3` then walks the values list; `zip_stream_item/3` could walk the triples
+   directly and save one list. Not done: it runs once per WS connect and per navigate,
+   not per event, so the saving is N cons cells on a cold path. Note the sibling
+   `render/1` IS one-pass now, but it is test-only (`-ignore_xref`), so that change
+   bought production nothing -- check the caller before valuing a render-path find.
+3. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the
