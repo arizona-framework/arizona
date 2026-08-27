@@ -657,10 +657,30 @@ and is scoped by the same `#{s, d}` path as an inline nested template.
     Az :: az(),
     Value :: term().
 scope_slot(Az, Value) when is_binary(Az) ->
-    scope_val(colon_free(Az), Value);
+    %% Ask the VALUE first. Only a nested snapshot is ever prefixed -- every other
+    %% shape `scope_val/2` can be handed comes back untouched -- and a scalar is what
+    %% nearly every content slot holds. Building the prefix regardless meant
+    %% `binary:replace/4` on every one of them: a pure-Erlang wrapper that compiles
+    %% the pattern, allocates a closure and copies the `az` into a fresh binary, all
+    %% to hand back a namespace nothing would read. That is ~125ns a slot, per
+    %% evaluation, on every render and every re-evaluated dynamic.
+    case scopable(Value) of
+        true -> scope_val(colon_free(Az), Value);
+        false -> Value
+    end;
 scope_slot(_Az, Value) ->
     %% Undefined slot az (an az-nodiff slot): no target to namespace against.
     Value.
+
+%% Mirrors `scope_val/2` clause for clause: `true` exactly where that function does
+%% something other than hand its argument back. Keep the two in step -- a shape that
+%% answers `false` here can never be prefixed, however `scope_val/2` treats it.
+scopable({arizona_esc, Val}) -> scopable(Val);
+scopable(#{view_id := _}) -> false;
+scopable(#{t := ?EACH}) -> false;
+scopable(#{az_local := _}) -> false;
+scopable(#{s := _, d := _}) -> true;
+scopable(_Val) -> false.
 
 colon_free(Az) ->
     binary:replace(Az, ~":", ~"-", [global]).
