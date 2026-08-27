@@ -1216,10 +1216,20 @@ strip_common_prefix(NewRest, OldRest, N) ->
 %% common case is a value changing in place, so paying two reverses there is the whole
 %% cost of this optimisation with none of its benefit.
 maybe_strip_common_suffix(New, Old) ->
-    case length(New) =:= length(Old) of
+    case same_length(New, Old) of
         true -> {New, Old};
         false -> strip_common_suffix(New, Old)
     end.
+
+%% Comparing two `length/1` calls walks BOTH lists to the end, even when one ran out
+%% a hundred items ago. The lockstep walk stops at the shorter one, and that is the
+%% side this guard cares about -- it asks whether the lengths differ, not by how much.
+same_length([], []) ->
+    true;
+same_length([_New | NR], [_Old | OR]) ->
+    same_length(NR, OR);
+same_length(_New, _Old) ->
+    false.
 
 strip_common_suffix(New, Old) ->
     {_N, RevNew, RevOld} = strip_common_prefix(lists:reverse(New), lists:reverse(Old), 0),
