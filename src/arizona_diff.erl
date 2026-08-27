@@ -340,6 +340,23 @@ dropped_key_ops(Az, [K | Rest], Keys, Tail) ->
             ]
     end.
 
+%% The same removals over a SNAPSHOT map instead of an order list. The restriction of
+%% that map to the visible window (`Kept`) already answers "did this key fall out?",
+%% so probing it needs no separate visible-key set. Walked through an iterator: a map
+%% comprehension would materialise the list these ops lead.
+pruned_key_ops(Az, Iter, Kept, Tail) ->
+    case maps:next(Iter) of
+        none ->
+            Tail;
+        {K, _ItemD, Iter1} when is_map_key(K, Kept) ->
+            pruned_key_ops(Az, Iter1, Kept, Tail);
+        {K, _ItemD, Iter1} ->
+            [
+                [?OP_REMOVE, Az, arizona_template:to_bin(K)]
+                | pruned_key_ops(Az, Iter1, Kept, Tail)
+            ]
+    end.
+
 %% Can this stream's change be expressed by draining its pending log?
 %%
 %% `diff_stream/4` derives its ops purely by draining that log, and the log is
@@ -900,18 +917,17 @@ stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
 stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     {Source, _Vis} = SV,
     VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
-    VSet = maps:from_keys(VKeys, true),
-    RemOps = [
-        [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-     || K := _ <- SnapAcc, not is_map_key(K, VSet)
-    ],
     Kept = maps:with(VKeys, SnapAcc),
     {DiffOps, NewSnaps, Views1} =
         smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
     {RestOps, FinalSnap, Views2} =
         diff_stream_pending(Az, Rest, SV, Tmpl, NewSnaps, VKeys, Views1),
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps, RestOps),
-    {RemOps ++ DiffOps ++ MoveOps, FinalSnap, Views2}.
+    %% This append is structural: the moves and the rest of the drain both need the
+    %% post-reset snapshot, which only the item walk above can produce -- so the
+    %% walk's ops cannot cons onto a tail that does not exist when it runs. The
+    %% removals lead everything, and those do cons.
+    ResetOps = DiffOps ++ compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps, RestOps),
+    {pruned_key_ops(Az, maps:iterator(SnapAcc), Kept, ResetOps), FinalSnap, Views2}.
 
 diff_list(Az, #{source := Items, template := Tmpl}, OldSnap, Views0) ->
     {NewItemsList, Views1} = arizona_eval:render_list_items(Items, Tmpl, Views0),
@@ -1375,20 +1391,17 @@ apply_limit(
         true ->
             %% Fast path -- the frame didn't touch window membership or order
             %% (e.g. a single visible-item content update): nothing fell out,
-            %% nothing to back-fill, so skip the VSet/RemOps/Pruned passes and
-            %% their map allocations entirely.
+            %% nothing to back-fill, so skip the pruning passes and their map
+            %% allocations entirely.
             {[], post_drain_snap(SnapItems, VKeys, Tmpl, Source), Views0};
         false ->
-            VSet = maps:from_keys(VKeys, true),
-            RemOps = [
-                [?OP_REMOVE, Az, arizona_template:to_bin(K)]
-             || K := _ <- SnapItems, not is_map_key(K, VSet)
-            ],
-            Pruned = #{K => V || K := V <- SnapItems, is_map_key(K, VSet)},
+            %% The window's survivors, which double as the "did this key fall out?"
+            %% probe the removals need.
+            Pruned = maps:with(VKeys, SnapItems),
             {InsOps, Final, Views1} =
                 snap_add_missing(Az, VKeys, Pruned, ItemsMap, Tmpl, Views0),
             {
-                RemOps ++ InsOps,
+                pruned_key_ops(Az, maps:iterator(SnapItems), Pruned, InsOps),
                 post_drain_snap(Final, VKeys, Tmpl, Source),
                 Views1
             }
