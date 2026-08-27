@@ -47,6 +47,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 %% --------------------------------------------------------------------
 
 -export([eval_dynamics/1]).
+-export([eval_item_value/1]).
 -export([eval_dynamics_v/2]).
 -export([eval_one_v_flat/2]).
 -export([eval_each_def/1]).
@@ -55,7 +56,6 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([render_stream_item_skipping/6]).
 -export([render_stream_items_simple/3]).
 -export([render_list_items/3]).
--export([render_list_items_simple/2]).
 -export([render_map_items/3]).
 -export([render_map_items_simple/2]).
 -export([check_restricted_keys/3]).
@@ -256,9 +256,11 @@ Renders list items with view tracking. Returns `{[ItemD], Views1}`.
 render_list_items(Items, #{d := DFun}, Views) ->
     render_list_items1(Items, DFun, Views).
 
--doc """
-Renders list items without view tracking. Returns `[ItemD]`.
-""".
+%% Renders list items without view tracking. Returns `[ItemD]`.
+%%
+%% Not exported: the SSR path renders a plain-list each straight to output and keeps no
+%% snapshot, so `eval_val/1` -- the live evaluator, whose snapshot the next diff reads
+%% -- is the only caller left.
 -spec render_list_items_simple(Items, Template) -> ItemDs when
     Items :: [term()],
     Template :: map(),
@@ -394,14 +396,30 @@ eval_one({Az, Spec}) ->
 %% chained `[{Az, Val, #{}} || {Az, Val} <- eval_dynamics(...)]`, which
 %% allocated an intermediate 2-tuple list and re-walked it. The simple
 %% snapshot path doesn't track deps, so the empty map literal is shared.
-eval_one_triple({Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
-    {Az, {attr, Name, eval_val(Fun())}, #{}};
-eval_one_triple({Az, Spec, _Loc}) ->
-    {Az, arizona_template:scope_slot(Az, eval_val(Spec)), #{}};
-eval_one_triple({Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
-    {Az, {attr, Name, eval_val(Fun())}, #{}};
-eval_one_triple({Az, Spec}) ->
-    {Az, arizona_template:scope_slot(Az, eval_val(Spec)), #{}}.
+eval_one_triple({Az, _Spec, _Loc} = Dyn) ->
+    {Az, eval_item_value(Dyn), #{}};
+eval_one_triple({Az, _Spec} = Dyn) ->
+    {Az, eval_item_value(Dyn), #{}}.
+
+-doc """
+The value an item dynamic evaluates to, without the `{Az, Value, Deps}` wrapper.
+
+The SSR path renders each item straight to its backend's output, so the triple -- and
+the per-item list of them, and the list of those -- is structure it would only take
+apart again.
+The paths that keep a snapshot still want the wrapper, and get it from
+`eval_one_triple/1`, which is this plus the address.
+""".
+-spec eval_item_value(Dynamic) -> term() when
+    Dynamic :: tuple().
+eval_item_value({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
+    {attr, Name, eval_val(Fun())};
+eval_item_value({Az, Spec, _Loc}) ->
+    arizona_template:scope_slot(Az, eval_val(Spec));
+eval_item_value({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
+    {attr, Name, eval_val(Fun())};
+eval_item_value({Az, Spec}) ->
+    arizona_template:scope_slot(Az, eval_val(Spec)).
 
 eval_val({esc, Fun}) when is_function(Fun, 0) ->
     arizona_template:mark_esc(eval_val(Fun()));

@@ -109,6 +109,9 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Skip the second `classify_trusted/1` per escaped value | (measured together with the fuse above) |
 | Keep the drain's accumulator when it exhausts the queue | halves `undrained_ops/2` on the ordinary path |
 | Carry a stream's child views only when it has any | avoids draining the whole pending queue per stream diff |
+| Key a stream's items and order in one walk | `reset/2`/`new/3` -30% at 100 items |
+| Skip clearing a stream queue that is already empty | -8% per untouched stream, and no record rebuilt |
+| Render a plain-list `?each` straight to output during SSR | `render_each_100` -18% |
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:
@@ -119,6 +122,18 @@ and the wholesale side is never negative, so a patch no bigger than the floor ca
 beat it by the floor, whatever the items weigh. The answer is settled by the ops
 alone. It was being computed on every drain, including the overwhelmingly common one
 that patches a single field.
+
+The **SSR each tree** was the one item on this list that had been written off as a
+redesign, and it took a different kind of check to unblock: not a measurement but a
+reachability argument. It built a `{Az, Value, Deps}` triple per dynamic, a list of
+those per item and a list of those, which the walk that turns them into output reads
+once and drops. That looked load-bearing because the same shape feeds
+`render_fp_val/2` and the hydration payload -- until every consumer of it turned out
+to live in `arizona_diff` and the LIVE render path, both of which keep a snapshot the
+next diff reads. The SSR family keeps none, so on that path alone the tree is pure
+overhead, and a `{ssr_rendered, _}` marker lets the items render as the walk reaches
+them. Worth remembering as a technique: when a structure looks required, enumerate who
+actually reads it before believing it.
 
 The **slot `az` prefix** was built by `binary:replace/4` before looking at the value.
 That is a pure-Erlang wrapper: it compiles the pattern, allocates a closure and copies
@@ -149,6 +164,20 @@ allocation bites (1000 of 1000: 28.6us vs 16.2us). Op builders here usually emit
 ops, so body recursion stayed. Worth re-measuring for any builder whose output is
 dense.
 
+**Decorate-sort-undecorate in `arizona_stream:sort/2`.** Replacing the comparator's
+two `maps:get/2` per comparison (~2*N*log2(N) lookups) with one lookup per element
+wins only for large streams: **-37%** at N=1000, but **+139%** at N=33 and **+4%** at
+N=100. The crossover is where the items map stops being a flat array and the lookups
+start to cost, which is not a boundary worth encoding as a magic threshold -- gating
+on `map_size > 32` was measured too and is exactly where the +139% lands. Left alone.
+
+**Rewriting `clear_stream_pending/2` as a single iterator pass.** Replacing the
+`stream_keys/1` comprehension plus the keyed walk with one `maps:next/1` walk measured
+**+27% to +47%** across every shape tried, for the same reason as
+`compute_item_changed/2`: a map comprehension is a compiled generator, stepping an
+iterator from Erlang is not. Only the narrower half of that idea survived -- skipping
+the rebuild when the queue is already empty.
+
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
 1000; the comprehension plus `lists:sum/1` it replaced was the slowest of the three
@@ -158,25 +187,13 @@ re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied
 
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **`render_list_items_simple/2`'s value tree** -- 16.4% of a 100-item render, split
-   across two comprehensions. It builds `[[{Az, Val, Deps}]]` for every item, which
-   the zip walk then turns into HTML and discards on the SSR path. Emitting HTML
-   directly per item would remove it, but the tree is load-bearing for nested
-   snapshots and `maybe_propagate/2`, so this is a redesign of the SSR path rather
-   than a local change.
-2. **`arizona_stream:clear_stream_pending/2`** -- called as
-   `clear_stream_pending(B, stream_keys(B))`, which walks the bindings map twice and
-   rebuilds every stream record even when its queue is already empty. Runs per
-   stateful child per evaluation.
-3. **`arizona_stream:sort/2`** -- `lists:sort/2` with a comparator that does two
-   `maps:get/2` per comparison, so ~2*N*log2(N) lookups. Decorate-sort-undecorate
-   makes it N.
-4. **`arizona_stream:reset/2` and `new/3`** -- build an intermediate `[{Key, Item}]`
-   list and walk it twice. `reset/2` is the documented bulk-mutation path.
-5. **`arizona_render:render/1`** -- builds a list of unwrapped values and then zips
-   it, although `zip_d/3` already walks pairs in one pass. On the connect/navigate
-   path, not per event.
-6. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+1. **`arizona_render:render/2`** -- `unzip_triples/2` builds three lists in one walk
+   and `zip/3` then walks the values list; `zip_stream_item/3` could walk the triples
+   directly and save one list. Not done: it runs once per WS connect and per navigate,
+   not per event, so the saving is N cons cells on a cold path. Note the sibling
+   `render/1` IS one-pass now, but it is test-only (`-ignore_xref`), so that change
+   bought production nothing -- check the caller before valuing a render-path find.
+2. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the

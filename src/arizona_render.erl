@@ -137,10 +137,11 @@ snapshot.
 render(#{s := Statics, d := Dynamics} = Tmpl) ->
     EvalDynamics = arizona_eval:eval_dynamics(Dynamics),
     Backend = backend(Tmpl),
-    HTML = zip(Backend, Statics, [
-        arizona_template:unwrap_val(Backend, V)
-     || {_Az, V} <:- EvalDynamics
-    ]),
+    %% `zip_d/3` walks the `{Az, V}` pairs directly. Unwrapping them into a list of
+    %% values first and zipping that built an N-element list per template for nothing:
+    %% `render_v/2` makes the same call `unwrap_val/2` would (`render_attr/2` for an
+    %% attribute, whose result is a binary that `render_dyn/2` hands straight back).
+    HTML = zip_d(Backend, Statics, EvalDynamics),
     Snap0 = #{s => Statics, d => EvalDynamics},
     Snap = arizona_template:maybe_propagate(Tmpl, Snap0),
     {HTML, Snap}.
@@ -255,6 +256,9 @@ zip(Backend, [S | Statics], [D | Dynamics]) ->
 %% Pre-unwrapped value path -- factored out of zip/3's body so zip_stream_item/3
 %% (the triple-walking variant) can share the same dispatch without duplicating
 %% the case clauses.
+render_dyn(_Backend, {ssr_rendered, Rendered}) ->
+    %% Already rendered, by render_ssr_val/2's plain-list each clause.
+    Rendered;
 render_dyn(Backend, {arizona_esc, V}) ->
     arizona_template:escape_marked(Backend, V);
 render_dyn(Backend, #{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) ->
@@ -547,6 +551,18 @@ render_v(Backend, V) -> render_dyn(Backend, V).
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly. `Backend` is the enclosing
 %% template's render backend, used to escape scalar leaves and render attributes.
+%% One `?each` item, evaluated and spliced between its statics in one pass. Mirrors
+%% `zip_stream_item/3`, which walks the same statics against an already-built triple
+%% list; here the value is produced as the walk reaches it.
+zip_ssr_item(_Backend, [S], []) ->
+    [S];
+zip_ssr_item(Backend, [S | Statics], [Dyn | Dynamics]) ->
+    [
+        S,
+        render_v(Backend, arizona_eval:eval_item_value(Dyn))
+        | zip_ssr_item(Backend, Statics, Dynamics)
+    ].
+
 %% SSR pair walker: renders each dynamic and splices it between the statics in ONE
 %% pass. Building the rendered list first (a comprehension) and zipping it after cost
 %% an N-element list per template that nothing else ever reads.
@@ -583,9 +599,15 @@ render_ssr_val(Backend, {esc, Fun}) when is_function(Fun, 0) ->
     end;
 render_ssr_val(Backend, Fun) when is_function(Fun, 0) ->
     render_ssr_val(Backend, Fun());
-render_ssr_val(_Backend, #{t := ?EACH, source := Items, template := Tmpl}) when is_list(Items) ->
-    ItemSnaps = arizona_eval:render_list_items_simple(Items, Tmpl),
-    #{t => ?EACH, items => ItemSnaps, template => Tmpl};
+render_ssr_val(Backend, #{t := ?EACH, source := Items, template := Tmpl}) when is_list(Items) ->
+    %% SSR keeps no snapshot, so render the items and keep nothing else. Going through
+    %% the item-snapshot shape instead materialised a `{Az, Value, Deps}` triple per
+    %% dynamic, a list of those per item, and a list of those -- all of it read once,
+    %% by the walk that turns it into exactly this output, and then dropped. The live
+    %% paths still build it, because their snapshot is what the next diff reads.
+    %% What the items render TO is the backend's concern, as everywhere else here.
+    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
+    {ssr_rendered, [zip_ssr_item(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items]};
 render_ssr_val(_Backend, #{
     t := ?EACH,
     source := #stream{
