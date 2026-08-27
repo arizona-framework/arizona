@@ -63,6 +63,30 @@ any profile row, divide its time by its call count and ask whether that per-call
 figure is physically plausible for what the function does; a per-byte walker and a
 BIF call in the same table are not on the same scale.
 
+**A microbench over a small collection can invent an effect.** Benchmarking a change
+by driving it through a realistic-looking 3-element list showed a 74 ns regression
+that vanished entirely once the changed clause was measured on its own -- its real
+cost was 8-13 ns. The surrounding walk contributes enough variance to manufacture a
+delta several times the size of the thing under test. Isolate to the one function you
+changed before believing any number from a collection-shaped benchmark.
+
+**A result does not transfer between modules without re-measuring.** Two modules asked
+the same question -- is a tail-recursive `<<Acc/binary, B>>` accumulator faster than
+consing an iolist and flattening once? -- and got opposite answers, both correct.
+Building lowercased HTTP header names (4-30 bytes) the iolist wins; escaping a template
+value the binary append wins, and by 2x from 200 bytes up. The crossover is around 20
+bytes, so the answer is decided entirely by each module's input length distribution.
+Numbers below are from `arizona_html:escape/2`:
+
+| input | binary append | iolist | iolist, sliced runs |
+| ----- | ------------- | ------ | ------------------- |
+| 1 metachar in 5B | 93 ns | **56** | 90 |
+| 1 metachar in 10B | 116 ns | **86** | 115 |
+| 1 metachar in 20B | 169 ns | 178 | **148** |
+| 1 metachar in 200B | 1170 ns | 2261 | **558** |
+| dense 200B | **1867 ns** | 3421 | 7582 |
+| markup-ish 500B | **3267 ns** | 6190 | 6050 |
+
 **What to do instead.** Prefer the minimum over the mean: the machine is usually
 contended, and the minimum is the run that was least disturbed. Interleave the two
 variants round by round so drift hits both. Pin with `taskset`. And when the
@@ -197,6 +221,15 @@ names walked four times -- 46 of 81 per-request calls), but it lives in the
 `roadrunner` dependency and is worth low single digits of the HTTP path, not the
 11.5% the profile suggested. Its `check_header_safe/3` is the least inflated of the
 four AND the security check: leave that one alone.
+
+**Rewriting `arizona_html:escape/2`'s accumulator.** Prompted by a neighbouring
+codebase measuring the opposite shape faster; see the transfer note above. The current
+tail-recursive binary append is the right choice HERE and stays: it beats a per-byte
+iolist everywhere past ~20 bytes, which is where template values live. A third variant
+that batches runs of ordinary bytes into slices is genuinely faster for a long value
+holding ONE metacharacter (1170 -> 558 ns at 200 bytes) but 4x slower on dense markup
+(1867 -> 7582), and escape-dense values are exactly what escaping exists for. Note the
+`first_meta/2` guard means none of this runs at all for a clean value.
 
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
