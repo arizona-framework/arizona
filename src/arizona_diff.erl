@@ -494,8 +494,8 @@ carry_skipped_view(_Old, Views) ->
 %% a descendant the seed did not already cover. In the ordinary case -- a
 %% container listing its children, none of which has grown since -- that is one
 %% lookup and one empty scan per id, with no per-id insert and no list building.
-%% Chaining every id unconditionally instead cost a single-key insert plus a `++`
-%% per entry on EVERY dep-skipped container, whether or not anything had changed.
+%% Chaining every id unconditionally instead cost a single-key insert plus a
+%% worklist entry per id on EVERY dep-skipped container, changed or not.
 live_subtree(Ids, Old) ->
     case names_every_live_view(Ids, Old) of
         true ->
@@ -538,7 +538,11 @@ expand_subtree([Id | Rest], Old, Acc) ->
 expand_uncovered([], Rest, Old, Acc) ->
     expand_subtree(Rest, Old, Acc);
 expand_uncovered(Missing, Rest, Old, Acc) ->
-    expand_subtree(Missing ++ Rest, Old, maps:merge(Acc, maps:with(Missing, Old))).
+    %% The worklist is a set to exhaust, not a queue to honour: covering the newly
+    %% found ids to fixpoint and then resuming `Rest` reaches the same closure as
+    %% splicing them in front of it, without copying a list to say so.
+    Acc1 = expand_subtree(Missing, Old, maps:merge(Acc, maps:with(Missing, Old))),
+    expand_subtree(Rest, Old, Acc1).
 
 %% Extract child view IDs from deleted stream items only. The result is
 %% only ever `maps:without/2`'s key list (`OldChildViews` minus these), so
