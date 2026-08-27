@@ -79,6 +79,7 @@
     stream_limit_drop_upsert_evicts/1,
     stream_limit_drop_sort_after_append/1,
     stream_limit_drop_append_past_front/1,
+    stream_insert_at_end_uses_the_append_buffer/1,
     stream_limit_halt_delete_backfills/1,
     stream_limit_halt_insert_at_window/1,
     stream_limit_halt_sort_order/1,
@@ -261,6 +262,7 @@ groups() ->
             stream_limit_drop_upsert_evicts,
             stream_limit_drop_sort_after_append,
             stream_limit_drop_append_past_front,
+            stream_insert_at_end_uses_the_append_buffer,
             stream_limit_halt_delete_backfills,
             stream_limit_halt_insert_at_window,
             stream_limit_halt_sort_order,
@@ -1556,6 +1558,37 @@ stream_limit_drop_insert(Config) when is_list(Config) ->
     ),
     ?assertEqual([2, 3], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))).
+
+%% A positional insert AT or PAST the end is an append, and must be answered from the
+%% append buffer rather than by flattening the order and walking to the end -- the walk
+%% is O(N) and, by rebuilding `order` as `{List, []}`, it also discards the buffer, so a
+%% run of end-inserts was O(N) each. Asserting the buffer is what pins that: the result
+%% list is identical either way, so only the representation distinguishes them.
+stream_insert_at_end_uses_the_append_buffer(Config) when is_list(Config) ->
+    Seed = [#{id => I} || I <- lists:seq(1, 4)],
+    Stream0 = arizona_stream:new(fun(#{id := Id}) -> Id end, Seed, #{}),
+    %% Pos =:= size, and Pos past size, both mean "last".
+    AtEnd = arizona_stream:insert(Stream0, #{id => 90}, 4),
+    PastEnd = arizona_stream:insert(Stream0, #{id => 91}, 99),
+    ?assertEqual([1, 2, 3, 4, 90], ids(AtEnd)),
+    ?assertEqual([1, 2, 3, 4, 91], ids(PastEnd)),
+    %% The front is untouched and the key went to the buffer, not through a flatten.
+    ?assertMatch(#stream{order = {[1, 2, 3, 4], [90]}}, AtEnd),
+    ?assertMatch(#stream{order = {[1, 2, 3, 4], [91]}}, PastEnd),
+    %% A run of them keeps using the buffer instead of re-flattening per insert.
+    Run = lists:foldl(
+        fun(I, S) -> arizona_stream:insert(S, #{id => I}, length(ids(S))) end,
+        Stream0,
+        [10, 11, 12]
+    ),
+    ?assertEqual([1, 2, 3, 4, 10, 11, 12], ids(Run)),
+    ?assertMatch(#stream{order = {[1, 2, 3, 4], [12, 11, 10]}}, Run),
+    %% An interior position still goes through the walk and still lands correctly.
+    Middle = arizona_stream:insert(Stream0, #{id => 50}, 2),
+    ?assertEqual([1, 2, 50, 3, 4], ids(Middle)).
+
+ids(Stream) ->
+    [Id || #{id := Id} <- arizona_stream:to_list(Stream)].
 
 %% drop + MORE appends than the limit, which is what a real tail -f buffer does.
 %% Eviction pops the front of the order and leaves the append buffer alone, so

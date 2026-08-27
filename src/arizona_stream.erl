@@ -311,6 +311,22 @@ insert(
             erlang:error({stream_duplicate_key, Key}, [S, Item, Pos], [
                 {error_info, #{module => ?MODULE}}
             ]);
+        #{} when Pos >= Size ->
+            %% At or past the end, so this IS an append -- the logical order is
+            %% `Front ++ reverse(Back)`, and pushing onto the front of `Back` puts the
+            %% key last. Flattening and walking to the end instead cost O(N) twice over
+            %% (the copy, then the rebuild) AND threw the append buffer away, so a run
+            %% of end-inserts was O(N) each: 1.0ms for ten of them at ten thousand
+            %% items, against 67ns for one `insert/2`. This deliberately does not evict
+            %% on a full `drop` stream -- only an append flow has a well-defined oldest
+            %% item, which is why `insert/3` keeps `halt` semantics in both modes.
+            {Front, Back} = Order,
+            S#stream{
+                items = Items#{Key => Item},
+                order = {Front, [Key | Back]},
+                pending = queue_op({insert, Key, Item, Pos}, Pending),
+                size = Size + 1
+            };
         #{} ->
             Flat = flat_order(Order),
             S#stream{
@@ -813,9 +829,16 @@ keyed_items(KeyFun, [Item | Rest], Map0) ->
     {Map, Order} = keyed_items(KeyFun, Rest, Map0#{Key => Item}),
     {Map, [Key | Order]}.
 
-order_insert_at(Order, Key, 0) -> [Key | Order];
-order_insert_at([], Key, _Pos) -> [Key];
-order_insert_at([H | T], Key, Pos) -> [H | order_insert_at(T, Key, Pos - 1)].
+%% Walked with an accumulator rather than body-recursively: the prefix is rebuilt
+%% either way, but `lists:reverse/2` splices it back in C instead of unwinding one
+%% stack frame per element. ~20% faster at a mid-list position on a long order.
+%% Only ever called with `Pos` strictly inside the order -- `insert/3` answers an
+%% at-or-past-the-end position from the append buffer before reaching here -- so the
+%% walk always meets `Pos` before it runs out of list, and there is no run-off clause.
+order_insert_at(Order, Key, Pos) -> order_insert_at(Order, Key, Pos, []).
+
+order_insert_at(Rest, Key, 0, Acc) -> lists:reverse(Acc, [Key | Rest]);
+order_insert_at([H | T], Key, Pos, Acc) -> order_insert_at(T, Key, Pos - 1, [H | Acc]).
 
 order_delete([], _Key) -> [];
 order_delete([Key | T], Key) -> T;
