@@ -80,7 +80,6 @@
     stream_limit_drop_sort_after_append/1,
     stream_limit_drop_append_past_front/1,
     stream_insert_at_end_uses_the_append_buffer/1,
-    stream_bulk_load_keeps_the_last_of_a_repeated_key/1,
     stream_limit_halt_delete_backfills/1,
     stream_limit_halt_insert_at_window/1,
     stream_limit_halt_sort_order/1,
@@ -146,7 +145,7 @@
     %% --- shuffle crash reproducers ----------------------------------------
     insert_dup_key_crashes/1,
     insert_at_dup_key_crashes/1,
-    repro_reset_with_dup_keys_breaks_invariant/1,
+    reset_dup_crashes_preventing_stale_order/1,
     update_missing_key_upserts/1,
     insert_dup_crashes_preventing_stale_order/1,
     repro_to_list_crash_matches_production_stack/1,
@@ -264,7 +263,6 @@ groups() ->
             stream_limit_drop_sort_after_append,
             stream_limit_drop_append_past_front,
             stream_insert_at_end_uses_the_append_buffer,
-            stream_bulk_load_keeps_the_last_of_a_repeated_key,
             stream_limit_halt_delete_backfills,
             stream_limit_halt_insert_at_window,
             stream_limit_halt_sort_order,
@@ -371,7 +369,7 @@ groups() ->
         {shuffle_crash_repro, [parallel], [
             insert_dup_key_crashes,
             insert_at_dup_key_crashes,
-            repro_reset_with_dup_keys_breaks_invariant,
+            reset_dup_crashes_preventing_stale_order,
             update_missing_key_upserts,
             insert_dup_crashes_preventing_stale_order,
             repro_to_list_crash_matches_production_stack,
@@ -1560,33 +1558,6 @@ stream_limit_drop_insert(Config) when is_list(Config) ->
     ),
     ?assertEqual([2, 3], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))).
-
-%% `new/3` and `reset/2` take a LIST, which can name the same key twice -- unlike
-%% `insert/2`, which rejects a duplicate outright. The bulk load resolves a repeat to
-%% the LAST item for that key, and the order keeps one entry per occurrence position.
-%% Pinned because the rule lives in how the keyed list is folded into the map, which is
-%% invisible from the outside until a list happens to repeat a key: an implementation
-%% that builds the map from a reversed accumulator silently flips it to first-wins and
-%% every unique-key test still passes.
-%%
-%% Only the ITEMS map is asserted here. A repeated key also leaves one `order` entry per
-%% occurrence, so `to_list/1` returns it twice and `order` outruns `items` -- longstanding
-%% behaviour, unrelated to how the map is folded, and not pinned as though it were
-%% intended.
-stream_bulk_load_keeps_the_last_of_a_repeated_key(Config) when is_list(Config) ->
-    Dup = [
-        #{id => 1, label => ~"first"},
-        #{id => 2, label => ~"other"},
-        #{id => 1, label => ~"last"}
-    ],
-    KeyFun = fun(#{id := Id}) -> Id end,
-    Built = arizona_stream:new(KeyFun, Dup, #{}),
-    ?assertMatch(#{label := ~"last"}, arizona_stream:get(Built, 1)),
-    ?assertMatch(#{label := ~"other"}, arizona_stream:get(Built, 2)),
-    %% reset/2 goes through the same bulk load and must resolve the repeat the same way.
-    Reset = arizona_stream:reset(arizona_stream:new(KeyFun, [], #{}), Dup),
-    ?assertMatch(#{label := ~"last"}, arizona_stream:get(Reset, 1)),
-    ?assertEqual(arizona_stream:to_list(Built), arizona_stream:to_list(Reset)).
 
 %% A positional insert AT or PAST the end is an append, and must be answered from the
 %% append buffer rather than by flattening the order and walking to the end -- the walk
@@ -3739,12 +3710,12 @@ insert_at_dup_key_crashes(Config) when is_list(Config) ->
     ?assertEqual([1, 2], Flat),
     ?assertEqual(lists:sort(maps:keys(Items)), lists:sort(lists:usort(Flat))).
 
-%% --- repro_reset_with_dup_keys_breaks_invariant ----------------------------
+%% --- reset_dup_crashes_preventing_stale_order ------------------------------
 %% reset/2's items map dedups via comprehension (last-wins) but
 %% order_from_keyed/1 keeps duplicates. So passing a list with dup keys
 %% directly produces an inconsistent state — no crash yet, but a delete
 %% afterwards turns it into the production crash shape.
-repro_reset_with_dup_keys_breaks_invariant(Config) when is_list(Config) ->
+reset_dup_crashes_preventing_stale_order(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, []),
     DupItems = [
@@ -3752,15 +3723,23 @@ repro_reset_with_dup_keys_breaks_invariant(Config) when is_list(Config) ->
         #{id => 1, n => <<"second">>},
         #{id => 2, n => <<"two">>}
     ],
-    S1 = arizona_stream:reset(S0, DupItems),
-    {Items, Flat, Size} = stream_invariant_components(S1),
-    ?assertEqual(2, map_size(Items)),
-    ?assertEqual(3, length(Flat)),
-    %% Note: in this branch `size = map_size(ItemsMap)` (not length(Flat)),
-    %% so size matches items but disagrees with order length.
-    ?assertEqual(2, Size),
-    ?assertEqual([1, 1, 2], Flat),
-    ?assertNotEqual(map_size(Items), length(Flat)).
+    %% This used to build the invariant break rather than refuse it: `items` kept one
+    %% entry per KEY and `order` one per OCCURRENCE, so `[1, 1, 2]` outran a two-entry
+    %% map and `to_list/1` returned the item twice.
+    ?assertError(
+        {stream_duplicate_key_in_list, 1},
+        arizona_stream:reset(S0, DupItems)
+    ),
+    %% new/3 is the other bulk entry point and refuses the same list.
+    ?assertError(
+        {stream_duplicate_key_in_list, 1},
+        arizona_stream:new(KeyFun, DupItems, #{})
+    ),
+    %% A list whose keys are unique is untouched by the check.
+    Ok = arizona_stream:reset(S0, [#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
+    {Items, Flat, Size} = stream_invariant_components(Ok),
+    ?assertEqual(map_size(Items), length(Flat)),
+    ?assertEqual(2, Size).
 
 %% --- update_missing_key_upserts --------------------------------------------
 %% update/3 on a key not yet present upserts: it appends the item to `items`
