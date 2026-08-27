@@ -1013,16 +1013,16 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
             not has_markerless_slot(NewItemsList),
     case Patchable of
         true ->
-            {Sized, Views2} =
+            {SubOps, Views2} =
                 diff_list_positional(Tmpl, NewItemsList, OldItemsList, 0, Views1),
-            case Sized of
-                {[], _ValueBytes, _Count} ->
+            case SubOps of
+                [] ->
                     {[], NewSnap, Views2};
                 _ ->
                     maybe_list_patch(
                         Az,
                         Tmpl,
-                        Sized,
+                        SubOps,
                         NewItemsList,
                         OldItemsList,
                         NewSnap,
@@ -1059,10 +1059,9 @@ diff_each_items(Az, Tmpl, NewItemsList, #{items := OldItemsList}, Views0, Views1
 %% for that would be a bad deal. Three quarters shifted is where positional turns
 %% decisively bigger (30-40% more bytes at 10 and 40 items) while touching nearly
 %% every node anyway, so that is where it hands over.
-maybe_list_patch(Az, Tmpl, Sized, NewItemsList, OldItemsList, NewSnap, Views1, Views2) ->
-    case outgrows_re_render(Sized, Tmpl) of
+maybe_list_patch(Az, Tmpl, SubOps, NewItemsList, OldItemsList, NewSnap, Views1, Views2) ->
+    case outgrows_re_render(SubOps, Tmpl, NewItemsList) of
         false ->
-            {SubOps, _ValueBytes, _Count} = Sized,
             {[[?OP_LIST_PATCH, Az, SubOps]], NewSnap, Views2};
         true ->
             diff_list_full(Az, Tmpl, NewItemsList, OldItemsList, NewSnap, Views1)
@@ -1085,8 +1084,8 @@ maybe_list_patch(Az, Tmpl, Sized, NewItemsList, OldItemsList, NewSnap, Views1, V
 %% a count at any threshold.
 %%
 %% Estimate both sides in bytes instead. The wholesale side costs nothing extra to
-%% obtain: `diff_list_positional/5` already visits every new item, so it accumulates
-%% their value bytes as it walks.
+%% obtain, but it is not free: it weighs every value of every new item. So it is asked
+%% only once the patch is big enough to have a chance -- see `list_outgrows_measured/3`.
 %%
 %% The comparison is biased toward staying positional, because those ops also
 %% preserve the DOM: the container is never torn down, so focus, scroll position and
@@ -1095,8 +1094,20 @@ maybe_list_patch(Az, Tmpl, Sized, NewItemsList, OldItemsList, NewSnap, Views1, V
 %% and it has to save something worth having in absolute terms too. A small container
 %% can be 2x cheaper to re-render while the saving is a hundred-odd bytes, which is
 %% not a trade worth losing an in-progress selection over.
-outgrows_re_render({SubOps, ValueBytes, Count}, Tmpl) ->
-    Positional = wire_bytes(SubOps),
+outgrows_re_render(SubOps, Tmpl, NewItemsList) ->
+    list_outgrows_measured(wire_bytes(SubOps), Tmpl, NewItemsList).
+
+%% Same short-circuit as the stream's estimate, and it earns more here: this walk was
+%% not merely paid on every drain, it was paid on every plain-list diff whether or not
+%% its result was ever read -- an unchanged list weighed all its items to produce a
+%% number that was then thrown away with the empty op list. Now nothing is weighed
+%% until a patch exists AND is big enough to have a chance of losing.
+list_outgrows_measured(Positional, _Tmpl, _NewItemsList) when
+    Positional =< ?RE_RENDER_MIN_SAVING
+->
+    false;
+list_outgrows_measured(Positional, Tmpl, NewItemsList) ->
+    {Count, ValueBytes} = count_value_bytes(NewItemsList, 0, 0),
     Whole = re_render_bytes(Tmpl, ValueBytes, Count),
     Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
         Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM.
@@ -1261,9 +1272,7 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% plus a single tail insert/remove -- correct (the new list is reproduced
 %% exactly) and minimal in childList churn; identity across reorders is the keyed
 %% `arizona_stream`'s job, not a plain list's.
-%% Returns `{{SubOps, ValueBytes, Count}, Views}`. `ValueBytes` and `Count` describe
-%% every NEW item, accumulated here because this walk already visits them -- they are
-%% what `outgrows_re_render/2` prices the wholesale alternative with.
+%% Returns `{SubOps, Views}`.
 %% Entry point. Strip the unchanged head and tail FIRST, then diff only the middle.
 %% Without that, a head insert reads as "every position differs" and emits one item
 %% patch per item plus a tail append -- each patch carrying the value of the item that
@@ -1275,15 +1284,12 @@ full_update(Az, Tmpl, NewItemsList, NewSnap, Views) ->
 %% past the end), and repeated inserts at one index keep their emitted order because
 %% each lands immediately before the same unmoved reference node.
 diff_list_positional(Tmpl, NewItems, OldItems, Idx0, Views0) ->
-    {AllCount, AllBytes} = count_value_bytes(NewItems, 0, 0),
     {Common, NewRest, OldRest} = strip_common_prefix(NewItems, OldItems, 0),
     {NewMid, OldMid} = maybe_strip_common_suffix(NewRest, OldRest),
-    {Ops, Views1} = diff_list_middle(Tmpl, NewMid, OldMid, Idx0 + Common, Views0),
-    {{Ops, AllBytes, AllCount}, Views1}.
+    diff_list_middle(Tmpl, NewMid, OldMid, Idx0 + Common, Views0).
 
-%% The wholesale estimate needs the item count beside the value bytes, and this walk
-%% is already the one pass over every new item -- so it carries the count out too,
-%% rather than leaving `length/1` to walk the same list again for it.
+%% The wholesale estimate needs the item count beside the value bytes, and one pass
+%% yields both -- so the count never costs a `length/1` walk of its own.
 count_value_bytes([], Count, Bytes) ->
     {Count, Bytes};
 count_value_bytes([ItemD | Rest], Count, Bytes) ->
