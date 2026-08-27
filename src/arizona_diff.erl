@@ -1242,7 +1242,7 @@ diff_list_middle(Tmpl, NewRest, [], Idx, Views) ->
     {[[?OP_INSERT, Idx, arizona_render:zip_item(Tmpl, D)] || D <- NewRest], Views};
 %% A pure removal: nothing new remains, so drop the old tail by index.
 diff_list_middle(_Tmpl, [], OldRest, Idx, Views) ->
-    {[[?OP_REMOVE, I] || I <- lists:seq(Idx, Idx + length(OldRest) - 1)], Views};
+    {remove_ops(OldRest, Idx), Views};
 %% Both sides still have items: an edit rather than a clean insert or remove. Walk them
 %% in lockstep, which is what a same-length content change wants anyway.
 diff_list_middle(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
@@ -1254,6 +1254,14 @@ diff_list_middle(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
         [] -> {RestOps, Views2};
         _ -> {[[?OP_ITEM_PATCH, Idx, InnerOps] | RestOps], Views2}
     end.
+
+%% One `?OP_REMOVE` per dropped item, indexed from `Idx`. Walking the items
+%% themselves keeps this one pass: `lists:seq/2` needs the tail's length first --
+%% another walk -- and then builds a list of integers only to walk that too.
+remove_ops([], _Idx) ->
+    [];
+remove_ops([_OldD | Rest], Idx) ->
+    [[?OP_REMOVE, Idx] | remove_ops(Rest, Idx + 1)].
 
 item_value_bytes(ItemD) ->
     lists:foldl(fun({_Az, V, _Deps}, A) -> A + wire_bytes(V) end, 0, ItemD).
