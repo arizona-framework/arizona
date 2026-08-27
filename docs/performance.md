@@ -111,6 +111,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Carry a stream's child views only when it has any | avoids draining the whole pending queue per stream diff |
 | Key a stream's items and order in one walk | `reset/2`/`new/3` -30% at 100 items |
 | Skip clearing a stream queue that is already empty | -8% per untouched stream, and no record rebuilt |
+| Render a plain-list `?each` straight to output during SSR | `render_each_100` -18% |
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:
@@ -121,6 +122,18 @@ and the wholesale side is never negative, so a patch no bigger than the floor ca
 beat it by the floor, whatever the items weigh. The answer is settled by the ops
 alone. It was being computed on every drain, including the overwhelmingly common one
 that patches a single field.
+
+The **SSR each tree** was the one item on this list that had been written off as a
+redesign, and it took a different kind of check to unblock: not a measurement but a
+reachability argument. It built a `{Az, Value, Deps}` triple per dynamic, a list of
+those per item and a list of those, which the walk that turns them into output reads
+once and drops. That looked load-bearing because the same shape feeds
+`render_fp_val/2` and the hydration payload -- until every consumer of it turned out
+to live in `arizona_diff` and the LIVE render path, both of which keep a snapshot the
+next diff reads. The SSR family keeps none, so on that path alone the tree is pure
+overhead, and a `{ssr_rendered, _}` marker lets the items render as the walk reaches
+them. Worth remembering as a technique: when a structure looks required, enumerate who
+actually reads it before believing it.
 
 The **slot `az` prefix** was built by `binary:replace/4` before looking at the value.
 That is a pure-Erlang wrapper: it compiles the pattern, allocates a closure and copies
@@ -174,19 +187,13 @@ re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied
 
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **`render_list_items_simple/2`'s value tree** -- 16.4% of a 100-item render, split
-   across two comprehensions. It builds `[[{Az, Val, Deps}]]` for every item, which
-   the zip walk then turns into HTML and discards on the SSR path. Emitting HTML
-   directly per item would remove it, but the tree is load-bearing for nested
-   snapshots and `maybe_propagate/2`, so this is a redesign of the SSR path rather
-   than a local change.
-2. **`arizona_render:render/2`** -- `unzip_triples/2` builds three lists in one walk
+1. **`arizona_render:render/2`** -- `unzip_triples/2` builds three lists in one walk
    and `zip/3` then walks the values list; `zip_stream_item/3` could walk the triples
    directly and save one list. Not done: it runs once per WS connect and per navigate,
    not per event, so the saving is N cons cells on a cold path. Note the sibling
    `render/1` IS one-pass now, but it is test-only (`-ignore_xref`), so that change
    bought production nothing -- check the caller before valuing a render-path find.
-3. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+2. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the
