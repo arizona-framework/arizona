@@ -403,8 +403,9 @@ eval_one_triple({Az, _Spec} = Dyn) ->
 -doc """
 The value an item dynamic evaluates to, without the `{Az, Value, Deps}` wrapper.
 
-The SSR path renders each item straight to HTML, so the triple -- and the per-item
-list of them, and the list of those -- is structure it would only take apart again.
+The SSR path renders each item straight to its backend's output, so the triple -- and
+the per-item list of them, and the list of those -- is structure it would only take
+apart again.
 The paths that keep a snapshot still want the wrapper, and get it from
 `eval_one_triple/1`, which is this plus the address.
 """.

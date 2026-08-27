@@ -256,9 +256,9 @@ zip(Backend, [S | Statics], [D | Dynamics]) ->
 %% Pre-unwrapped value path -- factored out of zip/3's body so zip_stream_item/3
 %% (the triple-walking variant) can share the same dispatch without duplicating
 %% the case clauses.
-render_dyn(_Backend, {ssr_html, HTML}) ->
+render_dyn(_Backend, {ssr_rendered, Rendered}) ->
     %% Already rendered, by render_ssr_val/2's plain-list each clause.
-    HTML;
+    Rendered;
 render_dyn(Backend, {arizona_esc, V}) ->
     arizona_template:escape_marked(Backend, V);
 render_dyn(Backend, #{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) ->
@@ -600,13 +600,14 @@ render_ssr_val(Backend, {esc, Fun}) when is_function(Fun, 0) ->
 render_ssr_val(Backend, Fun) when is_function(Fun, 0) ->
     render_ssr_val(Backend, Fun());
 render_ssr_val(Backend, #{t := ?EACH, source := Items, template := Tmpl}) when is_list(Items) ->
-    %% SSR keeps no snapshot, so build the HTML and nothing else. Going through the
-    %% item-snapshot shape instead materialised a `{Az, Value, Deps}` triple per
+    %% SSR keeps no snapshot, so render the items and keep nothing else. Going through
+    %% the item-snapshot shape instead materialised a `{Az, Value, Deps}` triple per
     %% dynamic, a list of those per item, and a list of those -- all of it read once,
-    %% by the walk that turns it into exactly this HTML, and then dropped. The live
+    %% by the walk that turns it into exactly this output, and then dropped. The live
     %% paths still build it, because their snapshot is what the next diff reads.
+    %% What the items render TO is the backend's concern, as everywhere else here.
     #{s := ItemStatics, d := DynamicsFun} = Tmpl,
-    {ssr_html, [zip_ssr_item(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items]};
+    {ssr_rendered, [zip_ssr_item(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items]};
 render_ssr_val(_Backend, #{
     t := ?EACH,
     source := #stream{
