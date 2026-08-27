@@ -53,6 +53,16 @@ it pointed at `arizona_template:track/1`, which turned out to already no-op when
 dependency collection is off. Use eprof to find *candidates*, then confirm with a
 micro-benchmark of that function in isolation.
 
+**Per-BYTE recursion is the extreme form of that, and it reads as a hot spot.** A
+function that recurses one byte at a time emits one trace event per byte, so eprof
+charges it per byte at trace-event prices. Profiling an HTTP GET made header parsing
+look like ~11.5% of the request -- more than the whole framework above it. Dividing
+gives it away: eprof attributed **41 ns to each byte-step** of a scan whose real cost
+is 1-2 ns, an inflation of 20-40x. The true share was well under 1%. Before believing
+any profile row, divide its time by its call count and ask whether that per-call
+figure is physically plausible for what the function does; a per-byte walker and a
+BIF call in the same table are not on the same scale.
+
 **What to do instead.** Prefer the minimum over the mean: the machine is usually
 contended, and the minimum is the run that was least disturbed. Interleave the two
 variants round by round so drift hits both. Pin with `taskset`. And when the
@@ -178,6 +188,15 @@ on `map_size > 32` was measured too and is exactly where the +139% lands. Left a
 iterator from Erlang is not. Only the narrower half of that idea survived -- skipping
 the rebuild when the queue is already empty.
 
+**Shrinking the wire payload, and the roadrunner header walkers.** Both came out of
+reading eprof percentages as wall clock; see the per-byte trap above. The header
+walkers do contain real redundancy (a compile-time-lowercase literal being lowercased
+on every request, a value walked once to validate and again to lowercase, Title-Case
+names walked four times -- 46 of 81 per-request calls), but it lives in the
+`roadrunner` dependency and is worth low single digits of the HTTP path, not the
+11.5% the profile suggested. Its `check_header_safe/3` is the least inflated of the
+four AND the security check: leave that one alone.
+
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
 1000; the comprehension plus `lists:sum/1` it replaced was the slowest of the three
@@ -185,15 +204,43 @@ re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied
 
 ## Still open
 
+### Where the time actually goes
+
+Profiling the two paths a user experiences, rather than a synthetic workload, bounds
+all of this. `arizona_*` modules are **14.1%** of a WebSocket event and **9.8%** of a
+page load; the rest is the socket write, JSON, the HTTP server and gen_server
+plumbing. Even an infinitely fast framework would remove only that much. Two
+consequences, both measured:
+
+- **The socket write is per-call, not per-byte** -- 3.55 us/call for a 59-byte patch
+  against 3.20 us/call for a whole-view replace, at one write per event. Shrinking
+  ops does not buy CPU. (It still buys client bandwidth: a one-field patch is 59
+  bytes of which 27 are the two `az` strings.)
+- **Broadcast is BEAM's message copy.** `arizona_pubsub:send_each/2` is 82% of the
+  broadcast profile and is already `Pid ! Data` in a loop.
+
+The remaining server-side candidates are all small, and the largest single
+`arizona_*` function on the event path is 1.88%.
+
+### Still open
+
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **`arizona_render:render/2`** -- `unzip_triples/2` builds three lists in one walk
+1. **The JS client's op-apply path** -- 3,900 lines, and the only part of the system
+   never measured. It has no layout thrashing and its per-batch caches are sound, but
+   there is structural work between them: `querySelectorAll('[az-hook]')` per element
+   per op with no early-out when no hooks are registered (a 500-item re-render is
+   ~1000 subtree queries for ONE op), `slotBounds` rescanning a container per
+   INSERT/MOVE, nested item ops passing `streams = null` and so falling back to
+   `querySelector` per op, and a marker that is resolved, discarded, re-found twice
+   and its slot walked three times.
+2. **`arizona_render:render/2`** -- `unzip_triples/2` builds three lists in one walk
    and `zip/3` then walks the values list; `zip_stream_item/3` could walk the triples
    directly and save one list. Not done: it runs once per WS connect and per navigate,
    not per event, so the saving is N cons cells on a cold path. Note the sibling
    `render/1` IS one-pass now, but it is test-only (`-ignore_xref`), so that change
    bought production nothing -- check the caller before valuing a render-path find.
-2. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+3. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the
