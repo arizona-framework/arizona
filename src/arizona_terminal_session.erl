@@ -13,7 +13,7 @@ changes.
 
 It is parameterized by a driver module and an output function `t:out/0`
 (`fun((iodata()) -> ok)`). The owning process becomes the live view's transport: it
-must forward each `{arizona_push, _, _, Effects}` it receives to `handle_push/2`, key
+must forward each `{arizona_push, _, _, Effects, _}` it receives to `handle_push/2`, key
 reads to `handle_key/2`, and terminal resizes to `resize/3`.
 """.
 
@@ -68,10 +68,10 @@ start(Handler, Bindings, Driver, DriverArg, Out) ->
     %% Load the driver once so the function_exported/3 fallbacks below are accurate.
     {module, Driver} = code:ensure_loaded(Driver),
     {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), []),
-    {ok, ViewId} = arizona_live:mount(Pid),
+    {ok, ViewId, _} = arizona_live:mount(Pid),
     DState0 = call_init(Driver, DriverArg),
     {Setup, DState1} = call_setup(Driver, DState0),
-    {ok, Frame} = arizona_live:render_current(Pid),
+    {ok, Frame, _} = arizona_live:render_current(Pid),
     {Paint, Next, DState2} = call_paint(Driver, Frame, [], DState1),
     ok = Out([Setup, Paint]),
     Session = #session{pid = Pid, view_id = ViewId, driver = Driver, dstate = DState2, out = Out},
@@ -108,7 +108,7 @@ handle_key(#session{driver = Driver, dstate = DState} = Session, Input) ->
     end.
 
 -doc """
-Handles a live-process push (the `Effects` from an `{arizona_push, _, _, Effects}` the
+Handles a live-process push (the `Effects` from an `{arizona_push, _, _, Effects, _}` the
 owning process received): repaints via the driver, returning `quit` if the driver
 stops.
 """.
@@ -171,14 +171,14 @@ to_binary(Input) when is_list(Input) ->
 dispatch_events(#session{pid = Pid, view_id = ViewId}, Events) ->
     lists:flatmap(
         fun({event, Name, Payload}) ->
-            {ok, _Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Name, Payload),
+            {ok, _Ops, Effects, _Observed} = arizona_live:handle_event(Pid, ViewId, Name, Payload),
             Effects
         end,
         Events
     ).
 
 repaint(#session{pid = Pid, driver = Driver, dstate = DState, out = Out} = Session, Effects) ->
-    {ok, Frame} = arizona_live:render_current(Pid),
+    {ok, Frame, _Observed} = arizona_live:render_current(Pid),
     {Output, Next, DState1} = call_paint(Driver, Frame, Effects, DState),
     ok = Out(Output),
     Session1 = Session#session{dstate = DState1},

@@ -139,15 +139,15 @@ renders_status_block(Config) when is_list(Config) ->
 key_moves_selection(Config) when is_list(Config) ->
     {Pid, ViewId} = start_demo(),
     ?assert(contains(frame(Pid), ~"> New Game")),
-    {ok, _Ops, _Effects} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
+    {ok, _Ops, _Effects, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
     Frame = frame(Pid),
     ?assert(contains(Frame, ~"> Options")),
     ?assert(contains(Frame, ~"  New Game")).
 
 key_changes_count(Config) when is_list(Config) ->
     {Pid, ViewId} = start_demo(),
-    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"+"}),
-    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"+"}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"+"}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"+"}),
     ?assert(contains(frame(Pid), ~"Count: 2")).
 
 tick_advances_clock(Config) when is_list(Config) ->
@@ -163,10 +163,10 @@ broadcast_pushes_log_effect(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_term_demo, #{}, self(), []
     ),
-    {ok, _ViewId} = arizona_live:mount(Pid),
+    {ok, _ViewId, _} = arizona_live:mount(Pid),
     ok = arizona_pubsub:broadcast(demo, {chat, ~"hello there"}),
     receive
-        {arizona_push, _, _Ops, Effects} ->
+        {arizona_push, _, _Ops, Effects, _} ->
             ?assertEqual([~"hello there"], arizona_term_demo_driver:log_lines(Effects))
     after 2000 ->
         ct:fail(no_push_received)
@@ -175,16 +175,16 @@ broadcast_pushes_log_effect(Config) when is_list(Config) ->
 enter_quits_on_quit_item(Config) when is_list(Config) ->
     %% Move the selection to "Quit" (index 3) and press enter -> a quit effect.
     {Pid, ViewId} = start_demo(),
-    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
-    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
-    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
-    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"enter"}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"j"}),
+    {ok, _Ops, Effects, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"enter"}),
     ?assert(arizona_term_demo_driver:has_quit(Effects)).
 
 enter_logs_selection(Config) when is_list(Config) ->
     %% Enter on a non-quit item ("New Game", index 0) logs the selection.
     {Pid, ViewId} = start_demo(),
-    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"enter"}),
+    {ok, _Ops, Effects, _} = arizona_live:handle_event(Pid, ViewId, ~"key", #{~"key" => ~"enter"}),
     ?assertEqual([~"selected New Game"], arizona_term_demo_driver:log_lines(Effects)),
     ?assertNot(arizona_term_demo_driver:has_quit(Effects)).
 
@@ -367,11 +367,11 @@ start_demo() ->
     {ok, Pid} = arizona_live:start_link(
         arizona_term_demo, #{}, undefined, []
     ),
-    {ok, ViewId} = arizona_live:mount(Pid),
+    {ok, ViewId, _} = arizona_live:mount(Pid),
     {Pid, ViewId}.
 
 frame(Pid) ->
-    {ok, Frame} = arizona_live:render_current(Pid),
+    {ok, Frame, _} = arizona_live:render_current(Pid),
     Frame.
 
 contains(Frame, Sub) ->

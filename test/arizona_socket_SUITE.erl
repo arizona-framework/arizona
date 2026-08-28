@@ -117,7 +117,7 @@ push_racing_navigate_dropped(Config) when is_list(Config) ->
             %% ops retagged as the NEW view's.
             ?assertEqual({ok, Socket1}, arizona_socket:handle_info(Push, Socket1)),
             %% The push names its owning root view so the socket can tell.
-            ?assertMatch({arizona_push, ~"timer", _, _}, Push)
+            ?assertMatch({arizona_push, ~"timer", _, _, _}, Push)
     after 1000 ->
         error(timeout_waiting_for_stale_push)
     end.
@@ -663,7 +663,7 @@ interleave_add_then_move(Socket0, [N | Rest]) ->
     %% ...and is not lost: it follows in its own frame, after the insert, with a
     %% `null` after-ref (move to the front).
     receive
-        {arizona_push, _, _, _} = Push ->
+        {arizona_push, _, _, _, _} = Push ->
             {reply, PushFrame, _Socket1} = arizona_socket:handle_info(Push, Socket),
             #{~"o" := PushOps} = json:decode(iolist_to_binary(PushFrame)),
             ?assertMatch([[?OP_MOVE, _, Id, null]], PushOps)
@@ -698,7 +698,7 @@ child_push_scoped_to_emitting_view(Config) when is_list(Config) ->
 child_push_target(Pid, Socket, ViewId) ->
     Pid ! {arizona_view, ViewId, close},
     receive
-        {arizona_push, _, _, _} = Push ->
+        {arizona_push, _, _, _, _} = Push ->
             {reply, Frame, _Socket} = arizona_socket:handle_info(Push, Socket),
             #{~"o" := [[?OP_TEXT, Target, _Value]]} = json:decode(iolist_to_binary(Frame)),
             Target
@@ -720,7 +720,7 @@ foreign_caller_does_not_desync_drain(Config) when is_list(Config) ->
     Self = self(),
     %% A foreign process drives the same live process.
     Foreign = spawn(fun() ->
-        {ok, _Ops, _Effects} = arizona_live:handle_event(Pid, ~"counter", ~"inc", #{}),
+        {ok, _Ops, _Effects, _} = arizona_live:handle_event(Pid, ~"counter", ~"inc", #{}),
         Self ! foreign_done
     end),
     receive

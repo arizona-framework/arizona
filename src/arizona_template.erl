@@ -310,6 +310,10 @@ Builds a stateful child descriptor. The renderer mounts `Handler` with `Props`.
     Handler :: module(),
     Props :: map().
 stateful(Handler, Props) when is_atom(Handler), is_map(Props) ->
+    %% Instantiation is the one moment a runtime-bound module
+    %% (`?stateful(?get(page), ...)`) is known, so the socket can walk its
+    %% compile-time attributes and deliver them on the frame that mounts it.
+    ok = arizona_event_attrs:observe_mod(Handler),
     #{stateful => Handler, props => Props}.
 
 -doc """
@@ -319,6 +323,8 @@ Builds a stateless child descriptor from a 1-arity render fun.
     Callback :: fun((map()) -> template()),
     Props :: map().
 stateless(Callback, Props) when is_function(Callback, 1), is_map(Props) ->
+    {module, CallbackMod} = erlang:fun_info(Callback, module),
+    ok = arizona_event_attrs:observe_mod(CallbackMod),
     #{callback => Callback, props => Props}.
 
 -doc """
@@ -329,6 +335,7 @@ Builds a stateless child descriptor from a `Handler:Fun/1` reference.
     Fun :: atom(),
     Props :: map().
 stateless(Handler, Fun, Props) when is_atom(Handler), is_atom(Fun), is_map(Props) ->
+    ok = arizona_event_attrs:observe_mod(Handler),
     #{callback => fun Handler:Fun/1, props => Props}.
 
 -doc """

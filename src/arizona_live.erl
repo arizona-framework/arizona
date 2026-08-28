@@ -280,7 +280,7 @@ send_after(ViewId, Time, Msg) ->
 -doc """
 Starts a live process for a route-level view `Handler`.
 
-The transport pid receives `{arizona_push, RootViewId, Ops, Effects}`
+The transport pid receives `{arizona_push, RootViewId, Ops, Effects, Observed}`
 messages when the live process diffs and emits updates; `RootViewId` is
 the emitting page's root view id, so a transport can drop a push that
 raced a navigate. `OnMount` is the route's hook
@@ -335,17 +335,20 @@ start_link(Handler, InitBindings, TransportPid, OnMount, ConnInfo) ->
 -doc """
 Mounts the handler without rendering. Returns `{ok, ViewId}`.
 """.
--spec mount(Pid) -> {ok, binary()} when
+-spec mount(Pid) -> {ok, binary(), arizona_event_attrs:observed()} when
     Pid :: pid().
 mount(Pid) ->
     gen_server:call(Pid, mount, infinity).
 
 -doc """
-Mounts and renders the handler. Returns `{ok, ViewId, PageContent}`
+Mounts and renders the handler. Returns `{ok, ViewId, PageContent, Observed}`
 where `PageContent` is either a fingerprint payload (if the template
-has `f`) or an HTML binary.
+has `f`) or an HTML binary, and `Observed` the render-time az-* observations
+(see `arizona_event_attrs`).
 """.
--spec mount_and_render(Pid) -> {ok, binary(), binary() | map()} when
+-spec mount_and_render(Pid) ->
+    {ok, binary(), binary() | map(), arizona_event_attrs:observed()}
+when
     Pid :: pid().
 mount_and_render(Pid) ->
     gen_server:call(Pid, mount_and_render, infinity).
@@ -362,7 +365,7 @@ through `arizona_render:render/2`, it threads the live `views` map and so
 reflects current root *and* nested child state; the freshly produced
 snapshot/views are discarded (read-only render).
 """.
--spec render_current(Pid) -> {ok, binary()} when
+-spec render_current(Pid) -> {ok, binary(), arizona_event_attrs:observed()} when
     Pid :: pid().
 render_current(Pid) ->
     gen_server:call(Pid, render_current, infinity).
@@ -383,15 +386,16 @@ stop(Pid) ->
 -doc """
 Dispatches a client event to a view. If `ViewId` matches a nested
 child, the event goes to that view; otherwise it goes to the root
-handler. Returns `{ok, Ops, Effects}`.
+handler. Returns `{ok, Ops, Effects, Observed}`.
 """.
--spec handle_event(Pid, ViewId, Event, Payload) -> {ok, Ops, Effects} when
+-spec handle_event(Pid, ViewId, Event, Payload) -> {ok, Ops, Effects, Observed} when
     Pid :: pid(),
     ViewId :: binary(),
     Event :: binary(),
     Payload :: map(),
     Ops :: [list()],
-    Effects :: [term()].
+    Effects :: [term()],
+    Observed :: arizona_event_attrs:observed().
 handle_event(Pid, ViewId, Event, Payload) ->
     gen_server:call(Pid, {event, ViewId, Event, Payload}, infinity).
 
@@ -401,7 +405,7 @@ and returns fresh page content. Equivalent to
 `navigate(Pid, NewHandler, InitBindings, [])`.
 """.
 -spec navigate(Pid, NewHandler, InitBindings) ->
-    {ok, binary(), binary() | map()}
+    {ok, binary(), binary() | map(), arizona_event_attrs:observed()}
 when
     Pid :: pid(),
     NewHandler :: module(),
@@ -413,7 +417,7 @@ navigate(Pid, NewHandler, InitBindings) ->
 SPA navigation with `on_mount` hooks for the new handler.
 """.
 -spec navigate(Pid, NewHandler, InitBindings, OnMount) ->
-    {ok, binary(), binary() | map()}
+    {ok, binary(), binary() | map(), arizona_event_attrs:observed()}
 when
     Pid :: pid(),
     NewHandler :: module(),
@@ -441,7 +445,9 @@ socket's `do_patch`), so per-arrival, request-shaped derivation (session,
 path params, ...) flows in as `Params`; handler-specific per-navigation logic
 goes in `handle_update/3`, which sees both the new `Params` and the live state.
 """.
--spec patch(Pid, Params) -> {ok, [arizona_diff:op()], [arizona_stateful:effect()]} when
+-spec patch(Pid, Params) ->
+    {ok, [arizona_diff:op()], [arizona_stateful:effect()], arizona_event_attrs:observed()}
+when
     Pid :: pid(),
     Params :: map().
 patch(Pid, Params) ->
@@ -523,6 +529,10 @@ init({Handler, InitBindings, TransportPid, OnMount, ParentMetadata, ConnInfo}) -
     TransportPid =/= undefined andalso erlang:put('$arizona_connected', true),
     TransportPid =/= undefined andalso erlang:put('$arizona_capabilities', Capabilities),
     TransportPid =/= undefined andalso erlang:put('$arizona_reconnected', Reconnect),
+    %% Arm the render-time observation collector (see arizona_event_attrs).
+    %% Peerless renders (SSR/static, TransportPid = undefined) never arm it, so
+    %% observation stays a no-op outside a transported live process.
+    TransportPid =/= undefined andalso arizona_event_attrs:arm(),
     %% Monitor the transport so a *normal* transport exit tears the view down.
     %% The start_link link only brings the view down on an *abnormal* transport
     %% exit; a `normal` exit (the common case -- a clean client disconnect) is
@@ -560,7 +570,7 @@ handle_call(
 ) ->
     {ViewId, _HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
     %% A full render already reflects every child, so nothing is pending on it.
-    {reply, {ok, ViewId}, State#state{
+    {reply, {ok, ViewId, arizona_event_attrs:drain()}, State#state{
         bindings = B2, snapshot = Snap, views = V1, pending_refresh = #{}
     }};
 handle_call(
@@ -576,13 +586,13 @@ handle_call(
 ) ->
     {ViewId, HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
     {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
-    {reply, {ok, ViewId, PageContent1}, State#state{
+    {reply, {ok, ViewId, PageContent1, arizona_event_attrs:drain()}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1, pending_refresh = #{}
     }};
 handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
     Tmpl = arizona_stateful:call_render(H, B),
     {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
-    {reply, {ok, iolist_to_binary(HTML)}, State};
+    {reply, {ok, iolist_to_binary(HTML), arizona_event_attrs:drain()}, State};
 handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings = B0} = State) ->
     ok = push_barrier(From, State),
     case V0 of
@@ -615,56 +625,11 @@ handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings =
                         "registered",
                         [Event, ViewId, RootId]
                     ),
-                    {reply, {ok, [], []}, State}
+                    {reply, {ok, [], [], {[], []}}, State}
             end
     end;
-handle_call(
-    {navigate, NewHandler, NewIB, NewOnMount},
-    _From,
-    #state{
-        handler = OldH,
-        bindings = OldB,
-        views = OldV,
-        transport_pid = TPid,
-        sent_fps = Fps0,
-        push_barrier = Barrier
-    } = _State
-) ->
-    ok = cancel_pending_timers(),
-    %% The outgoing page's children are discarded wholesale (the views map is
-    %% wiped by do_mount below), which is a removal -- so unmount them exactly
-    %% like a diff removal would: children first, then the root, mirroring
-    %% removal semantics.
-    ok = unmount_removed_views(OldV),
-    ok = arizona_stateful:call_unmount(OldH, OldB),
-    %% Carry the previous root handler's final bindings forward as the floor;
-    %% NewIB (route static config + middleware enrichments) overrides on
-    %% overlap. The new handler's `mount/1` receives `OldB ⊕ NewIB`, picks
-    %% what it cares about, and returns its own bindings — values it does
-    %% not include in the return are dropped. Handlers that want to keep
-    %% session-level state (current_user, theme, locale) just include those
-    %% keys in their mount return; everything else is page-local and
-    %% naturally evaporates on the next navigate.
-    %%
-    %% Framework-restricted keys (currently `id`) are stripped from the
-    %% carry: they're route-bound, and `do_mount` enforces that the new
-    %% handler's mount must keep `Props` restricted keys verbatim --
-    %% letting them carry would force the new route to pretend it's the
-    %% old one.
-    OldB1 = maps:without(arizona_eval:restricted_keys(), OldB),
-    Merged = maps:merge(OldB1, NewIB),
-    {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, Merged, #{}, NewOnMount),
-    {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
-    {reply, {ok, NewViewId, PageContent1}, #state{
-        handler = NewHandler,
-        bindings = B2,
-        snapshot = Snap,
-        views = V1,
-        on_mount = NewOnMount,
-        transport_pid = TPid,
-        sent_fps = Fps1,
-        push_barrier = Barrier
-    }};
+handle_call({navigate, NewHandler, NewIB, NewOnMount}, _From, State) ->
+    do_navigate_call(NewHandler, NewIB, NewOnMount, State);
 handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) ->
     ok = push_barrier(From, State),
     %% In-place navigation: the root view stays mounted. Deliver Params to its
@@ -677,7 +642,7 @@ handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) -
     {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
         H, B1, Resets, Effects, State
     ),
-    {reply, {ok, Ops1, Effects1}, NewState#state{
+    {reply, {ok, Ops1, Effects1, arizona_event_attrs:drain()}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
     }};
 handle_call(view_state, _From, #state{handler = H, bindings = B, views = V} = State) ->
@@ -802,6 +767,51 @@ page_content(#{f := _} = Snap, _HTML) ->
 page_content(_Snap, HTML) ->
     iolist_to_binary(HTML).
 
+do_navigate_call(NewHandler, NewIB, NewOnMount, State) ->
+    #state{
+        handler = OldH,
+        bindings = OldB,
+        views = OldV,
+        transport_pid = TPid,
+        sent_fps = Fps0,
+        push_barrier = Barrier
+    } = State,
+    ok = cancel_pending_timers(),
+    %% The outgoing page's children are discarded wholesale (the views map is
+    %% wiped by do_mount below), which is a removal -- so unmount them exactly
+    %% like a diff removal would: children first, then the root, mirroring
+    %% removal semantics.
+    ok = unmount_removed_views(OldV),
+    ok = arizona_stateful:call_unmount(OldH, OldB),
+    %% Carry the previous root handler's final bindings forward as the floor;
+    %% NewIB (route static config + middleware enrichments) overrides on
+    %% overlap. The new handler's `mount/1` receives `OldB ⊕ NewIB`, picks
+    %% what it cares about, and returns its own bindings — values it does
+    %% not include in the return are dropped. Handlers that want to keep
+    %% session-level state (current_user, theme, locale) just include those
+    %% keys in their mount return; everything else is page-local and
+    %% naturally evaporates on the next navigate.
+    %%
+    %% Framework-restricted keys (currently `id`) are stripped from the
+    %% carry: they're route-bound, and `do_mount` enforces that the new
+    %% handler's mount must keep `Props` restricted keys verbatim --
+    %% letting them carry would force the new route to pretend it's the
+    %% old one.
+    OldB1 = maps:without(arizona_eval:restricted_keys(), OldB),
+    Merged = maps:merge(OldB1, NewIB),
+    {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, Merged, #{}, NewOnMount),
+    {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
+    {reply, {ok, NewViewId, PageContent1, arizona_event_attrs:drain()}, #state{
+        handler = NewHandler,
+        bindings = B2,
+        snapshot = Snap,
+        views = V1,
+        on_mount = NewOnMount,
+        transport_pid = TPid,
+        sent_fps = Fps1,
+        push_barrier = Barrier
+    }}.
+
 do_mount(H, B0, V0, OnMount) ->
     B1 = apply_on_mount(OnMount, B0),
     {B2, Resets} = arizona_stateful:call_mount(H, B1),
@@ -818,7 +828,7 @@ handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
     {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
         H, B1, Resets, Effects, State
     ),
-    {reply, {ok, Ops1, Effects1}, NewState#state{
+    {reply, {ok, Ops1, Effects1, arizona_event_attrs:drain()}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
     }}.
 
@@ -827,7 +837,7 @@ handle_child_event(ViewId, Event, Payload, From, #state{views = V0} = State) ->
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
     {Ops1, V1, Fps1, Effects1} = process_child_change(H, B1, Resets, Effects, ViewId, View, State),
     NewState = mark_pending_refresh(ViewId, From, State#state{views = V1, sent_fps = Fps1}),
-    {reply, {ok, Ops1, Effects1}, NewState}.
+    {reply, {ok, Ops1, Effects1, arizona_event_attrs:drain()}, NewState}.
 
 handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} = State) ->
     case arizona_stateful:call_handle_info(H, Info, B0) of
@@ -1307,7 +1317,7 @@ push(undefined, _ViewId, _Ops, _Effects) ->
 push(_Pid, _ViewId, [], []) ->
     ok;
 push(Pid, ViewId, Ops, Effects) ->
-    Pid ! {arizona_push, ViewId, Ops, Effects},
+    Pid ! {arizona_push, ViewId, Ops, Effects, arizona_event_attrs:drain()},
     ok.
 
 %% Marks, in the transport's mailbox, the boundary between the pushes emitted
