@@ -83,6 +83,10 @@ routes() ->
             bindings => #{id => ~"pip_demo", title => <<"PiP">>},
             layouts => Layouts
         }},
+        {live, <<"/events">>, arizona_events_demo, #{
+            bindings => #{title => <<"Events">>},
+            layouts => Layouts
+        }},
         {live, <<"/transitions">>, arizona_transitions, #{
             bindings => #{title => <<"Transitions">>},
             layouts => Layouts
