@@ -291,9 +291,9 @@ Renders a single each-item snapshot.
 If the template has a fingerprint, returns a wire-format map keyed by
 `~"f"`/`~"s"`/`~"d"`. Otherwise returns a plain HTML binary.
 """.
-%% The `az-*` attributes a template declares, carried by the payload that renders it.
-%% They ride the statics -- both are sent once per fingerprint and stripped by the
-%% same dedup -- so the client learns a type from the very frame that can first
+%% The `az-*` attributes a template declares, carried by the payload that renders
+%% it. They ride the statics -- both are sent once per fingerprint and stripped by
+%% the same dedup -- so the client learns a type from the very frame that can first
 %% produce it, and a repeat costs nothing.
 az_field(#{a := Attrs}) when Attrs =/= [] -> #{~"a" => Attrs};
 az_field(_Template) -> #{}.

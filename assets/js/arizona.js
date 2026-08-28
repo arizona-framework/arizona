@@ -9,7 +9,7 @@
  * Worker for transmission.
  *
  * Wire protocol (Worker -> Main):
- *   [0, ops|null, effects|null, firstAfterReconnect, azNames|null] -- resolved message
+ *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *
@@ -2800,7 +2800,7 @@ function handleEvent(target, eventType, signal) {
         // scroll fast path for a page that only observes these events, `false` is
         // what makes preventDefault take effect on a page that declares it. The
         // value is known before any of the four is ever bound, because the whole
-        // name set arrives in one frame and `noteAzNames` reads the directive out
+        // attribute set arrives in one frame and `noteAzAttrs` reads the directive out
         // of it before binding anything.
         capOpts.passive = !_preventDefaultDeclared;
         bubOpts.passive = !_preventDefaultDeclared;
@@ -2894,7 +2894,7 @@ const AZ_DIRECTIVES = new Set([
  * The az-* DOM events delegated so far. Bootstrapped with the types every app
  * uses, because the server's name set arrives one round trip after the socket
  * opens and a click in that window must not find an empty document. Grown by
- * `noteAzNames` from the set, and by `noteAzAttr` from a runtime attribute write.
+ * `noteAzAttrs` from the set, and by `noteAzAttr` from a runtime attribute write.
  * Monotonic for the life of the page.
  */
 const _eventTypes = new Set([
@@ -2927,7 +2927,7 @@ const _eventDocs = new Map();
  * registered -- so it has to be known before this loop binds one of them.
  * @param {string[]} names raw `az-*` attribute names, already lowercase
  */
-function noteAzNames(names) {
+function noteAzAttrs(names) {
     if (names.includes('az-prevent-default')) _preventDefaultDeclared = true;
     for (const name of names) noteAzAttr(name);
 }
@@ -3258,11 +3258,11 @@ function connect(endpoint, params = {}) {
             const msg = e.data;
             switch (msg[0]) {
                 case 0: {
-                    // [0, ops|null, effects|null, firstAfterReconnect, azNames|null]
+                    // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null]
                     // The app's `az-*` vocabulary, collected by the parse transform
                     // and sent on the connect frame. Delegated BEFORE the ops land,
                     // so a listener exists the moment an element declaring one does.
-                    if (msg[4]) noteAzNames(msg[4]);
+                    if (msg[4]) noteAzAttrs(msg[4]);
                     const apply = () => {
                         // A patch-scroll intent lives exactly until the first frame
                         // after the patch request. applyOps consumes it when the

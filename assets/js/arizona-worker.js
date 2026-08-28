@@ -6,7 +6,7 @@
  * Sends pre-computed DOM-ready data to the main thread.
  *
  * Worker -> Main protocol (arrays for fast structured clone):
- *   [0, ops|null, effects|null, firstAfterReconnect, azNames|null] -- resolved message
+ *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *
@@ -24,7 +24,7 @@ import {
     mruFpKeys,
     resolveHtml,
     setOnPersist,
-    takeAzNames,
+    takeAzAttrs,
     takeTouchedFps,
 } from './arizona-core.js';
 
@@ -362,12 +362,12 @@ function openSocket() {
         // app's compile-time union (which SSR markup needs, since its templates never
         // arrive as payloads), and a resolved payload carries the names of the template
         // it renders (which a navigate needs, since no second connect frame is sent).
-        const fromPayloads = takeAzNames();
-        const azNames =
+        const fromPayloads = takeAzAttrs();
+        const azAttrs =
             msg.a || fromPayloads
                 ? [...new Set([...(msg.a || []), ...(fromPayloads || [])])]
                 : null;
-        postMessage([0, ops, effects, firstAfterReconnect, azNames]);
+        postMessage([0, ops, effects, firstAfterReconnect, azAttrs]);
     };
 
     ws.onclose = (e) => {

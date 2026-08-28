@@ -349,7 +349,7 @@ component_mod_args(stateless, [{atom, _, Mod}, {atom, _, _Fun} | _]) -> [Mod];
 component_mod_args(stateless, [{'fun', _, {function, {atom, _, Mod}, _, _}} | _]) -> [Mod];
 component_mod_args(_Fun, _Args) -> [].
 
-%% Record one `az-*` attribute name, meaning "this name can carry a command, or is
+%% Record one `az-*` attribute, meaning "this name can carry a command, or is
 %% a bare directive the client must know about". Called from `compile_attr`, the
 %% single point every attribute name resolves through.
 %%
@@ -1835,9 +1835,9 @@ count_var(_V, _Other, N) ->
     N.
 
 compile_template(Arg, Line, Module, LiveRender, Backend) ->
-    Mark = az_names_mark(),
+    Mark = az_attrs_mark(),
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(Arg, Module, LiveRender, Backend),
-    Opts = Opts0#{backend => Backend, az_names => az_names_since(Mark)},
+    Opts = Opts0#{backend => Backend, az_attrs => az_attrs_since(Mark)},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
 
@@ -2375,13 +2375,13 @@ compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0)
                 raw_text_tag = Tag,
                 content_ctx = ChildCtx
             },
-            InnerMark = az_names_mark(),
+            InnerMark = az_attrs_mark(),
             Inner1 = compile_children(Children, none, Inner0),
             {Statics, DynASTs} = finalize(Inner1),
             Fp = generate_fingerprint(Statics),
             {S1, D1} = scope_az(Backend, Fp, Statics, DynASTs),
             TmplAST = build_template_ast(Line, S1, D1, Fp, #{
-                backend => Backend, az_names => az_names_since(InnerMark)
+                backend => Backend, az_attrs => az_attrs_since(InnerMark)
             }),
             %% The folded content is a nested template, so its inner `?get` reads
             %% are isolated from THIS slot's dependency bracket -- without touches
@@ -3259,30 +3259,30 @@ build_template_ast(Line, Statics, DynASTs, Fingerprint, Opts) ->
     %% The `az-*` names this template declares, carried BY the template so the client
     %% learns them from the payload that renders them. They ride the statics: sent
     %% once per fingerprint and stripped by the same dedup, so a repeat costs nothing.
-    AzNames = maps:get(az_names, Opts, []),
-    AzField = [
-        {map_field_assoc, Line, {atom, Line, a}, erl_parse:abstract(AzNames, Line)}
-     || AzNames =/= []
+    AzAttrs = maps:get(az_attrs, Opts, []),
+    AttrsField = [
+        {map_field_assoc, Line, {atom, Line, a}, erl_parse:abstract(AzAttrs, Line)}
+     || AzAttrs =/= []
     ],
     BaseFields = [
         {map_field_assoc, Line, {atom, Line, s}, StaticsAST},
         {map_field_assoc, Line, {atom, Line, d}, DynamicsAST},
         {map_field_assoc, Line, {atom, Line, f}, FpAST}
     ],
-    {map, Line, BaseFields ++ AzField ++ opts_to_map_fields(maps:remove(az_names, Opts), Line)}.
+    {map, Line, BaseFields ++ AttrsField ++ opts_to_map_fields(maps:remove(az_attrs, Opts), Line)}.
 
 %% The accumulator is append-at-front, so a mark is its length and everything added
 %% since sits in front of it. A nested template's names appear in its enclosing
 %% template's slice too; harmless, since both payloads carry the same name and the
 %% client binds a type once.
-az_names_mark() ->
-    length(current_az_names()).
+az_attrs_mark() ->
+    length(current_az_attrs()).
 
-az_names_since(Mark) ->
-    All = current_az_names(),
+az_attrs_since(Mark) ->
+    All = current_az_attrs(),
     lists:usort(lists:sublist(All, length(All) - Mark)).
 
-current_az_names() ->
+current_az_attrs() ->
     case get(?AZ_ATTRS_KEY) of
         undefined -> [];
         L -> L

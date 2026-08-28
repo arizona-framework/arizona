@@ -5,7 +5,7 @@
  * unit tests (no Worker globals required).
  *
  * Exports: resolveHtml, zipTemplate, backoff, fpCache, loadFpEntries,
- *          setOnPersist, FP_CACHE_MAX, mruFpKeys, takeTouchedFps, takeAzNames.
+ *          setOnPersist, FP_CACHE_MAX, mruFpKeys, takeTouchedFps, takeAzAttrs.
  */
 
 /** Type constant (must match server ?STREAM). */
@@ -63,12 +63,12 @@ const fpCache = new Map();
 const _touchedFps = new Set();
 
 /**
- * `az-*` names seen on resolved payloads since the last drain. A template carries
- * the names it declares, so they arrive with the statics that render the markup
- * declaring them -- the client learns a DOM event type from the very frame that can
+ * `az-*` attributes seen on resolved payloads since the last drain. A template
+ * carries the attributes it declares, so they arrive with the statics that render
+ * the markup declaring them -- the client learns a DOM event type from the very frame that can
  * first produce it, without re-deriving anything from the bytes.
  */
-const _azNames = new Set();
+const _azAttrs = new Set();
 
 /**
  * Optional callback invoked whenever the fp cache is updated (new statics
@@ -117,11 +117,11 @@ function touchFp(f, entry) {
  * @returns {Array<string>}
  */
 /** @returns {string[]|null} */
-function takeAzNames() {
-    if (_azNames.size === 0) return null;
-    const names = [..._azNames];
-    _azNames.clear();
-    return names;
+function takeAzAttrs() {
+    if (_azAttrs.size === 0) return null;
+    const attrs = [..._azAttrs];
+    _azAttrs.clear();
+    return attrs;
 }
 
 function takeTouchedFps() {
@@ -157,7 +157,7 @@ function resolveHtml(payload) {
     // string), so the client innerHTMLs the unwrapped markup.
     if ('raw' in payload) return payload.raw;
     const f = payload.f;
-    if (payload.a) for (const n of payload.a) _azNames.add(n);
+    if (payload.a) for (const n of payload.a) _azAttrs.add(n);
     if (payload.s) {
         /** @type {{s: Array<string>, t?: number, u: number}} */
         const entry = { s: payload.s, u: Date.now() };
@@ -230,7 +230,7 @@ export {
     mruFpKeys,
     resolveHtml,
     setOnPersist,
-    takeAzNames,
+    takeAzAttrs,
     takeTouchedFps,
     zipTemplate,
 };

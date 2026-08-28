@@ -38,7 +38,7 @@ function mockWorker(mod) {
     return {
         open: () => inst.onmessage({ data: [1, false] }),
         /** The connect frame: the app's whole `az-*` vocabulary, ops optional. */
-        names: (azNames, ops = null) => inst.onmessage({ data: [0, ops, null, false, azNames] }),
+        names: (azAttrs, ops = null) => inst.onmessage({ data: [0, ops, null, false, azAttrs] }),
         ops: (ops) => inst.onmessage({ data: [0, ops, null, false, null] }),
         sent: () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1])),
         restore: () => {

@@ -67,8 +67,8 @@ The live process is linked. Exits map to WebSocket close codes:
 %% --------------------------------------------------------------------
 
 -define(OPS, ~"o").
-%% The `az-*` names the app's templates declare, sent once at connect.
--define(AZ_NAMES, ~"a").
+%% The `az-*` attributes the app's templates declare, sent once at connect.
+-define(AZ_ATTRS, ~"a").
 -define(EFFECTS, ~"e").
 -define(SYS_PING, ~"0").
 -define(SYS_PONG, ~"1").
@@ -215,25 +215,25 @@ init(Handler, Bindings, Req, Opts) ->
 %% mount must not run twice, and no frame can reach the unmounted live process
 %% -- handle_in flushes before processing any frame, and an unmounted process
 %% has no subscriptions or timers to push from.
-%% Every clause ships `?AZ_NAMES`, including the two that otherwise have nothing to
+%% Every clause ships `?AZ_ATTRS`, including the two that otherwise have nothing to
 %% say. The client delegates a DOM event type only for a name in this set, so a
 %% connect that sent no frame would leave the page unable to answer its own first
 %% event -- and a first connect (the third clause) is exactly the case that used to
 %% reply with nothing at all.
 init_view(true, true, Handler, Pid, Socket) ->
     TRef = erlang:send_after(?RESYNC_TIMEOUT_MS, self(), arizona_resync_timeout),
-    {reply, encode(#{?AZ_NAMES => arizona_az_attrs:all(Handler)}), Socket#socket{
+    {reply, encode(#{?AZ_ATTRS => arizona_az_attrs:all(Handler)}), Socket#socket{
         pid = Pid, pending_resync = TRef
     }};
 init_view(true, false, Handler, Pid, Socket) ->
     {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
     Ops = replace_ops(ViewId, PageHTML),
-    {reply, encode(#{?OPS => Ops, ?AZ_NAMES => arizona_az_attrs:all(Handler)}), Socket#socket{
+    {reply, encode(#{?OPS => Ops, ?AZ_ATTRS => arizona_az_attrs:all(Handler)}), Socket#socket{
         pid = Pid, view_id = ViewId
     }};
 init_view(false, _FpsFollow, Handler, Pid, Socket) ->
     {ok, ViewId} = arizona_live:mount(Pid),
-    {reply, encode(#{?AZ_NAMES => arizona_az_attrs:all(Handler)}), Socket#socket{
+    {reply, encode(#{?AZ_ATTRS => arizona_az_attrs:all(Handler)}), Socket#socket{
         pid = Pid, view_id = ViewId
     }}.
 
@@ -873,10 +873,10 @@ capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
 %% inline as iodata, skipping the per-op binary concat (and per-target
 %% `escape_binary/5` walk) that the previous `scope_ops` did. Effects
 %% keep the default encoder -- they're plain JSON values.
-encode(#{?OPS := Ops, ?AZ_NAMES := Names}) ->
-    json:encode(#{?OPS => Ops, ?AZ_NAMES => Names}, fun op_encoder/2);
-encode(#{?AZ_NAMES := Names}) ->
-    json:encode(#{?AZ_NAMES => Names});
+encode(#{?OPS := Ops, ?AZ_ATTRS := Attrs}) ->
+    json:encode(#{?OPS => Ops, ?AZ_ATTRS => Attrs}, fun op_encoder/2);
+encode(#{?AZ_ATTRS := Attrs}) ->
+    json:encode(#{?AZ_ATTRS => Attrs});
 encode(#{?OPS := Ops, ?EFFECTS := Effects}) ->
     [
         <<"{\"o\":">>,
