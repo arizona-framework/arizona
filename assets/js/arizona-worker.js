@@ -350,8 +350,13 @@ function openSocket() {
             flushTouchedFps();
         }
 
-        const firstAfterReconnect = _reconnecting;
-        if (_reconnecting) _reconnecting = false;
+        // The flag belongs to the frame that rebuilds the DOM, not merely the first
+        // one to arrive. A reconnect opens with the declared `az-*` names, which
+        // carry no ops: letting that frame claim the flag makes the main thread
+        // restore form state against the DOM the following OP_REPLACE is about to
+        // discard, silently losing what the user had typed.
+        const firstAfterReconnect = _reconnecting && ops !== null;
+        if (firstAfterReconnect) _reconnecting = false;
 
         postMessage([0, ops, effects, firstAfterReconnect, azNames]);
     };
