@@ -136,7 +136,10 @@ render(Bindings) ->
     d := [dynamic()],
     f := binary(),
     diff => false,
-    backend => module()
+    backend => module(),
+    %% The `az-*` attribute names this template declares, recorded by the parse
+    %% transform so the client can delegate exactly those DOM event types.
+    az_names => [binary()]
 }.
 
 -nominal each_template() :: #{
@@ -161,7 +164,8 @@ render(Bindings) ->
     deps => [deps()],
     diff => false,
     view_id => binary(),
-    backend => module()
+    backend => module(),
+    az_names => [binary()]
 }.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.

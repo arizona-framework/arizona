@@ -116,6 +116,7 @@ function touchFp(f, entry) {
  * The fingerprints touched since the last call, clearing the set.
  * @returns {Array<string>}
  */
+/** @returns {string[]|null} */
 function takeAzNames() {
     if (_azNames.size === 0) return null;
     const names = [..._azNames];
@@ -147,7 +148,7 @@ function mruFpKeys(limit) {
  * Resolve a payload that may be a plain text string (`?get` scalar), a `{raw}` tag
  * (a `?raw` trusted-HTML value), or a fingerprinted template object {f, s?, t?, d}
  * (a nested template / plain-list each). Returns the HTML/text string.
- * @param {string|{raw: string}|{f: string, s?: Array<string>, t?: number, d: Array<*>}} payload
+ * @param {string|{raw: string}|{f: string, s?: Array<string>, a?: Array<string>, t?: number, d: Array<*>}} payload
  * @returns {string}
  */
 function resolveHtml(payload) {
