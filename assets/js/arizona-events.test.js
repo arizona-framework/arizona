@@ -39,9 +39,22 @@ function mockWorker(mod) {
     };
 }
 
-/** Dispatch an event exactly as the platform does: `bubbles` decides the phase. */
-function fire(el, type, bubbles) {
-    el.dispatchEvent(new Event(type, { bubbles }));
+/**
+ * Dispatch an event exactly as the platform does: `bubbles` decides the phase.
+ * Returns the event, so a test can read `defaultPrevented` back off it.
+ */
+function fire(el, type, bubbles, cancelable = false) {
+    const ev = new Event(type, { bubbles, cancelable });
+    el.dispatchEvent(ev);
+    return ev;
+}
+
+/** Dispatch a drop carrying a dataTransfer, which the `Event` constructor has no slot for. */
+function fireDrop(el, key) {
+    const ev = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'dataTransfer', { value: { getData: () => key } });
+    el.dispatchEvent(ev);
+    return ev;
 }
 
 beforeEach(() => {
@@ -209,6 +222,13 @@ describe('open event delegation', () => {
         // `false`, not absent: Chrome forces passive when the flag is unspecified,
         // so an omitted flag here re-forces it and the upgrade does nothing.
         expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([false]);
+
+        // The re-add must be preceded by a real remove. `handleEvent` returns FRESH
+        // closures, so an upgrade that only re-adds leaves the passive pair
+        // registered beside the new one and one wheel pushes the command twice --
+        // invisible to the options assertion above, which never dispatches.
+        fire(document.getElementById('p'), 'wheel', true);
+        expect(w.sent()).toEqual([['v', 'w', {}]]);
     });
 
     it('upgrades passive when a patch writes az-prevent-default onto an element', async () => {
@@ -227,6 +247,33 @@ describe('open event delegation', () => {
         // `false`, not absent: Chrome forces passive when the flag is unspecified,
         // so an omitted flag here re-forces it and the upgrade does nothing.
         expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([false]);
+
+        // One live listener after the swap, not two -- see the twin assertion above.
+        fire(document.getElementById('p'), 'wheel', true);
+        expect(w.sent()).toEqual([['v', 'w', {}]]);
+    });
+
+    it('upgrades passive for a forced type the SSR markup already opts out of', async () => {
+        const mod = await fresh();
+        const calls = recordListeners();
+        document.body.innerHTML =
+            `<div id="v" az-view>` +
+            `<div id="p" az-wheel='[0,"w"]' az-prevent-default></div></div>`;
+        w = mockWorker(mod);
+        // The ordinary delivery: the attribute is in the server-rendered HTML, so the
+        // connect-time scan is what has to reach the upgrade -- there is no patch and
+        // no worker report to carry it. The scan binds `wheel` when it reads that
+        // attribute and meets az-prevent-default one attribute later, so the type is
+        // registered passive first and has to be re-registered.
+        w.open();
+
+        const passive = calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive);
+        // `false`, not absent: Chrome forces passive when the flag is unspecified,
+        // so an omitted flag here re-forces it and the upgrade does nothing.
+        expect(passive.at(-1)).toBe(false);
+        // ...and exactly one listener survives it.
+        fire(document.getElementById('p'), 'wheel', true);
+        expect(w.sent()).toEqual([['v', 'w', {}]]);
     });
 
     it('ignores an az-* attribute holding app data, not a command', async () => {
@@ -296,6 +343,57 @@ describe('open event delegation', () => {
         // `submit` is a real DOM event name AND a dedicated listener, so generic
         // delegation would run the command a second time.
         expect(w.sent()).toEqual([['v', 'saved', {}]]);
+    });
+
+    it('does not double-run az-drop, which has its own listener', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><ul id="list" az-drop='[0,"reorder"]'>` +
+            `<li id="item" az-key="a">A</li><li id="gap">drop zone padding</li></ul></div>`;
+        w = mockWorker(mod);
+        mod.mountHooks(document);
+        w.open();
+
+        // `drop` is submit's twin: a real DOM event name AND a dedicated listener
+        // (it carries the drag bookkeeping), so generic delegation would run the
+        // command a second time with the same payload.
+        fireDrop(document.getElementById('item'), 'a');
+        expect(w.sent()).toEqual([['v', 'reorder', { data_transfer: 'a', drop_index: 0 }]]);
+    });
+
+    it('ignores a drop on a child the drag bookkeeping does not key', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><ul id="list" az-drop='[0,"reorder"]'>` +
+            `<li id="item" az-key="a">A</li><li id="gap">drop zone padding</li></ul></div>`;
+        w = mockWorker(mod);
+        mod.mountHooks(document);
+        w.open();
+
+        // Dropping on a child with no az-key is not a reorder: the dedicated
+        // listener returns before executing anything, where generic delegation
+        // would report a phantom one, landing at index -1.
+        fireDrop(document.getElementById('gap'), 'a');
+        expect(w.sent()).toEqual([]);
+    });
+
+    it('cancels a non-bubbling event when the element declares prevent-default', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view>` +
+            `<dialog id="dlg" az-cancel='[0,"cancelled"]' az-prevent-default></dialog></div>`;
+        w = mockWorker(mod);
+        mod.mountHooks(document);
+        w.open();
+
+        // `cancel` (Esc on a <dialog>) and `beforetoggle` (a popover) are cancelable
+        // and do NOT bubble, so the capture listener is the only one that ever sees
+        // them: keeping the dialog open is impossible unless preventDefault runs on
+        // that path too. The bubble path can't stand in -- the event never gets there.
+        const ev = fire(document.getElementById('dlg'), 'cancel', false, true);
+
+        expect(ev.defaultPrevented).toBe(true);
+        expect(w.sent()).toEqual([['v', 'cancelled', {}]]);
     });
 
     it('survives an event whose target is the Document, not an Element', async () => {
