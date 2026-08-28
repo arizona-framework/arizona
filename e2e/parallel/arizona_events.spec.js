@@ -28,17 +28,25 @@ test('delivers a non-bubbling event the server declared at connect', async ({ pa
 test('never delegates an az-* name that only carries app data', async ({ page }) => {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
+    // The containment would turn a wrong delegation into a console warning, not
+    // a pageerror -- so the warning stream is the assertion that carries this
+    // test's failure mode.
+    const warnings = [];
+    page.on('console', (m) => {
+        if (m.text().includes('[arizona]')) warnings.push(m.text());
+    });
     await page.goto('/events');
     await wsReady(page);
 
     // az-select="[1,2,3]" is a static value, so the transform does not record it.
     // Were it delegated, this dispatch would parse [1,2,3] as a command -- opcode 1
-    // is toggle, selector 2 -- and throw out of the document listener.
+    // is toggle, selector 2 -- and crash the interpreter.
     await page.evaluate(() =>
         document.getElementById('data').dispatchEvent(new Event('select', { bubbles: true })),
     );
     await page.waitForTimeout(150);
     expect(errors).toEqual([]);
+    expect(warnings).toEqual([]);
 });
 
 // The /opaque-events view (test/support/arizona_opaque_events.erl) proves the
@@ -64,18 +72,25 @@ test('delivers an event proved only by the render, at connect', async ({ page })
 test('never delegates dynamic app data, even shaped like a command', async ({ page }) => {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
+    // As above: a wrong delegation surfaces as a contained console warning, so
+    // assert the warning stream too.
+    const warnings = [];
+    page.on('console', (m) => {
+        if (m.text().includes('[arizona]')) warnings.push(m.text());
+    });
     await page.goto('/opaque-events');
     await wsReady(page);
 
     // {az_select, ?get(ids)} renders az-select="[1,2,3]" -- app data the compile
     // step cannot classify. The render proved it is NOT a command, so `select` is
     // never delegated; were it, this dispatch would execute [1,2,3] (toggle,
-    // selector 2) and throw out of the document listener.
+    // selector 2) and crash the interpreter.
     await page.evaluate(() =>
         document.getElementById('data').dispatchEvent(new Event('select', { bubbles: true })),
     );
     await page.waitForTimeout(150);
     expect(errors).toEqual([]);
+    expect(warnings).toEqual([]);
 });
 
 test('delivers an event proved by a later frame, via its delta', async ({ page }) => {

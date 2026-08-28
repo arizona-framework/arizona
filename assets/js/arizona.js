@@ -818,13 +818,15 @@ function applyTextOp(el, az, val, isHtml) {
  * @param {string} val
  */
 function applySetAttrOp(el, name, val) {
-    el.setAttribute(name, val);
     // A runtime `arizona_js:set_attr(sel, "az-toggle", ...)` writes a name no
     // template contains, so the compile-time set cannot hold it. Every such write
     // funnels here -- the SET_ATTR op, an ITEM_PATCH inner op, `set_attr`/
     // `toggle_attr`, and a `?local` attribute slot -- so one call covers them all.
-    // Without it the attribute lands correctly and its event silently never fires.
+    // Without it the attribute lands correctly and its event silently never
+    // fires. Before the write: a custom element's attributeChangedCallback may
+    // synchronously dispatch the very event the attribute names.
     noteAzAttr(name);
+    el.setAttribute(name, val);
     if (name === 'value' && 'value' in el) el.value = val;
     else if (name === 'checked' && 'checked' in el) el.checked = true;
     else if (name === 'selected' && 'selected' in el) el.selected = true;
@@ -2174,7 +2176,21 @@ function execOne(el, event, cmd) {
                 _pendingTransition = { types: opts.types, kind };
                 executeJS(el, event, inner);
             } else {
-                runTransition(opts, () => executeJS(el, event, inner));
+                // The update callback runs inside startViewTransition, OUTSIDE
+                // every caller's containment -- a throwing command would become
+                // one unhandled rejection per dispatch. Same warn-once contract
+                // as runDelegated.
+                runTransition(opts, () => {
+                    try {
+                        executeJS(el, event, inner);
+                    } catch (err) {
+                        const detail = err instanceof Error ? err.message : String(err);
+                        warnOnce(
+                            `[arizona] az-transition command failed: ${detail}`,
+                            'az-transition',
+                        );
+                    }
+                });
             }
             break;
         }
@@ -2751,7 +2767,9 @@ function runDelegated(e, attr, sel, capture) {
         executeJS(el, e, withTransitionAttr(el, cmds));
     } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
-        warnOnce(`[arizona] ${attr} did not run as a command list: ${detail}`);
+        // Keyed by the attribute, not the message: a churning bad value would
+        // otherwise mint a new entry per distinct error snippet.
+        warnOnce(`[arizona] ${attr} did not run as a command list: ${detail}`, attr);
     }
 }
 
@@ -2857,9 +2875,9 @@ const NATIVELY_BUBBLING = new Set([
 const _warned = new Set();
 
 /** @param {string} msg */
-function warnOnce(msg) {
-    if (_warned.has(msg)) return;
-    _warned.add(msg);
+function warnOnce(msg, key = msg) {
+    if (_warned.has(key)) return;
+    _warned.add(key);
     console.warn(msg);
 }
 
@@ -3051,8 +3069,17 @@ function bindDocumentEvents(target, signal, abort) {
             e.preventDefault();
             form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
             const raw = form.getAttribute('az-submit');
-            const cmds = raw ? JSON.parse(raw) : null;
-            if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
+            let cmds = null;
+            try {
+                cmds = raw ? JSON.parse(raw) : null;
+                if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
+            } catch (err) {
+                const detail = err instanceof Error ? err.message : String(err);
+                warnOnce(
+                    `[arizona] az-submit did not run as a command list: ${detail}`,
+                    'az-submit',
+                );
+            }
             // A fetch command resets on its own 2xx response (so a validation error
             // keeps the typed fields); everything else resets synchronously here.
             if (!(cmds && commandsIncludeFetch(cmds))) maybeResetForm(form);
@@ -3089,7 +3116,12 @@ function bindDocumentEvents(target, signal, abort) {
             if (!container || !_connected) return;
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
-            executeJS(container, e, withTransitionAttr(container, JSON.parse(raw)));
+            try {
+                executeJS(container, e, withTransitionAttr(container, JSON.parse(raw)));
+            } catch (err) {
+                const detail = err instanceof Error ? err.message : String(err);
+                warnOnce(`[arizona] az-drop did not run as a command list: ${detail}`, 'az-drop');
+            }
         },
         { signal },
     );
@@ -3499,6 +3531,7 @@ function connect(endpoint, params = {}) {
         // reconnect rebinds the same types without waiting for the connect frame.
         for (const rec of _eventDocs.values()) rec.abort?.();
         _eventDocs.clear();
+        _passiveBound.clear();
         // Run destroyed() on every tracked hook and clear the map. Without
         // this, hook instances leak when host code removes the DOM by means
         // arizona didn't observe (third-party libs, test teardown via
