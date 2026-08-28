@@ -22,6 +22,7 @@
     reconnect_fps_follow_ships_resync_then_reply/1,
     connect_ships_walk_and_mount_observations/1,
     delta_rides_the_frame_that_first_renders_the_attr/1,
+    delta_rides_a_value_that_becomes_a_command/1,
     dynamic_stateful_swap_ships_new_module_names/1,
     layout_attrs_ride_the_connect_frame/1,
     navigate_reply_ships_target_route_names/1,
@@ -129,6 +130,7 @@ groups() ->
         reconnect_fps_follow_ships_resync_then_reply,
         connect_ships_walk_and_mount_observations,
         delta_rides_the_frame_that_first_renders_the_attr,
+        delta_rides_a_value_that_becomes_a_command,
         dynamic_stateful_swap_ships_new_module_names,
         layout_attrs_ride_the_connect_frame,
         navigate_reply_ships_target_route_names,
@@ -2071,17 +2073,35 @@ connect_ships_walk_and_mount_observations(Config) ->
 
 %% A branch that first renders on a later frame carries its opaque command's
 %% name as that frame's delta -- and only once: the per-socket dedup leaves
-%% every following frame bare.
+%% every following frame bare. The reveal handler also returns an effect, so
+%% this frame is the ops+effects+delta shape: the delta must ride BESIDE the
+%% effects, never at their expense (map patterns are subset matches, so a
+%% missing widest-shape encode clause would silently drop `e`).
 delta_rides_the_frame_that_first_renders_the_attr(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/opaque-events">>, []),
     ok = ws_send_json(Sock, [~"page", ~"reveal", #{}]),
     {text, Reply} = ws_recv(Sock),
-    ?assertMatch(#{~"o" := _, ~"a" := [~"az-dblclick"]}, json:decode(Reply)),
+    ?assertMatch(
+        #{~"o" := _, ~"e" := [[?EFFECT_SET_TITLE, ~"revealed"]], ~"a" := [~"az-dblclick"]},
+        json:decode(Reply)
+    ),
     ok = ws_send_json(Sock, [~"page", ~"entered", #{}]),
     {text, Reply2} = ws_recv(Sock),
     Decoded2 = json:decode(Reply2),
     ?assertMatch(#{~"o" := _}, Decoded2),
     ?assertNot(is_map_key(~"a", Decoded2)),
+    ws_close(Sock).
+
+%% An attribute VALUE that becomes a command between renders ships as an
+%% in-place OP_SET_ATTR -- a path that bypasses every rendering observation
+%% point. The transition's frame must still carry the name, or the DOM gains a
+%% working command that is never delegated (and nothing later re-evaluates the
+%% unchanged value to heal it).
+delta_rides_a_value_that_becomes_a_command(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/opaque-events">>, []),
+    ok = ws_send_json(Sock, [~"page", ~"arm_cmd", #{}]),
+    {text, Reply} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := _, ~"a" := [~"az-mouseleave"]}, json:decode(Reply)),
     ws_close(Sock).
 
 %% The documented `?stateful(?get(page), ...)` idiom: the module is data, so the

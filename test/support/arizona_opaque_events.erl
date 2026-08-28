@@ -27,6 +27,10 @@ mount(Init) ->
         ids => ~"[1,2,3]",
         enter_cmd => arizona_js:push_event(~"entered"),
         late_cmd => arizona_js:push_event(~"doubled"),
+        %% Starts as data (false strips the attribute) and BECOMES a command on
+        %% the arm_cmd event -- the in-place OP_SET_ATTR transition, which must
+        %% carry the name as that frame's delta.
+        flip_cmd => false,
         show_late => false,
         entered => 0,
         doubled => 0
@@ -40,6 +44,7 @@ render(Bindings) ->
             {h1, [], [?get(title)]},
             {p, [{id, ~"enter"}, {az_mouseenter, ?get(enter_cmd)}], [~"hover me"]},
             {p, [{id, ~"data"}, {az_select, ?get(ids)}], [~"data"]},
+            {p, [{id, ~"flip"}, {az_mouseleave, ?get(flip_cmd)}], [~"flip"]},
             case ?get(show_late) of
                 true -> {p, [{id, ~"late"}, {az_dblclick, ?get(late_cmd)}], [~"late"]};
                 false -> <<>>
@@ -55,7 +60,13 @@ render(Bindings) ->
 -spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
     az:handle_event_ret().
 handle_event(~"reveal", _Payload, Bindings) ->
-    {Bindings#{show_late => true}, #{}, []};
+    %% The effect makes the reply an ops+effects+delta frame, the shape that
+    %% must not lose its effects to the delta.
+    {Bindings#{show_late => true}, #{}, [arizona_js:set_title(~"revealed")]};
+handle_event(~"arm_cmd", _Payload, Bindings) ->
+    {Bindings#{flip_cmd => arizona_js:push_event(~"left")}, #{}, []};
+handle_event(~"left", _Payload, Bindings) ->
+    {Bindings#{entered => maps:get(entered, Bindings) + 1}, #{}, []};
 handle_event(~"entered", _Payload, Bindings) ->
     {Bindings#{entered => maps:get(entered, Bindings) + 1}, #{}, []};
 handle_event(~"doubled", _Payload, Bindings) ->

@@ -945,14 +945,31 @@ capture_flash_effect(Effect, Pending) ->
 capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
     {{arizona_effect, [Op, Path, maps:remove(flash, Opts)]}, maps:merge(Pending, Flash)}.
 
-%% Fast path for the three reply shapes produced by encode_reply/3. Hand
-%% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping
-%% OTP json's per-key map walk and the per-call escape on the constant
-%% `<<"o">>`/`<<"e">>` keys. The Ops list goes through `json:encode/2`
+%% Fast path for the reply shapes produced by encode_reply/3 and the connect
+%% frames. Hand writes the outer `{"o":...}` / `{"e":...}` / combined wrapper,
+%% skipping OTP json's per-key map walk and the per-call escape on the constant
+%% `<<"o">>`/`<<"e">>`/`<<"a">>` keys. The Ops list goes through `json:encode/2`
 %% with `op_encoder/2` -- the custom encoder emits `"<ViewId>:<Az>"`
 %% inline as iodata, skipping the per-op binary concat (and per-target
 %% `escape_binary/5` walk) that the previous `scope_ops` did. Effects
 %% keep the default encoder -- they're plain JSON values.
+%%
+%% Clause order carries a trap: map patterns are SUBSET matches, so the
+%% widest key set must match first -- an `o`+`e`+`a` frame reaching the
+%% `o`+`a` clause would re-encode without `e`, silently dropping the
+%% effects on exactly the frames that carry a delta.
+encode(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
+    [
+        <<"{\"o\":">>,
+        json:encode(Ops, fun op_encoder/2),
+        <<",\"e\":">>,
+        json:encode(Effects),
+        <<",\"a\":">>,
+        json:encode(Attrs),
+        $}
+    ];
+encode(#{?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
+    [<<"{\"e\":">>, json:encode(Effects), <<",\"a\":">>, json:encode(Attrs), $}];
 encode(#{?OPS := Ops, ?AZ_ATTRS := Attrs}) ->
     json:encode(#{?OPS => Ops, ?AZ_ATTRS => Attrs}, fun op_encoder/2);
 encode(#{?AZ_ATTRS := Attrs}) ->
