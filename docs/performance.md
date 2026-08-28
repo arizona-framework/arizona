@@ -308,13 +308,20 @@ raw-DOM floor. Not in `ci`, for the same reason `bench` is not.
 
 | workload | ops | total | floor | ratio |
 | -------- | --- | ----- | ----- | ----- |
-| `stream_patch` (200 of 400 changed) | 200 `OP_ITEM_PATCH` | 0.158 ms | 0.039 ms | 4.0x |
-| `stream_render` (400 of 400 changed) | 1 `OP_TEXT` | 1.08 ms | 1.00 ms | 1.1x |
+| `stream_patch` (200 of 400 changed) | 200 `OP_ITEM_PATCH` | 0.154 ms | 0.040 ms | 3.8x |
+| `stream_render` (400 of 400 changed) | 1 `OP_TEXT` | 1.12 ms | 1.04 ms | 1.1x |
 
-**The full re-render path is already at the floor.** `parseFragmentIn` is 0.93 ms of the
-1.08, so the batch costs about what a bare `innerHTML` of the same fragment does. Nothing to
-win there, and nothing to move to the worker either: parsing needs a DOM, and parsed nodes are
-not transferable.
+**The full re-render path is already at the floor.** The batch runs at 1.1x a bare
+`innerHTML` of the same fragment, with `parseFragmentIn` taking 83% of it. Nothing to win
+there, and nothing to move to the worker either: parsing needs a DOM, and parsed nodes are not
+transferable.
+
+**Read the per-function breakdown as shares, not milliseconds.** Wrapping every internal costs
+two `performance.now()` calls per call, which on `stream_patch` makes that pass ~4x slower than
+the plain run it prints under (on `stream_render`, with ~8 wrapped calls, it is ~1.0x). The
+proportions survive that overhead; the absolute figures do not, which is why the tool reports
+shares -- quoting an instrumented millisecond next to a plain total is its own small version of
+the denominator trap above.
 
 It guards two traps, both of which produced confident numbers for work that never happened.
 

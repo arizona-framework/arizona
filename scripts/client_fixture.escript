@@ -79,8 +79,11 @@ scope(ParentViewId, [[ChildViewId, ChildOps] | Rest]) when is_binary(ChildViewId
     scope(ChildViewId, ChildOps) ++ scope(ParentViewId, Rest);
 scope(ViewId, [[Code, Az | Tail] | Rest]) when is_binary(Az) ->
     [[Code, <<ViewId/binary, ":", Az/binary>> | Tail] | scope(ViewId, Rest)];
-scope(ViewId, [Op | Rest]) ->
-    [Op | scope(ViewId, Rest)].
+scope(_ViewId, [Op | _Rest]) ->
+    %% Loud on purpose. Passing an unrecognised op through unscoped would leave it
+    %% unresolvable, and the bench would report it as "nothing applied" -- a failure
+    %% pointing at the harness rather than at this function, which is where it is.
+    error({unscopable_op, Op}).
 
 %% Same shape as `scripts/bench.escript`: prefer the test profile so
 %% `test/support/` fixtures (arizona_stream_bulk) are on the path.

@@ -20,8 +20,12 @@
  * Usage: bench_client.mjs FIXTURE_DIR [--only LABEL] [--runs N]
  */
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+
+// Relative to this script, not the cwd, so it runs from anywhere.
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const [, , fixtureDir, ...rest] = process.argv;
 if (!fixtureDir) {
@@ -35,8 +39,8 @@ for (let i = 0; i < rest.length; i++) {
     else if (rest[i] === '--runs') runs = Number(rest[++i]);
 }
 
-const CLIENT = 'assets/js/arizona.js';
-const CORE = 'assets/js/arizona-core.js';
+const CLIENT = join(ROOT, 'assets/js/arizona.js');
+const CORE = join(ROOT, 'assets/js/arizona-core.js');
 
 // Module-internal functions worth a per-call breakdown. A name that is not a
 // `function` declaration in the client is skipped rather than failing the run.
@@ -95,13 +99,21 @@ if (labels.length === 0) {
 
 const client = readFileSync(CLIENT, 'utf8');
 const core = readFileSync(CORE, 'utf8');
-const browser = await chromium.launch();
+let browser;
+try {
+    browser = await chromium.launch();
+} catch (err) {
+    console.error(`cannot launch chromium: ${err.message.split('\n')[0]}`);
+    console.error('run `make setup-e2e` to install the browser Playwright needs.');
+    process.exit(1);
+}
 let failed = false;
 
 for (const label of labels) {
     const meta = JSON.parse(readFileSync(join(fixtureDir, `${label}.json`), 'utf8'));
     const html = readFileSync(join(fixtureDir, `${label}.html`), 'utf8');
 
+    let plainTotal = null;
     for (const mode of ['plain', 'instrumented']) {
         const page = await browser.newPage();
         const warnings = [];
@@ -163,6 +175,7 @@ for (const label of labels) {
         await page.close();
 
         if (mode === 'plain') {
+            plainTotal = r.total;
             const ok = r.applied && warnings.length === 0;
             console.log(
                 `\n${label}  (${meta.items} items, ${meta.changed} changed -> ${r.ops} ops)`,
@@ -173,8 +186,9 @@ for (const label of labels) {
                     `  REFUSING TO REPORT: applied=${r.applied} warnings=${warnings.length}`,
                 );
                 for (const w of warnings.slice(0, 3)) console.log(`    ${w}`);
-                console.log('  An op whose target does not resolve is skipped with a warning,');
-                console.log('  so any timing here would measure warning spam, not patching.');
+                console.log('  An op whose target does not resolve is skipped with a warning, so');
+                console.log('  timing it would measure warning spam. (A batch that legitimately');
+                console.log('  changes nothing reads the same way, and is equally not worth timing.)');
                 break;
             }
             const us = (r.total / r.ops) * 1000;
@@ -187,13 +201,24 @@ for (const label of labels) {
                 );
             }
         } else if (r.stats) {
+            // Wrapping every internal costs two `performance.now()` calls per call,
+            // which inflates this run several times over. Absolute ms here would be
+            // read as real next to the plain total above, so report SHARES: the
+            // proportions survive the overhead, the milliseconds do not.
             const rows = Object.entries(r.stats)
                 .map(([k, v]) => [k, v.n / runs, v.ms / runs])
                 .filter(([, n]) => n > 0)
                 .sort((a, b) => b[2] - a[2]);
-            console.log(`\n  function              calls/batch   ms/batch  (inclusive, instrumented)`);
+            const top = rows.length ? Math.max(...rows.map(([, , ms]) => ms)) : 0;
+            const factor = plainTotal ? r.total / plainTotal : null;
+            console.log(
+                `\n  breakdown (instrumented${factor ? `, ~${factor.toFixed(1)}x slower than above` : ''}` +
+                    ` -- read shares, not ms)`,
+            );
+            console.log(`  function              calls/batch    share`);
             for (const [k, n, ms] of rows) {
-                console.log(`  ${k.padEnd(22)} ${n.toFixed(0).padStart(8)} ${ms.toFixed(3).padStart(10)}`);
+                const share = top ? (ms / top) * 100 : 0;
+                console.log(`  ${k.padEnd(22)} ${n.toFixed(0).padStart(8)} ${share.toFixed(1).padStart(8)}%`);
             }
         }
     }
