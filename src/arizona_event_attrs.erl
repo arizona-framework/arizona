@@ -77,12 +77,22 @@ The observations collected since the last drain, clearing the collector.
 """.
 -spec drain() -> observed().
 drain() ->
+    %% The empty-empty case is almost every drain (one per reply a live process
+    %% emits), so it must not write the dictionary or allocate.
     case get(?ATTRS_KEY) of
         undefined ->
             {[], []};
+        [] ->
+            case get(?MODS_KEY) of
+                [] ->
+                    {[], []};
+                Mods ->
+                    put(?MODS_KEY, []),
+                    {[], lists:usort(Mods)}
+            end;
         Names ->
-            Mods = get(?MODS_KEY),
             put(?ATTRS_KEY, []),
+            Mods = get(?MODS_KEY),
             put(?MODS_KEY, []),
             {lists:usort(Names), lists:usort(Mods)}
     end.
@@ -129,9 +139,6 @@ walk(_Seen, [], Acc) ->
 walk(Seen, [Mod | Rest], Acc) when is_map_key(Mod, Seen) ->
     walk(Seen, Rest, Acc);
 walk(Seen, [Mod | Rest], Acc) ->
-    %% A handler for a route nobody has visited is typically not loaded yet, and an
-    %% unloaded module answers `undef` rather than an empty list.
-    _ = code:ensure_loaded(Mod),
     Attrs = module_attrs(Mod),
     walk(
         Seen#{Mod => true},
@@ -143,5 +150,16 @@ module_attrs(Mod) ->
     try
         Mod:module_info(attributes)
     catch
-        error:undef -> []
+        error:undef ->
+            %% A handler for a route nobody has visited is typically not loaded
+            %% yet, and an unloaded module answers `undef` rather than an empty
+            %% list. Loading only on that miss keeps the code-server round trip
+            %% off every walk of an already-loaded module (each connect walks).
+            module_attrs_loaded(Mod)
+    end.
+
+module_attrs_loaded(Mod) ->
+    case code:ensure_loaded(Mod) of
+        {module, Mod} -> Mod:module_info(attributes);
+        {error, _NotFound} -> []
     end.

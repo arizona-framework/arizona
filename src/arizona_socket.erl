@@ -872,16 +872,24 @@ encode_reply(Ops, Effects0, Socket0) ->
     {Effects, Socket} = capture_pending_flash(Effects0, Socket0),
     encode_reply_1(Ops, Effects, Socket).
 
+%% The first four clauses are the no-delta fast path -- almost every frame.
+%% They must not touch `az_pending`: reading it costs nothing, but clearing it
+%% would copy the socket record per event for a field that is already empty.
+encode_reply_1([], [], #socket{az_pending = []} = Socket) ->
+    {ok, Socket};
+encode_reply_1(Ops, [], #socket{az_pending = []} = Socket) ->
+    {reply, encode(#{?OPS => Ops}), Socket};
+encode_reply_1([], Effects, #socket{az_pending = []} = Socket) ->
+    {reply, encode(#{?EFFECTS => unwrap_effects(Effects)}), Socket};
+encode_reply_1(Ops, Effects, #socket{az_pending = []} = Socket) ->
+    {reply, encode(#{?OPS => Ops, ?EFFECTS => unwrap_effects(Effects)}), Socket};
 encode_reply_1(Ops, Effects, Socket0) ->
     {Attrs, Socket} = take_az_pending(Socket0),
     Fields =
         [{?OPS, Ops} || Ops =/= []] ++
             [{?EFFECTS, unwrap_effects(Effects)} || Effects =/= []] ++
-            [{?AZ_ATTRS, Attrs} || Attrs =/= []],
-    case Fields of
-        [] -> {ok, Socket};
-        _ -> {reply, encode(maps:from_list(Fields)), Socket}
-    end.
+            [{?AZ_ATTRS, Attrs}],
+    {reply, encode(maps:from_list(Fields)), Socket}.
 
 unwrap_effects(Effects) ->
     [Cmd || {arizona_effect, Cmd} <:- Effects].
