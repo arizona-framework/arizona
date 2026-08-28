@@ -118,6 +118,10 @@ render(Bindings) ->
 -type segment() :: binary() | {az_attr, binary()} | {az_slot, binary()}.
 
 %% Compile state threaded through element/attribute/child compilation.
+%% Process-dictionary key for the `az-*` attribute names collected while
+%% compiling a module. See `inject_az_attrs/1`.
+-define(AZ_ATTRS_KEY, arizona_az_attrs).
+
 -record(state, {
     %% Segments of the static under construction, newest first.
     buf = [] :: [segment()],
@@ -166,13 +170,19 @@ parse_transform(Forms, _Options) ->
     Module = extract_module(Forms),
     IsLive = has_behaviour(Forms, arizona_stateful),
     FunDefs = collect_fun_defs(Forms),
+    %% `az-*` names are collected in the process dictionary rather than threaded
+    %% through `#state{}`: the state is per-template, and this set spans every
+    %% template in the module. Erased on entry so a previous module in the same
+    %% compiler process cannot leak into this one.
+    _ = erase(?AZ_ATTRS_KEY),
     try
         Transformed = [
             transform_form(mark_targets(Form, none), Module, IsLive, FunDefs)
          || Form <- Forms
         ],
         WithSuppressions = inject_each_callback_suppressions(Transformed, Forms, FunDefs, Module),
-        erl_syntax:revert_forms(WithSuppressions)
+        WithEvents = inject_az_attrs(WithSuppressions),
+        erl_syntax:revert_forms(WithEvents)
     catch
         throw:{arizona_parse_error, Line, Reason} ->
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
@@ -279,6 +289,37 @@ each_callback_pair(
     {ok, {Name, Arity}};
 each_callback_pair(_Callback, _Module) ->
     none.
+
+%% Emit the `az-*` attribute names this module compiled, so the client can
+%% delegate exactly those DOM event types. The names are compile-time literals
+%% here (`compile_attr` resolves every one through `Backend:name/1` or a binary),
+%% which is why this belongs at compile time: recovering them later means a regex
+%% over serialized HTML, which cannot tell an attribute NAME from `az-` text
+%% inside an attribute VALUE, and is wrong in both directions.
+inject_az_attrs(Forms) ->
+    case lists:usort(case erase(?AZ_ATTRS_KEY) of undefined -> []; L -> L end) of
+        [] ->
+            Forms;
+        Names ->
+            {Before, [ModAttr | After]} = lists:splitwith(
+                fun(Form) -> not is_module_attr(Form) end, Forms
+            ),
+            Anno = element(2, ModAttr),
+            Before ++ [ModAttr, {attribute, Anno, arizona_az_attrs, Names} | After]
+    end.
+
+%% Record one `az-*` attribute name, meaning "this name can carry a command, or is
+%% a bare directive the client must know about". Called from `compile_attr`, the
+%% single point every attribute name resolves through.
+%%
+%% The bare and boolean forms are recorded because `az-prevent-default` arrives
+%% that way and the client's passive decision depends on it. The one form NOT
+%% recorded is a static binary value, which is app data (see the clause there).
+record_az_attr(<<"az-", _/binary>> = NameBin) ->
+    put(?AZ_ATTRS_KEY, [NameBin | case get(?AZ_ATTRS_KEY) of undefined -> []; L -> L end]),
+    NameBin;
+record_az_attr(NameBin) ->
+    NameBin.
 
 insert_suppression_attrs(Forms, Pairs) ->
     {Before, [ModAttr | After]} = lists:splitwith(
@@ -2307,7 +2348,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = extract_binary_value(Bin),
+    NameBin = record_az_attr(extract_binary_value(Bin)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
@@ -2317,7 +2358,7 @@ compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, ElemLine) 
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
     Backend = State0#state.backend,
-    NameBin = extract_attr_name(Backend, NameAST),
+    NameBin = record_az_attr(extract_attr_name(Backend, NameAST)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
@@ -2326,14 +2367,20 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     NameBin = extract_attr_name(Backend, NameAST),
     case is_static_binary(ValueAST) of
         true ->
+            %% A static binary value is DATA by construction: an effect is always a
+            %% call, never a literal. Deliberately not recorded -- recording it would
+            %% delegate the event type and then hand the app's own data to the command
+            %% interpreter (`{az_select, ~"[1,2,3]"}` parses as opcode 1 with selector
+            %% 2 and throws out of a document listener on every dispatch).
             ValBin = extract_binary_value(ValueAST),
             buf_append(State0, emit_backend(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
         false ->
+            _ = record_az_attr(NameBin),
             compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = Backend:name(Name),
+    NameBin = record_az_attr(Backend:name(Name)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
