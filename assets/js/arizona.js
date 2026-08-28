@@ -2827,7 +2827,9 @@ function scanEvents(root) {
     const doc = root.nodeType === 9 ? /** @type {Document} */ (root) : root.ownerDocument;
     if (!doc) return;
     const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-    for (let node = walker.currentNode; node; node = walker.nextNode()) {
+    /** @type {Node|null} */
+    let node = walker.currentNode;
+    for (; node; node = walker.nextNode()) {
         const attrs = /** @type {Element} */ (node).attributes;
         if (!attrs) continue;
         for (const { name } of attrs) {
