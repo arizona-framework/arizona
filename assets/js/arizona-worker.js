@@ -355,7 +355,7 @@ function openSocket() {
         // carry no ops: letting that frame claim the flag makes the main thread
         // restore form state against the DOM the following OP_REPLACE is about to
         // discard, silently losing what the user had typed.
-        const firstAfterReconnect = _reconnecting && ops !== null;
+        const firstAfterReconnect = _reconnecting;
         if (firstAfterReconnect) _reconnecting = false;
 
         postMessage([0, ops, effects, firstAfterReconnect, azNames]);

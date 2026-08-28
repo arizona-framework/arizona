@@ -19,7 +19,7 @@ been loaded yet -- the common case for a route nobody has visited -- is still
 counted. Missing one would silently break every event that module declares.
 """.
 
--export([all/0]).
+-export([all/1]).
 -export([flush/0]).
 
 -ignore_xref([flush/0]).
@@ -30,26 +30,24 @@ counted. Missing one would silently break every event that module declares.
 Every `az-*` attribute name declared by any loaded application that depends on
 Arizona, unioned and sorted.
 
-Cached in `persistent_term` and recomputed when the set of loaded modules
-changes, since a module outside any `.app` list is only visible once loaded.
+Cached in `persistent_term`, keyed on the route handlers already accounted for.
+
+A handler is the entry point to everything a page can render, so a handler this
+node has not served before is the one moment the answer can grow -- a module
+outside any `.app` modules list (compiled at runtime, or a test fixture) becomes
+visible only once something loads it. Polling `length(code:all_loaded())` instead
+also worked, but cost 72 us of a 97 us connect: three quarters of the connect path
+spent proving an answer that had not changed. This costs one map lookup.
 """.
--spec all() -> [binary()].
-all() ->
-    %% Keyed on the number of loaded modules, not cached outright. The app-listed
-    %% pass is stable, but the loaded pass is not: a module outside any `.app`
-    %% modules list (compiled at runtime, or a test fixture) only becomes visible
-    %% once it loads, so a set cached before that is permanently missing its names
-    %% and every event it declares is silently dead. Detecting the change costs
-    %% ~70 us against ~4 ms to rescan, and after the first few connections the
-    %% count stops moving.
-    Loaded = length(code:all_loaded()),
+-spec all(module()) -> [binary()].
+all(Handler) ->
     case persistent_term:get(?CACHE_KEY, undefined) of
-        {Loaded, Names} ->
+        {Seen, Names} when is_map_key(Handler, Seen) ->
             Names;
-        _StaleOrMissing ->
-            Names = scan(),
-            persistent_term:put(?CACHE_KEY, {Loaded, Names}),
-            Names
+        {Seen, _Stale} ->
+            rescan(Seen, Handler);
+        undefined ->
+            rescan(#{}, Handler)
     end.
 
 -doc """
@@ -68,25 +66,32 @@ flush() ->
 %% Only applications that list `arizona` as a dependency can hold templates, so
 %% scanning the rest (OTP's own, the deps of deps) would be thousands of modules
 %% for nothing. Arizona itself is included: its test fixtures carry templates.
+%% Force the handler in before scanning: `beam_lib` answers for anything listed in
+%% an `.app` whether loaded or not, but a module outside one is invisible until it
+%% loads, and the handler is exactly such a module in a test fixture tree.
+rescan(Seen, Handler) ->
+    _ = code:ensure_loaded(Handler),
+    {Examined, Names} = scan(),
+    %% Every module the scan looked at is now accounted for, not just this handler.
+    %% One cold connect therefore covers every route in the app: a later handler is
+    %% already in the set and reads the cache, instead of each route paying its own
+    %% ~5 ms rescan on its first visit.
+    persistent_term:put(?CACHE_KEY, {maps:merge(Seen, Examined#{Handler => true}), Names}),
+    Names.
+
 scan() ->
     Apps = [App || {App, _, _} <- application:loaded_applications(), depends_on_arizona(App)],
-    FromApps = [
-        Name
-     || App <- Apps,
-        Mod <- app_modules(App),
-        Name <- beam_az_attrs(Mod)
-    ],
+    AppMods = [Mod || App <- Apps, Mod <- app_modules(App)],
+    FromApps = [Name || Mod <- AppMods, Name <- beam_az_attrs(Mod)],
     %% Anything already loaded but absent from an `.app` modules list -- a module
     %% compiled at runtime, a test fixture -- would be missed by the pass above,
     %% and missing one silently kills every event it declares. `module_info/1`
     %% reads memory rather than a file, so this second pass is cheap (measured
     %% ~0.9 ms over 110 modules against ~4.7 ms for the beam pass).
-    FromLoaded = [
-        Name
-     || {Mod, _} <- code:all_loaded(),
-        Name <- loaded_az_attrs(Mod)
-    ],
-    lists:usort(FromApps ++ FromLoaded).
+    LoadedMods = [Mod || {Mod, _} <- code:all_loaded()],
+    FromLoaded = [Name || Mod <- LoadedMods, Name <- loaded_az_attrs(Mod)],
+    Examined = maps:from_keys(AppMods ++ LoadedMods, true),
+    {Examined, lists:usort(FromApps ++ FromLoaded)}.
 
 depends_on_arizona(arizona) ->
     true;

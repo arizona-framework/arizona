@@ -205,7 +205,7 @@ init(Handler, Bindings, Req, Opts) ->
             capabilities => Capabilities, reconnect => Reconnect, push_barrier => true
         },
         {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, ConnInfo),
-        init_view(Reconnect, FpsFollow, Pid, Socket)
+        init_view(Reconnect, FpsFollow, Handler, Pid, Socket)
     end).
 
 %% The three connect shapes, by reconnect and the client's fingerprint-follow
@@ -220,20 +220,20 @@ init(Handler, Bindings, Req, Opts) ->
 %% connect that sent no frame would leave the page unable to answer its own first
 %% event -- and a first connect (the third clause) is exactly the case that used to
 %% reply with nothing at all.
-init_view(true, true, Pid, Socket) ->
+init_view(true, true, Handler, Pid, Socket) ->
     TRef = erlang:send_after(?RESYNC_TIMEOUT_MS, self(), arizona_resync_timeout),
-    {reply, encode(#{?AZ_NAMES => arizona_az_attrs:all()}), Socket#socket{
+    {reply, encode(#{?AZ_NAMES => arizona_az_attrs:all(Handler)}), Socket#socket{
         pid = Pid, pending_resync = TRef
     }};
-init_view(true, false, Pid, Socket) ->
+init_view(true, false, Handler, Pid, Socket) ->
     {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
     Ops = replace_ops(ViewId, PageHTML),
-    {reply, encode(#{?OPS => Ops, ?AZ_NAMES => arizona_az_attrs:all()}), Socket#socket{
+    {reply, encode(#{?OPS => Ops, ?AZ_NAMES => arizona_az_attrs:all(Handler)}), Socket#socket{
         pid = Pid, view_id = ViewId
     }};
-init_view(false, _FpsFollow, Pid, Socket) ->
+init_view(false, _FpsFollow, Handler, Pid, Socket) ->
     {ok, ViewId} = arizona_live:mount(Pid),
-    {reply, encode(#{?AZ_NAMES => arizona_az_attrs:all()}), Socket#socket{
+    {reply, encode(#{?AZ_NAMES => arizona_az_attrs:all(Handler)}), Socket#socket{
         pid = Pid, view_id = ViewId
     }}.
 
