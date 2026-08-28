@@ -41,7 +41,7 @@ render(Bindings) ->
                         <<>>
                 end
             ]},
-            {'p', [{id, ~"toggles"}], [integer_to_binary(?get(toggles))]}
+            {p, [{id, ~"toggles"}], [integer_to_binary(?get(toggles))]}
         ]}
     ).
 
