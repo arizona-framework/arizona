@@ -15,7 +15,7 @@ SSH_DEMO_USER := arizona
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
 	build-js analyze-js build-android build-ios build-tauri dev-tauri \
 	test test-eunit test-ct test-erl test-js test-e2e test-android test-ios test-tauri \
-	bench term-demo ssh-server ssh-client \
+	bench bench-client term-demo ssh-server ssh-client \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
 	setup-e2e clean
@@ -187,6 +187,19 @@ test-e2e-native:
 #   make bench ARGS="--only diff_no_change --only diff_simple_event"
 bench: compile-test
 	./scripts/bench.escript $(ARGS)
+
+# Client-side benchmark: `applyOps` timed in a real Chromium, against fixtures
+# generated from a REAL diff rather than hand-written ops (the op SHAPE is not
+# guessable -- a bulk change collapses to one container OP_TEXT, a partial one
+# emits per-item OP_ITEM_PATCH sharing the container's az). Refuses to report
+# unless the patch visibly applied with no warnings, because an op whose target
+# does not resolve is skipped with a console.warn and would otherwise be timed as
+# if it were work. Not in ci, for the same reason `bench` is not.
+#   make bench-client ARGS="--only stream_patch"
+bench-client: compile-test
+	@mkdir -p _build/client_fixtures
+	./scripts/client_fixture.escript _build/client_fixtures
+	node ./scripts/bench_client.mjs _build/client_fixtures $(ARGS)
 
 # Paired A/B of one workload across two commits. Builds each ref in its own
 # worktree (so neither can silently measure the other's beams), interleaves the
