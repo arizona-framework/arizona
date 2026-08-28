@@ -933,6 +933,7 @@ function applyOps(ops) {
                     const added = Array.from(frag.children);
                     el.replaceWith(frag);
                     for (const e of added) mountHooksOnly(e);
+                    rederivePassive(added);
                     // A popped-out (PiP) view whose placeholder just went with
                     // the outgoing subtree is orphaned -- close its window.
                     closeOrphanedPipWindows();
@@ -2845,6 +2846,17 @@ let _preventDefaultSeen = false;
 function notePreventDefault() {
     if (_preventDefaultSeen) return;
     _preventDefaultSeen = true;
+    rebindForcedTypes();
+}
+
+/**
+ * Re-register the forced-passive types against the current `_preventDefaultSeen`.
+ * A real remove-then-add: re-adding the same function with different options is
+ * silently ignored, and `handleEvent` hands back fresh closures, so skipping the
+ * removal would leave the old pair registered beside the new one and run every
+ * command on those types twice.
+ */
+function rebindForcedTypes() {
     for (const [doc, rec] of _eventDocs) {
         for (const type of PASSIVE_FORCED) {
             const fns = rec.bound.get(type);
@@ -2854,6 +2866,22 @@ function notePreventDefault() {
             rec.bound.set(type, handleEvent(doc, type, rec.signal));
         }
     }
+}
+
+/**
+ * Re-derive the passive decision across a page replacement. The latch is monotonic
+ * WITHIN a page, but `navigate` swaps the whole view, and a declaration from the
+ * outgoing page must not keep the incoming one's scroll fast path disabled for the
+ * rest of the session. The incoming markup is walked here rather than left to the
+ * worker, whose own dedupe would never re-report a name it has already sent.
+ * @param {Element[]} roots
+ */
+function rederivePassive(roots) {
+    if (_preventDefaultSeen) {
+        _preventDefaultSeen = false;
+        rebindForcedTypes();
+    }
+    for (const root of roots) scanEvents(root);
 }
 
 /**
@@ -2927,7 +2955,13 @@ const _eventTypes = new Set([
 ]);
 
 /** Documents currently bound, and the listeners each already has per type. */
-/** @type {Map<Document, {signal: AbortSignal, bound: Map<string, [EventListener, EventListener]>}>} */
+/**
+ * @type {Map<Document, {
+ *   signal: AbortSignal,
+ *   abort?: () => void,
+ *   bound: Map<string, [EventListener, EventListener]>
+ * }>}
+ */
 const _eventDocs = new Map();
 
 /**
@@ -2968,9 +3002,10 @@ function scanEvents(root) {
     /** @type {Node|null} */
     let node = walker.currentNode;
     for (; node; node = walker.nextNode()) {
-        const attrs = /** @type {Element} */ (node).attributes;
-        if (!attrs) continue;
-        for (const { name } of attrs) noteAzAttr(name);
+        const el = /** @type {Element} */ (node);
+        // getAttributeNames() rather than walking `attributes`: this runs per element
+        // over freshly-inserted markup, and the NamedNodeMap accessor is far slower.
+        if (el.getAttributeNames) for (const name of el.getAttributeNames()) noteAzAttr(name);
     }
 }
 
@@ -2981,9 +3016,11 @@ function scanEvents(root) {
  * (az-navigate, popstate, scroll) are wired only for the main document.
  * @param {Document} target
  * @param {AbortSignal} signal
+ * @param {(() => void)} [abort] tear-down for documents whose listeners hang off a
+ *   controller the connection does not own (a PiP window's).
  */
-function bindDocumentEvents(target, signal) {
-    const rec = { signal, bound: new Map() };
+function bindDocumentEvents(target, signal, abort) {
+    const rec = { signal, abort, bound: new Map() };
     _eventDocs.set(target, rec);
     for (const type of _eventTypes) {
         rec.bound.set(type, handleEvent(target, type, signal));
@@ -3442,10 +3479,14 @@ function connect(endpoint, params = {}) {
         }
         _viewDocs.clear();
         _pipWindows.clear();
-        // Drop the per-document listener bookkeeping; the AbortSignal above has
-        // already removed the listeners themselves. `_eventTypes` deliberately
-        // survives -- it is what this PAGE has discovered, so a reconnect rebinds
-        // the same types without waiting to rediscover them from the markup.
+        // Tear down each bound document's listeners, then drop the bookkeeping. The
+        // connect-level signal covers the MAIN document only: a PiP document's
+        // listeners hang off requestPip's own controller, so without this they
+        // survive disconnect and are re-armed by the next connect() -- pushing
+        // events from the orphaned window under the previous view's id. `_eventTypes`
+        // deliberately survives: it is what this PAGE has discovered, so a reconnect
+        // rebinds the same types without waiting to rediscover them from markup.
+        for (const rec of _eventDocs.values()) rec.abort?.();
         _eventDocs.clear();
         // Run destroyed() on every tracked hook and clear the map. Without
         // this, hook instances leak when host code removes the DOM by means
@@ -3529,7 +3570,7 @@ async function requestPip(viewId, opts = {}) {
 
     // Delegate events fired inside the floating window; torn down on close.
     const controller = new AbortController();
-    bindDocumentEvents(pip.document, controller.signal);
+    bindDocumentEvents(pip.document, controller.signal, () => controller.abort());
 
     pip.addEventListener(
         'pagehide',

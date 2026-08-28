@@ -105,7 +105,12 @@ subresource has usually fired before discovery runs, since that happens on the W
 `az-error` on an SSR `<img>` works on a slow connection and not on a warm cache. Neither is a
 supported case today; use a hook for them.
 
-**Markup a host app inserts itself needs the exported `mountHooks`.** The worker reports names only
+**Markup a host app inserts itself needs the exported `mountHooks`** -- including markup it drives
+in through the exported `applyOps`, which the worker never saw and whose op path deliberately
+skips the scan. Calling it is safe on already-mounted markup: `mountHook` returns early for an
+element it already tracks, so hooks are not mounted twice.
+
+The worker reports names only
 for markup it resolved, and the DOM walk runs only where `mountHooks` is called, so DOM produced by
 app code (a hook's `mounted()` writing `innerHTML`, a third-party widget) declares nothing until
 `mountHooks` is called on it. That is the same contract hooks already have.
