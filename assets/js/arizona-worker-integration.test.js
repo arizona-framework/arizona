@@ -186,45 +186,38 @@ describe('arizona-worker', () => {
         expect(resolved[3]).toBe(false);
     });
 
-    it("reports a template's az-* names from the payload that carries them", () => {
+    it("forwards a frame's az-* delta beside the ops that render the markup", () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
         slf.posted.length = 0;
-        // A template declares its own names, so they ride the statics that render the
-        // markup declaring them: the client learns a DOM event type from the very
-        // frame that can first produce it. The worker only relays -- the main thread
-        // decides which names are DOM events, so that triage lives in one place.
+        // Newly proven names ride the frame itself (key `a`), deduped per socket by
+        // the server: the client learns a DOM event type from the very frame that
+        // can first produce the markup declaring it. The worker only relays -- the
+        // main thread decides which names are DOM events, so that triage lives in
+        // one place.
         ws.latest().simulateMessage(
             JSON.stringify({
-                o: [
-                    [
-                        0,
-                        'v:0',
-                        { f: 'fpA', s: ['<b az-toggle="x">', '</b>'], d: ['1'], a: ['az-toggle'] },
-                    ],
-                ],
+                o: [[0, 'v:0', { f: 'fpA', s: ['<b az-toggle="x">', '</b>'], d: ['1'] }]],
+                a: ['az-toggle'],
             }),
         );
         const resolved = slf.posted.find((m) => m[0] === 0);
+        expect(resolved[1]).toEqual([[0, 'v:0', '<b az-toggle="x">1</b>', true]]);
         expect(resolved[4]).toEqual(['az-toggle']);
     });
 
-    it('reports a name once, then stops repeating it', () => {
+    it('adds no names of its own: a frame without a delta forwards null', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
         const frame = JSON.stringify({
-            o: [
-                [
-                    0,
-                    'v:0',
-                    { f: 'fpB', s: ['<b az-close="x">', '</b>'], d: ['1'], a: ['az-close'] },
-                ],
-            ],
+            o: [[0, 'v:0', { f: 'fpB', s: ['<b az-close="x">', '</b>'], d: ['1'] }]],
+            a: ['az-close'],
         });
         ws.latest().simulateMessage(frame);
         slf.posted.length = 0;
-        // The statics are cached after the first sight, and the names ride them, so a
-        // later frame for the same fingerprint carries neither.
+        // The server already sent az-close on the frame above and dedupes per
+        // socket, so the follow-up frame carries no `a` -- and the worker must not
+        // re-derive names from the payload bytes it resolves.
         ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', { f: 'fpB', d: ['2'] }]] }));
         expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
     });

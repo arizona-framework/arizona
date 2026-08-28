@@ -13,7 +13,7 @@ transform was not applied.
 - **Bindings** -- the map passed to `render/1`. `get/2` and `get/3` access
   bindings while tracking which keys were read, so the differ knows which
   dynamics depend on which bindings.
-- **Templates** -- compile-time maps `#{s := Statics, d := Dynamics, f := Fp, a := Attributes}`
+- **Templates** -- compile-time maps `#{s := Statics, d := Dynamics, f := Fp}`
   emitted by the parse transform.
 - **Descriptors** -- lightweight tuples returned by `stateful/2` and
   `stateless/2,3` that tell the renderer how to mount a child component.
@@ -136,14 +136,7 @@ render(Bindings) ->
     d := [dynamic()],
     f := binary(),
     diff => false,
-    backend => module(),
-    %% Attributes: the `az-*` attribute names this template declares, recorded by
-    %% the parse transform so the client knows which DOM events to listen for. One
-    %% letter like `s`/`d`/`f`/`t` because the client reads it; `backend`, `diff`,
-    %% `deps` and `view_id` are spelled out because they never leave the server.
-    %% `az-prevent-default` is in the list too -- not an event, but it decides how
-    %% those listeners are registered, and the client needs it before binding one.
-    a => [binary()]
+    backend => module()
 }.
 
 -nominal each_template() :: #{
@@ -152,10 +145,7 @@ render(Bindings) ->
     d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
     f := binary(),
     single_root => true,
-    backend => module(),
-    %% Attributes, as on `template()`. Every item renders from this one template, so
-    %% a list of any length declares its attributes exactly once.
-    a => [binary()]
+    backend => module()
 }.
 
 -nominal each_container() :: #{
@@ -171,8 +161,7 @@ render(Bindings) ->
     deps => [deps()],
     diff => false,
     view_id => binary(),
-    backend => module(),
-    a => [binary()]
+    backend => module()
 }.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
@@ -630,16 +619,9 @@ maybe_propagate(Tmpl, Snap) ->
             #{} -> Snap
         end,
     Snap2 = maybe_put_fingerprint(Tmpl, Snap1),
-    Snap3 =
-        case Tmpl of
-            #{backend := Backend} -> Snap2#{backend => Backend};
-            #{} -> Snap2
-        end,
-    %% The client binds a DOM event type only for a name it has been told about, so
-    %% the names have to reach the payload that renders the markup declaring them.
     case Tmpl of
-        #{a := Attrs} -> Snap3#{a => Attrs};
-        #{} -> Snap3
+        #{backend := Backend} -> Snap2#{backend => Backend};
+        #{} -> Snap2
     end.
 
 %% Copies the `f` field from a template to a snapshot if present. Internal to

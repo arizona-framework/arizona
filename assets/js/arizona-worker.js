@@ -24,7 +24,6 @@ import {
     mruFpKeys,
     resolveHtml,
     setOnPersist,
-    takeAzAttrs,
     takeTouchedFps,
 } from './arizona-core.js';
 
@@ -337,13 +336,16 @@ function openSocket() {
         const msg = JSON.parse(e.data);
         const ops = msg.o || null;
         const effects = msg.e || null;
-        // The `az-*` attribute names the app's templates declare, unioned by the
-        // server from a compile-time module attribute and sent once, on the connect
-        // frame. Raw names, not event types: which of them are DOM events and which
-        // are framework directives is the main thread's call, so that list lives in
-        // one place. The worker only forwards -- deriving the names here would mean
-        // a regex over serialized HTML, which cannot tell an attribute NAME from
-        // `az-` text inside an attribute VALUE and is wrong in both directions.
+        // The `az-*` attribute names this frame proves the app can render: the
+        // connect frame carries the compile-time union walked from the route's
+        // handler and layouts, and any later frame carries only the per-socket
+        // delta (a render-observed command attribute, a dynamically mounted
+        // component's names, a navigate target's walk). Raw names, not event
+        // types: which of them are DOM events and which are framework directives
+        // is the main thread's call, so that list lives in one place. The worker
+        // only forwards -- deriving the names here would mean a regex over
+        // serialized HTML, which cannot tell an attribute NAME from `az-` text
+        // inside an attribute VALUE and is wrong in both directions.
 
         if (ops) {
             resolveOps(ops);
@@ -358,16 +360,7 @@ function openSocket() {
         const firstAfterReconnect = _reconnecting && ops !== null;
         if (firstAfterReconnect) _reconnecting = false;
 
-        // Two sources, each covering the other's gap: the connect frame carries the
-        // app's compile-time union (which SSR markup needs, since its templates never
-        // arrive as payloads), and a resolved payload carries the names of the template
-        // it renders (which a navigate needs, since no second connect frame is sent).
-        const fromPayloads = takeAzAttrs();
-        const azAttrs =
-            msg.a || fromPayloads
-                ? [...new Set([...(msg.a || []), ...(fromPayloads || [])])]
-                : null;
-        postMessage([0, ops, effects, firstAfterReconnect, azAttrs]);
+        postMessage([0, ops, effects, firstAfterReconnect, msg.a ?? null]);
     };
 
     ws.onclose = (e) => {

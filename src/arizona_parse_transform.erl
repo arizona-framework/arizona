@@ -1852,9 +1852,8 @@ count_var(_V, _Other, N) ->
     N.
 
 compile_template(Arg, Line, Module, LiveRender, Backend) ->
-    Mark = az_attrs_mark(),
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(Arg, Module, LiveRender, Backend),
-    Opts = Opts0#{backend => Backend, az_attrs => az_attrs_since(Mark)},
+    Opts = Opts0#{backend => Backend},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
 
@@ -1953,14 +1952,10 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
             %% sits in, so an element the backend classifies differently there
             %% (an SVG `<title>`) is treated the same as if it were written
             %% literally at that position.
-            ItemMark = az_attrs_mark(),
             {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
                 ElemAST, Module, false, Backend, CCtx
             ),
-            %% The item template declares its own attributes: every item renders from
-            %% it, so one `a` answers for the whole list and the per-item data carries
-            %% none of it.
-            Opts1 = Opts0#{backend => Backend, az_attrs => az_attrs_since(ItemMark)},
+            Opts1 = Opts0#{backend => Backend},
             Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
@@ -2396,14 +2391,11 @@ compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0)
                 raw_text_tag = Tag,
                 content_ctx = ChildCtx
             },
-            InnerMark = az_attrs_mark(),
             Inner1 = compile_children(Children, none, Inner0),
             {Statics, DynASTs} = finalize(Inner1),
             Fp = generate_fingerprint(Statics),
             {S1, D1} = scope_az(Backend, Fp, Statics, DynASTs),
-            TmplAST = build_template_ast(Line, S1, D1, Fp, #{
-                backend => Backend, az_attrs => az_attrs_since(InnerMark)
-            }),
+            TmplAST = build_template_ast(Line, S1, D1, Fp, #{backend => Backend}),
             %% The folded content is a nested template, so its inner `?get` reads
             %% are isolated from THIS slot's dependency bracket -- without touches
             %% the dep-aware diff skips the slot and the element freezes exactly as
@@ -3289,37 +3281,12 @@ compile_parts_ast(Statics, DynASTs, Fingerprint) ->
 
 build_template_ast(Line, Statics, DynASTs, Fingerprint, Opts) ->
     {StaticsAST, DynamicsAST, FpAST} = compile_parts_ast(Statics, DynASTs, Fingerprint),
-    %% The `az-*` names this template declares, carried BY the template so the client
-    %% learns them from the payload that renders them. They ride the statics: sent
-    %% once per fingerprint and stripped by the same dedup, so a repeat costs nothing.
-    AzAttrs = maps:get(az_attrs, Opts, []),
-    AttrsField = [
-        {map_field_assoc, Line, {atom, Line, a}, erl_parse:abstract(AzAttrs, Line)}
-     || AzAttrs =/= []
-    ],
     BaseFields = [
         {map_field_assoc, Line, {atom, Line, s}, StaticsAST},
         {map_field_assoc, Line, {atom, Line, d}, DynamicsAST},
         {map_field_assoc, Line, {atom, Line, f}, FpAST}
     ],
-    {map, Line, BaseFields ++ AttrsField ++ opts_to_map_fields(maps:remove(az_attrs, Opts), Line)}.
-
-%% The accumulator is append-at-front, so a mark is its length and everything added
-%% since sits in front of it. A nested template's names appear in its enclosing
-%% template's slice too; harmless, since both payloads carry the same name and the
-%% client binds a type once.
-az_attrs_mark() ->
-    length(current_az_attrs()).
-
-az_attrs_since(Mark) ->
-    All = current_az_attrs(),
-    lists:usort(lists:sublist(All, length(All) - Mark)).
-
-current_az_attrs() ->
-    case get(?AZ_ATTRS_KEY) of
-        undefined -> [];
-        L -> L
-    end.
+    {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)}.
 
 %% The per-item fun is inlined into the CALLER, so it binds the callback's own
 %% parameter names in the caller's scope. A callback that reads the item with
@@ -3441,11 +3408,6 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
             {clauses, [
                 {clause, Line, Vars1, Guards1, Prefix1 ++ [DynamicsAST1]}
             ]}},
-    AzAttrs = maps:get(az_attrs, Opts, []),
-    AttrsField = [
-        {map_field_assoc, Line, {atom, Line, a}, erl_parse:abstract(AzAttrs, Line)}
-     || AzAttrs =/= []
-    ],
     BaseFields = [
         {map_field_assoc, Line, {atom, Line, t}, {integer, Line, 0}},
         {map_field_assoc, Line, {atom, Line, s}, StaticsAST},
@@ -3453,8 +3415,7 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
         {map_field_assoc, Line, {atom, Line, f}, FpAST}
     ],
     TmplAST =
-        {map, Line,
-            BaseFields ++ AttrsField ++ opts_to_map_fields(maps:remove(az_attrs, Opts), Line)},
+        {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)},
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, TmplAST
     ]}.

@@ -5,7 +5,7 @@
  * unit tests (no Worker globals required).
  *
  * Exports: resolveHtml, zipTemplate, backoff, fpCache, loadFpEntries,
- *          setOnPersist, FP_CACHE_MAX, mruFpKeys, takeTouchedFps, takeAzAttrs.
+ *          setOnPersist, FP_CACHE_MAX, mruFpKeys, takeTouchedFps.
  */
 
 /** Type constant (must match server ?STREAM). */
@@ -63,14 +63,6 @@ const fpCache = new Map();
 const _touchedFps = new Set();
 
 /**
- * `az-*` attributes seen on resolved payloads since the last drain. A template
- * carries the attributes it declares, so they arrive with the statics that render
- * the markup declaring them -- the client learns a DOM event type from the very frame that can
- * first produce it, without re-deriving anything from the bytes.
- */
-const _azAttrs = new Set();
-
-/**
  * Optional callback invoked whenever the fp cache is updated (new statics
  * received). The Worker sets this to post cache entries to the main thread
  * for localStorage persistence. Tests leave it unset.
@@ -116,14 +108,6 @@ function touchFp(f, entry) {
  * The fingerprints touched since the last call, clearing the set.
  * @returns {Array<string>}
  */
-/** @returns {string[]|null} */
-function takeAzAttrs() {
-    if (_azAttrs.size === 0) return null;
-    const attrs = [..._azAttrs];
-    _azAttrs.clear();
-    return attrs;
-}
-
 function takeTouchedFps() {
     const keys = [..._touchedFps];
     _touchedFps.clear();
@@ -148,7 +132,7 @@ function mruFpKeys(limit) {
  * Resolve a payload that may be a plain text string (`?get` scalar), a `{raw}` tag
  * (a `?raw` trusted-HTML value), or a fingerprinted template object {f, s?, t?, d}
  * (a nested template / plain-list each). Returns the HTML/text string.
- * @param {string|{raw: string}|{f: string, s?: Array<string>, a?: Array<string>, t?: number, d: Array<*>}} payload
+ * @param {string|{raw: string}|{f: string, s?: Array<string>, t?: number, d: Array<*>}} payload
  * @returns {string}
  */
 function resolveHtml(payload) {
@@ -157,7 +141,6 @@ function resolveHtml(payload) {
     // string), so the client innerHTMLs the unwrapped markup.
     if ('raw' in payload) return payload.raw;
     const f = payload.f;
-    if (payload.a) for (const n of payload.a) _azAttrs.add(n);
     if (payload.s) {
         /** @type {{s: Array<string>, t?: number, u: number}} */
         const entry = { s: payload.s, u: Date.now() };
@@ -230,7 +213,6 @@ export {
     mruFpKeys,
     resolveHtml,
     setOnPersist,
-    takeAzAttrs,
     takeTouchedFps,
     zipTemplate,
 };
