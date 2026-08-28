@@ -1903,6 +1903,29 @@ function submitter(event) {
 }
 
 /**
+ * Collect a form's fields, keeping a duplicate name as an array. A checkbox
+ * group and a `<select multiple>` each submit one entry per selected value, so
+ * the flat `Object.fromEntries` shape silently keeps only the last of them.
+ * @param {FormData} fd
+ * @returns {Object<string, string|string[]>}
+ */
+function formFields(fd) {
+    /** @type {Object<string, string|string[]>} */
+    const data = {};
+    for (const [k, v] of fd.entries()) {
+        if (k in data) {
+            const prev = data[k];
+            data[k] = Array.isArray(prev)
+                ? prev.concat(/** @type {string} */ (v))
+                : [prev, /** @type {string} */ (v)];
+        } else {
+            data[k] = /** @type {string} */ (v);
+        }
+    }
+    return data;
+}
+
+/**
  * Auto-collect payload from an element based on its type and event context.
  * Drop -> {data_transfer, drop_index}, Forms -> FormData (incl. the submitter),
  * inputs/selects/textareas -> {value}, otherwise -> {}.
@@ -1921,9 +1944,7 @@ function autoPayload(el, event) {
     }
     const tag = el.tagName;
     if (tag === 'FORM')
-        return Object.fromEntries(
-            new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
-        );
+        return formFields(new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)));
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA')
         return { value: /** @type {any} */ (el).value || '' };
     return {};
@@ -2535,19 +2556,7 @@ function flushTimer(el) {
 function saveFormState() {
     _savedForms.clear();
     document.querySelectorAll('form[id]').forEach((form) => {
-        const fd = new FormData(/** @type {HTMLFormElement} */ (form));
-        /** @type {Object<string, string|string[]>} */
-        const data = {};
-        for (const [k, v] of fd.entries()) {
-            if (k in data) {
-                const prev = data[k];
-                data[k] = Array.isArray(prev)
-                    ? prev.concat(/** @type {string} */ (v))
-                    : [prev, /** @type {string} */ (v)];
-            } else {
-                data[k] = /** @type {string} */ (v);
-            }
-        }
+        const data = formFields(new FormData(/** @type {HTMLFormElement} */ (form)));
         const azChange = form.getAttribute('az-change') || null;
         _savedForms.set(form.id, { fields: data, azChange });
     });

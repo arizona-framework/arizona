@@ -5210,6 +5210,36 @@ describe('form submit', () => {
         ]);
     });
 
+    it('keeps duplicate field names as arrays (checkbox group, select multiple)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[0,"save"]]'>
+                <input type="checkbox" name="tags" value="a" checked />
+                <input type="checkbox" name="tags" value="b" checked />
+                <input type="checkbox" name="tags" value="c" checked />
+                <select name="langs" multiple>
+                    <option value="erl" selected>erl</option>
+                    <option value="js" selected>js</option>
+                </select>
+                <input name="email" value="ada@example.com" />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document
+            .getElementById('f')
+            .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+        // One entry per selected value: the flat shape kept only the last of each.
+        expect(mock.getSentMessages()).toContainEqual([
+            'page',
+            'save',
+            { tags: ['a', 'b', 'c'], langs: ['erl', 'js'], email: 'ada@example.com' },
+        ]);
+    });
+
     it('submit without az-submit does nothing', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
