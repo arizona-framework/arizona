@@ -586,26 +586,45 @@ ssr_local_init_escaped(Config) when is_list(Config) ->
         nomatch, binary:match(HTML, <<"title=\"&lt;img src=x onerror=alert(1)&gt;\"">>)
     ).
 
-%% Cross-language contract: every `<!--az:X-->` slot marker SSR emits must match
-%% the `<Fp>-<id>` shape, repeated per nesting level and optionally suffixed
-%% `:<slot>`. The doctrine is `arizona_html:scope_static/3`'s -- the fingerprint
-%% is what separates a real marker from user-authored bytes -- and the web
-%% client now depends on it: its slot walkers track marker NESTING depth, so
-%% they must tell a framework opener from a decoy comment that stored HTML (a
-%% `?raw` CMS payload) happens to carry. A server change that emitted a marker
-%% outside this shape would make the client stop counting it as an opener and
-%% under-walk the slot, so pin the shape here rather than in the client alone.
+%% Cross-language contract: every `<!--az:X-->` slot marker SSR emits must be a
+%% run of `-`-joined upper-case alphanumeric segments, optionally suffixed
+%% `:<slot>`. The doctrine is `arizona_html:scope_static/3`'s -- a framework
+%% marker must be tellable from user-authored bytes -- and the web client's
+%% `MARKER_OPEN` is the same expression: its slot walkers track marker NESTING
+%% depth, so they must tell a framework opener from a decoy comment that stored
+%% HTML (a `?raw` CMS payload) happens to carry. A server change that emitted a
+%% marker outside this shape would make the client stop counting it as an opener
+%% and under-walk the slot, so pin the shape here rather than in the client alone.
+%%
+%% The base unit is `<Fp>-<id>`, but markers are NOT simply those concatenated:
+%% `arizona_template:scope_slot/2` namespaces a slot's value by the slot az made
+%% colon-free, so a slot that is not the FIRST content slot of its element
+%% contributes a bare numeric segment (`<Fp>-0:1` -> the prefix `<Fp>-0-1`).
+%% Pinning strict `<Fp>-<id>` alternation is what let that shape ship unnoticed:
+%% the client rejected it, read a nested closer as the slot's own, and left
+%% cleared content stranded outside the slot for the next fill to duplicate.
+%% `arizona_repeated_stateless` is the smallest fixture that emits it, so it is
+%% in the list below to keep the gap closed.
+%%
+%% One segment per repetition, deliberately, not the exact grammar: a fingerprint
+%% can be all digits, so `<Fp>-<id>` pairs each optionally followed by a slot
+%% number is an ambiguous tiling of `-1-1...` and a regex for it backtracks
+%% exponentially on a non-matching numeric run -- reachable from `?raw` stored
+%% HTML on the client side.
+%%
 %% Covers the nesting-bearing fixtures: layouts, stateful children, inlined
-%% stateless children, `?local` slots, streams among siblings, and multi-slot
-%% elements.
+%% stateless children, `?local` slots, streams among siblings, multi-slot
+%% elements, and a stateless child in a non-first content slot.
 ssr_marker_az_shape(Config) when is_list(Config) ->
-    {ok, Re} = re:compile(<<"^[0-9A-Z]+-[0-9]+(-[0-9A-Z]+-[0-9]+)*(:[0-9]+)?$">>),
+    {ok, Re} = re:compile(<<"^[0-9A-Z]+(-[0-9A-Z]+)+(:[0-9]+)?$">>),
     Pages = [
         {arizona_page, #{bindings => #{title => <<"T">>}, layouts => [{arizona_layout, render}]}},
         {arizona_mixed_children, #{}},
         {arizona_local_nested, #{bindings => #{title => <<"N">>}}},
         {arizona_stream_siblings, #{}},
-        {arizona_datatable, #{}}
+        {arizona_datatable, #{}},
+        {arizona_repeated_stateless, #{}},
+        {arizona_slot_swap, #{}}
     ],
     Markers = lists:flatmap(fun page_markers/1, Pages),
     %% The fixtures really do carry markers (a silent [] would pass vacuously).
