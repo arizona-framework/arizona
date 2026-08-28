@@ -1844,7 +1844,22 @@ function applyListPatch(el, az, subOps) {
  */
 function applyEffects(effects) {
     for (const eff of effects) {
-        executeJS(document.documentElement, null, eff);
+        // Isolate each effect: `applyOps` already isolates per op, so this is the only
+        // step that can throw out of the worker's message handler, where it would skip
+        // the `restoreFormState()` queued behind it and discard the user's typed input
+        // on the very reconnect meant to preserve it. Event-attribute commands stay
+        // unisolated on purpose -- they run inside a DOM listener, where a throw is
+        // reported and costs nothing, and a bad selector or on_key regex there is a
+        // developer error that should stay loud.
+        try {
+            executeJS(document.documentElement, null, eff);
+        } catch (err) {
+            console.error(
+                '[arizona] effect %s failed; skipping',
+                Array.isArray(eff[0]) ? eff[0][0] : eff[0],
+                err,
+            );
+        }
     }
 }
 

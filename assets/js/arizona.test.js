@@ -1286,6 +1286,19 @@ describe('applyEffects', () => {
         // Should not throw
         applyEffects([[999, 'arg1', 'arg2']]);
     });
+
+    it('isolates a failing command so the rest of the batch still runs', () => {
+        document.title = 'before';
+        const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+        // '###nope' is not a valid selector, so add_class throws inside querySelectorAll.
+        applyEffects([
+            [4, '###nope', 'x'],
+            [14, 'after'],
+        ]);
+        expect(document.title).toBe('after');
+        expect(err).toHaveBeenCalled();
+        err.mockRestore();
+    });
 });
 
 // ---------------------------------------------------------------------------
