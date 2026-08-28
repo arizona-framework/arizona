@@ -207,7 +207,7 @@ ops); the inner loop accepts either to keep the harness generic.
     Stats :: map().
 run_socket_event_workload(Module, Bindings, Event, Runs) ->
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(Module, Bindings, Req, #{}),
+    {reply, _, Socket} = arizona_socket:init(Module, Bindings, Req, #{}),
     Json = iolist_to_binary(json:encode(Event)),
     case arizona_socket:handle_in(Json, Socket) of
         {ok, _} ->

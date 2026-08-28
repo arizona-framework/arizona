@@ -75,7 +75,7 @@ all() ->
 %% re-renders identically and `make_ops/5` suppresses the empty `[VId, []]`.
 item_patch_carries_child_view_wrapper(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket0} = arizona_socket:init(arizona_stream_item_child, #{}, Req, #{}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_stream_item_child, #{}, Req, #{}),
     %% Empty the label, then refill it: the child's slot holds a conditional, so its
     %% statics change and the patch carries the whole nested template rather than a
     %% bare scalar -- the payload shape that has to be resolved before it can be applied.
@@ -101,7 +101,7 @@ push_racing_navigate_dropped(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/next" => {arizona_root_counter, #{}}}
     }),
-    {ok, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
     %% Queue an info for the current page, then navigate: the live process
     %% handles the info first (FIFO), pushing old-page ops into our mailbox,
@@ -129,7 +129,7 @@ queued_push_prepended_to_event_reply(Config) when is_list(Config) ->
     %% causal order -- before the fix the reply carried only "6" and the queued
     %% "5" shipped in a LATER frame, so the stale value won client-side.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
     Pid ! {set_count, 5},
     EventFrame = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
@@ -148,7 +148,7 @@ queued_push_prepended_to_patch_reply(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/rc" => {arizona_root_counter, #{bindings => #{count => 7}}}}
     }),
-    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
     Pid ! {set_count, 5},
     PatchFrame = iolist_to_binary(
@@ -176,7 +176,7 @@ full_navigate_drops_pending_flash(Config) when is_list(Config) ->
     }),
     try
         Req = arizona_req_test_adapter:new(#{routes => #{}}),
-        {ok, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+        {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
         %% The handler's navigate effect carries a flash opt; encode_reply
         %% strips it from the client effect and stashes it on the socket.
         EventFrame = iolist_to_binary(json:encode([~"crashable", ~"flash_navigate", #{}])),
@@ -218,7 +218,7 @@ navigate_keeping_layouts_stays_on_the_socket(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/next" => {arizona_root_counter, #{layouts => Layouts}}}
     }),
-    {ok, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{layouts => Layouts}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{layouts => Layouts}),
     {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
     %% Same shell: the root view is replaced in place, no page load.
     ?assertMatch([[?OP_REPLACE, _ViewId, _HTML]], ops(Frame)).
@@ -229,7 +229,7 @@ navigate_changing_layouts_forces_full_load(Config) when is_list(Config) ->
             ~"/next" => {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
         }
     }),
-    {ok, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{
+    {reply, _, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{
         layouts => [{arizona_layout, render}]
     }),
     {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
@@ -250,7 +250,7 @@ patch_changing_layouts_forces_full_load(Config) when is_list(Config) ->
             ~"/rc" => {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
         }
     }),
-    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
         layouts => [{arizona_layout, render}]
     }),
     {reply, Frame, _Socket1} = arizona_socket:handle_in(patch_frame(~"/rc"), Socket0),
@@ -264,7 +264,7 @@ patch_to_other_handler_changing_layouts_forces_full_load(Config) when is_list(Co
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/other" => {arizona_timer, #{layouts => [{arizona_outer_layout, render}]}}}
     }),
-    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
         layouts => [{arizona_layout, render}]
     }),
     {reply, Frame, _Socket1} = arizona_socket:handle_in(patch_frame(~"/other"), Socket0),
@@ -300,7 +300,7 @@ middleware_flash_replays_requested_path_on_full_load(Config) when is_list(Config
                     {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
             }
         }),
-        {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+        {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
             layouts => [{arizona_layout, render}]
         }),
         %% The gate shares the current shell, so the navigate is served here and
@@ -353,7 +353,7 @@ flash_replay_does_not_hijack_an_unrelated_navigation(Config) when is_list(Config
                     {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
             }
         }),
-        {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+        {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
             layouts => [{arizona_layout, render}]
         }),
         {reply, _HaltFrame, Socket1} =
@@ -467,7 +467,7 @@ unmount_skipped_when_never_mounted(Config) when is_list(Config) ->
     Self = self(),
     Transport = spawn(fun() ->
         Req = arizona_req_test_adapter:new(),
-        {ok, Socket} = arizona_socket:init(
+        {reply, _, Socket} = arizona_socket:init(
             arizona_unmount_parent,
             #{notify => Self},
             Req,
@@ -598,7 +598,7 @@ resync_on_dead_live_process_closes_going_away(Config) when is_list(Config) ->
     %% close so the client's form-state-preserving reconnect runs; the flush
     %% raised a bare `{noproc, ...}` out of handle_in/2 instead.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(
+    {reply, _, Socket} = arizona_socket:init(
         arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
     ),
     Pid = arizona_socket:live_pid(Socket),
@@ -620,7 +620,7 @@ drain_before_mount_closes_going_away(Config) when is_list(Config) ->
     %% had already acknowledged the drain, leaving the listener to count it
     %% handled and hard-kill the connection at the deadline.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(
+    {reply, _, Socket} = arizona_socket:init(
         arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
     ),
     Pid = arizona_socket:live_pid(Socket),
@@ -644,7 +644,7 @@ push_emitted_after_reply_not_folded(Config) when is_list(Config) ->
     %% server meant INSERT-then-MOVE, and the client drops a move whose key it
     %% has not seen, leaving the server's snapshot wrong for good.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket0} = arizona_socket:init(arizona_stream_self_send, #{}, Req, #{}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_stream_self_send, #{}, Req, #{}),
     %% Repeat the interleave: the race is what the fix removes, so one trial
     %% only proves the fix when it happens to lose.
     interleave_add_then_move(Socket0, lists:seq(1, 20)).
@@ -681,7 +681,7 @@ child_push_scoped_to_emitting_view(Config) when is_list(Config) ->
     %% other. (The event path is already correct: it scopes with the child id
     %% the frame named.)
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(arizona_twin_parent, #{}, Req, #{}),
+    {reply, _, Socket} = arizona_socket:init(arizona_twin_parent, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket),
     TargetA = child_push_target(Pid, Socket, ~"twin_a"),
     TargetB = child_push_target(Pid, Socket, ~"twin_b"),
@@ -715,7 +715,7 @@ foreign_caller_does_not_desync_drain(Config) when is_list(Config) ->
     %% later frame over a newer value. The marker is emitted only for a call made
     %% by the transport itself, so the socket's mailbox never holds a stray one.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
     Self = self(),
     %% A foreign process drives the same live process.
@@ -762,7 +762,7 @@ effects(Frame) ->
 %% never at init.
 crashing_flagged_socket() ->
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(
+    {reply, _, Socket} = arizona_socket:init(
         arizona_crashable,
         #{crash_on_mount => true},
         Req,
