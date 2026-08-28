@@ -2586,11 +2586,16 @@ function flushTimer(el) {
  */
 function saveFormState() {
     _savedForms.clear();
-    document.querySelectorAll('form[id]').forEach((form) => {
-        const data = formFields(new FormData(/** @type {HTMLFormElement} */ (form)));
-        const azChange = form.getAttribute('az-change') || null;
-        _savedForms.set(form.id, { fields: data, azChange });
-    });
+    // Every hosting document, not just the main one: a view popped out to a PiP
+    // window keeps its forms in THAT window's document, and a reconnect has to
+    // preserve the user's typing there exactly as it does on the main page.
+    for (const doc of allDocs()) {
+        doc.querySelectorAll('form[id]').forEach((form) => {
+            const data = formFields(new FormData(/** @type {HTMLFormElement} */ (form)));
+            const azChange = form.getAttribute('az-change') || null;
+            _savedForms.set(form.id, { fields: data, azChange });
+        });
+    }
 }
 
 /**
@@ -2599,7 +2604,13 @@ function saveFormState() {
  */
 function restoreFormState() {
     for (const [formId, { fields, azChange }] of _savedForms) {
-        const form = document.getElementById(formId);
+        // Saved from any hosting document, so look in all of them -- a form popped
+        // out to a PiP window is not reachable from the main document.
+        let form = null;
+        for (const doc of allDocs()) {
+            form = doc.getElementById(formId);
+            if (form) break;
+        }
         if (!form) continue;
         const formEl = /** @type {HTMLFormElement} */ (form);
         // A duplicate name (a repeated text input, a checkbox group) was saved as
