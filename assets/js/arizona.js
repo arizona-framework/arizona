@@ -650,17 +650,36 @@ function destroyHooks(root) {
  * A framework slot-opening comment: `az:` followed by an az of the shape the
  * compiler emits.
  *
- * Every framework-emitted az is `<Fp>-<id>` -- a base-36 `phash2` fingerprint
- * (upper-case alphanumerics) and a numeric id, repeated for each nesting level
- * and optionally suffixed `:<slot>` for a second content slot on one element.
- * The fingerprint is the anchor that separates a real marker from user-authored
- * bytes, exactly as `arizona_html:scope_static/3` states for the server side:
- * static text is spliced verbatim and `?raw` splices trusted stored HTML, so a
- * comment written by a CMS or markdown pipeline reaches slot content as ordinary
- * bytes. Matching bare `az:` would let such a decoy pose as a nested opener and
- * make the walker below swallow the slot's own closer.
+ * A framework az is a run of `-`-joined upper-case alphanumeric segments, with
+ * an optional `:<slot>` suffix for a second content slot on one element. The
+ * base unit is `<Fp>-<id>` (a base-36 `phash2` fingerprint and a numeric id),
+ * but a nested one is NOT simply those units concatenated:
+ * `arizona_template:scope_slot/2` namespaces a slot's value by the slot az made
+ * colon-free (`:` -> `-`), so a slot that is not the FIRST content slot of its
+ * element contributes a bare numeric segment -- `<Fp>-0:1` becomes the prefix
+ * `<Fp>-0-1`, and every marker inside it reads `<Fp>-0-1-<Fp2>-<id>`. Requiring
+ * strict `<Fp>-<id>` alternation rejected exactly those, so the walker below
+ * stopped counting them as openers and under-walked the slot: a clear op emptied
+ * only up to the first nested closer, leaving the rest of the content stranded
+ * outside the slot to be drawn a second time by the next fill.
+ *
+ * The segment run is what separates a real marker from user-authored bytes,
+ * exactly as `arizona_html:scope_static/3` states for the server side: static
+ * text is spliced verbatim and `?raw` splices trusted stored HTML, so a comment
+ * written by a CMS or markdown pipeline reaches slot content as ordinary bytes.
+ * Matching bare `az:` would let such a decoy pose as a nested opener and make the
+ * walker swallow the slot's own closer.
+ *
+ * Deliberately NOT the exact grammar (`<Fp>-<id>` pairs each optionally followed
+ * by a colon-free slot number). That grammar is ambiguous once a fingerprint is
+ * all digits -- `-1-1` tiles as one pair or as a bare number plus the head of the
+ * next -- so a regex for it backtracks exponentially on a non-matching run of
+ * numeric segments, which is attacker-reachable through `?raw` stored HTML. One
+ * segment per repetition is unambiguous and linear, and pays for it only by
+ * admitting a decoy that already had to spell `az:` plus dash-joined upper-case
+ * segments.
  */
-const MARKER_OPEN = /^az:[0-9A-Z]+-\d+(?:-[0-9A-Z]+-\d+)*(?::\d+)?$/;
+const MARKER_OPEN = /^az:[0-9A-Z]+(?:-[0-9A-Z]+)+(?::\d+)?$/;
 
 /**
  * The `<!--/az-->` closing the slot `startMarker` opens, or null when the slot is

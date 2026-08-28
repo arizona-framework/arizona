@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyOps, hooks, mountHooks, OP, resolveEl } from './arizona.js';
+import { resolveHtml } from './arizona-core.js';
 
 // ---------------------------------------------------------------------------
 // Marker-anchored slots: targets that name NO element, and marker pairs that
@@ -662,5 +663,117 @@ describe('applyOps -- non-tail list inserts and removes', () => {
             ],
         ]);
         expect(texts()).toEqual(['b', 'z', 'c']);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// A slot whose az carries a colon-free slot number.
+//
+// `arizona_template:scope_slot/2` namespaces a slot's value by the slot az made
+// colon-free (`:` -> `-`), so a slot that is not the FIRST content slot of its
+// element bakes a BARE NUMERIC segment into every marker inside it:
+// `<Fp>-0:1` becomes the prefix `<Fp>-0-1` and the markers read
+// `<Fp>-0-1-<Fp2>-<id>`. `MARKER_OPEN` used to require strict `<Fp>-<id>`
+// alternation and rejected exactly those, so `findSlotEnd` stopped counting them
+// as openers and read the first NESTED closer as the slot's own.
+//
+// The damage was silent: clearing the slot emptied only up to that closer and
+// left the rest of the content stranded OUTSIDE the slot (still on screen, with
+// the server believing it gone), and the next fill drew a second copy beside it.
+// Nothing threw and nothing warned.
+//
+// Fixture: real `arizona_render` SSR of `arizona_slot_swap` paired with the real
+// `arizona_diff` ops for open -> close -> open.
+// ---------------------------------------------------------------------------
+
+describe('applyOps -- slot az with a colon-free slot number', () => {
+    const SWAP_SSR =
+        '<div az="1MDC969-0" az-view id="swap">' +
+        '<!--az:1MDC969-0-->a<!--/az--> | ' +
+        '<!--az:1MDC969-0:1-->' +
+        '<section az="1MDC969-0-1-BRG78W-0" class="drawer">' +
+        '<!--az:1MDC969-0-1-BRG78W-0--><!--/az-->' +
+        '</section>' +
+        '<!--/az--></div>';
+
+    // The drawer body: a template whose items are `?stateless` descriptors, so
+    // its marker pairs are SIBLINGS inside the drawer's content slot -- which is
+    // what makes the walker have to count nesting at all.
+    const BODY = {
+        f: '1MDC969-0-1-BRG78W-0-7I0WNB',
+        s: [
+            'lead <!--az:1MDC969-0-1-BRG78W-0-7I0WNB-0-->',
+            '<!--/az--><!--az:1MDC969-0-1-BRG78W-0-7I0WNB-1-->',
+            '<!--/az-->',
+        ],
+        d: [
+            {
+                f: '1MDC969-0-1-BRG78W-0-7I0WNB-0-1HB9I5W',
+                s: [
+                    '<p az="1MDC969-0-1-BRG78W-0-7I0WNB-0-1HB9I5W-0" class="row">' +
+                        '<!--az:1MDC969-0-1-BRG78W-0-7I0WNB-0-1HB9I5W-0-->',
+                    '<!--/az--></p>',
+                ],
+                d: ['one'],
+            },
+            {
+                f: '1MDC969-0-1-BRG78W-0-7I0WNB-1-1HB9I5W',
+                s: [
+                    '<p az="1MDC969-0-1-BRG78W-0-7I0WNB-1-1HB9I5W-0" class="row">' +
+                        '<!--az:1MDC969-0-1-BRG78W-0-7I0WNB-1-1HB9I5W-0-->',
+                    '<!--/az--></p>',
+                ],
+                d: ['two'],
+            },
+        ],
+    };
+
+    const DRAWER = 'swap:1MDC969-0-1-BRG78W-0';
+    const fill = () => [[OP.TEXT, DRAWER, resolveHtml(BODY), true]];
+    const clear = () => [[OP.TEXT, DRAWER, '']];
+    const drawer = () => document.querySelector('section.drawer');
+    const rows = () => [...document.querySelectorAll('p.row')].map((p) => p.textContent);
+
+    /** The drawer's children in DOM order, comments and text nodes included. */
+    function walk() {
+        return [...drawer().childNodes].map((n) => {
+            if (n.nodeType === 8) return `<!--${n.data}-->`;
+            if (n.nodeType === 3) return `#text ${JSON.stringify(n.data)}`;
+            return `<${n.nodeName.toLowerCase()}>${n.textContent}`;
+        });
+    }
+
+    beforeEach(() => {
+        document.body.innerHTML = SWAP_SSR;
+    });
+
+    it('fills the slot BETWEEN its markers, not after the closer', () => {
+        applyOps(fill());
+        expect(walk()).toEqual([
+            '<!--az:1MDC969-0-1-BRG78W-0-->',
+            '#text "lead "',
+            '<!--az:1MDC969-0-1-BRG78W-0-7I0WNB-0-->',
+            '<p>one',
+            '<!--/az-->',
+            '<!--az:1MDC969-0-1-BRG78W-0-7I0WNB-1-->',
+            '<p>two',
+            '<!--/az-->',
+            '<!--/az-->',
+        ]);
+    });
+
+    it('clears the WHOLE slot, leaving nothing stranded after the closer', () => {
+        applyOps(fill());
+        applyOps(clear());
+        expect(rows()).toEqual([]);
+        expect(walk()).toEqual(['<!--az:1MDC969-0-1-BRG78W-0-->', '#text ""', '<!--/az-->']);
+    });
+
+    it('refills without doubling the content', () => {
+        applyOps(fill());
+        applyOps(clear());
+        applyOps(fill());
+        expect(rows()).toEqual(['one', 'two']);
+        expect(drawer().textContent).toBe('lead onetwo');
     });
 });
