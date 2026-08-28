@@ -235,23 +235,20 @@ init(Handler, Bindings, Req, Opts) ->
 %% carry a layout's names.
 init_view(true, true, Handler, Pid, #socket{layouts = Layouts} = Socket0) ->
     TRef = erlang:send_after(?RESYNC_TIMEOUT_MS, self(), arizona_resync_timeout),
-    Socket1 = note_az(az_roots(Handler, Layouts), {[], []}, Socket0),
-    {Attrs, Socket} = take_az_pending(Socket1),
+    {Attrs, Socket} = az_connect(az_roots(Handler, Layouts), {[], []}, Socket0),
     {reply, encode(#{?AZ_ATTRS => Attrs}), Socket#socket{
         pid = Pid, pending_resync = TRef
     }};
 init_view(true, false, Handler, Pid, #socket{layouts = Layouts} = Socket0) ->
     {ok, ViewId, PageHTML, Observed} = arizona_live:mount_and_render(Pid),
     Ops = replace_ops(ViewId, PageHTML),
-    Socket1 = note_az(az_roots(Handler, Layouts), Observed, Socket0),
-    {Attrs, Socket} = take_az_pending(Socket1),
+    {Attrs, Socket} = az_connect(az_roots(Handler, Layouts), Observed, Socket0),
     {reply, encode(#{?OPS => Ops, ?AZ_ATTRS => Attrs}), Socket#socket{
         pid = Pid, view_id = ViewId
     }};
 init_view(false, _FpsFollow, Handler, Pid, #socket{layouts = Layouts} = Socket0) ->
     {ok, ViewId, Observed} = arizona_live:mount(Pid),
-    Socket1 = note_az(az_roots(Handler, Layouts), Observed, Socket0),
-    {Attrs, Socket} = take_az_pending(Socket1),
+    {Attrs, Socket} = az_connect(az_roots(Handler, Layouts), Observed, Socket0),
     {reply, encode(#{?AZ_ATTRS => Attrs}), Socket#socket{
         pid = Pid, view_id = ViewId
     }}.
@@ -838,6 +835,19 @@ drained_pushes(OpsAcc, EffectsAcc, Socket) ->
 %% can re-render one, so their names must ride the connect (or navigate) walk.
 az_roots(Handler, Layouts) ->
     [Handler | [Mod || {Mod, _Fun} <- Layouts]].
+
+%% Connect-time seeding, run once per socket: everything is new, so the delta
+%% bookkeeping note_az/3 does per frame (filter against walked, dedup against
+%% sent, the pending round trip) would only compare against empty sets. Walk
+%% the roots plus the mount's observations, seed both sets whole, and hand the
+%% names straight to the connect frame the caller builds.
+az_connect(Roots, {ObsNames, ObsMods}, Socket) ->
+    Mods = Roots ++ ObsMods,
+    Names = lists:usort(arizona_event_attrs:all(Mods) ++ ObsNames),
+    {Names, Socket#socket{
+        az_walked = maps:from_keys(Mods, true),
+        az_sent = maps:from_keys(Names, true)
+    }}.
 
 %% Fold newly proven az-* names into the socket's pending delta: walk modules not
 %% yet walked (extra roots plus render-observed ones), union render-observed

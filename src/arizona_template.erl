@@ -323,8 +323,7 @@ Builds a stateless child descriptor from a 1-arity render fun.
     Callback :: fun((map()) -> template()),
     Props :: map().
 stateless(Callback, Props) when is_function(Callback, 1), is_map(Props) ->
-    {module, CallbackMod} = erlang:fun_info(Callback, module),
-    ok = arizona_event_attrs:observe_mod(CallbackMod),
+    ok = arizona_event_attrs:observe_callback(Callback),
     #{callback => Callback, props => Props}.
 
 -doc """

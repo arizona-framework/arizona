@@ -41,6 +41,7 @@ and served a page's events short.
 -export([arm/0]).
 -export([drain/0]).
 -export([observe_attr/1]).
+-export([observe_callback/1]).
 -export([observe_mod/1]).
 
 -export_type([observed/0]).
@@ -114,6 +115,23 @@ observe_attr(<<"az-", _/binary>> = Name) ->
     end;
 observe_attr(_Name) ->
     ok.
+
+-doc """
+`observe_mod/1` for a stateless render callback: the armed check runs BEFORE
+the `fun_info` module lookup, so an unarmed render (SSR, static generation)
+pays one dictionary read and nothing else.
+""".
+-spec observe_callback(Callback) -> ok when
+    Callback :: fun((map()) -> term()).
+observe_callback(Callback) ->
+    case get(?MODS_KEY) of
+        undefined ->
+            ok;
+        Mods ->
+            {module, Mod} = erlang:fun_info(Callback, module),
+            put(?MODS_KEY, [Mod | Mods]),
+            ok
+    end.
 
 -doc """
 Records that a component module was instantiated, so the socket can walk it --
