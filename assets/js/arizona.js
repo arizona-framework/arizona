@@ -807,7 +807,12 @@ function applySetAttrOp(el, name, val) {
     // Without it the attribute lands correctly and its event silently never fires.
     if (name.startsWith('az-')) {
         const type = name.slice(3);
-        if (!AZ_DIRECTIVES.has(type)) bindEventType(type);
+        // Same two-way split as the other two discovery sites (`scanEvents` and the
+        // worker's report): `prevent-default` is a directive, not an event, but it
+        // still has to reach `notePreventDefault` or a patch that adds it leaves the
+        // forced-passive types passive and its own preventDefault silently ignored.
+        if (type === 'prevent-default') notePreventDefault();
+        else if (!AZ_DIRECTIVES.has(type)) bindEventType(type);
     }
     if (name === 'value' && 'value' in el) el.value = val;
     else if (name === 'checked' && 'checked' in el) el.checked = true;

@@ -99,6 +99,28 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide');
     });
 
+    it('delegates a newly discovered event type into an open PiP document', async () => {
+        document.body.innerHTML =
+            '<div id="v6" az-view az="0"><dialog id="d6" az="1"></dialog></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v6');
+
+        const bound = [];
+        const orig = pip.document.addEventListener.bind(pip.document);
+        pip.document.addEventListener = (t, fn, opts) => {
+            bound.push(t);
+            return orig(t, fn, opts);
+        };
+        // The type is discovered after the window opened, so it has to reach every
+        // hosting document, not just the main one -- the view now LIVES in the PiP
+        // document, so binding only the main document would delegate nothing.
+        applyOps([[1, 'v6:1', 'az-close', '[0,"closed"]']]);
+        expect(bound).toContain('close');
+
+        pip.fire('pagehide');
+    });
+
     it('routes ops for a nested stateful child into the PiP document', async () => {
         // A stateful child (its own `az-view`/id boundary) nested inside the
         // popped region. Only the root's id is registered in `_viewDocs`; the

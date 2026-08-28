@@ -34,6 +34,12 @@ custom element's own vocabulary works with nothing registered anywhere:
 (An atom attribute translates `_` to `-`, so an event name that genuinely contains an underscore
 needs the binary form, `{~"az-my_event", ...}`.)
 
+**The event name must be lowercase.** The HTML parser ASCII-lowercases attribute names, so
+`az-slChange` is stored as `az-slchange` and would bind `slchange`, an event that never fires. A
+camelCase DOM event therefore cannot be declared this way at all. In practice this costs nothing --
+custom elements dispatch kebab-case events precisely because of the same rule -- but it is the one
+event a template cannot name.
+
 **Types are discovered from the markup, not declared.** `scanEvents` walks freshly-inserted markup
 for `az-*` attributes and delegates any type not already bound. It shares `mountHooks`' call sites
 deliberately: those are exactly the points where new markup enters the DOM (SSR hydration,

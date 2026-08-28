@@ -201,6 +201,33 @@ describe('open event delegation', () => {
         spy.mockRestore();
     });
 
+    it('upgrades passive when a patch writes az-prevent-default onto an element', async () => {
+        const mod = await fresh();
+        const calls = [];
+        const orig = document.addEventListener.bind(document);
+        const spy = vi.spyOn(document, 'addEventListener').mockImplementation((t, fn, opts) => {
+            calls.push([t, opts]);
+            return orig(t, fn, opts);
+        });
+        document.body.innerHTML = `<div id="v" az-view az="0"><div id="p" az="1" az-wheel='[0,"w"]'></div></div>`;
+        w = mockWorker(mod);
+        w.open();
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
+            true,
+            true,
+        ]);
+
+        calls.length = 0;
+        // The attribute arrives by patch, not markup, so the worker never sees it --
+        // it has to be noticed where every attribute write funnels.
+        mod.applyOps([[1, 'v:1', 'az-prevent-default', '']]);
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
+            undefined,
+            undefined,
+        ]);
+        spy.mockRestore();
+    });
+
     it('does not double-run az-submit, which has its own listener', async () => {
         const mod = await fresh();
         document.body.innerHTML = `<div id="v" az-view><form id="f" az-submit='[0,"saved"]'></form></div>`;
