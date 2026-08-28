@@ -40,9 +40,14 @@ deliberately: those are exactly the points where new markup enters the DOM (SSR 
 `OP_TEXT`, `OP_INSERT`, `OP_REPLACE`, a list insert), plus the exported entry point a host app
 calls for markup it inserted itself. Binding is monotonic for the page, and the common types
 (`click`, `change`, `input`, `keydown`, `keyup`, `focusin`, `focusout`) are seeded eagerly so the
-usual path never waits on a scan. Measured cost: 0.372 ms for a 500-item list re-render (5000
-elements) against 0.005 ms for the hook early-out it precedes -- acceptable because a typical patch
-touches a handful of elements, and the reason this stays a plain `TreeWalker` rather than an index.
+usual path never waits on a scan.
+
+**The DOM walk is expensive, and was first recorded here as if it were not.** A/B of the real
+client in Chromium, per `applyOps`: a 500-element list re-render goes 0.219 -> 0.375 ms (**+71%**)
+and a 5000-element one 2.134 -> 3.514 ms (**+65%**). The earlier figure in this file compared the
+walk against the 0.005 ms hook early-out it precedes, a denominator that makes a cost of roughly
+two thirds of the patch look like noise. Measure it against the patch it rides on. Scanning the
+op's HTML string instead measures ~15x cheaper, which is why discovery belongs off this path.
 
 **Two listeners per type, split on the event's own `bubbles` flag**, because one phase cannot serve
 both kinds:

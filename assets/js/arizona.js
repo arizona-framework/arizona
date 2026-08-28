@@ -2817,10 +2817,15 @@ function bindEventType(type) {
  * no mapping table to keep in sync with the platform.
  *
  * Runs ahead of the hook early-out below and independently of it: markup declares
- * events whether or not the app registers hooks. Measured at 0.372 ms for a
- * 500-item list re-render (5000 elements) against 0.005 ms for the early-out it
- * precedes -- acceptable because a typical patch touches a handful of elements,
- * and the reason this stays a plain TreeWalker rather than growing an index.
+ * events whether or not the app registers hooks.
+ *
+ * COST: this walk is expensive. A/B of the real client in Chromium, per applyOps:
+ * a 500-element list re-render goes 0.219 -> 0.375 ms (+71%) and a 5000-element
+ * one 2.134 -> 3.514 ms (+65%). Measure it against the patch it rides on, not
+ * against the hook early-out it precedes (0.005 ms) -- that denominator makes a
+ * cost of roughly two thirds of the patch read as noise, which is how it was
+ * first mis-recorded here. A scan of the op's HTML string measures ~15x cheaper
+ * and is the reason discovery should move off this path.
  * @param {Element|Document} root
  */
 function scanEvents(root) {
