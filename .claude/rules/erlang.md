@@ -94,8 +94,15 @@ live root, rejected elsewhere. Everything else `az-*` is the template author's: 
 keys stream items, `az_click`/`az_submit`/... carry effects, and an app may invent its own.
 An event attribute may name **any** DOM event -- the suffix becomes the
 `addEventListener` type verbatim, so `az_toggle`, `az_close` and a custom element's
-`az_sl_change` all bind, including events that do not bubble (see
-[js.md](js.md) for how they are delivered).
+`az_sl_change` all bind, including events that do not bubble.
+
+**Where you put it depends on whether the event bubbles.** A bubbling event
+delegates, so `az_click` on a `ul` catches every item's click. A non-bubbling one
+(`load`, `toggle`, `close`, `play`, `scroll`, ...) is dispatched at its target
+alone, so it must sit on the element that emits it -- `az_load` on a wrapping
+`div` never fires. Such a command also cannot be suppressed with
+`stopPropagation`, and a custom-element event declared `composed: false` cannot be
+delegated at all. See [js.md](js.md).
 
 ## Route options
 

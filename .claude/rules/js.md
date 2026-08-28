@@ -74,6 +74,25 @@ both kinds:
   an event that never reached it. That is also why `mouseenter`/`mouseleave` -- which the platform
   dispatches separately to each nesting level -- fire once rather than once per level.
 
+Three consequences of that split, all verified:
+
+- **Delegation is asymmetric, and the rule is the event's `bubbles` flag.** `az-click` on a parent
+  catches every descendant's click; `az-load` or `az-toggle` on a parent never fires, because the
+  event is dispatched at the target alone. Put a non-bubbling handler on the element that emits it.
+- **An app cannot `stopPropagation` a non-bubbling `az-*` command.** The framework's capture
+  listener runs at the document, before any listener on the target. The bubbling case is
+  suppressible (above) and readers will assume symmetry; it is not symmetric.
+- **A `composed: false` custom-element event cannot be delegated at all** -- it never leaves the
+  shadow root, so nothing reaches the document. Composed events are fine either way: measured,
+  `composed+bubbles` retargets to the host and matches via `closest()`, and `composed` +
+  non-bubbling retargets to the host and matches by exact target. Since a template author
+  necessarily puts `az-<event>` on the host, both work.
+
+**Markup a host app inserts itself needs the exported `mountHooks`.** The worker reports names only
+for markup it resolved, and the DOM walk runs only where `mountHooks` is called, so DOM produced by
+app code (a hook's `mounted()` writing `innerHTML`, a third-party widget) declares nothing until
+`mountHooks` is called on it. That is the same contract hooks already have.
+
 `e.target` is not always an Element: a viewport `scroll`, the page-level `mouseenter`, and a
 server-sent `dispatch_event` all target the Document, which has no `closest`. The handler guards on
 `nodeType` before resolving.
