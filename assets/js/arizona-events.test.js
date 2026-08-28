@@ -50,7 +50,26 @@ beforeEach(() => {
 
 describe('open event delegation', () => {
     let w;
-    afterEach(() => w?.restore());
+    /** @type {{mockRestore: () => void} | null} */
+    let spy = null;
+    afterEach(() => {
+        // In the test body a failed assertion skips it, leaving addEventListener
+        // mocked and blowing the stack in every later test.
+        spy?.mockRestore();
+        spy = null;
+        w?.restore();
+    });
+
+    /** Record the options every document listener is registered with. */
+    function recordListeners() {
+        const calls = [];
+        const orig = document.addEventListener.bind(document);
+        spy = vi.spyOn(document, 'addEventListener').mockImplementation((t, fn, opts) => {
+            calls.push([t, opts]);
+            return orig(t, fn, opts);
+        });
+        return calls;
+    }
 
     it('delivers a non-bubbling event declared in the SSR markup', async () => {
         const mod = await fresh();
@@ -166,12 +185,7 @@ describe('open event delegation', () => {
 
     it('keeps a forced-passive type passive until the page declares prevent-default', async () => {
         const mod = await fresh();
-        const calls = [];
-        const orig = document.addEventListener.bind(document);
-        const spy = vi.spyOn(document, 'addEventListener').mockImplementation((t, fn, opts) => {
-            calls.push([t, opts]);
-            return orig(t, fn, opts);
-        });
+        const calls = recordListeners();
         document.body.innerHTML = `<div id="v" az-view><div id="p" az-wheel='[0,"w"]'></div></div>`;
         w = mockWorker(mod);
         w.open();
@@ -179,10 +193,8 @@ describe('open event delegation', () => {
         // Chrome forces these four passive on a Document, so opting out is the only
         // way preventDefault works there -- but opting out unconditionally costs the
         // whole page its scroll fast path, and observing wheel should not do that.
-        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
-            true,
-            true,
-        ]);
+        // One registration, not two: wheel bubbles natively, so no capture listener.
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([true]);
         // Types the platform does not force are left alone; non-passive is already
         // their default, so passing the flag at all was a no-op.
         expect(calls.filter(([t]) => t === 'click').every(([, o]) => o.passive === undefined)).toBe(
@@ -196,28 +208,17 @@ describe('open event delegation', () => {
         w.ops([], ['prevent-default']);
         // `false`, not absent: Chrome forces passive when the flag is unspecified,
         // so an omitted flag here re-forces it and the upgrade does nothing.
-        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
-            false,
-            false,
-        ]);
-        spy.mockRestore();
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([false]);
     });
 
     it('upgrades passive when a patch writes az-prevent-default onto an element', async () => {
         const mod = await fresh();
-        const calls = [];
-        const orig = document.addEventListener.bind(document);
-        const spy = vi.spyOn(document, 'addEventListener').mockImplementation((t, fn, opts) => {
-            calls.push([t, opts]);
-            return orig(t, fn, opts);
-        });
+        const calls = recordListeners();
         document.body.innerHTML = `<div id="v" az-view az="0"><div id="p" az="1" az-wheel='[0,"w"]'></div></div>`;
         w = mockWorker(mod);
         w.open();
-        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
-            true,
-            true,
-        ]);
+        // One registration, not two: wheel bubbles natively, so no capture listener.
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([true]);
 
         calls.length = 0;
         // The attribute arrives by patch, not markup, so the worker never sees it --
@@ -225,11 +226,58 @@ describe('open event delegation', () => {
         mod.applyOps([[1, 'v:1', 'az-prevent-default', '']]);
         // `false`, not absent: Chrome forces passive when the flag is unspecified,
         // so an omitted flag here re-forces it and the upgrade does nothing.
-        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
-            false,
-            false,
-        ]);
-        spy.mockRestore();
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([false]);
+    });
+
+    it('ignores an az-* attribute holding app data, not a command', async () => {
+        const mod = await fresh();
+        // erlang.md sanctions app-invented az-* names, and a suffix can collide with
+        // a real DOM event. Parsing this would throw out of a document listener on
+        // every dispatch, once per event, for the life of the page.
+        document.body.innerHTML =
+            `<div id="v" az-view>` +
+            `<details id="data" az-toggle="sidebar"><summary>s</summary></details>` +
+            `<details id="cmd" az-toggle='[0,"real"]'><summary>s</summary></details>` +
+            `</div>`;
+        w = mockWorker(mod);
+        mod.mountHooks(document);
+        w.open();
+
+        expect(() => fire(document.getElementById('data'), 'toggle', false)).not.toThrow();
+        expect(w.sent()).toEqual([]);
+        // ...and a real command of the SAME type is unaffected by the guard.
+        fire(document.getElementById('cmd'), 'toggle', false);
+        expect(w.sent()).toEqual([['v', 'real', {}]]);
+    });
+
+    it('ignores a non-bubbling dispatch of a type that bubbles natively', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view><input id="i" az-change='[0,"changed"]' /></div>`;
+        w = mockWorker(mod);
+        mod.mountHooks(document);
+        w.open();
+
+        // `new Event('change')` defaults to bubbles:false, the idiom a masked-input
+        // or autofill shim uses. Before the open surface these types were bubble-only,
+        // and delegating them in capture too would round-trip on views that opted
+        // into nothing.
+        fire(document.getElementById('i'), 'change', false);
+        expect(w.sent()).toEqual([]);
+        fire(document.getElementById('i'), 'change', true);
+        expect(w.sent()).toEqual([['v', 'changed', { value: '' }]]);
+    });
+
+    it('binds a type whose name is not a valid CSS identifier', async () => {
+        const mod = await fresh();
+        // The HTML parser keeps `.` and `:` in an attribute name, so the type reaches
+        // the selector unescaped and would throw per dispatch.
+        document.body.innerHTML = `<div id="v" az-view><b id="d" az-turbo:load='[0,"loaded"]'>x</b></div>`;
+        w = mockWorker(mod);
+        mod.mountHooks(document);
+        w.open();
+
+        expect(() => fire(document.getElementById('d'), 'turbo:load', true)).not.toThrow();
+        expect(w.sent()).toEqual([['v', 'loaded', {}]]);
     });
 
     it('does not double-run az-submit, which has its own listener', async () => {

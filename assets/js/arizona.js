@@ -805,15 +805,7 @@ function applySetAttrOp(el, name, val) {
     // here -- the SET_ATTR op, an ITEM_PATCH inner op, `arizona_js:set_attr`/
     // `toggle_attr`, and a `?local` attribute slot -- so one check covers them all.
     // Without it the attribute lands correctly and its event silently never fires.
-    if (name.startsWith('az-')) {
-        const type = name.slice(3);
-        // Same two-way split as the other two discovery sites (`scanEvents` and the
-        // worker's report): `prevent-default` is a directive, not an event, but it
-        // still has to reach `notePreventDefault` or a patch that adds it leaves the
-        // forced-passive types passive and its own preventDefault silently ignored.
-        if (type === 'prevent-default') notePreventDefault();
-        else if (!AZ_DIRECTIVES.has(type)) bindEventType(type);
-    }
+    noteAzAttr(name);
     if (name === 'value' && 'value' in el) el.value = val;
     else if (name === 'checked' && 'checked' in el) el.checked = true;
     else if (name === 'selected' && 'selected' in el) el.selected = true;
@@ -2721,12 +2713,27 @@ function runDelegated(e, eventType, capture) {
     // a server-sent `dispatch_event` all target the Document, which has no closest().
     if (!t || t.nodeType !== 1) return;
     const attr = `az-${eventType}`;
-    const el = capture ? (t.hasAttribute(attr) ? t : null) : t.closest(`[${attr}]`);
+    // CSS.escape: the type reaches here from a raw attribute name, and the HTML
+    // parser keeps `.` and `:` in one, so `az-turbo:load` would otherwise be an
+    // invalid selector and throw out of the listener on every dispatch.
+    const el = capture ? (t.hasAttribute(attr) ? t : null) : t.closest(`[${CSS.escape(attr)}]`);
     if (!el || !_connected) return;
-    if (el.hasAttribute('az-prevent-default')) e.preventDefault();
     const raw = el.getAttribute(attr);
-    if (!raw) return;
-    executeJS(el, e, withTransitionAttr(el, JSON.parse(raw)));
+    // The `az-*` namespace belongs to the template author too (see
+    // .claude/rules/erlang.md), so an attribute whose suffix happens to name a DOM
+    // event may just be app data -- `az-toggle="sidebar"`. A command list is always
+    // a JSON array, so treat anything else as not ours rather than parsing it: this
+    // runs in a document listener, where a throw is an uncaught error per event.
+    if (!raw || raw[0] !== '[') return;
+    let cmds;
+    try {
+        cmds = JSON.parse(raw);
+    } catch {
+        warnOnce(`[arizona] ${attr} is not a valid command list; ignoring it`);
+        return;
+    }
+    if (el.hasAttribute('az-prevent-default')) e.preventDefault();
+    executeJS(el, e, withTransitionAttr(el, cmds));
 }
 
 /**
@@ -2779,7 +2786,13 @@ function handleEvent(target, eventType, signal) {
         capOpts.passive = !_preventDefaultSeen;
         bubOpts.passive = !_preventDefaultSeen;
     }
-    target.addEventListener(eventType, capFn, capOpts);
+    // Capture exists only to reach events that cannot bubble. Registering it for a
+    // type the platform always bubbles is worse than useless: it changes what the
+    // SEVEN pre-existing types respond to (a shim's `new Event('change')` defaults
+    // to bubbles:false and would now round-trip on views that opted into nothing),
+    // and on `wheel`/`touchmove` it puts a non-passive document listener that can
+    // never do work in front of every scroll frame.
+    if (!NATIVELY_BUBBLING.has(eventType)) target.addEventListener(eventType, capFn, capOpts);
     target.addEventListener(eventType, bubFn, bubOpts);
     return [capFn, bubFn];
 }
@@ -2789,6 +2802,35 @@ function handleEvent(target, eventType, signal) {
  * is ignored unless the listener opts out explicitly.
  */
 const PASSIVE_FORCED = new Set(['wheel', 'mousewheel', 'touchstart', 'touchmove']);
+
+/**
+ * Types the platform always dispatches with `bubbles: true`, so the bubble phase
+ * already sees every real one and a capture listener would only ever add reach the
+ * pre-PR client did not have. The seeded seven plus the forced-passive four.
+ */
+const NATIVELY_BUBBLING = new Set([
+    'click',
+    'change',
+    'input',
+    'keydown',
+    'keyup',
+    'focusin',
+    'focusout',
+    'wheel',
+    'mousewheel',
+    'touchstart',
+    'touchmove',
+]);
+
+/** Messages already emitted by `warnOnce`, so app data cannot spam the console. */
+const _warned = new Set();
+
+/** @param {string} msg */
+function warnOnce(msg) {
+    if (_warned.has(msg)) return;
+    _warned.add(msg);
+    console.warn(msg);
+}
 
 /** Has this page declared `az-prevent-default` anywhere yet? */
 let _preventDefaultSeen = false;
@@ -2831,6 +2873,29 @@ function notePreventDefault() {
  * forgetting one is harmless, and only a future directive named after a real DOM
  * event would need to be added here.
  */
+/**
+ * Report one `az-*` attribute NAME to discovery. The single place the
+ * directive/event triage lives: it had drifted across three call sites, one of
+ * which skipped the lowercase and bound a type that could never fire.
+ * @param {string} name
+ */
+function noteAzAttr(name) {
+    if (name.startsWith('az-')) noteAzType(name.slice(3));
+}
+
+/**
+ * Report one `az-*` SUFFIX (the worker sends these already split off the name).
+ * @param {string} type
+ */
+function noteAzType(type) {
+    // Attribute names are ASCII-lowercased by the HTML parser, and
+    // `addEventListener` types are case-sensitive, so an unlowered `az-Close`
+    // would bind a dead `Close` while the DOM stores `az-close`.
+    const t = type.toLowerCase();
+    if (t === 'prevent-default') notePreventDefault();
+    else if (!_eventTypes.has(t) && !AZ_DIRECTIVES.has(t)) bindEventType(t);
+}
+
 const AZ_DIRECTIVES = new Set([
     'submit',
     'drop',
@@ -2909,12 +2974,7 @@ function scanEvents(root) {
     for (; node; node = walker.nextNode()) {
         const attrs = /** @type {Element} */ (node).attributes;
         if (!attrs) continue;
-        for (const { name } of attrs) {
-            if (!name.startsWith('az-')) continue;
-            const type = name.slice(3);
-            if (type === 'prevent-default') notePreventDefault();
-            else if (!_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) bindEventType(type);
-        }
+        for (const { name } of attrs) noteAzAttr(name);
     }
 }
 
@@ -3200,10 +3260,7 @@ function connect(endpoint, params = {}) {
                     // The worker reports raw `az-*` names; deciding which are events
                     // is done here, where the directive list already lives.
                     if (msg[4]) {
-                        for (const name of msg[4]) {
-                            if (name === 'prevent-default') notePreventDefault();
-                            else if (!AZ_DIRECTIVES.has(name)) bindEventType(name);
-                        }
+                        for (const name of msg[4]) noteAzType(name);
                     }
                     const apply = () => {
                         // A patch-scroll intent lives exactly until the first frame
