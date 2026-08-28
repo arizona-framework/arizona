@@ -35,27 +35,46 @@ that genuinely contains an underscore needs the binary form, `{~"az-my_event", .
 be lowercase: the HTML parser lowercases attribute names, so `az-slChange` binds a `slchange` that
 never fires -- which is what custom elements use kebab-case for anyway.)
 
-**The set of types comes from the compiler, not from the rendered bytes.** `compile_attr` in the
-parse transform resolves every `az-*` name to a literal, records it, and `inject_az_attrs/1` emits
-it as an `arizona_az_attrs` module attribute. `arizona_az_attrs:all/1` unions those across the
-loaded applications that depend on Arizona and the socket ships the set on the connect frame, under
-JSON key `"a"`, alongside `"o"`/`"e"`. The worker relays it as field 4 of
+**The set of types comes from proofs, never from guessing.** There are exactly two moments the
+command-versus-data question is answerable, and the delivery uses both (`arizona_event_attrs`):
+
+- **Compile time.** `compile_attr` records an `az-*` name when a builder call
+  (`arizona_js`/`arizona_android`/`arizona_os`) is visible anywhere in its value expression --
+  builders are the only producers of effect tuples, so the call is proof. The names land in an
+  `arizona_az_attrs` module attribute beside `arizona_az_deps` (the component modules the templates
+  name literally); `arizona_event_attrs:all/1` walks that graph from the route's handler **and
+  layout modules** (layouts render once, at SSR, so no frame can ever carry their markup) and the
+  socket ships the union on the connect frame, under JSON key `"a"` alongside `"o"`/`"e"`.
+- **Render time.** What compile time cannot prove, evaluation can: an opaque dynamic
+  (`{az_close, ?get(on_close)}`) that evaluates to an `{arizona_effect, _}` command names its
+  attribute, and a `?stateful`/`?stateless` instantiation names its module -- covering a module
+  bound at runtime (`?stateful(?get(page), ...)`), which the walk cannot follow. The socket walks
+  newly observed modules, dedups against everything already sent, and ships the per-socket delta as
+  `"a"` on the **same frame** that first renders the markup, so the type is bound before anything
+  can trigger it. After connect, frames carry no `"a"` at all unless something new was proved.
+
+The worker relays each frame's `"a"` as field 4 of
 `postMessage([0, ops, effects, firstAfterReconnect, azNames])`; the main thread decides which names
-are events.
+are events and unions monotonically.
 
-Deriving it at runtime instead was tried and abandoned. A regex over serialized HTML cannot tell an
-attribute NAME from `az-` text inside an attribute VALUE, so user content echoed into a `title`
-could register document listeners and disable the page's scroll fast path; and it truncated on a
-`>` inside an attribute value, silently dropping real events. Both failure modes are structural,
-not bugs to patch: the information exists exactly at compile time and nowhere else after.
+Deriving the set from rendered bytes instead was tried and abandoned. A regex over serialized HTML
+cannot tell an attribute NAME from `az-` text inside an attribute VALUE, so user content echoed
+into a `title` could register document listeners and disable the page's scroll fast path; and it
+truncated on a `>` inside an attribute value, silently dropping real events. Both failure modes are
+structural, not bugs to patch.
 
-**A static attribute value is data, and is deliberately not recorded.** An effect is always a call,
-never a literal, so `compile_attr`'s `is_static_binary(ValueAST)` branch is app data by
-construction. `{az_select, ~"[1,2,3]"}` therefore never enters the set, `select` is never delegated,
-and the value never reaches the command interpreter. That matters because a command list is a bare
-JSON array (`arizona_effect:encode/1` emits a single command unwrapped, `[0,"inc"]`), so `[1,2,3]`
-is a structurally valid command -- `toggle` with selector `2` -- and **no client-side inspection of
-the value can separate the two**. The discrimination is only possible at compile time.
+**An unproven value is data, and is deliberately not delegated.** A static binary is data by
+construction (an effect is always a call, never a literal), a bare or boolean attribute has no
+value to hold a command, and an opaque dynamic that never evaluates to a command is data too --
+`{az_select, ?get(ids)}` rendering `az-select="[1,2,3]"` never enters the set, `select` is never
+delegated, and the value never reaches the command interpreter. That matters because a command list
+is a bare JSON array (`arizona_effect:encode/1` emits a single command unwrapped, `[0,"inc"]`), so
+`[1,2,3]` is a structurally valid command -- `toggle` with selector `2` -- and **no client-side
+inspection of the value can separate the two**. Delegating on guesswork would both leave declared
+events dead and hand app data (possibly attacker-influenced) to the command interpreter; the typed
+proofs above are what make neither happen. The delegated dispatch still wraps parse AND execution
+in a warn-once containment, because a proven name can share the DOM with same-named app data (a
+runtime `set_attr`, host markup).
 
 **Two listeners per type, split on the event's own `bubbles` flag**, because one phase cannot serve
 both kinds:
@@ -80,14 +99,18 @@ resolving. The attribute name and its `CSS.escape`d selector are built once per 
 not per dispatch (`CSS.escape` because the parser keeps `.` and `:` in an attribute name, so
 `az-turbo:load` would otherwise be an invalid selector and throw on every dispatch).
 
-**Passive is decided once, at bind time.** Chrome makes a document-level `wheel`, `mousewheel`,
-`touchstart` or `touchmove` listener passive **by default**, so opting out is the only way
-`az-prevent-default` works on them -- but opting out unconditionally disables the browser's scroll
-fast path for the whole page, so an app that only wants to *observe* wheel events would pay scroll
-jank it never asked for. Because `az-prevent-default` is in the compile-time set, its presence is
-known before the first listener is registered and the right value is used the first time. The flag
-must be **stated in both directions**: omitting it entirely makes Chromium register `passive: true`
-anyway (verified against Chromium's own `DOMDebugger.getEventListeners`).
+**Passive is decided at bind time, and revisited exactly once.** Chrome makes a document-level
+`wheel`, `mousewheel`, `touchstart` or `touchmove` listener passive **by default**, so opting out
+is the only way `az-prevent-default` works on them -- but opting out unconditionally disables the
+browser's scroll fast path for the whole page, so an app that only wants to *observe* wheel events
+would pay scroll jank it never asked for. `az-prevent-default` is recorded in every attribute form
+(it is the one directive the client reads out of the declared set), so on the common path its
+presence is known before the first listener is registered. When the declaration arrives **after** a
+forced-passive type was bound (a later delta frame, a runtime attribute write), the client
+re-registers those listeners non-passive (`declarePreventDefault`) -- passive is fixed at
+registration, so without the rebind the page would keep ignoring the `preventDefault` it declared.
+The flag must be **stated in both directions**: omitting it entirely makes Chromium register
+`passive: true` anyway (verified against Chromium's own `DOMDebugger.getEventListeners`).
 
 **`submit` and `drop` are deliberately not delegated generically.** They name real DOM events *and*
 have dedicated listeners (submit flushes pending debounced inputs, honors `az-form-reset`, and
