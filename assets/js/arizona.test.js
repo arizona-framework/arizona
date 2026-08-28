@@ -104,7 +104,7 @@ function setupMockWorker(mod) {
         simulateClose(code = 1006) {
             mockWorkerInstance.onmessage({ data: [2, code] });
         },
-        /** Simulate Worker resolved message [0, ops, effects, firstAfterReconnect] */
+        /** Simulate Worker resolved message [0, ops, effects, firstAfterReconnect, azAttrs] */
         simulateMessage(ops, effects, firstAfterReconnect = false) {
             mockWorkerInstance.onmessage({ data: [0, ops, effects, firstAfterReconnect] });
         },
@@ -3130,7 +3130,7 @@ describe('OP.ITEM_PATCH with pre-resolved inner ops', () => {
 
 // ---------------------------------------------------------------------------
 // onmessage handles partial envelopes (omitted "o" or "e")
-// Worker sends [0, ops|null, effects|null, firstAfterReconnect] to main.
+// Worker sends [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] to main.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

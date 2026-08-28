@@ -6,7 +6,7 @@
  * Sends pre-computed DOM-ready data to the main thread.
  *
  * Worker -> Main protocol (arrays for fast structured clone):
- *   [0, ops|null, effects|null, firstAfterReconnect] -- resolved message
+ *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *
@@ -225,14 +225,31 @@ const _seenAzAttrs = new Set();
 /** @type {Array<string>} */
 let _newAzAttrs = [];
 
-// Matches an `az-*` attribute NAME in serialized HTML. Anchored on the separator
-// before it and on what legally follows a name (`=`, whitespace for a bare
-// attribute, or `/`/`>` closing the tag), so an `az-` inside a value or a URL is
-// not mistaken for one. Over-matching is safe -- an extra name only ever binds a
-// listener for an event that never fires -- but MISSING one is not, since that is
-// the silently-dead-event bug this discovery exists to prevent, so the pattern is
-// deliberately permissive about quoting and case.
-const AZ_ATTR_RE = /[\s/]az-([a-z0-9][a-z0-9-]*)(?=[\s/>=])/gi;
+// Tags only, never text. A raw `>` cannot appear in text or in an attribute value
+// -- the server escapes both to `&gt;` -- so it only ever closes a tag, which makes
+// this a safe way to look at markup alone. Scanning the whole payload instead let
+// ordinary prose containing the literal `az-prevent-default` latch the page's wheel
+// listeners non-passive, and let arbitrary user text register listeners; over-
+// matching is NOT harmless for a directive. A `?raw` payload is markup by
+// definition, so scanning its tags is right.
+//
+// Splitting into tags first costs ~2.7x a single pass over 68 KB of markup
+// (0.18 ms vs 0.07 ms). The obvious cheaper fix -- one pass, then `lastIndexOf('<')`
+// per hit to test whether it landed inside a tag -- is 2x faster on markup and
+// **640x slower on prose** (2.4 ms vs 0.004 ms for 14 KB of chat text carrying
+// `az-` tokens), because the backward scan degrades on exactly the user-authored
+// content this guard exists for. Cost that scales with attacker-supplied text is
+// the wrong trade; the memoisation worth having instead is per fingerprint, since
+// statics arrive once and dynamics are small.
+const TAG_RE = /<[^>]*>/g;
+
+// Matches an `az-*` attribute NAME inside one tag. Anchored on the separator before
+// it and on what legally follows a name (`=`, whitespace for a bare attribute, or
+// `/`/`>` closing the tag). The name class takes `_`, `.` and `:` as well, because
+// the HTML parser keeps all three in an attribute name and the docs prescribe the
+// underscore form (`{~"az-my_event", ...}`) -- excluding them made that form work at
+// SSR and die the moment the same element arrived by patch.
+const AZ_ATTR_RE = /[\s/]az-([a-z0-9][\w.:-]*)(?=[\s/>=])/gi;
 
 /**
  * Record every `az-*` attribute name in a resolved HTML payload.
@@ -240,15 +257,20 @@ const AZ_ATTR_RE = /[\s/]az-([a-z0-9][a-z0-9-]*)(?=[\s/>=])/gi;
  */
 function scanAzAttrs(html) {
     if (typeof html !== 'string') return;
-    AZ_ATTR_RE.lastIndex = 0;
-    let m = AZ_ATTR_RE.exec(html);
-    while (m !== null) {
-        const name = m[1].toLowerCase();
-        if (!_seenAzAttrs.has(name)) {
-            _seenAzAttrs.add(name);
-            _newAzAttrs.push(name);
+    TAG_RE.lastIndex = 0;
+    let tag = TAG_RE.exec(html);
+    while (tag !== null) {
+        AZ_ATTR_RE.lastIndex = 0;
+        let m = AZ_ATTR_RE.exec(tag[0]);
+        while (m !== null) {
+            const name = m[1].toLowerCase();
+            if (!_seenAzAttrs.has(name)) {
+                _seenAzAttrs.add(name);
+                _newAzAttrs.push(name);
+            }
+            m = AZ_ATTR_RE.exec(tag[0]);
         }
-        m = AZ_ATTR_RE.exec(html);
+        tag = TAG_RE.exec(html);
     }
 }
 

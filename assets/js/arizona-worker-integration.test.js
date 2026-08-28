@@ -231,6 +231,33 @@ describe('arizona-worker', () => {
         expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
     });
 
+    it('does not scan text content, only tags', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // User-authored prose reaches the client as escaped TEXT inside markup. It
+        // declares nothing, but `prevent-default` there would latch the page's wheel
+        // listeners non-passive for good, and junk tokens would register listeners.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [[0, 'v:0', { raw: '<p>chat: az-zz1 az-prevent-default ok</p>' }]],
+            }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
+    });
+
+    it('reports a name containing an underscore', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // The docs prescribe the binary form for these (`{~"az-my_event", ...}`), and
+        // SSR binds them, so dropping them here made the form die only on a patch.
+        ws.latest().simulateMessage(
+            JSON.stringify({ o: [[0, 'v:0', { raw: `<b az-my_event='[0,"u"]'></b>` }]] }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toEqual(['my_event']);
+    });
+
     it('does not mistake a scalar text value for markup', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

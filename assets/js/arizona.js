@@ -9,7 +9,7 @@
  * Worker for transmission.
  *
  * Wire protocol (Worker -> Main):
- *   [0, ops|null, effects|null, firstAfterReconnect] -- resolved message
+ *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *
