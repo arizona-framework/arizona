@@ -398,9 +398,9 @@ flagged_reconnect_defers_and_dedups_resync(Config) when is_list(Config) ->
         arizona_socket:init(arizona_root_counter, #{}, Req0, #{reconnect => true}),
     #{~"o" := [[?OP_REPLACE, _, #{~"f" := Fp, ~"s" := [_ | _]}]]} =
         json:decode(iolist_to_binary(RefFrame)),
-    %% Flagged run: no reply at init.
+    %% Flagged run: the reply carries only the declared az-* names, no ops.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket0} =
+    {reply, _, Socket0} =
         arizona_socket:init(
             arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
         ),
@@ -418,7 +418,7 @@ deferred_resync_flushed_by_event_frame(Config) when is_list(Config) ->
     %% (undeduped) and the event's own reply follows it in one `reply_many` --
     %% resync applies before the event ops on the client, in order.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket0} =
+    {reply, _, Socket0} =
         arizona_socket:init(
             arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
         ),
@@ -437,7 +437,7 @@ deferred_resync_flushed_by_ping(Config) when is_list(Config) ->
     %% A heartbeat ping while the resync is pending flushes it too -- the pong
     %% follows the resync frame. (Any frame at all settles the deferral.)
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket0} =
+    {reply, _, Socket0} =
         arizona_socket:init(
             arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
         ),
@@ -544,7 +544,7 @@ deferred_resync_timeout_flushes_undeduped(Config) when is_list(Config) ->
     %% real `arizona_resync_timeout` message arrives here; feeding it to
     %% handle_info flushes the resync undeduped.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket0} =
+    {reply, _, Socket0} =
         arizona_socket:init(
             arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
         ),
