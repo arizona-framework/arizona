@@ -454,18 +454,21 @@ bench_mount_only(Runs) ->
     %% against scheduler/GC load from earlier ones) and tripled the
     %% stdev (~16% vs ~2%).
     %%
-    %% The Socket is the record `{socket, Pid, ViewId, Req}` -- we use
-    %% element/2 instead of including the record header in this escript.
+    %% Element 2 of the socket record is the live pid -- we use element/2
+    %% instead of including the record header in this escript. A connect always
+    %% replies (the frame carries the declared az-* names), and building that
+    %% frame is part of what a mount costs, so the reply shape is the one
+    %% matched here.
     Req = arizona_req_test_adapter:new(),
     case arizona_socket:init(arizona_root_counter, #{}, Req, #{}) of
-        {ok, TestSock} when is_pid(element(2, TestSock)) ->
+        {reply, _Connect, TestSock} when is_pid(element(2, TestSock)) ->
             arizona_bench_lib:kill_live(element(2, TestSock));
         Other ->
             io:format("error: init returned unexpected ~p~n", [Other]),
             halt(1)
     end,
     Fun = fun() ->
-        {ok, Sock} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+        {reply, _, Sock} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
         arizona_bench_lib:kill_live(element(2, Sock)),
         ok
     end,

@@ -18,9 +18,11 @@ Inbound text frames are JSON arrays:
 ~"0"                                              %% ping (replied with ~"1")
 ```
 
-Outbound text frames are JSON maps with keys `~"o"` (ops) and/or
-`~"e"` (effects). Both are arrays produced by `arizona_diff` and
-`arizona_js` respectively.
+Outbound text frames are JSON maps with keys `~"o"` (ops), `~"e"`
+(effects), and/or `~"a"` (newly proven `az-*` attribute names -- the connect
+frame carries the compile-time walk of the route's handler and layouts, any
+later frame only the per-socket delta; see `arizona_event_attrs`). `~"o"` and
+`~"e"` are arrays produced by `arizona_diff` and `arizona_js` respectively.
 
 ## Exit handling
 
@@ -67,6 +69,9 @@ The live process is linked. Exits map to WebSocket close codes:
 %% --------------------------------------------------------------------
 
 -define(OPS, ~"o").
+%% The `az-*` attribute names newly proven for this socket: the compile-time
+%% walk on the connect frame, per-socket deltas after (see arizona_event_attrs).
+-define(AZ_ATTRS, ~"a").
 -define(EFFECTS, ~"e").
 -define(SYS_PING, ~"0").
 -define(SYS_PONG, ~"1").
@@ -99,6 +104,14 @@ The live process is linked. Exits map to WebSocket close codes:
     %% convenient: the only navigate that could change it is the one that forces
     %% a full page load, and that destroys this socket.
     layouts = [] :: [arizona_render:layout()],
+    %% Delivery bookkeeping for the declared az-* set (see arizona_event_attrs):
+    %% modules already walked, names already sent, and names proven since the
+    %% last outgoing frame. `az_pending` is attached to the next outgoing frame
+    %% (encode_reply_1/3, the connect/resync encodes) and cleared, so a delta
+    %% always rides the same frame as the render that proved it.
+    az_walked = #{} :: #{module() => true},
+    az_sent = #{} :: #{binary() => true},
+    az_pending = [] :: [binary()],
     %% One-shot flash carried in-process across an SPA navigate/patch. A WebSocket
     %% frame has no `Set-Cookie` leg, so a flash set by a halting middleware (or an
     %% `arizona_js:navigate`/`patch` `flash` opt) rides the socket to the follow-up
@@ -203,7 +216,7 @@ init(Handler, Bindings, Req, Opts) ->
             capabilities => Capabilities, reconnect => Reconnect, push_barrier => true
         },
         {ok, Pid} = arizona_live:start_link(Handler, Bindings, self(), OnMount, ConnInfo),
-        init_view(Reconnect, FpsFollow, Pid, Socket)
+        init_view(Reconnect, FpsFollow, Handler, Pid, Socket)
     end).
 
 %% The three connect shapes, by reconnect and the client's fingerprint-follow
@@ -213,16 +226,32 @@ init(Handler, Bindings, Req, Opts) ->
 %% mount must not run twice, and no frame can reach the unmounted live process
 %% -- handle_in flushes before processing any frame, and an unmounted process
 %% has no subscriptions or timers to push from.
-init_view(true, true, Pid, Socket) ->
+%% Every clause ships `?AZ_ATTRS`, including the two that otherwise have nothing to
+%% say. The client delegates a DOM event type only for a name in this set, so a
+%% connect that sent no frame would leave the page unable to answer its own first
+%% event -- and a first connect (the third clause) is exactly the case that used to
+%% reply with nothing at all. The walk roots are the handler AND the layout
+%% modules: a layout renders az-* markup too, once at SSR, and no later frame can
+%% carry a layout's names.
+init_view(true, true, Handler, Pid, #socket{layouts = Layouts} = Socket0) ->
     TRef = erlang:send_after(?RESYNC_TIMEOUT_MS, self(), arizona_resync_timeout),
-    {ok, Socket#socket{pid = Pid, pending_resync = TRef}};
-init_view(true, false, Pid, Socket) ->
-    {ok, ViewId, PageHTML} = arizona_live:mount_and_render(Pid),
+    {Attrs, Socket} = az_connect(az_roots(Handler, Layouts), {[], []}, Socket0),
+    {reply, encode(#{?AZ_ATTRS => Attrs}), Socket#socket{
+        pid = Pid, pending_resync = TRef
+    }};
+init_view(true, false, Handler, Pid, #socket{layouts = Layouts} = Socket0) ->
+    {ok, ViewId, PageHTML, Observed} = arizona_live:mount_and_render(Pid),
     Ops = replace_ops(ViewId, PageHTML),
-    {reply, encode(#{?OPS => Ops}), Socket#socket{pid = Pid, view_id = ViewId}};
-init_view(false, _FpsFollow, Pid, Socket) ->
-    {ok, ViewId} = arizona_live:mount(Pid),
-    {ok, Socket#socket{pid = Pid, view_id = ViewId}}.
+    {Attrs, Socket} = az_connect(az_roots(Handler, Layouts), Observed, Socket0),
+    {reply, encode(#{?OPS => Ops, ?AZ_ATTRS => Attrs}), Socket#socket{
+        pid = Pid, view_id = ViewId
+    }};
+init_view(false, _FpsFollow, Handler, Pid, #socket{layouts = Layouts} = Socket0) ->
+    {ok, ViewId, Observed} = arizona_live:mount(Pid),
+    {Attrs, Socket} = az_connect(az_roots(Handler, Layouts), Observed, Socket0),
+    {reply, encode(#{?AZ_ATTRS => Attrs}), Socket#socket{
+        pid = Pid, view_id = ViewId
+    }}.
 
 -doc """
 Handles an inbound text frame.
@@ -302,9 +331,13 @@ handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
         [Target, Event, Payload] when is_binary(Event), is_map(Payload) ->
             ViewId = event_target(Target, RootViewId),
             try dispatch_event(Pid, ViewId, Event, Payload) of
-                {AllOps, AllEffects} ->
-                    {PendOps, PendEffects} = drain_pending_pushes(Socket),
-                    encode_reply(PendOps ++ AllOps, PendEffects ++ AllEffects, Socket)
+                {AllOps, AllEffects, Observed} ->
+                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
+                    encode_reply(
+                        PendOps ++ AllOps,
+                        PendEffects ++ AllEffects,
+                        note_az([], Observed, Socket1)
+                    )
             catch
                 Class:Reason:Stacktrace ->
                     logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
@@ -352,9 +385,9 @@ handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0) wh
     %% firing timer -- has `pending_resync = undefined` and falls through to
     %% the catch-all below.)
     resync_reply(flush_resync(Socket0#socket{pending_resync = undefined}));
-handle_info({arizona_push, ViewId, Ops, Effects}, #socket{view_id = ViewId} = Socket) ->
-    encode_reply(flatten_ops(ViewId, Ops), Effects, Socket);
-handle_info({arizona_push, _StaleViewId, _Ops, _Effects}, Socket) ->
+handle_info({arizona_push, ViewId, Ops, Effects, Observed}, #socket{view_id = ViewId} = Socket) ->
+    encode_reply(flatten_ops(ViewId, Ops), Effects, note_az([], Observed, Socket));
+handle_info({arizona_push, _StaleViewId, _Ops, _Effects, _Observed}, Socket) ->
     %% Emitted by a page this socket already navigated away from -- drop.
     {ok, Socket};
 handle_info({'EXIT', Pid, {shutdown, drain}}, #socket{pid = Pid} = Socket) ->
@@ -425,8 +458,9 @@ decode_cached_fps(Frame) ->
 %% Returns `{ok, Ops, Socket}` or a ready-made close result.
 flush_resync(#socket{pid = Pid} = Socket) ->
     try arizona_live:mount_and_render(Pid) of
-        {ok, ViewId, PageHTML} ->
-            {ok, replace_ops(ViewId, PageHTML), Socket#socket{view_id = ViewId}}
+        {ok, ViewId, PageHTML, Observed} ->
+            {ok, replace_ops(ViewId, PageHTML),
+                note_az([], Observed, Socket#socket{view_id = ViewId})}
     catch
         %% Same drain/exit race as do_navigate (see there).
         exit:{noproc, _} ->
@@ -438,8 +472,9 @@ flush_resync(#socket{pid = Pid} = Socket) ->
             close_crash(Socket)
     end.
 
-resync_reply({ok, Ops, Socket}) ->
-    {reply, encode(#{?OPS => Ops}), Socket};
+resync_reply({ok, Ops, Socket0}) ->
+    {Attrs, Socket} = take_az_pending(Socket0),
+    {reply, encode(resync_frame(Ops, Attrs)), Socket};
 resync_reply({close, _Code, _Reason, _Socket} = Close) ->
     Close.
 
@@ -447,8 +482,9 @@ resync_reply({close, _Code, _Reason, _Socket} = Close) ->
 %% must apply the full-page replace first, then the frame's reply against the
 %% fresh DOM. A failed flush closes instead -- the frame must never reach a
 %% live process the flush left unmounted.
-resync_before_frame({ok, Ops, Socket}, Frame) ->
-    resync_then(encode(#{?OPS => Ops}), handle_in(Frame, Socket));
+resync_before_frame({ok, Ops, Socket0}, Frame) ->
+    {Attrs, Socket} = take_az_pending(Socket0),
+    resync_then(encode(resync_frame(Ops, Attrs)), handle_in(Frame, Socket));
 resync_before_frame({close, _Code, _Reason, _Socket} = Close, _Frame) ->
     Close.
 
@@ -601,14 +637,15 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
             try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
-                {ok, NewVId, PageHTML} ->
+                {ok, NewVId, PageHTML, Observed} ->
                     Ops = replace_ops(OldVId, PageHTML),
+                    Socket1 = note_az([H], Observed, Socket),
                     %% No effects: a navigate remounts, and mount/1 has no
                     %% effects channel (it also runs at SSR, where no client
                     %% exists to receive one). A view that wants one self-casts
                     %% from mount/1 and answers in handle_info/2, which pushes
                     %% its own frame rather than riding this reply.
-                    encode_reply(Ops, [], Socket#socket{view_id = NewVId, handler = H})
+                    encode_reply(Ops, [], Socket1#socket{view_id = NewVId, handler = H})
             catch
                 %% Live process exited between the navigate frame arriving and
                 %% this gen_server:call landing — typical during a drain where
@@ -645,10 +682,12 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
             try arizona_live:patch(Pid, Bindings1) of
-                {ok, Ops, Effects} ->
-                    {PendOps, PendEffects} = drain_pending_pushes(Socket),
+                {ok, Ops, Effects, Observed} ->
+                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
                     encode_reply(
-                        PendOps ++ flatten_ops(ViewId, Ops), PendEffects ++ Effects, Socket
+                        PendOps ++ flatten_ops(ViewId, Ops),
+                        PendEffects ++ Effects,
+                        note_az([], Observed, Socket1)
                     )
             catch
                 %% Same drain/exit race as do_navigate (see there).
@@ -735,8 +774,8 @@ event_target(Target, _RootViewId) when is_binary(Target) -> Target;
 event_target(_Target, RootViewId) -> RootViewId.
 
 dispatch_event(Pid, ViewId, Event, Payload) ->
-    {ok, Ops, Effects} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
-    {flatten_ops(ViewId, Ops), Effects}.
+    {ok, Ops, Effects, Observed} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
+    {flatten_ops(ViewId, Ops), Effects, Observed}.
 
 %% Selectively receive the `{arizona_push, ...}` messages the live process
 %% emitted BEFORE the reply to a synchronous event/patch call, and fold them in
@@ -768,25 +807,69 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
 %% mirroring handle_info/2. The navigate path needs no drain: its OP_REPLACE
 %% supersedes old-page ops, and the stale-view-id drop disposes of them once
 %% processed after the reply.
-drain_pending_pushes(#socket{view_id = ViewId}) ->
-    drain_pending_pushes(ViewId, [], []).
+drain_pending_pushes(#socket{view_id = ViewId} = Socket) ->
+    drain_pending_pushes(ViewId, [], [], Socket).
 
-drain_pending_pushes(ViewId, OpsAcc, EffectsAcc) ->
+drain_pending_pushes(ViewId, OpsAcc, EffectsAcc, Socket) ->
     receive
-        {arizona_push, ViewId, Ops, Effects} ->
+        {arizona_push, ViewId, Ops, Effects, Observed} ->
             drain_pending_pushes(
-                ViewId, [flatten_ops(ViewId, Ops) | OpsAcc], [Effects | EffectsAcc]
+                ViewId,
+                [flatten_ops(ViewId, Ops) | OpsAcc],
+                [Effects | EffectsAcc],
+                note_az([], Observed, Socket)
             );
-        {arizona_push, _StaleViewId, _Ops, _Effects} ->
-            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc);
+        {arizona_push, _StaleViewId, _Ops, _Effects, _Observed} ->
+            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc, Socket);
         arizona_push_barrier ->
-            drained_pushes(OpsAcc, EffectsAcc)
+            drained_pushes(OpsAcc, EffectsAcc, Socket)
     after 0 ->
-        drained_pushes(OpsAcc, EffectsAcc)
+        drained_pushes(OpsAcc, EffectsAcc, Socket)
     end.
 
-drained_pushes(OpsAcc, EffectsAcc) ->
-    {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc))}.
+drained_pushes(OpsAcc, EffectsAcc, Socket) ->
+    {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc)), Socket}.
+
+%% The compile-time walk roots for a page: the route handler plus its layout
+%% modules. Layouts render az-* markup too -- once, at SSR -- and no later frame
+%% can re-render one, so their names must ride the connect (or navigate) walk.
+az_roots(Handler, Layouts) ->
+    [Handler | [Mod || {Mod, _Fun} <- Layouts]].
+
+%% Connect-time seeding, run once per socket: everything is new, so the delta
+%% bookkeeping note_az/3 does per frame (filter against walked, dedup against
+%% sent, the pending round trip) would only compare against empty sets. Walk
+%% the roots plus the mount's observations, seed both sets whole, and hand the
+%% names straight to the connect frame the caller builds.
+az_connect(Roots, {ObsNames, ObsMods}, Socket) ->
+    Mods = Roots ++ ObsMods,
+    Names = lists:usort(arizona_event_attrs:all(Mods) ++ ObsNames),
+    {Names, Socket#socket{
+        az_walked = maps:from_keys(Mods, true),
+        az_sent = maps:from_keys(Names, true)
+    }}.
+
+%% Fold newly proven az-* names into the socket's pending delta: walk modules not
+%% yet walked (extra roots plus render-observed ones), union render-observed
+%% names, and dedup against everything already sent. The next outgoing frame
+%% carries the result (and marking sent here is safe: every note_az is followed
+%% by that frame's construction in the same handle_in/handle_info result).
+note_az([], {[], []}, Socket) ->
+    Socket;
+note_az(Roots, {ObsNames, ObsMods}, Socket) ->
+    #socket{az_walked = Walked0, az_sent = Sent0, az_pending = Pending} = Socket,
+    NewMods = [Mod || Mod <- Roots ++ ObsMods, not is_map_key(Mod, Walked0)],
+    Walked = maps:merge(Walked0, #{Mod => true || Mod <- NewMods}),
+    Names = arizona_event_attrs:all(NewMods) ++ ObsNames,
+    Fresh = [Name || Name <- lists:usort(Names), not is_map_key(Name, Sent0)],
+    Sent = maps:merge(Sent0, #{Name => true || Name <- Fresh}),
+    Socket#socket{az_walked = Walked, az_sent = Sent, az_pending = Pending ++ Fresh}.
+
+take_az_pending(#socket{az_pending = Pending} = Socket) ->
+    {Pending, Socket#socket{az_pending = []}}.
+
+resync_frame(Ops, []) -> #{?OPS => Ops};
+resync_frame(Ops, Attrs) -> #{?OPS => Ops, ?AZ_ATTRS => Attrs}.
 
 %% Single chokepoint for every reply that carries effects. Before encoding, an
 %% in-view flash a handler set (an `arizona_js:navigate`/`patch` `flash` opt) is
@@ -799,14 +882,24 @@ encode_reply(Ops, Effects0, Socket0) ->
     {Effects, Socket} = capture_pending_flash(Effects0, Socket0),
     encode_reply_1(Ops, Effects, Socket).
 
-encode_reply_1([], [], Socket) ->
+%% The first four clauses are the no-delta fast path -- almost every frame.
+%% They must not touch `az_pending`: reading it costs nothing, but clearing it
+%% would copy the socket record per event for a field that is already empty.
+encode_reply_1([], [], #socket{az_pending = []} = Socket) ->
     {ok, Socket};
-encode_reply_1(Ops, [], Socket) ->
+encode_reply_1(Ops, [], #socket{az_pending = []} = Socket) ->
     {reply, encode(#{?OPS => Ops}), Socket};
-encode_reply_1([], Effects, Socket) ->
+encode_reply_1([], Effects, #socket{az_pending = []} = Socket) ->
     {reply, encode(#{?EFFECTS => unwrap_effects(Effects)}), Socket};
-encode_reply_1(Ops, Effects, Socket) ->
-    {reply, encode(#{?OPS => Ops, ?EFFECTS => unwrap_effects(Effects)}), Socket}.
+encode_reply_1(Ops, Effects, #socket{az_pending = []} = Socket) ->
+    {reply, encode(#{?OPS => Ops, ?EFFECTS => unwrap_effects(Effects)}), Socket};
+encode_reply_1(Ops, Effects, Socket0) ->
+    {Attrs, Socket} = take_az_pending(Socket0),
+    Fields =
+        [{?OPS, Ops} || Ops =/= []] ++
+            [{?EFFECTS, unwrap_effects(Effects)} || Effects =/= []] ++
+            [{?AZ_ATTRS, Attrs}],
+    {reply, encode(maps:from_list(Fields)), Socket}.
 
 unwrap_effects(Effects) ->
     [Cmd || {arizona_effect, Cmd} <:- Effects].
@@ -852,14 +945,41 @@ capture_flash_effect(Effect, Pending) ->
 capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
     {{arizona_effect, [Op, Path, maps:remove(flash, Opts)]}, maps:merge(Pending, Flash)}.
 
-%% Fast path for the three reply shapes produced by encode_reply/3. Hand
-%% writes the outer `{"o":...}` / `{"e":...}` / both wrapper, skipping
-%% OTP json's per-key map walk and the per-call escape on the constant
-%% `<<"o">>`/`<<"e">>` keys. The Ops list goes through `json:encode/2`
+%% Fast path for the reply shapes produced by encode_reply/3 and the connect
+%% frames. Hand writes the outer `{"o":...}` / `{"e":...}` / combined wrapper,
+%% skipping OTP json's per-key map walk and the per-call escape on the constant
+%% `<<"o">>`/`<<"e">>`/`<<"a">>` keys. The Ops list goes through `json:encode/2`
 %% with `op_encoder/2` -- the custom encoder emits `"<ViewId>:<Az>"`
 %% inline as iodata, skipping the per-op binary concat (and per-target
 %% `escape_binary/5` walk) that the previous `scope_ops` did. Effects
 %% keep the default encoder -- they're plain JSON values.
+%%
+%% Clause order carries a trap: map patterns are SUBSET matches, so the
+%% widest key set must match first -- an `o`+`e`+`a` frame reaching the
+%% `o`+`a` clause would re-encode without `e`, silently dropping the
+%% effects on exactly the frames that carry a delta.
+encode(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
+    [
+        <<"{\"o\":">>,
+        json:encode(Ops, fun op_encoder/2),
+        <<",\"e\":">>,
+        json:encode(Effects),
+        <<",\"a\":">>,
+        json:encode(Attrs),
+        $}
+    ];
+encode(#{?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
+    [<<"{\"e\":">>, json:encode(Effects), <<",\"a\":">>, json:encode(Attrs), $}];
+encode(#{?OPS := Ops, ?AZ_ATTRS := Attrs}) ->
+    [
+        <<"{\"o\":">>,
+        json:encode(Ops, fun op_encoder/2),
+        <<",\"a\":">>,
+        json:encode(Attrs),
+        $}
+    ];
+encode(#{?AZ_ATTRS := Attrs}) ->
+    [<<"{\"a\":">>, json:encode(Attrs), $}];
 encode(#{?OPS := Ops, ?EFFECTS := Effects}) ->
     [
         <<"{\"o\":">>,

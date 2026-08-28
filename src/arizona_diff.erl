@@ -1682,6 +1682,17 @@ make_op(Az, {attr, Attr, false}, _Old) ->
 make_op(Az, {attr, Attr, true}, _Old) ->
     [?OP_SET_ATTR, Az, Attr, <<>>];
 make_op(Az, {attr, Attr, Val}, _Old) ->
+    %% A dynamic attribute value can BECOME a command between renders
+    %% (`{az_hover, ?get(cmd)}` flipping from `false` to a built effect). The
+    %% render paths observe through `Backend:render_attr`, but this in-place
+    %% value patch bypasses them -- unobserved, the DOM would gain a working
+    %% command whose name the client was never told, and nothing later
+    %% re-evaluates an unchanged value to heal it.
+    ok =
+        case arizona_template:classify_trusted(Val) of
+            {effect, _} -> arizona_event_attrs:observe_attr(Attr);
+            _NotACommand -> ok
+        end,
     [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)];
 make_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}) ->
     [VId, diff_child_dynamics(NewD, OldD)];

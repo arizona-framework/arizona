@@ -263,17 +263,17 @@ stateful_child_independent_state(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Increment counter child to 2
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, Ops2, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, Ops2, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"2">>]], Ops2),
     %% Title change on parent does not affect counter
-    {ok, TitleOps, _} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
+    {ok, TitleOps, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"Changed">>]], TitleOps),
     %% Parent "add" overwrites child count via handle_update
     %% Parent count goes from 0 to 1
-    {ok, AddOps, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add">>, #{}),
+    {ok, AddOps, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add">>, #{}),
     %% counter: default merge, count=1
     %% counter2: custom handle_update doubles, count=1*2=2
     ?assertMatch(
@@ -292,15 +292,15 @@ stateful_child_independent_state(Config) when is_list(Config) ->
 %% its independent state is preserved across the mid's re-render.
 nested_stateful_child_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_nested_root, #{}, undefined, []),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Grandchild owns its count: 0 -> 1.
-    {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
+    {ok, IncOps, _, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], IncOps),
     %% Middle child handles its own event -- must not crash.
-    {ok, _RelabelOps, _} = arizona_live:handle_event(Pid, <<"mid">>, <<"relabel">>, #{}),
+    {ok, _RelabelOps, _, _} = arizona_live:handle_event(Pid, <<"mid">>, <<"relabel">>, #{}),
     ?assert(is_process_alive(Pid)),
     %% Grandchild state survived the mid re-render: 1 -> 2 (not reset to 0 -> 1).
-    {ok, IncOps2, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
+    {ok, IncOps2, _, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"2">>]], IncOps2).
 
 %% The mid descriptor has static props, so a root re-render skips the mid slot.
@@ -308,12 +308,12 @@ nested_stateful_child_event(Config) when is_list(Config) ->
 %% grandchild is pruned from views and remounted with its state reset.
 nested_stateful_grandchild_survives_root_skip(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_nested_root, #{}, undefined, []),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
     %% Root event whose change (title) does not touch the mid slot's deps.
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"root">>, <<"title_change">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"root">>, <<"title_change">>, #{}),
     %% Grandchild preserved: 1 -> 2 (would be 0 -> 1 had it been remounted).
-    {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
+    {ok, IncOps, _, _} = arizona_live:handle_event(Pid, <<"leaf">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"2">>]], IncOps).
 
 grandchild_added_by_child_event_survives_root_skip(Config) when is_list(Config) ->
@@ -329,13 +329,13 @@ grandchild_added_by_child_event_survives_root_skip(Config) when is_list(Config) 
     {ok, Pid} = arizona_live:start_link(
         arizona_carry_root, #{notify => Self}, Self, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% The child's own event brings the grandchild into existence.
-    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
-    {ok, IncOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    {ok, IncOps, _, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
     ?assertMatch([[?OP_TEXT, _, ~"1"]], IncOps),
     %% A root change that touches nothing in that subtree, so it is dep-skipped.
-    {ok, TitleOps, _} = arizona_live:handle_event(Pid, ~"cr", ~"title_change", #{}),
+    {ok, TitleOps, _, _} = arizona_live:handle_event(Pid, ~"cr", ~"title_change", #{}),
     ?assertMatch([[?OP_TEXT, _, ~"Changed"]], TitleOps),
     %% (b) it was not unmounted...
     receive
@@ -344,7 +344,7 @@ grandchild_added_by_child_event_survives_root_skip(Config) when is_list(Config) 
     end,
     %% ...(a) it is still mounted and (c) still takes its own events, with its
     %% state intact: 1 -> 2, not a fresh 0 -> 1 and not the `[]` of a dropped id.
-    {ok, IncOps2, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    {ok, IncOps2, _, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
     ?assertMatch([[?OP_TEXT, _, ~"2"]], IncOps2).
 
 grandchild_refresh_reaches_through_container(Config) when is_list(Config) ->
@@ -360,15 +360,15 @@ grandchild_refresh_reaches_through_container(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_carry_root, #{notify => Self}, Self, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
     %% The grandchild patches itself, so the root's copy of it goes stale.
-    {ok, IncOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
+    {ok, IncOps, _, _} = arizona_live:handle_event(Pid, ~"g1", ~"inc", #{}),
     ?assertMatch([[?OP_TEXT, _, ~"1"]], IncOps),
     %% A root change the CONTAINER reads, so its slot is re-evaluated and
     %% compared against the root's copy. Only the label changed, so that is the
     %% only op: no re-emission of the grandchild's own slot.
-    {ok, RelabelOps, _} = arizona_live:handle_event(
+    {ok, RelabelOps, _, _} = arizona_live:handle_event(
         Pid, ~"cr", ~"relabel", #{~"label" => ~"L1"}
     ),
     ?assertMatch([[?OP_TEXT, _, ~"L1"]], RelabelOps).
@@ -388,18 +388,18 @@ grandchild_refresh_reaches_a_view_no_container_names(Config) when is_list(Config
     {ok, Pid} = arizona_live:start_link(
         arizona_carry_root, #{notify => Self}, Self, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ~"m1", ~"add_grandchild", #{}),
     %% Root diff that DEP-SKIPS the container: settles and clears `m1`'s mark,
     %% and leaves the container's annotation naming only `m1`.
-    {ok, _, _} = arizona_live:handle_event(Pid, ~"cr", ~"title_change", #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ~"cr", ~"title_change", #{}),
     %% Now the grandchild patches its own stream -- marking `g1` and nothing else.
-    {ok, AddOps, _} = arizona_live:handle_event(Pid, ~"g1", ~"add", #{~"id" => ~"b"}),
+    {ok, AddOps, _, _} = arizona_live:handle_event(Pid, ~"g1", ~"add", #{~"id" => ~"b"}),
     ?assertMatch([[?OP_INSERT, _, ~"b", -1, _Item]], AddOps),
     %% A root change the container reads. Only its own op may come out; a missed
     %% settle shows up as a wholesale container re-render over the grandchild's
     %% list.
-    {ok, RelabelOps, _} = arizona_live:handle_event(
+    {ok, RelabelOps, _, _} = arizona_live:handle_event(
         Pid, ~"cr", ~"relabel", #{~"label" => ~"L2"}
     ),
     ?assertMatch([[?OP_TEXT, _, ~"L2"]], RelabelOps).
@@ -408,8 +408,8 @@ grandchild_refresh_reaches_a_view_no_container_names(Config) when is_list(Config
 %% unmounted and pruned from views -- a later message to it crashes unknown_view.
 nested_stateful_grandchild_unmounted_on_removal(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(arizona_nested_root, #{}, undefined, []),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"mid">>, <<"hide_leaf">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"mid">>, <<"hide_leaf">>, #{}),
     unlink(Pid),
     Ref = monitor(process, Pid),
     Pid ! {arizona_view, <<"leaf">>, {set_count, 99}},
@@ -430,13 +430,13 @@ child_diff_dep_skips_unchanged_grandchild(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_update_effect_root, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"relabel">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects, _} = arizona_live:handle_event(Pid, <<"uep">>, <<"relabel">>, #{}),
     ?assertEqual([], Effects),
     ?assertMatch([[?OP_TEXT, _, <<"relabelled">>]], Ops),
     %% The skipped grandchild survived the dep skip: a value bump still reaches
     %% it (handle_update runs, its effect ships, its slot re-renders).
-    {ok, BumpOps, BumpEffects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
+    {ok, BumpOps, BumpEffects, _} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
     ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], BumpEffects),
     ?assertMatch([[<<"uep_child">>, [[?OP_TEXT, _, <<"1">>]]]], BumpOps).
 
@@ -447,10 +447,10 @@ nested_local_diff_skipped(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_local_nested, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% (a) Parent-propagated update (on fresh state): each child patches only its
     %% label; neither child's note ?local produces an op (single op per child).
-    {ok, RelabelOps, _} = arizona_live:handle_event(Pid, <<"local_nested">>, <<"relabel">>, #{}),
+    {ok, RelabelOps, _, _} = arizona_live:handle_event(Pid, <<"local_nested">>, <<"relabel">>, #{}),
     ?assertMatch(
         [
             [<<"child_a">>, [[?OP_TEXT, _, <<"v2">>]]],
@@ -459,7 +459,7 @@ nested_local_diff_skipped(Config) when is_list(Config) ->
         RelabelOps
     ),
     %% (b) Child's own event: only the count OP_TEXT, no op for the note ?local.
-    {ok, IncOps, _} = arizona_live:handle_event(Pid, <<"child_a">>, <<"inc">>, #{}),
+    {ok, IncOps, _, _} = arizona_live:handle_event(Pid, <<"child_a">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], IncOps).
 
 %% A handler can drive a ?local via a returned EFFECT (set_all): the server
@@ -470,8 +470,8 @@ nested_local_set_effect(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_local_nested, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _Ops, Effects} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects, _} = arizona_live:handle_event(
         Pid, <<"local_nested">>, <<"reset_notes">>, #{}
     ),
     %% op 17 = ?EFFECT_SET_LOCAL (literal, matching this suite's effect assertions).
@@ -481,32 +481,32 @@ live_mount(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    ?assertEqual({ok, <<"counter">>}, arizona_live:mount(Pid)).
+    ?assertMatch({ok, <<"counter">>, _}, arizona_live:mount(Pid)).
 
 live_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
 
 live_multiple_events(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"3">>]], Ops).
 
 live_dec_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"-1">>]], Ops).
 
 live_unknown_view_id_warns(Config) when is_list(Config) ->
@@ -519,8 +519,8 @@ live_unknown_view_id_warns(Config) when is_list(Config) ->
     }),
     try
         {ok, Pid} = arizona_live:start_link(arizona_root_counter, #{}, undefined, []),
-        {ok, _} = arizona_live:mount(Pid),
-        ?assertEqual({ok, [], []}, arizona_live:handle_event(Pid, <<"nope">>, <<"inc">>, #{})),
+        {ok, _, _} = arizona_live:mount(Pid),
+        ?assertMatch({ok, [], [], _}, arizona_live:handle_event(Pid, <<"nope">>, <<"inc">>, #{})),
         receive
             {arizona_test_log_handler, #{level := warning, msg := {Fmt, Args}}} ->
                 Msg = iolist_to_binary(io_lib:format(Fmt, Args)),
@@ -543,12 +543,12 @@ live_unknown_view_id_noop(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Bogus id: dropped (no ops, no effects). Before the fix this fell through
     %% to the root `inc`, returning the count op.
-    ?assertEqual({ok, [], []}, arizona_live:handle_event(Pid, <<"nope">>, <<"inc">>, #{})),
+    ?assertMatch({ok, [], [], _}, arizona_live:handle_event(Pid, <<"nope">>, <<"inc">>, #{})),
     %% Root state is untouched: the next real inc yields count 1, not 2.
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
 
 child_stream_survives_next_root_diff(Config) when is_list(Config) ->
@@ -561,18 +561,18 @@ child_stream_survives_next_root_diff(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_child_stream_root, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% The child patches its own stream: one incremental insert.
-    {ok, AddOps, _} = arizona_live:handle_event(Pid, ~"cs", ~"add", #{~"id" => ~"i2"}),
+    {ok, AddOps, _, _} = arizona_live:handle_event(Pid, ~"cs", ~"add", #{~"id" => ~"i2"}),
     ?assertMatch([[?OP_INSERT, _, ~"i2", -1, _Item]], AddOps),
     %% The FIRST root diff after it: only the label slot the root actually
     %% changed. No re-render of the container the child just patched.
-    {ok, BumpOps, _} = arizona_live:handle_event(
+    {ok, BumpOps, _, _} = arizona_live:handle_event(
         Pid, ~"csr", ~"relabel", #{~"label" => ~"L1"}
     ),
     ?assertMatch([[~"cs", [[?OP_TEXT, _, ~"L1"]]]], BumpOps),
     %% ...and the one after it, which was already clean, stays clean.
-    {ok, BumpOps2, _} = arizona_live:handle_event(
+    {ok, BumpOps2, _, _} = arizona_live:handle_event(
         Pid, ~"csr", ~"relabel", #{~"label" => ~"L2"}
     ),
     ?assertMatch([[~"cs", [[?OP_TEXT, _, ~"L2"]]]], BumpOps2).
@@ -598,13 +598,13 @@ child_event_leaves_root_snapshot_untouched(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_stream_with_child, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid, ~"swc", ~"add_item", #{~"id" => 2, ~"label" => ~"Item 2"}
     ),
     Before = root_snapshot(Pid),
     %% A stateful child inside the stream changes on its own.
-    {ok, ChildOps, _} = arizona_live:handle_event(Pid, ~"counter-1", ~"inc", #{}),
+    {ok, ChildOps, _, _} = arizona_live:handle_event(Pid, ~"counter-1", ~"inc", #{}),
     ?assertMatch([[?OP_TEXT, _, ~"1"]], ChildOps),
     ?assertEqual(Before, root_snapshot(Pid)).
 
@@ -624,24 +624,24 @@ live_init_bindings(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{count => 10}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"11">>]], Ops).
 
 live_page_child_mount(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    ?assertEqual({ok, <<"page">>}, arizona_live:mount(Pid)).
+    ?assertMatch({ok, <<"page">>, _}, arizona_live:mount(Pid)).
 
 live_connected_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% mount sends self() ! arizona_connected, handle_info pushes to transport
     receive
-        {arizona_push, _, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects, _} ->
             ?assertMatch([[?OP_TEXT, _, <<"Connected">>]], Ops),
             ?assertEqual([{arizona_effect, [14, <<"Welcome">>]}], Effects)
     after 1000 ->
@@ -652,8 +652,8 @@ live_child_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Child counter's count dynamic changed
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
 
@@ -661,10 +661,10 @@ live_child_multiple_events(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"3">>]], Ops).
 
 live_parent_event_updates_children(Config) when is_list(Config) ->
@@ -673,8 +673,8 @@ live_parent_event_updates_children(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"add">>, #{}),
     %% counter: default merge, count=1
     %% counter2: custom handle_update doubles, count=1*2=2
     ?assertMatch(
@@ -690,11 +690,11 @@ live_parent_change_child_stable(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Increment counter first so we can verify it's not touched
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Change parent title -- counter deps (count) unchanged, no counter ops
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"Changed">>]], Ops).
 
 %% Regression: a conditional `?stateful` in a content slot, toggled from the
@@ -708,26 +708,26 @@ live_conditional_child_toggle_patches_slot(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_conditional_child, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Toggle false -> true: the child appears. Exactly one ?OP_TEXT on the
     %% slot, carrying the child template -- not a whole-element write (which
     %% would clobber the <main> root and drop <header>/<footer>).
-    {ok, ShowOps, []} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
+    {ok, ShowOps, [], _} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
     ?assertMatch([[?OP_TEXT, _, #{<<"s">> := _, <<"d">> := _}]], ShowOps),
     [[_Op, SlotAz, _Payload]] = ShowOps,
     %% Toggle true -> false: the child is removed via an empty ?OP_TEXT on the
     %% same slot, leaving the siblings in place.
-    {ok, HideOps, []} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
+    {ok, HideOps, [], _} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
     ?assertMatch([[?OP_TEXT, SlotAz, <<>>]], HideOps),
     %% Toggle on again: the child re-mounts via the same single ?OP_TEXT slot
     %% patch. The payload is fingerprint-deduped (statics omitted, the client
     %% has them cached from the first show), so only `f`/`d` are present.
-    {ok, ReshowOps, []} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
+    {ok, ReshowOps, [], _} = arizona_live:handle_event(Pid, <<"app">>, <<"toggle">>, #{}),
     ?assertMatch([[?OP_TEXT, SlotAz, #{<<"f">> := _, <<"d">> := _}]], ReshowOps),
     %% The re-mounted child is a live view again: its own event drives a diff on
     %% the child, proving the Views accounting survives the off/on cycle (no
     %% leaked or dropped child view).
-    {ok, ChildOps, []} = arizona_live:handle_event(Pid, <<"child">>, <<"inc">>, #{}),
+    {ok, ChildOps, [], _} = arizona_live:handle_event(Pid, <<"child">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], ChildOps).
 
 live_child_then_parent_sync(Config) when is_list(Config) ->
@@ -738,13 +738,13 @@ live_child_then_parent_sync(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Increment counter child to 2
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Parent "add" event: parent count 0 -> 1
     %% Counter child: handle_update merges count=1 from parent, overwriting count=2
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"add">>, #{}),
     %% counter: default merge, count=1 (parent overwrites child's count=2)
     %% counter2: custom handle_update doubles parent count=1, so count=2
     ?assertMatch(
@@ -760,8 +760,8 @@ live_counter2_child_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
 
 live_inc_then_dec(Config) when is_list(Config) ->
@@ -769,11 +769,11 @@ live_inc_then_dec(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
     %% Back to 0, then dec again to -1
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"dec">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"-1">>]], Ops).
 
 render_current_full_frame(Config) when is_list(Config) ->
@@ -782,14 +782,14 @@ render_current_full_frame(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, ~"counter"} = arizona_live:mount(Pid),
-    {ok, Frame0} = arizona_live:render_current(Pid),
+    {ok, ~"counter", _} = arizona_live:mount(Pid),
+    {ok, Frame0, _} = arizona_live:render_current(Pid),
     ?assert(is_binary(Frame0)),
     ?assertNotEqual(nomatch, binary:match(Frame0, ~"<span")),
     ?assertNotEqual(nomatch, binary:match(Frame0, ~"0")),
     %% An event updates bindings; a fresh render_current reflects the new frame.
-    {ok, _Ops, _Effects} = arizona_live:handle_event(Pid, ~"counter", ~"inc", #{}),
-    {ok, Frame1} = arizona_live:render_current(Pid),
+    {ok, _Ops, _Effects, _} = arizona_live:handle_event(Pid, ~"counter", ~"inc", #{}),
+    {ok, Frame1, _} = arizona_live:render_current(Pid),
     ?assertNotEqual(nomatch, binary:match(Frame1, ~"1")),
     ?assertNotEqual(Frame0, Frame1).
 
@@ -802,7 +802,7 @@ mount_and_render_basic(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, ViewId, Content} = arizona_live:mount_and_render(Pid),
+    {ok, ViewId, Content, _} = arizona_live:mount_and_render(Pid),
     ?assertEqual(<<"counter">>, ViewId),
     %% counter has f key, so Content is a fingerprint payload map
     ?assert(is_map(Content)),
@@ -814,7 +814,7 @@ mount_and_render_fingerprinted(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, ViewId, Content} = arizona_live:mount_and_render(Pid),
+    {ok, ViewId, Content, _} = arizona_live:mount_and_render(Pid),
     ?assertEqual(<<"page">>, ViewId),
     ?assert(is_map(Content)),
     ?assert(is_binary(maps:get(<<"f">>, Content))),
@@ -828,9 +828,9 @@ mount_and_render_state_consistency(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, <<"counter">>, _Content} = arizona_live:mount_and_render(Pid),
+    {ok, <<"counter">>, _Content, _} = arizona_live:mount_and_render(Pid),
     %% Increment counter -- should produce an OP_TEXT with new value
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
 
 mount_and_render_custom_bindings(Config) when is_list(Config) ->
@@ -838,8 +838,8 @@ mount_and_render_custom_bindings(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{count => 42}, undefined, []
     ),
-    {ok, <<"counter">>, _Content} = arizona_live:mount_and_render(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, <<"counter">>, _Content, _} = arizona_live:mount_and_render(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"43">>]], Ops).
 
 %% =============================================================================
@@ -852,18 +852,18 @@ handle_update_child_event_then_parent(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Increment counter2 directly to 5
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
-    {ok, Ops5, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
+    {ok, Ops5, _, _} = arizona_live:handle_event(Pid, <<"counter2">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"5">>]], Ops5),
     %% Now parent "add": parent count 0->1
     %% counter2: handle_update doubles parent count=1, so count=2
     %% (child's independent count=5 is overwritten by maps:merge then doubled)
-    {ok, Ops, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add">>, #{}),
+    {ok, Ops, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add">>, #{}),
     ?assertMatch(
         [
             [<<"counter">>, [[?OP_TEXT, _, <<"1">>]]],
@@ -881,8 +881,8 @@ effect_push_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_effectful, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, Effects} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects, _} = arizona_live:handle_event(
         Pid,
         <<"effectful">>,
         <<"notify">>,
@@ -899,8 +899,8 @@ effect_multiple_push_events(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_effectful, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"effectful">>, <<"multi">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects, _} = arizona_live:handle_event(Pid, <<"effectful">>, <<"multi">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"multi">>]], Ops),
     ?assertEqual(
         [
@@ -915,16 +915,16 @@ effect_empty_effects(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_effectful, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, [], []} = arizona_live:handle_event(Pid, <<"effectful">>, <<"noop">>, #{}).
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, [], [], _} = arizona_live:handle_event(Pid, <<"effectful">>, <<"noop">>, #{}).
 
 effect_only_no_ops(Config) when is_list(Config) ->
     %% Effects returned but bindings unchanged -- no ops, effects still resolved
     {ok, Pid} = arizona_live:start_link(
         arizona_effectful, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"effectful">>, <<"notify_only">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects, _} = arizona_live:handle_event(Pid, <<"effectful">>, <<"notify_only">>, #{}),
     ?assertEqual([], Ops),
     ?assertEqual([{arizona_effect, [9, <<"ping">>, #{}]}], Effects).
 
@@ -933,9 +933,9 @@ effect_child_only_no_ops(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Counter starts at 0, reset keeps it at 0 -- no ops, but effect fires
-    {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"counter">>, <<"reset">>, #{}),
+    {ok, Ops, Effects, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"reset">>, #{}),
     ?assertEqual([], Ops),
     ?assertEqual(
         [{arizona_effect, [9, <<"counter_reset">>, #{<<"id">> => <<"counter">>}]}],
@@ -947,13 +947,13 @@ effect_child_event_with_effects(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Increment counter to 3 first
-    {ok, _, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, _, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, _, []} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Reset counter -- produces ops (count 3->0) AND push_event effect
-    {ok, Ops, Effects} = arizona_live:handle_event(Pid, <<"counter">>, <<"reset">>, #{}),
+    {ok, Ops, Effects, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"reset">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"0">>]], Ops),
     ?assertEqual(
         [{arizona_effect, [9, <<"counter_reset">>, #{<<"id">> => <<"counter">>}]}],
@@ -965,8 +965,8 @@ effect_child_event_no_effects(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertEqual([], Effects).
 
 effect_child_update_reaches_reply(Config) when is_list(Config) ->
@@ -977,8 +977,8 @@ effect_child_update_reaches_reply(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_update_effect_parent, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects, _} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
     %% op 0 = ?EFFECT_PUSH_EVENT (literal, matching this suite's effect assertions).
     ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects).
 
@@ -991,8 +991,8 @@ effect_child_update_combines_with_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_update_effect_parent, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump_titled">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects, _} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump_titled">>, #{}),
     %% op 0 = ?EFFECT_PUSH_EVENT (child, prepended), op 14 = ?EFFECT_SET_TITLE (event, seeded).
     ?assertEqual(
         [{arizona_effect, [0, <<"child_updated">>]}, {arizona_effect, [14, <<"titled">>]}],
@@ -1009,8 +1009,8 @@ effect_grandchild_update_reaches_child_reply(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_update_effect_root, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects, _} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump">>, #{}),
     %% op 0 = ?EFFECT_PUSH_EVENT (literal, matching this suite's effect assertions).
     ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects).
 
@@ -1022,8 +1022,8 @@ effect_grandchild_update_combines_with_child_event(Config) when is_list(Config) 
     {ok, Pid} = arizona_live:start_link(
         arizona_update_effect_root, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _Ops, Effects} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump_titled">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _Ops, Effects, _} = arizona_live:handle_event(Pid, <<"uep">>, <<"bump_titled">>, #{}),
     %% op 0 = ?EFFECT_PUSH_EVENT (grandchild, prepended), op 14 = ?EFFECT_SET_TITLE (seeded).
     ?assertEqual(
         [{arizona_effect, [0, <<"child_updated">>]}, {arizona_effect, [14, <<"titled">>]}],
@@ -1037,10 +1037,10 @@ effect_grandchild_update_reaches_child_push(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_update_effect_root, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     Pid ! {arizona_view, <<"uep">>, bump},
     receive
-        {arizona_push, _, _Ops, Effects} ->
+        {arizona_push, _, _Ops, Effects, _} ->
             ?assertEqual([{arizona_effect, [0, <<"child_updated">>]}], Effects)
     after 1000 ->
         error(timeout)
@@ -1054,10 +1054,10 @@ live_navigate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, <<"page">>} = arizona_live:mount(Pid),
+    {ok, <<"page">>, _} = arizona_live:mount(Pid),
     %% Navigate to about -- returns fingerprint payload since about has f key
     NavOpts = #{title => <<"About">>},
-    {ok, NewViewId, PageContent} = arizona_live:navigate(
+    {ok, NewViewId, PageContent, _} = arizona_live:navigate(
         Pid, arizona_about, NavOpts
     ),
     %% The destination's own id, not the outgoing view's -- the two differ, so this
@@ -1072,8 +1072,8 @@ live_patch_default_merge(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, <<"counter">>} = arizona_live:mount(Pid),
-    {ok, Ops, Effects} = arizona_live:patch(Pid, #{count => 7}),
+    {ok, <<"counter">>, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects, _} = arizona_live:patch(Pid, #{count => 7}),
     ?assertMatch([[?OP_TEXT, _, <<"7">>]], Ops),
     ?assertEqual([], Effects).
 
@@ -1084,8 +1084,8 @@ live_patch_handle_update_effect(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_patch_view, #{}, undefined, []
     ),
-    {ok, <<"patchview">>} = arizona_live:mount(Pid),
-    {ok, Ops, Effects} = arizona_live:patch(Pid, #{section => <<"about">>}),
+    {ok, <<"patchview">>, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects, _} = arizona_live:patch(Pid, #{section => <<"about">>}),
     ?assertMatch([[?OP_TEXT, _, <<"about">>]], Ops),
     %% op 14 = ?EFFECT_SET_TITLE (literal, matching this suite's effect assertions).
     ?assertEqual([{arizona_effect, [14, <<"about">>]}], Effects).
@@ -1097,8 +1097,8 @@ live_patch_no_change_no_ops(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_patch_view, #{section => <<"home">>}, undefined, []
     ),
-    {ok, <<"patchview">>} = arizona_live:mount(Pid),
-    {ok, Ops, Effects} = arizona_live:patch(Pid, #{section => <<"home">>}),
+    {ok, <<"patchview">>, _} = arizona_live:mount(Pid),
+    {ok, Ops, Effects, _} = arizona_live:patch(Pid, #{section => <<"home">>}),
     ?assertEqual([], Ops),
     ?assertEqual([{arizona_effect, [14, <<"home">>]}], Effects).
 
@@ -1112,8 +1112,8 @@ live_navigate_between_different_ids(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_navigate_halt, #{}, undefined, []
     ),
-    {ok, <<"navigate-halt">>} = arizona_live:mount(Pid),
-    {ok, NewViewId, _PageContent} = arizona_live:navigate(
+    {ok, <<"navigate-halt">>, _} = arizona_live:mount(Pid),
+    {ok, NewViewId, _PageContent, _} = arizona_live:navigate(
         Pid, arizona_login, #{}
     ),
     %% New route owns its own id -- not the carried `<<"navigate-halt">>`.
@@ -1129,8 +1129,8 @@ route_bindings_can_set_id_when_handler_accepts_it(Config) when is_list(Config) -
     {ok, Pid} = arizona_live:start_link(
         arizona_navigate_halt, #{}, undefined, []
     ),
-    {ok, <<"navigate-halt">>} = arizona_live:mount(Pid),
-    {ok, NewViewId, _PageContent} = arizona_live:navigate(
+    {ok, <<"navigate-halt">>, _} = arizona_live:mount(Pid),
+    {ok, NewViewId, _PageContent, _} = arizona_live:navigate(
         Pid, arizona_login, #{id => <<"explicit">>}
     ),
     ?assertEqual(<<"explicit">>, NewViewId).
@@ -1139,19 +1139,19 @@ live_navigate_then_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Drain the arizona_connected push from page mount
     receive
-        {arizona_push, _, _, _} -> ok
+        {arizona_push, _, _, _, _} -> ok
     after 1000 -> ct:fail(timeout)
     end,
     %% Navigate to about
-    {ok, _, _} = arizona_live:navigate(
+    {ok, _, _, _} = arizona_live:navigate(
         Pid, arizona_about, #{title => <<"About">>}
     ),
     %% About's mount sends arizona_connected via handle_info
     receive
-        {arizona_push, _, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects, _} ->
             %% About's connected doesn't change bindings, so no ops
             ?assertEqual([], Ops),
             %% But produces set_title effect
@@ -1164,18 +1164,18 @@ live_navigate_resets_views(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Page has child views (counter, counter2, counter3)
     %% Increment counter
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Navigate to about (has no children)
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{}),
+    {ok, _, _, _} = arizona_live:navigate(Pid, arizona_about, #{}),
     %% The views map was reset: <<"counter">> is no longer a known child, and it
     %% is not the new root's id (<<"about-page">>) either. An event to it is a
     %% safe no-op -- it must NOT fall through to the new root handler (which would
     %% crash on the unknown event) -- and the live process survives.
-    ?assertEqual(
-        {ok, [], []},
+    ?assertMatch(
+        {ok, [], [], _},
         arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{})
     ),
     ?assert(is_process_alive(Pid)).
@@ -1184,16 +1184,16 @@ live_navigate_round_trip(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Increment counter to 3
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     %% Navigate away to about
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_about, #{}),
+    {ok, _, _, _} = arizona_live:navigate(Pid, arizona_about, #{}),
     %% Navigate back to page -- fresh mount, counter starts at 0
     %% Returns fingerprint payload; verify counter dynamics contain "0"
-    {ok, _, PageContent} = arizona_live:navigate(
+    {ok, _, PageContent, _} = arizona_live:navigate(
         Pid, arizona_page, #{title => <<"Welcome">>}
     ),
     ?assert(is_binary(maps:get(<<"f">>, PageContent))),
@@ -1231,13 +1231,13 @@ live_navigate_carries_root_bindings(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_root_counter, #{}, undefined, []
     ),
-    {ok, ViewId} = arizona_live:mount(Pid),
+    {ok, ViewId, _} = arizona_live:mount(Pid),
     %% Tick the root counter to 3
-    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ViewId, ~"inc", #{}),
     %% Navigate back to the same handler with no overriding NewIB.
-    {ok, _NewViewId, PageContent} = arizona_live:navigate(
+    {ok, _NewViewId, PageContent, _} = arizona_live:navigate(
         Pid, arizona_root_counter, #{}
     ),
     %% Dynamics: [id_attr, count]. After the merge `count` should be 3 —
@@ -1254,10 +1254,10 @@ live_handle_info(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     Pid ! {set_message, <<"hello">>},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[?OP_TEXT, _, <<"hello">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1267,10 +1267,10 @@ live_handle_info_with_effects(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     Pid ! {set_message_with_effect, <<"hi">>},
     receive
-        {arizona_push, _, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects, _} ->
             ?assertMatch([[?OP_TEXT, _, <<"hi">>]], Ops),
             ?assertEqual(
                 [
@@ -1287,10 +1287,10 @@ live_handle_info_no_callback(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_no_info_root, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     Pid ! some_message,
     receive
-        {arizona_push, _, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1302,7 +1302,7 @@ live_handle_info_before_mount(Config) when is_list(Config) ->
     ),
     Pid ! {set_message, <<"hello">>},
     receive
-        {arizona_push, _, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1312,11 +1312,11 @@ live_handle_info_no_change(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Re-set message to the same default value
     Pid ! {set_message, <<"none">>},
     receive
-        {arizona_push, _, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1326,15 +1326,15 @@ live_handle_info_after_navigate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Navigate to a different handler
-    {ok, _, _} = arizona_live:navigate(
+    {ok, _, _, _} = arizona_live:navigate(
         Pid, arizona_timer, #{message => <<"fresh">>}
     ),
     %% Send message after navigate -- should still push
     Pid ! {set_message, <<"after_nav">>},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[?OP_TEXT, _, <<"after_nav">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1345,11 +1345,11 @@ live_handle_info_undefined_transport(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     Pid ! {set_message, <<"hello">>},
     %% No crash, no push
     receive
-        {arizona_push, _, _, _} -> error(unexpected_push)
+        {arizona_push, _, _, _, _} -> error(unexpected_push)
     after 100 ->
         ok
     end.
@@ -1360,10 +1360,10 @@ live_send_to_root(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"via send">>}},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[?OP_TEXT, _, <<"via send">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1373,10 +1373,10 @@ live_send_to_child(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push from page mount
     receive
-        {arizona_push, _, _, _} -> ok
+        {arizona_push, _, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Send to child counter view. The push names the ROOT view (the transport's
@@ -1384,7 +1384,7 @@ live_send_to_child(Config) when is_list(Config) ->
     %% the transport scopes them to the emitting view rather than the root.
     Pid ! {arizona_view, <<"counter">>, {set_count, 99}},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[<<"counter">>, [[?OP_TEXT, _, <<"99">>]]]], Ops)
     after 1000 ->
         error(timeout)
@@ -1394,7 +1394,7 @@ live_send_unknown_view(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     unlink(Pid),
     Ref = monitor(process, Pid),
     Pid ! {arizona_view, <<"nonexistent">>, hello},
@@ -1422,10 +1422,10 @@ live_send_after_to_root(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"delayed">>}},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[?OP_TEXT, _, <<"delayed">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1441,14 +1441,14 @@ unmount_on_navigate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_about, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push
     receive
-        {arizona_push, _, _, _} -> ok
+        {arizona_push, _, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Navigate to page -- should not crash
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_page, #{}).
+    {ok, _, _, _} = arizona_live:navigate(Pid, arizona_page, #{}).
 
 unmount_timer_cancelled_on_navigate(Config) when is_list(Config) ->
     %% About's handle_info(arizona_connected) starts a tick timer via ?send_after.
@@ -1456,22 +1456,22 @@ unmount_timer_cancelled_on_navigate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_about, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Drain arizona_connected push (which also starts the tick timer)
     receive
-        {arizona_push, _, _, _} -> ok
+        {arizona_push, _, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Navigate to page -- cancels pending timers
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_page, #{}),
+    {ok, _, _, _} = arizona_live:navigate(Pid, arizona_page, #{}),
     %% Drain page's arizona_connected push
     receive
-        {arizona_push, _, _, _} -> ok
+        {arizona_push, _, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Wait -- no tick should arrive (timer was cancelled)
     receive
-        {arizona_push, _, _, _} -> error(unexpected_tick_push)
+        {arizona_push, _, _, _, _} -> error(unexpected_tick_push)
     after 1500 ->
         ok
     end.
@@ -1482,7 +1482,7 @@ unmount_on_terminate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     unlink(Pid),
     Ref = monitor(process, Pid),
     exit(Pid, shutdown),
@@ -1501,8 +1501,8 @@ unmount_children_on_navigate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_unmount_parent, #{notify => self()}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:navigate(Pid, arizona_root_counter, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:navigate(Pid, arizona_root_counter, #{}),
     %% Children unmount before the root, mirroring removal semantics.
     receive
         Msg1 -> ?assertEqual({child_unmounted, ~"uchild"}, Msg1)
@@ -1519,7 +1519,7 @@ unmount_children_on_terminate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_unmount_parent, #{notify => self()}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     ok = arizona_live:stop(Pid),
     receive
         Msg1 -> ?assertEqual({child_unmounted, ~"uchild"}, Msg1)
@@ -1539,9 +1539,9 @@ removed_child_timer_cancelled(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_toast_parent, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"toast">>, <<"arm">>, #{~"delay" => 300}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"tp">>, <<"hide">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"toast">>, <<"arm">>, #{~"delay" => 300}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"tp">>, <<"hide">>, #{}),
     unlink(Pid),
     Ref = monitor(process, Pid),
     receive
@@ -1557,13 +1557,13 @@ fired_timer_ref_pruned(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_toast, #{id => <<"toast">>}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     ArmAndFire = fun() ->
-        {ok, _, _} = arizona_live:handle_event(Pid, <<"toast">>, <<"arm">>, #{~"delay" => 1}),
+        {ok, _, _, _} = arizona_live:handle_event(Pid, <<"toast">>, <<"arm">>, #{~"delay" => 1}),
         %% Each fire increments `closes`, so the push confirms the delivery
         %% (and thus the prune) happened.
         receive
-            {arizona_push, _, _, _} -> ok
+            {arizona_push, _, _, _, _} -> ok
         after 1000 -> error(timeout_waiting_for_close_push)
         end
     end,
@@ -1599,7 +1599,7 @@ live_reaped_on_transport_disconnect(Config) when is_list(Config) ->
         after 1000 ->
             error(no_live)
         end,
-    {ok, _} = arizona_live:mount(Live),
+    {ok, _, _} = arizona_live:mount(Live),
     Ref = monitor(process, Live),
     ?assert(is_process_alive(Live)),
     %% Transport returns from its fun -> exits `normal`.
@@ -1617,16 +1617,16 @@ child_in_stream_survives_dep_skip(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_stream_with_child, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Change title -- stream deps (items) not in Changed, so stream is dep-skipped.
     %% The child_views in the stream snapshot should carry counter-1 over.
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid, <<"swc">>, <<"set_title">>, #{~"title" => ~"Updated"}
     ),
     %% Now send to the child inside the stream -- should NOT crash with unknown_view.
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 42}},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"42">>]]]], Ops)
     after 1000 ->
         error(timeout)
@@ -1637,9 +1637,9 @@ child_in_stream_removed_on_delete(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_stream_with_child, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Delete item 1 -- counter-1 should be removed from views
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid, <<"swc">>, <<"delete_item">>, #{~"id" => 1}
     ),
     %% Sending to counter-1 should crash with unknown_view
@@ -1658,26 +1658,26 @@ multiple_children_in_stream_survive_dep_skip(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_stream_with_child, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Add item 2
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid, <<"swc">>, <<"add_item">>, #{~"id" => 2, ~"label" => ~"Item 2"}
     ),
     %% Dep-skip: change title (doesn't affect stream)
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid, <<"swc">>, <<"set_title">>, #{~"title" => ~"Updated"}
     ),
     %% Both children should still be routable
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
-        {arizona_push, _, Ops1, []} ->
+        {arizona_push, _, Ops1, [], _} ->
             ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"10">>]]]], Ops1)
     after 1000 ->
         error(timeout)
     end,
     Pid ! {arizona_view, <<"counter-2">>, {set_count, 20}},
     receive
-        {arizona_push, _, Ops2, []} ->
+        {arizona_push, _, Ops2, [], _} ->
             ?assertMatch([[<<"counter-2">>, [[?OP_TEXT, _, <<"20">>]]]], Ops2)
     after 1000 ->
         error(timeout)
@@ -1688,21 +1688,21 @@ child_in_stream_survives_item_update(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_stream_with_child, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Set counter-1 to 5
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 5}},
     receive
-        {arizona_push, _, _, _} -> ok
+        {arizona_push, _, _, _, _} -> ok
     after 1000 -> error(timeout)
     end,
     %% Update item 1's label -- child should survive with count=5
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid, <<"swc">>, <<"update_item">>, #{~"id" => 1, ~"label" => ~"Updated"}
     ),
     %% Verify counter-1 still has count=5 (handle_update merges, keeps count)
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 7}},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"7">>]]]], Ops)
     after 1000 ->
         error(timeout)
@@ -1714,15 +1714,15 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_stream_with_child, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Dep-skip: change title
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid, <<"swc">>, <<"set_title">>, #{~"title" => ~"Updated"}
     ),
     %% counter-1 should be routable
     Pid ! {arizona_view, <<"counter-1">>, {set_count, 10}},
     receive
-        {arizona_push, _, Ops1, []} ->
+        {arizona_push, _, Ops1, [], _} ->
             ?assertMatch([[<<"counter-1">>, [[?OP_TEXT, _, <<"10">>]]]], Ops1)
     after 1000 ->
         error(timeout)
@@ -1730,7 +1730,7 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
     %% extra-1 should also be routable
     Pid ! {arizona_view, <<"extra-1">>, {set_count, 20}},
     receive
-        {arizona_push, _, Ops2, []} ->
+        {arizona_push, _, Ops2, [], _} ->
             ?assertMatch([[<<"extra-1">>, [[?OP_TEXT, _, <<"20">>]]]], Ops2)
     after 1000 ->
         error(timeout)
@@ -1746,14 +1746,14 @@ on_mount_transforms_bindings(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), OnMount
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Timer renders ?get(message). On mount, message defaults to "none".
     %% Verify on_mount ran by sending a message that reads extra from bindings.
     %% Actually, just verify mount succeeded -- on_mount didn't crash.
     %% For a stronger test, send set_message and verify the process is alive.
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"hello">>}},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[?OP_TEXT, _, <<"hello">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1765,15 +1765,15 @@ on_mount_works_on_navigate(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Navigate with on_mount
-    {ok, _, _} = arizona_live:navigate(
+    {ok, _, _, _} = arizona_live:navigate(
         Pid, arizona_timer, #{}, OnMount
     ),
     %% Verify process is alive and functional
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"after_nav">>}},
     receive
-        {arizona_push, _, Ops, []} ->
+        {arizona_push, _, Ops, [], _} ->
             ?assertMatch([[?OP_TEXT, _, <<"after_nav">>]], Ops)
     after 1000 ->
         error(timeout)
@@ -1784,7 +1784,7 @@ on_mount_empty_is_noop(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), []
     ),
-    {ok, <<"timer">>} = arizona_live:mount(Pid).
+    {ok, <<"timer">>, _} = arizona_live:mount(Pid).
 
 on_mount_pipeline(Config) when is_list(Config) ->
     %% Multiple on_mount hooks run in order, each transforms bindings.
@@ -1794,11 +1794,11 @@ on_mount_pipeline(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_timer, #{}, self(), OnMount
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Both hooks ran -- step should be 2
     Pid ! {arizona_view, <<"timer">>, {set_message, <<"ok">>}},
     receive
-        {arizona_push, _, _, _} -> ok
+        {arizona_push, _, _, _, _} -> ok
     after 1000 ->
         error(timeout)
     end.
@@ -1812,23 +1812,23 @@ navigate_dedup_across_visits(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% First navigate to about -- has statics
-    {ok, _, Content1} = arizona_live:navigate(
+    {ok, _, Content1, _} = arizona_live:navigate(
         Pid, arizona_about, #{}
     ),
     ?assert(maps:is_key(<<"s">>, Content1)),
     AboutFp = maps:get(<<"f">>, Content1),
     ?assert(is_binary(AboutFp)),
     %% Navigate back to page (different fingerprint -- has statics)
-    {ok, _, Content2} = arizona_live:navigate(
+    {ok, _, Content2, _} = arizona_live:navigate(
         Pid, arizona_page, #{}
     ),
     ?assert(maps:is_key(<<"s">>, Content2)),
     PageFp = maps:get(<<"f">>, Content2),
     ?assertNotEqual(AboutFp, PageFp),
     %% Navigate to about again -- statics should be stripped
-    {ok, _, Content3} = arizona_live:navigate(
+    {ok, _, Content3, _} = arizona_live:navigate(
         Pid, arizona_about, #{}
     ),
     ?assertNot(maps:is_key(<<"s">>, Content3)),
@@ -2082,9 +2082,9 @@ dedup_navigate_nested_dynamics(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% First navigate to page -- page fp is new, keeps statics
-    {ok, _, Content1} = arizona_live:navigate(
+    {ok, _, Content1, _} = arizona_live:navigate(
         Pid, arizona_page, #{}
     ),
     ?assert(maps:is_key(<<"s">>, Content1)),
@@ -2099,7 +2099,7 @@ dedup_navigate_nested_dynamics(Config) when is_list(Config) ->
     %% at least one stripped (3 counters, same fp)
     ?assert(length(WithoutS1) >= 1),
     %% Second navigate -- page statics stripped, ALL counter statics stripped
-    {ok, _, Content2} = arizona_live:navigate(
+    {ok, _, Content2, _} = arizona_live:navigate(
         Pid, arizona_page, #{}
     ),
     ?assertNot(maps:is_key(<<"s">>, Content2)),
@@ -2117,8 +2117,8 @@ seed_fps_skips_statics(Config) when is_list(Config) ->
     {ok, Pid0} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid0),
-    {ok, Ops0, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid0),
+    {ok, Ops0, [], _} = arizona_live:handle_event(
         Pid0,
         <<"todo">>,
         <<"add">>,
@@ -2130,12 +2130,12 @@ seed_fps_skips_statics(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     arizona_live:seed_fps(Pid, [ItemFp]),
     %% Give the cast time to be processed
     sys:get_state(Pid),
     %% Add an item -- its fingerprinted payload should have statics stripped
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2150,10 +2150,10 @@ seed_fps_unknown_fp_still_sends(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     arizona_live:seed_fps(Pid, [<<"unrelated_fp">>]),
     sys:get_state(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2170,8 +2170,8 @@ seed_fps_merges_with_existing(Config) when is_list(Config) ->
     {ok, Pid0} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid0),
-    {ok, _, Content0} = arizona_live:navigate(
+    {ok, _, _} = arizona_live:mount(Pid0),
+    {ok, _, Content0, _} = arizona_live:navigate(
         Pid0, arizona_todo, #{items => []}
     ),
     TodoTplFp = maps:get(<<"f">>, Content0),
@@ -2179,9 +2179,9 @@ seed_fps_merges_with_existing(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% First add caches todo_item_tpl via dedup_fps
-    {ok, Ops1, []} = arizona_live:handle_event(
+    {ok, Ops1, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2193,7 +2193,7 @@ seed_fps_merges_with_existing(Config) when is_list(Config) ->
     arizona_live:seed_fps(Pid, [TodoTplFp]),
     sys:get_state(Pid),
     %% Now add another item -- todo_item_tpl should be stripped (already sent)
-    {ok, Ops2, []} = arizona_live:handle_event(
+    {ok, Ops2, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2203,7 +2203,7 @@ seed_fps_merges_with_existing(Config) when is_list(Config) ->
     ?assertNot(maps:is_key(<<"s">>, P2)),
     %% Navigate to todo -- todo_tpl should be stripped (seeded)
     InitItems = [#{id => 3, text => <<"C">>}],
-    {ok, _, Content} = arizona_live:navigate(
+    {ok, _, Content, _} = arizona_live:navigate(
         Pid, arizona_todo, #{items => InitItems}
     ),
     ?assert(maps:is_key(<<"f">>, Content)),
@@ -2214,9 +2214,9 @@ seed_fps_idempotent(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% First add caches todo_item_tpl in sent_fps via dedup
-    {ok, _, []} = arizona_live:handle_event(
+    {ok, _, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2226,7 +2226,7 @@ seed_fps_idempotent(Config) when is_list(Config) ->
     arizona_live:seed_fps(Pid, [<<"todo_item_tpl">>]),
     sys:get_state(Pid),
     %% Second add should still strip statics
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,

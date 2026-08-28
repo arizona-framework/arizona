@@ -365,7 +365,7 @@ prof_mount_only(Label, Opts) ->
     Req = arizona_req_test_adapter:new(),
     sanity_mount(Req),
     Op = fun() ->
-        {ok, Sock} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+        {reply, _, Sock} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
         arizona_bench_lib:kill_live(element(2, Sock)),
         ok
     end,
@@ -567,8 +567,9 @@ sanity_ws_send(Sock, Json) ->
     end.
 
 sanity_mount(Req) ->
+    %% A connect always replies (the frame carries the declared az-* names).
     case arizona_socket:init(arizona_root_counter, #{}, Req, #{}) of
-        {ok, Sock} when is_pid(element(2, Sock)) ->
+        {reply, _Connect, Sock} when is_pid(element(2, Sock)) ->
             arizona_bench_lib:kill_live(element(2, Sock));
         Other ->
             io:format("error: mount returned ~p~n", [Other]),

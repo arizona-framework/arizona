@@ -14,7 +14,7 @@ The module is both the **daemon launcher** (`start/1`) and the
 `m:ssh_server_channel` callback installed via the daemon's `ssh_cli` option. Each
 accepted session channel mounts a live view through `arizona_terminal_session`,
 supplying an output function that writes to the SSH channel; key bytes, terminal
-resizes, and the live process's `{arizona_push, _, _, _}` updates are fed to the
+resizes, and the live process's `{arizona_push, _, _, _, _}` updates are fed to the
 session.
 
 ```erlang
@@ -145,7 +145,7 @@ init([#{handler := Handler, driver := Driver}]) ->
 
 -doc """
 Handles non-SSH messages: the one-shot `ssh_channel_up` (records the connection
-and channel), the live process's `{arizona_push, _, _, Effects}` updates (timer ticks,
+and channel), the live process's `{arizona_push, _, _, Effects, _}` updates (timer ticks,
 pubsub) which the session turns into a repaint or a stop, and the linked live
 view's `{'EXIT', _, _}` (ssh channels trap exits, so a crash surfaces as a message
 rather than killing the channel) which restores the client's terminal and stops
@@ -156,7 +156,7 @@ receive.
 handle_msg({ssh_channel_up, ChannelId, ConnectionRef}, State) ->
     {ok, State#state{conn = ConnectionRef, channel = ChannelId}};
 handle_msg(
-    {arizona_push, _ViewId, _Ops, Effects},
+    {arizona_push, _ViewId, _Ops, Effects, _Observed},
     #state{session = Session, channel = ChannelId} = State
 ) ->
     apply_session_result(arizona_terminal_session:handle_push(Session, Effects), ChannelId, State);

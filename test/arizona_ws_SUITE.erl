@@ -20,6 +20,12 @@
     malformed_json/1,
     reconnect_init/1,
     reconnect_fps_follow_ships_resync_then_reply/1,
+    connect_ships_walk_and_mount_observations/1,
+    delta_rides_the_frame_that_first_renders_the_attr/1,
+    delta_rides_a_value_that_becomes_a_command/1,
+    dynamic_stateful_swap_ships_new_module_names/1,
+    layout_attrs_ride_the_connect_frame/1,
+    navigate_reply_ships_target_route_names/1,
     ws_decode_handles_every_length_form/1,
     connect_with_params/1,
     http_query_params/1,
@@ -122,6 +128,12 @@ groups() ->
         malformed_json,
         reconnect_init,
         reconnect_fps_follow_ships_resync_then_reply,
+        connect_ships_walk_and_mount_observations,
+        delta_rides_the_frame_that_first_renders_the_attr,
+        delta_rides_a_value_that_becomes_a_command,
+        dynamic_stateful_swap_ships_new_module_names,
+        layout_attrs_ride_the_connect_frame,
+        navigate_reply_ships_target_route_names,
         ws_decode_handles_every_length_form,
         connect_with_params,
         http_query_params,
@@ -246,6 +258,14 @@ init_per_group(roadrunner, Config) ->
         %% between them is same-handler (patch in place); `/pv/other` is a
         %% different handler so a patch to it falls back to a full navigate.
         {live, <<"/pv/home">>, arizona_patch_view, #{bindings => #{section => <<"home">>}}},
+        %% az-* delivery fixtures: opaque dynamic commands (render-observed), a
+        %% runtime-bound ?stateful(?get(page)) child, and a layout-declared
+        %% attribute (deliverable only through the connect walk's layout roots).
+        {live, <<"/opaque-events">>, arizona_opaque_events, #{}},
+        {live, <<"/dyn-page">>, arizona_dyn_page, #{}},
+        {live, <<"/layout-events">>, arizona_events_demo, #{
+            layouts => [{arizona_event_layout, render}]
+        }},
         {live, <<"/pv/about">>, arizona_patch_view, #{bindings => #{section => <<"about">>}}},
         {live, <<"/pv/other">>, arizona_root_counter, #{}},
         {live, <<"/crash_on_mount">>, arizona_crashable, #{
@@ -2027,12 +2047,109 @@ expect_ws_close(Sock, ExpectedCode) ->
         Other -> error({unexpected_recv, Other})
     end.
 
+%% ============================================================================
+%% az-* delivery: the connect walk, render-time observation, per-socket deltas
+%% ============================================================================
+
+%% The connect frame's `a` is the compile-time walk (handler + layouts) unioned
+%% with what the connect mount's render proved: an opaque dynamic that evaluated
+%% to a command is in, a branch nothing rendered is not, and the injected
+%% az-view marker never ships.
+connect_ships_walk_and_mount_observations(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/opaque-events">>, [{consume_connect, false}]),
+    {text, Connect} = ws_recv(Sock),
+    #{~"a" := Names} = json:decode(Connect),
+    %% Compile-proven (a literal builder call) via the walk:
+    ?assert(lists:member(~"az-click", Names)),
+    %% Render-observed at mount ({az_mouseenter, ?get(enter_cmd)}):
+    ?assert(lists:member(~"az-mouseenter", Names)),
+    %% In an unrendered branch, so unproven as yet:
+    ?assertNot(lists:member(~"az-dblclick", Names)),
+    %% Dynamic app data ({az_select, ?get(ids)} rendering "[1,2,3]"): the render
+    %% classified it as a value, not a command, so it is never delegated.
+    ?assertNot(lists:member(~"az-select", Names)),
+    ?assertNot(lists:member(~"az-view", Names)),
+    ws_close(Sock).
+
+%% A branch that first renders on a later frame carries its opaque command's
+%% name as that frame's delta -- and only once: the per-socket dedup leaves
+%% every following frame bare. The reveal handler also returns an effect, so
+%% this frame is the ops+effects+delta shape: the delta must ride BESIDE the
+%% effects, never at their expense (map patterns are subset matches, so a
+%% missing widest-shape encode clause would silently drop `e`).
+delta_rides_the_frame_that_first_renders_the_attr(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/opaque-events">>, []),
+    ok = ws_send_json(Sock, [~"page", ~"reveal", #{}]),
+    {text, Reply} = ws_recv(Sock),
+    ?assertMatch(
+        #{~"o" := _, ~"e" := [[?EFFECT_SET_TITLE, ~"revealed"]], ~"a" := [~"az-dblclick"]},
+        json:decode(Reply)
+    ),
+    ok = ws_send_json(Sock, [~"page", ~"entered", #{}]),
+    {text, Reply2} = ws_recv(Sock),
+    Decoded2 = json:decode(Reply2),
+    ?assertMatch(#{~"o" := _}, Decoded2),
+    ?assertNot(is_map_key(~"a", Decoded2)),
+    ws_close(Sock).
+
+%% An attribute VALUE that becomes a command between renders ships as an
+%% in-place OP_SET_ATTR -- a path that bypasses every rendering observation
+%% point. The transition's frame must still carry the name, or the DOM gains a
+%% working command that is never delegated (and nothing later re-evaluates the
+%% unchanged value to heal it).
+delta_rides_a_value_that_becomes_a_command(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/opaque-events">>, []),
+    ok = ws_send_json(Sock, [~"page", ~"arm_cmd", #{}]),
+    {text, Reply} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := _, ~"a" := [~"az-mouseleave"]}, json:decode(Reply)),
+    ws_close(Sock).
+
+%% The documented `?stateful(?get(page), ...)` idiom: the module is data, so the
+%% compile-time walk cannot follow it -- instantiation observes it instead. The
+%% initially mounted page's names ride the connect frame; a swapped-in page's
+%% names ride the swap's own reply; a swap back re-proves nothing.
+dynamic_stateful_swap_ships_new_module_names(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/dyn-page">>, [{consume_connect, false}]),
+    {text, Connect} = ws_recv(Sock),
+    #{~"a" := Names} = json:decode(Connect),
+    ?assert(lists:member(~"az-pointerdown", Names)),
+    ?assertNot(lists:member(~"az-pointerup", Names)),
+    ok = ws_send_json(Sock, [~"page", ~"swap", #{}]),
+    {text, Reply} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := _, ~"a" := [~"az-pointerup"]}, json:decode(Reply)),
+    ok = ws_send_json(Sock, [~"page", ~"swap", #{}]),
+    {text, Reply2} = ws_recv(Sock),
+    ?assertNot(is_map_key(~"a", json:decode(Reply2))),
+    ws_close(Sock).
+
+%% A layout's markup renders once, at SSR -- no frame can ever deliver it -- so
+%% its declared names are deliverable only because the walk takes the route's
+%% layout modules as roots beside the handler.
+layout_attrs_ride_the_connect_frame(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/layout-events">>, [{consume_connect, false}]),
+    {text, Connect} = ws_recv(Sock),
+    #{~"a" := Names} = json:decode(Connect),
+    ?assert(lists:member(~"az-mouseover", Names)),
+    ws_close(Sock).
+
+%% A cross-route navigate walks the target handler and mounts the new page, so
+%% the OP_REPLACE frame itself carries the not-yet-sent names -- both the
+%% target's compile-proven set and its mount observations.
+navigate_reply_ships_target_route_names(Config) ->
+    {ok, Sock} = ws_connect(Config, <<"/">>, []),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/opaque-events", ~"qs" => <<>>}]),
+    {text, Reply} = ws_recv(Sock),
+    #{~"o" := [[?OP_REPLACE | _]], ~"a" := Names} = json:decode(Reply),
+    ?assert(lists:member(~"az-mouseenter", Names)),
+    ws_close(Sock).
+
 reconnect_init(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}]),
-    %% Reconnect init sends a REPLACE op immediately
+    %% Reconnect init sends a REPLACE op immediately, carrying the declared names
+    %% on the same frame rather than costing a second one.
     {text, Resp} = ws_recv(Sock),
     Decoded = json:decode(Resp),
-    ?assertMatch(#{~"o" := _}, Decoded),
+    ?assertMatch(#{~"o" := _, ~"a" := _}, Decoded),
     ws_close(Sock).
 
 reconnect_fps_follow_ships_resync_then_reply(Config) ->
@@ -2114,7 +2231,8 @@ crash_info_closes(Config) ->
     gen_tcp:close(Sock).
 
 crash_init_closes(Config) ->
-    {ok, Sock} = ws_connect(Config, <<"/crash_on_mount">>),
+    %% Mount crashes before any reply, so there is no names frame to consume.
+    {ok, Sock} = ws_connect(Config, <<"/crash_on_mount">>, [{consume_connect, false}]),
     %% Mount crashes -- socket closes with 4500.
     {close, 4500, _} = ws_recv(Sock),
     gen_tcp:close(Sock).
@@ -2144,6 +2262,26 @@ ws_connect(Config, Path, Opts) ->
     ]),
     ok = ws_handshake(Sock, Port, Path, Opts),
     ok = inet:setopts(Sock, [{packet, raw}]),
+    %% Every successful connect opens with the declared `az-*` names, which the
+    %% client needs before it can answer its own first event. Consumed here so each
+    %% test reads the frame it is actually about, and asserted so the contract stays
+    %% covered. Opt out with `{consume_connect, false}` to inspect that frame, or
+    %% when init is expected to crash and close instead of replying.
+    %% Mirrors `arizona_socket:init_view/4`: only the plain reconnect (reconnect
+    %% without fps_follow) carries ops on its connect frame, and that frame is the
+    %% one its tests want to read. The other two reply with the names alone, so
+    %% consume those or every later `ws_recv` is off by one frame.
+    Reconnect = proplists:get_value(reconnect, Opts, false),
+    FpsFollow = proplists:get_value(fps_follow, Opts, false),
+    ConsumeDefault = not (Reconnect andalso not FpsFollow),
+    case proplists:get_value(consume_connect, Opts, ConsumeDefault) of
+        true ->
+            {text, Connect} = ws_recv(Sock),
+            #{~"a" := Names} = json:decode(Connect),
+            true = is_list(Names);
+        false ->
+            ok
+    end,
     {ok, Sock}.
 
 ws_handshake(Sock, Port, Path, Opts) ->

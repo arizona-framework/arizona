@@ -80,6 +80,10 @@ go through the host-neutral `arizona_os` seam; the reference shell is `clients/t
 
 Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?native` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders.
 
+**Any element event works.** `az-<event>` binds `addEventListener(<event>)` with the attribute suffix used verbatim as the listener type, so there is no supported-event list: `az_toggle` on a `<dialog popover>`, `az_close` on a `<dialog>`, `az_error` on an `<img>`, and a custom element's own `az_sl_change` all bind. Non-bubbling events are delivered too, matched on the element that declares them rather than by ancestor lookup, since such an event has no propagation path. The name must be lowercase (the HTML parser lowercases attribute names), which is what custom elements use kebab-case for anyway.
+
+The set of types is **collected at compile time**: the parse transform records every `az-*` name it resolves as a module attribute, `arizona_az_attrs` unions them across the app, and the socket ships the set on the connect frame. That makes discovery exact and free at runtime, and it is why an `az-*` attribute holding a *static* value is never delegated -- an effect is always a call, never a literal, so `{az_select, ~"[1,2,3]"}` is app data by construction and its value never reaches the command interpreter. Window-targeted events (`resize`, `online`, `hashchange`) are out of reach by construction; `?raw` markup and host-inserted DOM need the exported `mountHooks`. Mechanism, the bubbling asymmetry, and why `submit`/`drop` keep dedicated listeners, in [.claude/rules/js.md](.claude/rules/js.md).
+
 ```erlang
 %% Template: event attribute
 {'button', [{az_click, arizona_js:push_event(~"inc")}], [<<"+">>]}

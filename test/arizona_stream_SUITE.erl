@@ -810,8 +810,8 @@ stream_live_insert(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -829,20 +829,20 @@ stream_live_remove(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"A">>}
     ),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 2, <<"text">> => <<"B">>}
     ),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"remove">>,
@@ -855,14 +855,14 @@ stream_live_update(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"Old">>}
     ),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"update">>,
@@ -877,20 +877,20 @@ stream_live_reset(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"A">>}
     ),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 2, <<"text">> => <<"B">>}
     ),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"todo">>, <<"clear">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"todo">>, <<"clear">>, #{}),
     ?assertEqual(2, length(Ops)),
     ?assertMatch([?OP_REMOVE, _, <<"1">>], lists:nth(1, Ops)),
     ?assertMatch([?OP_REMOVE, _, <<"2">>], lists:nth(2, Ops)).
@@ -900,23 +900,23 @@ stream_live_multi_event(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Add three items
-    {ok, Ops1, _} = arizona_live:handle_event(
+    {ok, Ops1, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"A">>}
     ),
     ?assertMatch([[?OP_INSERT, _, _, _, _]], Ops1),
-    {ok, Ops2, _} = arizona_live:handle_event(
+    {ok, Ops2, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 2, <<"text">> => <<"B">>}
     ),
     ?assertMatch([[?OP_INSERT, _, _, _, _]], Ops2),
-    {ok, Ops3, _} = arizona_live:handle_event(
+    {ok, Ops3, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -924,7 +924,7 @@ stream_live_multi_event(Config) when is_list(Config) ->
     ),
     ?assertMatch([[?OP_INSERT, _, _, _, _]], Ops3),
     %% Remove middle item
-    {ok, Ops4, _} = arizona_live:handle_event(
+    {ok, Ops4, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"remove">>,
@@ -932,7 +932,7 @@ stream_live_multi_event(Config) when is_list(Config) ->
     ),
     ?assertMatch([[?OP_REMOVE, _, <<"2">>]], Ops4),
     %% Update remaining item
-    {ok, Ops5, _} = arizona_live:handle_event(
+    {ok, Ops5, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"update">>,
@@ -949,8 +949,8 @@ page_add_todo_live(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"1">>, -1, _]], Ops),
     [[_, _, _, _, Payload]] = Ops,
     ?assertMatch(#{<<"f">> := _, <<"s">> := _, <<"d">> := _}, Payload),
@@ -974,11 +974,11 @@ page_remove_todo_live(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     %% Remove first todo (id=1)
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"remove_todo">>,
@@ -991,10 +991,10 @@ page_clear_todos_live(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"clear_todos">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"clear_todos">>, #{}),
     ?assertEqual(2, length(Ops)),
     ?assertMatch([?OP_REMOVE, _, <<"1">>], lists:nth(1, Ops)),
     ?assertMatch([?OP_REMOVE, _, <<"2">>], lists:nth(2, Ops)).
@@ -1006,8 +1006,8 @@ stream_live_mount_with_items_then_insert(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{items => InitItems}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -1022,8 +1022,8 @@ stream_live_mount_with_items_then_delete(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{items => InitItems}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"todo">>, <<"remove">>, #{<<"id">> => 1}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"todo">>, <<"remove">>, #{<<"id">> => 1}),
     ?assertMatch([[?OP_REMOVE, _, <<"1">>]], Ops),
     %% No OP_INSERT ops
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
@@ -1035,8 +1035,8 @@ stream_live_mount_with_items_then_reset(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{items => InitItems}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"todo">>, <<"clear">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"todo">>, <<"clear">>, #{}),
     RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     ?assertEqual(2, length(RemOps)),
@@ -1047,16 +1047,16 @@ stream_live_delete_last_then_readd(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"A">>}
     ),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"todo">>, <<"remove">>, #{<<"id">> => 1}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"todo">>, <<"remove">>, #{<<"id">> => 1}),
     %% Stream is now empty -- add another item
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -1069,14 +1069,14 @@ stream_live_update_no_change(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"A">>}
     ),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"update">>,
@@ -1089,22 +1089,22 @@ stream_live_three_sequential_inserts(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops1, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops1, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"A">>}
     ),
     ?assertMatch([[?OP_INSERT, _, <<"1">>, -1, _]], Ops1),
-    {ok, Ops2, _} = arizona_live:handle_event(
+    {ok, Ops2, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 2, <<"text">> => <<"B">>}
     ),
     ?assertMatch([[?OP_INSERT, _, <<"2">>, -1, _]], Ops2),
-    {ok, Ops3, _} = arizona_live:handle_event(
+    {ok, Ops3, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -1117,20 +1117,20 @@ stream_live_insert_at_position(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"A">>}
     ),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 2, <<"text">> => <<"B">>}
     ),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"insert_at">>,
@@ -1143,20 +1143,20 @@ stream_live_reset_with_items(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 1, <<"text">> => <<"A">>}
     ),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
         #{<<"id">> => 2, <<"text">> => <<"B">>}
     ),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"reset_with">>,
@@ -1173,11 +1173,11 @@ page_title_change_skips_stream(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Add 1 todo first
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     %% Now change title -- should not produce stream ops
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
     StreamOps = [
         Op
      || [Code | _] = Op <- Ops,
@@ -1194,13 +1194,13 @@ page_add_todo_then_title_change_then_add_todo(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Event 1: add_todo
-    {ok, Ops1, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, Ops1, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     InsOps1 = [Op || [?OP_INSERT | _] = Op <- Ops1],
     ?assertMatch([[?OP_INSERT, _, _, _, _]], InsOps1),
     %% Event 2: title_change -- no stream ops
-    {ok, Ops2, _} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
+    {ok, Ops2, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"title_change">>, #{}),
     StreamOps2 = [
         Op
      || [Code | _] = Op <- Ops2,
@@ -1209,7 +1209,7 @@ page_add_todo_then_title_change_then_add_todo(Config) when is_list(Config) ->
     ],
     ?assertEqual([], StreamOps2),
     %% Event 3: add_todo again -- stream survives dep-skip cycle
-    {ok, Ops3, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, Ops3, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     InsOps3 = [Op || [?OP_INSERT | _] = Op <- Ops3],
     ?assertMatch([[?OP_INSERT, _, _, _, _]], InsOps3).
 
@@ -1218,14 +1218,14 @@ page_connected_event_skips_stream(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Drain the arizona_connected push from mount
     receive
-        {arizona_push, _, _, _} -> ok
+        {arizona_push, _, _, _, _} -> ok
     after 1000 -> ct:fail(timeout)
     end,
     %% Add 1 todo
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_todo">>, #{}),
     %% connected already fired -- no stream ops were emitted during connected push
     ok.
 
@@ -1244,9 +1244,9 @@ stream_live_mount_with_items(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{items => InitItems}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Update item "a" -- should only produce OP_ITEM_PATCH, not OP_INSERT
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"update">>,
@@ -1266,9 +1266,9 @@ stream_live_insert_no_stale_pending(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% First insert
-    {ok, Ops1, []} = arizona_live:handle_event(
+    {ok, Ops1, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -1277,7 +1277,7 @@ stream_live_insert_no_stale_pending(Config) when is_list(Config) ->
     Insert1 = [Op || [?OP_INSERT | _] = Op <- Ops1],
     ?assertMatch([[?OP_INSERT, _, <<"x">>, -1, _]], Insert1),
     %% Second insert -- must produce exactly 1 OP_INSERT (for "y" only)
-    {ok, Ops2, []} = arizona_live:handle_event(
+    {ok, Ops2, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2382,9 +2382,9 @@ stream_dedup_strips_statics(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% First insert -- should have statics
-    {ok, Ops1, []} = arizona_live:handle_event(
+    {ok, Ops1, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2393,7 +2393,7 @@ stream_dedup_strips_statics(Config) when is_list(Config) ->
     [[_, _, _, _, P1]] = Ops1,
     ?assert(maps:is_key(<<"s">>, P1)),
     %% Second insert -- statics should be stripped (same fingerprint)
-    {ok, Ops2, []} = arizona_live:handle_event(
+    {ok, Ops2, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2554,9 +2554,9 @@ navigate_with_stream_items(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{items => InitItems}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Navigate back to todo with same items -- produces fingerprinted payload
-    {ok, _, Content} = arizona_live:navigate(
+    {ok, _, Content, _} = arizona_live:navigate(
         Pid, arizona_todo, #{items => InitItems}
     ),
     ?assert(maps:is_key(<<"f">>, Content)),
@@ -2581,9 +2581,9 @@ dedup_stream_insert_then_item_patch(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_todo, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Insert
-    {ok, Ops1, []} = arizona_live:handle_event(
+    {ok, Ops1, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"add">>,
@@ -2592,7 +2592,7 @@ dedup_stream_insert_then_item_patch(Config) when is_list(Config) ->
     [[?OP_INSERT, _, _, _, P1]] = Ops1,
     ?assert(maps:is_key(<<"s">>, P1)),
     %% Update same item -- produces ITEM_PATCH with text ops
-    {ok, Ops2, []} = arizona_live:handle_event(
+    {ok, Ops2, [], _} = arizona_live:handle_event(
         Pid,
         <<"todo">>,
         <<"update">>,
@@ -3279,16 +3279,16 @@ datatable_live_mount(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, <<"page">>} = arizona_live:mount(Pid).
+    {ok, <<"page">>, _} = arizona_live:mount(Pid).
 
 datatable_live_connected(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, self(), []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% mount sends self() ! arizona_connected, handle_info pushes to transport
     receive
-        {arizona_push, _, Ops, Effects} ->
+        {arizona_push, _, Ops, Effects, _} ->
             ?assertEqual([], Ops),
             ?assertEqual([{arizona_effect, [14, <<"DataTable">>]}], Effects)
     after 1000 ->
@@ -3299,8 +3299,8 @@ datatable_live_add_row(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"6">>, -1, _]], Ops),
     [[_, _, _, _, Payload]] = Ops,
     ?assert(is_binary(maps:get(<<"f">>, Payload))),
@@ -3318,18 +3318,18 @@ datatable_live_add_row_sequence(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops1, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops1, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"6">>, -1, _]], Ops1),
-    {ok, Ops2, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    {ok, Ops2, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"7">>, -1, _]], Ops2).
 
 datatable_live_delete_row(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"delete_row">>,
@@ -3341,8 +3341,8 @@ datatable_live_delete_row_middle(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"delete_row">>,
@@ -3354,8 +3354,8 @@ datatable_live_sort_asc(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"sort">>,
@@ -3374,8 +3374,8 @@ datatable_live_sort_name_no_move(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"sort">>,
@@ -3388,16 +3388,16 @@ datatable_live_sort_toggle(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% First sort by age asc
-    {ok, _, []} = arizona_live:handle_event(
+    {ok, _, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"sort">>,
         #{<<"col">> => <<"age">>}
     ),
     %% Second sort by age toggles to desc
-    {ok, Ops2, []} = arizona_live:handle_event(
+    {ok, Ops2, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"sort">>,
@@ -3410,16 +3410,16 @@ datatable_live_sort_col_change(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Sort by age
-    {ok, _, []} = arizona_live:handle_event(
+    {ok, _, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"sort">>,
         #{<<"col">> => <<"age">>}
     ),
     %% Sort by id returns to original order
-    {ok, Ops2, []} = arizona_live:handle_event(
+    {ok, Ops2, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"sort">>,
@@ -3432,8 +3432,8 @@ datatable_live_move_top(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"move_top">>,
@@ -3446,8 +3446,8 @@ datatable_live_move_top_already_first(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, _Ops, []} = arizona_live:handle_event(
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _Ops, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"move_top">>,
@@ -3458,18 +3458,18 @@ datatable_live_reset(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Add a row
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     %% Delete a row
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"delete_row">>,
         #{<<"id">> => 2}
     ),
     %% Reset
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
     RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     %% Should remove the added row (6) and insert the deleted row (2)
@@ -3480,22 +3480,22 @@ datatable_live_reset_restores_next_id(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Add 2 rows (ids 6, 7)
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     %% Reset
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
     %% Add again -- should use id 6
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     ?assertMatch([[?OP_INSERT, _, <<"6">>, -1, _]], Ops).
 
 datatable_live_shuffle(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"shuffle">>, #{}),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"shuffle">>, #{}),
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
     ?assertEqual([], InsOps),
@@ -3507,9 +3507,9 @@ datatable_live_sort_dom_simulation(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Sort age asc: expected DOM order [2,4,1,5,3]
-    {ok, Ops1, []} = arizona_live:handle_event(
+    {ok, Ops1, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"sort">>,
@@ -3519,7 +3519,7 @@ datatable_live_sort_dom_simulation(Config) when is_list(Config) ->
     Dom1 = simulate_dom_moves([1, 2, 3, 4, 5], MoveOps1),
     ?assertEqual([2, 4, 1, 5, 3], Dom1),
     %% Sort age desc (toggle): expected DOM order [3,5,1,4,2]
-    {ok, Ops2, []} = arizona_live:handle_event(
+    {ok, Ops2, [], _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"sort">>,
@@ -3533,40 +3533,40 @@ datatable_live_delete_all_then_reset(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Delete all 5 rows
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"delete_row">>,
         #{<<"id">> => 1}
     ),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"delete_row">>,
         #{<<"id">> => 2}
     ),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"delete_row">>,
         #{<<"id">> => 3}
     ),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"delete_row">>,
         #{<<"id">> => 4}
     ),
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid,
         <<"page">>,
         <<"delete_row">>,
         #{<<"id">> => 5}
     ),
     %% Reset
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     RemOps = [Op || [?OP_REMOVE | _] = Op <- Ops],
     ?assertEqual(5, length(InsOps)),
@@ -3580,13 +3580,13 @@ datatable_live_delete_middle_then_reset(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Delete the middle row (3): DOM becomes [1,2,4,5].
-    {ok, _, _} = arizona_live:handle_event(
+    {ok, _, _, _} = arizona_live:handle_event(
         Pid, <<"page">>, <<"delete_row">>, #{<<"id">> => 3}
     ),
     %% Reset: restores all 5 in original order.
-    {ok, Ops, []} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
     HasInsert3 = lists:any(fun(Op) -> match_key(?OP_INSERT, <<"3">>, Op) end, Ops),
     HasMove3 = lists:any(fun(Op) -> match_key(?OP_MOVE, <<"3">>, Op) end, Ops),
     ?assert(HasInsert3),
@@ -3613,20 +3613,20 @@ datatable_navigate_from_page_then_add_row_no_crash(Config) when is_list(Config) 
     {ok, Pid} = arizona_live:start_link(
         arizona_page, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     ok = lists:foreach(
         fun(_) ->
-            {ok, _, _} = arizona_live:handle_event(
+            {ok, _, _, _} = arizona_live:handle_event(
                 Pid, <<"page">>, <<"add_todo">>, #{<<"text">> => <<"t">>}
             ),
             ok
         end,
         lists:seq(1, 3)
     ),
-    {ok, _, _} = arizona_live:navigate(
+    {ok, _, _, _} = arizona_live:navigate(
         Pid, arizona_datatable, #{title => <<"DataTable">>}
     ),
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"add_row">>, #{}),
     LiveState = sys:get_state(Pid),
     [B] = [El || El <- tuple_to_list(LiveState), is_map(El), is_map_key(rows, El)],
     Rows = maps:get(rows, B),
@@ -3639,7 +3639,7 @@ datatable_navigate_from_page_then_add_row_no_crash(Config) when is_list(Config) 
     %% Diana stayed at id=4 (was not overwritten by a dup-keyed New 4).
     ?assertMatch(#{name := <<"Diana">>}, maps:get(4, Items)),
     %% Shuffle path is clean.
-    {ok, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"shuffle">>, #{}).
+    {ok, _, _, _} = arizona_live:handle_event(Pid, <<"page">>, <<"shuffle">>, #{}).
 
 %% =============================================================================
 %% Shuffle crash reproducers
@@ -3813,7 +3813,7 @@ repro_shuffle_after_insert_dup_then_delete_crashes(Config) when is_list(Config) 
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
     ),
-    {ok, _} = arizona_live:mount(Pid),
+    {ok, _, _} = arizona_live:mount(Pid),
     %% Reach into the live state, corrupt the rows stream the same way
     %% insert(dup) + delete would, and put it back. This simulates whatever
     %% production trigger we haven't pinned down — the crash is downstream

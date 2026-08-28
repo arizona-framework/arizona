@@ -186,6 +186,53 @@ describe('arizona-worker', () => {
         expect(resolved[3]).toBe(false);
     });
 
+    it("forwards a frame's az-* delta beside the ops that render the markup", () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // Newly proven names ride the frame itself (key `a`), deduped per socket by
+        // the server: the client learns a DOM event type from the very frame that
+        // can first produce the markup declaring it. The worker only relays -- the
+        // main thread decides which names are DOM events, so that triage lives in
+        // one place.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [[0, 'v:0', { f: 'fpA', s: ['<b az-toggle="x">', '</b>'], d: ['1'] }]],
+                a: ['az-toggle'],
+            }),
+        );
+        const resolved = slf.posted.find((m) => m[0] === 0);
+        expect(resolved[1]).toEqual([[0, 'v:0', '<b az-toggle="x">1</b>', true]]);
+        expect(resolved[4]).toEqual(['az-toggle']);
+    });
+
+    it('adds no names of its own: a frame without a delta forwards null', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        const frame = JSON.stringify({
+            o: [[0, 'v:0', { f: 'fpB', s: ['<b az-close="x">', '</b>'], d: ['1'] }]],
+            a: ['az-close'],
+        });
+        ws.latest().simulateMessage(frame);
+        slf.posted.length = 0;
+        // The server already sent az-close on the frame above and dedupes per
+        // socket, so the follow-up frame carries no `a` -- and the worker must not
+        // re-derive names from the payload bytes it resolves.
+        ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', { f: 'fpB', d: ['2'] }]] }));
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
+    });
+
+    it('sends null in field 4 on a frame carrying no names', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // Every frame after connect. The field must be falsy so the main thread's
+        // `if (msg[4])` skips it rather than re-running the triage on every patch.
+        ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', 'hi']] }));
+        const resolved = slf.posted.find((m) => m[0] === 0);
+        expect(resolved[4]).toBeNull();
+    });
+
     it('an HTML-fragment OP_TEXT payload (object) is resolved and flagged isHtml', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
@@ -195,6 +242,26 @@ describe('arizona-worker', () => {
         ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', { raw: '<b>x</b>' }]] }));
         const resolved = slf.posted.find((m) => m[0] === 0);
         expect(resolved[1]).toEqual([[0, 'v:0', '<b>x</b>', true]]);
+    });
+
+    it('gives the reconnect flag to the frame that carries ops, not the first one', () => {
+        // the connect message's third element marks a reconnect (a bfcache restore)
+        slf.send([0, 'ws://host/ws?_az_path=%2F', true]);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // A reconnect opens with the declared az-* names and no ops. If that frame
+        // claimed the flag, the main thread would restore form state against a DOM
+        // the following OP_REPLACE discards, and `_savedForms.clear()` at the end of
+        // the restore means the user's typed input is gone rather than merely late.
+        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
+        const namesFrame = slf.posted.find((m) => m[0] === 0);
+        expect(namesFrame[1]).toBeNull();
+        expect(namesFrame[3]).toBe(false);
+
+        slf.posted.length = 0;
+        ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', 'hi']] }));
+        const opsFrame = slf.posted.find((m) => m[0] === 0);
+        expect(opsFrame[3]).toBe(true);
     });
 
     it('send message [1, json] forwards to WebSocket when ready', () => {

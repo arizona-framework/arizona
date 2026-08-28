@@ -74,6 +74,21 @@ export function serverFrames(page) {
         await expect.poll(pongs).toBeGreaterThan(before);
     }
 
+    /**
+     * The connect frame carrying the app's declared `az-*` names. It is sent once
+     * when the socket opens, not in response to anything the test did, so it is not
+     * a round-trip and must not count as one.
+     * @param {string} frame
+     */
+    function isConnectNames(frame) {
+        try {
+            const keys = Object.keys(JSON.parse(frame));
+            return keys.length === 1 && keys[0] === 'a';
+        } catch {
+            return false;
+        }
+    }
+
     return {
         settle,
         /**
@@ -84,7 +99,7 @@ export function serverFrames(page) {
         async expectNone(message) {
             await settle();
             expect(
-                frames.filter((f) => f !== PONG),
+                frames.filter((f) => f !== PONG && !isConnectNames(f)),
                 message,
             ).toEqual([]);
         },

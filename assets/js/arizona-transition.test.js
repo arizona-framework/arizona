@@ -298,3 +298,24 @@ describe('view transitions -- back/forward', () => {
         expect(fn.mock.calls[0][0].types).toEqual(['back']);
     });
 });
+
+describe('containment', () => {
+    it('warns once from its own catch when a wrapped command crashes', () => {
+        // `[1,"["]` parses but crashes the interpreter (invalid selector). With
+        // az-transition the execution runs inside startViewTransition's update
+        // callback -- in a real browser that is OUTSIDE runDelegated's try, so
+        // the wrapper needs its own containment. The sync stub cannot reproduce
+        // the async escape, but it pins WHERE the catch fires: the wrapper's
+        // message, not the generic delegated one.
+        document.body.innerHTML =
+            `<div id="v" az-view>` +
+            `<button id="b" az-click='[1,"["]' az-transition>x</button></div>`;
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const btn = document.getElementById('b');
+        btn.dispatchEvent(new Event('click', { bubbles: true }));
+        btn.dispatchEvent(new Event('click', { bubbles: true }));
+        const wrapped = warn.mock.calls.filter(([m]) => m.includes('az-transition command failed'));
+        expect(wrapped.length).toBe(1);
+        warn.mockRestore();
+    });
+});

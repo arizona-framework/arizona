@@ -6,7 +6,7 @@
  * Sends pre-computed DOM-ready data to the main thread.
  *
  * Worker -> Main protocol (arrays for fast structured clone):
- *   [0, ops|null, effects|null, firstAfterReconnect] -- resolved message
+ *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *
@@ -336,16 +336,31 @@ function openSocket() {
         const msg = JSON.parse(e.data);
         const ops = msg.o || null;
         const effects = msg.e || null;
+        // The `az-*` attribute names this frame proves the app can render: the
+        // connect frame carries the compile-time union walked from the route's
+        // handler and layouts, and any later frame carries only the per-socket
+        // delta (a render-observed command attribute, a dynamically mounted
+        // component's names, a navigate target's walk). Raw names, not event
+        // types: which of them are DOM events and which are framework directives
+        // is the main thread's call, so that list lives in one place. The worker
+        // only forwards -- deriving the names here would mean a regex over
+        // serialized HTML, which cannot tell an attribute NAME from `az-` text
+        // inside an attribute VALUE and is wrong in both directions.
 
         if (ops) {
             resolveOps(ops);
             flushTouchedFps();
         }
 
-        const firstAfterReconnect = _reconnecting;
-        if (_reconnecting) _reconnecting = false;
+        // The flag belongs to the frame that rebuilds the DOM, not merely the first
+        // one to arrive. A reconnect opens with the declared `az-*` names, which
+        // carry no ops: letting that frame claim the flag makes the main thread
+        // restore form state against the DOM the following OP_REPLACE is about to
+        // discard, silently losing what the user had typed.
+        const firstAfterReconnect = _reconnecting && ops !== null;
+        if (firstAfterReconnect) _reconnecting = false;
 
-        postMessage([0, ops, effects, firstAfterReconnect]);
+        postMessage([0, ops, effects, firstAfterReconnect, msg.a ?? null]);
     };
 
     ws.onclose = (e) => {

@@ -93,6 +93,21 @@ descriptor). Either one in a template is a compile error (`reserved_attr`), in a
 live root, rejected elsewhere. Everything else `az-*` is the template author's: `az_key`
 keys stream items, `az_click`/`az_submit`/... carry effects, and an app may invent its own.
 
+An event attribute may name **any** DOM event -- the suffix becomes the
+`addEventListener` type verbatim, so `az_toggle`, `az_close` and a custom element's
+`az_sl_change` all bind, including events that do not bubble. The names are
+collected at compile time (`compile_attr` records each one; see
+[js.md](js.md)), which has two consequences worth knowing:
+
+- **A static value is app data and is never delegated.** An effect is always a
+  call, so `{az_select, ~"[1,2,3]"}` is data by construction and no `select`
+  listener is bound. Only a dynamic value (a command, folded or not) or a bare
+  attribute puts the name in the set.
+- **Where you put it depends on whether the event bubbles.** `az_click` on a `ul`
+  catches every item's click; a non-bubbling one (`load`, `toggle`, `close`,
+  `play`) is dispatched at its target alone, so it must sit on the element that
+  emits it. Such a command also cannot be suppressed with `stopPropagation`.
+
 ## Route options
 
 A route's static config is the single canonical type `arizona_live:route_opts/0`:

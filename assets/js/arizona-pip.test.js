@@ -44,7 +44,69 @@ function stubPip(pip) {
     return requestWindow;
 }
 
+/**
+ * A module instance with no delegation history. The delegated event registry is
+ * module state and MONOTONIC, so a test sharing the import above inherits every
+ * type earlier tests declared: whether a window is bound for a type would then
+ * depend on test order.
+ */
+async function fresh() {
+    vi.resetModules();
+    return await import('./arizona.js');
+}
+
+/** The connection the running test opened, torn down in afterEach. */
+/** @type {{sent: () => *[], reconnect: () => void, restore: () => void} | null} */
+let openConn = null;
+
+/**
+ * Connect `mod` through a mocked Worker and open the socket, exposing what the
+ * delegated commands pushed. Delegation is gated on a live connection, so a test
+ * that fires an event in a PiP document needs one.
+ * @param {any} mod
+ */
+function connectMock(mod) {
+    /** @type {*[]} */
+    const posted = [];
+    /** @type {*} */
+    let onmsg = null;
+    const inst = {
+        postMessage: (/** @type {*} */ d) => posted.push(d),
+        set onmessage(fn) {
+            onmsg = fn;
+        },
+        get onmessage() {
+            return onmsg;
+        },
+        terminate: vi.fn(),
+    };
+    const Orig = globalThis.Worker;
+    globalThis.Worker = function () {
+        return inst;
+    };
+    let disconnect = mod.connect('/ws');
+    inst.onmessage({ data: [1, false] });
+    openConn = {
+        sent: () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1])),
+        /** Retire this connection and open a fresh one against the same document. */
+        reconnect: () => {
+            disconnect();
+            disconnect = mod.connect('/ws');
+            inst.onmessage({ data: [1, false] });
+        },
+        restore: () => {
+            disconnect();
+            globalThis.Worker = Orig;
+        },
+    };
+    return openConn;
+}
+
 afterEach(() => {
+    // In the test body a failed assertion skips the teardown, leaving the Worker
+    // constructor mocked for every later test in this file.
+    openConn?.restore();
+    openConn = null;
     /** @type {any} */ (window).documentPictureInPicture = undefined;
     document.body.innerHTML = '';
 });
@@ -97,6 +159,103 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         );
 
         pip.fire('pagehide');
+    });
+
+    it('delegates a newly declared event type into an open PiP document', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            '<div id="v6" az-view az="0"><dialog id="d6" az="1"></dialog></div>';
+        const conn = connectMock(mod);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await mod.requestPip('v6');
+
+        // The type is declared after the window opened, so it has to reach every
+        // hosting document, not just the main one -- the view now LIVES in the PiP
+        // document, so binding only the main document would delegate nothing.
+        mod.applyOps([[1, 'v6:1', 'az-close', '[0,"closed"]']]);
+        pip.document.getElementById('d6').dispatchEvent(new Event('close'));
+
+        expect(conn.sent()).toEqual([['v6', 'closed', {}]]);
+
+        pip.fire('pagehide');
+    });
+
+    it('delegates a type declared before the window opened', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            '<div id="v10" az-view az="0"><dialog id="d10" az="1"></dialog></div>';
+        const conn = connectMock(mod);
+
+        // Declared while the view is still inline...
+        mod.applyOps([[1, 'v10:1', 'az-close', '[0,"closed"]']]);
+
+        const pip = makePipWindow();
+        stubPip(pip);
+        await mod.requestPip('v10');
+
+        // ...and the window opens afterwards, so it is the RECORD of what has been
+        // delegated that binds it, not the declaration itself: a type only pushed
+        // to the documents open at the time is bound nowhere in a window opened
+        // later, and every event fired in the floating window is lost.
+        pip.document.getElementById('d10').dispatchEvent(new Event('close'));
+
+        expect(conn.sent()).toEqual([['v10', 'closed', {}]]);
+
+        pip.fire('pagehide');
+    });
+
+    it('stops delegating new event types into a window that has closed', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = '<div id="v11" az-view az="0"><b id="b11" az="1"></b></div>';
+        const conn = connectMock(mod);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await mod.requestPip('v11');
+        pip.fire('pagehide'); // the user closes the floating window
+
+        /** @type {string[]} */
+        const bound = [];
+        const orig = pip.document.addEventListener.bind(pip.document);
+        pip.document.addEventListener = (
+            /** @type {*} */ t,
+            /** @type {*} */ fn,
+            /** @type {*} */ opts,
+        ) => {
+            bound.push(t);
+            return orig(t, fn, opts);
+        };
+
+        // A type declared afterwards must reach the documents still hosting a
+        // view. The closed window is not one, and only the registry shows it: the
+        // window's listeners went with its AbortSignal, which also makes a re-add
+        // there a silent no-op -- so a document left in the registry is a dead
+        // Document kept alive and re-bound on every declaration, with no symptom.
+        mod.applyOps([[1, 'v11:1', 'az-toggle', '[0,"toggled"]']]);
+        expect(bound).toEqual([]);
+
+        // ...while the view, restored inline, does get the new type delegated.
+        document.getElementById('b11').dispatchEvent(new Event('toggle'));
+        expect(conn.sent()).toEqual([['v11', 'toggled', {}]]);
+    });
+
+    it("tears down a popped-out window's listeners when the connection ends", async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            '<div id="v12" az-view az="0"><button id="b12" az-click=\'[0,"clicked"]\'>go</button></div>';
+        const conn = connectMock(mod);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await mod.requestPip('v12');
+
+        // A PiP document's listeners hang off requestPip's own AbortController, not
+        // the connection's signal, so disconnect() cannot reach them on its own.
+        // Left armed, they survive into the NEXT connection and push events from an
+        // orphaned window under the previous view's id.
+        conn.reconnect();
+        pip.document.getElementById('b12').click();
+
+        expect(conn.sent()).toEqual([]);
     });
 
     it('routes ops for a nested stateful child into the PiP document', async () => {

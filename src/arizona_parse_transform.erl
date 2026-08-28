@@ -118,6 +118,10 @@ render(Bindings) ->
 -type segment() :: binary() | {az_attr, binary()} | {az_slot, binary()}.
 
 %% Compile state threaded through element/attribute/child compilation.
+%% Process-dictionary key for the `az-*` attribute names collected while
+%% compiling a module. See `inject_az_attrs/1`.
+-define(AZ_ATTRS_KEY, arizona_az_attrs).
+
 -record(state, {
     %% Segments of the static under construction, newest first.
     buf = [] :: [segment()],
@@ -166,13 +170,19 @@ parse_transform(Forms, _Options) ->
     Module = extract_module(Forms),
     IsLive = has_behaviour(Forms, arizona_stateful),
     FunDefs = collect_fun_defs(Forms),
+    %% `az-*` names are collected in the process dictionary rather than threaded
+    %% through `#state{}`: the state is per-template, and this set spans every
+    %% template in the module. Erased on entry so a previous module in the same
+    %% compiler process cannot leak into this one.
+    _ = erase(?AZ_ATTRS_KEY),
     try
         Transformed = [
             transform_form(mark_targets(Form, none), Module, IsLive, FunDefs)
          || Form <- Forms
         ],
         WithSuppressions = inject_each_callback_suppressions(Transformed, Forms, FunDefs, Module),
-        erl_syntax:revert_forms(WithSuppressions)
+        WithEvents = inject_az_attrs(WithSuppressions, collect_component_mods(Forms)),
+        erl_syntax:revert_forms(WithEvents)
     catch
         throw:{arizona_parse_error, Line, Reason} ->
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
@@ -279,6 +289,109 @@ each_callback_pair(
     {ok, {Name, Arity}};
 each_callback_pair(_Callback, _Module) ->
     none.
+
+%% Emit the `az-*` attribute names this module compiled, so the client can
+%% delegate exactly those DOM event types. The names are compile-time literals
+%% here (`compile_attr` resolves every one through `Backend:name/1` or a binary),
+%% which is why this belongs at compile time: recovering them later means a regex
+%% over serialized HTML, which cannot tell an attribute NAME from `az-` text
+%% inside an attribute VALUE, and is wrong in both directions.
+inject_az_attrs(Forms, Deps) ->
+    Names = lists:usort(
+        case erase(?AZ_ATTRS_KEY) of
+            undefined -> [];
+            L -> L
+        end
+    ),
+    case {Names, Deps} of
+        {[], []} ->
+            Forms;
+        _ ->
+            {Before, [ModAttr | After]} = lists:splitwith(
+                fun(Form) -> not is_module_attr(Form) end, Forms
+            ),
+            Anno = element(2, ModAttr),
+            Attrs =
+                [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
+                    [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []],
+            Before ++ [ModAttr | Attrs] ++ After
+    end.
+
+%% The component modules this module renders, as literal atoms.
+%%
+%% `?stateful(Mod, _)` and `?stateless(Mod, Fun, _)` pass the module as DATA to
+%% `arizona_template`, never as a call, so it does not survive into the compiled
+%% artifact -- `beam_lib` imports for a module rendering two components report only
+%% `[arizona_template, erlang]`. Compile time is the only moment the graph is
+%% visible, which is why it is recorded here rather than recovered later.
+%%
+%% A module reached only through a variable (`?stateful(Mod, _)` with `Mod` bound at
+%% runtime) is not resolvable and is not recorded.
+collect_component_mods(Forms) ->
+    lists:usort(lists:flatten([component_mods(Form) || Form <- Forms])).
+
+component_mods({call, _, {remote, _, {atom, _, Mod}, {atom, _, Fun}}, Args}) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    component_mod_args(Fun, Args) ++ [component_mods(A) || A <- Args];
+component_mods(Tuple) when is_tuple(Tuple) ->
+    [component_mods(E) || E <- tuple_to_list(Tuple)];
+component_mods(List) when is_list(List) ->
+    [component_mods(E) || E <- List];
+component_mods(_Other) ->
+    [].
+
+%% `stateful(Mod, Props)` and `stateless(Mod, Fun, Props)` name the module first;
+%% `stateless(fun Mod:Fun/1, Props)` names it inside the fun reference. Every other
+%% shape resolves within this module, or not at all.
+component_mod_args(stateful, [{atom, _, Mod} | _]) -> [Mod];
+component_mod_args(stateless, [{atom, _, Mod}, {atom, _, _Fun} | _]) -> [Mod];
+component_mod_args(stateless, [{'fun', _, {function, {atom, _, Mod}, _, _}} | _]) -> [Mod];
+component_mod_args(_Fun, _Args) -> [].
+
+%% Does the expression contain a command-builder call? The builders are the only
+%% functions that produce `{arizona_effect, _}` tuples, so a call to one anywhere
+%% in an attribute value is proof the value is a command and not app data. The
+%% converse is settled at render time (see the dynamic-attr clause of
+%% `compile_attr`), never guessed from shape.
+has_builder_call({call, _, {remote, _, {atom, _, Mod}, _}, _}) when
+    Mod =:= arizona_js; Mod =:= arizona_android; Mod =:= arizona_os
+->
+    true;
+has_builder_call(Tuple) when is_tuple(Tuple) ->
+    has_builder_call(tuple_to_list(Tuple));
+has_builder_call([Head | Tail]) ->
+    has_builder_call(Head) orelse has_builder_call(Tail);
+has_builder_call(_Other) ->
+    false.
+
+%% The two recording levels for the declared `az-*` set, called from
+%% `compile_attr`, the single point every attribute name resolves through.
+%%
+%% `record_az_attr` records a name proven to carry commands, so the client
+%% delegates its DOM event type. `record_directive_attr` records nothing but
+%% `az-prevent-default`: a command needs a value, so the bare, boolean, and
+%% static-value forms are data or directives, and the only directive whose
+%% presence the client reads out of the declared set rather than off the element
+%% is `az-prevent-default` -- passive is fixed at listener registration, before
+%% any element exists to look at, and a name left out of the set silently
+%% disarms the `preventDefault` it asked for.
+record_directive_attr(~"az-prevent-default" = NameBin) ->
+    record_az_attr(NameBin);
+record_directive_attr(NameBin) ->
+    NameBin.
+
+record_az_attr(<<"az-", _/binary>> = NameBin) ->
+    put(?AZ_ATTRS_KEY, [
+        NameBin
+        | case get(?AZ_ATTRS_KEY) of
+            undefined -> [];
+            L -> L
+        end
+    ]),
+    NameBin;
+record_az_attr(NameBin) ->
+    NameBin.
 
 insert_suppression_attrs(Forms, Pairs) ->
     {Before, [ModAttr | After]} = lists:splitwith(
@@ -2307,7 +2420,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = extract_binary_value(Bin),
+    NameBin = record_directive_attr(extract_binary_value(Bin)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
@@ -2317,7 +2430,7 @@ compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, ElemLine) 
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
     Backend = State0#state.backend,
-    NameBin = extract_attr_name(Backend, NameAST),
+    NameBin = record_directive_attr(extract_attr_name(Backend, NameAST)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
@@ -2326,14 +2439,39 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     NameBin = extract_attr_name(Backend, NameAST),
     case is_static_binary(ValueAST) of
         true ->
+            %% A static binary value is DATA by construction: an effect is always a
+            %% call, never a literal. Deliberately not recorded -- recording it would
+            %% delegate the event type and then hand the app's own data to the command
+            %% interpreter (`{az_select, ~"[1,2,3]"}` parses as opcode 1 with selector
+            %% 2 and throws out of a document listener on every dispatch).
+            %%
+            %% `az-prevent-default` is the exception, because it is a DIRECTIVE whose
+            %% value the client ignores (it tests `hasAttribute`). Written with a value
+            %% it is still a declaration, and leaving it out of the set makes the
+            %% client register wheel/touch listeners passive, silently disarming the
+            %% `preventDefault` the attribute asked for.
+            _ = record_directive_attr(NameBin),
             ValBin = extract_binary_value(ValueAST),
             buf_append(State0, emit_backend(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
         false ->
+            %% A dynamic value is recorded only on EVIDENCE that it carries
+            %% commands: a builder call somewhere in the expression. An opaque
+            %% dynamic (`{az_select, ?get(ids)}`) is indistinguishable from app
+            %% data here, and recording it would delegate the event type and hand
+            %% that data to the command interpreter -- so it is settled at render
+            %% time instead, where the evaluated value's type is proof
+            %% (arizona_event_attrs observes the `{arizona_effect, _}`
+            %% classification and the socket ships the name on that frame).
+            _ =
+                case has_builder_call(ValueAST) of
+                    true -> record_az_attr(NameBin);
+                    false -> record_directive_attr(NameBin)
+                end,
             compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = Backend:name(Name),
+    NameBin = record_directive_attr(Backend:name(Name)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
@@ -3276,7 +3414,8 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
         {map_field_assoc, Line, {atom, Line, d}, DFunAST},
         {map_field_assoc, Line, {atom, Line, f}, FpAST}
     ],
-    TmplAST = {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)},
+    TmplAST =
+        {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)},
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, TmplAST
     ]}.
@@ -3356,7 +3495,7 @@ try_fold_arizona_js(ExprAST) ->
 %% `try_fold_arizona_js/1` catches it. Add new platform builder modules here.
 eval_arizona_js_expr(
     {call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, ArgsAST}
-) when Mod =:= arizona_js orelse Mod =:= arizona_android ->
+) when Mod =:= arizona_js orelse Mod =:= arizona_android orelse Mod =:= arizona_os ->
     Args = [erl_syntax:concrete(A) || A <- ArgsAST],
     apply(Mod, Fn, Args);
 eval_arizona_js_expr({nil, _}) ->

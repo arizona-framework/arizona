@@ -48,7 +48,7 @@
     "check:js": "biome check",
     "fix:js": "biome check --write",
     "format:js": "biome format --write",
-    "check:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
+    "check:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\" \"#test-results\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
     "fix:md": "markdownlint-cli2 --fix \"**/*.md\" \"#node_modules\" \"#_build\" \"#_checkouts\" \"#doc\" \"#.claude\" \"#CLAUDE.md\" \"#AGENTS.md\"",
     "check:yaml": "uvx yamllint .",
     "check:actions": "actionlint",

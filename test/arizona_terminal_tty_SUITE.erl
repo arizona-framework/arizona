@@ -107,11 +107,11 @@ serve_loops_through_multiple_keys(Config) when is_list(Config) ->
     ?assertNot(is_process_alive(ViewPid)).
 
 %% A push (timer tick / broadcast) repaints and continues the loop; a following eof ends
-%% it. Exercises the {arizona_push, _, _, _} continue branch.
+%% it. Exercises the {arizona_push, _, _, _, _} continue branch.
 serve_handles_push_then_eof(Config) when is_list(Config) ->
     #{session := Session, view := ViewPid, reader := Reader, vmon := VMon, rmon := RMon} =
         serve_fixture(),
-    self() ! {arizona_push, ~"term_demo", [], [arizona_term_demo_effects:log(~"tick")]},
+    self() ! {arizona_push, ~"term_demo", [], [arizona_term_demo_effects:log(~"tick")], {[], []}},
     self() ! {term_input, eof},
     ok = arizona_terminal_tty:serve(Session, Reader),
     ?assert(down_within(VMon, ViewPid)),
@@ -123,7 +123,7 @@ serve_handles_push_then_eof(Config) when is_list(Config) ->
 serve_quits_on_push_quit_effect(Config) when is_list(Config) ->
     #{session := Session, view := ViewPid, reader := Reader, vmon := VMon, rmon := RMon} =
         serve_fixture(),
-    self() ! {arizona_push, ~"term_demo", [], [arizona_term_demo_effects:quit()]},
+    self() ! {arizona_push, ~"term_demo", [], [arizona_term_demo_effects:quit()], {[], []}},
     ok = arizona_terminal_tty:serve(Session, Reader),
     ?assert(down_within(VMon, ViewPid)),
     ?assert(down_within(RMon, Reader)).

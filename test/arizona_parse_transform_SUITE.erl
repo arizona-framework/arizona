@@ -395,6 +395,11 @@
 -export([scope_keeps_static_marker_text_in_each_item/1]).
 -export([scope_slot_keeps_static_marker_text/1]).
 -export([scope_repeated_stateless_keeps_static_marker_text/1]).
+-export([az_attrs_records_command_names/1]).
+-export([az_attrs_skips_unproven_values/1]).
+-export([az_attrs_keeps_prevent_default_with_a_value/1]).
+-export([az_attrs_skips_injected_az_view/1]).
+-export([az_attrs_records_component_modules/1]).
 
 all() ->
     [
@@ -416,7 +421,8 @@ all() ->
         {group, terminal},
         {group, az_macros},
         {group, az_view},
-        {group, az_scoping}
+        {group, az_scoping},
+        {group, az_attrs}
     ].
 
 groups() ->
@@ -867,6 +873,13 @@ groups() ->
             scope_keeps_static_marker_text_in_each_item,
             scope_slot_keeps_static_marker_text,
             scope_repeated_stateless_keeps_static_marker_text
+        ]},
+        {az_attrs, [parallel], [
+            az_attrs_records_command_names,
+            az_attrs_skips_unproven_values,
+            az_attrs_keeps_prevent_default_with_a_value,
+            az_attrs_skips_injected_az_view,
+            az_attrs_records_component_modules
         ]}
     ].
 
@@ -8658,4 +8671,136 @@ compute_changed(OldBindings, NewBindings) ->
             end
         end,
         NewBindings
+    ).
+
+%% ============================================================================
+%% az_attrs -- the `az-*` names shipped to the client
+%% ============================================================================
+
+%% A dynamic value is recorded when a builder call is visible anywhere in the
+%% expression -- literal args, dynamic args, a list of commands, a branch of a
+%% conditional -- because the builders are the only producers of effect tuples,
+%% so the call is proof the value is a command.
+az_attrs_records_command_names(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_cmd). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ["
+        "            {az_click, arizona_js:push_event(<<\"c\">>)},"
+        "            {<<\"az-sl-change\">>, arizona_js:push_event(az:get(ev, Bindings))},"
+        "            {az_dblclick,"
+        "                [arizona_js:push_event(<<\"d\">>), arizona_js:toggle(<<\"#m\">>)]},"
+        "            {az_mouseenter, case az:get(os, Bindings) of"
+        "                true -> arizona_os:focus();"
+        "                false -> arizona_android:push_event(<<\"m\">>)"
+        "            end},"
+        "            'az-prevent-default'"
+        "        ], [<<\"x\">>]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        [
+            <<"az-click">>,
+            <<"az-dblclick">>,
+            <<"az-mouseenter">>,
+            <<"az-prevent-default">>,
+            <<"az-sl-change">>
+        ],
+        az_attrs_of(Mod)
+    ).
+
+%% Everything a command cannot be is skipped: a static binary is app data (an
+%% effect is always a call, never a literal), a bare or boolean attribute has no
+%% value to hold a command, and an opaque dynamic with no builder call in sight
+%% is indistinguishable from app data -- recording it would delegate the event
+%% type and hand `[1,2,3]` to the command interpreter. Opaque dynamics that DO
+%% evaluate to commands are observed at render time instead
+%% (arizona_event_attrs), never guessed here.
+az_attrs_skips_unproven_values(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_data). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ["
+        "            {az_select, <<\"[1,2,3]\">>},"
+        "            {az_meta, az:get(ids, Bindings)},"
+        "            az_expanded,"
+        "            {az_open, true},"
+        "            {az_click, arizona_js:push_event(<<\"c\">>)}"
+        "        ], [<<\"x\">>]}"
+        "    ). "
+    ),
+    ?assertEqual([<<"az-click">>], az_attrs_of(Mod)).
+
+%% ...except `az-prevent-default`, a directive whose value the client ignores. Left
+%% out of the set, the client registers wheel/touch listeners passive and silently
+%% disarms the `preventDefault` the attribute asked for -- so it is recorded in
+%% every form, dynamic value included.
+az_attrs_keeps_prevent_default_with_a_value(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_pd). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ["
+        "            {az_prevent_default, <<\"true\">>},"
+        "            {az_wheel, arizona_js:push_event(<<\"w\">>)}"
+        "        ], [<<\"x\">>]}"
+        "    ). "
+    ),
+    ?assertEqual([<<"az-prevent-default">>, <<"az-wheel">>], az_attrs_of(Mod)),
+    DynMod = compile_module(
+        "-module(pt_az_pd_dyn). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{az_prevent_default, az:get(pd, Bindings)}], [<<\"x\">>]}"
+        "    ). "
+    ),
+    ?assertEqual([<<"az-prevent-default">>], az_attrs_of(DynMod)).
+
+%% The injected `az-view` marker lands in the DOM but not in the declared set:
+%% it is framework plumbing, not an event type, and it would ride every connect
+%% frame of every app as noise.
+az_attrs_skips_injected_az_view(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_view_unrecorded). "
+        "-behaviour(arizona_stateful). "
+        "-export([mount/1, render/1]). "
+        "mount(B) -> {B, #{}}. "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [{id, az:get(id, Bindings)}], [<<\"hi\">>]}"
+        "    ). "
+    ),
+    T = Mod:render(#{id => <<"v">>}),
+    StaticsBin = iolist_to_binary(maps:get(s, T)),
+    ?assertNotEqual(nomatch, binary:match(StaticsBin, <<"az-view">>)),
+    ?assertEqual([], az_attrs_of(Mod)).
+
+az_attrs_of(Mod) ->
+    proplists:get_value(arizona_az_attrs, Mod:module_info(attributes), []).
+
+%% The component graph is visible only at compile time: `?stateful`/`?stateless`
+%% pass the module as DATA, so it never becomes a call and does not survive into the
+%% beam. Recording it is what lets `arizona_event_attrs:all/1` walk from a route's
+%% handler to every component the page can render.
+az_attrs_records_component_modules(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_deps). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [], ["
+        "            arizona_template:stateless(other_component, row, #{}),"
+        "            arizona_template:stateful(child_view, #{})"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        [child_view, other_component],
+        proplists:get_value(arizona_az_deps, Mod:module_info(attributes), [])
     ).
