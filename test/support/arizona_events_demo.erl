@@ -35,7 +35,7 @@ render(Bindings) ->
             %% App data whose name collides with a real DOM event. The transform
             %% records only names that can carry a command, so `select` is never
             %% delegated and this value never reaches the command interpreter.
-            {'p', [{id, ~"data"}, {az_select, ~"[1,2,3]"}], [~"data"]},
+            {p, [{id, ~"data"}, {az_select, ~"[1,2,3]"}], [~"data"]},
             {p, [{id, ~"toggles"}], [integer_to_binary(?get(toggles))]}
         ]}
     ).
