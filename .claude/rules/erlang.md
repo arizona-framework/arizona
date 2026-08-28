@@ -92,6 +92,10 @@ descriptor). Either one in a template is a compile error (`reserved_attr`), in a
 (`{az, V}`, bare `az`, `<<"az">>`, `az_local`). `az-view` has its own rule -- injected on a
 live root, rejected elsewhere. Everything else `az-*` is the template author's: `az_key`
 keys stream items, `az_click`/`az_submit`/... carry effects, and an app may invent its own.
+An event attribute may name **any** DOM event -- the suffix becomes the
+`addEventListener` type verbatim, so `az_toggle`, `az_close` and a custom element's
+`az_sl_change` all bind, including events that do not bubble (see
+[js.md](js.md) for how they are delivered).
 
 ## Route options
 

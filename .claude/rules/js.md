@@ -25,6 +25,54 @@ Exports (the full list, alphabetical as in the module): `applyEffects`, `applyOp
 - `requestPip(viewId, opts?)` / `exitPip(viewId)` -- pop a view out into a document-picture-in-picture window / close it.
 - `saveFormState()` / `restoreFormState()` -- snapshot and re-apply typed form fields around a resync that rebuilds the DOM (an abnormal close, a bfcache round-trip).
 
+## Event delegation (`az-<event>`)
+
+An `az-<event>` attribute binds `addEventListener(<event>)` for **any** DOM event type. The
+attribute suffix is the listener type verbatim -- no mapping table, no supported-event list -- so a
+custom element's own vocabulary works with nothing registered anywhere:
+`{az_sl_change, arizona_js:push_event(~"picked")}` renders `az-sl-change` and binds `sl-change`.
+(An atom attribute translates `_` to `-`, so an event name that genuinely contains an underscore
+needs the binary form, `{~"az-my_event", ...}`.)
+
+**Types are discovered from the markup, not declared.** `scanEvents` walks freshly-inserted markup
+for `az-*` attributes and delegates any type not already bound. It shares `mountHooks`' call sites
+deliberately: those are exactly the points where new markup enters the DOM (SSR hydration,
+`OP_TEXT`, `OP_INSERT`, `OP_REPLACE`, a list insert), plus the exported entry point a host app
+calls for markup it inserted itself. Binding is monotonic for the page, and the common types
+(`click`, `change`, `input`, `keydown`, `keyup`, `focusin`, `focusout`) are seeded eagerly so the
+usual path never waits on a scan. Measured cost: 0.372 ms for a 500-item list re-render (5000
+elements) against 0.005 ms for the hook early-out it precedes -- acceptable because a typical patch
+touches a handful of elements, and the reason this stays a plain `TreeWalker` rather than an index.
+
+**Two listeners per type, split on the event's own `bubbles` flag**, because one phase cannot serve
+both kinds:
+
+- **Bubbling** events take the bubble phase and resolve with `closest()`, so an ancestor that opted
+  in handles a descendant's event and an inner `stopPropagation()` still suppresses it.
+- **Non-bubbling** events (`toggle`, `beforetoggle`, `close`, `cancel`, `scroll`, `scrollend`,
+  `play`, `load`, `error`, `invalid`, ...) are reachable **only** in the capture phase, since they
+  never reach the document by bubbling. They resolve by **exact target**, not `closest()`: an event
+  with no propagation path has no ancestor to delegate to, so matching one would run a command for
+  an event that never reached it. That is also why `mouseenter`/`mouseleave` -- which the platform
+  dispatches separately to each nesting level -- fire once rather than once per level.
+
+`e.target` is not always an Element: a viewport `scroll`, the page-level `mouseenter`, and a
+server-sent `dispatch_event` all target the Document, which has no `closest`. The handler guards on
+`nodeType` before resolving.
+
+`{passive: false}` is explicit. Chrome makes a document-level `wheel`, `mousewheel`, `touchstart`
+and `touchmove` listener passive **by default**, which would silently turn `az-prevent-default`
+into a no-op on exactly those four. Because types are discovered rather than assumed, a
+scroll-blocking listener exists only when an app actually declares one.
+
+**`submit` and `drop` are deliberately not delegated generically.** They name real DOM events *and*
+have dedicated listeners (submit flushes pending debounced/throttled inputs, honors
+`az-form-reset`, and defers the reset to a `fetch` response; drop carries the drag bookkeeping), so
+delegating them as well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the
+`az-*` names that are directives rather than events (`az-key`, `az-hook`, `az-target`, ...). Only a
+future directive named after a real DOM event needs adding there -- the rest name no event at all,
+so a missing one would merely register a listener that never fires.
+
 ## Client-owned slots (`?local`)
 
 `?local(Key, Init)` renders once at SSR and is then owned by the browser -- the server never diffs it and never reads it back. The client side is three functions:

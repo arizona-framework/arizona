@@ -80,6 +80,8 @@ go through the host-neutral `arizona_os` seam; the reference shell is `clients/t
 
 Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?native` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders.
 
+**Any DOM event works.** `az-<event>` binds `addEventListener(<event>)` with the attribute suffix used verbatim as the listener type, so there is no supported-event list: `az_toggle` on a `<dialog popover>`, `az_close` on a `<dialog>`, `az_error` on an `<img>`, and a custom element's own `az_sl_change` all bind without registering anything. Non-bubbling events (`toggle`, `close`, `scroll`, `play`, `load`, ...) are delivered too, matched on the element that declares them rather than by ancestor lookup, since such an event has no propagation path. Types are discovered from the markup as it arrives, so an event that only a later patch introduces still binds. Mechanism, and why `submit`/`drop` keep dedicated listeners, in [.claude/rules/js.md](.claude/rules/js.md).
+
 ```erlang
 %% Template: event attribute
 {'button', [{az_click, arizona_js:push_event(~"inc")}], [<<"+">>]}
