@@ -181,7 +181,7 @@ parse_transform(Forms, _Options) ->
          || Form <- Forms
         ],
         WithSuppressions = inject_each_callback_suppressions(Transformed, Forms, FunDefs, Module),
-        WithEvents = inject_az_attrs(WithSuppressions),
+        WithEvents = inject_az_attrs(WithSuppressions, collect_component_mods(Forms)),
         erl_syntax:revert_forms(WithEvents)
     catch
         throw:{arizona_parse_error, Line, Reason} ->
@@ -296,24 +296,58 @@ each_callback_pair(_Callback, _Module) ->
 %% which is why this belongs at compile time: recovering them later means a regex
 %% over serialized HTML, which cannot tell an attribute NAME from `az-` text
 %% inside an attribute VALUE, and is wrong in both directions.
-inject_az_attrs(Forms) ->
-    case
-        lists:usort(
-            case erase(?AZ_ATTRS_KEY) of
-                undefined -> [];
-                L -> L
-            end
-        )
-    of
-        [] ->
+inject_az_attrs(Forms, Deps) ->
+    Names = lists:usort(
+        case erase(?AZ_ATTRS_KEY) of
+            undefined -> [];
+            L -> L
+        end
+    ),
+    case {Names, Deps} of
+        {[], []} ->
             Forms;
-        Names ->
+        _ ->
             {Before, [ModAttr | After]} = lists:splitwith(
                 fun(Form) -> not is_module_attr(Form) end, Forms
             ),
             Anno = element(2, ModAttr),
-            Before ++ [ModAttr, {attribute, Anno, arizona_az_attrs, Names} | After]
+            Attrs =
+                [{attribute, Anno, arizona_az_attrs, Names} || Names =/= []] ++
+                    [{attribute, Anno, arizona_az_deps, Deps} || Deps =/= []],
+            Before ++ [ModAttr | Attrs] ++ After
     end.
+
+%% The component modules this module renders, as literal atoms.
+%%
+%% `?stateful(Mod, _)` and `?stateless(Mod, Fun, _)` pass the module as DATA to
+%% `arizona_template`, never as a call, so it does not survive into the compiled
+%% artifact -- `beam_lib` imports for a module rendering two components report only
+%% `[arizona_template, erlang]`. Compile time is the only moment the graph is
+%% visible, which is why it is recorded here rather than recovered later.
+%%
+%% A module reached only through a variable (`?stateful(Mod, _)` with `Mod` bound at
+%% runtime) is not resolvable and is not recorded.
+collect_component_mods(Forms) ->
+    lists:usort(lists:flatten([component_mods(Form) || Form <- Forms])).
+
+component_mods({call, _, {remote, _, {atom, _, Mod}, {atom, _, Fun}}, Args}) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    component_mod_args(Fun, Args) ++ [component_mods(A) || A <- Args];
+component_mods(Tuple) when is_tuple(Tuple) ->
+    [component_mods(E) || E <- tuple_to_list(Tuple)];
+component_mods(List) when is_list(List) ->
+    [component_mods(E) || E <- List];
+component_mods(_Other) ->
+    [].
+
+%% `stateful(Mod, Props)` and `stateless(Mod, Fun, Props)` name the module first;
+%% `stateless(fun Mod:Fun/1, Props)` names it inside the fun reference. Every other
+%% shape resolves within this module, or not at all.
+component_mod_args(stateful, [{atom, _, Mod} | _]) -> [Mod];
+component_mod_args(stateless, [{atom, _, Mod}, {atom, _, _Fun} | _]) -> [Mod];
+component_mod_args(stateless, [{'fun', _, {function, {atom, _, Mod}, _, _}} | _]) -> [Mod];
+component_mod_args(_Fun, _Args) -> [].
 
 %% Record one `az-*` attribute name, meaning "this name can carry a command, or is
 %% a bare directive the client must know about". Called from `compile_attr`, the

@@ -398,6 +398,7 @@
 -export([az_attrs_records_command_names/1]).
 -export([az_attrs_skips_static_data_values/1]).
 -export([az_attrs_keeps_prevent_default_with_a_value/1]).
+-export([az_attrs_records_component_modules/1]).
 
 all() ->
     [
@@ -875,7 +876,8 @@ groups() ->
         {az_attrs, [parallel], [
             az_attrs_records_command_names,
             az_attrs_skips_static_data_values,
-            az_attrs_keeps_prevent_default_with_a_value
+            az_attrs_keeps_prevent_default_with_a_value,
+            az_attrs_records_component_modules
         ]}
     ].
 
@@ -8730,3 +8732,24 @@ az_attrs_keeps_prevent_default_with_a_value(Config) when is_list(Config) ->
 
 az_attrs_of(Mod) ->
     proplists:get_value(arizona_az_attrs, Mod:module_info(attributes), []).
+
+%% The component graph is visible only at compile time: `?stateful`/`?stateless`
+%% pass the module as DATA, so it never becomes a call and does not survive into the
+%% beam. Recording it is what lets the runtime reach a component in an application
+%% the module scan cannot see.
+az_attrs_records_component_modules(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_deps). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [], ["
+        "            arizona_template:stateless(other_component, row, #{}),"
+        "            arizona_template:stateful(child_view, #{})"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        [child_view, other_component],
+        proplists:get_value(arizona_az_deps, Mod:module_info(attributes), [])
+    ).

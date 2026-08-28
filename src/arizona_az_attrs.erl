@@ -63,35 +63,49 @@ flush() ->
 %% Internal
 %% --------------------------------------------------------------------
 
-%% Only applications that list `arizona` as a dependency can hold templates, so
-%% scanning the rest (OTP's own, the deps of deps) would be thousands of modules
-%% for nothing. Arizona itself is included: its test fixtures carry templates.
-%% Force the handler in before scanning: `beam_lib` answers for anything listed in
+%% Force the handler in before walking: `beam_lib` answers for anything listed in
 %% an `.app` whether loaded or not, but a module outside one is invisible until it
-%% loads, and the handler is exactly such a module in a test fixture tree.
+%% loads, and the handler is exactly such a module in a fixture tree.
 rescan(Seen, Handler) ->
     _ = code:ensure_loaded(Handler),
-    {Examined, Names} = scan(),
-    %% Every module the scan looked at is now accounted for, not just this handler.
-    %% One cold connect therefore covers every route in the app: a later handler is
-    %% already in the set and reads the cache, instead of each route paying its own
-    %% ~5 ms rescan on its first visit.
+    {Examined, Names} = scan(Handler),
+    %% Every module the walk and the scan looked at is now accounted for, not just
+    %% this handler: one cold connect therefore covers every route in the app.
     persistent_term:put(?CACHE_KEY, {maps:merge(Seen, Examined#{Handler => true}), Names}),
     Names.
 
-scan() ->
+%% Walk the component graph from the handler, then fall back to an application
+%% scan for anything the graph cannot reach.
+%%
+%% The graph is exact: `?stateful(Mod, _)` / `?stateless(Mod, Fun, _)` name their
+%% module as a literal, so the transform records it (`arizona_az_deps`) and this
+%% walk visits precisely the modules a page can render. The scan is a heuristic --
+%% it guesses which applications might hold templates -- and exists only for a
+%% module reached through a runtime-bound module name, which the transform cannot
+%% resolve and therefore does not record.
+scan(Handler) ->
+    {GraphMods, GraphNames} = walk(#{}, [Handler], []),
+    {AppMods, AppNames} = scan_apps(),
+    {maps:merge(AppMods, GraphMods), lists:usort(GraphNames ++ AppNames)}.
+
+walk(Seen, [], Acc) ->
+    {Seen, Acc};
+walk(Seen, [Mod | Rest], Acc) when is_map_key(Mod, Seen) ->
+    walk(Seen, Rest, Acc);
+walk(Seen, [Mod | Rest], Acc) ->
+    _ = code:ensure_loaded(Mod),
+    Attrs = module_attrs(Mod),
+    Names = proplists:get_value(arizona_az_attrs, Attrs, []),
+    Deps = proplists:get_value(arizona_az_deps, Attrs, []),
+    walk(Seen#{Mod => true}, Deps ++ Rest, Names ++ Acc).
+
+scan_apps() ->
     Apps = [App || {App, _, _} <- application:loaded_applications(), depends_on_arizona(App)],
     AppMods = [Mod || App <- Apps, Mod <- app_modules(App)],
     FromApps = [Name || Mod <- AppMods, Name <- beam_az_attrs(Mod)],
-    %% Anything already loaded but absent from an `.app` modules list -- a module
-    %% compiled at runtime, a test fixture -- would be missed by the pass above,
-    %% and missing one silently kills every event it declares. `module_info/1`
-    %% reads memory rather than a file, so this second pass is cheap (measured
-    %% ~0.9 ms over 110 modules against ~4.7 ms for the beam pass).
     LoadedMods = [Mod || {Mod, _} <- code:all_loaded()],
     FromLoaded = [Name || Mod <- LoadedMods, Name <- loaded_az_attrs(Mod)],
-    Examined = maps:from_keys(AppMods ++ LoadedMods, true),
-    {Examined, lists:usort(FromApps ++ FromLoaded)}.
+    {maps:from_keys(AppMods ++ LoadedMods, true), lists:usort(FromApps ++ FromLoaded)}.
 
 depends_on_arizona(arizona) ->
     true;
@@ -107,21 +121,30 @@ app_modules(App) ->
         undefined -> []
     end.
 
-%% `beam_lib` rather than `Mod:module_info/1`: reading the chunk does not load the
-%% module, and an unvisited route's view is typically not loaded at boot.
-beam_az_attrs(Mod) ->
+%% Prefer the loaded module (the walk just ensured it), falling back to the beam so
+%% a dependency that is on disk but not yet loaded still answers.
+module_attrs(Mod) ->
+    try
+        Mod:module_info(attributes)
+    catch
+        error:undef -> beam_attrs(Mod)
+    end.
+
+beam_attrs(Mod) ->
     case code:which(Mod) of
         Beam when is_list(Beam) ->
             case beam_lib:chunks(Beam, [attributes]) of
-                {ok, {_Mod, [{attributes, Attrs}]}} ->
-                    proplists:get_value(arizona_az_attrs, Attrs, []);
-                _NotReadable ->
-                    []
+                {ok, {_Mod, [{attributes, Attrs}]}} -> Attrs;
+                _NotReadable -> []
             end;
         _NonFile ->
-            %% Cover-compiled or loaded from memory: the loaded pass answers for it.
             []
     end.
+
+%% `beam_lib` rather than `Mod:module_info/1`: reading the chunk does not load the
+%% module, and an unvisited route's view is typically not loaded at boot.
+beam_az_attrs(Mod) ->
+    proplists:get_value(arizona_az_attrs, beam_attrs(Mod), []).
 
 loaded_az_attrs(Mod) ->
     try
