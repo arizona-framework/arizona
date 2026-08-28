@@ -138,8 +138,10 @@ render(Bindings) ->
     diff => false,
     backend => module(),
     %% The `az-*` attribute names this template declares, recorded by the parse
-    %% transform so the client can delegate exactly those DOM event types.
-    az_names => [binary()]
+    %% transform so the client can delegate exactly those DOM event types. Short
+    %% like `s`/`d`/`f`/`t` and identical to its wire key, because unlike `backend`
+    %% or `diff` it is sent to the client rather than kept server-side.
+    a => [binary()]
 }.
 
 -nominal each_template() :: #{
@@ -165,7 +167,7 @@ render(Bindings) ->
     diff => false,
     view_id => binary(),
     backend => module(),
-    az_names => [binary()]
+    a => [binary()]
 }.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
@@ -606,7 +608,7 @@ mark_esc(V0) ->
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`
 (fingerprint), the optional `diff => false` flag, the render `backend`, and the
-`az_names` this template declares.
+`a` names this template declares.
 
 Used by both the render path (`arizona_render`) and the diff path
 (`arizona_diff`), so a diffed snapshot carries the same backend as a freshly
@@ -631,7 +633,7 @@ maybe_propagate(Tmpl, Snap) ->
     %% The client binds a DOM event type only for a name it has been told about, so
     %% the names have to reach the payload that renders the markup declaring them.
     case Tmpl of
-        #{az_names := Names} -> Snap3#{az_names => Names};
+        #{a := Names} -> Snap3#{a => Names};
         #{} -> Snap3
     end.
 
