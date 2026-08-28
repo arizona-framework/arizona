@@ -297,7 +297,14 @@ each_callback_pair(_Callback, _Module) ->
 %% over serialized HTML, which cannot tell an attribute NAME from `az-` text
 %% inside an attribute VALUE, and is wrong in both directions.
 inject_az_attrs(Forms) ->
-    case lists:usort(case erase(?AZ_ATTRS_KEY) of undefined -> []; L -> L end) of
+    case
+        lists:usort(
+            case erase(?AZ_ATTRS_KEY) of
+                undefined -> [];
+                L -> L
+            end
+        )
+    of
         [] ->
             Forms;
         Names ->
@@ -316,7 +323,13 @@ inject_az_attrs(Forms) ->
 %% that way and the client's passive decision depends on it. The one form NOT
 %% recorded is a static binary value, which is app data (see the clause there).
 record_az_attr(<<"az-", _/binary>> = NameBin) ->
-    put(?AZ_ATTRS_KEY, [NameBin | case get(?AZ_ATTRS_KEY) of undefined -> []; L -> L end]),
+    put(?AZ_ATTRS_KEY, [
+        NameBin
+        | case get(?AZ_ATTRS_KEY) of
+            undefined -> [];
+            L -> L
+        end
+    ]),
     NameBin;
 record_az_attr(NameBin) ->
     NameBin.
