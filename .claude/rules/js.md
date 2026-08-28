@@ -25,6 +25,96 @@ Exports (the full list, alphabetical as in the module): `applyEffects`, `applyOp
 - `requestPip(viewId, opts?)` / `exitPip(viewId)` -- pop a view out into a document-picture-in-picture window / close it.
 - `saveFormState()` / `restoreFormState()` -- snapshot and re-apply typed form fields around a resync that rebuilds the DOM (an abnormal close, a bfcache round-trip).
 
+## Event delegation (`az-<event>`)
+
+An `az-<event>` attribute binds `addEventListener(<event>)` for **any** element event. The suffix is
+the listener type verbatim -- no mapping table -- so a custom element's own vocabulary works with
+nothing registered anywhere: `{az_sl_change, arizona_js:push_event(~"picked")}` renders
+`az-sl-change` and binds `sl-change`. (An atom attribute translates `_` to `-`, so an event name
+that genuinely contains an underscore needs the binary form, `{~"az-my_event", ...}`. The name must
+be lowercase: the HTML parser lowercases attribute names, so `az-slChange` binds a `slchange` that
+never fires -- which is what custom elements use kebab-case for anyway.)
+
+**The set of types comes from the compiler, not from the rendered bytes.** `compile_attr` in the
+parse transform resolves every `az-*` name to a literal, records it, and `inject_az_attrs/1` emits
+it as an `arizona_az_attrs` module attribute. `arizona_az_attrs:all/1` unions those across the
+loaded applications that depend on Arizona and the socket ships the set on the connect frame, under
+JSON key `"a"`, alongside `"o"`/`"e"`. The worker relays it as field 4 of
+`postMessage([0, ops, effects, firstAfterReconnect, azNames])`; the main thread decides which names
+are events.
+
+Deriving it at runtime instead was tried and abandoned. A regex over serialized HTML cannot tell an
+attribute NAME from `az-` text inside an attribute VALUE, so user content echoed into a `title`
+could register document listeners and disable the page's scroll fast path; and it truncated on a
+`>` inside an attribute value, silently dropping real events. Both failure modes are structural,
+not bugs to patch: the information exists exactly at compile time and nowhere else after.
+
+**A static attribute value is data, and is deliberately not recorded.** An effect is always a call,
+never a literal, so `compile_attr`'s `is_static_binary(ValueAST)` branch is app data by
+construction. `{az_select, ~"[1,2,3]"}` therefore never enters the set, `select` is never delegated,
+and the value never reaches the command interpreter. That matters because a command list is a bare
+JSON array (`arizona_effect:encode/1` emits a single command unwrapped, `[0,"inc"]`), so `[1,2,3]`
+is a structurally valid command -- `toggle` with selector `2` -- and **no client-side inspection of
+the value can separate the two**. The discrimination is only possible at compile time.
+
+**Two listeners per type, split on the event's own `bubbles` flag**, because one phase cannot serve
+both kinds:
+
+- **Bubbling** events take the bubble phase and resolve with `closest()`, so an ancestor that opted
+  in handles a descendant's event and an inner `stopPropagation()` still suppresses it.
+- **Non-bubbling** events (`toggle`, `beforetoggle`, `close`, `cancel`, `scroll`, `scrollend`,
+  `play`, `load`, `error`, `invalid`, ...) are reachable **only** in the capture phase. They resolve
+  by **exact target**, not `closest()`: an event with no propagation path has no ancestor to
+  delegate to, so matching one would run a command for an event that never reached it. That is also
+  why `mouseenter`/`mouseleave` -- which the platform dispatches separately to each nesting level --
+  fire once rather than once per level.
+
+Capture is skipped for types in `NATIVELY_BUBBLING`. Registering it for a type the platform always
+bubbles would change what the pre-existing types respond to (a shim's `new Event('change')` defaults
+to `bubbles: false` and would start round-tripping on views that opted into nothing), and on
+`wheel`/`touchmove` it would put a listener that can never do work in front of every scroll frame.
+
+`e.target` is not always an Element -- a viewport `scroll`, the page-level `mouseenter`, and a
+server-sent `dispatch_event` all target the Document -- so the handler guards on `nodeType` before
+resolving. The attribute name and its `CSS.escape`d selector are built once per type at bind time,
+not per dispatch (`CSS.escape` because the parser keeps `.` and `:` in an attribute name, so
+`az-turbo:load` would otherwise be an invalid selector and throw on every dispatch).
+
+**Passive is decided once, at bind time.** Chrome makes a document-level `wheel`, `mousewheel`,
+`touchstart` or `touchmove` listener passive **by default**, so opting out is the only way
+`az-prevent-default` works on them -- but opting out unconditionally disables the browser's scroll
+fast path for the whole page, so an app that only wants to *observe* wheel events would pay scroll
+jank it never asked for. Because `az-prevent-default` is in the compile-time set, its presence is
+known before the first listener is registered and the right value is used the first time. The flag
+must be **stated in both directions**: omitting it entirely makes Chromium register `passive: true`
+anyway (verified against Chromium's own `DOMDebugger.getEventListeners`).
+
+**`submit` and `drop` are deliberately not delegated generically.** They name real DOM events *and*
+have dedicated listeners (submit flushes pending debounced inputs, honors `az-form-reset`, and
+defers the reset to a `fetch` response; drop carries the drag bookkeeping), so delegating them as
+well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-*` names that are
+directives rather than events.
+
+**Three cases the compile-time set cannot cover, and how each is handled:**
+
+- **A runtime attribute write** (`arizona_js:set_attr(sel, "az-toggle", ...)`) uses a name no
+  template contains. Every such write funnels through `applySetAttrOp`, which records the name it
+  just wrote.
+- **`?raw` markup and host-inserted DOM** declare nothing the compiler saw. Call the exported
+  `mountHooks` on it, the same contract hooks already have; it walks with `getAttributeNames()`,
+  which is exact because the parser already did the parsing. Calling it on already-mounted markup is
+  safe (`mountHook` returns early for an element it already tracks).
+- **Window-targeted events** (`resize`, `online`/`offline`, `hashchange`, `popstate`, `storage`)
+  are not delegated at all: delegation binds on Documents, and their propagation path does not
+  include the Document. Use a hook.
+
+**Delegation is asymmetric, and the rule is the event's `bubbles` flag.** `az-click` on a parent
+catches every descendant's click; `az-load` or `az-toggle` on a parent never fires. Two consequences
+readers assume away: an app cannot `stopPropagation` a non-bubbling `az-*` command (the framework's
+capture listener runs at the document, before any listener on the target), and a `composed: false`
+custom-element event cannot be delegated **when it originates inside a shadow root** -- a
+shadow-less custom element is unaffected, since `composed` only matters at a boundary.
+
 ## Client-owned slots (`?local`)
 
 `?local(Key, Init)` renders once at SSR and is then owned by the browser -- the server never diffs it and never reads it back. The client side is three functions:
