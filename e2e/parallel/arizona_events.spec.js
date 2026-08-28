@@ -40,3 +40,75 @@ test('never delegates an az-* name that only carries app data', async ({ page })
     await page.waitForTimeout(150);
     expect(errors).toEqual([]);
 });
+
+// The /opaque-events view (test/support/arizona_opaque_events.erl) proves the
+// render-time path: its commands are opaque `?get` dynamics the transform cannot
+// record, so the names reach the client only as observations -- `az-mouseenter`
+// on the connect frame (proved by the connect mount's render), `az-dblclick` as
+// the delta on the frame whose branch first renders it.
+
+test('delivers an event proved only by the render, at connect', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto('/opaque-events');
+    await wsReady(page);
+    await expect(page.locator('#entered')).toHaveText('0');
+
+    // A real hover: mouseenter is not bootstrapped, so it fires only because the
+    // connect frame carried the render-observed name.
+    await page.hover('#enter');
+    await expect(page.locator('#entered')).toHaveText('1');
+    expect(errors).toEqual([]);
+});
+
+test('never delegates dynamic app data, even shaped like a command', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto('/opaque-events');
+    await wsReady(page);
+
+    // {az_select, ?get(ids)} renders az-select="[1,2,3]" -- app data the compile
+    // step cannot classify. The render proved it is NOT a command, so `select` is
+    // never delegated; were it, this dispatch would execute [1,2,3] (toggle,
+    // selector 2) and throw out of the document listener.
+    await page.evaluate(() =>
+        document.getElementById('data').dispatchEvent(new Event('select', { bubbles: true })),
+    );
+    await page.waitForTimeout(150);
+    expect(errors).toEqual([]);
+});
+
+test('delivers an event proved by a later frame, via its delta', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto('/opaque-events');
+    await wsReady(page);
+
+    // The branch declaring az-dblclick renders on the reveal reply; the same
+    // frame carries the name, so the type is bound before anything can fire it.
+    await page.click('#reveal');
+    await expect(page.locator('#late')).toBeVisible();
+    await page.dblclick('#late');
+    await expect(page.locator('#doubled')).toHaveText('1');
+    expect(errors).toEqual([]);
+});
+
+// The /dyn-page view (test/support/arizona_dyn_page.erl) is the documented
+// `?stateful(?get(page), ...)` idiom: the module is data, so the compile-time
+// walk cannot follow it -- instantiation observes it, and a swapped-in page's
+// names arrive on the swap's own reply.
+
+test('a runtime-bound page swap delivers the new page events', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto('/dyn-page');
+    await wsReady(page);
+
+    await page.click('#swap');
+    await expect(page.locator('#pb')).toHaveText('page b:0');
+    // pointerup is not bootstrapped; the tap counts only because the swap
+    // reply's delta carried page b's names.
+    await page.locator('#pb').dispatchEvent('pointerup', { bubbles: true });
+    await expect(page.locator('#pb')).toHaveText('page b:1');
+    expect(errors).toEqual([]);
+});

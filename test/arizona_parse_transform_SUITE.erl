@@ -8690,7 +8690,8 @@ az_attrs_records_command_names(Config) when is_list(Config) ->
         "        {'div', ["
         "            {az_click, arizona_js:push_event(<<\"c\">>)},"
         "            {<<\"az-sl-change\">>, arizona_js:push_event(az:get(ev, Bindings))},"
-        "            {az_dblclick, [arizona_js:push_event(<<\"d\">>), arizona_js:toggle(<<\"#m\">>)]},"
+        "            {az_dblclick,"
+        "                [arizona_js:push_event(<<\"d\">>), arizona_js:toggle(<<\"#m\">>)]},"
         "            {az_mouseenter, case az:get(os, Bindings) of"
         "                true -> arizona_os:focus();"
         "                false -> arizona_android:push_event(<<\"m\">>)"
@@ -8785,8 +8786,8 @@ az_attrs_of(Mod) ->
 
 %% The component graph is visible only at compile time: `?stateful`/`?stateless`
 %% pass the module as DATA, so it never becomes a call and does not survive into the
-%% beam. Recording it is what lets the runtime reach a component in an application
-%% the module scan cannot see.
+%% beam. Recording it is what lets `arizona_event_attrs:all/1` walk from a route's
+%% handler to every component the page can render.
 az_attrs_records_component_modules(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_az_deps). "

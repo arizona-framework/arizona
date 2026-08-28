@@ -445,4 +445,60 @@ describe('open event delegation', () => {
         expect(w.sent()).toEqual([['v', 'typed', { value: '' }]]);
         warn.mockRestore();
     });
+
+    it('contains a value that parses but crashes the interpreter', async () => {
+        const mod = await fresh();
+        // `[1,2,3]` is a structurally valid command list: opcode 1 (toggle) with
+        // selector 2 -- querySelectorAll('2') throws. Execution must be inside the
+        // containment, or every dispatch throws out of a document listener.
+        document.body.innerHTML = `<div id="v" az-view><img id="i" az-error="[1,2,3]" /></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-error']);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const i = document.getElementById('i');
+        expect(() => fire(i, 'error', false)).not.toThrow();
+        fire(i, 'error', false);
+        // Once per failure message, not per dispatch.
+        expect(warn.mock.calls.filter(([m]) => m.includes('az-error')).length).toBe(1);
+        warn.mockRestore();
+    });
+
+    it('prevents the default for an empty az-event value', async () => {
+        const mod = await fresh();
+        // `az-<event>=""` declares no command but still asks for suppression:
+        // the prevent-default check must run before the empty-value return.
+        document.body.innerHTML = `<div id="v" az-view><a id="l" href="#" az-click="" az-prevent-default>x</a></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-prevent-default']);
+
+        const ev = fire(document.getElementById('l'), 'click', true, true);
+        expect(ev.defaultPrevented).toBe(true);
+        expect(w.sent()).toEqual([]);
+    });
+
+    it('rebinds a forced-passive type when prevent-default arrives late', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view><div id="s" az-wheel='[0,"w"]'></div></div>`;
+        w = mockWorker(mod);
+        w.open();
+        const calls = recordListeners();
+        // Frame 1 declares only the wheel: bound passive (the scroll fast path).
+        w.names(['az-wheel']);
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([true]);
+        // Frame 2 (a delta, or a runtime attribute write) declares the directive:
+        // passive is fixed at registration, so the wheel listener must be
+        // re-registered non-passive -- or the page's preventDefault stays a no-op
+        // forever.
+        w.names(['az-prevent-default']);
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
+            true,
+            false,
+        ]);
+        // The old registration is gone: one dispatch runs the command once.
+        fire(document.getElementById('s'), 'wheel', true, true);
+        expect(w.sent()).toEqual([['v', 'w', {}]]);
+    });
 });

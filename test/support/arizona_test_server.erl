@@ -87,6 +87,21 @@ routes() ->
             bindings => #{title => <<"Events">>},
             layouts => Layouts
         }},
+        %% Render-time az-* delivery: opaque dynamic commands (observed at
+        %% mount / on a later frame's branch render) and a runtime-bound
+        %% ?stateful(?get(page), ...) child (module observed at instantiation).
+        {live, <<"/opaque-events">>, arizona_opaque_events, #{
+            bindings => #{title => <<"Opaque">>},
+            layouts => Layouts
+        }},
+        {live, <<"/dyn-page">>, arizona_dyn_page, #{layouts => Layouts}},
+        %% A layout-declared effect attribute: deliverable only through the
+        %% connect walk taking layout modules as roots (layouts render once,
+        %% at SSR -- no frame can carry their markup).
+        {live, <<"/layout-events">>, arizona_events_demo, #{
+            bindings => #{title => <<"LayoutEvents">>},
+            layouts => [{arizona_event_layout, render}]
+        }},
         {live, <<"/transitions">>, arizona_transitions, #{
             bindings => #{title => <<"Transitions">>},
             layouts => Layouts
