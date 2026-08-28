@@ -322,6 +322,14 @@ inject_az_attrs(Forms) ->
 %% The bare and boolean forms are recorded because `az-prevent-default` arrives
 %% that way and the client's passive decision depends on it. The one form NOT
 %% recorded is a static binary value, which is app data (see the clause there).
+%% `az-prevent-default` written WITH a value, which the static-value branch would
+%% otherwise drop as data. Narrow on purpose: it is the only directive whose presence
+%% the client reads out of the declared set rather than off the element.
+record_directive_attr(~"az-prevent-default" = NameBin) ->
+    record_az_attr(NameBin);
+record_directive_attr(NameBin) ->
+    NameBin.
+
 record_az_attr(<<"az-", _/binary>> = NameBin) ->
     put(?AZ_ATTRS_KEY, [
         NameBin
@@ -2385,6 +2393,13 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
             %% delegate the event type and then hand the app's own data to the command
             %% interpreter (`{az_select, ~"[1,2,3]"}` parses as opcode 1 with selector
             %% 2 and throws out of a document listener on every dispatch).
+            %%
+            %% `az-prevent-default` is the exception, because it is a DIRECTIVE whose
+            %% value the client ignores (it tests `hasAttribute`). Written with a value
+            %% it is still a declaration, and leaving it out of the set makes the
+            %% client register wheel/touch listeners passive, silently disarming the
+            %% `preventDefault` the attribute asked for.
+            _ = record_directive_attr(NameBin),
             ValBin = extract_binary_value(ValueAST),
             buf_append(State0, emit_backend(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
         false ->

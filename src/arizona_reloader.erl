@@ -391,6 +391,11 @@ collect_errors(Files) ->
 reload_module(Mod, File, Binary) ->
     code:purge(Mod),
     {module, Mod} = code:load_binary(Mod, File, Binary),
+    %% The recompiled module may declare `az-*` names the cached set does not have.
+    %% Without this, adding an `az_mouseenter` to the page you are editing leaves the
+    %% event silently dead until the node restarts -- the exact failure this whole
+    %% mechanism exists to remove, relocated into the dev loop.
+    ok = arizona_az_attrs:flush(),
     ok.
 
 get_compile_opts(Mod) ->

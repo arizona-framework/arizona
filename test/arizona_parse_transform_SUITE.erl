@@ -395,6 +395,9 @@
 -export([scope_keeps_static_marker_text_in_each_item/1]).
 -export([scope_slot_keeps_static_marker_text/1]).
 -export([scope_repeated_stateless_keeps_static_marker_text/1]).
+-export([az_attrs_records_command_names/1]).
+-export([az_attrs_skips_static_data_values/1]).
+-export([az_attrs_keeps_prevent_default_with_a_value/1]).
 
 all() ->
     [
@@ -416,7 +419,8 @@ all() ->
         {group, terminal},
         {group, az_macros},
         {group, az_view},
-        {group, az_scoping}
+        {group, az_scoping},
+        {group, az_attrs}
     ].
 
 groups() ->
@@ -867,6 +871,11 @@ groups() ->
             scope_keeps_static_marker_text_in_each_item,
             scope_slot_keeps_static_marker_text,
             scope_repeated_stateless_keeps_static_marker_text
+        ]},
+        {az_attrs, [parallel], [
+            az_attrs_records_command_names,
+            az_attrs_skips_static_data_values,
+            az_attrs_keeps_prevent_default_with_a_value
         ]}
     ].
 
@@ -8659,3 +8668,65 @@ compute_changed(OldBindings, NewBindings) ->
         end,
         NewBindings
     ).
+
+%% ============================================================================
+%% az_attrs -- the `az-*` names shipped to the client
+%% ============================================================================
+
+%% A name that can carry a command is recorded, in every attribute form.
+az_attrs_records_command_names(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_cmd). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ["
+        "            {az_click, arizona_js:push_event(<<\"c\">>)},"
+        "            {<<\"az-sl-change\">>, arizona_js:push_event(<<\"s\">>)},"
+        "            {az_keydown, arizona_template:get(handler, Bindings)},"
+        "            'az-prevent-default'"
+        "        ], [<<\"x\">>]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        [<<"az-click">>, <<"az-keydown">>, <<"az-prevent-default">>, <<"az-sl-change">>],
+        az_attrs_of(Mod)
+    ).
+
+%% A static VALUE is app data: an effect is always a call, never a literal. Recording
+%% it would delegate the type and then feed the app's own data to the command
+%% interpreter -- `[1,2,3]` is a structurally valid command (toggle, selector 2).
+az_attrs_skips_static_data_values(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_data). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ["
+        "            {az_select, <<\"[1,2,3]\">>},"
+        "            {az_note, <<\"plain data\">>},"
+        "            {az_click, arizona_js:push_event(<<\"c\">>)}"
+        "        ], [<<\"x\">>]}"
+        "    ). "
+    ),
+    ?assertEqual([<<"az-click">>], az_attrs_of(Mod)).
+
+%% ...except `az-prevent-default`, a directive whose value the client ignores. Left
+%% out of the set, the client registers wheel/touch listeners passive and silently
+%% disarms the `preventDefault` the attribute asked for.
+az_attrs_keeps_prevent_default_with_a_value(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_pd). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ["
+        "            {az_prevent_default, <<\"true\">>},"
+        "            {az_wheel, arizona_js:push_event(<<\"w\">>)}"
+        "        ], [<<\"x\">>]}"
+        "    ). "
+    ),
+    ?assertEqual([<<"az-prevent-default">>, <<"az-wheel">>], az_attrs_of(Mod)).
+
+az_attrs_of(Mod) ->
+    proplists:get_value(arizona_az_attrs, Mod:module_info(attributes), []).
