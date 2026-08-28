@@ -221,6 +221,26 @@ describe('arizona-worker', () => {
         expect(resolved[1]).toEqual([[0, 'v:0', '<b>x</b>', true]]);
     });
 
+    it('gives the reconnect flag to the frame that carries ops, not the first one', () => {
+        // the connect message's third element marks a reconnect (a bfcache restore)
+        slf.send([0, 'ws://host/ws?_az_path=%2F', true]);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // A reconnect opens with the declared az-* names and no ops. If that frame
+        // claimed the flag, the main thread would restore form state against a DOM
+        // the following OP_REPLACE discards, and `_savedForms.clear()` at the end of
+        // the restore means the user's typed input is gone rather than merely late.
+        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
+        const namesFrame = slf.posted.find((m) => m[0] === 0);
+        expect(namesFrame[1]).toBeNull();
+        expect(namesFrame[3]).toBe(false);
+
+        slf.posted.length = 0;
+        ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', 'hi']] }));
+        const opsFrame = slf.posted.find((m) => m[0] === 0);
+        expect(opsFrame[3]).toBe(true);
+    });
+
     it('send message [1, json] forwards to WebSocket when ready', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
