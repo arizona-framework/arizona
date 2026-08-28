@@ -5240,6 +5240,34 @@ describe('form submit', () => {
         ]);
     });
 
+    it('reports a checkbox/radio checked state and every selection of a multiple select', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<input id="box" type="checkbox" value="yes" az-change='[[0,"toggled"]]' checked />
+             <select id="langs" multiple az-change='[[0,"picked"]]'>
+                <option value="erl" selected>erl</option>
+                <option value="js" selected>js</option>
+                <option value="rs">rs</option>
+             </select>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const box = document.getElementById('box');
+        box.dispatchEvent(new Event('change', { bubbles: true }));
+        box.checked = false;
+        box.dispatchEvent(new Event('change', { bubbles: true }));
+        document.getElementById('langs').dispatchEvent(new Event('change', { bubbles: true }));
+
+        const sent = mock.getSentMessages();
+        // The value is the same string either way; only `checked` distinguishes them.
+        expect(sent).toContainEqual(['page', 'toggled', { value: 'yes', checked: true }]);
+        expect(sent).toContainEqual(['page', 'toggled', { value: 'yes', checked: false }]);
+        expect(sent).toContainEqual(['page', 'picked', { value: ['erl', 'js'] }]);
+    });
+
     it('submit without az-submit does nothing', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');

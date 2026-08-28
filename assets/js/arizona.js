@@ -1945,8 +1945,18 @@ function autoPayload(el, event) {
     const tag = el.tagName;
     if (tag === 'FORM')
         return formFields(new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)));
-    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA')
-        return { value: /** @type {any} */ (el).value || '' };
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+        const field = /** @type {any} */ (el);
+        // A checkbox/radio reports what it WOULD submit, which is the same string
+        // whether or not it is on, so its state has to ride alongside the value.
+        if (field.type === 'checkbox' || field.type === 'radio')
+            return { value: field.value || '', checked: field.checked };
+        // `HTMLSelectElement.value` is only the FIRST selected option, so a multiple
+        // select would report one of its values and silently drop the rest.
+        if (tag === 'SELECT' && field.multiple)
+            return { value: Array.from(field.selectedOptions, (o) => o.value) };
+        return { value: field.value || '' };
+    }
     return {};
 }
 
