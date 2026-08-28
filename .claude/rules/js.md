@@ -78,10 +78,19 @@ both kinds:
 server-sent `dispatch_event` all target the Document, which has no `closest`. The handler guards on
 `nodeType` before resolving.
 
-`{passive: false}` is explicit. Chrome makes a document-level `wheel`, `mousewheel`, `touchstart`
-and `touchmove` listener passive **by default**, which would silently turn `az-prevent-default`
-into a no-op on exactly those four. Because types are discovered rather than assumed, a
-scroll-blocking listener exists only when an app actually declares one.
+**Passive is decided per type, and only for the four the platform forces.** Chrome makes a
+document-level `wheel`, `mousewheel`, `touchstart` and `touchmove` listener passive **by default**,
+so opting out is the only way `az-prevent-default` works on them. Opting out unconditionally is
+worse though: it disables the browser's scroll fast path for the whole page, so an app that only
+wants to *observe* wheel events would pay scroll jank it never asked for. Those four therefore
+start passive and are upgraded the first time the page declares `az-prevent-default` (reported by
+the same discovery that finds event names). The upgrade is a real remove-then-add -- re-adding the
+same function with a different `passive` is silently ignored, since listener identity is
+type+callback+capture. Every other type omits the flag; non-passive is already its default.
+
+Passive-ness belongs to the shared document listener, not the element, so this is page-wide and
+monotonic: one element declaring `az-prevent-default` decides those types for the page. That is
+also why it cannot be a per-element option.
 
 **`submit` and `drop` are deliberately not delegated generically.** They name real DOM events *and*
 have dedicated listeners (submit flushes pending debounced/throttled inputs, honors

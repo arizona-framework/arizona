@@ -2737,30 +2737,77 @@ function runDelegated(e, eventType, capture) {
  * the only way to see a non-bubbling event at all (`toggle`, `close`, `play`,
  * `load`, `scrollend`, ...), since those never reach the document by bubbling.
  *
- * `passive: false` is explicit: Chrome makes a document-level `wheel`,
- * `mousewheel`, `touchstart` and `touchmove` listener passive BY DEFAULT, which
- * silently turns `az-prevent-default` into a no-op on exactly those four. It is
- * inert for every other type, and because types are discovered rather than
- * assumed, a scroll-blocking listener exists only if the app really wrote one.
+ * Passive is decided per type, and only for the four the platform forces. Chrome
+ * makes a document-level `wheel`/`mousewheel`/`touchstart`/`touchmove` listener
+ * passive BY DEFAULT, which would silently turn `az-prevent-default` into a no-op
+ * on exactly those. But forcing `passive: false` on them unconditionally is worse:
+ * it disables the browser's scroll fast path for the whole page, so an app that
+ * only wants to OBSERVE wheel events pays scroll jank it never asked for. They
+ * start passive and are upgraded by `notePreventDefault` the first time the page
+ * actually declares `az-prevent-default`. Every other type omits the flag --
+ * non-passive is already the default there, so the old blanket flag did nothing.
  * @param {Document} target
  * @param {string} eventType
  * @param {AbortSignal} signal
+ * @returns {[EventListener, EventListener]} the capture and bubble listeners, kept
+ *   so a passive upgrade can remove exactly these and re-add them: re-adding the
+ *   same function with a different `passive` is a no-op, because listener identity
+ *   is type+callback+capture and `passive` is not part of it.
  */
 function handleEvent(target, eventType, signal) {
-    target.addEventListener(
-        eventType,
-        (e) => {
-            if (!e.bubbles) runDelegated(e, eventType, true);
-        },
-        { signal, capture: true, passive: false },
-    );
-    target.addEventListener(
-        eventType,
-        (e) => {
-            if (e.bubbles) runDelegated(e, eventType, false);
-        },
-        { signal, passive: false },
-    );
+    /** @type {EventListener} */
+    const capFn = (e) => {
+        if (!e.bubbles) runDelegated(e, eventType, true);
+    };
+    /** @type {EventListener} */
+    const bubFn = (e) => {
+        if (e.bubbles) runDelegated(e, eventType, false);
+    };
+    /** @type {AddEventListenerOptions} */
+    const capOpts = { signal, capture: true };
+    /** @type {AddEventListenerOptions} */
+    const bubOpts = { signal };
+    if (PASSIVE_FORCED.has(eventType) && !_preventDefaultSeen) {
+        capOpts.passive = true;
+        bubOpts.passive = true;
+    }
+    target.addEventListener(eventType, capFn, capOpts);
+    target.addEventListener(eventType, bubFn, bubOpts);
+    return [capFn, bubFn];
+}
+
+/**
+ * The event types Chrome forces passive on a Document, so `preventDefault` there
+ * is ignored unless the listener opts out explicitly.
+ */
+const PASSIVE_FORCED = new Set(['wheel', 'mousewheel', 'touchstart', 'touchmove']);
+
+/** Has this page declared `az-prevent-default` anywhere yet? */
+let _preventDefaultSeen = false;
+
+/**
+ * Re-register the forced-passive types as non-passive, the first time the page
+ * declares `az-prevent-default`. Needs a real remove-then-add; re-adding the same
+ * function with different options does nothing.
+ *
+ * Monotonic and page-wide: the attribute is per-element, but passive-ness belongs
+ * to the shared document listener, so one element declaring it decides the type
+ * for the page. The re-add also moves these listeners to the end of the document's
+ * list for that type, so an app listener registered in between now runs first --
+ * immaterial in practice, and only for these four types.
+ */
+function notePreventDefault() {
+    if (_preventDefaultSeen) return;
+    _preventDefaultSeen = true;
+    for (const [doc, rec] of _eventDocs) {
+        for (const type of PASSIVE_FORCED) {
+            const fns = rec.bound.get(type);
+            if (!fns) continue;
+            doc.removeEventListener(type, fns[0], { capture: true });
+            doc.removeEventListener(type, fns[1]);
+            rec.bound.set(type, handleEvent(doc, type, rec.signal));
+        }
+    }
 }
 
 /**
@@ -2810,8 +2857,8 @@ const _eventTypes = new Set([
     'focusout',
 ]);
 
-/** Documents currently bound, and which types each already has listeners for. */
-/** @type {Map<Document, {signal: AbortSignal, bound: Set<string>}>} */
+/** Documents currently bound, and the listeners each already has per type. */
+/** @type {Map<Document, {signal: AbortSignal, bound: Map<string, [EventListener, EventListener]>}>} */
 const _eventDocs = new Map();
 
 /**
@@ -2822,8 +2869,7 @@ function bindEventType(type) {
     _eventTypes.add(type);
     for (const [doc, rec] of _eventDocs) {
         if (rec.bound.has(type)) continue;
-        rec.bound.add(type);
-        handleEvent(doc, type, rec.signal);
+        rec.bound.set(type, handleEvent(doc, type, rec.signal));
     }
 }
 
@@ -2858,7 +2904,8 @@ function scanEvents(root) {
         for (const { name } of attrs) {
             if (!name.startsWith('az-')) continue;
             const type = name.slice(3);
-            if (!_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) bindEventType(type);
+            if (type === 'prevent-default') notePreventDefault();
+            else if (!_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) bindEventType(type);
         }
     }
 }
@@ -2872,11 +2919,10 @@ function scanEvents(root) {
  * @param {AbortSignal} signal
  */
 function bindDocumentEvents(target, signal) {
-    const rec = { signal, bound: new Set() };
+    const rec = { signal, bound: new Map() };
     _eventDocs.set(target, rec);
     for (const type of _eventTypes) {
-        rec.bound.add(type);
-        handleEvent(target, type, signal);
+        rec.bound.set(type, handleEvent(target, type, signal));
     }
 
     // Form submission: flush any pending debounced/throttled inputs first so
@@ -3147,7 +3193,8 @@ function connect(endpoint, params = {}) {
                     // is done here, where the directive list already lives.
                     if (msg[4]) {
                         for (const name of msg[4]) {
-                            if (!AZ_DIRECTIVES.has(name)) bindEventType(name);
+                            if (name === 'prevent-default') notePreventDefault();
+                            else if (!AZ_DIRECTIVES.has(name)) bindEventType(name);
                         }
                     }
                     const apply = () => {

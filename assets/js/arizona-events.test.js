@@ -164,6 +164,43 @@ describe('open event delegation', () => {
         expect(w.sent()).toEqual([]);
     });
 
+    it('keeps a forced-passive type passive until the page declares prevent-default', async () => {
+        const mod = await fresh();
+        const calls = [];
+        const orig = document.addEventListener.bind(document);
+        const spy = vi.spyOn(document, 'addEventListener').mockImplementation((t, fn, opts) => {
+            calls.push([t, opts]);
+            return orig(t, fn, opts);
+        });
+        document.body.innerHTML = `<div id="v" az-view><div id="p" az-wheel='[0,"w"]'></div></div>`;
+        w = mockWorker(mod);
+        w.open();
+
+        // Chrome forces these four passive on a Document, so opting out is the only
+        // way preventDefault works there -- but opting out unconditionally costs the
+        // whole page its scroll fast path, and observing wheel should not do that.
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
+            true,
+            true,
+        ]);
+        // Types the platform does not force are left alone; non-passive is already
+        // their default, so passing the flag at all was a no-op.
+        expect(calls.filter(([t]) => t === 'click').every(([, o]) => o.passive === undefined)).toBe(
+            true,
+        );
+
+        calls.length = 0;
+        // A later patch declares az-prevent-default, so wheel must be upgraded. It
+        // needs a real remove-then-add: re-adding the same function with different
+        // options is silently ignored.
+        w.ops([], ['prevent-default']);
+        expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
+            undefined,
+            undefined,
+        ]);
+        spy.mockRestore();
+    });
+
     it('does not double-run az-submit, which has its own listener', async () => {
         const mod = await fresh();
         document.body.innerHTML = `<div id="v" az-view><form id="f" az-submit='[0,"saved"]'></form></div>`;
