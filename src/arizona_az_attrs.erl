@@ -30,18 +30,25 @@ counted. Missing one would silently break every event that module declares.
 Every `az-*` attribute name declared by any loaded application that depends on
 Arizona, unioned and sorted.
 
-Computed once and cached in `persistent_term`: the answer only changes when code
-changes, which in dev mode means a full page reload (the reloader calls
-`location.reload()`) and in production means a new release.
+Cached in `persistent_term` and recomputed when the set of loaded modules
+changes, since a module outside any `.app` list is only visible once loaded.
 """.
 -spec all() -> [binary()].
 all() ->
+    %% Keyed on the number of loaded modules, not cached outright. The app-listed
+    %% pass is stable, but the loaded pass is not: a module outside any `.app`
+    %% modules list (compiled at runtime, or a test fixture) only becomes visible
+    %% once it loads, so a set cached before that is permanently missing its names
+    %% and every event it declares is silently dead. Detecting the change costs
+    %% ~70 us against ~4 ms to rescan, and after the first few connections the
+    %% count stops moving.
+    Loaded = length(code:all_loaded()),
     case persistent_term:get(?CACHE_KEY, undefined) of
-        undefined ->
-            Names = scan(),
-            persistent_term:put(?CACHE_KEY, Names),
+        {Loaded, Names} ->
             Names;
-        Names ->
+        _StaleOrMissing ->
+            Names = scan(),
+            persistent_term:put(?CACHE_KEY, {Loaded, Names}),
             Names
     end.
 
