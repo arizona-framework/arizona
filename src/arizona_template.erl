@@ -13,7 +13,7 @@ transform was not applied.
 - **Bindings** -- the map passed to `render/1`. `get/2` and `get/3` access
   bindings while tracking which keys were read, so the differ knows which
   dynamics depend on which bindings.
-- **Templates** -- compile-time maps `#{s := Statics, d := Dynamics, f := Fp}`
+- **Templates** -- compile-time maps `#{s := Statics, d := Dynamics, f := Fp, a := Attributes}`
   emitted by the parse transform.
 - **Descriptors** -- lightweight tuples returned by `stateful/2` and
   `stateless/2,3` that tell the renderer how to mount a child component.
@@ -137,11 +137,13 @@ render(Bindings) ->
     f := binary(),
     diff => false,
     backend => module(),
-    %% The `az-*` attributes this template declares, recorded by the parse transform
-    %% so the client knows which DOM events to listen for. `az-prevent-default` is in
-    %% here too: it is not an event, but it decides how those listeners are
-    %% registered, and the client needs it before it binds the first one.
-    events => [binary()]
+    %% Attributes: the `az-*` attribute names this template declares, recorded by
+    %% the parse transform so the client knows which DOM events to listen for. One
+    %% letter like `s`/`d`/`f`/`t` because the client reads it; `backend`, `diff`,
+    %% `deps` and `view_id` are spelled out because they never leave the server.
+    %% `az-prevent-default` is in the list too -- not an event, but it decides how
+    %% those listeners are registered, and the client needs it before binding one.
+    a => [binary()]
 }.
 
 -nominal each_template() :: #{
@@ -167,7 +169,7 @@ render(Bindings) ->
     diff => false,
     view_id => binary(),
     backend => module(),
-    events => [binary()]
+    a => [binary()]
 }.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
@@ -608,7 +610,7 @@ mark_esc(V0) ->
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`
 (fingerprint), the optional `diff => false` flag, the render `backend`, and the
-`events` the template declares.
+`a` attributes the template declares.
 
 Used by both the render path (`arizona_render`) and the diff path
 (`arizona_diff`), so a diffed snapshot carries the same backend as a freshly
@@ -633,7 +635,7 @@ maybe_propagate(Tmpl, Snap) ->
     %% The client binds a DOM event type only for a name it has been told about, so
     %% the names have to reach the payload that renders the markup declaring them.
     case Tmpl of
-        #{events := Events} -> Snap3#{events => Events};
+        #{a := Attrs} -> Snap3#{a => Attrs};
         #{} -> Snap3
     end.
 

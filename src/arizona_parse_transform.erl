@@ -3261,7 +3261,7 @@ build_template_ast(Line, Statics, DynASTs, Fingerprint, Opts) ->
     %% once per fingerprint and stripped by the same dedup, so a repeat costs nothing.
     AzNames = maps:get(az_names, Opts, []),
     AzField = [
-        {map_field_assoc, Line, {atom, Line, events}, erl_parse:abstract(AzNames, Line)}
+        {map_field_assoc, Line, {atom, Line, a}, erl_parse:abstract(AzNames, Line)}
      || AzNames =/= []
     ],
     BaseFields = [
