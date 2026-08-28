@@ -186,6 +186,30 @@ describe('arizona-worker', () => {
         expect(resolved[3]).toBe(false);
     });
 
+    it("forwards the server's az-* name set as field 4", () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // The app's `az-*` vocabulary, collected by the parse transform and unioned
+        // by the server. It rides the connect frame as top-level `a`, beside `o` and
+        // `e`, and the worker only relays it: the main thread decides which names
+        // are DOM events, so that triage lives in one place.
+        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click', 'az-toggle'] }));
+        const resolved = slf.posted.find((m) => m[0] === 0);
+        expect(resolved[4]).toEqual(['az-click', 'az-toggle']);
+    });
+
+    it('sends null in field 4 on a frame carrying no names', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // Every frame after connect. The field must be falsy so the main thread's
+        // `if (msg[4])` skips it rather than re-running the triage on every patch.
+        ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', 'hi']] }));
+        const resolved = slf.posted.find((m) => m[0] === 0);
+        expect(resolved[4]).toBeNull();
+    });
+
     it('an HTML-fragment OP_TEXT payload (object) is resolved and flagged isHtml', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

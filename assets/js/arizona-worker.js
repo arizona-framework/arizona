@@ -6,7 +6,7 @@
  * Sends pre-computed DOM-ready data to the main thread.
  *
  * Worker -> Main protocol (arrays for fast structured clone):
- *   [0, ops|null, effects|null, firstAfterReconnect] -- resolved message
+ *   [0, ops|null, effects|null, firstAfterReconnect, azNames|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *
@@ -336,6 +336,14 @@ function openSocket() {
         const msg = JSON.parse(e.data);
         const ops = msg.o || null;
         const effects = msg.e || null;
+        // The `az-*` attribute names the app's templates declare, unioned by the
+        // server from a compile-time module attribute and sent once, on the connect
+        // frame. Raw names, not event types: which of them are DOM events and which
+        // are framework directives is the main thread's call, so that list lives in
+        // one place. The worker only forwards -- deriving the names here would mean
+        // a regex over serialized HTML, which cannot tell an attribute NAME from
+        // `az-` text inside an attribute VALUE and is wrong in both directions.
+        const azNames = msg.a || null;
 
         if (ops) {
             resolveOps(ops);
@@ -345,7 +353,7 @@ function openSocket() {
         const firstAfterReconnect = _reconnecting;
         if (_reconnecting) _reconnecting = false;
 
-        postMessage([0, ops, effects, firstAfterReconnect]);
+        postMessage([0, ops, effects, firstAfterReconnect, azNames]);
     };
 
     ws.onclose = (e) => {

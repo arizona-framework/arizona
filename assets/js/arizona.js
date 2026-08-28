@@ -9,7 +9,7 @@
  * Worker for transmission.
  *
  * Wire protocol (Worker -> Main):
- *   [0, ops|null, effects|null, firstAfterReconnect] -- resolved message
+ *   [0, ops|null, effects|null, firstAfterReconnect, azNames|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *
@@ -611,6 +611,20 @@ function mountHooks(root) {
 }
 
 /**
+ * The exported `mountHooks`: the escape hatch a host app calls after inserting
+ * markup Arizona did not render. That markup is the one source of `az-*` names
+ * the compile-time set cannot cover, so this form also scans for them. The op
+ * path deliberately calls `mountHooks` instead -- server-rendered markup declares
+ * nothing the connect frame did not already deliver, so walking it again would
+ * re-derive what we were told, per element per op.
+ * @param {Element|Document} root
+ */
+function mountHooksPublic(root) {
+    scanEvents(root);
+    mountHooks(root);
+}
+
+/**
  * Is any hook definition registered? `hooks` is a plain object apps assign onto, so
  * there is nothing to cache against; `for...in` over an empty object allocates nothing
  * and returns immediately.
@@ -805,6 +819,12 @@ function applyTextOp(el, az, val, isHtml) {
  */
 function applySetAttrOp(el, name, val) {
     el.setAttribute(name, val);
+    // A runtime `arizona_js:set_attr(sel, "az-toggle", ...)` writes a name no
+    // template contains, so the compile-time set cannot hold it. Every such write
+    // funnels here -- the SET_ATTR op, an ITEM_PATCH inner op, `set_attr`/
+    // `toggle_attr`, and a `?local` attribute slot -- so one call covers them all.
+    // Without it the attribute lands correctly and its event silently never fires.
+    noteAzAttr(name);
     if (name === 'value' && 'value' in el) el.value = val;
     else if (name === 'checked' && 'checked' in el) el.checked = true;
     else if (name === 'selected' && 'selected' in el) el.selected = true;
@@ -2684,31 +2704,284 @@ function restoreFormState() {
 }
 
 /**
- * Delegate a DOM event type on `target` (a Document) via a delegated listener.
+ * Run the `az-<eventType>` command for one delegated event.
+ *
+ * `capture` picks the resolver, and the two are not interchangeable. A BUBBLING
+ * event walks its propagation path, so `closest()` correctly finds an ancestor
+ * that opted in. A NON-BUBBLING event has no path -- it is dispatched at the
+ * target alone -- so the only element that legitimately owns it is the target
+ * itself. Using `closest()` there would run an ancestor's command for an event
+ * that never reached it, which is what makes `mouseenter`/`mouseleave`
+ * (dispatched separately per element) fire once per nesting level.
+ * @param {Event} e
+ * @param {string} attr the `az-<eventType>` attribute name
+ * @param {string} sel the same name as an escaped attribute selector
+ * @param {boolean} capture
+ */
+function runDelegated(e, attr, sel, capture) {
+    const t = /** @type {Element} */ (e.target);
+    // Not always an Element: a viewport `scroll`, the page-level `mouseenter`, and
+    // a server-sent `dispatch_event` all target the Document, which has no closest().
+    if (!t || t.nodeType !== 1) return;
+    const el = capture ? (t.hasAttribute(attr) ? t : null) : t.closest(sel);
+    if (!el || !_connected) return;
+    const raw = el.getAttribute(attr);
+    if (!raw) return;
+    if (el.hasAttribute('az-prevent-default')) e.preventDefault();
+    // The value is a command list by DECLARATION, so it is not inspected to decide
+    // that. Command-versus-data is settled at compile time, where the parse
+    // transform can see it: it records `az-*` names bound to an effect and skips
+    // ones bound to a static value, so `az-select="[1,2,3]"` never reaches the
+    // server's set and `select` is never delegated. No value test could stand in
+    // for that -- `arizona_effect:encode/1` emits a single command unwrapped
+    // (`[0,"inc"]`), which makes an app's array of ids a structurally valid
+    // command list.
+    //
+    // The try/catch is containment, not discrimination. One declared shape can
+    // still hold anything at runtime: an attribute the transform could not fold
+    // (`{az_keydown, ?get(handler)}`) is recorded because its value is unknowable
+    // at compile time. A malformed value there must not throw out of a document
+    // listener, which is per dispatch on types that can fire at pointer-move rate
+    // -- hence warnOnce, keyed by the message so one bad attribute reports once.
+    let cmds;
+    try {
+        cmds = JSON.parse(raw);
+    } catch {
+        warnOnce(`[arizona] ${attr} does not hold a command list; ignoring it`);
+        return;
+    }
+    executeJS(el, e, withTransitionAttr(el, cmds));
+}
+
+/**
+ * Delegate a DOM event type on `target` (a Document) via delegated listeners.
  * Bound to the supplied AbortSignal so all delegated listeners can be torn down
  * together. Key filtering is handled by the JS_ON_KEY command inside executeJS,
  * not by attribute name suffixes.
+ *
+ * Two listeners, split on the event's own `bubbles` flag, because one phase
+ * cannot serve both kinds. Bubble phase keeps the delegated path unchanged for
+ * every event that bubbles -- including letting an inner `stopPropagation()`
+ * suppress an ancestor's command, which capture would override. Capture phase is
+ * the only way to see a non-bubbling event at all (`toggle`, `close`, `play`,
+ * `load`, `scrollend`, ...), since those never reach the document by bubbling.
  * @param {Document} target
  * @param {string} eventType
  * @param {AbortSignal} signal
  */
 function handleEvent(target, eventType, signal) {
-    target.addEventListener(
-        eventType,
-        (e) => {
-            const el = /** @type {Element} */ (e.target).closest(`[az-${eventType}]`);
-            if (!el || !_connected) return;
-            if (el.hasAttribute('az-prevent-default')) e.preventDefault();
-            const raw = el.getAttribute(`az-${eventType}`);
-            if (!raw) return;
-            executeJS(el, e, withTransitionAttr(el, JSON.parse(raw)));
-        },
-        { signal },
-    );
+    // Hoisted out of the listener: both are pure functions of the type, and the
+    // listener runs per dispatch on types that can fire at pointer-move rate.
+    // CSS.escape because the type reaches here from a raw attribute name and the
+    // HTML parser keeps `.` and `:` in one, so `az-turbo:load` would otherwise be
+    // an invalid selector and throw out of the listener on every dispatch.
+    const attr = `az-${eventType}`;
+    const sel = `[${CSS.escape(attr)}]`;
+    // The capture listener needs the flag and the bubble one does not: capture sees
+    // EVERY event descending to the target, so without it a bubbling event would run
+    // its command twice (once here, once on the way back up). The bubble phase is
+    // skipped outright for a non-bubbling event, so that listener only ever sees the
+    // kind it is for.
+    /** @type {EventListener} */
+    const capFn = (e) => {
+        if (!e.bubbles) runDelegated(e, attr, sel, true);
+    };
+    /** @type {EventListener} */
+    const bubFn = (e) => runDelegated(e, attr, sel, false);
+    /** @type {AddEventListenerOptions} */
+    const capOpts = { signal, capture: true };
+    /** @type {AddEventListenerOptions} */
+    const bubOpts = { signal };
+    if (PASSIVE_FORCED.has(eventType)) {
+        // Chrome makes a document-level wheel/mousewheel/touchstart/touchmove
+        // listener passive whenever `passive` is UNSPECIFIED, which would turn
+        // `az-prevent-default` into a silent no-op on exactly those four. Stating
+        // it is therefore mandatory here, in both directions: `true` keeps the
+        // scroll fast path for a page that only observes these events, `false` is
+        // what makes preventDefault take effect on a page that declares it. The
+        // value is known before any of the four is ever bound, because the whole
+        // name set arrives in one frame and `noteAzNames` reads the directive out
+        // of it before binding anything.
+        capOpts.passive = !_preventDefaultDeclared;
+        bubOpts.passive = !_preventDefaultDeclared;
+    }
+    // Capture exists only to reach events that cannot bubble. Registering it for a
+    // type the platform always bubbles is worse than useless: it changes what those
+    // types respond to (a shim's `new Event('change')` defaults to bubbles:false and
+    // would now round-trip on views that opted into nothing), and on wheel/touchmove
+    // it puts a document listener that can never do work in front of every scroll
+    // frame.
+    if (!NATIVELY_BUBBLING.has(eventType)) target.addEventListener(eventType, capFn, capOpts);
+    target.addEventListener(eventType, bubFn, bubOpts);
 }
 
-/** The az-* DOM events Arizona delegates per document (main + any PiP window). */
-const DELEGATED_EVENTS = ['click', 'change', 'input', 'keydown', 'keyup', 'focusin', 'focusout'];
+/**
+ * The event types Chrome forces passive on a Document, so `preventDefault` there
+ * is ignored unless the listener opts out explicitly.
+ */
+const PASSIVE_FORCED = new Set(['wheel', 'mousewheel', 'touchstart', 'touchmove']);
+
+/**
+ * Types the platform always dispatches with `bubbles: true`, so the bubble phase
+ * already sees every real one and a capture listener would only add reach. The
+ * bootstrap seven plus the forced-passive four.
+ */
+const NATIVELY_BUBBLING = new Set([
+    'click',
+    'change',
+    'input',
+    'keydown',
+    'keyup',
+    'focusin',
+    'focusout',
+    'wheel',
+    'mousewheel',
+    'touchstart',
+    'touchmove',
+]);
+
+/** Messages already emitted by `warnOnce`, so a repeating event cannot spam the console. */
+const _warned = new Set();
+
+/** @param {string} msg */
+function warnOnce(msg) {
+    if (_warned.has(msg)) return;
+    _warned.add(msg);
+    console.warn(msg);
+}
+
+/**
+ * Has the app declared `az-prevent-default` anywhere? Read when a forced-passive
+ * type is bound, which is why the whole name set is scanned for it before any
+ * type is delegated: `passive` is fixed at registration, and re-registering to
+ * change it would leave the listener behind an app listener added in between.
+ */
+let _preventDefaultDeclared = false;
+
+/**
+ * `az-*` suffixes that are framework directives rather than DOM event types.
+ *
+ * Only `submit` and `drop` are load-bearing: they name real DOM events AND have
+ * their own dedicated listeners below (submit flushes debounced inputs, honors
+ * `az-form-reset` and defers to `fetch`; drop carries the drag bookkeeping), so
+ * delegating them generically would run their commands a second time.
+ *
+ * The rest name no DOM event at all, so binding one would only ever register a
+ * listener that never fires. They are listed as hygiene, not as a safety net --
+ * forgetting one is harmless, and only a future directive named after a real DOM
+ * event would need to be added here.
+ */
+const AZ_DIRECTIVES = new Set([
+    'submit',
+    'drop',
+    'view',
+    'local',
+    'key',
+    'hook',
+    'target',
+    'debounce',
+    'throttle',
+    'transition',
+    'prevent-default',
+    'form-reset',
+    'noscroll',
+    'nodiff',
+    'navigate',
+    'patch',
+]);
+
+/**
+ * The az-* DOM events delegated so far. Bootstrapped with the types every app
+ * uses, because the server's name set arrives one round trip after the socket
+ * opens and a click in that window must not find an empty document. Grown by
+ * `noteAzNames` from the set, and by `noteAzAttr` from a runtime attribute write.
+ * Monotonic for the life of the page.
+ */
+const _eventTypes = new Set([
+    'click',
+    'change',
+    'input',
+    'keydown',
+    'keyup',
+    'focusin',
+    'focusout',
+]);
+
+/**
+ * Documents currently bound, and the tear-down for the ones whose listeners hang
+ * off a controller the connection does not own (a PiP window's).
+ * @type {Map<Document, {signal: AbortSignal, abort?: () => void}>}
+ */
+const _eventDocs = new Map();
+
+/**
+ * Delegate the app's whole `az-*` vocabulary, as collected by the parse transform
+ * and unioned by the server. Arrives once, on the connect frame, so an
+ * `az-<event>` attribute works for ANY event type with no list to maintain --
+ * including a custom element's own (`az-sl-change` binds `sl-change`). The
+ * suffix is used verbatim as the `addEventListener` type, so there is no mapping
+ * table to keep in sync with the platform.
+ *
+ * `az-prevent-default` is read out of the set FIRST. It decides `passive` for the
+ * four types the platform forces, and `passive` is fixed when a listener is
+ * registered -- so it has to be known before this loop binds one of them.
+ * @param {string[]} names raw `az-*` attribute names, already lowercase
+ */
+function noteAzNames(names) {
+    if (names.includes('az-prevent-default')) _preventDefaultDeclared = true;
+    for (const name of names) noteAzAttr(name);
+}
+
+/**
+ * Delegate one `az-*` attribute NAME. The single place the directive/event triage
+ * lives, so the server's set and a runtime attribute write cannot drift apart.
+ * @param {string} name
+ */
+function noteAzAttr(name) {
+    if (!name.startsWith('az-')) return;
+    // Attribute names are ASCII-lowercased by the HTML parser, and
+    // `addEventListener` types are case-sensitive, so an unlowered `az-Close`
+    // would bind a dead `Close` while the DOM stores `az-close`.
+    const type = name.slice(3).toLowerCase();
+    if (type === 'prevent-default') _preventDefaultDeclared = true;
+    else if (!_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) bindEventType(type);
+}
+
+/**
+ * Delegate `type` on every bound document. Idempotent: `_eventTypes` gates the
+ * call, and every bound document has every type in it.
+ * @param {string} type
+ */
+function bindEventType(type) {
+    _eventTypes.add(type);
+    for (const [doc, rec] of _eventDocs) handleEvent(doc, type, rec.signal);
+}
+
+/**
+ * Discover the DOM events `root` declares and delegate any not already bound.
+ *
+ * ONLY for markup the server never rendered: a host app that inserts its own
+ * `az-*` markup and calls the exported `mountHooks` for it. Server-rendered
+ * markup needs nothing here -- its names are in the compile-time set, which
+ * arrives before any of it can be patched in.
+ *
+ * `getAttributeNames()` on real DOM, so this is exact: the HTML parser already
+ * decided what is an attribute name and what is text inside a value.
+ * @param {Element|Document} root
+ */
+function scanEvents(root) {
+    const doc = root.nodeType === 9 ? /** @type {Document} */ (root) : root.ownerDocument;
+    if (!doc) return;
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    /** @type {Node|null} */
+    let node = walker.currentNode;
+    for (; node; node = walker.nextNode()) {
+        const el = /** @type {Element} */ (node);
+        // getAttributeNames() rather than walking `attributes`: the NamedNodeMap
+        // accessor is far slower, and this runs per element.
+        if (el.getAttributeNames) for (const name of el.getAttributeNames()) noteAzAttr(name);
+    }
+}
 
 /**
  * Bind every delegated DOM event on `target` (a Document): the az-* event types
@@ -2717,9 +2990,12 @@ const DELEGATED_EVENTS = ['click', 'change', 'input', 'keydown', 'keyup', 'focus
  * (az-navigate, popstate, scroll) are wired only for the main document.
  * @param {Document} target
  * @param {AbortSignal} signal
+ * @param {(() => void)} [abort] tear-down for documents whose listeners hang off a
+ *   controller the connection does not own (a PiP window's).
  */
-function bindDocumentEvents(target, signal) {
-    for (const type of DELEGATED_EVENTS) handleEvent(target, type, signal);
+function bindDocumentEvents(target, signal, abort) {
+    _eventDocs.set(target, { signal, abort });
+    for (const type of _eventTypes) handleEvent(target, type, signal);
 
     // Form submission: flush any pending debounced/throttled inputs first so
     // the server sees final values, then execute JS commands from az-submit.
@@ -2982,7 +3258,11 @@ function connect(endpoint, params = {}) {
             const msg = e.data;
             switch (msg[0]) {
                 case 0: {
-                    // [0, ops|null, effects|null, firstAfterReconnect]
+                    // [0, ops|null, effects|null, firstAfterReconnect, azNames|null]
+                    // The app's `az-*` vocabulary, collected by the parse transform
+                    // and sent on the connect frame. Delegated BEFORE the ops land,
+                    // so a listener exists the moment an element declaring one does.
+                    if (msg[4]) noteAzNames(msg[4]);
                     const apply = () => {
                         // A patch-scroll intent lives exactly until the first frame
                         // after the patch request. applyOps consumes it when the
@@ -3167,6 +3447,15 @@ function connect(endpoint, params = {}) {
         }
         _viewDocs.clear();
         _pipWindows.clear();
+        // Tear down each bound document's delegated listeners, then drop the
+        // bookkeeping. The connect-level signal covers the MAIN document only: a
+        // PiP document's listeners hang off requestPip's own controller, so
+        // without this they survive disconnect and the next connect() re-arms them
+        // -- pushing events from the orphaned window under the previous view's id.
+        // `_eventTypes` deliberately survives: it is what this PAGE delegates, so a
+        // reconnect rebinds the same types without waiting for the connect frame.
+        for (const rec of _eventDocs.values()) rec.abort?.();
+        _eventDocs.clear();
         // Run destroyed() on every tracked hook and clear the map. Without
         // this, hook instances leak when host code removes the DOM by means
         // arizona didn't observe (third-party libs, test teardown via
@@ -3249,7 +3538,7 @@ async function requestPip(viewId, opts = {}) {
 
     // Delegate events fired inside the floating window; torn down on close.
     const controller = new AbortController();
-    bindDocumentEvents(pip.document, controller.signal);
+    bindDocumentEvents(pip.document, controller.signal, () => controller.abort());
 
     pip.addEventListener(
         'pagehide',
@@ -3257,6 +3546,7 @@ async function requestPip(viewId, opts = {}) {
             controller.abort();
             _viewDocs.delete(viewId);
             _pipWindows.delete(viewId);
+            _eventDocs.delete(pip.document);
             // isConnected, not parentNode: a replaced (navigate) outgoing
             // subtree is detached wholesale, so the placeholder still HAS a
             // parent -- inside a dead tree.
@@ -3297,7 +3587,7 @@ export {
     exitPip,
     get,
     hooks,
-    mountHooks,
+    mountHooksPublic as mountHooks,
     OP,
     pushEvent,
     pushEventTo,
