@@ -8,6 +8,7 @@
 -export([observe_is_a_noop_until_armed/1]).
 -export([armed_collector_drains_once/1]).
 -export([observe_attr_ignores_non_az_names/1]).
+-export([layout_command_warns_at_ssr/1]).
 
 all() ->
     [
@@ -16,7 +17,8 @@ all() ->
         walk_skips_a_missing_module,
         observe_is_a_noop_until_armed,
         armed_collector_drains_once,
-        observe_attr_ignores_non_az_names
+        observe_attr_ignores_non_az_names,
+        layout_command_warns_at_ssr
     ].
 
 %% The walk follows both the transform-recorded dependency (arizona_walk_child)
@@ -65,3 +67,29 @@ observe_attr_ignores_non_az_names(Config) when is_list(Config) ->
     ok = arizona_event_attrs:observe_attr(~"data-count"),
     ok = arizona_event_attrs:observe_attr(~"class"),
     ?assertEqual({[], []}, arizona_event_attrs:drain()).
+
+%% A command proven only inside a layout render can never reach the client:
+%% layouts render once, at SSR, in a peerless process, and no frame ever
+%% re-renders one -- so the render-time proof has nothing to ride. The render
+%% warns, because the alternative is a permanently dead event with no symptom.
+layout_command_warns_at_ssr(Config) when is_list(Config) ->
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning, config => #{pid => self()}
+    }),
+    try
+        _HTML = arizona_render:render_view_to_iolist(arizona_opaque_layout_page, #{
+            layouts => [{arizona_opaque_layout, render}],
+            bindings => #{chrome_cmd => arizona_js:toggle(~"#menu")}
+        }),
+        receive
+            {arizona_test_log_handler, #{level := warning, msg := {Fmt, Args}}} ->
+                Msg = iolist_to_binary(io_lib:format(Fmt, Args)),
+                ?assertMatch({_, _}, binary:match(Msg, ~"az-contextmenu")),
+                ?assertMatch({_, _}, binary:match(Msg, ~"arizona_opaque_layout"))
+        after 1000 ->
+            ct:fail("no warning for an unprovable layout command")
+        end
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.

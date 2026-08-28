@@ -63,6 +63,7 @@ op-code targets.
 -export([render_to_iolist/1]).
 -export([render_to_iolist/2]).
 -export([render_view_to_iolist/2]).
+-export([current_layout/0]).
 -export([resolve_id/1]).
 -export([zip/2]).
 -export([zip_item/2]).
@@ -502,6 +503,14 @@ apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
 %% inner layers have already rendered into `Wrapped` by the time this runs, and
 %% `inner_content` is handed over as a no-dynamics template, so the flag never
 %% spans a nested layout or the page itself -- only this layer's own dynamics.
+-doc """
+The layout layer currently rendering in this process, or `undefined` outside
+one. The flag spans exactly one layer's own dynamics (see `render_layout/3`).
+""".
+-spec current_layout() -> {module(), atom()} | undefined.
+current_layout() ->
+    erlang:get(?IN_LAYOUT).
+
 render_layout(Mod, Fun, Tmpl) ->
     erlang:put(?IN_LAYOUT, {Mod, Fun}),
     try

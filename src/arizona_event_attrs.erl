@@ -31,10 +31,28 @@ The collector is process-dictionary state, armed only inside a live process:
 the request-free SSR paths (HTTP render, static generation) never arm it, so
 observation there is a no-op.
 
-The walk is deliberately uncached: it costs microseconds against the
+The walk itself is deliberately uncached: it costs microseconds against the
 milliseconds of the application scan it replaced, cheap enough that a cache
 would only add a staleness bug -- the previous one went stale on hot reload
-and served a page's events short.
+and served a page's events short. The per-socket dedup the socket keeps on
+top of it (`az_walked`/`az_sent`) is a narrower memo with a narrower window:
+a hot reload that adds a FOLDED command attribute (a literal builder call
+bakes into the statics, so no dynamic slot ever re-proves it) leaves already
+open sockets without the new name until they reconnect -- which the dev
+watcher's reload forces anyway.
+
+Known limits, all loud or documented rather than silent:
+
+- A command that reaches a LAYOUT attribute opaquely can never be delivered
+  (layouts render once, at SSR; no frame re-renders one) -- the render warns
+  (`observe_attr/1`'s unarmed branch). A `?stateless` with a runtime-bound
+  module inside a layout is the same hole one level up; `?stateful` in a
+  layout is already a render-time error.
+- A non-transport caller of `arizona_live:handle_event/4` (or `patch/2`)
+  receives that reply's drained observations and they die with it: unlike
+  ops, which the stale-snapshot mechanism re-emits on the next root diff, an
+  unchanged value is never re-proven. In-repo the only such callers are the
+  terminal transports, which have no DOM to delegate on.
 """.
 
 -export([all/1]).
@@ -108,13 +126,34 @@ ignored, so callers can hand over every dynamic attribute name unfiltered.
 observe_attr(<<"az-", _/binary>> = Name) ->
     case get(?ATTRS_KEY) of
         undefined ->
-            ok;
+            unprovable_in_layout(Name);
         Names ->
             put(?ATTRS_KEY, [Name | Names]),
             ok
     end;
 observe_attr(_Name) ->
     ok.
+
+%% An unarmed observation is normally fine: the request-path SSR render is
+%% re-run by the connect mount, which observes into a live socket. The one
+%% place that does not hold is a LAYOUT render -- layouts render once, at SSR,
+%% in a peerless process, and no frame ever re-renders one -- so a command
+%% proven only there can never reach the client and its event is permanently
+%% dead. Loud beats invisible.
+unprovable_in_layout(Name) ->
+    case arizona_render:current_layout() of
+        undefined ->
+            ok;
+        {Mod, Fun} ->
+            logger:warning(
+                "az attribute ~ts in layout ~p:~p/1 carries a command the "
+                "client will never delegate: a layout renders once, at SSR, "
+                "so its render-time proof reaches no frame. Build the command "
+                "with a literal arizona_js/arizona_android/arizona_os call so "
+                "it is proven at compile time instead",
+                [Name, Mod, Fun]
+            )
+    end.
 
 -doc """
 `observe_mod/1` for a stateless render callback: the armed check runs BEFORE
