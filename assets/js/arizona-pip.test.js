@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyOps, executeJS, hooks, mountHooks, OP, requestPip, resolveEl } from './arizona.js';
+import {
+    applyOps,
+    executeJS,
+    hooks,
+    mountHooks,
+    OP,
+    requestPip,
+    resolveEl,
+    restoreFormState,
+    saveFormState,
+} from './arizona.js';
 
 // A minimal stand-in for a Document Picture-in-Picture window, backed by a real
 // (jsdom) Document, so the multi-document patch/effect paths can be exercised
@@ -64,6 +74,29 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         expect(pip.document.querySelector('[az="1"]')?.getAttribute('class')).toBe('b');
 
         pip.fire('pagehide'); // restore
+    });
+
+    it("preserves a popped-out form's typed values across a reconnect", async () => {
+        document.body.innerHTML =
+            '<div id="v7" az-view az="0"><form id="pf"><input name="note" /></form></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v7');
+
+        // The form now lives in the PiP document, where the user types into it.
+        const typed = pip.document.getElementById('pf').querySelector('input');
+        typed.value = 'drafted in the pip window';
+        saveFormState();
+
+        // The socket drops and the view re-renders empty, as a reconnect would.
+        typed.value = '';
+        restoreFormState();
+
+        expect(pip.document.getElementById('pf').querySelector('input').value).toBe(
+            'drafted in the pip window',
+        );
+
+        pip.fire('pagehide');
     });
 
     it('routes ops for a nested stateful child into the PiP document', async () => {

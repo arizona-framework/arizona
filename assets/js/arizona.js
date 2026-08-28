@@ -1844,7 +1844,22 @@ function applyListPatch(el, az, subOps) {
  */
 function applyEffects(effects) {
     for (const eff of effects) {
-        executeJS(document.documentElement, null, eff);
+        // Isolate each effect: `applyOps` already isolates per op, so this is the only
+        // step that can throw out of the worker's message handler, where it would skip
+        // the `restoreFormState()` queued behind it and discard the user's typed input
+        // on the very reconnect meant to preserve it. Event-attribute commands stay
+        // unisolated on purpose -- they run inside a DOM listener, where a throw is
+        // reported and costs nothing, and a bad selector or on_key regex there is a
+        // developer error that should stay loud.
+        try {
+            executeJS(document.documentElement, null, eff);
+        } catch (err) {
+            console.error(
+                '[arizona] effect %s failed; skipping',
+                Array.isArray(eff[0]) ? eff[0][0] : eff[0],
+                err,
+            );
+        }
     }
 }
 
@@ -1903,6 +1918,29 @@ function submitter(event) {
 }
 
 /**
+ * Collect a form's fields, keeping a duplicate name as an array. A checkbox
+ * group and a `<select multiple>` each submit one entry per selected value, so
+ * the flat `Object.fromEntries` shape silently keeps only the last of them.
+ * @param {FormData} fd
+ * @returns {Object<string, string|string[]>}
+ */
+function formFields(fd) {
+    /** @type {Object<string, string|string[]>} */
+    const data = {};
+    for (const [k, v] of fd.entries()) {
+        if (k in data) {
+            const prev = data[k];
+            data[k] = Array.isArray(prev)
+                ? prev.concat(/** @type {string} */ (v))
+                : [prev, /** @type {string} */ (v)];
+        } else {
+            data[k] = /** @type {string} */ (v);
+        }
+    }
+    return data;
+}
+
+/**
  * Auto-collect payload from an element based on its type and event context.
  * Drop -> {data_transfer, drop_index}, Forms -> FormData (incl. the submitter),
  * inputs/selects/textareas -> {value}, otherwise -> {}.
@@ -1921,11 +1959,19 @@ function autoPayload(el, event) {
     }
     const tag = el.tagName;
     if (tag === 'FORM')
-        return Object.fromEntries(
-            new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
-        );
-    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA')
-        return { value: /** @type {any} */ (el).value || '' };
+        return formFields(new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)));
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+        const field = /** @type {any} */ (el);
+        // A checkbox/radio reports what it WOULD submit, which is the same string
+        // whether or not it is on, so its state has to ride alongside the value.
+        if (field.type === 'checkbox' || field.type === 'radio')
+            return { value: field.value || '', checked: field.checked };
+        // `HTMLSelectElement.value` is only the FIRST selected option, so a multiple
+        // select would report one of its values and silently drop the rest.
+        if (tag === 'SELECT' && field.multiple)
+            return { value: Array.from(field.selectedOptions, (o) => o.value) };
+        return { value: field.value || '' };
+    }
     return {};
 }
 
@@ -1978,6 +2024,12 @@ const CREDENTIALS = { same_origin: 'same-origin', include: 'include', omit: 'omi
 function osHost() {
     return /** @type {any} */ (globalThis).__arizona_os__;
 }
+
+// Whether this page has already handed the shell its OS-event callback. Module
+// scope, and deliberately NOT cleared by disconnect(): the shell's onEvent contract
+// is a bare callback with no unregister, so a registration outlives the connection
+// that made it and a second connect() would double every OS event forever.
+let _osEventBound = false;
 
 /**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
@@ -2534,23 +2586,16 @@ function flushTimer(el) {
  */
 function saveFormState() {
     _savedForms.clear();
-    document.querySelectorAll('form[id]').forEach((form) => {
-        const fd = new FormData(/** @type {HTMLFormElement} */ (form));
-        /** @type {Object<string, string|string[]>} */
-        const data = {};
-        for (const [k, v] of fd.entries()) {
-            if (k in data) {
-                const prev = data[k];
-                data[k] = Array.isArray(prev)
-                    ? prev.concat(/** @type {string} */ (v))
-                    : [prev, /** @type {string} */ (v)];
-            } else {
-                data[k] = /** @type {string} */ (v);
-            }
-        }
-        const azChange = form.getAttribute('az-change') || null;
-        _savedForms.set(form.id, { fields: data, azChange });
-    });
+    // Every hosting document, not just the main one: a view popped out to a PiP
+    // window keeps its forms in THAT window's document, and a reconnect has to
+    // preserve the user's typing there exactly as it does on the main page.
+    for (const doc of allDocs()) {
+        doc.querySelectorAll('form[id]').forEach((form) => {
+            const data = formFields(new FormData(/** @type {HTMLFormElement} */ (form)));
+            const azChange = form.getAttribute('az-change') || null;
+            _savedForms.set(form.id, { fields: data, azChange });
+        });
+    }
 }
 
 /**
@@ -2559,7 +2604,13 @@ function saveFormState() {
  */
 function restoreFormState() {
     for (const [formId, { fields, azChange }] of _savedForms) {
-        const form = document.getElementById(formId);
+        // Saved from any hosting document, so look in all of them -- a form popped
+        // out to a PiP window is not reachable from the main document.
+        let form = null;
+        for (const doc of allDocs()) {
+            form = doc.getElementById(formId);
+            if (form) break;
+        }
         if (!form) continue;
         const formEl = /** @type {HTMLFormElement} */ (form);
         // A duplicate name (a repeated text input, a checkbox group) was saved as
@@ -3000,12 +3051,17 @@ function connect(endpoint, params = {}) {
     // Let the native shell (if any) inject OS events (window focus/blur, capture
     // state, ...) into the ROOT view's normal event handling. The shell calls
     // cb(name, payload); we relay it as an ordinary pushEvent so the view's
-    // handle_event/3 sees it like any other event. Registered ONCE (not per
-    // spawnWorker / bfcache restore): the shell's listener is persistent, so
-    // re-registering would leak duplicate listeners. A bare callback is the
-    // documented contextBridge/Tauri-listen form (an object of functions can't
-    // cross contextBridge).
-    osHost()?.onEvent?.((name, payload) => pushEvent(name, payload));
+    // handle_event/3 sees it like any other event. Registered ONCE PER PAGE -- not
+    // per spawnWorker, bfcache restore, or connect(): the shell's listener is
+    // persistent and has no unregister, so disconnect() cannot take it back and a
+    // second registration would deliver every OS event twice. The callback relays
+    // through module state, so it keeps addressing the CURRENT connection. A bare
+    // callback is the documented contextBridge/Tauri-listen form (an object of
+    // functions can't cross contextBridge).
+    if (!_osEventBound) {
+        _osEventBound = true;
+        osHost()?.onEvent?.((name, payload) => pushEvent(name, payload));
+    }
 
     // window._ws proxy for E2E test compatibility
     if (typeof window !== 'undefined') {

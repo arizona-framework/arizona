@@ -1286,6 +1286,19 @@ describe('applyEffects', () => {
         // Should not throw
         applyEffects([[999, 'arg1', 'arg2']]);
     });
+
+    it('isolates a failing command so the rest of the batch still runs', () => {
+        document.title = 'before';
+        const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+        // '###nope' is not a valid selector, so add_class throws inside querySelectorAll.
+        applyEffects([
+            [4, '###nope', 'x'],
+            [14, 'after'],
+        ]);
+        expect(document.title).toBe('after');
+        expect(err).toHaveBeenCalled();
+        err.mockRestore();
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -4392,6 +4405,28 @@ describe('native-shell contract (__arizona_os__)', () => {
         disconnect();
     });
 
+    it('does not re-register onEvent when connect runs again', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">hi</span>');
+        const injected = [];
+        globalThis.__arizona_os__ = {
+            capabilities: {},
+            invoke: vi.fn(),
+            onEvent: vi.fn((cb) => injected.push(cb)),
+        };
+        connectWith(mod).disconnect();
+        const second = connectWith(mod);
+        // onEvent has no unregister, so disconnect() cannot take the first callback
+        // back: a second registration would double every OS event for the page's life.
+        expect(globalThis.__arizona_os__.onEvent).toHaveBeenCalledTimes(1);
+        // ...and the surviving callback must still address the CURRENT connection.
+        injected[0]('window_blurred', { x: 1 });
+        const sends = second.posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
+        expect(sends).toEqual([[null, 'window_blurred', { x: 1 }]]);
+        second.disconnect();
+    });
+
     it('a JS_OS effect delegates to the shell invoke with (name, args)', () => {
         const invoke = vi.fn();
         globalThis.__arizona_os__ = { invoke };
@@ -5208,6 +5243,64 @@ describe('form submit', () => {
             'submit_plan',
             { email: 'ada@example.com', plan: 'annual' },
         ]);
+    });
+
+    it('keeps duplicate field names as arrays (checkbox group, select multiple)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[0,"save"]]'>
+                <input type="checkbox" name="tags" value="a" checked />
+                <input type="checkbox" name="tags" value="b" checked />
+                <input type="checkbox" name="tags" value="c" checked />
+                <select name="langs" multiple>
+                    <option value="erl" selected>erl</option>
+                    <option value="js" selected>js</option>
+                </select>
+                <input name="email" value="ada@example.com" />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document
+            .getElementById('f')
+            .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+        // One entry per selected value: the flat shape kept only the last of each.
+        expect(mock.getSentMessages()).toContainEqual([
+            'page',
+            'save',
+            { tags: ['a', 'b', 'c'], langs: ['erl', 'js'], email: 'ada@example.com' },
+        ]);
+    });
+
+    it('reports a checkbox/radio checked state and every selection of a multiple select', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<input id="box" type="checkbox" value="yes" az-change='[[0,"toggled"]]' checked />
+             <select id="langs" multiple az-change='[[0,"picked"]]'>
+                <option value="erl" selected>erl</option>
+                <option value="js" selected>js</option>
+                <option value="rs">rs</option>
+             </select>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const box = document.getElementById('box');
+        box.dispatchEvent(new Event('change', { bubbles: true }));
+        box.checked = false;
+        box.dispatchEvent(new Event('change', { bubbles: true }));
+        document.getElementById('langs').dispatchEvent(new Event('change', { bubbles: true }));
+
+        const sent = mock.getSentMessages();
+        // The value is the same string either way; only `checked` distinguishes them.
+        expect(sent).toContainEqual(['page', 'toggled', { value: 'yes', checked: true }]);
+        expect(sent).toContainEqual(['page', 'toggled', { value: 'yes', checked: false }]);
+        expect(sent).toContainEqual(['page', 'picked', { value: ['erl', 'js'] }]);
     });
 
     it('submit without az-submit does nothing', async () => {
