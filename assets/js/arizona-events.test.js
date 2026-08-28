@@ -270,13 +270,15 @@ describe('open event delegation', () => {
     it('binds a type whose name is not a valid CSS identifier', async () => {
         const mod = await fresh();
         // The HTML parser keeps `.` and `:` in an attribute name, so the type reaches
-        // the selector unescaped and would throw per dispatch.
-        document.body.innerHTML = `<div id="v" az-view><b id="d" az-turbo:load='[0,"loaded"]'>x</b></div>`;
+        // the selector unescaped and would throw per dispatch without CSS.escape.
+        // A dot rather than a colon only because jsdom's selector engine will not
+        // match an escaped colon; Chromium matches both.
+        document.body.innerHTML = `<div id="v" az-view><b id="d" az-my.evt='[0,"loaded"]'>x</b></div>`;
         w = mockWorker(mod);
         mod.mountHooks(document);
         w.open();
 
-        expect(() => fire(document.getElementById('d'), 'turbo:load', true)).not.toThrow();
+        expect(() => fire(document.getElementById('d'), 'my.evt', true)).not.toThrow();
         expect(w.sent()).toEqual([['v', 'loaded', {}]]);
     });
 
