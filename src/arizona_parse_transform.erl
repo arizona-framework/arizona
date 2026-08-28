@@ -1936,10 +1936,14 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
             %% sits in, so an element the backend classifies differently there
             %% (an SVG `<title>`) is treated the same as if it were written
             %% literally at that position.
+            ItemMark = az_attrs_mark(),
             {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
                 ElemAST, Module, false, Backend, CCtx
             ),
-            Opts1 = Opts0#{backend => Backend},
+            %% The item template declares its own attributes: every item renders from
+            %% it, so one `a` answers for the whole list and the per-item data carries
+            %% none of it.
+            Opts1 = Opts0#{backend => Backend, az_attrs => az_attrs_since(ItemMark)},
             Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
@@ -3408,13 +3412,20 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
             {clauses, [
                 {clause, Line, Vars1, Guards1, Prefix1 ++ [DynamicsAST1]}
             ]}},
+    AzAttrs = maps:get(az_attrs, Opts, []),
+    AttrsField = [
+        {map_field_assoc, Line, {atom, Line, a}, erl_parse:abstract(AzAttrs, Line)}
+     || AzAttrs =/= []
+    ],
     BaseFields = [
         {map_field_assoc, Line, {atom, Line, t}, {integer, Line, 0}},
         {map_field_assoc, Line, {atom, Line, s}, StaticsAST},
         {map_field_assoc, Line, {atom, Line, d}, DFunAST},
         {map_field_assoc, Line, {atom, Line, f}, FpAST}
     ],
-    TmplAST = {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)},
+    TmplAST =
+        {map, Line,
+            BaseFields ++ AttrsField ++ opts_to_map_fields(maps:remove(az_attrs, Opts), Line)},
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, TmplAST
     ]}.
