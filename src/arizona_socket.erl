@@ -971,9 +971,15 @@ encode(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
 encode(#{?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
     [<<"{\"e\":">>, json:encode(Effects), <<",\"a\":">>, json:encode(Attrs), $}];
 encode(#{?OPS := Ops, ?AZ_ATTRS := Attrs}) ->
-    json:encode(#{?OPS => Ops, ?AZ_ATTRS => Attrs}, fun op_encoder/2);
+    [
+        <<"{\"o\":">>,
+        json:encode(Ops, fun op_encoder/2),
+        <<",\"a\":">>,
+        json:encode(Attrs),
+        $}
+    ];
 encode(#{?AZ_ATTRS := Attrs}) ->
-    json:encode(#{?AZ_ATTRS => Attrs});
+    [<<"{\"a\":">>, json:encode(Attrs), $}];
 encode(#{?OPS := Ops, ?EFFECTS := Effects}) ->
     [
         <<"{\"o\":">>,
