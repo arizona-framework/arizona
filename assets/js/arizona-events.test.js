@@ -194,9 +194,11 @@ describe('open event delegation', () => {
         // needs a real remove-then-add: re-adding the same function with different
         // options is silently ignored.
         w.ops([], ['prevent-default']);
+        // `false`, not absent: Chrome forces passive when the flag is unspecified,
+        // so an omitted flag here re-forces it and the upgrade does nothing.
         expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
-            undefined,
-            undefined,
+            false,
+            false,
         ]);
         spy.mockRestore();
     });
@@ -221,9 +223,11 @@ describe('open event delegation', () => {
         // The attribute arrives by patch, not markup, so the worker never sees it --
         // it has to be noticed where every attribute write funnels.
         mod.applyOps([[1, 'v:1', 'az-prevent-default', '']]);
+        // `false`, not absent: Chrome forces passive when the flag is unspecified,
+        // so an omitted flag here re-forces it and the upgrade does nothing.
         expect(calls.filter(([t]) => t === 'wheel').map(([, o]) => o.passive)).toEqual([
-            undefined,
-            undefined,
+            false,
+            false,
         ]);
         spy.mockRestore();
     });

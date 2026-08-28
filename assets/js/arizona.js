@@ -2772,9 +2772,12 @@ function handleEvent(target, eventType, signal) {
     const capOpts = { signal, capture: true };
     /** @type {AddEventListenerOptions} */
     const bubOpts = { signal };
-    if (PASSIVE_FORCED.has(eventType) && !_preventDefaultSeen) {
-        capOpts.passive = true;
-        bubOpts.passive = true;
+    if (PASSIVE_FORCED.has(eventType)) {
+        // Both values must be STATED for these four. Chrome's forced-passive applies
+        // exactly when `passive` is unspecified, so omitting it after the upgrade
+        // silently re-forces passive and `az-prevent-default` keeps doing nothing.
+        capOpts.passive = !_preventDefaultSeen;
+        bubOpts.passive = !_preventDefaultSeen;
     }
     target.addEventListener(eventType, capFn, capOpts);
     target.addEventListener(eventType, bubFn, bubOpts);
