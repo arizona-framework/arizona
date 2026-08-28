@@ -600,11 +600,20 @@ function notifyUpdated(el) {
  * @param {Element|Document} root
  */
 function mountHooks(root) {
-    // Delegate whatever events this markup declares. Shares mountHooks' call sites
-    // deliberately: they are exactly the points where new markup enters the DOM
-    // (SSR hydration, OP_TEXT, OP_INSERT, OP_REPLACE, a list insert), and it is the
-    // entry point a host app already calls for markup it inserted itself.
+    // Discovery for markup the WORKER never saw: SSR hydration, and whatever a host
+    // app inserted itself before calling this. Server-sent markup is scanned in the
+    // worker instead (see `mountHooksOnly`), so the op path never pays this walk.
     scanEvents(root);
+    mountHooksOnly(root);
+}
+
+/**
+ * Mount hooks without scanning for event types. The op path uses this: the worker
+ * already reported every `az-*` name in the markup it resolved, so walking the DOM
+ * again here would re-derive what we were just told, at +65-71% of the patch.
+ * @param {Element|Document} root
+ */
+function mountHooksOnly(root) {
     // Nothing to mount against: `mountHook` no-ops without a def, so the scan below can
     // only find elements it will ignore. Worth answering first because this runs per
     // ELEMENT per op -- a slot re-render of a 500-item list is 500 subtree queries for
@@ -754,12 +763,12 @@ function applyTextOp(el, az, val, isHtml) {
             console.warn(`[arizona] slot az:${az} has no closing marker; skipping`);
             return;
         }
-        forEachElementBetweenMarkers(marker, mountHooks);
+        forEachElementBetweenMarkers(marker, mountHooksOnly);
     } else {
         destroyChildHooks(el);
         if (isHtml) {
             el.innerHTML = val;
-            mountHooks(el);
+            mountHooksOnly(el);
         } else {
             // In-place when the element holds exactly one text node: `textContent =`
             // would remove + reinsert it (childList churn), and that forces a layout
@@ -791,6 +800,15 @@ function applyTextOp(el, az, val, isHtml) {
  */
 function applySetAttrOp(el, name, val) {
     el.setAttribute(name, val);
+    // An attribute write can introduce an event type on an element already in the
+    // DOM, where no markup arrives for the worker to scan. Every such write funnels
+    // here -- the SET_ATTR op, an ITEM_PATCH inner op, `arizona_js:set_attr`/
+    // `toggle_attr`, and a `?local` attribute slot -- so one check covers them all.
+    // Without it the attribute lands correctly and its event silently never fires.
+    if (name.startsWith('az-')) {
+        const type = name.slice(3);
+        if (!AZ_DIRECTIVES.has(type)) bindEventType(type);
+    }
     if (name === 'value' && 'value' in el) el.value = val;
     else if (name === 'checked' && 'checked' in el) el.checked = true;
     else if (name === 'selected' && 'selected' in el) el.selected = true;
@@ -917,7 +935,7 @@ function applyOps(ops) {
                     const frag = parseFragmentIn(el.parentNode, op[2]);
                     const added = Array.from(frag.children);
                     el.replaceWith(frag);
-                    for (const e of added) mountHooks(e);
+                    for (const e of added) mountHooksOnly(e);
                     // A popped-out (PiP) view whose placeholder just went with
                     // the outgoing subtree is orphaned -- close its window.
                     closeOrphanedPipWindows();
@@ -1570,7 +1588,7 @@ function insertItemEl(el, key, pos, html, streams = null, az) {
     }
     if (item) {
         streams?.get(el)?.set(key, item);
-        mountHooks(item);
+        mountHooksOnly(item);
     } else {
         console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
     }
@@ -1830,7 +1848,7 @@ function applyListPatch(el, az, subOps) {
                 // but honoring idx keeps this correct for any sub-op ordering).
                 const ref = roots[sub[1]] ?? endMarker;
                 ref.before(frag);
-                for (const e of added) mountHooks(e);
+                for (const e of added) mountHooksOnly(e);
                 childListChanged = true;
                 break;
             }
@@ -2816,16 +2834,16 @@ function bindEventType(type) {
  * attribute suffix is used verbatim as the `addEventListener` type, so there is
  * no mapping table to keep in sync with the platform.
  *
- * Runs ahead of the hook early-out below and independently of it: markup declares
- * events whether or not the app registers hooks.
+ * ONLY for markup the worker never saw -- SSR hydration and host-inserted markup.
+ * Server-sent markup is scanned in the worker (`scanAzAttrs`), which already walks
+ * every op and already knows which fields are HTML.
  *
- * COST: this walk is expensive. A/B of the real client in Chromium, per applyOps:
- * a 500-element list re-render goes 0.219 -> 0.375 ms (+71%) and a 5000-element
- * one 2.134 -> 3.514 ms (+65%). Measure it against the patch it rides on, not
- * against the hook early-out it precedes (0.005 ms) -- that denominator makes a
- * cost of roughly two thirds of the patch read as noise, which is how it was
- * first mis-recorded here. A scan of the op's HTML string measures ~15x cheaper
- * and is the reason discovery should move off this path.
+ * That split is not tidiness, it is the whole cost. This walk on the op path
+ * measured +71% on a 500-element list re-render and +65% on a 5000-element one
+ * (real client, Chromium, per applyOps). Off it, the same batches are +2.0% and
+ * +1.1%. Measure any change here against the patch it rides on, not against the
+ * hook early-out it precedes (0.005 ms) -- that denominator is what let a cost of
+ * roughly two thirds of the patch first get recorded here as noise.
  * @param {Element|Document} root
  */
 function scanEvents(root) {
@@ -3122,7 +3140,16 @@ function connect(endpoint, params = {}) {
             const msg = e.data;
             switch (msg[0]) {
                 case 0: {
-                    // [0, ops|null, effects|null, firstAfterReconnect]
+                    // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null]
+                    // Delegate any event type this batch's markup introduced, before
+                    // the ops land so a listener exists the moment the element does.
+                    // The worker reports raw `az-*` names; deciding which are events
+                    // is done here, where the directive list already lives.
+                    if (msg[4]) {
+                        for (const name of msg[4]) {
+                            if (!AZ_DIRECTIVES.has(name)) bindEventType(name);
+                        }
+                    }
                     const apply = () => {
                         // A patch-scroll intent lives exactly until the first frame
                         // after the patch request. applyOps consumes it when the

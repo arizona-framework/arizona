@@ -212,6 +212,47 @@ setOnPersist(
 // ---------------------------------------------------------------------------
 
 /**
+ * `az-*` attribute names already reported to the main thread. The worker is the
+ * right place to discover them: it already walks every op and already knows which
+ * fields are HTML, because it builds them. Doing it here rather than by walking
+ * the patched DOM keeps the cost off the main thread entirely -- the DOM walk it
+ * replaces measured +65-71% on an applyOps batch.
+ * @type {Set<string>}
+ */
+const _seenAzAttrs = new Set();
+
+/** Names found in THIS message and not seen before; drained by the send. */
+/** @type {Array<string>} */
+let _newAzAttrs = [];
+
+// Matches an `az-*` attribute NAME in serialized HTML. Anchored on the separator
+// before it and on what legally follows a name (`=`, whitespace for a bare
+// attribute, or `/`/`>` closing the tag), so an `az-` inside a value or a URL is
+// not mistaken for one. Over-matching is safe -- an extra name only ever binds a
+// listener for an event that never fires -- but MISSING one is not, since that is
+// the silently-dead-event bug this discovery exists to prevent, so the pattern is
+// deliberately permissive about quoting and case.
+const AZ_ATTR_RE = /[\s/]az-([a-z0-9][a-z0-9-]*)(?=[\s/>=])/gi;
+
+/**
+ * Record every `az-*` attribute name in a resolved HTML payload.
+ * @param {string} html
+ */
+function scanAzAttrs(html) {
+    if (typeof html !== 'string') return;
+    AZ_ATTR_RE.lastIndex = 0;
+    let m = AZ_ATTR_RE.exec(html);
+    while (m !== null) {
+        const name = m[1].toLowerCase();
+        if (!_seenAzAttrs.has(name)) {
+            _seenAzAttrs.add(name);
+            _newAzAttrs.push(name);
+        }
+        m = AZ_ATTR_RE.exec(html);
+    }
+}
+
+/**
  * Walk an ops array (top-level or inner), resolving HTML payloads in-place
  * so the main thread receives pure strings ready for DOM insertion.
  * `OP_REPLACE` only appears at the top level; inner-op cases simply skip it.
@@ -242,13 +283,16 @@ function resolveOps(ops) {
                 const isHtml = typeof op[2] !== 'string';
                 op[2] = resolveHtml(op[2]);
                 op[3] = isHtml;
+                if (isHtml) scanAzAttrs(op[2]);
                 break;
             }
             case OP_REPLACE:
                 op[2] = resolveHtml(op[2]);
+                scanAzAttrs(op[2]);
                 break;
             case OP_INSERT:
                 op[4] = resolveHtml(op[4]);
+                scanAzAttrs(op[4]);
                 break;
             case OP_ITEM_PATCH:
                 resolveOps(op[3]);
@@ -259,7 +303,10 @@ function resolveOps(ops) {
                 // stream form -- no key); INSERT carries item HTML at [2].
                 for (const sub of op[2]) {
                     if (sub[0] === OP_ITEM_PATCH) resolveOps(sub[2]);
-                    else if (sub[0] === OP_INSERT) sub[2] = resolveHtml(sub[2]);
+                    else if (sub[0] === OP_INSERT) {
+                        sub[2] = resolveHtml(sub[2]);
+                        scanAzAttrs(sub[2]);
+                    }
                 }
                 break;
         }
@@ -345,7 +392,13 @@ function openSocket() {
         const firstAfterReconnect = _reconnecting;
         if (_reconnecting) _reconnecting = false;
 
-        postMessage([0, ops, effects, firstAfterReconnect]);
+        // `az-*` names this batch introduced, so the main thread can delegate any
+        // new event type without walking the DOM it just patched. Sent as raw
+        // attribute names: which of them are events and which are framework
+        // directives is the main thread's call, so that list lives in one place.
+        const azAttrs = _newAzAttrs;
+        _newAzAttrs = [];
+        postMessage([0, ops, effects, firstAfterReconnect, azAttrs.length ? azAttrs : null]);
     };
 
     ws.onclose = (e) => {

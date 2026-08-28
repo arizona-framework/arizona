@@ -197,6 +197,52 @@ describe('arizona-worker', () => {
         expect(resolved[1]).toEqual([[0, 'v:0', '<b>x</b>', true]]);
     });
 
+    it('reports az-* attribute names found in resolved markup', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // The main thread no longer walks the patched DOM to find event types, so
+        // anything missed here is a silently dead event.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [
+                    [0, 'v:0', { raw: `<dialog az-close='[0,"c"]'></dialog>` }],
+                    [8, 'v:1', { raw: `<img az-error='[0,"e"]'>` }],
+                    [5, 'v:2', 'k', 0, { raw: `<li az-toggle='[0,"t"]'></li>` }],
+                    [7, 'v:3', 'k', [[8, 'v:4', { raw: `<p az-play='[0,"p"]'></p>` }]]],
+                    [10, 'v:5', [[5, 0, { raw: `<b az-scrollend='[0,"s"]'></b>` }]]],
+                ],
+            }),
+        );
+        const resolved = slf.posted.find((m) => m[0] === 0);
+        expect([...resolved[4]].sort()).toEqual(['close', 'error', 'play', 'scrollend', 'toggle']);
+    });
+
+    it('reports each az-* name once, then stops repeating it', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        const frame = JSON.stringify({
+            o: [[0, 'v:0', { raw: `<dialog az-close='[0,"c"]'></dialog>` }]],
+        });
+        ws.latest().simulateMessage(frame);
+        slf.posted.length = 0;
+        ws.latest().simulateMessage(frame);
+        // Already delegated; re-reporting would make every later patch carry it.
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
+    });
+
+    it('does not mistake a scalar text value for markup', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // A bare string is a `?get` value the client text-nodes; it is never parsed
+        // as HTML, so an attribute-looking substring in it declares nothing.
+        ws.latest().simulateMessage(
+            JSON.stringify({ o: [[0, 'v:0', `<dialog az-close='[0,"c"]'>`]] }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
+    });
+
     it('send message [1, json] forwards to WebSocket when ready', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

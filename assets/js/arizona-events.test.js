@@ -30,7 +30,7 @@ function mockWorker(mod) {
     const disconnect = mod.connect('/ws');
     return {
         open: () => inst.onmessage({ data: [1, false] }),
-        ops: (ops) => inst.onmessage({ data: [0, ops, null, false] }),
+        ops: (ops, azAttrs = null) => inst.onmessage({ data: [0, ops, null, false, azAttrs] }),
         sent: () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1])),
         restore: () => {
             disconnect();
@@ -87,7 +87,7 @@ describe('open event delegation', () => {
         expect(w.sent()).toEqual([['v', 'picked', {}]]);
     });
 
-    it('discovers an event type that only a later patch introduces', async () => {
+    it('delegates an event type the worker reports from a later patch', async () => {
         const mod = await fresh();
         // The SSR marker shape a conditional content slot really has.
         document.body.innerHTML = `<div id="v" az-view az="0"><!--az:0-->old<!--/az--></div>`;
@@ -96,10 +96,36 @@ describe('open event delegation', () => {
         w.open();
 
         // OP_TEXT swaps in markup declaring a type nothing had declared at connect.
-        w.ops([[0, 'v:0', `<dialog id="dlg" az-close='[0,"closed"]'></dialog>`, true]]);
+        // The worker scans the markup it resolved and names it on the frame (proved
+        // in arizona-worker-integration.test.js); the main thread must delegate it.
+        w.ops([[0, 'v:0', `<dialog id="dlg" az-close='[0,"closed"]'></dialog>`, true]], ['close']);
         fire(document.getElementById('dlg'), 'close', false);
 
         expect(w.sent()).toEqual([['v', 'closed', {}]]);
+    });
+
+    it('delegates an event type an attribute write introduces, with no markup', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view az="0"><dialog id="dlg" az="1"></dialog></div>`;
+        w = mockWorker(mod);
+        mod.mountHooks(document);
+        w.open();
+
+        // No markup arrives, so the worker has nothing to scan -- the attribute is
+        // written onto an element already in the DOM. Every such write funnels
+        // through applySetAttrOp: the op, an item-patch inner op, set_attr/
+        // toggle_attr effects, and a ?local attribute slot.
+        w.ops([[1, 'v:1', 'az-close', '[0,"closed"]']]);
+        fire(document.getElementById('dlg'), 'close', false);
+        expect(w.sent()).toEqual([['v', 'closed', {}]]);
+
+        // ...and via an effect, which never reaches the worker at all.
+        mod.applyEffects([[7, '#dlg', 'az-cancel', '[0,"cancelled"]']]);
+        fire(document.getElementById('dlg'), 'cancel', false);
+        expect(w.sent()).toEqual([
+            ['v', 'closed', {}],
+            ['v', 'cancelled', {}],
+        ]);
     });
 
     it('fires a non-bubbling event only for the element that declares it', async () => {

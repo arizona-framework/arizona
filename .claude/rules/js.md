@@ -42,12 +42,25 @@ calls for markup it inserted itself. Binding is monotonic for the page, and the 
 (`click`, `change`, `input`, `keydown`, `keyup`, `focusin`, `focusout`) are seeded eagerly so the
 usual path never waits on a scan.
 
-**The DOM walk is expensive, and was first recorded here as if it were not.** A/B of the real
-client in Chromium, per `applyOps`: a 500-element list re-render goes 0.219 -> 0.375 ms (**+71%**)
-and a 5000-element one 2.134 -> 3.514 ms (**+65%**). The earlier figure in this file compared the
-walk against the 0.005 ms hook early-out it precedes, a denominator that makes a cost of roughly
-two thirds of the patch look like noise. Measure it against the patch it rides on. Scanning the
-op's HTML string instead measures ~15x cheaper, which is why discovery belongs off this path.
+**Server-sent markup is scanned in the worker, not on the main thread.** `arizona-worker.js`
+already walks every op and already knows which fields are HTML, because it builds them, so it
+regexes each resolved payload for `az-*` names and ships the ones it has not reported before as a
+fifth field on `[0, ops, effects, firstAfterReconnect, azAttrs]`. It sends raw attribute names;
+deciding which are events is the main thread's job, so `AZ_DIRECTIVES` stays in one place.
+
+The main-thread `scanEvents` DOM walk therefore runs only for markup the worker never saw: SSR
+hydration, and whatever a host app inserted before calling the exported `mountHooks`. The op path
+uses `mountHooksOnly`, which skips it. **That split is the whole cost**, not tidiness: the walk on
+the op path measured **+71%** on a 500-element list re-render and **+65%** on a 5000-element one
+(real client, Chromium, per `applyOps`); off it, the same batches are +2.0% and +1.1%. Measure any
+change here against the patch it rides on -- comparing against the 0.005 ms hook early-out is what
+let a cost of roughly two thirds of the patch first get recorded here as noise.
+
+**An attribute write needs its own path.** A patch can introduce an event type by writing `az-*`
+onto an element already in the DOM, where no markup arrives for the worker to scan. Every such
+write funnels through `applySetAttrOp` -- the `SET_ATTR` op, an `ITEM_PATCH` inner op,
+`arizona_js:set_attr`/`toggle_attr`, and a `?local` attribute slot -- so the check lives there.
+Without it the attribute lands correctly and its event silently never fires.
 
 **Two listeners per type, split on the event's own `bubbles` flag**, because one phase cannot serve
 both kinds:
