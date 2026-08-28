@@ -1835,8 +1835,9 @@ count_var(_V, _Other, N) ->
     N.
 
 compile_template(Arg, Line, Module, LiveRender, Backend) ->
+    Mark = az_names_mark(),
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(Arg, Module, LiveRender, Backend),
-    Opts = Opts0#{backend => Backend},
+    Opts = Opts0#{backend => Backend, az_names => az_names_since(Mark)},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
 
@@ -2374,11 +2375,14 @@ compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0)
                 raw_text_tag = Tag,
                 content_ctx = ChildCtx
             },
+            InnerMark = az_names_mark(),
             Inner1 = compile_children(Children, none, Inner0),
             {Statics, DynASTs} = finalize(Inner1),
             Fp = generate_fingerprint(Statics),
             {S1, D1} = scope_az(Backend, Fp, Statics, DynASTs),
-            TmplAST = build_template_ast(Line, S1, D1, Fp, #{backend => Backend}),
+            TmplAST = build_template_ast(Line, S1, D1, Fp, #{
+                backend => Backend, az_names => az_names_since(InnerMark)
+            }),
             %% The folded content is a nested template, so its inner `?get` reads
             %% are isolated from THIS slot's dependency bracket -- without touches
             %% the dep-aware diff skips the slot and the element freezes exactly as
@@ -3252,12 +3256,37 @@ compile_parts_ast(Statics, DynASTs, Fingerprint) ->
 
 build_template_ast(Line, Statics, DynASTs, Fingerprint, Opts) ->
     {StaticsAST, DynamicsAST, FpAST} = compile_parts_ast(Statics, DynASTs, Fingerprint),
+    %% The `az-*` names this template declares, carried BY the template so the client
+    %% learns them from the payload that renders them. They ride the statics: sent
+    %% once per fingerprint and stripped by the same dedup, so a repeat costs nothing.
+    AzNames = maps:get(az_names, Opts, []),
+    AzField = [
+        {map_field_assoc, Line, {atom, Line, az_names}, erl_parse:abstract(AzNames, Line)}
+     || AzNames =/= []
+    ],
     BaseFields = [
         {map_field_assoc, Line, {atom, Line, s}, StaticsAST},
         {map_field_assoc, Line, {atom, Line, d}, DynamicsAST},
         {map_field_assoc, Line, {atom, Line, f}, FpAST}
     ],
-    {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)}.
+    {map, Line, BaseFields ++ AzField ++ opts_to_map_fields(maps:remove(az_names, Opts), Line)}.
+
+%% The accumulator is append-at-front, so a mark is its length and everything added
+%% since sits in front of it. A nested template's names appear in its enclosing
+%% template's slice too; harmless, since both payloads carry the same name and the
+%% client binds a type once.
+az_names_mark() ->
+    length(current_az_names()).
+
+az_names_since(Mark) ->
+    All = current_az_names(),
+    lists:usort(lists:sublist(All, length(All) - Mark)).
+
+current_az_names() ->
+    case get(?AZ_ATTRS_KEY) of
+        undefined -> [];
+        L -> L
+    end.
 
 %% The per-item fun is inlined into the CALLER, so it binds the callback's own
 %% parameter names in the caller's scope. A callback that reads the item with

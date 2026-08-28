@@ -5,7 +5,7 @@
  * unit tests (no Worker globals required).
  *
  * Exports: resolveHtml, zipTemplate, backoff, fpCache, loadFpEntries,
- *          setOnPersist, FP_CACHE_MAX, mruFpKeys, takeTouchedFps.
+ *          setOnPersist, FP_CACHE_MAX, mruFpKeys, takeTouchedFps, takeAzNames.
  */
 
 /** Type constant (must match server ?STREAM). */
@@ -63,6 +63,14 @@ const fpCache = new Map();
 const _touchedFps = new Set();
 
 /**
+ * `az-*` names seen on resolved payloads since the last drain. A template carries
+ * the names it declares, so they arrive with the statics that render the markup
+ * declaring them -- the client learns a DOM event type from the very frame that can
+ * first produce it, without re-deriving anything from the bytes.
+ */
+const _azNames = new Set();
+
+/**
  * Optional callback invoked whenever the fp cache is updated (new statics
  * received). The Worker sets this to post cache entries to the main thread
  * for localStorage persistence. Tests leave it unset.
@@ -108,6 +116,13 @@ function touchFp(f, entry) {
  * The fingerprints touched since the last call, clearing the set.
  * @returns {Array<string>}
  */
+function takeAzNames() {
+    if (_azNames.size === 0) return null;
+    const names = [..._azNames];
+    _azNames.clear();
+    return names;
+}
+
 function takeTouchedFps() {
     const keys = [..._touchedFps];
     _touchedFps.clear();
@@ -141,6 +156,7 @@ function resolveHtml(payload) {
     // string), so the client innerHTMLs the unwrapped markup.
     if ('raw' in payload) return payload.raw;
     const f = payload.f;
+    if (payload.a) for (const n of payload.a) _azNames.add(n);
     if (payload.s) {
         /** @type {{s: Array<string>, t?: number, u: number}} */
         const entry = { s: payload.s, u: Date.now() };
@@ -213,6 +229,7 @@ export {
     mruFpKeys,
     resolveHtml,
     setOnPersist,
+    takeAzNames,
     takeTouchedFps,
     zipTemplate,
 };

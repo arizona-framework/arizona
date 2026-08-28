@@ -186,17 +186,47 @@ describe('arizona-worker', () => {
         expect(resolved[3]).toBe(false);
     });
 
-    it("forwards the server's az-* name set as field 4", () => {
+    it("reports a template's az-* names from the payload that carries them", () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
         slf.posted.length = 0;
-        // The app's `az-*` vocabulary, collected by the parse transform and unioned
-        // by the server. It rides the connect frame as top-level `a`, beside `o` and
-        // `e`, and the worker only relays it: the main thread decides which names
-        // are DOM events, so that triage lives in one place.
-        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click', 'az-toggle'] }));
+        // A template declares its own names, so they ride the statics that render the
+        // markup declaring them: the client learns a DOM event type from the very
+        // frame that can first produce it. The worker only relays -- the main thread
+        // decides which names are DOM events, so that triage lives in one place.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [
+                    [
+                        0,
+                        'v:0',
+                        { f: 'fpA', s: ['<b az-toggle="x">', '</b>'], d: ['1'], a: ['az-toggle'] },
+                    ],
+                ],
+            }),
+        );
         const resolved = slf.posted.find((m) => m[0] === 0);
-        expect(resolved[4]).toEqual(['az-click', 'az-toggle']);
+        expect(resolved[4]).toEqual(['az-toggle']);
+    });
+
+    it('reports a name once, then stops repeating it', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        const frame = JSON.stringify({
+            o: [
+                [
+                    0,
+                    'v:0',
+                    { f: 'fpB', s: ['<b az-close="x">', '</b>'], d: ['1'], a: ['az-close'] },
+                ],
+            ],
+        });
+        ws.latest().simulateMessage(frame);
+        slf.posted.length = 0;
+        // The statics are cached after the first sight, and the names ride them, so a
+        // later frame for the same fingerprint carries neither.
+        ws.latest().simulateMessage(JSON.stringify({ o: [[0, 'v:0', { f: 'fpB', d: ['2'] }]] }));
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
     });
 
     it('sends null in field 4 on a frame carrying no names', () => {

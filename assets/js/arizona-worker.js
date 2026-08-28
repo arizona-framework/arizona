@@ -24,6 +24,7 @@ import {
     mruFpKeys,
     resolveHtml,
     setOnPersist,
+    takeAzNames,
     takeTouchedFps,
 } from './arizona-core.js';
 
@@ -343,7 +344,6 @@ function openSocket() {
         // one place. The worker only forwards -- deriving the names here would mean
         // a regex over serialized HTML, which cannot tell an attribute NAME from
         // `az-` text inside an attribute VALUE and is wrong in both directions.
-        const azNames = msg.a || null;
 
         if (ops) {
             resolveOps(ops);
@@ -358,6 +358,15 @@ function openSocket() {
         const firstAfterReconnect = _reconnecting && ops !== null;
         if (firstAfterReconnect) _reconnecting = false;
 
+        // Two sources, each covering the other's gap: the connect frame carries the
+        // app's compile-time union (which SSR markup needs, since its templates never
+        // arrive as payloads), and a resolved payload carries the names of the template
+        // it renders (which a navigate needs, since no second connect frame is sent).
+        const fromPayloads = takeAzNames();
+        const azNames =
+            msg.a || fromPayloads
+                ? [...new Set([...(msg.a || []), ...(fromPayloads || [])])]
+                : null;
         postMessage([0, ops, effects, firstAfterReconnect, azNames]);
     };
 

@@ -601,7 +601,8 @@ mark_esc(V0) ->
 
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`
-(fingerprint), the optional `diff => false` flag, and the render `backend`.
+(fingerprint), the optional `diff => false` flag, the render `backend`, and the
+`az_names` this template declares.
 
 Used by both the render path (`arizona_render`) and the diff path
 (`arizona_diff`), so a diffed snapshot carries the same backend as a freshly
@@ -618,9 +619,16 @@ maybe_propagate(Tmpl, Snap) ->
             #{} -> Snap
         end,
     Snap2 = maybe_put_fingerprint(Tmpl, Snap1),
+    Snap3 =
+        case Tmpl of
+            #{backend := Backend} -> Snap2#{backend => Backend};
+            #{} -> Snap2
+        end,
+    %% The client binds a DOM event type only for a name it has been told about, so
+    %% the names have to reach the payload that renders the markup declaring them.
     case Tmpl of
-        #{backend := Backend} -> Snap2#{backend => Backend};
-        #{} -> Snap2
+        #{az_names := Names} -> Snap3#{az_names => Names};
+        #{} -> Snap3
     end.
 
 %% Copies the `f` field from a template to a snapshot if present. Internal to

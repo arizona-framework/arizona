@@ -291,12 +291,19 @@ Renders a single each-item snapshot.
 If the template has a fingerprint, returns a wire-format map keyed by
 `~"f"`/`~"s"`/`~"d"`. Otherwise returns a plain HTML binary.
 """.
+%% The `az-*` names a template declares, carried by the payload that renders it.
+%% They ride the statics -- both are sent once per fingerprint and stripped by the
+%% same dedup -- so the client learns a type from the very frame that can first
+%% produce it, and a repeat costs nothing.
+az_field(#{az_names := Names}) when Names =/= [] -> #{~"a" => Names};
+az_field(_Template) -> #{}.
+
 -spec zip_item(Template, Dynamics) -> map() | binary() when
     Template :: map(),
     Dynamics :: [{arizona_template:az(), term(), map()}].
 zip_item(#{f := F, s := S} = Tmpl, D) ->
     Backend = backend(Tmpl),
-    #{
+    (az_field(Tmpl))#{
         ~"f" => F,
         ~"s" => S,
         ~"d" => [render_fp_val(Backend, V) || {_Az, V, _Deps} <:- D]
@@ -335,7 +342,7 @@ anywhere. A malformed template fails loudly at the match instead.
     Items :: [[{arizona_template:az(), term(), map()}]].
 zip_list_fp(#{f := F, s := S, t := T} = Tmpl, ItemsList) ->
     Backend = backend(Tmpl),
-    #{
+    (az_field(Tmpl))#{
         ~"t" => T,
         ~"f" => F,
         ~"s" => S,
@@ -356,7 +363,7 @@ against a template, producing the same fingerprinted wire payload as
     Order :: [term()].
 zip_stream_fp(#{f := F, s := S, t := T} = Tmpl, Items, Order) ->
     Backend = backend(Tmpl),
-    #{
+    (az_field(Tmpl))#{
         ~"t" => T,
         ~"f" => F,
         ~"s" => S,
@@ -379,7 +386,7 @@ plain snapshots fall back to a HTML binary.
     Snapshot :: map().
 fingerprint_payload(#{f := F, s := S, d := D} = Snap) ->
     Backend = backend(Snap),
-    #{
+    (az_field(Snap))#{
         ~"f" => F,
         ~"s" => S,
         ~"d" => [render_fp_val(Backend, V) || {_Az, V} <:- D]
@@ -695,10 +702,12 @@ render_fp_val(_Backend, #{f := _} = Nested) ->
     fingerprint_payload(Nested);
 render_fp_val(Backend, #{s := S, d := D}) ->
     flat_zip(Backend, S, [V || {_Az, V} <:- D]);
-render_fp_val(Backend, #{t := ?EACH, items := Items, template := #{f := F, t := T, s := S}}) when
+render_fp_val(Backend, #{
+    t := ?EACH, items := Items, template := #{f := F, t := T, s := S} = ItemTmpl
+}) when
     is_list(Items)
 ->
-    #{
+    (az_field(ItemTmpl))#{
         ~"t" => T,
         ~"f" => F,
         ~"s" => S,
@@ -722,9 +731,9 @@ render_fp_val(Backend, #{
     t := ?EACH,
     items := Items,
     order := Order,
-    template := #{f := F, t := T, s := S}
+    template := #{f := F, t := T, s := S} = ItemTmpl
 }) ->
-    #{
+    (az_field(ItemTmpl))#{
         ~"t" => T,
         ~"f" => F,
         ~"s" => S,
