@@ -270,6 +270,177 @@ describe('arizona-worker', () => {
         expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
     });
 
+    it('reports a name declared in a template payload statics', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // The scan walks the payload, not the markup built from it, so the statics
+        // are a scan site of their own.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [[0, 'v:0', { f: 'fpS', s: ['<li az="a" az-hover="1"', '>x</li>'], d: [''] }]],
+            }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toEqual(['hover']);
+    });
+
+    it('reports a name that arrives only in a dynamic attribute', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // `render_attr/2` emits a whole ` name="value"` as one dynamic, so the name
+        // is in the dynamics, not the statics.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [[0, 'v:0', { f: 'fpD', s: ['<li az="a"', '>x</li>'], d: [' az-key="1"'] }]],
+            }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toEqual(['key']);
+    });
+
+    it('reports a new dynamic name on a frame that ships no statics', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [[0, 'v:0', { f: 'fpC', s: ['<li az="a"', '>x</li>'], d: [' az-key="1"'] }]],
+            }),
+        );
+        slf.posted.length = 0;
+        // Statics are cached by fingerprint and cease to be sent, so scanning them
+        // once is enough -- but the dynamics still arrive every frame and can carry
+        // a name the page has never bound.
+        ws.latest().simulateMessage(
+            JSON.stringify({ o: [[0, 'v:0', { f: 'fpC', d: [' az-drop="2"'] }]] }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toEqual(['drop']);
+    });
+
+    it('reports a bare dynamic attribute closed by the following static', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // `{az_form_reset, true}` renders as ` az-form-reset` with nothing after it:
+        // the `>` that ends the name lives in the NEXT static, so a chunk scanned in
+        // isolation has to accept its own end as the boundary.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [
+                    [
+                        0,
+                        'v:0',
+                        { f: 'fpB', s: ['<form az="a"', '>x</form>'], d: [' az-form-reset'] },
+                    ],
+                ],
+            }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toEqual(['form-reset']);
+    });
+
+    it('does not scan a dynamic content value as markup', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // The same prose rule as for a whole payload, applied per slot: a value in a
+        // content slot is escaped text, whatever it spells.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [
+                    [
+                        0,
+                        'v:0',
+                        {
+                            f: 'fpP',
+                            s: ['<p az="a">', '</p>'],
+                            d: ['chat: az-zz1 az-prevent-default ok'],
+                        },
+                    ],
+                ],
+            }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toBeNull();
+    });
+
+    it('scans markup that arrives in a content slot', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // A nested template with no fingerprint of its own arrives already flattened
+        // to a markup string in the slot, so the slot still needs a tag scan.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [
+                    [
+                        0,
+                        'v:0',
+                        {
+                            f: 'fpF',
+                            s: ['<div az="a">', '</div>'],
+                            d: [`<b az-flat='[0,"f"]'>y</b>`],
+                        },
+                    ],
+                ],
+            }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toEqual(['flat']);
+    });
+
+    it('scans a template nested in a dynamic slot', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [
+                    [
+                        0,
+                        'v:0',
+                        {
+                            f: 'fpO',
+                            s: ['<div az="o">', '</div>'],
+                            d: [
+                                {
+                                    f: 'fpI',
+                                    s: ['<b az="i"', '>y</b>'],
+                                    d: [' az-hoverend="1"'],
+                                },
+                            ],
+                        },
+                    ],
+                ],
+            }),
+        );
+        expect(slf.posted.find((m) => m[0] === 0)[4]).toEqual(['hoverend']);
+    });
+
+    it('scans every item of an ?each payload, not just the first', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        // One template, one dynamics list per item -- and a per-item value is exactly
+        // where a name the page has never bound can appear.
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [
+                    [
+                        0,
+                        'v:0',
+                        {
+                            f: 'fpE',
+                            t: 0,
+                            s: ['<li az="i"', '>', '</li>'],
+                            d: [
+                                [' az-key="1"', 'a'],
+                                [' az-swipe="2"', 'b'],
+                            ],
+                        },
+                    ],
+                ],
+            }),
+        );
+        expect([...slf.posted.find((m) => m[0] === 0)[4]].sort()).toEqual(['key', 'swipe']);
+    });
+
     it('send message [1, json] forwards to WebSocket when ready', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

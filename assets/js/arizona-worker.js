@@ -18,6 +18,7 @@
  */
 
 import {
+    EACH,
     FP_CACHE_MAX,
     fpCache,
     loadFpEntries,
@@ -233,14 +234,14 @@ let _newAzAttrs = [];
 // matching is NOT harmless for a directive. A `?raw` payload is markup by
 // definition, so scanning its tags is right.
 //
-// Splitting into tags first costs ~2.7x a single pass over 68 KB of markup
-// (0.18 ms vs 0.07 ms). The obvious cheaper fix -- one pass, then `lastIndexOf('<')`
+// The obvious cheaper fix -- one pass over the payload, then `lastIndexOf('<')`
 // per hit to test whether it landed inside a tag -- is 2x faster on markup and
 // **640x slower on prose** (2.4 ms vs 0.004 ms for 14 KB of chat text carrying
 // `az-` tokens), because the backward scan degrades on exactly the user-authored
 // content this guard exists for. Cost that scales with attacker-supplied text is
-// the wrong trade; the memoisation worth having instead is per fingerprint, since
-// statics arrive once and dynamics are small.
+// the wrong trade. What pays instead is scanning the payload STRUCTURE rather than
+// the assembled markup (see scanAzAttrs): the statics are per fingerprint, so they
+// are scanned once, and every later frame scans only its dynamics.
 const TAG_RE = /<[^>]*>/g;
 
 // Matches an `az-*` attribute NAME inside one tag. Anchored on the separator before
@@ -249,29 +250,208 @@ const TAG_RE = /<[^>]*>/g;
 // the HTML parser keeps all three in an attribute name and the docs prescribe the
 // underscore form (`{~"az-my_event", ...}`) -- excluding them made that form work at
 // SSR and die the moment the same element arrived by patch.
-const AZ_ATTR_RE = /[\s/]az-([a-z0-9][\w.:-]*)(?=[\s/>=])/gi;
+const AZ_NAME = 'az-([a-z0-9][\\w.:-]*)';
+const AZ_ATTR_RE = new RegExp(`[\\s/]${AZ_NAME}(?=[\\s/>=])`, 'gi');
+
+// The same name matched inside ONE dynamic attribute chunk instead of a whole tag.
+// A chunk is what `arizona_html:render_attr/2` emits for one slot (` name`,
+// ` name="value"`, or nothing), so a name's separators can fall outside it: the one
+// in front sits at the end of the static before the slot, the one behind at the
+// start of the static after it -- a bare ` az-form-reset` has its `>` in the next
+// static and would go unseen without the end-anchored form. Both edges are fixed by
+// the template, so the plan below picks the variant per slot: bit 1 = the preceding
+// static ends with a separator, bit 0 = the following static starts with one.
+const AZ_CHUNK_RES = [
+    new RegExp(`[\\s/]${AZ_NAME}(?=[\\s/>=])`, 'gi'),
+    new RegExp(`[\\s/]${AZ_NAME}(?=[\\s/>=]|$)`, 'gi'),
+    new RegExp(`(?:^|[\\s/])${AZ_NAME}(?=[\\s/>=])`, 'gi'),
+    new RegExp(`(?:^|[\\s/])${AZ_NAME}(?=[\\s/>=]|$)`, 'gi'),
+];
+
+const SEP_RE = /[\s/]/;
+const AFTER_NAME_RE = /[\s/>=]/;
 
 /**
- * Record every `az-*` attribute name in a resolved HTML payload.
+ * Per-fingerprint scan plan, one entry per dynamic slot: `-1` for a content slot
+ * (between tags), otherwise the `AZ_CHUNK_RES` index for an attribute slot. Grows
+ * with the fingerprint cache and lives as long as it does -- both are keyed by a
+ * hash of the statics, so an entry can never go stale.
+ * @type {Map<string, Int8Array>}
+ */
+const _fpPlans = new Map();
+
+/**
+ * Record one name, reporting it to the main thread the first time it is seen.
+ * @param {string} name
+ */
+function recordAzAttr(name) {
+    const lower = name.toLowerCase();
+    if (!_seenAzAttrs.has(lower)) {
+        _seenAzAttrs.add(lower);
+        _newAzAttrs.push(lower);
+    }
+}
+
+/**
+ * Record every `az-*` attribute name in a run of markup: split into tags first,
+ * then look for names inside each tag.
  * @param {string} html
  */
-function scanAzAttrs(html) {
-    if (typeof html !== 'string') return;
+function scanMarkup(html) {
     TAG_RE.lastIndex = 0;
     let tag = TAG_RE.exec(html);
     while (tag !== null) {
         AZ_ATTR_RE.lastIndex = 0;
         let m = AZ_ATTR_RE.exec(tag[0]);
         while (m !== null) {
-            const name = m[1].toLowerCase();
-            if (!_seenAzAttrs.has(name)) {
-                _seenAzAttrs.add(name);
-                _newAzAttrs.push(name);
-            }
+            recordAzAttr(m[1]);
             m = AZ_ATTR_RE.exec(tag[0]);
         }
         tag = TAG_RE.exec(html);
     }
+}
+
+/**
+ * Record every `az-*` attribute name in one dynamic attribute chunk.
+ * @param {string} chunk
+ * @param {number} variant -- index into AZ_CHUNK_RES
+ */
+function scanAttrChunk(chunk, variant) {
+    const re = AZ_CHUNK_RES[variant];
+    re.lastIndex = 0;
+    let m = re.exec(chunk);
+    while (m !== null) {
+        recordAzAttr(m[1]);
+        m = re.exec(chunk);
+    }
+}
+
+/**
+ * Classify each dynamic slot of a template from its statics. A slot is inside a
+ * tag when the last `<` or `>` before it was a `<`; both characters are unambiguous
+ * because the server escapes them everywhere else.
+ * @param {Array<string>} statics
+ * @returns {Int8Array}
+ */
+function buildPlan(statics) {
+    const plan = new Int8Array(statics.length - 1);
+    let inTag = false;
+    for (let i = 0; i < plan.length; i++) {
+        const s = statics[i];
+        for (let j = s.length - 1; j >= 0; j--) {
+            const c = s.charCodeAt(j);
+            if (c === 60) {
+                inTag = true;
+                break;
+            }
+            if (c === 62) {
+                inTag = false;
+                break;
+            }
+        }
+        if (!inTag) {
+            plan[i] = -1;
+            continue;
+        }
+        // An empty neighbouring static leaves the boundary character to the
+        // adjoining dynamic, which is not knowable per fingerprint. Allow the
+        // anchor there: over-reporting a name only ever costs one extra delegated
+        // event type, while missing one is a dead event.
+        const next = statics[i + 1];
+        const headSep = s.length === 0 || SEP_RE.test(s[s.length - 1]);
+        const tailSep = next.length === 0 || AFTER_NAME_RE.test(next[0]);
+        plan[i] = (headSep ? 2 : 0) | (tailSep ? 1 : 0);
+    }
+    return plan;
+}
+
+/**
+ * The scan plan for a fingerprint, scanning its statics on the way in. The statics
+ * are constant for the fingerprint (it is their hash), so the names they declare
+ * are found once no matter how many frames carry the template.
+ * @param {string} f
+ * @param {Array<string>} statics
+ * @returns {Int8Array}
+ */
+function planFor(f, statics) {
+    let plan = _fpPlans.get(f);
+    if (plan === undefined) {
+        plan = buildPlan(statics);
+        _fpPlans.set(f, plan);
+        // Joining elides the dynamics, which is exactly right: they are scanned
+        // per frame below. Nothing is lost at the seams because an attribute NAME
+        // is always a compile-time literal, so it never spans a slot.
+        scanMarkup(statics.join(''));
+    }
+    return plan;
+}
+
+/**
+ * Record every `az-*` attribute name a payload introduces.
+ *
+ * Walks the payload rather than the markup `resolveHtml` builds from it, so the
+ * statics -- most of the bytes, and the same bytes on every frame -- are scanned
+ * once per fingerprint instead of once per frame. Must run AFTER `resolveHtml`:
+ * that is what puts a statics-less payload's fingerprint in the cache.
+ * @param {string|{raw: string}|{f: string, s?: Array<string>, t?: number, d: Array<*>}} payload
+ */
+function scanAzAttrs(payload) {
+    if (typeof payload === 'string') {
+        scanMarkup(payload);
+        return;
+    }
+    if ('raw' in payload) {
+        scanMarkup(payload.raw);
+        return;
+    }
+    const f = payload.f;
+    const statics = payload.s || /** @type {{s: Array<string>}} */ (fpCache.get(f)).s;
+    const plan = planFor(f, statics);
+    // An `?each` payload holds one dynamics list per item, all against the one
+    // template -- so one plan covers every item.
+    if (payload.t === EACH) {
+        for (const itemD of payload.d) scanDynamics(plan, itemD);
+    } else {
+        scanDynamics(plan, payload.d);
+    }
+}
+
+/**
+ * @param {Int8Array} plan
+ * @param {Array<*>} dynamics
+ */
+function scanDynamics(plan, dynamics) {
+    for (let i = 0; i < dynamics.length; i++) {
+        const v = dynamics[i];
+        const variant = plan[i];
+        if (Array.isArray(v)) {
+            for (let j = 0; j < v.length; j++) scanValue(v[j], variant);
+        } else {
+            scanValue(v, variant);
+        }
+    }
+}
+
+/**
+ * @param {*} v
+ * @param {number} variant -- AZ_CHUNK_RES index, or -1 for a content slot
+ */
+function scanValue(v, variant) {
+    if (typeof v !== 'string') {
+        // A nested template payload. An attribute slot never holds one --
+        // `arizona_html:render_attr/2` returns the whole ` name="value"` as a
+        // binary -- so this is always content and needs no chunk variant.
+        if (v !== null && typeof v === 'object') scanAzAttrs(v);
+        return;
+    }
+    if (variant >= 0) {
+        scanAttrChunk(v, variant);
+        return;
+    }
+    // A content slot can still hold markup (a nested template with no fingerprint
+    // of its own arrives already flattened), so it gets the tag scan -- which is
+    // also what keeps prose in that slot from declaring anything.
+    scanMarkup(v);
 }
 
 /**
@@ -302,20 +482,25 @@ function resolveOps(ops) {
                 // HTML via innerHTML. (Nothing extra rides the WS wire: text is a string,
                 // HTML an object -- the type itself is the discriminator; op[3] is only
                 // for the worker -> main-thread message.)
-                const isHtml = typeof op[2] !== 'string';
-                op[2] = resolveHtml(op[2]);
+                const payload = op[2];
+                const isHtml = typeof payload !== 'string';
+                op[2] = resolveHtml(payload);
                 op[3] = isHtml;
-                if (isHtml) scanAzAttrs(op[2]);
+                if (isHtml) scanAzAttrs(payload);
                 break;
             }
-            case OP_REPLACE:
-                op[2] = resolveHtml(op[2]);
-                scanAzAttrs(op[2]);
+            case OP_REPLACE: {
+                const payload = op[2];
+                op[2] = resolveHtml(payload);
+                scanAzAttrs(payload);
                 break;
-            case OP_INSERT:
-                op[4] = resolveHtml(op[4]);
-                scanAzAttrs(op[4]);
+            }
+            case OP_INSERT: {
+                const payload = op[4];
+                op[4] = resolveHtml(payload);
+                scanAzAttrs(payload);
                 break;
+            }
             case OP_ITEM_PATCH:
                 resolveOps(op[3]);
                 break;
@@ -326,8 +511,9 @@ function resolveOps(ops) {
                 for (const sub of op[2]) {
                     if (sub[0] === OP_ITEM_PATCH) resolveOps(sub[2]);
                     else if (sub[0] === OP_INSERT) {
-                        sub[2] = resolveHtml(sub[2]);
-                        scanAzAttrs(sub[2]);
+                        const payload = sub[2];
+                        sub[2] = resolveHtml(payload);
+                        scanAzAttrs(payload);
                     }
                 }
                 break;

@@ -5,7 +5,7 @@
  * unit tests (no Worker globals required).
  *
  * Exports: resolveHtml, zipTemplate, backoff, fpCache, loadFpEntries,
- *          setOnPersist, FP_CACHE_MAX, mruFpKeys, takeTouchedFps.
+ *          setOnPersist, EACH, FP_CACHE_MAX, mruFpKeys, takeTouchedFps.
  */
 
 /** Type constant (must match server ?STREAM). */
@@ -207,6 +207,7 @@ function backoff(attempt) {
 
 export {
     backoff,
+    EACH,
     FP_CACHE_MAX,
     fpCache,
     loadFpEntries,
