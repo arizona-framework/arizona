@@ -152,7 +152,10 @@ render(Bindings) ->
     d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
     f := binary(),
     single_root => true,
-    backend => module()
+    backend => module(),
+    %% Attributes, as on `template()`. Every item renders from this one template, so
+    %% a list of any length declares its attributes exactly once.
+    a => [binary()]
 }.
 
 -nominal each_container() :: #{
