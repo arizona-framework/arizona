@@ -2029,10 +2029,11 @@ expect_ws_close(Sock, ExpectedCode) ->
 
 reconnect_init(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>, [{reconnect, true}]),
-    %% Reconnect init sends a REPLACE op immediately
+    %% Reconnect init sends a REPLACE op immediately, carrying the declared names
+    %% on the same frame rather than costing a second one.
     {text, Resp} = ws_recv(Sock),
     Decoded = json:decode(Resp),
-    ?assertMatch(#{~"o" := _}, Decoded),
+    ?assertMatch(#{~"o" := _, ~"a" := _}, Decoded),
     ws_close(Sock).
 
 reconnect_fps_follow_ships_resync_then_reply(Config) ->
@@ -2114,7 +2115,8 @@ crash_info_closes(Config) ->
     gen_tcp:close(Sock).
 
 crash_init_closes(Config) ->
-    {ok, Sock} = ws_connect(Config, <<"/crash_on_mount">>),
+    %% Mount crashes before any reply, so there is no names frame to consume.
+    {ok, Sock} = ws_connect(Config, <<"/crash_on_mount">>, [{consume_connect, false}]),
     %% Mount crashes -- socket closes with 4500.
     {close, 4500, _} = ws_recv(Sock),
     gen_tcp:close(Sock).
@@ -2144,6 +2146,26 @@ ws_connect(Config, Path, Opts) ->
     ]),
     ok = ws_handshake(Sock, Port, Path, Opts),
     ok = inet:setopts(Sock, [{packet, raw}]),
+    %% Every successful connect opens with the declared `az-*` names, which the
+    %% client needs before it can answer its own first event. Consumed here so each
+    %% test reads the frame it is actually about, and asserted so the contract stays
+    %% covered. Opt out with `{consume_connect, false}` to inspect that frame, or
+    %% when init is expected to crash and close instead of replying.
+    %% Mirrors `arizona_socket:init_view/4`: only the plain reconnect (reconnect
+    %% without fps_follow) carries ops on its connect frame, and that frame is the
+    %% one its tests want to read. The other two reply with the names alone, so
+    %% consume those or every later `ws_recv` is off by one frame.
+    Reconnect = proplists:get_value(reconnect, Opts, false),
+    FpsFollow = proplists:get_value(fps_follow, Opts, false),
+    ConsumeDefault = not (Reconnect andalso not FpsFollow),
+    case proplists:get_value(consume_connect, Opts, ConsumeDefault) of
+        true ->
+            {text, Connect} = ws_recv(Sock),
+            #{~"a" := Names} = json:decode(Connect),
+            true = is_list(Names);
+        false ->
+            ok
+    end,
     {ok, Sock}.
 
 ws_handshake(Sock, Port, Path, Opts) ->
