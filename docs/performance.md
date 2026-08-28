@@ -12,6 +12,7 @@ treated as thresholds.
 | ------- | -------------- |
 | `make bench ARGS="--only <label>"` | Per-op wall clock for a workload. Catches regressions, not causes. |
 | `make bench-ab REFS="<a> <b>" ARGS="--only <label>"` | Paired A/B of one workload across two commits. |
+| `make bench-client ARGS="--only <label>"` | `applyOps` in a real Chromium, against fixtures from a real diff. |
 | `make prof ARGS="--only <label>"` | eprof/fprof per-MFA breakdown. Finds hot paths. |
 | `make prof-at REF=<ref> ARGS=...` | The same at any commit-ish, in a cached worktree. |
 | call-count tracing | Which functions run, and how often. See below. |
@@ -298,6 +299,39 @@ hook guard took a 500-item slot re-render from 3.2 ms of scanning to ~1 us.
 it, but `resolveHtml` is called directly by tests as well as by the worker, so any
 refresh entry point can be bypassed -- and a stale clock silently skews the fingerprint
 cache's MRU eviction. Not worth that for 23 ns.
+
+### Benchmarking the client -- `make bench-client`
+
+`make bench-client` times `applyOps` in a real Chromium against fixtures generated from a
+**real diff** (`scripts/client_fixture.escript`), printing a per-function breakdown beside a
+raw-DOM floor. Not in `ci`, for the same reason `bench` is not.
+
+| workload | ops | total | floor | ratio |
+| -------- | --- | ----- | ----- | ----- |
+| `stream_patch` (200 of 400 changed) | 200 `OP_ITEM_PATCH` | 0.158 ms | 0.039 ms | 4.0x |
+| `stream_render` (400 of 400 changed) | 1 `OP_TEXT` | 1.08 ms | 1.00 ms | 1.1x |
+
+**The full re-render path is already at the floor.** `parseFragmentIn` is 0.93 ms of the
+1.08, so the batch costs about what a bare `innerHTML` of the same fragment does. Nothing to
+win there, and nothing to move to the worker either: parsing needs a DOM, and parsed nodes are
+not transferable.
+
+It guards two traps, both of which produced confident numbers for work that never happened.
+
+**Hand-written ops measure a workload the engine never emits.** The op shape is not guessable:
+a bulk change collapses to ONE container `?OP_TEXT`, while a partial change emits per-item
+`?OP_ITEM_PATCH` that all share the container's az. A benchmark inventing one op per element
+reported 64% of its time in `querySelector` and implied an O(N^2) lookup problem -- the real
+batch resolves its target **once**, and `buildKeyMap` runs once. This is the client form of
+"the benchmark's call graph must match production's" above, so fixtures come from
+`arizona_diff` rather than from imagination.
+
+**An op that does not resolve is skipped, not failed.** A raw `arizona_diff:diff/4` target is
+view-relative, and the client reads a colon-less target as a VIEW ID, so a batch missing the
+scoping that `arizona_socket:flatten_ops/2` applies patches nothing and warns once per op.
+Timing that measures `console.warn`: it read 2.4 ms/batch where the real figure is 0.158 ms,
+and made framework overhead look like 98% of the batch. The harness refuses to print a number
+unless the DOM visibly changed and the console stayed silent, and exits non-zero instead.
 
 ## Where the time actually goes
 
