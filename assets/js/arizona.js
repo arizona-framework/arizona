@@ -2725,32 +2725,34 @@ function runDelegated(e, attr, sel, capture) {
     if (!t || t.nodeType !== 1) return;
     const el = capture ? (t.hasAttribute(attr) ? t : null) : t.closest(sel);
     if (!el || !_connected) return;
+    // Before the empty-value return: `az-<event>=""` with `az-prevent-default`
+    // declares no command but still asks for the default to be suppressed.
+    if (el.hasAttribute('az-prevent-default')) e.preventDefault();
     const raw = el.getAttribute(attr);
     if (!raw) return;
-    if (el.hasAttribute('az-prevent-default')) e.preventDefault();
     // The value is a command list by DECLARATION, so it is not inspected to decide
-    // that. Command-versus-data is settled at compile time, where the parse
-    // transform can see it: it records `az-*` names bound to an effect and skips
-    // ones bound to a static value, so `az-select="[1,2,3]"` never reaches the
-    // server's set and `select` is never delegated. No value test could stand in
-    // for that -- `arizona_effect:encode/1` emits a single command unwrapped
+    // that. Command-versus-data is settled where it is provable -- at compile time
+    // for a visible builder call, at render time for an opaque dynamic that
+    // evaluates to a command (arizona_event_attrs) -- so a delegated name was
+    // proved to carry commands somewhere. No value test here could stand in for
+    // that: `arizona_effect:encode/1` emits a single command unwrapped
     // (`[0,"inc"]`), which makes an app's array of ids a structurally valid
     // command list.
     //
-    // The try/catch is containment, not discrimination. One declared shape can
-    // still hold anything at runtime: an attribute the transform could not fold
-    // (`{az_keydown, ?get(handler)}`) is recorded because its value is unknowable
-    // at compile time. A malformed value there must not throw out of a document
-    // listener, which is per dispatch on types that can fire at pointer-move rate
-    // -- hence warnOnce, keyed by the message so one bad attribute reports once.
-    let cmds;
+    // The try/catch is containment, not discrimination, and it must cover the
+    // EXECUTION too: a proven name can still share the DOM with an app-data
+    // attribute of the same name (`arizona.set_attr` writing `az-close`, host
+    // markup), whose value parses but crashes the interpreter. Nothing may throw
+    // out of a document listener -- it is per dispatch on types that can fire at
+    // pointer-move rate -- hence warnOnce, keyed by the message so one bad
+    // attribute reports once.
     try {
-        cmds = JSON.parse(raw);
-    } catch {
-        warnOnce(`[arizona] ${attr} does not hold a command list; ignoring it`);
-        return;
+        const cmds = JSON.parse(raw);
+        executeJS(el, e, withTransitionAttr(el, cmds));
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        warnOnce(`[arizona] ${attr} did not run as a command list: ${detail}`);
     }
-    executeJS(el, e, withTransitionAttr(el, cmds));
 }
 
 /**
@@ -2798,12 +2800,23 @@ function handleEvent(target, eventType, signal) {
         // `az-prevent-default` into a silent no-op on exactly those four. Stating
         // it is therefore mandatory here, in both directions: `true` keeps the
         // scroll fast path for a page that only observes these events, `false` is
-        // what makes preventDefault take effect on a page that declares it. The
-        // value is known before any of the four is ever bound, because the whole
-        // attribute set arrives in one frame and `noteAzAttrs` reads the directive out
-        // of it before binding anything.
+        // what makes preventDefault take effect on a page that declares it.
+        // `noteAzAttrs` reads the directive out of a frame's set before binding
+        // anything from that frame -- but the declaration can also arrive AFTER
+        // the type is bound (a later delta frame, a runtime attribute write), so
+        // a passive registration is recorded for `declarePreventDefault` to
+        // rebind. Only the bubble listener needs recording: the four are all
+        // NATIVELY_BUBBLING, so the capture listener below never binds for them.
         capOpts.passive = !_preventDefaultDeclared;
         bubOpts.passive = !_preventDefaultDeclared;
+        if (!_preventDefaultDeclared) {
+            let perDoc = _passiveBound.get(target);
+            if (!perDoc) {
+                perDoc = new Map();
+                _passiveBound.set(target, perDoc);
+            }
+            perDoc.set(eventType, bubFn);
+        }
     }
     // Capture exists only to reach events that cannot bubble. Registering it for a
     // type the platform always bubbles is worse than useless: it changes what those
@@ -2857,6 +2870,35 @@ function warnOnce(msg) {
  * change it would leave the listener behind an app listener added in between.
  */
 let _preventDefaultDeclared = false;
+
+/**
+ * The forced-passive bubble listeners currently bound, per document, so a late
+ * `az-prevent-default` can rebind them non-passive. Passive is fixed at
+ * registration; entries are dropped once rebound (the flag never flips back).
+ * @type {Map<Document, Map<string, EventListener>>}
+ */
+const _passiveBound = new Map();
+
+/**
+ * Record the `az-prevent-default` declaration, re-registering any
+ * forced-passive listener that was bound before it arrived -- otherwise a page
+ * whose declaration lands in a later frame keeps ignoring the preventDefault
+ * it asked for.
+ */
+function declarePreventDefault() {
+    if (_preventDefaultDeclared) return;
+    _preventDefaultDeclared = true;
+    for (const [doc, perDoc] of _passiveBound) {
+        const rec = _eventDocs.get(doc);
+        if (rec) {
+            for (const [type, fn] of perDoc) {
+                doc.removeEventListener(type, fn);
+                doc.addEventListener(type, fn, { signal: rec.signal, passive: false });
+            }
+        }
+    }
+    _passiveBound.clear();
+}
 
 /**
  * `az-*` suffixes that are framework directives rather than DOM event types.
@@ -2928,7 +2970,7 @@ const _eventDocs = new Map();
  * @param {string[]} names raw `az-*` attribute names, already lowercase
  */
 function noteAzAttrs(names) {
-    if (names.includes('az-prevent-default')) _preventDefaultDeclared = true;
+    if (names.includes('az-prevent-default')) declarePreventDefault();
     for (const name of names) noteAzAttr(name);
 }
 
@@ -2943,7 +2985,7 @@ function noteAzAttr(name) {
     // `addEventListener` types are case-sensitive, so an unlowered `az-Close`
     // would bind a dead `Close` while the DOM stores `az-close`.
     const type = name.slice(3).toLowerCase();
-    if (type === 'prevent-default') _preventDefaultDeclared = true;
+    if (type === 'prevent-default') declarePreventDefault();
     else if (!_eventTypes.has(type) && !AZ_DIRECTIVES.has(type)) bindEventType(type);
 }
 
@@ -2978,8 +3020,9 @@ function scanEvents(root) {
     for (; node; node = walker.nextNode()) {
         const el = /** @type {Element} */ (node);
         // getAttributeNames() rather than walking `attributes`: the NamedNodeMap
-        // accessor is far slower, and this runs per element.
-        if (el.getAttributeNames) for (const name of el.getAttributeNames()) noteAzAttr(name);
+        // accessor is far slower, and this runs per element. hasAttributes first,
+        // so the (typical) attribute-less element costs no array allocation.
+        if (el.hasAttributes?.()) for (const name of el.getAttributeNames()) noteAzAttr(name);
     }
 }
 
@@ -3547,6 +3590,7 @@ async function requestPip(viewId, opts = {}) {
             _viewDocs.delete(viewId);
             _pipWindows.delete(viewId);
             _eventDocs.delete(pip.document);
+            _passiveBound.delete(pip.document);
             // isConnected, not parentNode: a replaced (navigate) outgoing
             // subtree is detached wholesale, so the placeholder still HAS a
             // parent -- inside a dead tree.
