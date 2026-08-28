@@ -41,10 +41,11 @@ custom elements dispatch kebab-case events precisely because of the same rule --
 event a template cannot name.
 
 **Types are discovered from the markup, not declared.** `scanEvents` walks freshly-inserted markup
-for `az-*` attributes and delegates any type not already bound. It shares `mountHooks`' call sites
-deliberately: those are exactly the points where new markup enters the DOM (SSR hydration,
-`OP_TEXT`, `OP_INSERT`, `OP_REPLACE`, a list insert), plus the exported entry point a host app
-calls for markup it inserted itself. Binding is monotonic for the page, and the common types
+for `az-*` attributes and delegates any type not already bound. It has ONE call site, the exported
+`mountHooks`, and covers only markup the worker never saw: SSR hydration and whatever a host app
+inserted before calling it. Server-sent markup is scanned in the worker instead (see below) -- the
+op path deliberately uses `mountHooksOnly`, which skips this. Binding is monotonic for the page,
+and the common types
 (`click`, `change`, `input`, `keydown`, `keyup`, `focusin`, `focusout`) are seeded eagerly so the
 usual path never waits on a scan.
 
@@ -88,11 +89,21 @@ Three consequences of that split, all verified:
 - **An app cannot `stopPropagation` a non-bubbling `az-*` command.** The framework's capture
   listener runs at the document, before any listener on the target. The bubbling case is
   suppressible (above) and readers will assume symmetry; it is not symmetric.
-- **A `composed: false` custom-element event cannot be delegated at all** -- it never leaves the
-  shadow root, so nothing reaches the document. Composed events are fine either way: measured,
-  `composed+bubbles` retargets to the host and matches via `closest()`, and `composed` +
-  non-bubbling retargets to the host and matches by exact target. Since a template author
-  necessarily puts `az-<event>` on the host, both work.
+- **`composed: false` only matters at a shadow boundary.** An event a custom element dispatches
+  with `composed: false` cannot be delegated **if it originates inside a shadow root** -- it never
+  leaves, so nothing reaches the document. A shadow-less custom element (most of them) is
+  unaffected: `composed` is irrelevant with no boundary to cross, and such an event delegates
+  normally. Across a real boundary, composed events work either way: measured,
+  `composed + bubbles` retargets to the host and matches via `closest()`, and `composed` +
+  non-bubbling retargets to the host and matches by exact target -- and the host is where a
+  template author necessarily puts `az-<event>`.
+
+**Two families are out of reach, both by construction.** Delegation binds on Documents, so a
+window-targeted event (`resize`, `online`/`offline`, `hashchange`, `popstate`, `storage`) never
+arrives -- its propagation path does not include the Document. And a `load`/`error` on a
+subresource has usually fired before discovery runs, since that happens on the WebSocket open, so
+`az-error` on an SSR `<img>` works on a slow connection and not on a warm cache. Neither is a
+supported case today; use a hook for them.
 
 **Markup a host app inserts itself needs the exported `mountHooks`.** The worker reports names only
 for markup it resolved, and the DOM walk runs only where `mountHooks` is called, so DOM produced by

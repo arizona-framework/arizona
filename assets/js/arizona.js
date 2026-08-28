@@ -2685,13 +2685,9 @@ function restoreFormState() {
 }
 
 /**
- * Delegate a DOM event type on `target` (a Document) via a delegated listener.
- * Bound to the supplied AbortSignal so all delegated listeners can be torn down
- * together. Key filtering is handled by the JS_ON_KEY command inside executeJS,
- * not by attribute name suffixes.
- * @param {Document} target
+ * @param {Event} e
  * @param {string} eventType
- * @param {AbortSignal} signal
+ * @param {boolean} capture
  */
 /**
  * Run the `az-<eventType>` command for one delegated event.

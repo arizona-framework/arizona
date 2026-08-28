@@ -102,7 +102,9 @@ delegates, so `az_click` on a `ul` catches every item's click. A non-bubbling on
 alone, so it must sit on the element that emits it -- `az_load` on a wrapping
 `div` never fires. Such a command also cannot be suppressed with
 `stopPropagation`, and a custom-element event declared `composed: false` cannot be
-delegated at all. See [js.md](js.md).
+delegated **when it originates inside a shadow root** (a shadow-less custom element
+is unaffected). Window-targeted events (`resize`, `online`, `hashchange`, ...) are
+not delegated at all. See [js.md](js.md).
 
 ## Route options
 
