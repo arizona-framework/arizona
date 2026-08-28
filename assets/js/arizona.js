@@ -2025,6 +2025,12 @@ function osHost() {
     return /** @type {any} */ (globalThis).__arizona_os__;
 }
 
+// Whether this page has already handed the shell its OS-event callback. Module
+// scope, and deliberately NOT cleared by disconnect(): the shell's onEvent contract
+// is a bare callback with no unregister, so a registration outlives the connection
+// that made it and a second connect() would double every OS event forever.
+let _osEventBound = false;
+
 /**
  * Reset a form after a successful az-submit, when it opted in with `az-form-reset`.
  * Shared by the submit listener (synchronous, for push_event-style commands) and the
@@ -3034,12 +3040,17 @@ function connect(endpoint, params = {}) {
     // Let the native shell (if any) inject OS events (window focus/blur, capture
     // state, ...) into the ROOT view's normal event handling. The shell calls
     // cb(name, payload); we relay it as an ordinary pushEvent so the view's
-    // handle_event/3 sees it like any other event. Registered ONCE (not per
-    // spawnWorker / bfcache restore): the shell's listener is persistent, so
-    // re-registering would leak duplicate listeners. A bare callback is the
-    // documented contextBridge/Tauri-listen form (an object of functions can't
-    // cross contextBridge).
-    osHost()?.onEvent?.((name, payload) => pushEvent(name, payload));
+    // handle_event/3 sees it like any other event. Registered ONCE PER PAGE -- not
+    // per spawnWorker, bfcache restore, or connect(): the shell's listener is
+    // persistent and has no unregister, so disconnect() cannot take it back and a
+    // second registration would deliver every OS event twice. The callback relays
+    // through module state, so it keeps addressing the CURRENT connection. A bare
+    // callback is the documented contextBridge/Tauri-listen form (an object of
+    // functions can't cross contextBridge).
+    if (!_osEventBound) {
+        _osEventBound = true;
+        osHost()?.onEvent?.((name, payload) => pushEvent(name, payload));
+    }
 
     // window._ws proxy for E2E test compatibility
     if (typeof window !== 'undefined') {

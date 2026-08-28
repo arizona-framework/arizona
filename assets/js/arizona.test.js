@@ -4405,6 +4405,28 @@ describe('native-shell contract (__arizona_os__)', () => {
         disconnect();
     });
 
+    it('does not re-register onEvent when connect runs again', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">hi</span>');
+        const injected = [];
+        globalThis.__arizona_os__ = {
+            capabilities: {},
+            invoke: vi.fn(),
+            onEvent: vi.fn((cb) => injected.push(cb)),
+        };
+        connectWith(mod).disconnect();
+        const second = connectWith(mod);
+        // onEvent has no unregister, so disconnect() cannot take the first callback
+        // back: a second registration would double every OS event for the page's life.
+        expect(globalThis.__arizona_os__.onEvent).toHaveBeenCalledTimes(1);
+        // ...and the surviving callback must still address the CURRENT connection.
+        injected[0]('window_blurred', { x: 1 });
+        const sends = second.posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
+        expect(sends).toEqual([[null, 'window_blurred', { x: 1 }]]);
+        second.disconnect();
+    });
+
     it('a JS_OS effect delegates to the shell invoke with (name, args)', () => {
         const invoke = vi.fn();
         globalThis.__arizona_os__ = { invoke };
