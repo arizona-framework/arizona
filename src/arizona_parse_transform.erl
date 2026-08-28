@@ -349,16 +349,33 @@ component_mod_args(stateless, [{atom, _, Mod}, {atom, _, _Fun} | _]) -> [Mod];
 component_mod_args(stateless, [{'fun', _, {function, {atom, _, Mod}, _, _}} | _]) -> [Mod];
 component_mod_args(_Fun, _Args) -> [].
 
-%% Record one `az-*` attribute, meaning "this name can carry a command, or is
-%% a bare directive the client must know about". Called from `compile_attr`, the
-%% single point every attribute name resolves through.
+%% Does the expression contain a command-builder call? The builders are the only
+%% functions that produce `{arizona_effect, _}` tuples, so a call to one anywhere
+%% in an attribute value is proof the value is a command and not app data. The
+%% converse is settled at render time (see the dynamic-attr clause of
+%% `compile_attr`), never guessed from shape.
+has_builder_call({call, _, {remote, _, {atom, _, Mod}, _}, _}) when
+    Mod =:= arizona_js; Mod =:= arizona_android; Mod =:= arizona_os
+->
+    true;
+has_builder_call(Tuple) when is_tuple(Tuple) ->
+    has_builder_call(tuple_to_list(Tuple));
+has_builder_call([Head | Tail]) ->
+    has_builder_call(Head) orelse has_builder_call(Tail);
+has_builder_call(_Other) ->
+    false.
+
+%% The two recording levels for the declared `az-*` set, called from
+%% `compile_attr`, the single point every attribute name resolves through.
 %%
-%% The bare and boolean forms are recorded because `az-prevent-default` arrives
-%% that way and the client's passive decision depends on it. The one form NOT
-%% recorded is a static binary value, which is app data (see the clause there).
-%% `az-prevent-default` written WITH a value, which the static-value branch would
-%% otherwise drop as data. Narrow on purpose: it is the only directive whose presence
-%% the client reads out of the declared set rather than off the element.
+%% `record_az_attr` records a name proven to carry commands, so the client
+%% delegates its DOM event type. `record_directive_attr` records nothing but
+%% `az-prevent-default`: a command needs a value, so the bare, boolean, and
+%% static-value forms are data or directives, and the only directive whose
+%% presence the client reads out of the declared set rather than off the element
+%% is `az-prevent-default` -- passive is fixed at listener registration, before
+%% any element exists to look at, and a name left out of the set silently
+%% disarms the `preventDefault` it asked for.
 record_directive_attr(~"az-prevent-default" = NameBin) ->
     record_az_attr(NameBin);
 record_directive_attr(NameBin) ->
@@ -2411,7 +2428,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = record_az_attr(extract_binary_value(Bin)),
+    NameBin = record_directive_attr(extract_binary_value(Bin)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
@@ -2421,7 +2438,7 @@ compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, ElemLine) 
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
     Backend = State0#state.backend,
-    NameBin = record_az_attr(extract_attr_name(Backend, NameAST)),
+    NameBin = record_directive_attr(extract_attr_name(Backend, NameAST)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
@@ -2445,12 +2462,24 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
             ValBin = extract_binary_value(ValueAST),
             buf_append(State0, emit_backend(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
         false ->
-            _ = record_az_attr(NameBin),
+            %% A dynamic value is recorded only on EVIDENCE that it carries
+            %% commands: a builder call somewhere in the expression. An opaque
+            %% dynamic (`{az_select, ?get(ids)}`) is indistinguishable from app
+            %% data here, and recording it would delegate the event type and hand
+            %% that data to the command interpreter -- so it is settled at render
+            %% time instead, where the evaluated value's type is proof
+            %% (arizona_event_attrs observes the `{arizona_effect, _}`
+            %% classification and the socket ships the name on that frame).
+            _ =
+                case has_builder_call(ValueAST) of
+                    true -> record_az_attr(NameBin);
+                    false -> record_directive_attr(NameBin)
+                end,
             compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0)
     end;
 compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
-    NameBin = record_az_attr(Backend:name(Name)),
+    NameBin = record_directive_attr(Backend:name(Name)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
@@ -3505,7 +3534,7 @@ try_fold_arizona_js(ExprAST) ->
 %% `try_fold_arizona_js/1` catches it. Add new platform builder modules here.
 eval_arizona_js_expr(
     {call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, ArgsAST}
-) when Mod =:= arizona_js orelse Mod =:= arizona_android ->
+) when Mod =:= arizona_js orelse Mod =:= arizona_android orelse Mod =:= arizona_os ->
     Args = [erl_syntax:concrete(A) || A <- ArgsAST],
     apply(Mod, Fn, Args);
 eval_arizona_js_expr({nil, _}) ->
