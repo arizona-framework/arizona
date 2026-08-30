@@ -1154,11 +1154,19 @@ wire_bytes(B) when is_binary(B) ->
 wire_bytes(I) when is_integer(I) ->
     4;
 wire_bytes(L) when is_list(L) ->
-    lists:foldl(fun(E, A) -> A + wire_bytes(E) + 1 end, 2, L);
+    %% Direct recursion, not lists:foldl -- the estimate walks thousands of
+    %% tiny values on an ops-heavy drain, and the per-element closure call
+    %% measured ~30% of this walk.
+    wire_bytes_list(L, 2);
 wire_bytes(M) when is_map(M) ->
     maps:fold(fun(K, V, A) -> A + wire_bytes(K) + wire_bytes(V) + 2 end, 2, M);
 wire_bytes(_Other) ->
     8.
+
+wire_bytes_list([], Acc) ->
+    Acc;
+wire_bytes_list([E | Rest], Acc) ->
+    wire_bytes_list(Rest, Acc + wire_bytes(E) + 1).
 
 is_single_root(#{single_root := true}) -> true;
 is_single_root(#{}) -> false.
@@ -1389,8 +1397,15 @@ remove_ops([], _Idx) ->
 remove_ops([_OldD | Rest], Idx) ->
     [[?OP_REMOVE, Idx] | remove_ops(Rest, Idx + 1)].
 
+%% Direct recursion for the same reason as wire_bytes_list/2: 20 triples per
+%% item over 100 items is 2000 closure calls a fold would add.
 item_value_bytes(ItemD) ->
-    lists:foldl(fun({_Az, V, _Deps}, A) -> A + wire_bytes(V) end, 0, ItemD).
+    item_value_bytes(ItemD, 0).
+
+item_value_bytes([], Acc) ->
+    Acc;
+item_value_bytes([{_Az, V, _Deps} | Rest], Acc) ->
+    item_value_bytes(Rest, Acc + wire_bytes(V)).
 
 smart_reset_items(_Az, [], _Kept, _OldItems, _ItemsMap, _Tmpl, Views, Snaps) ->
     {[], Snaps, Views};
