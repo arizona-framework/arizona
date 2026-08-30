@@ -366,7 +366,10 @@ compress() ->
 -doc """
 HTTP response transform: CORS -- answers the browser's preflight `OPTIONS`
 and decorates cross-origin responses with `Access-Control-*` headers per
-`Config` (the server middleware's own config map; `origins` at minimum).
+`Config`. The config keys are Arizona's contract for this transform --
+`origins` at minimum, plus the usual CORS knobs (`methods`, allowed
+headers, credentials) -- which the server adapter maps to its own CORS
+implementation.
 Distinct from `check_origin/2`, which REJECTS cross-origin requests --
 list this on a route that deliberately serves them (usually beside
 `check_origin => false`). Returns the plain term
