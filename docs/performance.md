@@ -427,9 +427,12 @@ What the first measurements said (connect_page / connect_bulk_500, min over 20 r
   full-render path: `parseFragmentIn` is ~60% of the 500-row resync. Form save/restore shows
   up on small pages only because everything else is tiny -- it is proportional one-shot work
   (~0.1 ms for one form) with nothing to guard.
-- Caveat: the harness serves the SOURCE worker + core (two module fetches); the production
-  bundle is one minified file, so the module-chain share reads slightly high. Comparisons
-  across commits are still like-for-like, which is what the tool is for.
+- **The production bundle halves the source shape's number.** The tool times both:
+  the committed `arizona.min.js` (one file, min worker beside it) reaches
+  `az-connected` in ~4.8 ms where the two-fetch source shape reads ~9.0 ms -- the
+  gap IS the module chain, so read the bundled block for absolute cost and the
+  source block for like-for-like comparison across commits. Against the ~2.8 ms
+  bare-worker floor, the shipped client's own boot contribution is ~2 ms.
 
 ## Where the time actually goes
 
