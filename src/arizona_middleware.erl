@@ -99,6 +99,19 @@ builder.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% HTTP response transform constructors: public API for route declarations;
+%% no internal callers by design (the router matches the tagged term).
+-ignore_xref([etag/0]).
+-ignore_xref([compress/0]).
+-ignore_xref([cors/1]).
+-ignore_xref([security_headers/0]).
+-ignore_xref([security_headers/1]).
+-ignore_xref([http_transform/1]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
 -ignore_xref([extract/1]).
 -ignore_xref([put_request/2]).
 -ignore_xref([fetch_flash/2]).
