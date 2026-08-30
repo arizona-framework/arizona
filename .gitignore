@@ -1,7 +1,9 @@
 /_build/
 /_checkouts/
 /doc/
-/node_modules/
+# No trailing slash: a worktree's node_modules is often a SYMLINK to the main
+# checkout's, and a trailing-slash pattern matches directories only.
+/node_modules
 /static/
 erl_crash.dump
 rebar3.crashdump
