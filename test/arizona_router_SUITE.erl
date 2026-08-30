@@ -502,12 +502,13 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
         ])
     ),
     %% A transform reaching the Arizona pipeline anyway (a custom
-    %% resolve_route result) is inert, not a crash.
+    %% resolve_route result) is inert, not a crash: the step after it still
+    %% runs and the pipeline conts.
     Req = arizona_req_test_adapter:new(),
     ?assertMatch(
-        {cont, _, #{k := v}},
+        {cont, _, #{method := _}},
         arizona_middleware:apply_middlewares(
-            [arizona_middleware:etag(), fun(R, B) -> {cont, R, B#{k => v}} end],
+            [arizona_middleware:etag(), arizona_middleware:extract([method])],
             Req,
             #{}
         )

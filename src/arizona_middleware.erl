@@ -159,8 +159,11 @@ builder.
 %% sys.config route can spell it literally (`{http_transform, etag}`) where a
 %% constructor call cannot be written. The router maps the named transforms to
 %% the server's own middlewares at route-compile time; `{custom, Entry}`
-%% carries a server-shaped middleware entry verbatim.
--nominal http_transform() ::
+%% carries a server-shaped middleware entry verbatim. A plain -type, not
+%% -nominal: the tag is already the discriminator, and the nominal made
+%% dialyzer mis-type a constructor-built value flowing into
+%% `apply_middlewares/3` (a false "no local return" at every such call site).
+-type http_transform() ::
     {http_transform,
         etag
         | compress
