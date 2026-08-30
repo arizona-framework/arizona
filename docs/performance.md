@@ -410,7 +410,33 @@ The remaining server-side candidates are all small, and the largest single
 
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+1. **The client connect/hydration path has no instrument.** `bench-client` times
+   `applyOps` only; attach-to-SSR-DOM, view registration, delegated-listener
+   binding, fingerprint-cache seeding and connect-frame handling have never been
+   measured. The last unmeasured client area opened (the applyOps pass) yielded
+   structural finds immediately, so build the fixture + harness first and let it
+   say whether anything is there.
+2. **Fuse the kept-item reuse walk with the inner-ops diff.** On a reset each
+   kept item pays two lockstep 20-element walks: `eval_or_reuse_per_item/4`
+   decides reuse-vs-re-eval and builds the new triples, then
+   `diff_item_dynamics_v/3` walks the same pairs comparing values. The first
+   walk already knows which positions it re-evaluated -- a reused position is
+   the same tuple and cannot emit an op -- so emitting ops during the reuse walk
+   collapses the two into one. Exact, but it crosses the `arizona_eval` /
+   `arizona_diff` seam; only worth it with a design that keeps the layering.
+3. **Let the diff flag fp-carrying frames so `dedup_fps/2` can skip wholesale.**
+   The sharing walk made rebuilds free but still VISITS every value of every
+   reply; `make_op/3` knows at build time when it emits a fingerprint-map
+   payload, and one boolean threaded to `arizona_live` would skip the walk for
+   the all-scalar frames that dominate. Capped at roughly 10 us on a 100-op
+   frame -- bundle it with other work rather than plumbing it alone.
+4. **Compile-time `{get, Key}` descriptors for per-item dynamics.** A re-rendered
+   stream item allocates ~20 closures through the template's `d` fun before the
+   reuse walk drops most of them; dynamics that are pure `get(K, Item)` reads
+   could compile to a descriptor evaluated directly. Parse-transform + eval
+   surgery with an uncertain win -- gate it on a real-app profile showing
+   item-eval dominance, not on the synthetic reset workload.
+5. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the
