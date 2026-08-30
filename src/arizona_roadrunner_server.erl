@@ -31,7 +31,11 @@ routes take effect without restarting the listener.
   `proto_opts.port`, then `4040`
 - `proto_opts` -- map of roadrunner listener opts merged on top of
   the dispatch (e.g. `max_clients`, `max_content_length`,
-  `request_timeout`, `tls`, `slot_reconciliation`)
+  `request_timeout`, `tls`, `slot_reconciliation`; since roadrunner
+  0.9.0 also the per-connection memory bounds -- a top-level
+  `recv_buffer`, and under `ws` the per-session `recv_buffer` and
+  `hibernate_after` to park idle WebSocket sessions -- plus
+  `tls_handshake_timeout`)
 - `compress` -- `true` (default) or `false`. When true,
   `roadrunner_compress` is attached to `live` and `asset` routes so
   HTML pages and static assets above the threshold are gzip/deflate
