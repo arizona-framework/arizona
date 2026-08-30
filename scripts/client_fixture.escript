@@ -21,10 +21,60 @@ main([OutDir]) ->
     ok = filelib:ensure_path(OutDir),
     ok = gen(OutDir, ~"stream_patch", 400, 200),
     ok = gen(OutDir, ~"stream_render", 400, 400),
+    %% Connect fixtures need the live process machinery, not just the renderer.
+    {ok, _} = application:ensure_all_started(arizona),
+    ok = gen_connect(OutDir, ~"connect_page", arizona_page, #{}),
+    ok = gen_connect(OutDir, ~"connect_bulk_500", arizona_stream_bulk, #{
+        items => arizona_stream:new(
+            fun(#{id := Id}) -> integer_to_binary(Id) end,
+            [
+                #{id => I, label => <<"row ", (integer_to_binary(I))/binary>>}
+             || I <- lists:seq(1, 500)
+            ]
+        )
+    }),
     io:format("fixtures written to ~s~n", [OutDir]);
 main(_) ->
     io:format(standard_error, "usage: client_fixture.escript OUTDIR~n", []),
     halt(1).
+
+%% Connect/reconnect fixture: the SSR page a browser holds before the client
+%% boots, plus the exact frames a real socket emits for it -- the first-connect
+%% frame (`{"a":...}`), the deferred-reconnect connect frame, and the resync
+%% frame the server sends once the promised `cached_fps` arrives. The bench
+%% (`bench_client_connect.mjs`) replays these through a stubbed WebSocket, so
+%% everything the client does with them is the production path.
+gen_connect(OutDir, Label, Handler, Bindings) ->
+    HTML = arizona_render:render_view_to_iolist(Handler, #{bindings => Bindings}),
+    Req = arizona_req_test_adapter:new(),
+    {reply, ConnectFrame, Sock0} = arizona_socket:init(Handler, Bindings, Req, #{}),
+    ok = arizona_bench_lib:kill_live(element(2, Sock0)),
+    {reply, ReconnectFrame, Sock1} = arizona_socket:init(Handler, Bindings, Req, #{
+        reconnect => true, fps_follow => true
+    }),
+    {reply, ResyncFrame, Sock2} = arizona_socket:handle_in(
+        iolist_to_binary(json:encode([~"cached_fps", []])), Sock1
+    ),
+    ok = arizona_bench_lib:kill_live(element(2, Sock2)),
+    Meta = #{
+        ~"label" => Label,
+        ~"kind" => ~"connect",
+        ~"connect_frame" => iolist_to_binary(ConnectFrame),
+        ~"reconnect_frame" => iolist_to_binary(ReconnectFrame),
+        ~"resync_frame" => iolist_to_binary(ResyncFrame)
+    },
+    Page = [
+        ~"<!doctype html><html><head><meta charset=\"utf-8\">",
+        ~"<title>connect bench</title></head><body>",
+        HTML,
+        ~"</body></html>"
+    ],
+    ok = file:write_file(
+        filename:join(OutDir, <<Label/binary, ".html">>), iolist_to_binary(Page)
+    ),
+    ok = file:write_file(
+        filename:join(OutDir, <<Label/binary, ".json">>), iolist_to_binary(json:encode(Meta))
+    ).
 
 %% `Changed` items of `Total` change their label, which is what selects the
 %% op shape: a partial change patches per item, a total one collapses.

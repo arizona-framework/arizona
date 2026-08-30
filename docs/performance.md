@@ -13,6 +13,7 @@ treated as thresholds.
 | `make bench ARGS="--only <label>"` | Per-op wall clock for a workload. Catches regressions, not causes. |
 | `make bench-ab REFS="<a> <b>" ARGS="--only <label>"` | Paired A/B of one workload across two commits. |
 | `make bench-client ARGS="--only <label>"` | `applyOps` in a real Chromium, against fixtures from a real diff. |
+| `make bench-client-connect ARGS="--only <label>"` | The real `connect()` + bfcache reconnect in Chromium, frames from a real socket, WS stubbed to zero latency. |
 | `make prof ARGS="--only <label>"` | eprof/fprof per-MFA breakdown. Finds hot paths. |
 | `make prof-at REF=<ref> ARGS=...` | The same at any commit-ish, in a cached worktree. |
 | call-count tracing | Which functions run, and how often. See below. |
@@ -388,6 +389,33 @@ Timing that measures `console.warn`: it read 2.4 ms/batch where the real figure 
 and made framework overhead look like 98% of the batch. The harness refuses to print a number
 unless the DOM visibly changed and the console stayed silent, and exits non-zero instead.
 
+### Benchmarking the connect path -- `make bench-client-connect`
+
+`make bench-client-connect` runs the real `connect()` and a bfcache-triggered reconnect in
+Chromium. Fixtures carry the SSR page plus the exact frames a real `arizona_socket` emitted
+for it -- the first-connect `{"a":...}`, the deferred-reconnect connect frame, and the resync
+the server sends once the promised `cached_fps` arrives -- and the only substitution is a
+stubbed zero-latency `WebSocket` in the worker, so the numbers isolate client-side boot cost.
+The reconnect leg goes through the client's own `pagehide`/`pageshow` handlers, not internals.
+Same refusal rules as `bench-client` (must reach `az-connected`, the resync must visibly
+replace the view root, console must stay silent), plus a fresh browser context per run so the
+worker's IndexedDB fingerprint cache is deterministically cold.
+
+What the first measurements said (connect_page / connect_bulk_500, min over 20 runs):
+
+- **The client's own connect work is sub-millisecond.** `connect()` returns in ~0.7 ms, and
+  the instrumented breakdown (delegation bind, `handleEvent` per type, `noteAzAttrs`,
+  `mountHooks`) is a fraction of that. Time-to-`az-connected` is ~9 ms, of which a bare
+  do-nothing worker's spawn-to-first-message floor is ~3 ms -- the rest is the real worker's
+  module chain and IndexedDB open, i.e. browser machinery, not framework code walking data.
+- **The reconnect resync is parse-bound on big pages**, exactly like the applyOps
+  full-render path: `parseFragmentIn` is ~60% of the 500-row resync. Form save/restore shows
+  up on small pages only because everything else is tiny -- it is proportional one-shot work
+  (~0.1 ms for one form) with nothing to guard.
+- Caveat: the harness serves the SOURCE worker + core (two module fetches); the production
+  bundle is one minified file, so the module-chain share reads slightly high. Comparisons
+  across commits are still like-for-like, which is what the tool is for.
+
 ## Where the time actually goes
 
 Profiling the two paths a user experiences, rather than a synthetic workload, bounds
@@ -410,13 +438,7 @@ The remaining server-side candidates are all small, and the largest single
 
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **The client connect/hydration path has no instrument.** `bench-client` times
-   `applyOps` only; attach-to-SSR-DOM, view registration, delegated-listener
-   binding, fingerprint-cache seeding and connect-frame handling have never been
-   measured. The last unmeasured client area opened (the applyOps pass) yielded
-   structural finds immediately, so build the fixture + harness first and let it
-   say whether anything is there.
-2. **Fuse the kept-item reuse walk with the inner-ops diff.** On a reset each
+1. **Fuse the kept-item reuse walk with the inner-ops diff.** On a reset each
    kept item pays two lockstep 20-element walks: `eval_or_reuse_per_item/4`
    decides reuse-vs-re-eval and builds the new triples, then
    `diff_item_dynamics_v/3` walks the same pairs comparing values. The first
@@ -424,19 +446,19 @@ Ranked by expected value. Nothing here has been measured end to end.
    the same tuple and cannot emit an op -- so emitting ops during the reuse walk
    collapses the two into one. Exact, but it crosses the `arizona_eval` /
    `arizona_diff` seam; only worth it with a design that keeps the layering.
-3. **Let the diff flag fp-carrying frames so `dedup_fps/2` can skip wholesale.**
+2. **Let the diff flag fp-carrying frames so `dedup_fps/2` can skip wholesale.**
    The sharing walk made rebuilds free but still VISITS every value of every
    reply; `make_op/3` knows at build time when it emits a fingerprint-map
    payload, and one boolean threaded to `arizona_live` would skip the walk for
    the all-scalar frames that dominate. Capped at roughly 10 us on a 100-op
    frame -- bundle it with other work rather than plumbing it alone.
-4. **Compile-time `{get, Key}` descriptors for per-item dynamics.** A re-rendered
+3. **Compile-time `{get, Key}` descriptors for per-item dynamics.** A re-rendered
    stream item allocates ~20 closures through the template's `d` fun before the
    reuse walk drops most of them; dynamics that are pure `get(K, Item)` reads
    could compile to a descriptor evaluated directly. Parse-transform + eval
    surgery with an uncertain win -- gate it on a real-app profile showing
    item-eval dominance, not on the synthetic reset workload.
-5. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+4. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the

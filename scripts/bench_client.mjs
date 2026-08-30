@@ -111,6 +111,8 @@ let failed = false;
 
 for (const label of labels) {
     const meta = JSON.parse(readFileSync(join(fixtureDir, `${label}.json`), 'utf8'));
+    // Connect/hydration fixtures belong to bench_client_connect.mjs.
+    if (meta.kind === 'connect') continue;
     const html = readFileSync(join(fixtureDir, `${label}.html`), 'utf8');
 
     let plainTotal = null;
