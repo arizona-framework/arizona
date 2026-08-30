@@ -585,7 +585,7 @@ handle_call(
     } = State
 ) ->
     {ViewId, HTML, Snap, B2, V1} = do_mount(H, B0, V0, OM),
-    {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
+    {PageContent1, Fps1, _Changed} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, ViewId, PageContent1, arizona_event_attrs:drain()}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1, pending_refresh = #{}
     }};
@@ -800,7 +800,7 @@ do_navigate_call(NewHandler, NewIB, NewOnMount, State) ->
     OldB1 = maps:without(arizona_eval:restricted_keys(), OldB),
     Merged = maps:merge(OldB1, NewIB),
     {NewViewId, HTML, Snap, B2, V1} = do_mount(NewHandler, Merged, #{}, NewOnMount),
-    {PageContent1, Fps1} = dedup_fp_val(page_content(Snap, HTML), Fps0),
+    {PageContent1, Fps1, _Changed} = dedup_fp_val(page_content(Snap, HTML), Fps0),
     {reply, {ok, NewViewId, PageContent1, arizona_event_attrs:drain()}, #state{
         handler = NewHandler,
         bindings = B2,
@@ -1382,56 +1382,79 @@ seed_one_fp(_Fp, Acc) ->
     Acc.
 
 %% Walk ops, stripping statics from fingerprinted payloads already sent.
-dedup_fps(Ops, Fps) ->
-    lists:mapfoldl(fun dedup_fp_op/2, Fps, Ops).
+%% Almost every frame strips nothing (its payloads are scalars), so each
+%% walker also answers whether its sub-walk changed anything and hands back
+%% the ORIGINAL term when it did not -- an untouched frame crosses without
+%% one list cell or map being rebuilt. Only a stripped or rewritten payload
+%% pays for reconstruction, and only along its own spine.
+dedup_fps(Ops, Fps0) ->
+    {Ops1, Fps1, _Changed} = dedup_fp_ops(Ops, Fps0),
+    {Ops1, Fps1}.
 
-dedup_fp_op([BinId, ChildOps], Fps0) when is_binary(BinId), is_list(ChildOps) ->
+dedup_fp_ops([], Fps) ->
+    {[], Fps, false};
+dedup_fp_ops([Op | Rest] = Ops, Fps0) ->
+    {Op1, Fps1, OpChanged} = dedup_fp_op(Op, Fps0),
+    {Rest1, Fps2, RestChanged} = dedup_fp_ops(Rest, Fps1),
+    case OpChanged orelse RestChanged of
+        true -> {[Op1 | Rest1], Fps2, true};
+        false -> {Ops, Fps2, false}
+    end.
+
+dedup_fp_op([BinId, ChildOps] = Op, Fps0) when is_binary(BinId), is_list(ChildOps) ->
     %% Child view ops: [ViewId, InnerOps]
-    {ChildOps1, Fps1} = dedup_fps(ChildOps, Fps0),
-    {[BinId, ChildOps1], Fps1};
-dedup_fp_op([OpCode, Target | Rest], Fps0) when is_integer(OpCode) ->
-    {Rest1, Fps1} = dedup_fp_rest(Rest, Fps0),
-    {[OpCode, Target | Rest1], Fps1};
+    {ChildOps1, Fps1, Changed} = dedup_fp_ops(ChildOps, Fps0),
+    case Changed of
+        true -> {[BinId, ChildOps1], Fps1, true};
+        false -> {Op, Fps1, false}
+    end;
+dedup_fp_op([OpCode, Target | Rest] = Op, Fps0) when is_integer(OpCode) ->
+    {Rest1, Fps1, Changed} = dedup_fp_vals(Rest, Fps0),
+    case Changed of
+        true -> {[OpCode, Target | Rest1], Fps1, true};
+        false -> {Op, Fps1, false}
+    end;
 dedup_fp_op(Op, Fps) ->
-    {Op, Fps}.
-
-dedup_fp_rest([], Fps) ->
-    {[], Fps};
-dedup_fp_rest([H | T], Fps0) ->
-    {H1, Fps1} = dedup_fp_val(H, Fps0),
-    {T1, Fps2} = dedup_fp_rest(T, Fps1),
-    {[H1 | T1], Fps2}.
+    {Op, Fps, false}.
 
 dedup_fp_val(#{~"f" := F, ~"s" := _, ~"d" := D} = Val, Fps) ->
     case Fps of
         #{F := _} ->
-            {D1, Fps1} = dedup_fp_dlist(D, Fps),
-            {maps:without([~"s"], Val#{~"d" => D1}), Fps1};
+            {D1, Fps1, _Changed} = dedup_fp_vals(D, Fps),
+            {maps:without([~"s"], Val#{~"d" => D1}), Fps1, true};
         #{} ->
-            {D1, Fps1} = dedup_fp_dlist(D, Fps#{F => true}),
-            {Val#{~"d" => D1}, Fps1}
+            {D1, Fps1, Changed} = dedup_fp_vals(D, Fps#{F => true}),
+            {rebuild_d(Val, D1, Changed), Fps1, Changed}
     end;
 dedup_fp_val(#{~"f" := F, ~"d" := D} = Val, Fps) ->
     %% Already stripped (no ~"s"), still recurse into nested dynamics
-    {D1, Fps1} = dedup_fp_dlist(D, Fps),
+    {D1, Fps1, Changed} = dedup_fp_vals(D, Fps),
     Fps2 =
         case Fps1 of
             #{F := _} -> Fps1;
             #{} -> Fps1#{F => true}
         end,
-    {Val#{~"d" => D1}, Fps2};
+    {rebuild_d(Val, D1, Changed), Fps2, Changed};
 dedup_fp_val(Items, Fps) when is_list(Items) ->
     %% List: stream items from ~"d" or inner ops from OP_ITEM_PATCH.
-    %% Use dedup_fp_dlist (not dedup_fps) so fingerprinted maps in lists
+    %% Use dedup_fp_vals (not dedup_fp_ops) so fingerprinted maps in lists
     %% are properly matched and deduped -- dedup_fps/dedup_fp_op only
     %% recognizes op-shaped lists, not bare fingerprint maps.
-    dedup_fp_dlist(Items, Fps);
+    dedup_fp_vals(Items, Fps);
 dedup_fp_val(Val, Fps) ->
-    {Val, Fps}.
+    {Val, Fps, false}.
 
-dedup_fp_dlist([], Fps) ->
-    {[], Fps};
-dedup_fp_dlist([H | T], Fps0) ->
-    {H1, Fps1} = dedup_fp_val(H, Fps0),
-    {T1, Fps2} = dedup_fp_dlist(T, Fps1),
-    {[H1 | T1], Fps2}.
+rebuild_d(Val, D1, true) -> Val#{~"d" => D1};
+rebuild_d(Val, _D1, false) -> Val.
+
+%% One walker for both an op's trailing args and a payload's d-list --
+%% every element goes through dedup_fp_val/2 either way.
+dedup_fp_vals([], Fps) ->
+    {[], Fps, false};
+dedup_fp_vals([H | T] = L, Fps0) ->
+    {H1, Fps1, HChanged} = dedup_fp_val(H, Fps0),
+    {T1, Fps2, TChanged} = dedup_fp_vals(T, Fps1),
+    case HChanged orelse TChanged of
+        true -> {[H1 | T1], Fps2, true};
+        false -> {L, Fps2, false}
+    end.
