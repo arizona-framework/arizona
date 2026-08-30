@@ -485,9 +485,7 @@ transform_to_roadrunner({http_transform, security_headers}) ->
 transform_to_roadrunner({http_transform, {cors, Config}}) ->
     {roadrunner_cors, Config};
 transform_to_roadrunner({http_transform, {security_headers, Config}}) ->
-    {roadrunner_security_headers, Config};
-transform_to_roadrunner({http_transform, {custom, Entry}}) ->
-    Entry.
+    {roadrunner_security_headers, Config}.
 
 with_transforms(Route, []) -> Route;
 with_transforms(Route, Transforms) -> Route#{middlewares => Transforms}.

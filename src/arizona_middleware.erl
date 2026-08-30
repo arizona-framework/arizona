@@ -39,8 +39,8 @@ controller, and a WebSocket upgrade.
 ## HTTP response transforms
 
 The list accepts a second kind of entry: an **HTTP response transform**,
-built by `etag/0`, `compress/0`, `cors/1`, `security_headers/0,1`, or the
-`http_transform/1` escape hatch. A transform is not a request-to-bindings
+built by `etag/0`, `compress/0`, `cors/1`, or `security_headers/0,1`.
+A transform is not a request-to-bindings
 step: it wraps the whole HTTP exchange (the server applies it in its own
 response pipeline), so it can see and rewrite the response -- the thing a
 step, which runs before any render and also on paths with no HTTP response
@@ -62,7 +62,13 @@ cannot hold a function call; see "Declaring steps" below for why):
 | `cors(Config)` | `{http_transform, {cors, Config}}` |
 | `security_headers()` | `{http_transform, security_headers}` |
 | `security_headers(Config)` | `{http_transform, {security_headers, Config}}` |
-| `http_transform(Entry)` | `{http_transform, {custom, Entry}}` |
+
+The named set is deliberately the whole vocabulary: a transform names an
+HTTP semantic, and the server adapter maps it to that server's own
+implementation, so a route never says which server runs beneath it. A
+custom server-level middleware has no per-route spelling here -- it goes
+in the server's own listener config (`proto_opts`), the one place that is
+server-specific by definition.
 
 ## Declaring steps
 
@@ -127,7 +133,6 @@ builder.
 -export([cors/1]).
 -export([security_headers/0]).
 -export([security_headers/1]).
--export([http_transform/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -145,7 +150,6 @@ builder.
 -ignore_xref([cors/1]).
 -ignore_xref([security_headers/0]).
 -ignore_xref([security_headers/1]).
--ignore_xref([http_transform/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -172,7 +176,7 @@ builder.
 %% sys.config route can spell it literally (`{http_transform, etag}`) where a
 %% constructor call cannot be written. The router maps the named transforms to
 %% the server's own middlewares at route-compile time; `{custom, Entry}`
-%% carries a server-shaped middleware entry verbatim. A plain -type, not
+%% A plain -type, not
 %% -nominal: the tag is already the discriminator, and the nominal made
 %% dialyzer mis-type a constructor-built value flowing into
 %% `apply_middlewares/3` (a false "no local return" at every such call site).
@@ -182,8 +186,7 @@ builder.
         | compress
         | security_headers
         | {cors, map()}
-        | {security_headers, map()}
-        | {custom, term()}}.
+        | {security_headers, map()}}.
 -nominal middleware_result() ::
     {cont, arizona_req:request(), az:bindings()} | {halt, arizona_req:request()}.
 
@@ -385,21 +388,6 @@ security_headers() ->
     Config :: map().
 security_headers(Config) when is_map(Config) ->
     {http_transform, {security_headers, Config}}.
-
--doc """
-Escape hatch for a response transform the named constructors do not cover:
-wraps a server-shaped middleware entry (for the roadrunner server, a module
-implementing `roadrunner_middleware`, a fun, or a `{Callable, Config}`
-pair) verbatim into the route's response pipeline. Unlike the named
-transforms this couples the route to the server backend -- prefer the
-constructors when one exists. Returns the plain term
-`{http_transform, {custom, Entry}}` -- spellable in sys.config when
-`Entry` is itself a term.
-""".
--spec http_transform(Entry) -> http_transform() when
-    Entry :: term().
-http_transform(Entry) ->
-    {http_transform, {custom, Entry}}.
 
 %% --------------------------------------------------------------------
 %% Internal functions

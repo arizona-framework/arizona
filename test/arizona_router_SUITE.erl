@@ -447,7 +447,7 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
         [#{middlewares := [roadrunner_compress]}],
         Router:routes([{live, ~"/", my_page, #{}}])
     ),
-    %% Config-carrying constructors and the escape hatch map through verbatim.
+    %% Config-carrying constructors map through with their config.
     ?assertMatch(
         [
             #{
@@ -455,8 +455,7 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
                     roadrunner_compress,
                     {roadrunner_cors, #{origins := [~"https://app.example"]}},
                     roadrunner_security_headers,
-                    {roadrunner_security_headers, #{frame_options := ~"DENY"}},
-                    my_custom_rr_mw
+                    {roadrunner_security_headers, #{frame_options := ~"DENY"}}
                 ]
             }
         ],
@@ -465,8 +464,7 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
                 middlewares => [
                     arizona_middleware:cors(#{origins => [~"https://app.example"]}),
                     arizona_middleware:security_headers(),
-                    arizona_middleware:security_headers(#{frame_options => ~"DENY"}),
-                    arizona_middleware:http_transform(my_custom_rr_mw)
+                    arizona_middleware:security_headers(#{frame_options => ~"DENY"})
                 ]
             }}
         ])
