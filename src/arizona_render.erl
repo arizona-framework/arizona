@@ -50,6 +50,10 @@ op-code targets.
 %% Set while a layout layer renders (see render_layout/3).
 -define(IN_LAYOUT, '$arizona_in_layout').
 
+%% Set whenever a fingerprint wire payload is built in this process (see
+%% note_fp_payload/0 / drain_fp_note/0).
+-define(FP_NOTE, '$arizona_fp_payload').
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -71,6 +75,7 @@ op-code targets.
 -export([zip_list_fp/2]).
 -export([zip_stream_fp/3]).
 -export([fingerprint_payload/1]).
+-export([drain_fp_note/0]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -307,6 +312,7 @@ If the template has a fingerprint, returns a wire-format map keyed by
     Template :: map(),
     Dynamics :: [{arizona_template:az(), term(), map()}].
 zip_item(#{f := F, s := S} = Tmpl, D) ->
+    ok = note_fp_payload(),
     Backend = backend(Tmpl),
     #{
         ~"f" => F,
@@ -346,6 +352,7 @@ anywhere. A malformed template fails loudly at the match instead.
     Template :: arizona_template:each_template(),
     Items :: [[{arizona_template:az(), term(), map()}]].
 zip_list_fp(#{f := F, s := S, t := T} = Tmpl, ItemsList) ->
+    ok = note_fp_payload(),
     Backend = backend(Tmpl),
     #{
         ~"t" => T,
@@ -367,6 +374,7 @@ against a template, producing the same fingerprinted wire payload as
     Items :: #{term() => [{arizona_template:az(), term(), map()}]},
     Order :: [term()].
 zip_stream_fp(#{f := F, s := S, t := T} = Tmpl, Items, Order) ->
+    ok = note_fp_payload(),
     Backend = backend(Tmpl),
     #{
         ~"t" => T,
@@ -390,6 +398,7 @@ plain snapshots fall back to a HTML binary.
 -spec fingerprint_payload(Snapshot) -> map() | binary() when
     Snapshot :: map().
 fingerprint_payload(#{f := F, s := S, d := D} = Snap) ->
+    ok = note_fp_payload(),
     Backend = backend(Snap),
     #{
         ~"f" => F,
@@ -398,6 +407,28 @@ fingerprint_payload(#{f := F, s := S, d := D} = Snap) ->
     };
 fingerprint_payload(#{s := S, d := D} = Snap) ->
     flat_zip(backend(Snap), S, [V || {_Az, V} <:- D]).
+
+-doc """
+True when a fingerprint wire payload was built in this process since the last
+drain, clearing the note. `arizona_live` asks this after a diff to skip the
+`dedup_fps/2` walk outright for the dominant all-scalar frame -- a frame with
+no `~"f"` payload has nothing to strip and no fingerprint to record. Every
+producer of such a payload (`zip_item/2`, `zip_list_fp/2`, `zip_stream_fp/3`,
+`fingerprint_payload/1`; the `render_fp_val/2` constructors run only inside
+them) sets the note, so a missed strip is impossible; the failure direction is
+a STALE note (a payload built outside a drain bracket, e.g. at mount), which
+merely walks one frame unnecessarily.
+""".
+-spec drain_fp_note() -> boolean().
+drain_fp_note() ->
+    case erase(?FP_NOTE) of
+        undefined -> false;
+        true -> true
+    end.
+
+note_fp_payload() ->
+    put(?FP_NOTE, true),
+    ok.
 
 -doc """
 Formats the layout errors raised by `render_ssr_val/2`.

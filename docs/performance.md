@@ -214,6 +214,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Materialize the changed keys once per dynamics walk | the per-slot deps probe loses its iterator/key-list setup; -20-30% per check at every small-map shape |
 | Ask the re-render estimate's floor before weighing items | skips the O(items x dynamics) weighing when the statics floor alone disqualifies wholesale |
 | Fuse `render/2`'s triple unzip into its zip walk | one walk and two lists where there were two walks and four, per connect/navigate |
+| Skip the fingerprint dedup walk for fp-less frames | strictly less work on every event workload: red/op -0.5% to -6.1%, resolved by the reductions column |
 
 (The whole 2026-08 arc that added the last four -- PRs #759-#762 -- closed with
 one paired `bench-ab` over every workload, benchmarks byte-identical on both
@@ -297,7 +298,10 @@ themselves, with exactness asserted. End to end, a 6-round paired `bench-ab` rea
 `stream_reset_with_overlap_100` **-1.6%** and `stream_update_field_100` **-2.2%**:
 under the floor, unresolved. Kept on the `++` precedent above -- strictly less
 work (and strictly less allocation per reply), no maintainability loss (the dedup
-rewrite retired a duplicated walker) -- but do not quote them as wins.
+rewrite retired a duplicated walker) -- but do not quote them as wins. (The
+follow-up skip -- `arizona_render:drain_fp_note/0` gating the walk outright --
+later recovered even the sharing walk's +5-reduction cost on single-op frames,
+and the reductions column resolved the whole family exactly.)
 
 **Replacing `maps:merge/2` in `compute_item_changed/2` with two iterator walks.**
 Measured **+49%** at 5 keys and **+30%** at 21 -- stream items are small maps, where
@@ -473,19 +477,13 @@ The remaining server-side candidates are all small, and the largest single
 
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **Let the diff flag fp-carrying frames so `dedup_fps/2` can skip wholesale.**
-   The sharing walk made rebuilds free but still VISITS every value of every
-   reply; `make_op/3` knows at build time when it emits a fingerprint-map
-   payload, and one boolean threaded to `arizona_live` would skip the walk for
-   the all-scalar frames that dominate. Capped at roughly 10 us on a 100-op
-   frame -- bundle it with other work rather than plumbing it alone.
-2. **Compile-time `{get, Key}` descriptors for per-item dynamics.** A re-rendered
+1. **Compile-time `{get, Key}` descriptors for per-item dynamics.** A re-rendered
    stream item allocates ~20 closures through the template's `d` fun before the
    reuse walk drops most of them; dynamics that are pure `get(K, Item)` reads
    could compile to a descriptor evaluated directly. Parse-transform + eval
    surgery with an uncertain win -- gate it on a real-app profile showing
    item-eval dominance, not on the synthetic reset workload.
-3. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+2. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the
