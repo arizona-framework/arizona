@@ -42,7 +42,10 @@ routes take effect without restarting the listener.
   encoded per `Accept-Encoding`. The dev SSE reload stream and the
   WebSocket upgrade response are intentionally **not** compressed.
   Set to `false` if you have an upstream proxy doing compression
-  already.
+  already -- and note the one thing that still compresses under `false`:
+  a route explicitly listing `arizona_middleware:compress()` in its
+  `middlewares` (route-level explicit beats the listener default). Behind
+  a compressing proxy, leave `compress()` out of routes too.
 
 Any option value (`port`, `scheme`, `tls` cert paths, `proto_opts` tunables)
 may be an env-var reference resolved at startup -- `{env, "PORT", 8080}` or the

@@ -36,6 +36,41 @@ controller, and a WebSocket upgrade.
   trusted (see `arizona_origin`). The router applies it to `live`/`controller` routes by
   default, so you rarely list it by hand.
 
+## HTTP response transforms
+
+The list accepts a second kind of entry: an **HTTP response transform**,
+built by `etag/0`, `compress/0`, `cors/1`, or `security_headers/0,1`.
+A transform is not a request-to-bindings
+step: it wraps the whole HTTP exchange (the server applies it in its own
+response pipeline), so it can see and rewrite the response -- the thing a
+step, which runs before any render and also on paths with no HTTP response
+at all, cannot. Order has phase semantics: steps run in list order during
+the request phase; transforms wrap the exchange in list order, first
+outermost -- except compression, which the router keeps OUTERMOST wherever
+it is written (or attaches itself), so a transform always sees the response
+before it is re-encoded. On a
+pipeline run with no HTTP response to wrap (the WebSocket upgrade, a
+navigate/patch), a transform is inert and skipped.
+
+Each constructor returns a plain, stable term, and that term -- not the
+call -- is what a `config/sys.config` route table must spell (a term file
+cannot hold a function call; see "Declaring steps" below for why):
+
+| constructor | literal term |
+| ----------- | ------------ |
+| `etag()` | `{http_transform, etag}` |
+| `compress()` | `{http_transform, compress}` |
+| `cors(Config)` | `{http_transform, {cors, Config}}` |
+| `security_headers()` | `{http_transform, security_headers}` |
+| `security_headers(Config)` | `{http_transform, {security_headers, Config}}` |
+
+The named set is deliberately the whole vocabulary: a transform names an
+HTTP semantic, and the server adapter maps it to that server's own
+implementation, so a route never says which server runs beneath it. A
+custom server-level middleware has no per-route spelling here -- it goes
+in the server's own listener config (`proto_opts`), the one place that is
+server-specific by definition.
+
 ## Declaring steps
 
 A step is either a fun of two arguments or a `{Module, Function}` pair naming a
@@ -94,6 +129,11 @@ builder.
 -export([fetch_flash/2]).
 -export([fetch_session/2]).
 -export([check_origin/2]).
+-export([etag/0]).
+-export([compress/0]).
+-export([cors/1]).
+-export([security_headers/0]).
+-export([security_headers/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -104,12 +144,20 @@ builder.
 -ignore_xref([fetch_flash/2]).
 -ignore_xref([fetch_session/2]).
 -ignore_xref([check_origin/2]).
+%% HTTP response transform constructors: public API for route declarations;
+%% no internal callers by design (the router matches the tagged term).
+-ignore_xref([etag/0]).
+-ignore_xref([compress/0]).
+-ignore_xref([cors/1]).
+-ignore_xref([security_headers/0]).
+-ignore_xref([security_headers/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
 %% --------------------------------------------------------------------
 
 -export_type([middleware/0]).
+-export_type([http_transform/0]).
 -export_type([middleware_result/0]).
 -export_type([extract_key/0]).
 
@@ -121,7 +169,24 @@ builder.
 %% the only form writable as a term, so it is what a `sys.config` route must use;
 %% see "Declaring steps" in the module doc.
 -nominal middleware() ::
-    fun((arizona_req:request(), az:bindings()) -> middleware_result()) | {module(), atom()}.
+    fun((arizona_req:request(), az:bindings()) -> middleware_result())
+    | {module(), atom()}
+    | http_transform().
+
+%% An HTTP response transform (see the module doc): a tagged term, so a
+%% sys.config route can spell it literally (`{http_transform, etag}`) where a
+%% constructor call cannot be written. The router maps the named transforms to
+%% the server's own middlewares at route-compile time. A plain -type, not
+%% -nominal: the tag is already the discriminator, and the nominal made
+%% dialyzer mis-type a constructor-built value flowing into
+%% `apply_middlewares/3` (a false "no local return" at every such call site).
+-type http_transform() ::
+    {http_transform,
+        etag
+        | compress
+        | security_headers
+        | {cors, map()}
+        | {security_headers, map()}}.
 -nominal middleware_result() ::
     {cont, arizona_req:request(), az:bindings()} | {halt, arizona_req:request()}.
 
@@ -144,6 +209,12 @@ through each step. Stops on the first `{halt, Request}` and returns it.
     Bindings :: az:bindings().
 apply_middlewares([], Req, Bindings) ->
     {cont, Req, Bindings};
+apply_middlewares([{http_transform, _} | Rest], Req, Bindings) ->
+    %% A response transform wraps the HTTP exchange; on a pipeline run with no
+    %% HTTP response to wrap (WS upgrade, navigate/patch, a custom
+    %% resolve_route result) it is inert. Statically declared routes never get
+    %% here -- the router splits transforms out at compile time.
+    apply_middlewares(Rest, Req, Bindings);
 apply_middlewares([Mw | Rest], Req, Bindings) ->
     case call(Mw, Req, Bindings) of
         {cont, Req1, Bindings1} -> apply_middlewares(Rest, Req1, Bindings1);
@@ -263,6 +334,69 @@ check_origin(Req0, Bindings) ->
         ok -> {cont, Req, Bindings};
         forbidden -> {halt, arizona_req:put_resp_status(Req, 403)}
     end.
+
+-doc """
+HTTP response transform: derive a weak `ETag` from the response body and
+answer a matching `If-None-Match` with `304` (RFC 7232). The validator is
+weak on purpose, so the framework's compression re-encoding the body
+outside it cannot invalidate the tag. Returns the plain term
+`{http_transform, etag}` -- the spelling a sys.config route uses.
+""".
+-spec etag() -> http_transform().
+etag() ->
+    {http_transform, etag}.
+
+-doc """
+HTTP response transform: gzip/deflate response compression. Only needed on
+routes the framework does not already compress -- controller routes; `live`
+and `asset` routes get compression from the server's `compress` option
+(default on), where listing it again changes nothing. Position-independent
+by construction: the router keeps compression OUTERMOST wherever it is
+written, so `[etag(), compress()]` and `[compress(), etag()]` compile to
+the same pipeline and an etag always hashes the pre-compression body. An
+explicit `compress()` also survives the server's `compress => false` (a
+route-level request beats the listener-level default-off). Returns the
+plain term `{http_transform, compress}` -- the spelling a sys.config route
+uses.
+""".
+-spec compress() -> http_transform().
+compress() ->
+    {http_transform, compress}.
+
+-doc """
+HTTP response transform: CORS -- answers the browser's preflight `OPTIONS`
+and decorates cross-origin responses with `Access-Control-*` headers per
+`Config`. The config keys are Arizona's contract for this transform --
+`origins` at minimum, plus the usual CORS knobs (`methods`, allowed
+headers, credentials) -- which the server adapter maps to its own CORS
+implementation.
+Distinct from `check_origin/2`, which REJECTS cross-origin requests --
+list this on a route that deliberately serves them (usually beside
+`check_origin => false`). Returns the plain term
+`{http_transform, {cors, Config}}` -- the spelling a sys.config route uses.
+""".
+-spec cors(Config) -> http_transform() when
+    Config :: map().
+cors(Config) when is_map(Config) ->
+    {http_transform, {cors, Config}}.
+
+-doc """
+HTTP response transform: a default-safe security-header set
+(`x-content-type-options`, `x-frame-options`, `referrer-policy`, ...)
+added to every response, leaving headers the handler already set
+untouched. `security_headers/1` overrides individual headers. Returns the
+plain term `{http_transform, security_headers}` (with config:
+`{http_transform, {security_headers, Config}}`) -- the spelling a
+sys.config route uses.
+""".
+-spec security_headers() -> http_transform().
+security_headers() ->
+    {http_transform, security_headers}.
+
+-spec security_headers(Config) -> http_transform() when
+    Config :: map().
+security_headers(Config) when is_map(Config) ->
+    {http_transform, {security_headers, Config}}.
 
 %% --------------------------------------------------------------------
 %% Internal functions

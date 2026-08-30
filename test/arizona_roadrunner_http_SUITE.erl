@@ -9,12 +9,14 @@
 -export([handle_returns_the_threaded_raw_request/1]).
 -export([handle_returns_the_threaded_raw_request_on_a_render_crash/1]).
 -export([manual_body_read_keeps_pipelining_intact/1]).
+-export([transforms_apply_over_the_wire/1]).
 
 all() ->
     [
         handle_returns_the_threaded_raw_request,
         handle_returns_the_threaded_raw_request_on_a_render_crash,
-        manual_body_read_keeps_pipelining_intact
+        manual_body_read_keeps_pipelining_intact,
+        transforms_apply_over_the_wire
     ].
 
 init_per_suite(Config) ->
@@ -25,6 +27,18 @@ init_per_suite(Config) ->
     Routes = [
         {live, ~"/echo_body", arizona_about, #{
             middlewares => [arizona_middleware:extract([body])]
+        }},
+        %% Response-transform wire fixtures: a controller with a deterministic
+        %% body, and a live page big enough (>= roadrunner_compress's 860-byte
+        %% threshold) that the compress/etag composition is real over the wire.
+        {get, ~"/etag_api", arizona_transform_probe_controller, #{
+            middlewares => [arizona_middleware:etag()]
+        }},
+        {live, ~"/etag_page", arizona_about, #{
+            bindings => #{
+                tags => [<<"tag-", (integer_to_binary(I))/binary>> || I <- lists:seq(1, 100)]
+            },
+            middlewares => [arizona_middleware:etag()]
         }}
     ],
     {ok, _} = arizona_roadrunner_server:start(Listener, #{
@@ -154,3 +168,70 @@ recv_until_quiet(Sock, Acc) ->
         {ok, Data} -> recv_until_quiet(Sock, <<Acc/binary, Data/binary>>);
         {error, _} -> Acc
     end.
+
+%% --------------------------------------------------------------------
+%% HTTP response transforms
+%% --------------------------------------------------------------------
+
+%% The router-suite tests pin the COMPILED shape; this one proves the wire
+%% behavior the docs promise. Controller leg: the etag transform tags a
+%% deterministic body and answers the conditional with 304. Live leg: the
+%% compress-outermost composition -- the identity and gzip responses carry
+%% the SAME weak tag (the etag hashed the pre-compression body), the gzip
+%% body really is the encoded identity body, and the conditional still 304s
+%% through compression.
+transforms_apply_over_the_wire(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    {200, ApiHeaders, ApiBody} = raw_get(Port, ~"/etag_api", []),
+    #{~"etag" := ApiTag} = ApiHeaders,
+    ?assertMatch(<<"W/\"", _/binary>>, ApiTag),
+    ?assertEqual(~"stable-transform-probe-body", ApiBody),
+    {304, _, <<>>} = raw_get(Port, ~"/etag_api", [{~"if-none-match", ApiTag}]),
+    {200, PlainHeaders, PlainBody} = raw_get(Port, ~"/etag_page", []),
+    #{~"etag" := PageTag} = PlainHeaders,
+    ?assertNot(is_map_key(~"content-encoding", PlainHeaders)),
+    {200, GzipHeaders, GzipBody} = raw_get(Port, ~"/etag_page", [
+        {~"accept-encoding", ~"gzip"}
+    ]),
+    ?assertEqual(~"gzip", maps:get(~"content-encoding", GzipHeaders)),
+    ?assertEqual(PageTag, maps:get(~"etag", GzipHeaders)),
+    ?assertEqual(PlainBody, zlib:gunzip(GzipBody)),
+    {304, _, <<>>} = raw_get(Port, ~"/etag_page", [
+        {~"accept-encoding", ~"gzip"},
+        {~"if-none-match", PageTag}
+    ]).
+
+raw_get(Port, Path, ExtraHeaders) ->
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+    ),
+    try
+        HeaderLines = [[K, ~": ", V, ~"\r\n"] || {K, V} <- ExtraHeaders],
+        ok = gen_tcp:send(Sock, [
+            ~"GET ",
+            Path,
+            ~" HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n",
+            HeaderLines,
+            ~"\r\n"
+        ]),
+        parse_response(recv_until_closed(Sock, <<>>))
+    after
+        gen_tcp:close(Sock)
+    end.
+
+recv_until_closed(Sock, Acc) ->
+    case gen_tcp:recv(Sock, 0, 5000) of
+        {ok, Data} -> recv_until_closed(Sock, <<Acc/binary, Data/binary>>);
+        {error, closed} -> Acc
+    end.
+
+parse_response(Raw) ->
+    [Head, Body] = binary:split(Raw, ~"\r\n\r\n"),
+    [StatusLine | HeaderLines] = binary:split(Head, ~"\r\n", [global]),
+    <<"HTTP/1.1 ", StatusBin:3/binary, _/binary>> = StatusLine,
+    Headers = maps:from_list([
+        {string:lowercase(Name), Value}
+     || Line <- HeaderLines,
+        [Name, Value] <- [binary:split(Line, ~": ")]
+    ]),
+    {binary_to_integer(StatusBin), Headers, Body}.
