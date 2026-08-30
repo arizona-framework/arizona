@@ -917,7 +917,7 @@ process_root_change(
     Effects1 = arizona_eval:drain_update_effects(),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
-    {Ops1, Fps1} = dedup_fps(Ops, Fps0),
+    {Ops1, Fps1} = dedup_fps_if_noted(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
     {Ops1, Snap1, V1, B3, Fps1, State#state{pending_refresh = #{}}, Effects1}.
 
@@ -945,7 +945,7 @@ process_child_change(
     ok = arizona_eval:set_update_effects(Effects0),
     {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
     Effects1 = arizona_eval:drain_update_effects(),
-    {Ops1, Fps1} = dedup_fps(Ops, Fps0),
+    {Ops1, Fps1} = dedup_fps_if_noted(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
     NewDescendants = arizona_eval:child_view_set(NewViews),
     OldDescendants = maps:get(child_views, Snap0, #{}),
@@ -1380,6 +1380,17 @@ seed_one_fp(Fp, Acc) when is_binary(Fp) ->
     end;
 seed_one_fp(_Fp, Acc) ->
     Acc.
+
+%% Walk ops only when the diff actually built a fingerprint payload
+%% (`arizona_render:drain_fp_note/0`): the dominant all-scalar frame has
+%% nothing to strip and no fingerprint to record, so it skips the visit
+%% entirely. A stale note walks one frame for nothing; a missed one cannot
+%% happen (the producers set it unconditionally).
+dedup_fps_if_noted(Ops, Fps) ->
+    case arizona_render:drain_fp_note() of
+        true -> dedup_fps(Ops, Fps);
+        false -> {Ops, Fps}
+    end.
 
 %% Walk ops, stripping statics from fingerprinted payloads already sent.
 %% Almost every frame strips nothing (its payloads are scalars), so each
