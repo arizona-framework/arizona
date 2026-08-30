@@ -255,6 +255,17 @@ end-to-end effect was **not measurable** -- each was linear in a list whose
 construction already cost more than the copy. The real win in the same code was the
 gate above, which removed the work rather than making it cheaper.
 
+**The dedup-sharing walk and the estimate's closure-free walkers landed in the same
+bucket.** `dedup_fps/2` now hands back the original term when a sub-walk stripped
+nothing (no list cell or map rebuilt on the common all-scalar frame), and
+`wire_bytes/1`/`item_value_bytes/1` walk by direct recursion instead of a
+`lists:foldl` closure per element -- micro-measured **-30/-40%** on the walks
+themselves, with exactness asserted. End to end, a 6-round paired `bench-ab` read
+`stream_reset_with_overlap_100` **-1.6%** and `stream_update_field_100` **-2.2%**:
+under the floor, unresolved. Kept on the `++` precedent above -- strictly less
+work (and strictly less allocation per reply), no maintainability loss (the dedup
+rewrite retired a duplicated walker) -- but do not quote them as wins.
+
 **Replacing `maps:merge/2` in `compute_item_changed/2` with two iterator walks.**
 Measured **+49%** at 5 keys and **+30%** at 21 -- stream items are small maps, where
 the merge's C path beats stepping a map iterator in Erlang. Rejected.
@@ -399,19 +410,7 @@ The remaining server-side candidates are all small, and the largest single
 
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **`arizona_live:dedup_fps/2` rebuilds every reply's ops.** The fingerprint-dedup
-   walk re-conses the whole ops structure even when it strips nothing, which is
-   every frame whose values are scalars -- ~4% of a 100-op reset frame's profile.
-   Returning the original term when a sub-walk changed nothing (a changed flag
-   threaded through, sharing instead of copying) is exact; weigh the code against
-   the win before keeping it.
-2. **The reset path still weighs every old item.** `stream_outgrows_measured/4`'s
-   floor early-out cannot fire for a large patch (statics are counted once, so the
-   floor is small against a 100-op positional estimate), so a big reset pays
-   `wire_bytes/1` over the ops AND `item_value_bytes/1` over the old items --
-   ~13% of that workload's profile. The exact fix is accumulating both sides as
-   the ops/items walks build them, which is invasive; measure before wiring it.
-3. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+1. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the
