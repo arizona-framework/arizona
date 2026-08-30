@@ -316,7 +316,7 @@ relist_items(Az, [K | Rest], NewItems, OldItems, Tmpl, Views0, Tail) ->
     NewD = maps:get(K, NewItems),
     case OldItems of
         #{K := OldD} ->
-            {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+            {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
             {RestOps, Views2} = relist_items(Az, Rest, NewItems, OldItems, Tmpl, Views1, Tail),
             case InnerOps of
                 [] ->
@@ -903,7 +903,7 @@ stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, View
 stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     %% A changed markerless slot is ignored: a stream item's raw-text content is
     %% render-once (no marker, no per-item re-render op that preserves siblings).
-    {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
     case InnerOps of
         [] ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views1);
@@ -1211,7 +1211,7 @@ list_changed([NewD | NR], [OldD | OR], Views0) ->
     %% list bearing per-item child views lands); its ops are discarded, since only
     %% the boolean matters here. A changed markerless slot emits no inner op but IS
     %% a change, and `item_changed/2` sees it like any other slot.
-    {_InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    {_InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
     {RestChanged, Views2} = list_changed(NR, OR, Views1),
     {item_changed(NewD, OldD) orelse RestChanged, Views2};
 list_changed([], [], Views) ->
@@ -1382,7 +1382,7 @@ diff_list_middle(_Tmpl, [], OldRest, Idx, Views) ->
 diff_list_middle(Tmpl, [NewD | NR], [OldD | OR], Idx, Views0) ->
     %% Markerless slots never reach this walk: `diff_each_items/6` routes any
     %% template carrying one to the wholesale fallback.
-    {InnerOps, _Markerless, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
+    {InnerOps, Views1} = diff_item_dynamics_v(NewD, OldD, Views0),
     {RestOps, Views2} = diff_list_middle(Tmpl, NR, OR, Idx + 1, Views1),
     case InnerOps of
         [] -> {RestOps, Views2};
@@ -1417,7 +1417,7 @@ smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
                 render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0),
             NewSnaps = Snaps#{K => NewD},
             %% Render-once markerless slots: same rule as stream_update_existing.
-            {InnerOps, _Markerless, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
+            {InnerOps, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
             case InnerOps of
                 [] ->
                     smart_reset_items(
@@ -1872,24 +1872,23 @@ markerless_changed([{undefined, _New} | _NR], [{undefined, _Old} | _OR]) ->
 markerless_changed([_New | NR], [_Old | OR]) ->
     markerless_changed(NR, OR).
 
-%% Walks an item's dynamics, returning `{Ops, Markerless, Views}`. `Markerless`
-%% is true when a markerless slot (raw-text element content, `Az = undefined`)
-%% changed value: such a slot has no op target, so no op is ever emitted for it
-%% (mirroring `diff_dynamics/3`), but a plain-list container uses the flag to
-%% fall back to the wholesale re-render that CAN deliver the change (see
-%% `diff_each_items/6` / `list_changed/3`). Stream items and reset keeps ignore
-%% it -- their markerless slots are render-once, like a root-level raw-text slot.
+%% Walks an item's dynamics, returning `{Ops, Views}`. A markerless slot
+%% (raw-text element content, `Az = undefined`) has no op target, so a changed
+%% one is simply skipped -- mirroring `diff_dynamics/3`. The callers that must
+%% still DELIVER such a change never reach this walk with one: the plain-list
+%% container routes any template carrying a markerless slot to the wholesale
+%% fallback before per-item patching (`diff_each_items/6` via
+%% `has_markerless_slot/1`), and its change detection compares values itself
+%% (`item_changed/2`). Stream items and reset keeps treat the slot as
+%% render-once, like a root-level raw-text slot.
 diff_item_dynamics_v([], [], Views) ->
-    {[], false, Views};
+    {[], Views};
 diff_item_dynamics_v([{Az, _, _} | NR], [{Az, #{diff := false}, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{Az, Same, _} | NR], [{Az, Same, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{undefined, _New, _} | NR], [{undefined, _Old, _} | OR], Views0) ->
-    %% Markerless render-once slot whose value changed (equal pairs matched
-    %% above): never emit an op -- there is no comment marker to target.
-    {Ops, _Markerless, Views1} = diff_item_dynamics_v(NR, OR, Views0),
-    {Ops, true, Views1};
+    diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
     case {New, Old} of
         {#{t := ?EACH, source := #stream{} = Src, template := Tmpl}, #{t := ?EACH}} ->
@@ -1899,14 +1898,13 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             %% clause below and re-render wholesale via the ?OP_TEXT each clause.
             EachDesc = #{source => Src, template => Tmpl},
             {EachOps, _NewSnap, Views1} = diff_stream(Az, EachDesc, Old, Views0),
-            {RestOps, Markerless, Views2} = diff_item_dynamics_v(NR, OR, Views1),
+            {RestOps, Views2} = diff_item_dynamics_v(NR, OR, Views1),
             %% Same ordering as `diff_each/9`'s stream clause: the drain feeds the
             %% rest of the walk its views, so its ops have no tail to cons onto.
-            {append_ops(EachOps, RestOps), Markerless, Views2};
+            {append_ops(EachOps, RestOps), Views2};
         _ ->
-            {RestOps, Markerless, Views1} = diff_item_dynamics_v(NR, OR, Views0),
-            {NewOps, Views2} = make_ops(Az, New, Old, RestOps, Views1),
-            {NewOps, Markerless, Views2}
+            {RestOps, Views1} = diff_item_dynamics_v(NR, OR, Views0),
+            make_ops(Az, New, Old, RestOps, Views1)
     end.
 
 diff_child_dynamics(NewD, OldD) ->

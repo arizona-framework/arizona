@@ -256,6 +256,18 @@ end-to-end effect was **not measurable** -- each was linear in a list whose
 construction already cost more than the copy. The real win in the same code was the
 gate above, which removed the work rather than making it cheaper.
 
+**Fusing the kept-item reuse walk with the inner-ops diff.** The idea: on a reset,
+`eval_or_reuse_per_item/4` already knows which positions it re-evaluated, so the
+second lockstep walk (`diff_item_dynamics_v/3`) could run over just those pairs.
+Measured before building it: the full 20-pair walk with 19 shared tuples costs
+**78 ns per kept item** and a pairs-only walk 8 ns, so the fusion's ceiling is
+~7 us on a 100-item reset -- 2.6%, under the noise floor -- at the price of
+threading changed-pairs across the eval/diff seam. Not built. What the reading
+DID pay for: the walk's threaded `Markerless` boolean was computed and never
+read by any caller (the plain-list container routes markerless templates to the
+wholesale fallback before per-item patching, and `list_changed/3` compares
+values itself), so it is gone and the walk returns `{Ops, Views}`.
+
 **The dedup-sharing walk and the estimate's closure-free walkers landed in the same
 bucket.** `dedup_fps/2` now hands back the original term when a sub-walk stripped
 nothing (no list cell or map rebuilt on the common all-scalar frame), and
@@ -438,27 +450,19 @@ The remaining server-side candidates are all small, and the largest single
 
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **Fuse the kept-item reuse walk with the inner-ops diff.** On a reset each
-   kept item pays two lockstep 20-element walks: `eval_or_reuse_per_item/4`
-   decides reuse-vs-re-eval and builds the new triples, then
-   `diff_item_dynamics_v/3` walks the same pairs comparing values. The first
-   walk already knows which positions it re-evaluated -- a reused position is
-   the same tuple and cannot emit an op -- so emitting ops during the reuse walk
-   collapses the two into one. Exact, but it crosses the `arizona_eval` /
-   `arizona_diff` seam; only worth it with a design that keeps the layering.
-2. **Let the diff flag fp-carrying frames so `dedup_fps/2` can skip wholesale.**
+1. **Let the diff flag fp-carrying frames so `dedup_fps/2` can skip wholesale.**
    The sharing walk made rebuilds free but still VISITS every value of every
    reply; `make_op/3` knows at build time when it emits a fingerprint-map
    payload, and one boolean threaded to `arizona_live` would skip the walk for
    the all-scalar frames that dominate. Capped at roughly 10 us on a 100-op
    frame -- bundle it with other work rather than plumbing it alone.
-3. **Compile-time `{get, Key}` descriptors for per-item dynamics.** A re-rendered
+2. **Compile-time `{get, Key}` descriptors for per-item dynamics.** A re-rendered
    stream item allocates ~20 closures through the template's `d` fun before the
    reuse walk drops most of them; dynamics that are pure `get(K, Item)` reads
    could compile to a descriptor evaluated directly. Parse-transform + eval
    surgery with an uncertain win -- gate it on a real-app profile showing
    item-eval dominance, not on the synthetic reset workload.
-4. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+3. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the
