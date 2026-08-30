@@ -197,10 +197,13 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Ask the re-render estimate's floor before weighing items | skips the O(items x dynamics) weighing when the statics floor alone disqualifies wholesale |
 | Fuse `render/2`'s triple unzip into its zip walk | one walk and two lists where there were two walks and four, per connect/navigate |
 
-(The 2026-08 pass that added the last four moved `stream_reset_with_overlap_100`
-343 -> 282 us p50, `stream_update_field_100` 5.1 -> 4.6 us and
-`stream_reorder_100` 4.6 -> 4.0 us, measured in-place; treat as a sense of scale
-until a paired `bench-ab` re-run.)
+(The 2026-08 pass that added the last four was verified with a paired
+`bench-ab`: `stream_reset_with_overlap_100` **-17.3%** (330 -> 273 us), the one
+workload whose frames are ops-heavy enough for the encoder and estimate work to
+clear the noise floor. `stream_reorder_100` -4.7% and `stream_update_field_100`
+-2.1% moved the right way but sit under the ~10% floor -- unresolved, per this
+document's own rule; the in-place unpaired runs had suggested more, which is the
+drift the pairing exists to cancel.)
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:
