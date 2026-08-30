@@ -672,19 +672,20 @@ sanity_handle_in(Json, Socket) ->
 %% ---------------------------------------------------------------------------
 
 profile_loop(Label, OpFun, Opts) ->
-    profile_loop_with(Label, OpFun, Opts, fun arizona_profiler:start/0).
+    profile_loop_with(Label, OpFun, Opts, [self()]).
 
-%% Like profile_loop/3 but seeds eprof with `SeedPids` instead of
+%% Like profile_loop/3 but seeds the profiler with `SeedPids` instead of
 %% `[self()]`. Used by the e2e workloads (`prof_http_get_e2e/2`,
 %% `prof_ws_event_e2e/2`) that drive a real roadrunner listener from the
 %% same BEAM -- seeding only server-side pids keeps the harness's
-%% gen_tcp work out of the trace. fprof falls back to default seeds
-%% (set_on_spawn from `self()`) -- explicit seeds aren't wired there
-%% yet, but eprof is the default and dominant tool.
+%% gen_tcp work out of the trace -- and by the socket-event workloads,
+%% whose live process is spawned in setup and so predates the trace.
+%% Both tools take the seeds: fprof missing them would silently profile
+%% everything except the process doing the diff.
 profile_loop_server(Label, OpFun, Opts, SeedPids) ->
-    profile_loop_with(Label, OpFun, Opts, fun() -> arizona_profiler:start(SeedPids) end).
+    profile_loop_with(Label, OpFun, Opts, SeedPids).
 
-profile_loop_with(Label, OpFun, Opts, StartFun) ->
+profile_loop_with(Label, OpFun, Opts, SeedPids) ->
     Tool = maps:get(tool, Opts, eprof),
     Ops = maps:get(ops, Opts, ?DEFAULT_OPS),
     MinMs = maps:get(min_ms, Opts, ?DEFAULT_MIN_MS),
@@ -694,12 +695,12 @@ profile_loop_with(Label, OpFun, Opts, StartFun) ->
     erlang:garbage_collect(self()),
     case Tool of
         eprof ->
-            ok = StartFun(),
+            ok = arizona_profiler:start(SeedPids),
             run_n(OpFun, Ops),
             ok = arizona_profiler:stop_and_dump(LogPath, MinMs);
         fprof ->
             TracePath = LogPath ++ ".trace",
-            ok = arizona_profiler:start_fprof(TracePath),
+            ok = arizona_profiler:start_fprof(TracePath, SeedPids),
             run_n(OpFun, Ops),
             ok = arizona_profiler:stop_fprof_and_dump(TracePath, LogPath)
     end,

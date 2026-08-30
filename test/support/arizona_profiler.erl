@@ -9,7 +9,7 @@ and the system under load. Seeds profiling with `[self()]` plus
 connection processes, pubsub subscribers) get auto-traced.
 
 eprof is the default tool — fast, gives total time per MFA. fprof is
-opt-in via `start_fprof/1` + `stop_fprof_and_dump/2` for the richer
+opt-in via `start_fprof/2` + `stop_fprof_and_dump/2` for the richer
 call-tree analysis (OWN/ACC time, callers/callees) when eprof's flat
 profile isn't enough.
 """.
@@ -17,7 +17,7 @@ profile isn't enough.
 -export([start/0]).
 -export([start/1]).
 -export([stop_and_dump/2]).
--export([start_fprof/1]).
+-export([start_fprof/2]).
 -export([stop_fprof_and_dump/2]).
 
 %% The `sink_loop/0` receive is indefinite by design -- it waits for
@@ -86,16 +86,21 @@ sink_loop() ->
     end.
 
 -doc """
-Start an `fprof` trace seeded with `[self()]` and `set_on_spawn`.
-`TraceFile` is the binary trace output; pass it to
-`stop_fprof_and_dump/2` along with the desired analysis output path.
+Start an `fprof` trace seeded with `SeedPids` (spawned descendants are traced
+too, as with eprof's `set_on_spawn`). `TraceFile` is the binary trace output;
+pass it to `stop_fprof_and_dump/2` along with the desired analysis output path.
+
+Seeds matter here for the same reason as in `start/1`: a process spawned in a
+workload's SETUP predates the trace, so a socket-event workload that seeds only
+the driver would fprof everything except the live process doing the diff.
 """.
--spec start_fprof(TraceFile) -> ok when
-    TraceFile :: file:filename().
-start_fprof(TraceFile) ->
+-spec start_fprof(TraceFile, SeedPids) -> ok when
+    TraceFile :: file:filename(),
+    SeedPids :: [pid()].
+start_fprof(TraceFile, SeedPids) ->
     ok = fprof:trace([
         start,
-        {procs, [self()]},
+        {procs, SeedPids},
         {file, TraceFile},
         verbose
     ]),
