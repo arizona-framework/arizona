@@ -144,6 +144,11 @@ fingerprints already shipped in the initial HTML.
     bindings => arizona_template:bindings(),
     on_mount => on_mount(),
     layouts => [arizona_render:layout()],
+    %% One list, two kinds of entry: request-to-bindings steps, and HTTP
+    %% response transforms (`arizona_middleware:etag/0`, `cors/1`, ...) the
+    %% router splits into the server's own response pipeline at compile time
+    %% (framework compression prepended outermost). Transforms are inert
+    %% where no HTTP response exists -- the WS upgrade, navigate/patch.
     middlewares => [arizona_middleware:middleware()],
     %% CSRF Origin check is on by default; set false to opt this route out.
     check_origin => boolean(),

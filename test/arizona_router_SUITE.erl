@@ -29,6 +29,7 @@
     compile_routes_live_opts_out_origin_check/1,
     compile_routes_live_method_gating/1,
     compile_routes_mixed/1,
+    compile_routes_http_transforms/1,
     compile_routes_ws/1
 ]).
 
@@ -58,7 +59,8 @@ groups() ->
         compile_routes_per_listener_dispatch,
         compile_routes_per_listener_error_page,
         compile_routes_mcp,
-        compile_routes_mixed
+        compile_routes_mixed,
+        compile_routes_http_transforms
     ],
     [
         {roadrunner, [sequence], Cases}
@@ -406,3 +408,107 @@ compile_routes_mixed(Config) ->
     ?assertEqual(arizona_roadrunner_controller, H4),
     ?assertEqual(health_h, maps:get(handler, Opts4)),
     ?assertEqual(#{status => ok}, maps:get(state, Opts4)).
+
+compile_routes_http_transforms(Config) when is_list(Config) ->
+    %% A route's single `middlewares` list holds two kinds of entry; the
+    %% router splits them at compile time. HTTP response transforms
+    %% (arizona_middleware constructors) map to roadrunner middlewares at the
+    %% route's TOP-LEVEL `middlewares` key -- roadrunner's own pipeline --
+    %% while request-to-bindings steps stay nested under `state.arizona`.
+    %% The framework's compress is PREPENDED, staying outermost, so a
+    %% transform sees the response before compress re-encodes it.
+    Router = ?config(router, Config),
+    %% Live: compress outermost, the transform inside.
+    ?assertMatch(
+        [#{middlewares := [roadrunner_compress, roadrunner_etag]}],
+        Router:routes([
+            {live, ~"/", my_page, #{middlewares => [arizona_middleware:etag()]}}
+        ])
+    ),
+    %% Live with compress off: the transform stands alone.
+    ?assertMatch(
+        [#{middlewares := [roadrunner_etag]}],
+        Router:routes(
+            [{live, ~"/", my_page, #{middlewares => [arizona_middleware:etag()]}}],
+            #{compress => false}
+        )
+    ),
+    %% An explicit compress() keeps its written position, not doubled.
+    ?assertMatch(
+        [#{middlewares := [roadrunner_etag, roadrunner_compress]}],
+        Router:routes([
+            {live, ~"/", my_page, #{
+                middlewares => [arizona_middleware:etag(), arizona_middleware:compress()]
+            }}
+        ])
+    ),
+    %% Without transforms a live route carries compress alone -- unchanged.
+    ?assertMatch(
+        [#{middlewares := [roadrunner_compress]}],
+        Router:routes([{live, ~"/", my_page, #{}}])
+    ),
+    %% Config-carrying constructors and the escape hatch map through verbatim.
+    ?assertMatch(
+        [
+            #{
+                middlewares := [
+                    roadrunner_compress,
+                    {roadrunner_cors, #{origins := [~"https://app.example"]}},
+                    roadrunner_security_headers,
+                    {roadrunner_security_headers, #{frame_options := ~"DENY"}},
+                    my_custom_rr_mw
+                ]
+            }
+        ],
+        Router:routes([
+            {live, ~"/", my_page, #{
+                middlewares => [
+                    arizona_middleware:cors(#{origins => [~"https://app.example"]}),
+                    arizona_middleware:security_headers(),
+                    arizona_middleware:security_headers(#{frame_options => ~"DENY"}),
+                    arizona_middleware:http_transform(my_custom_rr_mw)
+                ]
+            }}
+        ])
+    ),
+    %% Controller: the split leaves Arizona steps (plus the default origin
+    %% check) nested in state while the transform reaches roadrunner's
+    %% pipeline.
+    [ControllerRoute] = Router:routes([
+        {post, ~"/api", my_controller, #{
+            middlewares => [{my_mod, my_step}, arizona_middleware:etag()]
+        }}
+    ]),
+    ?assertMatch(#{middlewares := [roadrunner_etag]}, ControllerRoute),
+    #{state := #{arizona := #{middlewares := ArizonaMws}}} = ControllerRoute,
+    ?assertMatch([{arizona_middleware, check_origin}, {my_mod, my_step}], ArizonaMws),
+    %% Without transforms a controller route has no roadrunner middlewares key.
+    [BareController] = Router:routes([{post, ~"/api", my_controller, #{}}]),
+    ?assertNot(is_map_key(middlewares, BareController)),
+    %% Asset: transforms fine, an Arizona step fails loudly -- no pipeline
+    %% would ever run it there.
+    ?assertMatch(
+        [#{middlewares := [roadrunner_compress, roadrunner_security_headers]}],
+        Router:routes([
+            {asset, ~"/a", {dir, "/tmp"}, #{
+                middlewares => [arizona_middleware:security_headers()]
+            }}
+        ])
+    ),
+    ?assertError(
+        {asset_middleware_not_transform, [{my_mod, my_step}]},
+        Router:routes([
+            {asset, ~"/a", {dir, "/tmp"}, #{middlewares => [{my_mod, my_step}]}}
+        ])
+    ),
+    %% A transform reaching the Arizona pipeline anyway (a custom
+    %% resolve_route result) is inert, not a crash.
+    Req = arizona_req_test_adapter:new(),
+    ?assertMatch(
+        {cont, _, #{k := v}},
+        arizona_middleware:apply_middlewares(
+            [arizona_middleware:etag(), fun(R, B) -> {cont, R, B#{k => v}} end],
+            Req,
+            #{}
+        )
+    ).
