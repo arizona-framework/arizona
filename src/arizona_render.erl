@@ -162,11 +162,22 @@ of any child views encountered during evaluation.
 render(#{s := Statics, d := Dynamics} = Tmpl, Views0) ->
     {Triples, {_Old, NewViews}} = arizona_eval:eval_dynamics_v(Dynamics, {Views0, #{}}),
     Backend = backend(Tmpl),
-    {D, Deps, Vals} = arizona_template:unzip_triples(Backend, Triples),
-    HTML = zip(Backend, Statics, Vals),
+    {HTML, D, Deps} = zip_triples(Backend, Statics, Triples),
     Snap0 = #{s => Statics, d => D, deps => Deps},
     Snap = arizona_template:maybe_propagate(Tmpl, Snap0),
     {HTML, Snap, NewViews}.
+
+%% One pass over statics x triples: emits the HTML skeleton while splitting
+%% each triple into the snapshot's `{Az, V}` pair and its deps. Replaces an
+%% unzip into three lists plus a second zip walk over one of them.
+%% `render_v/2` is `unwrap_val/2` fused with `render_dyn/2`: the one shape
+%% unwrap rewrote (`{attr, Name, V}` to its rendered binary) it renders
+%% directly, and a binary passes through `render_dyn/2` verbatim.
+zip_triples(_Backend, [S], []) ->
+    {[S], [], []};
+zip_triples(Backend, [S | Statics], [{Az, V, Deps} | TRest]) ->
+    {HTML, DRest, DepsRest} = zip_triples(Backend, Statics, TRest),
+    {[S, render_v(Backend, V) | HTML], [{Az, V} | DRest], [Deps | DepsRest]}.
 
 -doc """
 SSR render: produces HTML iolist with no snapshot, used for the first
