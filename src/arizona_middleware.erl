@@ -51,6 +51,19 @@ all, so a transform sees the response before it is re-encoded. On a
 pipeline run with no HTTP response to wrap (the WebSocket upgrade, a
 navigate/patch), a transform is inert and skipped.
 
+Each constructor returns a plain, stable term, and that term -- not the
+call -- is what a `config/sys.config` route table must spell (a term file
+cannot hold a function call; see "Declaring steps" below for why):
+
+| constructor | literal term |
+| ----------- | ------------ |
+| `etag()` | `{http_transform, etag}` |
+| `compress()` | `{http_transform, compress}` |
+| `cors(Config)` | `{http_transform, {cors, Config}}` |
+| `security_headers()` | `{http_transform, security_headers}` |
+| `security_headers(Config)` | `{http_transform, {security_headers, Config}}` |
+| `http_transform(Entry)` | `{http_transform, {custom, Entry}}` |
+
 ## Declaring steps
 
 A step is either a fun of two arguments or a `{Module, Function}` pair naming a
@@ -323,7 +336,8 @@ check_origin(Req0, Bindings) ->
 HTTP response transform: derive a weak `ETag` from the response body and
 answer a matching `If-None-Match` with `304` (RFC 7232). The validator is
 weak on purpose, so the framework's compression re-encoding the body
-outside it cannot invalidate the tag.
+outside it cannot invalidate the tag. Returns the plain term
+`{http_transform, etag}` -- the spelling a sys.config route uses.
 """.
 -spec etag() -> http_transform().
 etag() ->
@@ -333,7 +347,8 @@ etag() ->
 HTTP response transform: gzip/deflate response compression. Only needed on
 routes the framework does not already compress -- controller routes; `live`
 and `asset` routes get compression from the server's `compress` option
-(default on), and listing it there again is a no-op.
+(default on), and listing it there again is a no-op. Returns the plain
+term `{http_transform, compress}` -- the spelling a sys.config route uses.
 """.
 -spec compress() -> http_transform().
 compress() ->
@@ -345,7 +360,8 @@ and decorates cross-origin responses with `Access-Control-*` headers per
 `Config` (the server middleware's own config map; `origins` at minimum).
 Distinct from `check_origin/2`, which REJECTS cross-origin requests --
 list this on a route that deliberately serves them (usually beside
-`check_origin => false`).
+`check_origin => false`). Returns the plain term
+`{http_transform, {cors, Config}}` -- the spelling a sys.config route uses.
 """.
 -spec cors(Config) -> http_transform() when
     Config :: map().
@@ -356,7 +372,10 @@ cors(Config) when is_map(Config) ->
 HTTP response transform: a default-safe security-header set
 (`x-content-type-options`, `x-frame-options`, `referrer-policy`, ...)
 added to every response, leaving headers the handler already set
-untouched. `security_headers/1` overrides individual headers.
+untouched. `security_headers/1` overrides individual headers. Returns the
+plain term `{http_transform, security_headers}` (with config:
+`{http_transform, {security_headers, Config}}`) -- the spelling a
+sys.config route uses.
 """.
 -spec security_headers() -> http_transform().
 security_headers() ->
@@ -373,7 +392,9 @@ wraps a server-shaped middleware entry (for the roadrunner server, a module
 implementing `roadrunner_middleware`, a fun, or a `{Callable, Config}`
 pair) verbatim into the route's response pipeline. Unlike the named
 transforms this couples the route to the server backend -- prefer the
-constructors when one exists.
+constructors when one exists. Returns the plain term
+`{http_transform, {custom, Entry}}` -- spellable in sys.config when
+`Entry` is itself a term.
 """.
 -spec http_transform(Entry) -> http_transform() when
     Entry :: term().
