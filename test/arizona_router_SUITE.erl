@@ -30,6 +30,7 @@
     compile_routes_live_method_gating/1,
     compile_routes_mixed/1,
     compile_routes_http_transforms/1,
+    compile_routes_http_transform_errors/1,
     compile_routes_ws/1
 ]).
 
@@ -60,7 +61,8 @@ groups() ->
         compile_routes_per_listener_error_page,
         compile_routes_mcp,
         compile_routes_mixed,
-        compile_routes_http_transforms
+        compile_routes_http_transforms,
+        compile_routes_http_transform_errors
     ],
     [
         {roadrunner, [sequence], Cases}
@@ -433,14 +435,36 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
             #{compress => false}
         )
     ),
-    %% An explicit compress() keeps its written position, not doubled.
+    %% compress() is position-independent: the router keeps compression
+    %% OUTERMOST wherever it is written, so an etag always hashes the
+    %% pre-compression body -- and it is never doubled.
     ?assertMatch(
-        [#{middlewares := [roadrunner_etag, roadrunner_compress]}],
+        [#{middlewares := [roadrunner_compress, roadrunner_etag]}],
         Router:routes([
             {live, ~"/", my_page, #{
                 middlewares => [arizona_middleware:etag(), arizona_middleware:compress()]
             }}
         ])
+    ),
+    %% An explicit compress() survives the server's compress => false (a
+    %% route-level request beats the listener-level default-off) -- still
+    %% outermost.
+    ?assertMatch(
+        [#{middlewares := [roadrunner_compress, roadrunner_etag]}],
+        Router:routes(
+            [
+                {live, ~"/", my_page, #{
+                    middlewares => [arizona_middleware:etag(), arizona_middleware:compress()]
+                }}
+            ],
+            #{compress => false}
+        )
+    ),
+    %% The literal term is the constructor's documented product -- a
+    %% sys.config route spells exactly this.
+    ?assertMatch(
+        [#{middlewares := [roadrunner_compress, roadrunner_etag]}],
+        Router:routes([{live, ~"/", my_page, #{middlewares => [{http_transform, etag}]}}])
     ),
     %% Without transforms a live route carries compress alone -- unchanged.
     ?assertMatch(
@@ -483,6 +507,50 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
     %% Without transforms a controller route has no roadrunner middlewares key.
     [BareController] = Router:routes([{post, ~"/api", my_controller, #{}}]),
     ?assertNot(is_map_key(middlewares, BareController)),
+    %% Controllers get no automatic compression, but an explicit compress()
+    %% still normalizes outermost.
+    ?assertMatch(
+        [#{middlewares := [roadrunner_compress, roadrunner_etag]}],
+        Router:routes([
+            {post, ~"/api", my_controller, #{
+                middlewares => [arizona_middleware:etag(), arizona_middleware:compress()]
+            }}
+        ])
+    ),
+    %% A {match, ...} multi-verb route splits identically to the verb sugar.
+    ?assertMatch(
+        [#{methods := [~"GET", ~"POST", ~"HEAD"], middlewares := [roadrunner_etag]}],
+        Router:routes([
+            {match, [get, post], ~"/multi", my_controller, #{
+                middlewares => [arizona_middleware:etag()]
+            }}
+        ])
+    ),
+    %% The documented CORS pairing: serve cross-origin deliberately -- the
+    %% cors transform on the roadrunner side, check_origin opted out on
+    %% Arizona's.
+    [CorsRoute] = Router:routes([
+        {post, ~"/public-api", my_controller, #{
+            check_origin => false,
+            middlewares => [arizona_middleware:cors(#{origins => [~"https://app.example"]})]
+        }}
+    ]),
+    ?assertMatch(
+        #{middlewares := [{roadrunner_cors, #{origins := [~"https://app.example"]}}]},
+        CorsRoute
+    ),
+    #{state := #{arizona := #{middlewares := CorsArizonaMws}}} = CorsRoute,
+    ?assertEqual([], CorsArizonaMws),
+    %% A live route's compiled meta -- what the WS upgrade and navigate read
+    %% their middlewares from -- carries the steps only; transforms never
+    %% reach Arizona's pipeline on those paths.
+    [LiveRoute] = Router:routes([
+        {live, ~"/mixed", my_page, #{
+            middlewares => [{my_mod, my_step}, arizona_middleware:etag()]
+        }}
+    ]),
+    #{state := #{arizona := #{middlewares := LiveMws}}} = LiveRoute,
+    ?assertMatch([{arizona_middleware, check_origin}, {my_mod, my_step}], LiveMws),
     %% Asset: transforms fine, an Arizona step fails loudly -- no pipeline
     %% would ever run it there.
     ?assertMatch(
@@ -511,3 +579,23 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
             #{}
         )
     ).
+
+compile_routes_http_transform_errors(Config) when is_list(Config) ->
+    %% A typo'd hand-spelled transform (the sys.config hazard) fails route
+    %% compilation with a named error, and format_error/2 renders a message
+    %% naming the valid set -- same convention as the asset guard below.
+    Router = ?config(router, Config),
+    ?assertError(
+        {unknown_http_transform, etga},
+        Router:routes([{live, ~"/", my_page, #{middlewares => [{http_transform, etga}]}}])
+    ),
+    Stack = [{Router, routes, 1, []}],
+    #{general := UnknownMsg} =
+        Router:format_error({unknown_http_transform, etga}, Stack),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(UnknownMsg), ~"etga")),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(UnknownMsg), ~"etag")),
+    #{general := AssetMsg} =
+        Router:format_error({asset_middleware_not_transform, [{my_mod, my_step}]}, Stack),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(AssetMsg), ~"my_mod")),
+    #{general := WildcardMsg} = Router:format_error(wildcard_in_method_list, Stack),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(WildcardMsg), ~"'*'")).
