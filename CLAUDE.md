@@ -50,6 +50,8 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make doc-erl` | Erlang docs (ex_doc) |
 | `make bench` | Performance bench (`scripts/bench.escript`, `ARGS=...`); deliberately **not** in `ci` -- shared runners are too noisy |
 | `make bench-ab REFS="<a> <b>"` | Paired A/B of one workload across two commits, each built in its own worktree; also **not** in `ci` |
+| `make bench-client` | Client `applyOps` bench in a real Chromium, fixtures from a real diff; also **not** in `ci` |
+| `make bench-client-connect` | Client connect + reconnect bench in a real Chromium, frames from a real socket; also **not** in `ci` |
 | `make prof` | eprof/fprof profile (`scripts/profile.escript`, `ARGS=...`); also **not** in `ci` |
 | `make prof-at REF=...` | Profile any commit-ish in a cached `git worktree`, for A/B comparisons |
 | `make setup-e2e` | Install E2E deps |
