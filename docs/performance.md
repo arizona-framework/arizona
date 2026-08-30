@@ -198,13 +198,16 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Ask the re-render estimate's floor before weighing items | skips the O(items x dynamics) weighing when the statics floor alone disqualifies wholesale |
 | Fuse `render/2`'s triple unzip into its zip walk | one walk and two lists where there were two walks and four, per connect/navigate |
 
-(The 2026-08 pass that added the last four was verified with a paired
-`bench-ab`: `stream_reset_with_overlap_100` **-17.3%** (330 -> 273 us), the one
-workload whose frames are ops-heavy enough for the encoder and estimate work to
-clear the noise floor. `stream_reorder_100` -4.7% and `stream_update_field_100`
--2.1% moved the right way but sit under the ~10% floor -- unresolved, per this
-document's own rule; the in-place unpaired runs had suggested more, which is the
-drift the pairing exists to cancel.)
+(The whole 2026-08 arc that added the last four -- PRs #759-#762 -- closed with
+one paired `bench-ab` over every workload, benchmarks byte-identical on both
+sides. Two labels resolve past the ~10% floor: `stream_reset_with_overlap_100`
+**-19.2%** (329 -> 266 us) and `stream_reorder_100` **-18.2%** (4.4 -> 3.6 us)
+-- the two whose frames carry enough ops for the encoder, deps-hoist and
+estimate work to add up. Everything else sits under the floor, the e2e paths at
+~0%, which is exactly what the framework-share bound below predicts: the arc's
+changes live inside the 14.1%/9.8% slice. Reading either number off an earlier
+partial pairing understates them; only the full-arc pairing shows the encoder
+and the walk changes compounding on the ops-heavy labels.)
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:
