@@ -51,6 +51,12 @@ for (let i = 0; i < rest.length; i++) {
 const CLIENT = readFileSync(join(ROOT, 'assets/js/arizona.js'), 'utf8');
 const CORE = readFileSync(join(ROOT, 'assets/js/arizona-core.js'), 'utf8');
 const WORKER = readFileSync(join(ROOT, 'assets/js/arizona-worker.js'), 'utf8');
+// The committed production bundle: one minified ESM file with the same named
+// exports, referencing its sibling min worker. Timed as its own pass so the
+// headline numbers exist in the exact shape production ships -- the source
+// pass pays two module fetches the bundle does not.
+const MIN_CLIENT = readFileSync(join(ROOT, 'priv/static/assets/js/arizona.min.js'), 'utf8');
+const MIN_WORKER = readFileSync(join(ROOT, 'priv/static/assets/js/arizona-worker.min.js'), 'utf8');
 
 /** Connect-path internals worth a per-call breakdown; missing names are skipped. */
 const INTERNALS = [
@@ -136,7 +142,11 @@ async function routeFiles(context, html, clientSrc, workerSrc) {
         if (path === '/index.html') return respond(html, 'text/html');
         if (path === '/az/arizona.js') return respond(clientSrc, 'text/javascript');
         if (path === '/az/arizona-core.js') return respond(CORE, 'text/javascript');
-        if (path === '/az/arizona-worker.js') return respond(workerSrc, 'text/javascript');
+        // The source client asks for arizona-worker.js, the bundle for its min
+        // sibling -- serve the pass's worker under both names.
+        if (path === '/az/arizona-worker.js' || path === '/az/arizona-worker.min.js') {
+            return respond(workerSrc, 'text/javascript');
+        }
         if (path === '/az/floor-worker.js') return respond('postMessage(1);', 'text/javascript');
         return route.fulfill({ status: 404, body: 'not found' });
     });
@@ -279,36 +289,51 @@ for (const label of labels) {
         `\n${label}  (connect ${meta.connect_frame.length} B, resync ${meta.resync_frame.length} B)`,
     );
 
-    // Plain pass for the headline timings; instrumented pass for shares only.
-    const timings = { tSync: [], tConnected: [], tAttrs: [], tResync: [], tFloor: [] };
-    let isolated = null;
-    let broken = null;
-    for (let i = 0; i < runs && !broken; i++) {
-        const { r, warnings, error } = await measure(browser, html, CLIENT, workerSrc);
-        if (error || warnings.length > 0) {
-            broken = { error, warnings };
-            break;
+    // Plain passes for the headline timings (source shape, then the committed
+    // production bundle); instrumented pass for shares only.
+    const timedPass = async (clientSrc, passWorkerSrc) => {
+        const timings = { tSync: [], tConnected: [], tAttrs: [], tResync: [], tFloor: [] };
+        let isolated = null;
+        for (let i = 0; i < runs; i++) {
+            const { r, warnings, error } = await measure(browser, html, clientSrc, passWorkerSrc);
+            if (error || warnings.length > 0) return { broken: { error, warnings } };
+            isolated = r.isolated;
+            for (const k of Object.keys(timings)) timings[k].push(r[k]);
         }
-        isolated = r.isolated;
-        for (const k of Object.keys(timings)) timings[k].push(r[k]);
-    }
-    if (broken) {
+        return { timings, isolated };
+    };
+    const refuse = (broken) => {
         failed = true;
         console.log(`  REFUSING TO REPORT: ${broken.error || 'console output'}`);
         for (const wtext of (broken.warnings || []).slice(0, 3)) console.log(`    ${wtext}`);
         console.log('  A connect that never reaches az-connected, a resync that never');
         console.log('  replaces the root, or console noise means the numbers would');
         console.log('  measure a broken boot, not the boot.');
+    };
+
+    const src = await timedPass(CLIENT, workerSrc);
+    if (src.broken) {
+        refuse(src.broken);
         continue;
     }
-    if (!isolated) {
+    if (!src.isolated) {
         console.log('  note: crossOriginIsolated=false -- timings quantized to 100 us');
     }
-    console.log(`  connect() sync        ${fmt(timings.tSync)}`);
-    console.log(`  to az-connected       ${fmt(timings.tConnected)}`);
-    console.log(`  to az-attrs applied   ${fmt(timings.tAttrs)}`);
-    console.log(`  reconnect resync      ${fmt(timings.tResync)}`);
-    console.log(`  worker spawn floor    ${fmt(timings.tFloor)}   (bare worker, spawn-to-message)`);
+    console.log(`  connect() sync        ${fmt(src.timings.tSync)}`);
+    console.log(`  to az-connected       ${fmt(src.timings.tConnected)}`);
+    console.log(`  to az-attrs applied   ${fmt(src.timings.tAttrs)}`);
+    console.log(`  reconnect resync      ${fmt(src.timings.tResync)}`);
+    console.log(`  worker spawn floor    ${fmt(src.timings.tFloor)}   (bare worker, spawn-to-message)`);
+
+    const bundled = await timedPass(MIN_CLIENT, fakeSocketPrelude(meta) + MIN_WORKER);
+    if (bundled.broken) {
+        refuse(bundled.broken);
+        continue;
+    }
+    console.log('  production bundle (arizona.min.js):');
+    console.log(`    connect() sync      ${fmt(bundled.timings.tSync)}`);
+    console.log(`    to az-connected     ${fmt(bundled.timings.tConnected)}`);
+    console.log(`    reconnect resync    ${fmt(bundled.timings.tResync)}`);
 
     // Shares from one boot are a single call per function -- aggregate several
     // instrumented runs so one scheduling hiccup can't own a share.
