@@ -186,8 +186,13 @@ diff(
     Views0,
     Changed
 ) ->
+    %% The changed keys are fixed for the whole walk, so materialize them
+    %% once -- `deps_changed/2` then probes each slot's deps map with zero
+    %% per-slot setup, instead of re-deriving an iterator (or key list)
+    %% from one of the two maps per dynamic.
+    ChangedKeys = maps:keys(Changed),
     {Ops, NewD, NewDeps, {_Old, NewViews}} =
-        diff_dynamics_v(NewDynamics, OldEvals, OldDeps, Changed, {Views0, #{}}),
+        diff_dynamics_v(NewDynamics, OldEvals, OldDeps, ChangedKeys, {Views0, #{}}),
     Snap0 = preserve_view_id(OldSnap, #{s => Statics, d => NewD, deps => NewDeps}),
     {Ops, arizona_template:maybe_propagate(Tmpl, Snap0), NewViews}.
 
@@ -381,58 +386,58 @@ stream_drainable(#stream{} = Src, Old) ->
         [] -> false
     end.
 
-diff_dynamics_v([], [], [], _Changed, Views) ->
+diff_dynamics_v([], [], [], _ChangedKeys, Views) ->
     {[], [], [], Views};
 diff_dynamics_v(
     [_Def | DR],
     [{undefined, _} = OldD | OR],
     [ODeps | DepsR],
-    Changed,
+    ChangedKeys,
     Views0
 ) ->
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so skip it -- never re-evaluate, never emit an op.
-    skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
+    skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
 diff_dynamics_v(
     [_Def | DR],
     [{_Az, #{diff := false}} = OldD | OR],
     [ODeps | DepsR],
-    Changed,
+    ChangedKeys,
     Views0
 ) ->
-    skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
-diff_dynamics_v([Def | DR], [{Az, Old} = OldD | OR], [ODeps | DepsR], Changed, Views0) ->
-    case deps_changed(ODeps, Changed) of
+    skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
+diff_dynamics_v([Def | DR], [{Az, Old} = OldD | OR], [ODeps | DepsR], ChangedKeys, Views0) ->
+    case deps_changed(ODeps, ChangedKeys) of
         false ->
-            skip_dynamic(OldD, ODeps, DR, OR, DepsR, Changed, Views0);
+            skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
         true ->
-            diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0)
+            diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, ChangedKeys, Views0)
     end.
 
 %% Skip a dynamic whose deps haven't changed: carry its child views to the
 %% new accumulator and cons the original `{Az, Old}` tuple onto the new
 %% snapshot -- shared with the old one, not rebuilt.
-skip_dynamic({_Az, Old} = OldD, ODeps, DR, OR, DepsR, Changed, Views0) ->
+skip_dynamic({_Az, Old} = OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0) ->
     Views1 = carry_skipped_view(Old, Views0),
     {OpsRest, DRest, DepsRest, Views2} =
-        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+        diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
     {OpsRest, [OldD | DRest], [ODeps | DepsRest], Views2}.
 
 %% Re-evaluate a dynamic whose deps have changed. Each-containers take a
 %% special path because their child snapshots need merging; everything else
 %% goes through eval_one_v_flat and a value comparison.
-diff_changed_dynamic(Def, _Az, #{t := ?EACH} = Old, DR, OR, DepsR, Changed, Views0) ->
+diff_changed_dynamic(Def, _Az, #{t := ?EACH} = Old, DR, OR, DepsR, ChangedKeys, Views0) ->
     {Az2, EachDesc, Deps} = arizona_eval:eval_each_def(Def),
-    diff_each(Az2, EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0);
-diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, Changed, Views0) ->
+    diff_each(Az2, EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0);
+diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, ChangedKeys, Views0) ->
     {Az, New, NewDeps, Views1} = arizona_eval:eval_one_v_flat(Def, Views0),
     {OpsRest, DRest, DepsRest, Views2} =
-        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+        diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
     {OpsFinal, ViewsFinal} = maybe_make_ops(Az, New, Old, OpsRest, Views2),
     {OpsFinal, [{Az, New} | DRest], [NewDeps | DepsRest], ViewsFinal}.
 
 diff_each(
-    Az, #{source := #stream{} = Source} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
+    Az, #{source := #stream{} = Source} = EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0
 ) ->
     {Old0, New0} = Views0,
     {StreamOps, NewSnap0, {_, LocalNew}} =
@@ -441,14 +446,14 @@ diff_each(
     NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew1)},
     Views1 = {Old0, maps:merge(New0, LocalNew1)},
     {OpsRest, DRest, DepsRest, Views2} =
-        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+        diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
     %% The drain runs first because the sibling walk consumes the views it rendered,
     %% so there is no tail here to cons onto. Diffing the siblings first to make one
     %% would reorder both their child `mount/1`s and the `$arizona_update_effects`
     %% accumulator, which ships in evaluation order.
     {append_ops(StreamOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
 diff_each(
-    Az, #{source := Items} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
+    Az, #{source := Items} = EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0
 ) when is_list(Items) ->
     {Old0, New0} = Views0,
     {ListOps, NewSnap0, {_, LocalNew}} =
@@ -456,10 +461,10 @@ diff_each(
     NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew)},
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
-        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+        diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
     {prepend_each_op(ListOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
 diff_each(
-    Az, #{source := Source} = EachDesc, Deps, Old, DR, OR, DepsR, Changed, Views0
+    Az, #{source := Source} = EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0
 ) when is_map(Source) ->
     %% A map-source `?each` renders to the same snapshot shape as a list-source
     %% one (`items => [ItemD]`), so it diffs through the same list machinery once
@@ -470,7 +475,7 @@ diff_each(
     NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew)},
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
-        diff_dynamics_v(DR, OR, DepsR, Changed, Views1),
+        diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
     {prepend_each_op(MapOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
 
 %% A list- or map-source `?each` container answers with exactly one op or none -- a
@@ -641,29 +646,24 @@ carry_item_children(ChildViewIds, Old, New) ->
     maps:merge(maps:intersect(ChildViewIds, Old), New).
 
 -doc """
-Returns `true` when any key in `Deps` also appears in `Changed`. Used by
+Returns `true` when any key in `ChangedKeys` appears in `Deps`. Used by
 `diff/4` and the per-item skipping renderer to decide whether a dynamic
-needs re-evaluation. Walks the smaller map and probes the larger via
-`is_map_key/2` -- avoids the allocation of `maps:intersect/2`.
+needs re-evaluation. The changed set is fixed for a whole dynamics walk
+while every slot brings its own deps map, so the caller materializes the
+changed KEYS once (`maps:keys/1`, one pass in C) and each slot then costs
+only `is_map_key/2` probes -- no per-slot iterator stepping or key-list
+allocation, both of which measured 20-30% slower at every small-map shape
+tried.
 """.
--spec deps_changed(Deps, Changed) -> boolean() when
+-spec deps_changed(Deps, ChangedKeys) -> boolean() when
     Deps :: map(),
-    Changed :: map().
-deps_changed(Deps, Changed) ->
-    case map_size(Deps) =< map_size(Changed) of
-        true -> any_key_in(Deps, Changed);
-        false -> any_key_in(Changed, Deps)
-    end.
-
-any_key_in(Small, Large) ->
-    any_key_in_iter(maps:next(maps:iterator(Small)), Large).
-
-any_key_in_iter(none, _Large) ->
+    ChangedKeys :: [term()].
+deps_changed(_Deps, []) ->
     false;
-any_key_in_iter({K, _V, Iter}, Large) ->
-    case is_map_key(K, Large) of
+deps_changed(Deps, [K | Ks]) ->
+    case is_map_key(K, Deps) of
         true -> true;
-        false -> any_key_in_iter(maps:next(Iter), Large)
+        false -> deps_changed(Deps, Ks)
     end.
 
 diff_stream(
@@ -759,8 +759,20 @@ stream_outgrows_measured(Positional, _Tmpl, _OldItems, _Source) when
     false;
 stream_outgrows_measured(Positional, Tmpl, OldItems, Source) ->
     NewCount = visible_count(Source),
-    AvgItem = sum_item_value_bytes(maps:values(OldItems), 0) div map_size(OldItems),
-    Whole = re_render_bytes(Tmpl, AvgItem * NewCount, NewCount),
+    %% Both conditions are monotone-decreasing in the wholesale size, so
+    %% failing either at the value-free floor (`Whole` minus the item
+    %% values, which are never negative) settles the answer as `false`
+    %% before any item is weighed.
+    Floor = re_render_bytes(Tmpl, 0, NewCount),
+    case outgrows(Positional, Floor) of
+        false ->
+            false;
+        true ->
+            AvgItem = sum_item_value_bytes(maps:values(OldItems), 0) div map_size(OldItems),
+            outgrows(Positional, Floor + AvgItem * NewCount)
+    end.
+
+outgrows(Positional, Whole) ->
     Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
         Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM.
 
@@ -1119,10 +1131,17 @@ list_outgrows_measured(Positional, _Tmpl, _NewItemsList) when
 ->
     false;
 list_outgrows_measured(Positional, Tmpl, NewItemsList) ->
-    {Count, ValueBytes} = count_value_bytes(NewItemsList, 0, 0),
-    Whole = re_render_bytes(Tmpl, ValueBytes, Count),
-    Positional - Whole > ?RE_RENDER_MIN_SAVING andalso
-        Positional * ?RE_RENDER_BIAS_DEN > Whole * ?RE_RENDER_BIAS_NUM.
+    %% Same value-free-floor early-out as `stream_outgrows_measured/4`,
+    %% with the count from `length/1` -- one BIF pass, no value walk.
+    Count = length(NewItemsList),
+    Floor = re_render_bytes(Tmpl, 0, Count),
+    case outgrows(Positional, Floor) of
+        false ->
+            false;
+        true ->
+            {Count, ValueBytes} = count_value_bytes(NewItemsList, 0, 0),
+            outgrows(Positional, Floor + ValueBytes)
+    end.
 
 %% Statics once, every item's values, plus per-item list framing.
 re_render_bytes(#{s := Statics}, ValueBytes, Count) ->
