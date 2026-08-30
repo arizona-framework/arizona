@@ -77,7 +77,6 @@ render(Bindings) ->
 -export([maybe_propagate/2]).
 -export([make_child_snap/4]).
 -export([scope_slot/2]).
--export([unzip_triples/2]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
 
@@ -775,23 +774,9 @@ scope_val(Prefix, #{s := _, d := _} = Nested) -> scope_snapshot(Prefix, Nested);
 scope_val(_Prefix, Val) -> Val.
 
 -doc """
-Splits a list of `{Az, Val, Deps}` triples into the snapshot d-list, deps list,
-and rendered values list (each rendered through `Backend`, an `arizona_renderer`).
-""".
--spec unzip_triples(Backend, Triples) -> {DList, DepsList, Vals} when
-    Backend :: module(),
-    Triples :: [{az(), term(), deps()}],
-    DList :: [{az(), term()}],
-    DepsList :: [deps()],
-    Vals :: [term()].
-unzip_triples(_Backend, []) ->
-    {[], [], []};
-unzip_triples(Backend, [{Az, Val, Deps} | Rest]) ->
-    {RestD, RestDeps, RestVals} = unzip_triples(Backend, Rest),
-    {[{Az, Val} | RestD], [Deps | RestDeps], [unwrap_val(Backend, Val) | RestVals]}.
-
--doc """
-Like `unzip_triples/2` but discards the rendered values list.
+Splits a list of `{Az, Val, Deps}` triples into the snapshot d-list and
+deps list. (The connect/navigate render needs the rendered values too and
+fuses this split into its zip walk -- `arizona_render`'s `zip_triples/3`.)
 """.
 -spec split_triples(Triples) -> {DList, DepsList} when
     Triples :: [{az(), term(), deps()}],

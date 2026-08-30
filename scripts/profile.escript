@@ -47,6 +47,7 @@ profilers() ->
         {~"render_each_100", fun prof_render_each_100/2},
         {~"diff_simple_event", fun prof_diff_simple_event/2},
         {~"stream_reorder_100", fun prof_stream_reorder_100/2},
+        {~"stream_reset_overlap_100", fun prof_stream_reset_overlap_100/2},
         {~"http_get_e2e", fun prof_http_get_e2e/2},
         {~"ws_event_e2e", fun prof_ws_event_e2e/2},
         {~"mount_only", fun prof_mount_only/2},
@@ -116,9 +117,12 @@ prof_diff_simple_event(Label, Opts) ->
     %% then loop `inc` events on arizona_root_counter. Each event mutates
     %% the `count` binding, so arizona_diff:diff/4 emits one OP_TEXT op.
     %% Exercises full WS event roundtrip: arizona_socket:handle_in +
-    %% handler dispatch + diff + reply encode.
+    %% handler dispatch + diff + reply encode. The live gen_server is
+    %% spawned here in setup -- BEFORE profiling starts -- so
+    %% set_on_spawn never sees it and its pid must be seeded explicitly,
+    %% or the whole server-side diff runs untraced.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, _Connect, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     Json = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
     sanity_handle_in(Json, Socket),
     Op = fun() ->
@@ -127,7 +131,7 @@ prof_diff_simple_event(Label, Opts) ->
             {reply, _, _} -> ok
         end
     end,
-    profile_loop(Label, Op, Opts).
+    profile_loop_server(Label, Op, Opts, [self(), element(2, Socket)]).
 
 prof_stream_reorder_100(Label, Opts) ->
     %% Mirrors bench_stream_reorder_100 (bench.escript:313). Mount
@@ -144,7 +148,7 @@ prof_stream_reorder_100(Label, Opts) ->
     ],
     Stream = arizona_stream:new(fun(#{id := Id}) -> Id end, Items),
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(
+    {reply, _Connect, Socket} = arizona_socket:init(
         arizona_datatable, #{rows => Stream}, Req, #{}
     ),
     Json = iolist_to_binary(
@@ -157,7 +161,47 @@ prof_stream_reorder_100(Label, Opts) ->
             {reply, _, _} -> ok
         end
     end,
-    profile_loop(Label, Op, Opts).
+    %% The live pid must be seeded -- it predates the trace (see
+    %% prof_diff_simple_event).
+    profile_loop_server(Label, Op, Opts, [self(), element(2, Socket)]).
+
+prof_stream_reset_overlap_100(Label, Opts) ->
+    %% Mirrors bench_stream_reset_with_overlap_100 (bench.escript:252). Mount
+    %% arizona_bench_each_track with 100 rows x 20 tracked fields, then loop
+    %% `reset_with_overlap` events replacing every row with a copy whose
+    %% `field_a` alone changes -- the smart_reset_items per-item skip path.
+    FieldKeys = [list_to_atom("field_" ++ [K]) || K <- lists:seq($a, $t)],
+    Items = [
+        maps:from_list(
+            [{id, I} | [{Field, integer_to_binary(I)} || Field <- FieldKeys]]
+        )
+     || I <- lists:seq(1, 100)
+    ],
+    Req = arizona_req_test_adapter:new(),
+    {reply, _Connect, Socket} = arizona_socket:init(
+        arizona_bench_each_track, #{items => Items}, Req, #{}
+    ),
+    Counter = counters:new(1, []),
+    sanity_handle_in(reset_event_json(0), Socket),
+    Op = fun() ->
+        N = counters:get(Counter, 1),
+        ok = counters:add(Counter, 1, 1),
+        Json = reset_event_json(N),
+        case arizona_socket:handle_in(Json, Socket) of
+            {ok, _} -> ok;
+            {reply, _, _} -> ok
+        end
+    end,
+    %% The live pid must be seeded -- it predates the trace (see
+    %% prof_diff_simple_event).
+    profile_loop_server(Label, Op, Opts, [self(), element(2, Socket)]).
+
+reset_event_json(N) ->
+    iolist_to_binary(
+        json:encode(
+            [~"bench_each", ~"reset_with_overlap", #{~"value" => integer_to_binary(N)}]
+        )
+    ).
 
 prof_mixed_todo_session(Label, Opts) ->
     %% Real-world-ish session: arizona_page (3 counters + todos stream
@@ -175,7 +219,7 @@ prof_mixed_todo_session(Label, Opts) ->
     %% changed maps, and the handle_call -> diff -> encode -> reply
     %% pipeline under varied input shapes.
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(arizona_page, #{}, Req, #{}),
+    {reply, _Connect, Socket} = arizona_socket:init(arizona_page, #{}, Req, #{}),
     %% Pre-populate 10 todos so update_todo always hits an existing id.
     Socket1 = lists:foldl(
         fun(_I, S) ->
@@ -203,7 +247,9 @@ prof_mixed_todo_session(Label, Opts) ->
         socket_handle_in(Json, Socket1),
         ok
     end,
-    profile_loop(Label, Op, Opts).
+    %% The live pid must be seeded -- it predates the trace (see
+    %% prof_diff_simple_event).
+    profile_loop_server(Label, Op, Opts, [self(), element(2, Socket1)]).
 
 socket_handle_in(Json, Socket) ->
     case arizona_socket:handle_in(Json, Socket) of

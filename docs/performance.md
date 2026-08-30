@@ -64,6 +64,20 @@ any profile row, divide its time by its call count and ask whether that per-call
 figure is physically plausible for what the function does; a per-byte walker and a
 BIF call in the same table are not on the same scale.
 
+**The profiler must trace the process that does the work.** eprof seeds a pid set
+and `set_on_spawn` extends it to processes spawned DURING the trace -- not to one
+spawned in the workload's setup. Every socket-event profile workload mounted its
+live `gen_server` in setup and then profiled only the driver process, so the whole
+server-side diff ran untraced and the trace showed the driver's share -- JSON
+encoding -- as ~97% of a workload whose real time was overwhelmingly in the live
+process. Two things gave it away: `arizona_diff` was absent from a diff-heavy
+profile, and a direct micro-benchmark of the encode step measured 37 us where the
+profile implied ~300. The workloads now seed `[self(), LivePid]` explicitly
+(`profile_loop_server/4`); a profile of a message-passing path should be read with
+"whose time is this?" asked first. (This is also a second instance of the
+inflation trap above: the tiny json functions were charged ~8x their wall clock,
+which is what let the driver's slice masquerade as the whole event.)
+
 **The benchmark's call graph must match production's.** Every direction this can go
 wrong has produced a wrong number in practice:
 
@@ -178,6 +192,18 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Skip clearing a stream queue that is already empty | -8% per untouched stream, and no record rebuilt |
 | Render a plain-list `?each` straight to output during SSR | `render_each_100` -18% |
 | Guard the client's per-element hook scans | a 500-item slot re-render stops doing 1000 subtree queries |
+| Encode the ops frame through a specialized walk | encode of a 100-op frame -56% (28.2 -> 12.3 us), byte-identical |
+| Materialize the changed keys once per dynamics walk | the per-slot deps probe loses its iterator/key-list setup; -20-30% per check at every small-map shape |
+| Ask the re-render estimate's floor before weighing items | skips the O(items x dynamics) weighing when the statics floor alone disqualifies wholesale |
+| Fuse `render/2`'s triple unzip into its zip walk | one walk and two lists where there were two walks and four, per connect/navigate |
+
+(The 2026-08 pass that added the last four was verified with a paired
+`bench-ab`: `stream_reset_with_overlap_100` **-17.3%** (330 -> 273 us), the one
+workload whose frames are ops-heavy enough for the encoder and estimate work to
+clear the noise floor. `stream_reorder_100` -4.7% and `stream_update_field_100`
+-2.1% moved the right way but sit under the ~10% floor -- unresolved, per this
+document's own rule; the in-place unpaired runs had suggested more, which is the
+drift the pairing exists to cancel.)
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:
@@ -206,6 +232,17 @@ That is a pure-Erlang wrapper: it compiles the pattern, allocates a closure and 
 the binary, ~125ns, even when there is no colon to replace. Only a nested snapshot
 ever uses the prefix; a scalar -- which is what nearly every content slot holds --
 threw it away. Asking the value first drops that slot to ~6ns.
+
+The **ops encoder** is worth a sentence on where the cost actually was. Generic
+`json:encode/2` walked a 5.4 KB / 100-op frame at ~63 ns per output byte -- an
+order of magnitude off raw JSON encoding -- because ops are many TINY values, and
+each one paid the full dispatch (`op_encoder` -> `encode_value` -> type switch ->
+escape setup), plus a fresh `<<ViewId:Az>>` binary built and escaped per op even
+though a stream drain's ops all share one target. The specialized walk switches on
+the type directly, emits through json's exported per-type functions (so the bytes
+cannot drift -- a differential test holds the two encoders together), and memoizes
+the scoped target across consecutive ops. Byte escaping itself was never the
+problem; dispatch per tiny value was.
 
 ## What did not work
 
@@ -362,13 +399,19 @@ The remaining server-side candidates are all small, and the largest single
 
 Ranked by expected value. Nothing here has been measured end to end.
 
-1. **`arizona_render:render/2`** -- `unzip_triples/2` builds three lists in one walk
-   and `zip/3` then walks the values list; `zip_stream_item/3` could walk the triples
-   directly and save one list. Not done: it runs once per WS connect and per navigate,
-   not per event, so the saving is N cons cells on a cold path. Note the sibling
-   `render/1` IS one-pass now, but it is test-only (`-ignore_xref`), so that change
-   bought production nothing -- check the caller before valuing a render-path find.
-2. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
+1. **`arizona_live:dedup_fps/2` rebuilds every reply's ops.** The fingerprint-dedup
+   walk re-conses the whole ops structure even when it strips nothing, which is
+   every frame whose values are scalars -- ~4% of a 100-op reset frame's profile.
+   Returning the original term when a sub-walk changed nothing (a changed flag
+   threaded through, sharing instead of copying) is exact; weigh the code against
+   the win before keeping it.
+2. **The reset path still weighs every old item.** `stream_outgrows_measured/4`'s
+   floor early-out cannot fire for a large patch (statics are counted once, so the
+   floor is small against a 100-op positional estimate), so a big reset pays
+   `wire_bytes/1` over the ops AND `item_value_bytes/1` over the old items --
+   ~13% of that workload's profile. The exact fix is accumulating both sides as
+   the ops/items walks build them, which is invasive; measure before wiring it.
+3. **`arizona_diff`'s four remaining appends** -- three are stream containers whose
    drain runs before the walk that would supply a tail (the drain feeds it the views
    it rendered, and reordering would reorder `$arizona_update_effects`, which ships
    in evaluation order); the fourth is in `stream_reset/8`, where the moves and the

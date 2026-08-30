@@ -948,11 +948,9 @@ capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
 %% Fast path for the reply shapes produced by encode_reply/3 and the connect
 %% frames. Hand writes the outer `{"o":...}` / `{"e":...}` / combined wrapper,
 %% skipping OTP json's per-key map walk and the per-call escape on the constant
-%% `<<"o">>`/`<<"e">>`/`<<"a">>` keys. The Ops list goes through `json:encode/2`
-%% with `op_encoder/2` -- the custom encoder emits `"<ViewId>:<Az>"`
-%% inline as iodata, skipping the per-op binary concat (and per-target
-%% `escape_binary/5` walk) that the previous `scope_ops` did. Effects
-%% keep the default encoder -- they're plain JSON values.
+%% `<<"o">>`/`<<"e">>`/`<<"a">>` keys. The Ops list goes through the
+%% specialized `encode_ops/1` walk rather than generic `json:encode/2`.
+%% Effects keep the default encoder -- they're plain JSON values.
 %%
 %% Clause order carries a trap: map patterns are SUBSET matches, so the
 %% widest key set must match first -- an `o`+`e`+`a` frame reaching the
@@ -961,7 +959,7 @@ capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
 encode(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
     [
         <<"{\"o\":">>,
-        json:encode(Ops, fun op_encoder/2),
+        encode_ops(Ops),
         <<",\"e\":">>,
         json:encode(Effects),
         <<",\"a\":">>,
@@ -973,7 +971,7 @@ encode(#{?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
 encode(#{?OPS := Ops, ?AZ_ATTRS := Attrs}) ->
     [
         <<"{\"o\":">>,
-        json:encode(Ops, fun op_encoder/2),
+        encode_ops(Ops),
         <<",\"a\":">>,
         json:encode(Attrs),
         $}
@@ -983,13 +981,13 @@ encode(#{?AZ_ATTRS := Attrs}) ->
 encode(#{?OPS := Ops, ?EFFECTS := Effects}) ->
     [
         <<"{\"o\":">>,
-        json:encode(Ops, fun op_encoder/2),
+        encode_ops(Ops),
         <<",\"e\":">>,
         json:encode(Effects),
         $}
     ];
 encode(#{?OPS := Ops}) ->
-    [<<"{\"o\":">>, json:encode(Ops, fun op_encoder/2), $}];
+    [<<"{\"o\":">>, encode_ops(Ops), $}];
 encode(#{?EFFECTS := Effects}) ->
     [<<"{\"e\":">>, json:encode(Effects), $}];
 encode(Map) ->
@@ -1008,23 +1006,80 @@ flatten_ops(ParentViewId, [[ChildViewId, ChildOps] | Rest]) when is_binary(Child
 flatten_ops(ViewId, [Op | Rest]) ->
     [{ViewId, Op} | flatten_ops(ViewId, Rest)].
 
-%% Custom JSON encoder. Pattern-matches the `{ViewId, RawOp}` tag
-%% produced by `flatten_ops/2` and emits the JSON array with the scoped
-%% target `<ViewId>:<Az>` as a JSON string. `Az` (Target) is
-%% framework-generated (fingerprint-scoped, alphanumeric + dash) and safe,
-%% but `ViewId` is the app-supplied `id` binding (root and `?stateful`
-%% props) and is NOT validated -- an id from user data containing `"`
-%% would break the ops frame, and a crafted value could inject ops
-%% (an injected `OP_REPLACE`, or an `OP_TEXT` carrying an HTML payload,
-%% reaches `innerHTML`: stored XSS via the diff channel). So the scoped
-%% target is run through `json:encode/1`, which escapes the JSON-breaking
-%% bytes (`"`/`\`); on safe ids this is byte-identical to the previous raw
-%% emit. The SSR path already escapes the same id in HTML; this closes the
-%% ops channel.
-%% Op codes 0..9 emit as a single digit byte (`OpCode + $0`, skipping an
-%% `integer_to_binary/1` per op); codes 10+ use `integer_to_binary/1` (see
-%% `op_code_iodata/1`). Falls back to `json:encode_value/2` for everything
-%% else (untagged replace ops, effects, payload values).
+%% Specialized JSON encoder for the ops list. Ops are framework-shaped --
+%% arrays of binaries, integers and nested op arrays, with a rare map
+%% payload -- so encoding them through generic `json:encode/2` pays a fun
+%% dispatch (`op_encoder/2` -> `json:encode_value/2` -> type switch) per
+%% value, which on an ops-heavy frame (a 100-item stream reset) costs more
+%% than the diff that produced it. This walk switches on the type directly
+%% and emits through json's exported per-type functions, so the bytes stay
+%% identical to what `json:encode(Ops, fun op_encoder/2)` produces --
+%% `encode_ops_matches_generic_encoder_test` holds the two together.
+%%
+%% The scoped target `<ViewId>:<Az>` is also memoized across consecutive
+%% ops: `flatten_ops/2` groups ops by view, and every per-item op of one
+%% stream drain shares the container's az, so a run of ops re-encoded (and
+%% re-escaped) the same target once per op. `ViewId` is the app-supplied
+%% `id` binding and is NOT validated -- an id containing `"` would break
+%% the ops frame, and a crafted value could inject ops (an injected
+%% `OP_REPLACE`, or an `OP_TEXT` carrying an HTML payload, reaches
+%% `innerHTML`: stored XSS via the diff channel) -- so the scoped target
+%% goes through `json:encode_binary/1`, which escapes the JSON-breaking
+%% bytes (`"`/`\`). The SSR path already escapes the same id in HTML; this
+%% closes the ops channel.
+encode_ops([]) ->
+    <<"[]">>;
+encode_ops([Op | Ops]) ->
+    {Enc, Cache} = encode_op(Op, none),
+    [$[, Enc | encode_ops_rest(Ops, Cache)].
+
+encode_ops_rest([], _Cache) ->
+    [$]];
+encode_ops_rest([Op | Ops], Cache) ->
+    {Enc, Cache1} = encode_op(Op, Cache),
+    [$,, Enc | encode_ops_rest(Ops, Cache1)].
+
+%% A tagged op emits the memoized scoped target; anything else (an untagged
+%% replace op, whose target IS the ViewId) is a plain value.
+encode_op({ViewId, [OpCode, Target | Args]}, Cache) when
+    is_integer(OpCode),
+    OpCode >= 0,
+    is_binary(ViewId),
+    is_binary(Target)
+->
+    {TargetJson, Cache1} =
+        case Cache of
+            {ViewId, Target, Hit} ->
+                {Hit, Cache};
+            _ ->
+                Enc = json:encode_binary(<<ViewId/binary, $:, Target/binary>>),
+                {Enc, {ViewId, Target, Enc}}
+        end,
+    {[$[, op_code_iodata(OpCode), $,, TargetJson, encode_op_args(Args), $]], Cache1};
+encode_op(Op, Cache) ->
+    {encode_op_value(Op), Cache}.
+
+encode_op_args([]) -> [];
+encode_op_args([A | As]) -> [$,, encode_op_value(A) | encode_op_args(As)].
+
+%% The op-arg vocabulary, most frequent first. The fallback keeps generic
+%% behavior (with `op_encoder/2` as the recursion point, matching what the
+%% generic path did) for the shapes the fast clauses don't name -- the
+%% `#{~"raw" => ...}` marker and fingerprinted `zip_item/2` payload maps.
+encode_op_value(B) when is_binary(B) -> json:encode_binary(B);
+encode_op_value(I) when is_integer(I) -> integer_to_binary(I);
+encode_op_value([]) -> <<"[]">>;
+encode_op_value([H | T]) -> [$[, encode_op_value(H) | encode_op_list_rest(T)];
+encode_op_value(V) -> json:encode_value(V, fun op_encoder/2).
+
+encode_op_list_rest([]) -> [$]];
+encode_op_list_rest([H | T]) -> [$,, encode_op_value(H) | encode_op_list_rest(T)].
+
+%% The generic-path encoder `encode_ops/1` specializes: `json:encode/2`
+%% callback emitting a tagged op's scoped target inline. Reached today only
+%% through `encode_op_value/1`'s map fallback (map values re-enter here) and
+%% as the differential test's reference implementation -- kept whole, not
+%% pruned to the map case, so the reference stays an independent oracle.
 op_encoder({ViewId, [OpCode, Target | RestArgs]}, E) when
     is_integer(OpCode),
     OpCode >= 0,
@@ -1116,6 +1171,37 @@ encode_list_patch_op_test() ->
         ~"{\"o\":[[10,\"page:4\",[[7,0,[[0,\"0\",\"X\"]]],[5,1,{\"f\":\"fp\"}],[6,2]]]]}",
         Bytes
     ).
+
+%% encode_ops/1 must emit byte-for-byte what the generic
+%% `json:encode(Ops, fun op_encoder/2)` path emits -- the specialization is
+%% dispatch removal plus the consecutive-target memo, never a format change.
+%% The ops list deliberately walks every branch: a run of tagged ops sharing
+%% one target (memo hits), a target flip and a view flip mid-run (memo
+%% misses), an untagged replace op (memo survives across it), every arg
+%% shape (escapes, unicode, control bytes, negative/zero integers, nested
+%% and empty lists, the `#{~"raw" => ...}` marker and a fingerprint payload
+%% map), and the two-digit op code 10.
+encode_ops_matches_generic_encoder_test() ->
+    Ops = [
+        {~"page", [7, ~"az-0", ~"1", [[0, ~"in-1", ~"same target run"]]]},
+        {~"page", [7, ~"az-0", ~"2", [[0, ~"in-1", ~"a\"b\\c\nd\td"]]]},
+        {~"page", [7, ~"az-0", ~"3", [[1, ~"in-2", ~"cls", ~"wide"], [2, ~"in-2", ~"x"]]]},
+        {~"page", [5, ~"az-1", ~"4", -1, ~"<li class=\"x\">unicode: αβ→</li>"]},
+        [8, ~"page", ~"<main>untagged replace</main>"],
+        {~"page", [9, ~"az-1", ~"5", 0]},
+        {~"child", [0, ~"az-0", ~"view flip"]},
+        {~"child", [0, ~"az-0", #{~"raw" => ~"<script>1</script>"}]},
+        {~"child", [10, ~"az-2", [[7, 0, [[0, ~"0", ~"X"]]], [5, 1, #{~"f" => ~"fp"}], [6, 2]]]},
+        {~"child", [0, ~"az-3", #{~"f" => ~"fp", ~"s" => [~"<b>", ~"</b>"], ~"d" => [[~"v"]]}]},
+        {~"ev\"il", [0, ~"az-0", ~"escaped view id"]},
+        {~"ev\"il", [4, ~"az-0"]},
+        {~"page", [0, <<0, 1, 31>>, <<"control bytes", 0, 31>>]}
+    ],
+    ?assertEqual(
+        iolist_to_binary(json:encode(Ops, fun op_encoder/2)),
+        iolist_to_binary(encode_ops(Ops))
+    ),
+    ?assertEqual(~"[]", iolist_to_binary(encode_ops([]))).
 
 %% A view id is the app-supplied `id` binding and is NOT validated, so a value
 %% carrying a JSON metacharacter (`"`) must be escaped in the ops frame. An
