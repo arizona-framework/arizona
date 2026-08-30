@@ -46,8 +46,9 @@ response pipeline), so it can see and rewrite the response -- the thing a
 step, which runs before any render and also on paths with no HTTP response
 at all, cannot. Order has phase semantics: steps run in list order during
 the request phase; transforms wrap the exchange in list order, first
-outermost -- and the framework's own compression is prepended outside them
-all, so a transform sees the response before it is re-encoded. On a
+outermost -- except compression, which the router keeps OUTERMOST wherever
+it is written (or attaches itself), so a transform always sees the response
+before it is re-encoded. On a
 pipeline run with no HTTP response to wrap (the WebSocket upgrade, a
 navigate/patch), a transform is inert and skipped.
 
@@ -175,8 +176,7 @@ builder.
 %% An HTTP response transform (see the module doc): a tagged term, so a
 %% sys.config route can spell it literally (`{http_transform, etag}`) where a
 %% constructor call cannot be written. The router maps the named transforms to
-%% the server's own middlewares at route-compile time; `{custom, Entry}`
-%% A plain -type, not
+%% the server's own middlewares at route-compile time. A plain -type, not
 %% -nominal: the tag is already the discriminator, and the nominal made
 %% dialyzer mis-type a constructor-built value flowing into
 %% `apply_middlewares/3` (a false "no local return" at every such call site).
@@ -350,8 +350,14 @@ etag() ->
 HTTP response transform: gzip/deflate response compression. Only needed on
 routes the framework does not already compress -- controller routes; `live`
 and `asset` routes get compression from the server's `compress` option
-(default on), and listing it there again is a no-op. Returns the plain
-term `{http_transform, compress}` -- the spelling a sys.config route uses.
+(default on), where listing it again changes nothing. Position-independent
+by construction: the router keeps compression OUTERMOST wherever it is
+written, so `[etag(), compress()]` and `[compress(), etag()]` compile to
+the same pipeline and an etag always hashes the pre-compression body. An
+explicit `compress()` also survives the server's `compress => false` (a
+route-level request beats the listener-level default-off). Returns the
+plain term `{http_transform, compress}` -- the spelling a sys.config route
+uses.
 """.
 -spec compress() -> http_transform().
 compress() ->

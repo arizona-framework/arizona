@@ -219,6 +219,17 @@ Formats route-compilation errors into a human-readable message. Picked up by
     Reason :: term(),
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
+format_error({unknown_http_transform, Unknown}, [{_M, _F, _Args, _Info} | _]) ->
+    #{
+        general => io_lib:format(
+            "~tp is not an HTTP response transform. The valid terms are "
+            "{http_transform, etag | compress | security_headers | "
+            "{cors, Config} | {security_headers, Config}} -- built by the "
+            "arizona_middleware constructors, or spelled literally in a "
+            "sys.config route.",
+            [Unknown]
+        )
+    };
 format_error({asset_middleware_not_transform, Steps}, [{_M, _F, _Args, _Info} | _]) ->
     #{
         general => io_lib:format(
@@ -384,21 +395,23 @@ build_live_meta(Handler, Opts, Steps, BuildOpts) ->
 controller_route(Methods, Path, Handler, Opts) ->
     {Transforms, Steps} = split_middlewares(Opts),
     [
-        with_transforms(
-            #{
-                path => Path,
-                handler => arizona_roadrunner_controller,
-                methods => Methods,
-                state => #{
-                    arizona => #{
-                        handler => Handler,
-                        action => maps:get(action, Opts, handle),
-                        state => maps:get(state, Opts, #{}),
-                        middlewares => with_origin_check(Opts, Steps)
+        compress_first(
+            with_transforms(
+                #{
+                    path => Path,
+                    handler => arizona_roadrunner_controller,
+                    methods => Methods,
+                    state => #{
+                        arizona => #{
+                            handler => Handler,
+                            action => maps:get(action, Opts, handle),
+                            state => maps:get(state, Opts, #{}),
+                            middlewares => with_origin_check(Opts, Steps)
+                        }
                     }
-                }
-            },
-            Transforms
+                },
+                Transforms
+            )
         )
     ].
 
@@ -446,21 +459,31 @@ with_origin_check(_Opts, Middlewares) ->
 %% Attach roadrunner_compress as a per-route middleware on the
 %% map-shape route entry when the build-time `compress` flag is on.
 with_compress(Route, #{compress := false}) ->
-    Route;
+    %% The framework attaches no compression -- but an EXPLICIT per-route
+    %% `arizona_middleware:compress()` still applies (a route-level request
+    %% beats the listener-level default-off), and still goes outermost.
+    compress_first(Route);
 with_compress(Route, _BuildOpts) ->
-    %% Prepend, never set: the route may already carry response transforms,
-    %% and compress belongs OUTERMOST (a middleware list runs head-outermost)
-    %% so a transform -- an etag, say -- sees the response body BEFORE
-    %% compress re-encodes it. That is the composition the etag's weak
-    %% validator is designed for: the tag stays representation-independent
-    %% and a 304 still flows out through compress untouched. An explicit
-    %% `arizona_middleware:compress()` in the list keeps its written position
-    %% instead of being doubled.
+    Route#{middlewares => [roadrunner_compress | exclude_compress(Route)]}.
+
+%% Compression is OUTERMOST wherever it is written -- an invariant, not a
+%% default. A middleware list runs head-outermost, and compress must touch
+%% the response LAST so any other transform -- an etag, say -- sees the body
+%% BEFORE it is re-encoded: that is the composition the etag's weak validator
+%% is designed for (a representation-independent tag, a 304 flowing out
+%% through compress untouched). Normalizing the position (rather than
+%% deduping in place) is what makes `arizona_middleware:compress()`
+%% genuinely position-independent: `[etag(), compress()]` and
+%% `[compress(), etag()]` compile to the same pipeline.
+compress_first(Route) ->
     Mws = maps:get(middlewares, Route, []),
     case lists:member(roadrunner_compress, Mws) of
-        true -> Route;
-        false -> Route#{middlewares => [roadrunner_compress | Mws]}
+        true -> Route#{middlewares => [roadrunner_compress | exclude_compress(Route)]};
+        false -> Route
     end.
+
+exclude_compress(Route) ->
+    [M || M <- maps:get(middlewares, Route, []), M =/= roadrunner_compress].
 
 %% Split a route's single `middlewares` opt into its HTTP response transforms
 %% (mapped to roadrunner middlewares, order preserved) and its Arizona
@@ -485,7 +508,12 @@ transform_to_roadrunner({http_transform, security_headers}) ->
 transform_to_roadrunner({http_transform, {cors, Config}}) ->
     {roadrunner_cors, Config};
 transform_to_roadrunner({http_transform, {security_headers, Config}}) ->
-    {roadrunner_security_headers, Config}.
+    {roadrunner_security_headers, Config};
+transform_to_roadrunner({http_transform, Unknown}) ->
+    %% A transform is a plain term a sys.config route can hand-spell, so a
+    %% typo arrives here rather than at a constructor -- name the valid set
+    %% instead of dying with a bare function_clause at boot.
+    error({unknown_http_transform, Unknown}, none, [{error_info, #{module => ?MODULE}}]).
 
 with_transforms(Route, []) -> Route;
 with_transforms(Route, Transforms) -> Route#{middlewares => Transforms}.
