@@ -82,7 +82,10 @@ Constants:
 -doc """
 Run a workload that times one call to `Fun()` per op, with
 `?OPS_PER_TRIAL` ops per trial and `Runs` measured trials (after
-2 discarded warmup trials). Returns a stats map.
+2 discarded warmup trials). Returns a stats map; beside the wall-clock
+stats it carries `red_per_op`, the per-op VM-wide reduction count
+(minimum across trials -- see `trial_reductions/0`), which resolves
+"strictly less work" changes too small for wall clock to see.
 """.
 -spec run_workload(Fun, Runs) -> Stats when
     Fun :: fun(() -> term()),
@@ -90,21 +93,25 @@ Run a workload that times one call to `Fun()` per op, with
     Stats :: map().
 run_workload(Fun, Runs) ->
     lists:foreach(fun(_) -> trial(Fun) end, lists:seq(1, ?WARMUP)),
-    PerOpNs = [
+    Samples = [
         begin
             erlang:garbage_collect(self()),
+            R0 = trial_reductions(),
             TrialNs = trial(Fun),
-            TrialNs / ?OPS_PER_TRIAL
+            R1 = trial_reductions(),
+            {TrialNs / ?OPS_PER_TRIAL, (R1 - R0) div ?OPS_PER_TRIAL}
         end
      || _ <- lists:seq(1, Runs)
     ],
+    {PerOpNs, PerOpRed} = lists:unzip(Samples),
     Stats = stats(PerOpNs),
-    Stats#{ops_per_trial => ?OPS_PER_TRIAL}.
+    Stats#{ops_per_trial => ?OPS_PER_TRIAL, red_per_op => lists:min(PerOpRed)}.
 
 -doc """
 Run a workload with a custom trial function. `TrialFun()` runs one
 trial worth of work and returns total elapsed nanoseconds. The harness
-divides by `OpsPerTrial` to get the per-op time. Use for workloads
+divides by `OpsPerTrial` to get the per-op time and samples reductions
+around the call, exactly as `run_workload/2` does. Use for workloads
 where the unit of measurement is a batch (e.g., 1000 stream inserts
 as one trial) or where multiple processes coordinate (e.g., 10
 concurrent clients each doing 100 ops).
@@ -116,16 +123,34 @@ concurrent clients each doing 100 ops).
     Stats :: map().
 run_workload_custom(TrialFun, Runs, OpsPerTrial) ->
     lists:foreach(fun(_) -> TrialFun() end, lists:seq(1, ?WARMUP)),
-    PerOpNs = [
+    Samples = [
         begin
             erlang:garbage_collect(self()),
+            R0 = trial_reductions(),
             TrialNs = TrialFun(),
-            TrialNs / OpsPerTrial
+            R1 = trial_reductions(),
+            {TrialNs / OpsPerTrial, (R1 - R0) div OpsPerTrial}
         end
      || _ <- lists:seq(1, Runs)
     ],
+    {PerOpNs, PerOpRed} = lists:unzip(Samples),
     Stats = stats(PerOpNs),
-    Stats#{ops_per_trial => OpsPerTrial}.
+    Stats#{ops_per_trial => OpsPerTrial, red_per_op => lists:min(PerOpRed)}.
+
+%% The VM-wide exact reduction total, read OUTSIDE the timed window (the
+%% clock starts inside the trial fun), so sampling it costs the timing
+%% nothing. VM-wide on purpose: a workload's work spans the driver, the
+%% live process, transport and worker processes, and reductions count all
+%% of them wherever they run. Background processes (loggers, timers) can
+%% only ADD reductions, never subtract -- hence the minimum across trials,
+%% which for a deterministic workload is stable to a handful of reductions
+%% where wall clock cannot resolve below ~10%. A reduction delta measures
+%% WORK, not time: it cannot see cache placement or scheduling, so it
+%% settles "strictly less work" exactly while wall clock stays the arbiter
+%% of whether that work was ever the bottleneck.
+trial_reductions() ->
+    {Total, _SinceLast} = erlang:statistics(exact_reductions),
+    Total.
 
 -doc """
 Run a concurrent workload with N persistent worker processes.
@@ -311,8 +336,8 @@ print_header(Runs, ProjectDir) ->
         ]
     ),
     io:format(
-        "~-32s ~8s ~8s ~8s ~8s ~12s~n",
-        ["workload", "mean", "stdev", "p50", "p99", "ops/s"]
+        "~-32s ~8s ~8s ~8s ~8s ~12s ~11s~n",
+        ["workload", "mean", "stdev", "p50", "p99", "ops/s", "red/op"]
     ).
 
 -doc "Pretty-print one workload's stats row aligned with the header.".
@@ -322,17 +347,19 @@ report(Label, #{
     stdev_ns := StdevNs,
     p50_ns := P50Ns,
     p99_ns := P99Ns,
-    ops_per_s := OpsPerSec
+    ops_per_s := OpsPerSec,
+    red_per_op := RedPerOp
 }) ->
     io:format(
-        "~-32s ~s ~s ~s ~s ~s~n",
+        "~-32s ~s ~s ~s ~s ~s ~s~n",
         [
             Label,
             pad_left(fmt_time(MeanNs), 8),
             pad_left(fmt_time(StdevNs), 8),
             pad_left(fmt_time(P50Ns), 8),
             pad_left(fmt_time(P99Ns), 8),
-            pad_left(fmt_int(OpsPerSec), 12)
+            pad_left(fmt_int(OpsPerSec), 12),
+            pad_left(fmt_int(RedPerOp), 11)
         ]
     ).
 
