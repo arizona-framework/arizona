@@ -10,7 +10,7 @@ treated as thresholds.
 
 | Command | What it is for |
 | ------- | -------------- |
-| `make bench ARGS="--only <label>"` | Per-op wall clock for a workload. Catches regressions, not causes. |
+| `make bench ARGS="--only <label>"` | Per-op wall clock + deterministic `red/op` reductions for a workload. Catches regressions, not causes. |
 | `make bench-ab REFS="<a> <b>" ARGS="--only <label>"` | Paired A/B of one workload across two commits. |
 | `make bench-client ARGS="--only <label>"` | `applyOps` in a real Chromium, against fixtures from a real diff. |
 | `make bench-client-connect ARGS="--only <label>"` | The real `connect()` + bfcache reconnect in Chromium, frames from a real socket, WS stubbed to zero latency. |
@@ -150,6 +150,23 @@ run_the_workload(),
 That is what settled the biggest find in this pass: a workload whose per-event cost
 was ~2100 calls to `wire_bytes/1`, all from one estimate that could not affect the
 outcome.
+
+**The bench's `red/op` column is the standing form of that answer.** Every workload
+row now ends with the per-op VM-wide `exact_reductions` count (minimum across
+trials -- background processes only add, never subtract), and `bench-ab` diffs it
+beside the wall clock. Reductions count WORK, not time: they are deterministic
+where the clock is not (identical to the reduction across repeated runs, against
+the ~10% wall floor), so they resolve exactly the "strictly less work" class of
+change this document keeps having to file as unresolved. Validating the column on
+the previously-unresolved dedup-sharing + walker pair settled all of it at once:
+`stream_reset_with_overlap_100` **-10.5%** reductions (wall had said -1.6%),
+`stream_update_field_100` -2.2% (confirming the wall reading), `ws_event_e2e`
+exactly 0 (those changes don't touch that path -- a clean null control), and
+`diff_simple_event` **+5 reductions** -- the sharing walk's changed-flag threading
+has a real, tiny cost on single-op frames that no clock could see. The caveat is
+the mirror of the strength: a reduction delta cannot see cache placement or
+scheduling, so the clock stays the arbiter of whether the work was ever the
+bottleneck.
 
 ## Verifying an optimisation is exact
 

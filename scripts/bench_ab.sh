@@ -88,10 +88,14 @@ for round in $(seq 1 "$ROUNDS"); do
         esac
         (cd "$wt" && "${PIN[@]}" ./scripts/bench.escript "$RUNS" "${BENCH_ARGS[@]}" 2>/dev/null) \
             | awk -v ref="$ref" '
-                # bench.escript rows: label mean unit stdev unit p50 unit p99 unit ops
+                # bench.escript rows: label mean unit stdev unit p50 unit p99 unit ops [red]
+                # The trailing red/op column is deterministic and resolves changes the
+                # wall clock cannot; a ref predating it prints rows without one, and
+                # the summary shows "-" for its side.
                 NF >= 9 && $2 ~ /^[0-9.]+$/ {
                     v = $6; if ($7 == "\xc2\xb5s") v = v * 1000; else if ($7 == "ms") v = v * 1000000
-                    print ref, $1, v
+                    r = "NA"; if (NF >= 11) { r = $11; gsub(",", "", r) }
+                    print ref, $1, v, r
                 }' >> "$RESULTS"
     done
 done
@@ -99,15 +103,19 @@ done
 echo
 awk '
     { key = $2; if (!($1 SUBSEP key in min) || $3 < min[$1, key]) min[$1, key] = $3
+      if ($4 != "NA" && (!(($1 SUBSEP key) in red) || $4 + 0 < red[$1, key])) red[$1, key] = $4 + 0
       refs[$1] = 1; labels[key] = 1 }
     END {
         n = 0; for (r in refs) { n++; order[n] = r }
         if (n != 2) { print "expected two refs"; exit 1 }
         a = order[1]; b = order[2]
-        printf "%-32s %14s %14s %9s\n", "workload", a, b, "delta" > "/dev/stderr"
+        printf "%-32s %14s %14s %9s %10s\n", "workload", a, b, "delta", "red-delta" > "/dev/stderr"
         for (l in labels) {
             x = min[a, l]; y = min[b, l]
-            printf "%-32s %11.0f ns %11.0f ns %8.1f%%\n", l, x, y, (y - x) * 100 / x
+            rd = "-"
+            if ((a SUBSEP l) in red && (b SUBSEP l) in red && red[a, l] > 0)
+                rd = sprintf("%+.2f%%", (red[b, l] - red[a, l]) * 100 / red[a, l])
+            printf "%-32s %11.0f ns %11.0f ns %8.1f%% %10s\n", l, x, y, (y - x) * 100 / x, rd
         }
     }' "$RESULTS" | sort
 
