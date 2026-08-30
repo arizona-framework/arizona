@@ -15,7 +15,7 @@ SSH_DEMO_USER := arizona
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
 	build-js analyze-js build-android build-ios build-tauri dev-tauri \
 	test test-eunit test-ct test-erl test-js test-e2e test-android test-ios test-tauri \
-	bench bench-client term-demo ssh-server ssh-client \
+	bench bench-client bench-client-connect term-demo ssh-server ssh-client \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
 	setup-e2e clean
@@ -200,6 +200,16 @@ bench-client: compile-test
 	@mkdir -p _build/client_fixtures
 	./scripts/client_fixture.escript _build/client_fixtures
 	node ./scripts/bench_client.mjs _build/client_fixtures $(ARGS)
+
+# Client connect/hydration benchmark: the real connect() + bfcache reconnect in
+# Chromium against fixtures from a real socket, with only the WebSocket stubbed
+# (zero latency), so the numbers isolate client-side boot cost. Refuses to
+# report a boot that never reached az-connected or logged to the console.
+#   make bench-client-connect ARGS="--only connect_page"
+bench-client-connect: compile-test
+	@mkdir -p _build/client_fixtures
+	./scripts/client_fixture.escript _build/client_fixtures
+	node ./scripts/bench_client_connect.mjs _build/client_fixtures $(ARGS)
 
 # Paired A/B of one workload across two commits. Builds each ref in its own
 # worktree (so neither can silently measure the other's beams), interleaves the
