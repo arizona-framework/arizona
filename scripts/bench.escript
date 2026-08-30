@@ -179,7 +179,7 @@ bench_stream_update_field_100(Runs) ->
      || I <- lists:seq(1, 100)
     ],
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(
+    {reply, _Connect, Socket} = arizona_socket:init(
         arizona_bench_each_track, #{items => Items}, Req, #{}
     ),
     Counter = counters:new(1, []),
@@ -226,7 +226,7 @@ bench_stream_update_unchanged_100(Runs) ->
      || I <- lists:seq(1, 100)
     ],
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(
+    {reply, _Connect, Socket} = arizona_socket:init(
         arizona_bench_each_track, #{items => Items}, Req, #{}
     ),
     Json = iolist_to_binary(
@@ -265,7 +265,7 @@ bench_stream_reset_with_overlap_100(Runs) ->
      || I <- lists:seq(1, 100)
     ],
     Req = arizona_req_test_adapter:new(),
-    {ok, Socket} = arizona_socket:init(
+    {reply, _Connect, Socket} = arizona_socket:init(
         arizona_bench_each_track, #{items => Items}, Req, #{}
     ),
     Counter = counters:new(1, []),
