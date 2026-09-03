@@ -1,6 +1,6 @@
-erlang 29.0.4
+erlang 29.0.6
 rebar 3.27.0
-nodejs 24.18.0
-java temurin-17.0.19+10
+nodejs 24.20.0
+java temurin-17.0.20+101
 gradle 8.13.0
-rust 1.96.0
+rust 1.98.1
