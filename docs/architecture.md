@@ -753,8 +753,9 @@ Authoring (`?local` = `arizona_template:local/2`, also `az:local/2`):
 ```
 
 Compile-time constraints: `Key` must be a literal binary or atom (an atom normalizes to a
-binary); a key can't bind both content and an attribute on one element; not allowed under
-`az-nodiff` (including a template nested in one) or in `?native` templates.
+binary); a key can't bind both content and an attribute on one element; not allowed in
+`?native` templates. Under `az-nodiff` only the element holding a content `?local` gets an `az`
+and that slot's marker; a layout's local sits outside every view, so `set_all` reaches it.
 A content `?local` does **not** have to be the sole child -- an element can hold several
 content slots, freely mixed with static text and other dynamic children. An attribute value
 may also **interpolate** one `?local` with static text around it (the statics become a
@@ -1574,9 +1575,11 @@ layout keeps diff markers and the page lands in an ordinary escaping value slot.
 conditional-branch templates, nested `?html`, `?each` item templates (at any depth), hoisted
 constructors and inlined local helpers all compile nodiff and emit no `az` attributes or slot
 markers, so the HTML is plain. `az_nodiff` on an `?each` item's root element reaches the templates
-nested in that item. Inheritance stops at components: a `?stateful` child is its own live view and
-its props are left as written, and a `?stateless` callback is a separate compile unit, so both keep
-their own markers. A `?local` anywhere under a nodiff template is a compile error.
+nested in that item. Inheritance stops where what is built can land in a live view's diffed slot
+(a `diff => false` value is skipped there forever): a `?stateful` child's props, and any fun other
+than an `?each` callback, since a fun prop is called later by whichever view receives it. A
+`?stateless` callback is a separate compile unit and keeps its own markers. A `?local` under a
+nodiff template keeps the `az` and slot marker the client resolves it by, and nothing else does.
 
 The page arrives as an **opaque nested template** (`#{s := [Page], d := []}`), not iodata and not a
 binary. That is what lets a content slot splice it verbatim rather than copying and

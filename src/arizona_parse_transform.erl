@@ -189,11 +189,24 @@ parse_transform(Forms, _Options) ->
         ],
         WithSuppressions = inject_each_callback_suppressions(Transformed, Forms, FunDefs, Module),
         WithEvents = inject_az_attrs(WithSuppressions, collect_component_mods(Forms)),
-        erl_syntax:revert_forms(WithEvents)
+        Reverted = erl_syntax:revert_forms(WithEvents),
+        ok = assert_no_nodiff_call(Reverted),
+        Reverted
     catch
         throw:{arizona_parse_error, Line, Reason} ->
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     end.
+
+%% An inherited constructor call (inherit_nodiff/1) that no compile path reached
+%% would otherwise reach the runtime as an `undef` on a module that does not exist.
+assert_no_nodiff_call({call, L, {remote, _, {atom, _, ?NODIFF_MOD}, _}, _}) ->
+    parse_error(nodiff_call_not_compiled, L);
+assert_no_nodiff_call(Node) when is_tuple(Node) ->
+    assert_no_nodiff_call(tuple_to_list(Node));
+assert_no_nodiff_call(Nodes) when is_list(Nodes) ->
+    lists:foreach(fun assert_no_nodiff_call/1, Nodes);
+assert_no_nodiff_call(_Node) ->
+    ok.
 
 %% Map every `{Name, Arity}` to its clause list, so a `?each(fun Name/Arity, _)`
 %% callback can be resolved to its body and inlined like an anonymous fun.
@@ -498,11 +511,13 @@ mark_targets(Node, Ctx) ->
     mark_targets(Node, Ctx, (ctx_backend(Ctx)):content_context(undefined, html)).
 
 %% A template renders its nested templates (a conditional branch, an `?each` item,
-%% a template passed as a `?stateless` prop) inside its own output, so under `az-nodiff` they
-%% render once too and their markers are bytes no op ever targets. Re-spell every
-%% constructor call in a nodiff template's argument so the bottom-up transform
-%% compiles it nodiff as well. A `?stateful` child is its own live view and diffs
-%% itself, so its props stay as written.
+%% a template passed as a `?stateless` prop) inside its own output, so under
+%% `az-nodiff` they render once too and their markers are bytes no op ever targets.
+%% Re-spell every constructor call in a nodiff template's argument so the bottom-up
+%% transform compiles it nodiff as well. Two places are left as written, because
+%% what they build can end up in a live view's diffed slot, where a `diff => false`
+%% value is skipped forever: a `?stateful` child's props, and any fun other than an
+%% `?each` callback (a fun prop is called later, by whichever view receives it).
 maybe_inherit_nodiff(Arg) ->
     case template_is_nodiff(Arg) of
         true -> inherit_nodiff(Arg);
@@ -519,10 +534,12 @@ inherit_nodiff({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, F}}, Args} = C
     case is_template_ctor(F, Args) of
         true ->
             Remote = {remote, RL, {atom, ML, ?NODIFF_MOD}, {atom, FL, F}},
-            {call, L, Remote, inherit_nodiff(Args)};
+            {call, L, Remote, inherit_ctor_args(Args)};
         false ->
             list_to_tuple(inherit_nodiff(tuple_to_list(Call)))
     end;
+inherit_nodiff({'fun', _, _} = Fun) ->
+    Fun;
 inherit_nodiff(Node) when is_tuple(Node) ->
     list_to_tuple(inherit_nodiff(tuple_to_list(Node)));
 inherit_nodiff(Nodes) when is_list(Nodes) ->
@@ -530,12 +547,25 @@ inherit_nodiff(Nodes) when is_list(Nodes) ->
 inherit_nodiff(Node) ->
     Node.
 
+inherit_ctor_args([FunArg, SourceArg]) ->
+    [inherit_each_fun(FunArg), inherit_nodiff(SourceArg)];
+inherit_ctor_args(Args) ->
+    inherit_nodiff(Args).
+
+%% An `?each` callback is compiled into the per-item template on the spot, so
+%% unlike any other fun its body renders inside the enclosing template.
+inherit_each_fun({'fun', L, {clauses, Clauses}}) ->
+    Inherited = [{clause, CL, Ps, Gs, inherit_nodiff(B)} || {clause, CL, Ps, Gs, B} <:- Clauses],
+    {'fun', L, {clauses, Inherited}};
+inherit_each_fun(FunRef) ->
+    FunRef.
+
 %% An `?each` item body is a template of its own, so `az-nodiff` on the item's
 %% element reaches the templates nested in it the same way.
 maybe_inherit_each_nodiff([{'fun', _, {clauses, [{clause, _, _, _, Body}]}} = Fun | Rest]) ->
     {_Prefix, Last} = split_fun_body(Body),
     case template_is_nodiff(Last) of
-        true -> [inherit_nodiff(Fun) | Rest];
+        true -> [inherit_each_fun(Fun) | Rest];
         false -> [Fun | Rest]
     end;
 maybe_inherit_each_nodiff(Args) ->
@@ -552,7 +582,7 @@ inherit_spliced_nodiff(Inherited, Arg) ->
     end.
 
 inherit_spliced_each_nodiff(true, FunArg) ->
-    inherit_nodiff(FunArg);
+    inherit_each_fun(FunArg);
 inherit_spliced_each_nodiff(false, FunArg) ->
     [FunArg1] = maybe_inherit_each_nodiff([FunArg]),
     FunArg1.
@@ -676,9 +706,9 @@ format_error({invalid_child, ValueStr}) ->
     );
 format_error(local_key_not_literal) ->
     "?local/2 key must be a literal binary or atom";
-format_error(local_in_nodiff) ->
-    "?local cannot be used in an az-nodiff template, or a template nested in one "
-    "-- the element has no diff target for the client to address";
+format_error(nodiff_call_not_compiled) ->
+    "internal: a template constructor inside an az-nodiff template was not compiled "
+    "-- please report this as an Arizona bug";
 format_error(local_unsupported) ->
     "?local is not supported by this render target";
 format_error(dynamic_in_raw_text) ->
@@ -1357,7 +1387,10 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
             Arg2 = inline_vars(Arg1, Inline),
             {Arg3, HelperCh} = inline_helper_calls(Arg2, Module, FunDefs, Target),
             Arg4 = retransform_spliced(
-                Arg3, map_size(Inline) > 0 orelse HelperCh, Module, FunDefs
+                inherit_spliced_nodiff(false, Arg3),
+                map_size(Inline) > 0 orelse HelperCh,
+                Module,
+                FunDefs
             ),
             compile_template(Arg4, L, Module, true, target_backend(Target));
         _ ->
@@ -2310,7 +2343,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, _CC
 %% A ?local outside an element -- a whole template body, a fragment top-level
 %% item, or a conditional-branch tail -- gets a slot but no enclosing element
 %% to carry the `az-local` descriptor (only compile_element/5 injects it via
-%% maybe_inject_local_descriptor/6). The client binds keys by scanning that
+%% maybe_inject_local_descriptor/5). The client binds keys by scanning that
 %% attribute, so the key would be unreachable and set/set_all silent no-ops.
 %% Reject at compile time.
 reject_orphaned_local(ExprAST) ->
@@ -2447,7 +2480,7 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
     RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
     ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
     Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
-    Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, RawKind, Line, State0),
+    Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, RawKind, Line),
     State1 = State0#state{root = false},
     %% A raw-text element's dynamic children fold into ONE nested template carried at
     %% the ELEMENT's own az (see compile_element_children/7), so it needs one too --
@@ -2455,7 +2488,7 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
     HasDyn =
         has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
     {ElemAz, State2} =
-        case HasDyn andalso (not State1#state.nodiff) of
+        case HasDyn andalso needs_elem_az(Children, Line, State1) of
             true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
             false -> {none, State1}
         end,
@@ -2490,6 +2523,14 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
                 content_ctx = State0#state.content_ctx
             }
     end.
+
+%% A nodiff element is never an op target, so it carries no `az` -- unless it holds
+%% a content `?local`, whose slot the client finds by the element's `az` plus the
+%% slot's comment marker (an attribute `?local` needs neither).
+needs_elem_az(_Children, _Line, #state{nodiff = false}) ->
+    true;
+needs_elem_az(Children, Line, #state{nodiff = true}) ->
+    map_size(collect_content_locals(Children, Line)) > 0.
 
 %% A raw-text element (script/style/textarea/title) cannot carry comment markers
 %% inside it -- a comment there is literal text, so a `<head>` title would render
@@ -2685,10 +2726,14 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
 compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     Module = State0#state.module,
     State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
-    AzBin = integer_to_binary(ElemAz),
     Expr = local_attr_expr_ast(NameBin, ValueAST),
-    DynAST = make_text_dynamic_ast(AzBin, Expr, Module, line(ValueAST)),
+    DynAST = make_text_dynamic_ast(local_attr_az(ElemAz), Expr, Module, line(ValueAST)),
     flush(State1, DynAST).
+
+%% A nodiff element with only attribute locals has no `az` (needs_elem_az/3): the
+%% client writes the attribute by name, so the slot is a render-once dynamic.
+local_attr_az(none) -> undefined;
+local_attr_az(ElemAz) -> integer_to_binary(ElemAz).
 
 %% AST for `(arizona_template:local(Key, Init))#{target => {attr, Name}}` -- stamps
 %% the attribute name/target onto the local-map the macro call produces.
@@ -2703,9 +2748,8 @@ local_attr_expr_ast(NameBin, LocalCallAST) ->
 compile_interp_local_attr(Backend, NameBin, LocalCall, Prefix, Suffix, ElemAz, State0) ->
     Module = State0#state.module,
     State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
-    AzBin = integer_to_binary(ElemAz),
     Expr = local_attr_interp_expr_ast(NameBin, LocalCall, Prefix, Suffix),
-    DynAST = make_text_dynamic_ast(AzBin, Expr, Module, line(LocalCall)),
+    DynAST = make_text_dynamic_ast(local_attr_az(ElemAz), Expr, Module, line(LocalCall)),
     flush(State1, DynAST).
 
 %% AST for `(arizona_template:local(Key, Init))#{target => {attr, Name},
@@ -2787,7 +2831,7 @@ local_key({call, _, _, [KeyAST, _Init]}, Line) ->
 %% as an ordinary static attribute value, so the backend's attr/2 HTML-escapes it
 %% for the attribute context (the client reads it via getAttribute, which decodes
 %% the entities back). No separate escape here -- that would double-escape.
-maybe_inject_local_descriptor(Backend, Attrs, Children, RawKind, Line, State) ->
+maybe_inject_local_descriptor(Backend, Attrs, Children, RawKind, Line) ->
     AttrLocals = collect_attr_locals(Backend, Attrs, Line),
     AttrAffixes = collect_attr_affixes(Backend, Attrs, Line),
     ContentLocals = collect_content_locals(Children, Line),
@@ -2796,7 +2840,7 @@ maybe_inject_local_descriptor(Backend, Attrs, Children, RawKind, Line, State) ->
             Attrs;
         true ->
             assert_content_local_not_raw_text(ContentLocals, RawKind, Line),
-            assert_local_supported(Backend, State, Line),
+            assert_local_supported(Backend, Line),
             assert_no_key_reuse(AttrLocals, ContentLocals, Line),
             Desc = build_local_descriptor(AttrLocals, AttrAffixes, ContentLocals),
             Json = iolist_to_binary(json:encode(Desc)),
@@ -2814,14 +2858,10 @@ assert_content_local_not_raw_text(ContentLocals, RawKind, Line) ->
         false -> ok
     end.
 
-assert_local_supported(Backend, State, Line) ->
+assert_local_supported(Backend, Line) ->
     case Backend:supports_local() of
         true -> ok;
         false -> parse_error(local_unsupported, Line)
-    end,
-    case State#state.nodiff of
-        false -> ok;
-        true -> parse_error(local_in_nodiff, Line)
     end.
 
 %% A key must not bind both content and an attribute on one element: a single
@@ -2972,10 +3012,17 @@ emit_child_dynamic(
     DynAST = make_raw_text_dynamic_ast(Child, Tag, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(
-    Child, _ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
+    Child, ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
 ) ->
-    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
-    {flush(State0, DynAST), Slot};
+    %% Only a content `?local` keeps its marker. Every dynamic child still counts a
+    %% slot, the numbering collect_content_locals/2 gives the client.
+    case is_local_marker(Child) of
+        true ->
+            emit_marked_child(Child, ElemAz, State0, Slot);
+        false ->
+            DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
+            {flush(State0, DynAST), Slot + 1}
+    end;
 emit_child_dynamic(
     Child,
     _ElemAz,
@@ -2988,7 +3035,10 @@ emit_child_dynamic(
     %% render-once, exactly like the layout/nodiff value path.
     DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
-emit_child_dynamic(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
+emit_child_dynamic(Child, ElemAz, State0, Slot) ->
+    emit_marked_child(Child, ElemAz, State0, Slot).
+
+emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = State0, Slot) ->
     ElemAzBin = integer_to_binary(ElemAz),
     MarkerAz = Backend:text_az(ElemAzBin, Slot),
     State1 = buf_az_slot(State0, MarkerAz),
@@ -3016,10 +3066,15 @@ is_raw_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, raw}}, [_Value]}) ->
 is_raw_call(_Expr) ->
     false.
 
-make_text_dynamic_ast(AzBin, ExprAST, Module, ExprLine) ->
+make_text_dynamic_ast(Az, ExprAST, Module, ExprLine) ->
     LocAST = loc_ast(Module, ExprLine),
+    AzAST =
+        case Az of
+            undefined -> {atom, 0, undefined};
+            AzBin -> ast_binary(AzBin)
+        end,
     {tuple, 0, [
-        ast_binary(AzBin),
+        AzAST,
         {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
         LocAST
     ]}.
@@ -3787,7 +3842,7 @@ bare_attr_name(_) ->
 %% The two attribute names the transform emits into the rendered output itself:
 %% `az` (the element's diff address, emitted by `Backend:az_attr/1` on any element
 %% carrying dynamics) and `az-local` (the `?local` descriptor injected by
-%% maybe_inject_local_descriptor/6). A template-authored copy is emitted *beside*
+%% maybe_inject_local_descriptor/5). A template-authored copy is emitted *beside*
 %% the injected one: HTML keeps the first of a duplicate pair and the native wire
 %% keeps the last, so one of the two silently disappears -- and when the element
 %% has no dynamics the user's `az` is the only one, is fingerprint-scoped like a
