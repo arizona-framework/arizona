@@ -134,6 +134,18 @@
     nodiff_binary/1,
     nodiff_diff_integration/1,
     nodiff_each/1,
+    nodiff_inherited_branch/1,
+    nodiff_inherited_nested_html/1,
+    nodiff_inherited_each/1,
+    nodiff_inherited_each_in_each/1,
+    nodiff_inherited_hoisted_each/1,
+    nodiff_inherited_helper_each/1,
+    nodiff_inherited_named_each/1,
+    nodiff_each_item_inherited/1,
+    nodiff_layout_inherited_each/1,
+    nodiff_stateful_props_not_inherited/1,
+    nodiff_inherited_local_error/1,
+    nodiff_absent_keeps_nested_markers/1,
     nodiff_nested_element_rejected/1,
     nodiff_with_other_attrs/1,
     render_integration/1,
@@ -586,6 +598,18 @@ groups() ->
             bool_dynamic_value,
             nodiff_with_other_attrs,
             nodiff_each,
+            nodiff_inherited_branch,
+            nodiff_inherited_nested_html,
+            nodiff_inherited_each,
+            nodiff_inherited_each_in_each,
+            nodiff_inherited_hoisted_each,
+            nodiff_inherited_helper_each,
+            nodiff_inherited_named_each,
+            nodiff_each_item_inherited,
+            nodiff_layout_inherited_each,
+            nodiff_stateful_props_not_inherited,
+            nodiff_inherited_local_error,
+            nodiff_absent_keeps_nested_markers,
             mixed_attr_forms
         ]},
         %% HTML auto-escaping: value interpolations are escaped at the HTML
@@ -901,6 +925,12 @@ compile_module(Source) ->
     {ok, Mod, Bin} = compile:forms(TransformedForms, [return_errors]),
     {module, Mod} = code:load_binary(Mod, "", Bin),
     Mod.
+
+%% Render a template and assert it carries none of the framework's markers.
+render_markerless(Tmpl) ->
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
+    ?assertEqual(nomatch, binary:match(HTML, [<<" az=\"">>, <<"<!--az:">>, <<"<!--/az-->">>])),
+    HTML.
 
 split_forms(Tokens) ->
     split_forms(Tokens, [], []).
@@ -4654,6 +4684,226 @@ nodiff_each(Config) when is_list(Config) ->
     ?assertEqual(false, maps:get(diff, Tmpl)),
     StaticsBin = iolist_to_binary(maps:get(s, Tmpl)),
     ?assertEqual(nomatch, binary:match(StaticsBin, <<"az-nodiff">>)).
+
+%% az-nodiff reaches every template nested in the directive's compile unit: they
+%% render inside its output, which never diffs, so none of them may carry a
+%% framework marker either.
+nodiff_inherited_branch(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_inh_branch). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ['az-nodiff'], ["
+        "            case arizona_template:get(f, Bindings) of "
+        "                true -> {'span', [], [arizona_template:get(b, Bindings)]}; "
+        "                _ -> <<>> "
+        "            end"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        <<"<div><span>B</span></div>">>, render_markerless(Mod:render(#{f => true, b => ~"B"}))
+    ).
+
+nodiff_inherited_nested_html(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_inh_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ['az-nodiff'], ["
+        "            arizona_template:html({'em', [], [arizona_template:get(a, Bindings)]})"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual(<<"<div><em>A</em></div>">>, render_markerless(Mod:render(#{a => ~"A"}))).
+
+nodiff_inherited_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_inh_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'ul', ['az-nodiff'], ["
+        "            arizona_template:each(fun(I) -> {'li', [], [I]} end, "
+        "                arizona_template:get(items, Bindings))"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        <<"<ul><li>1</li><li>2</li></ul>">>, render_markerless(Mod:render(#{items => [1, 2]}))
+    ).
+
+nodiff_inherited_each_in_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_inh_each_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'ul', ['az-nodiff'], ["
+        "            arizona_template:each(fun(I) -> "
+        "                {'li', [], [arizona_template:each(fun(J) -> {'b', [], [J]} end, I)]} "
+        "            end, arizona_template:get(items, Bindings))"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        <<"<ul><li><b>1</b><b>2</b></li></ul>">>,
+        render_markerless(Mod:render(#{items => [[1, 2]]}))
+    ).
+
+nodiff_inherited_hoisted_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_inh_hoisted). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Rows = arizona_template:each(fun(I) -> {'li', [], [I]} end, "
+        "        arizona_template:get(items, Bindings)), "
+        "    arizona_template:html({'ul', ['az-nodiff'], [Rows]}). "
+    ),
+    ?assertEqual(
+        <<"<ul><li>1</li><li>2</li></ul>">>, render_markerless(Mod:render(#{items => [1, 2]}))
+    ).
+
+nodiff_inherited_helper_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_inh_helper). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'ul', ['az-nodiff'], [row(arizona_template:get(a, Bindings))]}"
+        "    ). "
+        "row(X) -> {'li', [], [arizona_template:each(fun(I) -> {'i', [], [I]} end, [X])]}. "
+    ),
+    ?assertEqual(<<"<ul><li><i>A</i></li></ul>">>, render_markerless(Mod:render(#{a => ~"A"}))).
+
+nodiff_inherited_named_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_inh_named). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'ul', ['az-nodiff'], ["
+        "            arizona_template:each(fun row/1, arizona_template:get(items, Bindings))"
+        "        ]}"
+        "    ). "
+        "row(I) -> {'li', [], [case I of 1 -> {'b', [], [I]}; _ -> {'i', [], [I]} end]}. "
+    ),
+    ?assertEqual(
+        <<"<ul><li><b>1</b></li><li><i>2</i></li></ul>">>,
+        render_markerless(Mod:render(#{items => [1, 2]}))
+    ).
+
+%% An ?each item body is a compile unit of its own, so az-nodiff on the item
+%% element alone reaches the templates nested in the item.
+nodiff_each_item_inherited(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_item_inh). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'table', [], ["
+        "            arizona_template:each(fun({Id, Msg}) -> "
+        "                {'tr', ['az-nodiff'], ["
+        "                    {'td', [], [Id]}, "
+        "                    case Msg of <<>> -> <<>>; _ -> {'td', [], [Msg]} end"
+        "                ]} "
+        "            end, arizona_template:get(rows, Bindings))"
+        "        ]}"
+        "    ). "
+    ),
+    %% The table itself is diffable, so only the item's own markup is markerless.
+    HTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:render(#{rows => [{~"1", ~"a&b"}]}))
+    ),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<tr><td>1</td><td>a&amp;b</td></tr>">>)).
+
+%% A layout (?inner_content) is auto-nodiff, and that reaches its nested ?each.
+nodiff_layout_inherited_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_layout_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'body', [], ["
+        "            {'nav', [], [arizona_template:each(fun(L) -> {'a', [], [L]} end, "
+        "                arizona_template:get(links, Bindings))]}, "
+        "            az:inner_content(Bindings)"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        <<"<body><nav><a>x</a></nav>page</body>">>,
+        render_markerless(Mod:render(#{links => [~"x"], inner_content => ~"page"}))
+    ).
+
+%% A ?stateful child is its own live view and diffs itself: a template handed to
+%% it in props is NOT nodiff, even under a nodiff root.
+nodiff_stateful_props_not_inherited(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_stateful_props). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ['az-nodiff'], ["
+        "            arizona_template:stateful(child_mod, #{"
+        "                body => arizona_template:html("
+        "                    {'p', [], [arizona_template:get(a, Bindings)]})"
+        "            })"
+        "        ]}"
+        "    ). "
+    ),
+    T = Mod:render(#{a => ~"A"}),
+    ?assertEqual(false, maps:get(diff, T)),
+    [{undefined, Fun, _Loc}] = maps:get(d, T),
+    #{stateful := child_mod, props := #{body := Body}} = Fun(),
+    ?assertNot(maps:is_key(diff, Body)),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Body)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<" az=\"">>)),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"<!--az:">>)).
+
+%% An inherited nodiff is a full nodiff: a ?local in a nested ?each item has no
+%% diff target for the client to address either.
+nodiff_inherited_local_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_nodiff_inh_local). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'ul', ['az-nodiff'], ["
+        "            arizona_template:each(fun(I) -> "
+        "                {'li', [], [I, arizona_template:local(<<\"k\">>, <<\"x\">>)]} "
+        "            end, arizona_template:get(items, Bindings))"
+        "        ]}"
+        "    ). ",
+        fun(R) -> R =:= local_in_nodiff end
+    ).
+
+%% Without the directive nested templates keep every marker.
+nodiff_absent_keeps_nested_markers(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_absent_nested). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'ul', [], ["
+        "            case arizona_template:get(f, Bindings) of "
+        "                true -> {'li', [], [arizona_template:get(a, Bindings)]}; "
+        "                _ -> <<>> "
+        "            end, "
+        "            arizona_template:each(fun(I) -> {'li', [], [I]} end, "
+        "                arizona_template:get(items, Bindings))"
+        "        ]}"
+        "    ). "
+    ),
+    HTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:render(#{f => true, a => ~"A", items => [1]}))
+    ),
+    %% ul, branch li and each li each carry an az; four slots carry comment markers.
+    ?assertEqual(3, length(binary:matches(HTML, <<" az=\"">>))),
+    ?assertEqual(4, length(binary:matches(HTML, <<"<!--az:">>))),
+    ?assertEqual(4, length(binary:matches(HTML, <<"<!--/az-->">>))).
 
 %% az-nodiff is only honored on a template's top-level element (directives are
 %% stripped there). On a NESTED element it is neither stripped nor honored -- left as
