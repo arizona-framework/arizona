@@ -203,9 +203,9 @@ eval_each_def_3tuple(Config) when is_list(Config) ->
     ?assertMatch(#{t := 0, source := _, template := _}, Val).
 
 %% The tracked/diff render path (render_map_items) must yield entries in the same
-%% order as the SSR path (render_map_items_simple); otherwise the live snapshot
-%% disagrees with the SSR DOM item-for-item on connect. render_map_items folded
-%% with a prepend and so used to return the entries reversed.
+%% order SSR puts them on the page; otherwise the live snapshot disagrees with the
+%% SSR DOM item-for-item on connect. render_map_items folded with a prepend and so
+%% used to return the entries reversed.
 render_map_items_order_matches_ssr(Config) when is_list(Config) ->
     Map = #{<<"a">> => <<"1">>, <<"b">> => <<"2">>, <<"c">> => <<"3">>},
     Tmpl = #{
@@ -215,8 +215,13 @@ render_map_items_order_matches_ssr(Config) when is_list(Config) ->
         f => <<"x">>
     },
     {Tracked, _Views} = arizona_eval:render_map_items(Map, Tmpl, {#{}, #{}}),
-    Simple = arizona_eval:render_map_items_simple(Map, Tmpl),
-    ?assertEqual(Simple, Tracked).
+    TrackedHTML = iolist_to_binary([[<<"<li>">>, V, <<"</li>">>] || [{_Az, V, _Deps}] <:- Tracked]),
+    Page = #{
+        s => [<<>>, <<>>],
+        d => [{<<"r">>, fun() -> arizona_template:each(Map, Tmpl) end}],
+        f => <<"p">>
+    },
+    ?assertEqual(TrackedHTML, iolist_to_binary(arizona_render:render_to_iolist(Page))).
 
 %% eval_val processes stateless descriptors (#{callback, props}), and the
 %% enclosing dynamic namespaces the child's inner az ids (and fingerprint) by

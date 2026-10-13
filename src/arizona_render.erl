@@ -602,54 +602,48 @@ render_v(Backend, V) -> render_dyn(Backend, V).
 %% Az is ignored during SSR (only used for diff targeting), so `undefined` Az
 %% from az-nodiff templates flows through harmlessly. `Backend` is the enclosing
 %% template's render backend, used to escape scalar leaves and render attributes.
-%% One `?each` item, evaluated and spliced between its statics in one pass. Mirrors
-%% `zip_stream_item/3`, which walks the same statics against an already-built triple
-%% list; here the value is produced as the walk reaches it.
-zip_ssr_item(_Backend, [S], []) ->
-    [S];
-zip_ssr_item(Backend, [S | Statics], [Dyn | Dynamics]) ->
-    [S, render_ssr_item_value(Backend, Dyn) | zip_ssr_item(Backend, Statics, Dynamics)].
-
-%% An escaped item slot renders through the same render_ssr_esc_val/2 as a top-level
-%% one, so the two cannot drift; the general item path would wrap a scalar in an
-%% escape marker and unwrap it again, ~8 calls per value that change nothing.
-render_ssr_item_value(Backend, {Az, {esc, Fun}, _Loc}) when is_function(Fun, 0) ->
-    render_ssr_item_esc(Backend, Az, render_ssr_esc_val(Backend, Fun()));
-render_ssr_item_value(Backend, {Az, {esc, Fun}}) when is_function(Fun, 0) ->
-    render_ssr_item_esc(Backend, Az, render_ssr_esc_val(Backend, Fun()));
-render_ssr_item_value(Backend, Dyn) ->
-    render_v(Backend, arizona_eval:eval_item_value(Dyn)).
-
-render_ssr_item_esc(_Backend, _Az, Bin) when is_binary(Bin) ->
-    Bin;
-render_ssr_item_esc(Backend, Az, Rendered) ->
-    render_dyn(Backend, arizona_template:scope_slot(Az, Rendered)).
-
+%%
 %% SSR pair walker: renders each dynamic and splices it between the statics in ONE
 %% pass. Building the rendered list first (a comprehension) and zipping it after cost
-%% an N-element list per template that nothing else ever reads.
+%% an N-element list per template that nothing else ever reads. A template and an
+%% `?each` item (of any source) walk through here alike, so an item value renders,
+%% and a crash in it is located, exactly as a top-level one is.
 zip_ssr(_Backend, [S], []) ->
     [S];
 zip_ssr(Backend, [S | Statics], [D | Dynamics]) ->
-    [S, render_dyn(Backend, render_ssr_one(Backend, D)) | zip_ssr(Backend, Statics, Dynamics)].
+    [S, render_ssr_out(Backend, D) | zip_ssr(Backend, Statics, Dynamics)].
+
+%% An escaped value that renders to a binary is already the output: scoping it and
+%% render_dyn/2 would both hand it back untouched, and it is most of what a page holds.
+render_ssr_out(Backend, {Az, {esc, Fun}, Loc}) when is_function(Fun, 0) ->
+    try render_ssr_esc_val(Backend, Fun()) of
+        Bin when is_binary(Bin) -> Bin;
+        Rendered -> render_dyn(Backend, arizona_template:scope_slot(Az, Rendered))
+    catch
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+    end;
+render_ssr_out(Backend, D) ->
+    render_dyn(Backend, render_ssr_one(Backend, D)).
 
 render_ssr_one(Backend, {_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     render_ssr_attr(Backend, Name, Fun());
-render_ssr_one(Backend, {Az, Spec, {Mod, Line}}) ->
+render_ssr_one(Backend, {Az, Spec, Loc}) ->
     try
         arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec))
     catch
-        %% Already wrapped by a nested render -- preserve the deepest location,
-        %% which is closest to the actual failure.
-        Class:{arizona_loc, _, _} = Reason:ST ->
-            erlang:raise(Class, Reason, ST);
-        Class:Reason:ST ->
-            erlang:raise(Class, {arizona_loc, {Mod, Line}, Reason}, ST)
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
 render_ssr_one(Backend, {_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
     render_ssr_attr(Backend, Name, Fun());
 render_ssr_one(Backend, {Az, Spec}) ->
     arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec)).
+
+%% Already wrapped by a nested render -- preserve the deepest location, which is
+%% closest to the actual failure.
+relocate(Class, {arizona_loc, _, _} = Reason, ST, _Loc) ->
+    erlang:raise(Class, Reason, ST);
+relocate(Class, Reason, ST, Loc) ->
+    erlang:raise(Class, {arizona_loc, Loc, Reason}, ST).
 
 render_ssr_val(Backend, {esc, Fun}) when is_function(Fun, 0) ->
     render_ssr_esc_val(Backend, Fun());
@@ -663,8 +657,8 @@ render_ssr_val(Backend, #{t := ?EACH, source := Items, template := Tmpl}) when i
     %% paths still build it, because their snapshot is what the next diff reads.
     %% What the items render TO is the backend's concern, as everywhere else here.
     #{s := ItemStatics, d := DynamicsFun} = Tmpl,
-    {ssr_rendered, [zip_ssr_item(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items]};
-render_ssr_val(_Backend, #{
+    {ssr_rendered, [zip_ssr(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items]};
+render_ssr_val(Backend, #{
     t := ?EACH,
     source := #stream{
         items = ItemsMap,
@@ -673,12 +667,16 @@ render_ssr_val(_Backend, #{
     },
     template := Tmpl
 }) ->
-    VKeys = arizona_template:visible_keys(Order, Limit),
-    ItemSnaps = arizona_eval:render_stream_items_simple(VKeys, ItemsMap, Tmpl),
-    #{t => ?EACH, items => ItemSnaps, order => VKeys, template => Tmpl};
-render_ssr_val(_Backend, #{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
-    ItemSnaps = arizona_eval:render_map_items_simple(Source, Tmpl),
-    #{t => ?EACH, items => ItemSnaps, template => Tmpl};
+    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
+    {ssr_rendered, [
+        zip_ssr(Backend, ItemStatics, DynamicsFun(maps:get(K, ItemsMap), K))
+     || K <- arizona_template:visible_keys(Order, Limit)
+    ]};
+render_ssr_val(Backend, #{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
+    %% Same entry order as the live path (`arizona_eval:render_map_items_simple/2`),
+    %% so a later diff lines up with what SSR put on the page.
+    #{s := ItemStatics, d := DynamicsFun} = Tmpl,
+    {ssr_rendered, [zip_ssr(Backend, ItemStatics, DynamicsFun(K, V)) || K := V <- Source]};
 render_ssr_val(Backend, #{stateful := H, props := Props}) ->
     ok = refuse_stateful_in_layout(H),
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
@@ -726,19 +724,22 @@ render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
 render_ssr_val(_Backend, Val) ->
     arizona_template:to_bin(Val).
 
-%% A value interpolation: escape the rendered scalar bytes; nested
-%% templates/descriptors come back as snapshots (their inner dynamics carry
-%% their own marks), so pass those through untouched. A binary or an integer is
-%% escaped directly -- what the general clause would reach for it, minus the
-%% classification it is certain to pass.
+%% A value interpolation, classified as the live render classifies it
+%% (`arizona_template:mark_esc/1`): a map -- nested template, descriptor, `?local`
+%% -- renders structurally with its own escaping, an effect passes through encoded,
+%% and anything else is escaped once. Escaping whatever came back as a binary
+%% instead escaped an effect or a `?local` init a second time. A binary or an integer
+%% is escaped directly, the answer the classification is certain to give.
 render_ssr_esc_val(Backend, V) when is_binary(V) ->
     Backend:escape(V);
 render_ssr_esc_val(Backend, V) when is_integer(V) ->
     Backend:escape(integer_to_binary(V));
+render_ssr_esc_val(Backend, V) when is_map(V) ->
+    render_ssr_val(Backend, V);
 render_ssr_esc_val(Backend, V) ->
-    case render_ssr_val(Backend, V) of
-        Bin when is_binary(Bin) -> arizona_template:escape_value(Backend, Bin);
-        Other -> Other
+    case arizona_template:mark_esc(V) of
+        {arizona_esc, X} -> arizona_template:escape_marked(Backend, X);
+        Trusted -> arizona_template:to_bin(Trusted)
     end.
 
 render_ssr_attr(Backend, Name, Val) ->

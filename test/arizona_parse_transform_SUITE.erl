@@ -5622,10 +5622,26 @@ each_named_fun_ref_loc_names_callee(Config) when is_list(Config) ->
         "        arizona_template:get(rows, Bindings))]}).\n"
     ),
     T = Mod:render(#{rows => [#{side => ~"sell"}]}),
-    %% row/1's clause head is line 3; the ?each call site is line 7.
+    %% The crashing slot is row/1's line 5; the ?each call site is line 7.
     ?assertError(
-        {arizona_loc, {pt_each_named_loc, 3}, {boom, ~"sell"}},
+        {arizona_loc, {pt_each_named_loc, 5}, {boom, ~"sell"}},
         arizona_render:render_to_iolist(T)
+    ),
+    %% A crash before the element runs at the ?each level, which is stamped with
+    %% row/1's clause head (line 3), still not the call site.
+    Mod2 = compile_module(
+        "-module(pt_each_named_loc2).\n"
+        "-export([render/1]).\n"
+        "row(Bindings) ->\n"
+        "    {ok, Side} = erlang:error({boom, arizona_template:get(side, Bindings)}),\n"
+        "    {'li', [], [Side]}.\n"
+        "render(Bindings) ->\n"
+        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1,\n"
+        "        arizona_template:get(rows, Bindings))]}).\n"
+    ),
+    ?assertError(
+        {arizona_loc, {pt_each_named_loc2, 3}, {boom, ~"sell"}},
+        arizona_render:render_to_iolist(Mod2:render(#{rows => [#{side => ~"sell"}]}))
     ).
 
 each_named_fun_ref_nested_each(Config) when is_list(Config) ->

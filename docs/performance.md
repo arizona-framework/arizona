@@ -215,9 +215,10 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Ask the re-render estimate's floor before weighing items | skips the O(items x dynamics) weighing when the statics floor alone disqualifies wholesale |
 | Fuse `render/2`'s triple unzip into its zip walk | one walk and two lists where there were two walks and four, per connect/navigate |
 | Skip the fingerprint dedup walk for fp-less frames | strictly less work on every event workload: red/op -0.5% to -6.1%, resolved by the reductions column |
-| Escape a binary/integer SSR content value directly | `render_each_100` -18.5% (9.2 -> 7.5 us), red/op -37%; a 201-row escape-heavy table red/op -18%, wall unresolved |
+| Escape a binary/integer SSR content value directly; render every `?each` item through the top-level SSR walk | `render_each_100` -11.6% (6.9 -> 6.1 us), red/op -40%; red/op -31% `render_view_many_dyn_50`, -16%/-17% `render_view_small`/`_with_layout`, -8% `render_view_page`; a 201-row escape-heavy table red/op -23%, wall ~-5% (under the floor) |
 
-(The whole 2026-08 arc that added the last four -- PRs #759-#762 -- closed with
+(The whole 2026-08 arc that added the four rows from "Encode the ops frame" to
+"Fuse `render/2`'s triple unzip" -- PRs #759-#762 -- closed with
 one paired `bench-ab` over every workload, benchmarks byte-identical on both
 sides. Two labels resolve past the ~10% floor: `stream_reset_with_overlap_100`
 **-19.2%** (329 -> 266 us) and `stream_reorder_100` **-18.2%** (4.4 -> 3.6 us)
@@ -271,15 +272,20 @@ The **SSR escape shortcut** is the same lesson on the render side. An escaped co
 slot went through ~10 calls per value -- evaluate, wrap in an escape marker, classify,
 ask whether the marked value is scopable, unwrap, classify again, escape -- and for a
 binary or an integer, nearly every value a page renders, all but the last call are
-certain to change nothing. The SSR walks now call the slot's closure themselves and
-escape those two shapes straight away. An escaped item slot holding anything else now
-renders through the same function as a top-level one, so the two paths share one
-definition, and a test holds SSR output equal to the live render for every value shape. Where the values
-need real escaping the win is invisible on the clock: a 201-row table of messages full
-of `&`, `"` and `'` drops 18% of its reductions but not measurably in wall time, since
-escaping the bytes is most of that page. The tprof `call_time` profile that prompted it
-put the wrapper chain at ~25% of that page; its total ran 6.5x the page's real time, the
-per-call overhead weighting the ~4000 tiny calls per page far above their cost.
+certain to change nothing. The SSR walk now calls the slot's closure itself, escapes
+those two shapes straight away and splices the binary without scoping it; any other
+value is classified exactly as the live render classifies it. Every `?each` item,
+whatever its source, now renders through that same walk as a top-level slot. That
+removed three SSR-only divergences: an effect or a helper-returned `?local` in a
+content slot was escaped twice, a `?stateful` child in an item crashed the render, and
+a crash inside an item value was located at the enclosing `?each` instead of the slot
+that failed. A test holds SSR output equal to the live render for each fixture value
+shape, at the top level and in list, stream and map items. Where the values need real
+escaping the win barely shows on the clock: a 201-row table of messages full of `&`,
+`"` and `'` drops 23% of its reductions but only ~5% of wall time, under the floor,
+since escaping the bytes is most of that page. The tprof `call_time` profile that prompted it
+put the wrapper chain at ~25% of that page; its total ran 6.5x the page's real time,
+the per-call overhead weighting the ~4000 tiny calls per page far above their cost.
 
 ## What did not work
 
