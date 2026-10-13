@@ -540,6 +540,8 @@ inherit_nodiff({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, F}}, Args} = C
     end;
 inherit_nodiff({'fun', _, _} = Fun) ->
     Fun;
+inherit_nodiff({named_fun, _, _, _} = Fun) ->
+    Fun;
 inherit_nodiff(Node) when is_tuple(Node) ->
     list_to_tuple(inherit_nodiff(tuple_to_list(Node)));
 inherit_nodiff(Nodes) when is_list(Nodes) ->
@@ -580,6 +582,13 @@ inherit_spliced_nodiff(Inherited, Arg) ->
         true -> inherit_nodiff(Arg);
         false -> Arg
     end.
+
+%% An inherited `?each` renders its source's templates as item content, so a
+%% hoisted source is inherited like an inline one (inherit_ctor_args/1).
+inherit_spliced_source(true, SourceArg) ->
+    inherit_nodiff(SourceArg);
+inherit_spliced_source(false, SourceArg) ->
+    SourceArg.
 
 inherit_spliced_each_nodiff(true, FunArg) ->
     inherit_each_fun(FunArg);
@@ -1057,7 +1066,10 @@ transform_node(Node, Module, Inline, FunDefs) ->
                             FunDefs
                         ),
                         retransform_spliced(
-                            inline_vars(SourceArg, Inline), Spliced, Module, FunDefs
+                            inherit_spliced_source(Inherited, inline_vars(SourceArg, Inline)),
+                            Spliced,
+                            Module,
+                            FunDefs
                         ),
                         L,
                         Module,
@@ -2071,13 +2083,14 @@ compile_named_each(Name, Arity, SourceAST, L, Module, Backend, CCtx, FunDefs, In
             UnwrappedBody = unwrap_last_wrapper(Body, Backend:target()),
             Clause0 = {clause, CL, Vars, Guards, UnwrappedBody},
             Clause1 = rename_inlined_clause(Name, Arity, Clause0),
-            FunAST0 = inherit_spliced_each_nodiff(
-                Inherited, mark_targets({'fun', L, {clauses, [Clause1]}}, Backend:target())
-            ),
+            FunAST0 = mark_targets({'fun', L, {clauses, [Clause1]}}, Backend:target()),
+            %% Helpers first, so the bodies they splice are inherited too.
             {FunAST1, _HelperCh} = inline_helper_calls(
                 FunAST0, Module, FunDefs, Backend:target()
             ),
-            FunAST = transform_expr(FunAST1, Module, #{}, FunDefs),
+            FunAST = transform_expr(
+                inherit_spliced_each_nodiff(Inherited, FunAST1), Module, #{}, FunDefs
+            ),
             %% Stamp the each with the CALLEE's clause line, not the `?each` call
             %% site: the whole per-item template comes from that clause, so a crash
             %% in it reports a stack line inside the callee while `arizona_loc` named
