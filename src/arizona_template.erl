@@ -143,6 +143,8 @@ render(Bindings) ->
     s := [binary()],
     d := fun((term()) -> [dynamic()]) | fun((term(), term()) -> [dynamic()]),
     f := binary(),
+    %% An item element carrying az-nodiff compiles its per-item template nodiff.
+    diff => false,
     single_root => true,
     backend => module()
 }.

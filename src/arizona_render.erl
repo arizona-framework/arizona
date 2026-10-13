@@ -608,11 +608,22 @@ render_v(Backend, V) -> render_dyn(Backend, V).
 zip_ssr_item(_Backend, [S], []) ->
     [S];
 zip_ssr_item(Backend, [S | Statics], [Dyn | Dynamics]) ->
-    [
-        S,
-        render_v(Backend, arizona_eval:eval_item_value(Dyn))
-        | zip_ssr_item(Backend, Statics, Dynamics)
-    ].
+    [S, render_ssr_item_value(Backend, Dyn) | zip_ssr_item(Backend, Statics, Dynamics)].
+
+%% An escaped item slot renders through the same render_ssr_esc_val/2 as a top-level
+%% one, so the two cannot drift; the general item path would wrap a scalar in an
+%% escape marker and unwrap it again, ~8 calls per value that change nothing.
+render_ssr_item_value(Backend, {Az, {esc, Fun}, _Loc}) when is_function(Fun, 0) ->
+    render_ssr_item_esc(Backend, Az, render_ssr_esc_val(Backend, Fun()));
+render_ssr_item_value(Backend, {Az, {esc, Fun}}) when is_function(Fun, 0) ->
+    render_ssr_item_esc(Backend, Az, render_ssr_esc_val(Backend, Fun()));
+render_ssr_item_value(Backend, Dyn) ->
+    render_v(Backend, arizona_eval:eval_item_value(Dyn)).
+
+render_ssr_item_esc(_Backend, _Az, Bin) when is_binary(Bin) ->
+    Bin;
+render_ssr_item_esc(Backend, Az, Rendered) ->
+    render_dyn(Backend, arizona_template:scope_slot(Az, Rendered)).
 
 %% SSR pair walker: renders each dynamic and splices it between the statics in ONE
 %% pass. Building the rendered list first (a comprehension) and zipping it after cost
@@ -641,13 +652,7 @@ render_ssr_one(Backend, {Az, Spec}) ->
     arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec)).
 
 render_ssr_val(Backend, {esc, Fun}) when is_function(Fun, 0) ->
-    %% A value interpolation: escape the rendered scalar bytes; nested
-    %% templates/descriptors come back as snapshots (their inner dynamics carry
-    %% their own marks), so pass those through untouched.
-    case render_ssr_val(Backend, Fun()) of
-        Bin when is_binary(Bin) -> arizona_template:escape_value(Backend, Bin);
-        Other -> Other
-    end;
+    render_ssr_esc_val(Backend, Fun());
 render_ssr_val(Backend, Fun) when is_function(Fun, 0) ->
     render_ssr_val(Backend, Fun());
 render_ssr_val(Backend, #{t := ?EACH, source := Items, template := Tmpl}) when is_list(Items) ->
@@ -720,6 +725,21 @@ render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
     arizona_template:maybe_propagate(Tmpl, Snap0);
 render_ssr_val(_Backend, Val) ->
     arizona_template:to_bin(Val).
+
+%% A value interpolation: escape the rendered scalar bytes; nested
+%% templates/descriptors come back as snapshots (their inner dynamics carry
+%% their own marks), so pass those through untouched. A binary or an integer is
+%% escaped directly -- what the general clause would reach for it, minus the
+%% classification it is certain to pass.
+render_ssr_esc_val(Backend, V) when is_binary(V) ->
+    Backend:escape(V);
+render_ssr_esc_val(Backend, V) when is_integer(V) ->
+    Backend:escape(integer_to_binary(V));
+render_ssr_esc_val(Backend, V) ->
+    case render_ssr_val(Backend, V) of
+        Bin when is_binary(Bin) -> arizona_template:escape_value(Backend, Bin);
+        Other -> Other
+    end.
 
 render_ssr_attr(Backend, Name, Val) ->
     Backend:render_attr(Name, Val).
