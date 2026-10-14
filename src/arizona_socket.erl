@@ -986,16 +986,61 @@ captured_flash(Pending, Pending, Socket) ->
 captured_flash(_Pending0, Pending, Socket) ->
     Socket#socket{pending_flash = Pending, flash_replay = undefined}.
 
-capture_flash_effect(
-    {arizona_effect, [?EFFECT_NAVIGATE, Path, #{flash := Flash} = Opts]}, Pending
-) ->
-    capture_nav_flash(?EFFECT_NAVIGATE, Path, Flash, Opts, Pending);
-capture_flash_effect(
-    {arizona_effect, [?EFFECT_PATCH, Path, #{flash := Flash} = Opts]}, Pending
-) ->
-    capture_nav_flash(?EFFECT_PATCH, Path, Flash, Opts, Pending);
-capture_flash_effect(Effect, Pending) ->
-    {Effect, Pending}.
+capture_flash_effect({arizona_effect, Cmd0}, Pending0) ->
+    {Cmd, Pending} = capture_flash_cmd(Cmd0, Pending0),
+    {{arizona_effect, Cmd}, Pending}.
+
+%% A navigate/patch runs when the reply lands, so its flash is captured; so does
+%% one a `transition` wraps, which runs right away too. One an `on_key` or a
+%% `fetch`'s `on_error` wraps runs later, if ever, so its flash cannot be paired
+%% with the frame that follows it: it is stripped with a warning instead of
+%% riding into the browser or onto whatever navigation comes next.
+capture_flash_cmd([Op, Path, #{flash := Flash} = Opts], Pending) when
+    Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH
+->
+    capture_nav_flash(Op, Path, Flash, Opts, Pending);
+capture_flash_cmd([?EFFECT_TRANSITION, Opts, Cmds0], Pending0) ->
+    {Cmds, Pending} = map_wrapped(fun capture_flash_cmd/2, Pending0, Cmds0),
+    {[?EFFECT_TRANSITION, Opts, Cmds], Pending};
+capture_flash_cmd([?EFFECT_ON_KEY, Key, Cmds], Pending) ->
+    {[?EFFECT_ON_KEY, Key, strip_wrapped_flash(Cmds)], Pending};
+capture_flash_cmd([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts], Pending) ->
+    {[?EFFECT_FETCH, Url, Opts#{on_error => strip_wrapped_flash(Cmds)}], Pending};
+capture_flash_cmd(Cmd, Pending) ->
+    {Cmd, Pending}.
+
+strip_wrapped_flash(Cmds0) ->
+    {Cmds, ok} = map_wrapped(fun strip_flash_cmd/2, ok, Cmds0),
+    Cmds.
+
+strip_flash_cmd([Op, Path, #{flash := _} = Opts], ok) when
+    Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH
+->
+    logger:warning(
+        "flash dropped from a deferred ~s effect: one an on_key or a fetch's "
+        "on_error wraps runs later, if ever, so no frame can carry its flash",
+        [effect_name(Op)]
+    ),
+    {[Op, Path, maps:remove(flash, Opts)], ok};
+strip_flash_cmd(Cmd, ok) ->
+    case wrapped_cmds(Cmd) of
+        {ok, _Inner} -> {rewrap(Cmd, fun strip_wrapped_flash/1), ok};
+        none -> {Cmd, ok}
+    end.
+
+rewrap([?EFFECT_TRANSITION, Opts, Cmds], Fun) ->
+    [?EFFECT_TRANSITION, Opts, Fun(Cmds)];
+rewrap([?EFFECT_ON_KEY, Key, Cmds], Fun) ->
+    [?EFFECT_ON_KEY, Key, Fun(Cmds)];
+rewrap([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts], Fun) ->
+    [?EFFECT_FETCH, Url, Opts#{on_error => Fun(Cmds)}].
+
+%% Map over a wrapper's commands keeping their shape: one command (its head is
+%% an op code) stays one command, a list stays a list.
+map_wrapped(Fun, Acc, [Op | _] = Cmd) when is_integer(Op) ->
+    Fun(Cmd, Acc);
+map_wrapped(Fun, Acc, Cmds) ->
+    lists:mapfoldl(Fun, Acc, Cmds).
 
 %% `flash` is always stripped from the client effect (the browser never sees it),
 %% regardless of its shape -- so no non-map `flash` opt can leak. A non-map value is
@@ -1003,7 +1048,7 @@ capture_flash_effect(Effect, Pending) ->
 %% generator in `unwrap_effects/1`); there is deliberately no defensive `is_map` guard
 %% that would let it fall through to the client instead.
 capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
-    {{arizona_effect, [Op, Path, maps:remove(flash, Opts)]}, maps:merge(Pending, Flash)}.
+    {[Op, Path, maps:remove(flash, Opts)], maps:merge(Pending, Flash)}.
 
 %% Fast path for the reply shapes produced by encode_reply/3 and the connect
 %% frames. Hand writes the outer `{"o":...}` / `{"e":...}` / combined wrapper,

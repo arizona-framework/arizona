@@ -17,6 +17,8 @@
 -export([push_after_navigate_barrier_ships_after_replace/1]).
 -export([navigate_flushes_deferred_resync/1]).
 -export([foreign_id_push_folded_into_event_reply/1]).
+-export([transition_wrapped_flash_captured/1]).
+-export([deferred_wrapped_flash_stripped/1]).
 -export([item_patch_carries_child_view_wrapper/1]).
 -export([queued_push_prepended_to_event_reply/1]).
 -export([queued_push_prepended_to_patch_reply/1]).
@@ -55,6 +57,8 @@ all() ->
         push_after_navigate_barrier_ships_after_replace,
         navigate_flushes_deferred_resync,
         foreign_id_push_folded_into_event_reply,
+        transition_wrapped_flash_captured,
+        deferred_wrapped_flash_stripped,
         item_patch_carries_child_view_wrapper,
         queued_push_prepended_to_event_reply,
         queued_push_prepended_to_patch_reply,
@@ -246,6 +250,83 @@ foreign_id_push_folded_into_event_reply(Config) when is_list(Config) ->
         [[?OP_TEXT, ~"other:0", ~"x"], [?OP_TEXT, <<"counter:", _/binary>>, ~"1"]], ops(Frame)
     ),
     nothing_left_queued().
+
+transition_wrapped_flash_captured(Config) when is_list(Config) ->
+    %% A navigate a transition wraps runs as soon as the frame lands, so its
+    %% flash is captured onto the socket like a bare one's: it never reaches the
+    %% browser, and the next navigate carries it (here an unresolvable one, which
+    %% then warns it had to drop it -- proof it was stashed).
+    Req = arizona_req_test_adapter:new(#{routes => #{}}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_nav_card_hidden, #{}, Req, #{}),
+    Effect = arizona_js:transition(arizona_js:navigate(~"/x", #{flash => #{info => ~"hi"}})),
+    {Frame, Socket1} = push_effects([Effect], Socket0),
+    ?assertEqual(nomatch, binary:match(Frame, ~"hi")),
+    ?assertMatch([[?EFFECT_TRANSITION, #{}, [?EFFECT_NAVIGATE, ~"/x", #{}]]], effects(Frame)),
+    Warnings = with_warnings(fun() ->
+        {reply, _, _} = arizona_socket:handle_in(navigate_frame(~"/nowhere"), Socket1)
+    end),
+    ?assertMatch([_], [W || W <- Warnings, binary:match(W, ~"/nowhere") =/= nomatch]).
+
+deferred_wrapped_flash_stripped(Config) when is_list(Config) ->
+    %% A navigate an on_key or a fetch's on_error wraps runs later, if ever, so
+    %% its flash cannot be paired with a frame: stripped with a warning, never
+    %% sent to the browser, and never stashed for an unrelated navigate.
+    Req = arizona_req_test_adapter:new(#{routes => #{}}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_nav_card_hidden, #{}, Req, #{}),
+    Flash = #{flash => #{info => ~"hi"}},
+    Effects = [
+        arizona_js:on_key(enter, arizona_js:navigate(~"/k", Flash)),
+        arizona_js:fetch(~"/f", #{on_error => [arizona_js:patch(~"/e", Flash)]})
+    ],
+    {{Frame, Socket1}, Warnings} = with_warnings_result(fun() ->
+        push_effects(Effects, Socket0)
+    end),
+    ?assertEqual(nomatch, binary:match(Frame, ~"hi")),
+    ?assertMatch([_, _], [W || W <- Warnings, binary:match(W, ~"deferred") =/= nomatch]),
+    NavWarnings = with_warnings(fun() ->
+        {reply, _, _} = arizona_socket:handle_in(navigate_frame(~"/nowhere"), Socket1)
+    end),
+    ?assertEqual([], NavWarnings).
+
+%% Ship `Effects` from the live process as a push and return its frame.
+push_effects(Effects, Socket0) ->
+    Pid = arizona_socket:live_pid(Socket0),
+    Pid ! {show_card_with, ~"x", Effects},
+    Push =
+        receive
+            {arizona_push, _, _, _, _} = P -> P
+        after 2000 -> error(no_push)
+        end,
+    {reply, Frame, Socket} = arizona_socket:handle_info(Push, Socket0),
+    {iolist_to_binary(Frame), Socket}.
+
+with_warnings(Fun) ->
+    {_Result, Warnings} = with_warnings_result(Fun),
+    Warnings.
+
+%% Run Fun with a warning-level log handler attached; return its result and the
+%% formatted warnings it logged.
+with_warnings_result(Fun) ->
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning, config => #{pid => self()}
+    }),
+    Result =
+        try
+            Fun()
+        after
+            ok = logger:remove_handler(HandlerId)
+        end,
+    {Result, collect_warnings()}.
+
+collect_warnings() ->
+    receive
+        {arizona_test_log_handler, #{level := warning, msg := {Fmt, Args}}} ->
+            [iolist_to_binary(io_lib:format(Fmt, Args)) | collect_warnings()];
+        {arizona_test_log_handler, _Other} ->
+            collect_warnings()
+    after 200 -> []
+    end.
 
 flash_warnings() ->
     receive
