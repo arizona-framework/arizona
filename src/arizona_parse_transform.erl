@@ -272,9 +272,8 @@ maybe_helper_pair(Name, Arity, FunDefs, Acc) ->
         false -> Acc
     end.
 
-%% Scan the original forms (pre-mark_targets, so every ?each is still spelled `each`
-%% -- mark_targets renames nested each to native_each/terminal_each and unwraps an
-%% inline `?html`/`?native`/`?terminal` callback body, but never rewrites a
+%% Scan the original forms (pre-mark_targets -- which unwraps an inline
+%% `?html`/`?native`/`?terminal` callback body, but never rewrites a
 %% `fun Name/Arity` reference) for local `fun Name/Arity` (and same-module
 %% `fun ?MODULE:Name/Arity`) callbacks. Returns the deduped pairs defined in this module.
 collect_each_callback_pairs(Forms, FunDefs, Module) ->
@@ -428,11 +427,9 @@ is_module_attr(_) -> false.
 %% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
 %% any template, else `html` | `native` | `terminal`). Three jobs:
 %%
-%%   1. A single `?each` serves every target. Inside a `?native(...)` each nested
-%%      `?each` is rewritten to the internal `native_each`, and inside a
-%%      `?terminal(...)` to `terminal_each`, so the bottom-up transform compiles it
-%%      with the matching backend. `?each` under `?html` (or standalone) keeps the
-%%      `each` name (default `html` target).
+%%   1. A single `?each` serves every target. Each one is marked with the backend
+%%      of the target it sits in (the default `html` one standalone) and the
+%%      content context there, so the bottom-up transform compiles it with both.
 %%   2. Reject inline cross-target nesting: any target macro literally inside a
 %%      different one (e.g. `?html(...)` in `?native(...)`) would mix incompatible
 %%      statics in one tree. Caught here as a compile error instead of corrupting
@@ -466,24 +463,27 @@ mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [Arg]}
     {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [
         maybe_inherit_nodiff(mark_targets(Arg, Target, Default))
     ]};
-%% `?each` under `?html` (or standalone -- `none`) keeps the name `each` (the
-%% bottom-up transform compiles it with the default `html` target), but
-%% we still unwrap an inline `?html(...)` callback body here. The guard lets any
-%% other (future) `Ctx` fall through to the generic tuple recursion below.
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, each}}, Args}, Ctx, CCtx) when
+%% A fresh `?each` gets the backend and content context it compiles for appended
+%% as two bare atom args, `each(Fun, Source, Backend, CCtx)` -- bare, because a
+%% tuple there would be walked as an element.
+mark_targets(
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}} = Callee, [FunArg, SourceArg | Marking]},
+    Ctx,
+    CCtx
+) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
-    %% The backend names its own each marker for this content context, so the
-    %% transform hardcodes neither a target nor a context vocabulary. A backend
-    %% with one context answers the same marker every time, which makes this
-    %% inert for it without a target check here.
     Backend = ctx_backend(Ctx),
-    Marker = Backend:each_marker(CCtx),
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Marker}},
-        maybe_inherit_each_nodiff([
-            mark_targets(A, Ctx, CCtx)
-         || A <- unwrap_each_body(Args, Backend:target())
-        ])};
+    Args =
+        case needs_each_marking(SourceArg, Marking) of
+            true ->
+                Unwrapped = unwrap_each_body([FunArg, SourceArg], Backend:target()),
+                maybe_inherit_each_nodiff([mark_targets(A, Ctx, CCtx) || A <- Unwrapped]) ++
+                    [{atom, L, Backend}, {atom, L, CCtx}];
+            false ->
+                mark_targets([FunArg, SourceArg | Marking], Ctx, CCtx)
+        end,
+    {call, L, Callee, Args};
 %% An element tuple: its children may sit in a different content context (the
 %% backend decides -- `<svg>` opens foreign content for `?html`). Matched on the
 %% element shape only, so a plain data tuple a user writes cannot shift it.
@@ -513,6 +513,17 @@ mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
 %% default target's backend so the two callbacks above always have an answer.
 ctx_backend(none) -> target_backend(html);
 ctx_backend(Ctx) -> target_backend(Ctx).
+
+%% Whether mark_targets/3 marks an `?each`: a fresh one, and an already-marked
+%% one spliced into a template (a hoisted one, a helper argument) whose marking is
+%% the unplaced default -- it knew nothing about where it would render. The 2-arg
+%% compiled output a helper argument carries back into the pass (ih_call/7) and a
+%% marking made inside a target or content context are final.
+needs_each_marking(SourceArg, []) ->
+    not is_compiled_each_pairing(SourceArg);
+needs_each_marking(_SourceArg, [{atom, _, Backend}, {atom, _, CCtx}]) ->
+    Default = ctx_backend(none),
+    Backend =:= Default andalso CCtx =:= Default:content_context(undefined, html).
 
 mark_targets(Node, Ctx) ->
     mark_targets(Node, Ctx, (ctx_backend(Ctx)):content_context(undefined, html)).
@@ -556,8 +567,8 @@ inherit_nodiff(Nodes) when is_list(Nodes) ->
 inherit_nodiff(Node) ->
     Node.
 
-inherit_ctor_args([FunArg, SourceArg]) ->
-    [inherit_each_fun(FunArg), inherit_nodiff(SourceArg)];
+inherit_ctor_args([FunArg, SourceArg | Marking]) ->
+    [inherit_each_fun(FunArg), inherit_nodiff(SourceArg) | Marking];
 inherit_ctor_args(Args) ->
     inherit_nodiff(Args).
 
@@ -603,13 +614,12 @@ inherit_spliced_each_nodiff(false, FunArg) ->
     [FunArg1] = maybe_inherit_each_nodiff([FunArg]),
     FunArg1.
 
-%% A not-yet-compiled template constructor. The output form of a compiled `?each`
-%% reuses the `each` name, and is already final.
+%% A not-yet-compiled template constructor. A compiled `?each` keeps the `each`
+%% name with two args, and is already final; a marked one carries four.
 is_template_ctor(F, [_Arg]) ->
     F =:= html orelse F =:= native orelse F =:= terminal;
-is_template_ctor(F, [_FunArg, SourceArg]) ->
-    (F =:= each orelse F =:= foreign_each orelse F =:= native_each orelse
-        F =:= terminal_each) andalso not is_compiled_each_pairing(F, SourceArg);
+is_template_ctor(each, [_FunArg, _SourceArg, _Backend, _CCtx]) ->
+    true;
 is_template_ctor(_F, _Args) ->
     false.
 
@@ -1072,47 +1082,40 @@ transform_node(Node, Module, Inline, FunDefs) ->
                 FunDefs
             ),
             compile_template(Arg3, L, Module, false, target_backend(Target), Inherited);
-        {call, L, {remote, _, {atom, _, Mod}, {atom, _, EachFn}}, [FunArg, SourceArg]} when
-            (Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD) andalso
-                (EachFn =:= each orelse EachFn =:= foreign_each orelse
-                    EachFn =:= native_each orelse EachFn =:= terminal_each)
+        %% A marked `?each` (mark_targets/3). The compiled 2-arg pairing a
+        %% retransform_spliced/4 re-run revisits does not match, so it passes
+        %% through untouched.
+        {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}}, [
+            FunArg, SourceArg, {atom, _, Backend}, {atom, _, CCtx}
+        ]} when
+            Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD
         ->
-            case is_compiled_each_pairing(EachFn, SourceArg) of
-                true ->
-                    %% Already-compiled pairing (`arizona_template:each(Source,
-                    %% #{s,d,f,...})` from a previous pass) revisited by a
-                    %% retransform_spliced/4 re-run: pass it through untouched.
-                    N;
-                false ->
-                    Inherited = Mod =:= ?NODIFF_MOD,
-                    Spliced = map_size(Inline) > 0,
-                    FunArg1 = unwrap_spliced_each_callback(
-                        inline_vars(FunArg, Inline), EachFn, Inline
-                    ),
-                    {FunArg2, FunCh} = inline_helper_calls(
-                        FunArg1, Module, FunDefs, each_target(EachFn)
-                    ),
-                    compile_each(
-                        retransform_spliced(
-                            inherit_spliced_each_nodiff(Inherited, FunArg2),
-                            Spliced orelse FunCh,
-                            Module,
-                            FunDefs
-                        ),
-                        retransform_spliced(
-                            inherit_spliced_source(Inherited, inline_vars(SourceArg, Inline)),
-                            Spliced,
-                            Module,
-                            FunDefs
-                        ),
-                        L,
-                        Module,
-                        target_backend(each_target(EachFn)),
-                        each_content_ctx(EachFn),
-                        FunDefs,
-                        Inherited
-                    )
-            end;
+            Inherited = Mod =:= ?NODIFF_MOD,
+            Spliced = map_size(Inline) > 0,
+            FunArg1 = unwrap_spliced_each_callback(
+                inline_vars(FunArg, Inline), Backend:target(), Inline
+            ),
+            {FunArg2, FunCh} = inline_helper_calls(FunArg1, Module, FunDefs, Backend:target()),
+            compile_each(
+                retransform_spliced(
+                    inherit_spliced_each_nodiff(Inherited, FunArg2),
+                    Spliced orelse FunCh,
+                    Module,
+                    FunDefs
+                ),
+                retransform_spliced(
+                    inherit_spliced_source(Inherited, inline_vars(SourceArg, Inline)),
+                    Spliced,
+                    Module,
+                    FunDefs
+                ),
+                L,
+                Module,
+                Backend,
+                CCtx,
+                FunDefs,
+                Inherited
+            );
         %% Sugar: `arizona_template:stateless(atom, Props)` with a literal atom
         %% callback is rewritten to `arizona_template:stateless(fun atom/1, Props)`.
         %% Fun references and other shapes pass through unchanged.
@@ -1136,24 +1139,23 @@ transform_node(Node, Module, Inline, FunDefs) ->
 %% bottom-up transform over the spliced expression so those constructors
 %% compile exactly as written-inline code would. The re-run is idempotent on
 %% already-compiled output: template maps are not calls, the stateless sugar
-%% only matches an atom callback, and a compiled each pairing is recognized and
-%% skipped (is_compiled_each_pairing/2). Skipped entirely when nothing was
-%% spliced.
+%% only matches an atom callback, and a compiled each pairing has two args where
+%% a marked `?each` has four. Skipped entirely when nothing was spliced.
 retransform_spliced(Expr, false, _Module, _FunDefs) ->
     Expr;
 retransform_spliced(Expr, true, Module, FunDefs) ->
     transform_expr(Expr, Module, #{}, FunDefs).
 
-%% True for the OUTPUT form of a compiled ?each -- `arizona_template:each(Source,
-%% #{t,s,d,f,...})` (build_each_ast/build_each_from_compiled) -- revisited when
-%% retransform_spliced/4 re-runs the transform. The SOURCE form pairs
-%% `(Fun, Source)`, and a compiled pairing always carries the `t` assoc on top
-%% of `s`/`d`/`f`, so a literal map source can never be mistaken for one short
-%% of spelling out all four keys.
-is_compiled_each_pairing(each, {map, _, Fields}) ->
+%% True when the second arg of a 2-arg `each` is the OUTPUT of a compiled ?each
+%% -- `arizona_template:each(Source, #{t,s,d,f,...})` (build_each_ast/
+%% build_each_from_compiled) -- which a helper argument carries back into
+%% mark_targets/3. The SOURCE form pairs `(Fun, Source)`, and a compiled pairing
+%% always carries the `t` assoc on top of `s`/`d`/`f`, so a literal map source can
+%% never be mistaken for one short of spelling out all four keys.
+is_compiled_each_pairing({map, _, Fields}) ->
     is_compiled_template_map(Fields) andalso
         lists:member(t, [K || {map_field_assoc, _, {atom, _, K}, _} <- Fields]);
-is_compiled_each_pairing(_EachFn, _SourceArg) ->
+is_compiled_each_pairing(_SourceArg) ->
     false.
 
 %% Post-splice mirror of the mark-time unwrap_each_body/2 jobs, for material the
@@ -1163,10 +1165,10 @@ is_compiled_each_pairing(_EachFn, _SourceArg) ->
 %% -- BEFORE retransform_spliced/4 would compile that wrapper to a map, which
 %% skips body classification and silently drops `single_root` (positional list
 %% patching). A no-op when the clause hoists nothing.
-unwrap_spliced_each_callback(FunArg, _EachFn, Inline) when map_size(Inline) =:= 0 ->
+unwrap_spliced_each_callback(FunArg, _Target, Inline) when map_size(Inline) =:= 0 ->
     FunArg;
-unwrap_spliced_each_callback(FunArg, EachFn, _Inline) ->
-    [FunArg1 | _] = unwrap_each_body([flatten_spliced_tracks(FunArg)], each_target(EachFn)),
+unwrap_spliced_each_callback(FunArg, Target, _Inline) ->
+    [FunArg1 | _] = unwrap_each_body([flatten_spliced_tracks(FunArg)], Target),
     FunArg1.
 
 %% Flatten a spliced track-wrap block (`begin ok = track(K), ..., Expr end`, the
@@ -2605,17 +2607,6 @@ target_backend(html) -> arizona_html;
 target_backend(native) -> arizona_native;
 target_backend(terminal) -> arizona_terminal.
 
-%% The render target a `?each`/`?native_each`/`?terminal_each` macro compiles for.
-each_target(each) -> html;
-each_target(foreign_each) -> html;
-each_target(native_each) -> native;
-each_target(terminal_each) -> terminal.
-
-%% The content context the marker was chosen for, inverting `each_marker/1` so
-%% the per-item template compiles in the context its `?each` sits in.
-each_content_ctx(foreign_each) -> foreign;
-each_content_ctx(_Marker) -> html.
-
 %% A compiled template map literal carries the `s`/`d`/`f` assoc keys plus the
 %% `backend` build_template_ast/5 always adds, so a user data map spelling out
 %% `s`/`d`/`f` is not taken for one. A field with a non-atom key (`~"a" => 1`, a
@@ -3661,7 +3652,7 @@ stamp_leaf(_N, {nil, _} = Leaf) ->
 stamp_leaf(N, {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, _} = Leaf) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
-    case lists:member(F, [each, native_each, terminal_each, stateful, local, raw, inner_content]) of
+    case lists:member(F, [each, stateful, local, raw, inner_content]) of
         true -> Leaf;
         false -> branch_call(N, L, Leaf)
     end;
@@ -3959,9 +3950,6 @@ is_block_content_expr({call, _, {remote, _, {atom, _, M}, {atom, _, F}}, _Args})
             native,
             terminal,
             each,
-            foreign_each,
-            native_each,
-            terminal_each,
             stateful,
             stateless,
             inner_content,

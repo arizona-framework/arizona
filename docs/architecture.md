@@ -2056,9 +2056,9 @@ than half-handling it.
 The context reaches a construct compiled elsewhere through the top-down marking pass. A **local
 element helper** is spliced into the caller's element AST before that element compiles, so it
 carries the context directly. A **`?each`** is compiled bottom-up, before the enclosing element,
-so the pass renames it to the marker its backend names for the context it sits in
-(`each_marker/1`; `arizona_html` answers `foreign_each` inside `<svg>`), and the per-item template
-compiles in that context. Because the rename happens at the *call site*, a `fun row/1` callback
+so the pass appends the backend and the content context it sits in to the call as two bare atom
+arguments (`each(Fun, Source, Backend, Context)`), and the per-item template compiles in that
+context. Because the rename happens at the *call site*, a `fun row/1` callback
 defined elsewhere in the module inherits it too.
 
 A **`?stateless`/`?stateful` child** is the one construct that cannot: it is a separate template
