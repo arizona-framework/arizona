@@ -4603,14 +4603,25 @@ has_dynamic_attr([{bin, _, _} | Rest]) ->
 has_dynamic_attr([{tuple, _, [_, {atom, _, Val}]} | Rest]) when is_boolean(Val) ->
     has_dynamic_attr(Rest);
 has_dynamic_attr([{tuple, _, [_NameAST, ValueAST]} | Rest]) ->
-    case literal_text(ValueAST) of
-        {ok, _} -> has_dynamic_attr(Rest);
-        error -> true
+    case is_static_attr_value(ValueAST) of
+        true -> has_dynamic_attr(Rest);
+        false -> true
     end;
 has_dynamic_attr([{atom, _, _} | Rest]) ->
     has_dynamic_attr(Rest);
 has_dynamic_attr(_) ->
     false.
+
+%% A value compile_attr/4 emits as static bytes: a literal (literal_text/1) or a
+%% literal command, which compile_dynamic_attr_value/5 folds through the same
+%% try_fold_arizona_js/1. The element's `az` is only an op target -- event
+%% delegation resolves the view through the closest `az-view` (or `az-target`),
+%% and a native tap through the node's view id -- so a folded command needs none.
+is_static_attr_value(ValueAST) ->
+    case literal_text(ValueAST) of
+        {ok, _} -> true;
+        error -> try_fold_arizona_js(ValueAST) =/= error
+    end.
 
 has_dynamic_child([], _RawKind) ->
     false;

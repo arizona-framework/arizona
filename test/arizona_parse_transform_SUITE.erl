@@ -11306,7 +11306,8 @@ literal_list_mixed_not_folded(Config) when is_list(Config) ->
     ),
     ?assertMatch([{_, {esc, _}, _}], maps:get(d, Mod:content(#{c => <<"c">>}))).
 
-%% `?raw` and effect commands keep their own paths.
+%% `?raw` and effect commands keep their own paths. A folded command is static,
+%% so an element with no other dynamic carries no `az`.
 literal_list_raw_and_command_not_folded(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_fold_raw_cmd). "
@@ -11329,8 +11330,7 @@ literal_list_raw_and_command_not_folded(Config) when is_list(Config) ->
     CmdT = Mod:cmd(#{}),
     ?assertEqual([], maps:get(d, CmdT)),
     Cmd = arizona_html:attr_command(<<"az-click">>, [arizona_js:push_event(<<"inc">>)]),
-    [CmdStatic] = maps:get(s, CmdT),
-    ?assertNotEqual(nomatch, binary:match(CmdStatic, <<Cmd/binary, "></button>">>)).
+    ?assertEqual([<<"<button", Cmd/binary, "></button>">>], maps:get(s, CmdT)).
 
 %% Raw text keeps its own slot policy: a literal list in <script> is still a
 %% dynamic that must be a literal ?raw.
