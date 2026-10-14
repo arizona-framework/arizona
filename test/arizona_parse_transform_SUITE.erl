@@ -464,6 +464,8 @@
     raw_text_rejects_branch_markup/1,
     raw_text_keeps_values/1,
     raw_text_list_with_raw_is_text/1,
+    markup_var_in_content_list_rejected/1,
+    markup_var_in_content_list_allowed/1,
     cond_begin_block_tail/1,
     cond_try_bare_element/1,
     cond_maybe_bare_element/1,
@@ -815,6 +817,8 @@ groups() ->
             raw_text_rejects_branch_markup,
             raw_text_keeps_values,
             raw_text_list_with_raw_is_text,
+            markup_var_in_content_list_rejected,
+            markup_var_in_content_list_allowed,
             cond_begin_block_tail,
             cond_try_bare_element,
             cond_maybe_bare_element,
@@ -10467,3 +10471,59 @@ raw_text_list_with_raw_is_text(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{r => ~"&amp;"}))),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"a &amp;</title>")),
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--")).
+
+%% A content-slot list item that is a variable bound to markup is a compile error
+%% naming the variable: only markup written in the list is compiled.
+markup_var_in_content_list_rejected(Config) when is_list(Config) ->
+    [
+        assert_parse_error(
+            "-module(pt_markup_var_" ++ Suffix ++
+                "). "
+                "-export([render/1]). "
+                "render(Bindings) -> " ++ Body,
+            fun(R) -> R =:= {markup_var_in_content_list, 'Hdr'} end
+        )
+     || {Suffix, Body} <- [
+            {"each",
+                "Hdr = arizona_template:html({h1, [], [<<\"T\">>]}), "
+                "arizona_template:html({ul, [], [[Hdr, arizona_template:each("
+                "    fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings))]]}). "},
+            {"value",
+                "Hdr = {h1, [], [<<\"T\">>]}, "
+                "arizona_template:html({p, [], [[<<\"x\">>, Hdr, "
+                "    arizona_template:get(a, Bindings)]]}). "},
+            {"tail",
+                "Hdr = [<<\"x\">>, {b, [], []}], "
+                "arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
+                "    true -> [Hdr, <<\"y\">>]; false -> <<>> end]}). "}
+        ]
+    ],
+    ok.
+
+%% A hoisted template that reads a binding is substituted back, so it is markup
+%% written in the list; and a fun parameter or generator of the same name shadows a
+%% markup variable.
+markup_var_in_content_list_allowed(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_markup_var_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Hdr = arizona_template:html({h1, [], [arizona_template:get(t, Bindings)]}), "
+        "    Row = {b, [], []}, "
+        "    arizona_template:html({ul, [], ["
+        "        [Hdr, arizona_template:each(fun(Row) -> {li, [], [[<<\"r\">>, Row]]} end, "
+        "            arizona_template:get(xs, Bindings))]]}). "
+    ),
+    assert_list_child(
+        Mod, #{t => ~"T", xs => [~"x1"]}, #{t => ~"U", xs => [~"x1"]}, [~"T", ~"x1"], ~"U"
+    ),
+    ?assertEqual(
+        pt_markup_var_gen,
+        compile_module(
+            "-module(pt_markup_var_gen). "
+            "-export([render/1]). "
+            "render(_Bindings) -> "
+            "    Row = {b, [], []}, "
+            "    [arizona_template:html({i, [], [[<<\"g\">>, Row]]}) || Row <- [<<\"x\">>]]. "
+        )
+    ).

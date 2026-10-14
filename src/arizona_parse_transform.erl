@@ -720,6 +720,16 @@ format_error({invalid_child, ValueStr}) ->
             [ValueStr]
         )
     );
+format_error({markup_var_in_content_list, Var}) ->
+    lists:flatten(
+        io_lib:format(
+            "~s is bound to markup and used as an item of a content-slot list. The "
+            "transform compiles a list's markup only where it is written in the list, "
+            "so the variable is a plain value there and fails at render. Put the "
+            "markup directly in the children list instead of binding it first",
+            [Var]
+        )
+    );
 format_error(local_key_not_literal) ->
     "?local/2 key must be a literal binary or atom";
 format_error(nodiff_call_not_compiled) ->
@@ -1021,6 +1031,7 @@ transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body0),
     Body = normalize_tail_binds(Body0),
     Inline = prepare_inline(collect_inline(Body), Body),
+    ok = check_markup_vars(Body, Inline),
     Body1 = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Body],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
@@ -1506,6 +1517,7 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
     %% template and is handled by transform_live_render_last/4.
     Init = normalize_tail_binds(Init0),
     Inline = prepare_inline(collect_inline(Init ++ [Last]), Init ++ [Last]),
+    ok = check_markup_vars(Init ++ [Last], Inline),
     TransformedInit = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Init],
     TransformedLast = transform_live_render_last(Last, Module, Inline, FunDefs),
     Body1 = TransformedInit ++ [TransformedLast],
@@ -1681,6 +1693,102 @@ is_az_view_attr(Attr) ->
 %% Variables bound more than once are dropped (ambiguous to inline); a binding-derived
 %% expression with no read (e.g. `Id = make_uuid()`) is left captured so a pure
 %% side effect is never re-run per slot.
+%% A content-slot list compiles its markup items only where they are written in it;
+%% a variable item is a value. A hoisted read is substituted back first (it is in
+%% `Inline`), but a variable bound to markup that reads nothing stays a variable and
+%% fails at render, so it is refused here, naming the variable.
+check_markup_vars(Body, Inline) ->
+    {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}),
+    MarkupVars =
+        #{
+            V => true
+         || V := RHS <- maps:without(maps:keys(Poisoned), Raw),
+            not is_map_key(V, Inline),
+            is_markup_rhs(RHS)
+        },
+    case map_size(MarkupVars) of
+        0 -> ok;
+        _ -> check_markup_vars(Body, MarkupVars, false)
+    end.
+
+is_markup_rhs(RHS) ->
+    case is_list_ast(RHS) of
+        true -> list_has_markup_item(RHS);
+        false -> is_markup_item(RHS) andalso not is_value_constructor(RHS)
+    end.
+
+check_markup_vars(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, _}}, Args}, Vars, _InTemplate
+) when
+    Mod =:= arizona_template; Mod =:= az; Mod =:= ?NODIFF_MOD
+->
+    check_markup_vars(Args, Vars, true);
+check_markup_vars({'fun', _, {clauses, Clauses}}, Vars, InTemplate) ->
+    %% A fun parameter shadows a hoisted name in its body.
+    _ = [
+        check_markup_vars([G, B], maps:without(pattern_vars(Ps), Vars), InTemplate)
+     || {clause, _, Ps, G, B} <:- Clauses
+    ],
+    ok;
+check_markup_vars({Comp, _, T, Qualifiers}, Vars, InTemplate) when
+    Comp =:= lc; Comp =:= bc; Comp =:= mc
+->
+    %% So does a generator pattern, in the qualifiers after it and the template.
+    Bound = lists:append([qualifier_binders(Q) || Q <- Qualifiers]),
+    check_markup_vars([T, Qualifiers], maps:without(Bound, Vars), InTemplate);
+check_markup_vars({tuple, _, [_, _, Children]} = T, Vars, true) ->
+    case is_element_tuple(T) of
+        true -> ok = check_children_lists(Children, Vars);
+        false -> ok
+    end,
+    check_markup_vars(tuple_to_list(T), Vars, true);
+check_markup_vars(T, Vars, InTemplate) when is_tuple(T) ->
+    check_markup_vars(tuple_to_list(T), Vars, InTemplate);
+check_markup_vars([H | T], Vars, InTemplate) ->
+    ok = check_markup_vars(H, Vars, InTemplate),
+    check_markup_vars(T, Vars, InTemplate);
+check_markup_vars(_Leaf, _Vars, _InTemplate) ->
+    ok.
+
+qualifier_binders({zip, _, Generators}) ->
+    lists:append([qualifier_binders(G) || G <- Generators]);
+qualifier_binders({Gen, _, Pattern, _Source}) when
+    Gen =:= generate;
+    Gen =:= generate_strict;
+    Gen =:= b_generate;
+    Gen =:= b_generate_strict;
+    Gen =:= m_generate;
+    Gen =:= m_generate_strict
+->
+    pattern_vars(Pattern);
+qualifier_binders(_Filter) ->
+    [].
+
+%% Each children-list item that is a list -- written there or as a conditional's
+%% tail -- is a content-slot list.
+check_children_lists({cons, _, Item, Rest}, Vars) ->
+    _ = map_tail_exprs(
+        Item,
+        fun(Leaf) ->
+            ok = check_content_list(Leaf, Vars),
+            Leaf
+        end,
+        fun(NonTail) -> NonTail end
+    ),
+    check_children_lists(Rest, Vars);
+check_children_lists(_Children, _Vars) ->
+    ok.
+
+check_content_list({cons, _, {var, L, V}, Rest}, Vars) ->
+    case Vars of
+        #{V := _} -> parse_error({markup_var_in_content_list, V}, L);
+        #{} -> check_content_list(Rest, Vars)
+    end;
+check_content_list({cons, _, _, Rest}, Vars) ->
+    check_content_list(Rest, Vars);
+check_content_list(_Leaf, _Vars) ->
+    ok.
+
 collect_inline(Body) ->
     {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}),
     keep_reaching(maps:without(maps:keys(Poisoned), Raw)).

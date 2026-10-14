@@ -351,8 +351,12 @@ any children list.
 
 The list must be **literal at the template site**: a list the template cannot see -- a
 comprehension of templates, a list bound at runtime, a list nested inside the list -- is still a
-single value and fails at render on a template or component in it. A `?local` in such a list
-has no element to carry its descriptor and is a compile error (`local_orphaned`).
+single value and fails at render on a template or component in it. A **variable** item bound to
+markup that reads no binding (`Hdr = ?html({h1, [], [~"T"]})`, then `[[Hdr, ?each(...)]]`) is a
+compile error (`markup_var_in_content_list`) naming the variable: write the markup in the list
+itself. A hoisted template that reads a binding is substituted back into the slot, so it is
+markup written in the list and is fine. A `?local` in such a list has no element to carry its
+descriptor and is a compile error (`local_orphaned`).
 
 An `?each` in such a list is anchored by its own slot markers, which no element carries. A
 stream still diffs item by item: its `OP_INSERT`/`OP_MOVE`/`OP_REMOVE`/`OP_ITEM_PATCH` target the
