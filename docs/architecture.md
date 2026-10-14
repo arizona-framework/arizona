@@ -2058,8 +2058,22 @@ element helper** is spliced into the caller's element AST before that element co
 carries the context directly. A **`?each`** is compiled bottom-up, before the enclosing element,
 so the pass appends the backend and the content context it sits in to the call as two bare atom
 arguments (`each(Fun, Source, Backend, Context)`), and the per-item template compiles in that
-context. Because the rename happens at the *call site*, a `fun row/1` callback
+context. Because the marking happens at the *call site*, a `fun row/1` callback
 defined elsewhere in the module inherits it too.
+
+An `?each` is marked once, at the place it appears in the template that renders it. A **hoisted**
+`Items = ?each(...)` is bound outside every template, where the pass can only give it the default
+target and context, so that marking is provisional: the hoisted value has it stripped
+(`prepare_inline/2`) and is marked again where `Items` is spliced in (`splice_vars/4`, at the root of
+the `?html`/`?native`/`?terminal` that uses it, or the target and context of the `?each` whose
+callback or source uses it). It therefore compiles exactly as the same `?each` written at the use
+site -- native nodes under `?native`, foreign content inside `<svg>` -- and the splice is checked
+like written code, so a hoisted `?html` used inside `?native` is a `cross_target_nesting` compile
+error rather than a render-time `cross_target_child`. A local element helper does **not** re-mark
+what it is handed: its body is marked, but an argument -- a written `?each` already compiled
+bottom-up, or a spliced hoisted one already marked -- keeps the context of the call site. So
+`wrap(?each(...))` with `wrap(X) -> {svg, [], [X]}` called from HTML content compiles its items as
+HTML; write the `?each` inside the `<svg>` element for SVG treatment.
 
 A **`?stateless`/`?stateful` child** is the one construct that cannot: it is a separate template
 with no call site at compile time, so a `<title>` there is classified `html` and its slot comes

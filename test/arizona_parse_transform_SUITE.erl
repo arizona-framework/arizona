@@ -450,6 +450,11 @@
     helper_arg_each_native/1,
     helper_arg_each_terminal/1,
     helper_arg_each_svg/1,
+    hoisted_each_native/1,
+    hoisted_each_terminal/1,
+    hoisted_each_svg/1,
+    hoisted_each_helper_arg_svg/1,
+    hoisted_cross_target_nesting/1,
     list_child_inner_content/1,
     list_child_raw_beside_value/1,
     list_child_local_orphaned/1,
@@ -806,6 +811,11 @@ groups() ->
             helper_arg_each_native,
             helper_arg_each_terminal,
             helper_arg_each_svg,
+            hoisted_each_native,
+            hoisted_each_terminal,
+            hoisted_each_svg,
+            hoisted_each_helper_arg_svg,
+            hoisted_cross_target_nesting,
             list_child_inner_content,
             list_child_raw_beside_value,
             list_child_local_orphaned,
@@ -2531,9 +2541,9 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
         [[_Op, _Az, #{~"s" := [<<>>, <<>>], ~"d" := [~"B"]}]],
         element(1, arizona_diff:diff(Mod:component(#{t => ~"B"}), CompSnap))
     ),
-    %% `?each` DOES carry it: the top-down pass renames the each to the marker the
-    %% backend names for the enclosing context, and the per-item template compiles
-    %% in that context. Pinned against the component case above, which cannot.
+    %% `?each` DOES carry it: the top-down pass marks the each with the backend and
+    %% the enclosing context, and the per-item template compiles in that context.
+    %% Pinned against the component case above, which cannot.
     {EachHTML, _} = arizona_render:render(Mod:each(#{rows => [~"A"]})),
     ?assertMatch({_, _}, binary:match(iolist_to_binary(EachHTML), ~"<title az=")).
 
@@ -10371,6 +10381,125 @@ helper_arg_each_svg(Config) when is_list(Config) ->
             global, {capture, all_but_first, binary}
         ])
     ).
+
+%% A hoisted `?each` is bound outside every template, so nothing at its binding
+%% says what it renders in. It compiles where its variable is used, exactly as if
+%% it were written there: under `?native` its items are native JSON nodes.
+hoisted_each_native(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_hoisted_each_native). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Items = arizona_template:each("
+        "        fun(I) -> {text, [], [I]} end, arizona_template:get(items, Bindings)), "
+        "    arizona_template:native({column, [], [Items]}). "
+    ),
+    Wire = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
+    ?assertMatch(
+        #{
+            ~"type" := ~"column",
+            ~"children" := [
+                #{
+                    ~"children" := [
+                        [
+                            #{~"type" := ~"text", ~"children" := [#{~"children" := [~"a"]}]},
+                            #{~"type" := ~"text", ~"children" := [#{~"children" := [~"b"]}]}
+                        ]
+                    ]
+                }
+            ]
+        },
+        json:decode(Wire)
+    ).
+
+hoisted_each_terminal(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_hoisted_each_terminal). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Items = arizona_template:each("
+        "        fun(I) -> {line, [], [I]} end, arizona_template:get(items, Bindings)), "
+        "    arizona_template:terminal({col, [], [Items]}). "
+    ),
+    Out = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
+    ?assertEqual(nomatch, binary:match(Out, [~"<", ~"{"])),
+    ?assertMatch(
+        {match, [[~"a"], [~"b"]]},
+        re:run(Out, ~"([ab])", [global, {capture, all_but_first, binary}])
+    ).
+
+%% Used directly inside `<svg>`, a hoisted `?each` compiles its items in foreign
+%% content, where `<title>` is ordinary markup: each item's slot keeps its markers
+%% and an item change patches that slot alone.
+hoisted_each_svg(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_hoisted_each_svg). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Items = arizona_template:each("
+        "        fun(I) -> {title, [], [I]} end, arizona_template:get(items, Bindings)), "
+        "    arizona_template:html({svg, [], [Items]}). "
+    ),
+    assert_svg_title_items(Mod).
+
+%% An `?each` keeps the content context of where it is written -- or, hoisted,
+%% where its variable is used. A local element helper's body is not that place: an
+%% `?each` passed as a helper argument is in the caller's context, here HTML, even
+%% though the helper wraps it in `<svg>`. So its `<title>` items are escapable raw
+%% text (markerless) and an item change re-renders the item's title whole.
+hoisted_each_helper_arg_svg(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_hoisted_each_helper_svg). "
+        "-export([hoisted/1, inline/1]). "
+        "hoisted(Bindings) -> "
+        "    Items = arizona_template:each("
+        "        fun(I) -> {title, [], [I]} end, arizona_template:get(items, Bindings)), "
+        "    arizona_template:html({main, [], [wrap(Items)]}). "
+        "inline(Bindings) -> "
+        "    arizona_template:html({main, [], [wrap(arizona_template:each("
+        "        fun(I) -> {title, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
+        "wrap(X) -> {svg, [], [X]}. "
+    ),
+    lists:foreach(
+        fun(F) ->
+            {HTML, _} = arizona_render:render(Mod:F(#{items => [~"a", ~"b"]})),
+            ?assertMatch(
+                {match, [[~"a"], [~"b"]]},
+                re:run(HTML, ~"<title az=\"[^\"]+\">([ab])</title>", [
+                    global, {capture, all_but_first, binary}
+                ])
+            )
+        end,
+        [hoisted, inline]
+    ).
+
+%% Marking the splice site checks a hoisted template like a written one: a
+%% hoisted `?html` used inside `?native` is cross-target nesting at compile time,
+%% not a render-time `cross_target_child`.
+hoisted_cross_target_nesting(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_hoisted_cross_target). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Row = arizona_template:html({p, [], [arizona_template:get(x, Bindings)]}), "
+        "    arizona_template:native({column, [], [Row]}). ",
+        fun
+            (cross_target_nesting) -> true;
+            (_) -> false
+        end
+    ).
+
+assert_svg_title_items(Mod) ->
+    {HTML0, Snap0, Views0} = arizona_render:render(Mod:render(#{items => [~"a", ~"b"]}), #{}),
+    ?assertMatch(
+        {match, [[~"a"], [~"b"]]},
+        re:run(HTML0, ~"<title az=\"[^\"]+\"><!--az:[^>]+-->([ab])<!--/az--></title>", [
+            global, {capture, all_but_first, binary}
+        ])
+    ),
+    {Ops, _, _} =
+        arizona_diff:diff(Mod:render(#{items => [~"a", ~"c"]}), Snap0, Views0, #{items => true}),
+    ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 1, [[?OP_TEXT, _, ~"c"]]]]]], Ops).
 
 %% `?inner_content` beside static text in a layout's list gets its own slot.
 list_child_inner_content(Config) when is_list(Config) ->
