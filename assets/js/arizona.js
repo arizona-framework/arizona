@@ -992,6 +992,10 @@ function applyOps(ops) {
                     removeEl(el);
                     break;
                 case OP.INSERT:
+                    if (found.marker && !slotBounds(el, az)) {
+                        warnUnplaceable(op);
+                        break;
+                    }
                     insertItemEl(el, op[2], op[3], op[4], streams, az);
                     break;
                 case OP.REMOVE:
@@ -1001,6 +1005,10 @@ function applyOps(ops) {
                     applyItemPatch(el, op[2], op[3], streams);
                     break;
                 case OP.MOVE:
+                    if (found.marker && !slotBounds(el, az)) {
+                        warnUnplaceable(op);
+                        break;
+                    }
                     moveItemEl(el, op[2], op[3], streams, az);
                     break;
                 case OP.LIST_PATCH:
@@ -1036,25 +1044,32 @@ function applyOps(ops) {
 /**
  * Ops that act on the element they resolve to as a whole, so they cannot be
  * applied to a marker-only resolution -- whose element is the slot's PARENT, not
- * the slot. Two kinds, both refused:
+ * the slot. `replaceWith` / `remove` on the parent takes the slot's static
+ * siblings with it, and when the parent is the live root, the whole view. The
+ * server never addresses these to a marker-anchored slot (the diff emits the
+ * marker-aware `?OP_TEXT`), so this is a guard against a stray op, not a
+ * supported path.
  *
- * - DESTRUCTIVE (`REPLACE`, `REMOVE_NODE`): `replaceWith` / `remove` on the
- *   parent takes the slot's static siblings with it, and when the parent is the
- *   live root, the whole view. The server never addresses these to a
- *   marker-anchored slot (the diff emits the marker-aware `?OP_TEXT`), so this
- *   is a guard against a stray op, not a supported path.
- * - CONTAINER-RELATIVE PLACEMENT (`INSERT`, `MOVE`): a tail insert appends to the
- *   parent and a null-`afterKey` move prepends to it, both landing OUTSIDE the
- *   slot's marker span (after the footer, before the header). Silent misplacement
- *   is worse than the drop-and-warn these got before the marker fallback existed,
- *   so they warn too. Making stream items marker-relative is the tracked
- *   follow-up (see docs/architecture.md); until then this refuses rather than
- *   corrupts. The position-INDEPENDENT item ops (`REMOVE`, `ITEM_PATCH`) find
- *   their target by `az-key` and stay correct, so they are NOT refused -- they
- *   are a strict gain over dropping every stream op at this shape.
+ * The stream placement ops (`INSERT`, `MOVE`) are NOT here: on a marker-only hit
+ * the slot's markers are direct children of the resolved parent, so
+ * `insertItemEl` / `moveItemEl` place inside the span through `slotBounds`. They
+ * are refused only when that span cannot be found (`warnUnplaceable`), since an
+ * unbounded tail insert would land after the slot's static siblings.
  * @type {Set<number>}
  */
-const MARKER_UNSAFE_OPS = new Set([OP.REPLACE, OP.REMOVE_NODE, OP.INSERT, OP.MOVE]);
+const MARKER_UNSAFE_OPS = new Set([OP.REPLACE, OP.REMOVE_NODE]);
+
+/**
+ * Warn about a stream placement op whose marker-only target has no delimited slot
+ * span to place within (an unterminated marker), so it is skipped rather than
+ * appended outside the slot.
+ * @param {Array<*>} op
+ */
+function warnUnplaceable(op) {
+    console.warn(
+        `[arizona] op ${op[0]} target "${op[1]}" has no slot span to place within; skipping`,
+    );
+}
 
 /**
  * The az half of a `"viewId:az"` patch target (the whole string when it carries

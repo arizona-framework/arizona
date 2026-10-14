@@ -1980,11 +1980,12 @@ move-to-head after the opening one, and `keyedChildren` restricts positional ind
 So an each sharing its container with static siblings no longer strands items after a footer or
 before a header.
 
-What still does not work is the **marker-only** container (no element carries the slot az at all).
-There the client would have to place the node with no element to measure against, so `applyOps`
-refuses `OP_INSERT`/`OP_MOVE` on a marker-resolved target with a warning rather than misplace it
-silently. The position-independent `OP_REMOVE`/`OP_ITEM_PATCH` find their target by `az-key` and
-still apply. Lifting that refusal is the remaining follow-up.
+The **marker-only** container (no element carries the slot az at all -- a stream among a live
+root's static siblings, or in a content-slot list fragment) works the same way: `resolveOpTarget`
+resolves it through its opening marker to the enclosing element, and the markers are that
+element's direct children, so `slotBounds` finds the span and `OP_INSERT`/`OP_MOVE` place within
+it. Only a marker-resolved target whose slot cannot be delimited (no closing marker) is refused,
+with a warning, rather than appended outside the slot.
 
 ## Target scoping
 
