@@ -3831,6 +3831,24 @@ describe('saveFormState / restoreFormState', () => {
     });
 });
 
+describe('saveFormState / restoreFormState with Object.prototype member names', () => {
+    it('restores such fields and leaves an unsaved one untouched', () => {
+        document.body.innerHTML =
+            '<form id="f"><input name="constructor" value="c">' +
+            '<input name="valueOf" value="v1"><input name="valueOf" value="v2"></form>';
+        saveFormState();
+
+        document.body.innerHTML =
+            '<form id="f"><input name="constructor" value="">' +
+            '<input name="valueOf" value=""><input name="valueOf" value="">' +
+            '<input name="toString" value="keep"></form>';
+        restoreFormState();
+
+        const inputs = document.querySelectorAll('input');
+        expect(Array.from(inputs, (i) => i.value)).toEqual(['c', 'v1', 'v2', 'keep']);
+    });
+});
+
 // ---------------------------------------------------------------------------
 // saveFormState / restoreFormState -- checkbox, radio, select, textarea
 // ---------------------------------------------------------------------------
@@ -6116,6 +6134,32 @@ describe('form submit', () => {
             'save',
             { tags: ['a', 'b', 'c'], langs: ['erl', 'js'], email: 'ada@example.com' },
         ]);
+    });
+
+    it('sends a field named after an Object.prototype member as plain data', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[0,"save"]]'>
+                <input name="constructor" value="c" />
+                <input name="toString" value="t" />
+                <input name="__proto__" value="p" />
+                <input name="hasOwnProperty" value="x" />
+                <input name="hasOwnProperty" value="y" />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document
+            .getElementById('f')
+            .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+        // Raw wire string: a parsed `__proto__` key would not compare as own data.
+        const raw = mock.posted.filter((d) => d[0] === 1).map((d) => d[1]);
+        expect(raw).toContain(
+            '["page","save",{"constructor":"c","toString":"t","__proto__":"p","hasOwnProperty":["x","y"]}]',
+        );
     });
 
     it('reports a checkbox/radio checked state and every selection of a multiple select', async () => {
