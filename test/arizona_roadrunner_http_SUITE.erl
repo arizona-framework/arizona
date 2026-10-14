@@ -25,7 +25,7 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     {ok, _} = application:ensure_all_started(roadrunner),
     Listener = arizona_roadrunner_http_test,
-    Port = pick_port(),
+    Port = arizona_test_port:pick(),
     Routes = [
         {live, ~"/echo_body", arizona_about, #{
             middlewares => [arizona_middleware:extract([body])]
@@ -56,9 +56,6 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     ok = arizona_roadrunner_server:stop(?config(listener, Config)),
     ok.
-
-pick_port() ->
-    15040 + erlang:unique_integer([positive, monotonic]) rem 1000.
 
 %% --------------------------------------------------------------------
 %% Request threading

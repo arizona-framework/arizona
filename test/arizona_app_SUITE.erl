@@ -213,12 +213,9 @@ format_log_msg(Other) ->
 server_opts() ->
     #{
         scheme => http,
-        transport_opts => [{port, pick_port()}],
+        transport_opts => [{port, arizona_test_port:pick()}],
         routes => [{asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}]
     }.
-
-pick_port() ->
-    arizona_test_port:pick().
 
 unset_env(Key) ->
     application:unset_env(arizona, Key).
