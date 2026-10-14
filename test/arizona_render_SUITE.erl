@@ -104,6 +104,7 @@
     ssr_item_value_crash_location/1,
     ssr_top_value_crash_location/1,
     ssr_attr_crash_location/1,
+    render_crash_location/1,
     ssr_stateful_in_each_items_matches_live/1,
     ssr_page_with_child/1,
     ssr_nested_local/1,
@@ -207,6 +208,7 @@ groups() ->
             ssr_item_value_crash_location,
             ssr_top_value_crash_location,
             ssr_attr_crash_location,
+            render_crash_location,
             ssr_stateful_in_each_items_matches_live,
             resolve_id_binary,
             resolve_id_template
@@ -1264,6 +1266,16 @@ ssr_attr_crash_location(Config) when is_list(Config) ->
         )
     ).
 
+%% The snapshot render (`render/1`, no view tracking) locates a slot crash as the
+%% SSR walk does.
+render_crash_location(Config) when is_list(Config) ->
+    {Bindings, _Resets} = arizona_live_crash:mount(#{attr => ~"bad"}),
+    Line = arizona_live_crash:line(attr),
+    ?assertError(
+        {arizona_loc, {arizona_live_crash, Line}, {boom, ~"bad"}},
+        arizona_render:render(arizona_live_crash:render(Bindings))
+    ).
+
 %% A `?stateful` child in an `?each` item -- plain list or stream -- server-renders
 %% as the live first render does, view boundary and all.
 ssr_stateful_in_each_items_matches_live(Config) when is_list(Config) ->
@@ -1510,10 +1522,12 @@ descriptor_root_nested_anchor(Config) when is_list(Config) ->
 %% paths must now fail the same way.
 ssr_stateful_child_rejects_restricted_id(Config) when is_list(Config) ->
     Tmpl = arizona_restricted_id_child:host(),
-    %% Live path: already enforced (bare reason).
-    ?assertError(restricted_key_modified, arizona_render:render(Tmpl, #{})),
-    %% SSR path: must enforce it identically. The SSR walker wraps the raise with
-    %% source-location info for the dev error page, so the reason is `arizona_loc`.
+    %% Both paths enforce it identically, and both locate the raise at the slot
+    %% that mounted the child, so the reason is `arizona_loc`-wrapped.
+    ?assertError(
+        {arizona_loc, _, restricted_key_modified},
+        arizona_render:render(Tmpl, #{})
+    ),
     ?assertError(
         {arizona_loc, _, restricted_key_modified},
         iolist_to_binary(arizona_render:render_to_iolist(Tmpl))
