@@ -287,8 +287,9 @@ Starts a live process for a route-level view `Handler`.
 
 The transport pid receives `{arizona_push, RootViewId, Ops, Effects, Observed}`
 messages when the live process diffs and emits updates; `RootViewId` is
-the emitting page's root view id, so a transport can drop a push that
-raced a navigate. `OnMount` is the route's hook
+the emitting page's root view id, which the transport scopes the ops with
+(a push the old page queued before a navigate is shipped ahead of the
+replace, see `arizona_socket`). `OnMount` is the route's hook
 chain. Any request data the view needs is supplied as bindings by the
 transport layer (e.g. via `arizona_middleware:extract/1` middlewares); the live
 process is transport-agnostic and never sees a request.
@@ -311,7 +312,7 @@ two. Browser/SSR callers use `start_link/4` (empty context).
 
 `push_barrier` is the transport's own contract, not client data: set it when the
 transport folds queued `{arizona_push, ...}` messages into a synchronous
-event/patch reply, and the live process marks the boundary between the pushes
+event/patch/navigate reply, and the live process marks the boundary between the pushes
 that preceded that reply and anything emitted after it (see `push_barrier/1`).
 Transports that ship every push in its own frame leave it unset.
 """.
@@ -635,7 +636,8 @@ handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings =
                     {reply, {ok, [], [], {[], []}}, State}
             end
     end;
-handle_call({navigate, NewHandler, NewIB, NewOnMount}, _From, State) ->
+handle_call({navigate, NewHandler, NewIB, NewOnMount}, From, State) ->
+    ok = push_barrier(From, State),
     do_navigate_call(NewHandler, NewIB, NewOnMount, State);
 handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) ->
     ok = push_barrier(From, State),
@@ -1302,8 +1304,8 @@ key_changed(K, V, OldBindings) ->
 
 %% A child view's diff ops are addressed relative to the CHILD, so they must be
 %% scoped by the child's view id -- while the push itself must keep naming the
-%% ROOT view, which is what the transport compares against its current page to
-%% drop a push that raced a navigate (see push/4). Both fit in the message
+%% ROOT view, which is what the transport matches against its current page
+%% (see push/4). Both fit in the message
 %% unchanged: hand the ops over in the same `[ChildViewId, ChildOps]` nesting a
 %% root diff already uses for its embedded children, and the transport's
 %% flattening re-tags them with the child id.
@@ -1321,10 +1323,10 @@ scope_child_ops(_ViewId, []) ->
 scope_child_ops(ViewId, Ops) ->
     [[ViewId, Ops]].
 
-%% A push names the root view that owns it (the page's id at emit time), so a
-%% transport can drop a push that raced a navigate -- processed after the
-%% navigate it would otherwise be tagged with the NEW page's id and deliver
-%% stale ops into the fresh view.
+%% A push names the root view that owns it (the page's id at emit time). The
+%% transport sets a push barrier before a navigate and ships the old page's
+%% queued pushes ahead of the replace, so their ops land on the old DOM before
+%% the new page supersedes it.
 push(undefined, _ViewId, _Ops, _Effects) ->
     ok;
 push(_Pid, _ViewId, [], []) ->
@@ -1354,8 +1356,8 @@ push(Pid, ViewId, Ops, Effects) ->
 %% transport has by then received) and leaves the rest for its own inbox path,
 %% which ships them in a later frame, in order.
 %%
-%% Emitted only when the CALLER is the folding transport itself. `handle_event/4`
-%% and `patch/2` are exported, so any process can call them on a live process
+%% Emitted only when the CALLER is the folding transport itself. `handle_event/4`,
+%% `patch/2` and `navigate/3,4` are exported, so any process can call them on a live process
 %% whose transport folds -- and a marker sent for someone else's call is one
 %% nobody drains, which would offset the transport's drain by one from then on
 %% (every later drain eats the previous cycle's marker, folds nothing, and lets a

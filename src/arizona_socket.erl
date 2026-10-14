@@ -212,7 +212,7 @@ init(Handler, Bindings, Req, Opts) ->
     Socket = #socket{req = Req, handler = Handler, layouts = Layouts},
     safe_init(Handler, Socket, fun() ->
         %% `push_barrier` opts this transport into the ordering marker the
-        %% event/patch drain below relies on -- see drain_pending_pushes/1.
+        %% event/patch/navigate drain below relies on -- see drain_pending_pushes/1.
         ConnInfo = #{
             capabilities => Capabilities, reconnect => Reconnect, push_barrier => true
         },
@@ -327,12 +327,7 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
         [Target, Event, Payload] when is_binary(Event), is_map(Payload) ->
             ViewId = event_target(Target, RootViewId),
             {AllOps, AllEffects, Observed} = dispatch_event(Pid, ViewId, Event, Payload),
-            {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
-            encode_reply(
-                PendOps ++ AllOps,
-                PendEffects ++ AllEffects,
-                note_az([], Observed, Socket1)
-            );
+            reply_after_pending(AllOps, AllEffects, Observed, Socket);
         _ ->
             {ok, Socket}
     catch
@@ -356,11 +351,11 @@ live_pid(#socket{pid = Pid}) -> Pid.
 Handles inbox messages forwarded by the transport.
 
 Routes `{arizona_push, ViewId, Ops, Effects}` from the live process into
-a reply frame -- but only when `ViewId` (the emitting page's root view id)
-is still the socket's current one. A push emitted just before a navigate
-is processed after it; retagging it with the new page's id would deliver
-stale ops into the fresh view, so it is dropped instead. Handles `'EXIT'`
-from the linked live process per the mapping in this module's
+a reply frame, its ops tagged with the view id the push names. A push the old
+page emitted before a navigate this socket drives never gets here: its ops are
+folded into the navigate's frame ahead of the replace and its effects dropped
+(`drain_pending_pushes/1`). Handles
+`'EXIT'` from the linked live process per the mapping in this module's
 "Exit handling" section.
 """.
 -spec handle_info(Info, Socket) -> result() when
@@ -382,13 +377,8 @@ do_handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0)
     %% firing timer -- has `pending_resync = undefined` and falls through to
     %% the catch-all below.)
     resync_reply(flush_resync(Socket0#socket{pending_resync = undefined}));
-do_handle_info(
-    {arizona_push, ViewId, Ops, Effects, Observed}, #socket{view_id = ViewId} = Socket
-) ->
+do_handle_info({arizona_push, ViewId, Ops, Effects, Observed}, Socket) ->
     encode_reply(flatten_ops(ViewId, Ops), Effects, note_az([], Observed, Socket));
-do_handle_info({arizona_push, _StaleViewId, _Ops, _Effects, _Observed}, Socket) ->
-    %% Emitted by a page this socket already navigated away from -- drop.
-    {ok, Socket};
 do_handle_info({'EXIT', Pid, {shutdown, drain}}, #socket{pid = Pid} = Socket) ->
     %% Drain-initiated graceful exit. Close with 1001 (going away) so the
     %% JS client's auto-reconnect path runs (Worker treats any non-1000
@@ -642,16 +632,35 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
         {halt, HaltReq} ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
+            %% The socket is the only caller of arizona_live:navigate/4 (transport
+            %% API): the drain below relies on every push before the barrier
+            %% belonging to a page this socket put on screen.
             try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
                 {ok, NewVId, PageHTML, Observed} ->
-                    Ops = replace_ops(OldVId, PageHTML),
-                    Socket1 = note_az([H], Observed, Socket),
-                    %% No effects: a navigate remounts, and mount/1 has no
-                    %% effects channel (it also runs at SSR, where no client
-                    %% exists to receive one). A view that wants one self-casts
-                    %% from mount/1 and answers in handle_info/2, which pushes
-                    %% its own frame rather than riding this reply.
-                    encode_reply(Ops, [], Socket1#socket{view_id = NewVId, handler = H})
+                    %% The old page's pushes queued ahead of the reply ship in the
+                    %% same frame, their ops ahead of the replace: one may carry the
+                    %% first statics of a fingerprint the replace then references
+                    %% bare. Their effects are dropped: a client applies a frame's
+                    %% effects after its ops, so they would run against the NEW
+                    %% page (a relayed push_event reaches the new root, a navigate
+                    %% hijacks the user's own). Old-page ops may mount `az-hook`
+                    %% elements the replace destroys in the same frame -- churn,
+                    %% not a fault.
+                    %%
+                    %% The navigate itself adds no effects: mount/1 has no effects
+                    %% channel (it also runs at SSR, where no client exists to
+                    %% receive one). A view that wants one self-casts from mount/1
+                    %% and answers in handle_info/2, which pushes its own frame --
+                    %% behind the barrier, so after this replace.
+                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
+                    ok = log_dropped_effects(PendEffects),
+                    encode_reply(
+                        PendOps ++ replace_ops(OldVId, PageHTML),
+                        [],
+                        (note_az([H], Observed, Socket1))#socket{
+                            view_id = NewVId, handler = H
+                        }
+                    )
             catch
                 %% Live process exited between the navigate frame arriving and
                 %% this gen_server:call landing — typical during a drain where
@@ -689,12 +698,7 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
         {cont, _NewReq1, Bindings1} ->
             try arizona_live:patch(Pid, Bindings1) of
                 {ok, Ops, Effects, Observed} ->
-                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
-                    encode_reply(
-                        PendOps ++ flatten_ops(ViewId, Ops),
-                        PendEffects ++ Effects,
-                        note_az([], Observed, Socket1)
-                    )
+                    reply_after_pending(flatten_ops(ViewId, Ops), Effects, Observed, Socket)
             catch
                 %% Same drain/exit race as do_navigate (see there).
                 exit:{noproc, _} ->
@@ -783,7 +787,7 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
     {flatten_ops(ViewId, Ops), Effects, Observed}.
 
 %% Selectively receive the `{arizona_push, ...}` messages the live process
-%% emitted BEFORE the reply to a synchronous event/patch call, and fold them in
+%% emitted BEFORE the reply to a synchronous event/patch/navigate call, and fold them in
 %% front of that reply's own ops. Such a push is causally earlier, so it must be
 %% applied first: without this the reply ships first and the earlier push lands
 %% in a LATER frame, letting a stale value overwrite the reply's client-side
@@ -808,24 +812,21 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
 %% broken invariant degrades to the old (merely mis-ordered) behaviour instead
 %% of wedging the connection on a receive that never returns.
 %%
-%% A push from a page this socket already navigated away from is dropped,
-%% mirroring handle_info/2. The navigate path needs no drain: its OP_REPLACE
-%% supersedes old-page ops, and the stale-view-id drop disposes of them once
-%% processed after the reply.
-drain_pending_pushes(#socket{view_id = ViewId} = Socket) ->
-    drain_pending_pushes(ViewId, [], [], Socket).
+%% Every push up to the marker is taken, whatever view id it names, each tagged
+%% with its own: "everything before the marker" is the whole invariant. Navigate
+%% drains too, so the old page's pushes all ship ahead of the replace instead of
+%% trailing it into the new page.
+drain_pending_pushes(Socket) ->
+    drain_pending_pushes([], [], Socket).
 
-drain_pending_pushes(ViewId, OpsAcc, EffectsAcc, Socket) ->
+drain_pending_pushes(OpsAcc, EffectsAcc, Socket) ->
     receive
-        {arizona_push, ViewId, Ops, Effects, Observed} ->
+        {arizona_push, PushVId, Ops, Effects, Observed} ->
             drain_pending_pushes(
-                ViewId,
-                [flatten_ops(ViewId, Ops) | OpsAcc],
+                [flatten_ops(PushVId, Ops) | OpsAcc],
                 [Effects | EffectsAcc],
                 note_az([], Observed, Socket)
             );
-        {arizona_push, _StaleViewId, _Ops, _Effects, _Observed} ->
-            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc, Socket);
         arizona_push_barrier ->
             drained_pushes(OpsAcc, EffectsAcc, Socket)
     after 0 ->
@@ -834,6 +835,61 @@ drain_pending_pushes(ViewId, OpsAcc, EffectsAcc, Socket) ->
 
 drained_pushes(OpsAcc, EffectsAcc, Socket) ->
     {lists:append(lists:reverse(OpsAcc)), lists:append(lists:reverse(EffectsAcc)), Socket}.
+
+%% An event/patch reply: the pushes queued ahead of it, then its own ops and
+%% effects, in one frame -- all of them belong to the page still on screen.
+reply_after_pending(Ops, Effects, Observed, Socket0) ->
+    {PendOps, PendEffects, Socket} = drain_pending_pushes(Socket0),
+    encode_reply(PendOps ++ Ops, PendEffects ++ Effects, note_az([], Observed, Socket)).
+
+%% The old page's effects a navigate drops (see do_navigate/5): logged once, by
+%% op code only -- their payloads (push_event data, flash contents) stay out of
+%% the log.
+log_dropped_effects([]) ->
+    ok;
+log_dropped_effects(Dropped) ->
+    Cmds = unwrap_effects(Dropped),
+    ok = lists:foreach(fun warn_dropped_flash/1, nav_flash_ops(Cmds)),
+    logger:notice(
+        "dropped ~b old-page effect(s) on navigate, op codes ~w",
+        [length(Cmds), [Op || [Op | _] <:- Cmds]]
+    ).
+
+%% A dropped navigate/patch may carry a flash, which then never reaches anything
+%% (the same silent loss `drop_pending_flash/2` warns about).
+warn_dropped_flash(Op) ->
+    logger:warning(
+        "flash dropped with an old-page ~s effect on navigate: the page that "
+        "queued it is being replaced, so its navigation does not run",
+        [effect_name(Op)]
+    ).
+
+effect_name(?EFFECT_NAVIGATE) -> "navigate";
+effect_name(?EFFECT_PATCH) -> "patch".
+
+%% The navigate/patch op codes that carry a `flash` opt anywhere in a command
+%% list, including inside the commands a `transition`, `on_key` or a `fetch`
+%% `on_error` wraps.
+nav_flash_ops(Cmds) ->
+    lists:append([nav_flash_cmd(Cmd) || Cmd <- Cmds]).
+
+nav_flash_cmd([Op, _Path, #{flash := _}]) when Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH ->
+    [Op];
+nav_flash_cmd(Cmd) ->
+    case wrapped_cmds(Cmd) of
+        {ok, Inner} -> nav_flash_ops(Inner);
+        none -> []
+    end.
+
+%% The commands a command wraps, normalized to a list: `transition`, `on_key`
+%% and a `fetch` `on_error` hold one command (its head is an op code) or a list.
+wrapped_cmds([?EFFECT_TRANSITION, _Opts, Cmds]) -> {ok, cmd_list(Cmds)};
+wrapped_cmds([?EFFECT_ON_KEY, _Key, Cmds]) -> {ok, cmd_list(Cmds)};
+wrapped_cmds([?EFFECT_FETCH, _Url, #{on_error := Cmds}]) -> {ok, cmd_list(Cmds)};
+wrapped_cmds(_Cmd) -> none.
+
+cmd_list([Op | _] = Cmd) when is_integer(Op) -> [Cmd];
+cmd_list(Cmds) -> Cmds.
 
 %% The compile-time walk roots for a page: the route handler plus its layout
 %% modules. Layouts render az-* markup too -- once, at SSR -- and no later frame
@@ -931,16 +987,61 @@ captured_flash(Pending, Pending, Socket) ->
 captured_flash(_Pending0, Pending, Socket) ->
     Socket#socket{pending_flash = Pending, flash_replay = undefined}.
 
-capture_flash_effect(
-    {arizona_effect, [?EFFECT_NAVIGATE, Path, #{flash := Flash} = Opts]}, Pending
-) ->
-    capture_nav_flash(?EFFECT_NAVIGATE, Path, Flash, Opts, Pending);
-capture_flash_effect(
-    {arizona_effect, [?EFFECT_PATCH, Path, #{flash := Flash} = Opts]}, Pending
-) ->
-    capture_nav_flash(?EFFECT_PATCH, Path, Flash, Opts, Pending);
-capture_flash_effect(Effect, Pending) ->
-    {Effect, Pending}.
+capture_flash_effect({arizona_effect, Cmd0}, Pending0) ->
+    {Cmd, Pending} = capture_flash_cmd(Cmd0, Pending0),
+    {{arizona_effect, Cmd}, Pending}.
+
+%% A navigate/patch runs when the reply lands, so its flash is captured; so does
+%% one a `transition` wraps, which runs right away too. One an `on_key` or a
+%% `fetch`'s `on_error` wraps runs later, if ever, so its flash cannot be paired
+%% with the frame that follows it: it is stripped with a warning instead of
+%% riding into the browser or onto whatever navigation comes next.
+capture_flash_cmd([Op, Path, #{flash := Flash} = Opts], Pending) when
+    Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH
+->
+    capture_nav_flash(Op, Path, Flash, Opts, Pending);
+capture_flash_cmd([?EFFECT_TRANSITION, Opts, Cmds0], Pending0) ->
+    {Cmds, Pending} = map_wrapped(fun capture_flash_cmd/2, Pending0, Cmds0),
+    {[?EFFECT_TRANSITION, Opts, Cmds], Pending};
+capture_flash_cmd([?EFFECT_ON_KEY, Key, Cmds], Pending) ->
+    {[?EFFECT_ON_KEY, Key, strip_wrapped_flash(Cmds)], Pending};
+capture_flash_cmd([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts], Pending) ->
+    {[?EFFECT_FETCH, Url, Opts#{on_error => strip_wrapped_flash(Cmds)}], Pending};
+capture_flash_cmd(Cmd, Pending) ->
+    {Cmd, Pending}.
+
+strip_wrapped_flash(Cmds0) ->
+    {Cmds, ok} = map_wrapped(fun strip_flash_cmd/2, ok, Cmds0),
+    Cmds.
+
+strip_flash_cmd([Op, Path, #{flash := _} = Opts], ok) when
+    Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH
+->
+    logger:warning(
+        "flash dropped from a deferred ~s effect: one an on_key or a fetch's "
+        "on_error wraps runs later, if ever, so no frame can carry its flash",
+        [effect_name(Op)]
+    ),
+    {[Op, Path, maps:remove(flash, Opts)], ok};
+strip_flash_cmd(Cmd, ok) ->
+    case wrapped_cmds(Cmd) of
+        {ok, _Inner} -> {rewrap(Cmd, fun strip_wrapped_flash/1), ok};
+        none -> {Cmd, ok}
+    end.
+
+rewrap([?EFFECT_TRANSITION, Opts, Cmds], Fun) ->
+    [?EFFECT_TRANSITION, Opts, Fun(Cmds)];
+rewrap([?EFFECT_ON_KEY, Key, Cmds], Fun) ->
+    [?EFFECT_ON_KEY, Key, Fun(Cmds)];
+rewrap([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts], Fun) ->
+    [?EFFECT_FETCH, Url, Opts#{on_error => Fun(Cmds)}].
+
+%% Map over a wrapper's commands keeping their shape: one command (its head is
+%% an op code) stays one command, a list stays a list.
+map_wrapped(Fun, Acc, [Op | _] = Cmd) when is_integer(Op) ->
+    Fun(Cmd, Acc);
+map_wrapped(Fun, Acc, Cmds) ->
+    lists:mapfoldl(Fun, Acc, Cmds).
 
 %% `flash` is always stripped from the client effect (the browser never sees it),
 %% regardless of its shape -- so no non-map `flash` opt can leak. A non-map value is
@@ -948,7 +1049,7 @@ capture_flash_effect(Effect, Pending) ->
 %% generator in `unwrap_effects/1`); there is deliberately no defensive `is_map` guard
 %% that would let it fall through to the client instead.
 capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
-    {{arizona_effect, [Op, Path, maps:remove(flash, Opts)]}, maps:merge(Pending, Flash)}.
+    {[Op, Path, maps:remove(flash, Opts)], maps:merge(Pending, Flash)}.
 
 %% Fast path for the reply shapes produced by encode_reply/3 and the connect
 %% frames. Hand writes the outer `{"o":...}` / `{"e":...}` / combined wrapper,

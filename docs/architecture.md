@@ -1063,7 +1063,7 @@ fingerprints already shipped to the client for deduplication.
 `compute_changed/2` builds the Changed map by comparing old and new bindings key-by-key.
 
 `push/4` sends `{arizona_push, RootViewId, Ops, Effects}` to the transport PID -- `RootViewId`
-names the emitting page's root view, so a transport can drop a push that raced a navigate.
+names the emitting page's root view.
 No-ops when PID is `undefined` or ops and effects are both empty.
 
 ### Per-view messages and the timer registry
@@ -1136,11 +1136,17 @@ lives here independent of the server.
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
   `["navigate", #{~"path" := Path, ~"qs" := Qs}]` (replace), `["patch", #{~"path", ~"qs"}]`
   (in-place, same-handler -> `patch/2`, else falls back to navigate), `[target, event, payload]`
-- `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live` (dropped
-  when `ViewId` is no longer the socket's current root -- a push that raced a navigate), the
-  `arizona_resync_timeout` backstop, and `EXIT` signals from the live process. On a synchronous
-  event/patch reply, pushes already queued in the socket mailbox are folded into the reply frame
-  first (causal wire order)
+- `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live` (ops
+  tagged with the view id the push names), the `arizona_resync_timeout` backstop, and `EXIT`
+  signals from the live process. On a synchronous event/patch/navigate reply, every push already
+  queued in the socket mailbox up to the live process's barrier is taken, whatever view id it
+  names, and shipped first (causal wire order), in the reply frame ahead of its own ops. For a
+  navigate their ops ride ahead of the `OP_REPLACE`: one may carry the first statics of a
+  fingerprint the replace then references bare, and the replace supersedes them anyway. Their
+  effects are dropped and logged by op code (a client applies a frame's effects after its ops, so
+  they would run against the new page), with a warning for a dropped `navigate`/`patch` that
+  carried a flash, at any wrapper depth (`transition`, `on_key`, a `fetch`'s `on_error`). Only
+  this socket navigates its live process: `arizona_live:navigate/4` is transport API
 
 **Exit reason to close code** -- four cases, and the difference matters because the JS worker
 treats **any non-1000 code as reconnectable**:
@@ -1175,7 +1181,10 @@ a destination that stays on the socket: a target degrading to a full-page naviga
 the stashed requested path instead of the target -- the halt re-runs over HTTP and redirects with a
 real flash cookie. `flash_replay` holds the redirect target beside that path so the reroute fires
 only for the redirect it belongs to, never hijacking an unrelated navigation. A handler-set flash,
-which nothing reproduces, is dropped with a logged warning. The route adapter is recovered from
+which nothing reproduces, is dropped with a logged warning. A handler effect's flash is captured
+from a bare `navigate`/`patch` and from one a `transition` wraps (both run when the frame lands);
+one an `on_key` or a `fetch`'s `on_error` wraps runs later, if ever, so its flash is stripped with a
+warning rather than stashed for whatever navigation comes next. The route adapter is recovered from
 `req` on demand.
 
 **Op scoping happens at JSON-encode time, in two steps.** `flatten_ops/2` walks the nested
