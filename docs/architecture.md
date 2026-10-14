@@ -240,31 +240,69 @@ Each dynamic owns a private dep set: `#{key() => true}` of the binding keys
 read while it was evaluated. The diff engine compares each dep set against
 the `Changed` map and skips re-evaluation when they don't intersect.
 
-The mechanism is a single process-dictionary slot, `'$arizona_deps'`:
+The mechanism is a single process-dictionary slot, `'$arizona_deps'`, holding
+the open dependency scope:
 
-- `eval_one_v` (in `arizona_eval`) brackets each dynamic with
-  `erlang:put('$arizona_deps', #{})` at entry and `erlang:erase` at exit.
+- `eval_one_v` (in `arizona_eval`) opens a scope around each dynamic
+  (`open_deps/0`, which puts `#{}` and answers the enclosing scope) and closes
+  it at exit (`close_deps/1`).
 - `arizona_template:get/2,3`, `arizona_template:get_lazy/3`, and
-  `arizona_template:track/1` write the read key into the slot.
-- The dynamic's deps are read back at `erlang:erase` and stored on the
+  `arizona_template:track/1` write the read key into the open scope.
+- The dynamic's deps are read back when its scope closes and stored on the
   snapshot (parallel to `d`).
+
+Scopes nest. Closing a scope opened inside another hands its reads to the
+enclosing one, so a dynamic evaluated while another's scope is open counts
+toward both. That is deliberate in exactly one place, an `?each`'s items (below);
+everywhere else the enclosing scope is suspended first.
 
 **Per-dynamic isolation invariant:** every nested-template entry point
 runs inside a `with_saved_deps` wrapper (in `arizona_eval`), which
-snapshots the slot before entering and restores it after. Without this,
-an inner template's `?get` calls would land in the outer dynamic's slot
-and pollute its deps. Bracketed entry points and what each covers:
+suspends the enclosing scope (erases the slot) for its duration and restores
+it after. Without this, an inner template's `?get` calls would land in the
+outer dynamic's deps. Bracketed entry points and what each covers:
 
 - `eval_template` -- the inner template's per-dynamic eval loop
-- `eval_each` -- per-item rendering (list, stream, map sources)
 - `eval_stateful` -- the whole lifecycle: `mount/1` / `handle_update/3`,
   `render/1`, and the inner per-dynamic eval loop
 - the stateless inline path -- the entire `eval_val_v` recursion for
   `#{callback := _, props := _}` descriptors, including the callback
   body and any subsequent unwrapping
 
-Inner *dynamics* re-bracket their own slot, so per-inner-dynamic deps are
+Inner *dynamics* open their own scope, so per-inner-dynamic deps are
 independent of outer.
+
+**An `?each`'s items are the exception, and they feed the each slot.** The items
+of an each render inside the each slot's scope (`arizona_eval:eval_items/2`, one
+scope around them all), so whatever the callback reads -- an outer binding
+(`?each(fun(I) -> {li, [], [I, ?get(suffix)]} end, ?get(items))`), at any depth,
+an inner each's items included -- becomes a dep of the each slot beside its
+source. A change to such a binding re-evaluates the each, and the per-item diff
+then patches only the items it changed. The deps are the reads that actually
+happened, so a key computed at runtime (`?get(Key)`), a read in one branch, and a
+read in a helper the callback calls all count, with no compile-time analysis. Each
+item dynamic keeps its own deps too, which is what per-item skipping reads. Two
+consequences of collecting at runtime:
+
+- Every tracked read in an item counts, including an item-field read with an
+  explicit `arizona_template:get(text, Item)` (the form stream per-item skipping
+  keys on), so a view binding that happens to share that name re-evaluates the
+  each too. That over-tracks; the item diff then emits nothing.
+- An az-nodiff item template renders once, so its items are evaluated with the
+  scope suspended (`eval_items/2`) and their reads never reach the slot.
+
+On the diff path the each slot's own closure is re-run without its items
+(`eval_each_def/2`), and the each diff adds the reads of the items it renders. A
+list or map diff renders every item, so the slot's deps come out exact. A stream
+diff renders only what its queued ops touch, so the stream snapshot keeps the
+items' reads beside it (`item_deps`), grown by each diff's renders. When a
+changed binding is among them, the queued ops alone would leave every other item
+stale, so the stream reconciles against its current source in one step instead
+of draining (`diff_stream/5`'s `Reconcile`: a single `{reset, #{}}`, which
+re-renders the visible items and patches only those that differ). A stream nested
+inside an item is diffed from a value the walk already evaluated whole, so there
+the drain is checked against that render and the container reconciles against it
+(`stream_relist/7`) when the queue does not account for it (`nested_drain/4`).
 
 **Content-slot conditional branches:** a `case`/`if`/`maybe` in a content slot
 compiles each *element* branch into a nested template, so by this invariant the

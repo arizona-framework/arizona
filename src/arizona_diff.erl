@@ -241,17 +241,15 @@ diff_dynamics(
     Views0
 ) ->
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
-    case stream_drainable(Src, Old) of
-        true ->
-            {Old0, New0} = Views1,
-            {StreamOps, _NewSnap, {_, LocalNew}} =
-                diff_stream(Az, #{source => Src, template => Tmpl}, Old, {Old0, #{}}),
+    {Old0, New0} = Views1,
+    case stream_drainable(Src, Old) andalso nested_drain(Az, New, Old, {Old0, #{}}) of
+        {drained, StreamOps, {_, LocalNew}} ->
             LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
             %% A drain takes no tail. Threading one through every stream helper
             %% would buy this site alone: the other two stream containers drain
             %% BEFORE their siblings, so they have no tail to hand it.
             {append_ops(StreamOps, RestOps), {Old0, maps:merge(New0, LocalNew1)}};
-        false ->
+        _NotExplained ->
             stream_relist(Az, Src, Tmpl, New, Old, RestOps, Views1)
     end;
 diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
@@ -279,6 +277,29 @@ maybe_make_ops(Az, New, Old, Tail, Views) ->
         true -> {Tail, Views};
         false -> make_ops(Az, New, Old, Tail, Views)
     end.
+
+%% Drains a stream each that sits inside a value the walk has already evaluated
+%% whole, so `New` is its current render. The drain re-renders only the items the
+%% queued ops touch, and the others are taken from `Old`; when the items read a
+%% binding, one may have changed in the same cycle the queue was fed (the ops
+%% were never the whole story), which `New` settles: a drain that does not land
+%% on it answers `stale`, for the caller to reconcile against `New` instead. Items
+%% that read no binding render from their item alone, which the queue does account
+%% for, so they skip the comparison.
+nested_drain(Az, #{source := Src, template := Tmpl} = New, Old, Views0) ->
+    {StreamOps, Drained, Views1} =
+        diff_stream(Az, #{source => Src, template => Tmpl}, Old, Views0),
+    case drain_matches_render(Drained, New) of
+        true -> {drained, StreamOps, Views1};
+        false -> stale
+    end.
+
+drain_matches_render(_Drained, #{item_deps := ItemDeps}) when map_size(ItemDeps) =:= 0 ->
+    true;
+drain_matches_render(#{items := Items}, #{items := Items}) ->
+    true;
+drain_matches_render(#{}, #{}) ->
+    false.
 
 %% The log could not explain the change, but the two key orders can: this is
 %% semantically a reset to the stream's current state, so reconcile it as one.
@@ -432,11 +453,16 @@ skip_dynamic({_Az, Old} = OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0) ->
     {OpsRest, [OldD | DRest], [ODeps | DepsRest], Views2}.
 
 %% Re-evaluate a dynamic whose deps have changed. Each-containers take a
-%% special path because their child snapshots need merging; everything else
-%% goes through eval_one_v_flat and a value comparison.
+%% special path because their child snapshots need merging -- while the slot
+%% still holds one, since a conditional may have landed on another branch;
+%% everything else goes through eval_one_v_flat and a value comparison.
 diff_changed_dynamic(Def, _Az, #{t := ?EACH} = Old, DR, OR, DepsR, ChangedKeys, Views0) ->
-    {Az2, EachDesc, Deps} = arizona_eval:eval_each_def(Def),
-    diff_each(Az2, EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0);
+    case arizona_eval:eval_each_def(Def, Views0) of
+        {each, Az2, EachDesc, Deps} ->
+            diff_each(Az2, EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0);
+        {changed, Az2, New, NewDeps, Views1} ->
+            changed_dynamic(Az2, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1)
+    end;
 %% A slot holding an az-nodiff region asks first whether it still holds that
 %% region (`arizona_template:same_region/3`), which the slot closure answers
 %% without evaluating the region: if so the old render stands -- no op, no child
@@ -465,14 +491,43 @@ changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1) ->
     {OpsFinal, ViewsFinal} = maybe_make_ops(Az, New, Old, OpsRest, Views2),
     {OpsFinal, [{Az, New} | DRest], [NewDeps | DepsRest], ViewsFinal}.
 
+%% `Deps` are the reads of the slot's own closure; what its items read is added
+%% from the items this diff renders (`arizona_eval:eval_items/2`), so the slot
+%% stays dependent on a binding read only inside the `?each` callback.
 diff_each(
-    Az, #{source := #stream{} = Source} = EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0
+    Az,
+    #{source := #stream{} = Source, template := Tmpl} = EachDesc,
+    Deps,
+    Old,
+    DR,
+    OR,
+    DepsR,
+    ChangedKeys,
+    Views0
 ) ->
     {Old0, New0} = Views0,
-    {StreamOps, NewSnap0, {_, LocalNew}} =
-        diff_stream(Az, EachDesc, Old, {Old0, #{}}),
+    %% The drain renders only the items the queued ops touch. When a binding some
+    %% item read has changed, every visible item may render differently, so the
+    %% stream reconciles against its current source in one step instead. The other
+    %% items' reads are known only from earlier renders, so they are kept beside
+    %% the snapshot and grow by what a drain renders: an over-approximation that
+    %% can cost a reconcile that patches nothing, never a stale item. A reconcile
+    %% renders every visible item, so it starts them over exactly.
+    OldItemDeps = old_item_deps(Old),
+    Reconcile = deps_changed(OldItemDeps, ChangedKeys),
+    {{StreamOps, NewSnap0, {_, LocalNew}}, DrainDeps} =
+        arizona_eval:eval_items(Tmpl, fun() ->
+            diff_stream(Az, EachDesc, Old, {Old0, #{}}, Reconcile)
+        end),
+    ItemDeps =
+        case Reconcile of
+            true -> DrainDeps;
+            false -> maps:merge(OldItemDeps, DrainDeps)
+        end,
     LocalNew1 = merge_stream_child_views(Source, Old, LocalNew, Old0),
-    NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew1)},
+    NewSnap = NewSnap0#{
+        child_views => arizona_eval:child_view_set(LocalNew1), item_deps => ItemDeps
+    },
     Views1 = {Old0, maps:merge(New0, LocalNew1)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
@@ -480,32 +535,68 @@ diff_each(
     %% so there is no tail here to cons onto. Diffing the siblings first to make one
     %% would reorder both their child `mount/1`s and the `$arizona_update_effects`
     %% accumulator, which ships in evaluation order.
-    {append_ops(StreamOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
+    {
+        append_ops(StreamOps, OpsRest),
+        [{Az, NewSnap} | DRest],
+        [maps:merge(Deps, ItemDeps) | DepsRest],
+        Views2
+    };
 diff_each(
-    Az, #{source := Items} = EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0
+    Az,
+    #{source := Items, template := Tmpl} = EachDesc,
+    Deps,
+    Old,
+    DR,
+    OR,
+    DepsR,
+    ChangedKeys,
+    Views0
 ) when is_list(Items) ->
     {Old0, New0} = Views0,
-    {ListOps, NewSnap0, {_, LocalNew}} =
-        diff_list(Az, EachDesc, Old, {Old0, #{}}),
+    {{ListOps, NewSnap0, {_, LocalNew}}, ItemDeps} =
+        arizona_eval:eval_items(Tmpl, fun() -> diff_list(Az, EachDesc, Old, {Old0, #{}}) end),
     NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew)},
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
-    {prepend_each_op(ListOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2};
+    {
+        prepend_each_op(ListOps, OpsRest),
+        [{Az, NewSnap} | DRest],
+        [maps:merge(Deps, ItemDeps) | DepsRest],
+        Views2
+    };
 diff_each(
-    Az, #{source := Source} = EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0
+    Az,
+    #{source := Source, template := Tmpl} = EachDesc,
+    Deps,
+    Old,
+    DR,
+    OR,
+    DepsR,
+    ChangedKeys,
+    Views0
 ) when is_map(Source) ->
     %% A map-source `?each` renders to the same snapshot shape as a list-source
     %% one (`items => [ItemD]`), so it diffs through the same list machinery once
     %% the entries are rendered in map-iteration order (see diff_map/4).
     {Old0, New0} = Views0,
-    {MapOps, NewSnap0, {_, LocalNew}} =
-        diff_map(Az, EachDesc, Old, {Old0, #{}}),
+    {{MapOps, NewSnap0, {_, LocalNew}}, ItemDeps} =
+        arizona_eval:eval_items(Tmpl, fun() -> diff_map(Az, EachDesc, Old, {Old0, #{}}) end),
     NewSnap = NewSnap0#{child_views => arizona_eval:child_view_set(LocalNew)},
     Views1 = {Old0, maps:merge(New0, LocalNew)},
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
-    {prepend_each_op(MapOps, OpsRest), [{Az, NewSnap} | DRest], [Deps | DepsRest], Views2}.
+    {
+        prepend_each_op(MapOps, OpsRest),
+        [{Az, NewSnap} | DRest],
+        [maps:merge(Deps, ItemDeps) | DepsRest],
+        Views2
+    }.
+
+%% A slot that held a list or map each before holding this stream has no item
+%% reads to carry: diff_stream/5 renders the whole stream for it anyway.
+old_item_deps(#{item_deps := ItemDeps}) -> ItemDeps;
+old_item_deps(#{}) -> #{}.
 
 %% A list- or map-source `?each` container answers with exactly one op or none -- a
 %% positional patch, a wholesale re-render, or nothing at all -- so its result reaches
@@ -702,11 +793,17 @@ deps_changed(Deps, [K | Ks]) ->
         false -> deps_changed(Deps, Ks)
     end.
 
+diff_stream(Az, EachDesc, OldSnap, Views0) ->
+    diff_stream(Az, EachDesc, OldSnap, Views0, false).
+
+%% `Reconcile` replaces the queued ops with one reset against the current source,
+%% for when the items' rendering changed beyond what the queue records.
 diff_stream(
     Az,
     #{source := #stream{} = Source, template := Tmpl},
     #{items := OldItems} = OldSnap,
-    Views0
+    Views0,
+    Reconcile
 ) ->
     case OldSnap of
         #{order := OldOrder} ->
@@ -719,10 +816,10 @@ diff_stream(
             %% live process cannot clear (nested inside another value) keeps its
             %% whole history in `pending`, and replaying it re-emitted every
             %% historical intermediate patch -- see arizona_stream's moduledoc.
-            Ops = arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none)),
+            Ops = stream_ops(Source, OldSnap, Reconcile),
             {StreamOps, NewSnap, Views1} = diff_stream_pending(
                 Az,
-                drainable_ops(Ops),
+                Ops,
                 SV,
                 Tmpl,
                 OldItems,
@@ -843,6 +940,11 @@ sum_item_value_bytes([ItemD | Rest], Acc) ->
 %% equal and emit no op.
 drainable_ops([]) -> [{reset, #{}}];
 drainable_ops(Ops) -> Ops.
+
+stream_ops(_Source, _OldSnap, true) ->
+    [{reset, #{}}];
+stream_ops(Source, OldSnap, false) ->
+    drainable_ops(arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none))).
 
 diff_stream_pending(Az, [], {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
     apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
@@ -1951,12 +2053,17 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             %% diff_stream's first-render clause): list- and map-source eaches
             %% evaluate to snapshots without it, so they fall to the make_ops
             %% clause below and re-render wholesale via the ?OP_TEXT each clause.
-            EachDesc = #{source => Src, template => Tmpl},
-            {EachOps, _NewSnap, Views1} = diff_stream(Az, EachDesc, Old, Views0),
-            {RestOps, Views2} = diff_item_dynamics_v(NR, OR, Views1),
-            %% Same ordering as `diff_each/9`'s stream clause: the drain feeds the
-            %% rest of the walk its views, so its ops have no tail to cons onto.
-            {append_ops(EachOps, RestOps), Views2};
+            case nested_drain(Az, New, Old, Views0) of
+                {drained, EachOps, Views1} ->
+                    {RestOps, Views2} = diff_item_dynamics_v(NR, OR, Views1),
+                    %% Same ordering as `diff_each/9`'s stream clause: the drain
+                    %% feeds the rest of the walk its views, so its ops have no
+                    %% tail to cons onto.
+                    {append_ops(EachOps, RestOps), Views2};
+                stale ->
+                    {RestOps, Views1} = diff_item_dynamics_v(NR, OR, Views0),
+                    stream_relist(Az, Src, Tmpl, New, Old, RestOps, Views1)
+            end;
         _ ->
             {RestOps, Views1} = diff_item_dynamics_v(NR, OR, Views0),
             make_ops(Az, New, Old, RestOps, Views1)

@@ -98,7 +98,34 @@
     markerless_stream_item_update_no_dangling_op/1,
     markerless_list_item_falls_back_to_full_update/1,
     markerless_list_no_change_no_ops/1,
-    markerless_stateful_child_update_targets_element_az/1
+    markerless_stateful_child_update_targets_element_az/1,
+    each_list_callback_tracks/1,
+    each_stream_callback_tracks/1,
+    each_map_callback_tracks/1,
+    each_attr_callback_tracks/1,
+    each_in_branch_callback_tracks/1,
+    each_branch_swaps_to_value/1,
+    each_hoisted_callback_tracks/1,
+    each_hoisted_read_tracks/1,
+    each_helper_callback_tracks/1,
+    each_item_stateless_tracks/1,
+    each_item_branch_read_patches_its_item/1,
+    each_item_element_branch_read_patches_its_item/1,
+    each_computed_key_tracks/1,
+    each_callback_tracking_survives_a_diff/1,
+    each_stream_callback_tracking_survives_a_diff/1,
+    each_stream_op_alone_stays_incremental/1,
+    each_stream_insert_with_callback_change/1,
+    each_stream_update_with_callback_change/1,
+    each_stream_callback_change_settles/1,
+    each_nested_list_in_list_tracks/1,
+    each_nested_stream_in_list_tracks/1,
+    each_nested_list_in_stream_tracks/1,
+    each_nested_stream_in_stream_tracks/1,
+    each_nested_stream_op_with_callback_change/1,
+    each_unrelated_binding_skips/1,
+    each_nodiff_item_untouched/1,
+    each_nodiff_region_untouched/1
 ]).
 
 all() ->
@@ -107,7 +134,8 @@ all() ->
         {group, no_diff},
         {group, conditional_dep},
         {group, wire_payload},
-        {group, markerless_slots}
+        {group, markerless_slots},
+        {group, each_callback_deps}
     ].
 
 groups() ->
@@ -216,6 +244,35 @@ groups() ->
             markerless_list_item_falls_back_to_full_update,
             markerless_list_no_change_no_ops,
             markerless_stateful_child_update_targets_element_az
+        ]},
+        {each_callback_deps, [parallel], [
+            each_list_callback_tracks,
+            each_stream_callback_tracks,
+            each_map_callback_tracks,
+            each_attr_callback_tracks,
+            each_in_branch_callback_tracks,
+            each_branch_swaps_to_value,
+            each_hoisted_callback_tracks,
+            each_hoisted_read_tracks,
+            each_helper_callback_tracks,
+            each_item_stateless_tracks,
+            each_item_branch_read_patches_its_item,
+            each_item_element_branch_read_patches_its_item,
+            each_computed_key_tracks,
+            each_callback_tracking_survives_a_diff,
+            each_stream_callback_tracking_survives_a_diff,
+            each_stream_op_alone_stays_incremental,
+            each_stream_insert_with_callback_change,
+            each_stream_update_with_callback_change,
+            each_stream_callback_change_settles,
+            each_nested_list_in_list_tracks,
+            each_nested_stream_in_list_tracks,
+            each_nested_list_in_stream_tracks,
+            each_nested_stream_in_stream_tracks,
+            each_nested_stream_op_with_callback_change,
+            each_unrelated_binding_skips,
+            each_nodiff_item_untouched,
+            each_nodiff_region_untouched
         ]}
     ].
 
@@ -2149,3 +2206,316 @@ eval_stream_each(Tmpl) ->
     {Triples, _Views} = arizona_eval:eval_dynamics_v(maps:get(d, Tmpl), {#{}, #{}}),
     {[{Az, EachSnap}], DepsList} = arizona_template:split_triples(Triples),
     {Az, EachSnap, DepsList}.
+
+%% --- ?each callback deps ---
+%%
+%% An `?each` item's reads reach the each slot's deps (arizona_eval:eval_items/2),
+%% so a change to an outer binding read only inside the callback re-evaluates the
+%% each, and the per-item diff patches the items it changed. Every one of these
+%% emitted no op before: the slot depended only on its source.
+
+%% Both items of a two-item list re-render their `suffix` slot and nothing else.
+-define(BOTH_ITEMS_PATCHED, [
+    [
+        ?OP_LIST_PATCH,
+        _,
+        [
+            [?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, <<"y">>]]],
+            [?OP_ITEM_PATCH, 1, [[?OP_TEXT, _, <<"y">>]]]
+        ]
+    ]
+]).
+
+each_list_callback_tracks(Config) when is_list(Config) ->
+    ?assertMatch(?BOTH_ITEMS_PATCHED, each_suffix_diff(list)).
+
+each_stream_callback_tracks(Config) when is_list(Config) ->
+    ?assertMatch(
+        [
+            [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"y">>]]],
+            [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]]
+        ],
+        each_suffix_diff(stream)
+    ).
+
+each_map_callback_tracks(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, <<"y">>]]]]]],
+        each_suffix_diff(map)
+    ).
+
+each_attr_callback_tracks(Config) when is_list(Config) ->
+    ?assertMatch(
+        [
+            [
+                ?OP_LIST_PATCH,
+                _,
+                [
+                    [?OP_ITEM_PATCH, 0, [[?OP_SET_ATTR, _, <<"class">>, <<"y">>]]],
+                    [?OP_ITEM_PATCH, 1, [[?OP_SET_ATTR, _, <<"class">>, <<"y">>]]]
+                ]
+            ]
+        ],
+        each_suffix_diff(attr)
+    ).
+
+%% The each reached through a conditional branch, a hoisted local, a local helper
+%% and a hoisted read all diff like the inline form.
+each_in_branch_callback_tracks(Config) when is_list(Config) ->
+    ?assertMatch(?BOTH_ITEMS_PATCHED, each_suffix_diff(branch)).
+
+%% A slot whose branch is an each can land on another value and back. Leaving the
+%% each crashed with `function_clause`: the each re-evaluation assumed the slot
+%% still held one.
+each_branch_swaps_to_value(Config) when is_list(Config) ->
+    B0 = each_bindings(),
+    B1 = B0#{f => false},
+    ?assertMatch([[?OP_TEXT, _, <<"none">>]], each_diff(branch, B0, B1, #{f => true})),
+    ?assertMatch([[?OP_TEXT, _, #{<<"t">> := _}]], each_diff(branch, B1, B0, #{f => true})).
+
+each_hoisted_callback_tracks(Config) when is_list(Config) ->
+    ?assertMatch(?BOTH_ITEMS_PATCHED, each_suffix_diff(hoisted)).
+
+each_hoisted_read_tracks(Config) when is_list(Config) ->
+    ?assertMatch(?BOTH_ITEMS_PATCHED, each_suffix_diff(hoisted_read)).
+
+each_helper_callback_tracks(Config) when is_list(Config) ->
+    ?assertMatch(?BOTH_ITEMS_PATCHED, each_suffix_diff(named)).
+
+each_item_stateless_tracks(Config) when is_list(Config) ->
+    ?assertMatch(?BOTH_ITEMS_PATCHED, each_suffix_diff(item_stateless)).
+
+%% The binding is read only by the item that takes one branch, and only that item
+%% patches.
+each_item_branch_read_patches_its_item(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, <<"y">>]]]]]],
+        each_suffix_diff(item_branch)
+    ).
+
+each_item_element_branch_read_patches_its_item(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, <<"y">>]]]]]],
+        each_suffix_diff(item_element_branch)
+    ).
+
+%% The reads are the ones that happened, so a key computed at runtime tracks too.
+each_computed_key_tracks(Config) when is_list(Config) ->
+    ?assertMatch(?BOTH_ITEMS_PATCHED, each_suffix_diff(computed)).
+
+%% The deps a diff leaves on the slot still name the items' reads, so the next
+%% change to the binding patches again.
+each_callback_tracking_survives_a_diff(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, <<"z">>]]], _]]],
+        each_second_suffix_diff(list)
+    ).
+
+each_stream_callback_tracking_survives_a_diff(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"z">>]]], _],
+        each_second_suffix_diff(stream)
+    ).
+
+%% A stream op alone still drains: the items' reads do not include the source, so
+%% feeding the stream does not reconcile every item.
+each_stream_op_alone_stays_incremental(Config) when is_list(Config) ->
+    {Ops, _Snap, _B1} = each_stream_cycle(
+        fun(S) -> arizona_stream:insert(S, #{id => 3, n => <<"c">>}) end, <<"x">>
+    ),
+    ?assertMatch([[?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<"c">>, <<"x">>]}]], Ops).
+
+%% A stream drains only its queued ops, so a cycle that changes a callback binding
+%% AND queues an op patched just that op: every other item kept the old value, and
+%% the snapshot agreed with the stale DOM, so no later cycle fixed it. The stream
+%% reconciles against its source in one step instead.
+each_stream_insert_with_callback_change(Config) when is_list(Config) ->
+    {Ops, _Snap, _B1} = each_stream_cycle(
+        fun(S) -> arizona_stream:insert(S, #{id => 3, n => <<"c">>}) end, <<"y">>
+    ),
+    ?assertMatch(
+        [
+            [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"y">>]]],
+            [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]],
+            [?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<"c">>, <<"y">>]}]
+        ],
+        Ops
+    ).
+
+each_stream_update_with_callback_change(Config) when is_list(Config) ->
+    {Ops, _Snap, _B1} = each_stream_cycle(
+        fun(S) -> arizona_stream:update(S, 1, #{id => 1, n => <<"A">>}) end, <<"y">>
+    ),
+    ?assertMatch(
+        [
+            [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"A">>], [?OP_TEXT, _, <<"y">>]]],
+            [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]]
+        ],
+        Ops
+    ).
+
+%% The snapshot left by such a cycle matches a fresh render, so the next cycle has
+%% nothing stale to build on.
+each_stream_callback_change_settles(Config) when is_list(Config) ->
+    {_Ops, Snap1, B1} = each_stream_cycle(
+        fun(S) -> arizona_stream:insert(S, #{id => 3, n => <<"c">>}) end, <<"y">>
+    ),
+    B2 = arizona_stream:clear_stream_pending(B1, [s]),
+    {_HTML, Fresh, _V} = arizona_render:render(arizona_each_tracking:stream(B2), #{}),
+    Values = stream_item_values(Snap1),
+    ?assertMatch(#{1 := [_, {arizona_esc, <<"y">>}]}, Values),
+    ?assertEqual(stream_item_values(Fresh), Values).
+
+%% An inner each's item reads reach the outer each through the outer item.
+each_nested_list_in_list_tracks(Config) when is_list(Config) ->
+    ?assertMatch(
+        [
+            [
+                ?OP_LIST_PATCH,
+                _,
+                [
+                    [?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, #{<<"d">> := [[<<"a">>, <<"y">>]]}]]],
+                    [?OP_ITEM_PATCH, 1, [[?OP_TEXT, _, #{<<"d">> := [[<<"b">>, <<"y">>]]}]]]
+                ]
+            ]
+        ],
+        each_suffix_diff(nested_list)
+    ).
+
+each_nested_stream_in_list_tracks(Config) when is_list(Config) ->
+    ?assertMatch(
+        [
+            [
+                ?OP_LIST_PATCH,
+                _,
+                [
+                    [?OP_ITEM_PATCH, 0, [[?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"y">>]]]]],
+                    [?OP_ITEM_PATCH, 1, [[?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]]]]
+                ]
+            ]
+        ],
+        each_suffix_diff(nested_stream_in_list)
+    ).
+
+each_nested_list_in_stream_tracks(Config) when is_list(Config) ->
+    ?assertMatch(
+        [
+            [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, #{<<"d">> := [[<<"a">>, <<"y">>]]}]]],
+            [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, #{<<"d">> := [[<<"b">>, <<"y">>]]}]]]
+        ],
+        each_suffix_diff(nested_list_in_stream)
+    ).
+
+each_nested_stream_in_stream_tracks(Config) when is_list(Config) ->
+    ?assertMatch(
+        [
+            [
+                ?OP_ITEM_PATCH,
+                _,
+                <<"1">>,
+                [
+                    [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"y">>]]],
+                    [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]]
+                ]
+            ]
+        ],
+        each_suffix_diff(nested_stream_in_stream)
+    ).
+
+%% The inner stream is fed in the same cycle: its drain alone would patch only the
+%% new item, so it is reconciled against the render its outer item already made.
+each_nested_stream_op_with_callback_change(Config) when is_list(Config) ->
+    B0 = each_bindings(),
+    GS = maps:get(gs, B0),
+    #{inner := In} = arizona_stream:get(GS, 1),
+    In1 = arizona_stream:insert(In, #{id => 3, n => <<"c">>}),
+    GS1 = arizona_stream:update(GS, 1, #{id => 1, inner => In1}),
+    B1 = B0#{suffix => <<"y">>, gs => GS1},
+    ?assertMatch(
+        [
+            [
+                ?OP_ITEM_PATCH,
+                _,
+                <<"1">>,
+                [
+                    [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"y">>]]],
+                    [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]],
+                    [?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<"c">>, <<"y">>]}]
+                ]
+            ]
+        ],
+        each_diff(nested_stream_in_stream, B0, B1, #{suffix => true, gs => true})
+    ).
+
+%% A binding the items never read still leaves the list alone.
+each_unrelated_binding_skips(Config) when is_list(Config) ->
+    B0 = each_bindings(),
+    ?assertMatch(
+        [[?OP_TEXT, _, <<"p">>]],
+        each_diff(unrelated, B0, B0#{other => <<"p">>}, #{other => true})
+    ).
+
+%% An az-nodiff item, or a region holding the each, renders once: a change to what
+%% it reads patches nothing.
+each_nodiff_item_untouched(Config) when is_list(Config) ->
+    ?assertEqual([], each_suffix_diff(nodiff_item)).
+
+each_nodiff_region_untouched(Config) when is_list(Config) ->
+    ?assertEqual([], each_suffix_diff(nodiff_region)).
+
+each_suffix_diff(Fn) ->
+    B0 = each_bindings(),
+    each_diff(Fn, B0, B0#{suffix => <<"y">>}, #{suffix => true}).
+
+each_diff(Fn, B0, B1, Changed) ->
+    M = arizona_each_tracking,
+    {_HTML, Snap0, V0} = arizona_render:render(M:Fn(B0), #{}),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(M:Fn(B1), Snap0, V0, Changed),
+    Ops.
+
+%% Two changes to the binding in a row; answers the second diff's ops.
+each_second_suffix_diff(Fn) ->
+    M = arizona_each_tracking,
+    B0 = each_bindings(),
+    B1 = B0#{suffix => <<"y">>},
+    {_HTML, Snap0, V0} = arizona_render:render(M:Fn(B0), #{}),
+    {_Ops1, Snap1, V1} = arizona_diff:diff(M:Fn(B1), Snap0, V0, #{suffix => true}),
+    {Ops2, _Snap2, _V2} =
+        arizona_diff:diff(M:Fn(B1#{suffix => <<"z">>}), Snap1, V1, #{suffix => true}),
+    Ops2.
+
+%% One live-like cycle: the next bindings derive from the SAME stream the first
+%% render drained, so the diff sees only the newly queued op (a fresh stream would
+%% fall back to a full reconcile and hide the drain path under test).
+each_stream_cycle(Op, Suffix) ->
+    M = arizona_each_tracking,
+    B0 = each_bindings(),
+    {_HTML, Snap0, V0} = arizona_render:render(M:stream(B0), #{}),
+    B1 = B0#{s => Op(maps:get(s, B0)), suffix => Suffix},
+    Changed =
+        case Suffix of
+            <<"x">> -> #{s => true};
+            _ -> #{s => true, suffix => true}
+        end,
+    {Ops, Snap1, _V1} = arizona_diff:diff(M:stream(B1), Snap0, V0, Changed),
+    {Ops, Snap1, B1}.
+
+%% The rendered value of every slot of every visible stream item, keyed by item.
+stream_item_values(#{d := [{_Az, #{items := Items}}]}) ->
+    #{K => [element(2, Slot) || Slot <- ItemD] || K := ItemD <- Items}.
+
+each_bindings() ->
+    Stream = fun(Items) -> arizona_stream:new(fun(#{id := Id}) -> Id end, Items) end,
+    B = #{
+        suffix => <<"x">>,
+        other => <<"o">>,
+        f => true,
+        items => [<<"a">>, <<"b">>],
+        m => #{k1 => <<"a">>},
+        s => Stream([#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
+        groups => [Stream([#{id => 1, n => <<"a">>}]), Stream([#{id => 2, n => <<"b">>}])],
+        gs => Stream([
+            #{id => 1, inner => Stream([#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}])}
+        ])
+    },
+    arizona_stream:clear_stream_pending(B, [s, gs]).
