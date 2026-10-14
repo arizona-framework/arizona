@@ -86,6 +86,10 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `{name, false}` | `{hidden, false}` | Stripped |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Stripped, emits `diff => false` |
 
+A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
+integer in it is a codepoint. A boolean or other atom inside it is not text and raises
+`bad_template_value`; a boolean belongs in a whole-value attribute (`{disabled, ?get(off)}`).
+
 Two names are reserved because the transform emits them itself and a duplicate would
 misroute a patch: `az` (the element's diff address) and `az-local` (the `?local`
 descriptor). Either one in a template is a compile error (`reserved_attr`), in any form

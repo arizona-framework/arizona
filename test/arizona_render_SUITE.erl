@@ -10,6 +10,7 @@
 
 -export([all/0, groups/0]).
 -export([
+    to_bin_rejects_non_chardata_list/1,
     diff4_nodiff_shortcircuit/1,
     diff_nodiff_shortcircuit/1,
     error_page_arizona_loc/1,
@@ -147,6 +148,7 @@ groups() ->
             escape_matches_reference,
             raw_text_breakout_neutralized,
             raw_text_breakout_neutralized_for_chardata,
+            to_bin_rejects_non_chardata_list,
             raw_text_breakout_neutralized_for_atom,
             render_nested_sd,
             render_with_views_no_children,
@@ -526,6 +528,21 @@ raw_text_breakout_neutralized_for_chardata(Config) when is_list(Config) ->
     Undecodable = [<<255>>],
     ?assertEqual(Undecodable, arizona_html:raw_text(script, Undecodable)),
     ?assertError({bad_template_value, Undecodable}, arizona_template:to_bin(Undecodable)).
+
+%% A list value is text (chardata). An atom inside one -- a boolean interpolated into
+%% an attribute, `[~"a-", ?get(on)]` -- is not text, so it is refused as a
+%% `bad_template_value` like any other unsupported value, on every backend, instead of
+%% a bare `badarg` from the decoder.
+to_bin_rejects_non_chardata_list(Config) when is_list(Config) ->
+    ?assertError({bad_template_value, [~"a-", true]}, arizona_template:to_bin([~"a-", true])),
+    ?assertError({bad_template_value, [~"a-", on]}, arizona_template:to_bin([~"a-", on])),
+    ?assertError(
+        {bad_template_value, [~"a-", false]}, arizona_html:render_attr(~"class", [~"a-", false])
+    ),
+    ?assertError(
+        {bad_template_value, [~"a-", true]}, arizona_native:render_attr(~"label", [~"a-", true])
+    ),
+    ?assertEqual(~"a-b", arizona_template:to_bin([~"a-", "b"])).
 
 %% An ATOM carries bytes too: to_bin/1 renders it via atom_to_binary, so an
 %% attacker-influenced atom in a `?raw` script slot is a real breakout. It is the
@@ -1092,8 +1109,9 @@ ssr_inner_content_rejects_sibling_in_one_slot(Config) when is_list(Config) ->
     %% The page beside other values in ONE slot makes the slot a chardata list,
     %% which the opaque value is not part of. It raises; before it silently
     %% escaped both the sibling and the page, which was not usable output either.
+    %% The error names the offending value, like any other unsupported one.
     ?assertError(
-        {arizona_loc, {arizona_inner_content_layouts, _}, badarg},
+        {arizona_loc, {arizona_inner_content_layouts, _}, {bad_template_value, [_, #{s := _}]}},
         layout_html(arizona_inner_content_layouts, sibling)
     ).
 

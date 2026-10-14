@@ -444,9 +444,11 @@ to_bin(V0) ->
             %% codepoint to an invalid latin-1 byte (`"café"` -> `<<...,233>>`
             %% instead of `<<...,195,169>>`) and crashes a codepoint > 255 with a
             %% bare `badarg`. A term that is not valid chardata (e.g. a list
-            %% wrapping a binary of non-UTF-8 bytes) yields the same
-            %% `bad_template_value` as any other unsupported value.
-            case unicode:characters_to_binary(V0) of
+            %% wrapping a binary of non-UTF-8 bytes, or an atom/boolean inside an
+            %% interpolated attribute such as `[~"a-", ?get(on)]`) yields the same
+            %% `bad_template_value` as any other unsupported value; the decoder
+            %% raises `badarg` for a non-chardata element instead of returning.
+            case chardata_to_binary(V0) of
                 Bin when is_binary(Bin) ->
                     Bin;
                 _ ->
@@ -458,6 +460,13 @@ to_bin(V0) ->
             erlang:error({bad_template_value, V0}, [V0], [
                 {error_info, #{module => ?MODULE}}
             ])
+    end.
+
+chardata_to_binary(Chardata) ->
+    try
+        unicode:characters_to_binary(Chardata)
+    catch
+        error:badarg -> error
     end.
 
 -doc """
