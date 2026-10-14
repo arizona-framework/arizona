@@ -260,6 +260,11 @@
     inline_destructuring_not_inlined/1,
     inline_comprehension_source/1,
     inline_strict_generator_shadow/1,
+    hoisted_var_captured_rejected/1,
+    hoisted_var_captured_message/1,
+    hoisted_var_pattern_reads_not_captured/1,
+    hoisted_var_internal_binder_not_captured/1,
+    hoisted_var_zip_pattern_binds/1,
     inline_hoisted_html_renders_and_tracks/1,
     inline_hoisted_html_nested_chain/1,
     inline_hoisted_each_renders_and_tracks/1,
@@ -851,6 +856,11 @@ groups() ->
             inline_destructuring_not_inlined,
             inline_comprehension_source,
             inline_strict_generator_shadow,
+            hoisted_var_captured_rejected,
+            hoisted_var_captured_message,
+            hoisted_var_pattern_reads_not_captured,
+            hoisted_var_internal_binder_not_captured,
+            hoisted_var_zip_pattern_binds,
             inline_hoisted_html_renders_and_tracks,
             inline_hoisted_html_nested_chain,
             inline_hoisted_each_renders_and_tracks,
@@ -8596,6 +8606,124 @@ inline_strict_generator_shadow(Config) when is_list(Config) ->
     HTMLBin = iolist_to_binary(HTML),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"F")),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"ab")).
+
+%% A hoisted definition is re-read inside the template so it stays tracked. A fun
+%% parameter, a named fun or a generator there that rebinds a name the definition reads
+%% would make that copy read the inner binding: a compile error naming both.
+hoisted_var_captured_rejected(Config) when is_list(Config) ->
+    Outer = "Y = <<\"outer\">>, Z = <<Y/binary, (arizona_template:get(a, Bindings))/binary>>, ",
+    Cases = [
+        {"each",
+            Outer ++
+                "arizona_template:html({ul, [], [arizona_template:each("
+                "    fun(Y) -> {li, [], [Z]} end, arizona_template:get(items, Bindings))]}). ",
+            {fun_param, 'Y', 'Z'}},
+        {"fun",
+            Outer ++
+                "arizona_template:html({p, [], ["
+                "    (fun(Y) -> <<Z/binary, Y/binary>> end)(<<\"i\">>)]}). ",
+            {fun_param, 'Y', 'Z'}},
+        {"gen", Outer ++ "arizona_template:html({p, [], [[[Z, Y] || Y <- [<<\"i\">>]]]}). ",
+            {generator, 'Y', 'Z'}},
+        {"bingen",
+            Outer ++
+                "arizona_template:html({p, [], [<< <<Z/binary, Y>> || <<Y>> <= <<\"i\">> >>]}). ",
+            {generator, 'Y', 'Z'}},
+        {"zip",
+            Outer ++
+                "arizona_template:html({p, [], [[[Z, Y] || Y <- [<<\"i\">>] && _W <- [1]]]}). ",
+            {generator, 'Y', 'Z'}},
+        {"named",
+            "Self = <<\"outer\">>, "
+            "Z = <<Self/binary, (arizona_template:get(a, Bindings))/binary>>, "
+            "arizona_template:html({p, [], ["
+            "    (fun Self(0) -> Z; Self(N) -> Self(N - 1) end)(1)]}). ", {named_fun, 'Self', 'Z'}},
+        {"chain",
+            "Y = <<\"outer\">>, "
+            "A = <<(arizona_template:get(a, Bindings))/binary, Y/binary>>, "
+            "B = <<A/binary, \"!\">>, "
+            "arizona_template:html({p, [], [(fun(Y) -> <<B/binary, Y/binary>> end)(<<\"i\">>)]}). ",
+            {fun_param, 'Y', 'A'}}
+    ],
+    [
+        assert_parse_error(
+            "-module(pt_captured_" ++ Name ++ "). -export([render/1]). render(Bindings) -> " ++
+                Body,
+            fun(R) -> R =:= {hoisted_var_captured, Kind, Binder, Hoisted} end
+        )
+     || {Name, Body, {Kind, Binder, Hoisted}} <- Cases
+    ],
+    ok.
+
+hoisted_var_captured_message(Config) when is_list(Config) ->
+    Message = arizona_parse_transform:format_error({hoisted_var_captured, fun_param, 'Y', 'Z'}),
+    ?assertNotEqual(
+        nomatch, string:find(Message, "fun parameter Y shadows the Y that hoisted Z reads")
+    ).
+
+%% A map key or a binary size in a pattern reads a variable rather than binding it,
+%% so a hoisted definition reading that variable stays inlined and tracked.
+hoisted_var_pattern_reads_not_captured(Config) when is_list(Config) ->
+    MapKey = compile_module(
+        "-module(pt_captured_mapkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Key = arizona_template:get(sort, Bindings), "
+        "    Label = atom_to_binary(Key), "
+        "    arizona_template:html({p, [], ["
+        "        [[Label, V] || #{Key := V} <- arizona_template:get(rows, Bindings)],"
+        "        (fun(#{Key := V}) -> [Label, V] end)(arizona_template:get(row, Bindings))"
+        "    ]}). "
+    ),
+    B0 = #{sort => name, rows => [#{name => ~"r1"}], row => #{name => ~"f1"}},
+    B1 = B0#{rows => [#{name => ~"r2"}], row => #{name => ~"f2"}},
+    assert_captured_tracks(MapKey, B0, B1, [~"namer1", ~"namef1"], [~"namer2", ~"namef2"]),
+    BinSize = compile_module(
+        "-module(pt_captured_binsize). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Y = 8, "
+        "    Z = integer_to_binary(Y + arizona_template:get(a, Bindings)), "
+        "    arizona_template:html({p, [], ["
+        "        [[Z, <<\"|\">>, integer_to_binary(X)] || <<X:Y>> <= <<7>>],"
+        "        (fun(<<X:Y>>) -> [Z, <<\"/\">>, integer_to_binary(X)] end)(<<7>>)"
+        "    ]}). "
+    ),
+    assert_captured_tracks(BinSize, #{a => 2}, #{a => 3}, [~"10|7", ~"10/7"], [~"11|7", ~"11/7"]).
+
+%% A name bound inside the hoisted definition (its own generator) is not one it reads.
+hoisted_var_internal_binder_not_captured(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_captured_internal). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Lbl = iolist_to_binary([Y || Y <- arizona_template:get(xs, Bindings)]), "
+        "    arizona_template:html({p, [], ["
+        "        (fun(Y) -> <<Lbl/binary, Y/binary>> end)(<<\"!\">>)]}). "
+    ),
+    assert_captured_tracks(Mod, #{xs => [~"a", ~"b"]}, #{xs => [~"c"]}, [~"ab!"], [~"c!"]).
+
+%% A zip generator's patterns bind like any generator's: a hoisted name used as one is
+%% not substituted into it, and its source sees the enclosing scope.
+hoisted_var_zip_pattern_binds(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_captured_zip_pattern). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Z = arizona_template:get(a, Bindings), "
+        "    arizona_template:html({p, [], [Z, "
+        "        [[Z, integer_to_binary(W)] || Z <- [<<\"x\">>] && W <- [1]]]}). "
+    ),
+    assert_captured_tracks(Mod, #{a => ~"A"}, #{a => ~"B"}, [~"-->A<", ~"-->x1<"], [~"B"]).
+
+assert_captured_tracks(Mod, B0, B1, Shown, New) ->
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
+    lists:foreach(fun(S) -> ?assertNotEqual(nomatch, binary:match(SSR, S)) end, Shown),
+    {_Live, Snap, _Views} = arizona_render:render(Mod:render(B0), #{}),
+    Changed = maps:from_keys(maps:keys(B1), true),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(Mod:render(B1), Snap, #{}, Changed),
+    OpsBin = term_to_binary(Ops),
+    lists:foreach(fun(N) -> ?assertNotEqual(nomatch, binary:match(OpsBin, N)) end, New).
 
 %% A hoisted `?html(...)` whose body reads a binding, used in a content slot:
 %% the spliced RHS must be compiled (not left as a raw runtime-stub call --
