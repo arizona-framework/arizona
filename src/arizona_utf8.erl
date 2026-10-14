@@ -181,7 +181,7 @@ encoder_utf8_error({invalid_byte, _}) -> true;
 encoder_utf8_error(unexpected_end) -> true;
 encoder_utf8_error(_Reason) -> false.
 
-%% The first binary in `Term` that is not UTF-8, depth first in encoding order.
+%% A binary in `Term` that is not UTF-8, depth first (map entries in iteration order).
 find(Bin) when is_binary(Bin) ->
     case first_invalid(Bin) of
         none -> none;
