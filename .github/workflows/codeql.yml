@@ -43,6 +43,12 @@ jobs:
         with:
           languages: ${{matrix.language}}
           build-mode: none
+          # Test code builds DOM from constant fixtures and never ships; scanning
+          # it reports taint false positives on every change to a fixture.
+          config: |
+            paths-ignore:
+              - "assets/js/**/*.test.js"
+              - "e2e/**"
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
