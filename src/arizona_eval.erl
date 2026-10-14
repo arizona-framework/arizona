@@ -49,6 +49,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([eval_dynamics/1]).
 -export([eval_dynamics_v/2]).
 -export([eval_one_v_flat/2]).
+-export([eval_one_v_unless_fp/3]).
 -export([eval_each_def/1]).
 -export([eval_stream_items/4]).
 -export([render_stream_item/4]).
@@ -130,6 +131,58 @@ from `{{Az, Val, Deps}, Views}` to `{Az, Val, Deps, Views}`.
 eval_one_v_flat(Def, Views0) ->
     {{Az, Val, Deps}, Views1} = eval_one_v(Def, Views0),
     {Az, Val, Deps, Views1}.
+
+-doc """
+Evaluates a dynamic that last held the az-nodiff template fingerprinted `OldF`,
+unless it still holds that template.
+
+The slot's closure runs under dep tracking as in `eval_one_v_flat/2`, but its
+result is inspected before anything inside it is evaluated: a nested template
+whose scoped fingerprint is still `OldF` answers `{same, Deps}` and its dynamics
+never run -- the region renders once, so evaluating them would only cost the
+whole region per change and call `handle_update/3` on child views whose DOM is
+never patched. Anything else is evaluated from the value already produced (the
+closure is not called twice) and answered `{changed, Az, Value, Deps, Views1}`.
+""".
+-spec eval_one_v_unless_fp(Dynamic, OldF, Views) -> Result when
+    Dynamic :: arizona_template:dynamic(),
+    OldF :: binary(),
+    Views :: {map(), map()},
+    Result ::
+        {same, map()}
+        | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
+eval_one_v_unless_fp(Def, OldF, Views0) ->
+    {Az, Spec} = az_spec(Def),
+    erlang:put('$arizona_deps', #{}),
+    {Esc, Raw} = peek_spec(Spec),
+    case Raw of
+        #{s := _, d := _, f := F, diff := false} when is_binary(Az) ->
+            case arizona_template:slot_fingerprint(Az, F) of
+                OldF -> {same, erlang:erase('$arizona_deps')};
+                _Other -> eval_peeked(Az, Esc, Raw, Views0)
+            end;
+        _ ->
+            eval_peeked(Az, Esc, Raw, Views0)
+    end.
+
+az_spec({Az, Spec, _Loc}) -> {Az, Spec};
+az_spec({Az, Spec}) -> {Az, Spec}.
+
+%% The first step of eval_val_v/2, taken alone so the result can be looked at
+%% before it is evaluated.
+peek_spec({esc, Fun}) when is_function(Fun, 0) -> {true, Fun()};
+peek_spec(Fun) when is_function(Fun, 0) -> {false, Fun()};
+peek_spec(Spec) -> {false, Spec}.
+
+eval_peeked(Az, Esc, Raw, Views0) ->
+    {Val0, Views1} = eval_val_v(Raw, Views0),
+    Val =
+        case Esc of
+            true -> arizona_template:mark_esc(Val0);
+            false -> Val0
+        end,
+    Deps = erlang:erase('$arizona_deps'),
+    {changed, Az, arizona_template:scope_slot(Az, Val), Deps, Views1}.
 
 -doc """
 Evaluates an each definition by invoking its closure under dep tracking.

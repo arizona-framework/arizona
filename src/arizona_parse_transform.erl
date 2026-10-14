@@ -533,7 +533,7 @@ mark_targets(Node, Ctx) ->
 %% Re-spell every constructor call in a nodiff template's argument so the bottom-up
 %% transform compiles it nodiff as well. Two places are left as written, because
 %% what they build can end up in a live view's diffed slot, where a `diff => false`
-%% value is skipped forever: a `?stateful` child's props, and any fun other than an
+%% value keeps its first render: a `?stateful` child's props, and any fun other than an
 %% `?each` callback (a fun prop is called later, by whichever view receives it).
 maybe_inherit_nodiff(Arg) ->
     case template_is_nodiff(Arg) of
@@ -2751,8 +2751,8 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
 %% Emit a client-owned attribute slot (`?local` in attribute-value position): a
 %% dynamic whose evaluated value is the local-map (with target = {attr, Name}).
 %% It is never the normal `{attr, Name, Fun}` shape -- that would store
-%% `{attr, Name, Map}` and the per-dynamic `#{diff := false}` skip in arizona_diff
-%% would not match it.
+%% `{attr, Name, Map}` and the per-dynamic `az_local` skip in arizona_diff would
+%% not match it.
 compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     Module = State0#state.module,
     State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
@@ -3148,7 +3148,7 @@ branch_track_touches(ExprAST0) ->
             %% its reads equally isolated, so it needs the same touches or the
             %% slot freezes (a scalar or already-compiled expr contributes
             %% nothing and stays untouched).
-            case is_nested_template_leaf(Expr) of
+            case is_tracked_template_leaf(Expr) of
                 true ->
                     Keys = dedup_keys(collect_read_keys(Expr, [])),
                     [track_call_ast(K) || K <- Keys];
@@ -3213,10 +3213,15 @@ collect_tail_keys(Body, Acc) ->
 %% A tail leaf contributes its reads only when expand_element_leaf/3 would compile it
 %% into a nested template; otherwise its reads track eagerly when the branch runs.
 collect_leaf_keys(Leaf, Acc) ->
-    case is_nested_template_leaf(Leaf) of
+    case is_tracked_template_leaf(Leaf) of
         true -> collect_read_keys(Leaf, Acc);
         false -> Acc
     end.
+
+%% An az-nodiff leaf renders once, so a read inside it can never patch anything:
+%% tracking it would only re-run the slot for a change it has to ignore.
+is_tracked_template_leaf(Leaf) ->
+    is_nested_template_leaf(Leaf) andalso not template_is_nodiff(Leaf).
 
 is_nested_template_leaf(Leaf) ->
     case classify_body(Leaf) of

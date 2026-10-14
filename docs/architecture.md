@@ -779,7 +779,8 @@ renders `false` → absent / `true` → bare) -- an interpolated value always re
 
 Mechanism: `arizona_template:local/2` returns `#{diff => false, az_local => Key, v => Init}`
 (attributes add `target => {attr, Name}`). `eval` preserves it; `arizona_diff` skips it via
-the existing per-dynamic `#{diff := false}` clause; `arizona_render` unwraps it. Each content
+its per-dynamic `az_local` clauses (never re-evaluated, never patched); `arizona_render`
+unwraps it. Each content
 slot is an individually comment-marked text node (`<!--az:X-->Init<!--/az-->`), exactly like
 any dynamic text child. The parse transform bakes a self-describing `az-local` descriptor
 attribute (escaped JSON `{c: {slotIdx: key}, a: {attrName: key}, ap: {attrName: [prefix, suffix]}}`)
@@ -1613,10 +1614,13 @@ view receives it. A `?stateless` callback is a separate compile unit and keeps i
 `?local` under a nodiff template keeps the `az` and slot marker the client resolves it by, and
 nothing else does.
 
-A slot whose current value is a nodiff template still diffs as a slot. While it holds the same
-template (same statics) nothing is patched -- the template rendered once -- but when it switches to
-anything else, another branch or a plain value, it is replaced through its slot markers like any
-other change, so a conditional whose branch is `az-nodiff` can still leave it.
+A slot whose current value is a nodiff template still diffs as a slot. When it re-runs, the
+slot closure's result is compared by scoped fingerprint before anything inside it is evaluated:
+the same template keeps its first render (no op, no `handle_update/3` for a child view inside
+it, cost independent of the region's size), and anything else, another branch or a plain value,
+is replaced through its slot markers like any other change, so a conditional whose branch is
+`az-nodiff` can still leave it. Reads inside a nodiff branch are not tracked on the slot, since
+they can never patch; only the reads that choose the branch re-run it.
 
 The page arrives as an **opaque nested template** (`#{s := [Page], d := []}`), not iodata and not a
 binary. That is what lets a content slot splice it verbatim rather than copying and

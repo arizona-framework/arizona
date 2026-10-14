@@ -77,6 +77,7 @@ render(Bindings) ->
 -export([maybe_propagate/2]).
 -export([make_child_snap/4]).
 -export([scope_slot/2]).
+-export([slot_fingerprint/2]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
 
@@ -707,6 +708,17 @@ scopable(_Val) -> false.
 
 colon_free(Az) ->
     binary:replace(Az, ~":", ~"-", [global]).
+
+-doc """
+The fingerprint a nested template with raw fingerprint `F` carries once
+`scope_slot/2` has scoped it into the slot `Az` -- what a diff compares to tell
+whether a slot still holds the same template without evaluating it.
+""".
+-spec slot_fingerprint(Az, F) -> binary() when
+    Az :: binary(),
+    F :: binary().
+slot_fingerprint(Az, F) ->
+    <<(colon_free(Az))/binary, "-", F/binary>>.
 
 %% Only ever reached via scope_val/2's guarded `#{s, d}` clause, so the argument
 %% is always a snapshot map -- a non-snapshot (a scalar, a stateless child that

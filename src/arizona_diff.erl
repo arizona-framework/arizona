@@ -47,9 +47,12 @@ for a reorder.
 ## Az-nodiff safety
 
 Templates compiled with `az-nodiff` carry `diff => false` and dynamics
-with `Az = undefined`. The diff functions short-circuit on `diff => false`
-before ever inspecting individual dynamics, so `undefined` Az values
-never reach op-code targets.
+with `Az = undefined`. A ROOT snapshot with `diff => false` short-circuits
+`diff/2,3,4` before any dynamic is inspected. A SLOT holding such a template
+is still diffed as a slot: when it re-runs and lands on the same template
+(same scoped fingerprint) the old render stands and the template's own
+dynamics are never evaluated; when it switches to anything else it is patched
+through its markers. Either way no op targets an `undefined` Az.
 
 A diffable template can also carry an individual `Az = undefined` dynamic:
 a content slot inside a raw-text element (`script`/`style`/`textarea`/`title`),
@@ -396,10 +399,20 @@ diff_dynamics_v(
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so skip it -- never re-evaluate, never emit an op.
     skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
-%% A `?local` slot belongs to the browser: never re-evaluated, never patched.
+%% A `?local` slot belongs to the browser: never re-evaluated, never patched. A
+%% child view whose own root is az-nodiff renders once too: re-evaluating it would
+%% call its `handle_update/3` and move its state past a DOM no op will ever touch.
 diff_dynamics_v(
     [_Def | DR],
     [{_Az, #{az_local := _}} = OldD | OR],
+    [ODeps | DepsR],
+    ChangedKeys,
+    Views0
+) ->
+    skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
+diff_dynamics_v(
+    [_Def | DR],
+    [{_Az, #{view_id := _, diff := false}} = OldD | OR],
     [ODeps | DepsR],
     ChangedKeys,
     Views0
@@ -428,8 +441,28 @@ skip_dynamic({_Az, Old} = OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0) ->
 diff_changed_dynamic(Def, _Az, #{t := ?EACH} = Old, DR, OR, DepsR, ChangedKeys, Views0) ->
     {Az2, EachDesc, Deps} = arizona_eval:eval_each_def(Def),
     diff_each(Az2, EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0);
+%% A slot holding an az-nodiff template asks first whether it still holds that
+%% template (same scoped fingerprint), which the slot closure answers without
+%% evaluating the region: if so the old render stands -- no op, no child
+%% `handle_update/3`, only the new deps -- and the cost stays O(1) however large
+%% the region is. Anything else (another branch, a value) diffs as usual.
+diff_changed_dynamic(
+    Def, Az, #{diff := false, f := OldF} = Old, DR, OR, DepsR, ChangedKeys, Views0
+) ->
+    case arizona_eval:eval_one_v_unless_fp(Def, OldF, Views0) of
+        {same, NewDeps} ->
+            Views1 = carry_skipped_view(Old, Views0),
+            {OpsRest, DRest, DepsRest, Views2} =
+                diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
+            {OpsRest, [{Az, Old} | DRest], [NewDeps | DepsRest], Views2};
+        {changed, Az, New, NewDeps, Views1} ->
+            changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1)
+    end;
 diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, ChangedKeys, Views0) ->
     {Az, New, NewDeps, Views1} = arizona_eval:eval_one_v_flat(Def, Views0),
+    changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1).
+
+changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1) ->
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
     {OpsFinal, ViewsFinal} = maybe_make_ops(Az, New, Old, OpsRest, Views2),
@@ -1812,6 +1845,14 @@ make_op(Az, New, _Old) ->
 %% an az prefix from the child's own fingerprint, neither of which a plain branch has.
 %% So a same-S Old is necessarily a plain inline template too; a child New is excluded
 %% here and handled by make_op/3's child-view clause (which requires `view_id` on both).
+%% A `diff => false` value renders once. A `?local` slot is the browser's, and an
+%% az-nodiff template keeps its first render for as long as the slot still holds
+%% that template (same statics); a slot that switches to anything else -- another
+%% branch, a value -- is patched like any other, or it would freeze on that branch.
+make_ops(_Az, _New, #{az_local := _}, Tail, Views) ->
+    {Tail, Views};
+make_ops(_Az, #{s := S}, #{diff := false, s := S}, Tail, Views) ->
+    {Tail, Views};
 %% A stream `?each` container whose rendered items, order, and item-template
 %% fingerprint are all unchanged needs no op: the container's HTML is exactly
 %% what the client already holds, so the wholesale container `?OP_TEXT` the last
@@ -1825,14 +1866,6 @@ make_op(Az, New, _Old) ->
 %% side carries `source` and the stored side does not -- the incremental stream
 %% path settles its snapshot without it -- so the two never compare term-equal
 %% even when they render identically.
-%% A `diff => false` value renders once. A `?local` slot is the browser's, and an
-%% az-nodiff template keeps its first render for as long as the slot still holds
-%% that template (same statics); a slot that switches to anything else -- another
-%% branch, a value -- is patched like any other, or it would freeze on that branch.
-make_ops(_Az, _New, #{az_local := _}, Tail, Views) ->
-    {Tail, Views};
-make_ops(_Az, #{s := S}, #{diff := false, s := S}, Tail, Views) ->
-    {Tail, Views};
 make_ops(
     _Az,
     #{t := ?EACH, items := Items, order := Order, template := #{f := Fp}},
