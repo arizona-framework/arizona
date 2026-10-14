@@ -1975,25 +1975,36 @@ The **stream -> list** type switch is consistent with this: a binding that was a
 `arizona_stream` and becomes a plain list routes through `diff_list/4 -> full_update/5 -> OP_TEXT`,
 which replaces only the surviving marker span -- so the list renders as real HTML and the slot's
 siblings survive. The stream's keyed `az-key` items are element children, and stream ops
-(insert/remove/move/patch query `:scope > [az-key]`) never delete the comment markers, so the
-marker is still present at switch time.
+(insert/remove/move/patch look items up among the slot span's keyed children) never delete the
+comment markers, so the marker is still present at switch time.
 
 The **list -> stream** switch and every other stream **container full render** now use the same
 `OP_TEXT`, so a stream `?each` sharing a content slot with static siblings re-renders in place
 instead of clobbering them.
 
-**Stream incremental ops are anchored to the slot span**, and one case remains refused.
+**Stream incremental ops are anchored to the slot span.**
 `insertItemEl` and `moveItemEl` resolve `slotBounds(el, az)` and place relative to the slot's
 markers when the container has them -- a tail insert goes before the closing `<!--/az-->`, a
 move-to-head after the opening one, and `keyedChildren` restricts positional indexing to the span.
 So an each sharing its container with static siblings no longer strands items after a footer or
 before a header.
 
-What still does not work is the **marker-only** container (no element carries the slot az at all).
-There the client would have to place the node with no element to measure against, so `applyOps`
-refuses `OP_INSERT`/`OP_MOVE` on a marker-resolved target with a warning rather than misplace it
-silently. The position-independent `OP_REMOVE`/`OP_ITEM_PATCH` find their target by `az-key` and
-still apply. Lifting that refusal is the remaining follow-up.
+The **marker-only** container (no element carries the slot az at all -- a stream among a live
+root's static siblings, or in a content-slot list fragment) works the same way: `resolveOpTarget`
+resolves it through its opening marker to the enclosing element, and the markers are that
+element's direct children, so `slotBounds` finds the span and `OP_INSERT`/`OP_MOVE` place within
+it.
+
+The same holds **inside a stream item**. An item's `innerOps` resolve through the same three arms
+scoped to the item (element, compound base, marker), so a nested stream whose marker sits in a
+deeper element of the item -- behind a conditional fragment, say -- is placed within its own span.
+An inner az that resolves to nothing is skipped with a warning; it is never retargeted at the item
+itself, which would let an `OP_TEXT` rewrite the whole item.
+
+**Key lookup is scoped to the span too.** Two streams can share one parent element -- a second
+`?each` among siblings takes the compound az `<El>:1`, whose base is the same element -- and their
+keys can overlap. Lookups by key therefore read only the keyed children between the stream's own
+markers, so an `OP_REMOVE` or `OP_ITEM_PATCH` for one stream never lands on the other's item.
 
 ## Target scoping
 

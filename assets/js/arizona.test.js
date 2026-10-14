@@ -2084,11 +2084,25 @@ describe('applyOps -- OP.ITEM_PATCH edge cases', () => {
         expect(input.value).toBe('new');
     });
 
-    it('falls back to item element itself when no [az] found', () => {
+    it('skips an inner op whose az resolves to nothing, leaving the item untouched', () => {
         setupView('v', '<div az="0"><div az-key="k1">plain text</div></div>');
-        applyOps([[OP.ITEM_PATCH, 'v:0', 'k1', [[OP.SET_ATTR, '0', 'data-test', 'fallback']]]]);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:0',
+                'k1',
+                [
+                    [OP.SET_ATTR, '0', 'data-test', 'x'],
+                    [OP.TEXT, '0', 'wiped'],
+                ],
+            ],
+        ]);
         const item = resolveEl('v:0').querySelector('[az-key="k1"]');
-        expect(item.getAttribute('data-test')).toBe('fallback');
+        expect(item.getAttribute('data-test')).toBeNull();
+        expect(item.textContent).toBe('plain text');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('target "0" not found'));
+        warn.mockRestore();
     });
 });
 
@@ -5528,12 +5542,166 @@ describe('nested OP.ITEM_PATCH -- compound az fallback', () => {
             'page',
             `<ul az="0">
                 <li az-key="r1">
-                    <div az="1"><span az-key="c1">old</span></div>
+                    <div az="1"><span az="0" az-key="c1">old</span></div>
                 </li>
             </ul>`,
         );
         applyOps([[7, 'page:0', 'r1', [[7, '1:5', 'c1', [[0, '0', 'new']]]]]]);
         expect(document.querySelector('[az-key="c1"]').textContent).toContain('new');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Item ops into a marker-only slot, and streams sharing one parent
+//
+// Fixtures are real server output (`arizona_render:render/2` + `arizona_diff:diff/4`):
+// - A stream nested in a stream item behind a conditional fragment
+//   (`case ... of true -> [h4, ?each(...), footer]; false -> ~"" end` inside the
+//   item's `div`). The inner each's az is carried by NO element -- only by its
+//   `<!--az:X-->` marker, which sits in the `div`, not in the item.
+// - Two stream eaches in one element with overlapping keys: the second takes the
+//   compound az `<El>:1`, so both resolve to the same parent element.
+// ---------------------------------------------------------------------------
+
+describe('item ops -- marker-only slot inside an item', () => {
+    const row = (inner) =>
+        '<ul az="1FW8Y8A-0" id="list"><!--az:1FW8Y8A-0-->' +
+        '<li az="C5LPJH-0" az-key="r1"><div az="C5LPJH-1" class="box"><!--az:C5LPJH-1-->' +
+        '<h4>head</h4><!--az:C5LPJH-1-UG30P3-0-->' +
+        inner +
+        '<!--/az--><footer>foot</footer><!--/az--></div></li><!--/az--></ul>';
+    const c = (k, t) => `<p az="UH5VDM-0" az-key="${k}"><!--az:UH5VDM-0-->${t}<!--/az--></p>`;
+    const kids = () =>
+        Array.from(document.querySelector('.box').children).map(
+            (e) => e.tagName.toLowerCase() + (e.getAttribute('az-key') ?? ''),
+        );
+
+    it('places an inner insert inside the slot span, not after the item content', () => {
+        setupView('v', row(c('c1', 'one')));
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:1FW8Y8A-0',
+                'r1',
+                [[OP.INSERT, 'C5LPJH-1-UG30P3-0', 'c2', -1, c('c2', 'two')]],
+            ],
+        ]);
+        expect(kids()).toEqual(['h4', 'pc1', 'pc2', 'footer']);
+        expect(document.querySelector('li').children.length).toBe(1);
+    });
+
+    it('moves an inner item to the head of the slot span, not before the header', () => {
+        setupView('v', row(c('c1', 'one') + c('c2', 'two')));
+        applyOps([
+            [OP.ITEM_PATCH, 'v:1FW8Y8A-0', 'r1', [[OP.MOVE, 'C5LPJH-1-UG30P3-0', 'c2', null]]],
+        ]);
+        expect(kids()).toEqual(['h4', 'pc2', 'pc1', 'footer']);
+    });
+
+    it('re-renders only the slot span on an inner TEXT, keeping the siblings', () => {
+        setupView('v', row(c('c1', 'one')));
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:1FW8Y8A-0',
+                'r1',
+                [[OP.TEXT, 'C5LPJH-1-UG30P3-0', c('c9', 'nine'), true]],
+            ],
+        ]);
+        expect(kids()).toEqual(['h4', 'pc9', 'footer']);
+    });
+
+    it('finds a later op of the same batch after a TEXT re-rendered the slot', () => {
+        // The TEXT re-renders the enclosing conditional, replacing the inner slot's
+        // markers; the insert that follows must anchor to the span as it is now, not
+        // a span measured (and cached) before the rewrite.
+        setupView('v', row(c('c1', 'one')));
+        const fragment = `<h4>head</h4><!--az:C5LPJH-1-UG30P3-0-->${c('c9', 'nine')}<!--/az--><footer>foot</footer>`;
+        applyOps([
+            [
+                OP.ITEM_PATCH,
+                'v:1FW8Y8A-0',
+                'r1',
+                [
+                    [OP.INSERT, 'C5LPJH-1-UG30P3-0', 'c2', -1, c('c2', 'two')],
+                    [OP.TEXT, 'C5LPJH-1', fragment, true],
+                    [OP.INSERT, 'C5LPJH-1-UG30P3-0', 'c3', -1, c('c3', 'three')],
+                ],
+            ],
+        ]);
+        expect(kids()).toEqual(['h4', 'pc9', 'pc3', 'footer']);
+    });
+});
+
+describe('stream ops -- marker-only slot at the view level', () => {
+    const c = (k, t) => `<p az="UH5VDM-0" az-key="${k}"><!--az:UH5VDM-0-->${t}<!--/az--></p>`;
+    const fragment = (inner) =>
+        `<h4>head</h4><!--az:C5LPJH-1-UG30P3-0-->${inner}<!--/az--><footer>foot</footer>`;
+    const kids = () =>
+        Array.from(document.querySelector('.box').children).map(
+            (e) => e.tagName.toLowerCase() + (e.getAttribute('az-key') ?? ''),
+        );
+
+    it('anchors an insert to the span as a TEXT earlier in the batch left it', () => {
+        setupView(
+            'v',
+            `<div az="C5LPJH-1" class="box"><!--az:C5LPJH-1-->${fragment(c('c1', 'one'))}<!--/az--></div>`,
+        );
+        applyOps([
+            [OP.INSERT, 'v:C5LPJH-1-UG30P3-0', 'c2', -1, c('c2', 'two')],
+            [OP.TEXT, 'v:C5LPJH-1', fragment(c('c9', 'nine')), true],
+            [OP.INSERT, 'v:C5LPJH-1-UG30P3-0', 'c3', -1, c('c3', 'three')],
+        ]);
+        expect(kids()).toEqual(['h4', 'pc9', 'pc3', 'footer']);
+    });
+});
+
+describe('stream ops -- two streams in one element with overlapping keys', () => {
+    const two = (a, b) =>
+        '<div az="E6ZDXB-0" id="two"><!--az:E6ZDXB-0-->' +
+        `<p az="UH5VDM-0" az-key="a"><!--az:UH5VDM-0-->${a}<!--/az--></p>` +
+        '<!--/az--><hr /><!--az:E6ZDXB-0:1-->' +
+        `<p az="UH5VDM-0" az-key="a"><!--az:UH5VDM-0-->${b}<!--/az--></p>` +
+        '<!--/az--></div>';
+    const texts = () => Array.from(document.querySelectorAll('#two > p')).map((p) => p.textContent);
+
+    it('removes the key from the stream the op names', () => {
+        setupView('v', two('A1', 'A2'));
+        applyOps([[OP.REMOVE, 'v:E6ZDXB-0:1', 'a']]);
+        expect(texts()).toEqual(['A1']);
+    });
+
+    it('patches the key in the stream the op names', () => {
+        setupView('v', two('A1', 'A2'));
+        applyOps([[OP.ITEM_PATCH, 'v:E6ZDXB-0:1', 'a', [[OP.TEXT, 'UH5VDM-0', 'B!']]]]);
+        expect(texts()).toEqual(['A1', 'B!']);
+    });
+
+    it('keeps each stream on its own key map within one batch', () => {
+        // Both streams looked up in one batch: a key map shared by the parent element
+        // would answer the second stream's lookup with the first stream's item.
+        setupView('v', two('A1', 'A2'));
+        applyOps([
+            [OP.ITEM_PATCH, 'v:E6ZDXB-0', 'a', [[OP.TEXT, 'UH5VDM-0', 'X1']]],
+            [OP.ITEM_PATCH, 'v:E6ZDXB-0:1', 'a', [[OP.TEXT, 'UH5VDM-0', 'X2']]],
+        ]);
+        expect(texts()).toEqual(['X1', 'X2']);
+    });
+
+    it('moves an item after a key both streams hold, within its own span', () => {
+        // The first stream also holds `a`: a lookup unscoped to the span would place
+        // `b` after the first stream's `a`, outside its own slot.
+        setupView(
+            'v',
+            '<div az="E6ZDXB-0" id="two"><!--az:E6ZDXB-0-->' +
+                '<p az="UH5VDM-0" az-key="a"><!--az:UH5VDM-0-->A1<!--/az--></p>' +
+                '<!--/az--><hr /><!--az:E6ZDXB-0:1-->' +
+                '<p az="UH5VDM-0" az-key="b"><!--az:UH5VDM-0-->B<!--/az--></p>' +
+                '<p az="UH5VDM-0" az-key="a"><!--az:UH5VDM-0-->A2<!--/az--></p>' +
+                '<!--/az--></div>',
+        );
+        applyOps([[OP.MOVE, 'v:E6ZDXB-0:1', 'b', 'a']]);
+        expect(texts()).toEqual(['A1', 'A2', 'B']);
     });
 });
 

@@ -424,32 +424,53 @@ describe('applyOps -- destructive ops on a marker-only target', () => {
         warn.mockRestore();
     });
 
-    // A stream `?each` container op is resolved relative to the ELEMENT, so on a
-    // marker-only container the ops that place a node by container position land
-    // outside the slot: a tail OP_INSERT appends after the footer, an OP_MOVE
-    // prepend lands before the header. Silent misplacement is worse than the
-    // dropped-with-a-warning behaviour these had before the marker fallback
-    // existed, so they are refused too. The position-INDEPENDENT item ops
-    // (OP_REMOVE, OP_ITEM_PATCH) find their target by `az-key` and stay correct.
-    it('refuses a tail OP_INSERT on a marker-only stream container', () => {
+    // On a marker-only container the slot's markers are direct children of the
+    // resolved parent, so the stream placement ops anchor to the slot span: a tail
+    // OP_INSERT lands before the slot's closing marker (not after the footer) and a
+    // head OP_MOVE right after its opening one (not before the header).
+    it('places a tail OP_INSERT inside a marker-only stream container', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         setupSiblings();
-        const before = sibRoot().innerHTML;
         applyOps([[OP.INSERT, `page:${SIB_EACH_AZ}`, '2', -1, sibItem('2', 'b')]]);
-        expect(sibRoot().innerHTML).toBe(before);
-        expect(warn).toHaveBeenCalledOnce();
+        expect(sibRoot().innerHTML).toBe(sibBody(sibItem('1', 'a') + sibItem('2', 'b')));
+        expect(warn).not.toHaveBeenCalled();
         warn.mockRestore();
     });
 
-    it('refuses an OP_MOVE on a marker-only stream container', () => {
+    it('places a positional OP_INSERT among the slot items only', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupSiblings();
+        applyOps([[OP.INSERT, `page:${SIB_EACH_AZ}`, '0', 0, sibItem('0', 'z')]]);
+        expect(sibRoot().innerHTML).toBe(sibBody(sibItem('0', 'z') + sibItem('1', 'a')));
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+    });
+
+    it('moves an item to the head of a marker-only stream container', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         document.body.innerHTML =
             `<div az="${SIB_ROOT_AZ}" az-view id="page">` +
             `${sibBody(sibItem('1', 'a') + sibItem('2', 'b'))}</div>`;
-        const before = sibRoot().innerHTML;
         applyOps([[OP.MOVE, `page:${SIB_EACH_AZ}`, '2', null]]);
-        expect(sibRoot().innerHTML).toBe(before);
-        expect(warn).toHaveBeenCalledOnce();
+        expect(sibRoot().innerHTML).toBe(sibBody(sibItem('2', 'b') + sibItem('1', 'a')));
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+    });
+
+    // A stream in a content-slot list fragment (`{ul, [], [[~"x", ?each(...)]]}`):
+    // its slot az is scoped under the fragment, carried by no element, so the
+    // insert resolves through the marker to the `ul` and lands inside the span.
+    it('inserts into a stream hosted by a content-list fragment', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const frag = (items) =>
+            `<ul az="L46T83-0"><!--az:L46T83-0-->x<!--az:L46T83-0-PFJKUQ-0-->` +
+            `${items}<!--/az--><!--/az--></ul>`;
+        document.body.innerHTML = `<div id="page" az-view>${frag(sibItem('a', 'a'))}</div>`;
+        applyOps([[OP.INSERT, 'page:L46T83-0-PFJKUQ-0', 'c', -1, sibItem('c', 'c')]]);
+        expect(document.getElementById('page').innerHTML).toBe(
+            frag(sibItem('a', 'a') + sibItem('c', 'c')),
+        );
+        expect(warn).not.toHaveBeenCalled();
         warn.mockRestore();
     });
 

@@ -1772,11 +1772,10 @@ make_op(Az, #{t := ?EACH, items := Items, template := Tmpl}, _Old) when
 %% `?OP_REMOVE`, `?OP_MOVE`, `?OP_ITEM_PATCH`) keep their own op codes: they carry
 %% the SAME container az as the target and name the item by key in a later field,
 %% and they mutate one keyed child rather than the container's whole content, so
-%% the full-render op code does not govern them. They have their own open
-%% limitation -- placement (`?OP_INSERT`'s position, `?OP_MOVE`'s prepend) is
-%% relative to the container ELEMENT, not the marker span, so on a marker-only
-%% container the client refuses them rather than misplacing the node (see
-%% docs/architecture.md).
+%% the full-render op code does not govern them. Their placement
+%% (`?OP_INSERT`'s position, `?OP_MOVE`'s prepend) is relative to the slot's
+%% marker span, so the client places them inside it even on a marker-only
+%% container (see docs/architecture.md).
 make_op(Az, #{t := ?EACH, items := Items, order := Order, template := Tmpl}, _Old) ->
     [?OP_TEXT, Az, arizona_render:zip_stream_fp(Tmpl, Items, Order)];
 make_op(Az, remove, {attr, Attr, _}) ->
