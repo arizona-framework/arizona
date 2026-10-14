@@ -38,8 +38,9 @@ payloads when sending updates over WebSocket.
 ## Az-nodiff safety
 
 Templates compiled with `az-nodiff` carry `diff => false` and dynamics with
-`Az = undefined`. The diff engine short-circuits on `diff => false` before
-ever inspecting individual dynamics, so `undefined` Az values never reach
+`Az = undefined`. The diff engine never evaluates such a template's own
+dynamics once rendered (a root short-circuits; a slot keeps its first render
+while it holds the same region), so `undefined` Az values never reach
 op-code targets.
 """.
 

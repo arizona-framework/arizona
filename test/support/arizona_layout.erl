@@ -50,6 +50,26 @@ render(Bindings) ->
                     },
                     destroyed() { window._tickDestroyed = true; },
                 };
+                // A client-owned widget (arizona_nodiff_widget): it replaces the
+                // server's markup with its own and keeps state in it.
+                hooks.Widget = {
+                    mounted() {
+                        const log = (window._widget ||= { mounts: 0, destroys: 0, events: [] });
+                        log.mounts += 1;
+                        log.events.push(`mount:${this.el.dataset.kind}`);
+                        const input = document.createElement('input');
+                        input.className = 'widget-input';
+                        const kind = document.createElement('span');
+                        kind.className = 'widget-kind';
+                        kind.textContent = this.el.dataset.kind;
+                        this.el.replaceChildren(kind, input);
+                    },
+                    destroyed() {
+                        const log = window._widget;
+                        log.destroys += 1;
+                        log.events.push(`destroy:${this.el.dataset.kind}:${this.el.isConnected}`);
+                    },
+                };
                 connect('/ws');
                 """
                 ]}

@@ -491,8 +491,15 @@ mark_targets({tuple, L, [{atom, _, Tag}, _Attrs] = Parts}, Ctx, CCtx) ->
     mark_element_children(L, Tag, Parts, Ctx, CCtx);
 mark_targets({tuple, L, [{atom, _, Tag}, _Attrs, _Children] = Parts}, Ctx, CCtx) ->
     mark_element_children(L, Tag, Parts, Ctx, CCtx);
+%% A bare element in a control-flow tail compiles into its own template, exactly
+%% as a literal `?html` there would (expand_element_leaf/4), so it takes the same
+%% nodiff inheritance the `?html` clause above gives a wrapped one.
 mark_targets(Node, Ctx, CCtx) when is_tuple(Node) ->
-    list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]);
+    Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
+    case is_control_flow_ast(Node) of
+        true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
+        false -> Marked
+    end;
 mark_targets(Nodes, Ctx, CCtx) when is_list(Nodes) ->
     [mark_targets(E, Ctx, CCtx) || E <- Nodes];
 mark_targets(Node, _Ctx, _CCtx) ->
@@ -516,7 +523,7 @@ mark_targets(Node, Ctx) ->
 %% Re-spell every constructor call in a nodiff template's argument so the bottom-up
 %% transform compiles it nodiff as well. Two places are left as written, because
 %% what they build can end up in a live view's diffed slot, where a `diff => false`
-%% value is skipped forever: a `?stateful` child's props, and any fun other than an
+%% value keeps its first render: a `?stateful` child's props, and any fun other than an
 %% `?each` callback (a fun prop is called later, by whichever view receives it).
 maybe_inherit_nodiff(Arg) ->
     case template_is_nodiff(Arg) of
@@ -1421,45 +1428,59 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
 %% `of` clauses (its value is then matched by `of`, but this mirrors the original
 %% live-render behaviour and never matters for real templates).
 map_tail_exprs(Expr, TailFun, NonTailFun) ->
+    {Mapped, none} = mapfold_tail_exprs(
+        Expr, fun(Leaf, none) -> {TailFun(Leaf), none} end, NonTailFun, none
+    ),
+    Mapped.
+
+%% map_tail_exprs/3 threading an accumulator through the tail leaves, in source order.
+mapfold_tail_exprs(Expr, TailFun, NonTailFun, Acc0) ->
+    Clauses = fun(Cs, Acc) ->
+        lists:mapfoldl(fun(C, A) -> mapfold_tail_clause(C, TailFun, NonTailFun, A) end, Acc, Cs)
+    end,
     case erl_syntax:revert(Expr) of
-        {'case', L, Scrutinee, Clauses} ->
-            {'case', L, NonTailFun(Scrutinee), [
-                map_tail_clause(C, TailFun, NonTailFun)
-             || C <- Clauses
-            ]};
-        {'if', L, Clauses} ->
-            {'if', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses]};
-        {block, L, Body} ->
-            {block, L, map_tail_body(Body, TailFun, NonTailFun)};
-        {'receive', L, Clauses} ->
-            {'receive', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses]};
-        {'receive', L, Clauses, AfterExpr, AfterBody} ->
-            {'receive', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses],
-                NonTailFun(AfterExpr), map_tail_body(AfterBody, TailFun, NonTailFun)};
-        {'try', L, Body, OfClauses, CatchClauses, AfterBody} ->
-            {'try', L, map_tail_body(Body, TailFun, NonTailFun),
-                [map_tail_clause(C, TailFun, NonTailFun) || C <- OfClauses],
-                [map_tail_clause(C, TailFun, NonTailFun) || C <- CatchClauses], [
-                    NonTailFun(E)
-                 || E <- AfterBody
-                ]};
-        {'maybe', L, Body} ->
-            {'maybe', L, map_tail_body(Body, TailFun, NonTailFun)};
-        {'maybe', L, Body, {'else', L2, ElseClauses}} ->
-            {'maybe', L, map_tail_body(Body, TailFun, NonTailFun),
-                {'else', L2, [map_tail_clause(C, TailFun, NonTailFun) || C <- ElseClauses]}};
+        {'case', L, Scrutinee, Cs0} ->
+            {Cs, Acc} = Clauses(Cs0, Acc0),
+            {{'case', L, NonTailFun(Scrutinee), Cs}, Acc};
+        {'if', L, Cs0} ->
+            {Cs, Acc} = Clauses(Cs0, Acc0),
+            {{'if', L, Cs}, Acc};
+        {block, L, Body0} ->
+            {Body, Acc} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+            {{block, L, Body}, Acc};
+        {'receive', L, Cs0} ->
+            {Cs, Acc} = Clauses(Cs0, Acc0),
+            {{'receive', L, Cs}, Acc};
+        {'receive', L, Cs0, AfterExpr, AfterBody0} ->
+            {Cs, Acc1} = Clauses(Cs0, Acc0),
+            {AfterBody, Acc} = mapfold_tail_body(AfterBody0, TailFun, NonTailFun, Acc1),
+            {{'receive', L, Cs, NonTailFun(AfterExpr), AfterBody}, Acc};
+        {'try', L, Body0, OfClauses0, CatchClauses0, AfterBody} ->
+            {Body, Acc1} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+            {OfClauses, Acc2} = Clauses(OfClauses0, Acc1),
+            {CatchClauses, Acc} = Clauses(CatchClauses0, Acc2),
+            {{'try', L, Body, OfClauses, CatchClauses, [NonTailFun(E) || E <- AfterBody]}, Acc};
+        {'maybe', L, Body0} ->
+            {Body, Acc} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+            {{'maybe', L, Body}, Acc};
+        {'maybe', L, Body0, {'else', L2, ElseClauses0}} ->
+            {Body, Acc1} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+            {ElseClauses, Acc} = Clauses(ElseClauses0, Acc1),
+            {{'maybe', L, Body, {'else', L2, ElseClauses}}, Acc};
         _ ->
-            TailFun(Expr)
+            TailFun(Expr, Acc0)
     end.
 
-map_tail_clause({clause, L, Patterns, Guards, Body}, TailFun, NonTailFun) ->
-    {clause, L, Patterns, Guards, map_tail_body(Body, TailFun, NonTailFun)}.
+mapfold_tail_clause({clause, L, Patterns, Guards, Body0}, TailFun, NonTailFun, Acc0) ->
+    {Body, Acc} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+    {{clause, L, Patterns, Guards, Body}, Acc}.
 
-%% Only a body's last expression is a tail (recursing through map_tail_exprs/3 so
+%% Only a body's last expression is a tail (recursing through mapfold_tail_exprs/4 so
 %% a control-flow last is walked too); the init statements are non-tail.
-map_tail_body(Body, TailFun, NonTailFun) ->
-    {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    [NonTailFun(E) || E <- Init] ++ [map_tail_exprs(Last, TailFun, NonTailFun)].
+mapfold_tail_body(Body, TailFun, NonTailFun, Acc0) ->
+    {Init, [Last0]} = lists:split(length(Body) - 1, Body),
+    {Last, Acc} = mapfold_tail_exprs(Last0, TailFun, NonTailFun, Acc0),
+    {[NonTailFun(E) || E <- Init] ++ [Last], Acc}.
 
 validate_live_root({tuple, _, [_Tag, Attrs | _]}, L, Inline) ->
     validate_id_expr(Attrs, L, Inline);
@@ -2008,7 +2029,31 @@ compile_template(Arg, Line, Module, LiveRender, Backend, Inherited) ->
     ),
     Opts = Opts0#{backend => Backend},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
-    build_template_ast(Line, S1, D1, Fingerprint, Opts).
+    TmplAST = build_template_ast(Line, S1, D1, Fingerprint, Opts),
+    case {Opts, Inherited} of
+        {#{diff := false}, false} -> put_region_key(Arg, TmplAST);
+        _ -> TmplAST
+    end.
+
+%% An `az_key` on an az-nodiff root names the region beside its fingerprint and
+%% branch, so a new key value replaces the region. The key is built with the
+%% template, inside the slot that holds it, so its reads are that slot's deps.
+put_region_key({tuple, _, [_Tag, Attrs | _]}, {map, L, Fields} = TmplAST) ->
+    case [V || {tuple, _, [NameAST, V]} <- attr_list(Attrs), is_az_key(NameAST)] of
+        [KeyAST] -> {map, L, Fields ++ [{map_field_assoc, L, {atom, L, az_key}, KeyAST}]};
+        [] -> TmplAST
+    end;
+put_region_key(_Arg, TmplAST) ->
+    TmplAST.
+
+attr_list({cons, _, Head, Tail}) -> [Head | attr_list(Tail)];
+attr_list(_Attrs) -> [].
+
+is_az_key(NameAST) ->
+    case bare_attr_name(NameAST) of
+        {ok, Name} -> framework_attr_name(Name) =:= ~"az-key";
+        error -> false
+    end.
 
 compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs, Inherited) ->
     case FunAST of
@@ -2757,8 +2802,8 @@ typed_attr_ast(Backend, ValueAST) ->
 %% Emit a client-owned attribute slot (`?local` in attribute-value position): a
 %% dynamic whose evaluated value is the local-map (with target = {attr, Name}).
 %% It is never the normal `{attr, Name, Fun}` shape -- that would store
-%% `{attr, Name, Map}` and the per-dynamic `#{diff := false}` skip in arizona_diff
-%% would not match it.
+%% `{attr, Name, Map}` and the per-dynamic `az_local` skip in arizona_diff would
+%% not match it.
 compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     Module = State0#state.module,
     State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
@@ -3121,11 +3166,63 @@ make_text_dynamic_ast(Az, ExprAST, Module, ExprLine) ->
 %% left untagged and rendered structurally (escaping is decided at compile time
 %% so the runtime can never confuse user scalars with spliced framework HTML).
 make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
-    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, false),
+    ExprAST = stamp_branches(expand_block_element_tails(ExprAST0, Module, Backend, false)),
     LocAST = loc_ast(Module, ExprLine),
     Body = branch_track_touches(ExprAST0) ++ [ExprAST],
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], Body}]}},
     {tuple, 0, [ast_binary(AzBin), esc_spec(ExprAST, FunAST), LocAST]}.
+
+%% Number the tails of a content-slot control-flow expression and stamp each with
+%% its number, so an az-nodiff region names the branch that produced it (see
+%% arizona_template:branch/2): two branches can produce the same template, and
+%% once a region is no longer evaluated the branch is all that tells them apart.
+%% A literal template takes the stamp as a field; a value only known at runtime
+%% goes through branch/2; a value that can never be a region is left alone.
+stamp_branches(Expr) ->
+    case is_control_flow_ast(Expr) of
+        true ->
+            {Stamped, _Count} = mapfold_tail_exprs(Expr, fun stamp_branch/2, fun(E) -> E end, 1),
+            Stamped;
+        false ->
+            Expr
+    end.
+
+stamp_branch(Leaf, N) ->
+    {stamp_leaf(N, Leaf), N + 1}.
+
+stamp_leaf(N, {map, L, Fields} = Map) ->
+    case lists:any(fun is_nodiff_field/1, Fields) of
+        true -> {map, L, Fields ++ [{map_field_assoc, L, {atom, L, branch}, {integer, L, N}}]};
+        false -> Map
+    end;
+stamp_leaf(_N, {Literal, _, _} = Leaf) when
+    Literal =:= bin orelse Literal =:= string orelse Literal =:= integer orelse
+        Literal =:= float orelse Literal =:= atom orelse Literal =:= char
+->
+    Leaf;
+stamp_leaf(_N, {nil, _} = Leaf) ->
+    Leaf;
+stamp_leaf(N, {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, _} = Leaf) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    case lists:member(F, [each, native_each, terminal_each, stateful, local, raw, inner_content]) of
+        true -> Leaf;
+        false -> branch_call(N, L, Leaf)
+    end;
+%% A BIF never returns a template, and the stamp would cost a call per evaluation.
+stamp_leaf(N, {call, _, {atom, _, F}, Args} = Leaf) ->
+    case erl_internal:bif(F, length(Args)) of
+        true -> Leaf;
+        false -> branch_call(N, line(Leaf), Leaf)
+    end;
+stamp_leaf(N, Leaf) ->
+    branch_call(N, line(Leaf), Leaf).
+
+is_nodiff_field({map_field_assoc, _, {atom, _, diff}, {atom, _, false}}) -> true;
+is_nodiff_field(_Field) -> false.
+
+branch_call(N, L, Leaf) ->
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, branch}}, [{integer, L, N}, Leaf]}.
 
 %% A content-slot control-flow expression (`case`/`if`/`maybe`/...) compiles each
 %% branch *element* into a nested template (expand_block_element_tails/3) whose `?get`
@@ -3154,7 +3251,7 @@ branch_track_touches(ExprAST0) ->
             %% its reads equally isolated, so it needs the same touches or the
             %% slot freezes (a scalar or already-compiled expr contributes
             %% nothing and stays untouched).
-            case is_nested_template_leaf(Expr) of
+            case is_tracked_template_leaf(Expr) of
                 true ->
                     Keys = dedup_keys(collect_read_keys(Expr, [])),
                     [track_call_ast(K) || K <- Keys];
@@ -3219,10 +3316,15 @@ collect_tail_keys(Body, Acc) ->
 %% A tail leaf contributes its reads only when expand_element_leaf/3 would compile it
 %% into a nested template; otherwise its reads track eagerly when the branch runs.
 collect_leaf_keys(Leaf, Acc) ->
-    case is_nested_template_leaf(Leaf) of
+    case is_tracked_template_leaf(Leaf) of
         true -> collect_read_keys(Leaf, Acc);
         false -> Acc
     end.
+
+%% An az-nodiff leaf renders once, so a read inside it can never patch anything:
+%% tracking it would only re-run the slot for a change it has to ignore.
+is_tracked_template_leaf(Leaf) ->
+    is_nested_template_leaf(Leaf) andalso not template_is_nodiff(Leaf).
 
 is_nested_template_leaf(Leaf) ->
     case classify_body(Leaf) of

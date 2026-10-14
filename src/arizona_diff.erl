@@ -47,9 +47,12 @@ for a reorder.
 ## Az-nodiff safety
 
 Templates compiled with `az-nodiff` carry `diff => false` and dynamics
-with `Az = undefined`. The diff functions short-circuit on `diff => false`
-before ever inspecting individual dynamics, so `undefined` Az values
-never reach op-code targets.
+with `Az = undefined`. A ROOT snapshot with `diff => false` short-circuits
+`diff/2,3,4` before any dynamic is inspected. A SLOT holding such a template
+is still diffed as a slot: when it re-runs and lands on the same region
+(`arizona_template:same_region/3`) the old render stands and the template's
+own dynamics are never evaluated; when it switches to anything else it is
+replaced through its markers. Either way no op targets an `undefined` Az.
 
 A diffable template can also carry an individual `Az = undefined` dynamic:
 a content slot inside a raw-text element (`script`/`style`/`textarea`/`title`),
@@ -83,6 +86,7 @@ list to that fallback instead of a per-item patch).
 -export([diff/3]).
 -export([diff/4]).
 -export([deps_changed/2]).
+-export([carry_skipped_view/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -220,8 +224,6 @@ diff_dynamics([{undefined, _} | NR], [{undefined, _} | OR], Tail, Views) ->
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so never emit an op -- carry it forward as-is.
     diff_dynamics(NR, OR, Tail, Views);
-diff_dynamics([{Az, _} | NR], [{Az, #{diff := false}} | OR], Tail, Views) ->
-    diff_dynamics(NR, OR, Tail, Views);
 diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail, Views) ->
     diff_dynamics(NR, OR, Tail, Views);
 %% A stream each nested inside another template (what a `?stateless` child
@@ -267,6 +269,11 @@ diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
 %% that really do differ, which is the precondition it is named for.
 maybe_make_ops(_Az, Same, Same, Tail, Views) ->
     {Tail, Views};
+%% Two az-nodiff regions are told apart by identity, not by bytes: the client owns
+%% what is rendered inside, so a new region replaces the old one even when both
+%% rendered alike (make_ops/5 keeps the same one).
+maybe_make_ops(Az, #{diff := false} = New, #{diff := false} = Old, Tail, Views) ->
+    make_ops(Az, New, Old, Tail, Views);
 maybe_make_ops(Az, New, Old, Tail, Views) ->
     case collapses_to_same_bytes(New, Old) of
         true -> {Tail, Views};
@@ -398,9 +405,10 @@ diff_dynamics_v(
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so skip it -- never re-evaluate, never emit an op.
     skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
+%% A `?local` slot belongs to the browser: never re-evaluated, never patched.
 diff_dynamics_v(
     [_Def | DR],
-    [{_Az, #{diff := false}} = OldD | OR],
+    [{_Az, #{az_local := _}} = OldD | OR],
     [ODeps | DepsR],
     ChangedKeys,
     Views0
@@ -429,8 +437,29 @@ skip_dynamic({_Az, Old} = OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0) ->
 diff_changed_dynamic(Def, _Az, #{t := ?EACH} = Old, DR, OR, DepsR, ChangedKeys, Views0) ->
     {Az2, EachDesc, Deps} = arizona_eval:eval_each_def(Def),
     diff_each(Az2, EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0);
+%% A slot holding an az-nodiff region asks first whether it still holds that
+%% region (`arizona_template:same_region/3`), which the slot closure answers
+%% without evaluating the region: if so the old render stands -- no op, no child
+%% `handle_update/3`, only the new deps -- and the cost stays O(1) however large
+%% the region is. Anything else (another branch, a new `az_key`, a value) diffs
+%% as usual.
+diff_changed_dynamic(
+    Def, Az, #{diff := false} = Old, DR, OR, DepsR, ChangedKeys, Views0
+) ->
+    case arizona_eval:eval_unless_same_region(Def, Old, Views0) of
+        {same, NewDeps} ->
+            Views1 = carry_skipped_view(Old, Views0),
+            {OpsRest, DRest, DepsRest, Views2} =
+                diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
+            {OpsRest, [{Az, Old} | DRest], [NewDeps | DepsRest], Views2};
+        {changed, Az, New, NewDeps, Views1} ->
+            changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1)
+    end;
 diff_changed_dynamic(Def, Az, Old, DR, OR, DepsR, ChangedKeys, Views0) ->
     {Az, New, NewDeps, Views1} = arizona_eval:eval_one_v_flat(Def, Views0),
+    changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1).
+
+changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1) ->
     {OpsRest, DRest, DepsRest, Views2} =
         diff_dynamics_v(DR, OR, DepsR, ChangedKeys, Views1),
     {OpsFinal, ViewsFinal} = maybe_make_ops(Az, New, Old, OpsRest, Views2),
@@ -521,9 +550,16 @@ merge_stream_child_views(Source, Old, LocalNew, Old0) ->
             LocalNew
     end.
 
-%% When a dynamic is skipped (deps unchanged), carry its child views over
-%% from OldViews to NewViews so they aren't pruned.
-%%
+-doc """
+Carries a skipped value's child views (and their live subtrees) from the old
+views map into the new one, so a value that is kept rather than re-evaluated
+does not have its views pruned. Also used by `arizona_eval` for a child view it
+keeps without calling `handle_update/3`.
+""".
+-spec carry_skipped_view(Value, Views) -> Views1 when
+    Value :: term(),
+    Views :: {map(), map()},
+    Views1 :: {map(), map()}.
 %% Both the stateful-child form and the container form (a nested template or an
 %% `?each`, which record the views rendered inside them as `child_views`) resolve
 %% what to carry through `live_subtree/2` rather than trusting the set on the
@@ -1817,6 +1853,23 @@ make_op(Az, New, _Old) ->
 %% an az prefix from the child's own fingerprint, neither of which a plain branch has.
 %% So a same-S Old is necessarily a plain inline template too; a child New is excluded
 %% here and handled by make_op/3's child-view clause (which requires `view_id` on both).
+%% A `?local` slot is the browser's. An az-nodiff region keeps its first render for
+%% as long as the slot still holds that region (the same fingerprint, then
+%% `arizona_template:same_region/2`). Any other template entering or leaving a
+%% region replaces the slot whole: a region's dynamics carry no op target, so the
+%% same-statics paths below would find nothing to patch and the slot would keep
+%% the old region.
+make_ops(_Az, _New, #{az_local := _}, Tail, Views) ->
+    {Tail, Views};
+make_ops(Az, #{diff := false, f := F} = New, #{diff := false, f := F} = Old, Tail, Views) ->
+    case arizona_template:same_region(New, Old) of
+        true -> {Tail, Views};
+        false -> {[[?OP_TEXT, Az, arizona_render:zip_or_fp(New)] | Tail], Views}
+    end;
+make_ops(Az, #{s := _, d := _} = New, Old, Tail, Views) when
+    is_map_key(diff, New); is_map(Old), is_map_key(diff, Old)
+->
+    {[[?OP_TEXT, Az, arizona_render:zip_or_fp(New)] | Tail], Views};
 %% A stream `?each` container whose rendered items, order, and item-template
 %% fingerprint are all unchanged needs no op: the container's HTML is exactly
 %% what the client already holds, so the wholesale container `?OP_TEXT` the last
@@ -1890,8 +1943,6 @@ markerless_changed([_New | NR], [_Old | OR]) ->
 %% render-once, like a root-level raw-text slot.
 diff_item_dynamics_v([], [], Views) ->
     {[], Views};
-diff_item_dynamics_v([{Az, _, _} | NR], [{Az, #{diff := false}, _} | OR], Views0) ->
-    diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{Az, Same, _} | NR], [{Az, Same, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{undefined, _New, _} | NR], [{undefined, _Old, _} | OR], Views0) ->
@@ -1922,8 +1973,6 @@ diff_child_dynamics([], [], Tail) ->
 diff_child_dynamics([{undefined, _} | NR], [{undefined, _} | OR], Tail) ->
     %% Markerless render-once slot (raw-text element content): no comment
     %% marker to target, so never emit an op -- mirrors diff_dynamics/3.
-    diff_child_dynamics(NR, OR, Tail);
-diff_child_dynamics([{Az, _New} | NR], [{Az, #{diff := false}} | OR], Tail) ->
     diff_child_dynamics(NR, OR, Tail);
 diff_child_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail) ->
     diff_child_dynamics(NR, OR, Tail);
