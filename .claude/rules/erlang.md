@@ -83,7 +83,7 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `name` (atom) | `disabled` | `disabled` |
 | `<<"name">>` (binary) | `<<"hidden">>` | `hidden` |
 | `{name, true}` | `{hidden, true}` | `hidden` |
-| `{name, false}` | `{hidden, false}` | Stripped |
+| `{name, false}` | `{hidden, false}` | Stripped (`?native` keeps a typed `false` prop) |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Stripped, emits `diff => false` |
 
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
