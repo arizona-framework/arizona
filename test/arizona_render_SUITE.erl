@@ -380,17 +380,25 @@ escape_matches_reference(Config) when is_list(Config) ->
             lists:duplicate(30, 16#3042) ++ "&" ++ lists:duplicate(30, 16#E9)
         )
     ],
-    _ = rand:seed(exsss, {17, 29, 43}),
     Alphabet = <<"abcXYZ09 &<>\"'=;:\n\t"/utf8, 0, 127, 128, 195, 169, 240, 159, 152, 128>>,
-    Random = [
-        <<
-            <<(binary:at(Alphabet, rand:uniform(byte_size(Alphabet)) - 1))>>
-         || _ <- lists:seq(1, rand:uniform(300))
-        >>
-     || _ <- lists:seq(1, 500)
-    ],
+    Random = random_values(500, Alphabet, rand:seed_s(exsss, {17, 29, 43})),
     Inputs = EveryByte ++ Gaps ++ Dense ++ Utf8 ++ Random,
     ?assertEqual([], [I || I <- Inputs, arizona_html:escape(I) =/= reference_escape(I)]).
+
+%% Seeded values over `Alphabet`, the rand state threaded explicitly so the
+%% process-global state is left alone.
+random_values(0, _Alphabet, _State) ->
+    [];
+random_values(N, Alphabet, State0) ->
+    {Len, State1} = rand:uniform_s(300, State0),
+    {Value, State} = random_value(Len, Alphabet, State1, <<>>),
+    [Value | random_values(N - 1, Alphabet, State)].
+
+random_value(0, _Alphabet, State, Acc) ->
+    {Acc, State};
+random_value(Len, Alphabet, State0, Acc) ->
+    {I, State} = rand:uniform_s(byte_size(Alphabet), State0),
+    random_value(Len - 1, Alphabet, State, <<Acc/binary, (binary:at(Alphabet, I - 1))>>).
 
 reference_escape(Bin) ->
     <<<<(reference_entity(C))/binary>> || <<C>> <= Bin>>.

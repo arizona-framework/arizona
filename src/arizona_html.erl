@@ -273,12 +273,12 @@ supports_local() -> true.
 %% metacharacter at all, so locate the first one before building anything: with
 %% none, the input is returned as-is -- no accumulator, no copy. The scan takes 8
 %% (then 4) bytes per step under one guard, which the JIT compiles to plain byte
-%% compares; that halves short clean values and is ~2.5x on long ones. Past the
-%% first metacharacter a short tail goes through the plain append loop, and a
-%% longer one copies each clean run as one slice once two clean bytes in a row
-%% suggest the run is long, so dense markup never pays for a chunk attempt per
-%% byte. Measured shapes and the alternatives that lost (binary:match/2, SWAR,
-%% an iodata result) are in docs/performance.md.
+%% compares; that halves clean values of ~10-20 B and up and is ~2.5x on long
+%% ones. Past the first metacharacter a short tail goes through the plain append
+%% loop, and a longer one copies each clean run as one slice once two clean bytes
+%% in a row suggest the run is long, so dense markup never pays for a chunk
+%% attempt per byte. Measured shapes and the alternatives that lost
+%% (binary:match/2, SWAR, an iodata result) are in docs/performance.md.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) ->
     case first_meta(Bin, 0) of
@@ -295,6 +295,8 @@ escape(Bin) when is_binary(Bin) ->
 %% Byte offset of the first character needing an entity, `none` when there is none.
 %% A chunk that fails holds a metacharacter (or is past the end), so the single
 %% byte step after it hands over to a byte-only scan instead of retrying chunks.
+%% ?SAFE and the advances must never over-accept: a position reported early is
+%% only slower, one reported late leaves a metacharacter unescaped (XSS).
 first_meta(<<A, B, C, D, E, F, G, H, R/binary>>, Pos) when
     ?SAFE(A), ?SAFE(B), ?SAFE(C), ?SAFE(D), ?SAFE(E), ?SAFE(F), ?SAFE(G), ?SAFE(H)
 ->
@@ -335,7 +337,8 @@ escape_runs(<<"\"", R/binary>>, Acc, _Run) ->
     escape_runs(R, <<Acc/binary, "&quot;">>, 0);
 escape_runs(<<"'", R/binary>>, Acc, _Run) ->
     escape_runs(R, <<Acc/binary, "&#39;">>, 0);
-escape_runs(<<C, R/binary>>, Acc, Run) when Run < 2 -> escape_runs(R, <<Acc/binary, C>>, Run + 1);
+escape_runs(<<C, R/binary>>, Acc, Run) when Run < 2 ->
+    escape_runs(R, <<Acc/binary, C>>, Run + 1);
 escape_runs(<<>>, Acc, _Run) ->
     Acc;
 escape_runs(Bin, Acc, _Run) ->

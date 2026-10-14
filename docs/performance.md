@@ -216,7 +216,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Fuse `render/2`'s triple unzip into its zip walk | one walk and two lists where there were two walks and four, per connect/navigate |
 | Skip the fingerprint dedup walk for fp-less frames | strictly less work on every event workload: red/op -0.5% to -6.1%, resolved by the reductions column |
 | Escape a binary/integer SSR content value directly; render every `?each` item through the top-level SSR walk | `render_each_100` -11.6% (6.9 -> 6.1 us), red/op -40%; red/op -31% `render_view_many_dyn_50`, -16%/-17% `render_view_small`/`_with_layout`, -8% `render_view_page`; a 201-row escape-heavy table red/op -23%, wall ~-5% (under the floor) |
-| Scan `escape/1` 8 and 4 bytes per step; slice long clean runs | a 201-row escape-heavy table -46% (193 -> 105 us, red/op 24.8k -> 12.1k); per value: clean 10-200 B -46% to -55%, one metacharacter in 64-200 B -43% to -80%, markup -10%, UTF-8 prose -63%; `render_view_page` -6%, `render_each_100` red/op -13% |
+| Scan `escape/1` 8 and 4 bytes per step; slice long clean runs | a 201-row escape-heavy table -46% (193 -> 105 us, red/op 24.8k -> 12.1k); per value: clean 10-200 B -46% to -55%, one metacharacter in 64-200 B -30% to -80%, markup -10%, UTF-8 prose -63%; `render_view_page` -6%, `render_each_100` red/op -13% |
 
 (The whole 2026-08 arc that added the four rows from "Encode the ops frame" to
 "Fuse `render/2`'s triple unzip" -- PRs #759-#762 -- closed with
@@ -303,6 +303,7 @@ binary's `byte_size`, O(1), never an `iolist_size`. Per value, against the old s
 | ----- | ------ | ----- |
 | clean 5 / 10 / 20 B | 17.5 / 32.1 / 49.8 ns | 13.5 / 17.4 / 22.9 ns |
 | clean 64 / 200 B | 124 / 357 ns | 57 / 176 ns |
+| one `&` at the start / mid-way / at the end of 64 B | 551 / 398 / 205 ns | 180 / 195 / 143 ns |
 | one `&` at the start of 200 B | 1551 ns | 311 ns |
 | one `&` mid-way / at the end of 200 B | 1025 / 444 ns | 316 / 254 ns |
 | dense 200 B (`<a&b>"c'` repeated) | 1916 ns | 1856 ns |
