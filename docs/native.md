@@ -245,10 +245,10 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    array, and a list runs in order; a prop that is not an array (`false` for a
    disabled command) fires nothing. The server's `"e"` (effects) array, one
    command per entry, is dispatched after the ops. The portable commands are
-   handled — `push_event`, and `navigate` (which sends `["navigate", {path, qs}]` on the same socket; the
-   server's `handle_navigate` re-mounts the target view and replies with
-   `OP_REPLACE`). Web-only effects (`set_title`, `dispatch_event`, …) are skipped
-   on native.
+   handled — `push_event`, and `navigate` (which sends
+   `["navigate", {path, qs}]` on the same socket; the server's `handle_navigate`
+   re-mounts the target view and replies with `OP_REPLACE`). Web-only effects
+   (`set_title`, `dispatch_event`, …) are skipped on native.
 6. **Reconnect with backoff.** On a dropped socket — any close other than a
    normal `1000`, or an abrupt failure — reopen with exponential backoff
    (`[1, 2, 5, 10]`s steps, capped at 10s, ±20% jitter), resetting the attempt
