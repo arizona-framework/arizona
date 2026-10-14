@@ -113,6 +113,7 @@ render(Bindings) ->
 -export_type([each_template/0]).
 -export_type([each_container/0]).
 -export_type([snapshot/0]).
+-export_type([region/0]).
 -export_type([stateful_descriptor/0]).
 -export_type([stateless_descriptor/0]).
 -export_type([render_fun/0]).
