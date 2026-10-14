@@ -249,6 +249,8 @@ A reconnect must resync an already-rendered DOM, and the resync payload is a who
 
 An unflagged reconnect (`init_view(true, false, ...)`) keeps the old behavior: mount + render + `OP_REPLACE` immediately, undeduped.
 
+Crash recovery keys on when a connection **mounted** its view: a first connect's first frame, or a reconnect's frame with `firstAfterReconnect` set (its connect frame arrives before the deferred mount). A 4500 before that reloads the page after a jittered delay; one after it remounts in place through the worker's backoff reconnect.
+
 ## bfcache (worker teardown and respawn)
 
 A live WebSocket makes a page ineligible for the back/forward cache, so `connect` tears the transport down on `pagehide` and re-establishes it on `pageshow`:

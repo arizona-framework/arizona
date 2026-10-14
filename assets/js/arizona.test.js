@@ -4128,7 +4128,7 @@ describe('WS_CLOSE_CRASH recovery', () => {
         setupView('page', '<div az="0"></div>');
         mock = setupMockWorker(mod);
         vi.stubGlobal('location', { reload, href: 'http://localhost/' });
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
         return mock;
     }
 
@@ -4171,6 +4171,73 @@ describe('WS_CLOSE_CRASH recovery', () => {
         m.simulateClose(4500);
         vi.advanceTimersByTime(5000);
         expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('a reconnect resync that mounted is a post-mount crash: no reload', async () => {
+        const m = await start();
+        m.simulateOpen(true);
+        m.simulateMessage([], null, true); // the resync: mounted
+        m.simulateClose(4500);
+        vi.advanceTimersByTime(60000);
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    /** A view holding a form with an `az-change` command and one text field. */
+    async function startWithForm() {
+        const m = await start();
+        document.body.innerHTML =
+            '<div id="page" az-view><form id="f" az-change=\'[0,"changed"]\'>' +
+            '<input name="q" value=""></form></div>';
+        return m;
+    }
+    const field = () => /** @type {HTMLInputElement} */ (document.querySelector('[name=q]'));
+    const changeSends = (m) => m.getSentMessages().filter((s) => s[1] === 'changed').length;
+
+    it('a crash keeps the typed fields across the remount', async () => {
+        const m = await startWithForm();
+        m.simulateOpen();
+        m.simulateMessage(null, null); // mounted
+        field().value = 'typed';
+        vi.advanceTimersByTime(11000); // not a quick crash
+        m.simulateClose(4500);
+        field().value = 'stale';
+        m.simulateOpen(true);
+        m.simulateMessage([], null, true); // the resync restores the fields
+        expect(field().value).toBe('typed');
+    });
+
+    it('fields whose restore crashes the view are dropped, ending the loop', async () => {
+        const m = await startWithForm();
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        field().value = 'poison';
+        vi.advanceTimersByTime(11000);
+        m.simulateClose(4500); // saved
+        m.simulateOpen(true);
+        m.simulateMessage([], null, true); // restored + az-change replayed
+        expect(changeSends(m)).toBe(1);
+        m.simulateClose(4500); // the restored state crashed at once: dropped
+        field().value = 'server';
+        m.simulateOpen(true);
+        m.simulateMessage([], null, true);
+        expect(field().value).toBe('server'); // nothing restored
+        expect(changeSends(m)).toBe(1); // nor replayed
+    });
+
+    it('warns once after repeated quick post-mount crashes', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const m = await start();
+            for (let i = 0; i < 5; i++) {
+                m.simulateOpen(i > 0);
+                m.simulateMessage([], null, i > 0);
+                m.simulateClose(4500);
+            }
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(reload).not.toHaveBeenCalled();
+        } finally {
+            warn.mockRestore();
+        }
     });
 
     it('a mount that succeeds first cancels the pending reload and clears the count', async () => {

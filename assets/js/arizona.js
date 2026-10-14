@@ -83,8 +83,25 @@ const CRASH_RELOAD_MAX = 10;
 const CRASH_RELOAD_FAILSAFE = 30000;
 const CRASH_RELOAD_KEY = 'arizona:crash-reloads';
 
+/**
+ * A crash within this long of a mount counts as quick: the mounted state itself
+ * likely crashed, so a remount alone won't fix it. Matches the worker's
+ * backoff-reset window.
+ */
+const CRASH_QUICK_MS = 10000;
+/** Consecutive quick post-mount crashes before warning, once per page load. */
+const CRASH_QUICK_WARN = 3;
+
 /** @type {ReturnType<typeof setTimeout> | null} */
 let _crashReloadTimer = null;
+
+/** When the open connection mounted its view, or null before it has. */
+let _mountedAt = /** @type {number|null} */ (null);
+/** Whether this connection's resync restored saved form fields. */
+let _restoredForms = false;
+/** Consecutive quick post-mount crashes, and whether that was warned about. */
+let _quickCrashes = 0;
+let _quickCrashWarned = false;
 
 /** Whether this page load already logged entering the failsafe delay. */
 let _crashLogged = false;
@@ -3452,6 +3469,7 @@ function connect(endpoint, params = {}) {
                     // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null]
                     if (_mountPending && (!_connReconnect || msg[3])) {
                         _mountPending = false;
+                        _mountedAt = Date.now();
                         crashRecovered();
                     }
                     // The app's `az-*` vocabulary, collected by the parse transform
@@ -3474,7 +3492,10 @@ function connect(endpoint, params = {}) {
                         const armedScroll = _pendingScroll;
                         if (msg[1]) applyOps(msg[1]);
                         if (msg[2]) applyEffects(msg[2]);
-                        if (msg[3]) restoreFormState();
+                        if (msg[3]) {
+                            _restoredForms = _savedForms.size > 0;
+                            restoreFormState();
+                        }
                         if (armedScroll?.patch && _pendingScroll === armedScroll) {
                             _pendingScroll = null;
                         }
@@ -3507,6 +3528,8 @@ function connect(endpoint, params = {}) {
                     // [1, isReconnect]
                     _connected = true;
                     _mountPending = true;
+                    _mountedAt = null;
+                    _restoredForms = false;
                     _connReconnect = !!msg[1];
                     document.documentElement.classList.add('az-connected');
                     document.documentElement.classList.remove('az-disconnected');
@@ -3518,14 +3541,41 @@ function connect(endpoint, params = {}) {
                 case 2: {
                     // [2, closeCode]
                     _connected = false;
-                    const mountCrashed = _mountPending && msg[1] === WS_CLOSE_CRASH;
+                    const crashed = msg[1] === WS_CLOSE_CRASH;
+                    const mountCrashed = _mountPending && crashed;
+                    // Quick: the state this connection mounted (and restored) crashed.
+                    const quickCrash =
+                        crashed && _mountedAt !== null && Date.now() - _mountedAt < CRASH_QUICK_MS;
                     _mountPending = false;
                     document.documentElement.classList.add('az-disconnected');
                     document.documentElement.classList.remove('az-connected');
                     // A crash after the mount needs no reload: the worker's
-                    // reconnect remounts the view in place.
+                    // reconnect remounts the view in place. A respawned bfcache page
+                    // whose deferred mount and a racing event crash together reads as
+                    // a mount crash; the next reconnect's mount cancels that reload.
+                    // A crash in a navigate's mount reads as post-mount first and is
+                    // reclassified on the reconnect, one cycle later.
                     if (mountCrashed) scheduleCrashReload();
-                    if (msg[1] !== WS_CLOSE_NORMAL) saveFormState();
+                    if (_mountedAt !== null) {
+                        _quickCrashes = quickCrash ? _quickCrashes + 1 : 0;
+                        if (_quickCrashes >= CRASH_QUICK_WARN && !_quickCrashWarned) {
+                            _quickCrashWarned = true;
+                            console.warn(
+                                `[arizona] the view crashed within ${CRASH_QUICK_MS / 1000} s ` +
+                                    `of mounting ${_quickCrashes} times in a row; still reconnecting.`,
+                            );
+                        }
+                    }
+                    if (quickCrash && _restoredForms) {
+                        // The fields this connection restored (and replayed) crashed
+                        // the view: keeping them would crash every remount, so the
+                        // next one starts from the server's state instead.
+                        _savedForms.clear();
+                    } else if (msg[1] !== WS_CLOSE_NORMAL) {
+                        saveFormState();
+                    }
+                    _mountedAt = null;
+                    _restoredForms = false;
                     break;
                 }
             }
@@ -3593,6 +3643,8 @@ function connect(endpoint, params = {}) {
                 _worker = null;
                 _connected = false;
                 _mountPending = false;
+                _mountedAt = null;
+                _restoredForms = false;
                 cancelCrashReload();
                 // Reflect the dropped connection so a bfcache-restored snapshot
                 // shows disconnected until `pageshow` reconnects (the worker is
@@ -3626,6 +3678,9 @@ function connect(endpoint, params = {}) {
         }
         _connected = false;
         _mountPending = false;
+        _mountedAt = null;
+        _restoredForms = false;
+        _quickCrashes = 0;
         cancelCrashReload();
         _pendingScroll = null;
         _pendingTransition = null;

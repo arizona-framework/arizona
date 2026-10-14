@@ -429,6 +429,31 @@ describe('arizona-worker', () => {
         }
     });
 
+    it('a first connect mounts on any frame, a reconnect only on its resync', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] })); // first connect: mounted
+        ws.latest().close(1006); // a mounted session resets -> backoff(0)
+        vi.advanceTimersByTime(1200);
+        expect(ws.instances).toHaveLength(2);
+
+        ws.latest().simulateOpen(); // a reconnect: the attrs-only frame is not its mount
+        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
+        ws.latest().close(1006); // not mounted -> backoff(1)
+        vi.advanceTimersByTime(1300);
+        expect(ws.instances).toHaveLength(2);
+        vi.advanceTimersByTime(1200);
+        expect(ws.instances).toHaveLength(3);
+    });
+
+    it('a bfcache respawn [0, url, true] opens as a flagged reconnect', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F', true]);
+        expect(ws.latest().url).toContain('_az_reconnect=1');
+        expect(ws.latest().url).toContain('_az_fps_follow=1');
+        ws.latest().simulateOpen();
+        expect(slf.posted).toContainEqual([1, true]);
+    });
+
     it('update-path message [3, {path, qs}] rewrites the cached URL', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2Fold']);
         slf.send([3, { path: '/new', qs: '' }]);
