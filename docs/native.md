@@ -51,9 +51,7 @@ handle_event(~"inc", _Payload, Bindings) ->
   (`"enabled":false`), unlike the web, where `false` means the attribute is
   absent. Only a whole-value prop is typed: a boolean in content renders as the
   text `true`/`false`, an interpolated prop value (`[~"a-", ?get(on)]`) is text,
-  so a boolean in it raises `bad_template_value`, and a framework (`az-*`) name
-  is typed only for a static `true` (`az_view` needs it): its static `false` is
-  dropped and its dynamic values stay untyped.
+  so a boolean in it raises `bad_template_value`.
 - **Event handlers are props** whose value is an effect command built with the
   platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
   reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into

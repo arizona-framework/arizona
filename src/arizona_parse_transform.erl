@@ -2605,28 +2605,15 @@ compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0)
     end.
 
 %% A static `false` renders whatever the backend's attr_bool/2 says: nothing for a
-%% presence backend, a `false` prop for a value backend. A framework name (`az-*`)
-%% is never a typed prop, so its `false` is dropped on every backend, as it always was.
+%% presence backend, a `false` prop for a value backend.
 compile_static_false(NameAST, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = extract_attr_name(Backend, NameAST),
-    case is_framework_attr(NameBin) of
-        true ->
+    case emit_backend(fun() -> Backend:attr_bool(NameBin, false) end, ElemLine) of
+        <<>> ->
             State0;
-        false ->
-            case emit_backend(fun() -> Backend:attr_bool(NameBin, false) end, ElemLine) of
-                <<>> ->
-                    State0;
-                Bytes ->
-                    buf_append(State0, Bytes)
-            end
-    end.
-
-%% An `az-*` attribute, however spelled (`az_key`, `<<"az-key">>`).
-is_framework_attr(NameBin) ->
-    case binary:replace(framework_attr_name(NameBin), ~"_", ~"-", [global]) of
-        <<"az-", _/binary>> -> true;
-        _ -> false
+        Bytes ->
+            buf_append(State0, Bytes)
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
@@ -2741,7 +2728,7 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
                 State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
             ),
             DynAST = make_nodiff_attr_dynamic_ast(
-                NameBin, typed_attr_ast(Backend, NameBin, ValueAST), Module, line(ValueAST)
+                NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST);
         error ->
@@ -2751,20 +2738,19 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
             ),
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(
-                AzBin, NameBin, typed_attr_ast(Backend, NameBin, ValueAST), Module, line(ValueAST)
+                AzBin, NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST)
     end.
 
 %% A backend whose booleans are typed prop values (`boolean_attrs/0`) gets the value
-%% wrapped, so a dynamic `false` stays a value instead of removing the attribute. A
-%% framework name (`az-*`) is never a typed prop, so it is left unwrapped.
-typed_attr_ast(Backend, NameBin, ValueAST) ->
-    case {Backend:boolean_attrs(), is_framework_attr(NameBin)} of
-        {value, false} ->
+%% wrapped, so a dynamic `false` stays a value instead of removing the attribute.
+typed_attr_ast(Backend, ValueAST) ->
+    case Backend:boolean_attrs() of
+        value ->
             L = line(ValueAST),
             {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, bool_attr}}, [ValueAST]};
-        {_Booleans, _Framework} ->
+        presence ->
             ValueAST
     end.
 
