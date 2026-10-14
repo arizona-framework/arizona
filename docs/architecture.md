@@ -93,6 +93,10 @@ HTML output and rendering.
 - `render/1` -- evaluate dynamics, produce `{HTML, Snapshot}`
 - `render/2` -- like `render/1` but threads a views map for stateful children, collects deps:
   `{HTML, Snapshot, Views}`
+- `render_snapshot/2` -- `render/2` without the document: `{Snapshot, Views}`. A fingerprinted
+  reconnect or navigate ships the fingerprint payload, so it renders through this
+- `snapshot_html/1` -- rebuild the document `render/2` would have produced from a snapshot, for
+  a root with no fingerprint
 - `render_to_iolist/1` -- render a template to iolist (used for layout templates with
   `diff => false`)
 - `render_to_iolist/2` -- stateful-component SSR (test-only): `render_to_iolist(Handler, Opts)`
