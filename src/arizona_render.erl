@@ -280,10 +280,10 @@ render_dyn(Backend, {arizona_esc, V}) ->
     arizona_template:escape_marked(Backend, V);
 render_dyn(Backend, #{t := ?EACH, items := Items, template := Tmpl}) when is_list(Items) ->
     #{s := ItemS} = Tmpl,
-    [zip_stream_item(Backend, ItemS, ItemD) || ItemD <- Items];
+    join_items(Backend, [zip_stream_item(Backend, ItemS, ItemD) || ItemD <- Items]);
 render_dyn(Backend, #{t := ?EACH, items := Items, order := Order, template := Tmpl}) ->
     #{s := ItemS} = Tmpl,
-    [zip_stream_item(Backend, ItemS, maps:get(K, Items)) || K <- Order];
+    join_items(Backend, [zip_stream_item(Backend, ItemS, maps:get(K, Items)) || K <- Order]);
 render_dyn(Backend, #{az_local := _, target := {attr, Name}, v := V}) ->
     Backend:render_attr(Name, V);
 render_dyn(Backend, #{az_local := _, v := V}) ->
@@ -299,8 +299,20 @@ render_dyn(Backend, #{s := InnerS, d := InnerD} = Nested) ->
     zip_d(NestedBackend, InnerS, InnerD);
 render_dyn(_Backend, V) when is_binary(V) ->
     V;
-render_dyn(_Backend, V) ->
-    arizona_template:to_bin(V).
+render_dyn(Backend, V) ->
+    text_leaf(Backend, arizona_template:to_bin(V)).
+
+%% An unescaped scalar (a trusted value, or one from a slot that is not escaped)
+%% is spliced as a text child: verbatim for HTML, a JSON string for native.
+text_leaf(undefined, Bin) ->
+    Bin;
+text_leaf(Backend, Bin) ->
+    Backend:text_child(Bin).
+
+join_items(undefined, Items) ->
+    Items;
+join_items(Backend, Items) ->
+    Backend:each_items(Items).
 
 -doc """
 Renders a single each-item snapshot.
@@ -657,7 +669,8 @@ render_ssr_val(Backend, #{t := ?EACH, source := Items, template := Tmpl}) when i
     %% paths still build it, because their snapshot is what the next diff reads.
     %% What the items render TO is the backend's concern, as everywhere else here.
     #{s := ItemStatics, d := DynamicsFun} = Tmpl,
-    {ssr_rendered, [zip_ssr(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items]};
+    {ssr_rendered,
+        join_items(Backend, [zip_ssr(Backend, ItemStatics, DynamicsFun(Item)) || Item <- Items])};
 render_ssr_val(Backend, #{
     t := ?EACH,
     source := #stream{
@@ -668,15 +681,20 @@ render_ssr_val(Backend, #{
     template := Tmpl
 }) ->
     #{s := ItemStatics, d := DynamicsFun} = Tmpl,
-    {ssr_rendered, [
-        zip_ssr(Backend, ItemStatics, DynamicsFun(maps:get(K, ItemsMap), K))
-     || K <- arizona_template:visible_keys(Order, Limit)
-    ]};
+    {ssr_rendered,
+        join_items(Backend, [
+            zip_ssr(Backend, ItemStatics, DynamicsFun(maps:get(K, ItemsMap), K))
+         || K <- arizona_template:visible_keys(Order, Limit)
+        ])};
 render_ssr_val(Backend, #{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
     %% Same entry order as the live path (`arizona_eval:render_map_items_simple/2`),
     %% so a later diff lines up with what SSR put on the page.
     #{s := ItemStatics, d := DynamicsFun} = Tmpl,
-    {ssr_rendered, [zip_ssr(Backend, ItemStatics, DynamicsFun(K, V)) || K := V <- Source]};
+    {ssr_rendered,
+        join_items(Backend, [
+            zip_ssr(Backend, ItemStatics, DynamicsFun(K, V))
+         || K := V <- Source
+        ])};
 render_ssr_val(Backend, #{stateful := H, props := Props}) ->
     ok = refuse_stateful_in_layout(H),
     {B1, _Resets} = arizona_stateful:call_mount(H, Props),
@@ -721,8 +739,8 @@ render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
         ]
     },
     arizona_template:maybe_propagate(Tmpl, Snap0);
-render_ssr_val(_Backend, Val) ->
-    arizona_template:to_bin(Val).
+render_ssr_val(Backend, Val) ->
+    text_leaf(Backend, arizona_template:to_bin(Val)).
 
 %% A value interpolation, classified as the live render classifies it
 %% (`arizona_template:mark_esc/1`): a map -- nested template, descriptor, `?local`
@@ -739,23 +757,23 @@ render_ssr_esc_val(Backend, V) when is_map(V) ->
 render_ssr_esc_val(Backend, V) ->
     case arizona_template:mark_esc(V) of
         {arizona_esc, X} -> arizona_template:escape_marked(Backend, X);
-        Trusted -> arizona_template:to_bin(Trusted)
+        Trusted -> text_leaf(Backend, arizona_template:to_bin(Trusted))
     end.
 
 render_ssr_attr(Backend, Name, Val) ->
     Backend:render_attr(Name, Val).
 
 render_fp_val(Backend, {arizona_esc, V}) ->
-    %% The fingerprint (initial hydration) payload is the server-rendered output,
-    %% so a scalar content value is escaped through the backend here -- HTML
-    %% entity-escapes, native's escape/1 is the identity (raw). This is unlike the
-    %% live diff, where `make_op` sends the value raw for the client to text-node.
-    arizona_template:escape_value(Backend, V);
+    %% The fingerprint (initial hydration) payload carries a scalar content value
+    %% the way its client zips it (`wire_escape/1`): HTML entity-escaped, native
+    %% raw for the client to JSON-encode. This is unlike the live diff, where
+    %% `make_op` sends the value raw for the client to text-node.
+    Backend:wire_escape(arizona_template:to_bin(V));
 render_fp_val(Backend, {attr, Name, V}) ->
     %% One clause for every backend: HTML emits ` Name="Escaped"`, native strips
-    %% the name (baked into the static) and stringifies the value -- both via the
-    %% backend's render_attr/2, so no backend is named here.
-    Backend:render_attr(Name, V);
+    %% the name (baked into the static) and sends the raw value -- both via the
+    %% backend's wire_attr/2, so no backend is named here.
+    Backend:wire_attr(Name, V);
 render_fp_val(Backend, #{az_local := _, target := {attr, Name}, v := V}) ->
     Backend:render_attr(Name, V);
 render_fp_val(Backend, #{az_local := _, v := V}) ->

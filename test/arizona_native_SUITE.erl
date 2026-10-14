@@ -27,6 +27,8 @@
 -export([diff_stream_move_op/1]).
 -export([diff_remove_node_op/1]).
 -export([scope_keeps_command_payload_az/1]).
+-export([zipped_document_matches_client/1]).
+-export([ssr_view_matches_mount_frame/1]).
 
 all() ->
     [
@@ -53,7 +55,9 @@ all() ->
         diff_stream_remove_op,
         diff_stream_move_op,
         diff_remove_node_op,
-        scope_keeps_command_payload_az
+        scope_keeps_command_payload_az,
+        zipped_document_matches_client,
+        ssr_view_matches_mount_frame
     ].
 
 %% --------------------------------------------------------------------
@@ -474,6 +478,78 @@ scope_keeps_command_payload_az(Config) when is_list(Config) ->
 %% Decode a fully-static native template (single static fragment, no dynamics).
 decode_static(#{s := [Static], d := []}) ->
     json:decode(Static).
+
+%% The zipped document of a `?native` template -- what render_to_iolist/1 returns
+%% and the text render/1 returns -- is byte for byte the JSON a client builds by
+%% interleaving the fingerprint payload, for every value shape and position.
+zipped_document_matches_client(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Name, Tmpl}) ->
+            {Live, Snap} = arizona_render:render(Tmpl),
+            Client = interleave_bin(arizona_render:fingerprint_payload(Snap)),
+            ?assertMatch(#{}, json:decode(Client)),
+            ?assertEqual(
+                {Name, Client}, {Name, iolist_to_binary(arizona_render:render_to_iolist(Tmpl))}
+            ),
+            ?assertEqual({Name, Client}, {Name, iolist_to_binary(Live)})
+        end,
+        arizona_native_ssr_shapes:templates()
+    ).
+
+%% A `?native` view rendered request-free (render_view_to_iolist/2, the path
+%% static generation and the dev tools take) is the document a client builds from
+%% the live process's first frame, stateful children included.
+ssr_view_matches_mount_frame(Config) when is_list(Config) ->
+    Views = [
+        {arizona_native_counter, #{}},
+        {arizona_native_nested, #{}},
+        {arizona_native_conditional, #{}},
+        {arizona_native_stream_child, #{}},
+        {arizona_native_tabs, #{}},
+        {arizona_native_list, #{
+            items => [#{id => 1, text => ~"a \"b\""}, #{id => 2, text => ~"c"}]
+        }}
+    ],
+    lists:foreach(
+        fun({Handler, Bindings}) ->
+            {ok, Pid} = arizona_live:start_link(Handler, Bindings, undefined, []),
+            {ok, _ViewId, Frame, _} = arizona_live:mount_and_render(Pid),
+            ok = gen_server:stop(Pid),
+            SSR = arizona_render:render_view_to_iolist(Handler, #{bindings => Bindings}),
+            Client = iolist_to_binary(cached_interleave(Frame, frame_statics(Frame, #{}))),
+            ?assertEqual({Handler, Client}, {Handler, iolist_to_binary(SSR)})
+        end,
+        Views
+    ).
+
+interleave_bin(#{~"s" := Statics, ~"d" := Dynamics}) ->
+    iolist_to_binary(interleave(Statics, Dynamics)).
+
+%% A frame ships a fingerprint's statics once and omits them on every repeat, so a
+%% client resolves `#{f, d}` from what it already holds. Collect them first.
+frame_statics(#{~"f" := F, ~"s" := S} = Payload, Acc) ->
+    frame_statics(maps:get(~"d", Payload), Acc#{F => S});
+frame_statics(#{~"d" := D}, Acc) ->
+    frame_statics(D, Acc);
+frame_statics(List, Acc) when is_list(List) ->
+    lists:foldl(fun frame_statics/2, Acc, List);
+frame_statics(_Scalar, Acc) ->
+    Acc.
+
+cached_interleave(#{~"t" := _, ~"f" := F, ~"d" := ItemsList}, Cache) ->
+    #{F := S} = Cache,
+    Items = [cached_zip(S, ItemD, Cache) || ItemD <- ItemsList],
+    [$[, lists:join($,, Items), $]];
+cached_interleave(#{~"f" := F, ~"d" := D}, Cache) ->
+    #{F := S} = Cache,
+    cached_zip(S, D, Cache);
+cached_interleave(V, _Cache) when is_binary(V) ->
+    json:encode(V).
+
+cached_zip([S], [], _Cache) ->
+    [S];
+cached_zip([S | Statics], [V | Dynamics], Cache) ->
+    [S, cached_interleave(V, Cache) | cached_zip(Statics, Dynamics, Cache)].
 
 %% Mirror the browser worker's interleave for a fingerprint payload: stitch the
 %% JSON-fragment statics back together with the JSON-encoded dynamic values,

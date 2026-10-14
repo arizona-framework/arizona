@@ -57,6 +57,14 @@ needs a comma between array elements).
 """.
 -callback children_sep() -> binary().
 
+-doc """
+Joins an `?each`'s rendered items in the zipped document. HTML and the terminal
+concatenate them; native emits a JSON array, the nested array its client builds
+from the wire and splices into the parent -- which also keeps an empty `?each`
+between siblings valid.
+""".
+-callback each_items(Items :: [iodata()]) -> iodata().
+
 -doc "A static text child (raw text for HTML; a JSON string for native).".
 -callback text_child(Text :: binary()) -> binary().
 
@@ -182,14 +190,22 @@ rejects `?local` at compile time when `false`.
 -callback supports_local() -> boolean().
 
 -doc """
-Escape a dynamic value's rendered bytes for this backend's output. Called at the
-render boundary on interpolated scalar values (`arizona_template:escape_value/2`).
-HTML entity-escapes (`<`, `&`, ...); the terminal strips control bytes that would
-inject escape sequences; a plain-text/JSON backend is the identity. A `?raw`
-opt-out is classified out before this callback runs, so it never sees trusted
-fragments.
+Escape a dynamic value's rendered bytes for this backend's zipped document.
+Called at the render boundary on interpolated scalar values
+(`arizona_template:escape_value/2`). HTML entity-escapes (`<`, `&`, ...); the
+terminal strips control bytes that would inject escape sequences; native emits a
+JSON string. A `?raw` opt-out is classified out before this callback runs, so it
+never sees trusted fragments.
 """.
 -callback escape(Value :: binary()) -> binary().
+
+-doc """
+How an escaped scalar travels in the fingerprint (hydration) payload. A client
+that splices the payload as text (the browser) needs exactly `escape/1`'s
+output; the native client JSON-encodes each value itself, so it gets the raw
+value. The zipped document always uses `escape/1`.
+""".
+-callback wire_escape(Value :: binary()) -> binary().
 
 -doc """
 Neutralize a dynamic value spliced into a **raw-text** element (`raw_text_kind/2
@@ -214,10 +230,16 @@ Render a dynamic attribute's evaluated value to this backend's output bytes.
 
 Called at the render boundary for a dynamic attribute (`{attr, Name, Value}`).
 HTML emits ` Name="Escaped"` (or a bare/absent name for a boolean value); the
-native backend bakes the prop name into the static, so it emits just the
-stringified value. Escaping is governed by the backend (via `escape/1`, through
+native backend bakes the prop name into the static, so it emits just the value,
+as a JSON string. Escaping is governed by the backend (via `escape/1`, through
 `arizona_template:escape_value/2`, so a `?raw` opt-out or effect command is
 classified out first). A backend that rejects dynamic attributes at compile
 time (`attr_dyn_name/1`) never has this callback reached.
 """.
 -callback render_attr(Name :: binary(), Value :: term()) -> binary().
+
+-doc """
+How a dynamic attribute value travels in the fingerprint (hydration) payload --
+`render_attr/2`'s counterpart, as `wire_escape/1` is `escape/1`'s.
+""".
+-callback wire_attr(Name :: binary(), Value :: term()) -> binary().

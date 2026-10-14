@@ -20,6 +20,7 @@ identical to the previous inlined emission.
 -export([attr_command/2]).
 -export([attr_dyn_name/1]).
 -export([children_sep/0]).
+-export([each_items/1]).
 -export([text_child/1]).
 -export([text_az/2]).
 -export([text_slot_open/1]).
@@ -35,6 +36,8 @@ identical to the previous inlined emission.
 -export([escape/1]).
 -export([raw_text/2]).
 -export([render_attr/2]).
+-export([wire_escape/1]).
+-export([wire_attr/2]).
 
 -spec name(arizona_renderer:tag()) -> binary().
 %% An ATOM name is translated `_` -> `-` so `az_click` needs no quoting. A BINARY
@@ -104,6 +107,10 @@ attr_dyn_name(_Name) ->
 -spec children_sep() -> binary().
 children_sep() ->
     <<>>.
+
+-spec each_items([iodata()]) -> iodata().
+each_items(Items) ->
+    Items.
 
 -spec text_child(binary()) -> binary().
 text_child(Text) ->
@@ -455,3 +462,13 @@ render_attr(Name, Value) ->
         value ->
             attr(Name, arizona_template:to_bin(Value))
     end.
+
+%% The browser splices the fingerprint payload as text, so the wire carries what
+%% the document does.
+-spec wire_escape(binary()) -> binary().
+wire_escape(Bin) ->
+    escape(Bin).
+
+-spec wire_attr(binary(), term()) -> binary().
+wire_attr(Name, Value) ->
+    render_attr(Name, Value).
