@@ -17,8 +17,9 @@ become addressable `#text` nodes so the diff engine can target them by `az`.
 
 String keys and values are escaped via `json:encode/1`, so the zipped statics
 form valid JSON. So do the dynamics in the zipped document (`escape/1`,
-`render_attr/2`): a scalar is a JSON string, exactly what a client builds by
-JSON-encoding the wire value. On the wire itself a value stays raw
+`render_attr/2`): a scalar is a JSON string, an effect command its array and a
+typed boolean prop a JSON boolean, exactly what a client builds by JSON-encoding
+the wire value. On the wire itself a value stays raw
 (`wire_escape/1`, `wire_attr/2`), because the client does that encoding.
 """.
 -behaviour(arizona_renderer).
@@ -30,8 +31,7 @@ JSON-encoding the wire value. On the wire itself a value stays raw
 -export([element_void_close/0]).
 -export([element_close/1]).
 -export([attr/2]).
--export([attr_boolean/1]).
--export([attr_false/1]).
+-export([attr_bool/2]).
 -export([attr_command/2]).
 -export([attr_dyn_name/1]).
 -export([children_sep/0]).
@@ -86,13 +86,9 @@ element_close(_TagName) ->
 attr(Name, Value) ->
     <<",", (json_str(Name))/binary, ":", (json_str(Value))/binary>>.
 
--spec attr_boolean(binary()) -> binary().
-attr_boolean(Name) ->
-    <<",", (json_str(Name))/binary, ":true">>.
-
--spec attr_false(binary()) -> binary().
-attr_false(Name) ->
-    <<",", (json_str(Name))/binary, ":false">>.
+-spec attr_bool(binary(), boolean()) -> binary().
+attr_bool(Name, Bool) ->
+    <<",", (json_str(Name))/binary, ":", (atom_to_binary(Bool))/binary>>.
 
 -spec attr_command(binary(), term()) -> binary().
 attr_command(Name, Cmd) ->
@@ -200,14 +196,15 @@ raw_text(_Tag, Value) -> Value.
 %% Render a dynamic attribute value: the prop name is baked into the static by
 %% attr_dyn_name/1, so the dynamic is just the value -- the JSON the client builds
 %% by encoding the wire value: an array for an effect command, as a folded one
-%% (attr_command/2) is, else a string.
+%% (attr_command/2) is, a boolean for a typed boolean, else a string.
 -spec render_attr(binary(), term()) -> binary().
 render_attr(Name, Value) ->
     iolist_to_binary(json:encode(wire_attr(Name, Value))).
 
 %% The prop as the client receives it, before it JSON-encodes it: an effect
-%% command as its array, so a tap prop reads the same dynamic or folded, and any
-%% other value stringified (to_bin/1 classifies out a `?raw`).
+%% command as its array, so a tap prop reads the same dynamic or folded, a typed
+%% boolean (`arizona_template:bool_attr/1`) as itself, and any other value
+%% stringified (to_bin/1 classifies out a `?raw`).
 -spec wire_attr(binary(), term()) -> json:encode_value().
 wire_attr(_Name, {arizona_bool, Bool}) ->
     Bool;

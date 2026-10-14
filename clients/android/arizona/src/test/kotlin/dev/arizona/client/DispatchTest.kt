@@ -129,9 +129,14 @@ class DispatchTest {
         )
         client.handleText(frame("""[1,"native_x:B-0","on_tap",false]"""))
 
+        val sent = mutableListOf<String>()
+        client.handleOpen { sent.add(it) }
+        val announced = sent.size
+
         val button = content(client)
         assertEquals("false", button.props["on_tap"].toString())
         client.tap(button)
+        assertEquals(announced, sent.size)
     }
 
     // The documented `case ?get(flag) of true -> ?stateful(child, ...)` pattern:

@@ -13,6 +13,7 @@ templates() ->
         items => [~"a", ~"b"],
         none => [],
         flag => true,
+        off => false,
         int => -5,
         float => 1.5,
         atom => foo,
@@ -51,7 +52,14 @@ scalars(Bindings) ->
 
 attrs(Bindings) ->
     ?native(
-        {'Text', [{color, ?get(text)}, {size, ?get(int)}, {enabled, ?get(flag)}, {visible, false}],
+        {'Text',
+            [
+                {color, ?get(text)},
+                {size, ?get(int)},
+                {enabled, ?get(flag)},
+                {selected, ?get(off)},
+                {visible, false}
+            ],
             [
                 ~"x"
             ]}

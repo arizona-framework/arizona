@@ -2604,16 +2604,30 @@ compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0)
             flush(State0, DynAST)
     end.
 
-%% A presence backend drops a static `false`; a value backend keeps it as a
-%% prop, the same shape a dynamic `false` takes.
+%% A static `false` renders whatever the backend's attr_bool/2 says: nothing for a
+%% presence backend, a `false` prop for a value backend. A framework name (`az-*`)
+%% is never a typed prop, so its `false` is dropped on every backend, as it always was.
 compile_static_false(NameAST, State0, ElemLine) ->
     Backend = State0#state.backend,
-    case Backend:boolean_attrs() of
-        presence ->
+    NameBin = extract_attr_name(Backend, NameAST),
+    case is_framework_attr(NameBin) of
+        true ->
             State0;
-        value ->
-            NameBin = record_directive_attr(extract_attr_name(Backend, NameAST)),
-            buf_append(State0, emit_backend(fun() -> Backend:attr_false(NameBin) end, ElemLine))
+        false ->
+            case emit_backend(fun() -> Backend:attr_bool(NameBin, false) end, ElemLine) of
+                <<>> ->
+                    State0;
+                Bytes ->
+                    _ = record_directive_attr(NameBin),
+                    buf_append(State0, Bytes)
+            end
+    end.
+
+%% An `az-*` attribute, however spelled (`az_key`, `<<"az-key">>`).
+is_framework_attr(NameBin) ->
+    case binary:replace(framework_attr_name(NameBin), ~"_", ~"-", [global]) of
+        <<"az-", _/binary>> -> true;
+        _ -> false
     end.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
@@ -2625,7 +2639,7 @@ compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
 compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = record_directive_attr(extract_binary_value(Bin)),
-    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_bool(NameBin, true) end, ElemLine));
 compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
@@ -2635,7 +2649,7 @@ compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, ElemLine) 
 ->
     Backend = State0#state.backend,
     NameBin = record_directive_attr(extract_attr_name(Backend, NameAST)),
-    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_bool(NameBin, true) end, ElemLine));
 compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
@@ -2676,7 +2690,7 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
 compile_attr({atom, _, Name}, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = record_directive_attr(Backend:name(Name)),
-    buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
+    buf_append(State0, emit_backend(fun() -> Backend:attr_bool(NameBin, true) end, ElemLine));
 compile_attr(Attr, _ElemAz, _State0, ElemLine) ->
     AttrLine =
         try
@@ -2728,7 +2742,7 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
                 State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
             ),
             DynAST = make_nodiff_attr_dynamic_ast(
-                NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
+                NameBin, typed_attr_ast(Backend, NameBin, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST);
         error ->
@@ -2738,19 +2752,20 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
             ),
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(
-                AzBin, NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
+                AzBin, NameBin, typed_attr_ast(Backend, NameBin, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST)
     end.
 
 %% A backend whose booleans are typed prop values (`boolean_attrs/0`) gets the value
-%% wrapped, so a dynamic `false` stays a value instead of removing the attribute.
-typed_attr_ast(Backend, ValueAST) ->
-    case Backend:boolean_attrs() of
-        presence ->
-            ValueAST;
-        value ->
-            {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, bool_attr}}, [ValueAST]}
+%% wrapped, so a dynamic `false` stays a value instead of removing the attribute. A
+%% framework name (`az-*`) is never a typed prop, so it is left unwrapped.
+typed_attr_ast(Backend, NameBin, ValueAST) ->
+    case {Backend:boolean_attrs(), is_framework_attr(NameBin)} of
+        {value, false} ->
+            {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, bool_attr}}, [ValueAST]};
+        {_Booleans, _Framework} ->
+            ValueAST
     end.
 
 %% Emit a client-owned attribute slot (`?local` in attribute-value position): a

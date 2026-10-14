@@ -529,13 +529,11 @@ with no defined meaning; using it in a `?native`/`?terminal` template is unsuppo
     Value :: term().
 raw(Value) -> {arizona_raw, Value}.
 
--doc """
-Tags a boolean attribute value as a typed value rather than an HTML presence flag.
-
-The parse transform wraps a dynamic attribute in this call for a backend whose
-`boolean_attrs/0` is `value`, so the diff sends `true`/`false` as the prop value
-instead of adding and removing the attribute. Any other value passes through.
-""".
+%% Internal, emitted only by the parse transform for a `value`-boolean backend
+%% (`boolean_attrs/0`, i.e. ?native): tags a dynamic attribute's boolean so the diff
+%% sends `true`/`false` as the prop value instead of adding and removing it. Any
+%% other value passes through. Never valid in a presence-boolean (?html) template.
+-doc false.
 -spec bool_attr(Value) -> Value | {arizona_bool, boolean()} when
     Value :: term().
 bool_attr(Bool) when is_boolean(Bool) -> {arizona_bool, Bool};

@@ -44,11 +44,14 @@ handle_event(~"inc", _Payload, Bindings) ->
   client's / your tests' concern, not a compile error.
 - **Attributes are widget props.** Static and dynamic both supported. Values are
   string-encoded on the wire; the client coerces (typed props are a future
-  addition). A boolean is the exception: it is a JSON `true`/`false`, static
-  (`{visible, true}`) or dynamic (`{enabled, ?get(on)}`), and a dynamic one stays
-  present in both states -- `OP_SET_ATTR` sets it to `false` rather than removing
-  the prop. A static `false` stays too (`"enabled":false`), unlike the web, where
-  `false` means the attribute is absent.
+  addition). A whole-value boolean prop is the exception: it is a JSON
+  `true`/`false`, static (`{visible, true}`) or dynamic (`{enabled, ?get(on)}`),
+  and a dynamic one stays present in both states -- `OP_SET_ATTR` sets it to
+  `false` rather than removing the prop. A static `false` stays too
+  (`"enabled":false`), unlike the web, where `false` means the attribute is
+  absent. Only a whole-value prop is typed: a boolean in content renders as the
+  text `true`/`false`, an interpolated prop value (`[~"a-", ?get(on)]`) is text,
+  and a framework (`az-*`) name never becomes a typed prop.
 - **Event handlers are props** whose value is an effect command built with the
   platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
   reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into
@@ -155,7 +158,8 @@ browser, so statics are sent once and never re-sent:
   `content_type/0`; a render crash's error page stays HTML). The request-free
   render (`arizona_render:render_to_iolist/1`, `render_view_to_iolist/2`, so
   `arizona_static` and the dev tools) zips the same JSON a client builds from that
-  frame: each scalar a JSON string, each `?each` a nested array.
+  frame: each scalar a JSON string (a whole-value boolean prop a JSON boolean, an
+  effect command its array), each `?each` a nested array.
 
 ## Native client contract
 

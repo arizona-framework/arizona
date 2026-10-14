@@ -52,7 +52,7 @@ never sanitized.
 -export([element_void_close/0]).
 -export([element_close/1]).
 -export([attr/2]).
--export([attr_boolean/1]).
+-export([attr_bool/2]).
 -export([attr_command/2]).
 -export([attr_dyn_name/1]).
 -export([children_sep/0]).
@@ -91,7 +91,7 @@ name(Atom) ->
 element_open(TagName) ->
     %% No structural open in a terminal; styling comes from the attributes. This is
     %% still where the tag is checked, because it is the one callback every element
-    %% passes through exactly once -- the same place attr/2 and attr_boolean/1 police
+    %% passes through exactly once -- the same place attr/2 and attr_bool/2 police
     %% attribute names.
     %%
     %% The vocabulary is closed, so an unrecognized tag is a typo, not an extension
@@ -169,8 +169,10 @@ attr(Name, _Value) ->
         "), or {sgr, Escape} / {fg, Index} / {bg, Index} for a custom code"
     ]).
 
--spec attr_boolean(binary()) -> binary().
-attr_boolean(Name) ->
+-spec attr_bool(binary(), boolean()) -> binary().
+attr_bool(_Name, false) ->
+    <<>>;
+attr_bool(Name, true) ->
     case find_style(Name) of
         {ok, Escape} ->
             iolist_to_binary(Escape);

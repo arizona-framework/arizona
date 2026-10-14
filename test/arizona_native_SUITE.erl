@@ -18,6 +18,8 @@
 -export([html_dynamic_boolean_attr_keeps_presence/1]).
 -export([static_false_prop_is_present/1]).
 -export([html_static_false_attr_is_dropped/1]).
+-export([framework_static_false_dropped/1]).
+-export([framework_dynamic_bool_untyped/1]).
 -export([dedup_keeps_command_prop_payload/1]).
 -export([live_view_caches_statics/1]).
 -export([native_each_renders_item_array/1]).
@@ -55,6 +57,8 @@ all() ->
         html_dynamic_boolean_attr_keeps_presence,
         static_false_prop_is_present,
         html_static_false_attr_is_dropped,
+        framework_static_false_dropped,
+        framework_dynamic_bool_untyped,
         dedup_keeps_command_prop_payload,
         live_view_caches_statics,
         native_each_renders_item_array,
@@ -337,6 +341,36 @@ html_static_false_attr_is_dropped(Config) when is_list(Config) ->
         ~"<button hidden>x</button>",
         iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{})))
     ).
+
+%% A framework (`az-*`) name is never a typed prop: a static `false` on one is
+%% dropped on native exactly as on the web, whatever its spelling.
+framework_static_false_dropped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(nt_bool_framework). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    az:native({'Button', [{az_hint, false}, {<<\"az-flag\">>, false}, "
+        "        {enabled, false}], [<<\"x\">>]}). "
+    ),
+    Doc = json:decode(iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{})))),
+    ?assertMatch(#{~"enabled" := false}, Doc),
+    ?assertNot(is_map_key(~"az_hint", Doc)),
+    ?assertNot(is_map_key(~"az-flag", Doc)).
+
+%% A dynamic boolean on a framework (`az-*`) name is not wrapped as a typed prop,
+%% so it keeps the plain value rendering every other backend gives it.
+framework_dynamic_bool_untyped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(nt_bool_framework_dyn). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Button', [{az_hint, az:get(on, Bindings)}, "
+        "        {enabled, az:get(on, Bindings)}], [<<\"x\">>]}). "
+    ),
+    Doc = json:decode(
+        iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{on => false})))
+    ),
+    ?assertMatch(#{~"az_hint" := ~"false", ~"enabled" := false}, Doc).
 
 %% A command prop's payload map is app data, even when it carries `f`/`s`/`d`
 %% keys: the fingerprint dedup leaves it whole, in the hydration payload and in a

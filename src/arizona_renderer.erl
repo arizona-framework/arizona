@@ -31,17 +31,12 @@ other formats while reusing the same walker, diff engine, and transport.
 -doc "A name/value attribute.".
 -callback attr(Name :: binary(), Value :: binary()) -> binary().
 
--doc "A valueless (boolean) attribute.".
--callback attr_boolean(Name :: binary()) -> binary().
-
 -doc """
-A static `false` attribute. Required only by a backend whose `boolean_attrs/0` is
-`value`, where `false` is a prop value rather than an absence; a `presence` backend
-drops a static `false` at compile time and never gets this call.
+A static boolean attribute: `{Name, true}`, `{Name, false}` or a bare name. A
+`presence` backend (`boolean_attrs/0`) renders the bare name for `true` and nothing
+for `false`; a `value` backend renders the boolean as the prop's value.
 """.
--callback attr_false(Name :: binary()) -> binary().
-
--optional_callbacks([attr_false/1]).
+-callback attr_bool(Name :: binary(), Bool :: boolean()) -> binary().
 
 -doc """
 An attribute whose value is a compile-time-folded effect command (e.g.
@@ -208,7 +203,7 @@ rejects `?local` at compile time when `false`.
 What a dynamic boolean attribute means on this backend's wire. `presence` (HTML): `true`
 renders the bare attribute and `false` removes it. `value`: a boolean is a typed prop
 value, sent as JSON `true`/`false` and present in both states, the same shape a static
-`true` (`attr_boolean/1`) renders. Asked by the parse transform at compile time, which
+boolean (`attr_bool/2`) renders. Asked by the parse transform at compile time, which
 wraps the attribute expression in `arizona_template:bool_attr/1` for a `value` backend.
 """.
 -callback boolean_attrs() -> presence | value.
@@ -254,11 +249,12 @@ Render a dynamic attribute's evaluated value to this backend's output bytes.
 
 Called at the render boundary for a dynamic attribute (`{attr, Name, Value}`).
 HTML emits ` Name="Escaped"` (or a bare/absent name for a boolean value); the
-native backend bakes the prop name into the static, so it emits just the value,
-as a JSON string. Escaping is governed by the backend (via `escape/1`, through
-`arizona_template:escape_value/2`, so a `?raw` opt-out or effect command is
-classified out first). A backend that rejects dynamic attributes at compile
-time (`attr_dyn_name/1`) never has this callback reached.
+native backend bakes the prop name into the static, so it emits just the value
+as JSON: a string, an effect command's array, or a typed boolean. Escaping is
+governed by the backend (via `escape/1`, through `arizona_template:escape_value/2`,
+so a `?raw` opt-out or effect command is classified out first). A backend that
+rejects dynamic attributes at compile time (`attr_dyn_name/1`) never has this
+callback reached.
 """.
 -callback render_attr(Name :: binary(), Value :: term()) -> binary().
 
