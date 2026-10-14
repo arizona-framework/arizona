@@ -341,7 +341,7 @@ SSR splices it inside `name="..."`, where the parser decodes its entities, so `m
 tags it `#{~"raw" => Markup}` on `?OP_SET_ATTR` too and the client decodes it in that same
 double-quoted context (a bare string would leave `&amp;` literal after the first update).
 An interpolated value with a literal `?raw` part (`{href, [~"/a?", ?raw(Q)]}`) is markup as
-a whole: the transform wraps it in `arizona_template:raw_attr/2`, which splices the raw parts
+a whole: the transform wraps it in a `raw_attr` call, which splices the raw parts
 verbatim and escapes every other part, static or dynamic, so SSR and the tagged live update
 carry the same assembled markup.
 (`?raw` is an HTML-target feature; the
