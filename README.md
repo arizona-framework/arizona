@@ -185,11 +185,15 @@ render(Bindings) ->
 
 ### 4. Configure the server
 
-Add `arizona` to your app's `applications` list in `.app.src`:
+Add `arizona` and `roadrunner` (the HTTP/WebSocket server) to your app's `applications`
+list in `.app.src`:
 
 ```erlang
-{applications, [kernel, stdlib, arizona]}
+{applications, [kernel, stdlib, arizona, roadrunner]}
 ```
+
+Arizona starts the server on demand but does not list it itself, so an app that renders pages
+offline only (`arizona_static`) never boots it. Add `ssh` too if you serve the SSH transport.
 
 Ensure `rebar3 shell` loads the config and starts your app by adding
 to `rebar.config`:
