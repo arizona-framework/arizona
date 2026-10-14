@@ -938,12 +938,20 @@ let rawAttrTpl = null;
  * page's value is what the HTML parser made of that text (`&amp;` -> `&`); setting the
  * markup with `setAttribute` would keep the entities literal. Parsing it in the same
  * double-quoted context, inside an inert template, yields the value SSR produced.
+ *
+ * No DOM API decodes character references without a parse, and the attribute-context
+ * rules (a legacy entity without `;` is left alone before `=` or an alphanumeric) rule
+ * out an RCDATA decode or a hand-written table, so the parse stays. Every `"` becomes
+ * `&quot;` first: in the double-quoted value state that is the only character that ends
+ * the value, so the text can never leave the attribute and the parse can only decode
+ * character references. A bare `"` is invalid in this context (at SSR it would end the
+ * value), so the live path shows it literally instead of breaking out.
  * @param {string} raw
  * @returns {string}
  */
 function decodeRawAttr(raw) {
     if (!rawAttrTpl) rawAttrTpl = document.createElement('template');
-    rawAttrTpl.innerHTML = `<i a="${raw}"></i>`;
+    rawAttrTpl.innerHTML = `<i a="${raw.replace(/"/g, '&quot;')}"></i>`;
     const el = /** @type {Element} */ (rawAttrTpl.content.firstChild);
     return el.getAttribute('a') ?? '';
 }

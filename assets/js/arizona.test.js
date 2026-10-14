@@ -454,6 +454,27 @@ describe('applyOps -- OP.SET_ATTR', () => {
         expect(resolveEl('v:0').querySelector('*')).toBeNull();
     });
 
+    // A `"` is the only character that ends a double-quoted value, so it is neutralized
+    // before the parse: a breakout attempt stays one attribute's text and creates no
+    // element.
+    it('keeps a {raw} value with a bare quote inside the attribute', () => {
+        setupView('v', '<span az="0" data-r="a">hi</span>');
+        const payload = 'x"><img src=x onerror=alert(1)>';
+        applyOps([[OP.SET_ATTR, 'v:0', 'data-r', { raw: payload }]]);
+        const el = resolveEl('v:0');
+        expect(el.getAttribute('data-r')).toBe(payload);
+        expect([...el.attributes].map((a) => a.name).sort()).toEqual(['az', 'data-r']);
+        // The whole payload came back as the value, so the decoding parse never left
+        // the attribute (a breakout would have ended the value at `x`).
+        expect(document.querySelector('img')).toBeNull();
+    });
+
+    it('decodes &quot; in a {raw} value to a quote', () => {
+        setupView('v', '<span az="0" data-r="a">hi</span>');
+        applyOps([[OP.SET_ATTR, 'v:0', 'data-r', { raw: 'say &quot;hi&quot;' }]]);
+        expect(resolveEl('v:0').getAttribute('data-r')).toBe('say "hi"');
+    });
+
     it('decodes a {raw} value inside an ITEM_PATCH', () => {
         setupView('v', '<div az="0"><div az-key="k1"><span az="0" data-r="a">x</span></div></div>');
         applyOps([
