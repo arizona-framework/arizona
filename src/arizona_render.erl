@@ -737,8 +737,12 @@ render_ssr_out(Backend, {Az, {esc, Fun}, Loc}) when is_function(Fun, 0) ->
 render_ssr_out(Backend, D) ->
     render_dyn(Backend, render_ssr_one(Backend, D)).
 
-render_ssr_one(Backend, {_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
-    render_ssr_attr(Backend, Name, Fun());
+render_ssr_one(Backend, {_Az, {attr, Name, Fun}, Loc}) when is_function(Fun, 0) ->
+    try
+        render_ssr_attr(Backend, Name, Fun())
+    catch
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+    end;
 render_ssr_one(Backend, {Az, Spec, Loc}) ->
     try
         arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec))
