@@ -1681,23 +1681,46 @@ state, on every change. When a change *should* remount (a different dataset), pu
 `az_key`: a new key value replaces the region, and the key's reads are dependencies of the slot.
 A child view whose own root is `az-nodiff` is identified by its id; a new id replaces it.
 
+The branch is taken from the conditional in the region's **own** slot, not from any conditional
+above it. When a switch higher up lands on a wrapper with the same statics, the diff descends into
+the wrapper and the region's slot still chooses the same branch, so the region is kept:
+
+```erlang
+case ?get(tab) of
+    sales -> {section, [{class, ~"tab"}], [chart(?get(series))]};
+    costs -> {section, [{class, ~"tab"}], [chart(?get(series))]}
+end
+%% chart/1 returns {'div', ['az-nodiff', {az_hook, ~"Chart"}, ...], [...]}
+```
+
+Moving from `sales` to `costs` keeps the chart. To remount it, give its root an `az_key` that
+names what changed (`{az_key, ?get(tab)}`).
+
 **Props.** A widget reads its initial props from attributes at mount (`data-*`, parsed in
 `mounted()`); the server-rendered children are a placeholder for the first paint. Later updates go
 to the widget, not through the diff: return `arizona_js:dispatch_event(~"chart:series", Payload)`
 from a handler and let the hook listen for it on `document`, or remount with a new `az_key`. The
 widget talks back with `this.pushEvent(name, payload)`. Reads inside a region are not tracked on
 its slot -- they can never patch -- so only the reads that choose the region (and its `az_key`)
-re-run the slot, and a re-run that lands on the same region costs O(1) whatever the region's size.
+re-run the slot. When that slot re-runs and lands on the same region, the check runs before the
+region is evaluated, so it costs O(1) whatever the region's size. Paths that re-evaluate a whole
+enclosing template -- a plain-list `?each` item, a wrapper the diff descends into, `diff/3` --
+evaluate the region and then compare it, so they cost the region's size; the result is the same
+(no op, child views kept).
 
 **Child views inside a region** take their props at mount only. A region is never re-rendered, so
 a parent-driven `handle_update/3` would move the child's state past a DOM no op will ever touch;
 the same handler at the same id keeps its view on every path the region is reached through (a
-branch, a `?stateless` body, a list item). A child still handles its own events.
+branch, a `?stateless` body, a list item). That holds when a switch replaces the region too: a
+child with the same handler at the same id keeps its state, and the new props are ignored. A child
+still handles its own events.
 
 **Caveats.**
 
 - Anything that re-renders an enclosing region wholesale remounts the widgets in it: a branch
-  switch above the slot, or a plain-list `?each` that falls back to its container `?OP_TEXT`.
+  switch above the slot to a wrapper with different statics, or a plain-list `?each` that falls
+  back to its container `?OP_TEXT`. A switch above the slot to a wrapper with the same statics
+  keeps the region (see "What the same region means"); use `az_key` to remount it.
   For a list of widgets prefer a stream, whose items are inserted and removed one by one.
 - A reconnect mounts the view afresh and resyncs it with `?OP_REPLACE`, so every widget is
   destroyed and remounted and its client state is lost. Keep state that must survive in the
