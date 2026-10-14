@@ -552,8 +552,21 @@ with_saved_deps(Fun) ->
     erlang:put('$arizona_deps', SavedDeps),
     Result.
 
-eval_stateful(H, Props, {Old, New}) ->
+eval_stateful(H, Props, {Old, _New} = Views) ->
     Id = maps:get(id, Props),
+    case Old of
+        %% A child view whose own root is az-nodiff renders once: re-running it
+        %% would call `handle_update/3` and move its state past a DOM no op will
+        %% ever touch, wherever the descriptor is evaluated from (a slot, a
+        %% branch, a `?stateless` body, a list item). The same handler at the same
+        %% id keeps its view as it is.
+        #{Id := #{handler := H, snapshot := #{diff := false} = Snap}} ->
+            {Snap, arizona_diff:carry_skipped_view(Snap, Views)};
+        #{} ->
+            eval_stateful_lifecycle(H, Props, Id, Views)
+    end.
+
+eval_stateful_lifecycle(H, Props, Id, {Old, New}) ->
     %% Bracket the whole lifecycle. mount/1 and handle_update/3 callbacks
     %% are user code; their ?get calls would otherwise land in the outer
     %% dynamic's tracked deps.

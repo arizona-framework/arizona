@@ -86,6 +86,7 @@ list to that fallback instead of a per-item patch).
 -export([diff/3]).
 -export([diff/4]).
 -export([deps_changed/2]).
+-export([carry_skipped_view/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -553,6 +554,16 @@ merge_stream_child_views(Source, Old, LocalNew, Old0) ->
             LocalNew
     end.
 
+-doc """
+Carries a skipped value's child views (and their live subtrees) from the old
+views map into the new one, so a value that is kept rather than re-evaluated
+does not have its views pruned. Also used by `arizona_eval` for a child view it
+keeps without calling `handle_update/3`.
+""".
+-spec carry_skipped_view(Value, Views) -> Views1 when
+    Value :: term(),
+    Views :: {map(), map()},
+    Views1 :: {map(), map()}.
 %% When a dynamic is skipped (deps unchanged), carry its child views over
 %% from OldViews to NewViews so they aren't pruned.
 %%

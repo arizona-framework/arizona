@@ -142,6 +142,7 @@
     nodiff_child_view_branch_swaps_away/1,
     nodiff_branch_local_across_swap/1,
     nodiff_same_statics_branches_swap/1,
+    nodiff_root_child_kept_wherever_evaluated/1,
     nodiff_inherited_nested_html/1,
     nodiff_inherited_each/1,
     nodiff_inherited_each_in_each/1,
@@ -626,6 +627,7 @@ groups() ->
             nodiff_child_view_branch_swaps_away,
             nodiff_branch_local_across_swap,
             nodiff_same_statics_branches_swap,
+            nodiff_root_child_kept_wherever_evaluated,
             nodiff_inherited_nested_html,
             nodiff_inherited_each,
             nodiff_inherited_each_in_each,
@@ -4939,6 +4941,42 @@ nodiff_same_statics_branches_swap(Config) when is_list(Config) ->
     {[[?OP_TEXT, _, Tab]], _, _} =
         arizona_diff:diff(Mod:render(B0#{tab => about}), Snap0, V0, #{tab => true}),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~p", [Tab])), ~"About")).
+
+%% A child view whose own root is az-nodiff keeps its state wherever its
+%% descriptor is re-evaluated from -- a branch element, a `?stateless` body, a
+%% plain-list item -- so its state never moves past a DOM no op touches.
+nodiff_root_child_kept_wherever_evaluated(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_root_child_kept). "
+        "-export([render/1, wrap/1]). "
+        "wrap(Bindings) -> arizona_template:html({'span', [], ["
+        "    arizona_template:stateful(arizona_no_diff_counter, "
+        "        #{id => <<\"ndc_s\">>, count => arizona_template:get(c, Bindings)})]}). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [], ["
+        "            case arizona_template:get(f, Bindings) of "
+        "                true -> {'div', [], [<<\"x\">>, "
+        "                    arizona_template:stateful(arizona_no_diff_counter, "
+        "                        #{id => <<\"ndc_b\">>, "
+        "                          count => arizona_template:get(c, Bindings)})]}; "
+        "                false -> <<\"off\">> "
+        "            end, "
+        "            arizona_template:stateless(fun wrap/1, "
+        "                #{c => arizona_template:get(c, Bindings)}), "
+        "            [{'i', [], [arizona_template:stateful(arizona_no_diff_counter, "
+        "                #{id => <<\"ndc_l\">>, count => arizona_template:get(c, Bindings)})]}]"
+        "        ]}"
+        "    ). "
+    ),
+    B0 = #{f => true, c => 1},
+    {_, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, _, V1} = arizona_diff:diff(Mod:render(B0#{c => 2}), Snap0, V0, #{c => true}),
+    ?assertEqual([], Ops),
+    [
+        ?assertEqual(maps:get(Id, V0), maps:get(Id, V1))
+     || Id <- [~"ndc_b", ~"ndc_s", ~"ndc_l"]
+    ].
 
 %% A child view's inner slot leaves an az-nodiff branch when the child re-renders
 %% under its parent (the child-view path diffs its inner dynamics itself).
