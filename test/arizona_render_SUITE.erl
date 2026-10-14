@@ -733,8 +733,11 @@ ssr_cross_target_layout_raises(Config) when is_list(Config) ->
             arizona_counter, #{layouts => [{arizona_native_layout, render}]}
         )
     ),
-    %% Each layer is checked against the page's target, not the layer it wraps: a
-    %% backendless inner layer does not hide the html outer one from a native page.
+    %% A backendless inner layer does not hide an html outer layer from a native
+    %% page: the outer layer is still refused. This pins that the check does not
+    %% stop at the inner layer's missing backend; it does not distinguish checking
+    %% against the page from checking against the target the inner layer passes
+    %% through, since a backendless layer passes the page's target unchanged.
     ?assertError(
         {cross_target_layout, arizona_layout, render, arizona_html, arizona_native},
         arizona_render:render_view_to_iolist(
@@ -1082,8 +1085,9 @@ ssr_inner_content_rejects_attribute_value(Config) when is_list(Config) ->
     %% says so instead of emitting an escaped page as an attribute: the error
     %% carries the whole page, which is the documented cost of that placement, and
     %% is located at the attribute like any other attribute crash.
+    Line = arizona_inner_content_layouts:attr_line(),
     ?assertError(
-        {arizona_loc, {arizona_inner_content_layouts, _},
+        {arizona_loc, {arizona_inner_content_layouts, Line},
             {bad_template_value, #{s := [_Page], d := []}}},
         layout_html(arizona_inner_content_layouts, attr)
     ).

@@ -733,7 +733,7 @@ render_ssr_out(Backend, D) ->
 
 render_ssr_one(Backend, {_Az, {attr, Name, Fun}, Loc}) when is_function(Fun, 0) ->
     try
-        render_ssr_attr(Backend, Name, Fun())
+        Backend:render_attr(Name, Fun())
     catch
         Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
@@ -744,7 +744,7 @@ render_ssr_one(Backend, {Az, Spec, Loc}) ->
         Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
 render_ssr_one(Backend, {_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
-    render_ssr_attr(Backend, Name, Fun());
+    Backend:render_attr(Name, Fun());
 render_ssr_one(Backend, {Az, Spec}) ->
     arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec)).
 
@@ -816,7 +816,7 @@ render_ssr_val(Backend, #{callback := Callback, props := Props}) ->
     %% on the client (see arizona_template).
     render_ssr_val(Backend, Callback(Props));
 render_ssr_val(Backend, #{az_local := _, target := {attr, Name}, v := V}) ->
-    render_ssr_attr(Backend, Name, V);
+    Backend:render_attr(Name, V);
 render_ssr_val(Backend, #{az_local := _, v := V}) ->
     %% Escape the content `?local` init to match the client's text-node semantics
     %% (see render_dyn/2); a raw splice here is an XSS vector for a seeded init.
@@ -857,9 +857,6 @@ render_ssr_esc_val(Backend, V) ->
         {arizona_esc, X} -> arizona_template:escape_marked(Backend, X);
         Trusted -> text_leaf(Backend, arizona_template:to_bin(Trusted))
     end.
-
-render_ssr_attr(Backend, Name, Val) ->
-    Backend:render_attr(Name, Val).
 
 render_fp_val(Backend, {arizona_esc, V}) ->
     %% The fingerprint (initial hydration) payload carries a scalar content value

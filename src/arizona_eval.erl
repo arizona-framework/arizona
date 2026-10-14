@@ -378,16 +378,22 @@ format_error(restricted_key_modified, [{_M, _F, [Key, Handler], _Info} | _]) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-eval_one(Dyn) ->
-    {element(1, Dyn), dyn_value(Dyn)}.
+eval_one({Az, _Spec, _Loc} = Dyn) ->
+    {Az, dyn_value(Dyn)};
+eval_one({Az, _Spec} = Dyn) ->
+    {Az, dyn_value(Dyn)}.
 
 %% Like eval_one/1 but builds the 3-tuple `{Az, Val, #{}}` directly, for the
 %% per-item snapshot paths (render_list_items_simple, render_map_items_simple,
 %% render_stream_item_simple), which track no deps, so the empty map is shared.
-eval_one_triple(Dyn) ->
-    {element(1, Dyn), dyn_value(Dyn), #{}}.
+eval_one_triple({Az, _Spec, _Loc} = Dyn) ->
+    {Az, dyn_value(Dyn), #{}};
+eval_one_triple({Az, _Spec} = Dyn) ->
+    {Az, dyn_value(Dyn), #{}}.
 
 %% The value a dynamic evaluates to; eval_one/1 and eval_one_triple/1 add the address.
+-spec dyn_value(Dynamic) -> term() when
+    Dynamic :: tuple().
 dyn_value({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     {attr, Name, eval_val(Fun())};
 dyn_value({Az, Spec, _Loc}) ->

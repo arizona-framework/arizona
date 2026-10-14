@@ -110,12 +110,17 @@ render_top_attr_crash(Bindings) ->
     ?html({p, [{class, boom(?get(v))}], [~"x"]}).
 
 -spec item_attr_crash_line() -> pos_integer().
-item_attr_crash_line() -> ?LINE + 5.
+item_attr_crash_line() -> ?LINE + 7.
 -spec render_item_attr_crash(az:bindings()) -> az:template().
 render_item_attr_crash(Bindings) ->
     ?html(
         {ul, [], [
-            ?each(fun(V) -> {li, [{class, boom(V)}], [~"x"]} end, ?get(items))
+            ?each(
+                fun(V) ->
+                    {li, [{class, boom(V)}], [~"x"]}
+                end,
+                ?get(items)
+            )
         ]}
     ).
 
