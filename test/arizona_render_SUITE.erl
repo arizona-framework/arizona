@@ -100,6 +100,7 @@
     ssr_escaped_scalars_exact/1,
     ssr_item_value_crash_location/1,
     ssr_top_value_crash_location/1,
+    ssr_attr_crash_location/1,
     ssr_stateful_in_each_items_matches_live/1,
     ssr_page_with_child/1,
     ssr_nested_local/1,
@@ -199,6 +200,7 @@ groups() ->
             ssr_escaped_scalars_exact,
             ssr_item_value_crash_location,
             ssr_top_value_crash_location,
+            ssr_attr_crash_location,
             ssr_stateful_in_each_items_matches_live,
             resolve_id_binary,
             resolve_id_template
@@ -1069,9 +1071,12 @@ marker_count(HTML) ->
 ssr_inner_content_rejects_attribute_value(Config) when is_list(Config) ->
     %% A rendered page inside an attribute has no meaning, and the opaque value
     %% says so instead of emitting an escaped page as an attribute: the error
-    %% carries the whole page, which is the documented cost of that placement.
+    %% carries the whole page, which is the documented cost of that placement, and
+    %% is located at the attribute like any other attribute crash.
+    Line = arizona_inner_content_layouts:attr_line(),
     ?assertError(
-        {bad_template_value, #{s := [_Page], d := []}},
+        {arizona_loc, {arizona_inner_content_layouts, Line},
+            {bad_template_value, #{s := [_Page], d := []}}},
         layout_html(arizona_inner_content_layouts, attr)
     ).
 
@@ -1172,6 +1177,22 @@ ssr_top_value_crash_location(Config) when is_list(Config) ->
     ?assertError(
         {arizona_loc, {arizona_ssr_values, Line}, {boom, 1}},
         arizona_render:render_to_iolist(arizona_ssr_values:render_top_crash(#{v => 1}))
+    ).
+
+%% A crash inside an attribute value is located at the attribute's line, top-level
+%% and in a list item alike.
+ssr_attr_crash_location(Config) when is_list(Config) ->
+    TopLine = arizona_ssr_values:top_attr_crash_line(),
+    ?assertError(
+        {arizona_loc, {arizona_ssr_values, TopLine}, {boom, 1}},
+        arizona_render:render_to_iolist(arizona_ssr_values:render_top_attr_crash(#{v => 1}))
+    ),
+    ItemLine = arizona_ssr_values:item_attr_crash_line(),
+    ?assertError(
+        {arizona_loc, {arizona_ssr_values, ItemLine}, {boom, 7}},
+        arizona_render:render_to_iolist(
+            arizona_ssr_values:render_item_attr_crash(#{items => [7]})
+        )
     ).
 
 %% A `?stateful` child in an `?each` item -- plain list or stream -- server-renders

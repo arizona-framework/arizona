@@ -188,7 +188,7 @@ from the snapshot for the rare root that has none.
     Views1 :: map().
 render_snapshot(Tmpl, Views0) ->
     {Triples, NewViews} = eval_triples(Tmpl, Views0),
-    {D, Deps} = split_triples(Triples),
+    {D, Deps} = arizona_template:split_triples(Triples),
     {snapshot(Tmpl, D, Deps), NewViews}.
 
 eval_triples(#{d := Dynamics}, Views0) ->
@@ -197,12 +197,6 @@ eval_triples(#{d := Dynamics}, Views0) ->
 
 snapshot(#{s := Statics} = Tmpl, D, Deps) ->
     arizona_template:maybe_propagate(Tmpl, #{s => Statics, d => D, deps => Deps}).
-
-split_triples([]) ->
-    {[], []};
-split_triples([{Az, V, Deps} | TRest]) ->
-    {DRest, DepsRest} = split_triples(TRest),
-    {[{Az, V} | DRest], [Deps | DepsRest]}.
 
 -doc """
 The document `render/2` would have returned for `Snapshot`: the same walk over
@@ -330,7 +324,7 @@ zip(Backend, [S | Statics], [D | Dynamics]) ->
 %% (the triple-walking variant) can share the same dispatch without duplicating
 %% the case clauses.
 render_dyn(_Backend, {ssr_rendered, Rendered}) ->
-    %% Already rendered, by render_ssr_val/2's plain-list each clause.
+    %% Already rendered, by render_ssr_val/2's each clauses (list, stream and map).
     Rendered;
 render_dyn(Backend, {arizona_esc, V}) ->
     arizona_template:escape_marked(Backend, V);
@@ -737,8 +731,12 @@ render_ssr_out(Backend, {Az, {esc, Fun}, Loc}) when is_function(Fun, 0) ->
 render_ssr_out(Backend, D) ->
     render_dyn(Backend, render_ssr_one(Backend, D)).
 
-render_ssr_one(Backend, {_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
-    render_ssr_attr(Backend, Name, Fun());
+render_ssr_one(Backend, {_Az, {attr, Name, Fun}, Loc}) when is_function(Fun, 0) ->
+    try
+        Backend:render_attr(Name, Fun())
+    catch
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+    end;
 render_ssr_one(Backend, {Az, Spec, Loc}) ->
     try
         arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec))
@@ -746,7 +744,7 @@ render_ssr_one(Backend, {Az, Spec, Loc}) ->
         Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
 render_ssr_one(Backend, {_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
-    render_ssr_attr(Backend, Name, Fun());
+    Backend:render_attr(Name, Fun());
 render_ssr_one(Backend, {Az, Spec}) ->
     arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec)).
 
@@ -818,7 +816,7 @@ render_ssr_val(Backend, #{callback := Callback, props := Props}) ->
     %% on the client (see arizona_template).
     render_ssr_val(Backend, Callback(Props));
 render_ssr_val(Backend, #{az_local := _, target := {attr, Name}, v := V}) ->
-    render_ssr_attr(Backend, Name, V);
+    Backend:render_attr(Name, V);
 render_ssr_val(Backend, #{az_local := _, v := V}) ->
     %% Escape the content `?local` init to match the client's text-node semantics
     %% (see render_dyn/2); a raw splice here is an XSS vector for a seeded init.
@@ -859,9 +857,6 @@ render_ssr_esc_val(Backend, V) ->
         {arizona_esc, X} -> arizona_template:escape_marked(Backend, X);
         Trusted -> text_leaf(Backend, arizona_template:to_bin(Trusted))
     end.
-
-render_ssr_attr(Backend, Name, Val) ->
-    Backend:render_attr(Name, Val).
 
 render_fp_val(Backend, {arizona_esc, V}) ->
     %% The fingerprint (initial hydration) payload carries a scalar content value

@@ -12,6 +12,7 @@ opacity rules documented at `az:inner_content/1` are pinned by tests.
 -export([prop/1]).
 -export([maps_get/1]).
 -export([attr/1]).
+-export([attr_line/0]).
 -export([measure/1]).
 -export([raw/1]).
 -export([sibling/1]).
@@ -44,7 +45,9 @@ body(Bindings) ->
 maps_get(Bindings) ->
     ?html([~"<g>", maps:get(inner_content, Bindings), ~"</g>"]).
 
-%% The page as an attribute value.
+%% The page as an attribute value; `attr_line/0` is the attribute's line.
+-spec attr_line() -> pos_integer().
+attr_line() -> ?LINE + 3.
 -spec attr(az:bindings()) -> az:template().
 attr(Bindings) ->
     ?html({'div', [{'data-page', ?inner_content}], [~"x"]}).

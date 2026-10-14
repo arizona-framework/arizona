@@ -1,7 +1,18 @@
 -module(arizona_ssr_values).
 -include("arizona_stateless.hrl").
--export([render/1, render_nodiff/1, render_stream/1, render_map/1, values/0]).
--export([render_item_crash/1, render_stream_item_crash/1, render_top_crash/1, crash_line/0]).
+-export([render/1]).
+-export([render_nodiff/1]).
+-export([render_stream/1]).
+-export([render_map/1]).
+-export([values/0]).
+-export([render_item_crash/1]).
+-export([render_stream_item_crash/1]).
+-export([render_top_crash/1]).
+-export([crash_line/0]).
+-export([render_top_attr_crash/1]).
+-export([render_item_attr_crash/1]).
+-export([top_attr_crash_line/0]).
+-export([item_attr_crash_line/0]).
 
 %% Fixture: one content slot per value shape the SSR escape path distinguishes, at
 %% the top level and as `?each` item content (list, stream and map sources), in a
@@ -97,6 +108,33 @@ render_stream_item_crash(Bindings) ->
 -spec render_top_crash(az:bindings()) -> az:template().
 render_top_crash(Bindings) ->
     ?html({p, [], [?stateless(fun crashy/1, #{x => ?get(v)})]}).
+
+%% A crash inside an attribute value, top-level and in a list item: SSR locates it at
+%% the attribute's own line, the one each `*_attr_crash_line/0` names, not bare or at
+%% the enclosing `?each`.
+%% The `?LINE + N` helpers count the lines down to the template, so a line inserted
+%% between a helper and its template shifts the pin: the test then fails, never
+%% passes falsely.
+-spec top_attr_crash_line() -> pos_integer().
+top_attr_crash_line() -> ?LINE + 3.
+-spec render_top_attr_crash(az:bindings()) -> az:template().
+render_top_attr_crash(Bindings) ->
+    ?html({p, [{class, boom(?get(v))}], [~"x"]}).
+
+-spec item_attr_crash_line() -> pos_integer().
+item_attr_crash_line() -> ?LINE + 7.
+-spec render_item_attr_crash(az:bindings()) -> az:template().
+render_item_attr_crash(Bindings) ->
+    ?html(
+        {ul, [], [
+            ?each(
+                fun(V) ->
+                    {li, [{class, boom(V)}], [~"x"]}
+                end,
+                ?get(items)
+            )
+        ]}
+    ).
 
 boom(V) ->
     error({boom, V}).

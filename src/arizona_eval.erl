@@ -378,36 +378,33 @@ format_error(restricted_key_modified, [{_M, _F, [Key, Handler], _Info} | _]) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-eval_one({Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
-    {Az, {attr, Name, eval_val(Fun())}};
-eval_one({Az, Spec, _Loc}) ->
-    {Az, arizona_template:scope_slot(Az, eval_val(Spec))};
-eval_one({Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
-    {Az, {attr, Name, eval_val(Fun())}};
-eval_one({Az, Spec}) ->
-    {Az, arizona_template:scope_slot(Az, eval_val(Spec))}.
+-spec eval_one(Dynamic) -> {arizona_template:az(), term()} when
+    Dynamic :: arizona_template:dynamic().
+eval_one({Az, _Spec, _Loc} = Dyn) ->
+    {Az, dyn_value(Dyn)};
+eval_one({Az, _Spec} = Dyn) ->
+    {Az, dyn_value(Dyn)}.
 
-%% Like eval_one/1 but builds the 3-tuple `{Az, Val, #{}}` directly,
-%% used by the per-item snapshot paths (render_list_items_simple,
-%% render_map_items_simple, render_stream_item_simple). They previously
-%% chained `[{Az, Val, #{}} || {Az, Val} <- eval_dynamics(...)]`, which
-%% allocated an intermediate 2-tuple list and re-walked it. The simple
-%% snapshot path doesn't track deps, so the empty map literal is shared.
+%% Like eval_one/1 but builds the 3-tuple `{Az, Val, #{}}` directly, for the
+%% per-item snapshot paths (render_list_items_simple, render_map_items_simple,
+%% render_stream_item_simple), which track no deps, so the empty map is shared.
+-spec eval_one_triple(Dynamic) -> {arizona_template:az(), term(), #{}} when
+    Dynamic :: arizona_template:dynamic().
 eval_one_triple({Az, _Spec, _Loc} = Dyn) ->
-    {Az, eval_item_value(Dyn), #{}};
+    {Az, dyn_value(Dyn), #{}};
 eval_one_triple({Az, _Spec} = Dyn) ->
-    {Az, eval_item_value(Dyn), #{}}.
+    {Az, dyn_value(Dyn), #{}}.
 
-%% The value an item dynamic evaluates to; `eval_one_triple/1` adds the address.
--spec eval_item_value(Dynamic) -> term() when
-    Dynamic :: tuple().
-eval_item_value({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
+%% The value a dynamic evaluates to; eval_one/1 and eval_one_triple/1 add the address.
+-spec dyn_value(Dynamic) -> term() when
+    Dynamic :: arizona_template:dynamic().
+dyn_value({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     {attr, Name, eval_val(Fun())};
-eval_item_value({Az, Spec, _Loc}) ->
+dyn_value({Az, Spec, _Loc}) ->
     arizona_template:scope_slot(Az, eval_val(Spec));
-eval_item_value({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
+dyn_value({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
     {attr, Name, eval_val(Fun())};
-eval_item_value({Az, Spec}) ->
+dyn_value({Az, Spec}) ->
     arizona_template:scope_slot(Az, eval_val(Spec)).
 
 eval_val({esc, Fun}) when is_function(Fun, 0) ->
