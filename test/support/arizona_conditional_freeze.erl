@@ -40,6 +40,7 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([raw_in_stream_item/1]).
 -export([raw_in_branch/1]).
 -export([raw_attr/1]).
+-export([raw_interp_attr/1]).
 
 %% Constant scrutinee (`flag`), branch reads `val`: a change to `val` must
 %% re-render the `<p>` even though `flag` is unchanged.
@@ -423,3 +424,8 @@ raw_in_branch(Bindings) ->
 -spec raw_attr(az:bindings()) -> az:template().
 raw_attr(Bindings) ->
     ?html({span, [{title, ?get(v)}, {'data-r', ?raw(?get(h))}], []}).
+
+%% An interpolated attribute value mixing static text, a `?raw` part and a plain one.
+-spec raw_interp_attr(az:bindings()) -> az:template().
+raw_interp_attr(Bindings) ->
+    ?html({a, [{href, [~"/a?q=\"<&", ?raw(?get(h)), ~"&z=", ?get(v)]}], []}).

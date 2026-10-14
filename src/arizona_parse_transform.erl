@@ -3153,7 +3153,8 @@ compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
             compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0)
     end.
 
-compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
+compile_dynamic_attr_value(Backend, NameBin, ValueAST0, ElemAz, State0) ->
+    ValueAST = raw_interp_attr_ast(Backend, ValueAST0),
     ValLine = line(ValueAST),
     case try_fold_arizona_js(ValueAST) of
         {ok, Cmd} ->
@@ -3179,6 +3180,25 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
                 AzBin, NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST)
+    end.
+
+%% An interpolated value holding a literal `?raw` part (`[~"/a?", ?raw(Q)]`) is
+%% attribute markup as a whole, so it becomes one raw value with every other part
+%% escaped: `arizona_template:raw_attr/2` assembles it. Left a plain list, the raw
+%% tuple inside it is not text and the value cannot render. Only a literal `?raw`
+%% counts, the rule the opt-out follows everywhere else.
+raw_interp_attr_ast(Backend, ValueAST) ->
+    case
+        is_list_ast(ValueAST) andalso
+            lists:any(fun is_raw_call/1, ast_list_to_list(ValueAST))
+    of
+        true ->
+            L = line(ValueAST),
+            {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, raw_attr}}, [
+                {atom, L, Backend}, ValueAST
+            ]};
+        false ->
+            ValueAST
     end.
 
 %% A backend whose booleans are typed prop values (`boolean_attrs/0`) gets the value

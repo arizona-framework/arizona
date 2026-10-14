@@ -440,6 +440,20 @@ describe('applyOps -- OP.SET_ATTR', () => {
         expect(resolveEl('v:0').getAttribute('data-r')).toBe(fresh);
     });
 
+    // An interpolated value with a `?raw` part arrives as one assembled markup string
+    // (the raw part verbatim, the others escaped server-side); it must decode to what
+    // the SSR rendering of the same markup holds.
+    it('decodes an assembled interpolated {raw} value the way SSR did', () => {
+        const markup = '/a?q=&quot;&lt;&amp;x&amp;y&amp;z=&quot;&lt;&amp;';
+        setupView('v', `<a az="0" href="${markup}">hi</a>`);
+        const fresh = resolveEl('v:0').getAttribute('href');
+        setupView('v', '<a az="0" href="/old">hi</a>');
+        applyOps([[OP.SET_ATTR, 'v:0', 'href', { raw: markup }]]);
+        expect(fresh).toBe('/a?q="<&x&y&z="<&');
+        expect(resolveEl('v:0').getAttribute('href')).toBe(fresh);
+        expect(resolveEl('v:0').querySelector('*')).toBeNull();
+    });
+
     it('decodes a {raw} value inside an ITEM_PATCH', () => {
         setupView('v', '<div az="0"><div az-key="k1"><span az="0" data-r="a">x</span></div></div>');
         applyOps([

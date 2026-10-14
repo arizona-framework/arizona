@@ -99,6 +99,8 @@
     wire_raw_in_stream_item/1,
     wire_raw_in_branch/1,
     wire_raw_attr_tagged/1,
+    raw_interp_attr_ssr/1,
+    wire_raw_interp_attr_tagged/1,
     markerless_stream_item_update_no_dangling_op/1,
     markerless_list_item_falls_back_to_full_update/1,
     markerless_list_no_change_no_ops/1,
@@ -245,7 +247,9 @@ groups() ->
             wire_raw_in_list_item,
             wire_raw_in_stream_item,
             wire_raw_in_branch,
-            wire_raw_attr_tagged
+            wire_raw_attr_tagged,
+            raw_interp_attr_ssr,
+            wire_raw_interp_attr_tagged
         ]},
         {markerless_slots, [parallel], [
             markerless_stream_item_update_no_dangling_op,
@@ -1859,6 +1863,40 @@ wire_raw_attr_tagged(Config) when is_list(Config) ->
         [
             [?OP_SET_ATTR, _, ~"title", ~"\"><b>x</b>"],
             [?OP_SET_ATTR, _, ~"data-r", #{~"raw" := ~"c &amp; d"}]
+        ],
+        Ops
+    ).
+
+%% An interpolated value with a `?raw` part is markup as a whole: the raw part is
+%% spliced verbatim and every other part -- static or `?get` -- escaped, so each
+%% means the same text it would with no raw sibling.
+raw_interp_attr_ssr(Config) when is_list(Config) ->
+    B = #{h => ~"x&amp;y", v => ~"\"<&"},
+    {HTML, _S, _V} = arizona_render:render(arizona_conditional_freeze:raw_interp_attr(B), #{}),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(
+            iolist_to_binary(HTML),
+            ~"href=\"/a?q=&quot;&lt;&amp;x&amp;y&amp;z=&quot;&lt;&amp;\""
+        )
+    ).
+
+%% The live update carries the same assembled markup, raw-tagged, so the client
+%% decodes it to what the SSR markup parses to.
+wire_raw_interp_attr_tagged(Config) when is_list(Config) ->
+    B0 = #{h => ~"x&amp;y", v => ~"a"},
+    {_HTML, S0, V0} = arizona_render:render(arizona_conditional_freeze:raw_interp_attr(B0), #{}),
+    {Ops, _, _} = arizona_diff:diff(
+        arizona_conditional_freeze:raw_interp_attr(B0#{v => ~"\"<&"}), S0, V0, #{v => true}
+    ),
+    ?assertMatch(
+        [
+            [
+                ?OP_SET_ATTR,
+                _,
+                ~"href",
+                #{~"raw" := ~"/a?q=&quot;&lt;&amp;x&amp;y&amp;z=&quot;&lt;&amp;"}
+            ]
         ],
         Ops
     ).
