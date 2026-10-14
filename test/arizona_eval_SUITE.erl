@@ -198,9 +198,10 @@ eval_each_def_3tuple(Config) when is_list(Config) ->
         t => 0, s => [<<"<li>">>], d => fun(I) -> [{<<"0">>, maps:get(name, I)}] end, f => <<"x">>
     },
     Def = {<<"0">>, fun() -> arizona_template:each(Items, Tmpl) end, {handler, 15}},
-    {Az, Val, _Deps} = arizona_eval:eval_each_def(Def),
-    ?assertEqual(<<"0">>, Az),
-    ?assertMatch(#{t := 0, source := _, template := _}, Val).
+    ?assertMatch(
+        {each, <<"0">>, #{t := 0, source := _, template := _}, #{}},
+        arizona_eval:eval_each_def(Def, {#{}, #{}})
+    ).
 
 %% The tracked/diff render path (render_map_items) must yield entries in the same
 %% order SSR puts them on the page; otherwise the live snapshot disagrees with the

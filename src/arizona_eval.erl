@@ -12,11 +12,19 @@ Two flavors of evaluation:
   dictionary key `$arizona_deps`. Used during diff so the next render
   can fast-skip dynamics whose deps didn't change.
 
-Each `eval_one_v` clause brackets its closure call with
-`erlang:put('$arizona_deps', #{})` and `erlang:erase('$arizona_deps')`,
-so any `arizona_template:get/2,3` calls inside the closure populate that
-map. The captured map becomes the dynamic's `Deps` and is later compared
-against the `Changed` set in `arizona_diff:diff/4`.
+Each `eval_one_v` clause opens a dependency scope around its closure call
+(`open_deps/0` .. `close_deps/1`), so any `arizona_template:get/2,3` calls
+inside the closure populate that scope's map. The captured map becomes the
+dynamic's `Deps` and is later compared against the `Changed` set in
+`arizona_diff:diff/4`.
+
+Scopes nest: a scope opened while another is open hands its reads to the
+enclosing one when it closes. That is how an `?each` item's reads reach the
+each slot -- items are evaluated inside the slot's scope, each item dynamic in
+its own. A nested template, a `?stateless` body and a `?stateful` child's
+lifecycle are evaluated under `with_saved_deps/1` instead, which suspends the
+enclosing scope: their reads stay out of it (the parse transform records the
+ones that matter on the enclosing slot at compile time).
 
 ## Container handling
 
@@ -50,7 +58,8 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([eval_dynamics_v/2]).
 -export([eval_one_v_flat/2]).
 -export([eval_unless_same_region/3]).
--export([eval_each_def/1]).
+-export([eval_each_def/2]).
+-export([eval_items/2]).
 -export([eval_stream_items/4]).
 -export([render_stream_item/4]).
 -export([render_stream_item_skipping/6]).
@@ -153,12 +162,12 @@ region per change. Anything else is evaluated from the value already produced
         | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
 eval_unless_same_region(Def, Old, Views0) ->
     {Az, Spec} = az_spec(Def),
-    erlang:put('$arizona_deps', #{}),
+    Outer = open_deps(),
     {Esc, Raw} = peek_spec(Spec),
     Val = peek_region(Raw),
     case arizona_template:same_region(Az, Val, Old) of
-        true -> {same, erlang:erase('$arizona_deps')};
-        false -> eval_peeked(Az, Esc, Val, Views0)
+        true -> {same, close_deps(Outer)};
+        false -> eval_peeked(Az, Esc, Val, Outer, Views0)
     end.
 
 az_spec({Az, Spec, _Loc}) -> {Az, Spec};
@@ -177,37 +186,67 @@ peek_region(#{callback := _, props := _} = Desc) ->
 peek_region(Val) ->
     Val.
 
-eval_peeked(Az, Esc, Raw, Views0) ->
+eval_peeked(Az, Esc, Raw, Outer, Views0) ->
     {Val0, Views1} = eval_val_v(Raw, Views0),
     Val =
         case Esc of
             true -> arizona_template:mark_esc(Val0);
             false -> Val0
         end,
-    Deps = erlang:erase('$arizona_deps'),
+    Deps = close_deps(Outer),
     {changed, Az, arizona_template:scope_slot(Az, Val), Deps, Views1}.
 
 -doc """
-Evaluates an each definition by invoking its closure under dep tracking.
+Re-evaluates a slot that last held an each container, under dep tracking,
+without rendering its items.
 
-Returns `{Az, EachValue, Deps}` where `EachValue` is the each container
-map (`#{t := ?EACH, source, template}`).
+Answers `{each, Az, EachValue, Deps}` while the slot still produces an each
+container (`#{t := ?EACH, source, template}`), for the each-specific diff to
+render the items against the old snapshot; `Deps` are then only the reads of the
+slot's own closure (the source, a branch condition), and the diff adds the
+items' through `eval_items/2`. The slot need not still hold an each -- a
+conditional whose branch was one can land on any value -- and anything else is
+evaluated from the value already produced, answered
+`{changed, Az, Value, Deps, Views1}` as `eval_unless_same_region/3` does.
 """.
--spec eval_each_def(Dynamic) -> {Az, Value, Deps} when
+-spec eval_each_def(Dynamic, Views) -> Result when
     Dynamic :: arizona_template:dynamic(),
-    Az :: arizona_template:az(),
-    Value :: map(),
-    Deps :: map().
-eval_each_def({Az, Fun, _Loc}) when is_function(Fun, 0) ->
-    erlang:put('$arizona_deps', #{}),
-    #{t := ?EACH, source := _, template := _} = Val = Fun(),
-    Deps = erlang:erase('$arizona_deps'),
-    {Az, Val, Deps};
-eval_each_def({Az, Fun}) when is_function(Fun, 0) ->
-    erlang:put('$arizona_deps', #{}),
-    #{t := ?EACH, source := _, template := _} = Val = Fun(),
-    Deps = erlang:erase('$arizona_deps'),
-    {Az, Val, Deps}.
+    Views :: {map(), map()},
+    Result ::
+        {each, arizona_template:az(), map(), map()}
+        | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
+eval_each_def(Def, Views0) ->
+    {Az, Spec} = az_spec(Def),
+    Outer = open_deps(),
+    case peek_spec(Spec) of
+        {_Esc, #{t := ?EACH, source := _, template := _} = Each} ->
+            {each, Az, Each, close_deps(Outer)};
+        {Esc, Raw} ->
+            eval_peeked(Az, Esc, Raw, Outer, Views0)
+    end.
+
+-doc """
+Runs `Fun`, which renders items of an `?each` whose per-item template is
+`Template`, in a dependency scope of its own, and returns `{Result, ItemDeps}`:
+the binding keys the items read, at any depth (an inner each's items included).
+
+They also reach the enclosing scope, if one is open, so an each slot evaluated
+with its items depends on whatever its items read -- a change to an outer
+binding read inside the callback re-evaluates the each, and the per-item diff
+then patches only the items it changed. An az-nodiff item template renders once,
+so its reads are suspended rather than collected (`#{}`).
+""".
+-spec eval_items(Template, Fun) -> {Result, ItemDeps} when
+    Template :: map(),
+    Fun :: fun(() -> Result),
+    Result :: term(),
+    ItemDeps :: map().
+eval_items(#{diff := false}, Fun) ->
+    {with_saved_deps(Fun), #{}};
+eval_items(_Tmpl, Fun) ->
+    Outer = open_deps(),
+    Result = Fun(),
+    {Result, close_deps(Outer)}.
 
 -doc """
 Evaluates a list of stream item keys against the items map and template,
@@ -516,25 +555,45 @@ observe_command(Name, Val) ->
     end.
 
 eval_one_v({Az, {attr, Name, Fun}, _Loc}, Views) when is_function(Fun, 0) ->
-    erlang:put('$arizona_deps', #{}),
+    Outer = open_deps(),
     Val = attr_val(Name, eval_val(Fun())),
-    Deps = erlang:erase('$arizona_deps'),
+    Deps = close_deps(Outer),
     {{Az, {attr, Name, Val}, Deps}, Views};
 eval_one_v({Az, Spec, _Loc}, Views0) ->
-    erlang:put('$arizona_deps', #{}),
+    Outer = open_deps(),
     {Val, Views1} = eval_val_v(Spec, Views0),
-    Deps = erlang:erase('$arizona_deps'),
+    Deps = close_deps(Outer),
     {{Az, arizona_template:scope_slot(Az, Val), Deps}, Views1};
 eval_one_v({Az, {attr, Name, Fun}}, Views) when is_function(Fun, 0) ->
-    erlang:put('$arizona_deps', #{}),
+    Outer = open_deps(),
     Val = attr_val(Name, eval_val(Fun())),
-    Deps = erlang:erase('$arizona_deps'),
+    Deps = close_deps(Outer),
     {{Az, {attr, Name, Val}, Deps}, Views};
 eval_one_v({Az, Spec}, Views0) ->
-    erlang:put('$arizona_deps', #{}),
+    Outer = open_deps(),
     {Val, Views1} = eval_val_v(Spec, Views0),
-    Deps = erlang:erase('$arizona_deps'),
+    Deps = close_deps(Outer),
     {{Az, arizona_template:scope_slot(Az, Val), Deps}, Views1}.
+
+%% Opens a dependency scope for `arizona_template:track/1` to fill, answering the
+%% enclosing one (`undefined` when none is open) for close_deps/1 to restore.
+open_deps() ->
+    erlang:put('$arizona_deps', #{}).
+
+%% Closes the scope open_deps/0 opened and answers its reads, handing them to the
+%% enclosing scope as well. Only an each's items evaluate inside another dynamic's
+%% scope (with_saved_deps/1 suspends it everywhere else), and most item slots read
+%% nothing tracked, hence the empty case.
+close_deps(undefined) ->
+    erlang:erase('$arizona_deps');
+close_deps(Outer) ->
+    case erlang:put('$arizona_deps', Outer) of
+        Deps when map_size(Deps) =:= 0 ->
+            Deps;
+        Deps ->
+            erlang:put('$arizona_deps', maps:merge(Outer, Deps)),
+            Deps
+    end.
 
 eval_val_v({esc, Fun}, Views0) when is_function(Fun, 0) ->
     {V, Views1} = eval_val_v(Fun(), Views0),
@@ -566,13 +625,17 @@ eval_val_v(#{az_local := _, target := {attr, Name}, v := V} = Local, Views) ->
 eval_val_v(Val, Views) ->
     {Val, Views}.
 
-%% Wrap Fun so any deps captured during its execution are scoped: the
-%% caller's existing `$arizona_deps` is restored when Fun returns.
+%% Run Fun with the enclosing dependency scope suspended: nothing Fun reads
+%% reaches it, and it is restored when Fun returns.
 with_saved_deps(Fun) ->
-    SavedDeps = erlang:get('$arizona_deps'),
-    Result = Fun(),
-    erlang:put('$arizona_deps', SavedDeps),
-    Result.
+    case erlang:erase('$arizona_deps') of
+        undefined ->
+            Fun();
+        SavedDeps ->
+            Result = Fun(),
+            erlang:put('$arizona_deps', SavedDeps),
+            Result
+    end.
 
 %% A child view whose own root is az-nodiff, or that sits inside an az-nodiff
 %% region, takes its props at mount only: re-running it would call
@@ -708,15 +771,19 @@ render_map_items(Map, #{d := DFun}, Views) ->
     {lists:reverse(Acc), Views1}.
 
 eval_each(RenderFun, Tmpl, {Old, New0}, StreamExtra) ->
-    {ItemSnaps, {_, LocalNew}} = with_saved_deps(fun() -> RenderFun(Old) end),
+    {{ItemSnaps, {_, LocalNew}}, ItemDeps} = eval_items(Tmpl, fun() -> RenderFun(Old) end),
     ChildViews = child_view_set(LocalNew),
-    Snap = build_each_snap(ItemSnaps, Tmpl, ChildViews, StreamExtra),
+    Snap = build_each_snap(ItemSnaps, Tmpl, ChildViews, ItemDeps, StreamExtra),
     {Snap, {Old, maps:merge(New0, LocalNew)}}.
 
-build_each_snap(ItemSnaps, Tmpl, ChildViews, undefined) ->
+build_each_snap(ItemSnaps, Tmpl, ChildViews, _ItemDeps, undefined) ->
     #{t => ?EACH, items => ItemSnaps, template => Tmpl, child_views => ChildViews};
-build_each_snap(ItemSnaps, Tmpl, ChildViews, {VKeys, Source}) ->
+build_each_snap(ItemSnaps, Tmpl, ChildViews, ItemDeps, {VKeys, Source}) ->
     #{
+        %% A stream diff renders only the items its queued ops touch, so it cannot
+        %% learn from the render what the others read; it keeps their reads here to
+        %% tell when an outer binding change must reconcile every visible item.
+        item_deps => ItemDeps,
         t => ?EACH,
         items => ItemSnaps,
         order => VKeys,

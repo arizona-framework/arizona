@@ -494,6 +494,18 @@ consequences:
   `?stateless(Mod, Fn, Props)`). They cannot close over outer `Bindings`,
   removing the footgun entirely.
 
+An **`?each` callback is not isolated**: its items render inside the each
+slot's dependency scope, so an outer binding read in the callback body
+(`?each(fun(I) -> {li, [], [I, ?get(suffix)]} end, ?get(items))`) is a dep
+of the each slot. A change to it re-evaluates the each and the per-item diff
+patches only the items that changed; a stream reconciles every visible item in
+one step instead of draining its queue. The deps are the reads that actually
+ran, so a read in one branch, in a helper the callback calls, in an inner
+`?each`, or under a computed key (`?get(Key)`) all count. An item-field read
+written as `arizona_template:get(text, Item)` counts too, so a view binding of
+the same name also re-evaluates the each (harmless: nothing differs, nothing
+ships). Reads in an az-nodiff item (or region) never count -- it renders once.
+
 Reads **hoisted into the render function body** do track: the parse transform
 inlines each interpolated variable back into its slot closure, so the `?get`
 re-runs inside the dependency bracket.
