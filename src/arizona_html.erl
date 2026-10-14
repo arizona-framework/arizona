@@ -33,6 +33,7 @@ identical to the previous inlined emission.
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
+-export([supports_region_keep/0]).
 -export([boolean_attrs/0]).
 -export([escape/1]).
 -export([raw_text/2]).
@@ -265,6 +266,8 @@ target() -> html.
 content_type() -> ~"text/html; charset=utf-8".
 
 supports_local() -> true.
+
+supports_region_keep() -> true.
 
 boolean_attrs() -> presence.
 

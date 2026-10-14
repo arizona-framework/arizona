@@ -149,6 +149,11 @@
     nodiff_region_root_child_id/1,
     nodiff_region_list_items/1,
     nodiff_region_stream_items/1,
+    nodiff_region_attr_names_identity/1,
+    nodiff_region_attr_follows_same_region/1,
+    nodiff_region_attr_item_key/1,
+    nodiff_region_attr_only_on_regions/1,
+    reserved_az_region_attr_raises/1,
     nodiff_branch_swaps_away/1,
     nodiff_branch_same_template_skips_eval/1,
     nodiff_item_branch_swaps_away/1,
@@ -533,7 +538,12 @@ groups() ->
             nodiff_region_child_views_not_updated,
             nodiff_region_root_child_id,
             nodiff_region_list_items,
-            nodiff_region_stream_items
+            nodiff_region_stream_items,
+            nodiff_region_attr_names_identity,
+            nodiff_region_attr_follows_same_region,
+            nodiff_region_attr_item_key,
+            nodiff_region_attr_only_on_regions,
+            reserved_az_region_attr_raises
         ]},
         %% Tests 1-25: basic element parsing
         {elements, [parallel], [
@@ -1092,10 +1102,16 @@ compile_module(Source) ->
     Mod.
 
 %% Render a template and assert it carries none of the framework's markers.
+%% The `az-region` attribute naming a region's root is not a diff anchor; it is
+%% stripped here so these cases pin the markerless markup, and the `region_attr`
+%% group pins the attribute itself.
 render_markerless(Tmpl) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
     ?assertEqual(nomatch, binary:match(HTML, [<<" az=\"">>, <<"<!--az:">>, <<"<!--/az-->">>])),
-    HTML.
+    strip_region_attr(HTML).
+
+strip_region_attr(HTML) ->
+    re:replace(HTML, ~" az-region=\"[^\"]*\"", ~"", [global, {return, binary}]).
 
 split_forms(Tokens) ->
     split_forms(Tokens, [], []).
@@ -2729,7 +2745,7 @@ raw_text_nodiff_keeps_script_render_once(Config) when is_list(Config) ->
     {HTML0, Snap0} = arizona_render:render(T1),
     HTML = iolist_to_binary(HTML0),
     %% No az on the element and no markers inside it.
-    ?assertEqual(<<"<script>a</script>">>, HTML),
+    ?assertEqual(<<"<script>a</script>">>, strip_region_attr(HTML)),
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
     T2 = Mod:render(#{boot => <<"b">>}),
     ?assertEqual([], element(1, arizona_diff:diff(T2, Snap0))),
@@ -3765,12 +3781,15 @@ nodiff_directive_case_insensitive(Config) when is_list(Config) ->
     %% Honored: the compile unit is marked non-diffable...
     ?assertEqual(false, maps:get(diff, T)),
     %% ...its dynamic carries no diff address...
-    ?assertMatch([{undefined, _Spec, _Loc}], maps:get(d, T)),
+    ?assertMatch(
+        [{undefined, {attr, ~"az-region", _}, _}, {undefined, _Spec, _Loc}], maps:get(d, T)
+    ),
     {HTML0, _Snap} = arizona_render:render(T),
     HTML = iolist_to_binary(HTML0),
     %% ...and the rendered element has no az attribute, no slot markers, and no
-    %% trace of the directive itself.
-    ?assertEqual(<<"<div>42</div>">>, HTML),
+    %% trace of the directive itself -- only the region name it earns.
+    #{f := F} = T,
+    ?assertEqual(<<"<div az-region=\"", F/binary, "\">42</div>">>, HTML),
     ?assertEqual(nomatch, binary:match(HTML, ~"AZ-NODIFF")),
     ?assertEqual(nomatch, binary:match(HTML, ~"az-nodiff")),
     ?assertEqual(nomatch, binary:match(HTML, ~" az=")),
@@ -4903,8 +4922,12 @@ nodiff_bare_branch_inherited(Config) when is_list(Config) ->
                     "        ]}"
                     "    ). "
             ),
-            HTML = iolist_to_binary(
-                arizona_render:render_to_iolist(Mod:render(#{f => true, b => ~"B", xs => [1, 2]}))
+            HTML = strip_region_attr(
+                iolist_to_binary(
+                    arizona_render:render_to_iolist(
+                        Mod:render(#{f => true, b => ~"B", xs => [1, 2]})
+                    )
+                )
             ),
             ?assertMatch({_, _}, binary:match(HTML, Section))
         end,
@@ -5184,7 +5207,7 @@ nodiff_branch_local_across_swap(Config) when is_list(Config) ->
     {[[?OP_TEXT, _, <<"off">>]], OffSnap, V1} =
         arizona_diff:diff(Mod:render(#{f => false}), OnSnap, V0, #{f => true}),
     ?assertMatch(
-        {[[?OP_TEXT, _, #{~"d" := [~"init"]}]], _, _},
+        {[[?OP_TEXT, _, #{~"d" := [_, ~"init"]}]], _, _},
         arizona_diff:diff(Mod:render(#{f => true}), OffSnap, V1, #{f => true})
     ).
 
@@ -5296,8 +5319,8 @@ nodiff_each_item_inherited(Config) when is_list(Config) ->
         "    ). "
     ),
     %% The table itself is diffable, so only the item's own markup is markerless.
-    HTML = iolist_to_binary(
-        arizona_render:render_to_iolist(Mod:render(#{rows => [{~"1", ~"a&b"}]}))
+    HTML = strip_region_attr(
+        iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{rows => [{~"1", ~"a&b"}]})))
     ),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"<tr><td>1</td><td>a&amp;b</td></tr>">>)).
 
@@ -5338,7 +5361,7 @@ nodiff_stateful_props_not_inherited(Config) when is_list(Config) ->
     ),
     T = Mod:render(#{a => ~"A"}),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, Fun, _Loc}] = maps:get(d, T),
+    [{undefined, {attr, ~"az-region", _}, _}, {undefined, Fun, _Loc}] = maps:get(d, T),
     #{stateful := child_mod, props := #{body := Body}} = Fun(),
     ?assertNot(maps:is_key(diff, Body)),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Body)),
@@ -5562,7 +5585,7 @@ nodiff_each_stateful_item(Config) when is_list(Config) ->
     ?assertMatch(
         {match, _},
         re:run(
-            iolist_to_binary(HTML),
+            strip_region_attr(iolist_to_binary(HTML)),
             <<"^<ul><li><span az=\"[^\"]+\" az-view id=\"a\">",
                 "<!--az:[^>]+-->0<!--/az--></span></li>">>
         )
@@ -5735,10 +5758,13 @@ layout_single_element(Config) when is_list(Config) ->
         "    ). "
     ),
     T = Mod:render(#{text => <<"hello">>}),
-    ?assertEqual([<<"<p>">>, <<"</p>">>], maps:get(s, T)),
+    ?assertEqual([<<"<p">>, <<">">>, <<"</p>">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, {esc, Fun}, {pt_layout_elem, 1}}] = maps:get(d, T),
+    [
+        {undefined, {attr, <<"az-region">>, _}, _},
+        {undefined, {esc, Fun}, {pt_layout_elem, 1}}
+    ] = maps:get(d, T),
     ?assert(is_function(Fun, 0)),
     ?assertEqual(<<"hello">>, Fun()).
 
@@ -5774,10 +5800,14 @@ layout_dynamic_attr(Config) when is_list(Config) ->
         "    ). "
     ),
     T = Mod:render(#{cls => <<"active">>}),
-    ?assertEqual([<<"<div">>, <<">ok</div>">>], maps:get(s, T)),
+    ?assertEqual([<<"<div">>, <<>>, <<">ok</div>">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, {attr, <<"class">>, Fun}, {pt_layout_dyn_attr, 1}}] = maps:get(d, T),
+    [
+        {undefined, {attr, <<"az-region">>, _}, _},
+        {undefined, {attr, <<"class">>, Fun}, {pt_layout_dyn_attr, 1}}
+    ] =
+        maps:get(d, T),
     ?assert(is_function(Fun, 0)),
     ?assertEqual(<<"active">>, Fun()).
 
@@ -5814,8 +5844,8 @@ layout_static_only(Config) when is_list(Config) ->
         "    arizona_template:html({'p', ['az-nodiff', {class, <<\"box\">>}], [<<\"Hello\">>]}). "
     ),
     T = Mod:render(),
-    ?assertEqual([<<"<p class=\"box\">Hello</p>">>], maps:get(s, T)),
-    ?assertEqual([], maps:get(d, T)),
+    ?assertEqual([<<"<p">>, <<" class=\"box\">Hello</p>">>], maps:get(s, T)),
+    ?assertMatch([{undefined, {attr, <<"az-region">>, _}, _}], maps:get(d, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)).
 
@@ -5834,10 +5864,11 @@ layout_multiple_dynamic_children(Config) when is_list(Config) ->
         "    ). "
     ),
     T = Mod:render(#{a => <<"X">>, b => <<"Y">>}),
-    ?assertEqual([<<"<p>">>, <<" and ">>, <<"</p>">>], maps:get(s, T)),
+    ?assertEqual([<<"<p">>, <<">">>, <<" and ">>, <<"</p>">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
     [
+        {undefined, {attr, <<"az-region">>, _}, _},
         {undefined, {esc, FunA}, {pt_layout_multi_dyn, 1}},
         {undefined, {esc, FunB}, {pt_layout_multi_dyn, 1}}
     ] = maps:get(d, T),
@@ -5860,10 +5891,14 @@ layout_void_dynamic_attr(Config) when is_list(Config) ->
         "    ). "
     ),
     T = Mod:render(#{v => <<"hello">>}),
-    ?assertEqual([<<"<input">>, <<" />">>], maps:get(s, T)),
+    ?assertEqual([<<"<input">>, <<>>, <<" />">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, {attr, <<"value">>, Fun}, {pt_layout_void_dyn, 1}}] = maps:get(d, T),
+    [
+        {undefined, {attr, <<"az-region">>, _}, _},
+        {undefined, {attr, <<"value">>, Fun}, {pt_layout_void_dyn, 1}}
+    ] =
+        maps:get(d, T),
     ?assertEqual(<<"hello">>, Fun()),
     %% No az attr in statics
     StaticsBin = iolist_to_binary(maps:get(s, T)),
@@ -5932,7 +5967,7 @@ layout_nested_no_az(Config) when is_list(Config) ->
     StaticsBin = iolist_to_binary(maps:get(s, T)),
     ?assertEqual(nomatch, binary:match(StaticsBin, <<"az=\"">>)),
     ?assertEqual(nomatch, binary:match(StaticsBin, <<"<!--az:">>)),
-    HTML = iolist_to_binary(arizona_render:render_to_iolist(T)),
+    HTML = strip_region_attr(iolist_to_binary(arizona_render:render_to_iolist(T))),
     ?assertEqual(<<"<div><section><p>deep</p></section><p>shallow</p></div>">>, HTML).
 
 %% Test 77b: Mixed list with az-nodiff -- all dynamics get undefined Az
@@ -7493,10 +7528,13 @@ az_layout(Config) when is_list(Config) ->
         "    ). "
     ),
     T = Mod:render(#{text => <<"hello">>}),
-    ?assertEqual([<<"<p>">>, <<"</p>">>], maps:get(s, T)),
+    ?assertEqual([<<"<p">>, <<">">>, <<"</p>">>], maps:get(s, T)),
     ?assert(maps:is_key(f, T)),
     ?assertEqual(false, maps:get(diff, T)),
-    [{undefined, {esc, Fun}, {pt_az_layout, 1}}] = maps:get(d, T),
+    [
+        {undefined, {attr, <<"az-region">>, _}, _},
+        {undefined, {esc, Fun}, {pt_az_layout, 1}}
+    ] = maps:get(d, T),
     ?assert(is_function(Fun, 0)),
     ?assertEqual(<<"hello">>, Fun()).
 
@@ -10000,7 +10038,7 @@ nodiff_region_show_hide(Config) when is_list(Config) ->
     {Hide, S1, V1} = region_diff(toggle, B0#{show => false}, S0, V0, [show]),
     ?assertMatch([[?OP_TEXT, _, <<>>]], Hide),
     {Show, _, _} = region_diff(toggle, B0#{v => ~"b"}, S1, V1, [show, v]),
-    ?assertMatch([[?OP_TEXT, _, #{~"d" := [~"b"]}]], Show).
+    ?assertMatch([[?OP_TEXT, _, #{~"d" := [_, ~"b"]}]], Show).
 
 %% Switching between two regions patches the slot, whether or not the two share
 %% their statics.
@@ -10008,7 +10046,7 @@ nodiff_region_switch(Config) when is_list(Config) ->
     B0 = #{kind => a, v => ~"1"},
     {_, S0, V0} = region_render(switch, B0),
     {AB, S1, V1} = region_diff(switch, B0#{kind => b, v => ~"2"}, S0, V0, [kind, v]),
-    ?assertMatch([[?OP_TEXT, _, #{~"d" := [~"2"]}]], AB),
+    ?assertMatch([[?OP_TEXT, _, #{~"d" := [_, ~"2"]}]], AB),
     ?assertMatch(
         {[[?OP_TEXT, _, _]], _, _},
         region_diff(switch, B0#{kind => c}, S1, V1, [kind])
@@ -10041,7 +10079,7 @@ nodiff_region_wrapper_switch(Config) when is_list(Config) ->
     B0 = #{tab => a, v => ~"x"},
     {_, S0, V0} = region_render(wrapper_switch, B0),
     {Ops, _, _} = region_diff(wrapper_switch, B0#{tab => b}, S0, V0, [tab]),
-    ?assertMatch([[?OP_TEXT, _, #{~"d" := [~" az-key=\"b\"", ~"x"]}]], Ops).
+    ?assertMatch([[?OP_TEXT, _, #{~"d" := [_, ~" az-key=\"b\"", ~"x"]}]], Ops).
 
 %% A value read only inside the region is not a dependency of its slot.
 nodiff_region_inner_change(Config) when is_list(Config) ->
@@ -10132,7 +10170,8 @@ nodiff_region_list_items(Config) when is_list(Config) ->
             items
         ]),
     ?assertMatch(
-        [[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, #{~"d" := [_, ~"a"]}]]]]]], Rekey
+        [[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, #{~"d" := [_, _, ~"a"]}]]]]]],
+        Rekey
     ).
 
 %% Regions in stream items come and go with their items; updating a kept item
@@ -10156,7 +10195,142 @@ nodiff_region_stream_items(Config) when is_list(Config) ->
     %% A new `az_key` in a kept item remounts its region.
     St5 = arizona_stream:update(settled_stream(St3), ~"1", #{id => ~"1", v => ~"z", rev => 1}),
     {Rekey, _, _} = region_diff(stream_widgets, #{items => St5}, S2, V2, [items]),
-    ?assertMatch([[?OP_ITEM_PATCH, _, ~"1", [[?OP_TEXT, _, #{~"d" := [_, ~"z"]}]]]], Rekey).
+    ?assertMatch([[?OP_ITEM_PATCH, _, ~"1", [[?OP_TEXT, _, #{~"d" := [_, _, ~"z"]}]]]], Rekey).
+
+%% A region's root names its identity -- the fingerprint, the branch that produced
+%% it and its `az_key` -- in `az-region`, for the client to keep it by across a
+%% wholesale re-render. The value is the one region_token/3 builds from the very
+%% fields same_region/3 compares, however the branch got stamped: on a literal
+%% template, by `branch/2` on a helper's runtime value, or through a `?stateless`
+%% descriptor.
+nodiff_region_attr_names_identity(Config) when is_list(Config) ->
+    {_, Keyed, _} = region_render(keyed, #{on => true, type => ~"line"}),
+    {_, Helpers, _} = region_render(helper_switch, #{kind => bar, v => ~"x"}),
+    Regions = region_snaps(Keyed) ++ region_snaps(Helpers),
+    ?assertEqual(6, length(Regions)),
+    [
+        ?assertEqual(
+            region_token_of(Snap), region_attr_of(Snap), {Snap, region_token_of(Snap)}
+        )
+     || Snap <- Regions
+    ],
+    %% The branch is named on every clause path, and the key whenever there is one.
+    [<<_/binary>> = Line | _] = [region_attr_of(S) || S <- region_snaps(Keyed)],
+    ?assertMatch({_, _}, binary:match(Line, ~".b1.k")),
+    [?assertMatch({_, _}, binary:match(region_attr_of(S), ~".b2")) || S <- region_snaps(Helpers)].
+
+%% Two renders name the same region exactly when the diff keeps it: the same
+%% branch with new values keeps the name, another branch calling the same helper
+%% or a new `az_key` changes it.
+nodiff_region_attr_follows_same_region(Config) when is_list(Config) ->
+    Attr = fun(Fun, B) ->
+        {_, Snap, _} = region_render(Fun, B),
+        [region_attr_of(S) || S <- region_snaps(Snap)]
+    end,
+    ?assertEqual(
+        Attr(one_branch, #{n => 1, v => ~"a"}), Attr(one_branch, #{n => 2, v => ~"b"})
+    ),
+    [Line1, Line2, Line3] = Attr(helper_switch, #{kind => line, v => ~"x"}),
+    [Bar1, Bar2, Bar3] = Attr(helper_switch, #{kind => bar, v => ~"x"}),
+    [?assertNotEqual(L, B) || {L, B} <- [{Line1, Bar1}, {Line2, Bar2}, {Line3, Bar3}]],
+    [K1, _, _] = Attr(keyed, #{on => true, type => ~"line"}),
+    [K2, _, _] = Attr(keyed, #{on => true, type => ~"bar"}),
+    ?assertNotEqual(K1, K2).
+
+%% An `?each` item whose root is a region is named too, with the item's own
+%% `az_key`.
+nodiff_region_attr_item_key(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_region_attr_item). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], ["
+        "        arizona_template:each(fun(I) -> "
+        "            {'li', ['az-nodiff', {az_key, I}], [I]} "
+        "        end, arizona_template:get(items, Bindings))"
+        "    ]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [1, 2]}))),
+    {match, Names} = re:run(HTML, ~"<li az-region=\"([^\"]+)\"", [
+        global, {capture, all_but_first, binary}
+    ]),
+    [[A], [B]] = Names,
+    [F, _] = binary:split(A, ~"."),
+    ?assertEqual(arizona_template:region_token(F, undefined, 1), A),
+    ?assertEqual(arizona_template:region_token(F, undefined, 2), B).
+
+%% Only a region's own root is named: not the templates nested in it (they are
+%% part of it), not a layout, and not a target whose client keeps no regions.
+nodiff_region_attr_only_on_regions(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_region_attr_only). "
+        "-export([region/1, layout/1, native/1]). "
+        "region(Bindings) -> "
+        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "        case arizona_template:get(on, Bindings) of "
+        "            true -> {'p', [], [<<\"in\">>]}; "
+        "            false -> <<>> "
+        "        end, "
+        "        arizona_template:html({'span', [], [<<\"nested\">>]})"
+        "    ]}). "
+        "layout(Bindings) -> "
+        "    arizona_template:html({'main', ['az-nodiff'], [az:inner_content(Bindings)]}). "
+        "native(_Bindings) -> "
+        "    arizona_template:native({'Column', ['az-nodiff'], [<<\"n\">>]}). "
+    ),
+    Region = iolist_to_binary(arizona_render:render_to_iolist(Mod:region(#{on => true}))),
+    ?assertMatch([_], binary:matches(Region, ~"az-region")),
+    ?assertMatch({0, _}, binary:match(Region, ~"<div az-region=")),
+    Layout = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:layout(#{inner_content => ~"page"}))
+    ),
+    ?assertEqual(nomatch, binary:match(Layout, ~"az-region")),
+    Native = iolist_to_binary(arizona_render:render_to_iolist(Mod:native(#{}))),
+    ?assertEqual(nomatch, binary:match(Native, ~"az-region")).
+
+%% `az-region` is the transform's own; an authored one would be read as a region's
+%% identity.
+reserved_az_region_attr_raises(Config) when is_list(Config) ->
+    [
+        assert_parse_error(
+            lists:flatten([
+                "-module(pt_reserved_region_",
+                integer_to_list(N),
+                "). -export([render/1]). render(_Bindings) -> ",
+                "arizona_template:html({'div', [",
+                Attr,
+                "], []}). "
+            ]),
+            fun
+                ({reserved_attr, Name}) -> string:lowercase(Name) =:= ~"az-region";
+                (_) -> false
+            end
+        )
+     || {N, Attr} <- [
+            {1, "{'az-region', <<\"x\">>}"},
+            {2, "{az_region, <<\"x\">>}"},
+            {3, "'az-nodiff', {<<\"AZ-REGION\">>, <<\"x\">>}"}
+        ]
+    ].
+
+%% Every az-nodiff region snapshot under `Snap`, in render order.
+region_snaps(#{d := D}) ->
+    lists:append([region_snaps_val(V) || {_Az, V} <- D]).
+
+region_snaps_val({arizona_esc, V}) -> region_snaps_val(V);
+region_snaps_val(#{diff := false} = Snap) -> [Snap];
+region_snaps_val(#{s := _, d := _} = Snap) -> region_snaps(Snap);
+region_snaps_val(_V) -> [].
+
+region_attr_of(#{d := [{undefined, {attr, ~"az-region", Name}} | _]}) ->
+    Name.
+
+%% The token same_region/3's identity spells: the unscoped fingerprint (the scope
+%% prefix is the slot, which the client reads off the DOM), the branch and key.
+region_token_of(#{f := ScopedF} = Snap) ->
+    {Branch, Key} = maps:get(region, Snap, {undefined, undefined}),
+    [F | _] = lists:reverse(binary:split(ScopedF, ~"-", [global])),
+    arizona_template:region_token(F, Branch, Key).
 
 region_render(Fun, Bindings) ->
     arizona_render:render(arizona_nodiff_regions:Fun(Bindings), #{}).

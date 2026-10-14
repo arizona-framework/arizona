@@ -49,6 +49,7 @@ the wire value. On the wire itself a value stays raw
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
+-export([supports_region_keep/0]).
 -export([boolean_attrs/0]).
 -export([escape/1]).
 -export([render_attr/2]).
@@ -169,6 +170,8 @@ target() -> native.
 content_type() -> ~"application/json".
 
 supports_local() -> false.
+
+supports_region_keep() -> false.
 
 boolean_attrs() -> value.
 

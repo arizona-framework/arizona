@@ -80,6 +80,7 @@ render(Bindings) ->
 -export([stateless_template/1]).
 -export([same_region/3]).
 -export([same_region/2]).
+-export([region_token/3]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
 
@@ -755,12 +756,43 @@ branch value it cannot see at compile time.
     Branch :: pos_integer(),
     Value :: term(),
     Value1 :: term().
+branch(Branch, #{s := _, d := [{Az, {attr, ~"az-region", _}, Loc} | D], f := F} = Tmpl) ->
+    %% The region's `az-region` attribute -- its root's first dynamic, the parse
+    %% transform puts it there -- names the branch too.
+    Key = maps:get(az_key, Tmpl, undefined),
+    Name = {Az, {attr, ~"az-region", fun() -> region_token(F, Branch, Key) end}, Loc},
+    Tmpl#{branch => Branch, d => [Name | D]};
 branch(Branch, #{s := _, d := _, diff := false} = Tmpl) ->
     Tmpl#{branch => Branch};
 branch(Branch, #{callback := _, props := _} = Desc) ->
     Desc#{branch => Branch};
 branch(_Branch, Value) ->
     Value.
+
+-doc """
+The value of the `az-region` attribute on the root of an az-nodiff region: its
+identity as `same_region/3` decides it -- the template's fingerprint `F`, the
+conditional branch that produced it and its `az_key` -- spelled as one opaque
+token. The client matches regions by it, so a wholesale re-render around a
+region (a reconnect, a container `?OP_TEXT`) carries the existing DOM over to a
+new render naming the same region, and replaces it otherwise.
+
+The token is not scoped: where the region sits (its slot, the item it is in) is
+read off the DOM by the client, which is where those addresses already are.
+""".
+-spec region_token(F, Branch, Key) -> binary() when
+    F :: binary(),
+    Branch :: pos_integer() | undefined,
+    Key :: term().
+region_token(F, Branch, Key) ->
+    <<F/binary, (region_branch(Branch))/binary, (region_key(Key))/binary>>.
+
+region_branch(undefined) -> <<>>;
+region_branch(Branch) -> <<".b", (integer_to_binary(Branch))/binary>>.
+
+%% A key is any term, so it is hashed: the attribute names it, it does not carry it.
+region_key(undefined) -> <<>>;
+region_key(Key) -> <<".k", (integer_to_binary(erlang:phash2(Key, 1 bsl 32), 36))/binary>>.
 
 -doc """
 Renders a `?stateless` descriptor to its template, passing on the branch stamp

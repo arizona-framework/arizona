@@ -129,6 +129,10 @@ render(Bindings) ->
 %% first. Every such call is compiled away -- one left over is `undef` at render.
 -define(NODIFF_MOD, '$arizona_nodiff').
 
+%% Stands in for a region's fingerprint in its `az-region` call until the
+%% statics, and so the fingerprint, are known (fill_region_fingerprint/2).
+-define(REGION_FP, '$arizona_region_fp').
+
 -record(state, {
     %% Segments of the static under construction, newest first.
     buf = [] :: [segment()],
@@ -153,6 +157,9 @@ render(Bindings) ->
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean(),
+    %% Set while compiling the root element of an az-nodiff region: it gets the
+    %% `az-region` attribute naming the region (see is_region_root/3).
+    region = false :: boolean(),
     backend = target_backend(html) :: module()
 }).
 
@@ -732,8 +739,9 @@ format_error({reserved_attr, Name}) ->
         io_lib:format(
             "the ~ts attribute is reserved -- the parse transform emits it itself "
             "(az addresses an element for the diff, az-local describes its ?local "
-            "slots), so a template-authored one renders as a duplicate whose value "
-            "can collide with a real slot address and misroute a patch. Remove it: "
+            "slots, az-region names an az-nodiff region), so a template-authored one "
+            "renders as a duplicate whose value can collide with a real one and "
+            "misroute a patch or a kept region. Remove it: "
             "az-key, the az-* event attributes and any az-* name of your own are "
             "unaffected",
             [Name]
@@ -2795,11 +2803,13 @@ reject_orphaned_local(ExprAST) ->
 
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, Inherited) ->
     Opts = prescan_directives(ElementASTs, Inherited),
+    Region = is_region_root(ElementASTs, Inherited, Backend),
     State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
         live_render = LiveRender,
         root = LiveRender,
+        region = Region,
         backend = Backend,
         content_ctx = CCtx
     },
@@ -2812,9 +2822,101 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, Inherited
         State0,
         ElementASTs
     ),
-    {Statics, DynASTs} = finalize(State1),
+    {Statics, DynASTs0} = finalize(State1),
     Fingerprint = generate_fingerprint(Statics),
+    DynASTs =
+        case Region of
+            true -> fill_region_fingerprint(Fingerprint, DynASTs0);
+            false -> DynASTs0
+        end,
     {Statics, DynASTs, Fingerprint, Opts}.
+
+%% An az-nodiff region is a template whose single root element carries the
+%% directive itself -- not one that inherits it from an enclosing region, which is
+%% part of that region, and not a layout, which is nodiff for `?inner_content`.
+%% Its root is named by an `az-region` attribute when the backend's client keeps
+%% regions across a wholesale re-render (`supports_region_keep/0`).
+is_region_root([Elem], false, Backend) ->
+    case is_element_tuple(Elem) of
+        true ->
+            {_Tag, Attrs, _Children, _Line} = extract_element(Elem),
+            {_Rest, ElemOpts} = extract_directives(Attrs),
+            maps:is_key(diff, ElemOpts) andalso not contains_inner_content(Elem) andalso
+                Backend:supports_region_keep();
+        false ->
+            false
+    end;
+is_region_root(_ElementASTs, _Inherited, _Backend) ->
+    false.
+
+%% The `az-region` value: `arizona_template:region_token/3` over the template's
+%% fingerprint, the branch that produced it and its `az_key` -- the identity the
+%% diff keeps a region by (`arizona_template:same_region/3`). The fingerprint is
+%% known only once the statics are, so the call is built with a placeholder and
+%% filled in here; the branch is stamped later, by stamp_leaf/2 or
+%% `arizona_template:branch/2`.
+region_attr(Attrs, Line) ->
+    KeyAST =
+        case [V || {tuple, _, [NameAST, V]} <- Attrs, is_az_key(NameAST)] of
+            [K] -> K;
+            [] -> {atom, Line, undefined}
+        end,
+    Call = region_token_call(Line, {atom, Line, ?REGION_FP}, {atom, Line, undefined}, KeyAST),
+    {tuple, Line, [{atom, Line, 'az-region'}, Call]}.
+
+maybe_inject_region(Attrs, Line, #state{region = true}) ->
+    [region_attr(Attrs, Line) | Attrs];
+maybe_inject_region(Attrs, _Line, #state{region = false}) ->
+    Attrs.
+
+region_token_call(L, FpAST, BranchAST, KeyAST) ->
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, region_token}}, [
+        FpAST, BranchAST, KeyAST
+    ]}.
+
+fill_region_fingerprint(Fingerprint, DynASTs) ->
+    replace_ast(
+        fun
+            ({atom, _, ?REGION_FP}) -> {ok, ast_binary(Fingerprint)};
+            (_Node) -> error
+        end,
+        DynASTs
+    ).
+
+%% Rewrites the region token's branch argument in a literal region template's
+%% `d` field (stamp_leaf/2): a template whose branch is known at compile time.
+stamp_region_branch(N, Fields) ->
+    [stamp_region_branch_field(N, F) || F <- Fields].
+
+stamp_region_branch_field(N, {map_field_assoc, L, {atom, _, d} = K, DAST}) ->
+    {map_field_assoc, L, K,
+        replace_ast(
+            fun
+                (
+                    {call, CL, {remote, _, {atom, _, arizona_template}, {atom, _, region_token}}, [
+                        FpAST, {atom, _, undefined}, KeyAST
+                    ]}
+                ) ->
+                    {ok, region_token_call(CL, FpAST, {integer, CL, N}, KeyAST)};
+                (_Node) ->
+                    error
+            end,
+            DAST
+        )};
+stamp_region_branch_field(_N, Field) ->
+    Field.
+
+%% AST substitution: `Fun` answers `{ok, New}` for a node it
+%% replaces (not descended into) and `error` for one to walk.
+replace_ast(Fun, Node) when is_tuple(Node) ->
+    case Fun(Node) of
+        {ok, New} -> New;
+        error -> list_to_tuple([replace_ast(Fun, E) || E <- tuple_to_list(Node)])
+    end;
+replace_ast(Fun, Nodes) when is_list(Nodes) ->
+    [replace_ast(Fun, E) || E <- Nodes];
+replace_ast(_Fun, Leaf) ->
+    Leaf.
 
 compile_mixed_items(Items, Module, Backend, CCtx, Inherited) ->
     Opts = prescan_directives(Items, Inherited),
@@ -2942,9 +3044,9 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
     Backend = State0#state.backend,
     RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
     ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
-    Attrs1 = maybe_inject_or_raise_az_view(Attrs0, Line, State0),
+    Attrs1 = maybe_inject_region(maybe_inject_or_raise_az_view(Attrs0, Line, State0), Line, State0),
     Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, RawKind, Line),
-    State1 = State0#state{root = false},
+    State1 = State0#state{root = false, region = false},
     %% A raw-text element's dynamic children fold into ONE nested template carried at
     %% the ELEMENT's own az (see compile_element_children/7), so it needs one too --
     %% not only dynamic attributes force one there.
@@ -3680,8 +3782,12 @@ stamp_branch(Leaf, N) ->
 
 stamp_leaf(N, {map, L, Fields} = Map) ->
     case lists:any(fun is_nodiff_field/1, Fields) of
-        true -> {map, L, Fields ++ [{map_field_assoc, L, {atom, L, branch}, {integer, L, N}}]};
-        false -> Map
+        true ->
+            {map, L,
+                stamp_region_branch(N, Fields) ++
+                    [{map_field_assoc, L, {atom, L, branch}, {integer, L, N}}]};
+        false ->
+            Map
     end;
 stamp_leaf(_N, {Literal, _, _} = Leaf) when
     Literal =:= bin orelse Literal =:= string orelse Literal =:= integer orelse
@@ -4531,6 +4637,7 @@ reserved_attr_name(Name) ->
 
 is_reserved_attr_name(~"az") -> true;
 is_reserved_attr_name(~"az-local") -> true;
+is_reserved_attr_name(~"az-region") -> true;
 is_reserved_attr_name(_Other) -> false.
 
 reject_reserved_attrs(Attrs, Line) ->

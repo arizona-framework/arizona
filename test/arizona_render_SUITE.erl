@@ -1218,10 +1218,13 @@ ssr_escaped_scalars_exact(Config) when is_list(Config) ->
     Tmpl = arizona_ssr_values:render_nodiff(#{
         v => ~"<&\"'>", items => [~"<&\"'>", 5, -3]
     }),
+    #{f := F} = Tmpl,
     ?assertEqual(
         <<
-            "<div><p>&lt;&amp;&quot;&#39;&gt;</p><ul><li>&lt;&amp;&quot;&#39;&gt;</li>"
-            "<li>5</li><li>-3</li></ul></div>"
+            "<div az-region=\"",
+            F/binary,
+            "\"><p>&lt;&amp;&quot;&#39;&gt;</p>"
+            "<ul><li>&lt;&amp;&quot;&#39;&gt;</li><li>5</li><li>-3</li></ul></div>"
         >>,
         iolist_to_binary(arizona_render:render_to_iolist(Tmpl))
     ).

@@ -932,6 +932,166 @@ function forEachElementBetweenMarkers(startMarker, fn) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Kept az-nodiff regions. A region is rendered by the server once and then owned
+// by the client (a widget mounted from its `az-hook`). When something around it is
+// re-rendered wholesale -- a container `OP_TEXT`, or the `OP_REPLACE` that resyncs
+// a reconnected view -- the new markup holds a fresh copy of every region in it.
+// The server names each region's identity on its root (`az-region`, built by
+// `arizona_template:region_token/3` from the fingerprint, branch and `az_key` the
+// diff keeps a region by), and here a region whose old and new copies sit at the
+// same place under the same name is carried over: the old DOM moves into the new
+// markup in place of the new copy, and its hooks see neither `destroyed()` nor
+// `mounted()`. Anything else is replaced as before.
+//
+// "The same place" is read off the DOM, where the addresses already are: the slot
+// marker enclosing each element on the way up, and the `az-key` / view id of each
+// ancestor. A slot holds one value, so two regions under the same name and place
+// are items of a plain list, matched by position, as the list diff matches them.
+// ---------------------------------------------------------------------------
+
+/** No region kept. Shared, never written. */
+const NO_REGIONS = /** @type {ReadonlySet<Element>} */ (new Set());
+
+const REGION_ATTR = 'az-region';
+
+/**
+ * Cheap pre-check: can this markup name a region at all? Keeps the common
+ * re-render on its original path.
+ * @param {string} html
+ * @returns {boolean}
+ */
+function mayNameRegion(html) {
+    return html.includes(` ${REGION_ATTR}="`);
+}
+
+/**
+ * Carry the regions in `oldNodes` (the content about to be replaced) over into
+ * `frag` (its replacement, not yet inserted): each new region with an old
+ * counterpart of the same identity is swapped for it. Returns the kept regions.
+ *
+ * A region holding a live view is not kept on a resync: the reconnect mounted that
+ * view afresh, so the DOM it left behind no longer matches the server's state.
+ * @param {ArrayLike<Node>} oldNodes
+ * @param {DocumentFragment} frag
+ * @param {boolean} resync
+ * @returns {ReadonlySet<Element>}
+ */
+function keepRegions(oldNodes, frag, resync) {
+    const fresh = regionsByIdentity(Array.from(frag.childNodes));
+    if (fresh.size === 0) return NO_REGIONS;
+    const old = regionsByIdentity(Array.from(oldNodes));
+    const kept = new Set();
+    for (const [id, news] of fresh) {
+        const olds = old.get(id);
+        if (!olds) continue;
+        const n = Math.min(news.length, olds.length);
+        for (let i = 0; i < n; i++) {
+            const o = olds[i];
+            if (resync && (o.hasAttribute('az-view') || o.querySelector('[az-view]'))) continue;
+            news[i].replaceWith(o);
+            kept.add(o);
+        }
+    }
+    return kept;
+}
+
+/**
+ * The outermost regions under the sibling range `tops`, grouped by identity in
+ * document order. A region inside another is part of it and is not listed.
+ * @param {Node[]} tops
+ * @returns {Map<string, Element[]>}
+ */
+function regionsByIdentity(tops) {
+    /** @type {Map<string, Element[]>} */
+    const byId = new Map();
+    /** @type {Map<Node, string>} */
+    const slots = new Map();
+    slotsOf(tops, slots);
+    for (const top of tops) {
+        if (top.nodeType !== 1) continue;
+        const el = /** @type {Element} */ (top);
+        const found = el.hasAttribute(REGION_ATTR) ? [el] : [];
+        for (const r of el.querySelectorAll(`[${REGION_ATTR}]`)) found.push(r);
+        for (const r of found) {
+            const id = regionIdentity(r, el, slots);
+            if (id === null) continue;
+            const list = byId.get(id);
+            if (list) list.push(r);
+            else byId.set(id, [r]);
+        }
+    }
+    return byId;
+}
+
+/**
+ * A region's identity: its name plus, for it and each ancestor up to `top`, the
+ * slot it sits in and its `az-key` / view id. Null when an ancestor is itself a
+ * region (the outer one carries this one).
+ * @param {Element} region
+ * @param {Element} top
+ * @param {Map<Node, string>} slots
+ * @returns {string|null}
+ */
+function regionIdentity(region, top, slots) {
+    let id = /** @type {string} */ (region.getAttribute(REGION_ATTR));
+    /** @type {Element} */
+    let node = region;
+    for (;;) {
+        if (node !== region) {
+            if (node.hasAttribute(REGION_ATTR)) return null;
+            const key = node.getAttribute('az-key') ?? '';
+            const view = node.hasAttribute('az-view') ? node.id : '';
+            id = `${key}#${view}/${id}`;
+        }
+        if (!slots.has(node))
+            slotsOf(Array.from(/** @type {Element} */ (node.parentNode).childNodes), slots);
+        id = `${slots.get(node)}>${id}`;
+        if (node === top) return id;
+        node = /** @type {Element} */ (node.parentNode);
+    }
+}
+
+/**
+ * Record, for each element in the sibling range `nodes`, the az of the innermost
+ * slot marker pair enclosing it within that range ('' for none).
+ * @param {Node[]} nodes
+ * @param {Map<Node, string>} slots
+ */
+function slotsOf(nodes, slots) {
+    /** @type {string[]} */
+    const open = [];
+    for (const n of nodes) {
+        if (n.nodeType === 8) {
+            const data = /** @type {Comment} */ (n).data;
+            if (data === '/az') open.pop();
+            else if (MARKER_OPEN.test(data)) open.push(data.slice(3));
+        } else if (n.nodeType === 1) {
+            slots.set(n, open.length > 0 ? open[open.length - 1] : '');
+        }
+    }
+}
+
+/**
+ * `mountHooks` over `root`, skipping the kept regions: their hooks never left,
+ * and what is inside them is the client's own markup.
+ * @param {Element} root
+ * @param {ReadonlySet<Element>} kept
+ */
+function mountHooksOutside(root, kept) {
+    if (kept.size === 0) {
+        mountHooks(root);
+        return;
+    }
+    if (!anyHookDefs()) return;
+    const inKept = (/** @type {Element} */ e) => {
+        for (const k of kept) if (k.contains(e)) return true;
+        return false;
+    };
+    if (root.hasAttribute('az-hook') && !inKept(root)) mountHook(root);
+    for (const e of root.querySelectorAll('[az-hook]')) if (!inKept(e)) mountHook(e);
+}
+
 /**
  * Apply a TEXT op: replace marker content (or el.textContent if no marker)
  * and walk hook lifecycle. `isHtml` distinguishes an HTML fragment (innerHTML) from a
@@ -944,15 +1104,33 @@ function forEachElementBetweenMarkers(startMarker, fn) {
 function applyTextOp(el, az, val, isHtml) {
     const marker = findMarker(el, az);
     if (marker) {
+        // A re-rendered slot keeps the az-nodiff regions its new content names again:
+        // they move into the new content before the old is torn down.
+        let frag = null;
+        let kept = NO_REGIONS;
+        if (isHtml && mayNameRegion(val)) {
+            /** @type {Node[]} */
+            const old = [];
+            if (forEachNodeInSlot(marker, (n) => old.push(n))) {
+                frag = parseFragmentIn(marker.parentNode, val);
+                kept = keepRegions(old, frag, false);
+            }
+        }
         forEachElementBetweenMarkers(marker, destroyHooks);
-        if (!updateMarkerContent(marker, val, isHtml)) {
+        if (!updateMarkerContent(marker, val, isHtml, frag)) {
             // Undelimited slot (stored HTML carrying a marker-shaped comment with
             // no closer). Nothing was touched -- say so rather than write the
             // value somewhere arbitrary.
             console.warn(`[arizona] slot az:${az} has no closing marker; skipping`);
             return;
         }
-        forEachElementBetweenMarkers(marker, mountHooks);
+        forEachElementBetweenMarkers(marker, (e) => mountHooksOutside(e, kept));
+    } else if (isHtml && mayNameRegion(val)) {
+        const frag = parseFragmentIn(el, val);
+        const kept = keepRegions(Array.from(el.childNodes), frag, false);
+        destroyChildHooks(el);
+        el.replaceChildren(frag);
+        mountHooksOutside(el, kept);
     } else {
         destroyChildHooks(el);
         if (isHtml) {
@@ -1083,9 +1261,14 @@ function removeEl(el) {
  *   lookup and maintained by the batch's INSERT/REMOVE ops -- an N-op reorder is
  *   O(N), not O(N^2) scans (mirrors applyListPatch's one-snapshot-per-batch
  *   shape).
+ *
+ * `resync` marks the batch that resyncs a reconnected view (the first frame after
+ * a reconnect): its `OP_REPLACE` keeps the az-nodiff regions the new render names
+ * again (`keepRegions`). A navigate's `OP_REPLACE` keeps none -- it is a new page.
  * @param {Array<Array<*>>} ops
+ * @param {boolean} [resync]
  */
-function applyOps(ops) {
+function applyOps(ops, resync = false) {
     let didReplace = false;
     /** @type {Map<string, Resolution>} */
     const els = new Map();
@@ -1145,15 +1328,18 @@ function applyOps(ops) {
                     applyRemAttrOp(el, op[2]);
                     break;
                 case OP.REPLACE: {
-                    destroyHooks(el);
                     // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
                     // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
                     // view) after the swap finds nothing and the destination's hooks would
                     // never mount. Same parse-then-mount shape as OP_INSERT.
                     const frag = parseFragmentIn(el.parentNode, op[2]);
+                    // Kept regions move into the replacement first, so the teardown below
+                    // no longer reaches them.
+                    const kept = resync ? keepRegions([el], frag, true) : NO_REGIONS;
+                    destroyHooks(el);
                     const added = Array.from(frag.children);
                     el.replaceWith(frag);
-                    for (const e of added) mountHooks(e);
+                    for (const e of added) mountHooksOutside(e, kept);
                     // A popped-out (PiP) view whose placeholder just went with
                     // the outgoing subtree is orphaned -- close its window.
                     closeOrphanedPipWindows();
@@ -1417,9 +1603,10 @@ function parseFragmentIn(parent, html) {
  * @param {Comment} startMarker
  * @param {string} value
  * @param {boolean} [isHtml]
+ * @param {DocumentFragment|null} [frag] -- `value` already parsed (see applyTextOp)
  * @returns {boolean}
  */
-function updateMarkerContent(startMarker, value, isHtml) {
+function updateMarkerContent(startMarker, value, isHtml, frag = null) {
     const doc = startMarker.ownerDocument;
     // Scalar fast path: a lone text node is updated in place (no childList churn,
     // which would revert an in-progress scroll on WebKitGTK -- see updateLoneTextNode).
@@ -1427,7 +1614,7 @@ function updateMarkerContent(startMarker, value, isHtml) {
     if (!forEachNodeInSlot(startMarker, (node) => node.remove())) return false;
     // Insert new content before the closing marker
     if (isHtml) {
-        startMarker.after(parseFragmentIn(startMarker.parentNode, value));
+        startMarker.after(frag ?? parseFragmentIn(startMarker.parentNode, value));
     } else {
         startMarker.after(doc.createTextNode(value));
     }
@@ -3661,7 +3848,7 @@ function connect(endpoint, params = {}) {
                         // Re-save what was typed while disconnected: the resync's
                         // OP_REPLACE is about to discard it.
                         if (msg[3] && _savedForms.size > 0) saveFormState();
-                        if (msg[1]) applyOps(msg[1]);
+                        if (msg[1]) applyOps(msg[1], !!msg[3]);
                         if (msg[2]) applyEffects(msg[2]);
                         if (msg[3]) restoreFormState();
                         if (armedScroll?.patch && _pendingScroll === armedScroll) {
