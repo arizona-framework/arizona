@@ -47,17 +47,14 @@ cannot modify framework-owned bindings like `id`. Violations raise
 %% --------------------------------------------------------------------
 
 -export([eval_dynamics/1]).
--export([eval_item_value/1]).
 -export([eval_dynamics_v/2]).
 -export([eval_one_v_flat/2]).
 -export([eval_each_def/1]).
 -export([eval_stream_items/4]).
 -export([render_stream_item/4]).
 -export([render_stream_item_skipping/6]).
--export([render_stream_items_simple/3]).
 -export([render_list_items/3]).
 -export([render_map_items/3]).
--export([render_map_items_simple/2]).
 -export([check_restricted_keys/3]).
 -export([restricted_keys/0]).
 -export([child_view_set/1]).
@@ -235,9 +232,9 @@ eval_or_reuse_per_item([Def | DR], [{Az, OldVal, OldDeps} | OR], ChangedKeys, Vi
 can_reuse(OldDeps, ChangedKeys) ->
     map_size(OldDeps) > 0 andalso not arizona_diff:deps_changed(OldDeps, ChangedKeys).
 
--doc """
-Renders stream items without view tracking. Returns `#{Key => ItemD}`.
-""".
+%% Renders stream items without view tracking. Returns `#{Key => ItemD}`.
+%%
+%% Not exported: SSR renders a stream each straight to output, like a plain list.
 -spec render_stream_items_simple(Keys, ItemsMap, Template) -> ItemSnaps when
     Keys :: [term()],
     ItemsMap :: #{term() => term()},
@@ -270,9 +267,7 @@ render_list_items(Items, #{d := DFun}, Views) ->
 render_list_items_simple(Items, #{d := DFun}) ->
     [[eval_one_triple(D) || D <- DFun(Item)] || Item <- Items].
 
--doc """
-Renders map entries without view tracking. Returns `[ItemD]`.
-""".
+%% Renders map entries without view tracking. Returns `[ItemD]`.
 -spec render_map_items_simple(Map, Template) -> ItemDs when
     Map :: map(),
     Template :: map(),
@@ -403,15 +398,7 @@ eval_one_triple({Az, _Spec, _Loc} = Dyn) ->
 eval_one_triple({Az, _Spec} = Dyn) ->
     {Az, eval_item_value(Dyn), #{}}.
 
--doc """
-The value an item dynamic evaluates to, without the `{Az, Value, Deps}` wrapper.
-
-The SSR path renders each item straight to its backend's output, so the triple -- and
-the per-item list of them, and the list of those -- is structure it would only take
-apart again.
-The paths that keep a snapshot still want the wrapper, and get it from
-`eval_one_triple/1`, which is this plus the address.
-""".
+%% The value an item dynamic evaluates to; `eval_one_triple/1` adds the address.
 -spec eval_item_value(Dynamic) -> term() when
     Dynamic :: tuple().
 eval_item_value({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
@@ -613,9 +600,9 @@ eval_each_map(Source, Tmpl, Views) ->
 render_map_items(Map, #{d := DFun}, Views) ->
     %% Fold prepends, so the accumulator ends up reversed relative to the map's
     %% iteration order -- reverse it back so the tracked/diff path renders entries
-    %% in the SAME order as the SSR path (`render_map_items_simple`, a `K := V <-`
-    %% comprehension over the same iteration order). Without this the live
-    %% snapshot disagrees with the SSR DOM item-for-item.
+    %% in the SAME order as the untracked path (`render_map_items_simple`) and SSR
+    %% (`arizona_render`), both a `K := V <-` comprehension over the same iteration
+    %% order. Without this the live snapshot disagrees with the SSR DOM item-for-item.
     {Acc, Views1} = maps:fold(
         fun(K, V, {Acc0, V0}) ->
             Dynamics = DFun(K, V),

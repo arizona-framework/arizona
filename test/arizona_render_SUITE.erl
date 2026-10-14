@@ -87,6 +87,11 @@
     ssr_inner_content_rejects_raw_wrapper/1,
     ssr_inner_content_rejects_sibling_in_one_slot/1,
     ssr_invalid_chardata_user_value_still_errors/1,
+    ssr_escaped_values_match_live/1,
+    ssr_escaped_scalars_exact/1,
+    ssr_item_value_crash_location/1,
+    ssr_top_value_crash_location/1,
+    ssr_stateful_in_each_items_matches_live/1,
     ssr_page_with_child/1,
     ssr_nested_local/1,
     ssr_local_app/1,
@@ -172,6 +177,11 @@ groups() ->
             ssr_inner_content_rejects_raw_wrapper,
             ssr_inner_content_rejects_sibling_in_one_slot,
             ssr_invalid_chardata_user_value_still_errors,
+            ssr_escaped_values_match_live,
+            ssr_escaped_scalars_exact,
+            ssr_item_value_crash_location,
+            ssr_top_value_crash_location,
+            ssr_stateful_in_each_items_matches_live,
             resolve_id_binary,
             resolve_id_template
         ]},
@@ -878,6 +888,78 @@ ssr_invalid_chardata_user_value_still_errors(Config) when is_list(Config) ->
             arizona_static_page, #{bindings => #{title => [<<255>>]}}
         )
     ).
+
+%% SSR escapes a binary or integer content value directly, skipping the escape
+%% marker the live render builds. Every fixture value shape -- scalars, a helper
+%% `?raw`, a nested template, a `?stateless` child, an effect, a helper `?local` --
+%% at the top level and as list, stream and map `?each` item content, diffable and
+%% az-nodiff, must still render byte for byte as the live path renders it.
+ssr_escaped_values_match_live(Config) when is_list(Config) ->
+    Values = arizona_ssr_values:values(),
+    [
+        begin
+            Bindings = #{v => V, items => Values},
+            SSR = iolist_to_binary(
+                arizona_render:render_to_iolist(arizona_ssr_values:F(Bindings))
+            ),
+            {Live, _Snap} = arizona_render:render(arizona_ssr_values:F(Bindings)),
+            ?assertEqual({F, V, iolist_to_binary(Live)}, {F, V, SSR})
+        end
+     || F <- [render, render_nodiff, render_stream, render_map], V <- Values
+    ].
+
+ssr_escaped_scalars_exact(Config) when is_list(Config) ->
+    Tmpl = arizona_ssr_values:render_nodiff(#{
+        v => ~"<&\"'>", items => [~"<&\"'>", 5, -3]
+    }),
+    ?assertEqual(
+        <<
+            "<div><p>&lt;&amp;&quot;&#39;&gt;</p><ul><li>&lt;&amp;&quot;&#39;&gt;</li>"
+            "<li>5</li><li>-3</li></ul></div>"
+        >>,
+        iolist_to_binary(arizona_render:render_to_iolist(Tmpl))
+    ).
+
+%% A crash inside a value is located at the slot that crashed, whether the value sits
+%% in a list item, a stream item or a top-level slot -- not at the enclosing `?each`.
+ssr_item_value_crash_location(Config) when is_list(Config) ->
+    Line = arizona_ssr_values:crash_line(),
+    ?assertError(
+        {arizona_loc, {arizona_ssr_values, Line}, {boom, 7}},
+        arizona_render:render_to_iolist(
+            arizona_ssr_values:render_item_crash(#{items => [7]})
+        )
+    ),
+    ?assertError(
+        {arizona_loc, {arizona_ssr_values, Line}, {boom, 7}},
+        arizona_render:render_to_iolist(
+            arizona_ssr_values:render_stream_item_crash(#{items => [7]})
+        )
+    ).
+
+ssr_top_value_crash_location(Config) when is_list(Config) ->
+    Line = arizona_ssr_values:crash_line(),
+    ?assertError(
+        {arizona_loc, {arizona_ssr_values, Line}, {boom, 1}},
+        arizona_render:render_to_iolist(arizona_ssr_values:render_top_crash(#{v => 1}))
+    ).
+
+%% A `?stateful` child in an `?each` item -- plain list or stream -- server-renders
+%% as the live first render does, view boundary and all.
+ssr_stateful_in_each_items_matches_live(Config) when is_list(Config) ->
+    [
+        begin
+            {Bindings, _Resets} = arizona_stateful:call_mount(H, #{}),
+            {Live, _Snap, _Views} = arizona_render:render(
+                arizona_stateful:call_render(H, Bindings), #{}
+            ),
+            SSR = iolist_to_binary(arizona_render:render_view_to_iolist(H, #{})),
+            ?assertEqual({H, iolist_to_binary(Live)}, {H, SSR}),
+            %% The root and at least one child view.
+            ?assertMatch([_, _ | _], binary:matches(SSR, ~" az-view"))
+        end
+     || H <- [arizona_ssr_list_child, arizona_stream_with_child, arizona_stream_item_child]
+    ].
 
 ssr_each_map(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(arizona_each_map, #{})),
