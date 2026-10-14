@@ -5705,6 +5705,46 @@ describe('stream ops -- two streams in one element with overlapping keys', () =>
     });
 });
 
+describe('stream ops -- slot span across a batch', () => {
+    const p = (k) => `<p az="UH5VDM-0" az-key="${k}"><!--az:UH5VDM-0-->${k}<!--/az--></p>`;
+    const span = (inner) => `<!--az:ABC1234-0:1-->${inner}<!--/az-->`;
+    const kids = () =>
+        Array.from(document.querySelector('#w').children).map(
+            (e) => e.tagName.toLowerCase() + (e.getAttribute('az-key') ?? ''),
+        );
+
+    it('recomputes a span whose markers a wholesale write replaced', () => {
+        // The TEXT names the element's own az, which has no marker, so it rewrites the
+        // whole element: the span the first insert measured is gone, and the second
+        // insert must anchor to the one the write brought in.
+        setupView(
+            'v',
+            `<div az="ABC1234-0" id="w"><h4>h</h4>${span(p('a'))}<footer>f</footer></div>`,
+        );
+        applyOps([
+            [OP.INSERT, 'v:ABC1234-0:1', 'b', -1, p('b')],
+            [OP.TEXT, 'v:ABC1234-0', `<h4>h</h4>${span(p('a'))}<footer>f</footer>`, true],
+            [OP.INSERT, 'v:ABC1234-0:1', 'c', -1, p('c')],
+        ]);
+        expect(kids()).toEqual(['h4', 'pa', 'pc', 'footer']);
+    });
+
+    it('finds a span a later op of the batch rendered after a miss', () => {
+        // The first op finds no span; the TEXT then renders one. A miss remembered
+        // for the batch would append the insert after the footer.
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        setupView('v', '<div az="ABC1234-0" id="w"><h4>h</h4><footer>f</footer></div>');
+        applyOps([
+            [OP.REMOVE, 'v:ABC1234-0:1', 'a'],
+            [OP.TEXT, 'v:ABC1234-0', `<h4>h</h4>${span(p('a'))}<footer>f</footer>`, true],
+            [OP.INSERT, 'v:ABC1234-0:1', 'c', -1, p('c')],
+        ]);
+        expect(kids()).toEqual(['h4', 'pa', 'pc', 'footer']);
+        expect(warn).toHaveBeenCalledTimes(1);
+        warn.mockRestore();
+    });
+});
+
 // ---------------------------------------------------------------------------
 // window._ws proxy
 // ---------------------------------------------------------------------------
