@@ -45,9 +45,10 @@ op-code targets.
 """.
 
 -compile({nowarn_redefined_builtin_type, [{dynamic, 0}]}).
-%% render_view/2 is render_view/3 with the identity: inlined, the compiler folds
-%% the literal fun away, so production pays no call for the shared sequence.
--compile({inline, [render_view/3]}).
+%% render_view/2 is render_view/3 with no template fun: inlined with the literal
+%% `none`, the compiler folds page_template/2 away, so production pays no call
+%% for the shared sequence.
+-compile({inline, [render_view/3, page_template/2]}).
 
 -include("arizona.hrl").
 
@@ -279,18 +280,18 @@ serving a `?native` view answers with JSON and an HTML one with HTML.
     Opts :: arizona_live:route_opts(),
     ContentType :: binary().
 render_view(Handler, Opts) ->
-    render_view(Handler, Opts, fun(PageTmpl) -> PageTmpl end).
+    render_view(Handler, Opts, none).
 
 -doc """
 `render_view/2` with the page's template passed through `TmplFun` between its
 `render/1` and the walk: the one mount sequence for both. `render_view/2` passes
-the identity; `arizona_utf8:render_view/2` (dev mode) passes a wrap that checks
+`none` (the template as it is); `arizona_utf8:render_view/2` (dev mode) passes a wrap that checks
 every value the walk evaluates, so the page still mounts once.
 """.
 -spec render_view(Handler, Opts, TmplFun) -> {ContentType, iolist()} when
     Handler :: module(),
     Opts :: arizona_live:route_opts(),
-    TmplFun :: fun((arizona_template:template()) -> arizona_template:template()),
+    TmplFun :: none | fun((arizona_template:template()) -> arizona_template:template()),
     ContentType :: binary().
 render_view(Handler, Opts, TmplFun) ->
     Bindings0 = arizona_live:apply_on_mount(
@@ -298,7 +299,7 @@ render_view(Handler, Opts, TmplFun) ->
         maps:get(bindings, Opts, #{})
     ),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
-    PageTmpl = TmplFun(arizona_stateful:call_render(Handler, Bindings)),
+    PageTmpl = page_template(TmplFun, arizona_stateful:call_render(Handler, Bindings)),
     {Backend, Page} = finish_page(PageTmpl, Bindings, Opts),
     {content_type(Backend), Page}.
 
@@ -605,6 +606,9 @@ flat_zip(Backend, Statics, Vals) ->
 %% records one (a layout, else the page), which is what the document as a whole
 %% is. A layout with a backend must share the page's (assert_layout_target/4), and
 %% a backendless one (`?inner_content` returned bare) inherits the inner backend.
+page_template(none, PageTmpl) -> PageTmpl;
+page_template(TmplFun, PageTmpl) -> TmplFun(PageTmpl).
+
 finish_page(PageTmpl, Bindings, Opts) ->
     Backend = backend(PageTmpl),
     PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
