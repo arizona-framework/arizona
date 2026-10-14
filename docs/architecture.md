@@ -1614,17 +1614,9 @@ view receives it. A `?stateless` callback is a separate compile unit and keeps i
 `?local` under a nodiff template keeps the `az` and slot marker the client resolves it by, and
 nothing else does.
 
-A slot whose current value is a nodiff template still diffs as a slot. A nodiff template's
-fingerprint hashes its dynamics' code beside its statics, so it names the template's site and two
-nodiff branches with the same markup stay distinct. The same template keeps its first render (no
-op); anything else, another branch or a plain value, is replaced through its slot markers like any
-other change, so a conditional whose branch is `az-nodiff` can still leave it. On a view's own
-slots the slot closure's result is compared by scoped fingerprint before anything inside it is
-evaluated, so the same template costs O(1) and a child view inside it gets no `handle_update/3`;
-a nodiff region reached through a list item or a `?stateless` body is evaluated and then compared.
-A child view whose own root is az-nodiff is never updated wherever its descriptor is re-evaluated
-(the same handler at the same id keeps its view). Reads inside a nodiff branch are not tracked on
-the slot, since they can never patch; only the reads that choose the branch re-run it.
+A slot whose current value is a nodiff template still diffs as a slot: the server decides whether
+the region exists and which one it is, the client owns what is inside. See
+[Embedding client-side components](#embedding-client-side-components).
 
 The page arrives as an **opaque nested template** (`#{s := [Page], d := []}`), not iodata and not a
 binary. That is what lets a content slot splice it verbatim rather than copying and
@@ -1633,6 +1625,89 @@ whole -- fine in a `case` tail or handed to a child as a prop, but `iolist_size/
 `badarg`, and in an **attribute** value it raises `bad_template_value` carrying the whole page in the
 error term. `az:inner_content/1` documents the full set of accepted and rejected placements;
 `arizona_render_SUITE`'s `ssr_inner_content_*` cases pin them.
+
+## Embedding client-side components
+
+An `az-nodiff` region is **rendered by the server once, then owned by the client**. That is the
+seam for a component another library draws -- a chart, a map, a React or Svelte island: mount it
+from an `az_hook` on the region's root, and the server never touches its DOM again.
+
+```erlang
+render(Bindings) ->
+    ?html({main, [], [
+        case ?get(view) of
+            chart ->
+                {'div', ['az-nodiff', {az_hook, ~"Chart"}, {data_series, ?get(series_json)},
+                         {az_key, ?get(dataset)}], [~"Loading chart..."]};
+            table ->
+                {'div', ['az-nodiff', {az_hook, ~"Grid"}], []};
+            none ->
+                <<>>
+        end
+    ]}).
+```
+
+```js
+hooks.Chart = {
+    mounted() {
+        this.chart = new ChartLib(this.el, JSON.parse(this.el.dataset.series));
+        this.onSeries = (e) => this.chart.update(e.detail);
+        document.addEventListener('chart:series', this.onSeries);
+    },
+    destroyed() {
+        document.removeEventListener('chart:series', this.onSeries);
+        this.chart.destroy();
+    },
+};
+```
+
+**The rules.**
+
+1. Nothing inside a region is ever patched: no op targets it, and its dynamics are not evaluated
+   once it is on screen.
+2. The server still decides whether the region exists. The slot holding it diffs like any other:
+   it can hide the region, show it, or switch it to another one. A switch replaces the slot through
+   its markers, so the old widget's `destroyed()` runs while its element is still attached and the
+   new one's `mounted()` runs after.
+3. The same region chosen again keeps the existing DOM untouched, even when the values it was
+   rendered from changed. It is never re-rendered.
+
+**What "the same region" means.** A region is identified by its template's fingerprint, the
+conditional branch (clause) that produced it, and an optional `az_key` on its root. Two clauses
+that produce identical markup -- or call the same helper, `chart(~"line")` and `chart(~"bar")`
+-- are two regions, so moving from one to the other remounts. The values a region was rendered
+from are deliberately not part of its identity: that would remount the widget, and destroy its
+state, on every change. When a change *should* remount (a different dataset), put that value in
+`az_key`: a new key value replaces the region, and the key's reads are dependencies of the slot.
+A child view whose own root is `az-nodiff` is identified by its id; a new id replaces it.
+
+**Props.** A widget reads its initial props from attributes at mount (`data-*`, parsed in
+`mounted()`); the server-rendered children are a placeholder for the first paint. Later updates go
+to the widget, not through the diff: return `arizona_js:dispatch_event(~"chart:series", Payload)`
+from a handler and let the hook listen for it on `document`, or remount with a new `az_key`. The
+widget talks back with `this.pushEvent(name, payload)`. Reads inside a region are not tracked on
+its slot -- they can never patch -- so only the reads that choose the region (and its `az_key`)
+re-run the slot, and a re-run that lands on the same region costs O(1) whatever the region's size.
+
+**Child views inside a region** take their props at mount only. A region is never re-rendered, so
+a parent-driven `handle_update/3` would move the child's state past a DOM no op will ever touch;
+the same handler at the same id keeps its view on every path the region is reached through (a
+branch, a `?stateless` body, a list item). A child still handles its own events.
+
+**Caveats.**
+
+- Anything that re-renders an enclosing region wholesale remounts the widgets in it: a branch
+  switch above the slot, or a plain-list `?each` that falls back to its container `?OP_TEXT`.
+  For a list of widgets prefer a stream, whose items are inserted and removed one by one.
+- A reconnect mounts the view afresh and resyncs it with `?OP_REPLACE`, so every widget is
+  destroyed and remounted and its client state is lost. Keep state that must survive in the
+  server (pushed back at mount) or in storage the widget owns.
+- The first paint is the server's placeholder. Mount the component from the hook's `mounted()`
+  rather than hydrating the server markup; the server never rendered the component itself.
+- `az-*` attributes inside the widget's own DOM are markup Arizona did not render: the client
+  delegates only the event names the compiled templates declared, and mounts hooks only in markup
+  it inserted. Call the exported `mountHooks(root)` on the widget's root after rendering such
+  markup; it scans for both.
 
 ## Handler callbacks
 
