@@ -95,6 +95,10 @@
     wire_get_value_raw/1,
     wire_raw_value_tagged_html/1,
     wire_helper_raw_value_escaped/1,
+    wire_raw_in_list_item/1,
+    wire_raw_in_stream_item/1,
+    wire_raw_in_branch/1,
+    wire_raw_attr_tagged/1,
     markerless_stream_item_update_no_dangling_op/1,
     markerless_list_item_falls_back_to_full_update/1,
     markerless_list_no_change_no_ops/1,
@@ -237,7 +241,11 @@ groups() ->
         {wire_payload, [parallel], [
             wire_get_value_raw,
             wire_raw_value_tagged_html,
-            wire_helper_raw_value_escaped
+            wire_helper_raw_value_escaped,
+            wire_raw_in_list_item,
+            wire_raw_in_stream_item,
+            wire_raw_in_branch,
+            wire_raw_attr_tagged
         ]},
         {markerless_slots, [parallel], [
             markerless_stream_item_update_no_dangling_op,
@@ -1779,6 +1787,89 @@ wire_helper_raw_value_escaped(Config) when is_list(Config) ->
         M:helper_raw(#{html => <<"<b>z</b>">>}), S0, V0, #{html => true}
     ),
     ?assertMatch([[?OP_TEXT, _, <<"<b>z</b>">>]], Ops).
+
+%% The text/HTML distinction holds below the top level too: inside a plain-list item
+%% patch, a stream item patch and a same-statics branch, the `?get` value stays a bare
+%% string the client text-nodes and the `?raw` one carries the HTML tag.
+wire_raw_in_list_item(Config) when is_list(Config) ->
+    {Before, After} = raw_items(),
+    Ops = raw_wire_diff(raw_in_list_item, #{items => [Before]}, #{items => [After]}, items),
+    ?assertMatch(
+        [
+            [
+                ?OP_LIST_PATCH,
+                _,
+                [
+                    [
+                        ?OP_ITEM_PATCH,
+                        0,
+                        [[?OP_TEXT, _, <<"<b>x</b>">>], [?OP_TEXT, _, #{~"raw" := <<"<b>x</b>">>}]]
+                    ]
+                ]
+            ]
+        ],
+        Ops
+    ).
+
+wire_raw_in_stream_item(Config) when is_list(Config) ->
+    {Before, After} = raw_items(),
+    KeyFun = fun(#{t := _}) -> ~"k" end,
+    Ops = raw_wire_diff(
+        raw_in_stream_item,
+        #{items => arizona_stream:new(KeyFun, [Before])},
+        #{items => arizona_stream:update(arizona_stream:new(KeyFun, [Before]), ~"k", After)},
+        items
+    ),
+    ?assertMatch(
+        [
+            [
+                ?OP_ITEM_PATCH,
+                _,
+                ~"k",
+                [[?OP_TEXT, _, <<"<b>x</b>">>], [?OP_TEXT, _, #{~"raw" := <<"<b>x</b>">>}]]
+            ]
+        ],
+        Ops
+    ).
+
+wire_raw_in_branch(Config) when is_list(Config) ->
+    B0 = #{flag => true, v => ~"a", h => ~"<i>a</i>"},
+    B1 = B0#{v => ~"<b>x</b>", h => ~"<b>x</b>"},
+    {_HTML, S0, V0} = arizona_render:render(arizona_conditional_freeze:raw_in_branch(B0), #{}),
+    {Ops, _, _} = arizona_diff:diff(
+        arizona_conditional_freeze:raw_in_branch(B1), S0, V0, #{v => true, h => true}
+    ),
+    ?assertMatch(
+        [[?OP_TEXT, _, <<"<b>x</b>">>], [?OP_TEXT, _, #{~"raw" := <<"<b>x</b>">>}]], Ops
+    ).
+
+%% A `?raw` attribute value is attribute markup: SSR splices it inside `name="..."`,
+%% where the browser decodes its entities. It is tagged so the client decodes it the
+%% same way -- `setAttribute` on the bare string would keep `&amp;` literal. A plain
+%% value stays a bare string, set verbatim, quotes and angle brackets included.
+wire_raw_attr_tagged(Config) when is_list(Config) ->
+    B0 = #{v => ~"a", h => ~"a &amp; b"},
+    B1 = #{v => ~"\"><b>x</b>", h => ~"c &amp; d"},
+    {HTML, S0, V0} = arizona_render:render(arizona_conditional_freeze:raw_attr(B0), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"data-r=\"a &amp; b\"")),
+    {Ops, _, _} = arizona_diff:diff(
+        arizona_conditional_freeze:raw_attr(B1), S0, V0, #{v => true, h => true}
+    ),
+    ?assertMatch(
+        [
+            [?OP_SET_ATTR, _, ~"title", ~"\"><b>x</b>"],
+            [?OP_SET_ATTR, _, ~"data-r", #{~"raw" := ~"c &amp; d"}]
+        ],
+        Ops
+    ).
+
+raw_items() ->
+    {#{t => ~"a", h => ~"<i>a</i>"}, #{t => ~"<b>x</b>", h => ~"<b>x</b>"}}.
+
+raw_wire_diff(Fun, B0, B1, Changed) ->
+    {_HTML, S0, V0} = arizona_render:render(arizona_conditional_freeze:Fun(B0), #{}),
+    {Ops, _, _} = arizona_diff:diff(arizona_conditional_freeze:Fun(B1), S0, V0, #{Changed => true}),
+    Ops.
 
 %% =============================================================================
 %% Markerless (raw-text) slots inside items and child views

@@ -418,6 +418,37 @@ describe('applyOps -- OP.SET_ATTR', () => {
         expect(resolveEl('v:0').getAttribute('class')).toBe('active');
     });
 
+    // A plain value is the attribute's value, never markup: quotes and angle brackets
+    // land verbatim and no element is created.
+    it('sets a plain value verbatim (quotes and angle brackets stay literal)', () => {
+        setupView('v', '<span az="0">hi</span>');
+        applyOps([[OP.SET_ATTR, 'v:0', 'title', '"><b>x</b>']]);
+        const el = resolveEl('v:0');
+        expect(el.getAttribute('title')).toBe('"><b>x</b>');
+        expect(el.querySelector('b')).toBeNull();
+    });
+
+    // A `?raw` value is attribute markup SSR spliced inside `name="..."`, so the page
+    // holds the parser's decoding of it. The update must hold the same value, not the
+    // entities `setAttribute` would keep literal.
+    it('decodes a {raw} value the way SSR did', () => {
+        setupView('v', '<span az="0" data-r="c &amp; d &lt;e&gt;">hi</span>');
+        const fresh = resolveEl('v:0').getAttribute('data-r');
+        setupView('v', '<span az="0" data-r="a">hi</span>');
+        applyOps([[OP.SET_ATTR, 'v:0', 'data-r', { raw: 'c &amp; d &lt;e&gt;' }]]);
+        expect(fresh).toBe('c & d <e>');
+        expect(resolveEl('v:0').getAttribute('data-r')).toBe(fresh);
+    });
+
+    it('decodes a {raw} value inside an ITEM_PATCH', () => {
+        setupView('v', '<div az="0"><div az-key="k1"><span az="0" data-r="a">x</span></div></div>');
+        applyOps([
+            [OP.ITEM_PATCH, 'v:0', 'k1', [[OP.SET_ATTR, '0', 'data-r', { raw: 'b &amp; c' }]]],
+        ]);
+        const item = resolveEl('v:0').querySelector('[az-key="k1"]');
+        expect(item.querySelector('[az="0"]').getAttribute('data-r')).toBe('b & c');
+    });
+
     it('syncs value property on input elements', () => {
         setupView('v', '<input az="0" value="old" />');
         applyOps([[OP.SET_ATTR, 'v:0', 'value', 'new']]);

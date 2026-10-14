@@ -1868,7 +1868,13 @@ make_op(Az, {attr, Attr, Val}, _Old) ->
     case arizona_template:classify_trusted(Val) of
         {effect, Cmds} ->
             [?OP_SET_ATTR, Az, Attr, arizona_effect:json_value(Cmds)];
-        _NotACommand ->
+        %% A `?raw` value is attribute markup, not the value: SSR splices it inside
+        %% `Name="..."`, where the parser decodes its entities. `setAttribute` decodes
+        %% nothing, so a bare string would leave `&amp;` literal in the DOM after the
+        %% first update. Tagged like the content `?raw`, so the client parses it.
+        {raw, V} ->
+            [?OP_SET_ATTR, Az, Attr, #{~"raw" => arizona_template:to_bin(V)}];
+        value ->
             [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)]
     end;
 make_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}) ->
