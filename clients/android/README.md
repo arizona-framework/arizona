@@ -34,8 +34,8 @@ Authored against a known-good late-2024/early-2025 toolchain (see `gradle/libs.v
 **align versions with your installed Android SDK/AGP/Kotlin**. The package names
 (`dev.arizona.*`) are placeholders — rename freely. No Gradle wrapper is committed:
 build via Android Studio (it bundles its own Gradle) or a system `gradle` install —
-the CLI commands below assume `gradle` on `PATH`. CI provisions Gradle with
-`gradle/actions/setup-gradle`.
+the CLI commands below assume `gradle` on `PATH`. CI provisions Java and Gradle with
+`mise`, from the versions pinned in the repo's root `.tool-versions`.
 
 ## Verify
 
