@@ -965,7 +965,6 @@ function applyOps(ops) {
             switch (op[0]) {
                 case OP.TEXT:
                     applyTextOp(el, az, op[2], op[3]);
-                    dropSpans(streams);
                     break;
                 case OP.SET_ATTR:
                     applySetAttrOp(el, op[2], op[3]);
@@ -1006,7 +1005,6 @@ function applyOps(ops) {
                     break;
                 case OP.LIST_PATCH:
                     applyListPatch(el, az, op[2]);
-                    dropSpans(streams);
                     break;
                 default:
                     // Silence here would let a version-skewed or retired op (code 3,
@@ -1552,28 +1550,22 @@ function keyedChildren(el, bounds) {
  *   under one element) with overlapping keys, so a map is scoped to the stream's
  *   slot span when it has one -- otherwise an op for one stream finds the other's
  *   item.
- * - `spans`: the slot span each (container, az) resolves to, stamped with the
- *   `epoch` it was found in. `slotBounds` walks the slot to its closing marker, so
- *   without this every lookup by key paid an O(items) walk. Any op that re-renders
- *   a container's children (TEXT, LIST_PATCH) bumps `epoch`: an enclosing re-render
- *   replaces the markers, so a span found or ruled out before it may no longer
- *   hold. A stale span whose markers are both still children of
- *   the container is still exact and is kept -- the common batch interleaves a TEXT
- *   inside every row with lookups in the list, and re-walking the list after each
- *   one would make it quadratic.
- * @typedef {{keys: Map<Element, Map<string, Map<string, Element>>>, spans: Map<Element, Map<string, {span: SlotSpan|null, epoch: number}>>, epoch: number}} StreamCache
+ * - `spans`: the slot span each (container, az) resolves to. `slotBounds` walks the
+ *   slot to its closing marker, so without this every lookup by key paid an O(items)
+ *   walk -- and the common batch interleaves a TEXT inside every row with lookups in
+ *   the list, so re-walking after each one would make it quadratic. A cached span is
+ *   exact while both its markers are still children of the container: no op moves a
+ *   marker, an op that rewrites the span's surroundings removes them, and whatever
+ *   it inserts is balanced, so the closer pairs with the same opener. Only a found
+ *   span is kept; a miss is looked up again, since a later re-render can add one.
+ * @typedef {{keys: Map<Element, Map<string, Map<string, Element>>>, spans: Map<Element, Map<string, SlotSpan>>}} StreamCache
  */
 
 /** @typedef {{start: Comment, end: Comment}} SlotSpan */
 
 /** @returns {StreamCache} */
 function newStreamCache() {
-    return { keys: new Map(), spans: new Map(), epoch: 0 };
-}
-
-/** @param {StreamCache|null} streams */
-function dropSpans(streams) {
-    if (streams) streams.epoch++;
+    return { keys: new Map(), spans: new Map() };
 }
 
 /**
@@ -1592,16 +1584,9 @@ function spanOf(streams, el, az) {
         streams.spans.set(el, byAz);
     }
     const hit = byAz.get(az);
-    if (
-        hit &&
-        (hit.epoch === streams.epoch ||
-            (hit.span && hit.span.start.parentNode === el && hit.span.end.parentNode === el))
-    ) {
-        hit.epoch = streams.epoch;
-        return hit.span;
-    }
+    if (hit && hit.start.parentNode === el && hit.end.parentNode === el) return hit;
     const span = slotBounds(el, az);
-    byAz.set(az, { span, epoch: streams.epoch });
+    if (span) byAz.set(az, span);
     return span;
 }
 
@@ -1887,7 +1872,6 @@ function applyItemOps(item, innerOps, streams = null) {
             switch (op[0]) {
                 case OP.TEXT:
                     applyTextOp(el, az, op[2], op[3]);
-                    dropSpans(streams);
                     break;
                 case OP.SET_ATTR:
                     applySetAttrOp(el, op[2], op[3]);
@@ -1909,7 +1893,6 @@ function applyItemOps(item, innerOps, streams = null) {
                     break;
                 case OP.LIST_PATCH:
                     applyListPatch(el, az, op[2]);
-                    dropSpans(streams);
                     break;
                 default:
                     console.warn(`[arizona] item op ${op[0]} not recognized; skipping`);
