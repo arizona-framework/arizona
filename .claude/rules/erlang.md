@@ -232,7 +232,7 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?stateless(Mod, Fun, Props)` | `arizona_template:stateless(Mod, Fun, Props)` |
 | `?local(Key, Init)` | `arizona_template:local(Key, Init)` -- client-owned slot: server renders `Init` once and never diffs it; the browser owns/updates the value via `Key` (a binary or atom literal; content -- one or many per element, mixed with static text -- or an attribute value, whole or interpolated with one local + static prefix/suffix) |
 | `?raw(Value)` | `arizona_template:raw(Value)` -- escape opt-out: splices a trusted, already-safe HTML fragment verbatim into a content slot or attribute value instead of HTML-escaping it. The parse transform only recognizes the opt-out when the `raw` call is **literal at the template site**, so wrap values here, never inside a helper. Never for user-controlled data. A dynamic content slot inside `<script>`/`<style>` is spliced verbatim (raw text decodes no character references, so escaping cannot apply there) and therefore **must** carry it -- an unmarked value there is a compile error (`dynamic_in_raw_text`); serialize data first, e.g. `?raw(json:encode(Data))`. The breakout neutralization behind that opt-out is **per-slot**, so two adjacent `?raw` slots in one `<script>`/`<style>` can reassemble a close tag across the boundary (`~"</scr"` + `~"ipt>"`) -- build the value in one slot |
-| `?inner_content` | `az:inner_content(Bindings)` -- the rendered page a layout wraps. **Opaque, and it fills a content slot whole**: an internal nested template (so the page is spliced, not copied and re-decoded per layer), not iodata. Fine in a `case` tail or as a `?stateless` prop; raises in an attribute value, under `iolist_size`, wrapped in `?raw` (redundant -- a content slot is already unescaped), or beside other values in one slot (`[~"&lt;hr&gt;", ?inner_content]` -- give it its own slot) |
+| `?inner_content` | `az:inner_content(Bindings)` -- the rendered page a layout wraps. **Opaque, and it fills a content slot whole**: an internal nested template (so the page is spliced, not copied and re-decoded per layer), not iodata. Fine in a `case` tail or as a `?stateless` prop; raises in an attribute value, under `iolist_size`, wrapped in `?raw` (redundant -- a content slot is already unescaped), or inside a list the template cannot see (a comprehension, or a list built at runtime); a literal content-slot list such as `[~"&lt;hr&gt;", ?inner_content]` gives it its own slot (see "Content-slot lists") |
 | `?connected` | `arizona_live:connected()` -- true inside a connected live process, false during SSR |
 | `?reconnected` | `arizona_live:reconnected()` -- true when the connected live process is a reconnection (client re-opened the WS), false on first connect/SSR. Gate one-shot OS commands with `?connected andalso not ?reconnected` |
 | `?capability(Key)` | `arizona_live:capability(Key)` -- did the native shell advertise capability `Key`? `false` in a plain browser/SSR. A UI/effect hint, **never** authorization (see [docs/os.md](../../docs/os.md)) |
@@ -332,6 +332,33 @@ row(U) -> ?html({li, [], [case U of #{name := N} -> N; _ -> ~"-" end]}).
 %% plain values: a comprehension, not ?each
 {ul, [], [[<<"#", Tag/binary>> || Tag <- ?get(tags)]]}
 ```
+
+## Content-slot lists
+
+A literal list in a content slot that holds a **block** -- an element, a nested
+`?html`/`?native`/`?terminal`, an `?each`, a `?stateful`/`?stateless` component,
+`?inner_content`, or `?raw`, or a `case`/`if` whose tail can be one -- compiles as a fragment:
+each item gets its own slot. So `{ul, [], [[~"Tags: ", ?each(...)]]}` renders and diffs like a
+literal mixed fragment, and so does the same list as a conditional tail, a hoisted template that
+reads a binding, or a local helper's body. A list of plain values only stays one value slot.
+
+**Escaping follows the list's kind.** Once a list holds a block, its static binaries are
+template statics, exactly like the binaries of a children list: they render as written, so
+`[~"<hr>", ?inner_content]` emits a real `<hr>`. Its dynamic values are still escaped. A list of
+plain values is one value, and every binary in it is escaped. Adding a block to a list therefore
+changes how its literal text renders -- write text that must show as text with entities, as in
+any children list.
+
+The list must be **literal at the template site**: a list the template cannot see -- a
+comprehension of templates, a list bound at runtime, a list nested inside the list -- is still a
+single value and fails at render on a template or component in it. A `?local` in such a list
+has no element to carry its descriptor and is a compile error (`local_orphaned`).
+
+An `?each` in such a list is anchored by its own slot markers, which no element carries. A
+stream still diffs item by item: its `OP_INSERT`/`OP_MOVE`/`OP_REMOVE`/`OP_ITEM_PATCH` target the
+slot's az, which the web client resolves to the markers' parent element, placing and finding
+items inside the marker span. A plain-list `?each` re-renders its whole slot on any change; as a
+flat sibling -- `{ul, [], [~"Tags: ", ?each(...)]}` -- it stays on the positional per-item path.
 
 ## Bare element tuples in conditional tails
 

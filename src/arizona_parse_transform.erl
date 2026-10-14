@@ -1125,7 +1125,7 @@ retransform_spliced(Expr, true, Module, FunDefs) ->
 %% of spelling out all four keys.
 is_compiled_each_pairing(each, {map, _, Fields}) ->
     is_compiled_template_map(Fields) andalso
-        lists:member(t, [K || {map_field_assoc, _, {atom, _, K}, _} <:- Fields]);
+        lists:member(t, [K || {map_field_assoc, _, {atom, _, K}, _} <- Fields]);
 is_compiled_each_pairing(_EachFn, _SourceArg) ->
     false.
 
@@ -1420,13 +1420,13 @@ helper_clause_plan([{clause, _, Params, Guards, Body}], Name, Arity, Target) ->
                     %% Renders as a runtime nested template today; keep it.
                     skip;
                 {false, bare} ->
-                    {reject, helper_reject_reason(Guards, Body, Name, Arity)}
+                    reject_element_helper(BodyExpr, Guards, Body, Name, Arity)
             end
     end;
 helper_clause_plan(Clauses, Name, Arity, Target) ->
     BareClause = fun({clause, _, _P, _G, B}) ->
         case helper_body_shape(lists:last(B), Target) of
-            {bare, _} -> true;
+            {bare, Expr} -> is_element_body(Expr);
             _ -> false
         end
     end,
@@ -1434,6 +1434,29 @@ helper_clause_plan(Clauses, Name, Arity, Target) ->
         true -> {reject, {helper_multi_clause, Name, Arity}};
         false -> skip
     end.
+
+%% An unclean helper (guarded, multi-statement, non-variable params) is rejected only
+%% when its body is element-shaped: that one always crashed at render. A body that is
+%% markup only through constructors (`[~"a", ?stateless(...)]`) renders fine wherever
+%% the call is not a content slot, so it is left as a runtime call.
+reject_element_helper(BodyExpr, Guards, Body, Name, Arity) ->
+    case is_element_body(BodyExpr) of
+        true -> {reject, helper_reject_reason(Guards, Body, Name, Arity)};
+        false -> skip
+    end.
+
+is_element_body(Expr) ->
+    case classify_body(Expr) of
+        element_tuple -> true;
+        element_list -> true;
+        list_ast -> list_has_element_tuple(Expr);
+        _ -> false
+    end.
+
+list_has_element_tuple({cons, _, Head, Tail}) ->
+    is_element_tuple(Head) orelse list_has_element_tuple(Tail);
+list_has_element_tuple(_) ->
+    false.
 
 is_single_expr_body([_]) -> true;
 is_single_expr_body(_Body) -> false.
@@ -2350,12 +2373,13 @@ each_target(terminal_each) -> terminal.
 each_content_ctx(foreign_each) -> foreign;
 each_content_ctx(_Marker) -> html.
 
-%% A compiled template map literal carries all three of the `s`/`d`/`f` assoc keys (from
-%% build_template_ast). A user map or a ?stateful/?stateless descriptor (a runtime call, not
-%% a map literal) does not, so they fall through to the normal reject.
+%% A compiled template map literal carries the `s`/`d`/`f` assoc keys plus the
+%% `backend` build_template_ast/5 always adds, so a user data map spelling out
+%% `s`/`d`/`f` is not taken for one. A field with a non-atom key (`~"a" => 1`, a
+%% variable) is simply not a template key -- lazy, so it cannot crash the transform.
 is_compiled_template_map(Fields) ->
-    Keys = [K || {map_field_assoc, _, {atom, _, K}, _} <:- Fields],
-    lists:all(fun(Key) -> lists:member(Key, Keys) end, [s, d, f]).
+    Keys = [K || {map_field_assoc, _, {atom, _, K}, _} <- Fields],
+    lists:all(fun(Key) -> lists:member(Key, Keys) end, [s, d, f, backend]).
 
 %% Build the ?each iteration AST from an already-compiled template map (an inline
 %% `?html`/`?native`/`?terminal` body). Mirror build_each_ast but reuse the map's prebuilt
@@ -3434,7 +3458,7 @@ is_nested_template_leaf(Leaf) ->
     case classify_body(Leaf) of
         element_tuple -> true;
         element_list -> true;
-        list_ast -> list_has_element_tuple(Leaf);
+        list_ast -> list_has_markup_item(Leaf);
         _ -> false
     end.
 
@@ -3517,7 +3541,7 @@ expand_block_element_tails(Expr, Module, Backend, Nodiff) ->
     end.
 
 %% At a tail leaf, compile a bare element tuple / element list (or a mixed list
-%% that contains an element tuple) into a nested template, as a literal ?html
+%% that contains markup, see is_markup_item/1) into a nested template, as a literal ?html
 %% there would; leave plain values (and pure value lists) untouched. A ?local
 %% leaf is rejected: a conditional-branch ?local emits no az-local descriptor
 %% (see reject_orphaned_local/1).
@@ -3527,7 +3551,7 @@ expand_element_leaf(Expr, Module, Backend, Nodiff) ->
         Class when Class =:= element_tuple; Class =:= element_list ->
             compile_template(Expr, line(Expr), Module, false, Backend, Nodiff);
         list_ast ->
-            case list_has_element_tuple(Expr) of
+            case list_has_markup_item(Expr) of
                 true -> compile_template(Expr, line(Expr), Module, false, Backend, Nodiff);
                 false -> Expr
             end;
@@ -3535,10 +3559,53 @@ expand_element_leaf(Expr, Module, Backend, Nodiff) ->
             Expr
     end.
 
-list_has_element_tuple({cons, _, Head, Tail}) ->
-    is_element_tuple(Head) orelse list_has_element_tuple(Tail);
-list_has_element_tuple(_) ->
+list_has_markup_item({cons, _, Head, Tail}) ->
+    is_markup_item(Head) orelse list_has_markup_item(Tail);
+list_has_markup_item(_) ->
     false.
+
+has_markup_tail(Flow) ->
+    try
+        _ = map_tail_exprs(
+            Flow,
+            fun(Leaf) ->
+                case is_markup_item(Leaf) orelse list_has_markup_item(Leaf) of
+                    true -> throw(markup_tail);
+                    false -> Leaf
+                end
+            end,
+            fun(NonTail) -> NonTail end
+        ),
+        false
+    catch
+        throw:markup_tail -> true
+    end.
+
+%% A list item that is a block rather than a value: an element, a compiled template
+%% map, or any constructor call is_block_content_expr/1 recognises (raw or already
+%% compiled -- a helper body or a hoisted variable splices the raw form). A hoisted
+%% template arrives wrapped in its track block (prepare_inline_rhs/2), so the block's
+%% last expression decides. Left in a plain value list, a block reaches to_bin/1 and
+%% crashes; in a fragment each gets its own slot (and a ?local the usual
+%% local_orphaned error).
+is_markup_item({map, _, Fields}) ->
+    is_compiled_template_map(Fields);
+is_markup_item({block, _, [_ | _] = Exprs}) ->
+    is_markup_item(lists:last(Exprs));
+is_markup_item(Flow) when
+    element(1, Flow) =:= 'case';
+    element(1, Flow) =:= 'if';
+    element(1, Flow) =:= 'receive';
+    element(1, Flow) =:= 'try';
+    element(1, Flow) =:= 'maybe'
+->
+    %% A conditional item whose tail can be markup is a block: its slot compiles
+    %% each element tail into a nested template, as a conditional child does.
+    has_markup_tail(Flow);
+is_markup_item({call, _, {remote, _, {atom, _, _}, {atom, _, _}}, _} = Call) ->
+    is_block_content_expr(Call);
+is_markup_item(Item) ->
+    is_element_tuple(Item).
 
 %% Tag a value interpolation `{esc, Fun}` so it is escaped at the render boundary,
 %% or leave a block bare. Every backend marks scalar values uniformly -- the
@@ -3564,6 +3631,7 @@ is_block_content_expr({call, _, {remote, _, {atom, _, M}, {atom, _, F}}, _Args})
             native,
             terminal,
             each,
+            foreign_each,
             native_each,
             terminal_each,
             stateful,

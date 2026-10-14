@@ -95,7 +95,7 @@
     ssr_inner_content_rejects_attribute_value/1,
     ssr_inner_content_rejects_being_measured/1,
     ssr_inner_content_rejects_raw_wrapper/1,
-    ssr_inner_content_rejects_sibling_in_one_slot/1,
+    ssr_inner_content_beside_text_in_one_slot/1,
     ssr_inner_content_rejects_runtime_list/1,
     ssr_invalid_chardata_user_value_still_errors/1,
     ssr_escaped_values_match_live/1,
@@ -197,7 +197,7 @@ groups() ->
             ssr_inner_content_rejects_attribute_value,
             ssr_inner_content_rejects_being_measured,
             ssr_inner_content_rejects_raw_wrapper,
-            ssr_inner_content_rejects_sibling_in_one_slot,
+            ssr_inner_content_beside_text_in_one_slot,
             ssr_inner_content_rejects_runtime_list,
             ssr_invalid_chardata_user_value_still_errors,
             ssr_escaped_values_match_live,
@@ -1112,15 +1112,15 @@ ssr_inner_content_rejects_raw_wrapper(Config) when is_list(Config) ->
         layout_html(arizona_inner_content_layouts, raw)
     ).
 
-ssr_inner_content_rejects_sibling_in_one_slot(Config) when is_list(Config) ->
-    %% The page beside other values in ONE slot makes the slot a chardata list,
-    %% which the opaque value is not part of. It raises; before it silently
-    %% escaped both the sibling and the page, which was not usable output either.
-    %% The error names the offending value, like any other unsupported one.
-    ?assertError(
-        {arizona_loc, {arizona_inner_content_layouts, _}, {bad_template_value, [_, #{s := _}]}},
-        layout_html(arizona_inner_content_layouts, sibling)
-    ).
+ssr_inner_content_beside_text_in_one_slot(Config) when is_list(Config) ->
+    %% A content-slot list holding the page compiles as a fragment, so the page
+    %% gets its own slot beside the static text instead of being forced through a
+    %% chardata list: the text is spliced as written, the page's markup unescaped
+    %% and its own dynamic still escaped.
+    HTML = layout_html(arizona_inner_content_layouts, sibling),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<s><hr><div az=")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"&lt;div")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"PAGE&lt;&amp;&gt;")).
 
 ssr_inner_content_rejects_runtime_list(Config) when is_list(Config) ->
     %% A list built at runtime is opaque to the template, so the slot is text and
