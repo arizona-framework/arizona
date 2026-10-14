@@ -64,6 +64,8 @@ op-code targets.
 
 -export([render/1]).
 -export([render/2]).
+-export([render_snapshot/2]).
+-export([snapshot_html/1]).
 -export([render_to_iolist/1]).
 -export([render_to_iolist/2]).
 -export([render_view_to_iolist/2]).
@@ -165,13 +167,51 @@ of any child views encountered during evaluation.
     HTML :: iolist(),
     Snapshot :: arizona_template:snapshot(),
     Views1 :: map().
-render(#{s := Statics, d := Dynamics} = Tmpl, Views0) ->
+render(#{s := Statics} = Tmpl, Views0) ->
+    {Triples, NewViews} = eval_triples(Tmpl, Views0),
+    {HTML, D, Deps} = zip_triples(backend(Tmpl), Statics, Triples),
+    {HTML, snapshot(Tmpl, D, Deps), NewViews}.
+
+-doc """
+Initial render without the document: the snapshot and child views of
+`render/2`, minus the HTML.
+
+A live mount ships the fingerprint payload (`fingerprint_payload/1`) whenever the
+root carries a fingerprint, which is always for a compiled template, so the HTML
+`render/2` builds alongside would be thrown away. `snapshot_html/1` builds it
+from the snapshot for the rare root that has none.
+""".
+-spec render_snapshot(Template, Views) -> {Snapshot, Views1} when
+    Template :: arizona_template:template(),
+    Views :: map(),
+    Snapshot :: arizona_template:snapshot(),
+    Views1 :: map().
+render_snapshot(Tmpl, Views0) ->
+    {Triples, NewViews} = eval_triples(Tmpl, Views0),
+    {D, Deps} = split_triples(Triples),
+    {snapshot(Tmpl, D, Deps), NewViews}.
+
+eval_triples(#{d := Dynamics}, Views0) ->
     {Triples, {_Old, NewViews}} = arizona_eval:eval_dynamics_v(Dynamics, {Views0, #{}}),
-    Backend = backend(Tmpl),
-    {HTML, D, Deps} = zip_triples(Backend, Statics, Triples),
-    Snap0 = #{s => Statics, d => D, deps => Deps},
-    Snap = arizona_template:maybe_propagate(Tmpl, Snap0),
-    {HTML, Snap, NewViews}.
+    {Triples, NewViews}.
+
+snapshot(#{s := Statics} = Tmpl, D, Deps) ->
+    arizona_template:maybe_propagate(Tmpl, #{s => Statics, d => D, deps => Deps}).
+
+split_triples([]) ->
+    {[], []};
+split_triples([{Az, V, Deps} | TRest]) ->
+    {DRest, DepsRest} = split_triples(TRest),
+    {[{Az, V} | DRest], [Deps | DepsRest]}.
+
+-doc """
+The document `render/2` would have returned for `Snapshot`: the same walk over
+the same values, so the bytes are identical.
+""".
+-spec snapshot_html(Snapshot) -> iolist() when
+    Snapshot :: arizona_template:snapshot().
+snapshot_html(#{s := Statics, d := D} = Snap) ->
+    zip_d(backend(Snap), Statics, D).
 
 %% One pass over statics x triples: emits the HTML skeleton while splitting
 %% each triple into the snapshot's `{Az, V}` pair and its deps. Replaces an
@@ -803,9 +843,13 @@ render_fp_val(Backend, #{az_local := _, v := V}) ->
     %% (see render_dyn/2). `?local` is HTML-only (compile-rejected for native), so
     %% the enclosing backend is always HTML here.
     arizona_template:escape_value(Backend, V);
-render_fp_val(_Backend, #{f := _} = Nested) ->
+render_fp_val(Backend, #{f := _} = Nested) ->
+    %% The same-target check render_dyn/2 makes, so a live mount that ships only
+    %% this payload still refuses a child of another target.
+    ok = assert_same_target(Backend, backend(Nested)),
     fingerprint_payload(Nested);
-render_fp_val(Backend, #{s := S, d := D}) ->
+render_fp_val(Backend, #{s := S, d := D} = Nested) ->
+    ok = assert_same_target(Backend, backend(Nested)),
     flat_zip(Backend, S, [V || {_Az, V} <:- D]);
 render_fp_val(Backend, #{
     t := ?EACH, items := Items, template := #{f := F, t := T, s := S}

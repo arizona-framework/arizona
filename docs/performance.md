@@ -217,6 +217,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Skip the fingerprint dedup walk for fp-less frames | strictly less work on every event workload: red/op -0.5% to -6.1%, resolved by the reductions column |
 | Escape a binary/integer SSR content value directly; render every `?each` item through the top-level SSR walk | `render_each_100` -11.6% (6.9 -> 6.1 us), red/op -40%; red/op -31% `render_view_many_dyn_50`, -16%/-17% `render_view_small`/`_with_layout`, -8% `render_view_page`; a 201-row escape-heavy table red/op -23%, wall ~-5% (under the floor) |
 | Scan `escape/1` 8 and 4 bytes per step; slice long clean runs | a 201-row escape-heavy table -46% (193 -> 105 us, red/op 24.8k -> 12.1k); per value: clean 10-200 B -46% to -55%, one metacharacter in 64-200 B -30% to -80%, markup -10%, UTF-8 prose -63%; `render_view_page` -6%, `render_each_100` red/op -13% |
+| Skip the document on a fingerprinted mount (`render_snapshot/2`) | reconnect/navigate render+payload -10% to -50% by fixture (datatable -38 to -57%, `bench_many_dyn` -27%, `bench_nested_each` -21 to -25%) |
 
 (The whole 2026-08 arc that added the four rows from "Encode the ops frame" to
 "Fuse `render/2`'s triple unzip" -- PRs #759-#762 -- closed with
@@ -229,6 +230,20 @@ estimate work to add up. Everything else sits under the floor, the e2e paths at
 changes live inside the 14.1%/9.8% slice. Reading either number off an earlier
 partial pairing understates them; only the full-arc pairing shows the encoder
 and the walk changes compounding on the ops-heavy labels.)
+
+A **fingerprinted mount** (`mount_and_render`, navigate) ships the fingerprint payload,
+never the document, yet `do_mount` built both: `render/2` zipped and escaped every value
+into HTML that `page_content/2` then discarded. `render_snapshot/2` returns the same
+snapshot and views without the document, and `snapshot_html/1` rebuilds it byte for
+byte for the rare root with no fingerprint. Measured as render plus payload, old against
+new in one VM, alternating, pinned, three runs at load ~13: every fixture got cheaper,
+from about -10% (`arizona_page`, a few slots) to -50% (`arizona_datatable`, where the
+escaped stream rows dominated). No `bench-ab` workload covers it: `mount_only` takes
+the plain `mount` path, which still renders the document because building it is what
+observes the opaque command attributes the connect frame declares; the payload observes
+them too (HTML `wire_attr/2` is `render_attr/2`), which is what makes the skip exact
+for the other two paths. The payload also gained `render_dyn/2`'s same-target check,
+since it is now the only render a fingerprinted mount does.
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:
