@@ -1711,6 +1711,10 @@ make_op(Az, {arizona_esc, New}, Old) ->
     make_op(Az, New, Old);
 make_op(Az, New, {arizona_esc, Old}) ->
     make_op(Az, New, Old);
+%% A typed boolean (`arizona_template:bool_attr/1`, a `value` backend) is a prop
+%% value in both states, so it is set rather than added and removed.
+make_op(Az, {attr, Attr, {arizona_bool, Bool}}, _Old) ->
+    [?OP_SET_ATTR, Az, Attr, Bool];
 make_op(Az, {attr, Attr, false}, _Old) ->
     [?OP_REM_ATTR, Az, Attr];
 make_op(Az, {attr, Attr, true}, _Old) ->

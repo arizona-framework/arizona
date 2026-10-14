@@ -79,6 +79,7 @@
     terminal_custom_sgr_attr/1,
     terminal_fg_attr/1,
     terminal_unknown_style_rejected/1,
+    terminal_unknown_false_style_rejected/1,
     terminal_unknown_attr_rejected/1,
     terminal_unknown_tag_rejected/1,
     terminal_known_tags_accepted/1,
@@ -877,6 +878,7 @@ groups() ->
             terminal_custom_sgr_attr,
             terminal_fg_attr,
             terminal_unknown_style_rejected,
+            terminal_unknown_false_style_rejected,
             terminal_unknown_attr_rejected,
             terminal_unknown_tag_rejected,
             terminal_known_tags_accepted,
@@ -7609,6 +7611,22 @@ terminal_unknown_style_rejected(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:terminal("
         "        {text, [grween], [arizona_template:get(x, Bindings)]}"
+        "    ). ",
+        fun
+            ({render_reject, _}) -> true;
+            (_) -> false
+        end
+    ).
+
+%% A static `false` emits nothing, but a misspelled style is still a typo: it is
+%% rejected like the `true` form, not dropped silently.
+terminal_unknown_false_style_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_term_bad_false_style). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal("
+        "        {text, [{bolld, false}], [arizona_template:get(x, Bindings)]}"
         "    ). ",
         fun
             ({render_reject, _}) -> true;

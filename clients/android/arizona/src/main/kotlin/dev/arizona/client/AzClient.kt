@@ -243,9 +243,10 @@ class AzClient(baseUrl: String, path: String) {
     }
 
     /** Fire the command read from a node's tap prop (e.g. `on_tap`), routing the
-     *  event to the node's enclosing view (the root, or a stateful child). */
+     *  event to the node's enclosing view (the root, or a stateful child). A prop
+     *  that is not an array (a disabled command reads `false`) fires nothing. */
     fun tap(node: Node, prop: String = "on_tap") {
-        node.props[prop]?.jsonArray?.let { cmds ->
+        (node.props[prop] as? JsonArray)?.let { cmds ->
             for (cmd in commands(cmds)) runEffect(cmd, strict = true, target = node.viewId)
         }
     }

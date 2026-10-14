@@ -1,6 +1,7 @@
 package dev.arizona.client
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -159,5 +160,21 @@ class InterleaverTest {
         val cmd = node.getValue("on_tap").jsonArray
         assertEquals(0, cmd[0].jsonPrimitive.int)
         assertEquals("inc", cmd[1].jsonPrimitive.content)
+    }
+
+    @Test
+    fun decodesDynamicBooleanProp() {
+        // A dynamic boolean prop rides in "d" as a JSON boolean and interleaves to
+        // one, beside a static false the statics already carry.
+        val frame =
+            """
+            {"d":[false],"f":"BOOL1","s":[
+            "{\"type\":\"Button\",\"enabled\":",",\"visible\":false,\"children\":[\"x\"]}"]}
+            """.trimIndent()
+        val node = Json.parseToJsonElement(
+            Interleaver(FingerprintCache()).interleave(Json.parseToJsonElement(frame).jsonObject),
+        ).jsonObject
+        assertEquals(false, node.getValue("enabled").jsonPrimitive.boolean)
+        assertEquals(false, node.getValue("visible").jsonPrimitive.boolean)
     }
 }

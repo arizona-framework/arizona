@@ -114,6 +114,28 @@ class DispatchTest {
         assertEquals("\"red\"", text.props["color"].toString())
     }
 
+    // A disabled command prop reads `false` after an OP_SET_ATTR; tapping it fires
+    // nothing instead of throwing on a non-array prop.
+    @Test
+    fun tapOnADisabledCommandPropDoesNotThrow() {
+        val client = newClient()
+        replaceRoot(client)
+        client.handleText(
+            frame(
+                """[0,"native_x:R-0t0",""" +
+                    """{"f":"B","s":["{\"type\":\"Button\",\"az\":\"B-0\",\"on_tap\":[0,\"go\"],""" +
+                    """\"children\":[\"b\"]}"],"d":[]}]""",
+            ),
+        )
+        client.handleText(frame("""[1,"native_x:B-0","on_tap",false]"""))
+
+        val button = content(client)
+        assertEquals("false", button.props["on_tap"].toString())
+        // A JVM test has no socket to observe a send on, so this pins the part that
+        // used to fail: reading a non-array tap prop no longer throws.
+        client.tap(button)
+    }
+
     // The documented `case ?get(flag) of true -> ?stateful(child, ...)` pattern:
     // the installed payload carries its OWN view id, which must be registered or
     // the child's very first update crashes.

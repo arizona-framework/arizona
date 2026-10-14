@@ -511,6 +511,25 @@ final class DispatchTests: XCTestCase {
             ["[\"native_counter\",\"save\",{}]", "[\"native_counter\",\"inc\",{}]"])
     }
 
+    // A disabled command prop reads `false`; tapping it sends nothing.
+    func testTapOnADisabledCommandPropFiresNothing() {
+        var captured: MockTransport?
+        let client = AzClient(
+            baseUrl: "http://localhost:4040",
+            path: "/native/counter",
+            makeTransport: { _ in let m = MockTransport(); captured = m; return m },
+            runOnMain: { $0() })
+        client.connect()
+        captured?.simulateOpen()
+        let frame = counterFrame.replacingOccurrences(of: ##"[0,\"inc\"]"##, with: "false")
+        captured?.simulateText("{\"o\":[[8,\"native_counter\",\(frame)]]}")
+        let sentBefore = captured?.sent.count
+
+        let button = childNodes(client.root!).first { $0.props["on_tap"] == .bool(false) }
+        client.tap(button!)
+        XCTAssertEqual(captured?.sent.count, sentBefore)
+    }
+
     func testCommandsTellsOneCommandFromAList() {
         let one: [JSONValue] = [.int(0), .string("inc")]
         let two: [JSONValue] = [.array(one), .array([.int(10), .string("/n")])]

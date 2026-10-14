@@ -62,6 +62,13 @@ describe('native client effect dispatch', () => {
         expect(() => client._runEffect([99, 'nope'], true)).toThrow();
     });
 
+    it('fires nothing for a disabled (false) or missing tap prop', () => {
+        const { client, sent } = clientWithRecorder('root_view');
+        client.tap({ __view: 'child_view', on_tap: false });
+        client.tap({ __view: 'child_view' });
+        expect(sent).toEqual([]);
+    });
+
     it('runs every command of a tap prop holding a list, in order', () => {
         const { client, sent } = clientWithRecorder('root_view');
         const node = {
@@ -240,6 +247,23 @@ describe('native client op application', () => {
         client._applyOps([[OP_SET_ATTR, 'native_x:B-0', 'on_tap', [0, 'b']]]);
         client.tap(client.tree().children[0]);
         expect(JSON.parse(sent.at(-1))).toEqual(['native_x', 'b', {}]);
+    });
+
+    // A dynamic boolean prop is a JSON boolean in the hydration payload and on a
+    // later SET_ATTR alike, so `false` stays a present prop rather than a missing one.
+    it('keeps a dynamic boolean prop a boolean, mounted and patched', () => {
+        const client = newClient();
+        replaceRoot(client);
+        client._applyOps([
+            [
+                OP_TEXT,
+                'native_x:R-0t0',
+                { f: 'E', s: ['{"type":"Button","az":"E-0","enabled":', '}'], d: [false] },
+            ],
+        ]);
+        expect(client.tree().children[0].enabled).toBe(false);
+        client._applyOps([[OP_SET_ATTR, 'native_x:E-0', 'enabled', true]]);
+        expect(client.tree().children[0].enabled).toBe(true);
     });
 
     // The documented `case ?get(flag) of true -> ?stateful(child, ...)` pattern:

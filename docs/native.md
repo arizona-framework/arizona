@@ -44,13 +44,22 @@ handle_event(~"inc", _Payload, Bindings) ->
   client's / your tests' concern, not a compile error.
 - **Attributes are widget props.** Static and dynamic both supported. Values are
   string-encoded on the wire; the client coerces (typed props are a future
-  addition).
+  addition). A whole-value boolean prop is the exception: it is a JSON
+  `true`/`false`, static (`{visible, true}`) or dynamic (`{enabled, ?get(on)}`),
+  and a dynamic one stays present in both states -- `OP_SET_ATTR` sets it to
+  `false` rather than removing the prop. A static `false` stays too
+  (`"enabled":false`), unlike the web, where `false` means the attribute is
+  absent. Only a whole-value prop is typed: a boolean in content renders as the
+  text `true`/`false`, an interpolated prop value (`[~"a-", ?get(on)]`) is text,
+  so a boolean in it raises `bad_template_value`.
 - **Event handlers are props** whose value is an effect command built with the
   platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
   reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into
   the statics or computed at runtime (`{on_tap, ?get(cmd)}`, carried in `d` and
-  patched by `OP_SET_ATTR`), so a tap prop always reads an array. A list of
-  commands arrives as a list of arrays and runs in order, as on the web. Events
+  patched by `OP_SET_ATTR`). A list of commands arrives as a list of arrays and
+  runs in order, as on the web. A disabled command reads `false`
+  (`{on_tap, case ?get(on) of true -> Cmd; false -> false end}`); a client treats
+  a tap prop that is not an array as no command and fires nothing. Events
   flow back exactly as on the web (`[ViewId, Event, Payload]` → `handle_event/3`).
 - **`?each` works uniformly.** A `?each` inside `?native` is compiled for the
   native target automatically — no separate macro. `?stateful`/`?stateless`
@@ -149,7 +158,8 @@ browser, so statics are sent once and never re-sent:
   `content_type/0`; a render crash's error page stays HTML). The request-free
   render (`arizona_render:render_to_iolist/1`, `render_view_to_iolist/2`, so
   `arizona_static` and the dev tools) zips the same JSON a client builds from that
-  frame: each scalar a JSON string, each `?each` a nested array.
+  frame: each scalar a JSON string (a whole-value boolean prop a JSON boolean, an
+  effect command its array), each `?each` a nested array.
 
 ## Native client contract
 
@@ -230,7 +240,8 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    the node's nearest enclosing `az_view` (the root, or a nested `?stateful`
    child) — so events reach stateful children, not just the root. The prop holds
    one command or a list of them, told apart by whether its first element is an
-   array, and a list runs in order. The server's `"e"` (effects) array is
+   array, and a list runs in order; a prop that is not an array (`false` for a
+   disabled command) fires nothing. The server's `"e"` (effects) array is
    dispatched after the ops. The portable commands are handled — `push_event`,
    and `navigate` (which sends `["navigate", {path, qs}]` on the same socket; the
    server's `handle_navigate` re-mounts the target view and replies with
@@ -288,8 +299,8 @@ returns them won't crash a native client.
   targets in one tree mismatches the statics format. This is a documented rule,
   not a checked one.
 - **No server-side widget validation** (let-it-crash / the client's concern).
-- **Props are string-encoded** (an event prop's command excepted, which is an
-  array); the client coerces. Typed props, opt-in
+- **Props are string-encoded** (a boolean, which is JSON `true`/`false`, and an
+  event prop's command, which is an array, excepted); the client coerces. Typed props, opt-in
   per-platform compile-time validators, and a portable cross-platform
   vocabulary helper are possible future additions.
 - **A stateful child inside a stream item resolves through its own view.** The

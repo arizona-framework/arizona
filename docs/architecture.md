@@ -1765,7 +1765,7 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 | Code | Name             | Args                       | Description                                            |
 | ---- | ---------------- | -------------------------- | ------------------------------------------------------ |
 | 0    | `OP_TEXT`        | `[target, value]`          | Replace marker content (text, nested tmpl, plain each) |
-| 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attribute (an effect command value is its array)   |
+| 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attr (command: its array; native bool: JSON bool)  |
 | 2    | `OP_REM_ATTR`    | `[target, attr]`           | Remove attribute                                       |
 | 4    | `OP_REMOVE_NODE` | `[target]`                 | Remove element                                         |
 | 5    | `OP_INSERT`      | `[target, key, pos, html]` | Stream insert (pos=-1 -> append, otherwise index)      |

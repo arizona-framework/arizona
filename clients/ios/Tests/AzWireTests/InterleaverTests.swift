@@ -93,4 +93,13 @@ final class InterleaverTests: XCTestCase {
         XCTAssertEqual(node["on_tap"]![0].intValue, 10)
         XCTAssertEqual(node["on_tap"]![1].stringValue, "/native/counter")
     }
+
+    func testDecodesDynamicBooleanProp() throws {
+        // A dynamic boolean prop rides in "d" as a JSON boolean and interleaves to
+        // one, beside a static false the statics already carry.
+        let frame = ##"{"d":[false],"f":"BOOL1","s":["{\"type\":\"Button\",\"enabled\":",",\"visible\":false,\"children\":[\"x\"]}"]}"##
+        let node = try Interleaver(FingerprintCache()).interleave(JSONValue.parse(frame))
+        XCTAssertEqual(node["enabled"]?.boolValue, false)
+        XCTAssertEqual(node["visible"]?.boolValue, false)
+    }
 }

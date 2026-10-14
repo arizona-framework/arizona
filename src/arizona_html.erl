@@ -16,7 +16,7 @@ identical to the previous inlined emission.
 -export([element_void_close/0]).
 -export([element_close/1]).
 -export([attr/2]).
--export([attr_boolean/1]).
+-export([attr_bool/2]).
 -export([attr_command/2]).
 -export([attr_dyn_name/1]).
 -export([children_sep/0]).
@@ -34,6 +34,7 @@ identical to the previous inlined emission.
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
+-export([boolean_attrs/0]).
 -export([escape/1]).
 -export([raw_text/2]).
 -export([render_attr/2]).
@@ -99,9 +100,11 @@ attr(Name, Value) ->
 attr_unescaped(Name, Value) ->
     <<" ", Name/binary, "=\"", Value/binary, "\"">>.
 
--spec attr_boolean(binary()) -> binary().
-attr_boolean(Name) ->
-    <<" ", Name/binary>>.
+-spec attr_bool(binary(), boolean()) -> binary().
+attr_bool(Name, true) ->
+    <<" ", Name/binary>>;
+attr_bool(_Name, false) ->
+    <<>>.
 
 -spec attr_command(binary(), term()) -> binary().
 attr_command(Name, Cmd) ->
@@ -267,6 +270,8 @@ target() -> html.
 content_type() -> ~"text/html; charset=utf-8".
 
 supports_local() -> true.
+
+boolean_attrs() -> presence.
 
 %% HTML-escape the five metacharacters; safe for element content and
 %% double/single-quoted attribute values. Comparisons are per byte, so UTF-8 is
@@ -504,7 +509,7 @@ ci_prefix(_Bin, _Pattern) -> false.
 render_attr(_Name, false) ->
     <<>>;
 render_attr(Name, true) ->
-    attr_boolean(Name);
+    attr_bool(Name, true);
 render_attr(Name, Value) ->
     case arizona_template:classify_trusted(Value) of
         {raw, V} ->

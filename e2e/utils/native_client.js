@@ -220,8 +220,10 @@ export class NativeClient {
 
     // Interpret a node's tap command prop (an arizona_effect command array) and
     // fire it, like the browser delegating an az-click. Strict: an unexpected
-    // command throws.
+    // command throws. A prop that is not an array (a disabled command reads
+    // `false`, or none at all) fires nothing.
     tap(node, prop = 'on_tap') {
+        if (!Array.isArray(node[prop])) return;
         for (const cmd of commands(node[prop])) this._runEffect(cmd, true, node.__view);
     }
 
