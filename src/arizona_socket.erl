@@ -212,7 +212,7 @@ init(Handler, Bindings, Req, Opts) ->
     Socket = #socket{req = Req, handler = Handler, layouts = Layouts},
     safe_init(Handler, Socket, fun() ->
         %% `push_barrier` opts this transport into the ordering marker the
-        %% event/patch drain below relies on -- see drain_pending_pushes/1.
+        %% event/patch/navigate drain below relies on -- see drain_pending_pushes/1.
         ConnInfo = #{
             capabilities => Capabilities, reconnect => Reconnect, push_barrier => true
         },
@@ -356,10 +356,9 @@ live_pid(#socket{pid = Pid}) -> Pid.
 Handles inbox messages forwarded by the transport.
 
 Routes `{arizona_push, ViewId, Ops, Effects}` from the live process into
-a reply frame -- but only when `ViewId` (the emitting page's root view id)
-is still the socket's current one. A push emitted just before a navigate
-is processed after it; retagging it with the new page's id would deliver
-stale ops into the fresh view, so it is dropped instead. Handles `'EXIT'`
+a reply frame. `ViewId` is always the socket's current root view id: a push
+the old page emitted before a navigate is folded into the navigate reply
+ahead of its replace (`drain_pending_pushes/1`). Handles `'EXIT'`
 from the linked live process per the mapping in this module's
 "Exit handling" section.
 """.
@@ -386,9 +385,6 @@ do_handle_info(
     {arizona_push, ViewId, Ops, Effects, Observed}, #socket{view_id = ViewId} = Socket
 ) ->
     encode_reply(flatten_ops(ViewId, Ops), Effects, note_az([], Observed, Socket));
-do_handle_info({arizona_push, _StaleViewId, _Ops, _Effects, _Observed}, Socket) ->
-    %% Emitted by a page this socket already navigated away from -- drop.
-    {ok, Socket};
 do_handle_info({'EXIT', Pid, {shutdown, drain}}, #socket{pid = Pid} = Socket) ->
     %% Drain-initiated graceful exit. Close with 1001 (going away) so the
     %% JS client's auto-reconnect path runs (Worker treats any non-1000
@@ -644,14 +640,21 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
         {cont, _NewReq1, Bindings1} ->
             try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
                 {ok, NewVId, PageHTML, Observed} ->
-                    Ops = replace_ops(OldVId, PageHTML),
-                    Socket1 = note_az([H], Observed, Socket),
-                    %% No effects: a navigate remounts, and mount/1 has no
-                    %% effects channel (it also runs at SSR, where no client
-                    %% exists to receive one). A view that wants one self-casts
-                    %% from mount/1 and answers in handle_info/2, which pushes
-                    %% its own frame rather than riding this reply.
-                    encode_reply(Ops, [], Socket1#socket{view_id = NewVId, handler = H})
+                    %% The old page's pushes queued ahead of the reply ship first,
+                    %% still tagged with the old view id: one may carry the first
+                    %% statics of a fingerprint the replace then references bare,
+                    %% and the replace supersedes their ops on the client anyway.
+                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
+                    Socket2 = note_az([H], Observed, Socket1),
+                    %% The navigate itself adds no effects: mount/1 has no effects
+                    %% channel (it also runs at SSR, where no client exists to
+                    %% receive one). A view that wants one self-casts from mount/1
+                    %% and answers in handle_info/2, which pushes its own frame.
+                    encode_reply(
+                        PendOps ++ replace_ops(OldVId, PageHTML),
+                        PendEffects,
+                        Socket2#socket{view_id = NewVId, handler = H}
+                    )
             catch
                 %% Live process exited between the navigate frame arriving and
                 %% this gen_server:call landing — typical during a drain where
@@ -783,7 +786,7 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
     {flatten_ops(ViewId, Ops), Effects, Observed}.
 
 %% Selectively receive the `{arizona_push, ...}` messages the live process
-%% emitted BEFORE the reply to a synchronous event/patch call, and fold them in
+%% emitted BEFORE the reply to a synchronous event/patch/navigate call, and fold them in
 %% front of that reply's own ops. Such a push is causally earlier, so it must be
 %% applied first: without this the reply ships first and the earlier push lands
 %% in a LATER frame, letting a stale value overwrite the reply's client-side
@@ -808,10 +811,9 @@ dispatch_event(Pid, ViewId, Event, Payload) ->
 %% broken invariant degrades to the old (merely mis-ordered) behaviour instead
 %% of wedging the connection on a receive that never returns.
 %%
-%% A push from a page this socket already navigated away from is dropped,
-%% mirroring handle_info/2. The navigate path needs no drain: its OP_REPLACE
-%% supersedes old-page ops, and the stale-view-id drop disposes of them once
-%% processed after the reply.
+%% Navigate drains too, which is what keeps every push tagged with the socket's
+%% current view id: the old page's pushes all precede the navigate's marker, so
+%% they ship ahead of the replace instead of trailing it into the new page.
 drain_pending_pushes(#socket{view_id = ViewId} = Socket) ->
     drain_pending_pushes(ViewId, [], [], Socket).
 
@@ -824,8 +826,6 @@ drain_pending_pushes(ViewId, OpsAcc, EffectsAcc, Socket) ->
                 [Effects | EffectsAcc],
                 note_az([], Observed, Socket)
             );
-        {arizona_push, _StaleViewId, _Ops, _Effects, _Observed} ->
-            drain_pending_pushes(ViewId, OpsAcc, EffectsAcc, Socket);
         arizona_push_barrier ->
             drained_pushes(OpsAcc, EffectsAcc, Socket)
     after 0 ->

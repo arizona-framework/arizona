@@ -1063,7 +1063,7 @@ fingerprints already shipped to the client for deduplication.
 `compute_changed/2` builds the Changed map by comparing old and new bindings key-by-key.
 
 `push/4` sends `{arizona_push, RootViewId, Ops, Effects}` to the transport PID -- `RootViewId`
-names the emitting page's root view, so a transport can drop a push that raced a navigate.
+names the emitting page's root view.
 No-ops when PID is `undefined` or ops and effects are both empty.
 
 ### Per-view messages and the timer registry
@@ -1136,11 +1136,13 @@ lives here independent of the server.
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
   `["navigate", #{~"path" := Path, ~"qs" := Qs}]` (replace), `["patch", #{~"path", ~"qs"}]`
   (in-place, same-handler -> `patch/2`, else falls back to navigate), `[target, event, payload]`
-- `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live` (dropped
-  when `ViewId` is no longer the socket's current root -- a push that raced a navigate), the
+- `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live`, the
   `arizona_resync_timeout` backstop, and `EXIT` signals from the live process. On a synchronous
-  event/patch reply, pushes already queued in the socket mailbox are folded into the reply frame
-  first (causal wire order)
+  event/patch/navigate reply, pushes already queued in the socket mailbox are folded into the
+  reply frame first (causal wire order). On a navigate they ship ahead of the `OP_REPLACE`, still
+  tagged with the old page's view id: one may carry the first statics of a fingerprint the replace
+  then references bare, and the replace supersedes their ops anyway. So every push reaching
+  `handle_info/2` names the socket's current root
 
 **Exit reason to close code** -- four cases, and the difference matters because the JS worker
 treats **any non-1000 code as reconnectable**:

@@ -311,7 +311,7 @@ two. Browser/SSR callers use `start_link/4` (empty context).
 
 `push_barrier` is the transport's own contract, not client data: set it when the
 transport folds queued `{arizona_push, ...}` messages into a synchronous
-event/patch reply, and the live process marks the boundary between the pushes
+event/patch/navigate reply, and the live process marks the boundary between the pushes
 that preceded that reply and anything emitted after it (see `push_barrier/1`).
 Transports that ship every push in its own frame leave it unset.
 """.
@@ -635,7 +635,8 @@ handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings =
                     {reply, {ok, [], [], {[], []}}, State}
             end
     end;
-handle_call({navigate, NewHandler, NewIB, NewOnMount}, _From, State) ->
+handle_call({navigate, NewHandler, NewIB, NewOnMount}, From, State) ->
+    ok = push_barrier(From, State),
     do_navigate_call(NewHandler, NewIB, NewOnMount, State);
 handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) ->
     ok = push_barrier(From, State),
@@ -1354,8 +1355,8 @@ push(Pid, ViewId, Ops, Effects) ->
 %% transport has by then received) and leaves the rest for its own inbox path,
 %% which ships them in a later frame, in order.
 %%
-%% Emitted only when the CALLER is the folding transport itself. `handle_event/4`
-%% and `patch/2` are exported, so any process can call them on a live process
+%% Emitted only when the CALLER is the folding transport itself. `handle_event/4`,
+%% `patch/2` and `navigate/3,4` are exported, so any process can call them on a live process
 %% whose transport folds -- and a marker sent for someone else's call is one
 %% nobody drains, which would offset the transport's drain by one from then on
 %% (every later drain eats the previous cycle's marker, folds nothing, and lets a

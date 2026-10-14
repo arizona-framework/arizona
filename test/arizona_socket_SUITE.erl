@@ -10,7 +10,8 @@
 %% pushes land in its own mailbox exactly as they do in the real transport.
 
 -export([all/0]).
--export([push_racing_navigate_dropped/1]).
+-export([push_racing_navigate_ships_first/1]).
+-export([push_racing_same_id_navigate_ships_first/1]).
 -export([item_patch_carries_child_view_wrapper/1]).
 -export([queued_push_prepended_to_event_reply/1]).
 -export([queued_push_prepended_to_patch_reply/1]).
@@ -42,7 +43,8 @@
 
 all() ->
     [
-        push_racing_navigate_dropped,
+        push_racing_navigate_ships_first,
+        push_racing_same_id_navigate_ships_first,
         item_patch_carries_child_view_wrapper,
         queued_push_prepended_to_event_reply,
         queued_push_prepended_to_patch_reply,
@@ -100,35 +102,59 @@ relabel(Id, Label) ->
         json:encode([~"sic", ~"relabel", #{~"id" => Id, ~"label" => Label}])
     ).
 
-push_racing_navigate_dropped(Config) when is_list(Config) ->
-    %% A push the live process emits just before serving a navigate is
-    %% processed by the socket AFTER the navigate reply. It belongs to the OLD
-    %% page, so it must be dropped -- shipping it tagged with the new root id
-    %% delivers stale ops into the fresh page (the client's resolveEl fallback
-    %% can innerHTML-overwrite the just-rendered view).
+push_racing_navigate_ships_first(Config) when is_list(Config) ->
+    %% A push the old page emits just before a navigate is served carries the
+    %% shared card's statics for the first time, so the live process records
+    %% them as sent and the navigate's page payload references the card bare.
+    %% The push must therefore reach the client, ahead of the replace -- before
+    %% the fix it was dropped as stale and the client could not resolve the
+    %% replace's fingerprint.
     Req = arizona_req_test_adapter:new(#{
-        routes => #{~"/next" => {arizona_root_counter, #{}}}
+        routes => #{~"/next" => {arizona_nav_card_shown, #{}}}
     }),
-    {reply, _, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_nav_card_hidden, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
-    %% Queue an info for the current page, then navigate: the live process
-    %% handles the info first (FIFO), pushing old-page ops into our mailbox,
-    %% and only then serves the navigate call.
-    Pid ! {set_message, ~"stale"},
-    NavFrame = iolist_to_binary(
-        json:encode([~"navigate", #{~"path" => ~"/next", ~"qs" => <<>>}])
+    Pid ! {show_card, ~"old"},
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
+    ?assertMatch(
+        [[?OP_TEXT, _, #{~"f" := _, ~"s" := _}], [?OP_REPLACE, ~"nca", _]], ops(Frame)
     ),
-    {reply, _ReplaceFrame, Socket1} = arizona_socket:handle_in(NavFrame, Socket0),
+    [[?OP_TEXT, _, #{~"f" := CardFp}], [?OP_REPLACE, _, Page]] = ops(Frame),
+    %% The replace names the card by fingerprint alone, relying on the push.
+    ?assertMatch([_ | _], [P || #{~"f" := F} = P <- payloads(Page), F =:= CardFp]),
+    ?assertEqual([], [P || #{~"f" := F, ~"s" := _} = P <- payloads(Page), F =:= CardFp]),
+    nothing_left_queued().
+
+push_racing_same_id_navigate_ships_first(Config) when is_list(Config) ->
+    %% Two routes on one handler share its view id, so a push the old page
+    %% emitted just before the navigate looks current afterwards. It must ship
+    %% ahead of the replace, never after it: before the fix it trailed into the
+    %% next frame and applied old-page ops to the new page.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/rc" => {arizona_root_counter, #{bindings => #{count => 7}}}}
+    }),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket0),
+    Pid ! {set_count, 5},
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/rc"), Socket0),
+    ?assertMatch([[?OP_TEXT, _, ~"5"], [?OP_REPLACE, ~"counter", _]], ops(Frame)),
+    nothing_left_queued().
+
+nothing_left_queued() ->
     receive
-        Push ->
-            %% Dropped, not shipped: before the fix this replied with the stale
-            %% ops retagged as the NEW view's.
-            ?assertEqual({ok, Socket1}, arizona_socket:handle_info(Push, Socket1)),
-            %% The push names its owning root view so the socket can tell.
-            ?assertMatch({arizona_push, ~"timer", _, _, _}, Push)
-    after 1000 ->
-        error(timeout_waiting_for_stale_push)
+        LeftOver -> error({push_left_in_mailbox, LeftOver})
+    after 0 -> ok
     end.
+
+%% Every fingerprint payload map nested anywhere in a decoded page payload.
+payloads(#{~"f" := _} = P) ->
+    [P | payloads(maps:values(P))];
+payloads(M) when is_map(M) ->
+    payloads(maps:values(M));
+payloads(L) when is_list(L) ->
+    lists:append([payloads(X) || X <- L]);
+payloads(_Other) ->
+    [].
 
 queued_push_prepended_to_event_reply(Config) when is_list(Config) ->
     %% Causal order: an info (count -> 5) precedes the event (inc -> 6). The
