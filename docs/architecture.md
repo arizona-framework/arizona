@@ -123,8 +123,8 @@ re-raises it as `{arizona_loc, {Module, Line}, Reason}`, keeping the class and
 stacktrace (`arizona_eval:relocate/4`). The evaluators are the SSR walk
 (`arizona_render`), the live mount and snapshot render (`arizona_eval`'s `eval_one_v/2`
 and `eval_one/1`), and the diff's re-evaluation of a changed slot, including the
-`?each`-source and az-nodiff-region paths (`eval_each_def/2`,
-`eval_unless_same_region/3`). So a crash names the same template line whether it
+`?each`-source and az-nodiff-az-nodiff element paths (`eval_each_def/2`,
+`eval_unless_same_nodiff/3`). So a crash names the same template line whether it
 happens at the first page render, at connect, or after an event changed a binding, and
 whether it sits in a top-level value, an attribute, an `?each` item, a conditional
 branch or a `?stateless` body.
@@ -707,19 +707,20 @@ handle_event(~"inc", _P, B) ->
   presence toggle: add if absent, remove if present; `toggle_attr/4` flips between two values)
 - `dispatch_event/2` -- dispatch CustomEvent on document
 - `navigate/1,2` -- SPA navigation, replaces the root view (opts: `#{replace => true}`)
-- `patch/1,2` -- in-place SPA navigation, keeps the root view and re-renders it via `handle_update/3`
-- `fetch/2` -- HTTP request via the browser `fetch()`, **no page reload** (opts: `method`,
-  `body`, `headers`, `credentials`, `on_error`, `keep_alive`). The only mode that can set a real `Set-Cookie`
-  (HttpOnly honored) without navigating, so it suits flows that rotate a session cookie while
-  keeping form fields and showing inline validation. Hits a controller route (e.g. `{post, ...}`)
-  that returns the `{"e": [...]}` effects payload via `arizona_controller:reply_effects/1`; those
-  effects are applied (against the trigger element) **whenever the body parses, even on a
-  `4xx`** (so the controller can use a real status and still drive inline validation). To
-  re-render the **submitting** view, return an `arizona_js:push_event` in the response -- the
-  client relays it over the existing WebSocket and the view re-renders via `handle_event` (no
-  pubsub); broadcast over `arizona_pubsub` only to reach **other** views. `on_error` (plus an
-  `arizona:fetch-error` DOM event) runs only when there is no usable effects body -- a non-JSON
-  page, an empty non-2xx, or a network failure. A redirect is an `arizona_js:navigate` effect
+- `patch/1,2` -- in-place SPA navigation, keeps the root view and re-renders it via
+  `handle_update/3`
+- `fetch/2` -- HTTP request via the browser `fetch()`, **no page reload** (opts: `method`, `body`,
+  `headers`, `credentials`, `on_error`, `keep_alive`). The only mode that can set a real
+  `Set-Cookie` (HttpOnly honored) without navigating, so it suits flows that rotate a session cookie
+  while keeping form fields and showing inline validation. Hits a controller route (e.g. `{post,
+  ...}`) that returns the `{"e": [...]}` effects payload via `arizona_controller:reply_effects/1`;
+  those effects are applied (against the trigger element) **whenever the body parses, even on a
+  `4xx`** (so the controller can use a real status and still drive inline validation). To re-render
+  the **submitting** view, return an `arizona_js:push_event` in the response -- the client relays it
+  over the existing WebSocket and the view re-renders via `handle_event` (no pubsub); broadcast over
+  `arizona_pubsub` only to reach **other** views. `on_error` (plus an `arizona:fetch-error` DOM
+  event) runs only when there is no usable effects body -- a non-JSON page, an empty non-2xx, or a
+  network failure. A redirect is an `arizona_js:navigate` effect
   (`arizona_controller:reply_redirect/1`), not an HTTP 3xx. `keep_alive` (default `false`) maps to
   the browser's `fetch(url, { keepalive: true })` so a request fired just before a navigation
   completes instead of being cancelled (browser inflight-body cap ~64KB).
@@ -731,9 +732,9 @@ handle_event(~"inc", _P, B) ->
   safe no-op
 - `select/1` -- select (highlight) the first matching `<input>`/`<textarea>`'s text
   (`HTMLInputElement.select`); a non-input match is a safe no-op
-- `copy_to_clipboard/1` -- copy the first match's `value` (form control) or `textContent` to the clipboard
-  (`navigator.clipboard.writeText`); needs a secure context + user gesture, so it is an **event
-  command only** (not a handler effect); a missing/blocked clipboard is a safe no-op
+- `copy_to_clipboard/1` -- copy the first match's `value` (form control) or `textContent` to the
+  clipboard (`navigator.clipboard.writeText`); needs a secure context + user gesture, so it is an
+  **event command only** (not a handler effect); a missing/blocked clipboard is a safe no-op
 - `show_modal/1`, `close_modal/1` -- open the first matching `<dialog>` as a true modal
   (`showModal`, top layer + `::backdrop` + ESC-to-close, unlike the `open` attribute) / close it
   (`close`); a non-dialog match is a safe no-op
@@ -816,10 +817,10 @@ immediately. The wrap is applied at the **worker message handler**, so a message
 animate together, in order. By default the whole root cross-fades; a `view-transition-name` on an
 element scopes/morphs just it (and must be unique among rendered elements or the browser skips it).
 
-Guards: no-op (instant swap) when `startViewTransition` is absent or
-`prefers-reduced-motion`; `types` use the object-form call only when `:active-view-transition-type()`
-is supported. Back/forward is symmetric: a transitioned nav stamps `_azTransition` onto both history
-entries and popstate replays it. Cross-document (real `<a href>`) navigations animate via the user's
+Guards: no-op (instant swap) when `startViewTransition` is absent or `prefers-reduced-motion`;
+`types` use the object-form call only when `:active-view-transition-type()` is supported.
+Back/forward is symmetric: a transitioned nav stamps `_azTransition` onto both history entries and
+popstate replays it. Cross-document (real `<a href>`) navigations animate via the user's
 `@view-transition { navigation: auto; }` CSS with no framework code. All styling
 (`view-transition-name`, `::view-transition-*`, `:active-view-transition-type`) is user CSS. See
 `.claude/rules/js.md` for the client surface.
@@ -892,9 +893,10 @@ present, `false` => absent.
 
 Caveats (by design):
 
-- **Wholesale re-render resets it.** A `?local` value survives normal per-slot diffs, but
-  an enclosing region re-rendered as a unit (an `OP_TEXT` replacing a whole slot, `OP_REPLACE`,
-  an `?each` item swap, a conditional template switch) recreates the slot at its SSR initial.
+- **Wholesale re-render resets it.** A `?local` value survives normal per-slot diffs, but an
+  enclosing subtree re-rendered as a unit (an `OP_TEXT` replacing a whole slot, `OP_REPLACE`, an
+  `?each` item swap, a conditional template switch) recreates the slot at its SSR initial -- unless
+  it sits inside an az-nodiff element that is kept.
 - **Inside `?each`, items share the slot key.** `?local` keys are compile-time literals (you
   can't build `?local(<<"open_", Id/binary>>, ...)` -- that errors `local_key_not_literal`), so
   every item rendered from the same template carries the **same** key and `set`/`set_all`
@@ -1038,11 +1040,11 @@ stream that mutates over a long-lived session as a top-level binding.
   (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics. An append to an
   overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`.
 
-**Window reconciliation is shared by both modes** (`apply_limit/6` in `arizona_diff`). By the time the
-diff runs, `order` already reflects the halt/drop retention decision, so reconciliation is purely:
-remove the DOM items that fell out of the window, and insert the newly-visible ones **at their
-ordered position**. Positional back-fill is what lets a delete slide the next hidden item into the
-freed slot and a sort bring a hidden item into view at the right spot (appending at `-1` only
+**Window reconciliation is shared by both modes** (`apply_limit/6` in `arizona_diff`). By the time
+the diff runs, `order` already reflects the halt/drop retention decision, so reconciliation is
+purely: remove the DOM items that fell out of the window, and insert the newly-visible ones **at
+their ordered position**. Positional back-fill is what lets a delete slide the next hidden item into
+the freed slot and a sort bring a hidden item into view at the right spot (appending at `-1` only
 happened to be right when the new item was last in the window). `window_unchanged/4` is the
 allocation-light fast path: when the new window equals the pre-frame one element-wise and the
 snapshot holds exactly those keys, the whole remove/back-fill pass is skipped -- the common case of
@@ -1106,9 +1108,9 @@ Simplified gen_server wrapper:
   `push_event` handler effect, a hook outside any view, or `arizona.pushEvent/2` is always
   recoverable -- a DOM-derived guess would not be
 - `handle_info/2` -- gen_server callback for Erlang messages (`Pid ! Msg`, `erlang:send_after`,
-  etc.). If handler exports `handle_info/2`, calls it, diffs, and pushes
-  `{arizona_push, RootViewId, Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without
-  `handle_info/2` are silently dropped. Empty ops+effects are not pushed
+  etc.). If handler exports `handle_info/2`, calls it, diffs, and pushes `{arizona_push, RootViewId,
+  Ops, Effects}` to `transport_pid`. Pre-mount messages and handlers without `handle_info/2` are
+  silently dropped. Empty ops+effects are not pushed
 - `navigate/3,4` -- `navigate(Pid, NewHandler, InitBindings [, OnMount])`. Tears the old page down
   in this order: **cancel timers first** (`cancel_pending_timers/0` erases the whole
   `$arizona_timers` registry, cancels every ref, then drains already-delivered
@@ -1130,8 +1132,9 @@ new handler omits from its mount return
 - `patch/2` -- `patch(Pid, Params)`. In-place navigation: keeps the current root mounted, runs its
   `handle_update/3` with `Params`, and re-renders through the diff (no unmount, no remount, no timer
   cancel, no `OP_REPLACE`). `handler`, view id, and child views all survive. Returns `{ok, Ops,
-  Effects}` -- the diff ops plus the reaction's effects (`handle_update`'s, folded with any child's).
-  Mirrors `handle_root_event`, but the reaction is `handle_update` instead of `handle_event`
+  Effects}` -- the diff ops plus the reaction's effects (`handle_update`'s, folded with any
+  child's). Mirrors `handle_root_event`, but the reaction is `handle_update` instead of
+  `handle_event`
 - `dev_info/1(Pid)` -- a live process's current view state for dev-time introspection (root
   handler/bindings plus each child view's), read via `sys:get_state/1` so a wedged view still
   answers and nothing is added to the process's own protocol. Backs the dev MCP's `view_state`.
@@ -1588,32 +1591,29 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
 
 **SSR (HTTP):** `arizona_roadrunner_http:handle/1` delegates to `arizona_http:render/3`, which wraps
 the native req in an `arizona_req:request()`, runs any route middlewares
-(`arizona_middleware:apply_middlewares/3`), then calls
-`arizona_render:render_view(Handler, Opts)` where Opts may contain
-`layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view/2`
-mounts the page via `arizona_stateful:call_mount/2`, applies `on_mount` hooks,
+(`arizona_middleware:apply_middlewares/3`), then calls `arizona_render:render_view(Handler, Opts)`
+where Opts may contain `layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`.
+`render_view/2` mounts the page via `arizona_stateful:call_mount/2`, applies `on_mount` hooks,
 renders to page HTML, then optionally injects the rendered page into mount bindings as
-`inner_content` -- as an opaque nested template, not iodata (see **Slots** below)
--- and passes the bindings to the layout's `render/1`. A layout is a stateless HTML shell (DOCTYPE,
-head, body, scripts) with no markers or `az` attributes: `?inner_content` is itself what marks the
-whole layout `az-nodiff`, so an explicit `az_nodiff` attribute is redundant and no layout fixture
-in the repo writes one. A `?stateful` inside a layout is a **render-time error**
-(`stateful_in_layout`): layouts render on the request-free SSR path, which has no `views`
-accumulator, so the child is mounted and discarded while its `az-view` marker -- baked into the
-module's compiled statics, so it cannot be stripped here -- still reaches the DOM naming a view the
-server never registered. The check is at render rather than compile time because the disqualifying
-property is the *path*, not the template: a `?stateful` under a user `az-nodiff` renders on the live
-path, is registered, and works. Use `?stateless` for layout chrome; chrome that must stay live across
-navigation belongs in a view the routes share, linked with `az_patch`. A layout must share the
-page's render target (`cross_target_layout` otherwise): the page reaches it as a backendless
-template, which the nested-template target check waves through. `layouts` is always a list,
-applied outermost-first (`[Root, Section]` produces `Root(Section(Page))`); an empty list renders
-the page directly, with no wrapper. Route config
-provides `bindings`, `on_mount`, `layouts`, `middlewares`, and `check_origin` -- the single canonical
-`t:arizona_live:route_opts/0`. URL data (path bindings,
-query params) does NOT flat-merge into Bindings -- a route opts into
-`arizona_middleware:extract/1` middlewares (or `arizona_middleware:put_request/2`) to project
-what its handler needs. Middleware halts that call
+`inner_content` -- as an opaque nested template, not iodata (see **Slots** below) -- and passes the
+bindings to the layout's `render/1`. A layout is a stateless HTML shell (DOCTYPE, head, body,
+scripts) with no markers or `az` attributes: `?inner_content` is itself what marks the whole layout
+`az-nodiff`, so an explicit `az_nodiff` attribute is redundant and no layout fixture in the repo
+writes one. A `?stateful` inside a layout is a **render-time error** (`stateful_in_layout`): layouts
+render on the request-free SSR path, which has no `views` accumulator, so the child is mounted and
+discarded while its `az-view` marker -- baked into the module's compiled statics, so it cannot be
+stripped here -- still reaches the DOM naming a view the server never registered. The check is at
+render rather than compile time because the disqualifying property is the *path*, not the template:
+a `?stateful` under a user `az-nodiff` renders on the live path, is registered, and works. Use
+`?stateless` for layout chrome; chrome that must stay live across navigation belongs in a view the
+routes share, linked with `az_patch`. A layout must share the page's render target
+(`cross_target_layout` otherwise): the page reaches it as a backendless template, which the
+nested-template target check waves through. `layouts` is always a list, applied outermost-first
+(`[Root, Section]` produces `Root(Section(Page))`); an empty list renders the page directly, with no
+wrapper. Route config provides `bindings`, `on_mount`, `layouts`, `middlewares`, and `check_origin`
+-- the single canonical `t:arizona_live:route_opts/0`. URL data (path bindings, query params) does
+NOT flat-merge into Bindings -- a route opts into `arizona_middleware:extract/1` middlewares (or
+`arizona_middleware:put_request/2`) to project what its handler needs. Middleware halts that call
 `arizona_req:redirect/2,3` surface as a `{redirect, Status, Location}` result that the transport
 emits as a 3xx reply.
 
@@ -1658,30 +1658,31 @@ envelope `{"o": scopedOps, "e": effects}`.
 **SPA navigation + unmount:** Client clicks `[az-navigate]` link -> JS intercepts, calls
 `history.pushState`, sends `["navigate", {path, qs}]` over WebSocket. `arizona_socket`'s navigate
 handler resolves the new route via the adapter, then runs the new route's middlewares (lifecycle
-parity with HTTP init and WS upgrade). If middleware halts with `arizona_req:redirect/2,3`, the socket
-emits `[arizona_js:navigate(Location)]` as a client effect -- no `arizona_live:navigate` call
-happens; the browser pushes the new URL and the fresh HTTP handshake runs middleware again on
-the redirect target. On `cont`, `arizona_live:navigate/4` is called. Before mounting the new
-handler it cancels every pending `send_after` timer (`cancel_pending_timers/0`, over the whole
+parity with HTTP init and WS upgrade). If middleware halts with `arizona_req:redirect/2,3`, the
+socket emits `[arizona_js:navigate(Location)]` as a client effect -- no `arizona_live:navigate` call
+happens; the browser pushes the new URL and the fresh HTTP handshake runs middleware again on the
+redirect target. On `cont`, `arizona_live:navigate/4` is called. Before mounting the new handler it
+cancels every pending `send_after` timer (`cancel_pending_timers/0`, over the whole
 `$arizona_timers` registry) and then unmounts the outgoing page **children first, then the root**
-(`unmount_removed_views/1` over the old views map, then `arizona_stateful:call_unmount/2` on the
-old root). Discarding the page is a removal, so it unmounts exactly like a diff removal does, and
+(`unmount_removed_views/1` over the old views map, then `arizona_stateful:call_unmount/2` on the old
+root). Discarding the page is a removal, so it unmounts exactly like a diff removal does, and
 `terminate/2` uses the same order for any exit reason -- every child's `unmount/1` runs while the
 root is still mounted, and no handler has to propagate unmount by hand. Note the guarantee is
 against the root: `views` is flat and walked with `maps:foreach`, so nested views unmount in key
-order, not parent-before-child. Then the new handler
-is mounted and gen_server state is reset. Returns `{ok, NewViewId, PageHTML, Observed}`. The WS
-handler sends one frame: the old page's pushes queued ahead of the live process's barrier, their
-ops first, then `[OP_REPLACE, OldViewId, PageHTML]` (their effects are dropped with a log line, see
-`handle_info/2` above). Browser back/forward also triggers navigate via `popstate`.
+order, not parent-before-child. Then the new handler is mounted and gen_server state is reset.
+Returns `{ok, NewViewId, PageHTML, Observed}`. The WS handler sends one frame: the old page's pushes
+queued ahead of the live process's barrier, their ops first, then `[OP_REPLACE, OldViewId,
+PageHTML]` (their effects are dropped with a log line, see `handle_info/2` above). Browser
+back/forward also triggers navigate via `popstate`.
 
-**SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS sends
-`["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for navigate, then
-compares the resolved handler against the tracked root `handler`: same handler -> `arizona_live:patch/2`
-(the root's `handle_update/3` runs, then a diff-in-place, returning `{ok, Ops, Effects}` -- no
-unmount/remount/`OP_REPLACE`); different handler -> falls back to the navigate/replace path above. The
-client tags the history entry (`_azNav`) and stamps the outgoing entry so back/forward replays the
-patch, keeping live chrome across the edge. See "SPA navigate / patch route resolution".
+**SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS
+sends `["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for
+navigate, then compares the resolved handler against the tracked root `handler`: same handler ->
+`arizona_live:patch/2` (the root's `handle_update/3` runs, then a diff-in-place, returning `{ok,
+Ops, Effects}` -- no unmount/remount/`OP_REPLACE`); different handler -> falls back to the
+navigate/replace path above. The client tags the history entry (`_azNav`) and stamps the outgoing
+entry so back/forward replays the patch, keeping live chrome across the edge. See "SPA navigate /
+patch route resolution".
 
 **Stateful children:** `arizona_template:stateful(Handler, Props)` returns a descriptor map. During
 `eval_val_v/2`, the engine checks if the child is already in the views map -- if so, calls
@@ -1707,8 +1708,8 @@ render(Bindings) ->
 
 Use the **macro**, not `maps:get(inner_content, Bindings)`: the parse transform recognizes
 `?inner_content` as a block, which is what marks the whole layout `az-nodiff` (a layout renders once
-at SSR and is never diffed, so it needs no `az` targets). A raw `maps:get` is invisible to it, so the
-layout keeps diff markers and the page lands in an ordinary escaping value slot.
+at SSR and is never diffed, so it needs no `az` targets). A raw `maps:get` is invisible to it, so
+the layout keeps diff markers and the page lands in an ordinary escaping value slot.
 
 `az-nodiff` -- explicit or a layout's implicit one -- inherits downward through the compile unit:
 conditional-branch templates, nested `?html`, `?each` item templates (at any depth), hoisted
@@ -1723,22 +1724,22 @@ view receives it. A `?stateless` callback is a separate compile unit and keeps i
 nothing else does.
 
 A slot whose current value is a nodiff template still diffs as a slot: the server decides whether
-the region exists and which one it is, the client owns what is inside. See
+the az-nodiff element exists and which one it is, the client owns what is inside. See
 [Embedding client-side components](#embedding-client-side-components).
 
 The page arrives as an **opaque nested template** (`#{s := [Page], d := []}`), not iodata and not a
 binary. That is what lets a content slot splice it verbatim rather than copying and
 UTF-8-re-decoding the whole page once per layout layer. Consequences: it belongs in a content slot
 whole -- fine in a `case` tail or handed to a child as a prop, but `iolist_size/1` on it raises
-`badarg`, and in an **attribute** value it raises `bad_template_value` carrying the whole page in the
-error term. `az:inner_content/1` documents the full set of accepted and rejected placements;
+`badarg`, and in an **attribute** value it raises `bad_template_value` carrying the whole page in
+the error term. `az:inner_content/1` documents the full set of accepted and rejected placements;
 `arizona_render_SUITE`'s `ssr_inner_content_*` cases pin them.
 
 ## Embedding client-side components
 
-An `az-nodiff` region is **rendered by the server once, then owned by the client**. That is the
+An `az-nodiff` element is **rendered by the server once, then owned by the client**. That is the
 seam for a component another library draws -- a chart, a map, a React or Svelte island: mount it
-from an `az_hook` on the region's root, and the server never touches its DOM again.
+from an `az_hook` on the az-nodiff element's root, and the server never touches its DOM again.
 
 ```erlang
 render(Bindings) ->
@@ -1771,27 +1772,29 @@ hooks.Chart = {
 
 **The rules.**
 
-1. Nothing inside a region is ever patched: no op targets it, and its dynamics are not evaluated
-   once it is on screen.
-2. The server still decides whether the region exists. The slot holding it diffs like any other:
-   it can hide the region, show it, or switch it to another one. A switch replaces the slot through
-   its markers, so the old widget's `destroyed()` runs while its element is still attached and the
-   new one's `mounted()` runs after.
-3. The same region chosen again keeps the existing DOM untouched, even when the values it was
-   rendered from changed. It is never re-rendered.
+1. Nothing inside an az-nodiff element is ever patched: no op targets it, and its dynamics are not
+   evaluated once it is on screen.
+2. The server still decides whether the az-nodiff element exists. The slot holding it diffs like any
+   other: it can hide the az-nodiff element, show it, or switch it to another one. A switch replaces
+   the slot through its markers, so the old widget's `destroyed()` runs while its element is still
+   attached and the new one's `mounted()` runs after.
+3. The same az-nodiff element chosen again keeps the existing DOM untouched, even when the values it
+   was rendered from changed. It is never re-rendered.
 
-**What "the same region" means.** A region is identified by its template's fingerprint, the
-conditional branch (clause) that produced it, and an optional `az_key` on its root. Two clauses
-that produce identical markup -- or call the same helper, `chart(~"line")` and `chart(~"bar")`
--- are two regions, so moving from one to the other remounts. The values a region was rendered
-from are deliberately not part of its identity: that would remount the widget, and destroy its
-state, on every change. When a change *should* remount (a different dataset), put that value in
-`az_key`: a new key value replaces the region, and the key's reads are dependencies of the slot.
-A child view whose own root is `az-nodiff` is identified by its id; a new id replaces it.
+**What "the same az-nodiff element" means.** An az-nodiff element is identified by its template's
+fingerprint, the conditional branch (clause) that produced it, and an optional `az_key` on its root.
+Two clauses that produce identical markup -- or call the same helper, `chart(~"line")` and
+`chart(~"bar")` -- are two az-nodiff elements, so moving from one to the other remounts. The values
+an az-nodiff element was rendered from are deliberately not part of its identity: that would remount
+the widget, and destroy its state, on every change. When a change *should* remount (a different
+dataset), put that value in `az_key`: a new key value replaces the az-nodiff element, and the key's
+reads are dependencies of the slot. A child view whose own root is `az-nodiff` is identified by its
+id; a new id replaces it.
 
-The branch is taken from the conditional in the region's **own** slot, not from any conditional
-above it. When a switch higher up lands on a wrapper with the same statics, the diff descends into
-the wrapper and the region's slot still chooses the same branch, so the region is kept:
+The branch is taken from the conditional in the az-nodiff element's **own** slot, not from any
+conditional above it. When a switch higher up lands on a wrapper with the same statics, the diff
+descends into the wrapper and the az-nodiff element's slot still chooses the same branch, so the
+az-nodiff element is kept:
 
 ```erlang
 case ?get(tab) of
@@ -1808,59 +1811,65 @@ names what changed (`{az_key, ?get(tab)}`).
 `mounted()`); the server-rendered children are a placeholder for the first paint. Later updates go
 to the widget, not through the diff: return `arizona_js:dispatch_event(~"chart:series", Payload)`
 from a handler and let the hook listen for it on `document`, or remount with a new `az_key`. The
-widget talks back with `this.pushEvent(name, payload)`. Reads inside a region are not tracked on
-its slot -- they can never patch -- so only the reads that choose the region (and its `az_key`)
-re-run the slot. When that slot re-runs and lands on the same region, the check runs before the
-region is evaluated, so it costs O(1) whatever the region's size. Paths that re-evaluate a whole
-enclosing template -- a plain-list `?each` item, a wrapper the diff descends into, `diff/3` --
-evaluate the region and then compare it, so they cost the region's size; the result is the same
-(no op, child views kept).
+widget talks back with `this.pushEvent(name, payload)`. Reads inside an az-nodiff element are not
+tracked on its slot -- they can never patch -- so only the reads that choose the az-nodiff element
+(and its `az_key`) re-run the slot. When that slot re-runs and lands on the same az-nodiff element,
+the check runs before the az-nodiff element is evaluated, so it costs O(1) whatever the az-nodiff
+element's size. Paths that re-evaluate a whole enclosing template -- a plain-list `?each` item, a
+wrapper the diff descends into, `diff/3` -- evaluate the az-nodiff element and then compare it, so
+they cost the az-nodiff element's size; the result is the same (no op, child views kept).
 
-**Child views inside a region** take their props at mount only. A region is never re-rendered, so
-a parent-driven `handle_update/3` would move the child's state past a DOM no op will ever touch;
-the same handler at the same id keeps its view on every path the region is reached through (a
-branch, a `?stateless` body, a list item). That holds when a switch replaces the region too: a
-child with the same handler at the same id keeps its state, and the new props are ignored. A child
-still handles its own events.
+**Child views inside an az-nodiff element** take their props at mount only. An az-nodiff element is
+never re-rendered, so a parent-driven `handle_update/3` would move the child's state past a DOM no
+op will ever touch; the same handler at the same id keeps its view on every path the az-nodiff
+element is reached through (a branch, a `?stateless` body, a list item). That holds when a switch
+replaces the az-nodiff element too: a child with the same handler at the same id keeps its state,
+and the new props are ignored. A child still handles its own events.
 
-**Wholesale re-renders keep the region.** Some changes re-render the markup around a region
-whole instead of patching it: a plain-list `?each` that falls back to its container `?OP_TEXT`
-(always, when its items are themselves regions), a stream's container render, and the
-`?OP_REPLACE` that resyncs a view after a reconnect. The new markup holds a fresh copy of every
-region in it, so the client carries the old ones over: each region's root names its identity in an
-`az-region` attribute (the fingerprint, branch and `az_key` above, spelled by
-`arizona_template:region_token/3`), and a region whose old and new copies sit at the same place
-under the same name keeps its existing DOM -- the old element is moved into the new markup in place
-of the new copy, and its hook sees neither `destroyed()` nor `mounted()`. "The same place" is the
-slot that holds it plus, on the way up, its own and each enclosing element's `az-key` and view id,
-so a region in a keyed item follows its key and a child view whose root is a region is kept only
-under the same id. A region the new render does not name there is replaced as before.
+**Wholesale re-renders keep the az-nodiff element.** Some changes re-render the markup around an
+az-nodiff element whole instead of patching it: a plain-list `?each` that falls back to its
+container `?OP_TEXT` (always, when its items are themselves az-nodiff elements), a stream's
+container render, and the `?OP_REPLACE` that resyncs a view after a reconnect. The new markup holds
+a fresh copy of every az-nodiff element in it, so the client carries the old ones over: each
+az-nodiff element's root keeps its directive in the HTML with its identity as the value,
+`az-nodiff="TOKEN"` (the fingerprint, branch and `az_key` above, spelled by
+`arizona_template:nodiff_token/3`), and an az-nodiff element whose old and new copies sit at the
+same place under the same name keeps its existing DOM -- the old element is moved into the new
+markup in place of the new copy, and its hook sees neither `destroyed()` nor `mounted()`. "The same
+place" is the slot that holds it plus, on the way up, its own and each enclosing element's `az-key`
+and view id, so an az-nodiff element in a keyed item follows its key and a child view whose root is
+an az-nodiff element is kept only under the same id. An az-nodiff element the new render does not
+name there is replaced as before.
 
 **List items are kept only when keyed.** Unkeyed items share one template, so nothing tells which
 old item a new one is -- that is exactly why such a list re-renders wholesale. An unkeyed `?each`
-item whose root is a region is therefore not named at all, and when two regions inside unkeyed
+item whose root is an az-nodiff element therefore keeps a bare `az-nodiff` -- client-owned, never
+carried over, and nothing inside it is either -- and when two az-nodiff elements inside unkeyed
 items share a name and place, neither is kept: both remount for their own item. Give the item an
-`az_key` (`{li, ['az-nodiff', {az_key, Id}], [...]}`) and its widget follows it through adds,
-drops, reorders and a reconnect.
+`az_key` (`{li, ['az-nodiff', {az_key, Id}], [...]}`) and its widget follows it through adds, drops,
+reorders and a reconnect.
 
-A reconnect mounts the view afresh, so what survives it is decided by what the fresh mount
-renders: a region its initial state chooses again keeps its widget and client state; one chosen
-by state the old process had built up (another branch, a later `az_key`) is replaced by the region
-the fresh state names. A navigate is a new page and keeps nothing.
+A reconnect mounts the view afresh, so what survives it is decided by what the fresh mount renders:
+an az-nodiff element its initial state chooses again keeps its widget and client state; one chosen
+by state the old process had built up (another branch, a later `az_key`) is replaced by the
+az-nodiff element the fresh state names. A navigate is a new page and keeps nothing.
 
 **Caveats.**
 
-- A kept region is moved, not re-created, so its element leaves the document for an instant:
-  focus inside it is lost, and so is the state of anything the platform resets on removal (an
-  `<iframe>` reloads, media restarts). Its JavaScript state, form values and `?local` values stay.
-- A region holding a child view is replaced by a reconnect anyway: the reconnect mounted that view
-  afresh, and the DOM it left behind no longer matches its state.
-- A switch above the region's slot to a wrapper with different statics moves the region into a
-  different slot, so it is remounted; a wrapper with the same statics keeps it (see "What the same
-  region means"), and `az_key` remounts it.
-- Only a template whose single root element carries `az-nodiff` is named. A multi-root nodiff
-  fragment, and the `?native` and `?terminal` targets (whose clients keep no regions), are
-  re-created by a wholesale re-render.
+- A kept az-nodiff element is moved, not re-created, so its element leaves the document for an
+  instant: focus inside it is lost, and so is the state of anything the platform resets on removal
+  (an `<iframe>` reloads, media restarts). Its JavaScript state, form values and `?local` values
+  stay.
+- An az-nodiff element holding a child view is replaced by a reconnect anyway: the reconnect mounted
+  that view afresh, and the DOM it left behind no longer matches its state.
+- A switch above the az-nodiff element's slot to a wrapper with different statics moves the
+  az-nodiff element into a different slot, so it is remounted; a wrapper with the same statics keeps
+  it (see "What the same az-nodiff element means"), and `az_key` remounts it.
+- Only a template whose single root element carries `az-nodiff` is named. A root of a multi-element
+  nodiff fragment keeps a bare `az-nodiff`, and the `?native` and `?terminal` targets (whose clients
+  keep no az-nodiff elements) emit none; all are re-created by a wholesale re-render.
+- The directive is written bare. Its value in the HTML is the compiler's, so an authored one
+  (`{'az-nodiff', V}`, `{az_nodiff, true}`) is a compile error.
 - The first paint is the server's placeholder. Mount the component from the hook's `mounted()`
   rather than hydrating the server markup; the server never rendered the component itself.
 - `az-*` attributes inside the widget's own DOM are markup Arizona did not render: the client
@@ -1874,18 +1883,18 @@ The client announces connection changes as two `CustomEvent`s on `document`, in 
 as `arizona:fetch-error`. They are for client code the server cannot reach while the socket is
 down -- a hooked widget, an embedded component, a status badge:
 
-- **`arizona:disconnected`**, detail `{code, reloadInMs}` -- the connection was lost. Fired
-  **once per outage, and again when a page reload gets scheduled during it**: the first close of
-  a live (or not yet live) page announces the outage, and the worker's reconnect attempts that
-  fail while the server is still down report closes of their own, which announce nothing until a
-  mount has ended the outage -- unless one is a `4501` that schedules the reload, the moment a
-  widget has to save its state. Write listeners to be idempotent. `code` is the close code the
-  browser reports: the server's (`1001` drain, `4500` crash, `4501` mount failure) or, for a connection
-  that ended without a close frame -- a network drop, a failed handshake, a first connect that
-  never opened -- `1006`. `reloadInMs` is the delay of the page reload this `4501` scheduled,
-  `null` otherwise (including a `4501` while a reload is already pending). A `1000` close (a
-  deliberate end, which the client does not reconnect after), `disconnect()`, and `pagehide` fire
-  nothing: the last two terminate the worker, so no close reaches the page.
+- **`arizona:disconnected`**, detail `{code, reloadInMs}` -- the connection was lost. Fired **once
+  per outage, and again when a page reload gets scheduled during it**: the first close of a live (or
+  not yet live) page announces the outage, and the worker's reconnect attempts that fail while the
+  server is still down report closes of their own, which announce nothing until a mount has ended
+  the outage -- unless one is a `4501` that schedules the reload, the moment a widget has to save
+  its state. Write listeners to be idempotent. `code` is the close code the browser reports: the
+  server's (`1001` drain, `4500` crash, `4501` mount failure) or, for a connection that ended
+  without a close frame -- a network drop, a failed handshake, a first connect that never opened --
+  `1006`. `reloadInMs` is the delay of the page reload this `4501` scheduled, `null` otherwise
+  (including a `4501` while a reload is already pending). A `1000` close (a deliberate end, which
+  the client does not reconnect after), `disconnect()`, and `pagehide` fire nothing: the last two
+  terminate the worker, so no close reaches the page.
 - **`arizona:connected`**, detail `{reconnect}` -- a view mounted on a new socket, fired once the
   ops of the frame that proves it (the first frame of a first connect, the resync of a reconnect)
   have been applied -- after a view transition's deferred update when one wraps that frame, and
@@ -2019,11 +2028,11 @@ callback's body propagate untagged.
 
 `handle_update/3` reacts to new props arriving from an enclosing context: a parent re-rendering an
 embedded child with new `Props`, **or** a `patch` navigation delivering the new route's params to a
-route root (navigation as the root's prop source). If not exported, the framework merges `Props` into
-`Bindings` directly (`call_handle_update/4`). `Effects` is the accumulator of effects already queued
-for this update cycle; return it extended with this callback's own effects (the default returns it
-verbatim) -- so a patch reaction can set the document title or redirect, threaded without any
-caller-side concatenation. See "SPA navigate / patch route resolution".
+route root (navigation as the root's prop source). If not exported, the framework merges `Props`
+into `Bindings` directly (`call_handle_update/4`). `Effects` is the accumulator of effects already
+queued for this update cycle; return it extended with this callback's own effects (the default
+returns it verbatim) -- so a patch reaction can set the document title or redirect, threaded without
+any caller-side concatenation. See "SPA navigate / patch route resolution".
 
 `unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional
 or navigate) or the live process is shutting down. Use it to release resources (timers, external
@@ -2153,8 +2162,8 @@ defined elsewhere in the module inherits it too.
 An `?each` is marked once, at the place it appears in the template that renders it. A **hoisted**
 `Items = ?each(...)` is bound outside every template, where the pass can only give it the default
 target and context, so that marking is provisional: the hoisted value has it stripped
-(`prepare_inline/2`) and is marked again where `Items` is spliced in (`splice_vars/4`, at the root of
-the `?html`/`?native`/`?terminal` that uses it, or the target and context of the `?each` whose
+(`prepare_inline/2`) and is marked again where `Items` is spliced in (`splice_vars/4`, at the root
+of the `?html`/`?native`/`?terminal` that uses it, or the target and context of the `?each` whose
 callback or source uses it). It therefore compiles exactly as the same `?each` written at the use
 site -- native nodes under `?native`, foreign content inside `<svg>` -- and the splice is checked
 like written code, so a hoisted `?html` used inside `?native` is a `cross_target_nesting` compile
@@ -2221,18 +2230,18 @@ ordinary `compile_children/3` walk, so each dynamic keeps its own policy (`raw` 
 `raw_text/2` neutralization, `escapable` HTML-escaped via `esc_spec`).
 
 **An executable `<script>` is the one case where updating is questionable, and `az-nodiff` is the
-answer.** A script element carries an "already started" flag, so mutating its text after it has
-run does not re-execute it: the element's source would read one thing while the code in effect
-says another. That is a browser rule, not a framework choice. The update is still right for the
-sanctioned use -- a `?raw(json:encode(Data))` data island, whose consumer reads `textContent`
-later -- so the fold applies by default and the fold guard honours `az-nodiff`, which keeps an
-executable script markerless and render-once exactly as before.
-The backend classifies the tag via the `arizona_renderer` `raw_text_kind/2` callback: `raw` (`script`/`style`)
-renders the value **verbatim** (the browser decodes no character references there, so HTML-escaping
-would corrupt it -- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL
-correct); `escapable` (`textarea`/`title`) HTML-escapes a scalar (references *are* decoded there)
-but is still markerless. Because a `raw` slot is spliced byte for byte and escaping is *impossible*
-there, the parse transform **requires** the value to carry a literal `?raw(...)` at the slot
+answer.** A script element carries an "already started" flag, so mutating its text after it has run
+does not re-execute it: the element's source would read one thing while the code in effect says
+another. That is a browser rule, not a framework choice. The update is still right for the
+sanctioned use -- a `?raw(json:encode(Data))` data island, whose consumer reads `textContent` later
+-- so the fold applies by default and the fold guard honours `az-nodiff`, which keeps an executable
+script markerless and render-once exactly as before. The backend classifies the tag via the
+`arizona_renderer` `raw_text_kind/2` callback: `raw` (`script`/`style`) renders the value
+**verbatim** (the browser decodes no character references there, so HTML-escaping would corrupt it
+-- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL correct);
+`escapable` (`textarea`/`title`) HTML-escapes a scalar (references *are* decoded there) but is still
+markerless. Because a `raw` slot is spliced byte for byte and escaping is *impossible* there, the
+parse transform **requires** the value to carry a literal `?raw(...)` at the slot
 (`dynamic_in_raw_text`): an unmarked `?get` in a `<script>` would otherwise be the one content
 position where user data reaches the output unescaped, free to close the JavaScript string it sits
 in. Literal script/CSS text is static, not a slot, so it is unaffected; `escapable` elements escape
@@ -2242,20 +2251,20 @@ tokenizer -- a trusted JSON blob's own string data can still spell an element br
 **tag**, because which sequences break out is a property of that element's tokenizer state rather
 than of raw text at large. `</script`/`</style` becomes `<\/script` in both elements -- strictly
 only the *appropriate* end tag (the one whose name matches the element being parsed) closes a
-raw-text element, so `</style>` inside a `<script>` is ordinary text, but both names are
-neutralized in both as a harmless superset that keeps this half of the rule tag-independent.
-`<!--` and `<script` (which together reach script-data-**double**-escaped, where the
-element's own `</script>` stops closing it and the rest of the document is swallowed) have their
-`<` rewritten as `\u003c`, but **only inside `<script>`**: `<style>` content is RAWTEXT, which has
-no escaped state, so rewriting them there would defend nothing while corrupting the stylesheet
-(`\u003c` is a JS/JSON escape a CSS parser reads as `u003c`, and `<!--`/`-->` are legitimate CSS
-CDO/CDC tokens). Every rewrite therefore decodes back to the original in the context it is applied
-to. It covers every shape `to_bin/1` can turn into attacker-chosen bytes: a binary, an **atom**
-(rendered with `atom_to_binary`, so it carries bytes exactly like a binary), **chardata** -- the
-documented remedy `?raw(json:encode(Data))` hands it an iolist, not a binary, so a binary-only
-guard would wave a breakout through on the very form the compile error recommends -- and a `?raw`
-wrapping any of those. An integer, a float and an effect command (whose JSON `arizona_effect:encode/1`
-already HTML-escapes) cannot spell a sequence, so they pass through.
+raw-text element, so `</style>` inside a `<script>` is ordinary text, but both names are neutralized
+in both as a harmless superset that keeps this half of the rule tag-independent. `<!--` and
+`<script` (which together reach script-data-**double**-escaped, where the element's own `</script>`
+stops closing it and the rest of the document is swallowed) have their `<` rewritten as `\u003c`,
+but **only inside `<script>`**: `<style>` content is RAWTEXT, which has no escaped state, so
+rewriting them there would defend nothing while corrupting the stylesheet (`\u003c` is a JS/JSON
+escape a CSS parser reads as `u003c`, and `<!--`/`-->` are legitimate CSS CDO/CDC tokens). Every
+rewrite therefore decodes back to the original in the context it is applied to. It covers every
+shape `to_bin/1` can turn into attacker-chosen bytes: a binary, an **atom** (rendered with
+`atom_to_binary`, so it carries bytes exactly like a binary), **chardata** -- the documented remedy
+`?raw(json:encode(Data))` hands it an iolist, not a binary, so a binary-only guard would wave a
+breakout through on the very form the compile error recommends -- and a `?raw` wrapping any of
+those. An integer, a float and an effect command (whose JSON `arizona_effect:encode/1` already
+HTML-escapes) cannot spell a sequence, so they pass through.
 
 **Known limit -- the check is per-slot.** Each dynamic is neutralized on its own, so two
 **adjacent** `?raw` slots in one raw-text element whose halves are both attacker-controlled
@@ -2397,12 +2406,12 @@ search-and-replace blindly:
   entries rather than bytes; scoping rebuilds exactly those through the backend's `az_attr/1` /
   `text_slot_open/1` with the fingerprint prepended, and copies literal segments through untouched.
   The fingerprint is still taken over the *unscoped* bytes, so it is unchanged by this.
-- **Runtime** (the `scope_static/3` renderer callback) has only bytes, so it anchors on the template's
-  own fingerprint: every framework `az` in a compiled static is `<Fp>-<id>`, so the backend matches
-  `az="<Fp>` / `<!--az:<Fp>` (HTML) or `"az":"<Fp>` (native), never the bare marker opener. After a
-  pass the statics read `<Prefix>-<Fp>-<id>` and `f` becomes `<Prefix>-<Fp>`, so re-scoping an
-  already-scoped snapshot anchors correctly too. The terminal backend writes no markers, so its
-  `scope_static/3` is the identity.
+- **Runtime** (the `scope_static/3` renderer callback) has only bytes, so it anchors on the
+  template's own fingerprint: every framework `az` in a compiled static is `<Fp>-<id>`, so the
+  backend matches `az="<Fp>` / `<!--az:<Fp>` (HTML) or `"az":"<Fp>` (native), never the bare marker
+  opener. After a pass the statics read `<Prefix>-<Fp>-<id>` and `f` becomes `<Prefix>-<Fp>`, so
+  re-scoping an already-scoped snapshot anchors correctly too. The terminal backend writes no
+  markers, so its `scope_static/3` is the identity.
 
 ## Server integration
 
@@ -2491,8 +2500,8 @@ the tool/resource/prompt registry, the session lifecycle, and the Origin/auth po
 MCP's Streamable HTTP maps onto roadrunner response shapes with no new transport feature:
 
 - **POST** -- the client sends one JSON-RPC message. The handler decodes and dispatches; it returns
-  a buffered `application/json` reply, or -- for a `tools/call` carrying a `_meta.progressToken` from
-  a client that accepts `text/event-stream` -- answers as an SSE stream (the tool's
+  a buffered `application/json` reply, or -- for a `tools/call` carrying a `_meta.progressToken`
+  from a client that accepts `text/event-stream` -- answers as an SSE stream (the tool's
   `notifications/progress`, then the result, then close).
 - **GET** (session mode) -- opens the long-lived server-to-client SSE channel as
   `{loop, 200, [event-stream headers], State}`; `handle_info/3` forwards server-initiated
@@ -2507,12 +2516,12 @@ frame to the wire with no coalescing, so a `notifications/*` message reaches the
 
 When a token-bearing `tools/call` streams (the client accepted SSE), the tool runs in a worker
 process so the connection loop is free to push its progress as it arrives. In **stateless** mode the
-loop spawns the worker; in **session** mode the session spawns it (so the session stays responsive to
-a cancel) and the worker reports its threaded-back state on completion. Either way the tool emits via
-the `Ctx` handed to `handle_tool/4` -- `arizona_mcp:progress/2,3` relays each `notifications/progress`
-to the POST's loop, which pushes it; the final result is the last frame, then the loop
-stops. The context is inert (a no-op) for a non-streaming call, so a tool can always call
-`progress/2,3`.
+loop spawns the worker; in **session** mode the session spawns it (so the session stays responsive
+to a cancel) and the worker reports its threaded-back state on completion. Either way the tool emits
+via the `Ctx` handed to `handle_tool/4` -- `arizona_mcp:progress/2,3` relays each
+`notifications/progress` to the POST's loop, which pushes it; the final result is the last frame,
+then the loop stops. The context is inert (a no-op) for a non-streaming call, so a tool can always
+call `progress/2,3`.
 
 **A JSON-RPC object is encoded by whoever produces it, never by the process that writes it to the
 wire.** `json:encode/1` rejects a binary that is not valid UTF-8, and a callback module can return
@@ -2530,8 +2539,8 @@ own a session-keyed pubsub subscription and run no app code), so the session pro
 app code -- it stays responsive to cancels, idle-reap, and server pushes even while a tool runs.
 **Buffered** (non-streaming) requests are served through a one-at-a-time queue (so their state
 threading stays serialized) and replied to asynchronously; a request that outlives
-`request_timeout_ms` (default 60s) frees the client with a -32603 while the session keeps running it.
-A **streaming** `tools/call` runs concurrently in its own worker, reading a state snapshot and
+`request_timeout_ms` (default 60s) frees the client with a -32603 while the session keeps running
+it. A **streaming** `tools/call` runs concurrently in its own worker, reading a state snapshot and
 threading nothing back -- so the serialized buffered queue is the only path that mutates session
 state, and nothing races on it.
 
@@ -2552,12 +2561,11 @@ run forever.
 Without `sessions => true` every request is self-contained: the handler runs `init/1` per request,
 dispatches, and discards the state. With `sessions => true`, `initialize` mints an `Mcp-Session-Id`
 and starts an `arizona_mcp_session` process (owned by `arizona_mcp_sup`, not linked to the
-connection, so it outlives any single request); later requests carrying that id route to the
-process via `arizona_mcp_session_registry`, which runs them one at a time (each in a worker, so a
-slow tool never blocks the session) against its held state. A stateful callback's returned state
-threads back into the session, so the session is genuinely stateful across requests; a crash answers
-`-32603` and leaves the prior state intact. An idle session is reaped after `session_ttl_ms` (default
-5 minutes).
+connection, so it outlives any single request); later requests carrying that id route to the process
+via `arizona_mcp_session_registry`, which runs them one at a time (each in a worker, so a slow tool
+never blocks the session) against its held state. A stateful callback's returned state threads back
+into the session, so the session is genuinely stateful across requests; a crash answers `-32603` and
+leaves the prior state intact. An idle session is reaped after `session_ttl_ms` (default 5 minutes).
 
 ### Resumability and server push
 
@@ -2584,18 +2592,18 @@ optional `resource_templates/1` callback backs `resources/templates/list` (URI t
 
 ### Logging and completion
 
-`logging/setLevel` stores a minimum severity in the session map (`log_min_severity`, default `info`),
-threaded back like any other state; `arizona_mcp:log/3` resolves the level severity caller-side and
-casts to the session, which emits a `notifications/message` only when the message is at or above the
-stored minimum. `completion/complete` decodes the ref (`{prompt, Name}` | `{resource, Uri}`) and the
-partial argument, calls the optional `complete/3` callback, and caps the returned values at 100,
-setting `hasMore`. Both are capability-gated (`logging` / `completions`).
+`logging/setLevel` stores a minimum severity in the session map (`log_min_severity`, default
+`info`), threaded back like any other state; `arizona_mcp:log/3` resolves the level severity
+caller-side and casts to the session, which emits a `notifications/message` only when the message is
+at or above the stored minimum. `completion/complete` decodes the ref (`{prompt, Name}` |
+`{resource, Uri}`) and the partial argument, calls the optional `complete/3` callback, and caps the
+returned values at 100, setting `hasMore`. Both are capability-gated (`logging` / `completions`).
 
 ### Pagination
 
 The `*/list` methods paginate with opaque cursors, framework-side: the `tools/1` / `resources/1` /
-`prompts/1` callbacks keep returning their full list, and the transport slices it by an offset cursor
-(base64 of the offset), emitting `nextCursor` when more remain. The page size is the route's
+`prompts/1` callbacks keep returning their full list, and the transport slices it by an offset
+cursor (base64 of the offset), emitting `nextCursor` when more remain. The page size is the route's
 `page_size` opt (default 50), so a list that fits returns in one page with no cursor. A malformed
 cursor is a `-32602`; an offset past the end returns an empty final page. The callbacks never see a
 cursor. Because the cursor is an offset, it assumes a stable list across pages -- a list mutated

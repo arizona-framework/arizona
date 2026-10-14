@@ -40,7 +40,7 @@ payloads when sending updates over WebSocket.
 Templates compiled with `az-nodiff` carry `diff => false` and dynamics with
 `Az = undefined`. The diff engine never evaluates such a template's own
 dynamics once rendered (a root short-circuits; a slot keeps its first render
-while it holds the same region), so `undefined` Az values never reach
+while it holds the same az-nodiff element), so `undefined` Az values never reach
 op-code targets.
 """.
 

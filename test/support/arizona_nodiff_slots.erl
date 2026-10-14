@@ -1,6 +1,6 @@
--module(arizona_nodiff_regions).
+-module(arizona_nodiff_slots).
 -moduledoc """
-Slots holding an `az-nodiff` region: the server decides whether the region exists
+Slots holding an az-nodiff element: the server decides whether the az-nodiff element exists
 and which branch produced it, the client owns its DOM once it is there.
 """.
 -include("arizona_stateless.hrl").
@@ -12,7 +12,7 @@ and which branch produced it, the client owns its DOM once it is there.
 -export([keyed/1]).
 -export([child_paths/1]).
 -export([root_child/1]).
--export([region_body/1]).
+-export([nodiff_body/1]).
 -export([widget/1]).
 -export([list_widgets/1]).
 -export([stream_widgets/1]).
@@ -80,7 +80,7 @@ one_branch(Bindings) ->
         ]}
     ).
 
-%% A switch above the region's own slot, between wrappers with the same statics,
+%% A switch above the az-nodiff element's own slot, between wrappers with the same statics,
 %% with and without an `az_key` naming the switch.
 -spec wrapper_switch(az:bindings()) -> az:template().
 wrapper_switch(Bindings) ->
@@ -121,7 +121,7 @@ keyed_chart_rt(Type) ->
     Label = <<"chart ", Type/binary>>,
     ?html({'div', ['az-nodiff', {az_key, Type}], [Label]}).
 
-%% A child view inside a nodiff region, reached through a branch, a `?stateless`
+%% A child view inside a az-nodiff element, reached through a branch, a `?stateless`
 %% body and a list item.
 -spec child_paths(az:bindings()) -> az:template().
 child_paths(Bindings) ->
@@ -135,11 +135,11 @@ child_paths(Bindings) ->
                 false ->
                     <<>>
             end,
-            ?stateless(fun region_body/1, #{n => ?get(n)}),
+            ?stateless(fun nodiff_body/1, #{n => ?get(n)}),
             {ul, [], [
                 ?each(
                     fun(Item) ->
-                        {li, [], [?stateless(fun region_item/1, Item)]}
+                        {li, [], [?stateless(fun nodiff_item/1, Item)]}
                     end,
                     ?get(items)
                 )
@@ -156,15 +156,15 @@ root_child(Bindings) ->
         ]}
     ).
 
--spec region_body(az:bindings()) -> az:template().
-region_body(Bindings) ->
+-spec nodiff_body(az:bindings()) -> az:template().
+nodiff_body(Bindings) ->
     ?html(
         {section, ['az-nodiff'], [
             ?stateful(arizona_counter, #{id => ~"in_stateless", count => ?get(n)})
         ]}
     ).
 
-region_item(Bindings) ->
+nodiff_item(Bindings) ->
     ?html(
         {section, ['az-nodiff'], [
             ?stateful(arizona_counter, #{id => ?get(id), count => ?get(n)})

@@ -933,60 +933,61 @@ function forEachElementBetweenMarkers(startMarker, fn) {
 }
 
 // ---------------------------------------------------------------------------
-// Kept az-nodiff regions. A region is rendered by the server once and then owned
+// Kept az-nodiff elements. An az-nodiff element is rendered by the server once and then owned
 // by the client (a widget mounted from its `az-hook`). When something around it is
 // re-rendered wholesale -- a container `OP_TEXT`, or the `OP_REPLACE` that resyncs
-// a reconnected view -- the new markup holds a fresh copy of every region in it.
-// The server names each region's identity on its root (`az-region`, built by
-// `arizona_template:region_token/3` from the fingerprint, branch and `az_key` the
-// diff keeps a region by), and here a region whose old and new copies sit at the
+// a reconnected view -- the new markup holds a fresh copy of every az-nodiff element in it.
+// The server names each az-nodiff element's identity as the value of the `az-nodiff` attribute
+// on its root (built by `arizona_template:nodiff_token/3` from the fingerprint,
+// branch and `az_key` the diff keeps an az-nodiff element by); a bare `az-nodiff` marks
+// client-owned markup that cannot be told apart from its siblings (an unkeyed list
+// item) and is never kept. Here an az-nodiff element whose old and new copies sit at the
 // same place under the same name is carried over: the old DOM moves into the new
 // markup in place of the new copy, and its hooks see neither `destroyed()` nor
 // `mounted()`. Anything else is replaced as before.
 //
-// "The same place" is read off the DOM, where the addresses already are: the slot
-// marker enclosing each element on the way up, and the `az-key` / view id of the
-// region and each ancestor. A slot holds one value, so two regions under the same
-// name and place are unkeyed items of a plain list -- which nothing can match up,
-// so they are never kept.
+// "The same place" is read off the DOM, where the addresses already are: the slot marker enclosing
+// each element on the way up, and the `az-key` / view id of the az-nodiff element and each
+// ancestor. A slot holds one value, so two az-nodiff elements under the same name and place are
+// unkeyed items of a plain list -- which nothing can match up, so they are never kept.
 // ---------------------------------------------------------------------------
 
-/** No region kept. Shared, never written. */
-const NO_REGIONS = /** @type {ReadonlySet<Element>} */ (new Set());
+/** No az-nodiff element kept. Shared, never written. */
+const NO_KEPT = /** @type {ReadonlySet<Element>} */ (new Set());
 
-const REGION_ATTR = 'az-region';
+const NODIFF_ATTR = 'az-nodiff';
 
 /**
- * Cheap pre-check: can this markup name a region at all? Keeps the common
+ * Cheap pre-check: can this markup name an az-nodiff element at all? Keeps the common
  * re-render on its original path.
  * @param {string} html
  * @returns {boolean}
  */
-function mayNameRegion(html) {
-    return html.includes(` ${REGION_ATTR}="`);
+function mayNameNodiff(html) {
+    return html.includes(` ${NODIFF_ATTR}="`);
 }
 
 /**
- * Carry the regions in `oldNodes` (the content about to be replaced) over into
- * `frag` (its replacement, not yet inserted): each new region with an old
- * counterpart of the same identity is swapped for it. Returns the kept regions.
+ * Carry the az-nodiff elements in `oldNodes` (the content about to be replaced) over into
+ * `frag` (its replacement, not yet inserted): each new az-nodiff element with an old
+ * counterpart of the same identity is swapped for it. Returns the kept az-nodiff elements.
  *
- * A region holding a live view is not kept on a resync: the reconnect mounted that
+ * An az-nodiff element holding a live view is not kept on a resync: the reconnect mounted that
  * view afresh, so the DOM it left behind no longer matches the server's state.
  * @param {ArrayLike<Node>} oldNodes
  * @param {DocumentFragment} frag
  * @param {boolean} resync
  * @returns {ReadonlySet<Element>}
  */
-function keepRegions(oldNodes, frag, resync) {
-    const fresh = regionsByIdentity(Array.from(frag.childNodes), frag);
-    if (fresh.size === 0) return NO_REGIONS;
+function keepNodiff(oldNodes, frag, resync) {
+    const fresh = nodiffByIdentity(Array.from(frag.childNodes), frag);
+    if (fresh.size === 0) return NO_KEPT;
     const tops = Array.from(oldNodes);
-    const old = regionsByIdentity(tops, /** @type {ParentNode} */ (tops[0].parentNode));
+    const old = nodiffByIdentity(tops, /** @type {ParentNode} */ (tops[0].parentNode));
     const kept = new Set();
     for (const [id, news] of fresh) {
         const olds = old.get(id);
-        // Two regions under one name at one place are items the server could not
+        // Two az-nodiff elements under one name at one place are items the server could not
         // tell apart (it re-renders a list wholesale for exactly that reason), so
         // which old one a new one is cannot be known: keep neither.
         if (olds?.length !== 1 || news.length !== 1) continue;
@@ -999,22 +1000,23 @@ function keepRegions(oldNodes, frag, resync) {
 }
 
 /**
- * The outermost regions under the sibling range `tops` (children of `parent`),
- * grouped by identity in document order. A region inside another is part of it
+ * The outermost az-nodiff elements under the sibling range `tops` (children of `parent`),
+ * grouped by identity in document order. An az-nodiff element inside another is part of it
  * and is not listed. One query over `parent`, not one per top: a list re-render
  * has as many tops as items.
  * @param {Node[]} tops
  * @param {ParentNode} parent
  * @returns {Map<string, Element[]>}
  */
-function regionsByIdentity(tops, parent) {
+function nodiffByIdentity(tops, parent) {
     /** @type {Map<string, Element[]>} */
     const byId = new Map();
     /** @type {Map<Node, string>} */
     const slots = new Map();
     slotsOf(tops, slots);
-    for (const r of parent.querySelectorAll(`[${REGION_ATTR}]`)) {
-        const id = regionIdentity(r, parent, slots);
+    // Every marked root, bare ones too: a named az-nodiff element inside one is part of it.
+    for (const r of parent.querySelectorAll(`[${NODIFF_ATTR}]`)) {
+        const id = nodiffIdentity(r, parent, slots);
         if (id === null) continue;
         const list = byId.get(id);
         if (list) list.push(r);
@@ -1024,22 +1026,24 @@ function regionsByIdentity(tops, parent) {
 }
 
 /**
- * A region's identity: its name plus, for it and each ancestor below `parent`,
- * the slot it sits in and its `az-key` / view id -- the region's own included,
- * since a child view whose root is the region is that view only under its id.
- * Null when an ancestor is itself a region (the outer one carries this one), or
- * when the region is outside the range (`slots` holds the range's tops).
- * @param {Element} region
+ * An az-nodiff element's identity: its name plus, for it and each ancestor below `parent`,
+ * the slot it sits in and its `az-key` / view id -- the az-nodiff element's own included,
+ * since a child view whose root is the az-nodiff element is that view only under its id.
+ * Null when the az-nodiff element is bare (never kept), when an ancestor is itself marked
+ * (the outer one carries this one), or when the az-nodiff element is outside the range
+ * (`slots` holds the range's tops).
+ * @param {Element} marked
  * @param {ParentNode} parent
  * @param {Map<Node, string>} slots
  * @returns {string|null}
  */
-function regionIdentity(region, parent, slots) {
-    let id = /** @type {string} */ (region.getAttribute(REGION_ATTR));
+function nodiffIdentity(marked, parent, slots) {
+    let id = /** @type {string} */ (marked.getAttribute(NODIFF_ATTR));
+    if (id === '') return null;
     /** @type {Element} */
-    let node = region;
+    let node = marked;
     for (;;) {
-        if (node !== region && node.hasAttribute(REGION_ATTR)) return null;
+        if (node !== marked && node.hasAttribute(NODIFF_ATTR)) return null;
         const key = node.getAttribute('az-key') ?? '';
         const view = node.hasAttribute('az-view') ? node.id : '';
         id = `${key}#${view}/${id}`;
@@ -1075,7 +1079,7 @@ function slotsOf(nodes, slots) {
 }
 
 /**
- * `mountHooks` over `root`, skipping the kept regions: their hooks never left,
+ * `mountHooks` over `root`, skipping the kept az-nodiff elements: their hooks never left,
  * and what is inside them is the client's own markup.
  * @param {Element} root
  * @param {ReadonlySet<Element>} kept
@@ -1086,9 +1090,9 @@ function mountHooksOutside(root, kept) {
         return;
     }
     if (!anyHookDefs()) return;
-    // Up from each hook to `root`: a kept region on the way means it is inside one.
-    // Each hook costs its depth, where asking every kept region `contains()` cost
-    // the number of regions -- quadratic over a list of widgets.
+    // Up from each hook to `root`: a kept az-nodiff element on the way means it is inside one.
+    // Each hook costs its depth, where asking every kept az-nodiff element `contains()` cost
+    // the number of az-nodiff elements -- quadratic over a list of widgets.
     const inKept = (/** @type {Element} */ e) => {
         for (let n = /** @type {Element|null} */ (e); n; n = n === root ? null : n.parentElement)
             if (kept.has(n)) return true;
@@ -1110,16 +1114,16 @@ function mountHooksOutside(root, kept) {
 function applyTextOp(el, az, val, isHtml) {
     const marker = findMarker(el, az);
     if (marker) {
-        // A re-rendered slot keeps the az-nodiff regions its new content names again:
+        // A re-rendered slot keeps the az-nodiff elements its new content names again:
         // they move into the new content before the old is torn down.
         let frag = null;
-        let kept = NO_REGIONS;
-        if (isHtml && mayNameRegion(val)) {
+        let kept = NO_KEPT;
+        if (isHtml && mayNameNodiff(val)) {
             /** @type {Node[]} */
             const old = [];
             if (forEachNodeInSlot(marker, (n) => old.push(n))) {
                 frag = parseFragmentIn(marker.parentNode, val);
-                kept = keepRegions(old, frag, false);
+                kept = keepNodiff(old, frag, false);
             }
         }
         forEachElementBetweenMarkers(marker, destroyHooks);
@@ -1263,8 +1267,8 @@ function removeEl(el) {
  *   shape).
  *
  * `resync` marks the batch that resyncs a reconnected view (the first frame after
- * a reconnect): its `OP_REPLACE` keeps the az-nodiff regions the new render names
- * again (`keepRegions`). A navigate's `OP_REPLACE` keeps none -- it is a new page.
+ * a reconnect): its `OP_REPLACE` keeps the az-nodiff elements the new render names
+ * again (`keepNodiff`). A navigate's `OP_REPLACE` keeps none -- it is a new page.
  * @param {Array<Array<*>>} ops
  * @param {boolean} [resync]
  */
@@ -1333,9 +1337,9 @@ function applyOps(ops, resync = false) {
                     // view) after the swap finds nothing and the destination's hooks would
                     // never mount. Same parse-then-mount shape as OP_INSERT.
                     const frag = parseFragmentIn(el.parentNode, op[2]);
-                    // Kept regions move into the replacement first, so the teardown below
+                    // Kept az-nodiff elements move into the replacement first, so the teardown below
                     // no longer reaches them.
-                    const kept = resync ? keepRegions([el], frag, true) : NO_REGIONS;
+                    const kept = resync ? keepNodiff([el], frag, true) : NO_KEPT;
                     destroyHooks(el);
                     const added = Array.from(frag.children);
                     el.replaceWith(frag);

@@ -78,9 +78,9 @@ render(Bindings) ->
 -export([scope_slot/2]).
 -export([branch/2]).
 -export([stateless_template/1]).
--export([same_region/3]).
--export([same_region/2]).
--export([region_token/3]).
+-export([same_nodiff/3]).
+-export([same_nodiff/2]).
+-export([nodiff_token/3]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
 
@@ -92,8 +92,8 @@ render(Bindings) ->
 -ignore_xref([format_error/2]).
 %% Emitted by the parse transform for a conditional branch value it cannot see.
 -ignore_xref([branch/2]).
-%% Emitted by the parse transform as an az-nodiff region root's `az-region` value.
--ignore_xref([region_token/3]).
+%% Emitted by the parse transform as an az-nodiff element's `az-nodiff` value.
+-ignore_xref([nodiff_token/3]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
 %% Emitted by the parse transform around an interpolated attribute with a `?raw` part.
@@ -114,7 +114,7 @@ render(Bindings) ->
 -export_type([each_template/0]).
 -export_type([each_container/0]).
 -export_type([snapshot/0]).
--export_type([region/0]).
+-export_type([nodiff_identity/0]).
 -export_type([stateful_descriptor/0]).
 -export_type([stateless_descriptor/0]).
 -export_type([render_fun/0]).
@@ -173,12 +173,12 @@ render(Bindings) ->
     f => binary(),
     deps => [deps()],
     diff => false,
-    region => region(),
+    nodiff => nodiff_identity(),
     view_id => binary(),
     backend => module()
 }.
 
--nominal region() :: {pos_integer() | undefined, term()}.
+-nominal nodiff_identity() :: {pos_integer() | undefined, term()}.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
 -nominal stateless_descriptor() :: #{
@@ -635,8 +635,8 @@ rendered one -- the field is a uniform invariant on every snapshot.
 maybe_propagate(Tmpl, Snap) ->
     Snap1 =
         case Tmpl of
-            #{diff := false, branch := _} -> Snap#{diff => false, region => region(Tmpl)};
-            #{diff := false, az_key := _} -> Snap#{diff => false, region => region(Tmpl)};
+            #{diff := false, branch := _} -> Snap#{diff => false, nodiff => nodiff_identity(Tmpl)};
+            #{diff := false, az_key := _} -> Snap#{diff => false, nodiff => nodiff_identity(Tmpl)};
             #{diff := false} -> Snap#{diff => false};
             #{} -> Snap
         end,
@@ -646,14 +646,14 @@ maybe_propagate(Tmpl, Snap) ->
         #{} -> Snap2
     end.
 
-%% A region's identity beside its fingerprint. Only a template that has one puts it
-%% on its snapshot (an `?each` item never does), so an absent `region` reads as the
+%% An az-nodiff element's identity beside its fingerprint. Only a template that has one puts it
+%% on its snapshot (an `?each` item never does), so an absent `nodiff` field reads as the
 %% identity with neither part.
-region(Tmpl) ->
+nodiff_identity(Tmpl) ->
     {maps:get(branch, Tmpl, undefined), maps:get(az_key, Tmpl, undefined)}.
 
-snapshot_region(Snap) ->
-    maps:get(region, Snap, {undefined, undefined}).
+snapshot_nodiff(Snap) ->
+    maps:get(nodiff, Snap, {undefined, undefined}).
 
 %% Copies the `f` field from a template to a snapshot if present. Internal to
 %% maybe_propagate/2.
@@ -748,7 +748,7 @@ Stamps the value a conditional branch produced with that branch's index within
 its slot, when the value is an az-nodiff template or a `?stateless` descriptor
 (whose template takes the stamp when it is rendered). Two branches can produce
 the same template -- the same markup, the same helper -- and the stamp is what
-tells them apart once their regions are no longer evaluated. Any other value is
+tells them apart once their az-nodiff elements are no longer evaluated. Any other value is
 returned as is.
 
 The parse transform stamps a literal template itself and calls this only for a
@@ -758,11 +758,11 @@ branch value it cannot see at compile time.
     Branch :: pos_integer(),
     Value :: term(),
     Value1 :: term().
-branch(Branch, #{s := _, d := [{Az, {attr, ~"az-region", _}, Loc} | D], f := F} = Tmpl) ->
-    %% The region's `az-region` attribute -- its root's first dynamic, the parse
-    %% transform puts it there -- names the branch too.
+branch(Branch, #{s := _, d := [{Az, {attr, ~"az-nodiff", _}, Loc} | D], f := F} = Tmpl) ->
+    %% The az-nodiff element's token -- the `az-nodiff` value, its root's first dynamic (the
+    %% parse transform puts it there) -- names the branch too.
     Key = maps:get(az_key, Tmpl, undefined),
-    Name = {Az, {attr, ~"az-region", fun() -> region_token(F, Branch, Key) end}, Loc},
+    Name = {Az, {attr, ~"az-nodiff", fun() -> nodiff_token(F, Branch, Key) end}, Loc},
     Tmpl#{branch => Branch, d => [Name | D]};
 branch(Branch, #{s := _, d := _, diff := false} = Tmpl) ->
     Tmpl#{branch => Branch};
@@ -772,29 +772,29 @@ branch(_Branch, Value) ->
     Value.
 
 -doc """
-The value of the `az-region` attribute on the root of an az-nodiff region: its
-identity as `same_region/3` decides it -- the template's fingerprint `F`, the
+The value of the `az-nodiff` attribute on the root of an az-nodiff element: its
+identity as `same_nodiff/3` decides it -- the template's fingerprint `F`, the
 conditional branch that produced it and its `az_key` -- spelled as one opaque
-token. The client matches regions by it, so a wholesale re-render around a
-region (a reconnect, a container `?OP_TEXT`) carries the existing DOM over to a
-new render naming the same region, and replaces it otherwise.
+token. The client matches az-nodiff elements by it, so a wholesale re-render around a
+az-nodiff element (a reconnect, a container `?OP_TEXT`) carries the existing DOM over to a
+new render naming the same az-nodiff element, and replaces it otherwise.
 
-The token is not scoped: where the region sits (its slot, the item it is in) is
+The token is not scoped: where the az-nodiff element sits (its slot, the item it is in) is
 read off the DOM by the client, which is where those addresses already are.
 """.
--spec region_token(F, Branch, Key) -> binary() when
+-spec nodiff_token(F, Branch, Key) -> binary() when
     F :: binary(),
     Branch :: pos_integer() | undefined,
     Key :: term().
-region_token(F, Branch, Key) ->
-    <<F/binary, (region_branch(Branch))/binary, (region_key(Key))/binary>>.
+nodiff_token(F, Branch, Key) ->
+    <<F/binary, (nodiff_branch_part(Branch))/binary, (nodiff_key_part(Key))/binary>>.
 
-region_branch(undefined) -> <<>>;
-region_branch(Branch) -> <<".b", (integer_to_binary(Branch))/binary>>.
+nodiff_branch_part(undefined) -> <<>>;
+nodiff_branch_part(Branch) -> <<".b", (integer_to_binary(Branch))/binary>>.
 
 %% A key is any term, so it is hashed: the attribute names it, it does not carry it.
-region_key(undefined) -> <<>>;
-region_key(Key) -> <<".k", (integer_to_binary(erlang:phash2(Key, 1 bsl 32), 36))/binary>>.
+nodiff_key_part(undefined) -> <<>>;
+nodiff_key_part(Key) -> <<".k", (integer_to_binary(erlang:phash2(Key, 1 bsl 32), 36))/binary>>.
 
 -doc """
 Renders a `?stateless` descriptor to its template, passing on the branch stamp
@@ -808,28 +808,28 @@ stateless_template(#{callback := Callback, props := Props}) ->
     Callback(Props).
 
 -doc """
-Whether the template `Tmpl`, about to fill the slot `Az`, is the az-nodiff region
+Whether the template `Tmpl`, about to fill the slot `Az`, is the az-nodiff element
 the slot's snapshot `Old` already holds: the same scoped fingerprint, the same
 producing branch and the same `az_key`.
 """.
--spec same_region(Az, Tmpl, Old) -> boolean() when
+-spec same_nodiff(Az, Tmpl, Old) -> boolean() when
     Az :: binary(),
     Tmpl :: term(),
     Old :: snapshot().
-same_region(Az, #{s := _, d := _, f := F, diff := false} = Tmpl, #{f := OldF} = Old) ->
-    scoped_by(OldF, Az, F) andalso region(Tmpl) =:= snapshot_region(Old);
-same_region(_Az, _Tmpl, _Old) ->
+same_nodiff(Az, #{s := _, d := _, f := F, diff := false} = Tmpl, #{f := OldF} = Old) ->
+    scoped_by(OldF, Az, F) andalso nodiff_identity(Tmpl) =:= snapshot_nodiff(Old);
+same_nodiff(_Az, _Tmpl, _Old) ->
     false.
 
 -doc """
-Whether two az-nodiff snapshots of the same fingerprint are the same region: the
+Whether two az-nodiff snapshots of the same fingerprint are the same az-nodiff element: the
 same producing branch and `az_key`, and the same child view when they are one.
 """.
--spec same_region(New, Old) -> boolean() when
+-spec same_nodiff(New, Old) -> boolean() when
     New :: snapshot(),
     Old :: snapshot().
-same_region(New, Old) ->
-    snapshot_region(New) =:= snapshot_region(Old) andalso
+same_nodiff(New, Old) ->
+    snapshot_nodiff(New) =:= snapshot_nodiff(Old) andalso
         maps:get(view_id, New, undefined) =:= maps:get(view_id, Old, undefined).
 
 %% Only ever reached via scope_val/2's guarded `#{s, d}` clause, so the argument

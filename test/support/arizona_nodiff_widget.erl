@@ -5,7 +5,7 @@
 -export([handle_event/3]).
 
 %% A client-owned widget (the `Widget` hook in `arizona_layout`) mounted in an
-%% az-nodiff region. The server picks which region the slot holds; the widget owns
+%% az-nodiff element. The server picks which az-nodiff element the slot holds; the widget owns
 %% everything rendered inside it.
 
 -spec mount(az:bindings()) -> az:mount_ret().

@@ -57,7 +57,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([eval_dynamics/1]).
 -export([eval_dynamics_v/2]).
 -export([eval_one_v_flat/2]).
--export([eval_unless_same_region/3]).
+-export([eval_unless_same_nodiff/3]).
 -export([eval_each_def/2]).
 -export([eval_items/2]).
 -export([eval_stream_items/4]).
@@ -143,38 +143,38 @@ eval_one_v_flat(Def, Views0) ->
     {Az, Val, Deps, Views1}.
 
 -doc """
-Evaluates a dynamic whose snapshot `Old` holds an az-nodiff region, unless the
-dynamic still produces that region.
+Evaluates a dynamic whose snapshot `Old` holds an az-nodiff element, unless the
+dynamic still produces that az-nodiff element.
 
 The slot's closure runs under dep tracking as in `eval_one_v_flat/2`, but its
 result is inspected before anything inside it is evaluated (a `?stateless`
-descriptor is rendered to its template first): a template that is the same region
-(`arizona_template:same_region/3`) answers `{same, Deps}` and its dynamics never
-run -- the region renders once, so evaluating them would only cost the whole
-region per change. Anything else is evaluated from the value already produced
+descriptor is rendered to its template first): a template that is the same az-nodiff element
+(`arizona_template:same_nodiff/3`) answers `{same, Deps}` and its dynamics never
+run -- the az-nodiff element renders once, so evaluating them would only cost the whole
+az-nodiff element per change. Anything else is evaluated from the value already produced
 (the closure is not called twice) and answered `{changed, Az, Value, Deps, Views1}`.
 """.
--spec eval_unless_same_region(Dynamic, Old, Views) -> Result when
+-spec eval_unless_same_nodiff(Dynamic, Old, Views) -> Result when
     Dynamic :: arizona_template:dynamic(),
     Old :: arizona_template:snapshot(),
     Views :: {map(), map()},
     Result ::
         {same, map()}
         | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
-eval_unless_same_region({Az, Spec, Loc}, Old, Views0) ->
+eval_unless_same_nodiff({Az, Spec, Loc}, Old, Views0) ->
     try
-        unless_same_region(Az, Spec, Old, Views0)
+        unless_same_nodiff(Az, Spec, Old, Views0)
     catch
         Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
     end;
-eval_unless_same_region({Az, Spec}, Old, Views0) ->
-    unless_same_region(Az, Spec, Old, Views0).
+eval_unless_same_nodiff({Az, Spec}, Old, Views0) ->
+    unless_same_nodiff(Az, Spec, Old, Views0).
 
-unless_same_region(Az, Spec, Old, Views0) ->
+unless_same_nodiff(Az, Spec, Old, Views0) ->
     Outer = open_deps(),
     {Esc, Raw} = peek_spec(Spec),
-    Val = peek_region(Raw),
-    case arizona_template:same_region(Az, Val, Old) of
+    Val = peek_nodiff(Raw),
+    case arizona_template:same_nodiff(Az, Val, Old) of
         true -> {same, close_deps(Outer)};
         false -> eval_peeked(Az, Esc, Val, Outer, Views0)
     end.
@@ -187,9 +187,9 @@ peek_spec(Spec) -> {false, Spec}.
 
 %% A `?stateless` descriptor is rendered here as eval_val_v/2 would, its body's
 %% own reads kept out of the slot's deps.
-peek_region(#{callback := _, props := _} = Desc) ->
-    with_saved_deps(fun() -> peek_region(arizona_template:stateless_template(Desc)) end);
-peek_region(Val) ->
+peek_nodiff(#{callback := _, props := _} = Desc) ->
+    with_saved_deps(fun() -> peek_nodiff(arizona_template:stateless_template(Desc)) end);
+peek_nodiff(Val) ->
     Val.
 
 eval_peeked(Az, Esc, Raw, Outer, Views0) ->
@@ -213,7 +213,7 @@ slot's own closure (the source, a branch condition), and the diff adds the
 items' through `eval_items/2`. The slot need not still hold an each -- a
 conditional whose branch was one can land on any value -- and anything else is
 evaluated from the value already produced, answered
-`{changed, Az, Value, Deps, Views1}` as `eval_unless_same_region/3` does.
+`{changed, Az, Value, Deps, Views1}` as `eval_unless_same_nodiff/3` does.
 """.
 -spec eval_each_def(Dynamic, Views) -> Result when
     Dynamic :: arizona_template:dynamic(),
@@ -689,7 +689,7 @@ with_saved_deps(Fun) ->
     end.
 
 %% A child view whose own root is az-nodiff, or that sits inside an az-nodiff
-%% region, takes its props at mount only: re-running it would call
+%% az-nodiff element, takes its props at mount only: re-running it would call
 %% `handle_update/3` and move its state past a DOM no op will ever touch, wherever
 %% the descriptor is evaluated from (a slot, a branch, a `?stateless` body, a list
 %% item). The same handler at the same id keeps its view as it is.
@@ -849,7 +849,7 @@ build_each_snap(ItemSnaps, Tmpl, ChildViews, ItemDeps, {VKeys, Source}) ->
     }.
 
 eval_template(#{d := Dynamics, diff := false} = Tmpl, {Old, _New0} = Views) ->
-    Evaluated = with_saved_deps(fun() -> eval_region_dynamics(Dynamics, {Old, #{}}) end),
+    Evaluated = with_saved_deps(fun() -> eval_nodiff_dynamics(Dynamics, {Old, #{}}) end),
     template_snapshot(Tmpl, Evaluated, Views);
 eval_template(#{d := Dynamics} = Tmpl, {Old, _New0} = Views) ->
     Evaluated = with_saved_deps(fun() -> eval_dynamics_v(Dynamics, {Old, #{}}) end),
@@ -863,7 +863,7 @@ template_snapshot(#{s := Statics} = Tmpl, {Triples, {_, LocalNew}}, {Old, New0})
     {Snap1#{child_views => ChildViews}, {Old, maps:merge(New0, LocalNew)}}.
 
 %% Mark the evaluation of an az-nodiff template's dynamics for eval_stateful/3.
-eval_region_dynamics(Dynamics, Views) ->
+eval_nodiff_dynamics(Dynamics, Views) ->
     case erlang:put('$arizona_in_nodiff', true) of
         true ->
             eval_dynamics_v(Dynamics, Views);

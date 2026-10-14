@@ -189,15 +189,16 @@ rejects `?local` at compile time when `false`.
 -callback supports_local() -> boolean().
 
 -doc """
-Whether this backend's client carries an az-nodiff region over a wholesale
+Whether this backend's client carries an az-nodiff element over a wholesale
 re-render of its surroundings -- a reconnect resync or a container `?OP_TEXT` --
-when the new render holds the same region. When `true`, the parse transform puts
-an `az-region` attribute naming the region's identity
-(`arizona_template:region_token/3`) on the root of every az-nodiff region, which
-is what the client matches regions by. A backend capability, declared by each
-backend.
+when the new render holds the same az-nodiff element. When `true`, the parse transform keeps
+the `az-nodiff` directive in the output as a compiler-owned attribute: on a
+keepable az-nodiff element its value names the element's identity
+(`arizona_template:nodiff_token/3`), which is what the client matches az-nodiff elements by;
+on other client-owned roots it is bare, and never kept. When `false` the directive
+is stripped. A backend capability, declared by each backend.
 """.
--callback supports_region_keep() -> boolean().
+-callback supports_nodiff_keep() -> boolean().
 
 -doc """
 What a dynamic boolean attribute means on this backend's wire. `presence` (HTML): `true`

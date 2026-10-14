@@ -7,7 +7,7 @@
 
 %% Fixture: one slot per shape a live crash can sit in -- a top-level value, an
 %% attribute, an `?each` item, a conditional branch, a `?stateless` body, an
-%% `?each` source and the closure of a slot holding an az-nodiff region -- each fed
+%% `?each` source and the closure of a slot holding an az-nodiff element -- each fed
 %% by its own binding, so `set` can break exactly one of them after mount.
 %% Every binding defaults to a valid value; a crash raises `{boom, V}`.
 %%
@@ -25,7 +25,7 @@ mount(Bindings) ->
             branch => maps:get(branch, Bindings, 1),
             sless => maps:get(sless, Bindings, 1),
             source => maps:get(source, Bindings, [1]),
-            region => maps:get(region, Bindings, 1)
+            nodiff => maps:get(nodiff, Bindings, 1)
         },
         #{}
     }.
@@ -37,7 +37,7 @@ line(item) -> ?LINE + 12;
 line(branch) -> ?LINE + 14;
 line(sless) -> ?LINE + 26;
 line(source) -> ?LINE + 15;
-line(region) -> ?LINE + 15.
+line(nodiff) -> ?LINE + 15.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
@@ -52,7 +52,7 @@ render(Bindings) ->
             end,
             ?stateless(fun cell/1, #{v => ?get(sless)}),
             {ol, [], [?each(fun(I) -> {li, [], [I]} end, check_list(?get(source)))]},
-            case check(?get(region)) of
+            case check(?get(nodiff)) of
                 ~"0" -> <<>>;
                 _ -> {section, ['az-nodiff'], [~"r"]}
             end

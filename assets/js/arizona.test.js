@@ -4795,15 +4795,15 @@ describe('connection events', () => {
         expect(seen).toBe('resynced');
     });
 
-    // The resync keeps an az-nodiff region the new render names again; a listener
+    // The resync keeps an az-nodiff element the new render names again; a listener
     // must see it already moved into the remounted view.
-    it('fires connected after a kept region is in place in the resynced view', async () => {
-        const region = '<section az-region="R"></section>';
+    it('fires connected after a kept az-nodiff element is in place in the resynced view', async () => {
+        const marked = '<section az-nodiff="R"></section>';
         const m = await start();
-        document.body.innerHTML = `<div id="page" az-view>${region}</div>`;
+        document.body.innerHTML = `<div id="page" az-view>${marked}</div>`;
         m.simulateOpen();
         m.simulateMessage(null, null);
-        const kept = document.querySelector('[az-region]');
+        const kept = document.querySelector('[az-nodiff]');
         kept.dataset.state = 'client';
         m.simulateClose(4500);
         m.simulateOpen(true);
@@ -4812,12 +4812,12 @@ describe('connection events', () => {
         document.addEventListener(
             'arizona:connected',
             () => {
-                seen = document.querySelector('#page[data-render="resync"] [az-region]');
+                seen = document.querySelector('#page[data-render="resync"] [az-nodiff]');
             },
             { once: true },
         );
         m.simulateMessage(
-            [[8, 'page', `<div id="page" az-view data-render="resync">${region}</div>`]],
+            [[8, 'page', `<div id="page" az-view data-render="resync">${marked}</div>`]],
             null,
             true,
         );

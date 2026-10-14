@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
 
-// A client-owned widget in an az-nodiff region (`arizona_nodiff_widget`, the `Widget`
-// hook in `arizona_layout`): the server decides which region the slot holds, the widget
+// A client-owned widget in an az-nodiff element (`arizona_nodiff_widget`, the `Widget`
+// hook in `arizona_layout`): the server decides which az-nodiff element the slot holds, the widget
 // owns the DOM inside it. The CT suites pin the ops; these assert the client side --
-// that a kept region keeps the widget's own state and a replaced one runs the hook's
+// that a kept az-nodiff element keeps the widget's own state and a replaced one runs the hook's
 // lifecycle.
 
 const wsReady = (page) =>
@@ -37,7 +37,9 @@ test('switching branches destroys the widget before removing it', async ({ page 
     expect((await log(page)).events).toEqual(['mount:line', 'destroy:line:true', 'mount:bar']);
 });
 
-test('hiding and showing the region unmounts and remounts the widget', async ({ page }) => {
+test('hiding and showing the az-nodiff element unmounts and remounts the widget', async ({
+    page,
+}) => {
     await page.locator('#hide').click();
     await expect(widget(page)).toHaveCount(0);
     await page.locator('#line').click();
@@ -45,7 +47,7 @@ test('hiding and showing the region unmounts and remounts the widget', async ({ 
     expect((await log(page)).events).toEqual(['mount:line', 'destroy:line:true', 'mount:line']);
 });
 
-test('two branches calling the same helper are two regions', async ({ page }) => {
+test('two branches calling the same helper are two az-nodiff elements', async ({ page }) => {
     await page.locator('#helper-a').click();
     await expect(kind(page)).toHaveText('helper');
     await input(page).fill('typed');
@@ -75,7 +77,7 @@ const reconnect = async (page) => {
     await wsReady(page);
 };
 
-// A reconnect mounts the view afresh and resyncs it whole; a region the new render
+// A reconnect mounts the view afresh and resyncs it whole; an az-nodiff element the new render
 // names again is carried over, so the widget and its client state survive.
 test('a reconnect keeps the widget and its state', async ({ page }) => {
     await input(page).fill('typed');
@@ -84,9 +86,9 @@ test('a reconnect keeps the widget and its state', async ({ page }) => {
     expect(await log(page)).toEqual({ mounts: 1, destroys: 0, events: ['mount:line'] });
 });
 
-// The fresh mount holds the initial branch again, so a region switched away from
-// it is a different region after the reconnect.
-test('a region switched before a reconnect is remounted by it', async ({ page }) => {
+// The fresh mount holds the initial branch again, so an az-nodiff element switched away from
+// it is a different az-nodiff element after the reconnect.
+test('an az-nodiff element switched before a reconnect is remounted by it', async ({ page }) => {
     await page.locator('#bar').click();
     await expect(kind(page)).toHaveText('bar');
     await input(page).fill('typed');
@@ -103,7 +105,7 @@ test('a region switched before a reconnect is remounted by it', async ({ page })
 });
 
 // The same for a new `az_key`: the fresh mount is back on the initial key.
-test('a region rekeyed before a reconnect is remounted by it', async ({ page }) => {
+test('an az-nodiff element rekeyed before a reconnect is remounted by it', async ({ page }) => {
     await page.locator('#rekey').click();
     await expect.poll(async () => (await log(page)).mounts).toBe(2);
     await input(page).fill('typed');

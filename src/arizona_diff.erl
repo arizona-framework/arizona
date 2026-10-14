@@ -49,8 +49,8 @@ for a reorder.
 Templates compiled with `az-nodiff` carry `diff => false` and dynamics
 with `Az = undefined`. A ROOT snapshot with `diff => false` short-circuits
 `diff/2,3,4` before any dynamic is inspected. A SLOT holding such a template
-is still diffed as a slot: when it re-runs and lands on the same region
-(`arizona_template:same_region/3`) the old render stands and the template's
+is still diffed as a slot: when it re-runs and lands on the same az-nodiff element
+(`arizona_template:same_nodiff/3`) the old render stands and the template's
 own dynamics are never evaluated; when it switches to anything else it is
 replaced through its markers. Either way no op targets an `undefined` Az.
 
@@ -267,8 +267,8 @@ diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
 %% that really do differ, which is the precondition it is named for.
 maybe_make_ops(_Az, Same, Same, Tail, Views) ->
     {Tail, Views};
-%% Two az-nodiff regions are told apart by identity, not by bytes: the client owns
-%% what is rendered inside, so a new region replaces the old one even when both
+%% Two az-nodiff elements are told apart by identity, not by bytes: the client owns
+%% what is rendered inside, so a new az-nodiff element replaces the old one even when both
 %% rendered alike (make_ops/5 keeps the same one).
 maybe_make_ops(Az, #{diff := false} = New, #{diff := false} = Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views);
@@ -463,16 +463,16 @@ diff_changed_dynamic(Def, _Az, #{t := ?EACH} = Old, DR, OR, DepsR, ChangedKeys, 
         {changed, Az2, New, NewDeps, Views1} ->
             changed_dynamic(Az2, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1)
     end;
-%% A slot holding an az-nodiff region asks first whether it still holds that
-%% region (`arizona_template:same_region/3`), which the slot closure answers
-%% without evaluating the region: if so the old render stands -- no op, no child
+%% A slot holding an az-nodiff element asks first whether it still holds that
+%% az-nodiff element (`arizona_template:same_nodiff/3`), which the slot closure answers
+%% without evaluating the az-nodiff element: if so the old render stands -- no op, no child
 %% `handle_update/3`, only the new deps -- and the cost stays O(1) however large
-%% the region is. Anything else (another branch, a new `az_key`, a value) diffs
+%% the az-nodiff element is. Anything else (another branch, a new `az_key`, a value) diffs
 %% as usual.
 diff_changed_dynamic(
     Def, Az, #{diff := false} = Old, DR, OR, DepsR, ChangedKeys, Views0
 ) ->
-    case arizona_eval:eval_unless_same_region(Def, Old, Views0) of
+    case arizona_eval:eval_unless_same_nodiff(Def, Old, Views0) of
         {same, NewDeps} ->
             Views1 = carry_skipped_view(Old, Views0),
             {OpsRest, DRest, DepsRest, Views2} =
@@ -1958,16 +1958,16 @@ make_op(Az, New, _Old) ->
 %% an az prefix from the child's own fingerprint, neither of which a plain branch has.
 %% So a same-S Old is necessarily a plain inline template too; a child New is excluded
 %% here and handled by make_op/3's child-view clause (which requires `view_id` on both).
-%% A `?local` slot is the browser's. An az-nodiff region keeps its first render for
-%% as long as the slot still holds that region (the same fingerprint, then
-%% `arizona_template:same_region/2`). Any other template entering or leaving a
-%% region replaces the slot whole: a region's dynamics carry no op target, so the
-%% same-statics paths below would find nothing to patch and the slot would keep
-%% the old region.
+%% A `?local` slot is the browser's. An az-nodiff element keeps its first render for
+%% as long as the slot still holds that az-nodiff element (the same fingerprint, then
+%% `arizona_template:same_nodiff/2`). Any other template entering or leaving a
+%% az-nodiff element replaces the slot whole: an az-nodiff element's dynamics carry no op target, so
+%% the same-statics paths below would find nothing to patch and the slot would keep the old
+%% az-nodiff element.
 make_ops(_Az, _New, #{az_local := _}, Tail, Views) ->
     {Tail, Views};
 make_ops(Az, #{diff := false, f := F} = New, #{diff := false, f := F} = Old, Tail, Views) ->
-    case arizona_template:same_region(New, Old) of
+    case arizona_template:same_nodiff(New, Old) of
         true -> {Tail, Views};
         false -> {[[?OP_TEXT, Az, arizona_render:zip_or_fp(New)] | Tail], Views}
     end;

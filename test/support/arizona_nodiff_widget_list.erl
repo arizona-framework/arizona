@@ -5,7 +5,7 @@
 -export([handle_event/3]).
 
 %% A plain list whose items are client-owned widgets (the `Widget` hook in
-%% `arizona_layout`): each item is an az-nodiff region, so any change to the list
+%% `arizona_layout`): each item is an az-nodiff element, so any change to the list
 %% re-renders it wholesale. The `keyed` route binding gives each item an `az_key`.
 
 -spec mount(az:bindings()) -> az:mount_ret().
