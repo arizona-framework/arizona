@@ -126,6 +126,10 @@ routes() ->
             layouts => Layouts,
             middlewares => [arizona_middleware:extract([params])]
         }},
+        {live, <<"/crash-on-connect">>, arizona_crashable, #{
+            bindings => #{crash_on_connect => true},
+            layouts => Layouts
+        }},
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},
         {live, <<"/navigate-halt">>, arizona_navigate_halt, #{layouts => Layouts}},

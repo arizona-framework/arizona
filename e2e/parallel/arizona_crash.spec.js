@@ -32,4 +32,31 @@ test.describe('crash recovery', () => {
         await expect(status).toContainText('Status: ok');
         expect(await page.evaluate(() => /** @type {any} */ (window).__azNoReload)).toBe(true);
     });
+
+    test('a failed mount reloads the page after a 5-10 s delay, without spinning', async ({
+        page,
+    }) => {
+        test.setTimeout(60000);
+        /** @type {number[]} */
+        const loads = [];
+        page.on('load', () => loads.push(Date.now()));
+        // The page renders at SSR; only the live mount fails (closes 4501).
+        await page.goto('/crash-on-connect');
+        await expect(page.locator('p:has-text("Status:")')).toBeVisible();
+        await expect(html(page)).toHaveClass(/az-disconnected/);
+
+        // The reload waits: the worker's reconnects (which fail to mount too)
+        // must not turn into a reload loop.
+        await expect.poll(() => loads.length, { timeout: 15000 }).toBe(2);
+        expect(loads[1] - loads[0]).toBeGreaterThanOrEqual(5000);
+        expect(
+            await page.evaluate(() =>
+                localStorage.getItem('arizona:mount-reloads:/crash-on-connect'),
+            ),
+        ).toBe('1');
+
+        // The reloaded page waits again before the next one.
+        await page.waitForTimeout(4000);
+        expect(loads).toHaveLength(2);
+    });
 });

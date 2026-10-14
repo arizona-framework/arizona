@@ -969,8 +969,8 @@ test.describe('SPA navigation', () => {
         await page.waitForSelector('#status:has-text("Connected")');
         // Wrapping the click asserts the WebSocket stays connected through
         // the navigate -- a silent server-side crash on the new mount would
-        // close 4500 + reload, and the destination assertion would still
-        // pass. This is the catch-net for that whole class of regression.
+        // close 4501 and reload the page, and the destination assertion would
+        // still pass. This is the catch-net for that whole class of regression.
         await expectStaysConnected(page, async () => {
             await page.click('a[href="/about"]');
             await expect(page.locator('main h1')).toHaveText('About');

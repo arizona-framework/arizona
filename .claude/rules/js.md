@@ -249,7 +249,11 @@ A reconnect must resync an already-rendered DOM, and the resync payload is a who
 
 An unflagged reconnect (`init_view(true, false, ...)`) keeps the old behavior: mount + render + `OP_REPLACE` immediately, undeduped.
 
-Crash recovery keys on when a connection **mounted** its view: a first connect's first frame, or a reconnect's frame with `firstAfterReconnect` set (its connect frame arrives before the deferred mount). A 4500 before that reloads the page after a jittered delay; one after it remounts in place through the worker's backoff reconnect.
+## Crash and mount-failure recovery
+
+The client classifies a close by its code alone. **4500** (the view crashed after it mounted): no reload; the worker's backoff reconnect remounts the view in place. **4501** (the view failed to mount): reload after a random 5-10 s delay, counted per path in `localStorage` (`arizona:mount-reloads:<pathname>`), 30 s from the 10th consecutive reload, never giving up; a successful mount clears the count and cancels a pending reload, as do `pagehide` and `disconnect()`. A successful mount is the first frame of a first connect (the server sends nothing before it mounts) or the resync frame (`firstAfterReconnect`) of a reconnect.
+
+Typed form fields are saved on any non-1000 close (and re-saved just before the resync replaces the view) and restored after the remount, replaying `az-change` once. If the next close is a 4500 before any user frame was answered since that replay, the replayed forms are restored next time **without** the replay -- the values are kept, never dropped.
 
 ## bfcache (worker teardown and respawn)
 

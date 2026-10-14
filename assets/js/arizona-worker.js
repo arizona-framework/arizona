@@ -147,16 +147,28 @@ let _reconnecting = false;
 /** @type {number} */
 let _attempt = 0;
 
-/**
- * When the open socket's view mounted (Date.now()), null before it does.
- * @type {number|null}
- */
-let _mountedAt = null;
+/** Close codes (must match `arizona_socket.erl`): crash after mount, mount failed. */
+const WS_CLOSE_CRASH = 4500;
+const WS_CLOSE_MOUNT_FAILED = 4501;
 
 /**
- * A mounted connection resets the reconnect backoff on close, unless the view
- * crashed (4500) within this long of mounting: a view that crashes right after
- * every remount must keep backing off instead of reconnecting at backoff[0].
+ * Whether the open socket received a frame: only a working session may reset the
+ * reconnect backoff (see onclose).
+ * @type {boolean}
+ */
+let _framed = false;
+
+/**
+ * When the open socket's view was last (re)mounted, as Date.now(): at open, and
+ * again on each SPA navigation, which may mount a new view.
+ * @type {number}
+ */
+let _mountedAt = 0;
+
+/**
+ * A view that crashes (4500) within this long of its mount does not reset the
+ * reconnect backoff: one that crashes right after every remount must keep
+ * backing off instead of reconnecting at backoff[0].
  */
 const CRASH_STABLE_MS = 10000;
 
@@ -297,7 +309,7 @@ function openSocket() {
     if (_reconnectTimer) clearTimeout(_reconnectTimer);
     _reconnectTimer = null;
     _fpsSent = false;
-    _mountedAt = null;
+    _framed = false;
     // A reconnect open promises the `cached_fps` announcement as its first
     // frame (`_az_fps_follow=1` below), so the server defers the full-page
     // resync until it arrives and dedups the payload against it. First
@@ -321,6 +333,7 @@ function openSocket() {
 
     ws.onopen = () => {
         if (_ws !== ws) return;
+        _mountedAt = Date.now();
         _heartbeatPending = false;
         _heartbeatInterval = setInterval(() => {
             if (_heartbeatPending) {
@@ -341,16 +354,10 @@ function openSocket() {
         _heartbeatPending = false;
         if (e.data === SYS_PONG) return;
 
+        _framed = true;
         const msg = JSON.parse(e.data);
         const ops = msg.o || null;
         const effects = msg.e || null;
-
-        // The view mounted: a first connect mounts before its first frame, a
-        // reconnect with the resync (the first frame carrying ops -- its connect
-        // frame arrives before the deferred mount). Only a mounted session may
-        // reset the backoff (see onclose), so a server that accepts the socket but
-        // fails to mount keeps backing off instead of being hammered at backoff[0].
-        if (_mountedAt === null && (!_reconnecting || ops !== null)) _mountedAt = Date.now();
         // The `az-*` attribute names this frame proves the app can render: the
         // connect frame carries the compile-time union walked from the route's
         // handler and layouts, and any later frame carries only the per-socket
@@ -388,9 +395,14 @@ function openSocket() {
         postMessage([2, e.code]);
 
         if (e.code === 1000) return;
+        // Reset the backoff only after a working session: one that framed, did not
+        // fail to mount, and did not crash right after its mount. A server that
+        // accepts the socket but never frames (a dead backend) or cannot mount
+        // the view thus keeps backing off instead of being hammered at backoff[0].
         if (
-            _mountedAt !== null &&
-            (e.code !== 4500 || Date.now() - _mountedAt >= CRASH_STABLE_MS)
+            _framed &&
+            e.code !== WS_CLOSE_MOUNT_FAILED &&
+            (e.code !== WS_CLOSE_CRASH || Date.now() - _mountedAt >= CRASH_STABLE_MS)
         ) {
             _attempt = 0;
         }
@@ -469,6 +481,9 @@ self.onmessage = (e) => {
             // extras). Framework `_az_*` params (e.g. `_az_caps`) are preserved.
             // Without replacing the user params, the original page's query string
             // would persist and the navigated-to one would be lost on reconnect.
+            // The navigation may also mount a new view on this socket, so a crash
+            // right after it is quick (see CRASH_STABLE_MS).
+            _mountedAt = Date.now();
             if (!_wsUrl) break;
             const { path, qs } = msg[1];
             const u = new URL(_wsUrl);

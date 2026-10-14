@@ -113,7 +113,7 @@ test.describe('?local -- client-only', () => {
         await openBtn(page).click();
         await expect(dialog(page)).toBeVisible();
 
-        // close(4000) is neither 1000 (normal, no reconnect) nor 4500 (crash):
+        // close(4000) is neither 1000 (normal, no reconnect) nor 4501 (mount failed):
         // the client auto-reconnects and the server fresh-mounts the view (the
         // old live process died -- drain is server-initiated only), so client-owned
         // slots reset to their SSR initial (dialog closed).

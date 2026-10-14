@@ -12,9 +12,9 @@ test.describe('middleware halt on WS navigate', () => {
         // The target route's middleware halts via `arizona_req:redirect(Req, "/login")`,
         // which the server translates into an `arizona_js:navigate("/login")` effect.
         // The client applies the effect: pushState + fresh HTTP handshake to /login.
-        // The WS must stay connected -- a server-side crash (e.g. a
-        // restricted-keys collision) would close 4500 and remount, silently
-        // absorbed into a passing assertion below.
+        // The WS must stay connected -- a failed mount of the target (e.g. a
+        // restricted-keys collision) would close 4501 and reload the page,
+        // silently absorbed into a passing assertion below.
         await expectStaysConnected(page, async () => {
             await page.click('#protected-link');
             await expect(page).toHaveURL('/login');

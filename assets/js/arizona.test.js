@@ -4040,17 +4040,18 @@ describe('connection CSS classes', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
-        document.body.innerHTML = '<form id="f"><input name="x" value="saved"></form>';
+        document.body.innerHTML =
+            '<div id="v" az-view><form id="f"><input name="x" value="saved"></form></div>';
 
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         mock.simulateClose(1006);
 
-        // After abnormal close, form state should be saved
-        // Verify by replacing DOM and restoring
-        document.body.innerHTML = '<form id="f"><input name="x" value=""></form>';
+        // After abnormal close, form state should be saved: the reconnect's
+        // resync replaces the view, and the saved value comes back.
+        const fresh = '<div id="v" az-view><form id="f"><input name="x" value=""></form></div>';
         mock.simulateOpen(true); // reconnect
-        mock.simulateMessage(null, null, true); // firstAfterReconnect
+        mock.simulateMessage([[8, 'v', fresh]], null, true); // firstAfterReconnect
         expect(document.querySelector('input[name="x"]').value).toBe('saved');
     });
 
@@ -4092,18 +4093,19 @@ describe('connection CSS classes', () => {
 });
 
 // ---------------------------------------------------------------------------
-// WS_CLOSE_CRASH (4500) crash recovery
+// Crash (4500) and mount-failure (4501) recovery
 // ---------------------------------------------------------------------------
 
-describe('WS_CLOSE_CRASH recovery', () => {
+describe('crash and mount-failure recovery', () => {
     /** @type {ReturnType<typeof setupMockWorker> | null} */
     let mock;
     let reload;
     let errSpy;
     let random;
+    const KEY = 'arizona:mount-reloads:/page';
 
     beforeEach(() => {
-        sessionStorage.clear();
+        localStorage.clear();
         reload = vi.fn();
         errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
         random = vi.spyOn(Math, 'random').mockReturnValue(0); // 5 s delay
@@ -4116,7 +4118,7 @@ describe('WS_CLOSE_CRASH recovery', () => {
         mock = null;
         errSpy.mockRestore();
         random.mockRestore();
-        sessionStorage.clear();
+        localStorage.clear();
     });
 
     // Stub location and fake the timers AFTER connect() runs: connect builds the
@@ -4127,170 +4129,138 @@ describe('WS_CLOSE_CRASH recovery', () => {
         const mod = await import('./arizona.js');
         setupView('page', '<div az="0"></div>');
         mock = setupMockWorker(mod);
-        vi.stubGlobal('location', { reload, href: 'http://localhost/' });
+        vi.stubGlobal('location', { reload, href: 'http://localhost/page', pathname: '/page' });
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
         return mock;
     }
 
-    it('a crash after the mount reconnects in place without reloading', async () => {
+    /** How long after now the reload fires, or null if none does within 60 s. */
+    function reloadDelay() {
+        for (let t = 0; t <= 60000; t += 1) {
+            if (reload.mock.calls.length > 0) return t;
+            vi.advanceTimersByTime(1);
+        }
+        return null;
+    }
+
+    it('a crash after the mount (4500) never reloads, whatever came before it', async () => {
         const m = await start();
         m.simulateOpen();
-        m.simulateMessage(null, null); // the connect frame: mounted
+        m.simulateClose(4500); // no frame first: still the server's post-mount code
+        m.simulateOpen(true);
+        m.simulateMessage(null, null, false);
         m.simulateClose(4500);
         vi.advanceTimersByTime(60000);
         expect(reload).not.toHaveBeenCalled();
         expect(document.documentElement.classList.contains('az-disconnected')).toBe(true);
     });
 
-    it('a crash while mounting reloads after a jittered 5-10 s delay', async () => {
+    it('a mount failure (4501) reloads after a random delay from 5 s', async () => {
         const m = await start();
         m.simulateOpen();
-        m.simulateClose(4500); // no frame yet: the mount crashed
-        vi.advanceTimersByTime(4999);
-        expect(reload).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(1);
-        expect(reload).toHaveBeenCalledTimes(1);
-        expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+        expect(localStorage.getItem(KEY)).toBe('1');
     });
 
-    it('the reload delay spans up to 10 s', async () => {
+    it('a mount failure (4501) reloads after a random delay up to 10 s', async () => {
         random.mockReturnValue(0.9999);
         const m = await start();
         m.simulateOpen();
-        m.simulateClose(4500);
-        vi.advanceTimersByTime(9999);
-        expect(reload).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(1);
-        expect(reload).toHaveBeenCalledTimes(1);
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(10000);
     });
 
-    it('a reconnect mounts with its resync, not its connect frame', async () => {
+    it('a mount failure after a mounted session (a navigate) reloads too', async () => {
         const m = await start();
-        m.simulateOpen(true);
-        m.simulateMessage(null, null, false); // connect frame, before the deferred mount
-        m.simulateClose(4500);
-        vi.advanceTimersByTime(5000);
-        expect(reload).toHaveBeenCalledTimes(1);
-    });
-
-    it('a reconnect resync that mounted is a post-mount crash: no reload', async () => {
-        const m = await start();
-        m.simulateOpen(true);
-        m.simulateMessage([], null, true); // the resync: mounted
-        m.simulateClose(4500);
-        vi.advanceTimersByTime(60000);
-        expect(reload).not.toHaveBeenCalled();
-    });
-
-    /** A view holding a form with an `az-change` command and one text field. */
-    async function startWithForm() {
-        const m = await start();
-        document.body.innerHTML =
-            '<div id="page" az-view><form id="f" az-change=\'[0,"changed"]\'>' +
-            '<input name="q" value=""></form></div>';
-        return m;
-    }
-    const field = () => /** @type {HTMLInputElement} */ (document.querySelector('[name=q]'));
-    const changeSends = (m) => m.getSentMessages().filter((s) => s[1] === 'changed').length;
-
-    it('a crash keeps the typed fields across the remount', async () => {
-        const m = await startWithForm();
         m.simulateOpen();
         m.simulateMessage(null, null); // mounted
-        field().value = 'typed';
-        vi.advanceTimersByTime(11000); // not a quick crash
-        m.simulateClose(4500);
-        field().value = 'stale';
-        m.simulateOpen(true);
-        m.simulateMessage([], null, true); // the resync restores the fields
-        expect(field().value).toBe('typed');
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
     });
 
-    it('fields whose restore crashes the view are dropped, ending the loop', async () => {
-        const m = await startWithForm();
-        m.simulateOpen();
-        m.simulateMessage(null, null);
-        field().value = 'poison';
-        vi.advanceTimersByTime(11000);
-        m.simulateClose(4500); // saved
-        m.simulateOpen(true);
-        m.simulateMessage([], null, true); // restored + az-change replayed
-        expect(changeSends(m)).toBe(1);
-        m.simulateClose(4500); // the restored state crashed at once: dropped
-        field().value = 'server';
-        m.simulateOpen(true);
-        m.simulateMessage([], null, true);
-        expect(field().value).toBe('server'); // nothing restored
-        expect(changeSends(m)).toBe(1); // nor replayed
-    });
-
-    it('warns once after repeated quick post-mount crashes', async () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        try {
-            const m = await start();
-            for (let i = 0; i < 5; i++) {
-                m.simulateOpen(i > 0);
-                m.simulateMessage([], null, i > 0);
-                m.simulateClose(4500);
-            }
-            expect(warn).toHaveBeenCalledTimes(1);
-            expect(reload).not.toHaveBeenCalled();
-        } finally {
-            warn.mockRestore();
-        }
-    });
-
-    it('a mount that succeeds first cancels the pending reload and clears the count', async () => {
-        sessionStorage.setItem('arizona:crash-reloads', '2');
+    it('counts reloads per path, leaving other paths alone', async () => {
+        localStorage.setItem('arizona:mount-reloads:/other', '4');
+        localStorage.setItem(KEY, '2');
         const m = await start();
         m.simulateOpen();
-        m.simulateClose(4500); // reload pending
-        m.simulateOpen(true);
-        m.simulateMessage([], null, true); // the worker's reconnect resynced: mounted
-        vi.advanceTimersByTime(60000);
-        expect(reload).not.toHaveBeenCalled();
-        expect(sessionStorage.getItem('arizona:crash-reloads')).toBeNull();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+        expect(localStorage.getItem(KEY)).toBe('3');
+        expect(localStorage.getItem('arizona:mount-reloads:/other')).toBe('4');
     });
 
-    it('past the cap it keeps retrying every 30 s and logs once per page load', async () => {
-        sessionStorage.setItem('arizona:crash-reloads', '10');
+    it('past 10 consecutive reloads it retries every 30 s and logs once per page load', async () => {
+        localStorage.setItem(KEY, '10');
         const m = await start();
         m.simulateOpen();
-        m.simulateClose(4500);
-        vi.advanceTimersByTime(29999);
-        expect(reload).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(1);
-        expect(reload).toHaveBeenCalledTimes(1);
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(30000);
+        expect(localStorage.getItem(KEY)).toBe('11');
 
+        // The stub reload keeps this page, so the next failure is the same load.
+        reload.mockClear();
         m.simulateOpen(true);
-        m.simulateClose(4500);
-        vi.advanceTimersByTime(30000);
-        expect(reload).toHaveBeenCalledTimes(2);
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(30000);
         expect(errSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('a normal (non-crash) close never reloads', async () => {
+    it('below the cap it keeps the 5-10 s delay', async () => {
+        localStorage.setItem(KEY, '9');
         const m = await start();
         m.simulateOpen();
-        m.simulateClose(1006);
-        vi.advanceTimersByTime(60000);
-        expect(reload).not.toHaveBeenCalled();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+        expect(errSpy).not.toHaveBeenCalled();
     });
 
-    it('reads a count stored by an older client as no count', async () => {
-        sessionStorage.setItem('arizona:crash-reloads', JSON.stringify({ count: 3 }));
+    it("a first connect's frame proves the mount and clears the path's count", async () => {
+        localStorage.setItem(KEY, '7');
         const m = await start();
         m.simulateOpen();
-        m.simulateClose(4500);
-        vi.advanceTimersByTime(5000);
+        m.simulateMessage(null, null);
+        expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it("a reconnect's names frame does not prove the mount, its resync does", async () => {
+        localStorage.setItem(KEY, '7');
+        const m = await start();
+        m.simulateOpen(true);
+        m.simulateMessage(null, null, false);
+        expect(localStorage.getItem(KEY)).toBe('7');
+        m.simulateMessage([], null, true);
+        expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('a later connection that mounts cancels the pending reload', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501); // reload pending
+        expect(vi.getTimerCount()).toBe(1); // the reload is pending
+        m.simulateOpen(true);
+        m.simulateMessage([], null, true); // the worker's reconnect mounted
+        vi.advanceTimersByTime(60000);
+        expect(reload).not.toHaveBeenCalled();
+        expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('a reconnect that fails to mount again keeps the one pending reload', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        vi.advanceTimersByTime(3000);
+        m.simulateOpen(true);
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(2000);
         expect(reload).toHaveBeenCalledTimes(1);
-        expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
     });
 
     it('pagehide cancels the pending reload', async () => {
         const m = await start();
         m.simulateOpen();
-        m.simulateClose(4500);
+        m.simulateClose(4501);
+        expect(vi.getTimerCount()).toBe(1); // the reload is pending
         window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
         vi.advanceTimersByTime(60000);
         expect(reload).not.toHaveBeenCalled();
@@ -4299,11 +4269,154 @@ describe('WS_CLOSE_CRASH recovery', () => {
     it('disconnect() cancels the pending reload', async () => {
         const m = await start();
         m.simulateOpen();
-        m.simulateClose(4500);
+        m.simulateClose(4501);
+        expect(vi.getTimerCount()).toBe(1); // the reload is pending
         m.restore();
         mock = null;
         vi.advanceTimersByTime(60000);
         expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('a network drop never reloads', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(1006);
+        vi.advanceTimersByTime(60000);
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    /** A view holding forms `f` (with an `az-change`) and `g` (without one). */
+    const VIEW =
+        '<div id="page" az-view>' +
+        '<form id="f" az-change=\'[0,"changed"]\'><input name="q" value=""></form>' +
+        '<form id="g"><input name="r" value=""></form></div>';
+    async function startWithForms() {
+        const m = await start();
+        document.body.innerHTML = VIEW;
+        m.simulateOpen();
+        m.simulateMessage(null, null); // mounted
+        return m;
+    }
+    const field = (name) =>
+        /** @type {HTMLInputElement} */ (document.querySelector(`[name=${name}]`));
+    const changeSends = (m) => m.getSentMessages().filter((s) => s[1] === 'changed').length;
+    /** The worker's reconnect: open + the resync, which rebuilds the view empty. */
+    const remount = (m) => {
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', VIEW]], null, true);
+    };
+
+    it('a crash restores the typed fields and replays az-change once', async () => {
+        const m = await startWithForms();
+        field('q').value = 'typed';
+        m.simulateClose(4500);
+        remount(m);
+        expect(field('q').value).toBe('typed');
+        expect(changeSends(m)).toBe(1);
+    });
+
+    it('keeps what was typed while disconnected', async () => {
+        const m = await startWithForms();
+        field('q').value = 'before';
+        m.simulateClose(1006);
+        field('q').value = 'during';
+        remount(m);
+        expect(field('q').value).toBe('during');
+    });
+
+    it('a crash before any user interaction after a replay restores without replaying', async () => {
+        const m = await startWithForms();
+        field('q').value = 'poison';
+        m.simulateClose(4500);
+        remount(m); // restored + replayed
+        expect(changeSends(m)).toBe(1);
+        field('q').value = 'poison, edited';
+        m.simulateClose(4500); // the replayed values are suspect
+        remount(m);
+        expect(field('q').value).toBe('poison, edited'); // values kept
+        expect(changeSends(m)).toBe(1); // not replayed again
+    });
+
+    it('a mount failure in between keeps the withheld replay withheld', async () => {
+        const m = await startWithForms();
+        field('q').value = 'poison';
+        m.simulateClose(4500);
+        remount(m);
+        m.simulateClose(4500); // suspect
+        m.simulateOpen(true);
+        m.simulateClose(4501); // saved again before any restore
+        remount(m);
+        expect(field('q').value).toBe('poison');
+        expect(changeSends(m)).toBe(1);
+    });
+
+    it('a user interaction the server answered clears the suspicion', async () => {
+        const m = await startWithForms();
+        field('q').value = 'fine';
+        m.simulateClose(4500);
+        remount(m);
+        window._ws.send(JSON.stringify(['page', 'click', {}])); // the user acts
+        m.simulateMessage([], null); // ... and the server answered
+        m.simulateClose(4500); // an unrelated crash
+        remount(m);
+        expect(changeSends(m)).toBe(2); // replayed again
+    });
+
+    it('a user frame the server never answered does not clear the suspicion', async () => {
+        const m = await startWithForms();
+        field('q').value = 'poison';
+        m.simulateClose(4500);
+        remount(m);
+        window._ws.send(JSON.stringify(['page', 'submit', {}])); // crashes the view
+        m.simulateClose(4500);
+        remount(m);
+        expect(changeSends(m)).toBe(1);
+    });
+
+    it('a frame answering only the replay does not clear the suspicion', async () => {
+        const m = await startWithForms();
+        field('q').value = 'poison';
+        m.simulateClose(4500);
+        remount(m);
+        m.simulateMessage([], null); // the reply to the replayed az-change
+        m.simulateClose(4500);
+        remount(m);
+        expect(changeSends(m)).toBe(1);
+    });
+
+    it('a non-crash close after a replay does not withhold the next one', async () => {
+        const m = await startWithForms();
+        field('q').value = 'fine';
+        m.simulateClose(4500);
+        remount(m);
+        m.simulateClose(1006); // a network drop is not the replay's fault
+        remount(m);
+        expect(changeSends(m)).toBe(2);
+    });
+
+    it('only forms that were replayed are withheld; typing elsewhere survives', async () => {
+        const m = await startWithForms();
+        field('q').value = 'q1';
+        field('r').value = 'r1';
+        m.simulateClose(1006);
+        remount(m); // f replayed, g restored (no az-change)
+        field('r').value = 'r2'; // typed after the remount
+        m.simulateClose(4500); // a quick, unrelated crash
+        remount(m);
+        expect(field('r').value).toBe('r2');
+        expect(field('q').value).toBe('q1');
+    });
+
+    it('the withheld replay comes back after one remount', async () => {
+        const m = await startWithForms();
+        field('q').value = 'v';
+        m.simulateClose(4500);
+        remount(m); // replay 1
+        m.simulateClose(4500); // suspect
+        remount(m); // restored, not replayed
+        m.simulateClose(1006);
+        remount(m); // replay 2
+        expect(changeSends(m)).toBe(2);
     });
 });
 

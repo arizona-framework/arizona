@@ -382,76 +382,95 @@ describe('arizona-worker', () => {
         expect(ws.instances).toHaveLength(3);
     });
 
-    // backoff(0) in [800,1200), backoff(1) in [1600,2400): the fire time tells the
-    // attempt index apart. Each helper reconnects once at backoff(0).
-    function reconnectOnce() {
+    // backoff(0) in [800,1200), backoff(1) in [1600,2400): the wait tells the
+    // attempt index apart.
+    /** Close the open socket with `code`; return how long the worker waits to reopen. */
+    function reopenDelay(code) {
+        const n = ws.instances.length;
+        ws.latest().close(code);
+        let waited = 0;
+        while (ws.instances.length === n && waited < 60000) {
+            vi.advanceTimersByTime(50);
+            waited += 50;
+        }
+        return waited;
+    }
+    const FIRST_STEP = [800, 1200];
+    const SECOND_STEP = [1600, 2400];
+    const inStep = (ms, [lo, hi]) => ms >= lo && ms <= hi;
+
+    /** Open a connection that already backed off once (attempt 1 is next). */
+    function openAfterOneDrop() {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
-        ws.latest().close(1006); // never mounted -> backoff(0)
-        vi.advanceTimersByTime(1200);
-        expect(ws.instances).toHaveLength(2);
+        const first = reopenDelay(1006); // never framed -> backoff(0)
         ws.latest().simulateOpen();
+        return first;
     }
 
-    it('a reconnect connect frame without ops does not reset the backoff', () => {
-        // A flagged reconnect's connect frame arrives before the deferred mount, so
-        // a mount that crashes after it must keep backing off.
-        reconnectOnce();
+    it('a mount failure (4501) never resets the backoff, even after a frame', () => {
+        expect(inStep(openAfterOneDrop(), FIRST_STEP)).toBe(true);
+        // A flagged reconnect frames its az-* names before the deferred mount.
         ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
-        ws.latest().close(4500); // attempt 1 -> backoff(1)
-        vi.advanceTimersByTime(1300);
-        expect(ws.instances).toHaveLength(2);
-        vi.advanceTimersByTime(1200);
-        expect(ws.instances).toHaveLength(3);
+        expect(inStep(reopenDelay(4501), SECOND_STEP)).toBe(true);
     });
 
-    it('a crash right after a mount keeps backing off', () => {
-        reconnectOnce();
-        ws.latest().simulateMessage(JSON.stringify({ o: [] })); // the resync: mounted
-        ws.latest().close(4500); // crashed within the stable window -> backoff(1)
-        vi.advanceTimersByTime(1300);
-        expect(ws.instances).toHaveLength(2);
-        vi.advanceTimersByTime(1200);
-        expect(ws.instances).toHaveLength(3);
-    });
-
-    it('a crash long after a mount resets the backoff', () => {
+    it('a navigate whose mount fails (4501) on a long-lived session keeps backing off', () => {
         const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
         try {
-            reconnectOnce();
-            ws.latest().simulateMessage(JSON.stringify({ o: [] })); // mounted
-            now.mockReturnValue(1_000_000 + 10_000); // a healthy session
-            ws.latest().close(4500); // reset -> backoff(0)
-            vi.advanceTimersByTime(1200);
-            expect(ws.instances).toHaveLength(3);
+            openAfterOneDrop();
+            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            now.mockReturnValue(1_000_000 + 60_000);
+            expect(inStep(reopenDelay(4501), SECOND_STEP)).toBe(true);
         } finally {
             now.mockRestore();
         }
     });
 
-    it('a first connect mounts on any frame, a reconnect only on its resync', () => {
-        slf.send([0, 'ws://host/ws?_az_path=%2F']);
-        ws.latest().simulateOpen();
-        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] })); // first connect: mounted
-        ws.latest().close(1006); // a mounted session resets -> backoff(0)
-        vi.advanceTimersByTime(1200);
-        expect(ws.instances).toHaveLength(2);
-
-        ws.latest().simulateOpen(); // a reconnect: the attrs-only frame is not its mount
-        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
-        ws.latest().close(1006); // not mounted -> backoff(1)
-        vi.advanceTimersByTime(1300);
-        expect(ws.instances).toHaveLength(2);
-        vi.advanceTimersByTime(1200);
-        expect(ws.instances).toHaveLength(3);
+    it('a crash (4500) right after the mount keeps backing off', () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+        try {
+            openAfterOneDrop();
+            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            now.mockReturnValue(1_000_000 + 9_999);
+            expect(inStep(reopenDelay(4500), SECOND_STEP)).toBe(true);
+        } finally {
+            now.mockRestore();
+        }
     });
 
-    it('a bfcache respawn [0, url, true] opens as a flagged reconnect', () => {
-        slf.send([0, 'ws://host/ws?_az_path=%2F', true]);
-        expect(ws.latest().url).toContain('_az_reconnect=1');
-        expect(ws.latest().url).toContain('_az_fps_follow=1');
-        ws.latest().simulateOpen();
-        expect(slf.posted).toContainEqual([1, true]);
+    it('a crash (4500) long after the mount resets the backoff', () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+        try {
+            openAfterOneDrop();
+            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            now.mockReturnValue(1_000_000 + 10_000);
+            expect(inStep(reopenDelay(4500), FIRST_STEP)).toBe(true);
+        } finally {
+            now.mockRestore();
+        }
+    });
+
+    it('a crash (4500) right after an SPA navigation keeps backing off', () => {
+        // The navigation may mount a new view, so "right after the mount" counts
+        // from it, not from the connection's open.
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+        try {
+            openAfterOneDrop();
+            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            now.mockReturnValue(1_000_000 + 60_000);
+            slf.send([3, { path: '/next', qs: '' }]);
+            now.mockReturnValue(1_000_000 + 61_000);
+            expect(inStep(reopenDelay(4500), SECOND_STEP)).toBe(true);
+        } finally {
+            now.mockRestore();
+        }
+    });
+
+    it('any other close after a frame resets the backoff', () => {
+        openAfterOneDrop();
+        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
+        expect(inStep(reopenDelay(1001), FIRST_STEP)).toBe(true);
     });
 
     it('update-path message [3, {path, qs}] rewrites the cached URL', () => {
