@@ -25,7 +25,7 @@ its result into roadrunner's `{Response, Req}` reply shape.
 
 -doc """
 Roadrunner `handle/1` callback. Renders the configured Arizona
-handler and replies with HTML.
+handler and replies with the document under its render target's media type.
 """.
 -spec handle(Req) -> {Response, Req} when
     Req :: roadrunner_req:request(),
@@ -43,14 +43,11 @@ handle(Req) ->
     case arizona_http:render(H, ArzReq, State) of
         {halt, HaltReq} ->
             {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
-        {ok, Status, Body, ArzReq1} ->
+        {Outcome, Status, ContentType, Body, ArzReq1} when Outcome =:= ok; Outcome =:= error ->
             {
-                arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)),
-                arizona_req:raw(ArzReq1)
-            };
-        {error, Status, Body, ArzReq1} ->
-            {
-                arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)),
+                arizona_roadrunner_resp:flush(
+                    ArzReq1, roadrunner_resp:body(Status, ContentType, Body)
+                ),
                 arizona_req:raw(ArzReq1)
             }
     end.

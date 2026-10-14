@@ -6,6 +6,7 @@
 
 -export([halt_keeps_redirect_and_cookie/1]).
 -export([render_threads_cookie/1]).
+-export([render_answers_the_targets_content_type/1]).
 -export([error_page_prod_serves_minimal_500/1]).
 -export([error_page_dev_serves_rich_page/1]).
 -export([error_page_logs_the_crash/1]).
@@ -17,7 +18,8 @@ groups() ->
     [
         {render, [parallel], [
             halt_keeps_redirect_and_cookie,
-            render_threads_cookie
+            render_threads_cookie,
+            render_answers_the_targets_content_type
         ]},
         %% Sequential: these toggle the global `arizona_reload_url` persistent_term
         %% (the dev/prod signal), which must not race the parallel render tests.
@@ -60,11 +62,29 @@ render_threads_cookie(Config) when is_list(Config) ->
             {cont, R1, B}
         end
     ],
-    {ok, 200, _Body, ReqOut} = arizona_http:render(arizona_about, Req, #{middlewares => Mw}),
+    {ok, 200, _ContentType, _Body, ReqOut} = arizona_http:render(arizona_about, Req, #{
+        middlewares => Mw
+    }),
     ?assertEqual(
         [{~"theme", ~"dark", #{path => ~"/"}}],
         arizona_req:resp_cookies(ReqOut)
     ).
+
+%% The page is served under the media type of its render target: a `?native` view
+%% is a JSON document, an HTML view (bare or in a layout) an HTML one.
+render_answers_the_targets_content_type(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{}),
+    {ok, 200, NativeType, NativeBody, _} =
+        arizona_http:render(arizona_native_counter_demo, Req, #{}),
+    ?assertEqual(~"application/json", NativeType),
+    ?assertMatch(#{~"type" := ~"Column"}, json:decode(iolist_to_binary(NativeBody))),
+    {ok, 200, HtmlType, _, _} = arizona_http:render(arizona_about, Req, #{}),
+    ?assertEqual(~"text/html; charset=utf-8", HtmlType),
+    {ok, 200, LayoutType, _, _} = arizona_http:render(arizona_local_nested, Req, #{
+        bindings => #{title => ~"Nested"},
+        layouts => [{arizona_layout, render}]
+    }),
+    ?assertEqual(~"text/html; charset=utf-8", LayoutType).
 
 %% --------------------------------------------------------------------
 %% Error page: production must not leak internals; crashes must be logged
@@ -79,7 +99,8 @@ crash_opts() ->
 error_page_prod_serves_minimal_500(Config) when is_list(Config) ->
     persistent_term:erase(arizona_reload_url),
     Req = arizona_req_test_adapter:new(#{}),
-    {error, 500, Body, _} = arizona_http:render(arizona_crashable, Req, crash_opts()),
+    {error, 500, ContentType, Body, _} = arizona_http:render(arizona_crashable, Req, crash_opts()),
+    ?assertEqual(~"text/html; charset=utf-8", ContentType),
     Bin = iolist_to_binary(Body),
     ?assertEqual(nomatch, binary:match(Bin, ~"crash_on_mount")),
     ?assertEqual(nomatch, binary:match(Bin, ~"arizona_crashable")),
@@ -91,7 +112,10 @@ error_page_dev_serves_rich_page(Config) when is_list(Config) ->
     persistent_term:put(arizona_reload_url, ~"/arizona/reload"),
     try
         Req = arizona_req_test_adapter:new(#{}),
-        {error, 500, Body, _} = arizona_http:render(arizona_crashable, Req, crash_opts()),
+        {error, 500, ContentType, Body, _} = arizona_http:render(
+            arizona_crashable, Req, crash_opts()
+        ),
+        ?assertEqual(~"text/html; charset=utf-8", ContentType),
         Bin = iolist_to_binary(Body),
         ?assertNotEqual(nomatch, binary:match(Bin, ~"crash_on_mount"))
     after
@@ -108,7 +132,9 @@ error_page_logs_the_crash(Config) when is_list(Config) ->
     }),
     try
         Req = arizona_req_test_adapter:new(#{}),
-        {error, 500, _Body, _} = arizona_http:render(arizona_crashable, Req, crash_opts()),
+        {error, 500, _ContentType, _Body, _} = arizona_http:render(
+            arizona_crashable, Req, crash_opts()
+        ),
         ?assert(received_crash_log(1000))
     after
         logger:remove_handler(HandlerId)

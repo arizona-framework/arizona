@@ -183,6 +183,12 @@ target name from a backend module without hardcoding the module -> name mapping.
 -callback target() -> atom().
 
 -doc """
+The media type of a whole document rendered by this backend, used when a route
+serving one of its views answers an HTTP request.
+""".
+-callback content_type() -> binary().
+
+-doc """
 Whether this backend supports the client-owned `?local` slot (a browser/HTML-only
 feature). A backend capability, declared by each backend; the parse transform
 rejects `?local` at compile time when `false`.

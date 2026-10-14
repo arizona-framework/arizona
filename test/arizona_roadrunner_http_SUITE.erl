@@ -10,13 +10,15 @@
 -export([handle_returns_the_threaded_raw_request_on_a_render_crash/1]).
 -export([manual_body_read_keeps_pipelining_intact/1]).
 -export([transforms_apply_over_the_wire/1]).
+-export([page_carries_its_targets_content_type/1]).
 
 all() ->
     [
         handle_returns_the_threaded_raw_request,
         handle_returns_the_threaded_raw_request_on_a_render_crash,
         manual_body_read_keeps_pipelining_intact,
-        transforms_apply_over_the_wire
+        transforms_apply_over_the_wire,
+        page_carries_its_targets_content_type
     ].
 
 init_per_suite(Config) ->
@@ -39,7 +41,8 @@ init_per_suite(Config) ->
                 tags => [<<"tag-", (integer_to_binary(I))/binary>> || I <- lists:seq(1, 100)]
             },
             middlewares => [arizona_middleware:etag()]
-        }}
+        }},
+        {live, ~"/native_page", arizona_native_counter_demo, #{}}
     ],
     {ok, _} = arizona_roadrunner_server:start(Listener, #{
         transport_opts => [{port, Port}],
@@ -201,14 +204,37 @@ transforms_apply_over_the_wire(Config) when is_list(Config) ->
         {~"if-none-match", PageTag}
     ]).
 
+%% A `?native` route answers GET and HEAD with its JSON document under
+%% `application/json`, an HTML route with `text/html`, and a render crash's error
+%% page (HTML) keeps `text/html`.
+page_carries_its_targets_content_type(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    {200, NativeHeaders, NativeBody} = raw_get(Port, ~"/native_page", []),
+    ?assertEqual(~"application/json", maps:get(~"content-type", NativeHeaders)),
+    ?assertMatch(#{~"type" := ~"Column"}, json:decode(NativeBody)),
+    {200, HeadHeaders, <<>>} = raw_request(Port, ~"HEAD", ~"/native_page", []),
+    ?assertEqual(~"application/json", maps:get(~"content-type", HeadHeaders)),
+    {200, HtmlHeaders, _} = raw_get(Port, ~"/etag_page", []),
+    ?assertEqual(~"text/html; charset=utf-8", maps:get(~"content-type", HtmlHeaders)),
+    Req = manual_body_req(~"", arizona_crashable, #{crash_on_mount => true}),
+    {{500, CrashHeaders, _}, _} = arizona_roadrunner_http:handle(Req),
+    ?assertEqual(
+        {~"content-type", ~"text/html; charset=utf-8"},
+        lists:keyfind(~"content-type", 1, CrashHeaders)
+    ).
+
 raw_get(Port, Path, ExtraHeaders) ->
+    raw_request(Port, ~"GET", Path, ExtraHeaders).
+
+raw_request(Port, Method, Path, ExtraHeaders) ->
     {ok, Sock} = gen_tcp:connect(
         "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
     ),
     try
         HeaderLines = [[K, ~": ", V, ~"\r\n"] || {K, V} <- ExtraHeaders],
         ok = gen_tcp:send(Sock, [
-            ~"GET ",
+            Method,
+            ~" ",
             Path,
             ~" HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n",
             HeaderLines,

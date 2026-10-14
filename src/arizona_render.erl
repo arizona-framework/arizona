@@ -67,6 +67,7 @@ op-code targets.
 -export([render_to_iolist/1]).
 -export([render_to_iolist/2]).
 -export([render_view_to_iolist/2]).
+-export([render_view/2]).
 -export([current_layout/0]).
 -export([resolve_id/1]).
 -export([zip/2]).
@@ -208,7 +209,8 @@ route-level concept and is intentionally not honored here.
 render_to_iolist(Handler, Opts) ->
     Bindings0 = maps:get(bindings, Opts, #{}),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
-    finish_ssr(Handler, Bindings, Opts).
+    {_Backend, Page} = finish_ssr(Handler, Bindings, Opts),
+    Page.
 
 -doc """
 SSR render for a route-level page (the production HTTP path).
@@ -222,12 +224,26 @@ Use `render_to_iolist/2` for embedded-component SSR (no `on_mount`).
     Handler :: module(),
     Opts :: arizona_live:route_opts().
 render_view_to_iolist(Handler, Opts) ->
+    {_ContentType, Page} = render_view(Handler, Opts),
+    Page.
+
+-doc """
+Like `render_view_to_iolist/2`, paired with the document's media type: the
+outermost rendered template's backend answers it (`content_type/0`), so a route
+serving a `?native` view answers with JSON and an HTML one with HTML.
+""".
+-spec render_view(Handler, Opts) -> {ContentType, iolist()} when
+    Handler :: module(),
+    Opts :: arizona_live:route_opts(),
+    ContentType :: binary().
+render_view(Handler, Opts) ->
     Bindings0 = arizona_live:apply_on_mount(
         maps:get(on_mount, Opts, []),
         maps:get(bindings, Opts, #{})
     ),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
-    finish_ssr(Handler, Bindings, Opts).
+    {Backend, Page} = finish_ssr(Handler, Bindings, Opts),
+    {content_type(Backend), Page}.
 
 -doc """
 Resolves an id-or-template to a binary id.
@@ -517,12 +533,18 @@ backend(Map) -> maps:get(backend, Map, undefined).
 flat_zip(Backend, Statics, Vals) ->
     iolist_to_binary(zip(Backend, Statics, [arizona_template:unwrap_val(Backend, V) || V <- Vals])).
 
+%% Returns the rendered document with the backend of its outermost template (the
+%% outermost layout, else the page), which is what the document as a whole is.
 finish_ssr(Handler, Bindings, Opts) ->
     PageTmpl = arizona_stateful:call_render(Handler, Bindings),
     Backend = backend(PageTmpl),
     PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
     Layouts = maps:get(layouts, Opts, []),
-    apply_layouts(Layouts, PageHTML, Bindings).
+    apply_layouts(Layouts, {Backend, PageHTML}, Bindings).
+
+%% A hand-built template carries no backend; it renders as the default target.
+content_type(undefined) -> arizona_html:content_type();
+content_type(Backend) -> Backend:content_type().
 
 %% Wraps `Inner` with each layer. List is outermost-first, so the page
 %% HTML ends up nested inside every layer in the order given:
@@ -549,9 +571,9 @@ finish_ssr(Handler, Bindings, Opts) ->
 apply_layouts([], Inner, _Bindings) ->
     Inner;
 apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
-    Wrapped = apply_layouts(Rest, Inner, Bindings),
+    {_InnerBackend, Wrapped} = apply_layouts(Rest, Inner, Bindings),
     Tmpl = Mod:Fun(Bindings#{inner_content => #{s => [Wrapped], d => []}}),
-    render_layout(Mod, Fun, Tmpl).
+    {backend(Tmpl), render_layout(Mod, Fun, Tmpl)}.
 
 %% Mark the layer so `render_ssr_val/2` can refuse a `?stateful` inside it. The
 %% inner layers have already rendered into `Wrapped` by the time this runs, and

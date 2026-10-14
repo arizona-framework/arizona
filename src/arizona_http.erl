@@ -5,7 +5,7 @@ Arizona view as the page response.
 
 Runs route middlewares against an already-wrapped
 `arizona_req:request()`, then dispatches to
-`arizona_render:render_view_to_iolist/2` and returns either a halt
+`arizona_render:render_view/2` and returns either a halt
 signal (middleware refused to continue), the rendered page body,
 or a crash/error page body. The caller is responsible for wrapping
 the native request beforehand and translating the result into its
@@ -19,10 +19,12 @@ transport's native reply shape.
    or status and ships the reply (a `403` when the middleware stashed
    neither).
 3. On `{cont, Req1, Bindings1}` -- call
-   `arizona_render:render_view_to_iolist/2` with the route's
-   `layout`/`on_mount`. Return `{ok, 200, Page, Req1}` or, on crash or a
-   stashed hot-reload error, `{error, 500, ErrorPage, Req1}` (the threaded
-   req carries any response headers/cookies for the transport to flush).
+   `arizona_render:render_view/2` with the route's `layout`/`on_mount`.
+   Return `{ok, 200, ContentType, Page, Req1}` or, on crash or a stashed
+   hot-reload error, `{error, 500, ContentType, ErrorPage, Req1}` (the
+   threaded req carries any response headers/cookies for the transport to
+   flush). `ContentType` is the rendered document's media type, answered by
+   its render backend, so a `?native` route serves JSON and an HTML one HTML.
 """.
 
 %% --------------------------------------------------------------------
@@ -51,8 +53,8 @@ transport's native reply shape.
 
 -nominal result() ::
     {halt, arizona_req:request()}
-    | {ok, arizona_req:resp_status(), iolist(), arizona_req:request()}
-    | {error, 500, iolist(), arizona_req:request()}.
+    | {ok, arizona_req:resp_status(), ContentType :: binary(), iolist(), arizona_req:request()}
+    | {error, 500, ContentType :: binary(), iolist(), arizona_req:request()}.
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -98,7 +100,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
                     layouts => maps:get(layouts, Opts, []),
                     on_mount => maps:get(on_mount, Opts, [])
                 },
-                Page = arizona_render:render_view_to_iolist(H, RenderOpts),
+                {ContentType, Page} = arizona_render:render_view(H, RenderOpts),
                 %% A view or middleware may stash a non-200 status (e.g. 401)
                 %% while still rendering a body; default to 200.
                 OkStatus =
@@ -106,7 +108,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
                         undefined -> 200;
                         Status -> Status
                     end,
-                {ok, OkStatus, Page, ArzReq}
+                {ok, OkStatus, ContentType, Page, ArzReq}
             catch
                 Class:Reason:Stacktrace ->
                     %% arizona catches the render crash here, before roadrunner's
@@ -114,10 +116,12 @@ do_render(H, ArzReq, Bindings, Opts) ->
                     %% exception is swallowed and the operator gets no record of
                     %% the 500. Log it, then serve the (dev-gated) error body.
                     logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-                    {error, 500, error_body(Bindings, Class, Reason, Stacktrace, Opts), ArzReq}
+                    {ErrorType, ErrorBody} = error_body(Bindings, Class, Reason, Stacktrace, Opts),
+                    {error, 500, ErrorType, ErrorBody, ArzReq}
             end;
         #{errors := Errors} ->
-            {error, 500, error_body(Bindings, error, {compile_error, Errors}, [], Opts), ArzReq}
+            {ErrorType, ErrorBody} = error_body(Bindings, error, {compile_error, Errors}, [], Opts),
+            {error, 500, ErrorType, ErrorBody, ArzReq}
     end.
 
 %% The rich error page (exception class, reason, and full stack with file:line)
@@ -129,7 +133,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
 error_body(Bindings, Class, Reason, Stacktrace, Opts) ->
     case reload_url() of
         undefined ->
-            minimal_error_body();
+            {arizona_html:content_type(), minimal_error_body()};
         ReloadUrl ->
             ErrorInfo = #{
                 class => Class,
@@ -143,7 +147,12 @@ error_body(Bindings, Class, Reason, Stacktrace, Opts) ->
 render_error_body(Bindings, ErrorInfo, Opts) ->
     {Mod, Fun} = error_page(Opts),
     Tmpl = Mod:Fun(Bindings#{error_info => ErrorInfo}),
-    arizona_render:render_to_iolist(Tmpl).
+    {error_page_type(Tmpl), arizona_render:render_to_iolist(Tmpl)}.
+
+%% The error page is whatever template the listener configured; its backend names
+%% its media type, defaulting to HTML for a hand-built template that carries none.
+error_page_type(#{backend := Backend}) -> Backend:content_type();
+error_page_type(_Tmpl) -> arizona_html:content_type().
 
 %% Production 500 body: no class/reason/stack and no reload script.
 minimal_error_body() ->
