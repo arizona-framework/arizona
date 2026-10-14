@@ -146,9 +146,10 @@ The live process is linked. Exits map to WebSocket close codes:
     %% against the announced fingerprints. `undefined` once flushed (or when
     %% the connection never deferred).
     pending_resync = undefined :: undefined | reference(),
-    %% The request tag of a call into the live process that failed because the
-    %% process went away (`crash_close/4`). The frame is dropped and the close
-    %% waits for the queued exit; a crash exit then logs which call it cut short.
+    %% The request tag of the first call into the live process that the
+    %% process died under (`live_call_failed/4`). The frame is dropped and the
+    %% close waits for the queued exit; a crash exit then logs which call it cut
+    %% short. Never set for a process that was already dead when the call began.
     failed_call = undefined :: undefined | term()
 }).
 
@@ -451,7 +452,7 @@ close_crash(Socket) ->
 crash_close(
     exit, {CallReason, {gen_server, call, [Pid, Request | _]}}, Stacktrace, #socket{pid = Pid} = S
 ) when is_pid(Pid) ->
-    live_call_failed(CallReason, Stacktrace, S#socket{failed_call = call_tag(Request)});
+    live_call_failed(CallReason, call_tag(Request), Stacktrace, S);
 crash_close(Class, Reason, Stacktrace, Socket) ->
     log_crash(Class, Reason, Stacktrace),
     close_crash(Socket).
@@ -459,23 +460,37 @@ crash_close(Class, Reason, Stacktrace, Socket) ->
 %% `noproc`: the process was already dead when the call began, so its exit was
 %% sent first, and a receive handles pending signals before matching -- `after 0`
 %% sees it. Taking it out and re-sending it keeps it behind the pushes it
-%% trailed. No exit at all means something else consumed it, which the socket
-%% never does: an invariant break, reported rather than guessed as a drain. A
-%% timed-out call left the process alive: a crash. Any other reason is the exit
-%% the process died with under the call, still on its way to this mailbox.
-live_call_failed(noproc, _Stacktrace, #socket{pid = Pid, failed_call = Call} = Socket) ->
+%% trailed. The receive is cheap and is the only check that nothing else
+%% consumed the exit (the socket never does): finding none is an invariant
+%% break, reported rather than guessed as a drain. The call did not cause the
+%% exit, so it is not recorded as the one the crash cut short.
+%%
+%% `timeout`: the process is still alive, so no exit will come; without this
+%% clause the frame would be dropped and the session would wait forever.
+%% Unreachable today -- every socket-side call into the live process uses
+%% `infinity` -- but a finite timeout added later must not hang the session. A
+%% process that exits with the bare reason `timeout` under the call lands here
+%% too and is logged as a timeout rather than a crash; it still closes 4500.
+%%
+%% Any other reason is the exit the process died with under the call, still on
+%% its way to this mailbox: local `gen_server:call` with `infinity` raises only
+%% after the monitor fires, and the link's exit follows from the same process.
+%% The first call it cut short is kept for the crash log.
+live_call_failed(noproc, Tag, _Stacktrace, #socket{pid = Pid} = Socket) ->
     receive
         {'EXIT', Pid, _} = Exit ->
             self() ! Exit,
             {ok, Socket}
     after 0 ->
-        logger:warning("Live process ~p gone with no exit queued (call ~p)", [Pid, Call]),
+        logger:warning("Live process ~p gone with no exit queued (call ~p)", [Pid, Tag]),
         close_crash(Socket)
     end;
-live_call_failed(timeout, Stacktrace, #socket{failed_call = Call} = Socket) ->
-    log_crash(exit, {timeout, Call}, Stacktrace),
+live_call_failed(timeout, Tag, Stacktrace, Socket) ->
+    log_crash(exit, {timeout, Tag}, Stacktrace),
     close_crash(Socket);
-live_call_failed(_ExitReason, _Stacktrace, Socket) ->
+live_call_failed(_ExitReason, Tag, _Stacktrace, #socket{failed_call = undefined} = Socket) ->
+    {ok, Socket#socket{failed_call = Tag}};
+live_call_failed(_ExitReason, _Tag, _Stacktrace, Socket) ->
     {ok, Socket}.
 
 %% The call's request tag, never its arguments (an event payload may be user

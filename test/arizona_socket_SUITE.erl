@@ -47,6 +47,9 @@
 -export([event_drained_under_call_closes_going_away/1]).
 -export([navigate_middleware_noproc_closes_crash/1]).
 -export([drain_effects_ship_before_close/1]).
+-export([drain_effects_ship_before_noproc_close/1]).
+-export([crash_before_frame_not_blamed_on_it/1]).
+-export([crash_under_call_names_the_call/1]).
 -export([patch_on_drained_live_process_closes_going_away/1]).
 -export([resync_timeout_on_drained_live_process_closes_going_away/1]).
 -export([drain_before_mount_closes_going_away/1]).
@@ -96,6 +99,9 @@ all() ->
         event_drained_under_call_closes_going_away,
         navigate_middleware_noproc_closes_crash,
         drain_effects_ship_before_close,
+        drain_effects_ship_before_noproc_close,
+        crash_before_frame_not_blamed_on_it,
+        crash_under_call_names_the_call,
         patch_on_drained_live_process_closes_going_away,
         resync_timeout_on_drained_live_process_closes_going_away,
         drain_before_mount_closes_going_away,
@@ -968,6 +974,49 @@ drain_effects_ship_before_close(Config) when is_list(Config) ->
     ?assertMatch([[_DispatchEvent, ~"draining" | _]], effects(Pushed)),
     ?assertMatch({close, 1001, <<>>, _}, Close).
 
+drain_effects_ship_before_noproc_close(Config) when is_list(Config) ->
+    %% The same drain finished before the frame arrived: the call finds the live
+    %% process already gone (noproc). Its effects push still sits ahead of its
+    %% exit in the socket mailbox, so it ships before the 1001.
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket} = arizona_socket:init(arizona_drainable, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket),
+    Ref = erlang:monitor(process, Pid),
+    Pid ! {arizona_drain, erlang:monotonic_time(millisecond) + 5000},
+    ok = await_down(Ref, Pid),
+    Frame = iolist_to_binary(json:encode([null, ~"noop", #{}])),
+    {[Pushed], Close} = settle(arizona_socket:handle_in(Frame, Socket), Socket),
+    ?assertMatch([[_DispatchEvent, ~"draining" | _]], effects(Pushed)),
+    ?assertMatch({close, 1001, <<>>, _}, Close).
+
+crash_before_frame_not_blamed_on_it(Config) when is_list(Config) ->
+    %% A live process that crashed before the frame arrived was not cut short
+    %% by that frame's call: the crash log carries the reason, not the call.
+    Socket = counter_socket(),
+    Pid = arizona_socket:live_pid(Socket),
+    Ref = erlang:monitor(process, Pid),
+    true = exit(Pid, boom_before_frame),
+    ok = await_down(Ref, Pid),
+    {{[], Close}, [Text]} = error_texts(fun() ->
+        settle(arizona_socket:handle_in(inc_frame(), Socket), Socket)
+    end),
+    ?assertMatch({close, 4500, ~"server crash", _}, Close),
+    ?assertNotEqual(nomatch, string:find(Text, "crashed: boom_before_frame")),
+    ?assertEqual(nomatch, string:find(Text, "during")).
+
+crash_under_call_names_the_call(Config) when is_list(Config) ->
+    %% A live process that dies while the frame's call is queued was cut short by
+    %% that call, and the crash log names it.
+    Socket = counter_socket(),
+    Pid = arizona_socket:live_pid(Socket),
+    ok = sys:suspend(Pid),
+    true = is_pid(spawn_link(fun() -> kill_when_queued(Pid) end)),
+    {{[], Close}, [Text]} = error_texts(fun() ->
+        settle(arizona_socket:handle_in(inc_frame(), Socket), Socket)
+    end),
+    ?assertMatch({close, 4500, ~"server crash", _}, Close),
+    ?assertNotEqual(nomatch, string:find(Text, "crashed during event")).
+
 patch_on_drained_live_process_closes_going_away(Config) when is_list(Config) ->
     %% The patch leg: its call finds the drained live process gone, and the
     %% queued exit closes 1001.
@@ -1285,6 +1334,38 @@ await_down(Ref, Pid) ->
     receive
         {'DOWN', Ref, process, Pid, _Reason} -> ok
     after 2000 -> error(live_process_did_not_stop)
+    end.
+
+%% Kills the suspended live process once a call is queued in it, so the caller
+%% sees it die under the call.
+kill_when_queued(Pid) ->
+    case erlang:process_info(Pid, message_queue_len) of
+        {message_queue_len, Len} when Len >= 1 ->
+            true = exit(Pid, boom_under_call),
+            ok;
+        {message_queue_len, _} ->
+            ok = timer:sleep(1),
+            kill_when_queued(Pid)
+    end.
+
+%% `{Result, Texts}`: the formatted error-level logs running `Fun` produced.
+error_texts(Fun) ->
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => error, config => #{pid => self()}
+    }),
+    try
+        Result = Fun(),
+        {Result, collect_texts([])}
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.
+
+collect_texts(Acc) ->
+    receive
+        {arizona_test_log_handler, #{level := error, msg := {Format, Args}}} ->
+            collect_texts([lists:flatten(io_lib:format(Format, Args)) | Acc])
+    after 100 -> lists:reverse(Acc)
     end.
 
 resume_when_queued(Pid, N) ->
