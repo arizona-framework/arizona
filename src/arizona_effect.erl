@@ -69,8 +69,15 @@ embed the command as a JSON value.
     Cmds :: cmd() | [cmd()].
 encode_json(Cmds) ->
     %% A string argument that is not UTF-8 is named `non_utf8_render`, not left
-    %% as the encoder's `unexpected_end` (arizona_utf8:json_encode/1).
-    arizona_utf8:json_encode(json_value(Cmds)).
+    %% as the encoder's `unexpected_end` (arizona_utf8:refuse/3, as in
+    %% arizona_native). The try is inline: this runs per command per render, and
+    %% only a failure should pay for the rename.
+    Json = json_value(Cmds),
+    try
+        iolist_to_binary(json:encode(Json))
+    catch
+        error:Reason:Stacktrace -> arizona_utf8:refuse(Json, Reason, Stacktrace)
+    end.
 
 -doc """
 The command (or list of commands) as the JSON term it serializes to: `[OpCode |

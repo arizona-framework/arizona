@@ -219,7 +219,12 @@ chardata_wrapping_non_utf8_binary(Config) when is_list(Config) ->
     ?assertEqual(~"日本 é", arizona_template:to_bin([~"日本", " é"])).
 
 format_error_names_the_byte_and_the_fix(Config) when is_list(Config) ->
-    {Reason, ST} = caught(fun() -> arizona_utf8:json_encode(latin1()) end),
+    {Reason, ST} =
+        try
+            arizona_utf8:refuse(latin1(), unexpected_end, [])
+        catch
+            error:R:S -> {R, S}
+        end,
     ?assertEqual({non_utf8_render, 16#E9, 3}, Reason),
     [{arizona_utf8, _Fun, [Value], Info} | _] = ST,
     ?assertEqual(latin1(), Value),

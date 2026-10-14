@@ -42,7 +42,6 @@ one of them on the render path was measured too expensive (see
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([json_encode/1]).
 -export([refuse/3]).
 -export([render_view/2]).
 -export([mount/1]).
@@ -62,22 +61,6 @@ one of them on the render path was measured too expensive (see
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
-
--doc """
-`json:encode/1` to a binary, with a failure over a string that is not UTF-8 named
-`non_utf8_render` (see `refuse/3`). The encoder validates UTF-8 as it escapes, so
-the check itself costs nothing; only a failure pays for the rename. Every arizona
-JSON encode of a rendered value goes through here: the `?native` backend's values
-and props, and `arizona_effect`'s commands.
-""".
--spec json_encode(Term) -> binary() when
-    Term :: json:encode_value().
-json_encode(Term) ->
-    try
-        iolist_to_binary(json:encode(Term))
-    catch
-        error:Reason:Stacktrace -> refuse(Term, Reason, Stacktrace)
-    end.
 
 -doc """
 Re-raises a JSON encoder failure on `Term` as `{non_utf8_render, Byte, Offset}`

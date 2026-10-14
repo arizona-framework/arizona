@@ -248,7 +248,9 @@ route-level concept and is intentionally not honored here.
 render_to_iolist(Handler, Opts) ->
     Bindings0 = maps:get(bindings, Opts, #{}),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
-    {_Backend, Page} = finish_ssr(Handler, Bindings, Opts),
+    {_Backend, Page} = finish_page(
+        arizona_stateful:call_render(Handler, Bindings), Bindings, Opts
+    ),
     Page.
 
 -doc """
@@ -603,9 +605,6 @@ flat_zip(Backend, Statics, Vals) ->
 %% records one (a layout, else the page), which is what the document as a whole
 %% is. A layout with a backend must share the page's (assert_layout_target/4), and
 %% a backendless one (`?inner_content` returned bare) inherits the inner backend.
-finish_ssr(Handler, Bindings, Opts) ->
-    finish_page(arizona_stateful:call_render(Handler, Bindings), Bindings, Opts).
-
 finish_page(PageTmpl, Bindings, Opts) ->
     Backend = backend(PageTmpl),
     PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
