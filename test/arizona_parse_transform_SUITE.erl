@@ -433,6 +433,10 @@
     cond_case_diff_transition/1,
     cond_case_element_list_tail/1,
     cond_case_mixed_fragment_tail/1,
+    wrapped_helper_try_tail_tracked/1,
+    wrapped_helper_receive_tail_tracked/1,
+    wrapped_helper_maybe_tail_tracked/1,
+    list_child_wrapped_element_helper_off_tail/1,
     cond_begin_block_tail/1,
     cond_try_bare_element/1,
     cond_maybe_bare_element/1,
@@ -753,6 +757,10 @@ groups() ->
             cond_case_diff_transition,
             cond_case_element_list_tail,
             cond_case_mixed_fragment_tail,
+            wrapped_helper_try_tail_tracked,
+            wrapped_helper_receive_tail_tracked,
+            wrapped_helper_maybe_tail_tracked,
+            list_child_wrapped_element_helper_off_tail,
             cond_begin_block_tail,
             cond_try_bare_element,
             cond_maybe_bare_element,
@@ -9959,3 +9967,52 @@ region_diff(Fun, Bindings, Snap, Views, Changed) ->
 settled_stream(Stream) ->
     #{s := Settled} = arizona_stream:clear_stream_pending(#{s => Stream}, [s]),
     Settled.
+
+%% A wrapped helper in a try/receive/maybe tail is inlined like a case tail, so its
+%% reads stay tracked on the slot.
+wrapped_helper_try_tail_tracked(Config) when is_list(Config) ->
+    assert_tail_tracked(
+        "pt_wrapped_try",
+        "try w(Bindings) catch _:_ -> <<>> end"
+    ).
+
+wrapped_helper_receive_tail_tracked(Config) when is_list(Config) ->
+    assert_tail_tracked(
+        "pt_wrapped_receive",
+        "receive never -> <<>> after 0 -> w(Bindings) end"
+    ).
+
+wrapped_helper_maybe_tail_tracked(Config) when is_list(Config) ->
+    assert_tail_tracked(
+        "pt_wrapped_maybe",
+        "maybe ok ?= ok, w(Bindings) end"
+    ).
+
+assert_tail_tracked(Name, Tail) ->
+    Mod = compile_module(
+        "-module(" ++ Name ++
+            "). "
+            "-export([render/1]). "
+            "render(Bindings) -> arizona_template:html({p, [], [" ++ Tail ++
+            "]}). "
+            "w(Bindings) -> arizona_template:html({b, [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{x => ~"X0"}), #{}),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(Mod:render(#{x => ~"X1"}), Snap, #{}, #{x => true}),
+    ?assertNotEqual(nomatch, binary:match(term_to_binary(Ops), ~"X1")).
+
+%% An element-bodied `?html`-wrapped helper used as a value (a case scrutinee) stays
+%% a call, so the consumer gets its template rather than the unwrapped element.
+list_child_wrapped_element_helper_off_tail(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_off_tail_el). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], ["
+        "        case card(arizona_template:get(a, Bindings)) of T -> T end"
+        "    ]}). "
+        "card(Y) -> arizona_template:html({b, [], [Y]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{a => ~"A"}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<b")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"A")).

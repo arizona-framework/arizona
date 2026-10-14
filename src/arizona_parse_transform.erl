@@ -261,7 +261,7 @@ maybe_helper_pair(Name, Arity, FunDefs, Acc) ->
     Inlineable = lists:any(
         fun(Target) ->
             case helper_plan_shape(Name, Arity, FunDefs, Target) of
-                {inline, _Params, _Body} -> true;
+                {inline, _Params, _Body, _Wrap} -> true;
                 _ -> false
             end
         end,
@@ -1206,46 +1206,145 @@ is_track_touch(_Stmt) ->
 %% Returns {Expr1, Changed} so the caller re-runs the bottom-up transform
 %% (retransform_spliced/4) only when a body was actually spliced.
 inline_helper_calls(Expr, Module, FunDefs, Target) ->
-    ih(Expr, {Module, FunDefs, Target, #{}}, false).
+    ih(Expr, {Module, FunDefs, Target, #{}}, false, true).
 
-ih({call, L, {atom, _, Name}, Args} = Call, Ctx, Ch) ->
-    ih_call(Call, Name, Args, L, Ctx, Ch);
+%% `Tail` is true where the expression's value IS template content: the template
+%% body itself, an element's children (and each item of a children list or of a
+%% content-slot list), and a control-flow tail of one. Elsewhere -- a function
+%% argument, a case scrutinee, an attribute, a statement -- the value is consumed as
+%% data. A bare-element body spliced there is the same value the call returned, so it
+%% is inlined anywhere; a `?html`-wrapped body is not (unwrapping it would hand the
+%% consumer the inner element or list instead of the template the call returned), so
+%% off a tail the call is left to run.
+ih({call, L, {atom, _, Name}, Args} = Call, Ctx, Ch, Tail) ->
+    ih_call(Call, Name, Args, L, Ctx, Ch, Tail);
 ih(
     {call, L, {remote, _, {atom, _, Module}, {atom, _, Name}}, Args} = Call,
     {Module, _, _, _} = Ctx,
-    Ch
+    Ch,
+    Tail
 ) ->
-    ih_call(Call, Name, Args, L, Ctx, Ch);
-ih({map, _, _} = Map, _Ctx, Ch) ->
+    ih_call(Call, Name, Args, L, Ctx, Ch, Tail);
+ih({map, _, _} = Map, _Ctx, Ch, _Tail) ->
     %% Map literals hold runtime data (user maps, ?stateful props) or
     %% already-compiled templates from a previous pass -- never descend.
     {Map, Ch};
-ih({map, _, _, _} = Map, _Ctx, Ch) ->
+ih({map, _, _, _} = Map, _Ctx, Ch, _Tail) ->
     {Map, Ch};
-ih(T, Ctx, Ch) when is_tuple(T) ->
-    {L1, Ch1} = ih_list(tuple_to_list(T), Ctx, Ch),
-    {list_to_tuple(L1), Ch1};
-ih(L, Ctx, Ch) when is_list(L) ->
-    ih_list(L, Ctx, Ch);
-ih(Other, _Ctx, Ch) ->
+ih({tuple, L, [Tag, Attrs, Children]} = T, Ctx, Ch, Tail) ->
+    case is_element_tuple(T) of
+        true ->
+            {[Tag1, Attrs1], Ch1} = ih_list([Tag, Attrs], Ctx, Ch, false),
+            {Children1, Ch2} = ih_children(Children, Ctx, Ch1),
+            {{tuple, L, [Tag1, Attrs1, Children1]}, Ch2};
+        false ->
+            ih_generic(T, Ctx, Ch, Tail)
+    end;
+ih({cons, L, H, T}, Ctx, Ch, true) ->
+    %% A list nested inside the list is a single value, not content.
+    {H1, Ch1} = ih(H, Ctx, Ch, not is_list_ast(H)),
+    {T1, Ch2} = ih(T, Ctx, Ch1, true),
+    {{cons, L, H1, T1}, Ch2};
+ih(T, Ctx, Ch, Tail) when
+    element(1, T) =:= 'case';
+    element(1, T) =:= 'if';
+    element(1, T) =:= block;
+    element(1, T) =:= 'receive';
+    element(1, T) =:= 'try';
+    element(1, T) =:= 'maybe';
+    element(1, T) =:= 'fun'
+->
+    ih_flow(T, Ctx, Ch, Tail);
+ih(T, Ctx, Ch, _Tail) when is_tuple(T) ->
+    ih_generic(T, Ctx, Ch, false);
+ih(L, Ctx, Ch, _Tail) when is_list(L) ->
+    ih_list(L, Ctx, Ch, false);
+ih(Other, _Ctx, Ch, _Tail) ->
     {Other, Ch}.
 
-ih_list([], _Ctx, Ch) ->
+%% Control flow: a clause body's last expression carries the value, so it
+%% inherits `Tail`; scrutinees, timeouts and `after` bodies never do.
+ih_flow({'case', L, Scrutinee, Clauses}, Ctx, Ch, Tail) ->
+    {Scrutinee1, Ch1} = ih(Scrutinee, Ctx, Ch, false),
+    {Clauses1, Ch2} = ih_clauses(Clauses, Ctx, Ch1, Tail),
+    {{'case', L, Scrutinee1, Clauses1}, Ch2};
+ih_flow({'if', L, Clauses}, Ctx, Ch, Tail) ->
+    {Clauses1, Ch1} = ih_clauses(Clauses, Ctx, Ch, Tail),
+    {{'if', L, Clauses1}, Ch1};
+ih_flow({block, L, Body}, Ctx, Ch, Tail) ->
+    {Body1, Ch1} = ih_body(Body, Ctx, Ch, Tail),
+    {{block, L, Body1}, Ch1};
+ih_flow({'receive', L, Clauses}, Ctx, Ch, Tail) ->
+    {Clauses1, Ch1} = ih_clauses(Clauses, Ctx, Ch, Tail),
+    {{'receive', L, Clauses1}, Ch1};
+ih_flow({'receive', L, Clauses, After, AfterBody}, Ctx, Ch, Tail) ->
+    {Clauses1, Ch1} = ih_clauses(Clauses, Ctx, Ch, Tail),
+    {After1, Ch2} = ih(After, Ctx, Ch1, false),
+    {AfterBody1, Ch3} = ih_body(AfterBody, Ctx, Ch2, Tail),
+    {{'receive', L, Clauses1, After1, AfterBody1}, Ch3};
+ih_flow({'try', L, Body, OfClauses, CatchClauses, AfterBody}, Ctx, Ch, Tail) ->
+    {Body1, Ch1} = ih_body(Body, Ctx, Ch, Tail),
+    {OfClauses1, Ch2} = ih_clauses(OfClauses, Ctx, Ch1, Tail),
+    {CatchClauses1, Ch3} = ih_clauses(CatchClauses, Ctx, Ch2, Tail),
+    {AfterBody1, Ch4} = ih_list(AfterBody, Ctx, Ch3, false),
+    {{'try', L, Body1, OfClauses1, CatchClauses1, AfterBody1}, Ch4};
+ih_flow({'maybe', L, Body}, Ctx, Ch, Tail) ->
+    {Body1, Ch1} = ih_body(Body, Ctx, Ch, Tail),
+    {{'maybe', L, Body1}, Ch1};
+ih_flow({'maybe', L, Body, {'else', L2, ElseClauses}}, Ctx, Ch, Tail) ->
+    {Body1, Ch1} = ih_body(Body, Ctx, Ch, Tail),
+    {ElseClauses1, Ch2} = ih_clauses(ElseClauses, Ctx, Ch1, Tail),
+    {{'maybe', L, Body1, {'else', L2, ElseClauses1}}, Ch2};
+ih_flow({'fun', L, {clauses, Clauses}}, Ctx, Ch, Tail) ->
+    {Clauses1, Ch1} = ih_clauses(Clauses, Ctx, Ch, Tail),
+    {{'fun', L, {clauses, Clauses1}}, Ch1};
+ih_flow(T, Ctx, Ch, _Tail) ->
+    %% A fun reference (`fun f/1`) holds no body to walk.
+    ih_generic(T, Ctx, Ch, false).
+
+%% Each item of an element's children list is a content slot, and an item that
+%% is itself a list is a content-slot list (a fragment), so its items are
+%% content too -- one level only (see the cons clause of ih/4).
+ih_children({cons, L, H, T}, Ctx, Ch) ->
+    {H1, Ch1} = ih(H, Ctx, Ch, true),
+    {T1, Ch2} = ih_children(T, Ctx, Ch1),
+    {{cons, L, H1, T1}, Ch2};
+ih_children(Children, Ctx, Ch) ->
+    ih(Children, Ctx, Ch, true).
+
+ih_generic(T, Ctx, Ch, Tail) ->
+    {L1, Ch1} = ih_list(tuple_to_list(T), Ctx, Ch, Tail),
+    {list_to_tuple(L1), Ch1}.
+
+ih_list([], _Ctx, Ch, _Tail) ->
     {[], Ch};
-ih_list([H | T], Ctx, Ch) ->
-    {H1, Ch1} = ih(H, Ctx, Ch),
-    {T1, Ch2} = ih_list(T, Ctx, Ch1),
+ih_list([H | T], Ctx, Ch, Tail) ->
+    {H1, Ch1} = ih(H, Ctx, Ch, Tail),
+    {T1, Ch2} = ih_list(T, Ctx, Ch1, Tail),
     {[H1 | T1], Ch2}.
 
-ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch) ->
+%% A clause's patterns and guards are never content; its body's last expression
+%% carries the clause's value, so it inherits `Tail`.
+ih_clauses(Clauses, Ctx, Ch, Tail) ->
+    lists:mapfoldl(
+        fun({clause, L, Patterns, Guards, Body}, Ch0) ->
+            {Body1, Ch1} = ih_body(Body, Ctx, Ch0, Tail),
+            {{clause, L, Patterns, Guards, Body1}, Ch1}
+        end,
+        Ch,
+        Clauses
+    ).
+
+ih_body(Body, Ctx, Ch, Tail) ->
+    {Init, [Last]} = lists:split(length(Body) - 1, Body),
+    {Init1, Ch1} = ih_list(Init, Ctx, Ch, false),
+    {Last1, Ch2} = ih(Last, Ctx, Ch1, Tail),
+    {Init1 ++ [Last1], Ch2}.
+
+ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch, Tail) ->
     Arity = length(Args),
     case helper_plan(Name, Arity, FunDefs, Target, L) of
-        skip ->
-            %% Not an inlineable element helper: recurse into the args (they
-            %% may contain helper calls of their own).
-            {Parts, Ch1} = ih_list(tuple_to_list(Call), Ctx, Ch),
-            {list_to_tuple(Parts), Ch1};
-        {inline, Params, BodyExpr} ->
+        {inline, Params, BodyExpr, Wrap} when Tail; Wrap =:= bare ->
             case Stack of
                 #{{Name, Arity} := _} -> parse_error({helper_recursive, Name, Arity}, L);
                 #{} -> ok
@@ -1253,8 +1352,13 @@ ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch) ->
             BodyExpr1 = rename_inlined_body(Name, Arity, Params, BodyExpr),
             Spliced = mark_targets(subst_helper_args(BodyExpr1, Params, Args), Target),
             Ctx1 = {Module, FunDefs, Target, Stack#{{Name, Arity} => true}},
-            {Spliced1, true} = ih(Spliced, Ctx1, true),
-            {Spliced1, true}
+            {Spliced1, true} = ih(Spliced, Ctx1, true, Tail),
+            {Spliced1, true};
+        _NotInlined ->
+            %% Not an inlineable element helper here: recurse into the args (they
+            %% may contain helper calls of their own).
+            {Parts, Ch1} = ih_list(tuple_to_list(Call), Ctx, Ch, false),
+            {list_to_tuple(Parts), Ch1}
     end.
 
 %% Substitute the helper's params with the caller's argument expressions via
@@ -1281,7 +1385,7 @@ fresh_helper_var(P) ->
 
 %% Decide what to do with a local call: `skip` (leave the call -- a scalar
 %% helper, an unresolvable callee, or a wrapped body that renders fine as-is)
-%% or `{inline, ParamNames, BodyExpr}`. Raises the helper_* errors only for
+%% or `{inline, ParamNames, BodyExpr, bare | wrapped}`. Raises the helper_* errors only for
 %% bare-element bodies, which pre-fix compiled clean and crashed at render.
 helper_plan(Name, Arity, FunDefs, Target, CallLine) ->
     case helper_plan_shape(Name, Arity, FunDefs, Target) of
@@ -1311,7 +1415,7 @@ helper_clause_plan([{clause, _, Params, Guards, Body}], Name, Arity, Target) ->
                     ParamNames =/= invalid,
             case {Clean, Wrap} of
                 {true, _} ->
-                    {inline, ParamNames, BodyExpr};
+                    {inline, ParamNames, BodyExpr, Wrap};
                 {false, wrapped} ->
                     %% Renders as a runtime nested template today; keep it.
                     skip;

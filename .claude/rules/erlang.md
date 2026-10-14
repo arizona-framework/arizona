@@ -544,6 +544,13 @@ template function, as for `?each` named refs above. An element-**list** body com
 nested-template child whose literal reads are tracked on the slot -- the same
 tracking a literal element-list child gets.
 
+A whole-body `?html(...)` helper is inlined only where its value **is** content -- the slot
+expression, an item of a children list or of a content-slot list, or a control-flow tail of
+one. Anywhere else (a function argument, a `case` scrutinee, an attribute) the call stays and
+returns its template, since splicing the unwrapped element or list there would hand the
+consumer a different value. A bare-bodied helper is inlined anywhere: its body is the same
+value the call returned.
+
 A callee whose body is not element-shaped (a scalar helper) is untouched: the call
 runs inside the slot closure, so its reads fire in-bracket as before. Shapes that
 cannot be cleanly inlined are compile errors when the body is a **bare** element
