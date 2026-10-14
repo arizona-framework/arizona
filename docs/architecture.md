@@ -1164,7 +1164,7 @@ treats **any non-1000 code as reconnectable**:
 | `{shutdown, drain}` | `?CLOSE_GOING_AWAY` (1001) | **Reconnects** -- the deliberate drain path (RFC 6455 §7.4 "going away"); the main thread preserves form state |
 | `normal` | 1000 | No reconnect |
 | `shutdown` / `{shutdown, _}` (any other reason) | 1000 | No reconnect -- opt into the reconnect path by exiting `{shutdown, drain}` explicitly |
-| anything else (a crash) | `?CLOSE_CRASH` (4500) | The client reloads the page, at most 3 times with no stable (10 s) connection in between, then stops reloading and falls back to the worker's backoff reconnect, which resyncs the page once the server stops crashing; the reason is logged once per page load. Crash remount is deliberately not attempted server-side |
+| anything else (a crash) | `?CLOSE_CRASH` (4500) | **Reconnects**, by when it crashed. After the connection mounted its view, the worker's backoff reconnect remounts it in place (no reload); a view that crashes within 10 s of each remount keeps backing off. While mounting (a first connect's mount, or a reconnect's deferred mount), the client reloads the page after a random 5-10 s delay, unless a reconnect mounts first; after 10 consecutive mount-crash reloads it retries every 30 s and logs why once per page load. Crash remount is deliberately not attempted server-side |
 
 A raise inside the socket itself closes the same way: `handle_in/2` and `handle_info/2` each catch
 anything their handling raises -- a handler crash, or a frame that cannot be JSON-encoded, such as

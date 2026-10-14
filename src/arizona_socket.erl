@@ -40,7 +40,8 @@ The live process is linked. Exits map to WebSocket close codes:
   among them.
 - Anything else (including raises in `handle_in/2` and `handle_info/2`,
   among them a frame that cannot be encoded) -- crash close `4500`. Client
-  triggers `location.reload()` for a fresh start.
+  remounts the view by reconnecting, or reloads the page when the mount
+  itself crashed.
 """.
 
 -include("arizona.hrl").

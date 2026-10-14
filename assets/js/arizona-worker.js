@@ -147,6 +147,19 @@ let _reconnecting = false;
 /** @type {number} */
 let _attempt = 0;
 
+/**
+ * When the open socket's view mounted (Date.now()), null before it does.
+ * @type {number|null}
+ */
+let _mountedAt = null;
+
+/**
+ * A mounted connection resets the reconnect backoff on close, unless the view
+ * crashed (4500) within this long of mounting: a view that crashes right after
+ * every remount must keep backing off instead of reconnecting at backoff[0].
+ */
+const CRASH_STABLE_MS = 10000;
+
 /** @type {ReturnType<typeof setTimeout>|null} */
 let _reconnectTimer = null;
 
@@ -284,6 +297,7 @@ function openSocket() {
     if (_reconnectTimer) clearTimeout(_reconnectTimer);
     _reconnectTimer = null;
     _fpsSent = false;
+    _mountedAt = null;
     // A reconnect open promises the `cached_fps` announcement as its first
     // frame (`_az_fps_follow=1` below), so the server defers the full-page
     // resync until it arrives and dedups the payload against it. First
@@ -327,15 +341,16 @@ function openSocket() {
         _heartbeatPending = false;
         if (e.data === SYS_PONG) return;
 
-        // Reset the backoff only once a real frame arrives -- a working session,
-        // not a bare WS handshake. A server that accepts the socket but drops it
-        // before framing (crashing mount, dead backend) thus keeps backing off
-        // instead of being hammered at backoff[0].
-        _attempt = 0;
-
         const msg = JSON.parse(e.data);
         const ops = msg.o || null;
         const effects = msg.e || null;
+
+        // The view mounted: a first connect mounts before its first frame, a
+        // reconnect with the resync (the first frame carrying ops -- its connect
+        // frame arrives before the deferred mount). Only a mounted session may
+        // reset the backoff (see onclose), so a server that accepts the socket but
+        // fails to mount keeps backing off instead of being hammered at backoff[0].
+        if (_mountedAt === null && (!_reconnecting || ops !== null)) _mountedAt = Date.now();
         // The `az-*` attribute names this frame proves the app can render: the
         // connect frame carries the compile-time union walked from the route's
         // handler and layouts, and any later frame carries only the per-socket
@@ -373,6 +388,12 @@ function openSocket() {
         postMessage([2, e.code]);
 
         if (e.code === 1000) return;
+        if (
+            _mountedAt !== null &&
+            (e.code !== 4500 || Date.now() - _mountedAt >= CRASH_STABLE_MS)
+        ) {
+            _attempt = 0;
+        }
         _reconnecting = true;
         _reconnectTimer = setTimeout(openSocket, backoff(_attempt++));
     };

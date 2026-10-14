@@ -382,6 +382,53 @@ describe('arizona-worker', () => {
         expect(ws.instances).toHaveLength(3);
     });
 
+    // backoff(0) in [800,1200), backoff(1) in [1600,2400): the fire time tells the
+    // attempt index apart. Each helper reconnects once at backoff(0).
+    function reconnectOnce() {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        ws.latest().close(1006); // never mounted -> backoff(0)
+        vi.advanceTimersByTime(1200);
+        expect(ws.instances).toHaveLength(2);
+        ws.latest().simulateOpen();
+    }
+
+    it('a reconnect connect frame without ops does not reset the backoff', () => {
+        // A flagged reconnect's connect frame arrives before the deferred mount, so
+        // a mount that crashes after it must keep backing off.
+        reconnectOnce();
+        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
+        ws.latest().close(4500); // attempt 1 -> backoff(1)
+        vi.advanceTimersByTime(1300);
+        expect(ws.instances).toHaveLength(2);
+        vi.advanceTimersByTime(1200);
+        expect(ws.instances).toHaveLength(3);
+    });
+
+    it('a crash right after a mount keeps backing off', () => {
+        reconnectOnce();
+        ws.latest().simulateMessage(JSON.stringify({ o: [] })); // the resync: mounted
+        ws.latest().close(4500); // crashed within the stable window -> backoff(1)
+        vi.advanceTimersByTime(1300);
+        expect(ws.instances).toHaveLength(2);
+        vi.advanceTimersByTime(1200);
+        expect(ws.instances).toHaveLength(3);
+    });
+
+    it('a crash long after a mount resets the backoff', () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+        try {
+            reconnectOnce();
+            ws.latest().simulateMessage(JSON.stringify({ o: [] })); // mounted
+            now.mockReturnValue(1_000_000 + 10_000); // a healthy session
+            ws.latest().close(4500); // reset -> backoff(0)
+            vi.advanceTimersByTime(1200);
+            expect(ws.instances).toHaveLength(3);
+        } finally {
+            now.mockRestore();
+        }
+    });
+
     it('update-path message [3, {path, qs}] rewrites the cached URL', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2Fold']);
         slf.send([3, { path: '/new', qs: '' }]);

@@ -61,74 +61,84 @@ const WS_CLOSE_NORMAL = 1000;
 const WS_CLOSE_CRASH = 4500;
 
 /**
- * Crash-reload loop guard: a WS_CLOSE_CRASH triggers a full-page reload, so a view
- * that crashes deterministically would reload forever. Allow at most
- * CRASH_RELOAD_MAX crash reloads (counted in sessionStorage, so the count survives
- * the reload) before giving up. The count clears only once a connection has stayed
- * up for CRASH_RELOAD_STABLE_MS: the server's crash close always arrives after the
- * socket opened, so resetting on open would never let the guard trip. A crash that
- * fires later than that after each connect still reloads every time, but the page
- * is usable in between.
+ * Crash recovery. A WS_CLOSE_CRASH means the view's live process crashed, and what
+ * helps depends on whether this connection had mounted the view yet:
+ *
+ * - After a mount: the page is current, so the worker's backoff reconnect remounts
+ *   it in place (the reconnect resync replaces the view) -- no reload, which would
+ *   throw away client-only state for nothing.
+ * - During a mount: the page itself may be stale (a deploy changed the route or the
+ *   assets), so reload it -- after a random CRASH_RELOAD_DELAY_MIN..MAX delay, so the
+ *   tabs a bad deploy breaks don't all reload at once. The worker keeps reconnecting
+ *   meanwhile, and a mount that succeeds first cancels the reload.
+ *
+ * Consecutive mount-crash reloads are counted in sessionStorage (per tab, so it
+ * survives the reload without tabs racing each other) and cleared by a successful
+ * mount. Past CRASH_RELOAD_MAX the delay becomes CRASH_RELOAD_FAILSAFE: a page
+ * that cannot mount keeps retrying, slowly, and says why once per page load.
  */
-const CRASH_RELOAD_MAX = 3;
-const CRASH_RELOAD_STABLE_MS = 10000;
+const CRASH_RELOAD_DELAY_MIN = 5000;
+const CRASH_RELOAD_DELAY_MAX = 10000;
+const CRASH_RELOAD_MAX = 10;
+const CRASH_RELOAD_FAILSAFE = 30000;
 const CRASH_RELOAD_KEY = 'arizona:crash-reloads';
 
 /** @type {ReturnType<typeof setTimeout> | null} */
-let _crashResetTimer = null;
+let _crashReloadTimer = null;
 
-/** Whether this page load already explained why it stopped reloading. */
+/** Whether this page load already logged entering the failsafe delay. */
 let _crashLogged = false;
 
-/** Clear the crash count once the connection that just opened proves stable. */
-function armCrashReset() {
-    disarmCrashReset();
-    _crashResetTimer = setTimeout(() => {
-        _crashResetTimer = null;
-        try {
-            sessionStorage.removeItem(CRASH_RELOAD_KEY);
-        } catch {
-            /* sessionStorage unavailable -- nothing to reset */
-        }
-    }, CRASH_RELOAD_STABLE_MS);
-}
-
-function disarmCrashReset() {
-    if (_crashResetTimer !== null) clearTimeout(_crashResetTimer);
-    _crashResetTimer = null;
-}
-
-/**
- * Reload after a server-side crash close, unless CRASH_RELOAD_MAX crash reloads
- * already happened with no stable connection in between (a deterministic crash
- * loop): then stop reloading and leave recovery to the worker's backoff reconnect,
- * which resyncs the page once the server stops crashing. The reason is logged once
- * per page load, so a manual reload of a still-crashing page explains itself.
- */
-function crashReload() {
-    let count = 0;
+/** Consecutive mount-crash reloads; an unreadable or older-format value is 0. */
+function crashReloadCount() {
     try {
-        count = Number(sessionStorage.getItem(CRASH_RELOAD_KEY)) || 0;
+        return Number(sessionStorage.getItem(CRASH_RELOAD_KEY)) || 0;
     } catch {
-        /* sessionStorage unavailable -- reload without the guard */
+        return 0; // sessionStorage unavailable -- no count to keep
     }
+}
+
+/** Schedule the reload for a mount crash, unless one is already pending. */
+function scheduleCrashReload() {
+    if (_crashReloadTimer !== null) return;
+    const count = crashReloadCount();
+    let delay =
+        CRASH_RELOAD_DELAY_MIN +
+        Math.floor(Math.random() * (CRASH_RELOAD_DELAY_MAX - CRASH_RELOAD_DELAY_MIN + 1));
     if (count >= CRASH_RELOAD_MAX) {
+        delay = CRASH_RELOAD_FAILSAFE;
         if (!_crashLogged) {
             _crashLogged = true;
             console.error(
-                `[arizona] WebSocket closed with a crash after ${count} reloads without ` +
-                    `a stable connection; not reloading again -- the view likely ` +
-                    `crashes deterministically server-side.`,
+                `[arizona] the view crashed while mounting ${count} times in a row; ` +
+                    `retrying every ${CRASH_RELOAD_FAILSAFE / 1000} s.`,
             );
         }
-        return;
     }
+    _crashReloadTimer = setTimeout(() => {
+        _crashReloadTimer = null;
+        try {
+            sessionStorage.setItem(CRASH_RELOAD_KEY, String(count + 1));
+        } catch {
+            /* sessionStorage unavailable -- reload anyway */
+        }
+        location.reload();
+    }, delay);
+}
+
+function cancelCrashReload() {
+    if (_crashReloadTimer !== null) clearTimeout(_crashReloadTimer);
+    _crashReloadTimer = null;
+}
+
+/** A mount succeeded: the crash loop, if any, is over. */
+function crashRecovered() {
+    cancelCrashReload();
     try {
-        sessionStorage.setItem(CRASH_RELOAD_KEY, String(count + 1));
+        sessionStorage.removeItem(CRASH_RELOAD_KEY);
     } catch {
-        /* sessionStorage unavailable -- reload anyway, just without the guard */
+        /* sessionStorage unavailable -- nothing to clear */
     }
-    location.reload();
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +200,18 @@ let _worker = null;
 
 /** @type {boolean} */
 let _connected = false;
+
+/**
+ * Whether the open connection has yet to mount its view (see crash recovery).
+ * A first connect mounts before its first frame; a reconnect mounts with the
+ * resync, the first frame that carries ops -- its earlier connect frame only
+ * declares the `az-*` names.
+ * @type {boolean}
+ */
+let _mountPending = false;
+
+/** Whether the open connection is a reconnect. @type {boolean} */
+let _connReconnect = false;
 
 // Path + query the server last rendered. Tracked so the popstate handler can
 // tell a real cross-page back/forward (which needs a server navigate) from a
@@ -3428,6 +3450,10 @@ function connect(endpoint, params = {}) {
             switch (msg[0]) {
                 case 0: {
                     // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null]
+                    if (_mountPending && (!_connReconnect || msg[3])) {
+                        _mountPending = false;
+                        crashRecovered();
+                    }
                     // The app's `az-*` vocabulary, collected by the parse transform
                     // and sent on the connect frame. Delegated BEFORE the ops land,
                     // so a listener exists the moment an element declaring one does.
@@ -3480,9 +3506,10 @@ function connect(endpoint, params = {}) {
                 case 1: {
                     // [1, isReconnect]
                     _connected = true;
+                    _mountPending = true;
+                    _connReconnect = !!msg[1];
                     document.documentElement.classList.add('az-connected');
                     document.documentElement.classList.remove('az-disconnected');
-                    armCrashReset();
                     if (!msg[1]) {
                         mountHooks(document);
                     }
@@ -3491,13 +3518,13 @@ function connect(endpoint, params = {}) {
                 case 2: {
                     // [2, closeCode]
                     _connected = false;
-                    disarmCrashReset();
+                    const mountCrashed = _mountPending && msg[1] === WS_CLOSE_CRASH;
+                    _mountPending = false;
                     document.documentElement.classList.add('az-disconnected');
                     document.documentElement.classList.remove('az-connected');
-                    if (msg[1] === WS_CLOSE_CRASH) {
-                        crashReload();
-                        return;
-                    }
+                    // A crash after the mount needs no reload: the worker's
+                    // reconnect remounts the view in place.
+                    if (mountCrashed) scheduleCrashReload();
                     if (msg[1] !== WS_CLOSE_NORMAL) saveFormState();
                     break;
                 }
@@ -3565,7 +3592,8 @@ function connect(endpoint, params = {}) {
                 _worker.terminate();
                 _worker = null;
                 _connected = false;
-                disarmCrashReset();
+                _mountPending = false;
+                cancelCrashReload();
                 // Reflect the dropped connection so a bfcache-restored snapshot
                 // shows disconnected until `pageshow` reconnects (the worker is
                 // killed abruptly, so no [2, closeCode] arrives to do this).
@@ -3597,7 +3625,8 @@ function connect(endpoint, params = {}) {
             _worker = null;
         }
         _connected = false;
-        disarmCrashReset();
+        _mountPending = false;
+        cancelCrashReload();
         _pendingScroll = null;
         _pendingTransition = null;
         _connectQs = '';
