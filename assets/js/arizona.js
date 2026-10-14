@@ -916,8 +916,7 @@ function applyOps(ops) {
     let didReplace = false;
     /** @type {Map<string, Resolution>} */
     const els = new Map();
-    /** @type {Map<Element, Map<string, Element>>} */
-    const streams = new Map();
+    const streams = newStreamCache();
     /** @param {string} target @returns {Resolution|null} */
     const resolve = (target) => {
         const hit = els.get(target);
@@ -965,6 +964,7 @@ function applyOps(ops) {
             switch (op[0]) {
                 case OP.TEXT:
                     applyTextOp(el, az, op[2], op[3]);
+                    dropSpans(streams);
                     break;
                 case OP.SET_ATTR:
                     applySetAttrOp(el, op[2], op[3]);
@@ -973,6 +973,7 @@ function applyOps(ops) {
                     applyRemAttrOp(el, op[2]);
                     break;
                 case OP.REPLACE: {
+                    dropSpans(streams);
                     destroyHooks(el);
                     // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
                     // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
@@ -990,22 +991,23 @@ function applyOps(ops) {
                 }
                 case OP.REMOVE_NODE:
                     removeEl(el);
+                    dropSpans(streams);
                     break;
                 case OP.INSERT:
-                    if (found.marker && !slotBounds(el, az)) {
+                    if (found.marker && !spanOf(streams, el, az)) {
                         warnUnplaceable(op);
                         break;
                     }
                     insertItemEl(el, op[2], op[3], op[4], streams, az);
                     break;
                 case OP.REMOVE:
-                    removeItemEl(el, op[2], streams);
+                    removeItemEl(el, op[2], streams, az);
                     break;
                 case OP.ITEM_PATCH:
-                    applyItemPatch(el, op[2], op[3], streams);
+                    applyItemPatch(el, op[2], op[3], streams, az);
                     break;
                 case OP.MOVE:
-                    if (found.marker && !slotBounds(el, az)) {
+                    if (found.marker && !spanOf(streams, el, az)) {
                         warnUnplaceable(op);
                         break;
                     }
@@ -1013,6 +1015,7 @@ function applyOps(ops) {
                     break;
                 case OP.LIST_PATCH:
                     applyListPatch(el, az, op[2]);
+                    dropSpans(streams);
                     break;
                 default:
                     // Silence here would let a version-skewed or retired op (code 3,
@@ -1524,21 +1527,15 @@ function get(a, b) {
 }
 
 /**
- * Build a key -> element map of a container's direct keyed (az-key) children,
- * in DOM order. Under a duplicate key the FIRST child wins, matching what a
- * `:scope > [az-key="..."]` query would return.
- * @param {Element} el
- * @returns {Map<string, Element>}
- */
-/**
  * Boundary of a stream container's slot when the container shares its parent's
  * content slot with siblings. There the each's slot az is compound and carried by no
  * element, so `resolveEl` falls back to the BASE az -- the enclosing element -- and
  * `el` is that enclosing element, not the list. Appending or prepending to it puts the
  * item outside the slot span (after a footer, before a header) instead of in the list.
  *
- * Lookup by key needs none of this: the items are real children of `el` either way.
- * Only PLACEMENT does, so this is used solely to anchor inserts and moves.
+ * It anchors inserts and moves, and scopes lookup by key: two streams can share `el`
+ * (a second `?each` among siblings takes the compound `<El>:1` az) with overlapping
+ * keys, so only the children between this slot's markers belong to it.
  *
  * Returns null for the ordinary case (a container that owns its az), which keeps the
  * plain element placement.
@@ -1571,15 +1568,77 @@ function keyedChildren(el, bounds) {
 }
 
 /**
- * Build a key -> element map of a container's direct keyed (az-key) children,
- * in DOM order. Under a duplicate key the FIRST child wins, matching what a
- * `:scope > [az-key="..."]` query would return.
+ * Per-batch stream lookup state, so a K-op batch scans a container's children
+ * once rather than once per op:
+ * - `keys`: a key -> item map per container AND slot scope. Two streams can share
+ *   one parent element (siblings in a content-list fragment, or compound slots
+ *   under one element) with overlapping keys, so a map is scoped to the stream's
+ *   slot span when it has one -- otherwise an op for one stream finds the other's
+ *   item.
+ * - `spans`: the slot span each (container, az) resolves to, stamped with the
+ *   `epoch` it was found in. `slotBounds` walks the slot to its closing marker, so
+ *   without this every lookup by key paid an O(items) walk. Any op that can rewrite
+ *   a container's children (TEXT, REPLACE, LIST_PATCH, REMOVE_NODE) bumps `epoch`:
+ *   an enclosing re-render replaces the markers, so a span found or ruled out before
+ *   it may no longer hold. A stale span whose markers are both still children of
+ *   the container is still exact and is kept -- the common batch interleaves a TEXT
+ *   inside every row with lookups in the list, and re-walking the list after each
+ *   one would make it quadratic.
+ * @typedef {{keys: Map<Element, Map<string, Map<string, Element>>>, spans: Map<Element, Map<string, {span: SlotSpan|null, epoch: number}>>, epoch: number}} StreamCache
+ */
+
+/** @typedef {{start: Comment, end: Comment}} SlotSpan */
+
+/** @returns {StreamCache} */
+function newStreamCache() {
+    return { keys: new Map(), spans: new Map(), epoch: 0 };
+}
+
+/** @param {StreamCache|null} streams */
+function dropSpans(streams) {
+    if (streams) streams.epoch++;
+}
+
+/**
+ * The slot span of `az` within `el`, memoized per batch (see `StreamCache`).
+ * @param {StreamCache|null} streams
  * @param {Element} el
+ * @param {string} [az]
+ * @returns {SlotSpan|null}
+ */
+function spanOf(streams, el, az) {
+    if (!az) return null;
+    if (!streams) return slotBounds(el, az);
+    let byAz = streams.spans.get(el);
+    if (!byAz) {
+        byAz = new Map();
+        streams.spans.set(el, byAz);
+    }
+    const hit = byAz.get(az);
+    if (
+        hit &&
+        (hit.epoch === streams.epoch ||
+            (hit.span && hit.span.start.parentNode === el && hit.span.end.parentNode === el))
+    ) {
+        hit.epoch = streams.epoch;
+        return hit.span;
+    }
+    const span = slotBounds(el, az);
+    byAz.set(az, { span, epoch: streams.epoch });
+    return span;
+}
+
+/**
+ * Build a key -> element map of a container's keyed (az-key) children, in DOM
+ * order, restricted to the slot span when there is one. Under a duplicate key the
+ * FIRST child wins, matching what a `:scope > [az-key="..."]` query would return.
+ * @param {Element} el
+ * @param {SlotSpan|null} span
  * @returns {Map<string, Element>}
  */
-function buildKeyMap(el) {
+function buildKeyMap(el, span) {
     const map = new Map();
-    for (const child of el.children) {
+    for (const child of keyedChildren(el, span)) {
         const k = child.getAttribute('az-key');
         if (k !== null && !map.has(k)) map.set(k, child);
     }
@@ -1587,29 +1646,51 @@ function buildKeyMap(el) {
 }
 
 /**
- * Look up a stream container's direct keyed child. With a per-batch `streams`
- * cache (top-level applyOps) the container's children are scanned once and the
- * map is maintained by the batch's inserts/removes, so an N-op stream batch is
- * O(N) instead of one full child scan per op. Without one (nested item ops) it
- * falls back to a direct query. A cached entry that went stale -- a non-stream
- * op (TEXT) rewrote the container's children under the map -- triggers one
- * rebuild and retry, so the cache can never return a disconnected element.
- * @param {Map<Element, Map<string, Element>>|null} streams
+ * The cached key map of a stream, if this batch built one.
+ * @param {StreamCache|null} streams
+ * @param {Element} el
+ * @param {string} [az]
+ * @returns {Map<string, Element>|undefined}
+ */
+function cachedKeyMap(streams, el, az) {
+    if (!streams) return undefined;
+    const span = spanOf(streams, el, az);
+    return streams.keys.get(el)?.get(span && az ? az : '');
+}
+
+/**
+ * Look up a stream's keyed child, within the stream's slot span when it has one.
+ * With a per-batch `streams` cache the children are scanned once and the map is
+ * maintained by the batch's inserts/removes, so an N-op stream batch is O(N)
+ * instead of one full child scan per op. A cached entry that went stale -- a
+ * non-stream op (TEXT) rewrote the container's children under the map -- triggers
+ * one rebuild and retry, so the cache can never return a disconnected element.
+ * @param {StreamCache|null} streams
  * @param {Element} el
  * @param {string} key
+ * @param {string} [az] -- the stream slot's az, scoping the lookup to its span
  * @returns {Element|null}
  */
-function itemByKey(streams, el, key) {
-    if (!streams) return el.querySelector(`:scope > [az-key="${CSS.escape(key)}"]`);
-    let map = streams.get(el);
+function itemByKey(streams, el, key, az) {
+    const span = spanOf(streams, el, az);
+    if (!streams) {
+        return keyedChildren(el, span).find((c) => c.getAttribute('az-key') === key) ?? null;
+    }
+    const scope = span && az ? az : '';
+    let byScope = streams.keys.get(el);
+    if (!byScope) {
+        byScope = new Map();
+        streams.keys.set(el, byScope);
+    }
+    let map = byScope.get(scope);
     if (!map) {
-        map = buildKeyMap(el);
-        streams.set(el, map);
+        map = buildKeyMap(el, span);
+        byScope.set(scope, map);
     }
     let item = map.get(key);
     if (item === undefined || !item.isConnected) {
-        map = buildKeyMap(el);
-        streams.set(el, map);
+        map = buildKeyMap(el, span);
+        byScope.set(scope, map);
         item = map.get(key);
     }
     return item ?? null;
@@ -1621,12 +1702,12 @@ function itemByKey(streams, el, key) {
  * @param {string} key
  * @param {number} pos -- -1 means append, otherwise insert before child at index
  * @param {string} html
- * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
+ * @param {StreamCache|null} [streams] -- per-batch stream lookups
  * @param {string} [az] -- the op's slot az, used to anchor placement to the slot span
  */
 function insertItemEl(el, key, pos, html, streams = null, az) {
     const frag = parseFragmentIn(el, html);
-    const bounds = slotBounds(el, az);
+    const bounds = spanOf(streams, el, az);
     // Grab the keyed item from the payload BEFORE inserting it: re-querying the
     // container by key afterwards would find a PRE-EXISTING element first under
     // a duplicate key, mounting hooks on the wrong element and skipping the new
@@ -1648,7 +1729,7 @@ function insertItemEl(el, key, pos, html, streams = null, az) {
         }
     }
     if (item) {
-        streams?.get(el)?.set(key, item);
+        cachedKeyMap(streams, el, az)?.set(key, item);
         mountHooks(item);
     } else {
         console.warn(`[arizona] stream item missing az-key="${key}" after insert`);
@@ -1666,16 +1747,17 @@ function insertItemEl(el, key, pos, html, streams = null, az) {
  * Remove a keyed child from a container element.
  * @param {Element} el -- container element
  * @param {string} key
- * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
+ * @param {StreamCache|null} [streams] -- per-batch stream lookups
+ * @param {string} [az] -- the stream slot's az
  */
-function removeItemEl(el, key, streams = null) {
-    const item = itemByKey(streams, el, key);
+function removeItemEl(el, key, streams = null, az) {
+    const item = itemByKey(streams, el, key, az);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for remove`);
         return;
     }
     removeEl(item);
-    streams?.get(el)?.delete(key);
+    cachedKeyMap(streams, el, az)?.delete(key);
     notifyUpdated(el);
 }
 
@@ -1686,11 +1768,11 @@ function removeItemEl(el, key, streams = null) {
  * @param {Element} el -- container element
  * @param {string} key
  * @param {string|null} afterKey -- key of preceding sibling, or null for prepend
- * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
+ * @param {StreamCache|null} [streams] -- per-batch stream lookups
  * @param {string} [az] -- the op's slot az, used to anchor placement to the slot span
  */
 function moveItemEl(el, key, afterKey, streams = null, az) {
-    const item = itemByKey(streams, el, key);
+    const item = itemByKey(streams, el, key, az);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for move`);
         return;
@@ -1704,15 +1786,15 @@ function moveItemEl(el, key, afterKey, streams = null, az) {
     // present -- never reads it. Computing it up front made a reorder pay that walk
     // once per moved item for a result it discarded.
     if (afterKey === null) {
-        const bounds = slotBounds(el, az);
+        const bounds = spanOf(streams, el, az);
         if (bounds) bounds.start.after(item);
         else el.prepend(item);
     } else {
-        const ref = itemByKey(streams, el, afterKey);
+        const ref = itemByKey(streams, el, afterKey, az);
         if (ref) {
             ref.after(item);
         } else {
-            const bounds = slotBounds(el, az);
+            const bounds = spanOf(streams, el, az);
             if (bounds) el.insertBefore(item, bounds.end);
             else el.appendChild(item);
         }
@@ -1729,10 +1811,11 @@ function moveItemEl(el, key, afterKey, streams = null, az) {
  * @param {Element} container
  * @param {string} key
  * @param {Array<Array<*>>} innerOps
- * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
+ * @param {StreamCache|null} [streams] -- per-batch stream lookups
+ * @param {string} [az] -- the stream slot's az
  */
-function applyItemPatch(container, key, innerOps, streams = null) {
-    const item = itemByKey(streams, container, key);
+function applyItemPatch(container, key, innerOps, streams = null, az) {
+    const item = itemByKey(streams, container, key, az);
     if (!item) {
         console.warn(`[arizona] stream item az-key="${key}" not found for patch`);
         return;
@@ -1747,32 +1830,49 @@ function applyItemPatch(container, key, innerOps, streams = null) {
  * @param {string} az -- az attribute to find the container within parentEl
  * @param {string} key -- az-key of the item to patch
  * @param {Array<Array<*>>} innerOps -- ops scoped to the item
- * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
+ * @param {StreamCache|null} [streams] -- per-batch stream lookups
  */
 function patchItemEl(parentEl, az, key, innerOps, streams = null) {
-    applyItemPatch(resolveInnerEl(parentEl, az), key, innerOps, streams);
+    const found = resolveInnerEl(parentEl, az);
+    if (!found) {
+        console.warn(`[arizona] item op target "${az}" not found; skipping`);
+        return;
+    }
+    applyItemPatch(found.el, key, innerOps, streams, az);
 }
 
 /**
- * Resolve an element within a parent by az attribute, with compound fallback.
- * For compound az like "0:1", tries exact match first, then base az "0".
+ * Resolve an az within an item, mirroring `resolveOpTarget`'s three arms: an
+ * element carrying the az (the item itself or a descendant), for a compound
+ * "X:n" az the base element, then the slot's comment marker -- whose PARENT is
+ * returned flagged `marker: true`, since that element is not the target. A miss
+ * is null: falling back to the item would let a marker-aware op rewrite the whole
+ * item (an `OP_TEXT` whole-element write) or place a node outside the slot.
  * @param {Element} parent
  * @param {string} az
- * @returns {Element}
+ * @returns {Resolution|null}
  */
 function resolveInnerEl(parent, az) {
-    let el = parent.querySelector(`[az="${az}"]`);
-    if (!el && az.includes(':')) {
-        el = parent.querySelector(`[az="${az.substring(0, az.indexOf(':'))}"]`);
+    if (parent.getAttribute('az') === az) return { el: parent, marker: false };
+    const el = parent.querySelector(`[az="${az}"]`);
+    if (el) return { el, marker: false };
+    const j = az.indexOf(':');
+    if (j !== -1) {
+        const baseAz = az.substring(0, j);
+        if (parent.getAttribute('az') === baseAz) return { el: parent, marker: false };
+        const base = parent.querySelector(`[az="${baseAz}"]`);
+        if (base) return { el: base, marker: false };
     }
-    return el || parent;
+    const markerParent = findMarkerDeep(parent, az)?.parentElement;
+    return markerParent ? { el: markerParent, marker: true } : null;
 }
 
 /**
  * Apply inner ops to an item element. Ops arrive pre-resolved from the Worker.
  * Per-op behaviour matches `applyOps` via the shared `apply*Op` helpers,
- * differing only in element resolution: bare `az` resolved against `item`
- * via `resolveInnerEl/2`, with a separate fallback for `REMOVE_NODE`.
+ * differing only in element resolution: bare `az` resolved against `item` via
+ * `resolveInnerEl/2` (an unresolvable target is skipped, never retargeted at the
+ * item), with `REMOVE_NODE` looked up directly.
  *
  * An op whose head is NOT an op code is the `[ChildViewId, ChildOps]` child-view
  * wrapper: `arizona_socket:flatten_ops/2` unwraps it only at top level, so a
@@ -1782,22 +1882,23 @@ function resolveInnerEl(parent, az) {
  * through this function (which also covers a grandchild wrapper).
  * @param {Element} item
  * @param {Array<Array<*>>} innerOps
- * @param {Map<Element, Map<string, Element>>|null} [streams] -- per-batch key maps
+ * @param {StreamCache|null} [streams] -- per-batch stream lookups
  */
 function applyItemOps(item, innerOps, streams = null) {
     // Same memo as `applyOps`' `els`, for the same reason: two ops in one item batch
     // commonly target the same az (a TEXT plus a SET_ATTR), and each `resolveInnerEl`
     // is a full subtree `querySelector` -- two on a miss.
-    /** @type {Map<string, Element>} */
+    /** @type {Map<string, Resolution>} */
     const innerEls = new Map();
-    /** @param {string} az @returns {Element} */
+    /** @param {string} az @returns {Resolution|null} */
     const inner = (az) => {
         const hit = innerEls.get(az);
-        // A hit is only reusable while it is still in the document: an earlier op in
-        // this batch can re-render the slot that held it.
-        if (hit?.isConnected) return hit;
+        // A hit is only reusable while it is still in the document (an earlier op in
+        // this batch can re-render the slot that held it) and, for a marker hit,
+        // while the marker itself survives -- the same check `applyOps` makes.
+        if (hit?.el.isConnected && (!hit.marker || findMarker(hit.el, az))) return hit;
         const found = resolveInnerEl(item, az);
-        innerEls.set(az, found);
+        if (found) innerEls.set(az, found);
         return found;
     };
     for (const op of innerOps) {
@@ -1813,35 +1914,62 @@ function applyItemOps(item, innerOps, streams = null) {
                 continue;
             }
             const az = op[1];
+            if (op[0] === OP.REMOVE_NODE) {
+                const innerEl = item.querySelector(`[az="${az}"]`);
+                if (innerEl) removeEl(innerEl);
+                dropSpans(streams);
+                continue;
+            }
+            if (op[0] === OP.ITEM_PATCH) {
+                patchItemEl(item, az, op[2], op[3], streams);
+                continue;
+            }
+            const found = inner(az);
+            if (!found) {
+                console.warn(`[arizona] item op ${op[0]} target "${az}" not found; skipping`);
+                continue;
+            }
+            const el = found.el;
             switch (op[0]) {
                 case OP.TEXT:
-                    applyTextOp(inner(az), az, op[2], op[3]);
+                    applyTextOp(el, az, op[2], op[3]);
+                    dropSpans(streams);
                     break;
                 case OP.SET_ATTR:
-                    applySetAttrOp(inner(az), op[2], op[3]);
-                    break;
                 case OP.REM_ATTR:
-                    applyRemAttrOp(inner(az), op[2]);
+                    // A marker hit is the slot's parent: an attribute write there would
+                    // land on the wrong element.
+                    if (found.marker) {
+                        console.warn(
+                            `[arizona] item op ${op[0]} target "${az}" resolves only to a ` +
+                                'slot marker; skipping',
+                        );
+                    } else if (op[0] === OP.SET_ATTR) {
+                        applySetAttrOp(el, op[2], op[3]);
+                    } else {
+                        applyRemAttrOp(el, op[2]);
+                    }
                     break;
-                case OP.REMOVE_NODE: {
-                    const innerEl = item.querySelector(`[az="${az}"]`);
-                    if (innerEl) removeEl(innerEl);
-                    break;
-                }
                 case OP.INSERT:
-                    insertItemEl(inner(az), op[2], op[3], op[4], streams, az);
+                    if (found.marker && !spanOf(streams, el, az)) {
+                        warnUnplaceable(op);
+                        break;
+                    }
+                    insertItemEl(el, op[2], op[3], op[4], streams, az);
                     break;
                 case OP.REMOVE:
-                    removeItemEl(inner(az), op[2], streams);
-                    break;
-                case OP.ITEM_PATCH:
-                    patchItemEl(item, az, op[2], op[3], streams);
+                    removeItemEl(el, op[2], streams, az);
                     break;
                 case OP.MOVE:
-                    moveItemEl(inner(az), op[2], op[3], streams, az);
+                    if (found.marker && !spanOf(streams, el, az)) {
+                        warnUnplaceable(op);
+                        break;
+                    }
+                    moveItemEl(el, op[2], op[3], streams, az);
                     break;
                 case OP.LIST_PATCH:
-                    applyListPatch(inner(az), az, op[2]);
+                    applyListPatch(el, az, op[2]);
+                    dropSpans(streams);
                     break;
                 default:
                     console.warn(`[arizona] item op ${op[0]} not recognized; skipping`);
