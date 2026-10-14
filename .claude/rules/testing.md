@@ -41,9 +41,10 @@ into unrelated suites through a half-started application. `pick/0` also re-rolls
 WHATWG "bad ports" ceiling (10080), since a browser -- and the MCP SDK client the conformance
 suite drives -- refuses to connect to one of those.
 
-Current users: `arizona_app_SUITE`, `arizona_ws_SUITE`, `arizona_mcp_e2e_SUITE`,
-`arizona_mcp_conformance_SUITE`, `arizona_bench_lib`. A suite whose server assigns the port
-itself (`arizona_terminal_ssh_SUITE` reads it back from `ssh:daemon_info/1`) needs nothing.
+Current users: `arizona_app_SUITE`, `arizona_ws_SUITE`, `arizona_roadrunner_http_SUITE`,
+`arizona_mcp_e2e_SUITE`, `arizona_mcp_conformance_SUITE`, `arizona_bench_lib`. A suite whose
+server assigns the port itself (`arizona_terminal_ssh_SUITE` reads it back from
+`ssh:daemon_info/1`) needs nothing.
 
 ## E2E tests
 

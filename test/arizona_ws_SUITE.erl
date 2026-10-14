@@ -235,7 +235,7 @@ init_per_group(roadrunner, Config) ->
     {ok, _} = application:ensure_all_started(roadrunner),
     %% Signing key for the flash cookie (see the set_flash/show_flash routes).
     application:set_env(arizona, secret_key, ~"ws-suite-secret-key-0123456789ab"),
-    Port = pick_port(),
+    Port = arizona_test_port:pick(),
     %% Tests that assert on URL data in rendered HTML opt into the framework's
     %% `arizona_middleware:extract/1` middleware on their routes; the framework itself
     %% never flat-merges URL data into bindings.
@@ -512,9 +512,6 @@ end_per_group(roadrunner, Config) ->
     ok;
 end_per_group(_Group, _Config) ->
     ok.
-
-pick_port() ->
-    arizona_test_port:pick().
 
 %% --------------------------------------------------------------------
 %% Basic tests
@@ -1664,7 +1661,7 @@ tls_without_scheme_serves_https(Config) when is_list(Config) ->
     %% and boot a plain-HTTP listener, so traffic the operator configured TLS for
     %% went out in cleartext. `tls` alone now means https.
     Name = arizona_tls_no_scheme_test,
-    Port = pick_port(),
+    Port = arizona_test_port:pick(),
     {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
         routes => [],
         tls => test_tls_opts(),
@@ -1707,7 +1704,7 @@ portless_transport_opts_keeps_proto_opts_port(Config) when is_list(Config) ->
     %% proto_opts.port with the 4040 default. The port now falls back to
     %% proto_opts.port when transport_opts carries no port entry.
     Name = arizona_portless_transport_test,
-    Port = pick_port(),
+    Port = arizona_test_port:pick(),
     {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
         routes => [],
         transport_opts => [],
@@ -1723,8 +1720,8 @@ transport_opts_port_wins_over_proto_opts(Config) when is_list(Config) ->
     %% When both name a port, the transport_opts one (the explicit listen-port
     %% sugar) wins over proto_opts.port.
     Name = arizona_transport_port_wins_test,
-    TransportPort = pick_port(),
-    ProtoPort = pick_port(),
+    TransportPort = arizona_test_port:pick(),
+    ProtoPort = arizona_test_port:pick(),
     {ok, _Pid} = arizona_roadrunner_server:start(Name, #{
         routes => [],
         transport_opts => [{port, TransportPort}],
@@ -1746,7 +1743,7 @@ unsupported_transport_opt_errors(Config) when is_list(Config) ->
         try
             arizona_roadrunner_server:start(Name, #{
                 routes => [],
-                transport_opts => [{ip, {127, 0, 0, 1}}, {port, pick_port()}]
+                transport_opts => [{ip, {127, 0, 0, 1}}, {port, arizona_test_port:pick()}]
             })
         catch
             error:Reason -> {error_caught, Reason}
