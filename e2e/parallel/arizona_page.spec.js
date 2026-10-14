@@ -25,7 +25,7 @@ const liveSettled = async (page) => {
 // ---------------------------------------------------------------------------
 
 /** Locate a counter's count <p> by its view id. */
-const countText = (page, viewId) => page.locator(`#${viewId} p[az$="-3"]`);
+const countText = (page, viewId) => page.locator(`#${viewId} > p`);
 
 /** Locate the inc/dec button inside a specific counter view. */
 const incBtn = (page, viewId) => page.locator(`#${viewId} button[az-click*='"inc"']`);
@@ -260,12 +260,11 @@ test.describe('comment markers', () => {
 
         // Verify the comment markers are present in the DOM
         const hasMarkers = await page.evaluate(() => {
-            const p = document.querySelector('#counter p[az$="-3"]');
+            const p = document.querySelector('#counter > p');
             const children = Array.from(p.childNodes);
             return (
-                children.some(
-                    (n) => n.nodeType === 8 && n.data.startsWith('az:') && n.data.endsWith('-3'),
-                ) && children.some((n) => n.nodeType === 8 && n.data === '/az')
+                children.some((n) => n.nodeType === 8 && n.data === `az:${p.getAttribute('az')}`) &&
+                children.some((n) => n.nodeType === 8 && n.data === '/az')
             );
         });
         expect(hasMarkers).toBe(true);
@@ -760,7 +759,7 @@ test.describe('interleaving counter and stream events', () => {
 
         // Increment counter
         await page.locator(`#counter button[az-click*='"inc"']`).click();
-        await expect(page.locator('#counter p[az$="-3"]')).toHaveText('Count: 1');
+        await expect(page.locator('#counter > p')).toHaveText('Count: 1');
 
         // Todo still present
         await expect(todoItem(page, '1')).toBeVisible();
