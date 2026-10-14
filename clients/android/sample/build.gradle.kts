@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "dev.arizona.sample"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "dev.arizona.sample"
