@@ -543,6 +543,16 @@ format_error({cross_target_child, Parent, Child}, _ST) ->
             [macro_of(Child), macro_of(Parent), macro_of(Parent)]
         )
     };
+format_error({cross_target_layout, Mod, Fun, LayoutBackend, PageBackend}, _ST) ->
+    #{
+        general => io_lib:format(
+            "layout ~s:~s/1 is a ~s template but wraps a ~s page. The render "
+            "targets emit incompatible output, so the wrapped document is one no "
+            "client can parse. A route's layouts must use the page's target: give "
+            "the page its own layouts, or none.",
+            [Mod, Fun, macro_of(LayoutBackend), macro_of(PageBackend)]
+        )
+    };
 format_error({stateful_in_layout, Mod, Fun, Handler}, _ST) ->
     #{
         general => io_lib:format(
@@ -575,12 +585,13 @@ flat_zip(Backend, Statics, Vals) ->
 
 %% Returns the rendered document with the backend of its outermost template (the
 %% outermost layout, else the page), which is what the document as a whole is.
+%% A layout must share the page's target (assert_layout_target/4), so the two agree.
 finish_ssr(Handler, Bindings, Opts) ->
     PageTmpl = arizona_stateful:call_render(Handler, Bindings),
     Backend = backend(PageTmpl),
     PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
     Layouts = maps:get(layouts, Opts, []),
-    apply_layouts(Layouts, {Backend, PageHTML}, Bindings).
+    apply_layouts(Layouts, Backend, {Backend, PageHTML}, Bindings).
 
 %% A hand-built template carries no backend; it renders as the default target.
 content_type(undefined) -> arizona_html:content_type();
@@ -588,7 +599,7 @@ content_type(Backend) -> Backend:content_type().
 
 %% Wraps `Inner` with each layer. List is outermost-first, so the page
 %% HTML ends up nested inside every layer in the order given:
-%% `apply_layouts([Root, Sub], Page, _)` → `Root(Sub(Page))`.
+%% `apply_layouts([Root, Sub], Backend, Page, _)` → `Root(Sub(Page))`.
 %%
 %% The inner content is handed over as a single-static, no-dynamics template --
 %% which is what finished output *is* -- so the layout's `?inner_content` slot
@@ -608,12 +619,31 @@ content_type(Backend) -> Backend:content_type().
 %% because `arizona_template:classify_trusted/1` knows them and re-escapes.
 %% The `#{s, d}` shape adds no surface: a binding holding one already splices
 %% raw (a nested template is exactly what it claims to be).
-apply_layouts([], Inner, _Bindings) ->
+apply_layouts([], _PageBackend, Inner, _Bindings) ->
     Inner;
-apply_layouts([{Mod, Fun} | Rest], Inner, Bindings) ->
-    {_InnerBackend, Wrapped} = apply_layouts(Rest, Inner, Bindings),
+apply_layouts([{Mod, Fun} | Rest], PageBackend, Inner, Bindings) ->
+    {_InnerBackend, Wrapped} = apply_layouts(Rest, PageBackend, Inner, Bindings),
     Tmpl = Mod:Fun(Bindings#{inner_content => #{s => [Wrapped], d => []}}),
+    ok = assert_layout_target(Mod, Fun, backend(Tmpl), PageBackend),
     {backend(Tmpl), render_layout(Mod, Fun, Tmpl)}.
+
+%% The page reaches a layout as a backendless template, so the nested-template
+%% check (assert_same_target/2) waves it through and a layout of one target can
+%% wrap a page of another into a document no client parses. Compare the two
+%% backends at the boundary instead; every layer wraps the same page, so each
+%% must match the page's target. An unrecorded backend is not a mismatch.
+assert_layout_target(_Mod, _Fun, Backend, Backend) ->
+    ok;
+assert_layout_target(_Mod, _Fun, undefined, _PageBackend) ->
+    ok;
+assert_layout_target(_Mod, _Fun, _LayoutBackend, undefined) ->
+    ok;
+assert_layout_target(Mod, Fun, LayoutBackend, PageBackend) ->
+    erlang:error(
+        {cross_target_layout, Mod, Fun, LayoutBackend, PageBackend},
+        none,
+        [{error_info, #{module => ?MODULE}}]
+    ).
 
 %% Mark the layer so `render_ssr_val/2` can refuse a `?stateful` inside it. The
 %% inner layers have already rendered into `Wrapped` by the time this runs, and

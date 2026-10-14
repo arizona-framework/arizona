@@ -7,7 +7,7 @@
 -export([halt_keeps_redirect_and_cookie/1]).
 -export([render_threads_cookie/1]).
 -export([render_answers_the_targets_content_type/1]).
--export([render_types_the_page_by_its_outermost_layer/1]).
+-export([render_refuses_a_cross_target_layout/1]).
 -export([renderers_name_their_content_type/1]).
 -export([error_page_prod_serves_minimal_500/1]).
 -export([error_page_dev_serves_rich_page/1]).
@@ -23,7 +23,7 @@ groups() ->
             halt_keeps_redirect_and_cookie,
             render_threads_cookie,
             render_answers_the_targets_content_type,
-            render_types_the_page_by_its_outermost_layer,
+            render_refuses_a_cross_target_layout,
             renderers_name_their_content_type
         ]},
         %% Sequential: these toggle the global `arizona_reload_url` persistent_term
@@ -92,15 +92,17 @@ render_answers_the_targets_content_type(Config) when is_list(Config) ->
     }),
     ?assertEqual(~"text/html; charset=utf-8", LayoutType).
 
-%% The type describes the document the client receives, and a layout wraps the
-%% page: a `?native` page inside an HTML layout is served as HTML.
-render_types_the_page_by_its_outermost_layer(Config) when is_list(Config) ->
+%% A layout of one target around a page of another would be a document no client
+%% parses, so the render refuses it and the request gets the error page.
+render_refuses_a_cross_target_layout(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{}),
-    {ok, 200, ContentType, _, _} = arizona_http:render(arizona_native_counter_demo, Req, #{
-        bindings => #{title => ~"Native"},
-        layouts => [{arizona_layout, render}]
-    }),
-    ?assertEqual(~"text/html; charset=utf-8", ContentType).
+    ?assertMatch(
+        {error, 500, ~"text/html; charset=utf-8", _, _},
+        arizona_http:render(arizona_native_counter_demo, Req, #{
+            bindings => #{title => ~"Native"},
+            layouts => [{arizona_layout, render}]
+        })
+    ).
 
 renderers_name_their_content_type(Config) when is_list(Config) ->
     ?assertEqual(~"text/html; charset=utf-8", arizona_html:content_type()),

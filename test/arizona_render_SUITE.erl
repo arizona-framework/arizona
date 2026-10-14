@@ -74,6 +74,8 @@
     ssr_counter_custom_id/1,
     ssr_counter/1,
     ssr_cross_target_child_raises/1,
+    ssr_cross_target_layout_raises/1,
+    ssr_same_target_native_layout/1,
     ssr_counter_with_bindings/1,
     ssr_each_map/1,
     nested_each_render/1,
@@ -162,6 +164,8 @@ groups() ->
             render_snapshot_matches_render,
             mount_payload_observes_like_render,
             snapshot_html_matches_render_unprinted,
+            ssr_cross_target_layout_raises,
+            ssr_same_target_native_layout,
             ssr_counter_with_bindings,
             ssr_counter_custom_id,
             ssr_page_with_child,
@@ -706,6 +710,33 @@ snapshot_fixtures() ->
         arizona_native_stream_child,
         arizona_native_list
     ].
+
+%% The page reaches a layout as a backendless template, so the nested-template
+%% check above never sees a layout of one target wrapping a page of another.
+%% Refused at the layout boundary instead, in both directions.
+ssr_cross_target_layout_raises(Config) when is_list(Config) ->
+    ?assertError(
+        {cross_target_layout, arizona_layout, render, arizona_html, arizona_native},
+        arizona_render:render_view_to_iolist(
+            arizona_native_counter_demo, #{layouts => [{arizona_layout, render}]}
+        )
+    ),
+    ?assertError(
+        {cross_target_layout, arizona_native_layout, render, arizona_native, arizona_html},
+        arizona_render:render_view_to_iolist(
+            arizona_counter, #{layouts => [{arizona_native_layout, render}]}
+        )
+    ).
+
+ssr_same_target_native_layout(Config) when is_list(Config) ->
+    Doc = iolist_to_binary(
+        arizona_render:render_view_to_iolist(
+            arizona_native_counter_demo, #{layouts => [{arizona_native_layout, render}]}
+        )
+    ),
+    ?assertMatch(
+        #{~"type" := ~"Column", ~"children" := [#{~"type" := ~"Column"}]}, json:decode(Doc)
+    ).
 
 ssr_counter(Config) when is_list(Config) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(arizona_counter, #{})),

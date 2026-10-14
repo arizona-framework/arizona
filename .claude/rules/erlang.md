@@ -140,6 +140,11 @@ must stay live across navigation, put it in a view the routes share and link wit
 registered. The disqualifying property is the render path, not the nodiff flag, which is why
 this is not a compile-time check.)
 
+A layout must also share the page's render target: an `?html` layout around a `?native`
+page, or the reverse, is a render-time error (`cross_target_layout`). The page reaches a
+layout as a backendless nested template, so the nested-template target check cannot see it;
+the layout boundary compares the two instead.
+
 Layouts render **once, at SSR** -- a live navigate/patch replaces only the view *inside* them, so no frame can re-render one. `arizona_socket` therefore compares a navigate/patch target's `layouts` against the ones already on screen and degrades to a full page load (`arizona_js:navigate(Url, #{full => true})`) when they differ, instead of dropping the new page into the old page's shell. Whole-list term equality: a difference at any depth disqualifies an in-place swap, since an inner layer wraps the replaced view exactly as the outer one does. Crossing layout families therefore needs no hand-written `<a href>` -- `az_navigate`/`az_patch` degrade themselves, including on a server-issued redirect.
 
 ### CSRF Origin check
