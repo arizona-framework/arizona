@@ -115,6 +115,32 @@ HTML output and rendering.
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
 - `fingerprint_payload/1` -- convert a snapshot to fingerprint wire format
 
+### Error location -- `arizona_loc`
+
+Every compiled dynamic carries `Loc = {Module, Line}`, its template source line. Each
+evaluator of a located dynamic catches an exception raised while evaluating it and
+re-raises it as `{arizona_loc, {Module, Line}, Reason}`, keeping the class and
+stacktrace (`arizona_eval:relocate/4`). The evaluators are the SSR walk
+(`arizona_render`), the live mount and snapshot render (`arizona_eval`'s `eval_one_v/2`
+and `eval_one/1`), and the diff's re-evaluation of a changed slot, including the
+`?each`-source and az-nodiff-region paths (`eval_each_def/2`,
+`eval_unless_same_region/3`). So a crash names the same template line whether it
+happens at the first page render, at connect, or after an event changed a binding, and
+whether it sits in a top-level value, an attribute, an `?each` item, a conditional
+branch or a `?stateless` body.
+
+An enclosing dynamic never re-wraps a tag a nested one already attached: the deepest
+location, closest to the failure, wins. The tag is the reason itself, so it reaches
+every consumer unchanged. The dev error page (`arizona_error_page`) titles the page with
+the location and formats the inner reason; the socket's crash log
+(`Live process ~p crashed: ~p`) prints the live process's exit reason, tag included. A
+crash in a `?stateful` child's `mount/1` or `handle_update/3` is tagged with the line of
+the slot that holds the child, as at SSR. A 2-tuple dynamic (no `Loc`, built by hand)
+is evaluated without the catch.
+
+The catch is one `try` per located dynamic on the path every slot evaluation already
+takes. It adds no reductions; only a crash pays, for the re-raise.
+
 ## Terminal render target -- `?terminal`
 
 `?terminal(Elems)` renders a view to ANSI text instead of HTML or JSON. The backend

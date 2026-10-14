@@ -79,6 +79,8 @@
     seed_fps_caps_growth/1,
     live_unknown_view_id_noop/1,
     live_connected_bad_value_mounts/1,
+    live_mount_crash_location/1,
+    live_diff_crash_location/1,
     child_command_reobserved_on_root_diff/1,
     live_unknown_view_id_warns/1,
     child_stream_survives_next_root_diff/1,
@@ -162,6 +164,8 @@ groups() ->
             live_inc_then_dec,
             live_unknown_view_id_noop,
             live_connected_bad_value_mounts,
+            live_mount_crash_location,
+            live_diff_crash_location,
             child_command_reobserved_on_root_diff,
             child_stream_survives_next_root_diff,
             child_event_leaves_root_snapshot_untouched,
@@ -573,6 +577,65 @@ live_connected_bad_value_mounts(Config) when is_list(Config) ->
     ),
     receive
         {'EXIT', Pid, _} -> ok
+    after 1000 -> ct:fail(no_exit)
+    end.
+
+%% A crash in a slot while the live process mounts names the template line, as
+%% the same crash does at SSR: a top-level value, an attribute, an `?each` item,
+%% a conditional branch, a `?stateless` body, an `?each` source and a slot that
+%% holds an az-nodiff region.
+live_mount_crash_location(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    [
+        ?assertEqual(
+            {Case,
+                {arizona_loc, {arizona_live_crash, arizona_live_crash:line(Case)}, {boom, ~"bad"}}},
+            {Case, live_crash_reason(crash_bindings(Case), fun(_Pid) -> ok end)}
+        )
+     || Case <- crash_cases()
+    ].
+
+%% The same crashes, reached by the diff after an event breaks the binding. An
+%% `?each` source and an az-nodiff region slot are re-evaluated through their
+%% own diff paths, not the plain slot one.
+live_diff_crash_location(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    [
+        ?assertEqual(
+            {Case,
+                {arizona_loc, {arizona_live_crash, arizona_live_crash:line(Case)}, {boom, ~"bad"}}},
+            {Case,
+                live_crash_reason(#{}, fun(Pid) ->
+                    arizona_live:handle_event(Pid, ~"crash", ~"set", crash_payload(Case))
+                end)}
+        )
+     || Case <- crash_cases()
+    ].
+
+crash_cases() ->
+    [top, attr, item, branch, sless, source, region].
+
+crash_bindings(item) -> #{items => [~"bad"]};
+crash_bindings(Case) -> #{Case => ~"bad"}.
+
+crash_payload(item) -> #{~"key" => ~"items", ~"value" => [~"bad"]};
+crash_payload(Case) -> #{~"key" => atom_to_binary(Case), ~"value" => ~"bad"}.
+
+%% The reason the live process exits with once `Then` runs after mount, with the
+%% stacktrace dropped.
+live_crash_reason(Bindings, Then) ->
+    {ok, Pid} = arizona_live:start_link(arizona_live_crash, Bindings, undefined, []),
+    Reason =
+        try
+            {ok, _, _} = arizona_live:mount(Pid),
+            Then(Pid)
+        of
+            Result -> error({no_crash, Result})
+        catch
+            exit:{{R, ST}, {gen_server, call, _}} when is_list(ST) -> R
+        end,
+    receive
+        {'EXIT', Pid, _} -> Reason
     after 1000 -> ct:fail(no_exit)
     end.
 

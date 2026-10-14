@@ -70,6 +70,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([child_view_set/1]).
 -export([set_update_effects/1]).
 -export([drain_update_effects/0]).
+-export([relocate/4]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -160,8 +161,16 @@ region per change. Anything else is evaluated from the value already produced
     Result ::
         {same, map()}
         | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
-eval_unless_same_region(Def, Old, Views0) ->
-    {Az, Spec} = az_spec(Def),
+eval_unless_same_region({Az, Spec, Loc}, Old, Views0) ->
+    try
+        unless_same_region(Az, Spec, Old, Views0)
+    catch
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+    end;
+eval_unless_same_region({Az, Spec}, Old, Views0) ->
+    unless_same_region(Az, Spec, Old, Views0).
+
+unless_same_region(Az, Spec, Old, Views0) ->
     Outer = open_deps(),
     {Esc, Raw} = peek_spec(Spec),
     Val = peek_region(Raw),
@@ -169,9 +178,6 @@ eval_unless_same_region(Def, Old, Views0) ->
         true -> {same, close_deps(Outer)};
         false -> eval_peeked(Az, Esc, Val, Outer, Views0)
     end.
-
-az_spec({Az, Spec, _Loc}) -> {Az, Spec};
-az_spec({Az, Spec}) -> {Az, Spec}.
 
 %% The first step of eval_val_v/2, taken alone so the result can be looked at
 %% before it is evaluated.
@@ -215,8 +221,16 @@ evaluated from the value already produced, answered
     Result ::
         {each, arizona_template:az(), map(), map()}
         | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
-eval_each_def(Def, Views0) ->
-    {Az, Spec} = az_spec(Def),
+eval_each_def({Az, Spec, Loc}, Views0) ->
+    try
+        each_def(Az, Spec, Views0)
+    catch
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+    end;
+eval_each_def({Az, Spec}, Views0) ->
+    each_def(Az, Spec, Views0).
+
+each_def(Az, Spec, Views0) ->
     Outer = open_deps(),
     case peek_spec(Spec) of
         {_Esc, #{t := ?EACH, source := _, template := _} = Each} ->
@@ -437,6 +451,25 @@ drain_update_effects() ->
         Effects -> Effects
     end.
 
+-doc """
+Re-raises an exception from a template dynamic tagged with the dynamic's source
+location, as `{arizona_loc, Loc, Reason}`, keeping its class and stacktrace.
+
+Every evaluator of a located dynamic catches here -- the SSR walk, the live
+mount and the diff alike -- so a crash names the template line whichever path
+ran it. A reason already tagged by a nested dynamic is re-raised unchanged:
+the deepest location is the one closest to the failure.
+""".
+-spec relocate(Class, Reason, Stacktrace, Loc) -> no_return() when
+    Class :: error | exit | throw,
+    Reason :: term(),
+    Stacktrace :: erlang:stacktrace(),
+    Loc :: {module(), pos_integer()}.
+relocate(Class, {arizona_loc, _, _} = Reason, ST, _Loc) ->
+    erlang:raise(Class, Reason, ST);
+relocate(Class, Reason, ST, Loc) ->
+    erlang:raise(Class, {arizona_loc, Loc, Reason}, ST).
+
 check_restricted_key(Key, Bindings, Props, Handler) ->
     case Props of
         #{Key := Expected} ->
@@ -493,10 +526,18 @@ eval_one_triple({Az, _Spec} = Dyn) ->
 %% The value a dynamic evaluates to; eval_one/1 and eval_one_triple/1 add the address.
 -spec dyn_value(Dynamic) -> term() when
     Dynamic :: arizona_template:dynamic().
-dyn_value({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
-    {attr, Name, attr_val(Name, eval_val(Fun()))};
-dyn_value({Az, Spec, _Loc}) ->
-    arizona_template:scope_slot(Az, eval_val(Spec));
+dyn_value({_Az, {attr, Name, Fun}, Loc}) when is_function(Fun, 0) ->
+    try
+        {attr, Name, attr_val(Name, eval_val(Fun()))}
+    catch
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+    end;
+dyn_value({Az, Spec, Loc}) ->
+    try
+        arizona_template:scope_slot(Az, eval_val(Spec))
+    catch
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+    end;
 dyn_value({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
     {attr, Name, attr_val(Name, eval_val(Fun()))};
 dyn_value({Az, Spec}) ->
@@ -554,14 +595,24 @@ observe_command(Name, Val) ->
         _NotACommand -> ok
     end.
 
-eval_one_v({Az, {attr, Name, Fun}, _Loc}, Views) when is_function(Fun, 0) ->
+eval_one_v({Az, {attr, Name, Fun}, Loc}, Views) when is_function(Fun, 0) ->
     Outer = open_deps(),
-    Val = attr_val(Name, eval_val(Fun())),
+    Val =
+        try
+            attr_val(Name, eval_val(Fun()))
+        catch
+            Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+        end,
     Deps = close_deps(Outer),
     {{Az, {attr, Name, Val}, Deps}, Views};
-eval_one_v({Az, Spec, _Loc}, Views0) ->
+eval_one_v({Az, Spec, Loc}, Views0) ->
     Outer = open_deps(),
-    {Val, Views1} = eval_val_v(Spec, Views0),
+    {Val, Views1} =
+        try
+            eval_val_v(Spec, Views0)
+        catch
+            Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+        end,
     Deps = close_deps(Outer),
     {{Az, arizona_template:scope_slot(Az, Val), Deps}, Views1};
 eval_one_v({Az, {attr, Name, Fun}}, Views) when is_function(Fun, 0) ->

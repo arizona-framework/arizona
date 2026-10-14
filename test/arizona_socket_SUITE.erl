@@ -43,6 +43,7 @@
 -export([event_on_stopped_live_process_closes_normal/1]).
 -export([event_on_drained_live_process_closes_going_away/1]).
 -export([navigate_on_crashed_live_process_closes_crash/1]).
+-export([live_crash_log_names_template_line/1]).
 -export([event_drained_under_call_closes_going_away/1]).
 -export([navigate_middleware_noproc_closes_crash/1]).
 -export([drain_effects_ship_before_close/1]).
@@ -99,6 +100,7 @@ all() ->
         event_on_stopped_live_process_closes_normal,
         event_on_drained_live_process_closes_going_away,
         navigate_on_crashed_live_process_closes_crash,
+        live_crash_log_names_template_line,
         event_drained_under_call_closes_going_away,
         navigate_middleware_noproc_closes_crash,
         drain_effects_ship_before_close,
@@ -931,6 +933,37 @@ navigate_on_crashed_live_process_closes_crash(Config) when is_list(Config) ->
             settle(arizona_socket:handle_in(navigate_frame(~"/rc"), Socket), Socket)
         end)
     ).
+
+%% A view whose template crashes on an event closes 4500, and the crash log names
+%% the template line the crash came from.
+live_crash_log_names_template_line(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket} = arizona_socket:init(arizona_live_crash, #{}, Req, #{}),
+    Frame = iolist_to_binary(
+        json:encode([null, ~"set", #{~"key" => ~"top", ~"value" => ~"bad"}])
+    ),
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => error, config => #{pid => self()}
+    }),
+    try
+        ?assertMatch(
+            {[], {close, 4500, ~"server crash", _}},
+            settle(arizona_socket:handle_in(Frame, Socket), Socket)
+        ),
+        Line = arizona_live_crash:line(top),
+        %% The socket's own line, not the gen_server's terminate report.
+        receive
+            {arizona_test_log_handler, #{msg := {"Live process ~p crashed: ~p", Args}}} ->
+                ?assertMatch(
+                    [_Pid, {{arizona_loc, {arizona_live_crash, Line}, {boom, ~"bad"}}, _ST}],
+                    Args
+                )
+        after 1000 -> ct:fail(no_crash_logged)
+        end
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.
 
 event_drained_under_call_closes_going_away(Config) when is_list(Config) ->
     %% The drain lands while the event's call is already queued: the live process

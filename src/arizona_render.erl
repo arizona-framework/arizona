@@ -728,7 +728,7 @@ render_ssr_out(Backend, {Az, {esc, Fun}, Loc}) when is_function(Fun, 0) ->
         Bin when is_binary(Bin) -> Bin;
         Rendered -> render_dyn(Backend, arizona_template:scope_slot(Az, Rendered))
     catch
-        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+        Class:Reason:ST -> arizona_eval:relocate(Class, Reason, ST, Loc)
     end;
 render_ssr_out(Backend, D) ->
     render_dyn(Backend, render_ssr_one(Backend, D)).
@@ -737,25 +737,18 @@ render_ssr_one(Backend, {_Az, {attr, Name, Fun}, Loc}) when is_function(Fun, 0) 
     try
         Backend:render_attr(Name, Fun())
     catch
-        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+        Class:Reason:ST -> arizona_eval:relocate(Class, Reason, ST, Loc)
     end;
 render_ssr_one(Backend, {Az, Spec, Loc}) ->
     try
         arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec))
     catch
-        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+        Class:Reason:ST -> arizona_eval:relocate(Class, Reason, ST, Loc)
     end;
 render_ssr_one(Backend, {_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
     Backend:render_attr(Name, Fun());
 render_ssr_one(Backend, {Az, Spec}) ->
     arizona_template:scope_slot(Az, render_ssr_val(Backend, Spec)).
-
-%% Already wrapped by a nested render -- preserve the deepest location, which is
-%% closest to the actual failure.
-relocate(Class, {arizona_loc, _, _} = Reason, ST, _Loc) ->
-    erlang:raise(Class, Reason, ST);
-relocate(Class, Reason, ST, Loc) ->
-    erlang:raise(Class, {arizona_loc, Loc, Reason}, ST).
 
 render_ssr_val(Backend, {esc, Fun}) when is_function(Fun, 0) ->
     render_ssr_esc_val(Backend, Fun());
