@@ -252,6 +252,28 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?subscribe(Topic)` | `arizona_pubsub:subscribe(Topic, self())` -- subscribe the live process to `Topic` (stateful only) |
 | `?unsubscribe(Topic)` | `arizona_pubsub:unsubscribe(Topic, self())` -- unsubscribe the live process from `Topic` (stateful only) |
 
+## Rendered binaries must be UTF-8
+
+Every target writes UTF-8, but a binary renders as the bytes it holds -- nothing checks
+it on the render path (measured too costly; see docs/performance.md). A list is chardata
+and is converted (and validated) by `to_bin/1`. The usual non-UTF-8 source is a bare
+`<<"café">>`: one byte per character, Latin-1. Write `~"café"` or `<<"café"/utf8>>`, or
+convert external Latin-1 data with `unicode:characters_to_binary(Bin, latin1)`.
+
+- A non-ASCII `<<"...">>` that is a **template static** (content or attribute value) is
+  folded as UTF-8 by the parse transform and renders correctly.
+- Anywhere else in a module using the Arizona headers (`mount/1`, a handler, a helper, a
+  `?get` default, a conditional branch value, a hoisted variable, `?raw`, props) it gets
+  the compile warning `latin1_binary_literal` -- an error under `warnings_as_errors`. There
+  is no suppression option: spell intended bytes as integer segments
+  (`<<16#89, "PNG">>`) or a sized string (`<<"\351":8>>`), which do not warn.
+- At runtime a refused frame or `?native` value raises/logs `{non_utf8_render, Byte,
+  Offset}` (the JSON encoder already refused it; only the name is new). In dev mode an
+  HTTP page renders with every value checked (same mount, same bytes), so the failure
+  is located at its template line.
+
+See "Output is UTF-8" in [docs/architecture.md](../../docs/architecture.md).
+
 ## `?each` body must return an element
 
 `?each` compiles each item into a per-item template (`#{s, d, f}`) for fine-grained diffing

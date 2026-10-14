@@ -132,7 +132,7 @@ failure_carries_render_location(Config) when is_list(Config) ->
         {arizona_static_page, ~"bad.html", #{bindings => #{title => [<<255>>]}}}
     ]),
     ?assertMatch(
-        {error, {arizona_loc, {arizona_static_page, _Line}, {bad_template_value, [<<255>>]}}, [
+        {error, {arizona_loc, {arizona_static_page, _Line}, {non_utf8_render, 255, 0}}, [
             {arizona_template, to_bin, _Args, _Info} | _
         ]},
         Failure

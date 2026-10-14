@@ -49,7 +49,15 @@ main(Args) ->
         {<<"http_get_e2e_each">>, fun bench_http_get_e2e_each/1},
         {<<"ws_event_e2e">>, fun bench_ws_event_e2e/1},
         {<<"ws_event_e2e_10c">>, fun bench_ws_event_e2e_10c/1},
-        {<<"pubsub_broadcast_100">>, fun bench_pubsub_broadcast_100/1}
+        {<<"pubsub_broadcast_100">>, fun bench_pubsub_broadcast_100/1},
+        {<<"render_text_page_ascii">>, fun(R) -> bench_render_text_page(ascii, R) end},
+        {<<"render_text_page_pt">>, fun(R) -> bench_render_text_page(pt, R) end},
+        {<<"render_text_page_cjk">>, fun(R) -> bench_render_text_page(cjk, R) end},
+        {<<"render_each_100_pt">>, fun(R) -> bench_render_each_100_text(pt, R) end},
+        {<<"render_each_100_cjk">>, fun(R) -> bench_render_each_100_text(cjk, R) end},
+        {<<"diff_text_ascii">>, fun(R) -> bench_diff_text(ascii, R) end},
+        {<<"diff_text_pt">>, fun(R) -> bench_diff_text(pt, R) end},
+        {<<"diff_text_cjk">>, fun(R) -> bench_diff_text(cjk, R) end}
     ],
     Workloads = filter_workloads(AllWorkloads, Only),
     Results = [{Label, Fun(Runs)} || {Label, Fun} <- Workloads],
@@ -117,6 +125,32 @@ bench_render_each_100(Runs) ->
         arizona_about,
         #{bindings => #{tags => Tags}},
         Runs
+    ).
+
+%% Non-ASCII text workloads: the same shapes in three scripts, so the cost of
+%% multibyte values reads against the ASCII control.
+bench_text(ascii) -> <<"Quick action, single price, heart">>;
+bench_text(pt) -> <<"Ação rápida, preço único, coração"/utf8>>;
+bench_text(cjk) -> <<"日本語のテキストと説明"/utf8>>.
+
+bench_tag(pt) -> <<"ação"/utf8>>;
+bench_tag(cjk) -> <<"日本語"/utf8>>.
+
+bench_render_text_page(Script, Runs) ->
+    arizona_bench_lib:run_view_render_workload(
+        arizona_bench_text, #{bindings => #{text => bench_text(Script)}}, Runs
+    ).
+
+bench_render_each_100_text(Script, Runs) ->
+    %% render_each_100's shape (arizona_about, 100 tags) with non-ASCII tags.
+    Tag = bench_tag(Script),
+    Tags = [<<Tag/binary, (integer_to_binary(I))/binary>> || I <- lists:seq(1, 100)],
+    arizona_bench_lib:run_view_render_workload(arizona_about, #{bindings => #{tags => Tags}}, Runs).
+
+bench_diff_text(Script, Runs) ->
+    %% Each `next` rewrites the title (content + attribute) and four paragraphs.
+    arizona_bench_lib:run_socket_event_workload(
+        arizona_bench_text, #{text => bench_text(Script)}, [~"bench_text", ~"next", #{}], Runs
     ).
 
 bench_render_view_many_dyn_50(Runs) ->

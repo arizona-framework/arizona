@@ -195,7 +195,7 @@ raw_text(_Tag, Value) -> Value.
 %% (attr_command/2) is, a boolean for a typed boolean, else a string.
 -spec render_attr(binary(), term()) -> binary().
 render_attr(Name, Value) ->
-    iolist_to_binary(json:encode(wire_attr(Name, Value))).
+    json_value(wire_attr(Name, Value)).
 
 %% The prop as the client receives it, before it JSON-encodes it: an effect
 %% command as its array, so a tap prop reads the same dynamic or folded, a typed
@@ -216,4 +216,15 @@ wire_attr(_Name, Value) ->
 
 -spec json_str(binary()) -> binary().
 json_str(Bin) ->
-    iolist_to_binary(json:encode(Bin)).
+    json_value(Bin).
+
+%% A value that is not UTF-8 is refused by the encoder for free and named
+%% `non_utf8_render` (arizona_utf8:refuse/3), inside the slot's located
+%% evaluation, so the template line comes with it. The try is inline: this
+%% runs per value, and only a failure pays.
+json_value(Value) ->
+    try
+        iolist_to_binary(json:encode(Value))
+    catch
+        error:Reason:Stacktrace -> arizona_utf8:refuse(Value, Reason, Stacktrace)
+    end.
