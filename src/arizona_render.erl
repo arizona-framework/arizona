@@ -499,7 +499,8 @@ note_fp_payload() ->
     ok.
 
 -doc """
-Formats the layout errors raised by `render_ssr_val/2`.
+Formats the render errors: a `?stateful` in a layout, a child or a layout
+of another render target.
 
 Picked up by `erl_error:format_exception/3` via the `error_info`
 annotation, so the dev error page (and crash log) reads a sentence
@@ -583,9 +584,10 @@ backend(Map) -> maps:get(backend, Map, undefined).
 flat_zip(Backend, Statics, Vals) ->
     iolist_to_binary(zip(Backend, Statics, [arizona_template:unwrap_val(Backend, V) || V <- Vals])).
 
-%% Returns the rendered document with the backend of its outermost template (the
-%% outermost layout, else the page), which is what the document as a whole is.
-%% A layout must share the page's target (assert_layout_target/4), so the two agree.
+%% Returns the rendered document with the backend of its outermost template that
+%% records one (a layout, else the page), which is what the document as a whole
+%% is. A layout with a backend must share the page's (assert_layout_target/4), and
+%% a backendless one (`?inner_content` returned bare) inherits the inner backend.
 finish_ssr(Handler, Bindings, Opts) ->
     PageTmpl = arizona_stateful:call_render(Handler, Bindings),
     Backend = backend(PageTmpl),
@@ -622,10 +624,16 @@ content_type(Backend) -> Backend:content_type().
 apply_layouts([], _PageBackend, Inner, _Bindings) ->
     Inner;
 apply_layouts([{Mod, Fun} | Rest], PageBackend, Inner, Bindings) ->
-    {_InnerBackend, Wrapped} = apply_layouts(Rest, PageBackend, Inner, Bindings),
+    {InnerBackend, Wrapped} = apply_layouts(Rest, PageBackend, Inner, Bindings),
     Tmpl = Mod:Fun(Bindings#{inner_content => #{s => [Wrapped], d => []}}),
-    ok = assert_layout_target(Mod, Fun, backend(Tmpl), PageBackend),
-    {backend(Tmpl), render_layout(Mod, Fun, Tmpl)}.
+    LayoutBackend = backend(Tmpl),
+    ok = assert_layout_target(Mod, Fun, LayoutBackend, PageBackend),
+    {layer_backend(LayoutBackend, InnerBackend), render_layout(Mod, Fun, Tmpl)}.
+
+%% A layer that records no backend adds no target of its own, so the document is
+%% still what it wraps.
+layer_backend(undefined, InnerBackend) -> InnerBackend;
+layer_backend(LayoutBackend, _InnerBackend) -> LayoutBackend.
 
 %% The page reaches a layout as a backendless template, so the nested-template
 %% check (assert_same_target/2) waves it through and a layout of one target can

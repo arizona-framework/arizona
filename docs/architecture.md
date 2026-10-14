@@ -106,7 +106,8 @@ HTML output and rendering.
   Mounts via `arizona_stateful:call_mount/2`, applies `on_mount` hooks, optionally
   wraps in a layout
 - `render_view/2` -- the same, returning `{ContentType, Page}`: the outermost rendered
-  template's backend names the document's media type (`content_type/0`)
+  template that records a backend names the document's media type (`content_type/0`);
+  a backendless layout inherits the page's
 - `resolve_id/1` -- resolves a binary id (passthrough) or a `#{s, d}` template (renders to binary)
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
 - `fingerprint_payload/1` -- convert a snapshot to fingerprint wire format
