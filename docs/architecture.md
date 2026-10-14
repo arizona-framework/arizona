@@ -8,7 +8,7 @@
 | `src/arizona_template.erl`                | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities                   |
 | `src/arizona_eval.erl`                    | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                                             |
 | `src/arizona_render.erl`                  | Render orchestration (target-aware) -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/2`), `zip/2`, `fingerprint_payload/1`                                            |
-| `src/arizona_utf8.erl`                    | UTF-8 output contract -- `check/1`, `refuse/3` (names an encoder failure `non_utf8_render`), dev-mode `render_view/2` / `locate_live/3`                                                   |
+| `src/arizona_utf8.erl`                    | UTF-8 output contract -- `json_encode/1`, `refuse/3` (name an encoder failure `non_utf8_render`), dev-mode `render_view/2` / `locate_live/3`                                              |
 | `src/arizona_renderer.erl`                | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and native JSON backends below                                                                                  |
 | `src/arizona_html.erl`                    | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                                      |
 | `src/arizona_native.erl`                  | Native render backend -- emits a JSON widget tree (the `?native` target); see docs/native.md                                                                                              |
@@ -112,9 +112,9 @@ HTML output and rendering.
 - `render_view/2` -- the same, returning `{ContentType, Page}`: the outermost rendered
   template that records a backend names the document's media type (`content_type/0`);
   a backendless layout inherits the page's
-- `render_page/3` -- `render_view/2`'s second half: renders an already-mounted page
-  template inside the route's `layouts`, given the bindings its `mount/1` returned
-  (`arizona_utf8:render_view/2` passes a checked template)
+- `render_view/3` -- `render_view/2` with the page's template passed through a fun
+  between its `render/1` and the walk: the one mount sequence, which
+  `arizona_utf8:render_view/2` (dev mode) uses to check every value
 - `resolve_id/1` -- resolves a binary id (passthrough) or a `#{s, d}` template (renders to binary)
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
 - `fingerprint_payload/1` -- convert a snapshot to fingerprint wire format
@@ -175,8 +175,12 @@ The contract is enforced where it costs nothing:
   `<<"...">>` with no `/utf8` gets the compile **warning** `latin1_binary_literal`
   (an error under `warnings_as_errors`). It is not re-encoded: such a literal may be
   data compared against other Latin-1 bytes or a protocol constant, and the transform
-  cannot tell which. `~"..."`, `<<"..."/utf8>>`, ASCII-only literals and explicit byte
-  values (`<<16#E9>>`) never trigger it.
+  cannot tell which. `~"..."`, `<<"..."/utf8>>` and ASCII-only literals never trigger
+  it. There is no suppression option: bytes meant as bytes (a PNG signature, a
+  protocol constant) are spelled so they do not look like text -- integer segments
+  (`<<16#89, "PNG\r\n", 16#1A, "\n">>`, `<<16#E9>>`) or a sized string
+  (`<<"\351":8>>`, `<<"é":8>>`), which compile to the same bytes. The warning text
+  names both.
 - **Failure paths.** The JSON encoder validates UTF-8 as it escapes, so a frame or a
   `?native` value holding other bytes is already refused -- as the encoder's
   `{invalid_byte, _}` or `unexpected_end`, which names neither the value nor the cause.
@@ -198,12 +202,26 @@ The contract is enforced where it costs nothing:
   once, as in production. A refused WebSocket frame is located from the live process's
   current views (`arizona_utf8:locate_live/3`, via `arizona_live:view_state/1`): each
   view renders again from the bindings it holds, children skipped and checked from
-  their own, so nothing is mounted. Production pays one dev-flag read per HTTP response
+  their own, so nothing is mounted, and with the live process's connection state
+  (`?connected`, `?capabilities`/`?capability`, `?reconnected`) copied in for the render,
+  so it takes the branches that produced the frame. Production pays one dev-flag read per HTTP response
   and nothing per frame.
 
 `format_error/2` (`arizona_utf8`) names the byte, its offset, the value's bytes (as
 integers -- `~p` would print a Latin-1 binary as the very text it fails to be) and the
-fix. Handler effects are not template values; the socket encodes them, so a non-UTF-8
+fix. What `Offset` counts depends on where the bytes were refused:
+
+- **A binary** -- a JSON encoder's refusal (`?native`, an effect command, a socket
+  frame; `arizona_utf8:refuse/3`) and the dev-mode per-value check: the offset into
+  that binary, which the preview shows.
+- **A list** -- `arizona_template:to_bin/1` decoding chardata: the offset into the
+  decoded output, i.e. how many UTF-8 bytes the elements before the bad one produced.
+  The raising call's argument is the list, so there is no preview.
+- **The finished document** -- the dev-mode check after a page renders (bytes no slot
+  produced, such as a layout's): the offset into the document; the preview is the 32
+  bytes around it.
+
+Handler effects are not template values; the socket encodes them, so a non-UTF-8
 string in one is named on the same failure path.
 
 ## Terminal render target -- `?terminal`

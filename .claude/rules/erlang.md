@@ -258,7 +258,9 @@ convert external Latin-1 data with `unicode:characters_to_binary(Bin, latin1)`.
   folded as UTF-8 by the parse transform and renders correctly.
 - Anywhere else in a module using the Arizona headers (`mount/1`, a handler, a helper, a
   `?get` default, a conditional branch value, a hoisted variable, `?raw`, props) it gets
-  the compile warning `latin1_binary_literal` -- an error under `warnings_as_errors`.
+  the compile warning `latin1_binary_literal` -- an error under `warnings_as_errors`. There
+  is no suppression option: spell intended bytes as integer segments
+  (`<<16#89, "PNG">>`) or a sized string (`<<"\351":8>>`), which do not warn.
 - At runtime a refused frame or `?native` value raises/logs `{non_utf8_render, Byte,
   Offset}` (the JSON encoder already refused it; only the name is new). In dev mode an
   HTTP page renders with every value checked (same mount, same bytes), so the failure
