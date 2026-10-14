@@ -49,10 +49,10 @@ for a reorder.
 Templates compiled with `az-nodiff` carry `diff => false` and dynamics
 with `Az = undefined`. A ROOT snapshot with `diff => false` short-circuits
 `diff/2,3,4` before any dynamic is inspected. A SLOT holding such a template
-is still diffed as a slot: when it re-runs and lands on the same template
-(same scoped fingerprint) the old render stands and the template's own
-dynamics are never evaluated; when it switches to anything else it is patched
-through its markers. Either way no op targets an `undefined` Az.
+is still diffed as a slot: when it re-runs and lands on the same region
+(`arizona_template:same_region/3`) the old render stands and the template's
+own dynamics are never evaluated; when it switches to anything else it is
+replaced through its markers. Either way no op targets an `undefined` Az.
 
 A diffable template can also carry an individual `Az = undefined` dynamic:
 a content slot inside a raw-text element (`script`/`style`/`textarea`/`title`),
@@ -269,6 +269,11 @@ diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
 %% that really do differ, which is the precondition it is named for.
 maybe_make_ops(_Az, Same, Same, Tail, Views) ->
     {Tail, Views};
+%% Two az-nodiff regions are told apart by identity, not by bytes: the client owns
+%% what is rendered inside, so a new region replaces the old one even when both
+%% rendered alike (make_ops/5 keeps the same one).
+maybe_make_ops(Az, #{diff := false} = New, #{diff := false} = Old, Tail, Views) ->
+    make_ops(Az, New, Old, Tail, Views);
 maybe_make_ops(Az, New, Old, Tail, Views) ->
     case collapses_to_same_bytes(New, Old) of
         true -> {Tail, Views};
@@ -432,15 +437,16 @@ skip_dynamic({_Az, Old} = OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0) ->
 diff_changed_dynamic(Def, _Az, #{t := ?EACH} = Old, DR, OR, DepsR, ChangedKeys, Views0) ->
     {Az2, EachDesc, Deps} = arizona_eval:eval_each_def(Def),
     diff_each(Az2, EachDesc, Deps, Old, DR, OR, DepsR, ChangedKeys, Views0);
-%% A slot holding an az-nodiff template asks first whether it still holds that
-%% template (same scoped fingerprint), which the slot closure answers without
-%% evaluating the region: if so the old render stands -- no op, no child
+%% A slot holding an az-nodiff region asks first whether it still holds that
+%% region (`arizona_template:same_region/3`), which the slot closure answers
+%% without evaluating the region: if so the old render stands -- no op, no child
 %% `handle_update/3`, only the new deps -- and the cost stays O(1) however large
-%% the region is. Anything else (another branch, a value) diffs as usual.
+%% the region is. Anything else (another branch, a new `az_key`, a value) diffs
+%% as usual.
 diff_changed_dynamic(
-    Def, Az, #{diff := false, f := OldF} = Old, DR, OR, DepsR, ChangedKeys, Views0
+    Def, Az, #{diff := false} = Old, DR, OR, DepsR, ChangedKeys, Views0
 ) ->
-    case arizona_eval:eval_one_v_unless_fp(Def, OldF, Views0) of
+    case arizona_eval:eval_unless_same_region(Def, Old, Views0) of
         {same, NewDeps} ->
             Views1 = carry_skipped_view(Old, Views0),
             {OpsRest, DRest, DepsRest, Views2} =
@@ -1846,20 +1852,23 @@ make_op(Az, New, _Old) ->
 %% an az prefix from the child's own fingerprint, neither of which a plain branch has.
 %% So a same-S Old is necessarily a plain inline template too; a child New is excluded
 %% here and handled by make_op/3's child-view clause (which requires `view_id` on both).
-%% A `diff => false` value renders once. A `?local` slot is the browser's, and an
-%% az-nodiff template keeps its first render for as long as the slot still holds
-%% that template (same fingerprint, which names the template's site, not just its
-%% statics); a slot that switches to anything else -- another branch, a value --
-%% is patched like any other, or it would freeze on that branch.
+%% A `?local` slot is the browser's. An az-nodiff region keeps its first render for
+%% as long as the slot still holds that region (the same fingerprint, then
+%% `arizona_template:same_region/2`). Any other template entering or leaving a
+%% region replaces the slot whole: a region's dynamics carry no op target, so the
+%% same-statics paths below would find nothing to patch and the slot would keep
+%% the old region.
 make_ops(_Az, _New, #{az_local := _}, Tail, Views) ->
     {Tail, Views};
-make_ops(_Az, #{f := F}, #{diff := false, f := F}, Tail, Views) ->
-    {Tail, Views};
-%% A hand-built nodiff map carries no fingerprint; its statics are all it has.
-make_ops(_Az, #{s := S}, #{diff := false, s := S} = Old, Tail, Views) when
-    not is_map_key(f, Old)
+make_ops(Az, #{diff := false, f := F} = New, #{diff := false, f := F} = Old, Tail, Views) ->
+    case arizona_template:same_region(New, Old) of
+        true -> {Tail, Views};
+        false -> {[[?OP_TEXT, Az, arizona_render:zip_or_fp(New)] | Tail], Views}
+    end;
+make_ops(Az, #{s := _, d := _} = New, Old, Tail, Views) when
+    is_map_key(diff, New); is_map(Old), is_map_key(diff, Old)
 ->
-    {Tail, Views};
+    {[[?OP_TEXT, Az, arizona_render:zip_or_fp(New)] | Tail], Views};
 %% A stream `?each` container whose rendered items, order, and item-template
 %% fingerprint are all unchanged needs no op: the container's HTML is exactly
 %% what the client already holds, so the wholesale container `?OP_TEXT` the last

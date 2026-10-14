@@ -496,7 +496,7 @@ mark_targets({tuple, L, [{atom, _, Tag}, _Attrs, _Children] = Parts}, Ctx, CCtx)
 %% nodiff inheritance the `?html` clause above gives a wrapped one.
 mark_targets(Node, Ctx, CCtx) when is_tuple(Node) ->
     Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
-    case is_control_flow(Node) of
+    case is_control_flow_ast(Node) of
         true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
         false -> Marked
     end;
@@ -504,16 +504,6 @@ mark_targets(Nodes, Ctx, CCtx) when is_list(Nodes) ->
     [mark_targets(E, Ctx, CCtx) || E <- Nodes];
 mark_targets(Node, _Ctx, _CCtx) ->
     Node.
-
-is_control_flow({'case', _, _, _}) -> true;
-is_control_flow({'if', _, _}) -> true;
-is_control_flow({block, _, _}) -> true;
-is_control_flow({'receive', _, _}) -> true;
-is_control_flow({'receive', _, _, _, _}) -> true;
-is_control_flow({'try', _, _, _, _, _}) -> true;
-is_control_flow({'maybe', _, _}) -> true;
-is_control_flow({'maybe', _, _, _}) -> true;
-is_control_flow(_Node) -> false.
 
 mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
     ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
@@ -2020,13 +2010,36 @@ compile_template(Arg, Line, Module, LiveRender, Backend) ->
 %% `Inherited` is true for a template nested in an `az-nodiff` one (see
 %% inherit_nodiff/1): it compiles nodiff whatever its own attributes say.
 compile_template(Arg, Line, Module, LiveRender, Backend, Inherited) ->
-    {Statics, DynASTs, Fingerprint0, Opts0} = compile_body_parts(
+    {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
         Arg, Module, LiveRender, Backend, html, Inherited
     ),
-    Fingerprint = site_fingerprint(Opts0, Statics, DynASTs, Fingerprint0),
     Opts = Opts0#{backend => Backend},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
-    build_template_ast(Line, S1, D1, Fingerprint, Opts).
+    TmplAST = build_template_ast(Line, S1, D1, Fingerprint, Opts),
+    case {Opts, Inherited} of
+        {#{diff := false}, false} -> put_region_key(Arg, TmplAST);
+        _ -> TmplAST
+    end.
+
+%% An `az_key` on an az-nodiff root names the region beside its fingerprint and
+%% branch, so a new key value replaces the region. The key is built with the
+%% template, inside the slot that holds it, so its reads are that slot's deps.
+put_region_key({tuple, _, [_Tag, Attrs | _]}, {map, L, Fields} = TmplAST) ->
+    case [V || {tuple, _, [NameAST, V]} <- attr_list(Attrs), is_az_key(NameAST)] of
+        [KeyAST] -> {map, L, Fields ++ [{map_field_assoc, L, {atom, L, az_key}, KeyAST}]};
+        [] -> TmplAST
+    end;
+put_region_key(_Arg, TmplAST) ->
+    TmplAST.
+
+attr_list({cons, _, Head, Tail}) -> [Head | attr_list(Tail)];
+attr_list(_Attrs) -> [].
+
+is_az_key(NameAST) ->
+    case bare_attr_name(NameAST) of
+        {ok, Name} -> framework_attr_name(Name) =:= ~"az-key";
+        error -> false
+    end.
 
 compile_each(FunAST, SourceAST, Line, Module, Backend, CCtx, FunDefs, Inherited) ->
     case FunAST of
@@ -2144,10 +2157,9 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
             %% sits in, so an element the backend classifies differently there
             %% (an SVG `<title>`) is treated the same as if it were written
             %% literally at that position.
-            {Statics, DynASTs, Fingerprint0, Opts0} = compile_body_parts(
+            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
                 ElemAST, Module, false, Backend, CCtx, Inherited
             ),
-            Fingerprint = site_fingerprint(Opts0, Statics, DynASTs, Fingerprint0),
             Opts1 = Opts0#{backend => Backend},
             Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
@@ -3117,11 +3129,66 @@ make_text_dynamic_ast(Az, ExprAST, Module, ExprLine) ->
 %% left untagged and rendered structurally (escaping is decided at compile time
 %% so the runtime can never confuse user scalars with spliced framework HTML).
 make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
-    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, false),
+    ExprAST = stamp_branches(expand_block_element_tails(ExprAST0, Module, Backend, false)),
     LocAST = loc_ast(Module, ExprLine),
     Body = branch_track_touches(ExprAST0) ++ [ExprAST],
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], Body}]}},
     {tuple, 0, [ast_binary(AzBin), esc_spec(ExprAST, FunAST), LocAST]}.
+
+%% Number the tails of a content-slot control-flow expression and stamp each with
+%% its number, so an az-nodiff region names the branch that produced it (see
+%% arizona_template:branch/2): two branches can produce the same template, and
+%% once a region is no longer evaluated the branch is all that tells them apart.
+%% A literal template takes the stamp as a field; a value only known at runtime
+%% goes through branch/2; a value that can never be a region is left alone.
+stamp_branches(Expr) ->
+    case is_control_flow_ast(Expr) of
+        true ->
+            undefined = put('$arizona_branch', 0),
+            Stamped = map_tail_exprs(Expr, fun stamp_branch/1, fun(E) -> E end),
+            true = is_integer(erase('$arizona_branch')),
+            Stamped;
+        false ->
+            Expr
+    end.
+
+stamp_branch(Leaf) ->
+    N = put('$arizona_branch', get('$arizona_branch') + 1),
+    stamp_leaf(N, Leaf).
+
+stamp_leaf(N, {map, L, Fields} = Map) ->
+    case lists:any(fun is_nodiff_field/1, Fields) of
+        true -> {map, L, Fields ++ [{map_field_assoc, L, {atom, L, branch}, {integer, L, N}}]};
+        false -> Map
+    end;
+stamp_leaf(_N, {Literal, _, _} = Leaf) when
+    Literal =:= bin orelse Literal =:= string orelse Literal =:= integer orelse
+        Literal =:= float orelse Literal =:= atom orelse Literal =:= char
+->
+    Leaf;
+stamp_leaf(_N, {nil, _} = Leaf) ->
+    Leaf;
+stamp_leaf(N, {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, _} = Leaf) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    case lists:member(F, [each, native_each, terminal_each, stateful, local, raw, inner_content]) of
+        true -> Leaf;
+        false -> branch_call(N, L, Leaf)
+    end;
+%% A BIF never returns a template, and the stamp would cost a call per evaluation.
+stamp_leaf(N, {call, _, {atom, _, F}, Args} = Leaf) ->
+    case erl_internal:bif(F, length(Args)) of
+        true -> Leaf;
+        false -> branch_call(N, line(Leaf), Leaf)
+    end;
+stamp_leaf(N, Leaf) ->
+    branch_call(N, line(Leaf), Leaf).
+
+is_nodiff_field({map_field_assoc, _, {atom, _, diff}, {atom, _, false}}) -> true;
+is_nodiff_field(_Field) -> false.
+
+branch_call(N, L, Leaf) ->
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, branch}}, [{integer, L, N}, Leaf]}.
 
 %% A content-slot control-flow expression (`case`/`if`/`maybe`/...) compiles each
 %% branch *element* into a nested template (expand_block_element_tails/3) whose `?get`
@@ -3499,16 +3566,6 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
 generate_fingerprint(Statics) ->
     Hash = erlang:phash2(Statics, 1 bsl 32),
     integer_to_binary(Hash, 36).
-
-%% An az-nodiff template is never diffed inside, so a slot that switches between
-%% two of them with the same statics (same-shaped branches, tabs) can only tell
-%% them apart by fingerprint. Its identity is the whole site, so its fingerprint
-%% also hashes the dynamics' code (which carries their source lines); a diffable
-%% template keeps the statics-only fingerprint.
-site_fingerprint(#{diff := false}, Statics, DynASTs, _Fingerprint) ->
-    generate_fingerprint({Statics, DynASTs});
-site_fingerprint(_Opts, _Statics, _DynASTs, Fingerprint) ->
-    Fingerprint.
 
 split_fun_body([Last]) ->
     {[], Last};

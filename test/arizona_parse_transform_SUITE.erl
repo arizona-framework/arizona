@@ -136,6 +136,17 @@
     nodiff_each/1,
     nodiff_inherited_branch/1,
     nodiff_bare_branch_inherited/1,
+    nodiff_region_show_hide/1,
+    nodiff_region_switch/1,
+    nodiff_region_helper_switch/1,
+    nodiff_region_same_branch_kept/1,
+    nodiff_region_inner_change/1,
+    nodiff_region_az_key/1,
+    nodiff_region_az_key_spellings/1,
+    nodiff_region_child_views_not_updated/1,
+    nodiff_region_root_child_id/1,
+    nodiff_region_list_items/1,
+    nodiff_region_stream_items/1,
     nodiff_branch_swaps_away/1,
     nodiff_branch_same_template_skips_eval/1,
     nodiff_item_branch_swaps_away/1,
@@ -456,11 +467,25 @@ all() ->
         {group, az_macros},
         {group, az_view},
         {group, az_scoping},
-        {group, az_attrs}
+        {group, az_attrs},
+        {group, nodiff_region}
     ].
 
 groups() ->
     [
+        {nodiff_region, [parallel], [
+            nodiff_region_show_hide,
+            nodiff_region_switch,
+            nodiff_region_helper_switch,
+            nodiff_region_same_branch_kept,
+            nodiff_region_inner_change,
+            nodiff_region_az_key,
+            nodiff_region_az_key_spellings,
+            nodiff_region_child_views_not_updated,
+            nodiff_region_root_child_id,
+            nodiff_region_list_items,
+            nodiff_region_stream_items
+        ]},
         %% Tests 1-25: basic element parsing
         {elements, [parallel], [
             static_only,
@@ -4908,8 +4933,8 @@ nodiff_item_branch_swaps_away(Config) when is_list(Config) ->
     ).
 
 %% Two az-nodiff branches with the same statics are still different templates:
-%% the slot switches between them (a nodiff fingerprint names its site, not only
-%% its statics).
+%% the slot switches between them (a region is named by the branch that produced
+%% it, not only by its statics).
 nodiff_same_statics_branches_swap(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_nodiff_same_statics). "
@@ -9732,3 +9757,158 @@ az_attrs_records_component_modules(Config) when is_list(Config) ->
         [child_view, other_component],
         proplists:get_value(arizona_az_deps, Mod:module_info(attributes), [])
     ).
+
+%% --------------------------------------------------------------------
+%% nodiff_region: a slot holding an az-nodiff region
+%% --------------------------------------------------------------------
+
+%% The server decides whether the region exists: hiding and showing it patch the
+%% slot.
+nodiff_region_show_hide(Config) when is_list(Config) ->
+    B0 = #{show => true, v => ~"a"},
+    {_, S0, V0} = region_render(toggle, B0),
+    {Hide, S1, V1} = region_diff(toggle, B0#{show => false}, S0, V0, [show]),
+    ?assertMatch([[?OP_TEXT, _, <<>>]], Hide),
+    {Show, _, _} = region_diff(toggle, B0#{v => ~"b"}, S1, V1, [show, v]),
+    ?assertMatch([[?OP_TEXT, _, #{~"d" := [~"b"]}]], Show).
+
+%% Switching between two regions patches the slot, whether or not the two share
+%% their statics.
+nodiff_region_switch(Config) when is_list(Config) ->
+    B0 = #{kind => a, v => ~"1"},
+    {_, S0, V0} = region_render(switch, B0),
+    {AB, S1, V1} = region_diff(switch, B0#{kind => b, v => ~"2"}, S0, V0, [kind, v]),
+    ?assertMatch([[?OP_TEXT, _, #{~"d" := [~"2"]}]], AB),
+    ?assertMatch(
+        {[[?OP_TEXT, _, _]], _, _},
+        region_diff(switch, B0#{kind => c}, S1, V1, [kind])
+    ).
+
+%% Two clauses calling the same helper produce two regions, inlined or not.
+nodiff_region_helper_switch(Config) when is_list(Config) ->
+    B0 = #{kind => line, v => ~"x"},
+    {_, S0, V0} = region_render(helper_switch, B0),
+    {Ops, _, _} = region_diff(helper_switch, B0#{kind => bar}, S0, V0, [kind]),
+    ?assertMatch([[?OP_TEXT, _, _], [?OP_TEXT, _, _], [?OP_TEXT, _, _]], Ops).
+
+%% The same branch chosen again keeps the region untouched, even when the values
+%% it was rendered from changed.
+nodiff_region_same_branch_kept(Config) when is_list(Config) ->
+    B0 = #{n => 1, v => ~"a"},
+    {_, S0, V0} = region_render(one_branch, B0),
+    {Ops, S1, _} = region_diff(one_branch, B0#{n => 2, v => ~"b"}, S0, V0, [n, v]),
+    ?assertEqual([], Ops),
+    ?assertEqual(maps:get(d, S0), maps:get(d, S1)).
+
+%% A value read only inside the region is not a dependency of its slot.
+nodiff_region_inner_change(Config) when is_list(Config) ->
+    B0 = #{n => 1, v => ~"a"},
+    {_, S0, V0} = region_render(one_branch, B0),
+    {Ops, S1, _} = region_diff(one_branch, B0#{v => ~"b"}, S0, V0, [v]),
+    ?assertEqual([], Ops),
+    ?assertEqual(S0, S1).
+
+%% An `az_key` on the region's root remounts it when its value changes; without one
+%% the region stays.
+nodiff_region_az_key(Config) when is_list(Config) ->
+    B0 = #{on => true, type => ~"line"},
+    {_, S0, V0} = region_render(keyed, B0),
+    #{d := [{Az0, _}, {_Az1, _}, {Az2, _}]} = S0,
+    {Ops, S1, V1} = region_diff(keyed, B0#{type => ~"bar"}, S0, V0, [type]),
+    ?assertEqual([Az0, Az2], lists:sort([Az || [?OP_TEXT, Az, _] <- Ops])),
+    ?assertEqual(2, length(Ops)),
+    ?assertMatch({[], _, _}, region_diff(keyed, B0#{type => ~"bar"}, S1, V1, [type])).
+
+%% Every spelling of the `az_key` attribute names the region.
+nodiff_region_az_key_spellings(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_az_key_spellings). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(n, Bindings) of "
+        "            1 -> {'p', ['az-nodiff', "
+        "                {'az-key', arizona_template:get(k, Bindings)}], []}; "
+        "            2 -> {'p', ['az-nodiff', "
+        "                {<<\"AZ-KEY\">>, arizona_template:get(k, Bindings)}], []} "
+        "        end"
+        "    ]}). "
+    ),
+    [
+        begin
+            {_, S0, V0} = arizona_render:render(Mod:render(#{n => N, k => 1}), #{}),
+            ?assertMatch(
+                {[[?OP_TEXT, _, _]], _, _},
+                arizona_diff:diff(Mod:render(#{n => N, k => 2}), S0, V0, #{k => true})
+            )
+        end
+     || N <- [1, 2]
+    ].
+
+%% A child view inside a region gets its props at mount only, wherever the region
+%% is evaluated from.
+nodiff_region_child_views_not_updated(Config) when is_list(Config) ->
+    Item = fun(N) -> #{id => ~"in_item", n => N} end,
+    B0 = #{on => true, n => 1, items => [Item(1)]},
+    {_, S0, V0} = region_render(child_paths, B0),
+    Ids = [~"in_branch", ~"in_stateless", ~"in_item"],
+    [?assertMatch(#{count := 1}, maps:get(bindings, maps:get(Id, V0))) || Id <- Ids],
+    {Ops, _, V1} = region_diff(child_paths, B0#{n => 2, items => [Item(2)]}, S0, V0, [n, items]),
+    [?assertMatch(#{count := 1}, maps:get(bindings, maps:get(Id, V1))) || Id <- Ids],
+    ?assertEqual([], Ops).
+
+%% A child view whose own root is az-nodiff keeps its render under new props, and
+%% is replaced when its id changes.
+nodiff_region_root_child_id(Config) when is_list(Config) ->
+    B0 = #{cid => ~"rc1", n => 1},
+    {_, S0, V0} = region_render(root_child, B0),
+    ?assertMatch({[], _, _}, region_diff(root_child, B0#{n => 2}, S0, V0, [n])),
+    {Ops, _, V1} = region_diff(root_child, B0#{cid => ~"rc2"}, S0, V0, [cid]),
+    ?assertMatch([[?OP_TEXT, _, #{~"s" := _}]], Ops),
+    ?assertEqual([~"rc2"], maps:keys(V1)).
+
+%% Regions in plain-list items come and go with their items; a value change in a
+%% kept item leaves its region alone.
+nodiff_region_list_items(Config) when is_list(Config) ->
+    {_, S0, V0} = region_render(list_widgets, #{items => [#{v => ~"a"}]}),
+    {Add, S1, V1} = region_diff(list_widgets, #{items => [#{v => ~"a"}, #{v => ~"b"}]}, S0, V0, [
+        items
+    ]),
+    ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_INSERT | _]]]], Add),
+    ?assertMatch(
+        {[], _, _},
+        region_diff(list_widgets, #{items => [#{v => ~"z"}, #{v => ~"b"}]}, S1, V1, [items])
+    ),
+    {Remove, _, _} = region_diff(list_widgets, #{items => [#{v => ~"a"}]}, S1, V1, [items]),
+    ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_REMOVE | _]]]], Remove).
+
+%% Regions in stream items come and go with their items; updating a kept item
+%% leaves its region alone.
+nodiff_region_stream_items(Config) when is_list(Config) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    St0 = settled_stream(arizona_stream:new(KeyFun, [#{id => ~"1", v => ~"a"}])),
+    {_, S0, V0} = region_render(stream_widgets, #{items => St0}),
+    St1 = arizona_stream:insert(St0, #{id => ~"2", v => ~"b"}),
+    {Add, S1, V1} = region_diff(stream_widgets, #{items => St1}, S0, V0, [items]),
+    ?assertMatch([[?OP_INSERT, _, ~"2", _, _]], Add),
+    St2 = settled_stream(St1),
+    St3 = arizona_stream:update(St2, ~"1", #{id => ~"1", v => ~"z"}),
+    {Update, S2, V2} = region_diff(stream_widgets, #{items => St3}, S1, V1, [items]),
+    ?assertEqual([], Update),
+    St4 = arizona_stream:delete(settled_stream(St3), ~"2"),
+    ?assertMatch(
+        {[[?OP_REMOVE, _, ~"2"]], _, _},
+        region_diff(stream_widgets, #{items => St4}, S2, V2, [items])
+    ).
+
+region_render(Fun, Bindings) ->
+    arizona_render:render(arizona_nodiff_regions:Fun(Bindings), #{}).
+
+region_diff(Fun, Bindings, Snap, Views, Changed) ->
+    arizona_diff:diff(
+        arizona_nodiff_regions:Fun(Bindings), Snap, Views, maps:from_keys(Changed, true)
+    ).
+
+settled_stream(Stream) ->
+    #{s := Settled} = arizona_stream:clear_stream_pending(#{s => Stream}, [s]),
+    Settled.

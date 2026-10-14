@@ -49,7 +49,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([eval_dynamics/1]).
 -export([eval_dynamics_v/2]).
 -export([eval_one_v_flat/2]).
--export([eval_one_v_unless_fp/3]).
+-export([eval_unless_same_region/3]).
 -export([eval_each_def/1]).
 -export([eval_stream_items/4]).
 -export([render_stream_item/4]).
@@ -133,36 +133,32 @@ eval_one_v_flat(Def, Views0) ->
     {Az, Val, Deps, Views1}.
 
 -doc """
-Evaluates a dynamic that last held the az-nodiff template fingerprinted `OldF`,
-unless it still holds that template.
+Evaluates a dynamic whose snapshot `Old` holds an az-nodiff region, unless the
+dynamic still produces that region.
 
 The slot's closure runs under dep tracking as in `eval_one_v_flat/2`, but its
-result is inspected before anything inside it is evaluated: a nested template
-whose scoped fingerprint is still `OldF` answers `{same, Deps}` and its dynamics
-never run -- the region renders once, so evaluating them would only cost the
-whole region per change and call `handle_update/3` on child views whose DOM is
-never patched. Anything else is evaluated from the value already produced (the
-closure is not called twice) and answered `{changed, Az, Value, Deps, Views1}`.
+result is inspected before anything inside it is evaluated (a `?stateless`
+descriptor is rendered to its template first): a template that is the same region
+(`arizona_template:same_region/3`) answers `{same, Deps}` and its dynamics never
+run -- the region renders once, so evaluating them would only cost the whole
+region per change. Anything else is evaluated from the value already produced
+(the closure is not called twice) and answered `{changed, Az, Value, Deps, Views1}`.
 """.
--spec eval_one_v_unless_fp(Dynamic, OldF, Views) -> Result when
+-spec eval_unless_same_region(Dynamic, Old, Views) -> Result when
     Dynamic :: arizona_template:dynamic(),
-    OldF :: binary(),
+    Old :: arizona_template:snapshot(),
     Views :: {map(), map()},
     Result ::
         {same, map()}
         | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
-eval_one_v_unless_fp(Def, OldF, Views0) ->
+eval_unless_same_region(Def, Old, Views0) ->
     {Az, Spec} = az_spec(Def),
     erlang:put('$arizona_deps', #{}),
     {Esc, Raw} = peek_spec(Spec),
-    case Raw of
-        #{s := _, d := _, f := F, diff := false} when is_binary(Az) ->
-            case arizona_template:slot_fingerprint(Az, F) of
-                OldF -> {same, erlang:erase('$arizona_deps')};
-                _Other -> eval_peeked(Az, Esc, Raw, Views0)
-            end;
-        _ ->
-            eval_peeked(Az, Esc, Raw, Views0)
+    Val = peek_region(Raw),
+    case arizona_template:same_region(Az, Val, Old) of
+        true -> {same, erlang:erase('$arizona_deps')};
+        false -> eval_peeked(Az, Esc, Val, Views0)
     end.
 
 az_spec({Az, Spec, _Loc}) -> {Az, Spec};
@@ -173,6 +169,13 @@ az_spec({Az, Spec}) -> {Az, Spec}.
 peek_spec({esc, Fun}) when is_function(Fun, 0) -> {true, Fun()};
 peek_spec(Fun) when is_function(Fun, 0) -> {false, Fun()};
 peek_spec(Spec) -> {false, Spec}.
+
+%% A `?stateless` descriptor is rendered here as eval_val_v/2 would, its body's
+%% own reads kept out of the slot's deps.
+peek_region(#{callback := _, props := _} = Desc) ->
+    with_saved_deps(fun() -> peek_region(arizona_template:stateless_template(Desc)) end);
+peek_region(Val) ->
+    Val.
 
 eval_peeked(Az, Esc, Raw, Views0) ->
     {Val0, Views1} = eval_val_v(Raw, Views0),
@@ -485,11 +488,11 @@ eval_val(#{
 eval_val(#{t := ?EACH, source := Source, template := Tmpl}) when is_map(Source) ->
     ItemSnaps = render_map_items_simple(Source, Tmpl),
     #{t => ?EACH, items => ItemSnaps, template => Tmpl};
-eval_val(#{callback := Callback, props := Props}) ->
+eval_val(#{callback := _, props := _} = Desc) ->
     %% A stateless child evaluates to a plain snapshot map, structurally like an
     %% inline nested template. The enclosing eval_one (which knows the slot az)
     %% namespaces its inner az ids via scope_slot -- no wrapper tag needed.
-    eval_val(Callback(Props));
+    eval_val(arizona_template:stateless_template(Desc));
 eval_val(#{s := Statics, d := Dynamics} = Tmpl) ->
     Snap0 = #{s => Statics, d => eval_dynamics(Dynamics)},
     arizona_template:maybe_propagate(Tmpl, Snap0);
@@ -530,14 +533,14 @@ eval_val_v(#{t := ?EACH, source := #stream{} = Source, template := Tmpl}, Views)
     eval_each_stream(Source, Tmpl, Views);
 eval_val_v(#{t := ?EACH, source := Source, template := Tmpl}, Views) when is_map(Source) ->
     eval_each_map(Source, Tmpl, Views);
-eval_val_v(#{callback := Callback, props := Props}, Views) ->
+eval_val_v(#{callback := _, props := _} = Desc, Views) ->
     %% Bracket the whole stateless recursion so eager ?get calls inside the
     %% callback body don't leak into the outer dynamic's tracked deps. The child
     %% evaluates to a plain snapshot map; the enclosing dynamic (which knows the
     %% slot az) namespaces its inner az ids via scope_slot -- otherwise two
     %% renders of the same function share one diff target.
     with_saved_deps(fun() ->
-        eval_val_v(Callback(Props), Views)
+        eval_val_v(arizona_template:stateless_template(Desc), Views)
     end);
 eval_val_v(#{s := _, d := _} = Tmpl, Views) ->
     eval_template(Tmpl, Views);
@@ -552,16 +555,21 @@ with_saved_deps(Fun) ->
     erlang:put('$arizona_deps', SavedDeps),
     Result.
 
+%% A child view whose own root is az-nodiff, or that sits inside an az-nodiff
+%% region, takes its props at mount only: re-running it would call
+%% `handle_update/3` and move its state past a DOM no op will ever touch, wherever
+%% the descriptor is evaluated from (a slot, a branch, a `?stateless` body, a list
+%% item). The same handler at the same id keeps its view as it is.
 eval_stateful(H, Props, {Old, _New} = Views) ->
     Id = maps:get(id, Props),
     case Old of
-        %% A child view whose own root is az-nodiff renders once: re-running it
-        %% would call `handle_update/3` and move its state past a DOM no op will
-        %% ever touch, wherever the descriptor is evaluated from (a slot, a
-        %% branch, a `?stateless` body, a list item). The same handler at the same
-        %% id keeps its view as it is.
         #{Id := #{handler := H, snapshot := #{diff := false} = Snap}} ->
             {Snap, arizona_diff:carry_skipped_view(Snap, Views)};
+        #{Id := #{handler := H, snapshot := Snap}} ->
+            case erlang:get('$arizona_in_nodiff') of
+                true -> {Snap, arizona_diff:carry_skipped_view(Snap, Views)};
+                undefined -> eval_stateful_lifecycle(H, Props, Id, Views)
+            end;
         #{} ->
             eval_stateful_lifecycle(H, Props, Id, Views)
     end.
@@ -703,13 +711,32 @@ build_each_snap(ItemSnaps, Tmpl, ChildViews, {VKeys, Source}) ->
         drained => arizona_stream:drain_mark(Source)
     }.
 
-eval_template(#{s := Statics, d := Dynamics} = Tmpl, {Old, New0}) ->
-    {Triples, {_, LocalNew}} = with_saved_deps(fun() -> eval_dynamics_v(Dynamics, {Old, #{}}) end),
+eval_template(#{d := Dynamics, diff := false} = Tmpl, {Old, _New0} = Views) ->
+    Evaluated = with_saved_deps(fun() -> eval_region_dynamics(Dynamics, {Old, #{}}) end),
+    template_snapshot(Tmpl, Evaluated, Views);
+eval_template(#{d := Dynamics} = Tmpl, {Old, _New0} = Views) ->
+    Evaluated = with_saved_deps(fun() -> eval_dynamics_v(Dynamics, {Old, #{}}) end),
+    template_snapshot(Tmpl, Evaluated, Views).
+
+template_snapshot(#{s := Statics} = Tmpl, {Triples, {_, LocalNew}}, {Old, New0}) ->
     {D, DepsList} = arizona_template:split_triples(Triples),
     ChildViews = child_view_set(LocalNew),
     Snap0 = #{s => Statics, d => D, deps => DepsList},
     Snap1 = arizona_template:maybe_propagate(Tmpl, Snap0),
     {Snap1#{child_views => ChildViews}, {Old, maps:merge(New0, LocalNew)}}.
+
+%% Mark the evaluation of an az-nodiff template's dynamics for eval_stateful/3.
+eval_region_dynamics(Dynamics, Views) ->
+    case erlang:put('$arizona_in_nodiff', true) of
+        true ->
+            eval_dynamics_v(Dynamics, Views);
+        undefined ->
+            try
+                eval_dynamics_v(Dynamics, Views)
+            after
+                erlang:erase('$arizona_in_nodiff')
+            end
+    end.
 
 eval_stream_items([], _ItemsMap, _Tmpl, Views, Acc) ->
     {Acc, Views};

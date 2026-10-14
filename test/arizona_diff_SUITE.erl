@@ -1224,7 +1224,8 @@ no_diff_ops(Config) when is_list(Config) ->
     ?assertEqual([], Ops).
 
 no_diff_nested(Config) when is_list(Config) ->
-    %% Only the non-ignored dynamic produces ops
+    %% Only the non-ignored dynamic produces ops. The old nested snapshot is what
+    %% rendering the new one into slot "1" produced, with its scoped fingerprint.
     OldSnap = #{
         s => [<<"<div az=\"0\">">>, <<" ">>, <<"</div>">>],
         d => [
@@ -1232,7 +1233,8 @@ no_diff_nested(Config) when is_list(Config) ->
             {<<"1">>, #{
                 s => [<<"<p>">>, <<"</p>">>],
                 d => [{<<"i">>, <<"old">>}],
-                diff => false
+                diff => false,
+                f => <<"1-test">>
             }}
         ]
     },

@@ -77,7 +77,10 @@ render(Bindings) ->
 -export([maybe_propagate/2]).
 -export([make_child_snap/4]).
 -export([scope_slot/2]).
--export([slot_fingerprint/2]).
+-export([branch/2]).
+-export([stateless_template/1]).
+-export([same_region/3]).
+-export([same_region/2]).
 -export([split_triples/1]).
 -export([visible_keys/2]).
 
@@ -92,6 +95,8 @@ render(Bindings) ->
 -ignore_xref([native_each/2]).
 -ignore_xref([terminal_each/2]).
 -ignore_xref([foreign_each/2]).
+%% Emitted by the parse transform for a conditional branch value it cannot see.
+-ignore_xref([branch/2]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
 
@@ -136,6 +141,10 @@ render(Bindings) ->
     d := [dynamic()],
     f := binary(),
     diff => false,
+    %% An az-nodiff template's identity beside its fingerprint: the conditional
+    %% branch that produced it and the value of its root's `az_key`.
+    branch => non_neg_integer(),
+    az_key => term(),
     backend => module()
 }.
 
@@ -162,12 +171,19 @@ render(Bindings) ->
     f => binary(),
     deps => [deps()],
     diff => false,
+    region => region(),
     view_id => binary(),
     backend => module()
 }.
 
+-nominal region() :: {non_neg_integer() | undefined, term()}.
+
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
--nominal stateless_descriptor() :: #{callback := fun((map()) -> template()), props := map()}.
+-nominal stateless_descriptor() :: #{
+    callback := fun((map()) -> template()),
+    props := map(),
+    branch => non_neg_integer()
+}.
 
 -nominal render_fun() :: fun((bindings()) -> template()).
 
@@ -623,6 +639,8 @@ rendered one -- the field is a uniform invariant on every snapshot.
 maybe_propagate(Tmpl, Snap) ->
     Snap1 =
         case Tmpl of
+            #{diff := false, branch := _} -> Snap#{diff => false, region => region(Tmpl)};
+            #{diff := false, az_key := _} -> Snap#{diff => false, region => region(Tmpl)};
             #{diff := false} -> Snap#{diff => false};
             #{} -> Snap
         end,
@@ -631,6 +649,15 @@ maybe_propagate(Tmpl, Snap) ->
         #{backend := Backend} -> Snap2#{backend => Backend};
         #{} -> Snap2
     end.
+
+%% A region's identity beside its fingerprint. Only a template that has one puts it
+%% on its snapshot (an `?each` item never does), so an absent `region` reads as the
+%% identity with neither part.
+region(Tmpl) ->
+    {maps:get(branch, Tmpl, undefined), maps:get(az_key, Tmpl, undefined)}.
+
+snapshot_region(Snap) ->
+    maps:get(region, Snap, {undefined, undefined}).
 
 %% Copies the `f` field from a template to a snapshot if present. Internal to
 %% maybe_propagate/2.
@@ -709,16 +736,68 @@ scopable(_Val) -> false.
 colon_free(Az) ->
     binary:replace(Az, ~":", ~"-", [global]).
 
--doc """
-The fingerprint a nested template with raw fingerprint `F` carries once
-`scope_slot/2` has scoped it into the slot `Az` -- what a diff compares to tell
-whether a slot still holds the same template without evaluating it.
-""".
--spec slot_fingerprint(Az, F) -> binary() when
-    Az :: binary(),
-    F :: binary().
+%% The fingerprint a nested template with raw fingerprint `F` carries once
+%% `scope_slot/2` has scoped it into the slot `Az`.
 slot_fingerprint(Az, F) ->
     <<(colon_free(Az))/binary, "-", F/binary>>.
+
+-doc """
+Stamps the value a conditional branch produced with that branch's index within
+its slot, when the value is an az-nodiff template or a `?stateless` descriptor
+(whose template takes the stamp when it is rendered). Two branches can produce
+the same template -- the same markup, the same helper -- and the stamp is what
+tells them apart once their regions are no longer evaluated. Any other value is
+returned as is.
+
+The parse transform stamps a literal template itself and calls this only for a
+branch value it cannot see at compile time.
+""".
+-spec branch(Branch, Value) -> Value1 when
+    Branch :: non_neg_integer(),
+    Value :: term(),
+    Value1 :: term().
+branch(Branch, #{s := _, d := _, diff := false} = Tmpl) ->
+    Tmpl#{branch => Branch};
+branch(Branch, #{callback := _, props := _} = Desc) ->
+    Desc#{branch => Branch};
+branch(_Branch, Value) ->
+    Value.
+
+-doc """
+Renders a `?stateless` descriptor to its template, passing on the branch stamp
+the descriptor carries (see `branch/2`).
+""".
+-spec stateless_template(Descriptor) -> term() when
+    Descriptor :: stateless_descriptor().
+stateless_template(#{callback := Callback, props := Props, branch := Branch}) ->
+    branch(Branch, Callback(Props));
+stateless_template(#{callback := Callback, props := Props}) ->
+    Callback(Props).
+
+-doc """
+Whether the template `Tmpl`, about to fill the slot `Az`, is the az-nodiff region
+the slot's snapshot `Old` already holds: the same scoped fingerprint, the same
+producing branch and the same `az_key`.
+""".
+-spec same_region(Az, Tmpl, Old) -> boolean() when
+    Az :: binary(),
+    Tmpl :: term(),
+    Old :: snapshot().
+same_region(Az, #{s := _, d := _, f := F, diff := false} = Tmpl, #{f := OldF} = Old) ->
+    slot_fingerprint(Az, F) =:= OldF andalso region(Tmpl) =:= snapshot_region(Old);
+same_region(_Az, _Tmpl, _Old) ->
+    false.
+
+-doc """
+Whether two az-nodiff snapshots of the same fingerprint are the same region: the
+same producing branch and `az_key`, and the same child view when they are one.
+""".
+-spec same_region(New, Old) -> boolean() when
+    New :: snapshot(),
+    Old :: snapshot().
+same_region(New, Old) ->
+    snapshot_region(New) =:= snapshot_region(Old) andalso
+        maps:get(view_id, New, undefined) =:= maps:get(view_id, Old, undefined).
 
 %% Only ever reached via scope_val/2's guarded `#{s, d}` clause, so the argument
 %% is always a snapshot map -- a non-snapshot (a scalar, a stateless child that
