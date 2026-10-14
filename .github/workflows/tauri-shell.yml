@@ -56,18 +56,18 @@ jobs:
     # workflow would make that context appear and disappear per PR.
     name: Tauri Shell
 
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Single source of truth: the Rust toolchain comes from .tool-versions
       # (which already pinned `rust`, with nothing installing it until now), the
       # same file setup-beam/setup-node read for OTP/Node. Scoped to rust so the
       # other pins in that file are not built here.
       - name: Set up Rust from .tool-versions
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           install_args: rust
           cache: true
@@ -94,7 +94,7 @@ jobs:
       # so cache the registry and the build directory. Keyed on Cargo.toml since
       # no lockfile is committed for this shell.
       - name: Cache cargo registry and target
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
