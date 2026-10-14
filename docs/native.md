@@ -47,13 +47,16 @@ handle_event(~"inc", _Payload, Bindings) ->
   addition). A boolean is the exception: it is a JSON `true`/`false`, static
   (`{visible, true}`) or dynamic (`{enabled, ?get(on)}`), and a dynamic one stays
   present in both states -- `OP_SET_ATTR` sets it to `false` rather than removing
-  the prop. A static `false` is dropped at compile time, as on the web.
+  the prop. A static `false` stays too (`"enabled":false`), unlike the web, where
+  `false` means the attribute is absent.
 - **Event handlers are props** whose value is an effect command built with the
   platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
   reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into
   the statics or computed at runtime (`{on_tap, ?get(cmd)}`, carried in `d` and
-  patched by `OP_SET_ATTR`), so a tap prop always reads an array. A list of
-  commands arrives as a list of arrays and runs in order, as on the web. Events
+  patched by `OP_SET_ATTR`). A list of commands arrives as a list of arrays and
+  runs in order, as on the web. A disabled command reads `false`
+  (`{on_tap, case ?get(on) of true -> Cmd; false -> false end}`); a client treats
+  a tap prop that is not an array as no command and fires nothing. Events
   flow back exactly as on the web (`[ViewId, Event, Payload]` → `handle_event/3`).
 - **`?each` works uniformly.** A `?each` inside `?native` is compiled for the
   native target automatically — no separate macro. `?stateful`/`?stateless`
@@ -233,7 +236,8 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    the node's nearest enclosing `az_view` (the root, or a nested `?stateful`
    child) — so events reach stateful children, not just the root. The prop holds
    one command or a list of them, told apart by whether its first element is an
-   array, and a list runs in order. The server's `"e"` (effects) array is
+   array, and a list runs in order; a prop that is not an array (`false` for a
+   disabled command) fires nothing. The server's `"e"` (effects) array is
    dispatched after the ops. The portable commands are handled — `push_event`,
    and `navigate` (which sends `["navigate", {path, qs}]` on the same socket; the
    server's `handle_navigate` re-mounts the target view and replies with

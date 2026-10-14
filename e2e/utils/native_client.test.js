@@ -62,6 +62,13 @@ describe('native client effect dispatch', () => {
         expect(() => client._runEffect([99, 'nope'], true)).toThrow();
     });
 
+    it('fires nothing for a disabled (false) or missing tap prop', () => {
+        const { client, sent } = clientWithRecorder('root_view');
+        client.tap({ __view: 'child_view', on_tap: false });
+        client.tap({ __view: 'child_view' });
+        expect(sent).toEqual([]);
+    });
+
     it('runs every command of a tap prop holding a list, in order', () => {
         const { client, sent } = clientWithRecorder('root_view');
         const node = {

@@ -50,7 +50,12 @@ scalars(Bindings) ->
     ).
 
 attrs(Bindings) ->
-    ?native({'Text', [{color, ?get(text)}, {size, ?get(int)}], [~"x"]}).
+    ?native(
+        {'Text', [{color, ?get(text)}, {size, ?get(int)}, {enabled, ?get(flag)}, {visible, false}],
+            [
+                ~"x"
+            ]}
+    ).
 
 branch(Bindings) ->
     ?native(

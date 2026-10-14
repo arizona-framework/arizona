@@ -31,6 +31,7 @@ JSON-encoding the wire value. On the wire itself a value stays raw
 -export([element_close/1]).
 -export([attr/2]).
 -export([attr_boolean/1]).
+-export([attr_false/1]).
 -export([attr_command/2]).
 -export([attr_dyn_name/1]).
 -export([children_sep/0]).
@@ -88,6 +89,10 @@ attr(Name, Value) ->
 -spec attr_boolean(binary()) -> binary().
 attr_boolean(Name) ->
     <<",", (json_str(Name))/binary, ":true">>.
+
+-spec attr_false(binary()) -> binary().
+attr_false(Name) ->
+    <<",", (json_str(Name))/binary, ":false">>.
 
 -spec attr_command(binary(), term()) -> binary().
 attr_command(Name, Cmd) ->

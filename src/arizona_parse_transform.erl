@@ -2604,6 +2604,18 @@ compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0)
             flush(State0, DynAST)
     end.
 
+%% A presence backend drops a static `false`; a value backend keeps it as a
+%% prop, the same shape a dynamic `false` takes.
+compile_static_false(NameAST, State0, ElemLine) ->
+    Backend = State0#state.backend,
+    case Backend:boolean_attrs() of
+        presence ->
+            State0;
+        value ->
+            NameBin = record_directive_attr(extract_attr_name(Backend, NameAST)),
+            buf_append(State0, emit_backend(fun() -> Backend:attr_false(NameBin) end, ElemLine))
+    end.
+
 compile_attrs([], _ElemAz, State, _ElemLine) ->
     State;
 compile_attrs([Attr | Rest], ElemAz, State0, ElemLine) ->
@@ -2614,10 +2626,10 @@ compile_attr({bin, _, _} = Bin, _ElemAz, State0, ElemLine) ->
     Backend = State0#state.backend,
     NameBin = record_directive_attr(extract_binary_value(Bin)),
     buf_append(State0, emit_backend(fun() -> Backend:attr_boolean(NameBin) end, ElemLine));
-compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, _ElemLine) when
+compile_attr({tuple, _, [NameAST, {atom, _, false}]}, _ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->
-    State0;
+    compile_static_false(NameAST, State0, ElemLine);
 compile_attr({tuple, _, [NameAST, {atom, _, true}]}, _ElemAz, State0, ElemLine) when
     element(1, NameAST) =:= atom; element(1, NameAST) =:= bin
 ->

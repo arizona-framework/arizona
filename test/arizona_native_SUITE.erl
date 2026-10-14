@@ -16,6 +16,8 @@
 -export([dynamic_boolean_prop_is_json_bool/1]).
 -export([diff_dynamic_boolean_prop_op/1]).
 -export([html_dynamic_boolean_attr_keeps_presence/1]).
+-export([static_false_prop_is_present/1]).
+-export([html_static_false_attr_is_dropped/1]).
 -export([dedup_keeps_command_prop_payload/1]).
 -export([live_view_caches_statics/1]).
 -export([native_each_renders_item_array/1]).
@@ -51,6 +53,8 @@ all() ->
         dynamic_boolean_prop_is_json_bool,
         diff_dynamic_boolean_prop_op,
         html_dynamic_boolean_attr_keeps_presence,
+        static_false_prop_is_present,
+        html_static_false_attr_is_dropped,
         dedup_keeps_command_prop_payload,
         live_view_caches_statics,
         native_each_renders_item_array,
@@ -308,6 +312,31 @@ html_dynamic_boolean_attr_keeps_presence(Config) when is_list(Config) ->
     ?assertMatch([[?OP_REM_ATTR, _, ~"disabled"]], OpsOff),
     {OpsOn, _} = arizona_diff:diff(Mod:render(#{on => true}), Snap1),
     ?assertMatch([[?OP_SET_ATTR, _, ~"disabled", <<>>]], OpsOn).
+
+%% A static `false` prop is kept as a JSON `false`, the same shape a dynamic
+%% `false` takes, so a widget reads the same prop whichever form wrote it.
+static_false_prop_is_present(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(nt_bool_static). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    az:native({'Button', [{enabled, false}, {visible, true}], [<<\"x\">>]}). "
+    ),
+    Doc = json:decode(iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{})))),
+    ?assertMatch(#{~"enabled" := false, ~"visible" := true}, Doc).
+
+%% The HTML target still drops a static `false` attribute at compile time.
+html_static_false_attr_is_dropped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(nt_bool_static_html). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    az:html({button, [{disabled, false}, {hidden, true}], [<<\"x\">>]}). "
+    ),
+    ?assertEqual(
+        ~"<button hidden>x</button>",
+        iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{})))
+    ).
 
 %% A command prop's payload map is app data, even when it carries `f`/`s`/`d`
 %% keys: the fingerprint dedup leaves it whole, in the hydration payload and in a
@@ -637,6 +666,8 @@ ssr_view_matches_mount_frame(Config) when is_list(Config) ->
         {arizona_native_conditional, #{}},
         {arizona_native_stream_child, #{}},
         {arizona_native_tabs, #{}},
+        {arizona_native_toggle, #{on => false}},
+        {arizona_native_toggle, #{on => true}},
         {arizona_native_list, #{
             items => [#{id => 1, text => ~"a \"b\""}, #{id => 2, text => ~"c"}]
         }}
@@ -676,7 +707,7 @@ cached_interleave(#{~"t" := _, ~"f" := F, ~"d" := ItemsList}, Cache) ->
 cached_interleave(#{~"f" := F, ~"d" := D}, Cache) ->
     #{F := S} = Cache,
     cached_zip(S, D, Cache);
-cached_interleave(V, _Cache) when is_binary(V) ->
+cached_interleave(V, _Cache) when is_binary(V); is_boolean(V); is_number(V); is_list(V) ->
     json:encode(V).
 
 cached_zip([S], [], _Cache) ->

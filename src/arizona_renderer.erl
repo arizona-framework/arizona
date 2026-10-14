@@ -35,6 +35,15 @@ other formats while reusing the same walker, diff engine, and transport.
 -callback attr_boolean(Name :: binary()) -> binary().
 
 -doc """
+A static `false` attribute. Required only by a backend whose `boolean_attrs/0` is
+`value`, where `false` is a prop value rather than an absence; a `presence` backend
+drops a static `false` at compile time and never gets this call.
+""".
+-callback attr_false(Name :: binary()) -> binary().
+
+-optional_callbacks([attr_false/1]).
+
+-doc """
 An attribute whose value is a compile-time-folded effect command (e.g.
 `{az_click, arizona_js:push_event(...)}` on the web, `{on_tap,
 arizona_android:push_event(...)}` on native). HTML escapes it into the attribute
