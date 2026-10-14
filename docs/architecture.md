@@ -1840,6 +1840,59 @@ still handles its own events.
   it inserted. Call the exported `mountHooks(root)` on the widget's root after rendering such
   markup; it scans for both.
 
+## Connection events
+
+The client announces connection changes as two `CustomEvent`s on `document`, in the same style
+as `arizona:fetch-error`. They are for client code the server cannot reach while the socket is
+down -- a hooked widget, an embedded component, a status badge:
+
+- **`arizona:disconnected`**, detail `{code, reloadInMs}` -- the connection was lost. Fired
+  **once per outage, and again when a page reload gets scheduled during it**: the first close of
+  a live (or not yet live) page announces the outage, and the worker's reconnect attempts that
+  fail while the server is still down report closes of their own, which announce nothing until a
+  mount has ended the outage -- unless one is a `4501` that schedules the reload, the moment a
+  widget has to save its state. Write listeners to be idempotent. `code` is the close code the
+  browser reports: the server's (`1001` drain, `4500` crash, `4501` mount failure) or, for a connection
+  that ended without a close frame -- a network drop, a failed handshake, a first connect that
+  never opened -- `1006`. `reloadInMs` is the delay of the page reload this `4501` scheduled,
+  `null` otherwise (including a `4501` while a reload is already pending). A `1000` close (a
+  deliberate end, which the client does not reconnect after), `disconnect()`, and `pagehide` fire
+  nothing: the last two terminate the worker, so no close reaches the page.
+- **`arizona:connected`**, detail `{reconnect}` -- a view mounted on a new socket, fired once the
+  ops of the frame that proves it (the first frame of a first connect, the resync of a reconnect)
+  have been applied -- after a view transition's deferred update when one wraps that frame, and
+  not at all if the socket closes before then. `reconnect` means **this page had a mounted view
+  before**: `false` for the page load's first mount (even one reached through a reconnect after a
+  first connect that never opened), `true` for every later one, including a bfcache restore,
+  which has no `arizona:disconnected` before it. A navigate's `OP_REPLACE` reply on a live socket
+  is not a connection event and fires nothing.
+
+So a widget can pause while the server is unreachable and refresh what it may have missed once
+the view is back:
+
+```javascript
+hooks.Ticker = {
+    mounted() {
+        this.off = new AbortController();
+        const { signal } = this.off;
+        document.addEventListener('arizona:disconnected', () => this.pause(), { signal });
+        document.addEventListener(
+            'arizona:connected',
+            (e) => e.detail.reconnect && this.refresh(),
+            { signal },
+        );
+    },
+    destroyed() {
+        this.off.abort();
+    },
+    pause() { /* stop polling, grey out */ },
+    refresh() { /* refetch, resume */ },
+};
+```
+
+The `az-connected`/`az-disconnected` classes on `<html>` remain the CSS-side view of the same
+state; they flip on the socket's open and close, before the mount the event waits for.
+
 ## Handler callbacks
 
 Two handler kinds, each with its own header:

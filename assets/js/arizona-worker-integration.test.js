@@ -693,6 +693,24 @@ describe('arizona-worker', () => {
         expect(slf.posted).toContainEqual([2, 1006]);
     });
 
+    it('every failed reconnect attempt reports its own close', () => {
+        // The main thread's `arizona:disconnected` is once per outage BECAUSE
+        // each attempt that never opens still posts a close of its own.
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        ws.latest().close(1001);
+        vi.advanceTimersByTime(10000);
+        ws.latest().close(1006); // the handshake failed: no open, no frames
+        vi.advanceTimersByTime(10000);
+        ws.latest().close(1006);
+        expect(slf.posted.filter((m) => m[0] === 2)).toEqual([
+            [2, 1001],
+            [2, 1006],
+            [2, 1006],
+        ]);
+        expect(slf.posted.filter((m) => m[0] === 1)).toEqual([[1, false]]);
+    });
+
     it('fingerprinted template writes fpId + statics to IndexedDB via onPersist', async () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
