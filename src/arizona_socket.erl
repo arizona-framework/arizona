@@ -280,7 +280,11 @@ non-map payload can't reach a `#{...}`-matching handler and crash it.
     Frame :: binary(),
     Socket :: socket().
 handle_in(Frame, Socket) ->
-    guard(fun() -> do_handle_in(Frame, Socket) end, Socket).
+    try
+        do_handle_in(Frame, Socket)
+    catch
+        Class:Reason:Stacktrace -> crash_close(Class, Reason, Stacktrace, Socket)
+    end.
 
 do_handle_in(Frame, #socket{pending_resync = TRef, pid = Pid} = Socket0) when
     is_reference(TRef)
@@ -306,8 +310,8 @@ do_handle_in(?SYS_PING, Socket) ->
     {reply, ?SYS_PONG, Socket};
 do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
     %% `try ... of` so the catch fires ONLY on a malformed decode -- exceptions
-    %% raised inside the matched clause bodies (the inner navigate/dispatch
-    %% trys) are not caught here, so a genuine handler crash still closes 4500.
+    %% raised inside the matched clause bodies are not caught here, so a genuine
+    %% handler crash reaches handle_in/2's guard and still closes 4500.
     try json:decode(JSON) of
         [~"cached_fps", FpList] when is_list(FpList) ->
             arizona_live:seed_fps(Pid, FpList),
@@ -315,38 +319,20 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
         [~"navigate", #{~"path" := Path, ~"qs" := Qs}] when
             is_binary(Path), is_binary(Qs)
         ->
-            try
-                handle_navigate(Path, Qs, Socket)
-            catch
-                Class:Reason:Stacktrace ->
-                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-                    close_crash(Socket)
-            end;
+            handle_navigate(Path, Qs, Socket);
         [~"patch", #{~"path" := Path, ~"qs" := Qs}] when
             is_binary(Path), is_binary(Qs)
         ->
-            try
-                handle_patch(Path, Qs, Socket)
-            catch
-                Class:Reason:Stacktrace ->
-                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-                    close_crash(Socket)
-            end;
+            handle_patch(Path, Qs, Socket);
         [Target, Event, Payload] when is_binary(Event), is_map(Payload) ->
             ViewId = event_target(Target, RootViewId),
-            try dispatch_event(Pid, ViewId, Event, Payload) of
-                {AllOps, AllEffects, Observed} ->
-                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
-                    encode_reply(
-                        PendOps ++ AllOps,
-                        PendEffects ++ AllEffects,
-                        note_az([], Observed, Socket1)
-                    )
-            catch
-                Class:Reason:Stacktrace ->
-                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-                    close_crash(Socket)
-            end;
+            {AllOps, AllEffects, Observed} = dispatch_event(Pid, ViewId, Event, Payload),
+            {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
+            encode_reply(
+                PendOps ++ AllOps,
+                PendEffects ++ AllEffects,
+                note_az([], Observed, Socket1)
+            );
         _ ->
             {ok, Socket}
     catch
@@ -381,7 +367,11 @@ from the linked live process per the mapping in this module's
     Info :: term(),
     Socket :: socket().
 handle_info(Info, Socket) ->
-    guard(fun() -> do_handle_info(Info, Socket) end, Socket).
+    try
+        do_handle_info(Info, Socket)
+    catch
+        Class:Reason:Stacktrace -> crash_close(Class, Reason, Stacktrace, Socket)
+    end.
 
 do_handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0) when
     is_reference(TRef)
@@ -441,18 +431,14 @@ safe_init(Handler, Socket, Fun) ->
 close_crash(Socket) ->
     {close, ?CLOSE_CRASH, ~"server crash", Socket}.
 
-%% The transport has no catch of its own, so anything raised past the inner
-%% guards -- notably a frame that cannot be JSON-encoded, since encoding runs
-%% after them -- would end the session with no close frame (a bare 1006 the
-%% client only backs off from). Close 4500 like every other crash instead.
-guard(Fun, Socket) ->
-    try
-        Fun()
-    catch
-        Class:Reason:Stacktrace ->
-            logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-            close_crash(Socket)
-    end.
+%% The catch body of handle_in/2 and handle_info/2. The transport has no catch
+%% of its own, so a raise there -- a handler crash, or a frame that cannot be
+%% JSON-encoded -- would end the session with no close frame (a bare 1006).
+%% Close 4500 like every other crash instead. The trys sit inline in both entry
+%% points so no closure is built per frame.
+crash_close(Class, Reason, Stacktrace, Socket) ->
+    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+    close_crash(Socket).
 
 %% Is this frame the `cached_fps` announcement? Decoded here only to route the
 %% deferred-resync leg; the announcement leg never re-decodes, and the rare
@@ -470,13 +456,11 @@ decode_cached_fps(Frame) ->
 %% dedup against `sent_fps` happens inside `mount_and_render` -- any
 %% fingerprints seeded before this call elide their statics from the payload.
 %%
-%% This is a mount, so it carries the same guards as every other mount path
-%% (`safe_init/3` at connect, the trys in do_navigate/do_patch/the event leg):
-%% a raise anywhere in `mount/1`, `on_mount`, or `render/1` becomes the 4500
-%% crash close the client's `crashReload()` guard is built for -- unguarded it
-%% escaped both `handle_in/2` and `handle_info/2`, killed the session with no
-%% close frame, and left the client backing off on a bare 1006 forever. The
-%% drain/exit race gets the same 1001 going-away close its siblings give it.
+%% A raise anywhere in `mount/1`, `on_mount`, or `render/1` becomes the 4500
+%% crash close here rather than at the entry guard, because the result must be
+%% a value: resync_before_frame/2 matches a close to keep the triggering frame
+%% from reaching a live process the flush left unmounted. The drain/exit race
+%% gets the same 1001 going-away close do_navigate/do_patch give it.
 %% Returns `{ok, Ops, Socket}` or a ready-made close result.
 flush_resync(#socket{pid = Pid} = Socket) ->
     try arizona_live:mount_and_render(Pid) of
