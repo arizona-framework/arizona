@@ -9,6 +9,17 @@ import { expectStaysConnected } from '../utils/helpers.js';
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
 
+/**
+ * Wait for the frame the page sends on its own. The view self-sends on
+ * connect, and its "Connected" status frame can land after the socket opens,
+ * so a test that captures "the next frame" must wait for it first or it
+ * captures that frame instead of the reply to its own event.
+ */
+const liveSettled = async (page) => {
+    await wsReady(page);
+    await expect(page.locator('#status')).toHaveText('Connected');
+};
+
 // ---------------------------------------------------------------------------
 // Helpers -- counter
 // ---------------------------------------------------------------------------
@@ -381,7 +392,7 @@ test.describe('effects', () => {
 
     test('ops-only envelope omits "e" key', async ({ page }) => {
         await page.goto('/');
-        await wsReady(page);
+        await liveSettled(page);
 
         // Intercept the next ws message to verify envelope format
         const messagePromise = page.evaluate(() => {
@@ -407,7 +418,7 @@ test.describe('effects', () => {
 
     test('ops+effects envelope includes both keys', async ({ page }) => {
         await page.goto('/');
-        await wsReady(page);
+        await liveSettled(page);
 
         // Increment counter first so reset produces a diff
         await incBtn(page, 'counter').click();
@@ -438,7 +449,7 @@ test.describe('effects', () => {
 
     test('effects-only envelope omits "o" key', async ({ page }) => {
         await page.goto('/');
-        await wsReady(page);
+        await liveSettled(page);
 
         // Counter starts at 0 -- reset at 0 produces no ops but fires effect
         const messagePromise = page.evaluate(() => {
