@@ -216,6 +216,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Fuse `render/2`'s triple unzip into its zip walk | one walk and two lists where there were two walks and four, per connect/navigate |
 | Skip the fingerprint dedup walk for fp-less frames | strictly less work on every event workload: red/op -0.5% to -6.1%, resolved by the reductions column |
 | Escape a binary/integer SSR content value directly; render every `?each` item through the top-level SSR walk | `render_each_100` -11.6% (6.9 -> 6.1 us), red/op -40%; red/op -31% `render_view_many_dyn_50`, -16%/-17% `render_view_small`/`_with_layout`, -8% `render_view_page`; a 201-row escape-heavy table red/op -23%, wall ~-5% (under the floor) |
+| Scan `escape/1` 8 and 4 bytes per step; slice long clean runs | a 201-row escape-heavy table -46% (193 -> 105 us, red/op 24.8k -> 12.1k); per value: clean 10-200 B -46% to -55%, one metacharacter in 64-200 B -43% to -80%, markup -10%, UTF-8 prose -63%; `render_view_page` -6%, `render_each_100` red/op -13% |
 
 (The whole 2026-08 arc that added the four rows from "Encode the ops frame" to
 "Fuse `render/2`'s triple unzip" -- PRs #759-#762 -- closed with
@@ -286,6 +287,32 @@ escaping the win barely shows on the clock: a 201-row table of messages full of 
 since escaping the bytes is most of that page. The tprof `call_time` profile that prompted it
 put the wrapper chain at ~25% of that page; its total ran 6.5x the page's real time,
 the per-call overhead weighting the ~4000 tiny calls per page far above their cost.
+
+Then **the escape scan itself**, which is most of that table. `escape/1` used to look
+at one byte per call and append one byte per call; it now takes 8 (then 4) bytes per
+step under one guard of byte compares, which the JIT turns into plain comparisons
+(letters and UTF-8 bytes answer on the first test), and appends a clean run as one
+slice. Two details keep dense markup from paying for it. A failed chunk means a
+metacharacter within it, so the scan finishes byte by byte instead of retrying chunks
+per byte; and after an entity, clean bytes are appended one at a time until two in a
+row suggest a real run, so `<a&b>` never attempts a chunk. A tail under 16 bytes past
+the first metacharacter takes the old append loop. The thresholds are on the
+binary's `byte_size`, O(1), never an `iolist_size`. Per value, against the old scan:
+
+| value | before | after |
+| ----- | ------ | ----- |
+| clean 5 / 10 / 20 B | 17.5 / 32.1 / 49.8 ns | 13.5 / 17.4 / 22.9 ns |
+| clean 64 / 200 B | 124 / 357 ns | 57 / 176 ns |
+| one `&` at the start of 200 B | 1551 ns | 311 ns |
+| one `&` mid-way / at the end of 200 B | 1025 / 444 ns | 316 / 254 ns |
+| dense 200 B (`<a&b>"c'` repeated) | 1916 ns | 1856 ns |
+| markup 500 B | 4071 ns | 3650 ns |
+| an 80 B `<script>...</script>` text | 845 ns | 364 ns |
+| UTF-8 prose with `&` and `'` | 716 ns | 264 ns |
+| 5-10 B with a metacharacter first or mid-way | 99-147 ns | 105-160 ns (+3-9%) |
+
+The last row is the one cost: a few ns of failed chunk attempts on a very short value
+that starts with a metacharacter. The 201-row table renders in 105 us instead of 193.
 
 ## What did not work
 
@@ -359,14 +386,22 @@ names walked four times -- 46 of 81 per-request calls), but it lives in the
 11.5% the profile suggested. Its `check_header_safe/3` is the least inflated of the
 four AND the security check: leave that one alone.
 
-**Rewriting `arizona_html:escape/2`'s accumulator.** Prompted by a neighbouring
-codebase measuring the opposite shape faster; see the transfer note above. The current
-tail-recursive binary append is the right choice HERE and stays: it beats a per-byte
-iolist everywhere past ~20 bytes, which is where template values live. A third variant
-that batches runs of ordinary bytes into slices is genuinely faster for a long value
-holding ONE metacharacter (1170 -> 558 ns at 200 bytes) but 4x slower on dense markup
-(1867 -> 7582), and escape-dense values are exactly what escaping exists for. Note the
-`first_meta/2` guard means none of this runs at all for a clean value.
+**Other shapes for the escape scan** (the table above shows what won). Slicing runs
+was first rejected because a variant that sliced at every metacharacter ran dense
+markup 4x slower (1867 -> 7582 ns); the gating above is what fixes that. Measured and
+lost against the 8/4-byte guard:
+`binary:match/2` with a compiled pattern held in `persistent_term`, from 32 bytes up --
+2-4x on long clean or sparse values, but its ~30 ns fixed C-call cost plus the
+dense-or-sparse decision put long values that open with metacharacters 5-11% behind
+the old scan, and short values paid for the size guard; the same pattern compiled per
+call cost ~600 ns. An escape that returns iodata through a separate content-only
+callback (`escape_content/1`) -- 8% faster than `binary:match` on the table, but a new
+renderer callback on every backend and an iodata contract on the SSR path, slower than
+the old scan on every short value, and only element content benefits. SWAR over 7-byte
+words (`<<W:56>>` stays a small integer; the exact zero-byte test, so UTF-8 never
+flags; either the five targets OR'd or folded into three tests) -- correct, close
+behind the guard everywhere, never ahead. A byte-step window loop with no chunks --
+3.4x slower on dense input. Each was checked byte-identical before timing.
 
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at

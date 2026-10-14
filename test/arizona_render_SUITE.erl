@@ -36,6 +36,7 @@
     render_attr/1,
     static_attr_escaped/1,
     escape_clean_value_not_rebuilt/1,
+    escape_matches_reference/1,
     raw_text_breakout_neutralized/1,
     raw_text_breakout_neutralized_for_chardata/1,
     raw_text_breakout_neutralized_for_atom/1,
@@ -135,6 +136,7 @@ groups() ->
             render_attr,
             static_attr_escaped,
             escape_clean_value_not_rebuilt,
+            escape_matches_reference,
             raw_text_breakout_neutralized,
             raw_text_breakout_neutralized_for_chardata,
             raw_text_breakout_neutralized_for_atom,
@@ -350,6 +352,55 @@ escape_clean_value_not_rebuilt(Config) when is_list(Config) ->
     %% A value that does need escaping is a new term, not the input.
     Dirty = ~"a & b",
     ?assertNot(erts_debug:same(Dirty, arizona_html:escape(Dirty))).
+
+%% escape/1 scans 8 and 4 bytes at a time, hands a short tail to the append loop
+%% and copies long clean runs as slices, so each of those boundaries is crossed
+%% here against a byte-at-a-time reference: every byte value at every offset of a
+%% chunk, clean runs either side of the tail and run thresholds, dense and
+%% UTF-8-heavy values, and 500 seeded random ones.
+escape_matches_reference(Config) when is_list(Config) ->
+    Filler = fun(N) -> binary:copy(~"x", N) end,
+    EveryByte = [
+        <<(Filler(Off))/binary, B, (Filler(40 - Off))/binary>>
+     || B <- lists:seq(0, 255), Off <- lists:seq(0, 17)
+    ],
+    Lens = lists:seq(0, 20) ++ [31, 32, 33, 63, 64, 65, 200],
+    Gaps = [
+        <<(Filler(A))/binary, M, (Filler(G))/binary, N, (Filler(T))/binary>>
+     || A <- [0, 1, 3, 4, 7, 8, 9, 64],
+        G <- Lens,
+        T <- [0, 1, 2, 3, 15, 16, 17, 40],
+        {M, N} <- [{$&, $<}, {$", $'}, {$>, $&}]
+    ],
+    Dense = [binary:copy(~"<a&b>\"c'", K) || K <- [1, 2, 5, 40]],
+    Utf8 = [
+        <<"日本語 & ü → 'x' <y> 😀"/utf8>>,
+        <<"😀😀😀😀&😀😀😀😀😀😀😀😀😀😀😀😀\"é"/utf8>>,
+        unicode:characters_to_binary(
+            lists:duplicate(30, 16#3042) ++ "&" ++ lists:duplicate(30, 16#E9)
+        )
+    ],
+    _ = rand:seed(exsss, {17, 29, 43}),
+    Alphabet = <<"abcXYZ09 &<>\"'=;:\n\t"/utf8, 0, 127, 128, 195, 169, 240, 159, 152, 128>>,
+    Random = [
+        <<
+            <<(binary:at(Alphabet, rand:uniform(byte_size(Alphabet)) - 1))>>
+         || _ <- lists:seq(1, rand:uniform(300))
+        >>
+     || _ <- lists:seq(1, 500)
+    ],
+    Inputs = EveryByte ++ Gaps ++ Dense ++ Utf8 ++ Random,
+    ?assertEqual([], [I || I <- Inputs, arizona_html:escape(I) =/= reference_escape(I)]).
+
+reference_escape(Bin) ->
+    <<<<(reference_entity(C))/binary>> || <<C>> <= Bin>>.
+
+reference_entity($&) -> ~"&amp;";
+reference_entity($<) -> ~"&lt;";
+reference_entity($>) -> ~"&gt;";
+reference_entity($") -> ~"&quot;";
+reference_entity($') -> ~"&#39;";
+reference_entity(C) -> <<C>>.
 
 %% P9: a dynamic value in a raw-text element (<script>) renders verbatim, but a
 %% `</script>` in the value would break out into HTML parsing. The backend's
