@@ -45,6 +45,10 @@ routes() ->
             bindings => #{title => <<"NodiffWidgetList">>},
             layouts => Layouts
         }},
+        {live, <<"/nodiff-widget-list-keyed">>, arizona_nodiff_widget_list, #{
+            bindings => #{title => <<"NodiffWidgetListKeyed">>, keyed => true},
+            layouts => Layouts
+        }},
         {live, <<"/svg-each">>, arizona_svg_each_page, #{
             bindings => #{title => <<"SvgEach">>},
             layouts => Layouts

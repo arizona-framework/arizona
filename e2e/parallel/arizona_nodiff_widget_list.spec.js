@@ -2,54 +2,100 @@ import { expect, test } from '@playwright/test';
 
 // A plain list whose items are client-owned widgets (`arizona_nodiff_widget_list`,
 // the `Widget` hook in `arizona_layout`). Every change to it re-renders the list
-// wholesale; the items the new render still holds keep their widget and its state.
+// wholesale. Keyed items keep their widget and its state while they are listed;
+// unkeyed ones cannot be told apart, so every widget is remounted for its own item.
 
 const wsReady = (page) =>
     page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
 
 const items = (page) => page.locator('#list > li');
+const kinds = (page) => items(page).locator('.widget-kind');
 const input = (page, n) => items(page).nth(n).locator('.widget-input');
 const log = (page) => page.evaluate(() => window._widget);
 
-test.beforeEach(async ({ page }) => {
-    await page.goto('/nodiff-widget-list');
+async function open(page, path) {
+    await page.goto(path);
     await wsReady(page);
     await expect(items(page)).toHaveCount(2);
-});
-
-test('adding an item keeps the widgets already in the list', async ({ page }) => {
     await input(page, 0).fill('first');
     await input(page, 1).fill('second');
-    await page.locator('#add').click();
-    await expect(items(page)).toHaveCount(3);
-    await expect(input(page, 0)).toHaveValue('first');
-    await expect(input(page, 1)).toHaveValue('second');
-    expect(await log(page)).toEqual({
-        mounts: 3,
-        destroys: 0,
-        events: ['mount:a', 'mount:b', 'mount:i3'],
+}
+
+test.describe('unkeyed items', () => {
+    test.beforeEach(async ({ page }) => open(page, '/nodiff-widget-list'));
+
+    test('dropping the first item remounts the rest for their own items', async ({ page }) => {
+        await page.locator('#drop-first').click();
+        await expect(kinds(page)).toHaveText(['b']);
+        await expect(input(page, 0)).toHaveValue('');
+        expect((await log(page)).events).toEqual([
+            'mount:a',
+            'mount:b',
+            'destroy:a:true',
+            'destroy:b:true',
+            'mount:b',
+        ]);
+    });
+
+    test('reversing the items remounts each widget for its own item', async ({ page }) => {
+        await page.locator('#reverse').click();
+        await expect(kinds(page)).toHaveText(['b', 'a']);
+        await expect(input(page, 0)).toHaveValue('');
+        await expect(input(page, 1)).toHaveValue('');
+        expect((await log(page)).events).toEqual([
+            'mount:a',
+            'mount:b',
+            'destroy:a:true',
+            'destroy:b:true',
+            'mount:b',
+            'mount:a',
+        ]);
     });
 });
 
-test('dropping an item destroys only its widget', async ({ page }) => {
-    await input(page, 0).fill('first');
-    await page.locator('#drop').click();
-    await expect(items(page)).toHaveCount(1);
-    await expect(input(page, 0)).toHaveValue('first');
-    expect((await log(page)).events).toEqual(['mount:a', 'mount:b', 'destroy:b:true']);
-});
+test.describe('keyed items', () => {
+    test.beforeEach(async ({ page }) => open(page, '/nodiff-widget-list-keyed'));
 
-test('a reconnect keeps the widgets of the items still listed', async ({ page }) => {
-    await page.locator('#add').click();
-    await expect(items(page)).toHaveCount(3);
-    await input(page, 0).fill('first');
-    await page.evaluate(() => window._ws.close(4000));
-    await page.waitForFunction(() =>
-        document.documentElement.classList.contains('az-disconnected'),
-    );
-    await wsReady(page);
-    // The fresh mount lists two items again: the third widget goes, the others stay.
-    await expect(items(page)).toHaveCount(2);
-    await expect(input(page, 0)).toHaveValue('first');
-    expect((await log(page)).events).toEqual(['mount:a', 'mount:b', 'mount:i3', 'destroy:i3:true']);
+    test('adding an item keeps the widgets already in the list', async ({ page }) => {
+        await page.locator('#add').click();
+        await expect(kinds(page)).toHaveText(['a', 'b', 'i3']);
+        await expect(input(page, 0)).toHaveValue('first');
+        await expect(input(page, 1)).toHaveValue('second');
+        expect((await log(page)).events).toEqual(['mount:a', 'mount:b', 'mount:i3']);
+    });
+
+    test('dropping the first item destroys only its widget', async ({ page }) => {
+        await page.locator('#drop-first').click();
+        await expect(kinds(page)).toHaveText(['b']);
+        await expect(input(page, 0)).toHaveValue('second');
+        expect((await log(page)).events).toEqual(['mount:a', 'mount:b', 'destroy:a:true']);
+    });
+
+    test('reversing the items keeps each widget with its item', async ({ page }) => {
+        await page.locator('#reverse').click();
+        await expect(kinds(page)).toHaveText(['b', 'a']);
+        await expect(input(page, 0)).toHaveValue('second');
+        await expect(input(page, 1)).toHaveValue('first');
+        expect((await log(page)).events).toEqual(['mount:a', 'mount:b']);
+    });
+
+    // The fresh mount lists [a, b] again: b keeps its widget, a gets a new one.
+    test('a reconnect after dropping the first item keeps the widget by key', async ({ page }) => {
+        await page.locator('#drop-first').click();
+        await expect(kinds(page)).toHaveText(['b']);
+        await page.evaluate(() => window._ws.close(4000));
+        await page.waitForFunction(() =>
+            document.documentElement.classList.contains('az-disconnected'),
+        );
+        await wsReady(page);
+        await expect(kinds(page)).toHaveText(['a', 'b']);
+        await expect(input(page, 0)).toHaveValue('');
+        await expect(input(page, 1)).toHaveValue('second');
+        expect((await log(page)).events).toEqual([
+            'mount:a',
+            'mount:b',
+            'destroy:a:true',
+            'mount:a',
+        ]);
+    });
 });
