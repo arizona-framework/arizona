@@ -1141,8 +1141,11 @@ lives here independent of the server.
   event/patch/navigate reply, pushes already queued in the socket mailbox are folded into the
   reply frame first (causal wire order). On a navigate they ship ahead of the `OP_REPLACE`, still
   tagged with the old page's view id: one may carry the first statics of a fingerprint the replace
-  then references bare, and the replace supersedes their ops anyway. So every push reaching
-  `handle_info/2` names the socket's current root
+  then references bare, and the replace supersedes their ops anyway. Their effects are dropped,
+  since a client applies a frame's effects after its ops and they would run against the new page.
+  So for a navigate the socket drives, every push reaching `handle_info/2` names the socket's
+  current root. A navigate called directly on the live process (`arizona_live:navigate/3,4` from
+  another process) does not update the socket's view id, so later pushes are ignored
 
 **Exit reason to close code** -- four cases, and the difference matters because the JS worker
 treats **any non-1000 code as reconnectable**:

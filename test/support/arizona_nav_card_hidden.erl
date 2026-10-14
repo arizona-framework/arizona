@@ -22,4 +22,6 @@ render(Bindings) ->
 
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info({show_card, Label}, Bindings) ->
-    {Bindings#{show => true, label => Label}, #{}, []}.
+    {Bindings#{show => true, label => Label}, #{}, []};
+handle_info({show_card_titled, Label}, Bindings) ->
+    {Bindings#{show => true, label => Label}, #{}, [arizona_js:set_title(Label)]}.

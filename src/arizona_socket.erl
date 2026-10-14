@@ -356,9 +356,12 @@ live_pid(#socket{pid = Pid}) -> Pid.
 Handles inbox messages forwarded by the transport.
 
 Routes `{arizona_push, ViewId, Ops, Effects}` from the live process into
-a reply frame. `ViewId` is always the socket's current root view id: a push
-the old page emitted before a navigate is folded into the navigate reply
-ahead of its replace (`drain_pending_pushes/1`). Handles `'EXIT'`
+a reply frame. For a navigate this socket drives, `ViewId` is always the
+socket's current root view id: a push the old page emitted before the navigate
+is folded into the navigate reply ahead of its replace, its effects dropped
+(`drain_pending_pushes/1`). A navigate called directly on the live process
+(`arizona_live:navigate/3,4` from another process) does not update this
+socket's view id, so later pushes no longer match it and are ignored. Handles `'EXIT'`
 from the linked live process per the mapping in this module's
 "Exit handling" section.
 """.
@@ -644,7 +647,10 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
                     %% still tagged with the old view id: one may carry the first
                     %% statics of a fingerprint the replace then references bare,
                     %% and the replace supersedes their ops on the client anyway.
-                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
+                    %% Their effects are dropped: a client applies a frame's
+                    %% effects after its ops, so they would run against the new
+                    %% page, which is not the page that emitted them.
+                    {PendOps, _OldPageEffects, Socket1} = drain_pending_pushes(Socket),
                     Socket2 = note_az([H], Observed, Socket1),
                     %% The navigate itself adds no effects: mount/1 has no effects
                     %% channel (it also runs at SSR, where no client exists to
@@ -652,7 +658,7 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
                     %% and answers in handle_info/2, which pushes its own frame.
                     encode_reply(
                         PendOps ++ replace_ops(OldVId, PageHTML),
-                        PendEffects,
+                        [],
                         Socket2#socket{view_id = NewVId, handler = H}
                     )
             catch

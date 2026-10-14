@@ -12,6 +12,7 @@
 -export([all/0]).
 -export([push_racing_navigate_ships_first/1]).
 -export([push_racing_same_id_navigate_ships_first/1]).
+-export([push_racing_navigate_drops_old_effects/1]).
 -export([item_patch_carries_child_view_wrapper/1]).
 -export([queued_push_prepended_to_event_reply/1]).
 -export([queued_push_prepended_to_patch_reply/1]).
@@ -45,6 +46,7 @@ all() ->
     [
         push_racing_navigate_ships_first,
         push_racing_same_id_navigate_ships_first,
+        push_racing_navigate_drops_old_effects,
         item_patch_carries_child_view_wrapper,
         queued_push_prepended_to_event_reply,
         queued_push_prepended_to_patch_reply,
@@ -138,6 +140,22 @@ push_racing_same_id_navigate_ships_first(Config) when is_list(Config) ->
     Pid ! {set_count, 5},
     {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/rc"), Socket0),
     ?assertMatch([[?OP_TEXT, _, ~"5"], [?OP_REPLACE, ~"counter", _]], ops(Frame)),
+    nothing_left_queued().
+
+push_racing_navigate_drops_old_effects(Config) when is_list(Config) ->
+    %% The old page's push carries an effect as well as ops. A client applies a
+    %% frame's effects after its ops, so shipping it in the navigate frame would
+    %% run it against the new page: the ops ship (the replace may need their
+    %% statics), the effect does not.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/next" => {arizona_nav_card_shown, #{}}}
+    }),
+    {reply, _, Socket0} = arizona_socket:init(arizona_nav_card_hidden, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket0),
+    Pid ! {show_card_titled, ~"old"},
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
+    ?assertMatch([[?OP_TEXT, _, #{~"f" := _}], [?OP_REPLACE, ~"nca", _]], ops(Frame)),
+    ?assertNot(maps:is_key(~"e", decode(Frame))),
     nothing_left_queued().
 
 nothing_left_queued() ->
