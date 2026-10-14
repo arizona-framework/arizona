@@ -78,6 +78,7 @@
     seed_fps_unknown_fp_still_sends/1,
     seed_fps_caps_growth/1,
     live_unknown_view_id_noop/1,
+    live_connected_bad_value_mounts/1,
     child_command_reobserved_on_root_diff/1,
     live_unknown_view_id_warns/1,
     child_stream_survives_next_root_diff/1,
@@ -160,6 +161,7 @@ groups() ->
             live_counter2_child_event,
             live_inc_then_dec,
             live_unknown_view_id_noop,
+            live_connected_bad_value_mounts,
             child_command_reobserved_on_root_diff,
             child_stream_survives_next_root_diff,
             child_event_leaves_root_snapshot_untouched,
@@ -556,6 +558,23 @@ live_unknown_view_id_noop(Config) when is_list(Config) ->
     %% Root state is untouched: the next real inc yields count 1, not 2.
     {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
+
+%% A first connect ships no document, so its mount renders the snapshot only and
+%% does not check a value's renderability: SSR rendered the same template moments
+%% before, and the one value it could not have met -- produced only once
+%% connected -- is refused by the first render that ships it, here the full frame.
+live_connected_bad_value_mounts(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    {ok, Pid} = arizona_live:start_link(arizona_connected_bad_value, #{}, self(), []),
+    ?assertMatch({ok, ~"bad", _}, arizona_live:mount(Pid)),
+    ?assertExit(
+        {{{bad_template_value, {a, b}}, _}, _},
+        arizona_live:render_current(Pid)
+    ),
+    receive
+        {'EXIT', Pid, _} -> ok
+    after 1000 -> ct:fail(no_exit)
+    end.
 
 %% A child event from a caller other than the transport hands that caller the
 %% ops and the observations, and leaves the root's copy of the child stale. The

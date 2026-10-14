@@ -218,6 +218,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Escape a binary/integer SSR content value directly; render every `?each` item through the top-level SSR walk | `render_each_100` -11.6% (6.9 -> 6.1 us), red/op -40%; red/op -31% `render_view_many_dyn_50`, -16%/-17% `render_view_small`/`_with_layout`, -8% `render_view_page`; a 201-row escape-heavy table red/op -23%, wall ~-5% (under the floor) |
 | Scan `escape/1` 8 and 4 bytes per step; slice long clean runs | a 201-row escape-heavy table -46% (193 -> 105 us, red/op 24.8k -> 12.1k); per value: clean 10-200 B -46% to -55%, one metacharacter in 64-200 B -30% to -80%, markup -10%, UTF-8 prose -63%; `render_view_page` -6%, `render_each_100` red/op -13% |
 | Skip the document on a fingerprinted mount (`render_snapshot/2`) | reconnect/navigate render+payload red/op -22% to -42% on every fixture; wall -20% to -57% on the larger ones (`arizona_datatable` -38 to -57%, `arizona_bench_many_dyn` -26 to -28%, `arizona_bench_nested_each` -20 to -25%), the small ones under the floor |
+| Skip the document on a first connect too (observe commands in `arizona_eval`) | connect render red/op -22% to -69% against main's `render/2` (`arizona_datatable` 1919 -> 595, `arizona_opaque_nested` -49%, `arizona_bench_nested_each` -35%, `arizona_bench_many_dyn` -33%, `arizona_page` -28%); costs +2% on a reconnect and up to +5% on a full-dep diff, both under the floor |
 
 (The whole 2026-08 arc that added the four rows from "Encode the ops frame" to
 "Fuse `render/2`'s triple unzip" -- PRs #759-#762 -- closed with
@@ -241,12 +242,29 @@ new in one VM. Reductions per call settle it, since they are load-independent: -
 (`arizona_bench_nested_each`, `arizona_opaque_events`) and -42% (`arizona_datatable`,
 where the escaped stream rows dominated). Wall time, alternating and pinned but at load
 ~13, agreed: -20% to -57% on the larger fixtures, while `arizona_page` (-3% to -13%) and
-`arizona_counter` stayed under the noise floor. No `bench-ab` workload covers it: `mount_only` takes
-the plain `mount` path, which still renders the document because building it is what
-observes the opaque command attributes the connect frame declares; the payload observes
-them too (HTML `wire_attr/2` is `render_attr/2`), which is what makes the skip exact
-for the other two paths. The payload also gained `render_dyn/2`'s same-target check,
-since it is now the only render a fingerprinted mount does.
+`arizona_counter` stayed under the noise floor. No `bench-ab` workload covers it. The
+payload also gained `render_dyn/2`'s same-target check, since it is now the only render a
+fingerprinted mount does.
+
+The **first connect** (`mount`) ships no page at all, yet it kept building the document,
+because rendering an attribute (`render_attr/2`) was the only place that observed the
+opaque command attributes the connect frame declares. Observation now happens where a value
+is evaluated (`arizona_eval`), the way component modules already were, so every live mount,
+render and diff observes from one place and `do_mount` never builds a document. A
+first-connect walk over the snapshot was measured as the alternative and rejected: it
+duplicated the render's shape dispatch (kept in step by hand, pinned by a parity table), and
+the walk alone cost 17-34% of the new path. Measured old against new, reductions per call:
+`arizona_datatable` 1919 -> 595 (-69%), `arizona_opaque_nested` -49%,
+`arizona_opaque_events` -43%, `arizona_bench_nested_each` -35%, `arizona_bench_many_dyn`
+-33%, `arizona_counter` -32%, `arizona_page` -28%, `arizona_todo` -22%. The price is a
+classification per evaluated attribute: a reconnect (snapshot plus payload, which still
+observes through `render_attr/2`) +2% on `arizona_datatable`, and a diff that re-evaluates
+every slot +5% there, since it now observes every command it evaluates rather than only those
+it ships -- both well under the noise floor. The diff's own observation in `make_op/3` went
+away with it, because every value an op ships was evaluated, and so observed, in that cycle.
+The mount no longer refuses an unrenderable value either: SSR rendered the same template
+moments before, and a value only a connected render produces is refused by the first render
+that ships it.
 
 Two of these deserve their reasoning recorded, because both look like they *should*
 be needed:

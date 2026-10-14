@@ -574,9 +574,9 @@ handle_call(
     _From,
     #state{handler = H, bindings = B0, views = V0, on_mount = OM} = State
 ) ->
-    %% The document is discarded, but building it is what observes the dynamic
-    %% command attributes the connect frame declares, so this mount keeps it.
-    {ViewId, {_HTML, Snap, V1}, B2} = do_mount(H, B0, V0, OM, fun arizona_render:render/2),
+    %% The connect frame ships no document, only the dynamic command attributes
+    %% it declares, which evaluating the snapshot observes (arizona_eval).
+    {ViewId, {Snap, V1}, B2} = do_mount(H, B0, V0, OM),
     %% A full render already reflects every child, so nothing is pending on it.
     {reply, {ok, ViewId, arizona_event_attrs:drain()}, State#state{
         bindings = B2, snapshot = Snap, views = V1, pending_refresh = #{}
@@ -592,7 +592,7 @@ handle_call(
         sent_fps = Fps0
     } = State
 ) ->
-    {ViewId, {Snap, V1}, B2} = do_mount(H, B0, V0, OM, fun arizona_render:render_snapshot/2),
+    {ViewId, {Snap, V1}, B2} = do_mount(H, B0, V0, OM),
     {PageContent1, Fps1, _Changed} = dedup_fp_val(page_content(Snap), Fps0),
     {reply, {ok, ViewId, PageContent1, arizona_event_attrs:drain()}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1, pending_refresh = #{}
@@ -810,9 +810,7 @@ do_navigate_call(NewHandler, NewIB, NewOnMount, State) ->
     %% old one.
     OldB1 = maps:without(arizona_eval:restricted_keys(), OldB),
     Merged = maps:merge(OldB1, NewIB),
-    {NewViewId, {Snap, V1}, B2} = do_mount(
-        NewHandler, Merged, #{}, NewOnMount, fun arizona_render:render_snapshot/2
-    ),
+    {NewViewId, {Snap, V1}, B2} = do_mount(NewHandler, Merged, #{}, NewOnMount),
     {PageContent1, Fps1, _Changed} = dedup_fp_val(page_content(Snap), Fps0),
     {reply, {ok, NewViewId, PageContent1, arizona_event_attrs:drain()}, #state{
         handler = NewHandler,
@@ -825,15 +823,16 @@ do_navigate_call(NewHandler, NewIB, NewOnMount, State) ->
         push_barrier = Barrier
     }}.
 
-%% `Render` is `arizona_render:render/2` or `render_snapshot/2`; its result is
-%% handed back whole.
-do_mount(H, B0, V0, OnMount, Render) ->
+%% Every mount renders the snapshot only: the frame it answers carries the
+%% fingerprint payload, the document snapshot_html/1 rebuilds for a root with no
+%% fingerprint, or (a first connect) no page at all.
+do_mount(H, B0, V0, OnMount) ->
     B1 = apply_on_mount(OnMount, B0),
     {B2, Resets} = arizona_stateful:call_mount(H, B1),
     ok = arizona_eval:check_restricted_keys(B2, B1, H),
     ViewId = maps:get(id, B2),
     Tmpl = arizona_stateful:call_render(H, B2),
-    Rendered = Render(Tmpl, V0),
+    Rendered = arizona_render:render_snapshot(Tmpl, V0),
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
     B4 = maps:merge(B3, Resets),
     {ViewId, Rendered, B4}.
