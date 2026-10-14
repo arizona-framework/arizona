@@ -30,6 +30,11 @@ const OP_MOVE = 9;
 const EFFECT_PUSH_EVENT = 0;
 const EFFECT_NAVIGATE = 10;
 
+// A command value holds one command ([0, "inc"]) or a list of them
+// ([[0, "inc"], [10, "/n"]]), told apart by the first element exactly as the
+// web client's executeJS does.
+const commands = (cmds) => (Array.isArray(cmds) && Array.isArray(cmds[0]) ? cmds : [cmds]);
+
 // Heartbeat (mirror assets/js/arizona-worker.js): the client pings '0' every 30s
 // and the server pongs '1'; a missed pong before the next tick means the socket
 // is silently dead, so we close it and let the reconnect path re-open.
@@ -217,7 +222,7 @@ export class NativeClient {
     // fire it, like the browser delegating an az-click. Strict: an unexpected
     // command throws.
     tap(node, prop = 'on_tap') {
-        this._runEffect(node[prop], true, node.__view);
+        for (const cmd of commands(node[prop])) this._runEffect(cmd, true, node.__view);
     }
 
     // Run one effect command (from a tap prop or the server's "e" array). `strict`
@@ -242,7 +247,7 @@ export class NativeClient {
     // the throw is the development signal that a template built a bad command.
     _runEffectSafe(cmd) {
         try {
-            this._runEffect(cmd, false, undefined);
+            for (const one of commands(cmd)) this._runEffect(one, false, undefined);
         } catch (err) {
             // Static format string: the payload goes in an ARGUMENT, never in the
             // format position. Interpolated there, a `%s` in wire data consumes the

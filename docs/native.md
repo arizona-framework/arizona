@@ -49,9 +49,9 @@ handle_event(~"inc", _Payload, Bindings) ->
   platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
   reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into
   the statics or computed at runtime (`{on_tap, ?get(cmd)}`, carried in `d` and
-  patched by `OP_SET_ATTR`), so a tap prop always reads an array. A prop carries
-  one command: the native clients do not run a list of commands yet. Events flow
-  back exactly as on the web (`[ViewId, Event, Payload]` → `handle_event/3`).
+  patched by `OP_SET_ATTR`), so a tap prop always reads an array. A list of
+  commands arrives as a list of arrays and runs in order, as on the web. Events
+  flow back exactly as on the web (`[ViewId, Event, Payload]` → `handle_event/3`).
 - **`?each` works uniformly.** A `?each` inside `?native` is compiled for the
   native target automatically — no separate macro. `?stateful`/`?stateless`
   children also work; the embedded module must use the same target (see

@@ -489,4 +489,32 @@ final class DispatchTests: XCTestCase {
         client.tap(saveButton!)
         XCTAssertEqual(captured?.sent.last, "[\"native_counter\",\"save\",{\"id\":\"42\"}]")
     }
+
+    func testTapRunsEveryCommandOfAList() {
+        var captured: MockTransport?
+        let client = AzClient(
+            baseUrl: "http://localhost:4040",
+            path: "/native/counter",
+            makeTransport: { _ in let m = MockTransport(); captured = m; return m },
+            runOnMain: { $0() })
+        client.connect()
+        captured?.simulateOpen()
+        // Turn the `inc` button's on_tap into a list of two commands.
+        let frame = counterFrame.replacingOccurrences(
+            of: ##"[0,\"inc\"]"##, with: ##"[[0,\"save\"],[0,\"inc\"]]"##)
+        captured?.simulateText("{\"o\":[[8,\"native_counter\",\(frame)]]}")
+
+        let button = childNodes(client.root!).first { $0.props["on_tap"]?.arrayValue?.count == 2 }
+        client.tap(button!)
+        XCTAssertEqual(
+            captured?.sent.suffix(2),
+            ["[\"native_counter\",\"save\",{}]", "[\"native_counter\",\"inc\",{}]"])
+    }
+
+    func testCommandsTellsOneCommandFromAList() {
+        let one: [JSONValue] = [.int(0), .string("inc")]
+        let two: [JSONValue] = [.array(one), .array([.int(10), .string("/n")])]
+        XCTAssertEqual(commands(one), [one])
+        XCTAssertEqual(commands(two), [one, [.int(10), .string("/n")]])
+    }
 }

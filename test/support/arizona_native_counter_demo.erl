@@ -19,7 +19,15 @@ render(Bindings) ->
             {'Button', [{on_tap, arizona_android:push_event(~"dec")}], [~"-"]},
             %% Carries an explicit push_event/2 payload; the handler matches the
             %% required `value` key, so a client that drops the payload crashes it.
-            {'Button', [{on_tap, arizona_android:push_event(~"set", #{~"value" => 42})}], [~"Set"]}
+            {'Button', [{on_tap, arizona_android:push_event(~"set", #{~"value" => 42})}], [~"Set"]},
+            %% A list of commands: a native client runs each in order.
+            {'Button',
+                [
+                    {on_tap, [
+                        arizona_android:push_event(~"inc"), arizona_android:push_event(~"inc")
+                    ]}
+                ],
+                [~"+2"]}
         ]}
     ).
 

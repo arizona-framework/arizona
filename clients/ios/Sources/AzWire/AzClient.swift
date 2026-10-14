@@ -198,7 +198,9 @@ public final class AzClient {
         status = .connected
         // Handler-returned effects: dispatch the portable ones, skip web-only.
         if let effects = msg["e"]?.arrayValue {
-            for eff in effects { runEffect(eff.arrayValue ?? [], strict: false, target: nil) }
+            for eff in effects {
+                for cmd in commands(eff.arrayValue ?? []) { runEffect(cmd, strict: false, target: nil) }
+            }
         }
         onChange?()
     }
@@ -206,8 +208,8 @@ public final class AzClient {
     /// Fire the command read from a node's tap prop (e.g. `on_tap`), routing the
     /// event to the node's enclosing view (the root, or a stateful child).
     public func tap(_ node: Node, prop: String = "on_tap") {
-        guard let cmd = node.props[prop]?.arrayValue else { return }
-        runEffect(cmd, strict: true, target: node.viewId)
+        guard let cmds = node.props[prop]?.arrayValue else { return }
+        for cmd in commands(cmds) { runEffect(cmd, strict: true, target: node.viewId) }
     }
 
     /// Send an event frame `[ViewId, Event, Payload]`. ViewId defaults to the
@@ -603,4 +605,13 @@ public final class AzClient {
             charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
     }
+}
+
+/// A command value holds one command (`[0, "inc"]`) or a list of them
+/// (`[[0, "inc"], [10, "/n"]]`), told apart by the first element exactly as the
+/// web client's executeJS does: a command opens with its op code, a list with a
+/// command.
+func commands(_ cmds: [JSONValue]) -> [[JSONValue]] {
+    if case .array = cmds.first { return cmds.map { $0.arrayValue ?? [] } }
+    return [cmds]
 }
