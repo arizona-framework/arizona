@@ -432,6 +432,9 @@ safe_init(Handler, Socket, Fun) ->
     try
         Fun()
     catch
+        error:{non_utf8_render, _, _} = Reason:Stacktrace ->
+            ok = log_crash(error, Reason, Stacktrace, Socket),
+            close_mount_failed(Socket);
         Class:Reason:Stacktrace ->
             logger:error("~s in ~p:~p~n~p", [Class, Handler, Reason, Stacktrace]),
             close_mount_failed(Socket)
@@ -471,9 +474,21 @@ crash_close(Class, Reason, Stacktrace, Socket) ->
         true ->
             {ok, Socket#socket{mount_failed = mount_call(Reason)}};
         false ->
-            logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+            ok = log_crash(Class, Reason, Stacktrace, Socket),
             close_crash(Socket)
     end.
+
+%% A frame refused for bytes that are not UTF-8 (encode/1) names the value but
+%% not the template line: the frame has left the values behind. In dev mode
+%% arizona_utf8:locate_live/3 renders the live views again to find it; either way
+%% the log carries the formatted reason, which names the fix.
+log_crash(error, {non_utf8_render, _, _} = Reason0, Stacktrace0, #socket{pid = Pid}) ->
+    {Reason, Stacktrace} = arizona_utf8:locate_live(Reason0, Stacktrace0, Pid),
+    logger:error("error: ~p~n~ts", [
+        Reason, erl_error:format_exception(error, Reason, Stacktrace)
+    ]);
+log_crash(Class, Reason, Stacktrace, _Socket) ->
+    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]).
 
 live_call_failed(exit, {_, {gen_server, call, [Pid | _]}}, #socket{pid = Pid}) when is_pid(Pid) ->
     not is_process_alive(Pid);
@@ -538,7 +553,7 @@ deliver_view(Encode, Socket) ->
         Encode()
     catch
         Class:Reason:Stacktrace ->
-            logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+            ok = log_crash(Class, Reason, Stacktrace, Socket),
             close_mount_failed(Socket)
     end.
 
@@ -1078,6 +1093,17 @@ strip_flash_cmd(Cmd) ->
 capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
     {[Op, Path, maps:remove(flash, Opts)], maps:merge(Pending, Flash)}.
 
+%% A frame the encoder refuses for a string that is not UTF-8 is renamed
+%% `non_utf8_render`, naming the value (arizona_utf8:refuse/3); the encoder's own
+%% `{invalid_byte, _}`/`unexpected_end` names neither it nor the cause. The
+%% encoder validates as it escapes, so the check itself costs nothing.
+encode(Frame) ->
+    try
+        encode_frame(Frame)
+    catch
+        error:Reason:Stacktrace -> arizona_utf8:refuse(Frame, Reason, Stacktrace)
+    end.
+
 %% Fast path for the reply shapes produced by encode_reply/3 and the connect
 %% frames. Hand writes the outer `{"o":...}` / `{"e":...}` / combined wrapper,
 %% skipping OTP json's per-key map walk and the per-call escape on the constant
@@ -1089,7 +1115,7 @@ capture_nav_flash(Op, Path, Flash, Opts, Pending) ->
 %% widest key set must match first -- an `o`+`e`+`a` frame reaching the
 %% `o`+`a` clause would re-encode without `e`, silently dropping the
 %% effects on exactly the frames that carry a delta.
-encode(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
+encode_frame(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
     [
         <<"{\"o\":">>,
         encode_ops(Ops),
@@ -1099,9 +1125,9 @@ encode(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
         json:encode(Attrs),
         $}
     ];
-encode(#{?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
+encode_frame(#{?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
     [<<"{\"e\":">>, json:encode(Effects), <<",\"a\":">>, json:encode(Attrs), $}];
-encode(#{?OPS := Ops, ?AZ_ATTRS := Attrs}) ->
+encode_frame(#{?OPS := Ops, ?AZ_ATTRS := Attrs}) ->
     [
         <<"{\"o\":">>,
         encode_ops(Ops),
@@ -1109,9 +1135,9 @@ encode(#{?OPS := Ops, ?AZ_ATTRS := Attrs}) ->
         json:encode(Attrs),
         $}
     ];
-encode(#{?AZ_ATTRS := Attrs}) ->
+encode_frame(#{?AZ_ATTRS := Attrs}) ->
     [<<"{\"a\":">>, json:encode(Attrs), $}];
-encode(#{?OPS := Ops, ?EFFECTS := Effects}) ->
+encode_frame(#{?OPS := Ops, ?EFFECTS := Effects}) ->
     [
         <<"{\"o\":">>,
         encode_ops(Ops),
@@ -1119,11 +1145,11 @@ encode(#{?OPS := Ops, ?EFFECTS := Effects}) ->
         json:encode(Effects),
         $}
     ];
-encode(#{?OPS := Ops}) ->
+encode_frame(#{?OPS := Ops}) ->
     [<<"{\"o\":">>, encode_ops(Ops), $}];
-encode(#{?EFFECTS := Effects}) ->
+encode_frame(#{?EFFECTS := Effects}) ->
     [<<"{\"e\":">>, json:encode(Effects), $}];
-encode(Map) ->
+encode_frame(Map) ->
     json:encode(Map).
 
 %% Pre-flatten parent + child-view ops into tagged tuples ready for

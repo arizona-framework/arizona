@@ -1,0 +1,487 @@
+-module(arizona_utf8_SUITE).
+-include_lib("stdlib/include/assert.hrl").
+
+%% Every render target writes UTF-8, but a binary is emitted as the bytes it
+%% holds, and checking each one on the render path was measured too expensive.
+%% The contract is enforced where it costs nothing: a compile-time warning for the
+%% usual source (a non-ASCII `<<"...">>` that is not a folded template static), a
+%% named `non_utf8_render` where a JSON encoder already refused the bytes, and in
+%% dev mode a once-per-response check that locates the template line.
+
+-export([all/0]).
+-export([groups/0]).
+-export([warns_latin1_literal_outside_template_statics/1]).
+-export([no_warning_for_utf8_ascii_or_byte_literals/1]).
+-export([folded_statics_render_utf8_at_ssr_and_in_diff/1]).
+-export([native_ssr_names_non_utf8_at_its_line/1]).
+-export([native_command_prop_names_non_utf8/1]).
+-export([refuse_renames_only_the_encoder_utf8_error/1]).
+-export([chardata_wrapping_non_utf8_binary/1]).
+-export([format_error_names_the_byte_and_the_fix/1]).
+-export([to_bin_matches_the_classify_first_reference/1]).
+-export([escape_classifies_a_value_once/1]).
+-export([prod_http_serves_bytes_unchecked/1]).
+-export([dev_http_locates_every_shape/1]).
+-export([dev_http_serves_the_located_error_page/1]).
+-export([dev_http_passes_valid_utf8/1]).
+-export([socket_frame_failure_is_named/1]).
+-export([dev_socket_frame_failure_is_located/1]).
+
+all() ->
+    [{group, contract}, {group, global}].
+
+groups() ->
+    [
+        {contract, [parallel], [
+            warns_latin1_literal_outside_template_statics,
+            no_warning_for_utf8_ascii_or_byte_literals,
+            folded_statics_render_utf8_at_ssr_and_in_diff,
+            native_ssr_names_non_utf8_at_its_line,
+            native_command_prop_names_non_utf8,
+            refuse_renames_only_the_encoder_utf8_error,
+            chardata_wrapping_non_utf8_binary,
+            format_error_names_the_byte_and_the_fix,
+            to_bin_matches_the_classify_first_reference
+        ]},
+        %% Sequential: these toggle the dev signal (the `arizona_reload_url`
+        %% persistent_term), set a global call-count trace pattern, or add a
+        %% logger handler.
+        {global, [], [
+            escape_classifies_a_value_once,
+            prod_http_serves_bytes_unchecked,
+            dev_http_locates_every_shape,
+            dev_http_serves_the_located_error_page,
+            dev_http_passes_valid_utf8,
+            socket_frame_failure_is_named,
+            dev_socket_frame_failure_is_located
+        ]}
+    ].
+
+-define(VIEW, arizona_non_utf8_view).
+
+%% --------------------------------------------------------------------
+%% Compile time
+%% --------------------------------------------------------------------
+
+%% The literal lines marked `warn` hold a bare non-ASCII `<<"...">>` whose bytes
+%% reach the output (or a comparison) as Latin-1: outside any template, a `?get`
+%% default, a conditional branch value, a hoisted variable inlined into a slot, a
+%% `?raw` payload, a `?stateless` prop. The folded statics on the line marked
+%% `static` are not warned about: the transform encodes those as UTF-8.
+warns_latin1_literal_outside_template_statics(Config) when is_list(Config) ->
+    Lines = [
+        ~"-module(arizona_utf8_warn_probe).",
+        ~"-include(\"arizona_stateful.hrl\").",
+        ~"-export([mount/1, render/1, handle_event/3, title/0]).",
+        ~"mount(Bindings) ->",
+        ~"    {#{id => maps:get(id, Bindings, ~\"w\"), t => <<\"Ação\">>}, #{}}. %% warn",
+        ~"render(Bindings) ->",
+        ~"    Hoisted = <<\"içado\">>, %% warn",
+        ~"    ?html({'div', [{id, ?get(id)}], [",
+        ~"        {p, [{title, <<\"atributo é\">>}], [<<\"café\">>]}, %% static",
+        ~"        {p, [], [?get(x, <<\"padrão\">>)]}, %% warn",
+        ~"        case ?get(y, a) of a -> <<\"ramo é\">>; _ -> ~\"\" end, %% warn",
+        ~"        Hoisted,",
+        ~"        ?raw(<<\"<b>é</b>\">>), %% warn",
+        ~"        ?stateless(fun child/1, #{t => <<\"prop é\">>}) %% warn",
+        ~"    ]}).",
+        ~"child(Bindings) -> ?html({i, [], [?get(t)]}).",
+        ~"handle_event(_E, _P, B) -> {B#{t => <<\"novo ü\">>}, #{}, []}. %% warn",
+        ~"title() -> <<\"Ação\">>. %% warn"
+    ],
+    {ok, Warnings} = compile_probe(Config, Lines),
+    ?assertEqual(marked_lines(Lines, ~"%% warn"), warned_lines(Warnings)),
+    ?assertEqual(
+        "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>",
+        arizona_parse_transform:format_error(latin1_binary_literal)
+    ).
+
+no_warning_for_utf8_ascii_or_byte_literals(Config) when is_list(Config) ->
+    Lines = [
+        ~"-module(arizona_utf8_clean_probe).",
+        ~"-include(\"arizona_stateless.hrl\").",
+        ~"-export([render/1, data/0]).",
+        ~"render(Bindings) ->",
+        ~"    ?html({p, [{title, <<\"é\">>}], [<<\"café\">>, ?get(x, ~\"padrão\"),",
+        ~"        <<\"utf é\"/utf8>>, <<\"ascii\">>, ~\"\"\"",
+        ~"        triple é",
+        ~"        \"\"\"]}).",
+        ~"data() -> {~\"é\", ~b\"é\", <<\"é\"/utf8>>, <<\"ascii\">>,",
+        ~"    <<233>>, <<\"a\", 16#E9>>, \"é\"}."
+    ],
+    ?assertEqual({ok, []}, compile_probe(Config, Lines)).
+
+%% A non-ASCII literal that is a template static is folded as UTF-8 text, in
+%% content and attribute values, and in a conditional branch's static content, so
+%% it renders UTF-8 at SSR and ships UTF-8 in the diff. A charlist is chardata.
+folded_statics_render_utf8_at_ssr_and_in_diff(Config) when is_list(Config) ->
+    View = arizona_utf8_static_view,
+    HTML = iolist_to_binary(
+        arizona_render:render_view_to_iolist(View, #{bindings => #{open => true}})
+    ),
+    ?assert(is_binary(unicode:characters_to_binary(HTML))),
+    [
+        ?assertNotEqual(nomatch, binary:match(HTML, Part), Part)
+     || Part <- [
+            ~"title=\"atributo é\"",
+            ~"café",
+            ~"title=\"lista é\"",
+            ~"ação",
+            ~"class=\"ramo ü\"",
+            ~"aberto ü"
+        ]
+    ],
+    {ok, Pid} = arizona_live:start_link(View, #{}, undefined, []),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, Ops, [], _} = arizona_live:handle_event(Pid, ~"u8s", ~"open", #{}),
+    Frame = iolist_to_binary(json:encode(Ops)),
+    ?assertNotEqual(nomatch, binary:match(Frame, ~"aberto ü")),
+    ?assertNotEqual(nomatch, binary:match(Frame, ~"ramo ü")),
+    ok = gen_server:stop(Pid).
+
+%% --------------------------------------------------------------------
+%% Free renames on the failure paths
+%% --------------------------------------------------------------------
+
+%% `?native` escapes through the JSON encoder, which already refuses the bytes;
+%% the refusal used to surface as the encoder's `unexpected_end`.
+native_ssr_names_non_utf8_at_its_line(Config) when is_list(Config) ->
+    Line = line_of(~"?get(label)"),
+    [
+        ?assertEqual(
+            {Key, {arizona_loc, {?VIEW, Line}, {non_utf8_render, 16#E9, 3}}},
+            {Key, raised(fun() -> arizona_render:render_to_iolist(?VIEW:native(Bindings)) end)}
+        )
+     || {Key, Bindings} <- [
+            {text, #{label => ~"ok", text => latin1()}},
+            {label, #{label => latin1(), text => ~"ok"}}
+        ]
+    ].
+
+%% A command prop is a structured JSON value; the string nested in its payload
+%% gets the same name.
+native_command_prop_names_non_utf8(Config) when is_list(Config) ->
+    ?assertEqual(
+        {arizona_loc, {?VIEW, line_of(~"?get(cmd)")}, {non_utf8_render, 16#E9, 3}},
+        raised(fun() -> arizona_render:render_to_iolist(?VIEW:native_cmd(#{cmd => latin1()})) end)
+    ),
+    ?assertError(
+        {non_utf8_render, 16#E9, 3},
+        arizona_native:render_attr(
+            ~"on_tap", arizona_android:push_event(~"go", #{~"v" => [latin1()]})
+        )
+    ).
+
+refuse_renames_only_the_encoder_utf8_error(Config) when is_list(Config) ->
+    Term = #{~"o" => [[1, ~"az", <<"a", 255, "b">>]]},
+    {Reason, ST} = caught(fun() -> json:encode(Term) end),
+    ?assertError({non_utf8_render, 255, 1}, arizona_utf8:refuse(Term, Reason, ST)),
+    %% Another failure keeps its own reason, even beside bad bytes.
+    ?assertError(boom, arizona_utf8:refuse(Term, boom, [])),
+    %% The encoder's reason with no bad bytes to name is not renamed either.
+    ?assertError(unexpected_end, arizona_utf8:refuse(#{~"k" => ~"ok"}, unexpected_end, [])).
+
+%% A list wrapping non-UTF-8 bytes is the same mistake as the binary alone, so it
+%% gets the same name; an integer that is not a code point keeps
+%% `bad_template_value`.
+chardata_wrapping_non_utf8_binary(Config) when is_list(Config) ->
+    ?assertError({non_utf8_render, 16#E9, 5}, arizona_template:to_bin([~"ab", latin1()])),
+    ?assertError({bad_template_value, [$a, 16#110000]}, arizona_template:to_bin([$a, 16#110000])),
+    ?assertEqual(~"日本 é", arizona_template:to_bin([~"日本", " é"])).
+
+format_error_names_the_byte_and_the_fix(Config) when is_list(Config) ->
+    {Reason, ST} = caught(fun() -> arizona_utf8:check(latin1()) end),
+    ?assertEqual({non_utf8_render, 16#E9, 3}, Reason),
+    [{arizona_utf8, check, [Value], Info} | _] = ST,
+    ?assertEqual(latin1(), Value),
+    ?assertEqual(#{module => arizona_utf8}, proplists:get_value(error_info, Info)),
+    Located = {arizona_loc, {my_view, 12}, Reason},
+    Parts = [
+        ~"not valid UTF-8",
+        ~"16#E9 at offset 3",
+        ~"<<99,97,102,233>>",
+        ~"~\"...\"",
+        ~"/utf8",
+        ~"unicode:characters_to_binary"
+    ],
+    Missing = [
+        {R, Part}
+     || R <- [Reason, Located],
+        Formatted <- [unicode:characters_to_binary(erl_error:format_exception(error, R, ST))],
+        Part <- Parts,
+        binary:match(Formatted, Part) =:= nomatch
+    ],
+    ?assertEqual([], Missing),
+    LocatedMsg = unicode:characters_to_binary(erl_error:format_exception(error, Located, ST)),
+    ?assertNotEqual(nomatch, binary:match(LocatedMsg, ~"my_view:12")).
+
+%% --------------------------------------------------------------------
+%% One classification per escaped value
+%% --------------------------------------------------------------------
+
+%% to_bin/1 matches the trusted shapes in its clause heads instead of asking
+%% classify_trusted/1; for every shape its answer is the one the classify-first
+%% implementation gave, and so is escape_value/2's on every backend.
+to_bin_matches_the_classify_first_reference(Config) when is_list(Config) ->
+    Inputs = [
+        ~"é<&>",
+        <<>>,
+        42,
+        -1,
+        1.5,
+        foo,
+        true,
+        {arizona_esc, "x<"},
+        {arizona_esc, {arizona_raw, ~"<i>"}},
+        {arizona_raw, "<b>é</b>"},
+        {arizona_raw, {arizona_raw, ~"a"}},
+        {arizona_raw, 7},
+        arizona_js:toggle(~"#m"),
+        [arizona_js:toggle(~"#a"), arizona_js:hide(~"#b")],
+        "café",
+        [~"a", "b", $c, [~"日本"]],
+        [~"a-", true],
+        [1114112],
+        [],
+        make_ref(),
+        {x},
+        #{}
+    ],
+    [
+        ?assertEqual(
+            {V, outcome(fun reference_to_bin/1, V)}, {V, outcome(fun arizona_template:to_bin/1, V)}
+        )
+     || V <- Inputs
+    ],
+    [
+        ?assertEqual(
+            {B, V, outcome(fun(X) -> reference_escape_value(B, X) end, V)},
+            {B, V, outcome(fun(X) -> arizona_template:escape_value(B, X) end, V)}
+        )
+     || B <- [arizona_html, arizona_terminal, arizona_native], V <- Inputs
+    ].
+
+%% On main, escaping a list value classified it twice: escape_value/2 asked, then
+%% to_bin/1 asked again. A rendered attribute value took the same detour.
+escape_classifies_a_value_once(Config) when is_list(Config) ->
+    MFA = {arizona_template, classify_trusted, 1},
+    1 = erlang:trace_pattern(MFA, true, [local, call_count]),
+    try
+        Count = fun(Fun) ->
+            1 = erlang:trace_pattern(MFA, restart, [local, call_count]),
+            ?assert(is_binary(Fun())),
+            {call_count, N} = erlang:trace_info(MFA, call_count),
+            N
+        end,
+        ?assertEqual(1, Count(fun() -> arizona_template:escape_value(arizona_html, "café") end)),
+        ?assertEqual(1, Count(fun() -> arizona_html:render_attr(~"title", "café") end)),
+        ?assertEqual(0, Count(fun() -> arizona_template:escape_marked(arizona_html, "café") end))
+    after
+        erlang:trace_pattern(MFA, false, [local, call_count])
+    end.
+
+%% --------------------------------------------------------------------
+%% Dev boundary check (HTTP)
+%% --------------------------------------------------------------------
+
+%% Production runs none of the check: the bytes are served as they are.
+prod_http_serves_bytes_unchecked(Config) when is_list(Config) ->
+    persistent_term:erase(arizona_reload_url),
+    Req = arizona_req_test_adapter:new(#{}),
+    {ok, 200, _Type, Page, _} = arizona_http:render(?VIEW, Req, #{
+        bindings => #{content => latin1()}
+    }),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Page), latin1())).
+
+dev_http_locates_every_shape(Config) when is_list(Config) ->
+    with_dev(fun() ->
+        [
+            begin
+                Bindings = bad_bindings(Key),
+                Page = arizona_render:render_view_to_iolist(?VIEW, #{bindings => Bindings}),
+                ?assertEqual(
+                    {Key, {arizona_loc, {?VIEW, line_of(Needle)}, {non_utf8_render, 16#E9, 3}}},
+                    {Key,
+                        raised(fun() ->
+                            arizona_utf8:check_page(Page, ?VIEW, #{bindings => Bindings})
+                        end)}
+                )
+            end
+         || {Key, Needle} <- [
+                {content, ~"?get(content)"},
+                {attr, ~"?get(attr)"},
+                {raw, ~"?get(raw))"},
+                {raw_attr, ~"?get(raw_attr)"},
+                {items, ~"?get(items)"},
+                {child, ~"{em, [], [?get(text)]}"}
+            ]
+        ]
+    end).
+
+dev_http_serves_the_located_error_page(Config) when is_list(Config) ->
+    with_dev(fun() ->
+        Req = arizona_req_test_adapter:new(#{}),
+        {error, 500, _Type, Body, _} = arizona_http:render(?VIEW, Req, #{
+            bindings => #{content => latin1()}
+        }),
+        Bin = iolist_to_binary(Body),
+        ?assertNotEqual(nomatch, binary:match(Bin, ~"not valid UTF-8")),
+        ?assertNotEqual(nomatch, binary:match(Bin, ~"unicode:characters_to_binary"))
+    end).
+
+dev_http_passes_valid_utf8(Config) when is_list(Config) ->
+    with_dev(fun() ->
+        Req = arizona_req_test_adapter:new(#{}),
+        {ok, 200, _Type, Page, _} = arizona_http:render(?VIEW, Req, #{}),
+        ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Page), ~"日本"))
+    end).
+
+%% --------------------------------------------------------------------
+%% WebSocket frames
+%% --------------------------------------------------------------------
+
+%% The diff ships values raw, so the socket's JSON encoder is the first to see
+%% them. Its refusal is renamed and the session closes 4500 as before.
+socket_frame_failure_is_named(Config) when is_list(Config) ->
+    persistent_term:erase(arizona_reload_url),
+    ?assertEqual({non_utf8_render, 16#E9, 3}, socket_crash_reason(~"content")).
+
+%% In dev mode the live views are rendered again to name the template line.
+dev_socket_frame_failure_is_located(Config) when is_list(Config) ->
+    with_dev(fun() ->
+        [
+            ?assertEqual(
+                {Key, {arizona_loc, {?VIEW, line_of(Needle)}, {non_utf8_render, 16#E9, 3}}},
+                {Key, socket_crash_reason(Key)}
+            )
+         || {Key, Needle} <- [
+                {~"content", ~"?get(content)"},
+                {~"attr", ~"?get(attr)"},
+                {~"items", ~"?get(items)"},
+                {~"child", ~"{em, [], [?get(text)]}"}
+            ]
+        ]
+    end).
+
+%% --------------------------------------------------------------------
+%% Helpers
+%% --------------------------------------------------------------------
+
+latin1() ->
+    ?VIEW:latin1().
+
+bad_bindings(items) -> #{items => [~"ok", latin1()]};
+bad_bindings(Key) -> #{Key => latin1()}.
+
+raised(Fun) ->
+    try Fun() of
+        Result -> error({no_crash, Result})
+    catch
+        error:Reason -> Reason
+    end.
+
+caught(Fun) ->
+    try Fun() of
+        Result -> error({no_crash, Result})
+    catch
+        error:Reason:ST -> {Reason, ST}
+    end.
+
+outcome(Fun, V) ->
+    try Fun(V) of
+        Bin -> {ok, Bin}
+    catch
+        error:Reason -> {error, Reason}
+    end.
+
+%% to_bin/1 as it was before it matched the trusted shapes itself.
+reference_to_bin(V) when is_binary(V) -> V;
+reference_to_bin(V) when is_integer(V) -> integer_to_binary(V);
+reference_to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
+reference_to_bin(V) when is_atom(V) -> atom_to_binary(V);
+reference_to_bin({arizona_esc, V}) ->
+    reference_to_bin(V);
+reference_to_bin(V0) ->
+    case arizona_template:classify_trusted(V0) of
+        {raw, V} ->
+            reference_to_bin(V);
+        {effect, Cmd} ->
+            arizona_effect:encode(Cmd);
+        value when is_list(V0) ->
+            try unicode:characters_to_binary(V0) of
+                Bin when is_binary(Bin) -> Bin;
+                _ -> error({bad_template_value, V0})
+            catch
+                error:badarg -> error({bad_template_value, V0})
+            end;
+        value ->
+            error({bad_template_value, V0})
+    end.
+
+reference_escape_value(Backend, V0) ->
+    case arizona_template:classify_trusted(V0) of
+        {raw, V} -> reference_to_bin(V);
+        {effect, Cmd} -> reference_to_bin(Cmd);
+        value -> Backend:escape(reference_to_bin(V0))
+    end.
+
+line_of(Needle) ->
+    Source = proplists:get_value(source, ?VIEW:module_info(compile)),
+    {ok, Src} = file:read_file(Source),
+    Lines = binary:split(Src, ~"\n", [global]),
+    [Line | _] = [
+        N
+     || {N, L} <- lists:zip(lists:seq(1, length(Lines)), Lines), binary:match(L, Needle) =/= nomatch
+    ],
+    Line.
+
+marked_lines(Lines, Marker) ->
+    [
+        N
+     || {N, L} <- lists:zip(lists:seq(1, length(Lines)), Lines), binary:match(L, Marker) =/= nomatch
+    ].
+
+warned_lines(Warnings) ->
+    lists:usort([
+        L
+     || {_File, Ws} <- Warnings, {{L, _Col}, arizona_parse_transform, latin1_binary_literal} <- Ws
+    ]).
+
+compile_probe(Config, Lines) ->
+    Dir = proplists:get_value(priv_dir, Config),
+    [ModLine | _] = Lines,
+    {match, [Name]} = re:run(ModLine, "-module\\((\\w+)\\)", [{capture, all_but_first, list}]),
+    File = filename:join(Dir, Name ++ ".erl"),
+    ok = file:write_file(File, lists:join(~"\n", Lines)),
+    Include = filename:join(code:lib_dir(arizona), "include"),
+    case compile:file(File, [binary, return, {i, Include}]) of
+        {ok, _Mod, _Bin, Warnings} -> {ok, Warnings};
+        Error -> Error
+    end.
+
+with_dev(Fun) ->
+    persistent_term:put(arizona_reload_url, ~"/arizona/reload"),
+    try
+        Fun()
+    after
+        persistent_term:erase(arizona_reload_url)
+    end.
+
+%% The reason the socket logs when the frame for `break`ing `Key` fails to encode.
+socket_crash_reason(Key) ->
+    HandlerId = arizona_utf8_suite_log,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => error, config => #{pid => self()}
+    }),
+    try
+        Req = arizona_req_test_adapter:new(),
+        {reply, _, Socket0} = arizona_socket:init(?VIEW, #{}, Req, #{}),
+        Frame = iolist_to_binary(json:encode([~"nu8", ~"break", #{~"key" => Key}])),
+        ?assertMatch({close, 4500, ~"server crash", _}, arizona_socket:handle_in(Frame, Socket0)),
+        receive
+            {arizona_test_log_handler, #{msg := {_Format, [Reason | _]}}} -> Reason
+        after 1000 -> error(no_crash_log)
+        end
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.

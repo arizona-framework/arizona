@@ -412,35 +412,52 @@ to_bin(V) when is_atom(V) -> atom_to_binary(V);
 %% stays raw end to end.
 to_bin({arizona_esc, V}) ->
     to_bin(V);
-to_bin(V0) ->
-    case classify_trusted(V0) of
-        {raw, V} ->
-            to_bin(V);
-        {effect, Cmd} ->
-            arizona_effect:encode(Cmd);
-        value when is_list(V0) ->
-            %% A charlist/iodata is text: decode it as Unicode codepoints so the
-            %% output is valid UTF-8. `iolist_to_binary/1` truncates a 128..255
-            %% codepoint to an invalid latin-1 byte (`"café"` -> `<<...,233>>`
-            %% instead of `<<...,195,169>>`) and crashes a codepoint > 255 with a
-            %% bare `badarg`. A term that is not valid chardata (e.g. a list
-            %% wrapping a binary of non-UTF-8 bytes, or an atom/boolean inside an
-            %% interpolated attribute such as `[~"a-", ?get(on)]`) yields the same
-            %% `bad_template_value` as any other unsupported value; the decoder
-            %% raises `badarg` for a non-chardata element instead of returning.
-            case chardata_to_binary(V0) of
-                Bin when is_binary(Bin) ->
-                    Bin;
-                _ ->
-                    erlang:error({bad_template_value, V0}, [V0], [
+%% The trusted shapes of classify_trusted/1, matched in the clause heads rather
+%% than by asking it: escape_value/2, escape_marked/2 and the backends'
+%% render_attr/2 classify a value and then convert it here, and a second
+%% classify_trusted/1 call per list value was the one thing that cost. A head
+%% match dispatches without a call, and the answer is the same for every input.
+to_bin({arizona_raw, V}) ->
+    to_bin(V);
+to_bin({arizona_effect, _} = Cmd) ->
+    arizona_effect:encode(Cmd);
+to_bin([{arizona_effect, _} | _] = Cmds) ->
+    arizona_effect:encode(Cmds);
+to_bin(V) when is_list(V) ->
+    %% A charlist/iodata is text: decode it as Unicode codepoints so the output is
+    %% valid UTF-8. `iolist_to_binary/1` truncates a 128..255 codepoint to an
+    %% invalid latin-1 byte (`"café"` -> `<<...,233>>` instead of
+    %% `<<...,195,169>>`) and crashes a codepoint > 255 with a bare `badarg`. A
+    %% term that is not valid chardata (an atom/boolean inside an interpolated
+    %% attribute such as `[~"a-", ?get(on)]`) yields the same `bad_template_value`
+    %% as any other unsupported value. A list wrapping a binary of non-UTF-8 bytes
+    %% is named `non_utf8_render` instead; the decoder's failure is examined only
+    %% after it failed, so a valid value pays nothing for that.
+    case chardata_to_binary(V) of
+        Bin when is_binary(Bin) ->
+            Bin;
+        {_Status, Valid, Rest} when is_binary(Valid) ->
+            case first_byte(Rest) of
+                {ok, Byte} ->
+                    erlang:error({non_utf8_render, Byte, byte_size(Valid)}, [V], [
+                        {error_info, #{module => arizona_utf8}}
+                    ]);
+                error ->
+                    erlang:error({bad_template_value, V}, [V], [
                         {error_info, #{module => ?MODULE}}
                     ])
             end;
-        value ->
-            erlang:error({bad_template_value, V0}, [V0], [
-                {error_info, #{module => ?MODULE}}
-            ])
-    end.
+        error ->
+            erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}])
+    end;
+to_bin(V) ->
+    erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}]).
+
+%% The first element the decoder could not convert: a byte when it is binary
+%% data, `error` when it is an integer that is not a code point.
+first_byte(<<Byte, _/binary>>) -> {ok, Byte};
+first_byte([H | _]) -> first_byte(H);
+first_byte(_CodePoint) -> error.
 
 chardata_to_binary(Chardata) ->
     try
@@ -544,10 +561,12 @@ Classifies the escape-exempt content shapes: a `raw/1` opt-out
 (`{arizona_raw, V}`, returned unwrapped) and an already-encoded effect command
 or command list (`{arizona_effect, _}`). Every other value is `value`.
 
-The single definition of the shape vocabulary -- `to_bin/1`, `escape_value/2`,
-`mark_esc/1`, and `arizona_html:render_attr/2` all dispatch on it, so growing
-the vocabulary is a one-place change. Each call site decides the policy for a
-shape (`mark_esc/1` deliberately unwraps and re-escapes a helper-produced raw).
+The definition of the shape vocabulary -- `escape_value/2`, `mark_esc/1`, and
+`arizona_html:render_attr/2` dispatch on it. `to_bin/1` matches the same shapes
+in its clause heads instead, because it runs right after one of those callers
+has already classified the value; growing the vocabulary means updating both.
+Each call site decides the policy for a shape (`mark_esc/1` deliberately unwraps
+and re-escapes a helper-produced raw).
 """.
 -spec classify_trusted(Value) -> {raw, term()} | {effect, Effect} | value when
     Value :: term(),
@@ -570,7 +589,7 @@ JSON string encoding. `raw/1`-wrapped values and already-encoded
 escape_value(Backend, V0) ->
     case classify_trusted(V0) of
         {raw, V} -> to_bin(V);
-        {effect, Cmd} -> to_bin(Cmd);
+        {effect, Cmd} -> arizona_effect:encode(Cmd);
         value -> Backend:escape(to_bin(V0))
     end.
 

@@ -53,7 +53,10 @@ handle_event(~"next", _Payload, #{base := Base, n := N0, body := Body} = Binding
     N = N0 + 1,
     Suffix = integer_to_binary(N),
     [_, _, _, _ | Rest] = Body,
-    New = [<<Base/binary, " ", Suffix/binary, " ", (integer_to_binary(I))/binary>> || I <- [1, 2, 3, 4]],
+    New = [
+        <<Base/binary, " ", Suffix/binary, " ", (integer_to_binary(I))/binary>>
+     || I <- [1, 2, 3, 4]
+    ],
     {
         Bindings#{
             n => N,

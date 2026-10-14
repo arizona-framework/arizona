@@ -122,6 +122,10 @@ render(Bindings) ->
 %% compiling a module. See `inject_az_attrs/1`.
 -define(AZ_ATTRS_KEY, arizona_az_attrs).
 
+%% Process-dictionary key for the binary literals folded into template statics
+%% while compiling a module (see extract_binary_value/1 and latin1_warnings/2).
+-define(FOLDED_KEY, arizona_folded_literals).
+
 %% Module a template-constructor call is re-spelled under when it sits inside an
 %% `az-nodiff` template (see inherit_nodiff/1). The constructors compile
 %% bottom-up, so a nested `?each`/`?html` is a finished map before the enclosing
@@ -189,6 +193,8 @@ parse_transform(Forms, _Options) ->
     %% template in the module. Erased on entry so a previous module in the same
     %% compiler process cannot leak into this one.
     _ = erase(?AZ_ATTRS_KEY),
+    _ = erase(?FOLDED_KEY),
+    undefined = put(?FOLDED_KEY, #{}),
     try
         Transformed = [
             transform_form(mark_targets(Form, none), Module, IsLive, FunDefs)
@@ -198,11 +204,75 @@ parse_transform(Forms, _Options) ->
         WithEvents = inject_az_attrs(WithSuppressions, collect_component_mods(Forms)),
         Reverted = erl_syntax:revert_forms(WithEvents),
         ok = assert_no_nodiff_call(Reverted),
-        Reverted
+        with_warnings(Reverted, latin1_warnings(Forms, erase(?FOLDED_KEY)))
     catch
         throw:{arizona_parse_error, Line, Reason} ->
+            _ = erase(?FOLDED_KEY),
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     end.
+
+with_warnings(Forms, []) ->
+    Forms;
+with_warnings(Forms, Warnings) ->
+    {warning, Forms, Warnings}.
+
+%% A bare `<<"...">>` holding a character above 127 compiles to Latin-1 bytes,
+%% one per character, while every render target writes UTF-8. A template static
+%% is safe: the transform folds it as UTF-8 text (extract_bin_element/1), so
+%% `{p, [], [<<"café">>]}` renders `café`. Anywhere else the bytes reach the
+%% output as they are -- mojibake over HTTP, a JSON encoder failure over the
+%% WebSocket -- or are compared against UTF-8 input that can never equal them.
+%% Re-encoding those as well is not safe: the literal may be data (a pattern, a
+%% protocol constant, a value compared against other Latin-1 bytes), and the
+%% transform cannot tell which. So it warns, and leaves the bytes alone.
+%%
+%% The folded literals are recorded by extract_binary_value/1 and excluded here,
+%% keyed by location and annotation-free shape: a hoisted variable or a local
+%% helper spliced into a static position folds the very node the source holds.
+latin1_warnings(Forms, Folded) ->
+    {_File, Acc} = lists:foldl(
+        fun
+            ({attribute, _, file, {File, _}}, {_Current, Acc0}) ->
+                {File, Acc0};
+            (Form, {Current, Acc0}) ->
+                {Current, latin1_literals(Form, Current, Folded, Acc0)}
+        end,
+        {"nofile", []},
+        Forms
+    ),
+    group_by_file(lists:reverse(Acc)).
+
+latin1_literals({bin, Anno, Elements} = Bin, File, Folded, Acc) when is_list(Elements) ->
+    case is_latin1_literal(Elements) andalso not is_map_key(folded_key(Bin), Folded) of
+        true -> [{File, {erl_anno:location(Anno), ?MODULE, latin1_binary_literal}} | Acc];
+        false -> Acc
+    end;
+latin1_literals(Node, File, Folded, Acc) when is_tuple(Node) ->
+    latin1_literals(tuple_to_list(Node), File, Folded, Acc);
+latin1_literals([H | T], File, Folded, Acc) ->
+    latin1_literals(T, File, Folded, latin1_literals(H, File, Folded, Acc));
+latin1_literals(_Node, _File, _Folded, Acc) ->
+    Acc.
+
+%% A string element with no type spec is stored one byte per character; only a
+%% character above 127 makes that differ from its UTF-8 encoding.
+is_latin1_literal(Elements) ->
+    lists:any(
+        fun
+            ({bin_element, _, {string, _, Chars}, default, default}) ->
+                lists:any(fun(C) -> C > 127 end, Chars);
+            (_Element) ->
+                false
+        end,
+        Elements
+    ).
+
+folded_key({bin, Anno, _} = Bin) ->
+    {erl_anno:location(Anno), erl_parse:map_anno(fun(_) -> 0 end, Bin)}.
+
+group_by_file(Warnings) ->
+    Files = lists:usort([File || {File, _W} <- Warnings]),
+    [{File, [W || {F, W} <- Warnings, F =:= File]} || File <- Files].
 
 %% An inherited constructor call (inherit_nodiff/1) that no compile path reached
 %% would otherwise reach the runtime as an `undef` on a module that does not exist.
@@ -846,7 +916,16 @@ format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
             [binder_kind(Kind), Binder, Binder, Hoisted, Hoisted, Binder]
         )
     );
-format_error(tracked_get_on_non_bindings_map) ->
+format_error(Reason) when
+    Reason =:= tracked_get_on_non_bindings_map; Reason =:= latin1_binary_literal
+->
+    format_source_error(Reason).
+
+%% Diagnostics about how a value is written in the source rather than the template's
+%% structure. Kept apart for the same reason as format_each_error/1.
+format_source_error(latin1_binary_literal) ->
+    "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>";
+format_source_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
     "the view bindings, so their map argument must be the bindings -- a parameter or a "
     "direct alias (`B = Bindings`). This local is not provably the bindings. If it is a "
@@ -4445,7 +4524,8 @@ normalize_children(AST) ->
 extract_attr_name(Backend, {atom, _, Name}) -> Backend:name(Name);
 extract_attr_name(_Backend, BinAST) -> extract_binary_value(BinAST).
 
-extract_binary_value({bin, _, Elements}) ->
+extract_binary_value({bin, _, Elements} = Bin) ->
+    ok = note_folded(Bin),
     iolist_to_binary([extract_bin_element(E) || E <- Elements]).
 
 %% Templates treat binary-literal content as UTF-8 text: a code point is encoded
@@ -4457,6 +4537,22 @@ extract_bin_element({bin_element, _, {string, _, Chars}, default, _Type}) ->
     unicode:characters_to_binary(Chars);
 extract_bin_element({bin_element, _, {integer, _, N}, default, _Type}) ->
     <<N/utf8>>.
+
+%% Records a binary literal folded as UTF-8 text, so latin1_warnings/2 does not
+%% warn about it. Only a non-ASCII one can be warned about, so only those pay.
+note_folded({bin, _, Elements} = Bin) ->
+    case get(?FOLDED_KEY) of
+        Folded when is_map(Folded) ->
+            case is_latin1_literal(Elements) of
+                true ->
+                    Folded = put(?FOLDED_KEY, Folded#{folded_key(Bin) => true}),
+                    ok;
+                false ->
+                    ok
+            end;
+        undefined ->
+            ok
+    end.
 
 is_static_binary({bin, _, Elements}) ->
     lists:all(fun is_foldable_bin_element/1, Elements);

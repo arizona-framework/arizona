@@ -101,6 +101,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
                     on_mount => maps:get(on_mount, Opts, [])
                 },
                 {ContentType, Page} = arizona_render:render_view(H, RenderOpts),
+                ok = dev_check_utf8(Page, H, RenderOpts),
                 %% A view or middleware may stash a non-200 status (e.g. 401)
                 %% while still rendering a body; default to 200.
                 OkStatus =
@@ -122,6 +123,17 @@ do_render(H, ArzReq, Bindings, Opts) ->
         #{errors := Errors} ->
             {ErrorType, ErrorBody} = error_body(Bindings, error, {compile_error, Errors}, [], Opts),
             {error, 500, ErrorType, ErrorBody, ArzReq}
+    end.
+
+%% The page is served as UTF-8, and a binary value is emitted as the bytes it
+%% holds -- checking each one was measured too costly for every render. In dev
+%% mode the finished page is checked once instead; a failure is located at its
+%% template line (arizona_utf8:check_page/3) and raised into the catch above, so
+%% it reaches the dev error page. Production pays the one dev-flag read.
+dev_check_utf8(Page, H, RenderOpts) ->
+    case reload_url() of
+        undefined -> ok;
+        _Dev -> arizona_utf8:check_page(Page, H, RenderOpts)
     end.
 
 %% The rich error page (exception class, reason, and full stack with file:line)
