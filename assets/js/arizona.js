@@ -2419,8 +2419,11 @@ function submitter(event) {
  * @returns {Object<string, string|string[]>}
  */
 function formFields(fd) {
+    // Prototype-less: a field name is author data, and on a plain object one named
+    // `constructor` or `toString` would read back the inherited method (`in` is
+    // true, so the value became `[fn, v]`) and `__proto__` would hit the setter.
     /** @type {Object<string, string|string[]>} */
-    const data = {};
+    const data = Object.create(null);
     for (const [k, v] of fd.entries()) {
         if (k in data) {
             const prev = data[k];
@@ -3141,7 +3144,7 @@ function restoreFormState() {
         // an array. Value-setting fields consume it positionally, so track how many
         // values each name has handed out; checkbox groups match by value instead.
         /** @type {Object<string, number>} */
-        const cursor = {};
+        const cursor = Object.create(null);
         /** @param {string} name @returns {string|undefined} */
         const nextValue = (name) => {
             const val = fields[name];
