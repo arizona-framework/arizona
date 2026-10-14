@@ -1428,45 +1428,59 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
 %% `of` clauses (its value is then matched by `of`, but this mirrors the original
 %% live-render behaviour and never matters for real templates).
 map_tail_exprs(Expr, TailFun, NonTailFun) ->
+    {Mapped, none} = mapfold_tail_exprs(
+        Expr, fun(Leaf, none) -> {TailFun(Leaf), none} end, NonTailFun, none
+    ),
+    Mapped.
+
+%% map_tail_exprs/3 threading an accumulator through the tail leaves, in source order.
+mapfold_tail_exprs(Expr, TailFun, NonTailFun, Acc0) ->
+    Clauses = fun(Cs, Acc) ->
+        lists:mapfoldl(fun(C, A) -> mapfold_tail_clause(C, TailFun, NonTailFun, A) end, Acc, Cs)
+    end,
     case erl_syntax:revert(Expr) of
-        {'case', L, Scrutinee, Clauses} ->
-            {'case', L, NonTailFun(Scrutinee), [
-                map_tail_clause(C, TailFun, NonTailFun)
-             || C <- Clauses
-            ]};
-        {'if', L, Clauses} ->
-            {'if', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses]};
-        {block, L, Body} ->
-            {block, L, map_tail_body(Body, TailFun, NonTailFun)};
-        {'receive', L, Clauses} ->
-            {'receive', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses]};
-        {'receive', L, Clauses, AfterExpr, AfterBody} ->
-            {'receive', L, [map_tail_clause(C, TailFun, NonTailFun) || C <- Clauses],
-                NonTailFun(AfterExpr), map_tail_body(AfterBody, TailFun, NonTailFun)};
-        {'try', L, Body, OfClauses, CatchClauses, AfterBody} ->
-            {'try', L, map_tail_body(Body, TailFun, NonTailFun),
-                [map_tail_clause(C, TailFun, NonTailFun) || C <- OfClauses],
-                [map_tail_clause(C, TailFun, NonTailFun) || C <- CatchClauses], [
-                    NonTailFun(E)
-                 || E <- AfterBody
-                ]};
-        {'maybe', L, Body} ->
-            {'maybe', L, map_tail_body(Body, TailFun, NonTailFun)};
-        {'maybe', L, Body, {'else', L2, ElseClauses}} ->
-            {'maybe', L, map_tail_body(Body, TailFun, NonTailFun),
-                {'else', L2, [map_tail_clause(C, TailFun, NonTailFun) || C <- ElseClauses]}};
+        {'case', L, Scrutinee, Cs0} ->
+            {Cs, Acc} = Clauses(Cs0, Acc0),
+            {{'case', L, NonTailFun(Scrutinee), Cs}, Acc};
+        {'if', L, Cs0} ->
+            {Cs, Acc} = Clauses(Cs0, Acc0),
+            {{'if', L, Cs}, Acc};
+        {block, L, Body0} ->
+            {Body, Acc} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+            {{block, L, Body}, Acc};
+        {'receive', L, Cs0} ->
+            {Cs, Acc} = Clauses(Cs0, Acc0),
+            {{'receive', L, Cs}, Acc};
+        {'receive', L, Cs0, AfterExpr, AfterBody0} ->
+            {Cs, Acc1} = Clauses(Cs0, Acc0),
+            {AfterBody, Acc} = mapfold_tail_body(AfterBody0, TailFun, NonTailFun, Acc1),
+            {{'receive', L, Cs, NonTailFun(AfterExpr), AfterBody}, Acc};
+        {'try', L, Body0, OfClauses0, CatchClauses0, AfterBody} ->
+            {Body, Acc1} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+            {OfClauses, Acc2} = Clauses(OfClauses0, Acc1),
+            {CatchClauses, Acc} = Clauses(CatchClauses0, Acc2),
+            {{'try', L, Body, OfClauses, CatchClauses, [NonTailFun(E) || E <- AfterBody]}, Acc};
+        {'maybe', L, Body0} ->
+            {Body, Acc} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+            {{'maybe', L, Body}, Acc};
+        {'maybe', L, Body0, {'else', L2, ElseClauses0}} ->
+            {Body, Acc1} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+            {ElseClauses, Acc} = Clauses(ElseClauses0, Acc1),
+            {{'maybe', L, Body, {'else', L2, ElseClauses}}, Acc};
         _ ->
-            TailFun(Expr)
+            TailFun(Expr, Acc0)
     end.
 
-map_tail_clause({clause, L, Patterns, Guards, Body}, TailFun, NonTailFun) ->
-    {clause, L, Patterns, Guards, map_tail_body(Body, TailFun, NonTailFun)}.
+mapfold_tail_clause({clause, L, Patterns, Guards, Body0}, TailFun, NonTailFun, Acc0) ->
+    {Body, Acc} = mapfold_tail_body(Body0, TailFun, NonTailFun, Acc0),
+    {{clause, L, Patterns, Guards, Body}, Acc}.
 
-%% Only a body's last expression is a tail (recursing through map_tail_exprs/3 so
+%% Only a body's last expression is a tail (recursing through mapfold_tail_exprs/4 so
 %% a control-flow last is walked too); the init statements are non-tail.
-map_tail_body(Body, TailFun, NonTailFun) ->
-    {Init, [Last]} = lists:split(length(Body) - 1, Body),
-    [NonTailFun(E) || E <- Init] ++ [map_tail_exprs(Last, TailFun, NonTailFun)].
+mapfold_tail_body(Body, TailFun, NonTailFun, Acc0) ->
+    {Init, [Last0]} = lists:split(length(Body) - 1, Body),
+    {Last, Acc} = mapfold_tail_exprs(Last0, TailFun, NonTailFun, Acc0),
+    {[NonTailFun(E) || E <- Init] ++ [Last], Acc}.
 
 validate_live_root({tuple, _, [_Tag, Attrs | _]}, L, Inline) ->
     validate_id_expr(Attrs, L, Inline);
@@ -3144,17 +3158,14 @@ make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
 stamp_branches(Expr) ->
     case is_control_flow_ast(Expr) of
         true ->
-            undefined = put('$arizona_branch', 0),
-            Stamped = map_tail_exprs(Expr, fun stamp_branch/1, fun(E) -> E end),
-            true = is_integer(erase('$arizona_branch')),
+            {Stamped, _Count} = mapfold_tail_exprs(Expr, fun stamp_branch/2, fun(E) -> E end, 1),
             Stamped;
         false ->
             Expr
     end.
 
-stamp_branch(Leaf) ->
-    N = put('$arizona_branch', get('$arizona_branch') + 1),
-    stamp_leaf(N, Leaf).
+stamp_branch(Leaf, N) ->
+    {stamp_leaf(N, Leaf), N + 1}.
 
 stamp_leaf(N, {map, L, Fields} = Map) ->
     case lists:any(fun is_nodiff_field/1, Fields) of
