@@ -459,31 +459,32 @@ mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [Arg]}
         (Target =:= html orelse Target =:= native orelse Target =:= terminal)
 ->
     %% Entering a target resets the content context to that backend's default.
-    Default = (target_backend(Target)):content_context(undefined, html),
+    Default = root_content_context(Target),
     {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [
         maybe_inherit_nodiff(mark_targets(Arg, Target, Default))
     ]};
-%% A fresh `?each` gets the backend and content context it compiles for appended
-%% as two bare atom args, `each(Fun, Source, Backend, CCtx)` -- bare, because a
-%% tuple there would be walked as an element.
+%% An `?each` gets the backend and content context of where it sits appended as
+%% two bare atom args, `each(Fun, Source, Backend, CCtx)` -- bare, because a tuple
+%% there would be walked as an element. It is marked once, where it appears in the
+%% template that renders it: a hoisted one where its variable is used (splice_vars/4),
+%% and a helper's body never re-marks the arguments it is handed (ih_call/7). Those
+%% arguments may carry the 2-arg compiled output, which is final.
 mark_targets(
-    {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}} = Callee, [FunArg, SourceArg | Marking]},
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}} = Callee, [FunArg, SourceArg] = Args},
     Ctx,
     CCtx
 ) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
-    Backend = ctx_backend(Ctx),
-    Args =
-        case needs_each_marking(SourceArg, Marking) of
-            true ->
-                Unwrapped = unwrap_each_body([FunArg, SourceArg], Backend:target()),
-                maybe_inherit_each_nodiff([mark_targets(A, Ctx, CCtx) || A <- Unwrapped]) ++
-                    [{atom, L, Backend}, {atom, L, CCtx}];
-            false ->
-                mark_targets([FunArg, SourceArg | Marking], Ctx, CCtx)
-        end,
-    {call, L, Callee, Args};
+    case is_compiled_each_pairing(SourceArg) of
+        true ->
+            {call, L, Callee, mark_targets(Args, Ctx, CCtx)};
+        false ->
+            Backend = ctx_backend(Ctx),
+            Unwrapped = unwrap_each_body([FunArg, SourceArg], Backend:target()),
+            Marked = maybe_inherit_each_nodiff([mark_targets(A, Ctx, CCtx) || A <- Unwrapped]),
+            {call, L, Callee, Marked ++ [{atom, L, Backend}, {atom, L, CCtx}]}
+    end;
 %% An element tuple: its children may sit in a different content context (the
 %% backend decides -- `<svg>` opens foreign content for `?html`). Matched on the
 %% element shape only, so a plain data tuple a user writes cannot shift it.
@@ -514,16 +515,33 @@ mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
 ctx_backend(none) -> target_backend(html);
 ctx_backend(Ctx) -> target_backend(Ctx).
 
-%% Whether mark_targets/3 marks an `?each`: a fresh one, and an already-marked
-%% one spliced into a template (a hoisted one, a helper argument) whose marking is
-%% the unplaced default -- it knew nothing about where it would render. The 2-arg
-%% compiled output a helper argument carries back into the pass (ih_call/7) and a
-%% marking made inside a target or content context are final.
-needs_each_marking(SourceArg, []) ->
-    not is_compiled_each_pairing(SourceArg);
-needs_each_marking(_SourceArg, [{atom, _, Backend}, {atom, _, CCtx}]) ->
-    Default = ctx_backend(none),
-    Backend =:= Default andalso CCtx =:= Default:content_context(undefined, html).
+%% A hoisted value is bound outside every template, so an `?each` in it was marked
+%% with the default target and context, which say nothing about where it renders.
+%% prepare_inline/2 strips that marking and splice_vars/4 marks it again for the
+%% position the value is spliced into.
+unmark_eaches(
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}} = Callee, [FunArg, SourceArg, _, _]}
+) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    {call, L, Callee, [unmark_eaches(FunArg), unmark_eaches(SourceArg)]};
+unmark_eaches(Node) when is_tuple(Node) ->
+    list_to_tuple(unmark_eaches(tuple_to_list(Node)));
+unmark_eaches(Nodes) when is_list(Nodes) ->
+    [unmark_eaches(N) || N <- Nodes];
+unmark_eaches(Node) ->
+    Node.
+
+%% Splice the hoisted values into `Expr`, then mark the `?each`es they carry for
+%% the target `Ctx` and content context `CCtx` of where they land.
+splice_vars(Expr, Inline, _Ctx, _CCtx) when map_size(Inline) =:= 0 ->
+    Expr;
+splice_vars(Expr, Inline, Ctx, CCtx) ->
+    mark_targets(inline_vars(Expr, Inline), Ctx, CCtx).
+
+%% The content context at the root of a `Target` template.
+root_content_context(Target) ->
+    (target_backend(Target)):content_context(undefined, html).
 
 mark_targets(Node, Ctx) ->
     mark_targets(Node, Ctx, (ctx_backend(Ctx)):content_context(undefined, html)).
@@ -1073,7 +1091,7 @@ transform_node(Node, Module, Inline, FunDefs) ->
                 (Target =:= html orelse Target =:= native orelse Target =:= terminal)
         ->
             Inherited = Mod =:= ?NODIFF_MOD,
-            Arg1 = inline_vars(Arg, Inline),
+            Arg1 = splice_vars(Arg, Inline, Target, root_content_context(Target)),
             {Arg2, HelperCh} = inline_helper_calls(Arg1, Module, FunDefs, Target),
             Arg3 = retransform_spliced(
                 inherit_spliced_nodiff(Inherited, Arg2),
@@ -1092,10 +1110,11 @@ transform_node(Node, Module, Inline, FunDefs) ->
         ->
             Inherited = Mod =:= ?NODIFF_MOD,
             Spliced = map_size(Inline) > 0,
+            Target = Backend:target(),
             FunArg1 = unwrap_spliced_each_callback(
-                inline_vars(FunArg, Inline), Backend:target(), Inline
+                splice_vars(FunArg, Inline, Target, CCtx), Target, Inline
             ),
-            {FunArg2, FunCh} = inline_helper_calls(FunArg1, Module, FunDefs, Backend:target()),
+            {FunArg2, FunCh} = inline_helper_calls(FunArg1, Module, FunDefs, Target),
             compile_each(
                 retransform_spliced(
                     inherit_spliced_each_nodiff(Inherited, FunArg2),
@@ -1104,7 +1123,9 @@ transform_node(Node, Module, Inline, FunDefs) ->
                     FunDefs
                 ),
                 retransform_spliced(
-                    inherit_spliced_source(Inherited, inline_vars(SourceArg, Inline)),
+                    inherit_spliced_source(
+                        Inherited, splice_vars(SourceArg, Inline, Target, CCtx)
+                    ),
                     Spliced,
                     Module,
                     FunDefs
@@ -1560,7 +1581,7 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
         ->
             validate_live_root(Arg, L, Inline),
             Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
-            Arg2 = inline_vars(Arg1, Inline),
+            Arg2 = splice_vars(Arg1, Inline, Target, root_content_context(Target)),
             {Arg3, HelperCh} = inline_helper_calls(Arg2, Module, FunDefs, Target),
             Arg4 = retransform_spliced(
                 inherit_spliced_nodiff(false, Arg3),
@@ -1827,7 +1848,7 @@ prepare_inline(Raw, Body) ->
 
 prepare_inline_stmt({match, _, {var, _, V}, _RHS}, Raw, Acc) ->
     case Raw of
-        #{V := RHS} -> Acc#{V => prepare_inline_rhs(RHS, Acc)};
+        #{V := RHS} -> Acc#{V => unmark_eaches(prepare_inline_rhs(RHS, Acc))};
         #{} -> Acc
     end;
 prepare_inline_stmt(_Stmt, _Raw, Acc) ->

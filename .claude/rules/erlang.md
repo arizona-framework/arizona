@@ -535,6 +535,19 @@ re-renders when they change. A hoisted `?html` used as a whole `?each` callback
 body (`fun(_I) -> Row end`) keeps the per-item element path and its `single_root`
 flag.
 
+An `?each` compiles its items for the render target and content context of the
+place it appears in the template that renders it. For a hoisted `Items = ?each(...)`
+that place is where `Items` is used, not where it is bound: used inside `?native`
+its items are native nodes, used directly inside `<svg>` its `<title>` items are
+foreign content (markers, diffable), exactly as if the `?each` were written there.
+A hoisted value is checked like written code too, so a hoisted `?html` used inside
+`?native` is a `cross_target_nesting` compile error. A local element helper's body
+is **not** such a place for its arguments: an `?each` passed to a helper (written
+in the call, or a hoisted variable) keeps the context of the call site, so
+`wrap(Items)` with `wrap(X) -> {svg, [], [X]}` called from HTML content compiles
+the items as HTML (an HTML `<title>` is escapable raw text, so markerless). Write
+the `?each` inside the `<svg>` element to get SVG treatment.
+
 The invariant behind all of this: a slot tracks only the reads performed **inside
 its own closure**. The transform arranges that for a `?get` reaching the slot through
 a bare variable (it inlines a fresh read into the closure). It cannot when the value
