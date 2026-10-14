@@ -39,6 +39,17 @@ identical to the previous inlined emission.
 -export([wire_escape/1]).
 -export([wire_attr/2]).
 
+%% A byte that needs no entity. Letters and UTF-8 bytes (> `>`) answer on the
+%% first test; the rest of the safe set lies between and around `"`, `&`/`'`
+%% and `<`/`>`.
+-define(SAFE(C),
+    (C > $> orelse (C > $' andalso C < $<) orelse C < $" orelse C =:= $= orelse
+        (C > $" andalso C < $&))
+).
+%% Past the first metacharacter, a tail shorter than this has no run long enough
+%% for slicing to pay off, so the plain append loop takes it.
+-define(SHORT_TAIL, 16).
+
 -spec name(arizona_renderer:tag()) -> binary().
 %% An ATOM name is translated `_` -> `-` so `az_click` needs no quoting. A BINARY
 %% name is taken verbatim, which is the only way to write a name that really does
@@ -255,35 +266,55 @@ target() -> html.
 supports_local() -> true.
 
 %% HTML-escape the five metacharacters; safe for element content and
-%% double/single-quoted attribute values. Byte-at-a-time over the tail is
-%% UTF-8 safe (continuation bytes are all > 127, never a metacharacter).
+%% double/single-quoted attribute values. Comparisons are per byte, so UTF-8 is
+%% safe (continuation bytes are all > 127, never a metacharacter).
 %%
 %% Almost every value rendered through here (a name, a number, a date) carries no
 %% metacharacter at all, so locate the first one before building anything: with
-%% none, the input is returned as-is -- no accumulator, no copy. Only a value that
-%% really needs an entity allocates, and only from that first metacharacter on
-%% (the clean prefix seeds the accumulator in one slice). Measured over 200k calls,
-%% a clean value is ~5x the plain accumulator loop at every size tried (5 B to
-%% 1.2 KB), ~3x when the first metacharacter is near the end, and at parity when
-%% the value is escape-dense. A word-at-a-time (SWAR) scan was measured too: ~2x
-%% faster again on pure ASCII but slower on multi-byte UTF-8 and far harder to
-%% read, so the plain scan wins on the balance.
+%% none, the input is returned as-is -- no accumulator, no copy. The scan takes 8
+%% (then 4) bytes per step under one guard, which the JIT compiles to plain byte
+%% compares; that halves clean values of ~10-20 B and up and is ~2.5x on long
+%% ones. Past the first metacharacter a short tail goes through the plain append
+%% loop, and a longer one copies each clean run as one slice once two clean bytes
+%% in a row suggest the run is long, so dense markup never pays for a chunk
+%% attempt per byte. Measured shapes and the alternatives that lost
+%% (binary:match/2, SWAR, an iodata result) are in docs/performance.md.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) ->
     case first_meta(Bin, 0) of
         none ->
             Bin;
+        Pos when byte_size(Bin) - Pos < ?SHORT_TAIL ->
+            <<Clean:Pos/binary, Rest/binary>> = Bin,
+            escape(Rest, Clean);
         Pos ->
             <<Clean:Pos/binary, Rest/binary>> = Bin,
-            escape(Rest, Clean)
+            escape_runs(Rest, Clean, 0)
     end.
 
 %% Byte offset of the first character needing an entity, `none` when there is none.
-first_meta(<<C, R/binary>>, Pos) when C =/= $&, C =/= $<, C =/= $>, C =/= $", C =/= $' ->
-    first_meta(R, Pos + 1);
+%% A chunk that fails holds a metacharacter (or is past the end), so the single
+%% byte step after it hands over to a byte-only scan instead of retrying chunks.
+%% ?SAFE and the advances must never over-accept: a position reported early is
+%% only slower, one reported late leaves a metacharacter unescaped (XSS).
+first_meta(<<A, B, C, D, E, F, G, H, R/binary>>, Pos) when
+    ?SAFE(A), ?SAFE(B), ?SAFE(C), ?SAFE(D), ?SAFE(E), ?SAFE(F), ?SAFE(G), ?SAFE(H)
+->
+    first_meta(R, Pos + 8);
+first_meta(<<A, B, C, D, R/binary>>, Pos) when ?SAFE(A), ?SAFE(B), ?SAFE(C), ?SAFE(D) ->
+    first_meta(R, Pos + 4);
+first_meta(<<C, R/binary>>, Pos) when ?SAFE(C) ->
+    first_meta_bytes(R, Pos + 1);
 first_meta(<<>>, _Pos) ->
     none;
 first_meta(_Bin, Pos) ->
+    Pos.
+
+first_meta_bytes(<<C, R/binary>>, Pos) when ?SAFE(C) ->
+    first_meta_bytes(R, Pos + 1);
+first_meta_bytes(<<>>, _Pos) ->
+    none;
+first_meta_bytes(_Bin, Pos) ->
     Pos.
 
 escape(<<>>, Acc) -> Acc;
@@ -293,6 +324,31 @@ escape(<<">", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&gt;">>);
 escape(<<"\"", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&quot;">>);
 escape(<<"'", R/binary>>, Acc) -> escape(R, <<Acc/binary, "&#39;">>);
 escape(<<C, R/binary>>, Acc) -> escape(R, <<Acc/binary, C>>).
+
+%% `Run` counts the clean bytes appended one by one since the last entity; at two,
+%% the rest of the run is found with first_meta/2 and appended as one slice.
+escape_runs(<<"&", R/binary>>, Acc, _Run) ->
+    escape_runs(R, <<Acc/binary, "&amp;">>, 0);
+escape_runs(<<"<", R/binary>>, Acc, _Run) ->
+    escape_runs(R, <<Acc/binary, "&lt;">>, 0);
+escape_runs(<<">", R/binary>>, Acc, _Run) ->
+    escape_runs(R, <<Acc/binary, "&gt;">>, 0);
+escape_runs(<<"\"", R/binary>>, Acc, _Run) ->
+    escape_runs(R, <<Acc/binary, "&quot;">>, 0);
+escape_runs(<<"'", R/binary>>, Acc, _Run) ->
+    escape_runs(R, <<Acc/binary, "&#39;">>, 0);
+escape_runs(<<C, R/binary>>, Acc, Run) when Run < 2 ->
+    escape_runs(R, <<Acc/binary, C>>, Run + 1);
+escape_runs(<<>>, Acc, _Run) ->
+    Acc;
+escape_runs(Bin, Acc, _Run) ->
+    case first_meta(Bin, 0) of
+        none ->
+            <<Acc/binary, Bin/binary>>;
+        Pos ->
+            <<Clean:Pos/binary, Rest/binary>> = Bin,
+            escape_runs(Rest, <<Acc/binary, Clean/binary>>, 0)
+    end.
 
 %% Neutralize a raw-text (script/style) tokenizer breakout. Raw-text content is
 %% emitted verbatim -- HTML entity-escaping does not apply (the browser decodes
