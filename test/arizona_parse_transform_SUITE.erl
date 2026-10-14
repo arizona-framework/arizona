@@ -457,6 +457,13 @@
     list_child_stream_insert/1,
     list_child_plain_each/1,
     list_child_case_item_markup/1,
+    raw_text_rejects_each/1,
+    raw_text_rejects_element_child/1,
+    raw_text_rejects_inlined_element_helper/1,
+    raw_text_keeps_text_template/1,
+    raw_text_rejects_branch_markup/1,
+    raw_text_keeps_values/1,
+    raw_text_list_with_raw_is_text/1,
     cond_begin_block_tail/1,
     cond_try_bare_element/1,
     cond_maybe_bare_element/1,
@@ -801,6 +808,13 @@ groups() ->
             list_child_stream_insert,
             list_child_plain_each,
             list_child_case_item_markup,
+            raw_text_rejects_each,
+            raw_text_rejects_element_child,
+            raw_text_rejects_inlined_element_helper,
+            raw_text_keeps_text_template,
+            raw_text_rejects_branch_markup,
+            raw_text_keeps_values,
+            raw_text_list_with_raw_is_text,
             cond_begin_block_tail,
             cond_try_bare_element,
             cond_maybe_bare_element,
@@ -10370,3 +10384,86 @@ list_child_case_item_markup(Config) when is_list(Config) ->
     assert_list_child(
         Mod, #{f => true, a => ~"A"}, #{f => true, a => ~"B"}, [~"<b", ~"A"], ~"B"
     ).
+
+%% Escapable raw text (`<title>`, `<textarea>`) shows markup as literal text, so a
+%% markup constructor in its content is refused at compile time.
+raw_text_rejects_each(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_raw_text_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({textarea, [], ["
+        "        arizona_template:each(fun(I) -> {b, [], [I]} end, "
+        "            arizona_template:get(items, Bindings))]}). ",
+        fun(R) -> R =:= markup_in_raw_text end
+    ).
+
+raw_text_rejects_element_child(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_raw_text_elem). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({title, [], [{b, [], [arizona_template:get(t, Bindings)]}]}). ",
+        fun(R) -> R =:= markup_in_raw_text end
+    ).
+
+raw_text_rejects_inlined_element_helper(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_raw_text_helper). "
+        "-export([render/1]). "
+        "render(_Bindings) -> arizona_template:html({title, [], [h()]}). "
+        "h() -> {b, [], [<<\"x\">>]}. ",
+        fun(R) -> R =:= markup_in_raw_text end
+    ).
+
+%% A nested template with no dynamics and no tag renders as plain text.
+raw_text_keeps_text_template(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_raw_text_text_tmpl). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({title, [], [arizona_template:html(<<\"x\">>)]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertMatch({match, _}, re:run(HTML, ~"^<title[^>]*>x</title>$")).
+
+raw_text_rejects_branch_markup(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_raw_text_branch). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({title, [], ["
+        "        case arizona_template:get(f, Bindings) of"
+        "            true -> arizona_template:html({b, [], [<<\"x\">>]});"
+        "            false -> <<\"plain\">>"
+        "        end]}). ",
+        fun(R) -> R =:= markup_in_raw_text end
+    ).
+
+%% A value, a `?raw` and a value branch stay allowed there.
+raw_text_keeps_values(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_raw_text_values). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({textarea, [], ["
+        "        case arizona_template:get(f, Bindings) of"
+        "            true -> arizona_template:get(y, Bindings);"
+        "            false -> arizona_template:raw(<<\"&amp;\">>)"
+        "        end]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{f => true, y => ~"<y>"}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"&lt;y&gt;")).
+
+%% A ?raw in a title list is a value, as a bare ?raw there is: spliced as text.
+raw_text_list_with_raw_is_text(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_raw_text_raw_list). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({title, [], [[<<\"a \">>, "
+        "        arizona_template:raw(arizona_template:get(r, Bindings))]]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{r => ~"&amp;"}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"a &amp;</title>")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--")).

@@ -360,6 +360,10 @@ slot's az, which the web client resolves to the markers' parent element, placing
 items inside the marker span. A plain-list `?each` re-renders its whole slot on any change; as a
 flat sibling -- `{ul, [], [~"Tags: ", ?each(...)]}` -- it stays on the positional per-item path.
 
+In `<title>`/`<textarea>` (text only) a block in content is a compile error
+(`markup_in_raw_text`): the browser would show its markup as literal text. A `?raw` there is a
+value, alone or in a list.
+
 ## Bare element tuples in conditional tails
 
 A control-flow expression in a **content slot** -- `case`, `if`, `begin`, `receive`,

@@ -754,6 +754,10 @@ format_error(local_orphaned) ->
 %% format_helper_error/3 to keep format_error/1's clause complexity in check.
 format_error({HelperReason, Name, Arity}) ->
     format_helper_error(HelperReason, Name, Arity);
+format_error(markup_in_raw_text) ->
+    "a <title> or <textarea> holds text only (escapable raw text): the browser shows "
+    "an ?each, a ?stateless/?stateful component or a nested template there as literal "
+    "markup. Render the value as text instead";
 format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
@@ -3182,6 +3186,11 @@ compile_non_static_child(Child, ElemAz, State0, Slot) ->
     case is_element_tuple(Child) of
         true ->
             {Tag, Attrs, Children, ElemLine} = extract_element(Child),
+            %% A literal element in title/textarea content shows as literal text.
+            case State0#state.raw_text_kind of
+                escapable -> parse_error(markup_in_raw_text, ElemLine);
+                _ -> ok
+            end,
             {compile_element(Tag, Attrs, Children, ElemLine, State0), Slot};
         false ->
             compile_dynamic_child(Child, ElemAz, State0, Slot)
@@ -3193,8 +3202,66 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             ValueStr = erl_pp:expr(Child),
             parse_error({invalid_child, ValueStr}, line(Child));
         false ->
+            ok = reject_markup_in_raw_text(Child, State0#state.raw_text_kind),
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
+
+%% Escapable raw text (title/textarea) decodes character references but parses no
+%% tags, so markup there -- in the value itself or in any tail it can take -- would
+%% show as literal text (comment markers included). A script/style slot is
+%% already refused unless it is a literal ?raw (assert_raw_text_opt_out/1).
+reject_markup_in_raw_text(Child, escapable) ->
+    _Walked = map_tail_exprs(
+        Child,
+        fun(Leaf) ->
+            case is_markup_leaf(Leaf) of
+                true -> parse_error(markup_in_raw_text, line(Leaf));
+                false -> Leaf
+            end
+        end,
+        fun(NonTail) -> NonTail end
+    ),
+    ok;
+reject_markup_in_raw_text(_Child, _RawKind) ->
+    ok.
+
+%% A tail value that renders as markup: an element, an element list or a list holding
+%% one, or a constructor other than ?raw/?local (both are values here).
+is_markup_leaf({map, _, Fields} = Leaf) ->
+    %% A compiled template with no dynamics and no tag in its statics renders as
+    %% plain text (`?html(~"x")`), so it is a value here.
+    case is_compiled_template_map(Fields) andalso is_text_only_template(Fields) of
+        true -> false;
+        false -> is_markup_item(Leaf)
+    end;
+is_markup_leaf(Leaf) ->
+    case classify_body(Leaf) of
+        element_tuple -> true;
+        element_list -> true;
+        list_ast -> list_has_markup_value(Leaf);
+        _ -> is_markup_item(Leaf) andalso not is_value_constructor(Leaf)
+    end.
+
+%% In title/textarea a ?raw list item is a value, as a bare ?raw is.
+list_has_markup_value({cons, _, Head, Tail}) ->
+    (is_markup_item(Head) andalso not is_value_constructor(Head)) orelse
+        list_has_markup_value(Tail);
+list_has_markup_value(_) ->
+    false.
+
+is_text_only_template(Fields) ->
+    case {template_map_field(d, Fields), template_map_field(s, Fields)} of
+        {{nil, _}, SAST} ->
+            Statics = [extract_binary_value(B) || B <- ast_list_to_list(SAST)],
+            not lists:any(fun(B) -> binary:match(B, ~"<") =/= nomatch end, Statics);
+        _ ->
+            false
+    end.
+
+is_value_constructor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _}) ->
+    (Mod =:= arizona_template orelse Mod =:= az) andalso (F =:= raw orelse F =:= local);
+is_value_constructor(_Expr) ->
+    false.
 
 %% The `raw` raw-text clause comes FIRST, ahead of nodiff: both make the slot
 %% markerless and render-once (`undefined` az), so they agree on the diff
