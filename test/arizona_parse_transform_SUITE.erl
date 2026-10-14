@@ -433,6 +433,39 @@
     cond_case_diff_transition/1,
     cond_case_element_list_tail/1,
     cond_case_mixed_fragment_tail/1,
+    list_child_with_each/1,
+    list_child_with_stateless/1,
+    list_child_with_nested_html/1,
+    list_child_binary_key_map/1,
+    list_child_data_map_not_template/1,
+    list_child_guarded_helper_not_rejected/1,
+    list_child_hoisted_html/1,
+    list_child_helper_html/1,
+    list_child_helper_each/1,
+    list_child_inner_content/1,
+    list_child_raw_beside_value/1,
+    list_child_local_orphaned/1,
+    list_child_case_tail/1,
+    list_child_stateful/1,
+    list_child_terminal/1,
+    list_child_nodiff/1,
+    list_child_wrapped_helper_off_tail/1,
+    wrapped_helper_try_tail_tracked/1,
+    wrapped_helper_receive_tail_tracked/1,
+    wrapped_helper_maybe_tail_tracked/1,
+    list_child_wrapped_element_helper_off_tail/1,
+    list_child_stream_insert/1,
+    list_child_plain_each/1,
+    list_child_case_item_markup/1,
+    raw_text_rejects_each/1,
+    raw_text_rejects_element_child/1,
+    raw_text_rejects_inlined_element_helper/1,
+    raw_text_keeps_text_template/1,
+    raw_text_rejects_branch_markup/1,
+    raw_text_keeps_values/1,
+    raw_text_list_with_raw_is_text/1,
+    markup_var_in_content_list_rejected/1,
+    markup_var_in_content_list_allowed/1,
     cond_begin_block_tail/1,
     cond_try_bare_element/1,
     cond_maybe_bare_element/1,
@@ -753,6 +786,39 @@ groups() ->
             cond_case_diff_transition,
             cond_case_element_list_tail,
             cond_case_mixed_fragment_tail,
+            list_child_with_each,
+            list_child_with_stateless,
+            list_child_with_nested_html,
+            list_child_binary_key_map,
+            list_child_data_map_not_template,
+            list_child_guarded_helper_not_rejected,
+            list_child_hoisted_html,
+            list_child_helper_html,
+            list_child_helper_each,
+            list_child_inner_content,
+            list_child_raw_beside_value,
+            list_child_local_orphaned,
+            list_child_case_tail,
+            list_child_stateful,
+            list_child_terminal,
+            list_child_nodiff,
+            list_child_wrapped_helper_off_tail,
+            wrapped_helper_try_tail_tracked,
+            wrapped_helper_receive_tail_tracked,
+            wrapped_helper_maybe_tail_tracked,
+            list_child_wrapped_element_helper_off_tail,
+            list_child_stream_insert,
+            list_child_plain_each,
+            list_child_case_item_markup,
+            raw_text_rejects_each,
+            raw_text_rejects_element_child,
+            raw_text_rejects_inlined_element_helper,
+            raw_text_keeps_text_template,
+            raw_text_rejects_branch_markup,
+            raw_text_keeps_values,
+            raw_text_list_with_raw_is_text,
+            markup_var_in_content_list_rejected,
+            markup_var_in_content_list_allowed,
             cond_begin_block_tail,
             cond_try_bare_element,
             cond_maybe_bare_element,
@@ -9959,3 +10025,505 @@ region_diff(Fun, Bindings, Snap, Views, Changed) ->
 settled_stream(Stream) ->
     #{s := Settled} = arizona_stream:clear_stream_pending(#{s => Stream}, [s]),
     Settled.
+
+%% A content child that is a list mixing static text with an `?each` renders the
+%% each as markup and diffs it, as a literal mixed fragment there would.
+list_child_with_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({ul, [], [[<<\"x\">>, "
+        "        arizona_template:each(fun(I) -> {li, [], [I]} end, "
+        "            arizona_template:get(items, Bindings))]]}). "
+    ),
+    assert_list_child(Mod, #{items => [~"1", ~"2"]}, #{items => [~"1", ~"3"]}, [~"1", ~"2"], ~"3").
+
+%% The same with a `?stateless` component in the list.
+list_child_with_stateless(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_stateless). "
+        "-export([render/1, item/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [[<<\"x\">>, "
+        "        arizona_template:stateless(fun item/1, "
+        "            #{y => arizona_template:get(y, Bindings)})]]}). "
+        "item(Bindings) -> "
+        "    arizona_template:html({i, [], [arizona_template:get(y, Bindings)]}). "
+    ),
+    assert_list_child(Mod, #{y => ~"Y"}, #{y => ~"Z"}, [~"Y"], ~"Z").
+
+%% The same with a nested `?html` in the list.
+list_child_with_nested_html(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [[<<\"x\">>, "
+        "        arizona_template:html({b, [], [arizona_template:get(y, Bindings)]})]]}). "
+    ),
+    assert_list_child(Mod, #{y => ~"Y"}, #{y => ~"Z"}, [~"Y"], ~"Z").
+
+%% SSR equals the live render and shows the static text and every value; a change
+%% to the read binding diffs to ops carrying the new value.
+assert_list_child(Mod, B0, B1, Shown, New) ->
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
+    {Live, Snap, _Views} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertEqual(SSR, iolist_to_binary(Live)),
+    ?assertNotEqual(nomatch, binary:match(SSR, ~"x")),
+    [?assertNotEqual(nomatch, binary:match(SSR, V)) || V <- Shown],
+    Changed = maps:from_keys(maps:keys(B1), true),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(Mod:render(B1), Snap, #{}, Changed),
+    ?assertMatch([_ | _], Ops),
+    ?assertNotEqual(nomatch, binary:match(term_to_binary(Ops), New)).
+
+%% A map literal with a non-atom key in a content-slot list is data, not a
+%% template: the transform must not crash classifying it.
+list_child_binary_key_map(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_bin_map). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(f, Bindings) of"
+        "            true -> [<<\"x\">>, #{<<\"a\">> => 1}];"
+        "            false -> <<>>"
+        "        end"
+        "    ]}). "
+    ),
+    ?assertMatch(
+        <<"<p", _/binary>>,
+        iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{f => false})))
+    ).
+
+%% A user map that merely spells out `s`/`d`/`f` is not taken for a compiled
+%% template: it stays a value (and, being unrenderable, fails like any bad value).
+list_child_data_map_not_template(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_data_map). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(f, Bindings) of"
+        "            true -> [<<\"x\">>, #{s => [<<\"a\">>], d => [], f => <<\"z\">>}];"
+        "            false -> <<>>"
+        "        end"
+        "    ]}). "
+    ),
+    ?assertError(_, arizona_render:render_to_iolist(Mod:render(#{f => true}))).
+
+%% A guarded helper (single or multi-clause) whose body is markup only through a
+%% constructor is not rejected when it is called outside a content slot: it renders
+%% fine there.
+list_child_guarded_helper_not_rejected(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_guarded_helper). "
+        "-export([render/1, card/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], ["
+        "        integer_to_binary(length(kids(arizona_template:get(r, Bindings)))),"
+        "        integer_to_binary(length(kid(arizona_template:get(r, Bindings))))"
+        "    ]}). "
+        "kids(R) when R =:= admin -> "
+        "    [<<\"a\">>, arizona_template:stateless(fun card/1, #{})]; "
+        "kids(_) -> []. "
+        "kid(R) when is_atom(R) -> "
+        "    [<<\"b\">>, arizona_template:stateless(fun card/1, #{})]. "
+        "card(_Bindings) -> arizona_template:html({i, [], [<<\"c\">>]}). "
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(
+            iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{r => admin}))),
+            ~"2<!--/az--><!--az:"
+        )
+    ).
+
+%% A hoisted `?html` reaches the list wrapped in its track block; it is still markup.
+list_child_hoisted_html(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_hoisted). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    H = arizona_template:html({b, [], [arizona_template:get(y, Bindings)]}), "
+        "    arizona_template:html({p, [], [[<<\"x\">>, H]]}). "
+    ),
+    assert_list_child(Mod, #{y => ~"Y"}, #{y => ~"Z"}, [~"Y"], ~"Z").
+
+%% A local helper whose body is a list holding a raw `?html` is inlined like one
+%% holding a component.
+list_child_helper_html(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_helper_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [kids(arizona_template:get(y, Bindings))]}). "
+        "kids(Y) -> [<<\"x\">>, arizona_template:html({b, [], [Y]})]. "
+    ),
+    assert_list_child(Mod, #{y => ~"Y"}, #{y => ~"Z"}, [~"Y"], ~"Z").
+
+%% The same with a raw `?each` in the helper body.
+list_child_helper_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_helper_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({ul, [], [kids(arizona_template:get(items, Bindings))]}). "
+        "kids(Is) -> [<<\"x\">>, arizona_template:each(fun(I) -> {li, [], [I]} end, Is)]. "
+    ),
+    assert_list_child(Mod, #{items => [~"1", ~"2"]}, #{items => [~"1", ~"3"]}, [~"1", ~"2"], ~"3").
+
+%% `?inner_content` beside static text in a layout's list gets its own slot.
+list_child_inner_content(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_inner). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({main, [], [[<<\"x\">>, az:inner_content(Bindings)]]}). "
+    ),
+    HTML = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:render(#{inner_content => #{s => [~"PAGE"], d => []}}))
+    ),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"x")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"PAGE")).
+
+%% A whole-value `?raw` beside a plain value is spliced verbatim, the value escaped.
+list_child_raw_beside_value(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_raw). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [[arizona_template:raw(<<\"<i>r</i>\">>), "
+        "        arizona_template:get(y, Bindings)]]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{y => ~"<y>"}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<i>r</i>")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"&lt;y&gt;")).
+
+%% A `?local` in a content-slot list has no element to carry its descriptor.
+list_child_local_orphaned(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_list_child_local). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [[<<\"x\">>, arizona_template:local(k, 0)]]}). ",
+        fun(R) -> R =:= local_orphaned end
+    ).
+
+%% A content list as a conditional tail.
+list_child_case_tail(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_case). "
+        "-export([render/1, item/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(f, Bindings) of"
+        "            true -> [<<\"x\">>, arizona_template:stateless(fun item/1, "
+        "                #{y => arizona_template:get(y, Bindings)})];"
+        "            false -> <<>>"
+        "        end"
+        "    ]}). "
+        "item(Bindings) -> arizona_template:html({i, [], [arizona_template:get(y, Bindings)]}). "
+    ),
+    assert_list_child(Mod, #{f => true, y => ~"Y"}, #{f => true, y => ~"Z"}, [~"Y"], ~"Z").
+
+%% A `?stateful` child in a content list mounts and renders its own view.
+list_child_stateful(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_stateful). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({section, [], [[<<\"x\">>, "
+        "        arizona_template:stateful(arizona_counter, "
+        "            #{id => <<\"lc\">>, count => arizona_template:get(n, Bindings)})]]}). "
+    ),
+    {HTML, _Snap, Views} = arizona_render:render(Mod:render(#{n => 7}), #{}),
+    ?assertMatch(#{~"lc" := _}, Views),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"x")),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"7")).
+
+%% The terminal target renders a content list holding a nested template.
+list_child_terminal(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_term). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal({line, [], [[<<\"x\">>, "
+        "        arizona_template:terminal({text, [], [arizona_template:get(y, Bindings)]})]]}). "
+    ),
+    Out = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{y => ~"Y"}))),
+    ?assertNotEqual(nomatch, binary:match(Out, ~"x")),
+    ?assertNotEqual(nomatch, binary:match(Out, ~"Y")).
+
+%% Under az-nodiff the list renders once, markerless.
+list_child_nodiff(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_nodiff). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({ul, ['az-nodiff'], [[<<\"x\">>, "
+        "        arizona_template:each(fun(I) -> {li, [], [I]} end, "
+        "            arizona_template:get(items, Bindings))]]}). "
+    ),
+    HTML = render_markerless(Mod:render(#{items => [~"1", ~"2"]})),
+    ?assertEqual(~"<ul>x<li>1</li><li>2</li></ul>", HTML).
+
+%% A `?html`-wrapped helper is a template-returning call. Off a content tail (a
+%% function argument, a case scrutinee) the call stays, so the consumer gets the
+%% template it returned rather than the unwrapped list.
+list_child_wrapped_helper_off_tail(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_off_tail). "
+        "-export([render/1, inner/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], ["
+        "        element(1, {lst(arizona_template:get(a, Bindings))})]}). "
+        "lst(Y) -> arizona_template:html([<<\"x\">>, "
+        "    arizona_template:stateless(fun inner/1, #{a => Y})]). "
+        "inner(Bindings) -> arizona_template:html({i, [], [arizona_template:get(a, Bindings)]}). "
+    ),
+    assert_list_child(Mod, #{a => ~"A"}, #{a => ~"B"}, [~"A"], ~"B").
+
+%% A wrapped helper in a try/receive/maybe tail is inlined like a case tail, so its
+%% reads stay tracked on the slot.
+wrapped_helper_try_tail_tracked(Config) when is_list(Config) ->
+    assert_tail_tracked(
+        "pt_wrapped_try",
+        "try w(Bindings) catch _:_ -> <<>> end"
+    ).
+
+wrapped_helper_receive_tail_tracked(Config) when is_list(Config) ->
+    assert_tail_tracked(
+        "pt_wrapped_receive",
+        "receive never -> <<>> after 0 -> w(Bindings) end"
+    ).
+
+wrapped_helper_maybe_tail_tracked(Config) when is_list(Config) ->
+    assert_tail_tracked(
+        "pt_wrapped_maybe",
+        "maybe ok ?= ok, w(Bindings) end"
+    ).
+
+assert_tail_tracked(Name, Tail) ->
+    Mod = compile_module(
+        "-module(" ++ Name ++
+            "). "
+            "-export([render/1]). "
+            "render(Bindings) -> arizona_template:html({p, [], [" ++ Tail ++
+            "]}). "
+            "w(Bindings) -> arizona_template:html({b, [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{x => ~"X0"}), #{}),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(Mod:render(#{x => ~"X1"}), Snap, #{}, #{x => true}),
+    ?assertNotEqual(nomatch, binary:match(term_to_binary(Ops), ~"X1")).
+
+%% An element-bodied `?html`-wrapped helper used as a value (a case scrutinee) stays
+%% a call, so the consumer gets its template rather than the unwrapped element.
+list_child_wrapped_element_helper_off_tail(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_off_tail_el). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], ["
+        "        case card(arizona_template:get(a, Bindings)) of T -> T end"
+        "    ]}). "
+        "card(Y) -> arizona_template:html({b, [], [Y]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{a => ~"A"}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<b")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"A")).
+
+%% A stream in a content-list fragment keeps per-item ops. They target the each slot's
+%% own az, which no element carries: the client resolves it through the slot's markers
+%% and places the item inside their span.
+list_child_stream_insert(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_stream). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({ul, [], [[<<\"x\">>, "
+        "        arizona_template:each(fun(I, K) -> {li, [{az_key, K}], [I]} end, "
+        "            arizona_template:get(s, Bindings))]]}). "
+    ),
+    S0 = arizona_stream:new(fun(X) -> X end, [~"a", ~"b"]),
+    {HTML, Snap, _Views} = arizona_render:render(Mod:render(#{s => S0}), #{}),
+    S1 = arizona_stream:insert(S0, ~"c"),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(Mod:render(#{s => S1}), Snap, #{}, #{s => true}),
+    ?assertMatch([[?OP_INSERT, _, ~"c", -1, _]], Ops),
+    [[?OP_INSERT, Target | _]] = Ops,
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(HTML), <<"az=\"", Target/binary, "\"">>)),
+    ?assertNotEqual(
+        nomatch, binary:match(iolist_to_binary(HTML), <<"<!--az:", Target/binary, "-->">>)
+    ).
+
+%% A plain-list `?each` in a content-list fragment re-renders its own slot as a
+%% whole (one marker-anchored OP_TEXT), not item by item.
+list_child_plain_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_plain). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({ul, [], [[<<\"x\">>, "
+        "        arizona_template:each(fun(I) -> {li, [], [I]} end, "
+        "            arizona_template:get(items, Bindings))]]}). "
+    ),
+    {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{items => [~"a", ~"b"]}), #{}),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(
+        Mod:render(#{items => [~"a", ~"z"]}), Snap, #{}, #{items => true}
+    ),
+    ?assertMatch([[?OP_TEXT, _, #{~"t" := _}]], Ops).
+
+%% A conditional item whose tail is markup makes the list a fragment.
+list_child_case_item_markup(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_list_child_case_item). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [[<<\"x\">>, "
+        "        case arizona_template:get(f, Bindings) of"
+        "            true -> {b, [], [arizona_template:get(a, Bindings)]};"
+        "            false -> <<>>"
+        "        end]]}). "
+    ),
+    assert_list_child(
+        Mod, #{f => true, a => ~"A"}, #{f => true, a => ~"B"}, [~"<b", ~"A"], ~"B"
+    ).
+
+%% Escapable raw text (`<title>`, `<textarea>`) shows markup as literal text, so a
+%% markup constructor in its content is refused at compile time.
+raw_text_rejects_each(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_raw_text_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({textarea, [], ["
+        "        arizona_template:each(fun(I) -> {b, [], [I]} end, "
+        "            arizona_template:get(items, Bindings))]}). ",
+        fun(R) -> R =:= markup_in_raw_text end
+    ).
+
+raw_text_rejects_element_child(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_raw_text_elem). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({title, [], [{b, [], [arizona_template:get(t, Bindings)]}]}). ",
+        fun(R) -> R =:= markup_in_raw_text end
+    ).
+
+raw_text_rejects_inlined_element_helper(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_raw_text_helper). "
+        "-export([render/1]). "
+        "render(_Bindings) -> arizona_template:html({title, [], [h()]}). "
+        "h() -> {b, [], [<<\"x\">>]}. ",
+        fun(R) -> R =:= markup_in_raw_text end
+    ).
+
+%% A nested template with no dynamics and no tag renders as plain text.
+raw_text_keeps_text_template(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_raw_text_text_tmpl). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({title, [], [arizona_template:html(<<\"x\">>)]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertMatch({match, _}, re:run(HTML, ~"^<title[^>]*>x</title>$")).
+
+raw_text_rejects_branch_markup(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_raw_text_branch). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({title, [], ["
+        "        case arizona_template:get(f, Bindings) of"
+        "            true -> arizona_template:html({b, [], [<<\"x\">>]});"
+        "            false -> <<\"plain\">>"
+        "        end]}). ",
+        fun(R) -> R =:= markup_in_raw_text end
+    ).
+
+%% A value, a `?raw` and a value branch stay allowed there.
+raw_text_keeps_values(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_raw_text_values). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({textarea, [], ["
+        "        case arizona_template:get(f, Bindings) of"
+        "            true -> arizona_template:get(y, Bindings);"
+        "            false -> arizona_template:raw(<<\"&amp;\">>)"
+        "        end]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{f => true, y => ~"<y>"}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"&lt;y&gt;")).
+
+%% A ?raw in a title list is a value, as a bare ?raw there is: spliced as text.
+raw_text_list_with_raw_is_text(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_raw_text_raw_list). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({title, [], [[<<\"a \">>, "
+        "        arizona_template:raw(arizona_template:get(r, Bindings))]]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{r => ~"&amp;"}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"a &amp;</title>")),
+    ?assertEqual(nomatch, binary:match(HTML, ~"<!--")).
+
+%% A content-slot list item that is a variable bound to markup is a compile error
+%% naming the variable: only markup written in the list is compiled.
+markup_var_in_content_list_rejected(Config) when is_list(Config) ->
+    [
+        assert_parse_error(
+            "-module(pt_markup_var_" ++ Suffix ++
+                "). "
+                "-export([render/1]). "
+                "render(Bindings) -> " ++ Body,
+            fun(R) -> R =:= {markup_var_in_content_list, 'Hdr'} end
+        )
+     || {Suffix, Body} <- [
+            {"each",
+                "Hdr = arizona_template:html({h1, [], [<<\"T\">>]}), "
+                "arizona_template:html({ul, [], [[Hdr, arizona_template:each("
+                "    fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings))]]}). "},
+            {"value",
+                "Hdr = {h1, [], [<<\"T\">>]}, "
+                "arizona_template:html({p, [], [[<<\"x\">>, Hdr, "
+                "    arizona_template:get(a, Bindings)]]}). "},
+            {"tail",
+                "Hdr = [<<\"x\">>, {b, [], []}], "
+                "arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
+                "    true -> [Hdr, <<\"y\">>]; false -> <<>> end]}). "}
+        ]
+    ],
+    ok.
+
+%% A hoisted template that reads a binding is substituted back, so it is markup
+%% written in the list; and a fun parameter or generator of the same name shadows a
+%% markup variable.
+markup_var_in_content_list_allowed(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_markup_var_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Hdr = arizona_template:html({h1, [], [arizona_template:get(t, Bindings)]}), "
+        "    Row = {b, [], []}, "
+        "    arizona_template:html({ul, [], ["
+        "        [Hdr, arizona_template:each(fun(Row) -> {li, [], [[<<\"r\">>, Row]]} end, "
+        "            arizona_template:get(xs, Bindings))]]}). "
+    ),
+    assert_list_child(
+        Mod, #{t => ~"T", xs => [~"x1"]}, #{t => ~"U", xs => [~"x1"]}, [~"T", ~"x1"], ~"U"
+    ),
+    ?assertEqual(
+        pt_markup_var_gen,
+        compile_module(
+            "-module(pt_markup_var_gen). "
+            "-export([render/1]). "
+            "render(_Bindings) -> "
+            "    Row = {b, [], []}, "
+            "    [arizona_template:html({i, [], [[<<\"g\">>, Row]]}) || Row <- [<<\"x\">>]]. "
+        )
+    ).

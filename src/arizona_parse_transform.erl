@@ -261,7 +261,7 @@ maybe_helper_pair(Name, Arity, FunDefs, Acc) ->
     Inlineable = lists:any(
         fun(Target) ->
             case helper_plan_shape(Name, Arity, FunDefs, Target) of
-                {inline, _Params, _Body} -> true;
+                {inline, _Params, _Body, _Wrap} -> true;
                 _ -> false
             end
         end,
@@ -720,6 +720,16 @@ format_error({invalid_child, ValueStr}) ->
             [ValueStr]
         )
     );
+format_error({markup_var_in_content_list, Var}) ->
+    lists:flatten(
+        io_lib:format(
+            "~s is bound to markup and used as an item of a content-slot list. The "
+            "transform compiles a list's markup only where it is written in the list, "
+            "so the variable is a plain value there and fails at render. Put the "
+            "markup directly in the children list instead of binding it first",
+            [Var]
+        )
+    );
 format_error(local_key_not_literal) ->
     "?local/2 key must be a literal binary or atom";
 format_error(nodiff_call_not_compiled) ->
@@ -754,6 +764,10 @@ format_error(local_orphaned) ->
 %% format_helper_error/3 to keep format_error/1's clause complexity in check.
 format_error({HelperReason, Name, Arity}) ->
     format_helper_error(HelperReason, Name, Arity);
+format_error(markup_in_raw_text) ->
+    "a <title> or <textarea> holds text only (escapable raw text): the browser shows "
+    "an ?each, a ?stateless/?stateful component or a nested template there as literal "
+    "markup. Render the value as text instead";
 format_error(local_attr_multiple) ->
     "an attribute value can interpolate at most one ?local -- multiple ?local in "
     "one attribute can't be recomposed client-side";
@@ -1017,6 +1031,7 @@ transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body0),
     Body = normalize_tail_binds(Body0),
     Inline = prepare_inline(collect_inline(Body), Body),
+    ok = check_markup_vars(Body, Inline),
     Body1 = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Body],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
@@ -1125,7 +1140,7 @@ retransform_spliced(Expr, true, Module, FunDefs) ->
 %% of spelling out all four keys.
 is_compiled_each_pairing(each, {map, _, Fields}) ->
     is_compiled_template_map(Fields) andalso
-        lists:member(t, [K || {map_field_assoc, _, {atom, _, K}, _} <:- Fields]);
+        lists:member(t, [K || {map_field_assoc, _, {atom, _, K}, _} <- Fields]);
 is_compiled_each_pairing(_EachFn, _SourceArg) ->
     false.
 
@@ -1206,46 +1221,145 @@ is_track_touch(_Stmt) ->
 %% Returns {Expr1, Changed} so the caller re-runs the bottom-up transform
 %% (retransform_spliced/4) only when a body was actually spliced.
 inline_helper_calls(Expr, Module, FunDefs, Target) ->
-    ih(Expr, {Module, FunDefs, Target, #{}}, false).
+    ih(Expr, {Module, FunDefs, Target, #{}}, false, true).
 
-ih({call, L, {atom, _, Name}, Args} = Call, Ctx, Ch) ->
-    ih_call(Call, Name, Args, L, Ctx, Ch);
+%% `Tail` is true where the expression's value IS template content: the template
+%% body itself, an element's children (and each item of a children list or of a
+%% content-slot list), and a control-flow tail of one. Elsewhere -- a function
+%% argument, a case scrutinee, an attribute, a statement -- the value is consumed as
+%% data. A bare-element body spliced there is the same value the call returned, so it
+%% is inlined anywhere; a `?html`-wrapped body is not (unwrapping it would hand the
+%% consumer the inner element or list instead of the template the call returned), so
+%% off a tail the call is left to run.
+ih({call, L, {atom, _, Name}, Args} = Call, Ctx, Ch, Tail) ->
+    ih_call(Call, Name, Args, L, Ctx, Ch, Tail);
 ih(
     {call, L, {remote, _, {atom, _, Module}, {atom, _, Name}}, Args} = Call,
     {Module, _, _, _} = Ctx,
-    Ch
+    Ch,
+    Tail
 ) ->
-    ih_call(Call, Name, Args, L, Ctx, Ch);
-ih({map, _, _} = Map, _Ctx, Ch) ->
+    ih_call(Call, Name, Args, L, Ctx, Ch, Tail);
+ih({map, _, _} = Map, _Ctx, Ch, _Tail) ->
     %% Map literals hold runtime data (user maps, ?stateful props) or
     %% already-compiled templates from a previous pass -- never descend.
     {Map, Ch};
-ih({map, _, _, _} = Map, _Ctx, Ch) ->
+ih({map, _, _, _} = Map, _Ctx, Ch, _Tail) ->
     {Map, Ch};
-ih(T, Ctx, Ch) when is_tuple(T) ->
-    {L1, Ch1} = ih_list(tuple_to_list(T), Ctx, Ch),
-    {list_to_tuple(L1), Ch1};
-ih(L, Ctx, Ch) when is_list(L) ->
-    ih_list(L, Ctx, Ch);
-ih(Other, _Ctx, Ch) ->
+ih({tuple, L, [Tag, Attrs, Children]} = T, Ctx, Ch, Tail) ->
+    case is_element_tuple(T) of
+        true ->
+            {[Tag1, Attrs1], Ch1} = ih_list([Tag, Attrs], Ctx, Ch, false),
+            {Children1, Ch2} = ih_children(Children, Ctx, Ch1),
+            {{tuple, L, [Tag1, Attrs1, Children1]}, Ch2};
+        false ->
+            ih_generic(T, Ctx, Ch, Tail)
+    end;
+ih({cons, L, H, T}, Ctx, Ch, true) ->
+    %% A list nested inside the list is a single value, not content.
+    {H1, Ch1} = ih(H, Ctx, Ch, not is_list_ast(H)),
+    {T1, Ch2} = ih(T, Ctx, Ch1, true),
+    {{cons, L, H1, T1}, Ch2};
+ih(T, Ctx, Ch, Tail) when
+    element(1, T) =:= 'case';
+    element(1, T) =:= 'if';
+    element(1, T) =:= block;
+    element(1, T) =:= 'receive';
+    element(1, T) =:= 'try';
+    element(1, T) =:= 'maybe';
+    element(1, T) =:= 'fun'
+->
+    ih_flow(T, Ctx, Ch, Tail);
+ih(T, Ctx, Ch, _Tail) when is_tuple(T) ->
+    ih_generic(T, Ctx, Ch, false);
+ih(L, Ctx, Ch, _Tail) when is_list(L) ->
+    ih_list(L, Ctx, Ch, false);
+ih(Other, _Ctx, Ch, _Tail) ->
     {Other, Ch}.
 
-ih_list([], _Ctx, Ch) ->
+%% Control flow: a clause body's last expression carries the value, so it
+%% inherits `Tail`; scrutinees, timeouts and `after` bodies never do.
+ih_flow({'case', L, Scrutinee, Clauses}, Ctx, Ch, Tail) ->
+    {Scrutinee1, Ch1} = ih(Scrutinee, Ctx, Ch, false),
+    {Clauses1, Ch2} = ih_clauses(Clauses, Ctx, Ch1, Tail),
+    {{'case', L, Scrutinee1, Clauses1}, Ch2};
+ih_flow({'if', L, Clauses}, Ctx, Ch, Tail) ->
+    {Clauses1, Ch1} = ih_clauses(Clauses, Ctx, Ch, Tail),
+    {{'if', L, Clauses1}, Ch1};
+ih_flow({block, L, Body}, Ctx, Ch, Tail) ->
+    {Body1, Ch1} = ih_body(Body, Ctx, Ch, Tail),
+    {{block, L, Body1}, Ch1};
+ih_flow({'receive', L, Clauses}, Ctx, Ch, Tail) ->
+    {Clauses1, Ch1} = ih_clauses(Clauses, Ctx, Ch, Tail),
+    {{'receive', L, Clauses1}, Ch1};
+ih_flow({'receive', L, Clauses, After, AfterBody}, Ctx, Ch, Tail) ->
+    {Clauses1, Ch1} = ih_clauses(Clauses, Ctx, Ch, Tail),
+    {After1, Ch2} = ih(After, Ctx, Ch1, false),
+    {AfterBody1, Ch3} = ih_body(AfterBody, Ctx, Ch2, Tail),
+    {{'receive', L, Clauses1, After1, AfterBody1}, Ch3};
+ih_flow({'try', L, Body, OfClauses, CatchClauses, AfterBody}, Ctx, Ch, Tail) ->
+    {Body1, Ch1} = ih_body(Body, Ctx, Ch, Tail),
+    {OfClauses1, Ch2} = ih_clauses(OfClauses, Ctx, Ch1, Tail),
+    {CatchClauses1, Ch3} = ih_clauses(CatchClauses, Ctx, Ch2, Tail),
+    {AfterBody1, Ch4} = ih_list(AfterBody, Ctx, Ch3, false),
+    {{'try', L, Body1, OfClauses1, CatchClauses1, AfterBody1}, Ch4};
+ih_flow({'maybe', L, Body}, Ctx, Ch, Tail) ->
+    {Body1, Ch1} = ih_body(Body, Ctx, Ch, Tail),
+    {{'maybe', L, Body1}, Ch1};
+ih_flow({'maybe', L, Body, {'else', L2, ElseClauses}}, Ctx, Ch, Tail) ->
+    {Body1, Ch1} = ih_body(Body, Ctx, Ch, Tail),
+    {ElseClauses1, Ch2} = ih_clauses(ElseClauses, Ctx, Ch1, Tail),
+    {{'maybe', L, Body1, {'else', L2, ElseClauses1}}, Ch2};
+ih_flow({'fun', L, {clauses, Clauses}}, Ctx, Ch, Tail) ->
+    {Clauses1, Ch1} = ih_clauses(Clauses, Ctx, Ch, Tail),
+    {{'fun', L, {clauses, Clauses1}}, Ch1};
+ih_flow(T, Ctx, Ch, _Tail) ->
+    %% A fun reference (`fun f/1`) holds no body to walk.
+    ih_generic(T, Ctx, Ch, false).
+
+%% Each item of an element's children list is a content slot, and an item that
+%% is itself a list is a content-slot list (a fragment), so its items are
+%% content too -- one level only (see the cons clause of ih/4).
+ih_children({cons, L, H, T}, Ctx, Ch) ->
+    {H1, Ch1} = ih(H, Ctx, Ch, true),
+    {T1, Ch2} = ih_children(T, Ctx, Ch1),
+    {{cons, L, H1, T1}, Ch2};
+ih_children(Children, Ctx, Ch) ->
+    ih(Children, Ctx, Ch, true).
+
+ih_generic(T, Ctx, Ch, Tail) ->
+    {L1, Ch1} = ih_list(tuple_to_list(T), Ctx, Ch, Tail),
+    {list_to_tuple(L1), Ch1}.
+
+ih_list([], _Ctx, Ch, _Tail) ->
     {[], Ch};
-ih_list([H | T], Ctx, Ch) ->
-    {H1, Ch1} = ih(H, Ctx, Ch),
-    {T1, Ch2} = ih_list(T, Ctx, Ch1),
+ih_list([H | T], Ctx, Ch, Tail) ->
+    {H1, Ch1} = ih(H, Ctx, Ch, Tail),
+    {T1, Ch2} = ih_list(T, Ctx, Ch1, Tail),
     {[H1 | T1], Ch2}.
 
-ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch) ->
+%% A clause's patterns and guards are never content; its body's last expression
+%% carries the clause's value, so it inherits `Tail`.
+ih_clauses(Clauses, Ctx, Ch, Tail) ->
+    lists:mapfoldl(
+        fun({clause, L, Patterns, Guards, Body}, Ch0) ->
+            {Body1, Ch1} = ih_body(Body, Ctx, Ch0, Tail),
+            {{clause, L, Patterns, Guards, Body1}, Ch1}
+        end,
+        Ch,
+        Clauses
+    ).
+
+ih_body(Body, Ctx, Ch, Tail) ->
+    {Init, [Last]} = lists:split(length(Body) - 1, Body),
+    {Init1, Ch1} = ih_list(Init, Ctx, Ch, false),
+    {Last1, Ch2} = ih(Last, Ctx, Ch1, Tail),
+    {Init1 ++ [Last1], Ch2}.
+
+ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch, Tail) ->
     Arity = length(Args),
     case helper_plan(Name, Arity, FunDefs, Target, L) of
-        skip ->
-            %% Not an inlineable element helper: recurse into the args (they
-            %% may contain helper calls of their own).
-            {Parts, Ch1} = ih_list(tuple_to_list(Call), Ctx, Ch),
-            {list_to_tuple(Parts), Ch1};
-        {inline, Params, BodyExpr} ->
+        {inline, Params, BodyExpr, Wrap} when Tail; Wrap =:= bare ->
             case Stack of
                 #{{Name, Arity} := _} -> parse_error({helper_recursive, Name, Arity}, L);
                 #{} -> ok
@@ -1253,8 +1367,13 @@ ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch) ->
             BodyExpr1 = rename_inlined_body(Name, Arity, Params, BodyExpr),
             Spliced = mark_targets(subst_helper_args(BodyExpr1, Params, Args), Target),
             Ctx1 = {Module, FunDefs, Target, Stack#{{Name, Arity} => true}},
-            {Spliced1, true} = ih(Spliced, Ctx1, true),
-            {Spliced1, true}
+            {Spliced1, true} = ih(Spliced, Ctx1, true, Tail),
+            {Spliced1, true};
+        _NotInlined ->
+            %% Not an inlineable element helper here: recurse into the args (they
+            %% may contain helper calls of their own).
+            {Parts, Ch1} = ih_list(tuple_to_list(Call), Ctx, Ch, false),
+            {list_to_tuple(Parts), Ch1}
     end.
 
 %% Substitute the helper's params with the caller's argument expressions via
@@ -1281,7 +1400,7 @@ fresh_helper_var(P) ->
 
 %% Decide what to do with a local call: `skip` (leave the call -- a scalar
 %% helper, an unresolvable callee, or a wrapped body that renders fine as-is)
-%% or `{inline, ParamNames, BodyExpr}`. Raises the helper_* errors only for
+%% or `{inline, ParamNames, BodyExpr, bare | wrapped}`. Raises the helper_* errors only for
 %% bare-element bodies, which pre-fix compiled clean and crashed at render.
 helper_plan(Name, Arity, FunDefs, Target, CallLine) ->
     case helper_plan_shape(Name, Arity, FunDefs, Target) of
@@ -1311,18 +1430,18 @@ helper_clause_plan([{clause, _, Params, Guards, Body}], Name, Arity, Target) ->
                     ParamNames =/= invalid,
             case {Clean, Wrap} of
                 {true, _} ->
-                    {inline, ParamNames, BodyExpr};
+                    {inline, ParamNames, BodyExpr, Wrap};
                 {false, wrapped} ->
                     %% Renders as a runtime nested template today; keep it.
                     skip;
                 {false, bare} ->
-                    {reject, helper_reject_reason(Guards, Body, Name, Arity)}
+                    reject_element_helper(BodyExpr, Guards, Body, Name, Arity)
             end
     end;
 helper_clause_plan(Clauses, Name, Arity, Target) ->
     BareClause = fun({clause, _, _P, _G, B}) ->
         case helper_body_shape(lists:last(B), Target) of
-            {bare, _} -> true;
+            {bare, Expr} -> is_element_body(Expr);
             _ -> false
         end
     end,
@@ -1330,6 +1449,29 @@ helper_clause_plan(Clauses, Name, Arity, Target) ->
         true -> {reject, {helper_multi_clause, Name, Arity}};
         false -> skip
     end.
+
+%% An unclean helper (guarded, multi-statement, non-variable params) is rejected only
+%% when its body is element-shaped: that one always crashed at render. A body that is
+%% markup only through constructors (`[~"a", ?stateless(...)]`) renders fine wherever
+%% the call is not a content slot, so it is left as a runtime call.
+reject_element_helper(BodyExpr, Guards, Body, Name, Arity) ->
+    case is_element_body(BodyExpr) of
+        true -> {reject, helper_reject_reason(Guards, Body, Name, Arity)};
+        false -> skip
+    end.
+
+is_element_body(Expr) ->
+    case classify_body(Expr) of
+        element_tuple -> true;
+        element_list -> true;
+        list_ast -> list_has_element_tuple(Expr);
+        _ -> false
+    end.
+
+list_has_element_tuple({cons, _, Head, Tail}) ->
+    is_element_tuple(Head) orelse list_has_element_tuple(Tail);
+list_has_element_tuple(_) ->
+    false.
 
 is_single_expr_body([_]) -> true;
 is_single_expr_body(_Body) -> false.
@@ -1375,6 +1517,7 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
     %% template and is handled by transform_live_render_last/4.
     Init = normalize_tail_binds(Init0),
     Inline = prepare_inline(collect_inline(Init ++ [Last]), Init ++ [Last]),
+    ok = check_markup_vars(Init ++ [Last], Inline),
     TransformedInit = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Init],
     TransformedLast = transform_live_render_last(Last, Module, Inline, FunDefs),
     Body1 = TransformedInit ++ [TransformedLast],
@@ -1550,6 +1693,102 @@ is_az_view_attr(Attr) ->
 %% Variables bound more than once are dropped (ambiguous to inline); a binding-derived
 %% expression with no read (e.g. `Id = make_uuid()`) is left captured so a pure
 %% side effect is never re-run per slot.
+%% A content-slot list compiles its markup items only where they are written in it;
+%% a variable item is a value. A hoisted read is substituted back first (it is in
+%% `Inline`), but a variable bound to markup that reads nothing stays a variable and
+%% fails at render, so it is refused here, naming the variable.
+check_markup_vars(Body, Inline) ->
+    {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}),
+    MarkupVars =
+        #{
+            V => true
+         || V := RHS <- maps:without(maps:keys(Poisoned), Raw),
+            not is_map_key(V, Inline),
+            is_markup_rhs(RHS)
+        },
+    case map_size(MarkupVars) of
+        0 -> ok;
+        _ -> check_markup_vars(Body, MarkupVars, false)
+    end.
+
+is_markup_rhs(RHS) ->
+    case is_list_ast(RHS) of
+        true -> list_has_markup_item(RHS);
+        false -> is_markup_item(RHS) andalso not is_value_constructor(RHS)
+    end.
+
+check_markup_vars(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, _}}, Args}, Vars, _InTemplate
+) when
+    Mod =:= arizona_template; Mod =:= az; Mod =:= ?NODIFF_MOD
+->
+    check_markup_vars(Args, Vars, true);
+check_markup_vars({'fun', _, {clauses, Clauses}}, Vars, InTemplate) ->
+    %% A fun parameter shadows a hoisted name in its body.
+    _ = [
+        check_markup_vars([G, B], maps:without(pattern_vars(Ps), Vars), InTemplate)
+     || {clause, _, Ps, G, B} <:- Clauses
+    ],
+    ok;
+check_markup_vars({Comp, _, T, Qualifiers}, Vars, InTemplate) when
+    Comp =:= lc; Comp =:= bc; Comp =:= mc
+->
+    %% So does a generator pattern, in the qualifiers after it and the template.
+    Bound = lists:append([qualifier_binders(Q) || Q <- Qualifiers]),
+    check_markup_vars([T, Qualifiers], maps:without(Bound, Vars), InTemplate);
+check_markup_vars({tuple, _, [_, _, Children]} = T, Vars, true) ->
+    case is_element_tuple(T) of
+        true -> ok = check_children_lists(Children, Vars);
+        false -> ok
+    end,
+    check_markup_vars(tuple_to_list(T), Vars, true);
+check_markup_vars(T, Vars, InTemplate) when is_tuple(T) ->
+    check_markup_vars(tuple_to_list(T), Vars, InTemplate);
+check_markup_vars([H | T], Vars, InTemplate) ->
+    ok = check_markup_vars(H, Vars, InTemplate),
+    check_markup_vars(T, Vars, InTemplate);
+check_markup_vars(_Leaf, _Vars, _InTemplate) ->
+    ok.
+
+qualifier_binders({zip, _, Generators}) ->
+    lists:append([qualifier_binders(G) || G <- Generators]);
+qualifier_binders({Gen, _, Pattern, _Source}) when
+    Gen =:= generate;
+    Gen =:= generate_strict;
+    Gen =:= b_generate;
+    Gen =:= b_generate_strict;
+    Gen =:= m_generate;
+    Gen =:= m_generate_strict
+->
+    pattern_vars(Pattern);
+qualifier_binders(_Filter) ->
+    [].
+
+%% Each children-list item that is a list -- written there or as a conditional's
+%% tail -- is a content-slot list.
+check_children_lists({cons, _, Item, Rest}, Vars) ->
+    _ = map_tail_exprs(
+        Item,
+        fun(Leaf) ->
+            ok = check_content_list(Leaf, Vars),
+            Leaf
+        end,
+        fun(NonTail) -> NonTail end
+    ),
+    check_children_lists(Rest, Vars);
+check_children_lists(_Children, _Vars) ->
+    ok.
+
+check_content_list({cons, _, {var, L, V}, Rest}, Vars) ->
+    case Vars of
+        #{V := _} -> parse_error({markup_var_in_content_list, V}, L);
+        #{} -> check_content_list(Rest, Vars)
+    end;
+check_content_list({cons, _, _, Rest}, Vars) ->
+    check_content_list(Rest, Vars);
+check_content_list(_Leaf, _Vars) ->
+    ok.
+
 collect_inline(Body) ->
     {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}),
     keep_reaching(maps:without(maps:keys(Poisoned), Raw)).
@@ -2246,12 +2485,13 @@ each_target(terminal_each) -> terminal.
 each_content_ctx(foreign_each) -> foreign;
 each_content_ctx(_Marker) -> html.
 
-%% A compiled template map literal carries all three of the `s`/`d`/`f` assoc keys (from
-%% build_template_ast). A user map or a ?stateful/?stateless descriptor (a runtime call, not
-%% a map literal) does not, so they fall through to the normal reject.
+%% A compiled template map literal carries the `s`/`d`/`f` assoc keys plus the
+%% `backend` build_template_ast/5 always adds, so a user data map spelling out
+%% `s`/`d`/`f` is not taken for one. A field with a non-atom key (`~"a" => 1`, a
+%% variable) is simply not a template key -- lazy, so it cannot crash the transform.
 is_compiled_template_map(Fields) ->
-    Keys = [K || {map_field_assoc, _, {atom, _, K}, _} <:- Fields],
-    lists:all(fun(Key) -> lists:member(Key, Keys) end, [s, d, f]).
+    Keys = [K || {map_field_assoc, _, {atom, _, K}, _} <- Fields],
+    lists:all(fun(Key) -> lists:member(Key, Keys) end, [s, d, f, backend]).
 
 %% Build the ?each iteration AST from an already-compiled template map (an inline
 %% `?html`/`?native`/`?terminal` body). Mirror build_each_ast but reuse the map's prebuilt
@@ -3054,6 +3294,11 @@ compile_non_static_child(Child, ElemAz, State0, Slot) ->
     case is_element_tuple(Child) of
         true ->
             {Tag, Attrs, Children, ElemLine} = extract_element(Child),
+            %% A literal element in title/textarea content shows as literal text.
+            case State0#state.raw_text_kind of
+                escapable -> parse_error(markup_in_raw_text, ElemLine);
+                _ -> ok
+            end,
             {compile_element(Tag, Attrs, Children, ElemLine, State0), Slot};
         false ->
             compile_dynamic_child(Child, ElemAz, State0, Slot)
@@ -3065,8 +3310,66 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             ValueStr = erl_pp:expr(Child),
             parse_error({invalid_child, ValueStr}, line(Child));
         false ->
+            ok = reject_markup_in_raw_text(Child, State0#state.raw_text_kind),
             emit_child_dynamic(Child, ElemAz, State0, Slot)
     end.
+
+%% Escapable raw text (title/textarea) decodes character references but parses no
+%% tags, so markup there -- in the value itself or in any tail it can take -- would
+%% show as literal text (comment markers included). A script/style slot is
+%% already refused unless it is a literal ?raw (assert_raw_text_opt_out/1).
+reject_markup_in_raw_text(Child, escapable) ->
+    _Walked = map_tail_exprs(
+        Child,
+        fun(Leaf) ->
+            case is_markup_leaf(Leaf) of
+                true -> parse_error(markup_in_raw_text, line(Leaf));
+                false -> Leaf
+            end
+        end,
+        fun(NonTail) -> NonTail end
+    ),
+    ok;
+reject_markup_in_raw_text(_Child, _RawKind) ->
+    ok.
+
+%% A tail value that renders as markup: an element, an element list or a list holding
+%% one, or a constructor other than ?raw/?local (both are values here).
+is_markup_leaf({map, _, Fields} = Leaf) ->
+    %% A compiled template with no dynamics and no tag in its statics renders as
+    %% plain text (`?html(~"x")`), so it is a value here.
+    case is_compiled_template_map(Fields) andalso is_text_only_template(Fields) of
+        true -> false;
+        false -> is_markup_item(Leaf)
+    end;
+is_markup_leaf(Leaf) ->
+    case classify_body(Leaf) of
+        element_tuple -> true;
+        element_list -> true;
+        list_ast -> list_has_markup_value(Leaf);
+        _ -> is_markup_item(Leaf) andalso not is_value_constructor(Leaf)
+    end.
+
+%% In title/textarea a ?raw list item is a value, as a bare ?raw is.
+list_has_markup_value({cons, _, Head, Tail}) ->
+    (is_markup_item(Head) andalso not is_value_constructor(Head)) orelse
+        list_has_markup_value(Tail);
+list_has_markup_value(_) ->
+    false.
+
+is_text_only_template(Fields) ->
+    case {template_map_field(d, Fields), template_map_field(s, Fields)} of
+        {{nil, _}, SAST} ->
+            Statics = [extract_binary_value(B) || B <- ast_list_to_list(SAST)],
+            not lists:any(fun(B) -> binary:match(B, ~"<") =/= nomatch end, Statics);
+        _ ->
+            false
+    end.
+
+is_value_constructor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _}) ->
+    (Mod =:= arizona_template orelse Mod =:= az) andalso (F =:= raw orelse F =:= local);
+is_value_constructor(_Expr) ->
+    false.
 
 %% The `raw` raw-text clause comes FIRST, ahead of nodiff: both make the slot
 %% markerless and render-once (`undefined` az), so they agree on the diff
@@ -3330,7 +3633,7 @@ is_nested_template_leaf(Leaf) ->
     case classify_body(Leaf) of
         element_tuple -> true;
         element_list -> true;
-        list_ast -> list_has_element_tuple(Leaf);
+        list_ast -> list_has_markup_item(Leaf);
         _ -> false
     end.
 
@@ -3413,7 +3716,7 @@ expand_block_element_tails(Expr, Module, Backend, Nodiff) ->
     end.
 
 %% At a tail leaf, compile a bare element tuple / element list (or a mixed list
-%% that contains an element tuple) into a nested template, as a literal ?html
+%% that contains markup, see is_markup_item/1) into a nested template, as a literal ?html
 %% there would; leave plain values (and pure value lists) untouched. A ?local
 %% leaf is rejected: a conditional-branch ?local emits no az-local descriptor
 %% (see reject_orphaned_local/1).
@@ -3423,7 +3726,7 @@ expand_element_leaf(Expr, Module, Backend, Nodiff) ->
         Class when Class =:= element_tuple; Class =:= element_list ->
             compile_template(Expr, line(Expr), Module, false, Backend, Nodiff);
         list_ast ->
-            case list_has_element_tuple(Expr) of
+            case list_has_markup_item(Expr) of
                 true -> compile_template(Expr, line(Expr), Module, false, Backend, Nodiff);
                 false -> Expr
             end;
@@ -3431,10 +3734,53 @@ expand_element_leaf(Expr, Module, Backend, Nodiff) ->
             Expr
     end.
 
-list_has_element_tuple({cons, _, Head, Tail}) ->
-    is_element_tuple(Head) orelse list_has_element_tuple(Tail);
-list_has_element_tuple(_) ->
+list_has_markup_item({cons, _, Head, Tail}) ->
+    is_markup_item(Head) orelse list_has_markup_item(Tail);
+list_has_markup_item(_) ->
     false.
+
+has_markup_tail(Flow) ->
+    try
+        _ = map_tail_exprs(
+            Flow,
+            fun(Leaf) ->
+                case is_markup_item(Leaf) orelse list_has_markup_item(Leaf) of
+                    true -> throw(markup_tail);
+                    false -> Leaf
+                end
+            end,
+            fun(NonTail) -> NonTail end
+        ),
+        false
+    catch
+        throw:markup_tail -> true
+    end.
+
+%% A list item that is a block rather than a value: an element, a compiled template
+%% map, or any constructor call is_block_content_expr/1 recognises (raw or already
+%% compiled -- a helper body or a hoisted variable splices the raw form). A hoisted
+%% template arrives wrapped in its track block (prepare_inline_rhs/2), so the block's
+%% last expression decides. Left in a plain value list, a block reaches to_bin/1 and
+%% crashes; in a fragment each gets its own slot (and a ?local the usual
+%% local_orphaned error).
+is_markup_item({map, _, Fields}) ->
+    is_compiled_template_map(Fields);
+is_markup_item({block, _, [_ | _] = Exprs}) ->
+    is_markup_item(lists:last(Exprs));
+is_markup_item(Flow) when
+    element(1, Flow) =:= 'case';
+    element(1, Flow) =:= 'if';
+    element(1, Flow) =:= 'receive';
+    element(1, Flow) =:= 'try';
+    element(1, Flow) =:= 'maybe'
+->
+    %% A conditional item whose tail can be markup is a block: its slot compiles
+    %% each element tail into a nested template, as a conditional child does.
+    has_markup_tail(Flow);
+is_markup_item({call, _, {remote, _, {atom, _, _}, {atom, _, _}}, _} = Call) ->
+    is_block_content_expr(Call);
+is_markup_item(Item) ->
+    is_element_tuple(Item).
 
 %% Tag a value interpolation `{esc, Fun}` so it is escaped at the render boundary,
 %% or leave a block bare. Every backend marks scalar values uniformly -- the
@@ -3460,6 +3806,7 @@ is_block_content_expr({call, _, {remote, _, {atom, _, M}, {atom, _, F}}, _Args})
             native,
             terminal,
             each,
+            foreign_each,
             native_each,
             terminal_each,
             stateful,

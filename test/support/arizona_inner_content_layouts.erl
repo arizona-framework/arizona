@@ -64,7 +64,7 @@ measure(Bindings) ->
 raw(Bindings) ->
     ?html([~"<r>", ?raw(?inner_content), ~"</r>"]).
 
-%% The page as one item of a content slot holding several values.
+%% The page as one item of a content-slot list beside static text.
 -spec sibling(az:bindings()) -> az:template().
 sibling(Bindings) ->
     ?html([~"<s>", [~"<hr>", ?inner_content], ~"</s>"]).

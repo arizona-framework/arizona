@@ -184,9 +184,10 @@ Placements that raise, because the value is opaque:
 - wrapped in `?raw/1` -- `bad_template_value`. There is nothing to opt out of:
   a content slot already splices the page unescaped, so `?raw(?inner_content)`
   is redundant. Drop the wrapper;
-- **beside other values in one slot** -- `[~"<hr>", ?inner_content]` raises
-  `badarg`. Give the page a slot of its own:
-  `?html([~"<hr>", ?inner_content])`.
+- **inside a list the template cannot see** -- a comprehension, or a list
+  built at runtime, is one opaque value and raises. A literal content-slot list
+  such as `[~"<hr>", ?inner_content]` is fine: it compiles as a fragment, so
+  the page gets a slot of its own.
 
 The value stays opaque rather than paying the per-layer copy that would make
 those degrade quietly.
