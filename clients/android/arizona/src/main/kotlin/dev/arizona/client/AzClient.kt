@@ -92,6 +92,11 @@ class AzClient(baseUrl: String, path: String) {
     private var closing = false
     private var reconnectAttempt = 0
 
+    // When the open socket's view last mounted (an OP_REPLACE), or null before it
+    // has: only a working session resets the backoff (see [resetsBackoff]).
+    @VisibleForTesting
+    internal var mountedAt: Long? = null
+
     // Heartbeat state, touched only on the main thread (like reconnectAttempt).
     // A self-rescheduling Runnable is the Handler equivalent of setInterval.
     private var heartbeatPending = false
@@ -110,6 +115,7 @@ class AzClient(baseUrl: String, path: String) {
 
     fun connect() {
         status.value = ConnStatus.CONNECTING
+        mountedAt = null
         ws = http.newWebSocket(
             Request.Builder().url(wsUrl).build(),
             object : WebSocketListener() {
@@ -160,9 +166,13 @@ class AzClient(baseUrl: String, path: String) {
             return
         }
         msg["o"]?.jsonArray?.let { ops ->
+            // An OP_REPLACE is a mount: the reconnect's first render, or a
+            // navigate's new view.
+            if (ops.any { (it as? JsonArray)?.getOrNull(0)?.jsonPrimitive?.intOrNull == Op.REPLACE }) {
+                mountedAt = System.currentTimeMillis()
+            }
             applyOps(ops)
             status.value = ConnStatus.CONNECTED
-            reconnectAttempt = 0 // healthy frame -> reset backoff
         }
         // Handler-returned effects: dispatch the portable ones, skip web-only
         // effects (set_title, dispatch_event, ...). Isolated per effect, like the
@@ -221,6 +231,7 @@ class AzClient(baseUrl: String, path: String) {
             stopHeartbeat() // the old socket is dead; the new one restarts it
             status.value = ConnStatus.DISCONNECTED
             if (closing || code == 1000) return@post
+            if (resetsBackoff(code, mountedAt, System.currentTimeMillis())) reconnectAttempt = 0
             main.postDelayed({ if (!closing) connect() }, backoffDelayMs(reconnectAttempt++))
         }
     }
@@ -310,8 +321,7 @@ class AzClient(baseUrl: String, path: String) {
      * mount anew. A refused upgrade then takes the normal backoff.
      */
     private fun reload(path: String) {
-        wsUrl = wsBase + java.net.URLEncoder.encode(path.split("?", limit = 2)[0], "UTF-8") +
-            "&_az_reconnect=1"
+        wsUrl = reconnectUrl(wsBase, path)
         stopHeartbeat()
         val old = ws
         ws = null // retired first, so its close is ignored (see the listener)
@@ -572,6 +582,37 @@ class AzClient(baseUrl: String, path: String) {
 // (`[[0, "inc"], [10, "/n"]]`), told apart by the first element exactly as the
 // web client's executeJS does: a command opens with its op code, a list with a
 // command.
+/** Close codes (must match arizona_socket.erl): a crash after the mount, a failed mount. */
+private const val WS_CLOSE_CRASH = 4500
+private const val WS_CLOSE_MOUNT_FAILED = 4501
+
+/** A view that crashes within this long of its mount does not reset the backoff. */
+private const val CRASH_STABLE_MS = 10_000L
+
+/**
+ * Whether a close resets the reconnect backoff: only after a working session --
+ * one that mounted ([mountedAt] non-null), did not fail to mount, and did not
+ * crash right after its last mount -- so a view that crashes right after every
+ * remount keeps backing off. Mirrors the browser worker.
+ */
+@VisibleForTesting
+internal fun resetsBackoff(code: Int, mountedAt: Long?, now: Long): Boolean =
+    mountedAt != null &&
+        code != WS_CLOSE_MOUNT_FAILED &&
+        (code != WS_CLOSE_CRASH || now - mountedAt >= CRASH_STABLE_MS)
+
+/**
+ * The socket URL for `target` (a path, optionally with a query), the way the
+ * browser connect carries it: the route in `_az_path`, the query as plain params.
+ */
+@VisibleForTesting
+internal fun reconnectUrl(wsBase: String, target: String): String {
+    val parts = target.split("?", limit = 2)
+    val qs = parts.getOrElse(1) { "" }
+    return wsBase + java.net.URLEncoder.encode(parts[0], "UTF-8") +
+        (if (qs.isEmpty()) "" else "&$qs") + "&_az_reconnect=1"
+}
+
 /** Whether a navigate command carries the `full` opt (`[10, Path, {"full": true}]`). */
 @VisibleForTesting
 internal fun isFullNavigate(cmd: JsonArray): Boolean =

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NativeClient } from './native_client.js';
 
 // arizona_effect op codes (must match include/arizona_effect.hrl); the
@@ -74,19 +74,101 @@ describe('native client effect dispatch', () => {
                 }),
             );
             old.simulateMessage(
-                JSON.stringify({ e: [[EFFECT_NAVIGATE, '/gated', { full: true }]] }),
+                JSON.stringify({ e: [[EFFECT_NAVIGATE, '/gated?tab=b&x=1', { full: true }]] }),
             );
 
             expect(old.sent.some((f) => f.includes('"navigate"'))).toBe(false);
             expect(old.closedWith).toBe(1000);
             expect(ws.instances).toHaveLength(2);
-            expect(new URL(ws.latest().url).searchParams.get('_az_path')).toBe('/gated');
+            const params = new URL(ws.latest().url).searchParams;
+            expect(params.get('_az_path')).toBe('/gated');
+            // The query rides as plain params, as the browser connect carries it.
+            expect(params.get('tab')).toBe('b');
+            expect(params.get('x')).toBe('1');
+            expect(params.get('_az_reconnect')).toBe('1');
             vi.advanceTimersByTime(60000);
             expect(ws.instances).toHaveLength(2); // the retired socket reconnects nothing
         } finally {
             ws.restore();
             vi.useRealTimers();
         }
+    });
+
+    // Backoff parity with the browser worker: a view that crashes right after
+    // every remount must keep backing off, not reconnect at backoff[0] forever.
+    describe('reconnect backoff', () => {
+        const mountFrame = () =>
+            JSON.stringify({
+                o: [[OP_REPLACE, 'native_x', { f: 'R', s: ROOT_STATICS, d: ['native_x', ''] }]],
+            });
+        /** Close the open socket with `code`; return how long the client waits to reopen. */
+        function reopenDelay(ws, code) {
+            const n = ws.instances.length;
+            ws.latest().close(code);
+            let waited = 0;
+            while (ws.instances.length === n && waited < 60000) {
+                vi.advanceTimersByTime(50);
+                waited += 50;
+            }
+            return waited;
+        }
+        const inStep = (ms, [lo, hi]) => ms >= lo && ms <= hi;
+        /** A client whose second socket is open with attempt 1 next. */
+        function afterOneDrop(ws) {
+            const client = newClient();
+            client.connect();
+            ws.latest().simulateOpen();
+            ws.latest().simulateMessage(mountFrame()); // first render
+            ws.latest().close(4500); // crashed right after it -> backoff(0), attempt 1 next
+            vi.advanceTimersByTime(1200);
+            ws.latest().simulateOpen();
+            return client;
+        }
+        let ws;
+        let now;
+        beforeEach(() => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval'] });
+            now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+            ws = installWebSocketStub();
+        });
+        afterEach(() => {
+            ws.restore();
+            now.mockRestore();
+            vi.useRealTimers();
+        });
+
+        it('a crash right after the remount keeps backing off', () => {
+            afterOneDrop(ws);
+            ws.latest().simulateMessage(mountFrame());
+            now.mockReturnValue(1_000_000 + 9_999);
+            expect(inStep(reopenDelay(ws, 4500), [1600, 2400])).toBe(true);
+        });
+
+        it('a crash long after the mount resets the backoff', () => {
+            afterOneDrop(ws);
+            ws.latest().simulateMessage(mountFrame());
+            now.mockReturnValue(1_000_000 + 10_000);
+            expect(inStep(reopenDelay(ws, 4500), [800, 1200])).toBe(true);
+        });
+
+        it('a mount failure (4501) never resets the backoff', () => {
+            afterOneDrop(ws);
+            ws.latest().simulateMessage(mountFrame());
+            now.mockReturnValue(1_000_000 + 60_000);
+            expect(inStep(reopenDelay(ws, 4501), [1600, 2400])).toBe(true);
+        });
+
+        it('a frame that mounts nothing does not reset the backoff', () => {
+            afterOneDrop(ws);
+            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            expect(inStep(reopenDelay(ws, 1006), [1600, 2400])).toBe(true);
+        });
+
+        it('a drop after a mount resets the backoff', () => {
+            afterOneDrop(ws);
+            ws.latest().simulateMessage(mountFrame());
+            expect(inStep(reopenDelay(ws, 1006), [800, 1200])).toBe(true);
+        });
     });
 
     it('throws on an unsupported command in strict (tap) mode', () => {

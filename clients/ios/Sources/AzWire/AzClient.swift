@@ -16,6 +16,23 @@ public func backoffDelayMs(_ attempt: Int) -> Int {
     return Int((Double(base) * (0.8 + Double.random(in: 0..<1) * 0.4)).rounded())
 }
 
+/// Close codes (must match arizona_socket.erl): a crash after the mount, a failed mount.
+private let wsCloseCrash = 4500
+private let wsCloseMountFailed = 4501
+/// A view that crashes within this long of its mount does not reset the backoff.
+private let crashStableMs = 10_000
+
+/// Whether a close resets the reconnect backoff: only after a working session --
+/// one that mounted (`mountedAt` non-nil), did not fail to mount, and did not
+/// crash right after its last mount -- so a view that crashes right after every
+/// remount keeps backing off. Mirrors the browser worker.
+func resetsBackoff(code: Int, mountedAt: Int?, now: Int) -> Bool {
+    guard let mountedAt, code != wsCloseMountFailed else { return false }
+    return code != wsCloseCrash || now - mountedAt >= crashStableMs
+}
+
+private func nowMs() -> Int { Int(Date().timeIntervalSince1970 * 1000) }
+
 // Heartbeat (mirror assets/js/arizona-worker.js): ping "0" every 30s, pong "1";
 // a pong still pending at the next tick means the socket is silently dead.
 private let sysPing = "0"
@@ -74,6 +91,9 @@ public final class AzClient {
 
     private var closing = false
     private var reconnectAttempt = 0
+    /// When the open socket's view last mounted (an OP_REPLACE), in ms, or nil
+    /// before it has: only a working session resets the backoff.
+    private(set) var mountedAt: Int?
     private var heartbeatPending = false
     private var heartbeatItem: DispatchWorkItem?
     private var reconnectItem: DispatchWorkItem?
@@ -128,6 +148,7 @@ public final class AzClient {
         transport?.cancel()
         let gen = generation
         status = .connecting
+        mountedAt = nil
         guard let url = URL(string: wsUrl) else { preconditionFailure("bad ws url: \(wsUrl)") }
         let transport = makeTransport(url)
         self.transport = transport
@@ -185,7 +206,6 @@ public final class AzClient {
     func handleText(_ text: String) {
         heartbeatPending = false // any frame proves the socket is live
         if text == sysPong { return }
-        reconnectAttempt = 0 // a real frame -> reset backoff
         // A frame that will not parse is the same class of problem as an op that
         // will not apply: it is the server's output, not the user's, and dropping it
         // must cost one frame rather than the app. `parse` TRAPS on bad JSON, so the
@@ -194,7 +214,12 @@ public final class AzClient {
             azWarn("unparseable frame; skipping")
             return
         }
-        if let ops = msg["o"]?.arrayValue { applyOps(ops) }
+        if let ops = msg["o"]?.arrayValue {
+            // An OP_REPLACE is a mount: the reconnect's first render, or a
+            // navigate's new view.
+            if ops.contains(where: { $0.arrayValue?.first?.intValue == Op.replace }) { mountedAt = nowMs() }
+            applyOps(ops)
+        }
         status = .connected
         // Handler-returned effects: dispatch the portable ones, skip web-only.
         if let effects = msg["e"]?.arrayValue {
@@ -236,9 +261,16 @@ public final class AzClient {
     /// socket and connect fresh to the path, running its upgrade middlewares and
     /// mount anew. A refused upgrade then takes the normal backoff.
     func reload(_ path: String) {
-        let p = String(path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)[0])
-        wsUrl = wsBase + Self.encodeURIComponent(p) + "&_az_reconnect=1"
+        wsUrl = Self.reconnectUrl(wsBase: wsBase, target: path)
         connect()
+    }
+
+    /// The socket URL for `target` (a path, optionally with a query), the way the
+    /// browser connect carries it: the route in `_az_path`, the query as plain params.
+    static func reconnectUrl(wsBase: String, target: String) -> String {
+        let parts = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        let qs = parts.count > 1 ? parts[1] : ""
+        return wsBase + encodeURIComponent(parts[0]) + (qs.isEmpty ? "" : "&" + qs) + "&_az_reconnect=1"
     }
 
     // MARK: - Op application
@@ -572,6 +604,7 @@ public final class AzClient {
         status = .disconnected
         onChange?()
         if closing || code == 1000 { return }
+        if resetsBackoff(code: code, mountedAt: mountedAt, now: nowMs()) { reconnectAttempt = 0 }
         let delay = backoffDelayMs(reconnectAttempt)
         reconnectAttempt += 1
         let item = DispatchWorkItem { [weak self] in

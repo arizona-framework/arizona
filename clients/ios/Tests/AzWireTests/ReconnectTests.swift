@@ -20,6 +20,7 @@ final class ReconnectTests: XCTestCase {
         var sockets: [MockTransport] = []
         var urls: [URL] = []
         var scheduled: [DispatchWorkItem] = []
+        var delays: [Int] = []
     }
 
     /// A client whose sockets and backoff timer are both under the test's control:
@@ -42,10 +43,16 @@ final class ReconnectTests: XCTestCase {
                     return socket
                 },
                 runOnMain: { $0() },
-                runAfter: { _, item in rec.scheduled.append(item) })
+                runAfter: { ms, item in
+                    rec.delays.append(ms)
+                    rec.scheduled.append(item)
+                })
         }
 
         var socketCount: Int { rec.sockets.count }
+
+        /// The delay of the latest scheduled reconnect.
+        var lastDelay: Int { rec.delays[rec.delays.count - 1] }
 
         /// The URL the client opened its latest socket on.
         var currentUrl: String { rec.urls[rec.urls.count - 1].absoluteString }
@@ -146,13 +153,52 @@ final class ReconnectTests: XCTestCase {
         let h = connected()
         let old = h.current
 
-        old.simulateText("{\"e\":[[10,\"/gated\",{\"full\":true}]]}")
+        old.simulateText("{\"e\":[[10,\"/gated?tab=b\",{\"full\":true}]]}")
 
         XCTAssertFalse(old.sent.contains { $0.contains("\"navigate\"") }, "no navigate frame sent back")
         XCTAssertTrue(old.cancelled, "the old socket is dropped")
         XCTAssertEqual(h.socketCount, 2)
-        XCTAssertTrue(h.currentUrl.contains("_az_path=%2Fgated"), h.currentUrl)
+        XCTAssertTrue(h.currentUrl.contains("_az_path=%2Fgated&tab=b&"), h.currentUrl)
         XCTAssertTrue(h.liveReconnects.isEmpty, "the retired socket schedules no reconnect")
+    }
+
+    // Backoff parity with the browser worker: a view that crashes right after every
+    // remount must keep backing off, not reconnect at backoff[0] forever.
+    func testCrashRightAfterTheRemountKeepsBackingOff() {
+        let h = connected()
+        h.current.simulateClose(4500) // attempt 0
+        h.runReconnects()
+        h.current.simulateOpen()
+        h.current.simulateText(mountFrame(count: "0"))
+        h.current.simulateClose(4500) // crashed right after the remount
+        XCTAssertTrue((1600...2400).contains(h.lastDelay), "\(h.lastDelay)")
+    }
+
+    func testDropAfterAMountResetsTheBackoff() {
+        let h = connected()
+        h.current.simulateClose(4500)
+        h.runReconnects()
+        h.current.simulateOpen()
+        h.current.simulateText(mountFrame(count: "0"))
+        h.current.simulateClose(1006)
+        XCTAssertTrue((800...1200).contains(h.lastDelay), "\(h.lastDelay)")
+    }
+
+    func testResetsBackoffOnlyAfterAStableMount() {
+        XCTAssertFalse(resetsBackoff(code: 4500, mountedAt: 1_000, now: 1_000 + 9_999))
+        XCTAssertTrue(resetsBackoff(code: 4500, mountedAt: 1_000, now: 1_000 + 10_000))
+        XCTAssertFalse(resetsBackoff(code: 4501, mountedAt: 1_000, now: 1_000 + 60_000))
+        XCTAssertFalse(resetsBackoff(code: 1006, mountedAt: nil, now: 1_000))
+    }
+
+    func testFrameWithoutReplaceIsNotAMount() {
+        let h = connected()
+        h.current.simulateClose(1006)
+        h.runReconnects()
+        h.current.simulateOpen()
+        XCTAssertNil(h.client.mountedAt)
+        h.current.simulateText("{\"o\":[]}")
+        XCTAssertNil(h.client.mountedAt)
     }
 
     // A plain navigate stays on the socket.
