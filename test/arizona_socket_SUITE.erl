@@ -47,8 +47,7 @@
 -export([navigate_middleware_noproc_closes_crash/1]).
 -export([drain_effects_ship_before_close/1]).
 -export([drain_effects_ship_before_noproc_close/1]).
--export([crash_before_frame_not_blamed_on_it/1]).
--export([crash_under_call_names_the_call/1]).
+-export([crash_under_call_closes_crash/1]).
 -export([patch_on_drained_live_process_closes_going_away/1]).
 -export([resync_timeout_on_drained_live_process_closes_going_away/1]).
 -export([drain_before_mount_closes_going_away/1]).
@@ -98,8 +97,7 @@ all() ->
         navigate_middleware_noproc_closes_crash,
         drain_effects_ship_before_close,
         drain_effects_ship_before_noproc_close,
-        crash_before_frame_not_blamed_on_it,
-        crash_under_call_names_the_call,
+        crash_under_call_closes_crash,
         patch_on_drained_live_process_closes_going_away,
         resync_timeout_on_drained_live_process_closes_going_away,
         drain_before_mount_closes_going_away,
@@ -984,33 +982,18 @@ drain_effects_ship_before_noproc_close(Config) when is_list(Config) ->
     ?assertMatch([[_DispatchEvent, ~"draining" | _]], effects(Pushed)),
     ?assertMatch({close, 1001, <<>>, _}, Close).
 
-crash_before_frame_not_blamed_on_it(Config) when is_list(Config) ->
-    %% A live process that crashed before the frame arrived was not cut short
-    %% by that frame's call: the crash log carries the reason, not the call.
-    Socket = counter_socket(),
-    Pid = arizona_socket:live_pid(Socket),
-    Ref = erlang:monitor(process, Pid),
-    true = exit(Pid, boom_before_frame),
-    ok = await_down(Ref, Pid),
-    {{[], Close}, [Text]} = error_texts(fun() ->
-        settle(arizona_socket:handle_in(inc_frame(), Socket), Socket)
-    end),
-    ?assertMatch({close, 4500, ~"server crash", _}, Close),
-    ?assertNotEqual(nomatch, string:find(Text, "crashed: boom_before_frame")),
-    ?assertEqual(nomatch, string:find(Text, "during")).
-
-crash_under_call_names_the_call(Config) when is_list(Config) ->
-    %% A live process that dies while the frame's call is queued was cut short by
-    %% that call, and the crash log names it.
+crash_under_call_closes_crash(Config) when is_list(Config) ->
+    %% A live process that crashes while the frame's call is queued exits under
+    %% the call: the frame is dropped and its queued exit closes 4500, logged
+    %% exactly once.
     Socket = counter_socket(),
     Pid = arizona_socket:live_pid(Socket),
     ok = sys:suspend(Pid),
     true = is_pid(spawn_link(fun() -> kill_when_queued(Pid) end)),
-    {{[], Close}, [Text]} = error_texts(fun() ->
-        settle(arizona_socket:handle_in(inc_frame(), Socket), Socket)
-    end),
-    ?assertMatch({close, 4500, ~"server crash", _}, Close),
-    ?assertNotEqual(nomatch, string:find(Text, "crashed during event")).
+    ?assertMatch(
+        {{[], {close, 4500, ~"server crash", _}}, 1},
+        error_logs(fun() -> settle(arizona_socket:handle_in(inc_frame(), Socket), Socket) end)
+    ).
 
 patch_on_drained_live_process_closes_going_away(Config) when is_list(Config) ->
     %% The patch leg: its call finds the drained live process gone, and the
@@ -1341,26 +1324,6 @@ kill_when_queued(Pid) ->
         {message_queue_len, _} ->
             ok = timer:sleep(1),
             kill_when_queued(Pid)
-    end.
-
-%% `{Result, Texts}`: the formatted error-level logs running `Fun` produced.
-error_texts(Fun) ->
-    HandlerId = ?FUNCTION_NAME,
-    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
-        level => error, config => #{pid => self()}
-    }),
-    try
-        Result = Fun(),
-        {Result, collect_texts([])}
-    after
-        ok = logger:remove_handler(HandlerId)
-    end.
-
-collect_texts(Acc) ->
-    receive
-        {arizona_test_log_handler, #{level := error, msg := {Format, Args}}} ->
-            collect_texts([lists:flatten(io_lib:format(Format, Args)) | Acc])
-    after 100 -> lists:reverse(Acc)
     end.
 
 resume_when_queued(Pid, N) ->

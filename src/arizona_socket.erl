@@ -145,12 +145,7 @@ The live process is linked. Exits map to WebSocket close codes:
     %% mounting + rendering the full-page replace, so the payload dedups
     %% against the announced fingerprints. `undefined` once flushed (or when
     %% the connection never deferred).
-    pending_resync = undefined :: undefined | reference(),
-    %% The request tag of the call into the live process that the process
-    %% died under (`live_call_failed/3`). The frame is dropped and the
-    %% close waits for the queued exit; a crash exit then logs which call it cut
-    %% short. Never set for a process that was already dead when the call began.
-    failed_call = undefined :: undefined | term()
+    pending_resync = undefined :: undefined | reference()
 }).
 
 %% --------------------------------------------------------------------
@@ -407,11 +402,8 @@ do_handle_info({'EXIT', Pid, {shutdown, _}}, #socket{pid = Pid} = Socket) ->
     %% close-1000 semantics as `shutdown` atom; only `{shutdown, drain}`
     %% (matched above) opts into the reconnect path.
     {close, 1000, <<>>, Socket};
-do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid, failed_call = undefined} = Socket) ->
+do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) ->
     logger:error("Live process ~p crashed: ~p", [Pid, Reason]),
-    close_crash(Socket);
-do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid, failed_call = Call} = Socket) ->
-    logger:error("Live process ~p crashed during ~p: ~p", [Pid, Call, Reason]),
     close_crash(Socket);
 do_handle_info(_Info, Socket) ->
     {ok, Socket}.
@@ -439,51 +431,35 @@ close_crash(Socket) ->
 %% Close 4500 like every other crash instead. The trys sit inline in both entry
 %% points so no closure is built per frame.
 %%
-%% A call into the socket's own live process that raises because the process is
-%% gone, or went away under the call, is not a socket crash: the process's own
-%% exit decides. The socket is linked and traps exits, so that `{'EXIT', Pid, _}`
-%% reaches this mailbox behind every push the process sent before exiting
-%% (signals from one process arrive in order) -- a drain's `handle_drain/2`
-%% effects push in particular. So the frame is dropped and the transport left to
-%% deliver both in order: the push ships, then the exit closes per the mapping
-%% (1000, 1001 for `{shutdown, drain}`, or a logged 4500). Pinned to the live
-%% pid: a `noproc` from any other process a middleware or route adapter calls is
-%% a crash.
+%% A call into the socket's own live process that raised with the process no
+%% longer alive (gone before the call, or exited under it) is not a socket
+%% crash: the process's own exit decides. The socket is linked and traps exits,
+%% so that `{'EXIT', Pid, _}` reaches this mailbox behind every push the process
+%% sent before exiting (signals from one process arrive in order) -- a drain's
+%% `handle_drain/2` effects push in particular. So the frame is dropped and the
+%% transport left to deliver both in order: the push ships, then the exit closes
+%% per the mapping (1000, 1001 for `{shutdown, drain}`, or a logged 4500). A
+%% failed call to a process still alive gets no exit to wait for, so it is a
+%% crash, as is a `noproc` from any other process a middleware or route adapter
+%% calls.
 %%
 %% The socket returned is the one the frame entered with, so a deferred resync
 %% the same frame flushed before its own call failed is discarded: pushes that
 %% resync's mount queued may ship against the stale page just before the close.
 %% Brief -- the close follows them.
-crash_close(
-    exit,
-    {CallReason, {gen_server, call, [Pid, Request | _]}},
-    _Stacktrace,
-    #socket{pid = Pid} = S
-) when is_pid(Pid) ->
-    live_call_failed(CallReason, call_tag(Request), S);
 crash_close(Class, Reason, Stacktrace, Socket) ->
-    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-    close_crash(Socket).
+    case live_call_failed(Class, Reason, Socket) of
+        true ->
+            {ok, Socket};
+        false ->
+            logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+            close_crash(Socket)
+    end.
 
-%% `noproc`: the process was already dead when the call began, so its exit is
-%% already queued behind the pushes it trailed, and the transport forwards it.
-%% The call did not cause the exit, so it is not recorded as the one the crash
-%% cut short.
-%%
-%% Any other reason is the exit the process died with under the call, still on
-%% its way to this mailbox: local `gen_server:call` with `infinity` raises only
-%% after the monitor fires, and the link's exit follows from the same process.
-%% A process can cut short only one call (any later call to it is a `noproc`),
-%% so that call is kept for the crash log.
-live_call_failed(noproc, _Tag, Socket) ->
-    {ok, Socket};
-live_call_failed(_ExitReason, Tag, Socket) ->
-    {ok, Socket#socket{failed_call = Tag}}.
-
-%% The call's request tag, never its arguments (an event payload may be user
-%% data).
-call_tag(Request) when is_tuple(Request), tuple_size(Request) > 0 -> element(1, Request);
-call_tag(Request) -> Request.
+live_call_failed(exit, {_, {gen_server, call, [Pid | _]}}, #socket{pid = Pid}) when is_pid(Pid) ->
+    not is_process_alive(Pid);
+live_call_failed(_Class, _Reason, _Socket) ->
+    false.
 
 %% Is this frame the `cached_fps` announcement? Decoded here only to route the
 %% deferred-resync leg; the announcement leg never re-decodes, and the rare
