@@ -187,14 +187,13 @@ wire_escape(Bin) -> Bin.
 raw_text(_Tag, Value) -> Value.
 
 %% Render a dynamic attribute value: the prop name is baked into the static by
-%% attr_dyn_name/1, so the dynamic is just the value -- a JSON string in the
-%% document, whatever its shape, since the client string-encodes every prop.
+%% attr_dyn_name/1, so the dynamic is just the value, JSON-encoded as the client
+%% encodes the wire value.
 -spec render_attr(binary(), term()) -> binary().
 render_attr(Name, Value) ->
     json_str(wire_attr(Name, Value)).
 
-%% The raw stringified prop the client JSON-encodes; to_bin/1 classifies out a
-%% `?raw` and encodes an effect command.
+%% The raw stringified prop the client JSON-encodes.
 -spec wire_attr(binary(), term()) -> binary().
 wire_attr(_Name, Value) ->
     arizona_template:to_bin(Value).

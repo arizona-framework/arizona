@@ -514,10 +514,12 @@ ssr_view_matches_mount_frame(Config) when is_list(Config) ->
         fun({Handler, Bindings}) ->
             {ok, Pid} = arizona_live:start_link(Handler, Bindings, undefined, []),
             {ok, _ViewId, Frame, _} = arizona_live:mount_and_render(Pid),
+            {ok, Current, _} = arizona_live:render_current(Pid),
             ok = gen_server:stop(Pid),
             SSR = arizona_render:render_view_to_iolist(Handler, #{bindings => Bindings}),
             Client = iolist_to_binary(cached_interleave(Frame, frame_statics(Frame, #{}))),
-            ?assertEqual({Handler, Client}, {Handler, iolist_to_binary(SSR)})
+            ?assertEqual({Handler, Client}, {Handler, iolist_to_binary(SSR)}),
+            ?assertEqual({Handler, Client}, {Handler, Current})
         end,
         Views
     ).

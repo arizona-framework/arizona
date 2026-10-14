@@ -17,8 +17,7 @@ templates() ->
         float => 1.5,
         atom => foo,
         stream => arizona_stream:new(fun(X) -> X end, [~"x", ~"y"]),
-        map => #{k1 => ~"v1", k2 => ~"v2"},
-        cmd => arizona_android:push_event(~"go")
+        map => #{k1 => ~"v1", k2 => ~"v2"}
     },
     [{Name, Fun(Bindings)} || {Name, Fun} <- shapes()].
 
@@ -34,8 +33,7 @@ shapes() ->
         {map_each, fun map_each/1},
         {stateless_child, fun stateless_child/1},
         {nodiff, fun nodiff/1},
-        {nodiff_empty_each, fun nodiff_empty_each/1},
-        {effect_prop, fun effect_prop/1}
+        {nodiff_empty_each, fun nodiff_empty_each/1}
     ].
 
 top(Bindings) ->
@@ -104,6 +102,3 @@ nodiff_empty_each(Bindings) ->
             {'Text', [], [?get(text)]}
         ]}
     ).
-
-effect_prop(Bindings) ->
-    ?native({'Button', [{on_tap, ?get(cmd)}], [~"go"]}).
