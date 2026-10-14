@@ -12,9 +12,11 @@
 -export([all/0]).
 -export([push_racing_navigate_ships_first/1]).
 -export([push_racing_same_id_navigate_ships_first/1]).
--export([push_racing_navigate_runs_old_effects_first/1]).
--export([push_racing_navigate_filters_misfiring_effects/1]).
--export([push_from_unknown_root_drained_before_navigate/1]).
+-export([push_racing_navigate_drops_old_effects/1]).
+-export([dropped_navigate_flash_warned_at_any_depth/1]).
+-export([push_after_navigate_barrier_ships_after_replace/1]).
+-export([navigate_flushes_deferred_resync/1]).
+-export([foreign_id_push_folded_into_event_reply/1]).
 -export([item_patch_carries_child_view_wrapper/1]).
 -export([queued_push_prepended_to_event_reply/1]).
 -export([queued_push_prepended_to_patch_reply/1]).
@@ -48,9 +50,11 @@ all() ->
     [
         push_racing_navigate_ships_first,
         push_racing_same_id_navigate_ships_first,
-        push_racing_navigate_runs_old_effects_first,
-        push_racing_navigate_filters_misfiring_effects,
-        push_from_unknown_root_drained_before_navigate,
+        push_racing_navigate_drops_old_effects,
+        dropped_navigate_flash_warned_at_any_depth,
+        push_after_navigate_barrier_ships_after_replace,
+        navigate_flushes_deferred_resync,
+        foreign_id_push_folded_into_event_reply,
         item_patch_carries_child_view_wrapper,
         queued_push_prepended_to_event_reply,
         queued_push_prepended_to_patch_reply,
@@ -112,21 +116,20 @@ push_racing_navigate_ships_first(Config) when is_list(Config) ->
     %% A push the old page emits just before a navigate is served carries the
     %% shared card's statics for the first time, so the live process records
     %% them as sent and the navigate's page payload references the card bare.
-    %% The push must therefore reach the client, in a frame ahead of the
-    %% replace's -- before the fix it was dropped as stale and the client could
-    %% not resolve the replace's fingerprint.
+    %% The push's ops must therefore reach the client ahead of the replace, in
+    %% the same frame -- before the fix the push was dropped as stale and the
+    %% client could not resolve the replace's fingerprint.
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/next" => {arizona_nav_card_shown, #{}}}
     }),
     {reply, _, Socket0} = arizona_socket:init(arizona_nav_card_hidden, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
     Pid ! {show_card, ~"old"},
-    {reply_many, [Old, Replace], _Socket1} =
-        arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
-    ?assertMatch([[?OP_TEXT, _, #{~"f" := _, ~"s" := _}]], ops(Old)),
-    ?assertMatch([[?OP_REPLACE, ~"nca", _]], ops(Replace)),
-    [[?OP_TEXT, _, #{~"f" := CardFp}]] = ops(Old),
-    [[?OP_REPLACE, _, Page]] = ops(Replace),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
+    ?assertMatch(
+        [[?OP_TEXT, _, #{~"f" := _, ~"s" := _}], [?OP_REPLACE, ~"nca", _]], ops(Frame)
+    ),
+    [[?OP_TEXT, _, #{~"f" := CardFp}], [?OP_REPLACE, _, Page]] = ops(Frame),
     %% The replace names the card by fingerprint alone, relying on the push.
     ?assertMatch([_ | _], [P || #{~"f" := F} = P <- payloads(Page), F =:= CardFp]),
     ?assertEqual([], [P || #{~"f" := F, ~"s" := _} = P <- payloads(Page), F =:= CardFp]),
@@ -134,57 +137,53 @@ push_racing_navigate_ships_first(Config) when is_list(Config) ->
 
 push_racing_same_id_navigate_ships_first(Config) when is_list(Config) ->
     %% Two routes on one handler share its view id, so a push the old page
-    %% emitted just before the navigate looks current afterwards. It must ship
-    %% ahead of the replace, never after it: before the fix it trailed into the
-    %% next frame and applied old-page ops to the new page.
+    %% emitted just before the navigate looks current afterwards. Its ops must
+    %% ship ahead of the replace, never after it: before the fix they trailed
+    %% into the next frame and applied old-page ops to the new page.
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/rc" => {arizona_root_counter, #{bindings => #{count => 7}}}}
     }),
     {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
     Pid ! {set_count, 5},
-    {reply_many, [Old, Replace], _Socket1} =
-        arizona_socket:handle_in(navigate_frame(~"/rc"), Socket0),
-    ?assertMatch([[?OP_TEXT, _, ~"5"]], ops(Old)),
-    ?assertMatch([[?OP_REPLACE, ~"counter", _]], ops(Replace)),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/rc"), Socket0),
+    ?assertMatch([[?OP_TEXT, _, ~"5"], [?OP_REPLACE, ~"counter", _]], ops(Frame)),
     nothing_left_queued().
 
-push_racing_navigate_runs_old_effects_first(Config) when is_list(Config) ->
+push_racing_navigate_drops_old_effects(Config) when is_list(Config) ->
     %% The old page's push carries an effect as well as ops. A client applies a
-    %% frame's effects after its ops, so it ships in the old page's own frame,
-    %% ahead of the replace, and runs against the page that emitted it.
+    %% frame's effects after its ops, so shipped with the replace it would run
+    %% against the NEW page: its ops ship ahead of the replace, its effects are
+    %% dropped, all in one frame.
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/next" => {arizona_nav_card_shown, #{}}}
     }),
     {reply, _, Socket0} = arizona_socket:init(arizona_nav_card_hidden, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
     Pid ! {show_card_titled, ~"old"},
-    {reply_many, [Old, Replace], _Socket1} =
-        arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
-    ?assertMatch([[?OP_TEXT, _, #{~"f" := _}]], ops(Old)),
-    ?assertEqual([[?EFFECT_SET_TITLE, ~"old"]], effects(Old)),
-    ?assertMatch([[?OP_REPLACE, ~"nca", _]], ops(Replace)),
-    ?assertNot(maps:is_key(~"e", decode(Replace))),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
+    ?assertMatch([[?OP_TEXT, _, #{~"f" := _}], [?OP_REPLACE, ~"nca", _]], ops(Frame)),
+    ?assertNot(maps:is_key(~"e", decode(Frame))),
     nothing_left_queued().
 
-push_racing_navigate_filters_misfiring_effects(Config) when is_list(Config) ->
-    %% Effects that would act on the new page or hijack the user's navigation
-    %% (a `push_event` routes to the new root, a `navigate`/`patch` overrides
-    %% the one just made, also when wrapped in a transition) are dropped; the
-    %% rest run against the old page. A dropped navigate's flash is warned about.
+dropped_navigate_flash_warned_at_any_depth(Config) when is_list(Config) ->
+    %% A dropped navigate/patch carrying a flash loses it for good, so it is
+    %% warned about -- also when a transition, an on_key or a fetch's on_error
+    %% wraps it. Effects carrying no flash are dropped silently.
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/next" => {arizona_nav_card_shown, #{}}}
     }),
     {reply, _, Socket0} = arizona_socket:init(arizona_nav_card_hidden, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket0),
+    Flash = #{flash => #{info => ~"hi"}},
     Effects = [
         arizona_js:set_title(~"t"),
         arizona_js:push_event(~"x"),
-        arizona_js:navigate(~"/elsewhere", #{flash => #{info => ~"hi"}}),
+        arizona_js:navigate(~"/a", Flash),
         arizona_js:patch(~"/p"),
-        arizona_js:dispatch_event(~"d", #{}),
-        arizona_js:transition(arizona_js:navigate(~"/q")),
-        arizona_js:transition(arizona_js:toggle(~"#m"))
+        arizona_js:transition(arizona_js:navigate(~"/b", Flash)),
+        arizona_js:on_key(enter, [arizona_js:toggle(~"#m"), arizona_js:patch(~"/c", Flash)]),
+        arizona_js:fetch(~"/f", #{on_error => arizona_js:navigate(~"/d", Flash)})
     ],
     Pid ! {show_card_with, ~"old", Effects},
     HandlerId = ?FUNCTION_NAME,
@@ -197,45 +196,55 @@ push_racing_navigate_filters_misfiring_effects(Config) when is_list(Config) ->
         after
             ok = logger:remove_handler(HandlerId)
         end,
-    {reply_many, [Old, _Replace], _Socket1} = Result,
-    ?assertEqual(
-        [
-            [?EFFECT_SET_TITLE, ~"t"],
-            [?EFFECT_DISPATCH_EVENT, ~"d", #{}],
-            [?EFFECT_TRANSITION, #{}, [?EFFECT_TOGGLE, ~"#m"]]
-        ],
-        effects(Old)
-    ),
-    ?assertMatch([_], flash_warnings()).
+    {reply, Frame, _Socket1} = Result,
+    ?assertNot(maps:is_key(~"e", decode(Frame))),
+    ?assertMatch([_, _, _, _], flash_warnings()),
+    nothing_left_queued().
 
-push_from_unknown_root_drained_before_navigate(Config) when is_list(Config) ->
-    %% A navigate called directly on the live process, by a process other than
-    %% the socket, swaps the root without the socket knowing its new id. A push
-    %% that new root then emits must still precede a later client navigate's
-    %% replace: it can carry statics the replace references bare. Before the
-    %% fix the drain skipped it for its unknown id and the replace shipped alone.
-    Req = arizona_req_test_adapter:new(#{
-        routes => #{~"/next" => {arizona_nav_card_shown, #{}}}
-    }),
-    {reply, _, Socket0} = arizona_socket:init(arizona_nav_card_hidden, #{}, Req, #{}),
-    Pid = arizona_socket:live_pid(Socket0),
-    Self = self(),
-    Foreign = spawn(fun() ->
-        {ok, _VId, _Page, _Obs} =
-            arizona_live:navigate(Pid, arizona_nav_card_hidden, #{id => ~"ncx"}, []),
-        Self ! foreign_done
-    end),
-    receive
-        foreign_done -> ok
-    after 2000 -> error({foreign_navigate_stuck, Foreign})
-    end,
-    Pid ! {show_card, ~"x"},
-    {reply_many, [Old, Replace], _Socket1} =
-        arizona_socket:handle_in(navigate_frame(~"/next"), Socket0),
-    [[?OP_TEXT, Target, #{~"f" := CardFp, ~"s" := _}]] = ops(Old),
-    ?assertMatch(<<"ncx:", _/binary>>, Target),
-    [[?OP_REPLACE, _, Page]] = ops(Replace),
-    ?assertEqual([], [P || #{~"f" := F, ~"s" := _} = P <- payloads(Page), F =:= CardFp]),
+push_after_navigate_barrier_ships_after_replace(Config) when is_list(Config) ->
+    %% The new page's own push -- a self-cast from mount/1 answered in
+    %% handle_info/2 -- is emitted after the navigate's barrier, so the drain
+    %% leaves it queued and it ships in a later frame, after the replace.
+    Req = arizona_req_test_adapter:new(#{routes => #{~"/page" => {arizona_page, #{}}}}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, Frame, Socket1} = arizona_socket:handle_in(navigate_frame(~"/page"), Socket0),
+    ?assertMatch([[?OP_REPLACE, ~"counter", _]], ops(Frame)),
+    Push =
+        receive
+            {arizona_push, _, _, _, _} = P -> P
+        after 2000 -> error(no_new_page_push)
+        end,
+    {reply, PushFrame, _Socket2} = arizona_socket:handle_info(Push, Socket1),
+    ?assertMatch([[?OP_TEXT, <<"page:", _/binary>>, ~"Connected"] | _], ops(PushFrame)),
+    nothing_left_queued().
+
+navigate_flushes_deferred_resync(Config) when is_list(Config) ->
+    %% A flagged reconnect whose first frame is a navigate flushes the deferred
+    %% resync first. The resync mounts the page, whose mount/1 self-casts, so a
+    %% push is queued ahead of the navigate's barrier: its ops ride the
+    %% navigate's frame, which follows the resync frame.
+    Req = arizona_req_test_adapter:new(#{routes => #{~"/rc" => {arizona_root_counter, #{}}}}),
+    {reply, _, Socket0} =
+        arizona_socket:init(arizona_page, #{}, Req, #{reconnect => true, fps_follow => true}),
+    {reply_many, [Resync, Nav], _Socket1} =
+        arizona_socket:handle_in(navigate_frame(~"/rc"), Socket0),
+    ?assertMatch([[?OP_REPLACE, ~"page", _]], ops(Resync)),
+    ?assertMatch(
+        [[?OP_TEXT, <<"page:", _/binary>>, ~"Connected"], [?OP_REPLACE, ~"page", _]], ops(Nav)
+    ),
+    nothing_left_queued().
+
+foreign_id_push_folded_into_event_reply(Config) when is_list(Config) ->
+    %% The drain takes every push queued before the barrier, whatever view id it
+    %% names, each tagged with its own -- not only the root's.
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    self() ! {arizona_push, ~"other", [[?OP_TEXT, ~"0", ~"x"]], [], {[], []}},
+    EventFrame = iolist_to_binary(json:encode([~"counter", ~"inc", #{}])),
+    {reply, Frame, _Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+    ?assertMatch(
+        [[?OP_TEXT, ~"other:0", ~"x"], [?OP_TEXT, <<"counter:", _/binary>>, ~"1"]], ops(Frame)
+    ),
     nothing_left_queued().
 
 flash_warnings() ->

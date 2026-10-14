@@ -1140,13 +1140,13 @@ lives here independent of the server.
   tagged with the view id the push names), the `arizona_resync_timeout` backstop, and `EXIT`
   signals from the live process. On a synchronous event/patch/navigate reply, every push already
   queued in the socket mailbox up to the live process's barrier is taken, whatever view id it
-  names, and shipped first (causal wire order): folded into the event/patch reply frame, and for
-  a navigate sent as a frame of its own ahead of the `OP_REPLACE` frame (`reply_many`). One may
-  carry the first statics of a fingerprint the replace then references bare; the replace
-  supersedes their ops anyway. Their effects run in that earlier frame, against the page that
-  emitted them, except the ones that would act on the new page or on the user's navigation --
-  `push_event` (relayed to the new root), `navigate`/`patch` (also inside `transition`/`on_key`;
-  a flash they carry is dropped with a warning) and `request_pip` -- which are dropped and logged
+  names, and shipped first (causal wire order), in the reply frame ahead of its own ops. For a
+  navigate their ops ride ahead of the `OP_REPLACE`: one may carry the first statics of a
+  fingerprint the replace then references bare, and the replace supersedes them anyway. Their
+  effects are dropped and logged by op code (a client applies a frame's effects after its ops, so
+  they would run against the new page), with a warning for a dropped `navigate`/`patch` that
+  carried a flash, at any wrapper depth (`transition`, `on_key`, a `fetch`'s `on_error`). Only
+  this socket navigates its live process: `arizona_live:navigate/4` is transport API
 
 **Exit reason to close code** -- four cases, and the difference matters because the JS worker
 treats **any non-1000 code as reconnectable**:
