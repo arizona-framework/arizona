@@ -1071,9 +1071,11 @@ marker_count(HTML) ->
 ssr_inner_content_rejects_attribute_value(Config) when is_list(Config) ->
     %% A rendered page inside an attribute has no meaning, and the opaque value
     %% says so instead of emitting an escaped page as an attribute: the error
-    %% carries the whole page, which is the documented cost of that placement.
+    %% carries the whole page, which is the documented cost of that placement, and
+    %% is located at the attribute like any other attribute crash.
     ?assertError(
-        {bad_template_value, #{s := [_Page], d := []}},
+        {arizona_loc, {arizona_inner_content_layouts, _},
+            {bad_template_value, #{s := [_Page], d := []}}},
         layout_html(arizona_inner_content_layouts, attr)
     ).
 
