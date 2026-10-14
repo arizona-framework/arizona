@@ -189,6 +189,17 @@ rejects `?local` at compile time when `false`.
 -callback supports_local() -> boolean().
 
 -doc """
+Whether this backend's client carries an az-nodiff region over a wholesale
+re-render of its surroundings -- a reconnect resync or a container `?OP_TEXT` --
+when the new render holds the same region. When `true`, the parse transform puts
+an `az-region` attribute naming the region's identity
+(`arizona_template:region_token/3`) on the root of every az-nodiff region, which
+is what the client matches regions by. A backend capability, declared by each
+backend.
+""".
+-callback supports_region_keep() -> boolean().
+
+-doc """
 What a dynamic boolean attribute means on this backend's wire. `presence` (HTML): `true`
 renders the bare attribute and `false` removes it. `value`: a boolean is a typed prop
 value, sent as JSON `true`/`false` and present in both states, the same shape a static

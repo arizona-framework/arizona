@@ -67,15 +67,53 @@ test('a new az_key remounts the widget', async ({ page }) => {
     expect((await log(page)).events).toEqual(['mount:line', 'destroy:line:true', 'mount:line']);
 });
 
-// A reconnect mounts the view afresh and resyncs it whole, so the widget is remounted
-// and its client state is gone.
-test('a reconnect remounts the widget', async ({ page }) => {
-    await input(page).fill('typed');
+const reconnect = async (page) => {
     await page.evaluate(() => window._ws.close(4000));
     await page.waitForFunction(() =>
         document.documentElement.classList.contains('az-disconnected'),
     );
     await wsReady(page);
+};
+
+// A reconnect mounts the view afresh and resyncs it whole; a region the new render
+// names again is carried over, so the widget and its client state survive.
+test('a reconnect keeps the widget and its state', async ({ page }) => {
+    await input(page).fill('typed');
+    await reconnect(page);
+    await expect(input(page)).toHaveValue('typed');
+    expect(await log(page)).toEqual({ mounts: 1, destroys: 0, events: ['mount:line'] });
+});
+
+// The fresh mount holds the initial branch again, so a region switched away from
+// it is a different region after the reconnect.
+test('a region switched before a reconnect is remounted by it', async ({ page }) => {
+    await page.locator('#bar').click();
+    await expect(kind(page)).toHaveText('bar');
+    await input(page).fill('typed');
+    await reconnect(page);
+    await expect(kind(page)).toHaveText('line');
     await expect(input(page)).toHaveValue('');
-    expect((await log(page)).events).toEqual(['mount:line', 'destroy:line:true', 'mount:line']);
+    expect((await log(page)).events).toEqual([
+        'mount:line',
+        'destroy:line:true',
+        'mount:bar',
+        'destroy:bar:true',
+        'mount:line',
+    ]);
+});
+
+// The same for a new `az_key`: the fresh mount is back on the initial key.
+test('a region rekeyed before a reconnect is remounted by it', async ({ page }) => {
+    await page.locator('#rekey').click();
+    await expect.poll(async () => (await log(page)).mounts).toBe(2);
+    await input(page).fill('typed');
+    await reconnect(page);
+    await expect(input(page)).toHaveValue('');
+    expect((await log(page)).events).toEqual([
+        'mount:line',
+        'destroy:line:true',
+        'mount:line',
+        'destroy:line:true',
+        'mount:line',
+    ]);
 });

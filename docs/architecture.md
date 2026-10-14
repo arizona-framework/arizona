@@ -1823,16 +1823,44 @@ branch, a `?stateless` body, a list item). That holds when a switch replaces the
 child with the same handler at the same id keeps its state, and the new props are ignored. A child
 still handles its own events.
 
+**Wholesale re-renders keep the region.** Some changes re-render the markup around a region
+whole instead of patching it: a plain-list `?each` that falls back to its container `?OP_TEXT`
+(always, when its items are themselves regions), a stream's container render, and the
+`?OP_REPLACE` that resyncs a view after a reconnect. The new markup holds a fresh copy of every
+region in it, so the client carries the old ones over: each region's root names its identity in an
+`az-region` attribute (the fingerprint, branch and `az_key` above, spelled by
+`arizona_template:region_token/3`), and a region whose old and new copies sit at the same place
+under the same name keeps its existing DOM -- the old element is moved into the new markup in place
+of the new copy, and its hook sees neither `destroyed()` nor `mounted()`. "The same place" is the
+slot that holds it plus, on the way up, its own and each enclosing element's `az-key` and view id,
+so a region in a keyed item follows its key and a child view whose root is a region is kept only
+under the same id. A region the new render does not name there is replaced as before.
+
+**List items are kept only when keyed.** Unkeyed items share one template, so nothing tells which
+old item a new one is -- that is exactly why such a list re-renders wholesale. An unkeyed `?each`
+item whose root is a region is therefore not named at all, and when two regions inside unkeyed
+items share a name and place, neither is kept: both remount for their own item. Give the item an
+`az_key` (`{li, ['az-nodiff', {az_key, Id}], [...]}`) and its widget follows it through adds,
+drops, reorders and a reconnect.
+
+A reconnect mounts the view afresh, so what survives it is decided by what the fresh mount
+renders: a region its initial state chooses again keeps its widget and client state; one chosen
+by state the old process had built up (another branch, a later `az_key`) is replaced by the region
+the fresh state names. A navigate is a new page and keeps nothing.
+
 **Caveats.**
 
-- Anything that re-renders an enclosing region wholesale remounts the widgets in it: a branch
-  switch above the slot to a wrapper with different statics, or a plain-list `?each` that falls
-  back to its container `?OP_TEXT`. A switch above the slot to a wrapper with the same statics
-  keeps the region (see "What the same region means"); use `az_key` to remount it.
-  For a list of widgets prefer a stream, whose items are inserted and removed one by one.
-- A reconnect mounts the view afresh and resyncs it with `?OP_REPLACE`, so every widget is
-  destroyed and remounted and its client state is lost. Keep state that must survive in the
-  server (pushed back at mount) or in storage the widget owns.
+- A kept region is moved, not re-created, so its element leaves the document for an instant:
+  focus inside it is lost, and so is the state of anything the platform resets on removal (an
+  `<iframe>` reloads, media restarts). Its JavaScript state, form values and `?local` values stay.
+- A region holding a child view is replaced by a reconnect anyway: the reconnect mounted that view
+  afresh, and the DOM it left behind no longer matches its state.
+- A switch above the region's slot to a wrapper with different statics moves the region into a
+  different slot, so it is remounted; a wrapper with the same statics keeps it (see "What the same
+  region means"), and `az_key` remounts it.
+- Only a template whose single root element carries `az-nodiff` is named. A multi-root nodiff
+  fragment, and the `?native` and `?terminal` targets (whose clients keep no regions), are
+  re-created by a wholesale re-render.
 - The first paint is the server's placeholder. Mount the component from the hook's `mounted()`
   rather than hydrating the server markup; the server never rendered the component itself.
 - `az-*` attributes inside the widget's own DOM are markup Arizona did not render: the client
