@@ -34,9 +34,10 @@ The live process is linked. Exits map to WebSocket close codes:
 - `{shutdown, drain}` -- graceful close `1001` ("going away"). Client
   auto-reconnects via the form-state-preserving path; new live
   process mounts against the new server version. A frame whose call
-  into the live process races that exit closes `1001` the same way; a
-  call that finds the live process gone closes with whatever its exit
-  reason maps to.
+  into the live process finds it gone (a drain landing while the frame
+  is in flight) is dropped, and the close comes from the queued exit,
+  after any push the process sent before exiting -- a drain's effects
+  among them.
 - Anything else (including raises in `handle_in/2` and `handle_info/2`,
   among them a frame that cannot be encoded) -- crash close `4500`. Client
   triggers `location.reload()` for a fresh start.
@@ -44,10 +45,6 @@ The live process is linked. Exits map to WebSocket close codes:
 
 -include("arizona.hrl").
 -include("arizona_effect.hrl").
-
-%% How long a failed live-process call waits for the linked exit it implies.
-%% It is already queued in practice; the wait only covers signal ordering.
--define(LIVE_EXIT_WAIT_MS, 100).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -148,7 +145,11 @@ The live process is linked. Exits map to WebSocket close codes:
     %% mounting + rendering the full-page replace, so the payload dedups
     %% against the announced fingerprints. `undefined` once flushed (or when
     %% the connection never deferred).
-    pending_resync = undefined :: undefined | reference()
+    pending_resync = undefined :: undefined | reference(),
+    %% The request tag of a call into the live process that failed because the
+    %% process went away (`crash_close/4`). The frame is dropped and the close
+    %% waits for the queued exit; a crash exit then logs which call it cut short.
+    failed_call = undefined :: undefined | term()
 }).
 
 %% --------------------------------------------------------------------
@@ -405,8 +406,11 @@ do_handle_info({'EXIT', Pid, {shutdown, _}}, #socket{pid = Pid} = Socket) ->
     %% close-1000 semantics as `shutdown` atom; only `{shutdown, drain}`
     %% (matched above) opts into the reconnect path.
     {close, 1000, <<>>, Socket};
-do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) ->
+do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid, failed_call = undefined} = Socket) ->
     logger:error("Live process ~p crashed: ~p", [Pid, Reason]),
+    close_crash(Socket);
+do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid, failed_call = Call} = Socket) ->
+    logger:error("Live process ~p crashed during ~p: ~p", [Pid, Call, Reason]),
     close_crash(Socket);
 do_handle_info(_Info, Socket) ->
     {ok, Socket}.
@@ -434,36 +438,50 @@ close_crash(Socket) ->
 %% Close 4500 like every other crash instead. The trys sit inline in both entry
 %% points so no closure is built per frame.
 %%
-%% A call into the live process that raises because the process is gone, or
-%% went away under the call, is not a socket crash: the process's own exit
-%% decides. The socket is linked and traps exits, so that `{'EXIT', Pid, _}` is
-%% already queued; the exit mapping then picks 1000 (`normal`/`shutdown`), 1001
-%% (`{shutdown, drain}`, typically a listener drain landing while an event,
-%% navigate, patch or resync frame is in flight, so the client takes the
-%% form-state-preserving reconnect) or a logged 4500. Pinned to the socket's own
-%% live pid: a `noproc` from any other process a middleware or route adapter
-%% calls is a crash. A drain race skips the drain's last effects push, which
-%% the live process never got to send.
+%% A call into the socket's own live process that raises because the process is
+%% gone, or went away under the call, is not a socket crash: the process's own
+%% exit decides. The socket is linked and traps exits, so that `{'EXIT', Pid, _}`
+%% reaches this mailbox behind every push the process sent before exiting
+%% (signals from one process arrive in order) -- a drain's `handle_drain/2`
+%% effects push in particular. So the frame is dropped and the transport left to
+%% deliver both in order: the push ships, then the exit closes per the mapping
+%% (1000, 1001 for `{shutdown, drain}`, or a logged 4500). Pinned to the live
+%% pid: a `noproc` from any other process a middleware or route adapter calls is
+%% a crash.
 crash_close(
-    exit, {CallReason, {gen_server, call, [Pid | _]}}, Stacktrace, #socket{pid = Pid} = Socket
-) ->
-    receive
-        {'EXIT', Pid, Reason} -> do_handle_info({'EXIT', Pid, Reason}, Socket)
-    after ?LIVE_EXIT_WAIT_MS ->
-        live_call_failed(CallReason, Stacktrace, Socket)
-    end;
+    exit, {CallReason, {gen_server, call, [Pid, Request | _]}}, Stacktrace, #socket{pid = Pid} = S
+) when is_pid(Pid) ->
+    live_call_failed(CallReason, Stacktrace, S#socket{failed_call = call_tag(Request)});
 crash_close(Class, Reason, Stacktrace, Socket) ->
     log_crash(Class, Reason, Stacktrace),
     close_crash(Socket).
 
-%% No exit queued for the live pid. Gone with no exit left to read: the drain
-%% race it almost always is, so 1001. Otherwise the process is alive (a
-%% timed-out call) and this is a crash.
-live_call_failed(noproc, _Stacktrace, Socket) ->
-    {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
-live_call_failed(Reason, Stacktrace, Socket) ->
-    log_crash(exit, Reason, Stacktrace),
-    close_crash(Socket).
+%% `noproc`: the process was already dead when the call began, so its exit was
+%% sent first, and a receive handles pending signals before matching -- `after 0`
+%% sees it. Taking it out and re-sending it keeps it behind the pushes it
+%% trailed. No exit at all means something else consumed it, which the socket
+%% never does: an invariant break, reported rather than guessed as a drain. A
+%% timed-out call left the process alive: a crash. Any other reason is the exit
+%% the process died with under the call, still on its way to this mailbox.
+live_call_failed(noproc, _Stacktrace, #socket{pid = Pid, failed_call = Call} = Socket) ->
+    receive
+        {'EXIT', Pid, _} = Exit ->
+            self() ! Exit,
+            {ok, Socket}
+    after 0 ->
+        logger:warning("Live process ~p gone with no exit queued (call ~p)", [Pid, Call]),
+        close_crash(Socket)
+    end;
+live_call_failed(timeout, Stacktrace, #socket{failed_call = Call} = Socket) ->
+    log_crash(exit, {timeout, Call}, Stacktrace),
+    close_crash(Socket);
+live_call_failed(_ExitReason, _Stacktrace, Socket) ->
+    {ok, Socket}.
+
+%% The call's request tag, never its arguments (an event payload may be user
+%% data).
+call_tag(Request) when is_tuple(Request), tuple_size(Request) > 0 -> element(1, Request);
+call_tag(Request) -> Request.
 
 log_crash(Class, Reason, Stacktrace) ->
     logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]).
@@ -484,9 +502,9 @@ decode_cached_fps(Frame) ->
 %% dedup against `sent_fps` happens inside `mount_and_render` -- any
 %% fingerprints seeded before this call elide their statics from the payload.
 %%
-%% A raise in `mount/1`, `on_mount` or `render/1` (or the drain/exit race)
-%% propagates to the entry catch, which closes per the live process's exit
-%% (crash_close/4). Every caller runs
+%% A raise in `mount/1`, `on_mount` or `render/1` kills the live process under
+%% the call, so it reaches the entry catch like the drain/exit race does: the
+%% frame is dropped and the queued exit closes (crash_close/4). Every caller runs
 %% inside handle_in/2 or handle_info/2, and the raise happens while this is still
 %% an argument, so resync_before_frame/2 never runs and the triggering frame
 %% never reaches a live process the flush left unmounted.
@@ -653,8 +671,8 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
         {halt, HaltReq} ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
-            %% A live process gone under this call closes per its exit reason at
-            %% the entry catch (crash_close/4); a navigate crash closes 4500.
+            %% A live process gone under this call is handled at the entry catch
+            %% (crash_close/4): the frame is dropped and its queued exit closes.
             %%
             %% The socket is the only caller of arizona_live:navigate/4 (transport
             %% API): the drain below relies on every push before the barrier
