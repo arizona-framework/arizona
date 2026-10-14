@@ -36,6 +36,14 @@ const pageBody = () => document.querySelector('main').innerHTML;
 const condBody = (inner) =>
     `<h1>Title</h1><!--az:${PAGE_AZ}--><!--az:${CHILD_AZ}-->${inner}<!--/az--><!--/az-->`;
 
+/**
+ * Marker scans recorded by a `document.createTreeWalker` spy. jsdom's own
+ * selector engine walks the tree through the same public method (with an
+ * element filter) for every `querySelector`, so only `SHOW_COMMENT` walkers
+ * are the client's marker scan.
+ */
+const markerScans = (spy) => spy.mock.calls.filter(([, what]) => what === NodeFilter.SHOW_COMMENT);
+
 describe('resolveEl -- marker-only slot targets', () => {
     it('resolves a whole-template bare dynamic to the marker parent', () => {
         setupPage(condBody(''));
@@ -59,7 +67,7 @@ describe('resolveEl -- marker-only slot targets', () => {
         const el = resolveEl('v:0');
         expect(el.tagName).toBe('P');
         expect(el.getAttribute('az')).toBe('0');
-        expect(spy).not.toHaveBeenCalled();
+        expect(markerScans(spy)).toHaveLength(0);
         spy.mockRestore();
     });
 
@@ -77,7 +85,7 @@ describe('resolveEl -- marker-only slot targets', () => {
             [OP.TEXT, `page:${CHILD_AZ}`, 'B'],
             [OP.TEXT, `page:${CHILD_AZ}`, 'C'],
         ]);
-        expect(spy).toHaveBeenCalledTimes(1);
+        expect(markerScans(spy)).toHaveLength(1);
         expect(pageBody()).toBe(condBody('C'));
         spy.mockRestore();
     });
