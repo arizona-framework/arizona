@@ -8,6 +8,7 @@
 | `src/arizona_template.erl`                | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities                   |
 | `src/arizona_eval.erl`                    | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                                             |
 | `src/arizona_render.erl`                  | Render orchestration (target-aware) -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/2`), `zip/2`, `fingerprint_payload/1`                                            |
+| `src/arizona_utf8.erl`                    | UTF-8 output contract -- `check/1`, `refuse/3` (names an encoder failure `non_utf8_render`), dev-mode `check_page/3` / `locate_live/3`                                                    |
 | `src/arizona_renderer.erl`                | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and native JSON backends below                                                                                  |
 | `src/arizona_html.erl`                    | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                                      |
 | `src/arizona_native.erl`                  | Native render backend -- emits a JSON widget tree (the `?native` target); see docs/native.md                                                                                              |
@@ -140,6 +141,63 @@ is evaluated without the catch.
 
 The catch is one `try` per located dynamic on the path every slot evaluation already
 takes. It adds no reductions; only a crash pays, for the re-raise.
+
+### Output is UTF-8 -- `non_utf8_render`
+
+Every render target writes UTF-8: an HTML response is served as `text/html;
+charset=utf-8`, and a WebSocket frame and a `?native` document are JSON. So a rendered
+**binary must be UTF-8**. A list is chardata and needs nothing from the app:
+`arizona_template:to_bin/1` decodes it as Unicode code points, producing UTF-8, and
+refuses one that does not decode (a list wrapping non-UTF-8 bytes raises
+`{non_utf8_render, Byte, Offset}`, any other non-chardata `bad_template_value`). A
+binary is emitted as the bytes it holds, unchecked, because checking every value on the
+render path was measured at +22% to +49% on non-ASCII SSR (see docs/performance.md,
+"What did not work").
+
+The usual source of a non-UTF-8 binary is a bare `<<"café">>` literal: with no type
+spec, each character is stored as one byte, which is Latin-1. Fix it at the source:
+
+- write `~"café"` or `<<"café"/utf8>>`;
+- convert Latin-1 data from outside (a file, a legacy database, a socket) with
+  `unicode:characters_to_binary(Bin, latin1)`.
+
+The contract is enforced where it costs nothing:
+
+- **Compile time.** A template static is not the trap: the parse transform folds a
+  binary literal in a content or attribute position as UTF-8 text
+  (`extract_bin_element/1`), so `{p, [{title, <<"é">>}], [<<"café">>]}` renders
+  `café`. Everywhere else in a module using the Arizona headers -- `mount/1`,
+  `handle_event/3`, a helper, a `?get` default, a conditional branch value, a hoisted
+  variable, a `?raw` payload, a `?stateless`/`?stateful` prop -- a non-ASCII
+  `<<"...">>` with no `/utf8` gets the compile **warning** `latin1_binary_literal`
+  (an error under `warnings_as_errors`). It is not re-encoded: such a literal may be
+  data compared against other Latin-1 bytes or a protocol constant, and the transform
+  cannot tell which. `~"..."`, `<<"..."/utf8>>`, ASCII-only literals and explicit byte
+  values (`<<16#E9>>`) never trigger it.
+- **Failure paths.** The JSON encoder validates UTF-8 as it escapes, so a frame or a
+  `?native` value holding other bytes is already refused -- as the encoder's
+  `{invalid_byte, _}` or `unexpected_end`, which names neither the value nor the cause.
+  `arizona_utf8:refuse/3`, run only after the encoder raised, renames it
+  `{non_utf8_render, Byte, Offset}`, finding the bytes in a structured value too (a
+  command array). `?native` escapes inside the slot's located evaluation, so its error
+  carries the template line; a socket frame failure is logged with the formatted
+  reason and closes 4500 (4501 for the frame delivering a mount), as before.
+- **Dev mode** (the dev reloader is wired, the signal that also gates the rich error
+  page). `arizona_http` checks each HTML response once (`arizona_utf8:check_page/3`, one
+  BIF pass over the finished page). On failure it renders the view again with every
+  value checked (it wraps each dynamic so the check runs inside the
+  slot's located `try`) and raises `{arizona_loc, {Module, Line}, {non_utf8_render,
+  Byte, Offset}}`, which reaches the dev error page. A refused WebSocket frame is located
+  the same way from the live process's current views (`arizona_utf8:locate_live/3`, via
+  `arizona_live:view_state/1`) before it is logged. That re-render runs `mount/1` again
+  for an HTTP page (and for its `?stateful` children); a live view tree is rendered from
+  its held bindings, children skipped and checked from their own. Production pays one
+  dev-flag read per HTTP response and nothing per frame.
+
+`format_error/2` (`arizona_utf8`) names the byte, its offset, the value's bytes (as
+integers -- `~p` would print a Latin-1 binary as the very text it fails to be) and the
+fix. Handler effects are not template values; the socket encodes them, so a non-UTF-8
+string in one is named on the same failure path.
 
 ## Terminal render target -- `?terminal`
 
