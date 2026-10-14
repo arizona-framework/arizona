@@ -1,13 +1,13 @@
-# Version catalog. Align these with your installed Android toolchain; the values
-# below are a known-good late-2024/early-2025 set.
+# Version catalog. Renovate keeps these current; AGP 9 builds Kotlin in, so there is
+# no separate kotlin-android plugin and `kotlin` pins the compose/serialization plugins.
 [versions]
-agp = "8.13.2"
+agp = "9.4.1"
 kotlin = "2.4.21"
-coreKtx = "1.15.0"
-lifecycle = "2.8.7"
+coreKtx = "1.19.1"
+lifecycle = "2.11.0"
 activityCompose = "1.13.0"
-composeBom = "2025.12.01"
-okhttp = "4.12.0"
+composeBom = "2026.09.00"
+okhttp = "5.5.0"
 serialization = "1.11.0"
 junit = "4.13.2"
 androidxJunit = "1.3.0"
@@ -33,6 +33,5 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 [plugins]
 android-library = { id = "com.android.library", version.ref = "agp" }
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
