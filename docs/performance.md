@@ -217,6 +217,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Skip the fingerprint dedup walk for fp-less frames | strictly less work on every event workload: red/op -0.5% to -6.1%, resolved by the reductions column |
 | Escape a binary/integer SSR content value directly; render every `?each` item through the top-level SSR walk | `render_each_100` -11.6% (6.9 -> 6.1 us), red/op -40%; red/op -31% `render_view_many_dyn_50`, -16%/-17% `render_view_small`/`_with_layout`, -8% `render_view_page`; a 201-row escape-heavy table red/op -23%, wall ~-5% (under the floor) |
 | Scan `escape/1` 8 and 4 bytes per step; slice long clean runs | a 201-row escape-heavy table -46% (193 -> 105 us, red/op 24.8k -> 12.1k); per value: clean 10-200 B -46% to -55%, one metacharacter in 64-200 B -30% to -80%, markup -10%, UTF-8 prose -63%; `render_view_page` -6%, `render_each_100` red/op -13% |
+| Fold the UTF-8 output check into `escape/1`'s entry scan (`non_utf8_render`) | a correctness change that had to cost nothing: the guard's "needs nothing" class narrowed to ASCII, one extra compare per letter, and a value that stops the scan has its rest checked once by `unicode:characters_to_binary/1` (a BIF that returns its input uncopied). Paired against main: every render, diff and e2e label 0% to +2% wall, red/op 0 on the SSR labels, +1.6% `mount_only` / +0.9% `stream_update_field_100` (the live path's one BIF call per evaluated binary). Per value: clean ASCII 20 / 200 / 2048 B +0.6 / +14 / +266 ns; dense multibyte +38-800 ns. The alternatives are below |
 | Skip the document on a fingerprinted mount (`render_snapshot/2`) | reconnect/navigate render+payload red/op -22% to -42% on every fixture; wall -20% to -57% on the larger ones (`arizona_datatable` -38 to -57%, `arizona_bench_many_dyn` -26 to -28%, `arizona_bench_nested_each` -20 to -25%), the small ones under the floor |
 | Skip the document on a first connect too (observe commands in `arizona_eval`) | connect render red/op -22% to -69% against main's `render/2` (`arizona_datatable` 1919 -> 595, `arizona_opaque_nested` -49%, `arizona_bench_nested_each` -35%, `arizona_bench_many_dyn` -33%, `arizona_page` -28%); costs +2% on a reconnect and up to +5% on a full-dep diff, both under the floor |
 
@@ -439,6 +440,46 @@ words (`<<W:56>>` stays a small integer; the exact zero-byte test, so UTF-8 neve
 flags; either the five targets OR'd or folded into three tests) -- correct, close
 behind the guard everywhere, never ahead. A byte-step window loop with no chunks --
 3.4x slower on dense input. Each was checked byte-identical before timing.
+
+**Other shapes for the UTF-8 output check** (the row above shows what won). All
+checked correct against the same suite before timing. Per value, html `escape/1`,
+ns, against main's escape with no check:
+
+| value | main | folded (kept) | SWAR gate + `/utf8` loop | SWAR gate + BIF | BIF over the whole value first | `binary:match` for a byte >= 128 first |
+| ----- | ---- | ------------- | ------------------------ | --------------- | ------------------------------ | -------------------------------------- |
+| clean ASCII 20 B | 27.0 | 27.6 | 35.6 | 35.3 | 53.7 | 77.5 |
+| one multibyte in 20 B | 28.1 | 68.1 | 65.9 | 68.5 | 53.0 | 100.4 |
+| dense multibyte 20 B | 25.4 | 63.0 | 99.2 | 61.1 | 51.5 | 82.0 |
+| clean ASCII 200 B | 180 | 195 | 205 | 214 | 259 | 354 |
+| dense multibyte 200 B | 177 | 284 | 888 | 294 | 282 | 312 |
+| clean ASCII 2 KB | 1611 | 1877 | 1955 | 1980 | 2113 | 3113 |
+| dense multibyte 2 KB | 1573 | 2377 | 8686 | 2299 | 2286 | 2367 |
+
+SWAR (`<<W:56>>`, mask `16#80808080808080`, so the word stays a small integer, then the
+existing per-byte metacharacter guard) never beat folding the ASCII bound into that
+guard: the guard already touches every byte, and the word test is extra work on top. As a
+standalone validator for the live path the BIF also beat it everywhere (20 B 25.7 vs
+36.0 ns, dense multibyte 2 KB 753 vs 7317), so the per-codepoint `/utf8` loop is out
+entirely. Paired `bench-ab`, folded vs SWAR gate: all SSR labels within +-2% except
+`render_view_small` (+9.7%, under the floor at ~190 ns), and SWAR does +17% red/op on
+`render_each_100` (7-byte steps recurse more often). Folded vs BIF-first: BIF-first is
++12% to +27% wall on `render_view_page`/`_small`/`_many_dyn_50`/`render_each_100`, red/op
++11% to +24% -- a C call on every value, which the fold pays only for a non-ASCII or
+escaped one.
+
+**Checking the whole response once instead of each value.** One C pass over the
+finished page or frame, no per-value work -- and no template line, since the bytes no
+longer know which slot produced them (re-rendering with per-value checks after a failure
+could recover it, but only if the per-value pass is cheap, which makes the boundary pass
+pointless). `unicode:characters_to_binary/1` on the page iodata copies it into a fresh
+binary: paired against the folded check it cost `render_view_small` +151%, `render_view_page`
++118%, `render_each_100` +123%, `render_view_many_dyn_50` +26%, `http_get_e2e` +18%.
+Cheaper shapes, measured against each fixture's own render: a BIF per binary leaf of the
+iolist +46% / +42% / +90% / +16% (small, page, each_100, many_dyn_50), `iolist_to_binary`
+then the BIF +77% / +35% / +58% / +9% -- every one of them above the folded check's ~0%.
+On the WebSocket the boundary check is free (`json:encode` already validates), but it
+names the failure only after the frame left the live process; the per-value check there
+costs one BIF call per evaluated binary, under the floor on every live label.
 
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
