@@ -36,6 +36,11 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([top_text/1]).
 -export([raw_text/1]).
 -export([helper_raw/1]).
+-export([raw_in_list_item/1]).
+-export([raw_in_stream_item/1]).
+-export([raw_in_branch/1]).
+-export([raw_attr/1]).
+-export([raw_interp_attr/1]).
 
 %% Constant scrutinee (`flag`), branch reads `val`: a change to `val` must
 %% re-render the `<p>` even though `flag` is unchanged.
@@ -381,3 +386,46 @@ helper_raw(Bindings) ->
 
 wrap_raw(Value) ->
     arizona_template:raw(Value).
+
+%% A `?get` and a `?raw` side by side in one plain-list `?each` item.
+-spec raw_in_list_item(az:bindings()) -> az:template().
+raw_in_list_item(Bindings) ->
+    ?html(
+        {ul, [], [
+            ?each(fun(I) -> {li, [], [maps:get(t, I), ?raw(maps:get(h, I))]} end, ?get(items))
+        ]}
+    ).
+
+%% The same pair in a stream `?each` item.
+-spec raw_in_stream_item(az:bindings()) -> az:template().
+raw_in_stream_item(Bindings) ->
+    ?html(
+        {ul, [], [
+            ?each(
+                fun(I, K) -> {li, [{az_key, K}], [maps:get(t, I), ?raw(maps:get(h, I))]} end,
+                ?get(items)
+            )
+        ]}
+    ).
+
+%% The same pair in a conditional branch element (a nested template).
+-spec raw_in_branch(az:bindings()) -> az:template().
+raw_in_branch(Bindings) ->
+    ?html(
+        {'div', [], [
+            case ?get(flag) of
+                true -> {p, [], [?get(v), ?raw(?get(h))]};
+                false -> <<>>
+            end
+        ]}
+    ).
+
+%% A plain and a `?raw` attribute value.
+-spec raw_attr(az:bindings()) -> az:template().
+raw_attr(Bindings) ->
+    ?html({span, [{title, ?get(v)}, {'data-r', ?raw(?get(h))}], []}).
+
+%% An interpolated attribute value mixing static text, a `?raw` part and a plain one.
+-spec raw_interp_attr(az:bindings()) -> az:template().
+raw_interp_attr(Bindings) ->
+    ?html({a, [{href, [~"/a?q=\"<&", ?raw(?get(h)), ~"&z=", ?get(v)]}], []}).

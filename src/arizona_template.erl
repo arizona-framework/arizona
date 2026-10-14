@@ -63,6 +63,7 @@ render(Bindings) ->
 -export([each/2]).
 -export([to_bin/1]).
 -export([raw/1]).
+-export([raw_attr/2]).
 -export([bool_attr/1]).
 -export([classify_trusted/1]).
 -export([escape_value/2]).
@@ -92,6 +93,8 @@ render(Bindings) ->
 -ignore_xref([branch/2]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
+%% Emitted by the parse transform around an interpolated attribute with a `?raw` part.
+-ignore_xref([raw_attr/2]).
 %% Emitted by the parse transform around a `value` backend's dynamic attribute.
 -ignore_xref([bool_attr/1]).
 
@@ -511,6 +514,17 @@ with no defined meaning; using it in a `?native`/`?terminal` template is unsuppo
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
 raw(Value) -> {arizona_raw, Value}.
+
+%% Internal, emitted only by the parse transform for an interpolated attribute value
+%% with a literal `raw/1` part. The assembled value is markup, so it is one raw value:
+%% the raw parts verbatim, every other part escaped through `Backend` -- a static or
+%% `?get` part means the same text with or without a raw sibling.
+-doc false.
+-spec raw_attr(Backend, Parts) -> {arizona_raw, binary()} when
+    Backend :: module(),
+    Parts :: [term()].
+raw_attr(Backend, Parts) ->
+    {arizona_raw, <<<<(escape_value(Backend, P))/binary>> || P <- Parts>>}.
 
 %% Internal, emitted only by the parse transform for a `value`-boolean backend
 %% (`boolean_attrs/0`, i.e. ?native): tags a dynamic attribute's boolean so the diff

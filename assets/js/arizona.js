@@ -930,6 +930,32 @@ function applyTextOp(el, az, val, isHtml) {
     notifyUpdated(el);
 }
 
+/** @type {HTMLTemplateElement | null} */
+let rawAttrTpl = null;
+
+/**
+ * Decode a `?raw` attribute value. SSR splices it verbatim inside `name="..."`, so the
+ * page's value is what the HTML parser made of that text (`&amp;` -> `&`); setting the
+ * markup with `setAttribute` would keep the entities literal. Parsing it in the same
+ * double-quoted context, inside an inert template, yields the value SSR produced.
+ *
+ * No DOM API decodes character references without a parse, and the attribute-context
+ * rules (a legacy entity without `;` is left alone before `=` or an alphanumeric) rule
+ * out an RCDATA decode or a hand-written table, so the parse stays. Every `"` becomes
+ * `&quot;` first: in the double-quoted value state that is the only character that ends
+ * the value, so the text can never leave the attribute and the parse can only decode
+ * character references. A bare `"` is invalid in this context (at SSR it would end the
+ * value), so the live path shows it literally instead of breaking out.
+ * @param {string} raw
+ * @returns {string}
+ */
+function decodeRawAttr(raw) {
+    if (!rawAttrTpl) rawAttrTpl = document.createElement('template');
+    rawAttrTpl.innerHTML = `<i a="${raw.replace(/"/g, '&quot;')}"></i>`;
+    const el = /** @type {Element} */ (rawAttrTpl.content.firstChild);
+    return el.getAttribute('a') ?? '';
+}
+
 /**
  * Apply a SET_ATTR op: setAttribute and sync the live DOM property for form
  * controls. Once the user has interacted, the browser's dirty value/checkedness
@@ -937,13 +963,15 @@ function applyTextOp(el, az, val, isHtml) {
  * so without the property write a server-driven change would silently stop
  * rendering. The server is authoritative; a SET_ATTR of a boolean attribute
  * always means true (false diffs to REM_ATTR). A command value arrives as its
- * JSON array, not attribute text, so it is written back as JSON.
+ * JSON array, not attribute text, so it is written back as JSON. A `?raw` value
+ * arrives tagged `{raw}`: it is attribute markup, decoded the way SSR's parse did.
  * @param {Element} el
  * @param {string} name
- * @param {string | unknown[]} val
+ * @param {string | unknown[] | {raw: string}} val
  */
 function applySetAttrOp(el, name, val) {
-    if (typeof val !== 'string') val = JSON.stringify(val);
+    if (Array.isArray(val)) val = JSON.stringify(val);
+    else if (typeof val !== 'string') val = decodeRawAttr(val.raw);
     // A runtime `arizona_js:set_attr(sel, "az-toggle", ...)` writes a name no
     // template contains, so the compile-time set cannot hold it. Every such write
     // funnels here -- the SET_ATTR op, an ITEM_PATCH inner op, `set_attr`/

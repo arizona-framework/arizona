@@ -362,7 +362,15 @@ escaped) is a map; the client `innerHTML`s it. The escape opt-out `?raw` is the 
 scalar that must `innerHTML`, so `make_op/3` tags it `#{~"raw" => Html}` (a map, not a
 bare string) -- the only thing distinguishing trusted markup from a `?get` value that
 merely contains `<`. The worker sets `op[3] = true` for the HTML cases. Attribute values
-are escaped by the client's `setAttribute`. (`?raw` is an HTML-target feature; the
+are escaped by the client's `setAttribute`. A `?raw` attribute value is the exception again:
+SSR splices it inside `name="..."`, where the parser decodes its entities, so `make_op/3`
+tags it `#{~"raw" => Markup}` on `?OP_SET_ATTR` too and the client decodes it in that same
+double-quoted context (a bare string would leave `&amp;` literal after the first update).
+An interpolated value with a literal `?raw` part (`{href, [~"/a?", ?raw(Q)]}`) is markup as
+a whole: the transform wraps it in a `raw_attr` call, which splices the raw parts
+verbatim and escapes every other part, static or dynamic, so SSR and the tagged live update
+carry the same assembled markup.
+(`?raw` is an HTML-target feature; the
 `?native`/`?terminal` backends don't HTML-escape, so `?raw` there is unsupported -- a
 target-aware tag would be the follow-up if it ever needs to behave like a plain value.)
 
