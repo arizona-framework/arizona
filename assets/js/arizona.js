@@ -56,6 +56,7 @@ const W_SEND = 1;
 const W_CLOSE = 2;
 const W_UPDATE_PATH = 3;
 const W_ACK_REPLAY = 4;
+const W_MOUNTED = 5;
 
 /** WebSocket close codes used by Arizona (must match `arizona_socket.erl`). */
 const WS_CLOSE_NORMAL = 1000;
@@ -147,6 +148,8 @@ function cancelMountReload() {
  */
 function mountSucceeded(path) {
     cancelMountReload();
+    // The worker's reconnect backoff keys on mounts too; this is their one source.
+    workerPost(W_MOUNTED);
     try {
         localStorage.removeItem(MOUNT_RELOAD_KEY + path);
     } catch {
@@ -254,6 +257,50 @@ const _savedForms = new Map();
  * @type {Set<string>}
  */
 const _replayedForms = new Set();
+
+/**
+ * The current connection's form replay: how many of its parts have yet to post
+ * their events -- the restore itself, plus any command that defers its work (a
+ * view transition's update, a fetch's response effects). The acknowledgement
+ * goes out when it reaches zero, so it always follows every replayed event.
+ * Cleared on close, so a late part of an old replay acknowledges nothing.
+ * @type {{pending: number}|null}
+ */
+let _replay = null;
+
+/** The replay whose commands are executing right now, if any. @type {{pending: number}|null} */
+let _replayRunning = null;
+
+/** @param {{pending: number}} replay */
+function replayPartDone(replay) {
+    replay.pending--;
+    if (replay.pending === 0 && replay === _replay) workerPost(W_ACK_REPLAY);
+}
+
+/**
+ * Hold the replay executing now (if any) open for work a command runs later.
+ * Returns the runner for that work: it runs it as part of the replay, then
+ * releases the hold -- once, however many times it is called.
+ * @returns {(fn: () => void) => void}
+ */
+function holdReplay() {
+    const replay = _replayRunning;
+    if (replay) replay.pending++;
+    let held = replay !== null;
+    return (fn) => {
+        const outer = _replayRunning;
+        if (held) _replayRunning = replay;
+        try {
+            fn();
+        } finally {
+            _replayRunning = outer;
+            if (held) {
+                held = false;
+                replayPartDone(/** @type {{pending: number}} */ (replay));
+            }
+        }
+    };
+}
 
 // Teardown for the connection currently owning the module state, so a second
 // `connect()` can retire the first instead of orphaning its Worker. Cleared by
@@ -2320,17 +2367,20 @@ function execOne(el, event, cmd) {
                 // every caller's containment -- a throwing command would become
                 // one unhandled rejection per dispatch. Same warn-once contract
                 // as runDelegated.
-                runTransition(opts, () => {
-                    try {
-                        executeJS(el, event, inner);
-                    } catch (err) {
-                        const detail = err instanceof Error ? err.message : String(err);
-                        warnOnce(
-                            `[arizona] az-transition command failed: ${detail}`,
-                            'az-transition',
-                        );
-                    }
-                });
+                const later = holdReplay();
+                runTransition(opts, () =>
+                    later(() => {
+                        try {
+                            executeJS(el, event, inner);
+                        } catch (err) {
+                            const detail = err instanceof Error ? err.message : String(err);
+                            warnOnce(
+                                `[arizona] az-transition command failed: ${detail}`,
+                                'az-transition',
+                            );
+                        }
+                    }),
+                );
             }
             break;
         }
@@ -2474,6 +2524,7 @@ function execOne(el, event, cmd) {
                 if (opts.on_error) executeJS(el, event, opts.on_error);
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
+            const later = holdReplay();
             fetch(target, {
                 method,
                 body,
@@ -2482,52 +2533,54 @@ function execOne(el, event, cmd) {
                 keepalive: opts.keep_alive === true,
             })
                 .then((resp) =>
-                    resp.text().then((text) => {
-                        // Apply the effects body whenever it parses -- even on a 4xx, so
-                        // the server can drive inline validation with a real status. The
-                        // effects run against the enclosing view element (not the form, not
-                        // document), so a `push_event` in the response resolves to the
-                        // submitting view and re-renders it via handle_event (no pubsub) --
-                        // without scraping the form's fields into the event payload (the
-                        // view element isn't a form, so autoPayload is empty; the controller
-                        // passes any result explicitly). An empty 2xx body (a cookie-only
-                        // response) applies nothing. on_error runs only when there is no
-                        // usable effects body: a non-JSON page or an empty non-2xx.
-                        let effects = null;
-                        if (text) {
-                            try {
-                                effects = JSON.parse(text).e || [];
-                            } catch {
-                                effects = null;
+                    resp.text().then((text) =>
+                        later(() => {
+                            // Apply the effects body whenever it parses -- even on a 4xx, so
+                            // the server can drive inline validation with a real status. The
+                            // effects run against the enclosing view element (not the form, not
+                            // document), so a `push_event` in the response resolves to the
+                            // submitting view and re-renders it via handle_event (no pubsub) --
+                            // without scraping the form's fields into the event payload (the
+                            // view element isn't a form, so autoPayload is empty; the controller
+                            // passes any result explicitly). An empty 2xx body (a cookie-only
+                            // response) applies nothing. on_error runs only when there is no
+                            // usable effects body: a non-JSON page or an empty non-2xx.
+                            let effects = null;
+                            if (text) {
+                                try {
+                                    effects = JSON.parse(text).e || [];
+                                } catch {
+                                    effects = null;
+                                }
+                            } else if (resp.ok) {
+                                effects = [];
                             }
-                        } else if (resp.ok) {
-                            effects = [];
-                        }
-                        // Effect application is isolated from the trailing network
-                        // .catch: a throw here is an app bug on a request that
-                        // SUCCEEDED (the body parsed), so it is logged -- letting it
-                        // flow into the .catch would fire on_error/arizona:fetch-error
-                        // as a phantom network failure, after effects partially applied.
-                        if (effects !== null) {
-                            try {
-                                executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
-                            } catch (err) {
-                                console.error('[arizona] fetch response effect threw', err);
+                            // Effect application is isolated from the trailing network
+                            // .catch: a throw here is an app bug on a request that
+                            // SUCCEEDED (the body parsed), so it is logged -- letting it
+                            // flow into the .catch would fire on_error/arizona:fetch-error
+                            // as a phantom network failure, after effects partially applied.
+                            if (effects !== null) {
+                                try {
+                                    executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
+                                } catch (err) {
+                                    console.error('[arizona] fetch response effect threw', err);
+                                }
+                            } else onError({ url, status: resp.status });
+                            // Honor az-form-reset only on a 2xx success, so a validation
+                            // error (a non-2xx) keeps the typed fields. Same isolation as
+                            // the effects above.
+                            if (resp.ok && form) {
+                                try {
+                                    maybeResetForm(form);
+                                } catch (err) {
+                                    console.error('[arizona] az-form-reset failed', err);
+                                }
                             }
-                        } else onError({ url, status: resp.status });
-                        // Honor az-form-reset only on a 2xx success, so a validation
-                        // error (a non-2xx) keeps the typed fields. Same isolation as
-                        // the effects above.
-                        if (resp.ok && form) {
-                            try {
-                                maybeResetForm(form);
-                            } catch (err) {
-                                console.error('[arizona] az-form-reset failed', err);
-                            }
-                        }
-                    }),
+                        }),
+                    ),
                 )
-                .catch((error) => onError({ url, error }));
+                .catch((error) => later(() => onError({ url, error })));
             break;
         }
         case JS_FOCUS:
@@ -2807,6 +2860,7 @@ function saveFormState(suspect = null) {
  * tracked in `_replayedForms` until the server acknowledges the replay.
  */
 function restoreFormState() {
+    _replay = { pending: 1 }; // the restore itself
     for (const [formId, { fields, azChange, replay }] of _savedForms) {
         // Saved from any hosting document, so look in all of them -- a form popped
         // out to a PiP window is not reachable from the main document.
@@ -2862,15 +2916,20 @@ function restoreFormState() {
             }
         }
         if (replay && azChange && _connected) {
-            executeJS(form, null, JSON.parse(azChange));
+            _replayRunning = _replay;
+            try {
+                executeJS(form, null, JSON.parse(azChange));
+            } finally {
+                _replayRunning = null;
+            }
             _replayedForms.add(formId);
         }
     }
     _savedForms.clear();
     // The server handles a socket's frames in order, and an event synchronously,
-    // so the pong to a ping sent right after the replay proves it was handled
-    // without crashing the view.
-    if (_replayedForms.size > 0) workerPost(W_ACK_REPLAY);
+    // so the pong to a ping sent after every replayed event proves they were
+    // handled without crashing the view.
+    if (_replayedForms.size > 0) replayPartDone(/** @type {{pending: number}} */ (_replay));
 }
 
 /**
@@ -3579,6 +3638,7 @@ function connect(endpoint, params = {}) {
                         saveFormState(code === WS_CLOSE_CRASH ? _replayedForms : null);
                     }
                     _replayedForms.clear();
+                    _replay = null;
                     break;
                 }
                 case 3:
@@ -3651,6 +3711,7 @@ function connect(endpoint, params = {}) {
                 _connected = false;
                 _mountProof = null;
                 _replayedForms.clear();
+                _replay = null;
                 cancelMountReload();
                 // Reflect the dropped connection so a bfcache-restored snapshot
                 // shows disconnected until `pageshow` reconnects (the worker is
@@ -3685,6 +3746,7 @@ function connect(endpoint, params = {}) {
         _connected = false;
         _mountProof = null;
         _replayedForms.clear();
+        _replay = null;
         cancelMountReload();
         _pendingScroll = null;
         _pendingTransition = null;

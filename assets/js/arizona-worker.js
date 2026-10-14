@@ -19,6 +19,7 @@
  *   [3, {path, qs}]         -- an SPA navigation changed the reconnect path
  *   [4]                     -- acknowledge the frames sent so far: a ping, whose
  *                              pong the worker reports as [3]
+ *   [5]                     -- the open socket's view mounted
  */
 
 import {
@@ -156,18 +157,12 @@ const WS_CLOSE_CRASH = 4500;
 const WS_CLOSE_MOUNT_FAILED = 4501;
 
 /**
- * Whether the open socket received a frame: only a working session may reset the
- * reconnect backoff (see onclose).
- * @type {boolean}
+ * When the open socket's view last mounted, as Date.now(), or null before it
+ * has. The main thread tells (the [5] message): it is the one that knows which
+ * frame proves a mount.
+ * @type {number|null}
  */
-let _framed = false;
-
-/**
- * When the open socket's view was last (re)mounted, as Date.now(): at open, and
- * again on each SPA navigation (see the [3] message).
- * @type {number}
- */
-let _mountedAt = 0;
+let _mountedAt = null;
 
 /**
  * A view that crashes (4500) within this long of its mount does not reset the
@@ -321,7 +316,7 @@ function openSocket() {
     if (_reconnectTimer) clearTimeout(_reconnectTimer);
     _reconnectTimer = null;
     _fpsSent = false;
-    _framed = false;
+    _mountedAt = null;
     _pings = [];
     // A reconnect open promises the `cached_fps` announcement as its first
     // frame (`_az_fps_follow=1` below), so the server defers the full-page
@@ -346,7 +341,6 @@ function openSocket() {
 
     ws.onopen = () => {
         if (_ws !== ws) return;
-        _mountedAt = Date.now();
         _heartbeatPending = false;
         _heartbeatInterval = setInterval(() => {
             if (_heartbeatPending) {
@@ -371,7 +365,6 @@ function openSocket() {
             return;
         }
 
-        _framed = true;
         const msg = JSON.parse(e.data);
         const ops = msg.o || null;
         const effects = msg.e || null;
@@ -412,12 +405,13 @@ function openSocket() {
         postMessage([2, e.code]);
 
         if (e.code === 1000) return;
-        // Reset the backoff only after a working session: one that framed, did not
-        // fail to mount, and did not crash right after its mount. A server that
-        // accepts the socket but never frames (a dead backend) or cannot mount
-        // the view thus keeps backing off instead of being hammered at backoff[0].
+        // Reset the backoff only after a working session: one that mounted its
+        // view, did not fail to mount (a navigate), and did not crash right after
+        // its last mount. A server that accepts the socket but never mounts (a
+        // dead backend, a failing mount) thus keeps backing off instead of being
+        // hammered at backoff[0].
         if (
-            _framed &&
+            _mountedAt !== null &&
             e.code !== WS_CLOSE_MOUNT_FAILED &&
             (e.code !== WS_CLOSE_CRASH || Date.now() - _mountedAt >= CRASH_STABLE_MS)
         ) {
@@ -498,11 +492,6 @@ self.onmessage = (e) => {
             // extras). Framework `_az_*` params (e.g. `_az_caps`) are preserved.
             // Without replacing the user params, the original page's query string
             // would persist and the navigated-to one would be lost on reconnect.
-            // Restart the stable window (CRASH_STABLE_MS): a navigate mounts a new
-            // view on this socket. This message cannot tell a patch (no remount)
-            // from a navigate, so a patch restarts it too -- at worst one crash
-            // soon after a patch does not reset the backoff.
-            _mountedAt = Date.now();
             if (!_wsUrl) break;
             const { path, qs } = msg[1];
             const u = new URL(_wsUrl);
@@ -522,6 +511,12 @@ self.onmessage = (e) => {
                 _pings.push(true);
                 _ws.send(SYS_PING);
             }
+            break;
+        case 5:
+            // [5] -- the open socket's view mounted (a first connect's frame, a
+            // reconnect's resync, a navigate's OP_REPLACE). A message about a
+            // socket that already closed finds none open and is dropped.
+            if (_ws && _ws.readyState === 1) _mountedAt = Date.now();
             break;
     }
 };

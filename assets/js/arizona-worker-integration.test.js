@@ -350,38 +350,6 @@ describe('arizona-worker', () => {
         expect(url).not.toContain('q=a');
     });
 
-    it('does not reset the backoff on socket open without a frame', () => {
-        // backoff(0) in [800,1200), backoff(1) in [1600,2400) -- disjoint, so the
-        // fire time distinguishes the attempt index. A socket that opens but never
-        // frames must NOT reset the counter, so the second drop backs off further.
-        slf.send([0, 'ws://host/ws?_az_path=%2F']);
-        ws.latest().simulateOpen();
-        ws.latest().close(1006); // attempt 0 -> backoff(0)
-        vi.advanceTimersByTime(1200);
-        expect(ws.instances).toHaveLength(2); // reconnected
-
-        ws.latest().simulateOpen(); // open again, still no frame
-        ws.latest().close(1006); // attempt 1 (NOT reset on open) -> backoff(1)
-        vi.advanceTimersByTime(1300); // < 1600: too soon for backoff(1)
-        expect(ws.instances).toHaveLength(2);
-        vi.advanceTimersByTime(1200); // now past backoff(1)
-        expect(ws.instances).toHaveLength(3);
-    });
-
-    it('resets the backoff once a real frame arrives', () => {
-        slf.send([0, 'ws://host/ws?_az_path=%2F']);
-        ws.latest().simulateOpen();
-        ws.latest().close(1006); // attempt 0 -> backoff(0)
-        vi.advanceTimersByTime(1200);
-        expect(ws.instances).toHaveLength(2);
-
-        ws.latest().simulateOpen();
-        ws.latest().simulateMessage(JSON.stringify({ o: [] })); // a real frame resets the counter
-        ws.latest().close(1006); // attempt back to 0 -> backoff(0)
-        vi.advanceTimersByTime(1200); // backoff(0) < 1200 fires
-        expect(ws.instances).toHaveLength(3);
-    });
-
     // backoff(0) in [800,1200), backoff(1) in [1600,2400): the wait tells the
     // attempt index apart.
     /** Close the open socket with `code`; return how long the worker waits to reopen. */
@@ -403,23 +371,37 @@ describe('arizona-worker', () => {
     function openAfterOneDrop() {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();
-        const first = reopenDelay(1006); // never framed -> backoff(0)
+        const first = reopenDelay(1006); // never mounted -> backoff(0)
         ws.latest().simulateOpen();
         return first;
     }
+    /** The main thread's word that the open socket's view mounted. */
+    const mounted = () => slf.send([5]);
 
-    it('a mount failure (4501) never resets the backoff, even after a frame', () => {
+    it('does not reset the backoff on a socket that never mounted', () => {
         expect(inStep(openAfterOneDrop(), FIRST_STEP)).toBe(true);
-        // A flagged reconnect frames its az-* names before the deferred mount.
-        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
-        expect(inStep(reopenDelay(4501), SECOND_STEP)).toBe(true);
+        expect(inStep(reopenDelay(1006), SECOND_STEP)).toBe(true);
     });
 
-    it('a navigate whose mount fails (4501) on a long-lived session keeps backing off', () => {
+    it('frames alone do not reset the backoff: only the mount signal does', () => {
+        // A flagged reconnect frames its az-* names before the deferred mount.
+        openAfterOneDrop();
+        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
+        ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+        expect(inStep(reopenDelay(1006), SECOND_STEP)).toBe(true);
+    });
+
+    it('a drop after a mount resets the backoff', () => {
+        openAfterOneDrop();
+        mounted();
+        expect(inStep(reopenDelay(1006), FIRST_STEP)).toBe(true);
+    });
+
+    it('a mount failure (4501) on a long-lived session keeps backing off', () => {
         const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
         try {
             openAfterOneDrop();
-            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            mounted();
             now.mockReturnValue(1_000_000 + 60_000);
             expect(inStep(reopenDelay(4501), SECOND_STEP)).toBe(true);
         } finally {
@@ -431,7 +413,7 @@ describe('arizona-worker', () => {
         const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
         try {
             openAfterOneDrop();
-            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            mounted();
             now.mockReturnValue(1_000_000 + 9_999);
             expect(inStep(reopenDelay(4500), SECOND_STEP)).toBe(true);
         } finally {
@@ -443,7 +425,7 @@ describe('arizona-worker', () => {
         const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
         try {
             openAfterOneDrop();
-            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            mounted();
             now.mockReturnValue(1_000_000 + 10_000);
             expect(inStep(reopenDelay(4500), FIRST_STEP)).toBe(true);
         } finally {
@@ -451,26 +433,35 @@ describe('arizona-worker', () => {
         }
     });
 
-    it('a crash (4500) right after an SPA navigation keeps backing off', () => {
-        // The navigation may mount a new view, so "right after the mount" counts
-        // from it, not from the connection's open.
+    it('the stable window restarts at each mount, not at a path update', () => {
+        // A navigate's mount restarts it; a patch (a path update, no mount) must not.
         const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
         try {
             openAfterOneDrop();
-            ws.latest().simulateMessage(JSON.stringify({ o: [] }));
+            mounted();
             now.mockReturnValue(1_000_000 + 60_000);
-            slf.send([3, { path: '/next', qs: '' }]);
+            slf.send([3, { path: '/patched', qs: '' }]);
             now.mockReturnValue(1_000_000 + 61_000);
+            expect(inStep(reopenDelay(4500), FIRST_STEP)).toBe(true);
+
+            ws.latest().simulateOpen();
+            mounted();
+            now.mockReturnValue(1_000_000 + 120_000);
+            mounted(); // a navigate mounted a new view
+            now.mockReturnValue(1_000_000 + 121_000);
             expect(inStep(reopenDelay(4500), SECOND_STEP)).toBe(true);
         } finally {
             now.mockRestore();
         }
     });
 
-    it('any other close after a frame resets the backoff', () => {
+    it('a mount signal for a socket that already closed is dropped', () => {
         openAfterOneDrop();
-        ws.latest().simulateMessage(JSON.stringify({ a: ['az-click'] }));
-        expect(inStep(reopenDelay(1001), FIRST_STEP)).toBe(true);
+        ws.latest().close(1006);
+        mounted(); // late: no socket is open
+        vi.advanceTimersByTime(2400);
+        ws.latest().simulateOpen();
+        expect(inStep(reopenDelay(1006), [4000, 6000])).toBe(true);
     });
 
     it('update-path message [3, {path, qs}] rewrites the cached URL', () => {

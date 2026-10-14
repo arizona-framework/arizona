@@ -13,6 +13,9 @@ render(Bindings) ->
             {h1, [], [~"Navigate Halt Demo"]},
             {a, [{id, ~"protected-link"}, {href, ~"/protected"}, az_navigate], [
                 ~"Go to protected"
+            ]},
+            {a, [{id, ~"forbidden-link"}, {href, ~"/forbidden"}, az_navigate], [
+                ~"Go to forbidden"
             ]}
         ]}
     ).

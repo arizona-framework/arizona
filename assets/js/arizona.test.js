@@ -4235,6 +4235,20 @@ describe('crash and mount-failure recovery', () => {
         expect(localStorage.getItem(KEY)).toBeNull();
     });
 
+    it('tells the worker each time a view mounts, and only then', async () => {
+        const m = await start();
+        const mountedSignals = () => m.posted.filter((d) => d[0] === 5).length;
+        m.simulateOpen(true);
+        m.simulateMessage(null, null, false); // a reconnect's names frame
+        expect(mountedSignals()).toBe(0);
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null, true);
+        expect(mountedSignals()).toBe(1); // the resync
+        m.simulateMessage([[0, 'page:0', 'x']], null); // an ordinary diff
+        expect(mountedSignals()).toBe(1);
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null); // a navigate
+        expect(mountedSignals()).toBe(2);
+    });
+
     it('counts the path actually reloaded', async () => {
         const m = await start();
         m.simulateOpen();
@@ -4407,6 +4421,101 @@ describe('crash and mount-failure recovery', () => {
         m.simulateClose(4500);
         remount(m);
         expect(ackRequests(m)).toBe(0);
+    });
+
+    it('acknowledges only after a replayed event a view transition deferred', async () => {
+        // A transition around a plain command runs it in the transition's update,
+        // later; the push_event nested there must go out before the ping.
+        const deferred =
+            '<div id="page" az-view><form id="f" az-change=\'[20,{},[20,{},[0,"changed"]]]\'>' +
+            '<input name="q" value=""></form></div>';
+        const m = await start();
+        document.body.innerHTML = deferred;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        /** @type {Array<() => void>} */
+        const updates = [];
+        document.startViewTransition = (arg) => {
+            updates.push(typeof arg === 'function' ? arg : arg.update);
+            return {};
+        };
+        try {
+            field('q').value = 'v';
+            m.simulateClose(4500);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', deferred]], null, true);
+            expect(changeSends(m)).toBe(0);
+            expect(ackRequests(m)).toBe(0); // the replayed event is still pending
+            for (const update of updates.splice(0)) update();
+            const sends = m.posted.filter((d) => d[0] === 1 || d[0] === 4);
+            const change = sends.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
+            expect(change).toBeGreaterThanOrEqual(0);
+            expect(sends.findIndex((d) => d[0] === 4)).toBeGreaterThan(change);
+        } finally {
+            delete document.startViewTransition;
+        }
+    });
+
+    it("acknowledges only after a replayed fetch's response events", async () => {
+        // A fetch az-change posts its response's push_event later; the ping must
+        // follow it.
+        const viaFetch =
+            '<div id="page" az-view><form id="f" az-change=\'[22,"/save",{}]\'>' +
+            '<input name="q" value=""></form></div>';
+        const m = await start();
+        document.body.innerHTML = viaFetch;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        /** @type {(v: any) => void} */
+        let respond = () => {};
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(() => new Promise((resolve) => (respond = resolve)));
+        try {
+            field('q').value = 'v';
+            m.simulateClose(4500);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', viaFetch]], null, true);
+            expect(ackRequests(m)).toBe(0); // the response is still pending
+            respond({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'changed']] })),
+            });
+            for (let i = 0; i < 10; i++) await Promise.resolve();
+            const sends = m.posted.filter((d) => d[0] === 1 || d[0] === 4);
+            const change = sends.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
+            expect(change).toBeGreaterThanOrEqual(0);
+            expect(sends.findIndex((d) => d[0] === 4)).toBeGreaterThan(change);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
+
+    it('a deferred replay part finishing after the close acknowledges nothing', async () => {
+        const deferred =
+            '<div id="page" az-view><form id="f" az-change=\'[20,{},[20,{},[0,"changed"]]]\'>' +
+            '<input name="q" value=""></form></div>';
+        const m = await start();
+        document.body.innerHTML = deferred;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        /** @type {Array<() => void>} */
+        const updates = [];
+        document.startViewTransition = (arg) => {
+            updates.push(typeof arg === 'function' ? arg : arg.update);
+            return {};
+        };
+        try {
+            field('q').value = 'v';
+            m.simulateClose(4500);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', deferred]], null, true);
+            m.simulateClose(1006); // the connection goes before the transition runs
+            for (const update of updates.splice(0)) update();
+            expect(ackRequests(m)).toBe(0);
+        } finally {
+            delete document.startViewTransition;
+        }
     });
 
     it('a crash long after the acknowledged replay replays again', async () => {

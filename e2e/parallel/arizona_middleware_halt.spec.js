@@ -35,4 +35,24 @@ test.describe('middleware halt on WS navigate', () => {
         });
         await expect(page.locator('#flash')).toHaveText('Please sign in first.');
     });
+
+    test('a halt without a redirect loads the response in place, one history entry', async ({
+        page,
+    }) => {
+        await page.goto('/navigate-halt');
+        await wsReady(page);
+        // The middleware halts with no redirect: the server answers the SPA
+        // navigate with a full navigation, and HTTP serves the halt's 403.
+        const before = await page.evaluate(() => history.length);
+        const response = page.waitForResponse((r) => new URL(r.url()).pathname === '/forbidden');
+        await page.click('#forbidden-link');
+        expect((await response).status()).toBe(403);
+        await expect(page).toHaveURL('/forbidden');
+        // The client pushed /forbidden before asking; loading that same URL is a
+        // replace per the HTML navigate algorithm, so there is one new entry and
+        // one Back leaves the halt.
+        expect(await page.evaluate(() => history.length)).toBe(before + 1);
+        await page.goBack();
+        await expect(page).toHaveURL('/navigate-halt');
+    });
 });

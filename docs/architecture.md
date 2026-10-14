@@ -1164,7 +1164,7 @@ matters because the JS worker treats **any non-1000 code as reconnectable**:
 | `{shutdown, drain}` | `?CLOSE_GOING_AWAY` (1001) | **Reconnects** -- the deliberate drain path (RFC 6455 §7.4 "going away"); the main thread preserves form state |
 | `normal` | 1000 | No reconnect |
 | `shutdown` / `{shutdown, _}` (any other reason) | 1000 | No reconnect -- opt into the reconnect path by exiting `{shutdown, drain}` explicitly |
-| anything else, after the view mounted (a crash) | `?CLOSE_CRASH` (4500) | **Reconnects** with no page reload: the worker's backoff reconnect remounts the view in place and the main thread restores typed form fields. A crash within 10 s of the view's mount (the connection's open, or the last SPA navigation) does not reset the backoff, so a view that crashes right after every remount keeps backing off. Crash remount is deliberately not attempted server-side |
+| anything else, after the view mounted (a crash) | `?CLOSE_CRASH` (4500) | **Reconnects** with no page reload: the worker's backoff reconnect remounts the view in place and the main thread restores typed form fields. A crash within 10 s of the view's last mount (the main thread tells the worker: a first connect's frame, a reconnect's resync, a navigate's `OP_REPLACE`) does not reset the backoff, so a view that crashes right after every remount keeps backing off; the native clients apply the same rule from their `OP_REPLACE`. Crash remount is deliberately not attempted server-side |
 | any failure to mount the view | `?CLOSE_MOUNT_FAILED` (4501) | **Reconnects**, and reloads the page after a random 5-10 s delay (the page may be stale, e.g. after a deploy); a reconnect that mounts first cancels the reload. Consecutive reloads are counted in `localStorage`, so per origin and per path and shared across tabs, and cleared only by a successful mount of that path (`pagehide` and `disconnect()` just cancel the pending reload); from the 10th on the delay is 30 s, logged once per page load, and retrying never stops. Form fields saved on the close are lost by the reload, unless a reconnect mounts first and restores them. Never resets the backoff |
 
 The mount sites that close 4501 on any raise: the connect's mount in `init/4` (a first connect,
@@ -1179,7 +1179,7 @@ own exit). A navigate/patch whose middleware halts without a redirect is not a m
 a deliberate refusal: the socket replies with a full navigation to the requested URL
 (`arizona_js:navigate(Url, #{full => true})`), so the browser loads it over HTTP and shows the
 middleware's own response at once -- a reconnect's upgrade, refused by the same middleware, never
-would. A native client takes a `full` navigate as a fresh connection to that path.
+would. A native client takes a `full` navigate as a fresh connection to that path and query.
 
 A raise inside the socket itself after the mount closes the same way as a crash: `handle_in/2`
 and `handle_info/2` each catch anything their handling raises -- a handler crash, or a frame that
