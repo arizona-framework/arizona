@@ -1151,6 +1151,12 @@ treats **any non-1000 code as reconnectable**:
 | `shutdown` / `{shutdown, _}` (any other reason) | 1000 | No reconnect -- opt into the reconnect path by exiting `{shutdown, drain}` explicitly |
 | anything else (a crash) | `?CLOSE_CRASH` (4500) | Reconnects via backoff in `arizona-worker.js`; the reason is logged. Crash remount is deliberately not attempted server-side |
 
+A raise inside the socket itself closes the same way: `handle_in/2` and `handle_info/2` each run
+under one guard that turns anything escaping the inner ones -- notably a frame that cannot be
+JSON-encoded, such as a value holding invalid UTF-8, since encoding runs after them -- into a logged
+4500. The transport has no catch of its own, so without the guard the session would end with no
+close frame at all (a bare 1006).
+
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{reply_many, [iodata()], Socket}` | `{close, Code, Reason, Socket}`. `reply_many` exists for the
 deferred-resync flush: a non-`cached_fps` first frame produces the resync frame **and** its own
