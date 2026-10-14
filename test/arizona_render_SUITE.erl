@@ -96,6 +96,7 @@
     ssr_inner_content_rejects_being_measured/1,
     ssr_inner_content_rejects_raw_wrapper/1,
     ssr_inner_content_rejects_sibling_in_one_slot/1,
+    ssr_inner_content_rejects_runtime_list/1,
     ssr_invalid_chardata_user_value_still_errors/1,
     ssr_escaped_values_match_live/1,
     ssr_escaped_scalars_exact/1,
@@ -196,6 +197,7 @@ groups() ->
             ssr_inner_content_rejects_being_measured,
             ssr_inner_content_rejects_raw_wrapper,
             ssr_inner_content_rejects_sibling_in_one_slot,
+            ssr_inner_content_rejects_runtime_list,
             ssr_invalid_chardata_user_value_still_errors,
             ssr_escaped_values_match_live,
             ssr_escaped_scalars_exact,
@@ -1113,6 +1115,14 @@ ssr_inner_content_rejects_sibling_in_one_slot(Config) when is_list(Config) ->
     ?assertError(
         {arizona_loc, {arizona_inner_content_layouts, _}, {bad_template_value, [_, #{s := _}]}},
         layout_html(arizona_inner_content_layouts, sibling)
+    ).
+
+ssr_inner_content_rejects_runtime_list(Config) when is_list(Config) ->
+    %% A list built at runtime is opaque to the template, so the slot is text and
+    %% the opaque page inside it is refused by name, located at the layout.
+    ?assertError(
+        {arizona_loc, {arizona_inner_content_layouts, _}, {bad_template_value, [_, #{s := _}]}},
+        layout_html(arizona_inner_content_layouts, runtime_sibling)
     ).
 
 %% Renders arizona_static_page under one layout function, with a title carrying

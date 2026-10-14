@@ -2618,7 +2618,6 @@ compile_static_false(NameAST, State0, ElemLine) ->
                 <<>> ->
                     State0;
                 Bytes ->
-                    _ = record_directive_attr(NameBin),
                     buf_append(State0, Bytes)
             end
     end.
@@ -2763,7 +2762,8 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
 typed_attr_ast(Backend, NameBin, ValueAST) ->
     case {Backend:boolean_attrs(), is_framework_attr(NameBin)} of
         {value, false} ->
-            {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, bool_attr}}, [ValueAST]};
+            L = line(ValueAST),
+            {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, bool_attr}}, [ValueAST]};
         {_Booleans, _Framework} ->
             ValueAST
     end.

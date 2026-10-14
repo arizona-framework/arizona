@@ -169,14 +169,16 @@ attr(Name, _Value) ->
         "), or {sgr, Escape} / {fg, Index} / {bg, Index} for a custom code"
     ]).
 
+%% A `false` emits nothing, but its name is still checked, so `{bolld, false}` is the
+%% same typo `{bolld, true}` is.
 -spec attr_bool(binary(), boolean()) -> binary().
-attr_bool(_Name, false) ->
-    <<>>;
-attr_bool(Name, true) ->
-    case find_style(Name) of
-        {ok, Escape} ->
+attr_bool(Name, Bool) ->
+    case {find_style(Name), Bool} of
+        {{ok, _Escape}, false} ->
+            <<>>;
+        {{ok, Escape}, true} ->
             iolist_to_binary(Escape);
-        error ->
+        {error, _Bool} ->
             reject([
                 "unknown ?terminal style ",
                 quote(Name),

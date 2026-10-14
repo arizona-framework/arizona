@@ -15,6 +15,7 @@ opacity rules documented at `az:inner_content/1` are pinned by tests.
 -export([measure/1]).
 -export([raw/1]).
 -export([sibling/1]).
+-export([runtime_sibling/1]).
 
 %% The page returned from a `case` tail -- a value slot, so on iodata it was
 %% HTML-escaped; an opaque nested template renders through.
@@ -64,3 +65,8 @@ raw(Bindings) ->
 -spec sibling(az:bindings()) -> az:template().
 sibling(Bindings) ->
     ?html([~"<s>", [~"<hr>", ?inner_content], ~"</s>"]).
+
+%% The page inside a list built at runtime, which the template cannot see as markup.
+-spec runtime_sibling(az:bindings()) -> az:template().
+runtime_sibling(Bindings) ->
+    ?html([~"<s>", lists:append([~"<hr>"], [?inner_content]), ~"</s>"]).
