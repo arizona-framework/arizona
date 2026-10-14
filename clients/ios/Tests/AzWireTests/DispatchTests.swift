@@ -504,7 +504,7 @@ final class DispatchTests: XCTestCase {
             of: ##"[0,\"inc\"]"##, with: ##"[[0,\"save\"],[0,\"inc\"]]"##)
         captured?.simulateText("{\"o\":[[8,\"native_counter\",\(frame)]]}")
 
-        let button = childNodes(client.root!).first { $0.props["on_tap"]?.arrayValue?.count == 2 }
+        let button = childNodes(client.root!).first { $0.props["on_tap"]?.arrayValue?.first?.arrayValue != nil }
         client.tap(button!)
         XCTAssertEqual(
             captured?.sent.suffix(2),

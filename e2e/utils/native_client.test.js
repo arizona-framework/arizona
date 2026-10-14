@@ -78,7 +78,9 @@ describe('native client effect dispatch', () => {
         ]);
     });
 
-    it('runs every command of a server effect holding a list', () => {
+    // The server ships one command per effect today; this mirrors the web client,
+    // whose applyEffects runs every effect through the same interpreter as a tap.
+    it('runs a server effect holding a list, as the shared interpreter does', () => {
         const { client, sent } = clientWithRecorder();
         client._runEffectSafe([
             [EFFECT_PUSH_EVENT, 'a'],

@@ -227,12 +227,14 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    traps `Array.insert` on a negative index).
 5. **Run effects and navigate.** A tap fires its node's command prop, routed to
    the node's nearest enclosing `az_view` (the root, or a nested `?stateful`
-   child) — so events reach stateful children, not just the root. The server's
-   `"e"` (effects) array is dispatched after the ops. The portable commands are
-   handled — `push_event`, and `navigate` (which sends `["navigate", {path, qs}]`
-   on the same socket; the server's `handle_navigate` re-mounts the target view
-   and replies with `OP_REPLACE`). Web-only effects (`set_title`,
-   `dispatch_event`, …) are skipped on native.
+   child) — so events reach stateful children, not just the root. The prop holds
+   one command or a list of them, told apart by whether its first element is an
+   array, and a list runs in order. The server's `"e"` (effects) array is
+   dispatched after the ops. The portable commands are handled — `push_event`,
+   and `navigate` (which sends `["navigate", {path, qs}]` on the same socket; the
+   server's `handle_navigate` re-mounts the target view and replies with
+   `OP_REPLACE`). Web-only effects (`set_title`, `dispatch_event`, …) are skipped
+   on native.
 6. **Reconnect with backoff.** On a dropped socket — any close other than a
    normal `1000`, or an abrupt failure — reopen with exponential backoff
    (`[1, 2, 5, 10]`s steps, capped at 10s, ±20% jitter), resetting the attempt
