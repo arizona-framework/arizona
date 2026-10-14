@@ -1252,7 +1252,12 @@ no_diff_nested(Config) when is_list(Config) ->
         f => <<"test">>
     },
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
-    ?assertEqual([[?OP_TEXT, <<"0">>, <<"new title">>]], Ops).
+    ?assertEqual([[?OP_TEXT, <<"0">>, <<"new title">>]], Ops),
+    %% A different template in the same slot replaces it.
+    #{d := [Title, {<<"1">>, Nested}]} = NewTmpl,
+    Other = NewTmpl#{d => [Title, {<<"1">>, Nested#{f => <<"other">>}}]},
+    {SwitchOps, _} = arizona_diff:diff(Other, OldSnap),
+    ?assertMatch([[?OP_TEXT, <<"0">>, _], [?OP_TEXT, <<"1">>, _]], SwitchOps).
 
 no_diff_same_template_skips_eval(Config) when is_list(Config) ->
     %% diff/4 re-runs a changed slot holding a diff => false template, but when it
@@ -1269,7 +1274,7 @@ no_diff_same_template_skips_eval(Config) when is_list(Config) ->
                         s => [<<"<span>">>, <<"</span>">>],
                         d => [{<<"i">>, fun() -> arizona_template:get(content, B) end}],
                         diff => false,
-                        f => <<"inner">>
+                        f => maps:get(inner, B, <<"inner">>)
                     }
                 end}
             ],
@@ -1285,13 +1290,19 @@ no_diff_same_template_skips_eval(Config) when is_list(Config) ->
     %% Its inner az is namespaced by content slot `1` (scope_slot), so it reads
     %% back as `1-i`; the old value stands.
     [{<<"0">>, _}, {<<"1">>, KeptSnap}] = maps:get(d, Snap1),
-    ?assertEqual([{<<"1-i">>, <<"old">>}], maps:get(d, KeptSnap)).
+    ?assertEqual([{<<"1-i">>, <<"old">>}], maps:get(d, KeptSnap)),
+    %% Landing on another template replaces the slot.
+    Bindings2 = Bindings0#{n => 3, inner => <<"other">>},
+    ?assertMatch(
+        {[[?OP_TEXT, <<"1">>, _]], _, _},
+        arizona_diff:diff(T(Bindings2), Snap0, V0, compute_changed(Bindings0, Bindings2))
+    ).
 
 no_diff_stateful_child_keeps_state(Config) when is_list(Config) ->
     %% A child view whose root is diff => false renders once: a prop change must
     %% not run its handle_update/3, or its state would move past a DOM no op
     %% will ever patch.
-    T = fun(Count) ->
+    T = fun(Id, Count) ->
         #{
             s => [<<"<main az=\"0\">">>, <<"</main>">>],
             d => [
@@ -1299,17 +1310,22 @@ no_diff_stateful_child_keeps_state(Config) when is_list(Config) ->
                     ok = arizona_template:track(count),
                     arizona_template:stateful(
                         arizona_no_diff_counter,
-                        #{id => <<"nd_counter">>, count => Count}
+                        #{id => Id, count => Count}
                     )
                 end}
             ],
             f => <<"test">>
         }
     end,
-    {_, Snap0, Views0} = arizona_render:render(T(1), #{}),
-    {Ops, _, Views1} = arizona_diff:diff(T(99), Snap0, Views0, #{count => true}),
+    {_, Snap0, Views0} = arizona_render:render(T(<<"nd_counter">>, 1), #{}),
+    {Ops, _, Views1} =
+        arizona_diff:diff(T(<<"nd_counter">>, 99), Snap0, Views0, #{count => true}),
     ?assertEqual([], Ops),
-    ?assertEqual(maps:get(<<"nd_counter">>, Views0), maps:get(<<"nd_counter">>, Views1)).
+    ?assertEqual(maps:get(<<"nd_counter">>, Views0), maps:get(<<"nd_counter">>, Views1)),
+    %% A new id is another child view: the slot is replaced.
+    {IdOps, _, Views2} = arizona_diff:diff(T(<<"nd_other">>, 1), Snap0, Views0, #{count => true}),
+    ?assertMatch([[?OP_TEXT, <<"0">>, _]], IdOps),
+    ?assertEqual([<<"nd_other">>], maps:keys(Views2)).
 
 no_diff_stateful_child(Config) when is_list(Config) ->
     %% Stateful child whose render/1 returns diff => false.

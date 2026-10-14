@@ -140,6 +140,7 @@
     nodiff_region_switch/1,
     nodiff_region_helper_switch/1,
     nodiff_region_same_branch_kept/1,
+    nodiff_region_wrapper_switch/1,
     nodiff_region_inner_change/1,
     nodiff_region_az_key/1,
     nodiff_region_az_key_spellings/1,
@@ -478,6 +479,7 @@ groups() ->
             nodiff_region_switch,
             nodiff_region_helper_switch,
             nodiff_region_same_branch_kept,
+            nodiff_region_wrapper_switch,
             nodiff_region_inner_change,
             nodiff_region_az_key,
             nodiff_region_az_key_spellings,
@@ -9796,14 +9798,29 @@ nodiff_region_helper_switch(Config) when is_list(Config) ->
 nodiff_region_same_branch_kept(Config) when is_list(Config) ->
     B0 = #{n => 1, v => ~"a"},
     {_, S0, V0} = region_render(one_branch, B0),
-    {Ops, S1, _} = region_diff(one_branch, B0#{n => 2, v => ~"b"}, S0, V0, [n, v]),
+    {Ops, S1, V1} = region_diff(one_branch, B0#{n => 2, v => ~"b"}, S0, V0, [n, v]),
     ?assertEqual([], Ops),
-    ?assertEqual(maps:get(d, S0), maps:get(d, S1)).
+    ?assertEqual(maps:get(d, S0), maps:get(d, S1)),
+    %% The slot still leaves the region.
+    ?assertMatch(
+        {[[?OP_TEXT, _, ~"off"]], _, _},
+        region_diff(one_branch, B0#{n => 0}, S1, V1, [n])
+    ).
+
+%% A switch above the region's own slot to a wrapper with the same statics keeps
+%% the region; an `az_key` naming the switch remounts it.
+nodiff_region_wrapper_switch(Config) when is_list(Config) ->
+    B0 = #{tab => a, v => ~"x"},
+    {_, S0, V0} = region_render(wrapper_switch, B0),
+    {Ops, _, _} = region_diff(wrapper_switch, B0#{tab => b}, S0, V0, [tab]),
+    ?assertMatch([[?OP_TEXT, _, #{~"d" := [~" az-key=\"b\"", ~"x"]}]], Ops).
 
 %% A value read only inside the region is not a dependency of its slot.
 nodiff_region_inner_change(Config) when is_list(Config) ->
     B0 = #{n => 1, v => ~"a"},
     {_, S0, V0} = region_render(one_branch, B0),
+    #{deps := [SlotDeps]} = S0,
+    ?assertNot(is_map_key(v, SlotDeps)),
     {Ops, S1, _} = region_diff(one_branch, B0#{v => ~"b"}, S0, V0, [v]),
     ?assertEqual([], Ops),
     ?assertEqual(S0, S1).
@@ -9880,7 +9897,15 @@ nodiff_region_list_items(Config) when is_list(Config) ->
         region_diff(list_widgets, #{items => [#{v => ~"z"}, #{v => ~"b"}]}, S1, V1, [items])
     ),
     {Remove, _, _} = region_diff(list_widgets, #{items => [#{v => ~"a"}]}, S1, V1, [items]),
-    ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_REMOVE | _]]]], Remove).
+    ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_REMOVE | _]]]], Remove),
+    %% A new `az_key` in a kept item remounts its region.
+    {Rekey, _, _} =
+        region_diff(list_widgets, #{items => [#{v => ~"a", rev => 1}, #{v => ~"b"}]}, S1, V1, [
+            items
+        ]),
+    ?assertMatch(
+        [[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, #{~"d" := [_, ~"a"]}]]]]]], Rekey
+    ).
 
 %% Regions in stream items come and go with their items; updating a kept item
 %% leaves its region alone.
@@ -9899,7 +9924,11 @@ nodiff_region_stream_items(Config) when is_list(Config) ->
     ?assertMatch(
         {[[?OP_REMOVE, _, ~"2"]], _, _},
         region_diff(stream_widgets, #{items => St4}, S2, V2, [items])
-    ).
+    ),
+    %% A new `az_key` in a kept item remounts its region.
+    St5 = arizona_stream:update(settled_stream(St3), ~"1", #{id => ~"1", v => ~"z", rev => 1}),
+    {Rekey, _, _} = region_diff(stream_widgets, #{items => St5}, S2, V2, [items]),
+    ?assertMatch([[?OP_ITEM_PATCH, _, ~"1", [[?OP_TEXT, _, #{~"d" := [_, ~"z"]}]]]], Rekey).
 
 region_render(Fun, Bindings) ->
     arizona_render:render(arizona_nodiff_regions:Fun(Bindings), #{}).

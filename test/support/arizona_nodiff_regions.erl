@@ -8,6 +8,7 @@ and which branch produced it, the client owns its DOM once it is there.
 -export([switch/1]).
 -export([helper_switch/1]).
 -export([one_branch/1]).
+-export([wrapper_switch/1]).
 -export([keyed/1]).
 -export([child_paths/1]).
 -export([root_child/1]).
@@ -75,6 +76,23 @@ one_branch(Bindings) ->
             case ?get(n) > 0 of
                 true -> {section, ['az-nodiff'], [?get(n), ?get(v)]};
                 false -> ~"off"
+            end
+        ]}
+    ).
+
+%% A switch above the region's own slot, between wrappers with the same statics,
+%% with and without an `az_key` naming the switch.
+-spec wrapper_switch(az:bindings()) -> az:template().
+wrapper_switch(Bindings) ->
+    ?html(
+        {'div', [], [
+            case ?get(tab) of
+                a -> {section, [{class, ~"tab"}], [?stateless(fun widget/1, #{v => ?get(v)})]};
+                b -> {section, [{class, ~"tab"}], [?stateless(fun widget/1, #{v => ?get(v)})]}
+            end,
+            case ?get(tab) of
+                a -> {section, [], [?stateless(fun widget/1, #{v => ?get(v), rev => ?get(tab)})]};
+                b -> {section, [], [?stateless(fun widget/1, #{v => ?get(v), rev => ?get(tab)})]}
             end
         ]}
     ).
@@ -155,7 +173,7 @@ region_item(Bindings) ->
 
 -spec widget(az:bindings()) -> az:template().
 widget(Bindings) ->
-    ?html({'div', ['az-nodiff', {class, ~"widget"}], [?get(v)]}).
+    ?html({'div', ['az-nodiff', {class, ~"widget"}, {az_key, ?get(rev, 0)}], [?get(v)]}).
 
 -spec list_widgets(az:bindings()) -> az:template().
 list_widgets(Bindings) ->
