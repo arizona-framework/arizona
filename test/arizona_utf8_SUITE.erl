@@ -24,6 +24,8 @@
 -export([dev_http_locates_every_shape/1]).
 -export([dev_http_serves_the_located_error_page/1]).
 -export([dev_http_passes_valid_utf8/1]).
+-export([dev_http_mounts_once/1]).
+-export([dev_render_matches_prod_bytes/1]).
 -export([socket_frame_failure_is_named/1]).
 -export([dev_socket_frame_failure_is_located/1]).
 
@@ -52,6 +54,8 @@ groups() ->
             dev_http_locates_every_shape,
             dev_http_serves_the_located_error_page,
             dev_http_passes_valid_utf8,
+            dev_http_mounts_once,
+            dev_render_matches_prod_bytes,
             socket_frame_failure_is_named,
             dev_socket_frame_failure_is_located
         ]}
@@ -296,17 +300,13 @@ prod_http_serves_bytes_unchecked(Config) when is_list(Config) ->
 dev_http_locates_every_shape(Config) when is_list(Config) ->
     with_dev(fun() ->
         [
-            begin
-                Bindings = bad_bindings(Key),
-                Page = arizona_render:render_view_to_iolist(?VIEW, #{bindings => Bindings}),
-                ?assertEqual(
-                    {Key, {arizona_loc, {?VIEW, line_of(Needle)}, {non_utf8_render, 16#E9, 3}}},
-                    {Key,
-                        raised(fun() ->
-                            arizona_utf8:check_page(Page, ?VIEW, #{bindings => Bindings})
-                        end)}
-                )
-            end
+            ?assertEqual(
+                {Key, {arizona_loc, {?VIEW, line_of(Needle)}, {non_utf8_render, 16#E9, 3}}},
+                {Key,
+                    raised(fun() ->
+                        arizona_utf8:render_view(?VIEW, #{bindings => bad_bindings(Key)})
+                    end)}
+            )
          || {Key, Needle} <- [
                 {content, ~"?get(content)"},
                 {attr, ~"?get(attr)"},
@@ -315,8 +315,65 @@ dev_http_locates_every_shape(Config) when is_list(Config) ->
                 {items, ~"?get(items)"},
                 {child, ~"{em, [], [?get(text)]}"}
             ]
+        ],
+        %% A `?stateful` child's value, located in the child's own template.
+        ?assertEqual(
+            {arizona_loc,
+                {arizona_utf8_mount_child, line_of(arizona_utf8_mount_child, ~"?get(text)")},
+                {non_utf8_render, 16#E9, 3}},
+            raised(fun() ->
+                arizona_utf8:render_view(arizona_utf8_mount_page, #{
+                    bindings => #{notify => self(), child_text => latin1()}
+                })
+            end)
+        )
+    end).
+
+%% The dev check renders the page once, values checked as they render, so a
+%% failing page's mount/1 and its stateful child's run exactly once, as in
+%% production -- a re-render to locate the bytes would run their side effects
+%% twice.
+dev_http_mounts_once(Config) when is_list(Config) ->
+    Page = {mounted, arizona_utf8_mount_page},
+    Child = {mounted, arizona_utf8_mount_child},
+    with_dev(fun() ->
+        [
+            begin
+                Req = arizona_req_test_adapter:new(#{}),
+                Result = arizona_http:render(arizona_utf8_mount_page, Req, #{
+                    bindings => Bindings#{notify => self()}
+                }),
+                ?assertEqual({Bindings, Status}, {Bindings, element(2, Result)}),
+                ?assertEqual({Bindings, Mounts}, {Bindings, drain_mounts()})
+            end
+         || {Bindings, Status, Mounts} <- [
+                %% The page's own slot fails first, so the child is never reached.
+                {#{text => latin1()}, 500, [Page]},
+                {#{child_text => latin1()}, 500, [Page, Child]},
+                {#{}, 200, [Page, Child]}
+            ]
         ]
     end).
+
+%% Checking the values changes nothing they render to: the stand-in for a stateful
+%% child still mounts it and marks it a view boundary.
+dev_render_matches_prod_bytes(Config) when is_list(Config) ->
+    [
+        ?assertEqual(
+            {Mod, iolist_to_binary(element(2, arizona_render:render_view(Mod, Opts)))},
+            {Mod, iolist_to_binary(element(2, arizona_utf8:render_view(Mod, Opts)))}
+        )
+     || {Mod, Opts} <- [
+            {?VIEW, #{}},
+            {arizona_utf8_mount_page, #{bindings => #{notify => self()}}},
+            {arizona_utf8_static_view, #{bindings => #{open => true}}}
+        ]
+    ],
+    ?assertEqual(
+        [{mounted, arizona_utf8_mount_page}, {mounted, arizona_utf8_mount_child}] ++
+            [{mounted, arizona_utf8_mount_page}, {mounted, arizona_utf8_mount_child}],
+        drain_mounts()
+    ).
 
 dev_http_serves_the_located_error_page(Config) when is_list(Config) ->
     with_dev(fun() ->
@@ -426,7 +483,10 @@ reference_escape_value(Backend, V0) ->
     end.
 
 line_of(Needle) ->
-    Source = proplists:get_value(source, ?VIEW:module_info(compile)),
+    line_of(?VIEW, Needle).
+
+line_of(Mod, Needle) ->
+    Source = proplists:get_value(source, Mod:module_info(compile)),
     {ok, Src} = file:read_file(Source),
     Lines = binary:split(Src, ~"\n", [global]),
     [Line | _] = [
@@ -457,6 +517,12 @@ compile_probe(Config, Lines) ->
     case compile:file(File, [binary, return, {i, Include}]) of
         {ok, _Mod, _Bin, Warnings} -> {ok, Warnings};
         Error -> Error
+    end.
+
+drain_mounts() ->
+    receive
+        {mounted, _} = Mounted -> [Mounted | drain_mounts()]
+    after 0 -> []
     end.
 
 with_dev(Fun) ->

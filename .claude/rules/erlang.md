@@ -260,8 +260,9 @@ convert external Latin-1 data with `unicode:characters_to_binary(Bin, latin1)`.
   `?get` default, a conditional branch value, a hoisted variable, `?raw`, props) it gets
   the compile warning `latin1_binary_literal` -- an error under `warnings_as_errors`.
 - At runtime a refused frame or `?native` value raises/logs `{non_utf8_render, Byte,
-  Offset}` (the JSON encoder already refused it; only the name is new). In dev mode each
-  HTML response is checked once and the failure is located at its template line.
+  Offset}` (the JSON encoder already refused it; only the name is new). In dev mode an
+  HTTP page renders with every value checked (same mount, same bytes), so the failure
+  is located at its template line.
 
 See "Output is UTF-8" in [docs/architecture.md](../../docs/architecture.md).
 

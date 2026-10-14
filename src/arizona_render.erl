@@ -71,6 +71,7 @@ op-code targets.
 -export([render_to_iolist/2]).
 -export([render_view_to_iolist/2]).
 -export([render_view/2]).
+-export([render_page/3]).
 -export([current_layout/0]).
 -export([resolve_id/1]).
 -export([zip/2]).
@@ -278,7 +279,21 @@ render_view(Handler, Opts) ->
         maps:get(bindings, Opts, #{})
     ),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
-    {Backend, Page} = finish_ssr(Handler, Bindings, Opts),
+    render_page(arizona_stateful:call_render(Handler, Bindings), Bindings, Opts).
+
+-doc """
+The second half of `render_view/2`: renders an already-mounted page's template
+`PageTmpl`, wrapped in the `layouts` of `Opts`, given the `Bindings` its `mount/1`
+returned. `arizona_utf8` renders a dev-mode page through here with a template whose
+values are checked, so the page mounts once either way.
+""".
+-spec render_page(PageTmpl, Bindings, Opts) -> {ContentType, iolist()} when
+    PageTmpl :: arizona_template:template(),
+    Bindings :: arizona_template:bindings(),
+    Opts :: arizona_live:route_opts(),
+    ContentType :: binary().
+render_page(PageTmpl, Bindings, Opts) ->
+    {Backend, Page} = finish_page(PageTmpl, Bindings, Opts),
     {content_type(Backend), Page}.
 
 -doc """
@@ -585,7 +600,9 @@ flat_zip(Backend, Statics, Vals) ->
 %% is. A layout with a backend must share the page's (assert_layout_target/4), and
 %% a backendless one (`?inner_content` returned bare) inherits the inner backend.
 finish_ssr(Handler, Bindings, Opts) ->
-    PageTmpl = arizona_stateful:call_render(Handler, Bindings),
+    finish_page(arizona_stateful:call_render(Handler, Bindings), Bindings, Opts).
+
+finish_page(PageTmpl, Bindings, Opts) ->
     Backend = backend(PageTmpl),
     PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
     Layouts = maps:get(layouts, Opts, []),

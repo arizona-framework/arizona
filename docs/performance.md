@@ -466,9 +466,9 @@ A non-ASCII value stops the ASCII-narrowed scan at its first multibyte character
 pays the BIF from there, so any page in a language other than English pays it on most
 values. Rejected for a check that costs nothing: a compile-time warning for the usual
 source (a bare non-ASCII `<<"...">>` outside a template static), the encoder's own
-refusal renamed after it fails, and in dev mode one pass over each finished response,
-which locates the template line only after a failure by rendering again with every
-value checked (see "Output is UTF-8" in docs/architecture.md).
+refusal renamed after it fails, and in dev mode only, a page render with every value
+checked plus one pass over the finished document (see "Output is UTF-8" in
+docs/architecture.md).
 
 Other shapes for the per-value check, all checked correct against the same suite before
 timing. Per value, html `escape/1`, ns, against main's escape with no check:
@@ -502,8 +502,9 @@ cost `render_view_small` +151%, `render_view_page` +118%, `render_each_100` +123
 `render_view_many_dyn_50` +26%, `http_get_e2e` +18%. Cheaper shapes, measured against
 each fixture's own render: a BIF per binary leaf of the iolist +46% / +42% / +90% / +16%
 (small, page, each_100, many_dyn_50), `iolist_to_binary` then the BIF +77% / +35% / +58%
-/ +9%. That is why the response pass runs only in dev mode. On the WebSocket the
-boundary check is free (`json:encode` already validates); only the name was missing.
+/ +9%. That is why the response pass, like the per-value check, runs only in dev
+mode. On the WebSocket the boundary check is free (`json:encode` already validates);
+only the name was missing.
 
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
