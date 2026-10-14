@@ -6795,7 +6795,7 @@ each_named_fun_variable_module_rejected(Config) when is_list(Config) ->
         fun(R) -> R =:= each_remote_fun_ref end
     ).
 
-%% A named-fun ?each inside ?native goes through the native_each rewrite: the callback is
+%% A named-fun ?each inside ?native is marked for the native backend: the callback is
 %% resolved/inlined with the native backend, and a PRIVATE callback is suppressed the same
 %% way (compile_module_strict -> warnings_as_errors).
 each_named_fun_ref_native(Config) when is_list(Config) ->
@@ -7416,9 +7416,9 @@ each_native_no_single_root_flag(Config) when is_list(Config) ->
         "-module(pt_each_native_gate). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:native_each(fun(Item) -> "
+        "    arizona_template:each(fun(Item) -> "
         "        {'Text', [], [maps:get(name, Item)]} "
-        "    end, arizona_template:get(items, Bindings)). "
+        "    end, arizona_template:get(items, Bindings), arizona_native, html). "
     ),
     Result = Mod:render(#{items => [#{name => <<"a">>}]}),
     Tmpl = maps:get(template, Result),

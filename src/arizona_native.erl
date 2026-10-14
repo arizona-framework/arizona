@@ -43,7 +43,6 @@ the wire value. On the wire itself a value stays raw
 -export([is_void/1]).
 -export([raw_text_kind/2]).
 -export([content_context/2]).
--export([each_marker/1]).
 -export([raw_text/2]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
@@ -144,12 +143,6 @@ raw_text_kind(_Tag, _Context) ->
     %% The native wire is JSON, not HTML -- dynamic slots are `#slot` objects,
     %% not comment markers, so the raw-text corruption does not apply.
     none.
-
--spec each_marker(arizona_renderer:content_context()) -> atom().
-each_marker(_Context) ->
-    %% One content context, so the marker never varies -- the transform's
-    %% renaming is inert here by this answer, not by a target check.
-    native_each.
 
 -spec content_context(arizona_renderer:tag(), arizona_renderer:content_context()) ->
     arizona_renderer:content_context().

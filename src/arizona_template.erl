@@ -32,7 +32,7 @@ render(Bindings) ->
 
 -include("arizona.hrl").
 
-%% The html/native/terminal (+ _each) stubs are intentionally identical: each
+%% The html/native/terminal (+ each) stubs are intentionally identical: each
 %% raises parse_transform_not_applied inline so the raising stub is the top stack
 %% frame, pointing the user at the exact un-transformed call. A shared helper would
 %% move that frame and obscure which call was made, so dedup does not apply here.
@@ -61,9 +61,6 @@ render(Bindings) ->
 -export([stateless/3]).
 -export([local/2]).
 -export([each/2]).
--export([native_each/2]).
--export([terminal_each/2]).
--export([foreign_each/2]).
 -export([to_bin/1]).
 -export([raw/1]).
 -export([bool_attr/1]).
@@ -91,11 +88,6 @@ render(Bindings) ->
 
 -ignore_xref([format_error/1]).
 -ignore_xref([format_error/2]).
-%% Internal each stubs: emitted by the parse transform's native/terminal pre-pass,
-%% never called directly (no az alias, unlike each/2).
--ignore_xref([native_each/2]).
--ignore_xref([terminal_each/2]).
--ignore_xref([foreign_each/2]).
 %% Emitted by the parse transform for a conditional branch value it cannot see.
 -ignore_xref([branch/2]).
 %% Public escape opt-out for template authors; no internal callers by design.
@@ -391,42 +383,6 @@ own `(Fun, Source)` argument order, the transform did not run: say so with
 each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_function(DFun, 2) ->
     #{t => ?EACH, source => Source, template => Tmpl};
 each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
-    erlang:error(parse_transform_not_applied, [], [
-        {error_info, #{module => ?MODULE}}
-    ]).
-
--doc """
-Compile-time stub for the native each. The parse transform replaces every
-`?native_each(Fun, Source)` call with a compiled each-container whose per-item
-template carries JSON statics. If this function runs, the parse transform was
-not applied.
-""".
--spec native_each(term(), term()) -> no_return().
-native_each(_Fun, _Source) ->
-    erlang:error(parse_transform_not_applied, [], [
-        {error_info, #{module => ?MODULE}}
-    ]).
-
--doc """
-Compile-time stub for an each in a non-default content context (an `?each`
-inside `<svg>`, whose per-item template must be compiled as foreign content).
-The parse transform replaces every such call with a compiled each-container. If
-this function runs, the parse transform was not applied.
-""".
--spec foreign_each(term(), term()) -> no_return().
-foreign_each(_Fun, _Source) ->
-    erlang:error(parse_transform_not_applied, [], [
-        {error_info, #{module => ?MODULE}}
-    ]).
-
--doc """
-Compile-time stub for the terminal each. The parse transform replaces every
-`?terminal_each(Fun, Source)` call with a compiled each-container whose per-item
-template carries ANSI statics. If this function runs, the parse transform was
-not applied.
-""".
--spec terminal_each(term(), term()) -> no_return().
-terminal_each(_Fun, _Source) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).
