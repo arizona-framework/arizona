@@ -4,6 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import okhttp3.Request
+import okhttp3.WebSocket
+import okio.ByteString
 import org.junit.Test
 
 /**
@@ -339,6 +342,44 @@ class DispatchTest {
         // Still live: a well-formed frame after both still applies.
         client.handleText(frame("""[0,"native_x:R-0t0","applied"]"""))
         assertEquals("applied", node(client.root.value!!, 0).children[0])
+    }
+
+    // Each "e" entry is exactly one command: a frame carrying two must send two
+    // frames, once each and in order, and a malformed entry between them costs
+    // only itself.
+    @Test
+    fun runsEachServerEffectEntryAsOneCommandInOrder() {
+        val client = newClient()
+        val ws = RecordingWebSocket()
+        client.ws = ws
+        client.handleText(
+            """{"o":[[8,"native_x",{"f":"R","s":$rootStatics,"d":["native_x",""]}]],""" +
+                """"e":[[0,"saved",{"id":"1"}],[0],[10,"/done?x=1"]]}""",
+        )
+        assertEquals(
+            listOf(
+                """["native_x","saved",{"id":"1"}]""",
+                """["navigate",{"path":"/done","qs":"x=1"}]""",
+            ),
+            ws.sent,
+        )
+    }
+
+    // A socket that records every text frame sent through it.
+    private class RecordingWebSocket : WebSocket {
+        val sent = mutableListOf<String>()
+
+        override fun send(text: String): Boolean = sent.add(text)
+
+        override fun send(bytes: ByteString): Boolean = error("unexpected binary frame")
+
+        override fun request(): Request = error("not connected")
+
+        override fun queueSize(): Long = 0
+
+        override fun close(code: Int, reason: String?): Boolean = true
+
+        override fun cancel() {}
     }
 
     // Since OP_INSERT indexes what it grafts in, OP_REMOVE has to unindex what it

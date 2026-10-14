@@ -334,6 +334,30 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
     }
 
+    // Each "e" entry is exactly one command: a frame carrying two must send two
+    // frames, once each and in order, and a malformed entry between them costs
+    // only itself. Compared parsed, since an object's serialized key order is not
+    // fixed.
+    func testRunsEachServerEffectEntryAsOneCommandInOrder() {
+        var captured: MockTransport?
+        let client = AzClient(
+            baseUrl: "http://localhost:4040",
+            path: "/native/x",
+            makeTransport: { _ in let m = MockTransport(); captured = m; return m },
+            runOnMain: { $0() })
+        client.connect()
+        captured?.simulateOpen()
+        captured?.simulateText(
+            ##"{"o":[[8,"native_x",{"f":"R","s":\##(rootStatics),"d":["native_x",""]}]],"## +
+                ##""e":[[0,"saved",{"id":"1"}],[0],[10,"/done?x=1"]]}"##)
+        XCTAssertEqual(
+            captured?.sent.dropFirst().map { JSONValue.parse($0) },
+            [
+                JSONValue.parse(##"["native_x","saved",{"id":"1"}]"##),
+                JSONValue.parse(##"["navigate",{"path":"/done","qs":"x=1"}]"##),
+            ])
+    }
+
     // Since OP_INSERT indexes what it grafts in, OP_REMOVE has to unindex what it
     // drops -- otherwise a churning stream grows the registry (and pins every
     // detached subtree) once per cycle, for the life of the connection. Each item
