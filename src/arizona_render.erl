@@ -71,7 +71,7 @@ op-code targets.
 -export([render_to_iolist/2]).
 -export([render_view_to_iolist/2]).
 -export([render_view/2]).
--export([render_page/3]).
+-export([render_view/3]).
 -export([current_layout/0]).
 -export([resolve_id/1]).
 -export([zip/2]).
@@ -274,25 +274,26 @@ serving a `?native` view answers with JSON and an HTML one with HTML.
     Opts :: arizona_live:route_opts(),
     ContentType :: binary().
 render_view(Handler, Opts) ->
+    render_view(Handler, Opts, fun(PageTmpl) -> PageTmpl end).
+
+-doc """
+`render_view/2` with the page's template passed through `TmplFun` between its
+`render/1` and the walk: the one mount sequence for both. `render_view/2` passes
+the identity; `arizona_utf8:render_view/2` (dev mode) passes a wrap that checks
+every value the walk evaluates, so the page still mounts once.
+""".
+-spec render_view(Handler, Opts, TmplFun) -> {ContentType, iolist()} when
+    Handler :: module(),
+    Opts :: arizona_live:route_opts(),
+    TmplFun :: fun((arizona_template:template()) -> arizona_template:template()),
+    ContentType :: binary().
+render_view(Handler, Opts, TmplFun) ->
     Bindings0 = arizona_live:apply_on_mount(
         maps:get(on_mount, Opts, []),
         maps:get(bindings, Opts, #{})
     ),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
-    render_page(arizona_stateful:call_render(Handler, Bindings), Bindings, Opts).
-
--doc """
-The second half of `render_view/2`: renders an already-mounted page's template
-`PageTmpl`, wrapped in the `layouts` of `Opts`, given the `Bindings` its `mount/1`
-returned. `arizona_utf8` renders a dev-mode page through here with a template whose
-values are checked, so the page mounts once either way.
-""".
--spec render_page(PageTmpl, Bindings, Opts) -> {ContentType, iolist()} when
-    PageTmpl :: arizona_template:template(),
-    Bindings :: arizona_template:bindings(),
-    Opts :: arizona_live:route_opts(),
-    ContentType :: binary().
-render_page(PageTmpl, Bindings, Opts) ->
+    PageTmpl = TmplFun(arizona_stateful:call_render(Handler, Bindings)),
     {Backend, Page} = finish_page(PageTmpl, Bindings, Opts),
     {content_type(Backend), Page}.
 

@@ -26,6 +26,9 @@
 -export([dev_http_passes_valid_utf8/1]).
 -export([dev_http_mounts_once/1]).
 -export([dev_render_matches_prod_bytes/1]).
+-export([effect_command_names_non_utf8/1]).
+-export([dev_child_restricted_key_error_matches_prod/1]).
+-export([connect_frame_failure_log_names_the_view/1]).
 -export([socket_frame_failure_is_named/1]).
 -export([dev_socket_frame_failure_is_located/1]).
 
@@ -43,7 +46,9 @@ groups() ->
             refuse_renames_only_the_encoder_utf8_error,
             chardata_wrapping_non_utf8_binary,
             format_error_names_the_byte_and_the_fix,
-            to_bin_matches_the_classify_first_reference
+            to_bin_matches_the_classify_first_reference,
+            effect_command_names_non_utf8,
+            dev_child_restricted_key_error_matches_prod
         ]},
         %% Sequential: these toggle the dev signal (the `arizona_reload_url`
         %% persistent_term), set a global call-count trace pattern, or add a
@@ -57,6 +62,7 @@ groups() ->
             dev_http_mounts_once,
             dev_render_matches_prod_bytes,
             socket_frame_failure_is_named,
+            connect_frame_failure_log_names_the_view,
             dev_socket_frame_failure_is_located
         ]}
     ].
@@ -95,10 +101,28 @@ warns_latin1_literal_outside_template_statics(Config) when is_list(Config) ->
     ],
     {ok, Warnings} = compile_probe(Config, Lines),
     ?assertEqual(marked_lines(Lines, ~"%% warn"), warned_lines(Warnings)),
-    ?assertEqual(
-        "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>",
-        arizona_parse_transform:format_error(latin1_binary_literal)
-    ).
+    Msg = arizona_parse_transform:format_error(latin1_binary_literal),
+    [
+        ?assertNotEqual(nomatch, string:find(Msg, Part), Part)
+     || Part <- [
+            "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>",
+            "<<16#89, \"PNG\">>",
+            "<<\"\\351\":8>>"
+        ]
+    ],
+    %% The bytes the warning's own spellings stand for: \x89 P N G \r \n \x1a \n.
+    ?assertEqual(<<"\x89PNG\r\n\x1a\n">>, <<16#89, "PNG\r\n", 16#1A, "\n">>),
+    %% Written as escaped strings they still warn: the warning has no opt-out, and
+    %% its text is what names the spellings that do not.
+    Bytes = [
+        ~"-module(arizona_utf8_bytes_probe).",
+        ~"-include(\"arizona_stateless.hrl\").",
+        ~"-export([png/0, e/0]).",
+        ~"png() -> <<\"\\x89PNG\\r\\n\\x1a\\n\">>. %% warn",
+        ~"e() -> <<\"\\351\">>. %% warn"
+    ],
+    {ok, BytesWarnings} = compile_probe(Config, Bytes),
+    ?assertEqual(marked_lines(Bytes, ~"%% warn"), warned_lines(BytesWarnings)).
 
 no_warning_for_utf8_ascii_or_byte_literals(Config) when is_list(Config) ->
     Lines = [
@@ -111,7 +135,8 @@ no_warning_for_utf8_ascii_or_byte_literals(Config) when is_list(Config) ->
         ~"        triple é",
         ~"        \"\"\"]}).",
         ~"data() -> {~\"é\", ~b\"é\", <<\"é\"/utf8>>, <<\"ascii\">>,",
-        ~"    <<233>>, <<\"a\", 16#E9>>, \"é\"}."
+        ~"    <<233>>, <<\"a\", 16#E9>>, \"é\",",
+        ~"    <<16#89, \"PNG\\r\\n\", 16#1A, \"\\n\">>, <<\"\\351\":8>>, <<\"é\":8>>}."
     ],
     ?assertEqual({ok, []}, compile_probe(Config, Lines)).
 
@@ -194,9 +219,9 @@ chardata_wrapping_non_utf8_binary(Config) when is_list(Config) ->
     ?assertEqual(~"日本 é", arizona_template:to_bin([~"日本", " é"])).
 
 format_error_names_the_byte_and_the_fix(Config) when is_list(Config) ->
-    {Reason, ST} = caught(fun() -> arizona_utf8:check(latin1()) end),
+    {Reason, ST} = caught(fun() -> arizona_utf8:json_encode(latin1()) end),
     ?assertEqual({non_utf8_render, 16#E9, 3}, Reason),
-    [{arizona_utf8, check, [Value], Info} | _] = ST,
+    [{arizona_utf8, _Fun, [Value], Info} | _] = ST,
     ?assertEqual(latin1(), Value),
     ?assertEqual(#{module => arizona_utf8}, proplists:get_value(error_info, Info)),
     Located = {arizona_loc, {my_view, 12}, Reason},
@@ -401,7 +426,10 @@ dev_http_passes_valid_utf8(Config) when is_list(Config) ->
 %% them. Its refusal is renamed and the session closes 4500 as before.
 socket_frame_failure_is_named(Config) when is_list(Config) ->
     persistent_term:erase(arizona_reload_url),
-    ?assertEqual({non_utf8_render, 16#E9, 3}, socket_crash_reason(~"content")).
+    [
+        ?assertEqual({Key, {non_utf8_render, 16#E9, 3}}, {Key, socket_crash_reason(Key)})
+     || Key <- [~"content", ~"effect", ~"live"]
+    ].
 
 %% In dev mode the live views are rendered again to name the template line.
 dev_socket_frame_failure_is_located(Config) when is_list(Config) ->
@@ -415,10 +443,74 @@ dev_socket_frame_failure_is_located(Config) when is_list(Config) ->
                 {~"content", ~"?get(content)"},
                 {~"attr", ~"?get(attr)"},
                 {~"items", ~"?get(items)"},
-                {~"child", ~"{em, [], [?get(text)]}"}
+                {~"child", ~"{em, [], [?get(text)]}"},
+                {~"effect", ~"?get(effect)"},
+                %% Rendered only when connected: the re-render must see the live
+                %% process's connection state, not the socket process's. A value
+                %% from a conditional is located at the conditional's slot.
+                {~"live", ~"case ?connected of"}
             ]
         ]
     end).
+
+%% A reconnect's connect frame is encoded inside init/4, before the socket holds a
+%% live pid to locate the line from; the production log still names the view.
+connect_frame_failure_log_names_the_view(Config) when is_list(Config) ->
+    persistent_term:erase(arizona_reload_url),
+    HandlerId = arizona_utf8_suite_init_log,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => error, config => #{pid => self()}
+    }),
+    try
+        Req = arizona_req_test_adapter:new(),
+        ?assertMatch(
+            {close, 4501, ~"mount failed", _},
+            arizona_socket:init(?VIEW, #{content => latin1()}, Req, #{reconnect => true})
+        ),
+        Text =
+            receive
+                {arizona_test_log_handler, #{msg := {Format, Args}}} ->
+                    unicode:characters_to_binary(io_lib:format(Format, Args))
+            after 1000 -> error(no_crash_log)
+            end,
+        [
+            ?assertNotEqual(nomatch, binary:match(Text, Part), Part)
+         || Part <- [atom_to_binary(?VIEW), ~"non_utf8_render", ~"not valid UTF-8"]
+        ]
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.
+
+%% --------------------------------------------------------------------
+%% Effect commands
+%% --------------------------------------------------------------------
+
+%% An effect command is JSON-encoded where it is rendered (an attribute at SSR, an
+%% op value); a string argument that is not UTF-8 is named like any other refusal.
+effect_command_names_non_utf8(Config) when is_list(Config) ->
+    Cmd = arizona_js:push_event(~"x", #{v => <<233>>}),
+    ?assertError({non_utf8_render, 233, 0}, arizona_template:to_bin(Cmd)),
+    ?assertError({non_utf8_render, 233, 0}, arizona_effect:encode_json(Cmd)),
+    ?assertError({non_utf8_render, 233, 0}, arizona_html:render_attr(~"az-click", Cmd)),
+    ?assertEqual(
+        {arizona_loc, {?VIEW, line_of(~"?get(effect)")}, {non_utf8_render, 16#E9, 3}},
+        raised(fun() ->
+            arizona_render:render_view_to_iolist(?VIEW, #{bindings => #{effect => latin1()}})
+        end)
+    ).
+
+%% The dev render stands in for a stateful child's handler; a child that rewrites
+%% its restricted `id` must fail exactly as it does in production, naming the child.
+dev_child_restricted_key_error_matches_prod(Config) when is_list(Config) ->
+    Page = arizona_utf8_rekey_page,
+    Prod = caught(fun() -> arizona_render:render_view(Page, #{}) end),
+    Dev = caught(fun() -> arizona_utf8:render_view(Page, #{}) end),
+    ?assertMatch({{arizona_loc, {Page, _}, restricted_key_modified}, _}, Prod),
+    ?assertEqual(element(1, Prod), element(1, Dev)),
+    [ProdTop | _] = element(2, Prod),
+    [DevTop | _] = element(2, Dev),
+    ?assertMatch({arizona_eval, _, [id, arizona_utf8_rekey_child], _}, ProdTop),
+    ?assertEqual(ProdTop, DevTop).
 
 %% --------------------------------------------------------------------
 %% Helpers

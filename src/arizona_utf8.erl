@@ -25,6 +25,10 @@ one of them on the render path was measured too expensive (see
 
 -include("arizona.hrl").
 
+%% The live process's connection state, read by `?connected`, `?capabilities`,
+%% `?capability` and `?reconnected` (arizona_live).
+-define(CONN_KEYS, ['$arizona_connected', '$arizona_capabilities', '$arizona_reconnected']).
+
 %% The stood-in child handler, carried in the stand-in's props and bindings.
 -define(CHILD, '$arizona_utf8_handler').
 
@@ -38,7 +42,7 @@ one of them on the render path was measured too expensive (see
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([check/1]).
+-export([json_encode/1]).
 -export([refuse/3]).
 -export([render_view/2]).
 -export([mount/1]).
@@ -51,8 +55,6 @@ one of them on the render path was measured too expensive (see
 %% --------------------------------------------------------------------
 
 -ignore_xref([format_error/2]).
-%% Public: an app can assert its own data before rendering it.
--ignore_xref([check/1]).
 %% Called as a `?stateful` handler, through arizona_stateful:call_mount/2 and
 %% call_render/2.
 -ignore_xref([mount/1, render/1]).
@@ -62,15 +64,19 @@ one of them on the render path was measured too expensive (see
 %% --------------------------------------------------------------------
 
 -doc """
-Returns `Bin` when it is UTF-8, else raises `{non_utf8_render, Byte, Offset}`
-naming the first byte that does not decode and its offset in `Bin`.
+`json:encode/1` to a binary, with a failure over a string that is not UTF-8 named
+`non_utf8_render` (see `refuse/3`). The encoder validates UTF-8 as it escapes, so
+the check itself costs nothing; only a failure pays for the rename. Every arizona
+JSON encode of a rendered value goes through here: the `?native` backend's values
+and props, and `arizona_effect`'s commands.
 """.
--spec check(Bin) -> Bin when
-    Bin :: binary().
-check(Bin) ->
-    case first_invalid(Bin) of
-        none -> Bin;
-        {Byte, Offset} -> ?RAISE(Byte, Offset, Bin)
+-spec json_encode(Term) -> binary() when
+    Term :: json:encode_value().
+json_encode(Term) ->
+    try
+        iolist_to_binary(json:encode(Term))
+    catch
+        error:Reason:Stacktrace -> refuse(Term, Reason, Stacktrace)
     end.
 
 -doc """
@@ -110,12 +116,9 @@ Offset}` with the offset in the document. The output is the same bytes
     Opts :: arizona_live:route_opts(),
     ContentType :: binary().
 render_view(Handler, Opts) ->
-    Bindings0 = arizona_live:apply_on_mount(
-        maps:get(on_mount, Opts, []), maps:get(bindings, Opts, #{})
-    ),
-    {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
-    Page = wrap(arizona_stateful:call_render(Handler, Bindings), mount),
-    {ContentType, Doc} = arizona_render:render_page(Page, Bindings, Opts),
+    {ContentType, Doc} = arizona_render:render_view(Handler, Opts, fun(Page) ->
+        wrap(Page, mount)
+    end),
     ok = check_document(iolist_to_binary(Doc)),
     {ContentType, Doc}.
 
@@ -128,8 +131,13 @@ in the bindings for `render/1`.
     Props :: arizona_template:bindings(),
     Bindings :: arizona_template:bindings(),
     Resets :: map().
-mount(#{?CHILD := Handler} = Props) ->
-    {Bindings, Resets} = arizona_stateful:call_mount(Handler, maps:remove(?CHILD, Props)),
+mount(#{?CHILD := Handler} = Props0) ->
+    Props = maps:remove(?CHILD, Props0),
+    {Bindings, Resets} = arizona_stateful:call_mount(Handler, Props),
+    %% The SSR walk checks the restricted keys against the handler it called, this
+    %% stand-in; checked here against the real one, the error names the child
+    %% exactly as production does, and the walk's own check then passes.
+    ok = arizona_eval:check_restricted_keys(Bindings, Props, Handler),
     {Bindings#{?CHILD => Handler}, Resets}.
 
 -doc """
@@ -158,7 +166,7 @@ nothing is found, the input pair comes back unchanged.
 locate_live(Reason, ST, Pid) when is_pid(Pid) ->
     case persistent_term:get(arizona_reload_url, undefined) of
         undefined -> {Reason, ST};
-        _Dev -> locate_views(view_state(Pid), Reason, ST)
+        _Dev -> with_connection(Pid, fun() -> locate_views(view_state(Pid), Reason, ST) end)
     end;
 locate_live(Reason, ST, undefined) ->
     {Reason, ST}.
@@ -167,6 +175,12 @@ locate_live(Reason, ST, undefined) ->
 Formats `non_utf8_render`, bare or wrapped in `arizona_loc`. Picked up by
 `erl_error:format_exception/3` through the `error_info` annotation, so the dev
 error page and the crash log name the byte and the fix.
+
+`Offset` counts from the start of what was refused: the offending binary (an
+encoder refusal, the dev-mode per-value check -- the preview shows that binary),
+the decoded output of a chardata list (`arizona_template:to_bin/1` -- the raising
+call's argument is the list, so there is no preview), or the finished document
+(the dev-mode document check -- the preview is the 32 bytes around it).
 """.
 -spec format_error(Reason, Stacktrace) -> ErrorInfo when
     Reason :: term(),
@@ -189,6 +203,13 @@ format_error({non_utf8_render, Byte, Offset}, ST) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% The value as it is, or `non_utf8_render` with the offset into it.
+check(Bin) ->
+    case first_invalid(Bin) of
+        none -> Bin;
+        {Byte, Offset} -> ?RAISE(Byte, Offset, Bin)
+    end.
 
 %% The raising call's argument is the offending value. Its bytes are shown as
 %% integers: `~p` prints a Latin-1 binary as the very text it fails to be.
@@ -263,6 +284,32 @@ first_located([{H, B} | Rest], Default) ->
         _:_ ->
             first_located(Rest, Default)
     end.
+
+%% The connection state `?connected`, `?capability` and `?reconnected` read lives in
+%% the live process's dictionary, so a view re-rendered here in the socket process
+%% would take its disconnected branches -- not the ones that produced the frame.
+%% Copy the live process's into this process for the render, then put back what
+%% was here.
+with_connection(Pid, Fun) ->
+    Live =
+        case erlang:process_info(Pid, dictionary) of
+            {dictionary, Dict} -> [KV || {K, _} = KV <- Dict, lists:member(K, ?CONN_KEYS)];
+            undefined -> []
+        end,
+    Saved = [{K, erlang:get(K)} || K <- ?CONN_KEYS],
+    ok = lists:foreach(fun({K, V}) -> restore(K, V) end, Live),
+    try
+        Fun()
+    after
+        ok = lists:foreach(fun({K, V}) -> restore(K, V) end, Saved)
+    end.
+
+restore(Key, undefined) ->
+    _Old = erlang:erase(Key),
+    ok;
+restore(Key, Value) ->
+    _Old = erlang:put(Key, Value),
+    ok.
 
 %% Wraps a template so every value it evaluates is checked with `check/1` inside the
 %% slot's located evaluation -- nested templates, `?each` items, `?stateless`

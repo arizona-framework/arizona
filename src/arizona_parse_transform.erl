@@ -924,7 +924,9 @@ format_error(Reason) when
 %% Diagnostics about how a value is written in the source rather than the template's
 %% structure. Kept apart for the same reason as format_each_error/1.
 format_source_error(latin1_binary_literal) ->
-    "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>";
+    "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>. "
+    "For intended bytes, spell them so they do not warn: integer segments "
+    "(<<16#89, \"PNG\">>) or a sized string (<<\"\\351\":8>>)";
 format_source_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
     "the view bindings, so their map argument must be the bindings -- a parameter or a "

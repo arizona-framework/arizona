@@ -433,7 +433,11 @@ safe_init(Handler, Socket, Fun) ->
         Fun()
     catch
         error:{non_utf8_render, _, _} = Reason:Stacktrace ->
-            ok = log_crash(error, Reason, Stacktrace, Socket),
+            %% The connect frame failed to encode. No live pid is on the socket
+            %% yet to locate the line from, so the log names the view instead.
+            logger:error("error in ~p: ~p~n~ts", [
+                Handler, Reason, erl_error:format_exception(error, Reason, Stacktrace)
+            ]),
             close_mount_failed(Socket);
         Class:Reason:Stacktrace ->
             logger:error("~s in ~p:~p~n~p", [Class, Handler, Reason, Stacktrace]),

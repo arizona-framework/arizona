@@ -12,8 +12,9 @@
 %% a value can take on the way out -- an escaped content value, an attribute, a
 %% `?raw` content payload, a `?raw` attribute, an `?each` item, a `?stateless`
 %% child's value -- each fed by its own binding, so `break` can corrupt exactly
-%% one of them after mount. Every binding defaults to valid UTF-8 with multibyte
-%% characters. The suite finds each slot's line by the `?get(<key>)` on it.
+%% one of them after mount -- also an effect command's argument, and a value only
+%% the connected render shows (`?connected`). Every binding defaults to valid UTF-8
+%% with multibyte characters. The suite finds each slot's line by the `?get(<key>)` on it.
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
@@ -25,7 +26,9 @@ mount(Bindings) ->
             raw => maps:get(raw, Bindings, ~"<b>ünï</b>"),
             raw_attr => maps:get(raw_attr, Bindings, ~"/ü"),
             items => maps:get(items, Bindings, [~"日本"]),
-            child => maps:get(child, Bindings, ~"子")
+            child => maps:get(child, Bindings, ~"子"),
+            effect => maps:get(effect, Bindings, ~"ação"),
+            live => maps:get(live, Bindings, ~"ao vivo")
         },
         #{}
     }.
@@ -39,7 +42,14 @@ render(Bindings) ->
             {p, [], [?raw(?get(raw))]},
             {a, [{href, ?raw(?get(raw_attr))}], [~"b"]},
             {ul, [], [?each(fun(I) -> {li, [], [I]} end, ?get(items))]},
-            ?stateless(fun child/1, #{text => ?get(child)})
+            ?stateless(fun child/1, #{text => ?get(child)}),
+            {button, [{az_click, arizona_js:push_event(~"go", #{~"v" => ?get(effect)})}], [~"c"]},
+            {p, [], [
+                case ?connected of
+                    true -> ?get(live);
+                    false -> ~""
+                end
+            ]}
         ]}
     ).
 

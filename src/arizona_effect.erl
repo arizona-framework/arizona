@@ -68,7 +68,9 @@ embed the command as a JSON value.
 -spec encode_json(Cmds) -> binary() when
     Cmds :: cmd() | [cmd()].
 encode_json(Cmds) ->
-    iolist_to_binary(json:encode(json_value(Cmds))).
+    %% A string argument that is not UTF-8 is named `non_utf8_render`, not left
+    %% as the encoder's `unexpected_end` (arizona_utf8:json_encode/1).
+    arizona_utf8:json_encode(json_value(Cmds)).
 
 -doc """
 The command (or list of commands) as the JSON term it serializes to: `[OpCode |
