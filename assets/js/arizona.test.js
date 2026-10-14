@@ -5611,24 +5611,6 @@ describe('item ops -- marker-only slot inside an item', () => {
         expect(kids()).toEqual(['h4', 'pc9', 'footer']);
     });
 
-    it('refuses an attribute write whose target is only a slot marker', () => {
-        setupView('v', row(c('c1', 'one')));
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        applyOps([
-            [
-                OP.ITEM_PATCH,
-                'v:1FW8Y8A-0',
-                'r1',
-                [[OP.SET_ATTR, 'C5LPJH-1-UG30P3-0', 'data-x', '1']],
-            ],
-        ]);
-        expect(document.querySelector('[data-x]')).toBeNull();
-        expect(warn).toHaveBeenCalledWith(
-            expect.stringContaining('resolves only to a slot marker'),
-        );
-        warn.mockRestore();
-    });
-
     it('finds a later op of the same batch after a TEXT re-rendered the slot', () => {
         // The TEXT re-renders the enclosing conditional, replacing the inner slot's
         // markers; the insert that follows must anchor to the span as it is now, not
@@ -5706,19 +5688,20 @@ describe('stream ops -- two streams in one element with overlapping keys', () =>
         expect(texts()).toEqual(['X1', 'X2']);
     });
 
-    it('moves an item to the head of its own span', () => {
-        setupView('v', two('A1', 'A2'));
-        applyOps([
-            [
-                OP.INSERT,
-                'v:E6ZDXB-0:1',
-                'b',
-                -1,
-                '<p az="UH5VDM-0" az-key="b"><!--az:UH5VDM-0-->B<!--/az--></p>',
-            ],
-            [OP.MOVE, 'v:E6ZDXB-0:1', 'b', null],
-        ]);
-        expect(texts()).toEqual(['A1', 'B', 'A2']);
+    it('moves an item after a key both streams hold, within its own span', () => {
+        // The first stream also holds `a`: a lookup unscoped to the span would place
+        // `b` after the first stream's `a`, outside its own slot.
+        setupView(
+            'v',
+            '<div az="E6ZDXB-0" id="two"><!--az:E6ZDXB-0-->' +
+                '<p az="UH5VDM-0" az-key="a"><!--az:UH5VDM-0-->A1<!--/az--></p>' +
+                '<!--/az--><hr /><!--az:E6ZDXB-0:1-->' +
+                '<p az="UH5VDM-0" az-key="b"><!--az:UH5VDM-0-->B<!--/az--></p>' +
+                '<p az="UH5VDM-0" az-key="a"><!--az:UH5VDM-0-->A2<!--/az--></p>' +
+                '<!--/az--></div>',
+        );
+        applyOps([[OP.MOVE, 'v:E6ZDXB-0:1', 'b', 'a']]);
+        expect(texts()).toEqual(['A1', 'A2', 'B']);
     });
 });
 

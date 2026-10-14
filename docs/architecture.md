@@ -1984,10 +1984,7 @@ The **marker-only** container (no element carries the slot az at all -- a stream
 root's static siblings, or in a content-slot list fragment) works the same way: `resolveOpTarget`
 resolves it through its opening marker to the enclosing element, and the markers are that
 element's direct children, so `slotBounds` finds the span and `OP_INSERT`/`OP_MOVE` place within
-it. Only a target whose slot cannot be delimited (an opening marker with no closing one, reached
-through the marker or through a compound slot's base element) is refused, with a warning, rather
-than appended outside the slot. Attribute ops (`OP_SET_ATTR`/`OP_REM_ATTR`) on a marker-only hit
-are refused too, at view level and inside items, since the resolved element is the slot's parent.
+it.
 
 The same holds **inside a stream item**. An item's `innerOps` resolve through the same three arms
 scoped to the item (element, compound base, marker), so a nested stream whose marker sits in a

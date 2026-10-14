@@ -457,59 +457,6 @@ describe('applyOps -- destructive ops on a marker-only target', () => {
         warn.mockRestore();
     });
 
-    it('refuses a placement op when the marker-only slot is unterminated', () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        document.body.innerHTML =
-            `<div az="${SIB_ROOT_AZ}" az-view id="page">` +
-            `<p>header</p><!--az:${SIB_EACH_AZ}-->${sibItem('1', 'a')}<p>footer</p></div>`;
-        const before = sibRoot().innerHTML;
-        applyOps([[OP.INSERT, `page:${SIB_EACH_AZ}`, '2', -1, sibItem('2', 'b')]]);
-        expect(sibRoot().innerHTML).toBe(before);
-        expect(warn).toHaveBeenCalledOnce();
-        warn.mockRestore();
-    });
-
-    it('refuses an attribute write on a marker-only target', () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        setupSiblings();
-        const before = sibRoot().outerHTML;
-        applyOps([
-            [OP.SET_ATTR, `page:${SIB_EACH_AZ}`, 'class', 'x'],
-            [OP.REM_ATTR, `page:${SIB_EACH_AZ}`, 'id'],
-        ]);
-        // The resolved element is the slot's parent (here the live root): neither
-        // write may land on it.
-        expect(sibRoot().outerHTML).toBe(before);
-        expect(warn).toHaveBeenCalledTimes(2);
-        warn.mockRestore();
-    });
-
-    // A compound slot `B:1` resolves through its base element `[az="B"]`, not its
-    // marker. When that slot's span is unterminated, a tail insert has nowhere
-    // bounded to land and must not be appended after the base's static siblings.
-    it('refuses a placement op on a compound slot whose span is unterminated', () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        document.body.innerHTML =
-            '<div id="page" az-view><section az="B"><p>header</p><!--az:B:1-->' +
-            `${sibItem('1', 'a')}<p>footer</p></section></div>`;
-        const before = sibRoot().innerHTML;
-        applyOps([[OP.INSERT, 'page:B:1', '2', -1, sibItem('2', 'b')]]);
-        expect(sibRoot().innerHTML).toBe(before);
-        expect(warn).toHaveBeenCalledOnce();
-        warn.mockRestore();
-    });
-
-    it('places a tail insert inside a terminated compound slot span', () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        const body = (items) =>
-            `<section az="B"><p>header</p><!--az:B:1-->${items}<!--/az--><p>footer</p></section>`;
-        document.body.innerHTML = `<div id="page" az-view>${body(sibItem('1', 'a'))}</div>`;
-        applyOps([[OP.INSERT, 'page:B:1', '2', -1, sibItem('2', 'b')]]);
-        expect(sibRoot().innerHTML).toBe(body(sibItem('1', 'a') + sibItem('2', 'b')));
-        expect(warn).not.toHaveBeenCalled();
-        warn.mockRestore();
-    });
-
     // A stream in a content-slot list fragment (`{ul, [], [[~"x", ?each(...)]]}`):
     // its slot az is scoped under the fragment, carried by no element, so the
     // insert resolves through the marker to the `ul` and lands inside the span.

@@ -1775,8 +1775,7 @@ make_op(Az, #{t := ?EACH, items := Items, template := Tmpl}, _Old) when
 %% the full-render op code does not govern them. Their placement
 %% (`?OP_INSERT`'s position, `?OP_MOVE`'s prepend) is relative to the slot's
 %% marker span, so the client places them inside it even on a marker-only
-%% container, and refuses only a span it cannot delimit (see
-%% docs/architecture.md).
+%% container (see docs/architecture.md).
 make_op(Az, #{t := ?EACH, items := Items, order := Order, template := Tmpl}, _Old) ->
     [?OP_TEXT, Az, arizona_render:zip_stream_fp(Tmpl, Items, Order)];
 make_op(Az, remove, {attr, Attr, _}) ->

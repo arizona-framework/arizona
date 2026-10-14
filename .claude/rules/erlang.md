@@ -419,8 +419,7 @@ resolves the slot's markers and inserts before the closing one (or after the ope
 move-to-head), so an each sharing its container with static siblings keeps its items inside the
 slot. A **marker-only** container, where no element carries the slot az at all, is placed the
 same way: the client resolves it through its opening marker to the enclosing element and places
-within the span. Only a slot whose span cannot be delimited (an opening marker with no closing
-one) is refused (warn + skip) rather than letting the node land outside the slot.
+within the span.
 
 **Component as an `?each` item child.** A `?stateless` descriptor **inside** an item element
 (`{li, [], [?stateless(...)]}`) renders at SSR and diffs per-item like any other item content:

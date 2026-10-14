@@ -951,9 +951,9 @@ function applyOps(ops) {
             if (found.marker && MARKER_UNSAFE_OPS.has(op[0])) {
                 // A marker-only hit is the slot's PARENT element, not the slot:
                 // it exists to give the marker-aware ops something to scan. An op
-                // that rewrites that element or writes its attributes would act on
-                // content outside the slot -- see MARKER_UNSAFE_OPS. Refuse it as an
-                // unresolved target is refused.
+                // that rewrites the element would destroy content outside the slot
+                // -- see MARKER_UNSAFE_OPS. Refuse it as an unresolved target is
+                // refused.
                 console.warn(
                     `[arizona] op ${op[0]} target "${op[1]}" resolves only to a slot marker; ` +
                         `refusing an op that acts on the enclosing element`,
@@ -974,7 +974,6 @@ function applyOps(ops) {
                     applyRemAttrOp(el, op[2]);
                     break;
                 case OP.REPLACE: {
-                    dropSpans(streams);
                     destroyHooks(el);
                     // Hold the replacement's roots BEFORE inserting them: a navigate mounts a
                     // view whose id differs, so re-resolving `op[1]` (which names the OUTGOING
@@ -992,13 +991,8 @@ function applyOps(ops) {
                 }
                 case OP.REMOVE_NODE:
                     removeEl(el);
-                    dropSpans(streams);
                     break;
                 case OP.INSERT:
-                    if (!placeable(found, streams, el, az)) {
-                        warnUnplaceable(op);
-                        break;
-                    }
                     insertItemEl(el, op[2], op[3], op[4], streams, az);
                     break;
                 case OP.REMOVE:
@@ -1008,10 +1002,6 @@ function applyOps(ops) {
                     applyItemPatch(el, op[2], op[3], streams, az);
                     break;
                 case OP.MOVE:
-                    if (!placeable(found, streams, el, az)) {
-                        warnUnplaceable(op);
-                        break;
-                    }
                     moveItemEl(el, op[2], op[3], streams, az);
                     break;
                 case OP.LIST_PATCH:
@@ -1049,50 +1039,17 @@ function applyOps(ops) {
  * Ops that act on the element they resolve to as a whole, so they cannot be
  * applied to a marker-only resolution -- whose element is the slot's PARENT, not
  * the slot. `replaceWith` / `remove` on the parent takes the slot's static
- * siblings with it, and when the parent is the live root, the whole view; an
- * attribute write (`SET_ATTR` / `REM_ATTR`) would land on the parent, not on
- * anything the slot owns. The server never addresses these to a marker-anchored
- * slot (the diff emits the marker-aware `?OP_TEXT`), so this is a guard against
- * a stray op, not a supported path -- the same rule item ops apply.
+ * siblings with it, and when the parent is the live root, the whole view. The
+ * server never addresses these to a marker-anchored slot (the diff emits the
+ * marker-aware `?OP_TEXT`), so this is a guard against a stray op, not a
+ * supported path.
  *
  * The stream placement ops (`INSERT`, `MOVE`) are NOT here: on a marker-only hit
  * the slot's markers are direct children of the resolved parent, so
- * `insertItemEl` / `moveItemEl` place inside the span through `slotBounds`. They
- * are refused only when that span cannot be found (`warnUnplaceable`), since an
- * unbounded tail insert would land after the slot's static siblings.
+ * `insertItemEl` / `moveItemEl` place inside the span through `slotBounds`.
  * @type {Set<number>}
  */
-const MARKER_UNSAFE_OPS = new Set([OP.REPLACE, OP.REMOVE_NODE, OP.SET_ATTR, OP.REM_ATTR]);
-
-/**
- * Warn about a stream placement op whose marker-only target has no delimited slot
- * span to place within (an unterminated marker), so it is skipped rather than
- * appended outside the slot.
- * @param {Array<*>} op
- */
-function warnUnplaceable(op) {
-    console.warn(
-        `[arizona] op ${op[0]} target "${op[1]}" has no slot span to place within; skipping`,
-    );
-}
-
-/**
- * Whether a stream placement op (`INSERT` / `MOVE`) can be placed in `el`. A
- * container that owns the stream outright carries no slot markers for `az`, and
- * places among its own keyed children. Otherwise the op needs the slot's span:
- * a marker-only hit, or a compound slot resolved through its base element, whose
- * opening marker has no closing one cannot be delimited, and an unbounded tail
- * insert would land after the slot's static siblings.
- * @param {Resolution} found
- * @param {StreamCache|null} streams
- * @param {Element} el
- * @param {string} az
- * @returns {boolean}
- */
-function placeable(found, streams, el, az) {
-    if (spanOf(streams, el, az)) return true;
-    return !found.marker && !(az && findMarker(el, az));
-}
+const MARKER_UNSAFE_OPS = new Set([OP.REPLACE, OP.REMOVE_NODE]);
 
 /**
  * The az half of a `"viewId:az"` patch target (the whole string when it carries
@@ -1597,10 +1554,10 @@ function keyedChildren(el, bounds) {
  *   item.
  * - `spans`: the slot span each (container, az) resolves to, stamped with the
  *   `epoch` it was found in. `slotBounds` walks the slot to its closing marker, so
- *   without this every lookup by key paid an O(items) walk. Any op that can rewrite
- *   a container's children (TEXT, REPLACE, LIST_PATCH, REMOVE_NODE) bumps `epoch`:
- *   an enclosing re-render replaces the markers, so a span found or ruled out before
- *   it may no longer hold. A stale span whose markers are both still children of
+ *   without this every lookup by key paid an O(items) walk. Any op that re-renders
+ *   a container's children (TEXT, LIST_PATCH) bumps `epoch`: an enclosing re-render
+ *   replaces the markers, so a span found or ruled out before it may no longer
+ *   hold. A stale span whose markers are both still children of
  *   the container is still exact and is kept -- the common batch interleaves a TEXT
  *   inside every row with lookups in the list, and re-walking the list after each
  *   one would make it quadratic.
@@ -1844,24 +1801,6 @@ function applyItemPatch(container, key, innerOps, streams = null, az) {
 }
 
 /**
- * Resolve a nested item for patching: find the inner container by az,
- * then apply innerOps scoped to its keyed child.
- * @param {Element} parentEl -- parent item or container element
- * @param {string} az -- az attribute to find the container within parentEl
- * @param {string} key -- az-key of the item to patch
- * @param {Array<Array<*>>} innerOps -- ops scoped to the item
- * @param {StreamCache|null} [streams] -- per-batch stream lookups
- */
-function patchItemEl(parentEl, az, key, innerOps, streams = null) {
-    const found = resolveInnerEl(parentEl, az);
-    if (!found) {
-        console.warn(`[arizona] item op target "${az}" not found; skipping`);
-        return;
-    }
-    applyItemPatch(found.el, key, innerOps, streams, az);
-}
-
-/**
  * Resolve an az within an item, mirroring `resolveOpTarget`'s three arms: an
  * element carrying the az (the item itself or a descendant), for a compound
  * "X:n" az the base element, then the slot's comment marker -- whose PARENT is
@@ -1937,11 +1876,6 @@ function applyItemOps(item, innerOps, streams = null) {
             if (op[0] === OP.REMOVE_NODE) {
                 const innerEl = item.querySelector(`[az="${az}"]`);
                 if (innerEl) removeEl(innerEl);
-                dropSpans(streams);
-                continue;
-            }
-            if (op[0] === OP.ITEM_PATCH) {
-                patchItemEl(item, az, op[2], op[3], streams);
                 continue;
             }
             const found = inner(az);
@@ -1956,35 +1890,21 @@ function applyItemOps(item, innerOps, streams = null) {
                     dropSpans(streams);
                     break;
                 case OP.SET_ATTR:
+                    applySetAttrOp(el, op[2], op[3]);
+                    break;
                 case OP.REM_ATTR:
-                    // A marker hit is the slot's parent: an attribute write there would
-                    // land on the wrong element.
-                    if (found.marker) {
-                        console.warn(
-                            `[arizona] item op ${op[0]} target "${az}" resolves only to a ` +
-                                'slot marker; skipping',
-                        );
-                    } else if (op[0] === OP.SET_ATTR) {
-                        applySetAttrOp(el, op[2], op[3]);
-                    } else {
-                        applyRemAttrOp(el, op[2]);
-                    }
+                    applyRemAttrOp(el, op[2]);
                     break;
                 case OP.INSERT:
-                    if (!placeable(found, streams, el, az)) {
-                        warnUnplaceable(op);
-                        break;
-                    }
                     insertItemEl(el, op[2], op[3], op[4], streams, az);
                     break;
                 case OP.REMOVE:
                     removeItemEl(el, op[2], streams, az);
                     break;
+                case OP.ITEM_PATCH:
+                    applyItemPatch(el, op[2], op[3], streams, az);
+                    break;
                 case OP.MOVE:
-                    if (!placeable(found, streams, el, az)) {
-                        warnUnplaceable(op);
-                        break;
-                    }
                     moveItemEl(el, op[2], op[3], streams, az);
                     break;
                 case OP.LIST_PATCH:
