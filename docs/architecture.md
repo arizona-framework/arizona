@@ -93,8 +93,10 @@ HTML output and rendering.
 - `render/1` -- evaluate dynamics, produce `{HTML, Snapshot}`
 - `render/2` -- like `render/1` but threads a views map for stateful children, collects deps:
   `{HTML, Snapshot, Views}`
-- `render_snapshot/2` -- `render/2` without the document: `{Snapshot, Views}`. A fingerprinted
-  reconnect or navigate ships the fingerprint payload, so it renders through this
+- `render_snapshot/2` -- `render/2` without the document: `{Snapshot, Views}`. Every live mount
+  renders through this: a fingerprinted reconnect or navigate ships the fingerprint payload, and a
+  first connect ships no page at all. Evaluating the snapshot (`arizona_eval`) is what observes
+  the opaque command attributes the connect frame declares
 - `snapshot_html/1` -- rebuild the document `render/2` would have produced from a snapshot, for
   a root with no fingerprint
 - `render_to_iolist/1` -- render a template to iolist (used for layout templates with
@@ -1011,8 +1013,11 @@ Simplified gen_server wrapper:
   starts no live process at all, so it calls neither
 - `mount/1` -- calls `Handler:mount(Bindings)`. Extracts `ViewId = maps:get(id, Bindings)`, calls
   `Handler:render(B1)` via `arizona_stateful:call_render/2`, builds a snapshot via
-  `arizona_render:render/2`. Returns `{ok, ViewId}` (no HTML -- SSR is handled separately by
-  `arizona_roadrunner_http`)
+  `arizona_render:render_snapshot/2` (no document: the connect frame ships none, and evaluating
+  the snapshot observes its command attributes). Returns `{ok, ViewId}` (no HTML -- SSR is handled
+  separately by `arizona_roadrunner_http`). It does not check a value's renderability: SSR rendered
+  the same template moments before, and a value only a connected render produces is refused by
+  the first render that ships it
 - `handle_event/4` -- unified event dispatch: `handle_event(Pid, ViewId, Event, Payload)`. Checks
   views map -- if `ViewId` is a known child, dispatches to the child handler; if it is the root's
   id, to the root handler. Returns `{ok, Ops, Effects}`. An id that is **neither** is dropped

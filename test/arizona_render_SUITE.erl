@@ -36,7 +36,8 @@
     no_diff_ssr_nested/1,
     render_attr/1,
     render_snapshot_matches_render/1,
-    mount_payload_observes_like_render/1,
+    snapshot_observes_like_render/1,
+    snapshot_observes_window_and_local/1,
     snapshot_html_matches_render_unprinted/1,
     fingerprint_payload_cross_target_child_raises/1,
     static_attr_escaped/1,
@@ -168,7 +169,8 @@ groups() ->
             ssr_cross_target_child_raises,
             fingerprint_payload_cross_target_child_raises,
             render_snapshot_matches_render,
-            mount_payload_observes_like_render,
+            snapshot_observes_like_render,
+            snapshot_observes_window_and_local,
             snapshot_html_matches_render_unprinted,
             ssr_cross_target_layout_raises,
             ssr_same_target_native_layout,
@@ -691,16 +693,19 @@ snapshot_html_matches_render_unprinted(Config) when is_list(Config) ->
     ?assertEqual(iolist_to_binary(HTML), Doc),
     ?assertNotEqual(nomatch, binary:match(Doc, ~"&lt;x&gt; &amp; &quot;y&quot;")).
 
-%% The connect frame declares the command attributes the mount observed. A mount
-%% that ships the fingerprint payload observes through it, so it must declare
-%% exactly what the document render would have.
-mount_payload_observes_like_render(Config) when is_list(Config) ->
+%% The connect frame declares the command attributes the mount observed, and
+%% every mount renders the snapshot only: evaluating it (arizona_eval) is what
+%% observes them, so it must declare exactly what the document render would have.
+%% Swept over every stateful fixture that mounts and renders with no bindings,
+%% which covers nested templates, plain-list and stream eaches, child views,
+%% nodiff regions and opaque dynamic commands.
+snapshot_observes_like_render(Config) when is_list(Config) ->
     %% Unarmed, the collector drops every observation and both sides drain
-    %% `{[], []}`, which would hide a payload walk that observes nothing.
+    %% `{[], []}`, which would hide a snapshot that observes nothing.
     ok = arizona_event_attrs:arm(),
-    Observed = [{H, observe_both(H)} || H <- [arizona_opaque_nested | snapshot_fixtures()]],
+    Observed = [{H, O} || H <- stateful_fixtures(), {ok, O} <- [observe_both(H)]],
     lists:foreach(
-        fun({H, {ByRender, ByPayload}}) -> ?assertEqual(ByRender, ByPayload, H) end,
+        fun({H, {ByRender, BySnapshot}}) -> ?assertEqual(ByRender, BySnapshot, H) end,
         Observed
     ),
     ?assertMatch(
@@ -710,17 +715,53 @@ mount_payload_observes_like_render(Config) when is_list(Config) ->
     ?assertMatch(
         {[~"az-focusin", ~"az-keyup", ~"az-wheel"], _},
         element(1, proplists:get_value(arizona_opaque_nested, Observed))
-    ).
+    ),
+    %% Guards against a sweep that silently skips most fixtures.
+    ?assert(length(Observed) >= 50, length(Observed)).
 
+%% A stream evaluates its visible window only, so a command on a hidden item is
+%% never declared; a `?local` attribute whose init is a command is.
+snapshot_observes_window_and_local(Config) when is_list(Config) ->
+    ok = arizona_event_attrs:arm(),
+    {ok, {ByRender, BySnapshot}} = observe_both(arizona_observe_shapes),
+    ?assertEqual(ByRender, BySnapshot),
+    ?assertMatch({[~"az-blur"], _}, BySnapshot).
+
+%% `{ok, {ByRender, BySnapshot}}`, or `skip` for a fixture that cannot mount and
+%% render bare. Once render/2 succeeds, render_snapshot/2 must too.
 observe_both(H) ->
-    {B, _Resets} = arizona_stateful:call_mount(H, #{}),
-    Tmpl = arizona_stateful:call_render(H, B),
-    {_, _} = arizona_event_attrs:drain(),
-    {_HTML, _Snap, _Views} = arizona_render:render(Tmpl, #{}),
-    ByRender = arizona_event_attrs:drain(),
-    {Snap, _} = arizona_render:render_snapshot(Tmpl, #{}),
-    #{} = arizona_render:fingerprint_payload(Snap),
-    {ByRender, arizona_event_attrs:drain()}.
+    case render_bare(H) of
+        {ok, Tmpl, ByRender} ->
+            {_Snap, _Views} = arizona_render:render_snapshot(Tmpl, #{}),
+            {ok, {ByRender, arizona_event_attrs:drain()}};
+        skip ->
+            skip
+    end.
+
+render_bare(H) ->
+    try
+        {B, _Resets} = arizona_stateful:call_mount(H, #{}),
+        Tmpl = arizona_stateful:call_render(H, B),
+        {_, _} = arizona_event_attrs:drain(),
+        {_HTML, _Snap, _Views} = arizona_render:render(Tmpl, #{}),
+        {ok, Tmpl, arizona_event_attrs:drain()}
+    catch
+        _:_ ->
+            {_, _} = arizona_event_attrs:drain(),
+            skip
+    end.
+
+stateful_fixtures() ->
+    Dir = filename:dirname(code:which(arizona_counter)),
+    Mods = [
+        list_to_atom(filename:basename(F, ".beam"))
+     || F <- filelib:wildcard(filename:join(Dir, "arizona_*.beam"))
+    ],
+    [M || M <- Mods, is_stateful(M)].
+
+is_stateful(M) ->
+    Attrs = M:module_info(attributes),
+    lists:member(arizona_stateful, proplists:get_value(behaviour, Attrs, [])).
 
 snapshot_fixtures() ->
     [
