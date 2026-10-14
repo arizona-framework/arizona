@@ -425,6 +425,7 @@
 -export([az_attrs_keeps_prevent_default_with_a_value/1]).
 -export([az_attrs_skips_injected_az_view/1]).
 -export([az_attrs_records_component_modules/1]).
+-export([parse_transform_deps/1]).
 
 all() ->
     [
@@ -447,11 +448,14 @@ all() ->
         {group, az_macros},
         {group, az_view},
         {group, az_scoping},
-        {group, az_attrs}
+        {group, az_attrs},
+        {group, deps}
     ].
 
 groups() ->
     [
+        %% Traces calls process-wide, so it runs alone.
+        {deps, [], [parse_transform_deps]},
         %% Tests 1-25: basic element parsing
         {elements, [parallel], [
             static_only,
@@ -9408,3 +9412,79 @@ az_attrs_records_component_modules(Config) when is_list(Config) ->
         [child_view, other_component],
         proplists:get_value(arizona_az_deps, Mod:module_info(attributes), [])
     ).
+
+%% The transform runs other modules while it compiles a template, and rebar3 only
+%% rebuilds its users after a change to one of them if the transform declares it
+%% (see the behaviour list in arizona_parse_transform). Compile every transform user
+%% in the repo and check each arizona module the compile called is declared, so a
+%% new compile-time call cannot leave incremental builds stale. A compiled module's
+%% own `behaviour_info/1` lookups are the compiler's, not the transform's.
+parse_transform_deps(Config) when is_list(Config) ->
+    Src = proplists:get_value(source, arizona_parse_transform:module_info(compile)),
+    Root = filename:dirname(filename:dirname(Src)),
+    Files = [
+        filename:join(Root, "src/arizona_error_page.erl")
+        | filelib:wildcard(filename:join(Root, "test/support/*.erl"))
+    ],
+    Opts = [
+        binary,
+        return_errors,
+        no_spawn_compiler_process,
+        {i, filename:join(Root, "include")},
+        {i, filename:join(Root, "src")}
+    ],
+    ok =
+        case application:load(arizona) of
+            ok -> ok;
+            {error, {already_loaded, arizona}} -> ok
+        end,
+    {ok, AppMods} = application:get_key(arizona, modules),
+    Mods = [M || M <- AppMods, M =/= arizona_parse_transform],
+    ok = lists:foreach(fun(M) -> {module, M} = code:ensure_loaded(M) end, Mods),
+    {Compiled, Called} = trace_called(Mods, fun() -> [compile:file(F, Opts) || F <- Files] end),
+    ?assertEqual([], [R || R <- Compiled, element(1, R) =/= ok]),
+    Attrs = arizona_parse_transform:module_info(attributes),
+    Declared = lists:append(proplists:get_all_values(behaviour, Attrs)),
+    ?assertEqual([], Called -- Declared).
+
+trace_called(Mods, Fun) ->
+    Self = self(),
+    Tracer = spawn_link(fun() -> collect_called(#{}) end),
+    1 = erlang:trace(Self, true, [call, {tracer, Tracer}]),
+    ok = lists:foreach(fun(M) -> set_call_trace(M, true) end, Mods),
+    Result =
+        try
+            Fun()
+        after
+            1 = erlang:trace(Self, false, [call]),
+            ok = lists:foreach(fun(M) -> set_call_trace(M, false) end, Mods)
+        end,
+    Ref = erlang:trace_delivered(Self),
+    receive
+        {trace_delivered, Self, Ref} -> ok
+    after 5000 -> erlang:error(trace_not_delivered)
+    end,
+    Tracer ! {done, Self},
+    receive
+        {called, Called} -> {Result, Called}
+    after 5000 -> erlang:error(no_trace_result)
+    end.
+
+set_call_trace(M, On) ->
+    Traced = erlang:trace_pattern({M, '_', '_'}, On, [global]),
+    Skipped = erlang:trace_pattern({M, behaviour_info, 1}, false, [global]),
+    true = is_integer(Traced) andalso is_integer(Skipped),
+    ok.
+
+collect_called(Acc) ->
+    receive
+        {trace, _, call, {M, _, _}} -> collect_called(Acc#{M => true});
+        {done, From} -> drain_called(Acc, From)
+    after 600000 -> exit(no_trace_done)
+    end.
+
+drain_called(Acc, From) ->
+    receive
+        {trace, _, call, {M, _, _}} -> drain_called(Acc#{M => true}, From)
+    after 0 -> From ! {called, lists:sort(maps:keys(Acc))}
+    end.

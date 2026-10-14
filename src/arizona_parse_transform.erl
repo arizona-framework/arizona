@@ -65,6 +65,25 @@ render(Bindings) ->
 
 -compile({nowarn_redefined_builtin_type, [{dynamic, 0}]}).
 
+%% The transform runs these modules while it compiles a template: the render
+%% backends, and the command builders it folds with `arizona_effect` beneath
+%% them. rebar3 learns a module's compile-time dependencies only from its
+%% behaviour, include and parse_transform attributes, so they are declared as
+%% behaviours; a change to one then recompiles this module and, through it,
+%% every module it compiled, instead of leaving them built from the old code.
+%% None defines callbacks, so the compiler and dialyzer are told not to look
+%% for any. `parse_transform_deps` in arizona_parse_transform_SUITE fails if
+%% the transform starts calling a module missing here.
+-compile(nowarn_undefined_behaviour).
+-dialyzer(no_undefined_callbacks).
+-behaviour(arizona_html).
+-behaviour(arizona_native).
+-behaviour(arizona_terminal).
+-behaviour(arizona_js).
+-behaviour(arizona_android).
+-behaviour(arizona_os).
+-behaviour(arizona_effect).
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
