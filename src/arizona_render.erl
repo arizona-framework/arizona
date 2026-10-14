@@ -844,8 +844,9 @@ render_fp_val(Backend, #{az_local := _, v := V}) ->
     %% the enclosing backend is always HTML here.
     arizona_template:escape_value(Backend, V);
 render_fp_val(Backend, #{f := _} = Nested) ->
-    %% The same-target check render_dyn/2 makes, so a live mount that ships only
-    %% this payload still refuses a child of another target.
+    %% The same-target check render_dyn/2 makes. Every payload goes through here
+    %% (a fingerprinted mount, which renders no document, and a diff's branch
+    %% swap or each insert), so a child of another target is refused on all.
     ok = assert_same_target(Backend, backend(Nested)),
     fingerprint_payload(Nested);
 render_fp_val(Backend, #{s := S, d := D} = Nested) ->

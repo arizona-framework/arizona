@@ -36,6 +36,7 @@
     render_attr/1,
     render_snapshot_matches_render/1,
     mount_payload_observes_like_render/1,
+    snapshot_html_matches_render_unprinted/1,
     fingerprint_payload_cross_target_child_raises/1,
     static_attr_escaped/1,
     escape_clean_value_not_rebuilt/1,
@@ -160,6 +161,7 @@ groups() ->
             fingerprint_payload_cross_target_child_raises,
             render_snapshot_matches_render,
             mount_payload_observes_like_render,
+            snapshot_html_matches_render_unprinted,
             ssr_counter_with_bindings,
             ssr_counter_custom_id,
             ssr_page_with_child,
@@ -615,6 +617,17 @@ fingerprint_payload_cross_target_child_raises(Config) when is_list(Config) ->
     ?assertError(
         {cross_target_child, arizona_native, arizona_html},
         arizona_render:fingerprint_payload(Snap)
+    ),
+    %% A nested template without a fingerprint takes the payload's flat-zip
+    %% clause, which makes the same check.
+    UnprintedChild = maps:remove(f, HtmlChild),
+    UnprintedParent = NativeParent#{
+        d => [{<<"0">>, fun() -> #{callback => fun(_) -> UnprintedChild end, props => #{}} end}]
+    },
+    {UnprintedSnap, _} = arizona_render:render_snapshot(UnprintedParent, #{}),
+    ?assertError(
+        {cross_target_child, arizona_native, arizona_html},
+        arizona_render:fingerprint_payload(UnprintedSnap)
     ).
 
 %% render_snapshot/2 is render/2 without the document, and snapshot_html/1
@@ -636,23 +649,49 @@ render_snapshot_matches_render(Config) when is_list(Config) ->
         snapshot_fixtures()
     ).
 
+%% A snapshot with no fingerprint gets its document from snapshot_html/1 on a
+%% reconnect or navigate (page_content/1), so the rebuild must match render/2
+%% for a nodiff root with dynamic attributes and an escaped value. The
+%% template type requires `f`, so the snapshot is stripped instead.
+snapshot_html_matches_render_unprinted(Config) when is_list(Config) ->
+    {B, _Resets} = arizona_stateful:call_mount(arizona_opaque_events, #{title => ~"<x> & \"y\""}),
+    Tmpl = (arizona_stateful:call_render(arizona_opaque_events, B))#{diff => false},
+    {HTML, Snap, _Views} = arizona_render:render(Tmpl, #{}),
+    Unprinted = maps:remove(f, Snap),
+    Doc = iolist_to_binary(arizona_render:snapshot_html(Unprinted)),
+    ?assertEqual(iolist_to_binary(HTML), Doc),
+    ?assertNotEqual(nomatch, binary:match(Doc, ~"&lt;x&gt; &amp; &quot;y&quot;")).
+
 %% The connect frame declares the command attributes the mount observed. A mount
 %% that ships the fingerprint payload observes through it, so it must declare
 %% exactly what the document render would have.
 mount_payload_observes_like_render(Config) when is_list(Config) ->
+    %% Unarmed, the collector drops every observation and both sides drain
+    %% `{[], []}`, which would hide a payload walk that observes nothing.
+    ok = arizona_event_attrs:arm(),
+    Observed = [{H, observe_both(H)} || H <- [arizona_opaque_nested | snapshot_fixtures()]],
     lists:foreach(
-        fun(H) ->
-            {B, _Resets} = arizona_stateful:call_mount(H, #{}),
-            Tmpl = arizona_stateful:call_render(H, B),
-            {_, _} = arizona_event_attrs:drain(),
-            {_HTML, _Snap, _Views} = arizona_render:render(Tmpl, #{}),
-            ByRender = arizona_event_attrs:drain(),
-            {Snap, _} = arizona_render:render_snapshot(Tmpl, #{}),
-            #{} = arizona_render:fingerprint_payload(Snap),
-            ?assertEqual(ByRender, arizona_event_attrs:drain(), H)
-        end,
-        [arizona_opaque_events | snapshot_fixtures()]
+        fun({H, {ByRender, ByPayload}}) -> ?assertEqual(ByRender, ByPayload, H) end,
+        Observed
+    ),
+    ?assertMatch(
+        {[_ | _], _},
+        element(1, proplists:get_value(arizona_opaque_events, Observed))
+    ),
+    ?assertMatch(
+        {[~"az-focusin", ~"az-keyup", ~"az-wheel"], _},
+        element(1, proplists:get_value(arizona_opaque_nested, Observed))
     ).
+
+observe_both(H) ->
+    {B, _Resets} = arizona_stateful:call_mount(H, #{}),
+    Tmpl = arizona_stateful:call_render(H, B),
+    {_, _} = arizona_event_attrs:drain(),
+    {_HTML, _Snap, _Views} = arizona_render:render(Tmpl, #{}),
+    ByRender = arizona_event_attrs:drain(),
+    {Snap, _} = arizona_render:render_snapshot(Tmpl, #{}),
+    #{} = arizona_render:fingerprint_payload(Snap),
+    {ByRender, arizona_event_attrs:drain()}.
 
 snapshot_fixtures() ->
     [
