@@ -495,6 +495,44 @@ describe('arizona-worker', () => {
         expect(url).not.toContain('upload_path=%2Ffoo');
     });
 
+    it('acknowledges [4] with a ping and reports its pong as [3]', () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.send([1, '["page","changed",{}]']);
+        slf.send([4]);
+        // The ping goes out right after the frame it acknowledges.
+        expect(ws.latest().sent.slice(-2)).toEqual(['["page","changed",{}]', '0']);
+        slf.posted.length = 0;
+        ws.latest().simulateMessage('1');
+        expect(slf.posted).toEqual([[3]]);
+    });
+
+    it("a heartbeat's pong answers the heartbeat, not a later acknowledgement", () => {
+        // Pongs come back in ping order: a heartbeat ping sent before [4] gets the
+        // first pong, which must not be taken for the acknowledgement.
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        vi.advanceTimersByTime(30000); // heartbeat ping
+        slf.send([4]); // acknowledgement ping
+        slf.posted.length = 0;
+        ws.latest().simulateMessage('1'); // the heartbeat's pong
+        expect(slf.posted).toEqual([]);
+        ws.latest().simulateMessage('1'); // the acknowledgement's pong
+        expect(slf.posted).toEqual([[3]]);
+    });
+
+    it("a new socket forgets the old one's outstanding pings", () => {
+        slf.send([0, 'ws://host/ws?_az_path=%2F']);
+        ws.latest().simulateOpen();
+        slf.send([4]);
+        ws.latest().close(1006);
+        vi.advanceTimersByTime(1200);
+        ws.latest().simulateOpen();
+        slf.posted.length = 0;
+        ws.latest().simulateMessage('1'); // a pong on the new socket
+        expect(slf.posted).toEqual([]);
+    });
+
     it('heartbeat sends ping after 30s, closes if pong not received before next tick', () => {
         slf.send([0, 'ws://host/ws?_az_path=%2F']);
         ws.latest().simulateOpen();

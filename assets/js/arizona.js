@@ -55,6 +55,7 @@ const W_CONNECT = 0;
 const W_SEND = 1;
 const W_CLOSE = 2;
 const W_UPDATE_PATH = 3;
+const W_ACK_REPLAY = 4;
 
 /** WebSocket close codes used by Arizona (must match `arizona_socket.erl`). */
 const WS_CLOSE_NORMAL = 1000;
@@ -108,8 +109,7 @@ function mountReloadCount(path) {
 /** Schedule the reload for a mount failure, unless one is already pending. */
 function scheduleMountReload() {
     if (_mountReloadTimer !== null) return;
-    const path = location.pathname;
-    const count = mountReloadCount(path);
+    const count = mountReloadCount(location.pathname);
     let delay =
         MOUNT_RELOAD_DELAY_MIN +
         Math.floor(Math.random() * (MOUNT_RELOAD_DELAY_MAX - MOUNT_RELOAD_DELAY_MIN + 1));
@@ -125,8 +125,10 @@ function scheduleMountReload() {
     }
     _mountReloadTimer = setTimeout(() => {
         _mountReloadTimer = null;
+        // Count the URL actually reloaded: the path may have changed meanwhile.
+        const path = location.pathname;
         try {
-            localStorage.setItem(MOUNT_RELOAD_KEY + path, String(count + 1));
+            localStorage.setItem(MOUNT_RELOAD_KEY + path, String(mountReloadCount(path) + 1));
         } catch {
             /* localStorage unavailable -- reload anyway */
         }
@@ -139,11 +141,14 @@ function cancelMountReload() {
     _mountReloadTimer = null;
 }
 
-/** The view mounted: a mount-failure loop on this path, if any, is over. */
-function mountSucceeded() {
+/**
+ * A view mounted on `path`: a mount-failure loop there, if any, is over.
+ * @param {string} path
+ */
+function mountSucceeded(path) {
     cancelMountReload();
     try {
-        localStorage.removeItem(MOUNT_RELOAD_KEY + location.pathname);
+        localStorage.removeItem(MOUNT_RELOAD_KEY + path);
     } catch {
         /* localStorage unavailable -- nothing to clear */
     }
@@ -242,21 +247,13 @@ let _connectQs = '';
 const _savedForms = new Map();
 
 /**
- * Forms whose `az-change` the last restore replayed, while no user interaction
- * has since succeeded. A crash (4500) in that window may have been caused by the
- * replayed values, so the next restore puts them back without replaying them.
+ * Forms whose `az-change` the last restore replayed, until the server proves it
+ * handled the replay (see W_ACK_REPLAY). A crash (4500) before that may have been
+ * caused by the replayed values, so the next restore puts them back without
+ * replaying them.
  * @type {Set<string>}
  */
 const _replayedForms = new Set();
-
-/** True while restoreFormState replays, so those sends are not user interaction. */
-let _replaying = false;
-
-/**
- * A frame the user sent since the replay awaits proof the server processed it:
- * any later server frame (the socket handles frames in order).
- */
-let _interactionPending = false;
 
 // Teardown for the connection currently owning the module state, so a second
 // `connect()` can retire the first instead of orphaning its Worker. Cleared by
@@ -588,7 +585,6 @@ function navigateTo(path, qs, hash, opts) {
  * @param {...*} args
  */
 function workerPost(opcode, ...args) {
-    if (opcode === W_SEND && !_replaying && _replayedForms.size > 0) _interactionPending = true;
     if (_worker) _worker.postMessage([opcode, ...args]);
 }
 
@@ -2808,7 +2804,7 @@ function saveFormState(suspect = null) {
 /**
  * Restore form state after reconnection. Sets field values on matching forms
  * and replays az-change events to sync server state, once: a replayed form is
- * tracked in `_replayedForms` until a user interaction succeeds.
+ * tracked in `_replayedForms` until the server acknowledges the replay.
  */
 function restoreFormState() {
     for (const [formId, { fields, azChange, replay }] of _savedForms) {
@@ -2866,16 +2862,15 @@ function restoreFormState() {
             }
         }
         if (replay && azChange && _connected) {
-            _replaying = true;
-            try {
-                executeJS(form, null, JSON.parse(azChange));
-            } finally {
-                _replaying = false;
-            }
+            executeJS(form, null, JSON.parse(azChange));
             _replayedForms.add(formId);
         }
     }
     _savedForms.clear();
+    // The server handles a socket's frames in order, and an event synchronously,
+    // so the pong to a ping sent right after the replay proves it was handled
+    // without crashing the view.
+    if (_replayedForms.size > 0) workerPost(W_ACK_REPLAY);
 }
 
 /**
@@ -3493,15 +3488,16 @@ function connect(endpoint, params = {}) {
             switch (msg[0]) {
                 case 0: {
                     // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null]
-                    if (_mountProof === 'frame' || (_mountProof === 'resync' && msg[3])) {
+                    // A navigate's reply is its new view's OP_REPLACE, which proves
+                    // that mount too. `_currentPath` is the path the worker's socket
+                    // (or the navigate) asked for.
+                    if (
+                        _mountProof === 'frame' ||
+                        (_mountProof === 'resync' && msg[3]) ||
+                        msg[1]?.some((/** @type {Array<*>} */ op) => op[0] === OP.REPLACE)
+                    ) {
                         _mountProof = null;
-                        mountSucceeded();
-                    }
-                    // The server answered after a frame the user sent since the
-                    // last replay, so the replayed values did not crash the view.
-                    if (_interactionPending) {
-                        _interactionPending = false;
-                        _replayedForms.clear();
+                        mountSucceeded(_currentPath);
                     }
                     // The app's `az-*` vocabulary, collected by the parse transform
                     // and sent on the connect frame. Delegated BEFORE the ops land,
@@ -3576,16 +3572,19 @@ function connect(endpoint, params = {}) {
                     // A crash after the mount needs no reload: the worker's
                     // reconnect remounts the view in place.
                     if (code === WS_CLOSE_MOUNT_FAILED) scheduleMountReload();
-                    // A crash before any user interaction succeeded since the last
-                    // replay may come from the replayed values: keep them, but
-                    // restore them next time without replaying.
+                    // A crash before the server acknowledged the last replay may
+                    // come from the replayed values: keep them, but restore them
+                    // next time without replaying.
                     if (code !== WS_CLOSE_NORMAL) {
                         saveFormState(code === WS_CLOSE_CRASH ? _replayedForms : null);
                     }
                     _replayedForms.clear();
-                    _interactionPending = false;
                     break;
                 }
+                case 3:
+                    // [3] -- the server handled the form replay (see W_ACK_REPLAY).
+                    _replayedForms.clear();
+                    break;
             }
         };
 
@@ -3652,7 +3651,6 @@ function connect(endpoint, params = {}) {
                 _connected = false;
                 _mountProof = null;
                 _replayedForms.clear();
-                _interactionPending = false;
                 cancelMountReload();
                 // Reflect the dropped connection so a bfcache-restored snapshot
                 // shows disconnected until `pageshow` reconnects (the worker is
@@ -3687,7 +3685,6 @@ function connect(endpoint, params = {}) {
         _connected = false;
         _mountProof = null;
         _replayedForms.clear();
-        _interactionPending = false;
         cancelMountReload();
         _pendingScroll = null;
         _pendingTransition = null;

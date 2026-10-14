@@ -9,12 +9,16 @@
  *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
+ *   [3]                                               -- pong to a [4] ping
  *
  * Main -> Worker protocol:
  *   [0, wsUrl, isReconnect] -- connect (full URL; isReconnect resyncs an
  *                              already-rendered DOM, e.g. a bfcache restore)
  *   [1, jsonString]         -- send data (pre-stringified on main)
  *   [2, code]               -- close WS
+ *   [3, {path, qs}]         -- an SPA navigation changed the reconnect path
+ *   [4]                     -- acknowledge the frames sent so far: a ping, whose
+ *                              pong the worker reports as [3]
  */
 
 import {
@@ -160,7 +164,7 @@ let _framed = false;
 
 /**
  * When the open socket's view was last (re)mounted, as Date.now(): at open, and
- * again on each SPA navigation, which may mount a new view.
+ * again on each SPA navigation (see the [3] message).
  * @type {number}
  */
 let _mountedAt = 0;
@@ -180,6 +184,14 @@ let _heartbeatInterval = null;
 
 /** @type {boolean} */
 let _heartbeatPending = false;
+
+/**
+ * The open socket's pings awaiting their pong, oldest first: `true` for an
+ * acknowledgement ping ([4]), `false` for a heartbeat. The server answers frames
+ * in order, so each pong belongs to the oldest outstanding ping.
+ * @type {boolean[]}
+ */
+let _pings = [];
 
 /** @type {boolean} */
 let _fpsSent = false;
@@ -310,6 +322,7 @@ function openSocket() {
     _reconnectTimer = null;
     _fpsSent = false;
     _framed = false;
+    _pings = [];
     // A reconnect open promises the `cached_fps` announcement as its first
     // frame (`_az_fps_follow=1` below), so the server defers the full-page
     // resync until it arrives and dedups the payload against it. First
@@ -341,6 +354,7 @@ function openSocket() {
                 return;
             }
             _heartbeatPending = true;
+            _pings.push(false);
             ws.send(SYS_PING);
         }, 30000);
 
@@ -352,7 +366,10 @@ function openSocket() {
     ws.onmessage = (e) => {
         if (_ws !== ws) return;
         _heartbeatPending = false;
-        if (e.data === SYS_PONG) return;
+        if (e.data === SYS_PONG) {
+            if (_pings.shift()) postMessage([3]);
+            return;
+        }
 
         _framed = true;
         const msg = JSON.parse(e.data);
@@ -481,8 +498,10 @@ self.onmessage = (e) => {
             // extras). Framework `_az_*` params (e.g. `_az_caps`) are preserved.
             // Without replacing the user params, the original page's query string
             // would persist and the navigated-to one would be lost on reconnect.
-            // The navigation may also mount a new view on this socket, so a crash
-            // right after it is quick (see CRASH_STABLE_MS).
+            // Restart the stable window (CRASH_STABLE_MS): a navigate mounts a new
+            // view on this socket. This message cannot tell a patch (no remount)
+            // from a navigate, so a patch restarts it too -- at worst one crash
+            // soon after a patch does not reset the backoff.
             _mountedAt = Date.now();
             if (!_wsUrl) break;
             const { path, qs } = msg[1];
@@ -497,5 +516,12 @@ self.onmessage = (e) => {
             _wsUrl = u.toString();
             break;
         }
+        case 4:
+            // [4] -- acknowledge the frames sent so far (see [3] to main).
+            if (_ws && _ws.readyState === 1) {
+                _pings.push(true);
+                _ws.send(SYS_PING);
+            }
+            break;
     }
 };

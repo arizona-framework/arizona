@@ -4119,6 +4119,7 @@ describe('crash and mount-failure recovery', () => {
         errSpy.mockRestore();
         random.mockRestore();
         localStorage.clear();
+        history.replaceState(null, '', '/');
     });
 
     // Stub location and fake the timers AFTER connect() runs: connect builds the
@@ -4128,6 +4129,7 @@ describe('crash and mount-failure recovery', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView('page', '<div az="0"></div>');
+        history.replaceState(null, '', '/page'); // the path connect() mounts
         mock = setupMockWorker(mod);
         vi.stubGlobal('location', { reload, href: 'http://localhost/page', pathname: '/page' });
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
@@ -4231,6 +4233,38 @@ describe('crash and mount-failure recovery', () => {
         expect(localStorage.getItem(KEY)).toBe('7');
         m.simulateMessage([], null, true);
         expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('counts the path actually reloaded', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        location.pathname = '/other'; // the URL changed before the reload fired
+        expect(reloadDelay()).toBe(5000);
+        expect(localStorage.getItem('arizona:mount-reloads:/other')).toBe('1');
+        expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('a mount clears the count of the path the socket mounted', async () => {
+        localStorage.setItem(KEY, '3');
+        const m = await start();
+        location.pathname = '/elsewhere'; // not what the socket asked for
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it("a navigate's reply clears the count of the path it mounted", async () => {
+        localStorage.setItem('arizona:mount-reloads:/next', '4');
+        const m = await start();
+        m.simulateOpen();
+        m.simulateMessage(null, null); // mounted /page
+        location.pathname = '/next'; // back/forward to /next: an SPA navigate
+        m.posted.length = 0;
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+        expect(m.posted.some((d) => d[0] === 3 && d[1].path === '/next')).toBe(true);
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null);
+        expect(localStorage.getItem('arizona:mount-reloads:/next')).toBeNull();
     });
 
     it('a later connection that mounts cancels the pending reload', async () => {
@@ -4350,35 +4384,54 @@ describe('crash and mount-failure recovery', () => {
         expect(changeSends(m)).toBe(1);
     });
 
-    it('a user interaction the server answered clears the suspicion', async () => {
+    /** The worker reporting the pong to the main thread's acknowledgement ping. */
+    const ackReplay = (m) => m.worker.onmessage({ data: [3] });
+    const ackRequests = (m) => m.posted.filter((d) => d[0] === 4).length;
+
+    it('asks the worker to acknowledge right after the replayed push_event', async () => {
+        const m = await startWithForms();
+        field('q').value = 'v';
+        m.simulateClose(4500);
+        const before = m.posted.length;
+        remount(m);
+        const after = m.posted.slice(before);
+        const replay = after.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
+        expect(replay).toBeGreaterThanOrEqual(0);
+        expect(after[replay + 1]).toEqual([4]);
+    });
+
+    it('asks for no acknowledgement when nothing was replayed', async () => {
+        const m = await startWithForms();
+        field('r').value = 'only g, which has no az-change';
+        document.querySelector('#f')?.remove();
+        m.simulateClose(4500);
+        remount(m);
+        expect(ackRequests(m)).toBe(0);
+    });
+
+    it('a crash long after the acknowledged replay replays again', async () => {
+        // The server handled the replay; an hour later an unrelated crash must
+        // not withhold the next one.
         const m = await startWithForms();
         field('q').value = 'fine';
         m.simulateClose(4500);
         remount(m);
-        window._ws.send(JSON.stringify(['page', 'click', {}])); // the user acts
-        m.simulateMessage([], null); // ... and the server answered
-        m.simulateClose(4500); // an unrelated crash
+        ackReplay(m);
+        vi.advanceTimersByTime(3_600_000);
+        m.simulateClose(4500);
         remount(m);
-        expect(changeSends(m)).toBe(2); // replayed again
+        expect(changeSends(m)).toBe(2);
     });
 
-    it('a user frame the server never answered does not clear the suspicion', async () => {
+    it('frames before the acknowledgement do not clear the suspicion', async () => {
+        // A handle_info push (or the replay's own reply) arriving after a user
+        // frame proves nothing about the replay: only its acknowledgement does.
         const m = await startWithForms();
         field('q').value = 'poison';
         m.simulateClose(4500);
         remount(m);
-        window._ws.send(JSON.stringify(['page', 'submit', {}])); // crashes the view
-        m.simulateClose(4500);
-        remount(m);
-        expect(changeSends(m)).toBe(1);
-    });
-
-    it('a frame answering only the replay does not clear the suspicion', async () => {
-        const m = await startWithForms();
-        field('q').value = 'poison';
-        m.simulateClose(4500);
-        remount(m);
-        m.simulateMessage([], null); // the reply to the replayed az-change
+        window._ws.send(JSON.stringify(['page', 'click', {}]));
+        m.simulateMessage([], null);
         m.simulateClose(4500);
         remount(m);
         expect(changeSends(m)).toBe(1);
