@@ -1463,8 +1463,8 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
 **SSR (HTTP):** `arizona_roadrunner_http:handle/1` delegates to `arizona_http:render/3`, which wraps
 the native req in an `arizona_req:request()`, runs any route middlewares
 (`arizona_middleware:apply_middlewares/3`), then calls
-`arizona_render:render_view_to_iolist(Handler, Opts)` where Opts may contain
-`layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/2`
+`arizona_render:render_view(Handler, Opts)` where Opts may contain
+`layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view/2`
 mounts the page via `arizona_stateful:call_mount/2`, applies `on_mount` hooks,
 renders to page HTML, then optionally injects the rendered page into mount bindings as
 `inner_content` -- as an opaque nested template, not iodata (see **Slots** below)
