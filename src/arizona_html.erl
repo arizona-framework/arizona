@@ -34,6 +34,7 @@ identical to the previous inlined emission.
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
+-export([boolean_attrs/0]).
 -export([escape/1]).
 -export([raw_text/2]).
 -export([render_attr/2]).
@@ -267,6 +268,8 @@ target() -> html.
 content_type() -> ~"text/html; charset=utf-8".
 
 supports_local() -> true.
+
+boolean_attrs() -> presence.
 
 %% HTML-escape the five metacharacters; safe for element content and
 %% double/single-quoted attribute values. Comparisons are per byte, so UTF-8 is

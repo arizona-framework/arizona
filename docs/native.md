@@ -44,7 +44,10 @@ handle_event(~"inc", _Payload, Bindings) ->
   client's / your tests' concern, not a compile error.
 - **Attributes are widget props.** Static and dynamic both supported. Values are
   string-encoded on the wire; the client coerces (typed props are a future
-  addition).
+  addition). A boolean is the exception: it is a JSON `true`/`false`, static
+  (`{visible, true}`) or dynamic (`{enabled, ?get(on)}`), and a dynamic one stays
+  present in both states -- `OP_SET_ATTR` sets it to `false` rather than removing
+  the prop. A static `false` is dropped at compile time, as on the web.
 - **Event handlers are props** whose value is an effect command built with the
   platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
   reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into
@@ -288,8 +291,8 @@ returns them won't crash a native client.
   targets in one tree mismatches the statics format. This is a documented rule,
   not a checked one.
 - **No server-side widget validation** (let-it-crash / the client's concern).
-- **Props are string-encoded** (an event prop's command excepted, which is an
-  array); the client coerces. Typed props, opt-in
+- **Props are string-encoded** (a boolean, which is JSON `true`/`false`, and an
+  event prop's command, which is an array, excepted); the client coerces. Typed props, opt-in
   per-platform compile-time validators, and a portable cross-platform
   vocabulary helper are possible future additions.
 - **A stateful child inside a stream item resolves through its own view.** The

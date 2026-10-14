@@ -49,6 +49,7 @@ JSON-encoding the wire value. On the wire itself a value stays raw
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
+-export([boolean_attrs/0]).
 -export([escape/1]).
 -export([render_attr/2]).
 -export([wire_escape/1]).
@@ -175,6 +176,8 @@ content_type() -> ~"application/json".
 
 supports_local() -> false.
 
+boolean_attrs() -> value.
+
 %% A content value in the zipped document is a JSON string.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) -> json_str(Bin).
@@ -201,6 +204,8 @@ render_attr(Name, Value) ->
 %% command as its array, so a tap prop reads the same dynamic or folded, and any
 %% other value stringified (to_bin/1 classifies out a `?raw`).
 -spec wire_attr(binary(), term()) -> json:encode_value().
+wire_attr(_Name, {arizona_bool, Bool}) ->
+    Bool;
 wire_attr(_Name, Value) ->
     case arizona_template:classify_trusted(Value) of
         {effect, Cmds} -> arizona_effect:json_value(Cmds);

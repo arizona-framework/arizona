@@ -242,6 +242,23 @@ describe('native client op application', () => {
         expect(JSON.parse(sent.at(-1))).toEqual(['native_x', 'b', {}]);
     });
 
+    // A dynamic boolean prop is a JSON boolean in the hydration payload and on a
+    // later SET_ATTR alike, so `false` stays a present prop rather than a missing one.
+    it('keeps a dynamic boolean prop a boolean, mounted and patched', () => {
+        const client = newClient();
+        replaceRoot(client);
+        client._applyOps([
+            [
+                OP_TEXT,
+                'native_x:R-0t0',
+                { f: 'E', s: ['{"type":"Button","az":"E-0","enabled":', '}'], d: [false] },
+            ],
+        ]);
+        expect(client.tree().children[0].enabled).toBe(false);
+        client._applyOps([[OP_SET_ATTR, 'native_x:E-0', 'enabled', true]]);
+        expect(client.tree().children[0].enabled).toBe(true);
+    });
+
     // The documented `case ?get(flag) of true -> ?stateful(child, ...)` pattern:
     // the installed payload carries its OWN view id, which must be registered or
     // the child's very first update crashes.

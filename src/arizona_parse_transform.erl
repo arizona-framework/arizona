@@ -2716,7 +2716,7 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
                 State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
             ),
             DynAST = make_nodiff_attr_dynamic_ast(
-                NameBin, ValueAST, Module, line(ValueAST)
+                NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST);
         error ->
@@ -2726,9 +2726,19 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST, ElemAz, State0) ->
             ),
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(
-                AzBin, NameBin, ValueAST, Module, line(ValueAST)
+                AzBin, NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST)
+    end.
+
+%% A backend whose booleans are typed prop values (`boolean_attrs/0`) gets the value
+%% wrapped, so a dynamic `false` stays a value instead of removing the attribute.
+typed_attr_ast(Backend, ValueAST) ->
+    case Backend:boolean_attrs() of
+        presence ->
+            ValueAST;
+        value ->
+            {call, 0, {remote, 0, {atom, 0, arizona_template}, {atom, 0, bool_attr}}, [ValueAST]}
     end.
 
 %% Emit a client-owned attribute slot (`?local` in attribute-value position): a

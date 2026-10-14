@@ -196,6 +196,15 @@ rejects `?local` at compile time when `false`.
 -callback supports_local() -> boolean().
 
 -doc """
+What a dynamic boolean attribute means on this backend's wire. `presence` (HTML): `true`
+renders the bare attribute and `false` removes it. `value`: a boolean is a typed prop
+value, sent as JSON `true`/`false` and present in both states, the same shape a static
+`true` (`attr_boolean/1`) renders. Asked by the parse transform at compile time, which
+wraps the attribute expression in `arizona_template:bool_attr/1` for a `value` backend.
+""".
+-callback boolean_attrs() -> presence | value.
+
+-doc """
 Escape a dynamic value's rendered bytes for this backend's zipped document.
 Called at the render boundary on interpolated scalar values
 (`arizona_template:escape_value/2`). HTML entity-escapes (`<`, `&`, ...); the

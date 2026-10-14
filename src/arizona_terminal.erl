@@ -71,6 +71,7 @@ never sanitized.
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
+-export([boolean_attrs/0]).
 -export([escape/1]).
 -export([render_attr/2]).
 -export([wire_escape/1]).
@@ -264,6 +265,8 @@ target() -> terminal.
 content_type() -> ~"text/plain; charset=utf-8".
 
 supports_local() -> false.
+
+boolean_attrs() -> presence.
 
 -doc """
 Sanitize a dynamic value's bytes for terminal output. Strips the C0 control bytes

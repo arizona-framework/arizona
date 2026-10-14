@@ -66,6 +66,7 @@ render(Bindings) ->
 -export([foreign_each/2]).
 -export([to_bin/1]).
 -export([raw/1]).
+-export([bool_attr/1]).
 -export([classify_trusted/1]).
 -export([escape_value/2]).
 -export([escape_marked/2]).
@@ -93,6 +94,8 @@ render(Bindings) ->
 -ignore_xref([foreign_each/2]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
+%% Emitted by the parse transform around a `value` backend's dynamic attribute.
+-ignore_xref([bool_attr/1]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -525,6 +528,18 @@ with no defined meaning; using it in a `?native`/`?terminal` template is unsuppo
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
 raw(Value) -> {arizona_raw, Value}.
+
+-doc """
+Tags a boolean attribute value as a typed value rather than an HTML presence flag.
+
+The parse transform wraps a dynamic attribute in this call for a backend whose
+`boolean_attrs/0` is `value`, so the diff sends `true`/`false` as the prop value
+instead of adding and removing the attribute. Any other value passes through.
+""".
+-spec bool_attr(Value) -> Value | {arizona_bool, boolean()} when
+    Value :: term().
+bool_attr(Bool) when is_boolean(Bool) -> {arizona_bool, Bool};
+bool_attr(Value) -> Value.
 
 -doc """
 Classifies the escape-exempt content shapes: a `raw/1` opt-out

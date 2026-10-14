@@ -13,6 +13,9 @@
 -export([event_prop_navigate_command/1]).
 -export([dynamic_event_prop_is_json_array/1]).
 -export([diff_dynamic_event_prop_op/1]).
+-export([dynamic_boolean_prop_is_json_bool/1]).
+-export([diff_dynamic_boolean_prop_op/1]).
+-export([html_dynamic_boolean_attr_keeps_presence/1]).
 -export([dedup_keeps_command_prop_payload/1]).
 -export([live_view_caches_statics/1]).
 -export([native_each_renders_item_array/1]).
@@ -45,6 +48,9 @@ all() ->
         event_prop_navigate_command,
         dynamic_event_prop_is_json_array,
         diff_dynamic_event_prop_op,
+        dynamic_boolean_prop_is_json_bool,
+        diff_dynamic_boolean_prop_op,
+        html_dynamic_boolean_attr_keeps_presence,
         dedup_keeps_command_prop_payload,
         live_view_caches_statics,
         native_each_renders_item_array,
@@ -257,6 +263,51 @@ diff_dynamic_event_prop_op(Config) when is_list(Config) ->
     {_, Snap0} = arizona_render:render(Mod:render(#{ev => ~"a"})),
     {Ops, _} = arizona_diff:diff(Mod:render(#{ev => ~"b&"}), Snap0),
     ?assertMatch([[?OP_SET_ATTR, _Az, ~"on_tap", [0, ~"b&"]]], Ops).
+
+%% A dynamic boolean prop is a JSON boolean, present in both states, in the zipped
+%% document and the hydration payload -- the same shape a static `true` renders.
+dynamic_boolean_prop_is_json_bool(Config) when is_list(Config) ->
+    Mod = bool_prop_module(nt_bool_doc),
+    Doc = fun(On) ->
+        json:decode(iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{on => On}))))
+    end,
+    ?assertMatch(#{~"enabled" := true, ~"visible" := true}, Doc(true)),
+    ?assertMatch(#{~"enabled" := false, ~"visible" := true}, Doc(false)),
+    {_, Snap} = arizona_render:render(Mod:render(#{on => false})),
+    ?assertMatch(#{~"d" := [false]}, arizona_render:fingerprint_payload(Snap)).
+
+%% Toggling a dynamic boolean prop sets the value both ways, through the bare and
+%% the dependency-aware diff, instead of removing the prop or setting an empty string.
+diff_dynamic_boolean_prop_op(Config) when is_list(Config) ->
+    Mod = bool_prop_module(nt_bool_diff),
+    {_, Snap0} = arizona_render:render(Mod:render(#{on => true})),
+    {OpsOff, Snap1} = arizona_diff:diff(Mod:render(#{on => false}), Snap0),
+    ?assertMatch([[?OP_SET_ATTR, _, ~"enabled", false]], OpsOff),
+    {OpsOn, _} = arizona_diff:diff(Mod:render(#{on => true}), Snap1),
+    ?assertMatch([[?OP_SET_ATTR, _, ~"enabled", true]], OpsOn),
+    {_, DepSnap0, Views0} = arizona_render:render(Mod:render(#{on => true}), #{}),
+    {DepOpsOff, DepSnap1, Views1} =
+        arizona_diff:diff(Mod:render(#{on => false}), DepSnap0, Views0, #{on => true}),
+    ?assertMatch([[?OP_SET_ATTR, _, ~"enabled", false]], DepOpsOff),
+    {DepOpsOn, _, _} =
+        arizona_diff:diff(Mod:render(#{on => true}), DepSnap1, Views1, #{on => true}),
+    ?assertMatch([[?OP_SET_ATTR, _, ~"enabled", true]], DepOpsOn).
+
+%% The HTML target keeps presence semantics for the same template shape: `true`
+%% renders the bare attribute, `false` removes it.
+html_dynamic_boolean_attr_keeps_presence(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(nt_bool_html). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:html({button, [{disabled, az:get(on, Bindings)}], [<<\"x\">>]}). "
+    ),
+    {Page, Snap0} = arizona_render:render(Mod:render(#{on => true})),
+    ?assertMatch({_, _}, binary:match(iolist_to_binary(Page), ~" disabled>")),
+    {OpsOff, Snap1} = arizona_diff:diff(Mod:render(#{on => false}), Snap0),
+    ?assertMatch([[?OP_REM_ATTR, _, ~"disabled"]], OpsOff),
+    {OpsOn, _} = arizona_diff:diff(Mod:render(#{on => true}), Snap1),
+    ?assertMatch([[?OP_SET_ATTR, _, ~"disabled", <<>>]], OpsOn).
 
 %% A command prop's payload map is app data, even when it carries `f`/`s`/`d`
 %% keys: the fingerprint dedup leaves it whole, in the hydration payload and in a
@@ -683,6 +734,16 @@ compute_changed(OldBindings, NewBindings) ->
             end
         end,
         NewBindings
+    ).
+
+bool_prop_module(Name) ->
+    compile_module(
+        "-module(" ++ atom_to_list(Name) ++
+            "). "
+            "-export([render/1]). "
+            "render(Bindings) -> "
+            "    az:native({'Button', [{enabled, az:get(on, Bindings)}, {visible, true}], "
+            "[<<\"x\">>]}). "
     ).
 
 compile_module(Source) ->
