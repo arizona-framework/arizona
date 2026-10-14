@@ -5,7 +5,7 @@ import { NativeClient } from '../utils/native_client.js';
 // Tapping a child's button routes the event to THAT child's view id (not the
 // root), so only that child's count changes -- proving the client resolves a
 // tapped node to its enclosing az_view, like the browser. (The `multi` example,
-// by contrast, routes per-region events to a single view.)
+// by contrast, routes per-az-nodiff element events to a single view.)
 test.describe('native (JSON) wire -- nested stateful children', () => {
     test('routes a tap to the tapped child, leaving siblings untouched', async ({ baseURL }) => {
         const client = new NativeClient(baseURL, '/native/nested');

@@ -67,7 +67,7 @@ test.describe('keyed items', () => {
     });
 
     test('dropping the first item destroys only its widget', async ({ page }) => {
-        // The region's token: its identity, the item's key included.
+        // The az-nodiff element's token: its identity, the item's key included.
         await expect(items(page).first()).toHaveAttribute('az-nodiff', /\.k/);
         await page.locator('#drop-first').click();
         await expect(kinds(page)).toHaveText(['b']);

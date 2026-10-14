@@ -70,7 +70,7 @@ never sanitized.
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
--export([supports_region_keep/0]).
+-export([supports_nodiff_keep/0]).
 -export([boolean_attrs/0]).
 -export([escape/1]).
 -export([render_attr/2]).
@@ -264,7 +264,7 @@ content_type() -> ~"text/plain; charset=utf-8".
 
 supports_local() -> false.
 
-supports_region_keep() -> false.
+supports_nodiff_keep() -> false.
 
 boolean_attrs() -> presence.
 

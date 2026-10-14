@@ -129,9 +129,9 @@ render(Bindings) ->
 %% first. Every such call is compiled away -- one left over is `undef` at render.
 -define(NODIFF_MOD, '$arizona_nodiff').
 
-%% Stands in for a region's fingerprint in its `az-nodiff` token call until the
-%% statics, and so the fingerprint, are known (fill_region_fingerprint/2).
--define(REGION_FP, '$arizona_region_fp').
+%% Stands in for an az-nodiff element's fingerprint in its `az-nodiff` token call until the
+%% statics, and so the fingerprint, are known (fill_nodiff_fingerprint/2).
+-define(NODIFF_FP, '$arizona_nodiff_fp').
 
 -record(state, {
     %% Segments of the static under construction, newest first.
@@ -158,7 +158,7 @@ render(Bindings) ->
     live_render = false :: boolean(),
     root = false :: boolean(),
     %% What the element being compiled emits for its own `az-nodiff` directive
-    %% (see nodiff_mark/3): its region token, the bare attribute, or nothing.
+    %% (see nodiff_mark/3): its token, the bare attribute, or nothing.
     nodiff_mark = none :: none | bare | token,
     backend = target_backend(html) :: module()
 }).
@@ -812,7 +812,7 @@ format_error(local_attr_mixed) ->
 format_error(nodiff_value) ->
     "az-nodiff is a bare directive and takes no value -- write 'az-nodiff' (or "
     "az_nodiff / <<\"az-nodiff\">>) alone in the attribute list. The value it carries "
-    "in the rendered HTML belongs to the compiler: it names the region so the client "
+    "in the rendered HTML belongs to the compiler: it names the az-nodiff element so the client "
     "can keep it across a re-render, and an authored one would be read as that name";
 format_error(nested_nodiff) ->
     "az-nodiff is only honored on a template's top-level (root) element -- it is a "
@@ -2436,19 +2436,19 @@ compile_template(Arg, Line, Module, LiveRender, Backend, Inherited) ->
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     TmplAST = build_template_ast(Line, S1, D1, Fingerprint, Opts),
     case {Opts, Inherited} of
-        {#{diff := false}, false} -> put_region_key(Arg, TmplAST);
+        {#{diff := false}, false} -> put_nodiff_key(Arg, TmplAST);
         _ -> TmplAST
     end.
 
-%% An `az_key` on an az-nodiff root names the region beside its fingerprint and
-%% branch, so a new key value replaces the region. The key is built with the
+%% An `az_key` on an az-nodiff root names the az-nodiff element beside its fingerprint and
+%% branch, so a new key value replaces the az-nodiff element. The key is built with the
 %% template, inside the slot that holds it, so its reads are that slot's deps.
-put_region_key({tuple, _, [_Tag, Attrs | _]}, {map, L, Fields} = TmplAST) ->
+put_nodiff_key({tuple, _, [_Tag, Attrs | _]}, {map, L, Fields} = TmplAST) ->
     case [V || {tuple, _, [NameAST, V]} <- attr_list(Attrs), is_az_key(NameAST)] of
         [KeyAST] -> {map, L, Fields ++ [{map_field_assoc, L, {atom, L, az_key}, KeyAST}]};
         [] -> TmplAST
     end;
-put_region_key(_Arg, TmplAST) ->
+put_nodiff_key(_Arg, TmplAST) ->
     TmplAST.
 
 attr_list({cons, _, Head, Tail}) -> [Head | attr_list(Tail)];
@@ -2727,8 +2727,8 @@ is_fragile_each_item(_Item) ->
     false.
 
 %% `Unit` says what is being compiled: a `template`, or an `each_item` -- the
-%% per-item template of an `?each`, whose root is a region only when keyed (see
-%% is_region_root/4).
+%% per-item template of an `?each`, whose root is an az-nodiff element only when keyed (see
+%% is_keepable_nodiff/4).
 compile_body_parts(ExprAST, Module, LiveRender, Backend, CCtx, Inherited, Unit) ->
     case classify_body(ExprAST) of
         element_tuple ->
@@ -2811,10 +2811,10 @@ reject_orphaned_local(ExprAST) ->
 
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherited, Unit}) ->
     Opts = prescan_directives(ElementASTs, Inherited),
-    Region = is_region_root(ElementASTs, Inherited, Unit, Backend),
+    Keepable = is_keepable_nodiff(ElementASTs, Inherited, Unit, Backend),
     Marked =
         not Inherited andalso not lists:any(fun contains_inner_content/1, ElementASTs) andalso
-            Backend:supports_region_keep(),
+            Backend:supports_nodiff_keep(),
     State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
@@ -2827,7 +2827,7 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherite
         fun(Elem, State) ->
             {Tag, Attrs0, Children, ElemLine} = extract_element(Elem),
             {Attrs, ElemOpts} = extract_directives(Attrs0),
-            Mark = nodiff_mark(ElemOpts, Marked, Region),
+            Mark = nodiff_mark(ElemOpts, Marked, Keepable),
             compile_element(Tag, Attrs, Children, ElemLine, State#state{nodiff_mark = Mark})
         end,
         State0,
@@ -2836,45 +2836,45 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherite
     {Statics, DynASTs0} = finalize(State1),
     Fingerprint = generate_fingerprint(Statics),
     DynASTs =
-        case Region of
-            true -> fill_region_fingerprint(Fingerprint, DynASTs0);
+        case Keepable of
+            true -> fill_nodiff_fingerprint(Fingerprint, DynASTs0);
             false -> DynASTs0
         end,
     {Statics, DynASTs, Fingerprint, Opts}.
 
 %% The `az-nodiff` directive stays in the HTML on the element that carries it,
-%% compiler-owned, when the backend's client keeps regions across a wholesale
-%% re-render (`supports_region_keep/0`) -- not in a template that only inherits
-%% nodiff (it is part of the enclosing region) nor in a layout (nodiff for
-%% `?inner_content`, rendered once outside any view). Its value is the region's
-%% token when the element is a keepable region (is_region_root/4); otherwise it is
+%% compiler-owned, when the backend's client keeps az-nodiff elements across a wholesale
+%% re-render (`supports_nodiff_keep/0`) -- not in a template that only inherits
+%% nodiff (it is part of the enclosing az-nodiff element) nor in a layout (nodiff for
+%% `?inner_content`, rendered once outside any view). Its value is the az-nodiff element's
+%% token when the element is keepable (is_keepable_nodiff/4); otherwise it is
 %% bare -- client-owned markup the client must never carry over: an unkeyed `?each`
 %% item root, or a root of a multi-element fragment.
 nodiff_mark(#{diff := false}, true, true) -> token;
 nodiff_mark(#{diff := false}, true, false) -> bare;
-nodiff_mark(_ElemOpts, _Marked, _Region) -> none.
+nodiff_mark(_ElemOpts, _Marked, _Keepable) -> none.
 
-%% An az-nodiff region is a template whose single root element carries the
-%% directive itself -- not one that inherits it from an enclosing region, which is
-%% part of that region, and not a layout, which is nodiff for `?inner_content`.
-%% Its root carries its token as the `az-nodiff` value.
+%% A keepable az-nodiff element is the single root element of a template that carries the directive
+%% itself -- not one that inherits it from an enclosing az-nodiff element, which is part of that
+%% az-nodiff element, and not a layout, which is nodiff for `?inner_content`. Its root carries its
+%% token as the `az-nodiff` value.
 %%
 %% An `?each` item is named only when it carries an `az_key`. Every item shares one
 %% template, so an unkeyed item's name says nothing about WHICH item it is, and a
 %% list re-renders wholesale exactly when the server cannot match items up -- a
 %% client matching them by position would hand one item's widget to another.
-is_region_root([Elem], false, Unit, Backend) ->
+is_keepable_nodiff([Elem], false, Unit, Backend) ->
     case is_element_tuple(Elem) of
         true ->
             {_Tag, Attrs, _Children, _Line} = extract_element(Elem),
             {_Rest, ElemOpts} = extract_directives(Attrs),
             maps:is_key(diff, ElemOpts) andalso not contains_inner_content(Elem) andalso
                 (Unit =:= template orelse has_az_key(Attrs)) andalso
-                Backend:supports_region_keep();
+                Backend:supports_nodiff_keep();
         false ->
             false
     end;
-is_region_root(_ElementASTs, _Inherited, _Unit, _Backend) ->
+is_keepable_nodiff(_ElementASTs, _Inherited, _Unit, _Backend) ->
     false.
 
 has_az_key(Attrs) ->
@@ -2886,63 +2886,63 @@ has_az_key(Attrs) ->
         Attrs
     ).
 
-%% The `az-nodiff` token: `arizona_template:region_token/3` over the template's
+%% The `az-nodiff` token: `arizona_template:nodiff_token/3` over the template's
 %% fingerprint, the branch that produced it and its `az_key` -- the identity the
-%% diff keeps a region by (`arizona_template:same_region/3`). The fingerprint is
+%% diff keeps an az-nodiff element by (`arizona_template:same_nodiff/3`). The fingerprint is
 %% known only once the statics are, so the call is built with a placeholder and
 %% filled in here; the branch is stamped later, by stamp_leaf/2 or
 %% `arizona_template:branch/2`.
-region_attr(Attrs, Line) ->
+nodiff_token_attr(Attrs, Line) ->
     KeyAST =
         case [V || {tuple, _, [NameAST, V]} <- Attrs, is_az_key(NameAST)] of
             [K] -> K;
             [] -> {atom, Line, undefined}
         end,
-    Call = region_token_call(Line, {atom, Line, ?REGION_FP}, {atom, Line, undefined}, KeyAST),
+    Call = nodiff_token_call(Line, {atom, Line, ?NODIFF_FP}, {atom, Line, undefined}, KeyAST),
     {tuple, Line, [{atom, Line, 'az-nodiff'}, Call]}.
 
 maybe_inject_nodiff(Attrs, Line, #state{nodiff_mark = token}) ->
-    [region_attr(Attrs, Line) | Attrs];
+    [nodiff_token_attr(Attrs, Line) | Attrs];
 maybe_inject_nodiff(Attrs, Line, #state{nodiff_mark = bare}) ->
     [{atom, Line, 'az-nodiff'} | Attrs];
 maybe_inject_nodiff(Attrs, _Line, #state{nodiff_mark = none}) ->
     Attrs.
 
-region_token_call(L, FpAST, BranchAST, KeyAST) ->
-    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, region_token}}, [
+nodiff_token_call(L, FpAST, BranchAST, KeyAST) ->
+    {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, nodiff_token}}, [
         FpAST, BranchAST, KeyAST
     ]}.
 
-fill_region_fingerprint(Fingerprint, DynASTs) ->
+fill_nodiff_fingerprint(Fingerprint, DynASTs) ->
     replace_ast(
         fun
-            ({atom, _, ?REGION_FP}) -> {ok, ast_binary(Fingerprint)};
+            ({atom, _, ?NODIFF_FP}) -> {ok, ast_binary(Fingerprint)};
             (_Node) -> error
         end,
         DynASTs
     ).
 
-%% Rewrites the region token's branch argument in a literal region template's
+%% Rewrites the token's branch argument in a literal az-nodiff template's
 %% `d` field (stamp_leaf/2): a template whose branch is known at compile time.
-stamp_region_branch(N, Fields) ->
-    [stamp_region_branch_field(N, F) || F <- Fields].
+stamp_nodiff_branch(N, Fields) ->
+    [stamp_nodiff_branch_field(N, F) || F <- Fields].
 
-stamp_region_branch_field(N, {map_field_assoc, L, {atom, _, d} = K, DAST}) ->
+stamp_nodiff_branch_field(N, {map_field_assoc, L, {atom, _, d} = K, DAST}) ->
     {map_field_assoc, L, K,
         replace_ast(
             fun
                 (
-                    {call, CL, {remote, _, {atom, _, arizona_template}, {atom, _, region_token}}, [
+                    {call, CL, {remote, _, {atom, _, arizona_template}, {atom, _, nodiff_token}}, [
                         FpAST, {atom, _, undefined}, KeyAST
                     ]}
                 ) ->
-                    {ok, region_token_call(CL, FpAST, {integer, CL, N}, KeyAST)};
+                    {ok, nodiff_token_call(CL, FpAST, {integer, CL, N}, KeyAST)};
                 (_Node) ->
                     error
             end,
             DAST
         )};
-stamp_region_branch_field(_N, Field) ->
+stamp_nodiff_branch_field(_N, Field) ->
     Field.
 
 %% AST substitution: `Fun` answers `{ok, New}` for a node it
@@ -3700,7 +3700,7 @@ is_value_constructor(_Expr) ->
 %% The `raw` raw-text clause comes FIRST, ahead of nodiff: both make the slot
 %% markerless and render-once (`undefined` az), so they agree on the diff
 %% question, but only the raw-text path applies the escaping policy the *element*
-%% demands. Matching nodiff first let an `az-nodiff` region -- a layout, which is
+%% demands. Matching nodiff first let an `az-nodiff` element -- a layout, which is
 %% exactly where an inline `<script>` lives -- skip the opt-out guard and
 %% HTML-escape inside raw text, so a marked value was spliced with no
 %% neutralization and an unmarked one drew no compile error. The `escapable`
@@ -3802,11 +3802,11 @@ make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
     {tuple, 0, [ast_binary(AzBin), esc_spec(ExprAST, FunAST), LocAST]}.
 
 %% Number the tails of a content-slot control-flow expression and stamp each with
-%% its number, so an az-nodiff region names the branch that produced it (see
+%% its number, so an az-nodiff element names the branch that produced it (see
 %% arizona_template:branch/2): two branches can produce the same template, and
-%% once a region is no longer evaluated the branch is all that tells them apart.
+%% once an az-nodiff element is no longer evaluated the branch is all that tells them apart.
 %% A literal template takes the stamp as a field; a value only known at runtime
-%% goes through branch/2; a value that can never be a region is left alone.
+%% goes through branch/2; a value that can never be an az-nodiff element is left alone.
 stamp_branches(Expr) ->
     case is_control_flow_ast(Expr) of
         true ->
@@ -3823,7 +3823,7 @@ stamp_leaf(N, {map, L, Fields} = Map) ->
     case lists:any(fun is_nodiff_field/1, Fields) of
         true ->
             {map, L,
-                stamp_region_branch(N, Fields) ++
+                stamp_nodiff_branch(N, Fields) ++
                     [{map_field_assoc, L, {atom, L, branch}, {integer, L, N}}]};
         false ->
             Map
@@ -4619,7 +4619,7 @@ reject_framework_attrs(Attrs, Line) ->
     reject_reserved_attrs(Attrs, Line).
 
 %% `az-nodiff` is a bare directive. Its value in the HTML is the compiler's (the
-%% region token the client keeps a region by), so an authored one -- any value,
+%% token the client keeps the element by), so an authored one -- any value,
 %% `true` included -- is rejected rather than emitted or ignored.
 reject_nodiff_value(Attrs, Line) ->
     case lists:any(fun is_nodiff_value_attr/1, Attrs) of

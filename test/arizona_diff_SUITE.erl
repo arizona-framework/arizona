@@ -131,7 +131,7 @@
     each_nested_stream_op_with_callback_change/1,
     each_unrelated_binding_skips/1,
     each_nodiff_item_untouched/1,
-    each_nodiff_region_untouched/1
+    each_nodiff_slot_untouched/1
 ]).
 
 all() ->
@@ -284,7 +284,7 @@ groups() ->
             each_nested_stream_op_with_callback_change,
             each_unrelated_binding_skips,
             each_nodiff_item_untouched,
-            each_nodiff_region_untouched
+            each_nodiff_slot_untouched
         ]}
     ].
 
@@ -2584,13 +2584,13 @@ each_unrelated_binding_skips(Config) when is_list(Config) ->
         each_diff(unrelated, B0, B0#{other => <<"p">>}, #{other => true})
     ).
 
-%% An az-nodiff item, or a region holding the each, renders once: a change to what
+%% An az-nodiff item, or an az-nodiff element holding the each, renders once: a change to what
 %% it reads patches nothing.
 each_nodiff_item_untouched(Config) when is_list(Config) ->
     ?assertEqual([], each_suffix_diff(nodiff_item)).
 
-each_nodiff_region_untouched(Config) when is_list(Config) ->
-    ?assertEqual([], each_suffix_diff(nodiff_region)).
+each_nodiff_slot_untouched(Config) when is_list(Config) ->
+    ?assertEqual([], each_suffix_diff(nodiff_slot)).
 
 each_suffix_diff(Fn) ->
     B0 = each_bindings(),

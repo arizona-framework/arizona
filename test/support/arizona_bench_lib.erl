@@ -218,7 +218,7 @@ run_view_render_workload(Module, Opts, Runs) ->
 -doc """
 Run a workload that mounts a view (via `arizona_socket:init/4`),
 then times one `arizona_socket:handle_in/2` per op with the given
-event term (JSON-encoded once outside the timed region). Reuses the
+event term (JSON-encoded once outside the timed az-nodiff element). Reuses the
 same Socket across iterations -- valid for events whose handlers
 don't mutate the Socket record. The sanity check accepts either
 `{ok, _}` (no-change events) or `{reply, _, _}` (events emitting

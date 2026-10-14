@@ -3,13 +3,13 @@ import { applyOps, hooks, mountHooks, OP } from './arizona.js';
 import { resolveHtml } from './arizona-core.js';
 
 // ---------------------------------------------------------------------------
-// Kept az-nodiff regions: a wholesale re-render around a region (a container
-// OP_TEXT, the OP_REPLACE resyncing a reconnected view) carries the region's
-// existing DOM over when the new render names the same region (`az-nodiff="TOKEN"`) at
+// Kept az-nodiff elements: a wholesale re-render around an az-nodiff element (a container
+// OP_TEXT, the OP_REPLACE resyncing a reconnected view) carries the element's
+// existing DOM over when the new render names the same az-nodiff element (`az-nodiff="TOKEN"`) at
 // the same place.
 //
 // The fixtures are real `arizona_render` SSR output and real `arizona_diff` ops
-// (the `arizona_nodiff_widget` page and a plain list whose items are regions).
+// (the `arizona_nodiff_widget` page and a plain list whose items are az-nodiff elements).
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
@@ -44,7 +44,7 @@ function setupList(html) {
 }
 
 // `?each(fun(I) -> {li, ['az-nodiff', {az_hook, ~"W"}, {az_key, I}], [I]} end, ...)`:
-// each item is a region named with its key. Any change to such a list re-renders it wholesale.
+// each item is an az-nodiff element named with its key. Any change to such a list re-renders it wholesale.
 const KEYED_TMPL = { f: '1E5G6CX', s: ['<li', ' az-hook="W"', '>', '</li>'], t: 0 };
 const KEYED_TOKENS = { x: '1E5G6CX.kSPJT6G', y: '1E5G6CX.k19DTS45' };
 const keyed = (k) => `<li az-nodiff="${KEYED_TOKENS[k]}" az-hook="W" az-key="${k}">${k}</li>`;
@@ -59,7 +59,7 @@ const keyedOp = (ks) => [
 ];
 
 describe('keyed list items re-rendered wholesale', () => {
-    it('keeps the region of an item still listed when the first is dropped', () => {
+    it('keeps the az-nodiff element of an item still listed when the first is dropped', () => {
         const events = widgetHook();
         setupList(keyed('x') + keyed('y'));
         const [, y] = items();
@@ -70,7 +70,7 @@ describe('keyed list items re-rendered wholesale', () => {
         expect(events).toEqual(['mount:x', 'mount:y', 'destroy:x']);
     });
 
-    it('keeps each region with its key across a reorder', () => {
+    it('keeps each az-nodiff element with its key across a reorder', () => {
         const events = widgetHook();
         setupList(keyed('x') + keyed('y'));
         const [x, y] = items();
@@ -79,7 +79,7 @@ describe('keyed list items re-rendered wholesale', () => {
         expect(events).toEqual(['mount:x', 'mount:y']);
     });
 
-    it('keeps a region inside an item with that item', () => {
+    it('keeps an az-nodiff element inside an item with that item', () => {
         widgetHook();
         const row = (k) =>
             `<li az-key="${k}"><!--az:R-0--><div az-nodiff="W" az-hook="W">${k}</div><!--/az--></li>`;
@@ -90,9 +90,9 @@ describe('keyed list items re-rendered wholesale', () => {
     });
 });
 
-// Regions in unkeyed plain-list items share one name and place: nothing tells
+// Az-nodiff elements in unkeyed plain-list items share one name and place: nothing tells
 // which old item a new one is, so none is kept.
-describe('unkeyed regions under one name', () => {
+describe('unkeyed az-nodiff elements under one name', () => {
     const row = (v) => `<li><!--az:R-0--><div az-nodiff="W" az-hook="W">${v}</div><!--/az--></li>`;
 
     it('are remounted when the first item is dropped', () => {
@@ -132,7 +132,7 @@ describe('a bare az-nodiff', () => {
         expect(events).toEqual(['mount:a', 'destroy:a', 'mount:a']);
     });
 
-    it('carries no named region inside it either', () => {
+    it('carries no named az-nodiff element inside it either', () => {
         widgetHook();
         const item = '<li az-nodiff><div az-nodiff="W" az-hook="W">a</div></li>';
         setupList(item);
@@ -142,9 +142,9 @@ describe('a bare az-nodiff', () => {
     });
 });
 
-// `arizona_nodiff_regions:root_child/1`: a child view whose own root is az-nodiff,
+// `arizona_nodiff_slots:root_child/1`: a child view whose own root is az-nodiff,
 // its id from a binding. A new id is a new view the server addresses by that id.
-describe('a child view region', () => {
+describe('a child view az-nodiff element', () => {
     const SLOT = '17H5EN6-0';
     const CHILD = '<div az-nodiff="OAJKXF" az-view id="rc1">1</div>';
     const SWITCH = resolveHtml({
@@ -169,7 +169,7 @@ describe('a child view region', () => {
     });
 });
 
-// The `arizona_nodiff_widget` page: the region is a conditional's branch in the
+// The `arizona_nodiff_widget` page: the az-nodiff element is a conditional's branch in the
 // `#slot` content slot.
 const SLOT_AZ = '8ADF55-10';
 const LINE = '<div az-nodiff="1B4JTYR.b1.k1GIQY31" az-hook="W" data-kind="line" az-key="0">0</div>';
@@ -178,97 +178,97 @@ const BAR = resolveHtml({
     f: '8ADF55-10-1Y1XRZ5',
     s: ['<div', ' az-hook="W" data-kind="bar"', '>', '</div>'],
 });
-const page = (region) =>
+const page = (content) =>
     `<main az="8ADF55-0" az-view id="page"><p az="8ADF55-9" id="count">` +
     `<!--az:8ADF55-9-->0<!--/az--></p><div az="${SLOT_AZ}" id="slot">` +
-    `<!--az:${SLOT_AZ}-->${region}<!--/az--></div></main>`;
+    `<!--az:${SLOT_AZ}-->${content}<!--/az--></div></main>`;
 
-function setupPage(region) {
-    document.body.innerHTML = page(region);
+function setupPage(content) {
+    document.body.innerHTML = page(content);
     mountHooks(document);
     return document.querySelector('[az-nodiff]');
 }
 
 describe('a slot re-rendered wholesale', () => {
-    it('keeps a region named again', () => {
+    it('keeps an az-nodiff element named again', () => {
         const events = widgetHook();
-        const region = setupPage(LINE);
+        const widget = setupPage(LINE);
         applyOps([[OP.TEXT, `page:${SLOT_AZ}`, LINE.replace('>0<', '>1<'), true]]);
-        expect(document.querySelector('[az-nodiff]')).toBe(region);
-        // Never patched: the region keeps the content it was mounted with.
-        expect(region.textContent).toBe('0');
+        expect(document.querySelector('[az-nodiff]')).toBe(widget);
+        // Never patched: the az-nodiff element keeps the content it was mounted with.
+        expect(widget.textContent).toBe('0');
         expect(events).toEqual(['mount:0']);
     });
 
-    it('replaces a region named differently', () => {
+    it('replaces an az-nodiff element named differently', () => {
         const events = widgetHook();
-        const region = setupPage(LINE);
+        const widget = setupPage(LINE);
         applyOps([[OP.TEXT, `page:${SLOT_AZ}`, BAR, true]]);
-        expect(region.isConnected).toBe(false);
+        expect(widget.isConnected).toBe(false);
         expect(document.querySelector('[az-nodiff]').dataset.kind).toBe('bar');
         expect(events).toEqual(['mount:0', 'destroy:0', 'mount:0']);
     });
 
-    it('does not move a region into another slot under the same name', () => {
+    it('does not move an az-nodiff element into another slot under the same name', () => {
         widgetHook();
         const slots = (a, b) => `<!--az:A-1-->${a}<!--/az--><!--az:A-2-->${b}<!--/az-->`;
         document.body.innerHTML =
             `<main id="page" az-view><div az="${SLOT_AZ}"><!--az:${SLOT_AZ}-->` +
             `${slots(LINE, '')}<!--/az--></div></main>`;
         mountHooks(document);
-        const region = document.querySelector('[az-nodiff]');
+        const widget = document.querySelector('[az-nodiff]');
         applyOps([[OP.TEXT, `page:${SLOT_AZ}`, slots('', LINE), true]]);
-        expect(region.isConnected).toBe(false);
+        expect(widget.isConnected).toBe(false);
         expect(document.querySelector('[az-nodiff]')).not.toBeNull();
     });
 
-    it('carries a region nested in another along with it, and nothing else', () => {
+    it('carries an az-nodiff element nested in another along with it, and nothing else', () => {
         const mounted = vi.fn();
         hooks.Inner = { mounted };
         const outer =
             '<section az-nodiff="O"><div az-nodiff="I" az-hook="Inner"></div>' +
             '<i az-hook="Inner"></i></section>';
-        const region = setupPage(outer);
+        const widget = setupPage(outer);
         expect(mounted).toHaveBeenCalledTimes(2);
         // Markup the widget added: Arizona did not render it, so it mounts nothing.
-        region.insertAdjacentHTML('beforeend', '<b az-hook="Inner"></b>');
+        widget.insertAdjacentHTML('beforeend', '<b az-hook="Inner"></b>');
         applyOps([[OP.TEXT, `page:${SLOT_AZ}`, outer, true]]);
-        expect(document.querySelector('[az-nodiff="O"]')).toBe(region);
+        expect(document.querySelector('[az-nodiff="O"]')).toBe(widget);
         expect(mounted).toHaveBeenCalledTimes(2);
     });
 });
 
 describe('OP.REPLACE', () => {
-    it('keeps a region named again on a resync', () => {
+    it('keeps an az-nodiff element named again on a resync', () => {
         const events = widgetHook();
-        const region = setupPage(LINE);
+        const widget = setupPage(LINE);
         applyOps([[OP.REPLACE, 'page', page(LINE)]], true);
-        expect(document.querySelector('[az-nodiff]')).toBe(region);
+        expect(document.querySelector('[az-nodiff]')).toBe(widget);
         expect(document.querySelector('main')).not.toBeNull();
         expect(events).toEqual(['mount:0']);
     });
 
-    it('remounts a region named differently on a resync', () => {
+    it('remounts an az-nodiff element named differently on a resync', () => {
         const events = widgetHook();
-        const region = setupPage(BAR);
+        const widget = setupPage(BAR);
         applyOps([[OP.REPLACE, 'page', page(LINE)]], true);
-        expect(region.isConnected).toBe(false);
+        expect(widget.isConnected).toBe(false);
         expect(events).toEqual(['mount:0', 'destroy:0', 'mount:0']);
     });
 
     it('keeps nothing on a navigate', () => {
         const events = widgetHook();
-        const region = setupPage(LINE);
+        const widget = setupPage(LINE);
         applyOps([[OP.REPLACE, 'page', page(LINE)]]);
-        expect(region.isConnected).toBe(false);
+        expect(widget.isConnected).toBe(false);
         expect(events).toEqual(['mount:0', 'destroy:0', 'mount:0']);
     });
 
-    it('does not keep a region holding a live view on a resync', () => {
+    it('does not keep an az-nodiff element holding a live view on a resync', () => {
         widgetHook();
         const withView = '<section az-nodiff="R"><span az-view id="child">0</span></section>';
-        const region = setupPage(withView);
+        const widget = setupPage(withView);
         applyOps([[OP.REPLACE, 'page', page(withView)]], true);
-        expect(region.isConnected).toBe(false);
+        expect(widget.isConnected).toBe(false);
     });
 });

@@ -137,23 +137,23 @@
     nodiff_each/1,
     nodiff_inherited_branch/1,
     nodiff_bare_branch_inherited/1,
-    nodiff_region_show_hide/1,
-    nodiff_region_switch/1,
-    nodiff_region_helper_switch/1,
-    nodiff_region_same_branch_kept/1,
-    nodiff_region_wrapper_switch/1,
-    nodiff_region_inner_change/1,
-    nodiff_region_az_key/1,
-    nodiff_region_az_key_spellings/1,
-    nodiff_region_child_views_not_updated/1,
-    nodiff_region_root_child_id/1,
-    nodiff_region_list_items/1,
-    nodiff_region_stream_items/1,
-    nodiff_region_attr_names_identity/1,
-    nodiff_region_attr_follows_same_region/1,
-    nodiff_region_attr_item_key/1,
-    nodiff_region_attr_unkeyed_item/1,
-    nodiff_region_attr_only_on_regions/1,
+    nodiff_slot_show_hide/1,
+    nodiff_slot_switch/1,
+    nodiff_slot_helper_switch/1,
+    nodiff_slot_same_branch_kept/1,
+    nodiff_slot_wrapper_switch/1,
+    nodiff_slot_inner_change/1,
+    nodiff_slot_az_key/1,
+    nodiff_slot_az_key_spellings/1,
+    nodiff_slot_child_views_not_updated/1,
+    nodiff_slot_root_child_id/1,
+    nodiff_slot_list_items/1,
+    nodiff_slot_stream_items/1,
+    nodiff_token_names_identity/1,
+    nodiff_token_follows_same_nodiff/1,
+    nodiff_token_item_key/1,
+    nodiff_token_unkeyed_item/1,
+    nodiff_token_only_on_nodiff_roots/1,
     nodiff_value_raises/1,
     nodiff_branch_swaps_away/1,
     nodiff_branch_same_template_skips_eval/1,
@@ -522,29 +522,29 @@ all() ->
         {group, az_view},
         {group, az_scoping},
         {group, az_attrs},
-        {group, nodiff_region}
+        {group, nodiff_slot}
     ].
 
 groups() ->
     [
-        {nodiff_region, [parallel], [
-            nodiff_region_show_hide,
-            nodiff_region_switch,
-            nodiff_region_helper_switch,
-            nodiff_region_same_branch_kept,
-            nodiff_region_wrapper_switch,
-            nodiff_region_inner_change,
-            nodiff_region_az_key,
-            nodiff_region_az_key_spellings,
-            nodiff_region_child_views_not_updated,
-            nodiff_region_root_child_id,
-            nodiff_region_list_items,
-            nodiff_region_stream_items,
-            nodiff_region_attr_names_identity,
-            nodiff_region_attr_follows_same_region,
-            nodiff_region_attr_item_key,
-            nodiff_region_attr_unkeyed_item,
-            nodiff_region_attr_only_on_regions,
+        {nodiff_slot, [parallel], [
+            nodiff_slot_show_hide,
+            nodiff_slot_switch,
+            nodiff_slot_helper_switch,
+            nodiff_slot_same_branch_kept,
+            nodiff_slot_wrapper_switch,
+            nodiff_slot_inner_change,
+            nodiff_slot_az_key,
+            nodiff_slot_az_key_spellings,
+            nodiff_slot_child_views_not_updated,
+            nodiff_slot_root_child_id,
+            nodiff_slot_list_items,
+            nodiff_slot_stream_items,
+            nodiff_token_names_identity,
+            nodiff_token_follows_same_nodiff,
+            nodiff_token_item_key,
+            nodiff_token_unkeyed_item,
+            nodiff_token_only_on_nodiff_roots,
             nodiff_value_raises
         ]},
         %% Tests 1-25: basic element parsing
@@ -1104,9 +1104,9 @@ compile_module(Source) ->
     Mod.
 
 %% Render a template and assert it carries none of the framework's markers.
-%% The `az-nodiff` attribute a nodiff root keeps (its region token, or bare) is not
+%% The `az-nodiff` attribute a nodiff root keeps (its az-nodiff element token, or bare) is not
 %% a diff anchor; it is stripped here so these cases pin the markerless markup, and
-%% the `region_attr`
+%% the `nodiff_token_attr`
 %% group pins the attribute itself.
 render_markerless(Tmpl) ->
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Tmpl)),
@@ -2320,7 +2320,7 @@ raw_text_reject_message_renders(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, string:find(Msg, "script")).
 
 %% az-nodiff must not be an escape hatch out of the raw-text rule. The nodiff
-%% clause of emit_child_dynamic/4 once matched first, so an az-nodiff region
+%% clause of emit_child_dynamic/4 once matched first, so an az-nodiff element
 %% (layouts, the very place inline <script> lives) skipped the opt-out guard
 %% entirely and HTML-escaped the value inside raw text -- broken JS, and the
 %% author got no compile signal at all.
@@ -2335,7 +2335,7 @@ raw_text_in_nodiff_bare_dynamic_rejected(Config) when is_list(Config) ->
         fun(R) -> R =:= dynamic_in_raw_text end
     ).
 
-%% ...and the marked value in an az-nodiff region must still reach raw_text/2.
+%% ...and the marked value in an az-nodiff element must still reach raw_text/2.
 %% Skipping the raw-text clause sent it through the nodiff path, which neutralizes
 %% nothing, so a ?raw close tag broke straight out of the element.
 raw_text_in_nodiff_raw_neutralized(Config) when is_list(Config) ->
@@ -3790,7 +3790,7 @@ nodiff_directive_case_insensitive(Config) when is_list(Config) ->
     {HTML0, _Snap} = arizona_render:render(T),
     HTML = iolist_to_binary(HTML0),
     %% ...and the rendered element has no az attribute and no slot markers; the
-    %% directive stays, lowercase, holding the region token the compiler owns.
+    %% directive stays, lowercase, holding the az-nodiff element token the compiler owns.
     #{f := F} = T,
     ?assertEqual(<<"<div az-nodiff=\"", F/binary, "\">42</div>">>, HTML),
     ?assertEqual(nomatch, binary:match(HTML, ~"AZ-NODIFF")),
@@ -4997,7 +4997,7 @@ assert_nodiff_swap(Name, Branch) ->
     ).
 
 %% A slot that re-runs and lands on the same az-nodiff template keeps its first
-%% render without evaluating the region again: a child view inside it gets no
+%% render without evaluating the az-nodiff element again: a child view inside it gets no
 %% `handle_update/3` (its DOM is never patched, so its state must not move past it),
 %% and the old snapshot is carried as-is.
 nodiff_branch_same_template_skips_eval(Config) when is_list(Config) ->
@@ -5054,7 +5054,7 @@ nodiff_item_branch_swaps_away(Config) when is_list(Config) ->
     ).
 
 %% Two az-nodiff branches with the same statics are still different templates:
-%% the slot switches between them (a region is named by the branch that produced
+%% the slot switches between them (an az-nodiff element is named by the branch that produced
 %% it, not only by its statics).
 nodiff_same_statics_branches_swap(Config) when is_list(Config) ->
     Mod = compile_module(
@@ -5466,8 +5466,8 @@ nodiff_local_slot_numbering(Config) when is_list(Config) ->
 nodiff_fun_prop_not_inherited(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_nodiff_fun_prop). "
-        "-export([region/1, fwd/1, child/1]). "
-        "region(Bindings) -> "
+        "-export([marked/1, fwd/1, child/1]). "
+        "marked(Bindings) -> "
         "    arizona_template:html("
         "        {'div', ['az-nodiff'], ["
         "            arizona_template:stateless(fun fwd/1, #{mk => fun(N) -> "
@@ -5481,7 +5481,7 @@ nodiff_fun_prop_not_inherited(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], "
         "        [(arizona_template:get(mk, Bindings))(arizona_template:get(n, Bindings))]}). "
     ),
-    _ = arizona_render:render_to_iolist(Mod:region(#{})),
+    _ = arizona_render:render_to_iolist(Mod:marked(#{})),
     Mk = erase(pt_nodiff_fun_prop),
     ?assertNot(maps:is_key(diff, Mk(0))),
     {_HTML, Snap, Views} = arizona_render:render(Mod:child(#{mk => Mk, n => 0}), #{}),
@@ -5494,8 +5494,8 @@ nodiff_fun_prop_not_inherited(Config) when is_list(Config) ->
 nodiff_named_fun_prop_not_inherited(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_nodiff_named_fun_prop). "
-        "-export([region/1, fwd/1, child/1]). "
-        "region(Bindings) -> "
+        "-export([marked/1, fwd/1, child/1]). "
+        "marked(Bindings) -> "
         "    arizona_template:html("
         "        {'div', ['az-nodiff'], ["
         "            arizona_template:stateless(fun fwd/1, #{mk => fun Self(N) -> "
@@ -5509,7 +5509,7 @@ nodiff_named_fun_prop_not_inherited(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], "
         "        [(arizona_template:get(mk, Bindings))(arizona_template:get(n, Bindings))]}). "
     ),
-    _ = arizona_render:render_to_iolist(Mod:region(#{})),
+    _ = arizona_render:render_to_iolist(Mod:marked(#{})),
     Mk = erase(pt_nodiff_named_fun_prop),
     ?assertNot(maps:is_key(diff, Mk(0))),
     {_HTML, Snap, Views} = arizona_render:render(Mod:child(#{mk => Mk, n => 0}), #{}),
@@ -10029,83 +10029,83 @@ az_attrs_records_component_modules(Config) when is_list(Config) ->
     ).
 
 %% --------------------------------------------------------------------
-%% nodiff_region: a slot holding an az-nodiff region
+%% nodiff_slot: a slot holding an az-nodiff element
 %% --------------------------------------------------------------------
 
-%% The server decides whether the region exists: hiding and showing it patch the
+%% The server decides whether the az-nodiff element exists: hiding and showing it patch the
 %% slot.
-nodiff_region_show_hide(Config) when is_list(Config) ->
+nodiff_slot_show_hide(Config) when is_list(Config) ->
     B0 = #{show => true, v => ~"a"},
-    {_, S0, V0} = region_render(toggle, B0),
-    {Hide, S1, V1} = region_diff(toggle, B0#{show => false}, S0, V0, [show]),
+    {_, S0, V0} = nodiff_render(toggle, B0),
+    {Hide, S1, V1} = nodiff_diff(toggle, B0#{show => false}, S0, V0, [show]),
     ?assertMatch([[?OP_TEXT, _, <<>>]], Hide),
-    {Show, _, _} = region_diff(toggle, B0#{v => ~"b"}, S1, V1, [show, v]),
+    {Show, _, _} = nodiff_diff(toggle, B0#{v => ~"b"}, S1, V1, [show, v]),
     ?assertMatch([[?OP_TEXT, _, #{~"d" := [_, ~"b"]}]], Show).
 
-%% Switching between two regions patches the slot, whether or not the two share
+%% Switching between two az-nodiff elements patches the slot, whether or not the two share
 %% their statics.
-nodiff_region_switch(Config) when is_list(Config) ->
+nodiff_slot_switch(Config) when is_list(Config) ->
     B0 = #{kind => a, v => ~"1"},
-    {_, S0, V0} = region_render(switch, B0),
-    {AB, S1, V1} = region_diff(switch, B0#{kind => b, v => ~"2"}, S0, V0, [kind, v]),
+    {_, S0, V0} = nodiff_render(switch, B0),
+    {AB, S1, V1} = nodiff_diff(switch, B0#{kind => b, v => ~"2"}, S0, V0, [kind, v]),
     ?assertMatch([[?OP_TEXT, _, #{~"d" := [_, ~"2"]}]], AB),
     ?assertMatch(
         {[[?OP_TEXT, _, _]], _, _},
-        region_diff(switch, B0#{kind => c}, S1, V1, [kind])
+        nodiff_diff(switch, B0#{kind => c}, S1, V1, [kind])
     ).
 
-%% Two clauses calling the same helper produce two regions, inlined or not.
-nodiff_region_helper_switch(Config) when is_list(Config) ->
+%% Two clauses calling the same helper produce two az-nodiff elements, inlined or not.
+nodiff_slot_helper_switch(Config) when is_list(Config) ->
     B0 = #{kind => line, v => ~"x"},
-    {_, S0, V0} = region_render(helper_switch, B0),
-    {Ops, _, _} = region_diff(helper_switch, B0#{kind => bar}, S0, V0, [kind]),
+    {_, S0, V0} = nodiff_render(helper_switch, B0),
+    {Ops, _, _} = nodiff_diff(helper_switch, B0#{kind => bar}, S0, V0, [kind]),
     ?assertMatch([[?OP_TEXT, _, _], [?OP_TEXT, _, _], [?OP_TEXT, _, _]], Ops).
 
-%% The same branch chosen again keeps the region untouched, even when the values
+%% The same branch chosen again keeps the az-nodiff element untouched, even when the values
 %% it was rendered from changed.
-nodiff_region_same_branch_kept(Config) when is_list(Config) ->
+nodiff_slot_same_branch_kept(Config) when is_list(Config) ->
     B0 = #{n => 1, v => ~"a"},
-    {_, S0, V0} = region_render(one_branch, B0),
-    {Ops, S1, V1} = region_diff(one_branch, B0#{n => 2, v => ~"b"}, S0, V0, [n, v]),
+    {_, S0, V0} = nodiff_render(one_branch, B0),
+    {Ops, S1, V1} = nodiff_diff(one_branch, B0#{n => 2, v => ~"b"}, S0, V0, [n, v]),
     ?assertEqual([], Ops),
     ?assertEqual(maps:get(d, S0), maps:get(d, S1)),
-    %% The slot still leaves the region.
+    %% The slot still leaves the az-nodiff element.
     ?assertMatch(
         {[[?OP_TEXT, _, ~"off"]], _, _},
-        region_diff(one_branch, B0#{n => 0}, S1, V1, [n])
+        nodiff_diff(one_branch, B0#{n => 0}, S1, V1, [n])
     ).
 
-%% A switch above the region's own slot to a wrapper with the same statics keeps
-%% the region; an `az_key` naming the switch remounts it.
-nodiff_region_wrapper_switch(Config) when is_list(Config) ->
+%% A switch above the az-nodiff element's own slot to a wrapper with the same statics keeps
+%% the az-nodiff element; an `az_key` naming the switch remounts it.
+nodiff_slot_wrapper_switch(Config) when is_list(Config) ->
     B0 = #{tab => a, v => ~"x"},
-    {_, S0, V0} = region_render(wrapper_switch, B0),
-    {Ops, _, _} = region_diff(wrapper_switch, B0#{tab => b}, S0, V0, [tab]),
+    {_, S0, V0} = nodiff_render(wrapper_switch, B0),
+    {Ops, _, _} = nodiff_diff(wrapper_switch, B0#{tab => b}, S0, V0, [tab]),
     ?assertMatch([[?OP_TEXT, _, #{~"d" := [_, ~" az-key=\"b\"", ~"x"]}]], Ops).
 
-%% A value read only inside the region is not a dependency of its slot.
-nodiff_region_inner_change(Config) when is_list(Config) ->
+%% A value read only inside the az-nodiff element is not a dependency of its slot.
+nodiff_slot_inner_change(Config) when is_list(Config) ->
     B0 = #{n => 1, v => ~"a"},
-    {_, S0, V0} = region_render(one_branch, B0),
+    {_, S0, V0} = nodiff_render(one_branch, B0),
     #{deps := [SlotDeps]} = S0,
     ?assertNot(is_map_key(v, SlotDeps)),
-    {Ops, S1, _} = region_diff(one_branch, B0#{v => ~"b"}, S0, V0, [v]),
+    {Ops, S1, _} = nodiff_diff(one_branch, B0#{v => ~"b"}, S0, V0, [v]),
     ?assertEqual([], Ops),
     ?assertEqual(S0, S1).
 
-%% An `az_key` on the region's root remounts it when its value changes; without one
-%% the region stays.
-nodiff_region_az_key(Config) when is_list(Config) ->
+%% An `az_key` on the az-nodiff element's root remounts it when its value changes; without one
+%% the az-nodiff element stays.
+nodiff_slot_az_key(Config) when is_list(Config) ->
     B0 = #{on => true, type => ~"line"},
-    {_, S0, V0} = region_render(keyed, B0),
+    {_, S0, V0} = nodiff_render(keyed, B0),
     #{d := [{Az0, _}, {_Az1, _}, {Az2, _}]} = S0,
-    {Ops, S1, V1} = region_diff(keyed, B0#{type => ~"bar"}, S0, V0, [type]),
+    {Ops, S1, V1} = nodiff_diff(keyed, B0#{type => ~"bar"}, S0, V0, [type]),
     ?assertEqual([Az0, Az2], lists:sort([Az || [?OP_TEXT, Az, _] <- Ops])),
     ?assertEqual(2, length(Ops)),
-    ?assertMatch({[], _, _}, region_diff(keyed, B0#{type => ~"bar"}, S1, V1, [type])).
+    ?assertMatch({[], _, _}, nodiff_diff(keyed, B0#{type => ~"bar"}, S1, V1, [type])).
 
-%% Every spelling of the `az_key` attribute names the region.
-nodiff_region_az_key_spellings(Config) when is_list(Config) ->
+%% Every spelling of the `az_key` attribute names the az-nodiff element.
+nodiff_slot_az_key_spellings(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_nodiff_az_key_spellings). "
         "-export([render/1]). "
@@ -10130,45 +10130,45 @@ nodiff_region_az_key_spellings(Config) when is_list(Config) ->
      || N <- [1, 2]
     ].
 
-%% A child view inside a region gets its props at mount only, wherever the region
-%% is evaluated from.
-nodiff_region_child_views_not_updated(Config) when is_list(Config) ->
+%% A child view inside an az-nodiff element gets its props at mount only, wherever the
+%% element is evaluated from.
+nodiff_slot_child_views_not_updated(Config) when is_list(Config) ->
     Item = fun(N) -> #{id => ~"in_item", n => N} end,
     B0 = #{on => true, n => 1, items => [Item(1)]},
-    {_, S0, V0} = region_render(child_paths, B0),
+    {_, S0, V0} = nodiff_render(child_paths, B0),
     Ids = [~"in_branch", ~"in_stateless", ~"in_item"],
     [?assertMatch(#{count := 1}, maps:get(bindings, maps:get(Id, V0))) || Id <- Ids],
-    {Ops, _, V1} = region_diff(child_paths, B0#{n => 2, items => [Item(2)]}, S0, V0, [n, items]),
+    {Ops, _, V1} = nodiff_diff(child_paths, B0#{n => 2, items => [Item(2)]}, S0, V0, [n, items]),
     [?assertMatch(#{count := 1}, maps:get(bindings, maps:get(Id, V1))) || Id <- Ids],
     ?assertEqual([], Ops).
 
 %% A child view whose own root is az-nodiff keeps its render under new props, and
 %% is replaced when its id changes.
-nodiff_region_root_child_id(Config) when is_list(Config) ->
+nodiff_slot_root_child_id(Config) when is_list(Config) ->
     B0 = #{cid => ~"rc1", n => 1},
-    {_, S0, V0} = region_render(root_child, B0),
-    ?assertMatch({[], _, _}, region_diff(root_child, B0#{n => 2}, S0, V0, [n])),
-    {Ops, _, V1} = region_diff(root_child, B0#{cid => ~"rc2"}, S0, V0, [cid]),
+    {_, S0, V0} = nodiff_render(root_child, B0),
+    ?assertMatch({[], _, _}, nodiff_diff(root_child, B0#{n => 2}, S0, V0, [n])),
+    {Ops, _, V1} = nodiff_diff(root_child, B0#{cid => ~"rc2"}, S0, V0, [cid]),
     ?assertMatch([[?OP_TEXT, _, #{~"s" := _}]], Ops),
     ?assertEqual([~"rc2"], maps:keys(V1)).
 
-%% Regions in plain-list items come and go with their items; a value change in a
-%% kept item leaves its region alone.
-nodiff_region_list_items(Config) when is_list(Config) ->
-    {_, S0, V0} = region_render(list_widgets, #{items => [#{v => ~"a"}]}),
-    {Add, S1, V1} = region_diff(list_widgets, #{items => [#{v => ~"a"}, #{v => ~"b"}]}, S0, V0, [
+%% Az-nodiff elements in plain-list items come and go with their items; a value change in a
+%% kept item leaves its az-nodiff element alone.
+nodiff_slot_list_items(Config) when is_list(Config) ->
+    {_, S0, V0} = nodiff_render(list_widgets, #{items => [#{v => ~"a"}]}),
+    {Add, S1, V1} = nodiff_diff(list_widgets, #{items => [#{v => ~"a"}, #{v => ~"b"}]}, S0, V0, [
         items
     ]),
     ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_INSERT | _]]]], Add),
     ?assertMatch(
         {[], _, _},
-        region_diff(list_widgets, #{items => [#{v => ~"z"}, #{v => ~"b"}]}, S1, V1, [items])
+        nodiff_diff(list_widgets, #{items => [#{v => ~"z"}, #{v => ~"b"}]}, S1, V1, [items])
     ),
-    {Remove, _, _} = region_diff(list_widgets, #{items => [#{v => ~"a"}]}, S1, V1, [items]),
+    {Remove, _, _} = nodiff_diff(list_widgets, #{items => [#{v => ~"a"}]}, S1, V1, [items]),
     ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_REMOVE | _]]]], Remove),
-    %% A new `az_key` in a kept item remounts its region.
+    %% A new `az_key` in a kept item remounts its az-nodiff element.
     {Rekey, _, _} =
-        region_diff(list_widgets, #{items => [#{v => ~"a", rev => 1}, #{v => ~"b"}]}, S1, V1, [
+        nodiff_diff(list_widgets, #{items => [#{v => ~"a", rev => 1}, #{v => ~"b"}]}, S1, V1, [
             items
         ]),
     ?assertMatch(
@@ -10176,58 +10176,58 @@ nodiff_region_list_items(Config) when is_list(Config) ->
         Rekey
     ).
 
-%% Regions in stream items come and go with their items; updating a kept item
-%% leaves its region alone.
-nodiff_region_stream_items(Config) when is_list(Config) ->
+%% Az-nodiff elements in stream items come and go with their items; updating a kept item
+%% leaves its az-nodiff element alone.
+nodiff_slot_stream_items(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     St0 = settled_stream(arizona_stream:new(KeyFun, [#{id => ~"1", v => ~"a"}])),
-    {_, S0, V0} = region_render(stream_widgets, #{items => St0}),
+    {_, S0, V0} = nodiff_render(stream_widgets, #{items => St0}),
     St1 = arizona_stream:insert(St0, #{id => ~"2", v => ~"b"}),
-    {Add, S1, V1} = region_diff(stream_widgets, #{items => St1}, S0, V0, [items]),
+    {Add, S1, V1} = nodiff_diff(stream_widgets, #{items => St1}, S0, V0, [items]),
     ?assertMatch([[?OP_INSERT, _, ~"2", _, _]], Add),
     St2 = settled_stream(St1),
     St3 = arizona_stream:update(St2, ~"1", #{id => ~"1", v => ~"z"}),
-    {Update, S2, V2} = region_diff(stream_widgets, #{items => St3}, S1, V1, [items]),
+    {Update, S2, V2} = nodiff_diff(stream_widgets, #{items => St3}, S1, V1, [items]),
     ?assertEqual([], Update),
     St4 = arizona_stream:delete(settled_stream(St3), ~"2"),
     ?assertMatch(
         {[[?OP_REMOVE, _, ~"2"]], _, _},
-        region_diff(stream_widgets, #{items => St4}, S2, V2, [items])
+        nodiff_diff(stream_widgets, #{items => St4}, S2, V2, [items])
     ),
-    %% A new `az_key` in a kept item remounts its region.
+    %% A new `az_key` in a kept item remounts its az-nodiff element.
     St5 = arizona_stream:update(settled_stream(St3), ~"1", #{id => ~"1", v => ~"z", rev => 1}),
-    {Rekey, _, _} = region_diff(stream_widgets, #{items => St5}, S2, V2, [items]),
+    {Rekey, _, _} = nodiff_diff(stream_widgets, #{items => St5}, S2, V2, [items]),
     ?assertMatch([[?OP_ITEM_PATCH, _, ~"1", [[?OP_TEXT, _, #{~"d" := [_, _, ~"z"]}]]]], Rekey).
 
-%% A region's root names its identity -- the fingerprint, the branch that produced
+%% An az-nodiff element's root names its identity -- the fingerprint, the branch that produced
 %% it and its `az_key` -- in `az-nodiff`, for the client to keep it by across a
-%% wholesale re-render. The value is the one region_token/3 builds from the very
-%% fields same_region/3 compares, however the branch got stamped: on a literal
+%% wholesale re-render. The value is the one nodiff_token/3 builds from the very
+%% fields same_nodiff/3 compares, however the branch got stamped: on a literal
 %% template, by `branch/2` on a helper's runtime value, or through a `?stateless`
 %% descriptor.
-nodiff_region_attr_names_identity(Config) when is_list(Config) ->
-    {_, Keyed, _} = region_render(keyed, #{on => true, type => ~"line"}),
-    {_, Helpers, _} = region_render(helper_switch, #{kind => bar, v => ~"x"}),
-    Regions = region_snaps(Keyed) ++ region_snaps(Helpers),
-    ?assertEqual(6, length(Regions)),
+nodiff_token_names_identity(Config) when is_list(Config) ->
+    {_, Keyed, _} = nodiff_render(keyed, #{on => true, type => ~"line"}),
+    {_, Helpers, _} = nodiff_render(helper_switch, #{kind => bar, v => ~"x"}),
+    Marked = nodiff_snaps(Keyed) ++ nodiff_snaps(Helpers),
+    ?assertEqual(6, length(Marked)),
     [
         ?assertEqual(
-            region_token_of(Snap), region_attr_of(Snap), {Snap, region_token_of(Snap)}
+            nodiff_token_of(Snap), nodiff_attr_of(Snap), {Snap, nodiff_token_of(Snap)}
         )
-     || Snap <- Regions
+     || Snap <- Marked
     ],
     %% The branch is named on every clause path, and the key whenever there is one.
-    [<<_/binary>> = Line | _] = [region_attr_of(S) || S <- region_snaps(Keyed)],
+    [<<_/binary>> = Line | _] = [nodiff_attr_of(S) || S <- nodiff_snaps(Keyed)],
     ?assertMatch({_, _}, binary:match(Line, ~".b1.k")),
-    [?assertMatch({_, _}, binary:match(region_attr_of(S), ~".b2")) || S <- region_snaps(Helpers)].
+    [?assertMatch({_, _}, binary:match(nodiff_attr_of(S), ~".b2")) || S <- nodiff_snaps(Helpers)].
 
-%% Two renders name the same region exactly when the diff keeps it: the same
+%% Two renders name the same az-nodiff element exactly when the diff keeps it: the same
 %% branch with new values keeps the name, another branch calling the same helper
 %% or a new `az_key` changes it.
-nodiff_region_attr_follows_same_region(Config) when is_list(Config) ->
+nodiff_token_follows_same_nodiff(Config) when is_list(Config) ->
     Attr = fun(Fun, B) ->
-        {_, Snap, _} = region_render(Fun, B),
-        [region_attr_of(S) || S <- region_snaps(Snap)]
+        {_, Snap, _} = nodiff_render(Fun, B),
+        [nodiff_attr_of(S) || S <- nodiff_snaps(Snap)]
     end,
     ?assertEqual(
         Attr(one_branch, #{n => 1, v => ~"a"}), Attr(one_branch, #{n => 2, v => ~"b"})
@@ -10239,11 +10239,11 @@ nodiff_region_attr_follows_same_region(Config) when is_list(Config) ->
     [K2, _, _] = Attr(keyed, #{on => true, type => ~"bar"}),
     ?assertNotEqual(K1, K2).
 
-%% An `?each` item whose root is a region is named too, with the item's own
+%% An `?each` item whose root is an az-nodiff element is named too, with the item's own
 %% `az_key`.
-nodiff_region_attr_item_key(Config) when is_list(Config) ->
+nodiff_token_item_key(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_region_attr_item). "
+        "-module(pt_nodiff_token_item). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'ul', [], ["
@@ -10258,15 +10258,15 @@ nodiff_region_attr_item_key(Config) when is_list(Config) ->
     ]),
     [[A], [B]] = Names,
     [F, _] = binary:split(A, ~"."),
-    ?assertEqual(arizona_template:region_token(F, undefined, 1), A),
-    ?assertEqual(arizona_template:region_token(F, undefined, 2), B).
+    ?assertEqual(arizona_template:nodiff_token(F, undefined, 1), A),
+    ?assertEqual(arizona_template:nodiff_token(F, undefined, 2), B).
 
 %% An unkeyed `?each` item is not named, bare or through `?html`: every item
 %% shares the one template, so a name would not say which item it is. Its root
 %% keeps the directive bare -- client-owned, never carried over.
-nodiff_region_attr_unkeyed_item(Config) when is_list(Config) ->
+nodiff_token_unkeyed_item(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_region_attr_unkeyed). "
+        "-module(pt_nodiff_token_unkeyed). "
         "-export([bare/1, wrapped/1]). "
         "bare(Bindings) -> "
         "    arizona_template:html({'ul', [], ["
@@ -10293,13 +10293,13 @@ nodiff_region_attr_unkeyed_item(Config) when is_list(Config) ->
 strip_markers(HTML) ->
     re:replace(HTML, ~"<!--/?az[^>]*-->| az=\"[^\"]*\"", ~"", [global, {return, binary}]).
 
-%% Only a region's own root is named: not the templates nested in it (they are
-%% part of it), not a layout, and not a target whose client keeps no regions.
-nodiff_region_attr_only_on_regions(Config) when is_list(Config) ->
+%% Only an az-nodiff element's own root is named: not the templates nested in it (they are
+%% part of it), not a layout, and not a target whose client keeps no az-nodiff elements.
+nodiff_token_only_on_nodiff_roots(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_region_attr_only). "
-        "-export([region/1, layout/1, native/1, fragment/1]). "
-        "region(Bindings) -> "
+        "-module(pt_nodiff_token_only). "
+        "-export([marked/1, layout/1, native/1, fragment/1]). "
+        "marked(Bindings) -> "
         "    arizona_template:html({'div', ['az-nodiff'], ["
         "        case arizona_template:get(on, Bindings) of "
         "            true -> {'p', [], [<<\"in\">>]}; "
@@ -10314,9 +10314,9 @@ nodiff_region_attr_only_on_regions(Config) when is_list(Config) ->
         "fragment(_Bindings) -> "
         "    arizona_template:html([{'p', ['az-nodiff'], [<<\"a\">>]}, {'p', [], [<<\"b\">>]}]). "
     ),
-    Region = iolist_to_binary(arizona_render:render_to_iolist(Mod:region(#{on => true}))),
-    ?assertMatch([_], binary:matches(Region, ~"az-nodiff")),
-    ?assertMatch({0, _}, binary:match(Region, ~"<div az-nodiff=")),
+    Marked = iolist_to_binary(arizona_render:render_to_iolist(Mod:marked(#{on => true}))),
+    ?assertMatch([_], binary:matches(Marked, ~"az-nodiff")),
+    ?assertMatch({0, _}, binary:match(Marked, ~"<div az-nodiff=")),
     Layout = iolist_to_binary(
         arizona_render:render_to_iolist(Mod:layout(#{inner_content => ~"page"}))
     ),
@@ -10324,7 +10324,7 @@ nodiff_region_attr_only_on_regions(Config) when is_list(Config) ->
     Native = iolist_to_binary(arizona_render:render_to_iolist(Mod:native(#{}))),
     ?assertEqual(nomatch, binary:match(Native, ~"az-nodiff")),
     %% A root of a multi-element fragment keeps its directive bare: the element the
-    %% author marked, no other, and no token -- it is not a single region.
+    %% author marked, no other, and no token -- it is not a single az-nodiff element.
     ?assertEqual(
         ~"<p az-nodiff>a</p><p>b</p>",
         iolist_to_binary(arizona_render:render_to_iolist(Mod:fragment(#{})))
@@ -10356,31 +10356,31 @@ nodiff_value_raises(Config) when is_list(Config) ->
         ]
     ].
 
-%% Every az-nodiff region snapshot under `Snap`, in render order.
-region_snaps(#{d := D}) ->
-    lists:append([region_snaps_val(V) || {_Az, V} <- D]).
+%% Every az-nodiff element snapshot under `Snap`, in render order.
+nodiff_snaps(#{d := D}) ->
+    lists:append([nodiff_snaps_val(V) || {_Az, V} <- D]).
 
-region_snaps_val({arizona_esc, V}) -> region_snaps_val(V);
-region_snaps_val(#{diff := false} = Snap) -> [Snap];
-region_snaps_val(#{s := _, d := _} = Snap) -> region_snaps(Snap);
-region_snaps_val(_V) -> [].
+nodiff_snaps_val({arizona_esc, V}) -> nodiff_snaps_val(V);
+nodiff_snaps_val(#{diff := false} = Snap) -> [Snap];
+nodiff_snaps_val(#{s := _, d := _} = Snap) -> nodiff_snaps(Snap);
+nodiff_snaps_val(_V) -> [].
 
-region_attr_of(#{d := [{undefined, {attr, ~"az-nodiff", Name}} | _]}) ->
+nodiff_attr_of(#{d := [{undefined, {attr, ~"az-nodiff", Name}} | _]}) ->
     Name.
 
-%% The token same_region/3's identity spells: the unscoped fingerprint (the scope
+%% The token same_nodiff/3's identity spells: the unscoped fingerprint (the scope
 %% prefix is the slot, which the client reads off the DOM), the branch and key.
-region_token_of(#{f := ScopedF} = Snap) ->
-    {Branch, Key} = maps:get(region, Snap, {undefined, undefined}),
+nodiff_token_of(#{f := ScopedF} = Snap) ->
+    {Branch, Key} = maps:get(nodiff, Snap, {undefined, undefined}),
     [F | _] = lists:reverse(binary:split(ScopedF, ~"-", [global])),
-    arizona_template:region_token(F, Branch, Key).
+    arizona_template:nodiff_token(F, Branch, Key).
 
-region_render(Fun, Bindings) ->
-    arizona_render:render(arizona_nodiff_regions:Fun(Bindings), #{}).
+nodiff_render(Fun, Bindings) ->
+    arizona_render:render(arizona_nodiff_slots:Fun(Bindings), #{}).
 
-region_diff(Fun, Bindings, Snap, Views, Changed) ->
+nodiff_diff(Fun, Bindings, Snap, Views, Changed) ->
     arizona_diff:diff(
-        arizona_nodiff_regions:Fun(Bindings), Snap, Views, maps:from_keys(Changed, true)
+        arizona_nodiff_slots:Fun(Bindings), Snap, Views, maps:from_keys(Changed, true)
     ).
 
 settled_stream(Stream) ->

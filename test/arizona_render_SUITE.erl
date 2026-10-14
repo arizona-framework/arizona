@@ -700,7 +700,7 @@ snapshot_html_matches_render_unprinted(Config) when is_list(Config) ->
 %% observes them, so it must declare exactly what the document render would have.
 %% Swept over every stateful fixture that mounts and renders with no bindings,
 %% which covers nested templates, plain-list and stream eaches, child views,
-%% nodiff regions and opaque dynamic commands.
+%% nodiff az-nodiff elements and opaque dynamic commands.
 snapshot_observes_like_render(Config) when is_list(Config) ->
     %% Unarmed, the collector drops every observation and both sides drain
     %% `{[], []}`, which would hide a snapshot that observes nothing.

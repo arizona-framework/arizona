@@ -583,7 +583,7 @@ live_connected_bad_value_mounts(Config) when is_list(Config) ->
 %% A crash in a slot while the live process mounts names the template line, as
 %% the same crash does at SSR: a top-level value, an attribute, an `?each` item,
 %% a conditional branch, a `?stateless` body, an `?each` source and a slot that
-%% holds an az-nodiff region.
+%% holds an az-nodiff element.
 live_mount_crash_location(Config) when is_list(Config) ->
     process_flag(trap_exit, true),
     [
@@ -596,7 +596,7 @@ live_mount_crash_location(Config) when is_list(Config) ->
     ].
 
 %% The same crashes, reached by the diff after an event breaks the binding. An
-%% `?each` source and an az-nodiff region slot are re-evaluated through their
+%% `?each` source and an az-nodiff element slot are re-evaluated through their
 %% own diff paths, not the plain slot one.
 live_diff_crash_location(Config) when is_list(Config) ->
     process_flag(trap_exit, true),
@@ -613,7 +613,7 @@ live_diff_crash_location(Config) when is_list(Config) ->
     ].
 
 crash_cases() ->
-    [top, attr, item, branch, sless, source, region].
+    [top, attr, item, branch, sless, source, nodiff].
 
 crash_bindings(item) -> #{items => [~"bad"]};
 crash_bindings(Case) -> #{Case => ~"bad"}.

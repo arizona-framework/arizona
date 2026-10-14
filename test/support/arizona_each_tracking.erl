@@ -23,7 +23,7 @@ change to it must reach the items. Each function is a distinct scenario driven b
 -export([nested_stream_in_stream/1]).
 -export([unrelated/1]).
 -export([nodiff_item/1]).
--export([nodiff_region/1]).
+-export([nodiff_slot/1]).
 
 list(Bindings) ->
     ?html({ul, [], [?each(fun(I) -> {li, [], [I, ?get(suffix)]} end, ?get(items))]}).
@@ -185,8 +185,8 @@ unrelated(Bindings) ->
 nodiff_item(Bindings) ->
     ?html({ul, [], [?each(fun(I) -> {li, ['az-nodiff'], [I, ?get(suffix)]} end, ?get(items))]}).
 
-%% So does a whole az-nodiff region holding the each.
-nodiff_region(Bindings) ->
+%% So does a whole az-nodiff element holding the each.
+nodiff_slot(Bindings) ->
     ?html(
         {'div', [], [
             {p, [], [?get(other)]},
