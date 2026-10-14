@@ -62,47 +62,75 @@ const WS_CLOSE_CRASH = 4500;
 
 /**
  * Crash-reload loop guard: a WS_CLOSE_CRASH triggers a full-page reload, so a view
- * that crashes deterministically on mount would reload forever. Allow at most
- * CRASH_RELOAD_MAX reloads inside CRASH_RELOAD_WINDOW_MS (tracked in sessionStorage,
- * reset on a clean connect) before giving up.
+ * that crashes deterministically would reload forever. Allow at most
+ * CRASH_RELOAD_MAX crash reloads (counted in sessionStorage, so the count survives
+ * the reload) before giving up. The count clears only once a connection has stayed
+ * up for CRASH_RELOAD_STABLE_MS: the server's crash close always arrives after the
+ * socket opened, so resetting on open would never let the guard trip, and a
+ * time-window count would let a slow loop reload forever.
  */
 const CRASH_RELOAD_MAX = 3;
-const CRASH_RELOAD_WINDOW_MS = 10000;
+const CRASH_RELOAD_STABLE_MS = 10000;
 const CRASH_RELOAD_KEY = 'arizona:crash-reloads';
 
+/** @type {ReturnType<typeof setTimeout> | null} */
+let _crashResetTimer = null;
+
+/** Clear the crash count once the connection that just opened proves stable. */
+function armCrashReset() {
+    disarmCrashReset();
+    _crashResetTimer = setTimeout(() => {
+        _crashResetTimer = null;
+        try {
+            sessionStorage.removeItem(CRASH_RELOAD_KEY);
+        } catch {
+            /* sessionStorage unavailable -- nothing to reset */
+        }
+    }, CRASH_RELOAD_STABLE_MS);
+}
+
+function disarmCrashReset() {
+    if (_crashResetTimer !== null) clearTimeout(_crashResetTimer);
+    _crashResetTimer = null;
+}
+
 /**
- * Reload after a server-side crash close, unless we have already reloaded
- * CRASH_RELOAD_MAX times within the window (a deterministic crash loop): then log
- * an error and stay put with the `az-disconnected` state already set by the caller.
+ * Reload after a server-side crash close, unless CRASH_RELOAD_MAX crash reloads
+ * already happened with no stable connection in between (a deterministic crash
+ * loop): then log once and stay put with the `az-disconnected` state already set
+ * by the caller. The worker keeps reconnecting with backoff, so a fixed server
+ * still recovers the page.
  */
 function crashReload() {
-    /** @type {{count?: number, first?: number}} */
-    let rec = {};
+    let count = 0;
     try {
         const raw = sessionStorage.getItem(CRASH_RELOAD_KEY);
-        if (raw) rec = JSON.parse(raw);
+        if (raw) count = JSON.parse(raw).count || 0;
     } catch {
-        /* no/invalid record -- treat as a fresh window */
+        /* no/invalid record -- start counting afresh */
     }
-    const now = Date.now();
-    const count = rec.first && now - rec.first < CRASH_RELOAD_WINDOW_MS ? rec.count || 0 : 0;
     if (count >= CRASH_RELOAD_MAX) {
-        console.error(
-            `[arizona] WebSocket closed with a crash ${count} times within ` +
-                `${CRASH_RELOAD_WINDOW_MS}ms; not reloading again -- the view likely ` +
-                `crashes deterministically on mount server-side.`,
-        );
+        if (count === CRASH_RELOAD_MAX) {
+            console.error(
+                `[arizona] WebSocket closed with a crash ${count} times without a ` +
+                    `stable connection; not reloading again -- the view likely ` +
+                    `crashes deterministically server-side.`,
+            );
+            writeCrashCount(count + 1);
+        }
         return;
     }
+    writeCrashCount(count + 1);
+    location.reload();
+}
+
+/** @param {number} count */
+function writeCrashCount(count) {
     try {
-        sessionStorage.setItem(
-            CRASH_RELOAD_KEY,
-            JSON.stringify({ count: count + 1, first: count === 0 ? now : rec.first }),
-        );
+        sessionStorage.setItem(CRASH_RELOAD_KEY, JSON.stringify({ count }));
     } catch {
         /* sessionStorage unavailable -- reload anyway, just without the guard */
     }
-    location.reload();
 }
 
 // ---------------------------------------------------------------------------
@@ -3390,13 +3418,7 @@ function connect(endpoint, params = {}) {
                     _connected = true;
                     document.documentElement.classList.add('az-connected');
                     document.documentElement.classList.remove('az-disconnected');
-                    // A clean connect means any prior crash loop is broken -- reset
-                    // the crash-reload guard so a future genuine crash reloads again.
-                    try {
-                        sessionStorage.removeItem(CRASH_RELOAD_KEY);
-                    } catch {
-                        /* sessionStorage unavailable -- nothing to reset */
-                    }
+                    armCrashReset();
                     if (!msg[1]) {
                         mountHooks(document);
                     }
@@ -3405,6 +3427,7 @@ function connect(endpoint, params = {}) {
                 case 2: {
                     // [2, closeCode]
                     _connected = false;
+                    disarmCrashReset();
                     document.documentElement.classList.add('az-disconnected');
                     document.documentElement.classList.remove('az-connected');
                     if (msg[1] === WS_CLOSE_CRASH) {
@@ -3478,6 +3501,7 @@ function connect(endpoint, params = {}) {
                 _worker.terminate();
                 _worker = null;
                 _connected = false;
+                disarmCrashReset();
                 // Reflect the dropped connection so a bfcache-restored snapshot
                 // shows disconnected until `pageshow` reconnects (the worker is
                 // killed abruptly, so no [2, closeCode] arrives to do this).
@@ -3509,6 +3533,7 @@ function connect(endpoint, params = {}) {
             _worker = null;
         }
         _connected = false;
+        disarmCrashReset();
         _pendingScroll = null;
         _pendingTransition = null;
         _connectQs = '';

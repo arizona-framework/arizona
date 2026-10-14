@@ -1150,7 +1150,7 @@ treats **any non-1000 code as reconnectable**:
 | `{shutdown, drain}` | `?CLOSE_GOING_AWAY` (1001) | **Reconnects** -- the deliberate drain path (RFC 6455 §7.4 "going away"); the main thread preserves form state |
 | `normal` | 1000 | No reconnect |
 | `shutdown` / `{shutdown, _}` (any other reason) | 1000 | No reconnect -- opt into the reconnect path by exiting `{shutdown, drain}` explicitly |
-| anything else (a crash) | `?CLOSE_CRASH` (4500) | **Reloads the page** -- the main thread's `crashReload()` calls `location.reload()`, at most 3 times within 10 s (counted in `sessionStorage`, reset when a socket opens); the reason is logged. Crash remount is deliberately not attempted server-side |
+| anything else (a crash) | `?CLOSE_CRASH` (4500) | The client reloads the page, at most 3 times with no stable (10 s) connection in between, then stays disconnected while the worker keeps reconnecting with backoff; the reason is logged. Crash remount is deliberately not attempted server-side |
 
 A raise inside the socket itself closes the same way: `handle_in/2` and `handle_info/2` each catch
 anything their handling raises -- a handler crash, or a frame that cannot be JSON-encoded, such as
