@@ -56,4 +56,23 @@ test.describe('native (JSON) wire -- counter', () => {
             client.close();
         }
     });
+
+    test('runs every command of a tap prop holding a list', async ({ baseURL }) => {
+        const client = new NativeClient(baseURL, '/native/counter');
+        await client.connect();
+        try {
+            // The "+2" button's on_tap is a list of two inc commands; each one is a
+            // round trip, so the count only reaches 2 if the client ran both.
+            const plus2 = client.tree().children.find((c) => c.children?.[0] === '+2');
+            expect(plus2.on_tap).toEqual([
+                [0, 'inc'],
+                [0, 'inc'],
+            ]);
+            client.tap(plus2);
+            const after = await client.waitFor((t) => t.children[0].children[1] === '2');
+            expect(after.children[0].children).toEqual(['Count: ', '2']);
+        } finally {
+            client.close();
+        }
+    });
 });

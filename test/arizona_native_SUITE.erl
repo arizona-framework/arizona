@@ -228,15 +228,20 @@ dynamic_event_prop_is_json_array(Config) when is_list(Config) ->
         "        {'Button', [{on_tap, az:get(cmd, Bindings)}], [<<\"B\">>]}"
         "    ]}). "
     ),
-    %% One command per prop: the native clients run a single command, not a list.
-    Cmd = arizona_android:navigate(~"/n"),
-    T = Mod:render(#{ev => ~"a<b\"c", cmd => Cmd}),
+    %% A list of commands arrives as a list of arrays, which the native clients
+    %% run in order, as the web client does.
+    Cmds = [arizona_android:push_event(~"save"), arizona_android:navigate(~"/n")],
+    T = Mod:render(#{ev => ~"a<b\"c", cmd => Cmds}),
     {Live, Snap} = arizona_render:render(T),
     #{~"children" := [A, B]} = simulate_interleave(arizona_render:fingerprint_payload(Snap)),
     ?assertEqual([0, ~"a<b\"c"], maps:get(~"on_tap", A)),
-    ?assertEqual([10, ~"/n"], maps:get(~"on_tap", B)),
+    ?assertEqual([[0, ~"save"], [10, ~"/n"]], maps:get(~"on_tap", B)),
     ?assertMatch(
-        #{~"children" := [#{~"on_tap" := [0, ~"a<b\"c"]}, #{~"on_tap" := [10, ~"/n"]}]},
+        #{
+            ~"children" := [
+                #{~"on_tap" := [0, ~"a<b\"c"]}, #{~"on_tap" := [[0, ~"save"], [10, ~"/n"]]}
+            ]
+        },
         json:decode(iolist_to_binary(Live))
     ).
 

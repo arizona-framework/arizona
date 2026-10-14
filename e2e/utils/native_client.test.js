@@ -61,6 +61,33 @@ describe('native client effect dispatch', () => {
         const { client } = clientWithRecorder();
         expect(() => client._runEffect([99, 'nope'], true)).toThrow();
     });
+
+    it('runs every command of a tap prop holding a list, in order', () => {
+        const { client, sent } = clientWithRecorder('root_view');
+        const node = {
+            __view: 'child_view',
+            on_tap: [
+                [EFFECT_PUSH_EVENT, 'save', { id: '7' }],
+                [EFFECT_NAVIGATE, '/done'],
+            ],
+        };
+        client.tap(node);
+        expect(sent.map((f) => JSON.parse(f))).toEqual([
+            ['child_view', 'save', { id: '7' }],
+            ['navigate', { path: '/done', qs: '' }],
+        ]);
+    });
+
+    // The server ships one command per effect today; this mirrors the web client,
+    // whose applyEffects runs every effect through the same interpreter as a tap.
+    it('runs a server effect holding a list, as the shared interpreter does', () => {
+        const { client, sent } = clientWithRecorder();
+        client._runEffectSafe([
+            [EFFECT_PUSH_EVENT, 'a'],
+            [EFFECT_PUSH_EVENT, 'b'],
+        ]);
+        expect(sent.map((f) => JSON.parse(f)[1])).toEqual(['a', 'b']);
+    });
 });
 
 // --------------------------------------------------------------------------

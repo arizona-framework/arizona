@@ -171,7 +171,7 @@ class AzClient(baseUrl: String, path: String) {
     // throw is the development signal that a template built a bad command.
     private fun runEffectSafe(cmd: JsonElement) {
         try {
-            runEffect(cmd.jsonArray, strict = false)
+            for (one in commands(cmd.jsonArray)) runEffect(one, strict = false)
         } catch (e: Exception) {
             Log.w(TAG, "effect $cmd failed; skipping", e)
         }
@@ -245,7 +245,9 @@ class AzClient(baseUrl: String, path: String) {
     /** Fire the command read from a node's tap prop (e.g. `on_tap`), routing the
      *  event to the node's enclosing view (the root, or a stateful child). */
     fun tap(node: Node, prop: String = "on_tap") {
-        node.props[prop]?.jsonArray?.let { runEffect(it, strict = true, target = node.viewId) }
+        node.props[prop]?.jsonArray?.let { cmds ->
+            for (cmd in commands(cmds)) runEffect(cmd, strict = true, target = node.viewId)
+        }
     }
 
     // Run one effect command (a tap prop or a server "e" entry). `strict` errors
@@ -534,3 +536,11 @@ class AzClient(baseUrl: String, path: String) {
     private fun resolve(target: String): Node? =
         views[target.substringBefore(':')]?.get(target.substringAfter(':'))
 }
+
+// A command value holds one command (`[0, "inc"]`) or a list of them
+// (`[[0, "inc"], [10, "/n"]]`), told apart by the first element exactly as the
+// web client's executeJS does: a command opens with its op code, a list with a
+// command.
+@VisibleForTesting
+internal fun commands(cmds: JsonArray): List<JsonArray> =
+    if (cmds.firstOrNull() is JsonArray) cmds.map { it.jsonArray } else listOf(cmds)
