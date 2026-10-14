@@ -204,7 +204,7 @@ What a dynamic boolean attribute means on this backend's wire. `presence` (HTML)
 renders the bare attribute and `false` removes it. `value`: a boolean is a typed prop
 value, sent as JSON `true`/`false` and present in both states, the same shape a static
 boolean (`attr_bool/2`) renders. Asked by the parse transform at compile time, which
-wraps the attribute expression in `arizona_template:bool_attr/1` for a `value` backend.
+wraps the attribute expression in an internal boolean tag for a `value` backend.
 """.
 -callback boolean_attrs() -> presence | value.
 
