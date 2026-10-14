@@ -2,5 +2,5 @@ erlang 29.1.2
 rebar 3.27.3
 nodejs 24.22.0
 java temurin-25.0.4+101.0.LTS
-gradle 8.14.6
+gradle 9.8.1
 rust 1.99.0

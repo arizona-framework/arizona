@@ -1,13 +1,12 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.compose.compiler)
 }
 
 android {
     namespace = "dev.arizona.client"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24

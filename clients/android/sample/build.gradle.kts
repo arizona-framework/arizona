@@ -2,13 +2,12 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
 }
 
 android {
     namespace = "dev.arizona.sample"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.arizona.sample"
@@ -61,7 +60,7 @@ dependencies {
 // the dev loop nor CI runs `adb reverse` by hand (it's the single source of
 // truth for the tunnel; adb reverse resets on reconnect/reboot/adb restart).
 // Harmless if there's no device or the tunnel already exists.
-val adbReverse by tasks.registering(Exec::class) {
+val adbReverse = tasks.register<Exec>("adbReverse") {
     val sdkDir = System.getenv("ANDROID_HOME")
         ?: System.getenv("ANDROID_SDK_ROOT")
         ?: rootProject.file("local.properties").takeIf { it.exists() }?.let { f ->
