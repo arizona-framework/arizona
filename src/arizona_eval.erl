@@ -378,6 +378,8 @@ format_error(restricted_key_modified, [{_M, _F, [Key, Handler], _Info} | _]) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
+-spec eval_one(Dynamic) -> {arizona_template:az(), term()} when
+    Dynamic :: arizona_template:dynamic().
 eval_one({Az, _Spec, _Loc} = Dyn) ->
     {Az, dyn_value(Dyn)};
 eval_one({Az, _Spec} = Dyn) ->
@@ -386,6 +388,8 @@ eval_one({Az, _Spec} = Dyn) ->
 %% Like eval_one/1 but builds the 3-tuple `{Az, Val, #{}}` directly, for the
 %% per-item snapshot paths (render_list_items_simple, render_map_items_simple,
 %% render_stream_item_simple), which track no deps, so the empty map is shared.
+-spec eval_one_triple(Dynamic) -> {arizona_template:az(), term(), #{}} when
+    Dynamic :: arizona_template:dynamic().
 eval_one_triple({Az, _Spec, _Loc} = Dyn) ->
     {Az, dyn_value(Dyn), #{}};
 eval_one_triple({Az, _Spec} = Dyn) ->
@@ -393,7 +397,7 @@ eval_one_triple({Az, _Spec} = Dyn) ->
 
 %% The value a dynamic evaluates to; eval_one/1 and eval_one_triple/1 add the address.
 -spec dyn_value(Dynamic) -> term() when
-    Dynamic :: tuple().
+    Dynamic :: arizona_template:dynamic().
 dyn_value({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
     {attr, Name, eval_val(Fun())};
 dyn_value({Az, Spec, _Loc}) ->

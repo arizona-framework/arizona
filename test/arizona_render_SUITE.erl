@@ -733,11 +733,7 @@ ssr_cross_target_layout_raises(Config) when is_list(Config) ->
             arizona_counter, #{layouts => [{arizona_native_layout, render}]}
         )
     ),
-    %% A backendless inner layer does not hide an html outer layer from a native
-    %% page: the outer layer is still refused. This pins that the check does not
-    %% stop at the inner layer's missing backend; it does not distinguish checking
-    %% against the page from checking against the target the inner layer passes
-    %% through, since a backendless layer passes the page's target unchanged.
+    %% A backendless inner layer does not hide an html outer layer from a native page.
     ?assertError(
         {cross_target_layout, arizona_layout, render, arizona_html, arizona_native},
         arizona_render:render_view_to_iolist(
