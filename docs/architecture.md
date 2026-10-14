@@ -101,6 +101,8 @@ HTML output and rendering.
 - `render_view_to_iolist/2` -- production HTTP SSR for views: `render_view_to_iolist(Handler, Opts)`.
   Mounts via `arizona_stateful:call_mount/2`, applies `on_mount` hooks, optionally
   wraps in a layout
+- `render_view/2` -- the same, returning `{ContentType, Page}`: the outermost rendered
+  template's backend names the document's media type (`content_type/0`)
 - `resolve_id/1` -- resolves a binary id (passthrough) or a `#{s, d}` template (renders to binary)
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
 - `fingerprint_payload/1` -- convert a snapshot to fingerprint wire format
@@ -1391,8 +1393,8 @@ request/transport coupling.
 
 Shared HTTP render pipeline that serves an Arizona view as the initial page response. Wraps the
 native request in an `arizona_req:request()`, runs any route middlewares, and calls
-`arizona_render:render_view_to_iolist/2`. The transport handler translates the returned result
-into its native reply shape.
+`arizona_render:render_view/2` (`render_view_to_iolist/2` paired with the document's media
+type). The transport handler translates the returned result into its native reply shape.
 
 - `render/3(Handler, Req, Opts)` -- returns one of (each threads the request back so the
   transport can flush any middleware-stashed response headers/cookies):
@@ -1400,9 +1402,12 @@ into its native reply shape.
     (`arizona_req:halted_redirect/1`) or status off the request via
     `arizona_roadrunner_resp:halt/1`, which answers a halt carrying neither with `403`
     (one default for pages, controllers, and the WS upgrade alike)
-  - `{ok, resp_status(), iolist(), Request}` -- rendered page body; the status defaults to 200,
-    but a view or middleware may stash a non-200 (e.g. 401)
-  - `{error, 500, iolist(), Request}` -- rendered error page body (crash or stashed hot-reload error)
+  - `{ok, resp_status(), ContentType, iolist(), Request}` -- rendered page body; the status
+    defaults to 200, but a view or middleware may stash a non-200 (e.g. 401). `ContentType` is
+    the document's media type, answered by its render backend's `content_type/0` (HTML for an
+    `?html` view, `application/json` for a `?native` one)
+  - `{error, 500, ContentType, iolist(), Request}` -- rendered error page body (crash or stashed
+    hot-reload error), under the error page's own media type
 
 `arizona_roadrunner_http` consumes this helper and maps the three result shapes into roadrunner's
 reply tuple.
@@ -1458,8 +1463,8 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
 **SSR (HTTP):** `arizona_roadrunner_http:handle/1` delegates to `arizona_http:render/3`, which wraps
 the native req in an `arizona_req:request()`, runs any route middlewares
 (`arizona_middleware:apply_middlewares/3`), then calls
-`arizona_render:render_view_to_iolist(Handler, Opts)` where Opts may contain
-`layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view_to_iolist/2`
+`arizona_render:render_view(Handler, Opts)` where Opts may contain
+`layouts => [{Mod, Fun}]`, `bindings => map()`, and `on_mount => [...]`. `render_view/2`
 mounts the page via `arizona_stateful:call_mount/2`, applies `on_mount` hooks,
 renders to page HTML, then optionally injects the rendered page into mount bindings as
 `inner_content` -- as an opaque nested template, not iodata (see **Slots** below)

@@ -32,6 +32,7 @@ identical to the previous inlined emission.
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
+-export([content_type/0]).
 -export([supports_local/0]).
 -export([escape/1]).
 -export([raw_text/2]).
@@ -262,6 +263,8 @@ scope_static(Fp, Prefix, S0) ->
 supports_list_patch() -> true.
 
 target() -> html.
+
+content_type() -> ~"text/html; charset=utf-8".
 
 supports_local() -> true.
 

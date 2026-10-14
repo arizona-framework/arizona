@@ -47,6 +47,7 @@ JSON-encoding the wire value. On the wire itself a value stays raw
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
+-export([content_type/0]).
 -export([supports_local/0]).
 -export([escape/1]).
 -export([render_attr/2]).
@@ -169,6 +170,8 @@ scope_static(Fp, Prefix, S0) ->
 supports_list_patch() -> false.
 
 target() -> native.
+
+content_type() -> ~"application/json".
 
 supports_local() -> false.
 

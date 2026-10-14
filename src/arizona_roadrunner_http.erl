@@ -6,7 +6,7 @@ server-side render.
 Wired up by `arizona_roadrunner_router` for every Arizona route. The
 handler delegates the full render pipeline (wrap roadrunner req in an
 `arizona_req:request()`, run middlewares, call
-`arizona_render:render_view_to_iolist/2`, handle crashes + stashed
+`arizona_render:render_view/2`, handle crashes + stashed
 hot-reload compile errors) to `arizona_http:render/3`, and translates
 its result into roadrunner's `{Response, Req}` reply shape.
 """.
@@ -25,7 +25,7 @@ its result into roadrunner's `{Response, Req}` reply shape.
 
 -doc """
 Roadrunner `handle/1` callback. Renders the configured Arizona
-handler and replies with HTML.
+handler and replies with the document under its render target's media type.
 """.
 -spec handle(Req) -> {Response, Req} when
     Req :: roadrunner_req:request(),
@@ -43,14 +43,11 @@ handle(Req) ->
     case arizona_http:render(H, ArzReq, State) of
         {halt, HaltReq} ->
             {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
-        {ok, Status, Body, ArzReq1} ->
+        {Outcome, Status, ContentType, Body, ArzReq1} when Outcome =:= ok; Outcome =:= error ->
             {
-                arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)),
-                arizona_req:raw(ArzReq1)
-            };
-        {error, Status, Body, ArzReq1} ->
-            {
-                arizona_roadrunner_resp:flush(ArzReq1, roadrunner_resp:html(Status, Body)),
+                arizona_roadrunner_resp:flush(
+                    ArzReq1, roadrunner_resp:body(Status, ContentType, Body)
+                ),
                 arizona_req:raw(ArzReq1)
             }
     end.
