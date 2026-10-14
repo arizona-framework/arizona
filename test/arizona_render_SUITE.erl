@@ -1221,7 +1221,7 @@ ssr_escaped_scalars_exact(Config) when is_list(Config) ->
     #{f := F} = Tmpl,
     ?assertEqual(
         <<
-            "<div az-region=\"",
+            "<div az-nodiff=\"",
             F/binary,
             "\"><p>&lt;&amp;&quot;&#39;&gt;</p>"
             "<ul><li>&lt;&amp;&quot;&#39;&gt;</li><li>5</li><li>-3</li></ul></div>"

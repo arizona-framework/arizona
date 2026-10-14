@@ -1823,12 +1823,12 @@ branch, a `?stateless` body, a list item). That holds when a switch replaces the
 child with the same handler at the same id keeps its state, and the new props are ignored. A child
 still handles its own events.
 
-**Wholesale re-renders keep the region.** Some changes re-render the markup around a region
-whole instead of patching it: a plain-list `?each` that falls back to its container `?OP_TEXT`
-(always, when its items are themselves regions), a stream's container render, and the
-`?OP_REPLACE` that resyncs a view after a reconnect. The new markup holds a fresh copy of every
-region in it, so the client carries the old ones over: each region's root names its identity in an
-`az-region` attribute (the fingerprint, branch and `az_key` above, spelled by
+**Wholesale re-renders keep the region.** Some changes re-render the markup around a region whole
+instead of patching it: a plain-list `?each` that falls back to its container `?OP_TEXT` (always,
+when its items are themselves regions), a stream's container render, and the `?OP_REPLACE` that
+resyncs a view after a reconnect. The new markup holds a fresh copy of every region in it, so the
+client carries the old ones over: each region's root keeps its directive in the HTML with its
+identity as the value, `az-nodiff="TOKEN"` (the fingerprint, branch and `az_key` above, spelled by
 `arizona_template:region_token/3`), and a region whose old and new copies sit at the same place
 under the same name keeps its existing DOM -- the old element is moved into the new markup in place
 of the new copy, and its hook sees neither `destroyed()` nor `mounted()`. "The same place" is the
@@ -1838,7 +1838,8 @@ under the same id. A region the new render does not name there is replaced as be
 
 **List items are kept only when keyed.** Unkeyed items share one template, so nothing tells which
 old item a new one is -- that is exactly why such a list re-renders wholesale. An unkeyed `?each`
-item whose root is a region is therefore not named at all, and when two regions inside unkeyed
+item whose root is a region therefore keeps a bare `az-nodiff` -- client-owned, never carried
+over, and nothing inside it is either -- and when two regions inside unkeyed
 items share a name and place, neither is kept: both remount for their own item. Give the item an
 `az_key` (`{li, ['az-nodiff', {az_key, Id}], [...]}`) and its widget follows it through adds,
 drops, reorders and a reconnect.
@@ -1858,9 +1859,11 @@ the fresh state names. A navigate is a new page and keeps nothing.
 - A switch above the region's slot to a wrapper with different statics moves the region into a
   different slot, so it is remounted; a wrapper with the same statics keeps it (see "What the same
   region means"), and `az_key` remounts it.
-- Only a template whose single root element carries `az-nodiff` is named. A multi-root nodiff
-  fragment, and the `?native` and `?terminal` targets (whose clients keep no regions), are
-  re-created by a wholesale re-render.
+- Only a template whose single root element carries `az-nodiff` is named. A root of a
+  multi-element nodiff fragment keeps a bare `az-nodiff`, and the `?native` and `?terminal`
+  targets (whose clients keep no regions) emit none; all are re-created by a wholesale re-render.
+- The directive is written bare. Its value in the HTML is the compiler's, so an authored one
+  (`{'az-nodiff', V}`, `{az_nodiff, true}`) is a compile error.
 - The first paint is the server's placeholder. Mount the component from the hook's `mounted()`
   rather than hydrating the server markup; the server never rendered the component itself.
 - `az-*` attributes inside the widget's own DOM are markup Arizona did not render: the client

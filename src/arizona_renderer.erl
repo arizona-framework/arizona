@@ -191,11 +191,12 @@ rejects `?local` at compile time when `false`.
 -doc """
 Whether this backend's client carries an az-nodiff region over a wholesale
 re-render of its surroundings -- a reconnect resync or a container `?OP_TEXT` --
-when the new render holds the same region. When `true`, the parse transform puts
-an `az-region` attribute naming the region's identity
-(`arizona_template:region_token/3`) on the root of every az-nodiff region, which
-is what the client matches regions by. A backend capability, declared by each
-backend.
+when the new render holds the same region. When `true`, the parse transform keeps
+the `az-nodiff` directive in the output as a compiler-owned attribute: on a
+keepable region's root its value names the region's identity
+(`arizona_template:region_token/3`), which is what the client matches regions by;
+on other client-owned roots it is bare, and never kept. When `false` the directive
+is stripped. A backend capability, declared by each backend.
 """.
 -callback supports_region_keep() -> boolean().
 

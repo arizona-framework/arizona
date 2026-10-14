@@ -25,6 +25,8 @@ test.describe('unkeyed items', () => {
     test.beforeEach(async ({ page }) => open(page, '/nodiff-widget-list'));
 
     test('dropping the first item remounts the rest for their own items', async ({ page }) => {
+        // A bare marker: client-owned, but nothing names which item it is.
+        await expect(items(page).first()).toHaveAttribute('az-nodiff', '');
         await page.locator('#drop-first').click();
         await expect(kinds(page)).toHaveText(['b']);
         await expect(input(page, 0)).toHaveValue('');
@@ -65,6 +67,8 @@ test.describe('keyed items', () => {
     });
 
     test('dropping the first item destroys only its widget', async ({ page }) => {
+        // The region's token: its identity, the item's key included.
+        await expect(items(page).first()).toHaveAttribute('az-nodiff', /\.k/);
         await page.locator('#drop-first').click();
         await expect(kinds(page)).toHaveText(['b']);
         await expect(input(page, 0)).toHaveValue('second');

@@ -92,7 +92,7 @@ render(Bindings) ->
 -ignore_xref([format_error/2]).
 %% Emitted by the parse transform for a conditional branch value it cannot see.
 -ignore_xref([branch/2]).
-%% Emitted by the parse transform as an az-nodiff region root's `az-region` value.
+%% Emitted by the parse transform as an az-nodiff region root's `az-nodiff` value.
 -ignore_xref([region_token/3]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
@@ -758,11 +758,11 @@ branch value it cannot see at compile time.
     Branch :: pos_integer(),
     Value :: term(),
     Value1 :: term().
-branch(Branch, #{s := _, d := [{Az, {attr, ~"az-region", _}, Loc} | D], f := F} = Tmpl) ->
-    %% The region's `az-region` attribute -- its root's first dynamic, the parse
-    %% transform puts it there -- names the branch too.
+branch(Branch, #{s := _, d := [{Az, {attr, ~"az-nodiff", _}, Loc} | D], f := F} = Tmpl) ->
+    %% The region's token -- the `az-nodiff` value, its root's first dynamic (the
+    %% parse transform puts it there) -- names the branch too.
     Key = maps:get(az_key, Tmpl, undefined),
-    Name = {Az, {attr, ~"az-region", fun() -> region_token(F, Branch, Key) end}, Loc},
+    Name = {Az, {attr, ~"az-nodiff", fun() -> region_token(F, Branch, Key) end}, Loc},
     Tmpl#{branch => Branch, d => [Name | D]};
 branch(Branch, #{s := _, d := _, diff := false} = Tmpl) ->
     Tmpl#{branch => Branch};
@@ -772,7 +772,7 @@ branch(_Branch, Value) ->
     Value.
 
 -doc """
-The value of the `az-region` attribute on the root of an az-nodiff region: its
+The value of the `az-nodiff` attribute on the root of an az-nodiff region: its
 identity as `same_region/3` decides it -- the template's fingerprint `F`, the
 conditional branch that produced it and its `az_key` -- spelled as one opaque
 token. The client matches regions by it, so a wholesale re-render around a

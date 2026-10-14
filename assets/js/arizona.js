@@ -937,9 +937,11 @@ function forEachElementBetweenMarkers(startMarker, fn) {
 // by the client (a widget mounted from its `az-hook`). When something around it is
 // re-rendered wholesale -- a container `OP_TEXT`, or the `OP_REPLACE` that resyncs
 // a reconnected view -- the new markup holds a fresh copy of every region in it.
-// The server names each region's identity on its root (`az-region`, built by
-// `arizona_template:region_token/3` from the fingerprint, branch and `az_key` the
-// diff keeps a region by), and here a region whose old and new copies sit at the
+// The server names each region's identity as the value of the `az-nodiff` attribute
+// on its root (built by `arizona_template:region_token/3` from the fingerprint,
+// branch and `az_key` the diff keeps a region by); a bare `az-nodiff` marks
+// client-owned markup that cannot be told apart from its siblings (an unkeyed list
+// item) and is never kept. Here a region whose old and new copies sit at the
 // same place under the same name is carried over: the old DOM moves into the new
 // markup in place of the new copy, and its hooks see neither `destroyed()` nor
 // `mounted()`. Anything else is replaced as before.
@@ -954,7 +956,7 @@ function forEachElementBetweenMarkers(startMarker, fn) {
 /** No region kept. Shared, never written. */
 const NO_REGIONS = /** @type {ReadonlySet<Element>} */ (new Set());
 
-const REGION_ATTR = 'az-region';
+const NODIFF_ATTR = 'az-nodiff';
 
 /**
  * Cheap pre-check: can this markup name a region at all? Keeps the common
@@ -963,7 +965,7 @@ const REGION_ATTR = 'az-region';
  * @returns {boolean}
  */
 function mayNameRegion(html) {
-    return html.includes(` ${REGION_ATTR}="`);
+    return html.includes(` ${NODIFF_ATTR}="`);
 }
 
 /**
@@ -1013,7 +1015,8 @@ function regionsByIdentity(tops, parent) {
     /** @type {Map<Node, string>} */
     const slots = new Map();
     slotsOf(tops, slots);
-    for (const r of parent.querySelectorAll(`[${REGION_ATTR}]`)) {
+    // Every marked root, bare ones too: a named region inside one is part of it.
+    for (const r of parent.querySelectorAll(`[${NODIFF_ATTR}]`)) {
         const id = regionIdentity(r, parent, slots);
         if (id === null) continue;
         const list = byId.get(id);
@@ -1027,19 +1030,21 @@ function regionsByIdentity(tops, parent) {
  * A region's identity: its name plus, for it and each ancestor below `parent`,
  * the slot it sits in and its `az-key` / view id -- the region's own included,
  * since a child view whose root is the region is that view only under its id.
- * Null when an ancestor is itself a region (the outer one carries this one), or
- * when the region is outside the range (`slots` holds the range's tops).
+ * Null when the region is bare (never kept), when an ancestor is itself marked
+ * (the outer one carries this one), or when the region is outside the range
+ * (`slots` holds the range's tops).
  * @param {Element} region
  * @param {ParentNode} parent
  * @param {Map<Node, string>} slots
  * @returns {string|null}
  */
 function regionIdentity(region, parent, slots) {
-    let id = /** @type {string} */ (region.getAttribute(REGION_ATTR));
+    let id = /** @type {string} */ (region.getAttribute(NODIFF_ATTR));
+    if (id === '') return null;
     /** @type {Element} */
     let node = region;
     for (;;) {
-        if (node !== region && node.hasAttribute(REGION_ATTR)) return null;
+        if (node !== region && node.hasAttribute(NODIFF_ATTR)) return null;
         const key = node.getAttribute('az-key') ?? '';
         const view = node.hasAttribute('az-view') ? node.id : '';
         id = `${key}#${view}/${id}`;

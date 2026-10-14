@@ -38,7 +38,7 @@ root, auto-injection of `az-view`).
 | `~"name"` (binary) | `~"hidden"` | Boolean attribute |
 | `{name, true}` | `{hidden, true}` | Emitted |
 | `{name, false}` | `{hidden, false}` | Stripped |
-| `'az-nodiff'` | Directive | Stripped; emits `diff => false` |
+| `'az-nodiff'` | Directive | Emits `diff => false`; kept as a compiler-owned attribute |
 
 ## Dynamic Tuple Forms
 
@@ -129,7 +129,7 @@ render(Bindings) ->
 %% first. Every such call is compiled away -- one left over is `undef` at render.
 -define(NODIFF_MOD, '$arizona_nodiff').
 
-%% Stands in for a region's fingerprint in its `az-region` call until the
+%% Stands in for a region's fingerprint in its `az-nodiff` token call until the
 %% statics, and so the fingerprint, are known (fill_region_fingerprint/2).
 -define(REGION_FP, '$arizona_region_fp').
 
@@ -157,9 +157,9 @@ render(Bindings) ->
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean(),
-    %% Set while compiling the root element of an az-nodiff region: it gets the
-    %% `az-region` attribute naming the region (see is_region_root/3).
-    region = false :: boolean(),
+    %% What the element being compiled emits for its own `az-nodiff` directive
+    %% (see nodiff_mark/3): its region token, the bare attribute, or nothing.
+    nodiff_mark = none :: none | bare | token,
     backend = target_backend(html) :: module()
 }).
 
@@ -739,9 +739,8 @@ format_error({reserved_attr, Name}) ->
         io_lib:format(
             "the ~ts attribute is reserved -- the parse transform emits it itself "
             "(az addresses an element for the diff, az-local describes its ?local "
-            "slots, az-region names an az-nodiff region), so a template-authored one "
-            "renders as a duplicate whose value can collide with a real one and "
-            "misroute a patch or a kept region. Remove it: "
+            "slots), so a template-authored one renders as a duplicate whose value "
+            "can collide with a real slot address and misroute a patch. Remove it: "
             "az-key, the az-* event attributes and any az-* name of your own are "
             "unaffected",
             [Name]
@@ -810,6 +809,11 @@ format_error(local_attr_multiple) ->
 format_error(local_attr_mixed) ->
     "a ?local in an attribute value can only be combined with static text, not "
     "another dynamic expression";
+format_error(nodiff_value) ->
+    "az-nodiff is a bare directive and takes no value -- write 'az-nodiff' (or "
+    "az_nodiff / <<\"az-nodiff\">>) alone in the attribute list. The value it carries "
+    "in the rendered HTML belongs to the compiler: it names the region so the client "
+    "can keep it across a re-render, and an authored one would be read as that name";
 format_error(nested_nodiff) ->
     "az-nodiff is only honored on a template's top-level (root) element -- it is a "
     "whole-template directive, not a per-element one, so on a nested element it cannot "
@@ -2808,20 +2812,23 @@ reject_orphaned_local(ExprAST) ->
 compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherited, Unit}) ->
     Opts = prescan_directives(ElementASTs, Inherited),
     Region = is_region_root(ElementASTs, Inherited, Unit, Backend),
+    Marked =
+        not Inherited andalso not lists:any(fun contains_inner_content/1, ElementASTs) andalso
+            Backend:supports_region_keep(),
     State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
         live_render = LiveRender,
         root = LiveRender,
-        region = Region,
         backend = Backend,
         content_ctx = CCtx
     },
     State1 = fold_fragment_items(
         fun(Elem, State) ->
             {Tag, Attrs0, Children, ElemLine} = extract_element(Elem),
-            {Attrs, _ElemOpts} = extract_directives(Attrs0),
-            compile_element(Tag, Attrs, Children, ElemLine, State)
+            {Attrs, ElemOpts} = extract_directives(Attrs0),
+            Mark = nodiff_mark(ElemOpts, Marked, Region),
+            compile_element(Tag, Attrs, Children, ElemLine, State#state{nodiff_mark = Mark})
         end,
         State0,
         ElementASTs
@@ -2835,11 +2842,22 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherite
         end,
     {Statics, DynASTs, Fingerprint, Opts}.
 
+%% The `az-nodiff` directive stays in the HTML on the element that carries it,
+%% compiler-owned, when the backend's client keeps regions across a wholesale
+%% re-render (`supports_region_keep/0`) -- not in a template that only inherits
+%% nodiff (it is part of the enclosing region) nor in a layout (nodiff for
+%% `?inner_content`, rendered once outside any view). Its value is the region's
+%% token when the element is a keepable region (is_region_root/4); otherwise it is
+%% bare -- client-owned markup the client must never carry over: an unkeyed `?each`
+%% item root, or a root of a multi-element fragment.
+nodiff_mark(#{diff := false}, true, true) -> token;
+nodiff_mark(#{diff := false}, true, false) -> bare;
+nodiff_mark(_ElemOpts, _Marked, _Region) -> none.
+
 %% An az-nodiff region is a template whose single root element carries the
 %% directive itself -- not one that inherits it from an enclosing region, which is
 %% part of that region, and not a layout, which is nodiff for `?inner_content`.
-%% Its root is named by an `az-region` attribute when the backend's client keeps
-%% regions across a wholesale re-render (`supports_region_keep/0`).
+%% Its root carries its token as the `az-nodiff` value.
 %%
 %% An `?each` item is named only when it carries an `az_key`. Every item shares one
 %% template, so an unkeyed item's name says nothing about WHICH item it is, and a
@@ -2868,7 +2886,7 @@ has_az_key(Attrs) ->
         Attrs
     ).
 
-%% The `az-region` value: `arizona_template:region_token/3` over the template's
+%% The `az-nodiff` token: `arizona_template:region_token/3` over the template's
 %% fingerprint, the branch that produced it and its `az_key` -- the identity the
 %% diff keeps a region by (`arizona_template:same_region/3`). The fingerprint is
 %% known only once the statics are, so the call is built with a placeholder and
@@ -2881,11 +2899,13 @@ region_attr(Attrs, Line) ->
             [] -> {atom, Line, undefined}
         end,
     Call = region_token_call(Line, {atom, Line, ?REGION_FP}, {atom, Line, undefined}, KeyAST),
-    {tuple, Line, [{atom, Line, 'az-region'}, Call]}.
+    {tuple, Line, [{atom, Line, 'az-nodiff'}, Call]}.
 
-maybe_inject_region(Attrs, Line, #state{region = true}) ->
+maybe_inject_nodiff(Attrs, Line, #state{nodiff_mark = token}) ->
     [region_attr(Attrs, Line) | Attrs];
-maybe_inject_region(Attrs, _Line, #state{region = false}) ->
+maybe_inject_nodiff(Attrs, Line, #state{nodiff_mark = bare}) ->
+    [{atom, Line, 'az-nodiff'} | Attrs];
+maybe_inject_nodiff(Attrs, _Line, #state{nodiff_mark = none}) ->
     Attrs.
 
 region_token_call(L, FpAST, BranchAST, KeyAST) ->
@@ -3063,9 +3083,9 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
     Backend = State0#state.backend,
     RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
     ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
-    Attrs1 = maybe_inject_region(maybe_inject_or_raise_az_view(Attrs0, Line, State0), Line, State0),
+    Attrs1 = maybe_inject_nodiff(maybe_inject_or_raise_az_view(Attrs0, Line, State0), Line, State0),
     Attrs = maybe_inject_local_descriptor(Backend, Attrs1, Children, RawKind, Line),
-    State1 = State0#state{root = false, region = false},
+    State1 = State0#state{root = false, nodiff_mark = none},
     %% A raw-text element's dynamic children fold into ONE nested template carried at
     %% the ELEMENT's own az (see compile_element_children/7), so it needs one too --
     %% not only dynamic attributes force one there.
@@ -4595,11 +4615,27 @@ directive_opts_1(_Other) -> false.
 %% never mistaken for an authored one.
 reject_framework_attrs(Attrs, Line) ->
     ok = reject_nested_directives(Attrs, Line),
+    ok = reject_nodiff_value(Attrs, Line),
     reject_reserved_attrs(Attrs, Line).
+
+%% `az-nodiff` is a bare directive. Its value in the HTML is the compiler's (the
+%% region token the client keeps a region by), so an authored one -- any value,
+%% `true` included -- is rejected rather than emitted or ignored.
+reject_nodiff_value(Attrs, Line) ->
+    case lists:any(fun is_nodiff_value_attr/1, Attrs) of
+        true -> parse_error(nodiff_value, Line);
+        false -> ok
+    end.
+
+is_nodiff_value_attr({tuple, _, [NameAST, _Value]}) ->
+    is_directive_attr(NameAST);
+is_nodiff_value_attr(_Attr) ->
+    false.
 
 %% az-nodiff is a whole-compile-unit directive: it is stripped from a template's
 %% top-level element attrs (compile_fragment_parts / compile_mixed_items) before
-%% compile_element runs. A NESTED element reaches compile_element with its attrs
+%% compile_element runs, which re-emits it as the compiler-owned marker the
+%% element earns (nodiff_mark/3). A NESTED element reaches compile_element with its attrs
 %% unstripped, so a directive attribute here is az-nodiff on a non-top-level element.
 %% There is no per-element nodiff scope, and left as an ordinary boolean attribute it
 %% would silently leak the reserved `az-nodiff` into the DOM while keeping the element
@@ -4656,7 +4692,6 @@ reserved_attr_name(Name) ->
 
 is_reserved_attr_name(~"az") -> true;
 is_reserved_attr_name(~"az-local") -> true;
-is_reserved_attr_name(~"az-region") -> true;
 is_reserved_attr_name(_Other) -> false.
 
 reject_reserved_attrs(Attrs, Line) ->
