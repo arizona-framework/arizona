@@ -143,6 +143,7 @@
     nodiff_branch_local_across_swap/1,
     nodiff_same_statics_branches_swap/1,
     nodiff_root_child_kept_wherever_evaluated/1,
+    nodiff_root_child_slot_leaves/1,
     nodiff_inherited_nested_html/1,
     nodiff_inherited_each/1,
     nodiff_inherited_each_in_each/1,
@@ -628,6 +629,7 @@ groups() ->
             nodiff_branch_local_across_swap,
             nodiff_same_statics_branches_swap,
             nodiff_root_child_kept_wherever_evaluated,
+            nodiff_root_child_slot_leaves,
             nodiff_inherited_nested_html,
             nodiff_inherited_each,
             nodiff_inherited_each_in_each,
@@ -4977,6 +4979,38 @@ nodiff_root_child_kept_wherever_evaluated(Config) when is_list(Config) ->
         ?assertEqual(maps:get(Id, V0), maps:get(Id, V1))
      || Id <- [~"ndc_b", ~"ndc_s", ~"ndc_l"]
     ].
+
+%% A slot holding a nodiff-root child view still leaves it when its value
+%% changes, and the dep-aware and plain diffs agree.
+nodiff_root_child_slot_leaves(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_root_child_leaves). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [], ["
+        "            case arizona_template:get(show, Bindings) of "
+        "                true -> arizona_template:stateful(arizona_no_diff_counter, "
+        "                    #{id => <<\"ndc\">>, count => arizona_template:get(c, Bindings)}); "
+        "                false -> <<\"gone\">> "
+        "            end"
+        "        ]}"
+        "    ). "
+    ),
+    B0 = #{show => true, c => 1},
+    {_, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    New = Mod:render(B0#{show => false}),
+    {Ops4, _, V4} = arizona_diff:diff(New, Snap0, V0, #{show => true}),
+    {Ops2, _, V2} = arizona_diff:diff(New, Snap0, V0),
+    ?assertMatch([[?OP_TEXT, _, <<"gone">>]], Ops4),
+    ?assertEqual(Ops4, Ops2),
+    ?assertNot(maps:is_key(~"ndc", V4)),
+    ?assertNot(maps:is_key(~"ndc", V2)),
+    %% Re-running into the same child keeps it without an op.
+    {Same, _, VSame} =
+        arizona_diff:diff(Mod:render(B0#{c => 2}), Snap0, V0, #{c => true}),
+    ?assertEqual([], Same),
+    ?assertEqual(maps:get(~"ndc", V0), maps:get(~"ndc", VSame)).
 
 %% A child view's inner slot leaves an az-nodiff branch when the child re-renders
 %% under its parent (the child-view path diffs its inner dynamics itself).

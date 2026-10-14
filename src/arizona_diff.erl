@@ -400,20 +400,10 @@ diff_dynamics_v(
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so skip it -- never re-evaluate, never emit an op.
     skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
-%% A `?local` slot belongs to the browser: never re-evaluated, never patched. A
-%% child view whose own root is az-nodiff renders once too: re-evaluating it would
-%% call its `handle_update/3` and move its state past a DOM no op will ever touch.
+%% A `?local` slot belongs to the browser: never re-evaluated, never patched.
 diff_dynamics_v(
     [_Def | DR],
     [{_Az, #{az_local := _}} = OldD | OR],
-    [ODeps | DepsR],
-    ChangedKeys,
-    Views0
-) ->
-    skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
-diff_dynamics_v(
-    [_Def | DR],
-    [{_Az, #{view_id := _, diff := false}} = OldD | OR],
     [ODeps | DepsR],
     ChangedKeys,
     Views0
