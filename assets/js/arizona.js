@@ -66,8 +66,9 @@ const WS_CLOSE_CRASH = 4500;
  * CRASH_RELOAD_MAX crash reloads (counted in sessionStorage, so the count survives
  * the reload) before giving up. The count clears only once a connection has stayed
  * up for CRASH_RELOAD_STABLE_MS: the server's crash close always arrives after the
- * socket opened, so resetting on open would never let the guard trip, and a
- * time-window count would let a slow loop reload forever.
+ * socket opened, so resetting on open would never let the guard trip. A crash that
+ * fires later than that after each connect still reloads every time, but the page
+ * is usable in between.
  */
 const CRASH_RELOAD_MAX = 3;
 const CRASH_RELOAD_STABLE_MS = 10000;
@@ -75,6 +76,9 @@ const CRASH_RELOAD_KEY = 'arizona:crash-reloads';
 
 /** @type {ReturnType<typeof setTimeout> | null} */
 let _crashResetTimer = null;
+
+/** Whether this page load already explained why it stopped reloading. */
+let _crashLogged = false;
 
 /** Clear the crash count once the connection that just opened proves stable. */
 function armCrashReset() {
@@ -97,40 +101,34 @@ function disarmCrashReset() {
 /**
  * Reload after a server-side crash close, unless CRASH_RELOAD_MAX crash reloads
  * already happened with no stable connection in between (a deterministic crash
- * loop): then log once and stay put with the `az-disconnected` state already set
- * by the caller. The worker keeps reconnecting with backoff, so a fixed server
- * still recovers the page.
+ * loop): then stop reloading and leave recovery to the worker's backoff reconnect,
+ * which resyncs the page once the server stops crashing. The reason is logged once
+ * per page load, so a manual reload of a still-crashing page explains itself.
  */
 function crashReload() {
     let count = 0;
     try {
-        const raw = sessionStorage.getItem(CRASH_RELOAD_KEY);
-        if (raw) count = JSON.parse(raw).count || 0;
+        count = Number(sessionStorage.getItem(CRASH_RELOAD_KEY)) || 0;
     } catch {
-        /* no/invalid record -- start counting afresh */
+        /* sessionStorage unavailable -- reload without the guard */
     }
     if (count >= CRASH_RELOAD_MAX) {
-        if (count === CRASH_RELOAD_MAX) {
+        if (!_crashLogged) {
+            _crashLogged = true;
             console.error(
-                `[arizona] WebSocket closed with a crash ${count} times without a ` +
-                    `stable connection; not reloading again -- the view likely ` +
+                `[arizona] WebSocket closed with a crash after ${count} reloads without ` +
+                    `a stable connection; not reloading again -- the view likely ` +
                     `crashes deterministically server-side.`,
             );
-            writeCrashCount(count + 1);
         }
         return;
     }
-    writeCrashCount(count + 1);
-    location.reload();
-}
-
-/** @param {number} count */
-function writeCrashCount(count) {
     try {
-        sessionStorage.setItem(CRASH_RELOAD_KEY, JSON.stringify({ count }));
+        sessionStorage.setItem(CRASH_RELOAD_KEY, String(count + 1));
     } catch {
         /* sessionStorage unavailable -- reload anyway, just without the guard */
     }
+    location.reload();
 }
 
 // ---------------------------------------------------------------------------

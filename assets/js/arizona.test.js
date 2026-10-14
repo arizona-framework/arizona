@@ -4180,7 +4180,80 @@ describe('WS_CLOSE_CRASH reload guard', () => {
             mock.simulateClose(1006);
             mock.simulateOpen(true);
             vi.advanceTimersByTime(9000);
-            expect(JSON.parse(sessionStorage.getItem('arizona:crash-reloads')).count).toBe(1);
+            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a reloaded page that still crashes logs again but does not reload', async () => {
+        // The tab already used its reloads: the count survives in sessionStorage,
+        // while a manual reload starts a fresh module (a fresh console).
+        sessionStorage.setItem('arizona:crash-reloads', '3');
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        stubReload();
+
+        mock.simulateOpen();
+        mock.simulateClose(4500);
+        mock.simulateOpen(true);
+        mock.simulateClose(4500);
+
+        expect(reload).not.toHaveBeenCalled();
+        expect(errSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads a count stored by an older client as no count', async () => {
+        sessionStorage.setItem('arizona:crash-reloads', JSON.stringify({ count: 3 }));
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        stubReload();
+
+        mock.simulateOpen();
+        mock.simulateClose(4500);
+        expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('pagehide cancels the pending reset', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        stubReload();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            mock.simulateOpen();
+            mock.simulateClose(4500);
+            mock.simulateOpen(true);
+            vi.advanceTimersByTime(9000);
+            window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+            vi.advanceTimersByTime(2000);
+            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('disconnect() cancels the pending reset', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        stubReload();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            mock.simulateOpen();
+            mock.simulateClose(4500);
+            mock.simulateOpen(true);
+            vi.advanceTimersByTime(9000);
+            mock.restore();
+            mock = null;
+            vi.advanceTimersByTime(2000);
+            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
         } finally {
             vi.useRealTimers();
         }
