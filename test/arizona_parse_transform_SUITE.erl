@@ -141,6 +141,7 @@
     nodiff_item_branch_swaps_away/1,
     nodiff_child_view_branch_swaps_away/1,
     nodiff_branch_local_across_swap/1,
+    nodiff_same_statics_branches_swap/1,
     nodiff_inherited_nested_html/1,
     nodiff_inherited_each/1,
     nodiff_inherited_each_in_each/1,
@@ -624,6 +625,7 @@ groups() ->
             nodiff_item_branch_swaps_away,
             nodiff_child_view_branch_swaps_away,
             nodiff_branch_local_across_swap,
+            nodiff_same_statics_branches_swap,
             nodiff_inherited_nested_html,
             nodiff_inherited_each,
             nodiff_inherited_each_in_each,
@@ -4900,6 +4902,43 @@ nodiff_item_branch_swaps_away(Config) when is_list(Config) ->
     ?assertMatch(
         [[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, #{~"d" := [~"2"]}]]]]]], Ops
     ).
+
+%% Two az-nodiff branches with the same statics are still different templates:
+%% the slot switches between them (a nodiff fingerprint names its site, not only
+%% its statics).
+nodiff_same_statics_branches_swap(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_nodiff_same_statics). "
+        "-export([render/1, home/1, about/1]). "
+        "home(_Bindings) -> arizona_template:html({'p', [], [<<\"Home\">>]}). "
+        "about(_Bindings) -> arizona_template:html({'p', [], [<<\"About\">>]}). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', [], ["
+        "            case arizona_template:get(lang, Bindings) of "
+        "                en -> {'p', ['az-nodiff'], "
+        "                    [<<\"Hi \">>, arizona_template:get(a, Bindings)]}; "
+        "                pt -> {'p', ['az-nodiff'], "
+        "                    [<<\"Hi \">>, arizona_template:get(b, Bindings)]} "
+        "            end, "
+        "            case arizona_template:get(tab, Bindings) of "
+        "                home -> {'section', ['az-nodiff'], "
+        "                    [arizona_template:stateless(fun home/1, #{})]}; "
+        "                about -> {'section', ['az-nodiff'], "
+        "                    [arizona_template:stateless(fun about/1, #{})]} "
+        "            end"
+        "        ]}"
+        "    ). "
+    ),
+    B0 = #{lang => en, a => ~"A", b => ~"B", tab => home},
+    {_, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertMatch(
+        {[[?OP_TEXT, _, _]], _, _},
+        arizona_diff:diff(Mod:render(B0#{lang => pt}), Snap0, V0, #{lang => true})
+    ),
+    {[[?OP_TEXT, _, Tab]], _, _} =
+        arizona_diff:diff(Mod:render(B0#{tab => about}), Snap0, V0, #{tab => true}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~p", [Tab])), ~"About")).
 
 %% A child view's inner slot leaves an az-nodiff branch when the child re-renders
 %% under its parent (the child-view path diffs its inner dynamics itself).

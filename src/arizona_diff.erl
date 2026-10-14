@@ -1847,11 +1847,17 @@ make_op(Az, New, _Old) ->
 %% here and handled by make_op/3's child-view clause (which requires `view_id` on both).
 %% A `diff => false` value renders once. A `?local` slot is the browser's, and an
 %% az-nodiff template keeps its first render for as long as the slot still holds
-%% that template (same statics); a slot that switches to anything else -- another
-%% branch, a value -- is patched like any other, or it would freeze on that branch.
+%% that template (same fingerprint, which names the template's site, not just its
+%% statics); a slot that switches to anything else -- another branch, a value --
+%% is patched like any other, or it would freeze on that branch.
 make_ops(_Az, _New, #{az_local := _}, Tail, Views) ->
     {Tail, Views};
-make_ops(_Az, #{s := S}, #{diff := false, s := S}, Tail, Views) ->
+make_ops(_Az, #{f := F}, #{diff := false, f := F}, Tail, Views) ->
+    {Tail, Views};
+%% A hand-built nodiff map carries no fingerprint; its statics are all it has.
+make_ops(_Az, #{s := S}, #{diff := false, s := S} = Old, Tail, Views) when
+    not is_map_key(f, Old)
+->
     {Tail, Views};
 %% A stream `?each` container whose rendered items, order, and item-template
 %% fingerprint are all unchanged needs no op: the container's HTML is exactly

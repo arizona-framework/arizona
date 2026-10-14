@@ -2020,9 +2020,10 @@ compile_template(Arg, Line, Module, LiveRender, Backend) ->
 %% `Inherited` is true for a template nested in an `az-nodiff` one (see
 %% inherit_nodiff/1): it compiles nodiff whatever its own attributes say.
 compile_template(Arg, Line, Module, LiveRender, Backend, Inherited) ->
-    {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
+    {Statics, DynASTs, Fingerprint0, Opts0} = compile_body_parts(
         Arg, Module, LiveRender, Backend, html, Inherited
     ),
+    Fingerprint = site_fingerprint(Opts0, Statics, DynASTs, Fingerprint0),
     Opts = Opts0#{backend => Backend},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     build_template_ast(Line, S1, D1, Fingerprint, Opts).
@@ -2143,9 +2144,10 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
             %% sits in, so an element the backend classifies differently there
             %% (an SVG `<title>`) is treated the same as if it were written
             %% literally at that position.
-            {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
+            {Statics, DynASTs, Fingerprint0, Opts0} = compile_body_parts(
                 ElemAST, Module, false, Backend, CCtx, Inherited
             ),
+            Fingerprint = site_fingerprint(Opts0, Statics, DynASTs, Fingerprint0),
             Opts1 = Opts0#{backend => Backend},
             Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
@@ -3497,6 +3499,16 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
 generate_fingerprint(Statics) ->
     Hash = erlang:phash2(Statics, 1 bsl 32),
     integer_to_binary(Hash, 36).
+
+%% An az-nodiff template is never diffed inside, so a slot that switches between
+%% two of them with the same statics (same-shaped branches, tabs) can only tell
+%% them apart by fingerprint. Its identity is the whole site, so its fingerprint
+%% also hashes the dynamics' code (which carries their source lines); a diffable
+%% template keeps the statics-only fingerprint.
+site_fingerprint(#{diff := false}, Statics, DynASTs, _Fingerprint) ->
+    generate_fingerprint({Statics, DynASTs});
+site_fingerprint(_Opts, _Statics, _DynASTs, Fingerprint) ->
+    Fingerprint.
 
 split_fun_body([Last]) ->
     {[], Last};
