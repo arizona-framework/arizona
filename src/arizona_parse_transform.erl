@@ -2995,9 +2995,9 @@ fragment_sep(#state{backend = Backend} = State, _Index) ->
     end.
 
 compile_mixed_item(Item, Module, State) ->
-    case is_static_binary(Item) of
-        true -> buf_append(State, (State#state.backend):text_child(extract_binary_value(Item)));
-        false -> compile_mixed_non_static(Item, Module, State)
+    case static_child_bytes(Item, State) of
+        {ok, Bytes} -> buf_append(State, Bytes);
+        error -> compile_mixed_non_static(Item, Module, State)
     end.
 
 compile_mixed_non_static(Item, Module, State) ->
@@ -3090,7 +3090,7 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
     %% the ELEMENT's own az (see compile_element_children/7), so it needs one too --
     %% not only dynamic attributes force one there.
     HasDyn =
-        has_dynamic_attr(Attrs) orelse has_dynamic_child(Children),
+        has_dynamic_attr(Attrs) orelse has_dynamic_child(Children, RawKind),
     {ElemAz, State2} =
         case HasDyn andalso needs_elem_az(Children, Line, State1) of
             true -> {State1#state.az, State1#state{az = State1#state.az + 1}};
@@ -3160,8 +3160,8 @@ compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0)
         raw_text_kind = RawKind, raw_text_tag = Tag, content_ctx = ChildCtx
     },
     Fold =
-        RawKind =/= none andalso ElemAz =/= none andalso has_dynamic_child(Children) andalso
-            (not State0#state.nodiff),
+        RawKind =/= none andalso ElemAz =/= none andalso
+            has_dynamic_child(Children, RawKind) andalso (not State0#state.nodiff),
     case Fold of
         false ->
             compile_children(Children, ElemAz, ChildState);
@@ -3232,10 +3232,11 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
 ->
     Backend = State0#state.backend,
     NameBin = extract_attr_name(Backend, NameAST),
-    case is_static_binary(ValueAST) of
-        true ->
-            %% A static binary value is DATA by construction: an effect is always a
-            %% call, never a literal. Deliberately not recorded -- recording it would
+    case literal_text(ValueAST) of
+        {ok, ValBin} ->
+            %% A literal value (a binary, or a list of literals, folded by
+            %% literal_text/1) is DATA by construction: an effect is always a call,
+            %% never a literal. Deliberately not recorded -- recording it would
             %% delegate the event type and then hand the app's own data to the command
             %% interpreter (`{az_select, ~"[1,2,3]"}` parses as opcode 1 with selector
             %% 2 and throws out of a document listener on every dispatch).
@@ -3246,9 +3247,8 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
             %% client register wheel/touch listeners passive, silently disarming the
             %% `preventDefault` the attribute asked for.
             _ = record_directive_attr(NameBin),
-            ValBin = extract_binary_value(ValueAST),
             buf_append(State0, emit_backend(fun() -> Backend:attr(NameBin, ValBin) end, ElemLine));
-        false ->
+        error ->
             %% A dynamic value is recorded only on EVIDENCE that it carries
             %% commands: a builder call somewhere in the expression. An opaque
             %% dynamic (`{az_select, ?get(ids)}`) is indistinguishable from app
@@ -3586,9 +3586,12 @@ collect_content_locals([Child | Rest], Line, Slot, Acc) ->
     end.
 
 %% A child gets its own text marker (and bumps the slot counter) iff it is
-%% neither static text nor a nested element -- mirrors compile_child/4.
+%% neither static text nor a nested element -- mirrors compile_child/4. A folded
+%% literal list is static outside raw text, the only place a content local exists
+%% (assert_content_local_not_raw_text/3).
 is_dynamic_text_child(Child) ->
-    not is_static_binary(Child) andalso not is_element_tuple(Child).
+    not is_static_binary(Child) andalso not is_element_tuple(Child) andalso
+        literal_list_text(Child) =:= error.
 
 compile_children(Children, ElemAz, State) ->
     compile_children(Children, ElemAz, State, 0, 0).
@@ -3608,12 +3611,30 @@ maybe_children_sep(State, _Index) ->
     buf_append(State, (State#state.backend):children_sep()).
 
 compile_child(Child, ElemAz, State0, Slot) ->
+    case static_child_bytes(Child, State0) of
+        {ok, Bytes} ->
+            {buf_append(State0, Bytes), Slot};
+        error ->
+            compile_non_static_child(Child, ElemAz, State0, Slot)
+    end.
+
+%% A child that compiles to static bytes. A binary literal is static text, spliced
+%% verbatim (text_child/1, the raw-HTML seam). A list of literals is a VALUE -- at
+%% runtime it is a text slot rendered through `Backend:escape/1` -- so its folded
+%% text goes through that same callback, and the output only loses the slot markers.
+%% Not under raw text: there a dynamic slot keeps its own policy (a `<script>` value
+%% must be a literal `?raw`, a `<title>` one folds into the element's template).
+static_child_bytes(Child, #state{backend = Backend, raw_text_kind = RawKind}) ->
     case is_static_binary(Child) of
         true ->
-            Bin = (State0#state.backend):text_child(extract_binary_value(Child)),
-            {buf_append(State0, Bin), Slot};
+            {ok, Backend:text_child(extract_binary_value(Child))};
+        false when RawKind =:= none ->
+            case literal_list_text(Child) of
+                {ok, Bin} -> {ok, Backend:escape(Bin)};
+                error -> error
+            end;
         false ->
-            compile_non_static_child(Child, ElemAz, State0, Slot)
+            error
     end.
 
 compile_non_static_child(Child, ElemAz, State0, Slot) ->
@@ -4481,6 +4502,48 @@ is_foldable_bin_element({bin_element, _, {integer, _, _N}, default, [utf8]}) ->
 is_foldable_bin_element(_) ->
     false.
 
+%% The text a literal attribute value folds to: a binary literal, or a (possibly
+%% nested) list of literals, which renders at runtime as the chardata it is.
+literal_text(AST) ->
+    case is_static_binary(AST) of
+        true -> {ok, extract_binary_value(AST)};
+        false -> literal_list_text(AST)
+    end.
+
+%% A string literal or a list -- nested to any depth -- of binary literals (folded
+%% as is_static_binary/1 admits them), string literals and character codes, whose
+%% runtime value would be rendered by `arizona_template:to_bin/1` as chardata. The
+%% same conversion runs here, so a folded value is the bytes the runtime emits; a
+%% list it would reject (an atom, an invalid code point) is left to the runtime,
+%% which raises `bad_template_value` exactly as before. Any other element -- a
+%% variable, a call, `?raw`, `?local`, an effect command -- leaves the whole value
+%% dynamic.
+literal_list_text(AST) ->
+    try unicode:characters_to_binary(literal_chardata(AST)) of
+        Bin when is_binary(Bin) -> {ok, Bin};
+        _Invalid -> error
+    catch
+        throw:not_literal -> error;
+        error:badarg -> error
+    end.
+
+literal_chardata({nil, _}) -> [];
+literal_chardata({string, _, Chars}) -> Chars;
+literal_chardata({cons, _, Head, Tail}) -> [literal_chardata_item(Head) | literal_chardata(Tail)];
+literal_chardata(_) -> throw(not_literal).
+
+literal_chardata_item({integer, _, N}) ->
+    N;
+literal_chardata_item({char, _, C}) ->
+    C;
+literal_chardata_item({bin, _, _} = Bin) ->
+    case is_static_binary(Bin) of
+        true -> extract_binary_value(Bin);
+        false -> throw(not_literal)
+    end;
+literal_chardata_item(Item) ->
+    literal_chardata(Item).
+
 %% Try to fold an attribute value AST that is a literal `arizona_js`
 %% command (or literal list of commands) into the final
 %% HTML-attribute-safe encoded binary at compile time. Returns
@@ -4540,20 +4603,23 @@ has_dynamic_attr([{bin, _, _} | Rest]) ->
 has_dynamic_attr([{tuple, _, [_, {atom, _, Val}]} | Rest]) when is_boolean(Val) ->
     has_dynamic_attr(Rest);
 has_dynamic_attr([{tuple, _, [_NameAST, ValueAST]} | Rest]) ->
-    case is_static_binary(ValueAST) of
-        true -> has_dynamic_attr(Rest);
-        false -> true
+    case literal_text(ValueAST) of
+        {ok, _} -> has_dynamic_attr(Rest);
+        error -> true
     end;
 has_dynamic_attr([{atom, _, _} | Rest]) ->
     has_dynamic_attr(Rest);
 has_dynamic_attr(_) ->
     false.
 
-has_dynamic_child([]) ->
+has_dynamic_child([], _RawKind) ->
     false;
-has_dynamic_child([Child | Rest]) ->
-    case is_static_binary(Child) orelse is_element_tuple(Child) of
-        true -> has_dynamic_child(Rest);
+has_dynamic_child([Child | Rest], RawKind) ->
+    case
+        is_static_binary(Child) orelse is_element_tuple(Child) orelse
+            (RawKind =:= none andalso literal_list_text(Child) =/= error)
+    of
+        true -> has_dynamic_child(Rest, RawKind);
         false -> true
     end.
 

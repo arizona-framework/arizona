@@ -5,6 +5,18 @@
 
 -export([all/0, groups/0]).
 -export([
+    literal_list_attr_folds/1,
+    literal_list_attr_matches_runtime/1,
+    literal_list_attr_native_matches_runtime/1,
+    literal_list_attr_empty/1,
+    literal_list_content_folds/1,
+    literal_list_content_native_matches_runtime/1,
+    literal_list_in_conditional_and_each/1,
+    literal_list_attr_diff_no_op/1,
+    literal_list_content_local_slot/1,
+    literal_list_mixed_not_folded/1,
+    literal_list_raw_and_command_not_folded/1,
+    literal_list_script_still_rejected/1,
     az_each_basic/1,
     az_each_inside_html/1,
     each_with_named_fun_ref/1,
@@ -522,11 +534,26 @@ all() ->
         {group, az_view},
         {group, az_scoping},
         {group, az_attrs},
-        {group, nodiff_slot}
+        {group, nodiff_slot},
+        {group, literal_fold}
     ].
 
 groups() ->
     [
+        {literal_fold, [parallel], [
+            literal_list_attr_folds,
+            literal_list_attr_matches_runtime,
+            literal_list_attr_native_matches_runtime,
+            literal_list_attr_empty,
+            literal_list_content_folds,
+            literal_list_content_native_matches_runtime,
+            literal_list_in_conditional_and_each,
+            literal_list_attr_diff_no_op,
+            literal_list_content_local_slot,
+            literal_list_mixed_not_folded,
+            literal_list_raw_and_command_not_folded,
+            literal_list_script_still_rejected
+        ]},
         {nodiff_slot, [parallel], [
             nodiff_slot_show_hide,
             nodiff_slot_switch,
@@ -11072,3 +11099,249 @@ markup_var_in_content_list_allowed(Config) when is_list(Config) ->
             "    [arizona_template:html({i, [], [[<<\"g\">>, Row]]}) || Row <- [<<\"x\">>]]. "
         )
     ).
+
+%% =============================================================================
+%% Literal lists fold to statics
+%% =============================================================================
+
+%% An attribute whose value is a list of literals is static: concatenated at
+%% compile time, no dynamic, no `az` on an element that had no other dynamic.
+literal_list_attr_folds(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_attr). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html("
+        "        {'p', [{class, [<<\"foo\">>, <<\"bar\">>]}, {id, \"str\"}], "
+        "            [<<\"baz\">>, <<\"qux\">>]}"
+        "    ). "
+    ),
+    T = Mod:render(#{}),
+    ?assertEqual([<<"<p class=\"foobar\" id=\"str\">bazqux</p>">>], maps:get(s, T)),
+    ?assertEqual([], maps:get(d, T)).
+
+%% The folded value is byte-identical to what the runtime renders for the same
+%% list held in a binding -- nested lists, strings, char codes, UTF-8, and the
+%% attribute escaping of every HTML-significant character.
+literal_list_attr_matches_runtime(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_attr_rt). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html("
+        "        {'p', [{title, [<<\"<a>\">>, \"&b\", [<<\"\\\"'\">>, $c, 16#2764], []]}], []}"
+        "    ). "
+    ),
+    Value = [<<"<a>">>, "&b", [<<"\"'">>, $c, 16#2764], []],
+    T = Mod:render(#{}),
+    ?assertEqual([], maps:get(d, T)),
+    Runtime = arizona_html:render_attr(<<"title">>, Value),
+    ?assertEqual(<<" title=\"&lt;a&gt;&amp;b&quot;&#39;c", 16#2764/utf8, "\"">>, Runtime),
+    ?assertEqual([<<"<p", Runtime/binary, "></p>">>], maps:get(s, T)).
+
+%% ?native: the folded prop is the JSON the runtime path produces.
+literal_list_attr_native_matches_runtime(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_attr_native). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:native("
+        "        {'Text', [{label, [<<\"a\">>, [<<\"\\\"b\">>, $c]]}], []}"
+        "    ). "
+    ),
+    Value = [<<"a">>, [<<"\"b">>, $c]],
+    T = Mod:render(#{}),
+    ?assertEqual([], maps:get(d, T)),
+    Prop = <<
+        (arizona_native:attr_dyn_name(<<"label">>))/binary,
+        (arizona_native:render_attr(<<"label">>, Value))/binary
+    >>,
+    ?assertEqual(
+        [<<"{\"type\":\"Text\"", Prop/binary, ",\"children\":[]}">>], maps:get(s, T)
+    ),
+    ?assertEqual(<<"a\"bc">>, maps:get(<<"label">>, json:decode(hd(maps:get(s, T))))).
+
+%% An empty list value is the empty string, as at runtime.
+literal_list_attr_empty(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_attr_empty). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'p', [{class, []}, {id, [[], []]}], []}). "
+    ),
+    T = Mod:render(#{}),
+    ?assertEqual([<<"<p class=\"\" id=\"\"></p>">>], maps:get(s, T)),
+    ?assertEqual([], maps:get(d, T)).
+
+%% A nested literal list in content is a value: folded, and escaped exactly as
+%% the runtime escapes it -- unlike a bare binary literal, which is raw markup.
+literal_list_content_folds(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_content). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html("
+        "        {'p', [], [[<<\"<a>\">>, [\"&\", $b]], <<\"<i>c</i>\">>]}"
+        "    ). "
+    ),
+    T = Mod:render(#{}),
+    ?assertEqual([], maps:get(d, T)),
+    Escaped = arizona_template:escape_value(arizona_html, [<<"<a>">>, ["&", $b]]),
+    ?assertEqual(<<"&lt;a&gt;&amp;b">>, Escaped),
+    ?assertEqual([<<"<p>", Escaped/binary, "<i>c</i></p>">>], maps:get(s, T)).
+
+literal_list_content_native_matches_runtime(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_content_native). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:native({'Column', [], [<<\"x\">>, [<<\"a\">>, \"\\\"b\"]]}). "
+    ),
+    T = Mod:render(#{}),
+    ?assertEqual([], maps:get(d, T)),
+    Value = arizona_template:escape_value(arizona_native, [<<"a">>, "\"b"]),
+    ?assertEqual(
+        [<<"{\"type\":\"Column\",\"children\":[\"x\",", Value/binary, "]}">>],
+        maps:get(s, T)
+    ),
+    ?assertMatch(#{<<"children">> := [<<"x">>, <<"a\"b">>]}, json:decode(hd(maps:get(s, T)))).
+
+%% Conditional tails and ?each item templates compile through the same element
+%% path, so their literal lists fold too: no `az` on the span, no slot marker
+%% around the item's literal text.
+literal_list_in_conditional_and_each(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_nested). "
+        "-export([branch/1, each/1]). "
+        "branch(Bindings) -> "
+        "    arizona_template:html({'p', [], ["
+        "        case arizona_template:get(on, Bindings) of "
+        "            true -> {span, [{class, [<<\"a\">>, <<\"b\">>]}], [[<<\"x\">>, <<\"y\">>]]}; "
+        "            false -> <<>> "
+        "        end"
+        "    ]}). "
+        "each(Bindings) -> "
+        "    arizona_template:html({ul, [], ["
+        "        arizona_template:each(fun(I) -> "
+        "            {li, [{class, [<<\"a\">>, <<\"b\">>]}], [[<<\"x\">>, <<\"y\">>], I]} "
+        "        end, arizona_template:get(items, Bindings))"
+        "    ]}). "
+    ),
+    CondHTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:branch(#{on => true}))),
+    ?assertNotEqual(nomatch, binary:match(CondHTML, <<"--><span class=\"ab\">xy</span><!--">>)),
+    EachHTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:each(#{items => [<<"i">>]}))),
+    ?assertMatch(
+        {match, _},
+        re:run(EachHTML, <<"<li az=\"[^\"]+\" class=\"ab\">xy<!--az:[^>]+-->i<!--/az--></li>">>)
+    ).
+
+%% An element whose only dynamic was the folded attribute carries none: the
+%% snapshot holds only the sibling's slot and a change to it is the only op.
+literal_list_attr_diff_no_op(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_attr_diff). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {p, [{class, [<<\"a\">>, <<\"b\">>]}], [<<\"p\">>]}, "
+        "        arizona_template:get(x, Bindings)"
+        "    ]}). "
+    ),
+    T1 = Mod:render(#{x => <<"1">>}),
+    ?assertMatch([{_, {esc, _}, _}], maps:get(d, T1)),
+    {HTML, Snap} = arizona_render:render(T1),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), <<"<p class=\"ab\">p</p>">>)),
+    ?assertMatch(#{d := [_]}, Snap),
+    {Same, _} = arizona_diff:diff(Mod:render(#{x => <<"1">>}), Snap),
+    ?assertEqual([], Same),
+    {Ops, _} = arizona_diff:diff(Mod:render(#{x => <<"2">>}), Snap),
+    ?assertMatch([[?OP_TEXT, _, <<"2">>]], Ops).
+
+%% A folded literal list takes no content slot, so a following ?local is slot 0
+%% in both the descriptor and its marker.
+literal_list_content_local_slot(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_local_slot). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'p', [], ["
+        "        [<<\"a\">>], arizona_template:local(<<\"k\">>, <<\"v\">>)"
+        "    ]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertEqual(#{~"c" => #{~"0" => ~"k"}}, decode_local_descriptor(HTML)),
+    ?assertMatch(
+        {match, _}, re:run(HTML, <<"<p az=\"([^\"]+)\"[^>]*>a<!--az:\\1-->v<!--/az--></p>">>)
+    ).
+
+%% A list holding anything evaluated stays a runtime value: a binding read, a
+%% variable, an atom (which the runtime rejects, and still does).
+literal_list_mixed_not_folded(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_mixed). "
+        "-export([get/1, var/1, atom/1, content/1]). "
+        "get(Bindings) -> "
+        "    arizona_template:html("
+        "        {'p', [{class, [<<\"a\">>, arizona_template:get(c, Bindings)]}], []}"
+        "    ). "
+        "var(_Bindings) -> "
+        "    C = <<\"c\">>, "
+        "    arizona_template:html({'p', [{class, [<<\"a\">>, C]}], []}). "
+        "atom(_Bindings) -> "
+        "    arizona_template:html({'p', [{class, [<<\"a\">>, b]}], []}). "
+        "content(Bindings) -> "
+        "    arizona_template:html({'p', [], [[<<\"a\">>, arizona_template:get(c, Bindings)]]}). "
+    ),
+    [
+        ?assertMatch([{_, {attr, <<"class">>, _}, _}], maps:get(d, Mod:F(#{c => <<"c">>})))
+     || F <- [get, var, atom]
+    ],
+    ?assertEqual(
+        <<"<p az=\"0\" class=\"ac\"></p>">>,
+        strip_fp(iolist_to_binary(arizona_render:render_to_iolist(Mod:get(#{c => <<"c">>}))))
+    ),
+    ?assertError(
+        {arizona_loc, _, {bad_template_value, [<<"a">>, b]}},
+        arizona_render:render_to_iolist(Mod:atom(#{}))
+    ),
+    ?assertMatch([{_, {esc, _}, _}], maps:get(d, Mod:content(#{c => <<"c">>}))).
+
+%% `?raw` and effect commands keep their own paths.
+literal_list_raw_and_command_not_folded(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_fold_raw_cmd). "
+        "-export([raw/1, cmd/1]). "
+        "raw(_Bindings) -> "
+        "    arizona_template:html("
+        "        {'a', [{href, [<<\"/x?\">>, arizona_template:raw(<<\"a&b\">>)]}], []}"
+        "    ). "
+        "cmd(_Bindings) -> "
+        "    arizona_template:html("
+        "        {'button', [{az_click, [arizona_js:push_event(<<\"inc\">>)]}], []}"
+        "    ). "
+    ),
+    RawT = Mod:raw(#{}),
+    ?assertMatch([{_, {attr, <<"href">>, _}, _}], maps:get(d, RawT)),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(iolist_to_binary(arizona_render:render_to_iolist(RawT)), <<"href=\"/x?a&b\"">>)
+    ),
+    CmdT = Mod:cmd(#{}),
+    ?assertEqual([], maps:get(d, CmdT)),
+    Cmd = arizona_html:attr_command(<<"az-click">>, [arizona_js:push_event(<<"inc">>)]),
+    [CmdStatic] = maps:get(s, CmdT),
+    ?assertNotEqual(nomatch, binary:match(CmdStatic, <<Cmd/binary, "></button>">>)).
+
+%% Raw text keeps its own slot policy: a literal list in <script> is still a
+%% dynamic that must be a literal ?raw.
+literal_list_script_still_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_fold_script). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'script', [], [[<<\"a\">>, <<\"b\">>]]}). ",
+        fun(R) -> R =:= dynamic_in_raw_text end
+    ).
+
+strip_fp(HTML) ->
+    re:replace(HTML, <<" az=\"[^\"-]+-">>, <<" az=\"">>, [global, {return, binary}]).
