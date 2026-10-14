@@ -449,6 +449,11 @@ close_crash(Socket) ->
 %% (1000, 1001 for `{shutdown, drain}`, or a logged 4500). Pinned to the live
 %% pid: a `noproc` from any other process a middleware or route adapter calls is
 %% a crash.
+%%
+%% The socket returned is the one the frame entered with, so a deferred resync
+%% the same frame flushed before its own call failed is discarded: pushes that
+%% resync's mount queued may ship against the stale page just before the close.
+%% Brief -- the close follows them.
 crash_close(
     exit, {CallReason, {gen_server, call, [Pid, Request | _]}}, Stacktrace, #socket{pid = Pid} = S
 ) when is_pid(Pid) ->
