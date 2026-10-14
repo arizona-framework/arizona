@@ -106,7 +106,8 @@ HTML output and rendering.
   Mounts via `arizona_stateful:call_mount/2`, applies `on_mount` hooks, optionally
   wraps in a layout
 - `render_view/2` -- the same, returning `{ContentType, Page}`: the outermost rendered
-  template's backend names the document's media type (`content_type/0`)
+  template that records a backend names the document's media type (`content_type/0`);
+  a backendless layout inherits the page's
 - `resolve_id/1` -- resolves a binary id (passthrough) or a `#{s, d}` template (renders to binary)
 - `zip/2` -- interleave statics and evaluated dynamics into iolist
 - `fingerprint_payload/1` -- convert a snapshot to fingerprint wire format
@@ -1247,7 +1248,7 @@ already on screen. Layouts render once, at SSR: `?OP_REPLACE` swaps only the vie
 and a patch keeps the shell outright, so no frame can re-render one, and serving such a target
 in place would drop the new page into the old page's shell. `arizona_socket` tracks the connect
 route's `layouts` (threaded `arizona_ws:prepare/3` -> `arizona_socket:init/4`) and compares by
-whole-list term equality -- `apply_layouts/3` nests the list, so an inner layer wraps the
+whole-list term equality -- `apply_layouts/4` nests the list, so an inner layer wraps the
 replaced view exactly as the outer one does and a difference at any depth disqualifies an
 in-place swap. The check sits on both frame handlers, which also covers the middleware
 halt-redirect path: that halt emits a navigate effect the client replays as an ordinary
@@ -1487,7 +1488,9 @@ module's compiled statics, so it cannot be stripped here -- still reaches the DO
 server never registered. The check is at render rather than compile time because the disqualifying
 property is the *path*, not the template: a `?stateful` under a user `az-nodiff` renders on the live
 path, is registered, and works. Use `?stateless` for layout chrome; chrome that must stay live across
-navigation belongs in a view the routes share, linked with `az_patch`. `layouts` is always a list,
+navigation belongs in a view the routes share, linked with `az_patch`. A layout must share the
+page's render target (`cross_target_layout` otherwise): the page reaches it as a backendless
+template, which the nested-template target check waves through. `layouts` is always a list,
 applied outermost-first (`[Root, Section]` produces `Root(Section(Page))`); an empty list renders
 the page directly, with no wrapper. Route config
 provides `bindings`, `on_mount`, `layouts`, `middlewares`, and `check_origin` -- the single canonical
@@ -1571,7 +1574,7 @@ accumulates only children rendered this cycle. Children removed from the templat
 rendering) are pruned from the views map and their `unmount/1` callback is called if exported.
 
 **Slots:** Slots are implemented via stateless children and bindings. A layout places the page it
-wraps with the **`?inner_content`** macro; the binding key is fixed (`apply_layouts/3` injects
+wraps with the **`?inner_content`** macro; the binding key is fixed (`apply_layouts/4` injects
 `inner_content` into the layout's bindings), not configurable. Stateless components receive props
 with arbitrary content:
 

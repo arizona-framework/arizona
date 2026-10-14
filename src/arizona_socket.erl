@@ -542,7 +542,7 @@ patch_or_navigate(H, RouteOpts, NewReq, Requested, Socket) ->
 
 %% Does the target route wrap its page in different layouts than the ones
 %% already on screen? Term equality on the whole list, deliberately: a
-%% difference at ANY depth is disqualifying, since `arizona_render:apply_layouts/3`
+%% difference at ANY depth is disqualifying, since `arizona_render:apply_layouts/4`
 %% nests them (`[Root, Section]` renders `Root(Section(Page))`), so an inner
 %% layer wraps the replaced view exactly as the outer one does.
 layout_changed(RouteOpts, #socket{layouts = Layouts}) ->
