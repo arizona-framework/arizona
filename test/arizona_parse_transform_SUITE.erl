@@ -135,6 +135,7 @@
     nodiff_diff_integration/1,
     nodiff_each/1,
     nodiff_inherited_branch/1,
+    nodiff_bare_branch_inherited/1,
     nodiff_inherited_nested_html/1,
     nodiff_inherited_each/1,
     nodiff_inherited_each_in_each/1,
@@ -612,6 +613,7 @@ groups() ->
             nodiff_with_other_attrs,
             nodiff_each,
             nodiff_inherited_branch,
+            nodiff_bare_branch_inherited,
             nodiff_inherited_nested_html,
             nodiff_inherited_each,
             nodiff_inherited_each_in_each,
@@ -4742,6 +4744,44 @@ nodiff_inherited_branch(Config) when is_list(Config) ->
     ?assertEqual(
         <<"<div><span>B</span></div>">>, render_markerless(Mod:render(#{f => true, b => ~"B"}))
     ).
+
+%% `az-nodiff` on a bare element in a conditional branch reaches the templates
+%% nested in it, exactly as on the same element wrapped in `?html`.
+nodiff_bare_branch_inherited(Config) when is_list(Config) ->
+    Section = <<"<section><i>B</i><li>1</li><li>2</li></section>">>,
+    lists:foreach(
+        fun({Name, Branch}) ->
+            Mod = compile_module(
+                "-module(" ++ Name ++
+                    "). "
+                    "-export([render/1]). "
+                    "render(Bindings) -> "
+                    "    arizona_template:html("
+                    "        {'div', [], ["
+                    "            case arizona_template:get(f, Bindings) of "
+                    "                true -> " ++ Branch ++
+                    "; "
+                    "                _ -> <<>> "
+                    "            end"
+                    "        ]}"
+                    "    ). "
+            ),
+            HTML = iolist_to_binary(
+                arizona_render:render_to_iolist(Mod:render(#{f => true, b => ~"B", xs => [1, 2]}))
+            ),
+            ?assertMatch({_, _}, binary:match(HTML, Section))
+        end,
+        [
+            {"pt_nodiff_bare_branch", nodiff_section()},
+            {"pt_nodiff_wrapped_branch", "arizona_template:html(" ++ nodiff_section() ++ ")"}
+        ]
+    ).
+
+nodiff_section() ->
+    "{'section', ['az-nodiff'], ["
+    "    arizona_template:html({'i', [], [arizona_template:get(b, Bindings)]}), "
+    "    arizona_template:each(fun(X) -> {'li', [], [X]} end, arizona_template:get(xs, Bindings))"
+    "]}".
 
 nodiff_inherited_nested_html(Config) when is_list(Config) ->
     Mod = compile_module(

@@ -1604,9 +1604,10 @@ layout keeps diff markers and the page lands in an ordinary escaping value slot.
 `az-nodiff` -- explicit or a layout's implicit one -- inherits downward through the compile unit:
 conditional-branch templates, nested `?html`, `?each` item templates (at any depth), hoisted
 constructors and inlined local helpers all compile nodiff and emit no `az` attributes or slot
-markers, so the HTML is plain. `az_nodiff` on an `?each` item's root element reaches the templates
-nested in that item. Inheritance stops where what is built can land in a live view's diffed slot
-(a `diff => false` value is skipped there forever): a `?stateful` child's props, and any fun
+markers, so the HTML is plain. `az_nodiff` on an `?each` item's root element, or on a bare
+element in a conditional branch, reaches the templates nested in it the same way. Inheritance stops
+where what is built can land in a live view's diffed slot (a nodiff value there never updates in
+place): a `?stateful` child's props, and any fun
 (anonymous or named) other than an `?each` callback, since a fun prop is called later by whichever
 view receives it. A `?stateless` callback is a separate compile unit and keeps its own markers. A
 `?local` under a nodiff template keeps the `az` and slot marker the client resolves it by, and

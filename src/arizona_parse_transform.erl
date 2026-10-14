@@ -491,12 +491,29 @@ mark_targets({tuple, L, [{atom, _, Tag}, _Attrs] = Parts}, Ctx, CCtx) ->
     mark_element_children(L, Tag, Parts, Ctx, CCtx);
 mark_targets({tuple, L, [{atom, _, Tag}, _Attrs, _Children] = Parts}, Ctx, CCtx) ->
     mark_element_children(L, Tag, Parts, Ctx, CCtx);
+%% A bare element in a control-flow tail compiles into its own template, exactly
+%% as a literal `?html` there would (expand_element_leaf/4), so it takes the same
+%% nodiff inheritance the `?html` clause above gives a wrapped one.
 mark_targets(Node, Ctx, CCtx) when is_tuple(Node) ->
-    list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]);
+    Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
+    case is_control_flow(Node) of
+        true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
+        false -> Marked
+    end;
 mark_targets(Nodes, Ctx, CCtx) when is_list(Nodes) ->
     [mark_targets(E, Ctx, CCtx) || E <- Nodes];
 mark_targets(Node, _Ctx, _CCtx) ->
     Node.
+
+is_control_flow({'case', _, _, _}) -> true;
+is_control_flow({'if', _, _}) -> true;
+is_control_flow({block, _, _}) -> true;
+is_control_flow({'receive', _, _}) -> true;
+is_control_flow({'receive', _, _, _, _}) -> true;
+is_control_flow({'try', _, _, _, _, _}) -> true;
+is_control_flow({'maybe', _, _}) -> true;
+is_control_flow({'maybe', _, _, _}) -> true;
+is_control_flow(_Node) -> false.
 
 mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
     ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
