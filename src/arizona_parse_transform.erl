@@ -784,6 +784,14 @@ format_error(Reason) when
     Reason =:= each_remote_fun_ref
 ->
     format_each_error(Reason);
+format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
+    lists:flatten(
+        io_lib:format(
+            "~s ~s shadows the ~s that hoisted ~s reads; rename it. ~s is re-read inside "
+            "the template so it stays tracked, and there ~s would name the inner binding",
+            [binder_kind(Kind), Binder, Binder, Hoisted, Hoisted, Binder]
+        )
+    );
 format_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
     "the view bindings, so their map argument must be the bindings -- a parameter or a "
@@ -791,6 +799,10 @@ format_error(tracked_get_on_non_bindings_map) ->
     "nested map, read it with maps:get/2 (`User = arizona_template:get(user, Bindings), "
     "Name = maps:get(name, User)`); if it is a bindings value reached through a "
     "case/merge the transform cannot see into, alias it directly with `B = Bindings` first".
+
+binder_kind(fun_param) -> "fun parameter";
+binder_kind(named_fun) -> "named fun";
+binder_kind(generator) -> "generator pattern variable".
 
 format_each_error(each_body_not_element) ->
     "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
@@ -1782,15 +1794,18 @@ inline_vars(Expr, Inline) when map_size(Inline) =:= 0 ->
 inline_vars({'fun', L, {clauses, Cs}}, Inline) ->
     {'fun', L, {clauses, [iv_fun_clause(C, Inline) || C <- Cs]}};
 inline_vars({named_fun, L, Name, Cs}, Inline) ->
-    Inline1 = maps:remove(Name, Inline),
+    Inline1 = bind([Name], named_fun, L, maps:remove(Name, Inline)),
     {named_fun, L, Name, [iv_fun_clause(C, Inline1) || C <- Cs]};
 inline_vars(Expr, Inline) ->
     iv(Expr, Inline).
 
 iv({var, _, V} = Var, Inline) ->
     case Inline of
-        #{V := RHS} -> iv(RHS, Inline);
-        #{} -> Var
+        #{V := RHS} ->
+            ok = check_capture(V, RHS, Inline),
+            iv(RHS, Inline);
+        #{} ->
+            Var
     end;
 iv({'fun', L, {clauses, Cs}}, Inline) ->
     iv_fun(L, Cs, Inline);
@@ -1841,7 +1856,7 @@ iv_fun(L, Cs, Inline) ->
     wrap_guard_touches({'fun', L, {clauses, iv_fun_clauses(Cs, Inline)}}, L, Cs, Inline).
 
 iv_named_fun(L, Name, Cs, Inline) ->
-    Inline1 = maps:remove(Name, Inline),
+    Inline1 = bind([Name], named_fun, L, maps:remove(Name, Inline)),
     wrap_guard_touches({named_fun, L, Name, iv_fun_clauses(Cs, Inline1)}, L, Cs, Inline1).
 
 iv_case(L, E, Cs, Inline) ->
@@ -1874,7 +1889,9 @@ iv_maybe_else(L, B, L2, Cs, Inline) ->
 %% inline_vars/2: compile_each needs a single-clause fun, whose guards are over the item
 %% param, not outer tracked vars).
 iv_fun_clause({clause, L, Params, Guards, Body}, Inline) ->
-    Inline1 = maps:without(pattern_vars(Params), Inline),
+    Inline1 = bind(
+        pattern_binders(Params), fun_param, L, maps:without(pattern_vars(Params), Inline)
+    ),
     {clause, L, Params, Guards, iv_body(Body, Inline1)}.
 
 %% case/receive/try-of/catch clause: patterns match the (already inlined) scrutinee,
@@ -1952,24 +1969,138 @@ iv_body(Exprs, Inline) ->
     lists:reverse(Rev).
 
 %% Comprehension qualifiers, left to right: generator patterns bind for subsequent
-%% qualifiers and the template; filters are plain expressions.
+%% qualifiers and the template; filters are plain expressions. A zip generator
+%% evaluates all its sources in the enclosing scope, then binds all its patterns.
 iv_quals(Qs, Inline) ->
     lists:mapfoldl(fun iv_qual/2, Inline, Qs).
 
-iv_qual({generate, L, P, E}, Inline) ->
-    {{generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
-iv_qual({generate_strict, L, P, E}, Inline) ->
-    {{generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
-iv_qual({b_generate, L, P, E}, Inline) ->
-    {{b_generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
-iv_qual({b_generate_strict, L, P, E}, Inline) ->
-    {{b_generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
-iv_qual({m_generate, L, P, E}, Inline) ->
-    {{m_generate, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
-iv_qual({m_generate_strict, L, P, E}, Inline) ->
-    {{m_generate_strict, L, P, iv(E, Inline)}, maps:without(pattern_vars(P), Inline)};
+iv_qual({zip, L, Gens}, Inline) ->
+    Gens1 = [{Gen, GL, P, iv(E, Inline)} || {Gen, GL, P, E} <:- Gens],
+    {{zip, L, Gens1}, bind_generators([P || {_, _, P, _} <:- Gens], L, Inline)};
+iv_qual({Gen, L, P, E}, Inline) when
+    Gen =:= generate;
+    Gen =:= generate_strict;
+    Gen =:= b_generate;
+    Gen =:= b_generate_strict;
+    Gen =:= m_generate;
+    Gen =:= m_generate_strict
+->
+    {{Gen, L, P, iv(E, Inline)}, bind_generators([P], L, Inline)};
 iv_qual(Filter, Inline) ->
     {iv(Filter, Inline), Inline}.
+
+bind_generators(Patterns, L, Inline) ->
+    bind(pattern_binders(Patterns), generator, L, maps:without(pattern_vars(Patterns), Inline)).
+
+%% A fun head, a named fun and a generator bind names in a new scope. A hoisted
+%% definition substituted inside that scope was written against the enclosing one, so
+%% one that reads a name bound there would silently read the inner binding instead.
+%% The scope's binders are recorded under a key no variable can have, and
+%% check_capture/3 refuses such a substitution at compile time.
+bind([], _Kind, _Line, Inline) ->
+    Inline;
+bind(Names, Kind, Line, Inline) ->
+    Binders = maps:get('$binders', Inline, #{}),
+    Inline#{'$binders' => maps:merge(Binders, #{N => {Kind, Line} || N <- Names})}.
+
+check_capture(Hoisted, RHS, #{'$binders' := Binders}) ->
+    case [B || B := _ <- free_vars(RHS, #{}, #{}), is_map_key(B, Binders)] of
+        [] ->
+            ok;
+        Captured ->
+            Binder = lists:min(Captured),
+            #{Binder := {Kind, Line}} = Binders,
+            parse_error({hoisted_var_captured, Kind, Binder, Hoisted}, Line)
+    end;
+check_capture(_Hoisted, _RHS, _Inline) ->
+    ok.
+
+%% The names a pattern binds. A map key and a binary segment size are expressions the
+%% pattern reads, not binders.
+pattern_binders(Pattern) ->
+    maps:keys(binder_vars(Pattern, #{})).
+
+binder_vars({map_field_exact, _, _Key, Value}, Acc) ->
+    binder_vars(Value, Acc);
+binder_vars({bin_element, _, Value, _Size, _Types}, Acc) ->
+    binder_vars(Value, Acc);
+binder_vars({var, _, '_'}, Acc) ->
+    Acc;
+binder_vars({var, _, V}, Acc) ->
+    Acc#{V => true};
+binder_vars(T, Acc) when is_tuple(T) ->
+    binder_vars(tuple_to_list(T), Acc);
+binder_vars([H | T], Acc) ->
+    binder_vars(T, binder_vars(H, Acc));
+binder_vars(_Leaf, Acc) ->
+    Acc.
+
+%% The expressions a pattern reads: its map keys and binary segment sizes.
+pattern_reads({map_field_exact, _, Key, Value}) ->
+    [Key | pattern_reads(Value)];
+pattern_reads({bin_element, _, Value, Size, _Types}) ->
+    [Size | pattern_reads(Value)];
+pattern_reads(T) when is_tuple(T) ->
+    pattern_reads(tuple_to_list(T));
+pattern_reads(L) when is_list(L) ->
+    lists:append([pattern_reads(E) || E <- L]);
+pattern_reads(_Leaf) ->
+    [].
+
+%% The variables an expression reads from its enclosing scope: a name a fun head, a
+%% named fun or a generator binds inside it is not free there, while a pattern's map
+%% keys and binary sizes are reads. A match or case pattern variable is counted free:
+%% it may test a variable of the enclosing scope.
+free_vars({var, _, '_'}, _Bound, Acc) ->
+    Acc;
+free_vars({var, _, V}, Bound, Acc) ->
+    case Bound of
+        #{V := _} -> Acc;
+        #{} -> Acc#{V => true}
+    end;
+free_vars({'fun', _, {clauses, Cs}}, Bound, Acc) ->
+    free_vars_fun_clauses(Cs, Bound, Acc);
+free_vars({named_fun, _, Name, Cs}, Bound, Acc) ->
+    free_vars_fun_clauses(Cs, Bound#{Name => true}, Acc);
+free_vars({Comp, _, T, Qs}, Bound, Acc) when Comp =:= lc; Comp =:= bc; Comp =:= mc ->
+    free_vars_quals(Qs, T, Bound, Acc);
+free_vars(T, Bound, Acc) when is_tuple(T) ->
+    free_vars(tuple_to_list(T), Bound, Acc);
+free_vars([H | T], Bound, Acc) ->
+    free_vars(T, Bound, free_vars(H, Bound, Acc));
+free_vars(_Leaf, _Bound, Acc) ->
+    Acc.
+
+free_vars_fun_clauses(Cs, Bound, Acc) ->
+    lists:foldl(
+        fun({clause, _, Params, Guards, Body}, A) ->
+            Bound1 = binder_vars(Params, Bound),
+            free_vars([pattern_reads(Params), Guards, Body], Bound1, A)
+        end,
+        Acc,
+        Cs
+    ).
+
+free_vars_quals([], T, Bound, Acc) ->
+    free_vars(T, Bound, Acc);
+free_vars_quals([{zip, _, Gens} | Rest], T, Bound, Acc) ->
+    free_vars_generators(Gens, Rest, T, Bound, Acc);
+free_vars_quals([{Gen, _, _, _} = G | Rest], T, Bound, Acc) when
+    Gen =:= generate;
+    Gen =:= generate_strict;
+    Gen =:= b_generate;
+    Gen =:= b_generate_strict;
+    Gen =:= m_generate;
+    Gen =:= m_generate_strict
+->
+    free_vars_generators([G], Rest, T, Bound, Acc);
+free_vars_quals([Filter | Rest], T, Bound, Acc) ->
+    free_vars_quals(Rest, T, Bound, free_vars(Filter, Bound, Acc)).
+
+free_vars_generators(Gens, Rest, T, Bound, Acc) ->
+    Patterns = [P || {_, _, P, _} <:- Gens],
+    Acc1 = free_vars([[E || {_, _, _, E} <:- Gens] | pattern_reads(Patterns)], Bound, Acc),
+    free_vars_quals(Rest, T, binder_vars(Patterns, Bound), Acc1).
 
 pattern_vars(Pattern) ->
     maps:keys(collect_pattern_vars(Pattern, #{})).

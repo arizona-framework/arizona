@@ -337,7 +337,10 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
   `?html`/`?each` argument -- including inside a `case` scrutinee or an opaque
   call -- recursively and scope-aware (fun parameters and comprehension
   generators shadow; patterns and guards are never substituted, so a
-  substitution can never form an illegal pattern or a guard `?get`).
+  substitution can never form an illegal pattern or a guard `?get`). A
+  substitution under a fun parameter, named fun or generator that rebinds a
+  name the definition reads is a compile error (`hoisted_var_captured`): the
+  copy would read the inner binding.
 - **`normalize_tail_binds/1`** lifts a statement-form `case` that binds one
   variable as the whole body of every branch
   (`case ?get(m) of a -> X = ?get(p); _ -> X = ?get(q) end`) into value form

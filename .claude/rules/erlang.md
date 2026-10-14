@@ -463,6 +463,13 @@ Reads **hoisted into the render function body** do track: the parse transform
 inlines each interpolated variable back into its slot closure, so the `?get`
 re-runs inside the dependency bracket.
 
+Because the definition is re-read inside the template, a fun parameter, named fun or
+comprehension generator there that rebinds a name the definition reads would make that copy
+read the inner binding. That is a compile error (`hoisted_var_captured`) naming both -- `Z =
+<<Y/binary, (?get(a))/binary>>` used under `fun(Y) -> ... end` -- so rename the inner binder. A
+pattern's map key or binary size reads a variable rather than binding it, and a name bound
+inside the definition itself is not one it reads; neither is affected.
+
 ```erlang
 %% all of these track per-slot (compile-time inlining):
 Name = ?get(name),                 ?html({p, [], [Name]}).
