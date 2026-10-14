@@ -1722,12 +1722,16 @@ make_op(Az, {attr, Attr, Val}, _Old) ->
     %% value patch bypasses them -- unobserved, the DOM would gain a working
     %% command whose name the client was never told, and nothing later
     %% re-evaluates an unchanged value to heal it.
-    ok =
-        case arizona_template:classify_trusted(Val) of
-            {effect, _} -> arizona_event_attrs:observe_attr(Attr);
-            _NotACommand -> ok
-        end,
-    [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)];
+    %% A command travels as its JSON array, not the HTML-escaped attribute text:
+    %% the value is set verbatim (`setAttribute`, a native prop), where entities
+    %% would never be decoded and the command would fail to parse.
+    case arizona_template:classify_trusted(Val) of
+        {effect, Cmds} ->
+            ok = arizona_event_attrs:observe_attr(Attr),
+            [?OP_SET_ATTR, Az, Attr, arizona_effect:json_value(Cmds)];
+        _NotACommand ->
+            [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)]
+    end;
 make_op(_Az, #{view_id := VId, s := S, d := NewD}, #{view_id := _, s := S, d := OldD}) ->
     [VId, diff_child_dynamics(NewD, OldD)];
 %% A nested template/snapshot in a content slot is always anchored by the

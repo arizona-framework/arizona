@@ -5,6 +5,7 @@
 -export([all/0, groups/0]).
 -export([
     diff_attr_op/1,
+    diff_attr_command_op_is_json_array/1,
     diff_slot_invisible_change_emits_no_op/1,
     diff_attr_invisible_change_emits_no_op/1,
     diff_attr_boolean_vs_string_still_emits/1,
@@ -113,6 +114,7 @@ groups() ->
         {basic_ops, [parallel], [
             diff_text_op,
             diff_attr_op,
+            diff_attr_command_op_is_json_array,
             diff_slot_invisible_change_emits_no_op,
             diff_attr_invisible_change_emits_no_op,
             diff_attr_boolean_vs_string_still_emits,
@@ -301,6 +303,20 @@ diff_attr_op(Config) when is_list(Config) ->
     },
     {Ops, _} = arizona_diff:diff(NewTmpl, OldSnap),
     ?assertEqual([[?OP_SET_ATTR, <<"0">>, <<"class">>, <<"inactive">>]], Ops).
+
+%% A command attribute value travels as its JSON array, not the HTML-escaped
+%% attribute text: a client sets it verbatim (`setAttribute`, a native prop), where
+%% `&quot;` would never be decoded and the command would fail to parse.
+diff_attr_command_op_is_json_array(Config) when is_list(Config) ->
+    Old = arizona_js:push_event(~"a"),
+    New = arizona_js:push_event(~"b\"<&"),
+    ?assertEqual(
+        [[?OP_SET_ATTR, <<"0">>, <<"data-v">>, [0, ~"b\"<&"]]],
+        element(1, attr_diff(Old, New))
+    ),
+    Cmds = [arizona_js:push_event(~"x"), arizona_js:toggle(~"#m")],
+    {[[?OP_SET_ATTR, _, _, Value]], _} = attr_diff(Old, Cmds),
+    ?assertEqual(~"[[0,\"x\"],[1,\"#m\"]]", iolist_to_binary(json:encode(Value))).
 
 %% Bool attr: false -> true produces OP_SET_ATTR with empty value.
 diff_bool_attr_add(Config) when is_list(Config) ->

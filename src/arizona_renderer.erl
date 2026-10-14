@@ -240,6 +240,8 @@ time (`attr_dyn_name/1`) never has this callback reached.
 
 -doc """
 How a dynamic attribute value travels in the fingerprint (hydration) payload --
-`render_attr/2`'s counterpart, as `wire_escape/1` is `escape/1`'s.
+`render_attr/2`'s counterpart, as `wire_escape/1` is `escape/1`'s. Any JSON value:
+the payload is JSON-encoded as a whole, so a native effect command travels as its
+array.
 """.
--callback wire_attr(Name :: binary(), Value :: term()) -> binary().
+-callback wire_attr(Name :: binary(), Value :: term()) -> json:encode_value().

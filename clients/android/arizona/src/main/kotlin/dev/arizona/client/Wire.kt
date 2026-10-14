@@ -3,7 +3,6 @@ package dev.arizona.client
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -123,7 +122,7 @@ class Interleaver(private val cache: FingerprintCache) {
             }
             // A nested {f, s, d} template (child component).
             v is JsonObject -> interleave(v)
-            // A scalar: JsonPrimitive.toString() is its JSON form (quoted/bare).
-            else -> (v as JsonPrimitive).toString()
+            // A value -- a scalar, or an effect command prop's array: its JSON form.
+            else -> v.toString()
         }
 }

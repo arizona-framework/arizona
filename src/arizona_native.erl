@@ -187,16 +187,22 @@ wire_escape(Bin) -> Bin.
 raw_text(_Tag, Value) -> Value.
 
 %% Render a dynamic attribute value: the prop name is baked into the static by
-%% attr_dyn_name/1, so the dynamic is just the value, JSON-encoded as the client
-%% encodes the wire value.
+%% attr_dyn_name/1, so the dynamic is just the value -- the JSON the client builds
+%% by encoding the wire value: an array for an effect command, as a folded one
+%% (attr_command/2) is, else a string.
 -spec render_attr(binary(), term()) -> binary().
 render_attr(Name, Value) ->
-    json_str(wire_attr(Name, Value)).
+    iolist_to_binary(json:encode(wire_attr(Name, Value))).
 
-%% The raw stringified prop the client JSON-encodes.
--spec wire_attr(binary(), term()) -> binary().
+%% The prop as the client receives it, before it JSON-encodes it: an effect
+%% command as its array, so a tap prop reads the same dynamic or folded, and any
+%% other value stringified (to_bin/1 classifies out a `?raw`).
+-spec wire_attr(binary(), term()) -> json:encode_value().
 wire_attr(_Name, Value) ->
-    arizona_template:to_bin(Value).
+    case arizona_template:classify_trusted(Value) of
+        {effect, Cmds} -> arizona_effect:json_value(Cmds);
+        _NotACommand -> arizona_template:to_bin(Value)
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions

@@ -1424,7 +1424,21 @@ dedup_fp_op([BinId, ChildOps] = Op, Fps0) when is_binary(BinId), is_list(ChildOp
         true -> {[BinId, ChildOps1], Fps1, true};
         false -> {Op, Fps1, false}
     end;
-dedup_fp_op([OpCode, Target | Rest] = Op, Fps0) when is_integer(OpCode) ->
+%% Only the op positions the diff fills with a payload are walked: an op's
+%% shape is fixed by its code, so the walk follows it rather than descending
+%% into any list. A SET_ATTR value is app data -- a command array whose payload
+%% map may hold any keys, `~"f"`/`~"d"` included -- and is never a payload.
+dedup_fp_op([?OP_ITEM_PATCH, Az, Key, InnerOps] = Op, Fps0) ->
+    dedup_inner_ops(Op, [?OP_ITEM_PATCH, Az, Key], InnerOps, Fps0);
+dedup_fp_op([OpCode, Target, InnerOps] = Op, Fps0) when
+    OpCode =:= ?OP_ITEM_PATCH; OpCode =:= ?OP_LIST_PATCH
+->
+    %% A positional OP_ITEM_PATCH (inside an OP_LIST_PATCH) or an OP_LIST_PATCH:
+    %% the last element is a list of ops.
+    dedup_inner_ops(Op, [OpCode, Target], InnerOps, Fps0);
+dedup_fp_op([OpCode, Target | Rest] = Op, Fps0) when
+    OpCode =:= ?OP_TEXT; OpCode =:= ?OP_INSERT; OpCode =:= ?OP_REPLACE
+->
     {Rest1, Fps1, Changed} = dedup_fp_vals(Rest, Fps0),
     case Changed of
         true -> {[OpCode, Target | Rest1], Fps1, true};
@@ -1433,38 +1447,58 @@ dedup_fp_op([OpCode, Target | Rest] = Op, Fps0) when is_integer(OpCode) ->
 dedup_fp_op(Op, Fps) ->
     {Op, Fps, false}.
 
+dedup_inner_ops(Op, Head, InnerOps, Fps0) ->
+    {InnerOps1, Fps1, Changed} = dedup_fp_ops(InnerOps, Fps0),
+    case Changed of
+        true -> {Head ++ [InnerOps1], Fps1, true};
+        false -> {Op, Fps1, false}
+    end.
+
 dedup_fp_val(#{~"f" := F, ~"s" := _, ~"d" := D} = Val, Fps) ->
     case Fps of
         #{F := _} ->
-            {D1, Fps1, _Changed} = dedup_fp_vals(D, Fps),
+            {D1, Fps1, _Changed} = dedup_fp_d(Val, D, Fps),
             {maps:without([~"s"], Val#{~"d" => D1}), Fps1, true};
         #{} ->
-            {D1, Fps1, Changed} = dedup_fp_vals(D, Fps#{F => true}),
+            {D1, Fps1, Changed} = dedup_fp_d(Val, D, Fps#{F => true}),
             {rebuild_d(Val, D1, Changed), Fps1, Changed}
     end;
 dedup_fp_val(#{~"f" := F, ~"d" := D} = Val, Fps) ->
     %% Already stripped (no ~"s"), still recurse into nested dynamics
-    {D1, Fps1, Changed} = dedup_fp_vals(D, Fps),
+    {D1, Fps1, Changed} = dedup_fp_d(Val, D, Fps),
     Fps2 =
         case Fps1 of
             #{F := _} -> Fps1;
             #{} -> Fps1#{F => true}
         end,
     {rebuild_d(Val, D1, Changed), Fps2, Changed};
-dedup_fp_val(Items, Fps) when is_list(Items) ->
-    %% List: stream items from ~"d" or inner ops from OP_ITEM_PATCH.
-    %% Use dedup_fp_vals (not dedup_fp_ops) so fingerprinted maps in lists
-    %% are properly matched and deduped -- dedup_fps/dedup_fp_op only
-    %% recognizes op-shaped lists, not bare fingerprint maps.
-    dedup_fp_vals(Items, Fps);
 dedup_fp_val(Val, Fps) ->
+    %% A scalar, or a list that is not a payload: a native command array, or a
+    %% no-`f` each fallback (rendered binaries). Neither can hold one.
     {Val, Fps, false}.
+
+%% An each payload (`~"t"`) holds one row of values per item; any other payload
+%% holds the values directly.
+dedup_fp_d(#{~"t" := _}, Rows, Fps) ->
+    dedup_fp_rows(Rows, Fps);
+dedup_fp_d(_Val, D, Fps) ->
+    dedup_fp_vals(D, Fps).
+
+dedup_fp_rows([], Fps) ->
+    {[], Fps, false};
+dedup_fp_rows([Row | T] = L, Fps0) ->
+    {Row1, Fps1, RowChanged} = dedup_fp_vals(Row, Fps0),
+    {T1, Fps2, TChanged} = dedup_fp_rows(T, Fps1),
+    case RowChanged orelse TChanged of
+        true -> {[Row1 | T1], Fps2, true};
+        false -> {L, Fps2, false}
+    end.
 
 rebuild_d(Val, D1, true) -> Val#{~"d" => D1};
 rebuild_d(Val, _D1, false) -> Val.
 
-%% One walker for both an op's trailing args and a payload's d-list --
-%% every element goes through dedup_fp_val/2 either way.
+%% One walker for both an op's trailing args and a payload's values -- every
+%% element goes through dedup_fp_val/2 either way.
 dedup_fp_vals([], Fps) ->
     {[], Fps, false};
 dedup_fp_vals([H | T] = L, Fps0) ->

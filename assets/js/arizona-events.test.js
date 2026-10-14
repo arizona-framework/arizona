@@ -115,6 +115,22 @@ describe('open event delegation', () => {
         ]);
     });
 
+    // A diff that changes a command attribute ships the command as its JSON array,
+    // not attribute text: written verbatim, `&quot;` would never be decoded and the
+    // next click would fail to parse it.
+    it('fires a command attribute a SET_ATTR op replaced', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view><button id="b" az="1" az-click='[0,"old"]'>go</button></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        mod.applyOps([[1, 'v:1', 'az-click', [0, 'new"<&']]]);
+
+        expect(document.getElementById('b').getAttribute('az-click')).toBe('[0,"new\\"<&"]');
+        document.getElementById('b').click();
+        expect(w.sent()).toEqual([['v', 'new"<&', {}]]);
+    });
+
     it('delegates the common types before the connect frame arrives', async () => {
         const mod = await fresh();
         document.body.innerHTML = `<div id="v" az-view><button id="b" az-click='[0,"clicked"]'>go</button></div>`;

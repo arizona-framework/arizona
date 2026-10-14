@@ -15,6 +15,8 @@
     dedup_nested_each/1,
     dedup_component_in_each_item/1,
     dedup_deep_nesting/1,
+    dedup_skips_command_attr/1,
+    dedup_list_patch_inner_ops/1,
     effect_child_event_no_effects/1,
     effect_child_event_with_effects/1,
     effect_child_only_no_ops/1,
@@ -242,7 +244,9 @@ groups() ->
             dedup_each_repeated_item_fp,
             dedup_nested_each,
             dedup_component_in_each_item,
-            dedup_deep_nesting
+            dedup_deep_nesting,
+            dedup_skips_command_attr,
+            dedup_list_patch_inner_ops
         ]},
         {seed_fps, [parallel], [
             seed_fps_skips_statics,
@@ -2074,6 +2078,50 @@ dedup_deep_nesting(Config) when is_list(Config) ->
     [[P3]] = maps:get(<<"d">>, P2),
     ?assert(maps:is_key(<<"s">>, P2)),
     ?assert(maps:is_key(<<"s">>, P3)).
+
+%% A command attribute value is app data: its payload map may carry `<<"f">>`
+%% and `<<"d">>` keys, which must never be read as a fingerprint payload -- not
+%% at top level, and not inside an OP_ITEM_PATCH -- even when the same frame
+%% carries a real one.
+dedup_skips_command_attr(Config) when is_list(Config) ->
+    Cmd = [0, <<"go">>, #{<<"f">> => <<"seen">>, <<"s">> => <<"keep">>, <<"d">> => <<"x">>}],
+    Fp = #{<<"f">> => <<"real_fp">>, <<"s">> => [<<"<b>">>, <<"</b>">>], <<"d">> => [<<"v">>]},
+    Ops = [
+        [?OP_SET_ATTR, <<"0">>, <<"az-click">>, Cmd],
+        [?OP_ITEM_PATCH, <<"1">>, <<"k">>, [[?OP_SET_ATTR, <<"2">>, <<"az-click">>, Cmd]]],
+        [?OP_TEXT, <<"3">>, Fp]
+    ],
+    {Result, Fps} = dedup_fps(Ops, #{<<"seen">> => true}),
+    ?assertEqual(Ops, Result),
+    ?assertEqual(#{<<"seen">> => true, <<"real_fp">> => true}, Fps).
+
+%% An OP_LIST_PATCH carries positional sub-ops: an OP_INSERT payload and an
+%% OP_ITEM_PATCH's inner ops are both deduped.
+dedup_list_patch_inner_ops(Config) when is_list(Config) ->
+    Fp = #{<<"f">> => <<"lp_fp">>, <<"s">> => [<<"<i>">>, <<"</i>">>], <<"d">> => [<<"v">>]},
+    Ops = [
+        [
+            ?OP_LIST_PATCH,
+            <<"0">>,
+            [
+                [?OP_INSERT, 0, Fp],
+                [?OP_ITEM_PATCH, 1, [[?OP_TEXT, <<"1">>, Fp]]]
+            ]
+        ]
+    ],
+    {
+        [
+            [
+                ?OP_LIST_PATCH,
+                <<"0">>,
+                [[?OP_INSERT, 0, P1], [?OP_ITEM_PATCH, 1, [[?OP_TEXT, <<"1">>, P2]]]]
+            ]
+        ],
+        Fps
+    } = dedup_fps(Ops, #{}),
+    ?assert(maps:is_key(<<"s">>, P1)),
+    ?assertNot(maps:is_key(<<"s">>, P2)),
+    ?assert(maps:is_key(<<"lp_fp">>, Fps)).
 
 dedup_navigate_nested_dynamics(Config) when is_list(Config) ->
     %% Navigate returns fingerprinted payload whose dynamics contain
