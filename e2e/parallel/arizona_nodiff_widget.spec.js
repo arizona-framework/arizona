@@ -1,0 +1,81 @@
+import { expect, test } from '@playwright/test';
+
+// A client-owned widget in an az-nodiff region (`arizona_nodiff_widget`, the `Widget`
+// hook in `arizona_layout`): the server decides which region the slot holds, the widget
+// owns the DOM inside it. The CT suites pin the ops; these assert the client side --
+// that a kept region keeps the widget's own state and a replaced one runs the hook's
+// lifecycle.
+
+const wsReady = (page) =>
+    page.waitForFunction(() => document.documentElement.classList.contains('az-connected'));
+
+const widget = (page) => page.locator('#slot [az-hook="Widget"]');
+const input = (page) => page.locator('#slot .widget-input');
+const kind = (page) => page.locator('#slot .widget-kind');
+const log = (page) => page.evaluate(() => window._widget);
+
+test.beforeEach(async ({ page }) => {
+    await page.goto('/nodiff-widget');
+    await wsReady(page);
+    await expect(kind(page)).toHaveText('line');
+});
+
+test('the same branch chosen again keeps the widget and its state', async ({ page }) => {
+    await input(page).fill('typed');
+    await page.locator('#rerun').click();
+    await page.locator('#bump').click();
+    await expect(page.locator('#count')).toHaveText('1');
+    await expect(input(page)).toHaveValue('typed');
+    expect(await log(page)).toEqual({ mounts: 1, destroys: 0, events: ['mount:line'] });
+});
+
+test('switching branches destroys the widget before removing it', async ({ page }) => {
+    await input(page).fill('typed');
+    await page.locator('#bar').click();
+    await expect(kind(page)).toHaveText('bar');
+    await expect(input(page)).toHaveValue('');
+    expect((await log(page)).events).toEqual(['mount:line', 'destroy:line:true', 'mount:bar']);
+});
+
+test('hiding and showing the region unmounts and remounts the widget', async ({ page }) => {
+    await page.locator('#hide').click();
+    await expect(widget(page)).toHaveCount(0);
+    await page.locator('#line').click();
+    await expect(kind(page)).toHaveText('line');
+    expect((await log(page)).events).toEqual(['mount:line', 'destroy:line:true', 'mount:line']);
+});
+
+test('two branches calling the same helper are two regions', async ({ page }) => {
+    await page.locator('#helper-a').click();
+    await expect(kind(page)).toHaveText('helper');
+    await input(page).fill('typed');
+    await page.locator('#helper-b').click();
+    await expect(input(page)).toHaveValue('');
+    expect((await log(page)).events).toEqual([
+        'mount:line',
+        'destroy:line:true',
+        'mount:helper',
+        'destroy:helper:true',
+        'mount:helper',
+    ]);
+});
+
+test('a new az_key remounts the widget', async ({ page }) => {
+    await input(page).fill('typed');
+    await page.locator('#rekey').click();
+    await expect(input(page)).toHaveValue('');
+    expect((await log(page)).events).toEqual(['mount:line', 'destroy:line:true', 'mount:line']);
+});
+
+// A reconnect mounts the view afresh and resyncs it whole, so the widget is remounted
+// and its client state is gone.
+test('a reconnect remounts the widget', async ({ page }) => {
+    await input(page).fill('typed');
+    await page.evaluate(() => window._ws.close(4000));
+    await page.waitForFunction(() =>
+        document.documentElement.classList.contains('az-disconnected'),
+    );
+    await wsReady(page);
+    await expect(input(page)).toHaveValue('');
+    expect((await log(page)).events).toEqual(['mount:line', 'destroy:line:true', 'mount:line']);
+});
