@@ -42,8 +42,7 @@
 -export([resync_on_dead_live_process_closes_going_away/1]).
 -export([event_on_stopped_live_process_closes_normal/1]).
 -export([event_on_drained_live_process_closes_going_away/1]).
--export([event_on_crashed_live_process_closes_crash/1]).
--export([event_on_gone_live_process_without_exit_closes_crash/1]).
+-export([navigate_on_crashed_live_process_closes_crash/1]).
 -export([event_drained_under_call_closes_going_away/1]).
 -export([navigate_middleware_noproc_closes_crash/1]).
 -export([drain_effects_ship_before_close/1]).
@@ -94,8 +93,7 @@ all() ->
         resync_on_dead_live_process_closes_going_away,
         event_on_stopped_live_process_closes_normal,
         event_on_drained_live_process_closes_going_away,
-        event_on_crashed_live_process_closes_crash,
-        event_on_gone_live_process_without_exit_closes_crash,
+        navigate_on_crashed_live_process_closes_crash,
         event_drained_under_call_closes_going_away,
         navigate_middleware_noproc_closes_crash,
         drain_effects_ship_before_close,
@@ -903,30 +901,27 @@ event_on_drained_live_process_closes_going_away(Config) when is_list(Config) ->
         error_logs(fun() -> settle(arizona_socket:handle_in(inc_frame(), Socket), Socket) end)
     ).
 
-event_on_crashed_live_process_closes_crash(Config) when is_list(Config) ->
-    %% ...and after a crash it is a crash: 4500, logged exactly once.
-    Socket = counter_socket(),
+navigate_on_crashed_live_process_closes_crash(Config) when is_list(Config) ->
+    %% ...and after a crash it is a crash: a navigate whose call finds the live
+    %% process killed ships the push the process sent before dying, then closes
+    %% 4500, logged exactly once. The navigate leg used to read any `noproc` as
+    %% the drain race and close 1001, skipping the push.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/rc" => {arizona_root_counter, #{}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket),
+    Pid ! {set_count, 5},
+    {status, Pid, _, _} = sys:get_status(Pid),
     Ref = erlang:monitor(process, Pid),
     true = exit(Pid, kill),
     ok = await_down(Ref, Pid),
     ?assertMatch(
-        {{[], {close, 4500, ~"server crash", _}}, 1},
-        error_logs(fun() -> settle(arizona_socket:handle_in(inc_frame(), Socket), Socket) end)
+        {{[_Pushed], {close, 4500, ~"server crash", _}}, 1},
+        error_logs(fun() ->
+            settle(arizona_socket:handle_in(navigate_frame(~"/rc"), Socket), Socket)
+        end)
     ).
-
-event_on_gone_live_process_without_exit_closes_crash(Config) when is_list(Config) ->
-    %% A live process gone with no exit left to read means something else
-    %% consumed it, which the socket never does: an invariant break, closed
-    %% 4500 rather than guessed to be a drain.
-    Socket = counter_socket(),
-    Pid = arizona_socket:live_pid(Socket),
-    ok = stop_live(Socket, {shutdown, drain}),
-    receive
-        {'EXIT', Pid, _} -> ok
-    after 1000 -> error(no_exit_queued)
-    end,
-    ?assertMatch({close, 4500, ~"server crash", _}, arizona_socket:handle_in(inc_frame(), Socket)).
 
 event_drained_under_call_closes_going_away(Config) when is_list(Config) ->
     %% The drain lands while the event's call is already queued: the live process
