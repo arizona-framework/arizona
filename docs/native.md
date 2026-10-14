@@ -49,7 +49,8 @@ handle_event(~"inc", _Payload, Bindings) ->
   platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
   reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into
   the statics or computed at runtime (`{on_tap, ?get(cmd)}`, carried in `d` and
-  patched by `OP_SET_ATTR`), so a tap prop always reads an array. Events flow
+  patched by `OP_SET_ATTR`), so a tap prop always reads an array. A prop carries
+  one command: the native clients do not run a list of commands yet. Events flow
   back exactly as on the web (`[ViewId, Event, Payload]` → `handle_event/3`).
 - **`?each` works uniformly.** A `?each` inside `?native` is compiled for the
   native target automatically — no separate macro. `?stateful`/`?stateless`
@@ -284,7 +285,8 @@ returns them won't crash a native client.
   targets in one tree mismatches the statics format. This is a documented rule,
   not a checked one.
 - **No server-side widget validation** (let-it-crash / the client's concern).
-- **Props are string-encoded**; the client coerces. Typed props, opt-in
+- **Props are string-encoded** (an event prop's command excepted, which is an
+  array); the client coerces. Typed props, opt-in
   per-platform compile-time validators, and a portable cross-platform
   vocabulary helper are possible future additions.
 - **A stateful child inside a stream item resolves through its own view.** The

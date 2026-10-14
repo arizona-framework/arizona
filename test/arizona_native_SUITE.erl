@@ -13,6 +13,7 @@
 -export([event_prop_navigate_command/1]).
 -export([dynamic_event_prop_is_json_array/1]).
 -export([diff_dynamic_event_prop_op/1]).
+-export([dedup_keeps_command_prop_payload/1]).
 -export([live_view_caches_statics/1]).
 -export([native_each_renders_item_array/1]).
 -export([native_each_empty_is_valid_json/1]).
@@ -44,6 +45,7 @@ all() ->
         event_prop_navigate_command,
         dynamic_event_prop_is_json_array,
         diff_dynamic_event_prop_op,
+        dedup_keeps_command_prop_payload,
         live_view_caches_statics,
         native_each_renders_item_array,
         native_each_empty_is_valid_json,
@@ -226,18 +228,15 @@ dynamic_event_prop_is_json_array(Config) when is_list(Config) ->
         "        {'Button', [{on_tap, az:get(cmd, Bindings)}], [<<\"B\">>]}"
         "    ]}). "
     ),
-    Cmds = [arizona_android:push_event(~"x"), arizona_android:navigate(~"/n")],
-    T = Mod:render(#{ev => ~"a<b\"c", cmd => Cmds}),
+    %% One command per prop: the native clients run a single command, not a list.
+    Cmd = arizona_android:navigate(~"/n"),
+    T = Mod:render(#{ev => ~"a<b\"c", cmd => Cmd}),
     {Live, Snap} = arizona_render:render(T),
     #{~"children" := [A, B]} = simulate_interleave(arizona_render:fingerprint_payload(Snap)),
     ?assertEqual([0, ~"a<b\"c"], maps:get(~"on_tap", A)),
-    ?assertEqual([[0, ~"x"], [10, ~"/n"]], maps:get(~"on_tap", B)),
+    ?assertEqual([10, ~"/n"], maps:get(~"on_tap", B)),
     ?assertMatch(
-        #{
-            ~"children" := [
-                #{~"on_tap" := [0, ~"a<b\"c"]}, #{~"on_tap" := [[0, ~"x"], [10, ~"/n"]]}
-            ]
-        },
+        #{~"children" := [#{~"on_tap" := [0, ~"a<b\"c"]}, #{~"on_tap" := [10, ~"/n"]}]},
         json:decode(iolist_to_binary(Live))
     ).
 
@@ -253,6 +252,36 @@ diff_dynamic_event_prop_op(Config) when is_list(Config) ->
     {_, Snap0} = arizona_render:render(Mod:render(#{ev => ~"a"})),
     {Ops, _} = arizona_diff:diff(Mod:render(#{ev => ~"b&"}), Snap0),
     ?assertMatch([[?OP_SET_ATTR, _Az, ~"on_tap", [0, ~"b&"]]], Ops).
+
+%% A command prop's payload map is app data, even when it carries `f`/`s`/`d`
+%% keys: the fingerprint dedup leaves it whole, in the hydration payload and in a
+%% diff frame that also ships a real fingerprint payload.
+dedup_keeps_command_prop_payload(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(nt_dedup_cmd). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:native({'Column', [], ["
+        "        {'Button', [{on_tap, az:get(cmd, Bindings)}], [<<\"B\">>]}, "
+        "        case az:get(show, Bindings) of "
+        "            true -> {'Text', [], [<<\"on\">>]}; "
+        "            false -> <<>> "
+        "        end"
+        "    ]}). "
+    ),
+    Payload = #{~"f" => ~"seen", ~"s" => ~"keep", ~"d" => ~"x"},
+    Cmd0 = arizona_android:push_event(~"a", Payload),
+    Cmd1 = arizona_android:push_event(~"b", Payload),
+    {_, Snap0} = arizona_render:render(Mod:render(#{cmd => Cmd0, show => false})),
+    Seen = #{~"seen" => true},
+    {[[?OP_TEXT, ~"0", Mount]], _} =
+        arizona_live:dedup_fps([[?OP_TEXT, ~"0", arizona_render:fingerprint_payload(Snap0)]], Seen),
+    #{~"children" := [Button | _]} = simulate_interleave(Mount),
+    ?assertEqual([0, ~"a", Payload], maps:get(~"on_tap", Button)),
+    {Ops, _} = arizona_diff:diff(Mod:render(#{cmd => Cmd1, show => true}), Snap0),
+    {Ops1, Fps} = arizona_live:dedup_fps(Ops, Seen),
+    ?assertMatch([[?OP_SET_ATTR, _, ~"on_tap", [0, ~"b", Payload]], [?OP_TEXT, _, #{}]], Ops1),
+    ?assertEqual(2, map_size(Fps)).
 
 live_view_caches_statics(Config) when is_list(Config) ->
     %% Wire-efficiency proof: a native live view's first mount ships the full
