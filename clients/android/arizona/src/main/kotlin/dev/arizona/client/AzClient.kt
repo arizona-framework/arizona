@@ -78,7 +78,10 @@ class AzClient(baseUrl: String, path: String) {
     internal val views = HashMap<String, MutableMap<String, Node>>()
     private val main = Handler(Looper.getMainLooper())
     private val http = OkHttpClient()
-    private var ws: WebSocket? = null
+    // Settable by tests so a JVM test can assert on what the client TRANSMITS
+    // (a frame's effects, as opposed to the open handshake [handleOpen] covers).
+    @VisibleForTesting
+    internal var ws: WebSocket? = null
     private var viewId: String? = null
 
     // Reconnect bookkeeping. `closing` (set on an intentional close) suppresses
@@ -171,7 +174,7 @@ class AzClient(baseUrl: String, path: String) {
     // throw is the development signal that a template built a bad command.
     private fun runEffectSafe(cmd: JsonElement) {
         try {
-            for (one in commands(cmd.jsonArray)) runEffect(one, strict = false)
+            runEffect(cmd.jsonArray, strict = false)
         } catch (e: Exception) {
             Log.w(TAG, "effect $cmd failed; skipping", e)
         }

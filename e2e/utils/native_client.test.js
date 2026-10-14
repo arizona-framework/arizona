@@ -84,17 +84,6 @@ describe('native client effect dispatch', () => {
             ['navigate', { path: '/done', qs: '' }],
         ]);
     });
-
-    // The server ships one command per effect today; this mirrors the web client,
-    // whose applyEffects runs every effect through the same interpreter as a tap.
-    it('runs a server effect holding a list, as the shared interpreter does', () => {
-        const { client, sent } = clientWithRecorder();
-        client._runEffectSafe([
-            [EFFECT_PUSH_EVENT, 'a'],
-            [EFFECT_PUSH_EVENT, 'b'],
-        ]);
-        expect(sent.map((f) => JSON.parse(f)[1])).toEqual(['a', 'b']);
-    });
 });
 
 // --------------------------------------------------------------------------
@@ -446,6 +435,38 @@ describe('native client op application', () => {
                 }),
             );
             expect(client.tree().id).toBe('native_x');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // Each "e" entry is exactly one command: a frame carrying two must send two
+    // frames, once each and in order, and a malformed entry between them costs
+    // only itself.
+    it('runs each server effect entry as one command, in order', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const ws = installWebSocketStub();
+        try {
+            const client = newClient();
+            client.connect();
+            ws.latest().simulateOpen();
+            ws.latest().simulateMessage(
+                JSON.stringify({
+                    o: [[OP_REPLACE, 'native_x', { f: 'R', s: ROOT_STATICS, d: ['native_x', ''] }]],
+                    e: [
+                        [EFFECT_PUSH_EVENT, 'saved', { id: '1' }],
+                        [EFFECT_PUSH_EVENT],
+                        [EFFECT_NAVIGATE, '/done?x=1'],
+                    ],
+                }),
+            );
+            // sent[0] is the open handshake's cached_fps announcement.
+            const effects = ws.latest().sent.slice(1);
+            expect(effects.map((f) => JSON.parse(f))).toEqual([
+                ['native_x', 'saved', { id: '1' }],
+                ['navigate', { path: '/done', qs: 'x=1' }],
+            ]);
+            expect(warn).toHaveBeenCalledTimes(1);
         } finally {
             ws.restore();
         }

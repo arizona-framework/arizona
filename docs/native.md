@@ -116,7 +116,7 @@ reserved keys; every other key is a prop:
 {
   "type": "Column",
   "az": "f1-0",
-  "az-view": "counter",
+  "az_view": true,
   "id": "counter",
   "padding": "16",
   "children": [
@@ -129,8 +129,9 @@ reserved keys; every other key is a prop:
 
 - **`az`** is the diff-target token. Ops address `"ViewId:az"`; the client keeps
   an `az` → node registry.
-- **`az-view`** marks a view root; its value is the `ViewId` (the `id` returned
-  by `mount`). Events from a node route to the nearest enclosing `az-view`.
+- **`az_view`** (`true`) marks a view root; its `id` prop is the `ViewId` (the
+  `id` returned by `mount`). Events from a node route to the nearest enclosing
+  `az_view`.
 - **`#slot`** is the addressable, *transparent* wrapper for any **dynamic** child
   (dynamic text, an `?each`, or a child component). The client renders a `#slot`
   by splicing its `children` into the parent — a fragment. One `#slot` per
@@ -146,8 +147,9 @@ browser, so statics are sent once and never re-sent:
   `{"f": F, "s": [...statics...], "d": [...values...]}`.
 - Once the client has cached `f` (it reports them via `["cached_fps", [...]]` on
   connect), the server omits `s`: `{"f": F, "d": [...]}`.
-- `d` carries **raw** values (strings/numbers). The browser concatenates them;
-  the native client `JSON.stringify`s each one as it interleaves.
+- `d` carries **raw** values: strings, numbers, and an effect command's JSON
+  array. The browser concatenates them; the native client `JSON.stringify`s each
+  one as it interleaves.
 - Op codes (`OP_TEXT`, `OP_SET_ATTR`, `OP_INSERT`/`OP_MOVE`/`OP_REMOVE`/
   `OP_ITEM_PATCH`, `OP_REPLACE`, …) are identical; only the payload
   *content* is a JSON widget skeleton instead of HTML.
@@ -241,12 +243,12 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    child) — so events reach stateful children, not just the root. The prop holds
    one command or a list of them, told apart by whether its first element is an
    array, and a list runs in order; a prop that is not an array (`false` for a
-   disabled command) fires nothing. The server's `"e"` (effects) array is
-   dispatched after the ops. The portable commands are handled — `push_event`,
-   and `navigate` (which sends `["navigate", {path, qs}]` on the same socket; the
-   server's `handle_navigate` re-mounts the target view and replies with
-   `OP_REPLACE`). Web-only effects (`set_title`, `dispatch_event`, …) are skipped
-   on native.
+   disabled command) fires nothing. The server's `"e"` (effects) array, one
+   command per entry, is dispatched after the ops. The portable commands are
+   handled — `push_event`, and `navigate` (which sends
+   `["navigate", {path, qs}]` on the same socket; the server's `handle_navigate`
+   re-mounts the target view and replies with `OP_REPLACE`). Web-only effects
+   (`set_title`, `dispatch_event`, …) are skipped on native.
 6. **Reconnect with backoff.** On a dropped socket — any close other than a
    normal `1000`, or an abrupt failure — reopen with exponential backoff
    (`[1, 2, 5, 10]`s steps, capped at 10s, ±20% jitter), resetting the attempt
