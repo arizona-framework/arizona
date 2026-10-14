@@ -40,6 +40,16 @@
 -export([resync_mount_crash_on_other_frame_closes_crash/1]).
 -export([resync_mount_crash_on_timeout_closes_crash/1]).
 -export([resync_on_dead_live_process_closes_going_away/1]).
+-export([event_on_stopped_live_process_closes_normal/1]).
+-export([event_on_drained_live_process_closes_going_away/1]).
+-export([navigate_on_crashed_live_process_closes_crash/1]).
+-export([event_drained_under_call_closes_going_away/1]).
+-export([navigate_middleware_noproc_closes_crash/1]).
+-export([drain_effects_ship_before_close/1]).
+-export([drain_effects_ship_before_noproc_close/1]).
+-export([crash_under_call_closes_crash/1]).
+-export([patch_on_drained_live_process_closes_going_away/1]).
+-export([resync_timeout_on_drained_live_process_closes_going_away/1]).
 -export([drain_before_mount_closes_going_away/1]).
 -export([push_emitted_after_reply_not_folded/1]).
 -export([child_push_scoped_to_emitting_view/1]).
@@ -80,6 +90,16 @@ all() ->
         resync_mount_crash_on_other_frame_closes_crash,
         resync_mount_crash_on_timeout_closes_crash,
         resync_on_dead_live_process_closes_going_away,
+        event_on_stopped_live_process_closes_normal,
+        event_on_drained_live_process_closes_going_away,
+        navigate_on_crashed_live_process_closes_crash,
+        event_drained_under_call_closes_going_away,
+        navigate_middleware_noproc_closes_crash,
+        drain_effects_ship_before_close,
+        drain_effects_ship_before_noproc_close,
+        crash_under_call_closes_crash,
+        patch_on_drained_live_process_closes_going_away,
+        resync_timeout_on_drained_live_process_closes_going_away,
         drain_before_mount_closes_going_away,
         push_emitted_after_reply_not_folded,
         child_push_scoped_to_emitting_view,
@@ -804,7 +824,10 @@ resync_mount_crash_on_fps_frame_closes_crash(Config) when is_list(Config) ->
     %% `cached_fps` frame -- must close 4500 like every sibling mount path.
     Socket = crashing_flagged_socket(),
     FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
-    ?assertMatch({close, 4500, ~"server crash", _}, arizona_socket:handle_in(FpsFrame, Socket)).
+    ?assertMatch(
+        {[], {close, 4500, ~"server crash", _}},
+        logged_error(fun() -> settle(arizona_socket:handle_in(FpsFrame, Socket), Socket) end)
+    ).
 
 resync_mount_crash_on_other_frame_closes_crash(Config) when is_list(Config) ->
     %% Protocol-violation leg: a non-`cached_fps` first frame flushes the resync
@@ -814,36 +837,189 @@ resync_mount_crash_on_other_frame_closes_crash(Config) when is_list(Config) ->
     EventFrame = iolist_to_binary(
         json:encode([~"crashable", ~"set_status", #{~"value" => ~"x"}])
     ),
-    ?assertMatch({close, 4500, ~"server crash", _}, arizona_socket:handle_in(EventFrame, Socket)).
+    ?assertMatch(
+        {[], {close, 4500, ~"server crash", _}},
+        logged_error(fun() -> settle(arizona_socket:handle_in(EventFrame, Socket), Socket) end)
+    ).
 
 resync_mount_crash_on_timeout_closes_crash(Config) when is_list(Config) ->
     %% Backstop leg: the flagged client never announced, so the timer flushes
     %% the resync from handle_info/2 -- equally unguarded before the fix.
     Socket = crashing_flagged_socket(),
     ?assertMatch(
-        {close, 4500, ~"server crash", _},
-        arizona_socket:handle_info(arizona_resync_timeout, Socket)
+        {[], {close, 4500, ~"server crash", _}},
+        logged_error(fun() ->
+            settle(arizona_socket:handle_info(arizona_resync_timeout, Socket), Socket)
+        end)
     ).
 
 resync_on_dead_live_process_closes_going_away(Config) when is_list(Config) ->
-    %% Drain/exit race: the resync flush reaches a live process that already
-    %% exited (a listener drain landing inside the deferral window). Its sibling
-    %% mount paths (do_navigate/do_patch) translate that into a 1001 going-away
-    %% close so the client's form-state-preserving reconnect runs; the flush
-    %% raised a bare `{noproc, ...}` out of handle_in/2 instead.
+    %% Drain race: the resync flush reaches a live process that already exited
+    %% `{shutdown, drain}` (a listener drain landing inside the deferral window).
+    %% The flush raises out of the call; the frame is dropped and the queued
+    %% exit closes: 1001, so the client's form-state-preserving reconnect runs.
     Req = arizona_req_test_adapter:new(),
     {reply, _, Socket} = arizona_socket:init(
         arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
     ),
+    ok = stop_live(Socket, {shutdown, drain}),
+    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
+    ?assertMatch(
+        {[], {close, 1001, <<>>, _}}, settle(arizona_socket:handle_in(FpsFrame, Socket), Socket)
+    ).
+
+event_on_stopped_live_process_closes_normal(Config) when is_list(Config) ->
+    %% An event frame whose call finds the live process gone closes per that
+    %% process's exit, not as a drain: a deliberate end of session (`normal`,
+    %% `shutdown`, any `{shutdown, _}` but drain) is a 1000 with no reconnect,
+    %% unlogged.
+    lists:foreach(
+        fun(Reason) ->
+            Socket = counter_socket(),
+            ok = stop_live(Socket, Reason),
+            ?assertMatch(
+                {{[], {close, 1000, <<>>, _}}, 0},
+                error_logs(fun() ->
+                    settle(arizona_socket:handle_in(inc_frame(), Socket), Socket)
+                end),
+                Reason
+            )
+        end,
+        [normal, shutdown, {shutdown, other}]
+    ).
+
+event_on_drained_live_process_closes_going_away(Config) when is_list(Config) ->
+    %% The same race after a drain exit is the form-state-preserving reconnect:
+    %% 1001, unlogged. The event leg used to let `{noproc, _}` reach the 4500
+    %% crash close.
+    Socket = counter_socket(),
+    ok = stop_live(Socket, {shutdown, drain}),
+    ?assertMatch(
+        {{[], {close, 1001, <<>>, _}}, 0},
+        error_logs(fun() -> settle(arizona_socket:handle_in(inc_frame(), Socket), Socket) end)
+    ).
+
+navigate_on_crashed_live_process_closes_crash(Config) when is_list(Config) ->
+    %% ...and after a crash it is a crash: a navigate whose call finds the live
+    %% process killed ships the push the process sent before dying, then closes
+    %% 4500, logged exactly once. The navigate leg used to read any `noproc` as
+    %% the drain race and close 1001, skipping the push.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/rc" => {arizona_root_counter, #{}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket),
+    Pid ! {set_count, 5},
+    {status, Pid, _, _} = sys:get_status(Pid),
+    Ref = erlang:monitor(process, Pid),
+    true = exit(Pid, kill),
+    ok = await_down(Ref, Pid),
+    ?assertMatch(
+        {{[_Pushed], {close, 4500, ~"server crash", _}}, 1},
+        error_logs(fun() ->
+            settle(arizona_socket:handle_in(navigate_frame(~"/rc"), Socket), Socket)
+        end)
+    ).
+
+event_drained_under_call_closes_going_away(Config) when is_list(Config) ->
+    %% The drain lands while the event's call is already queued: the live process
+    %% handles the drain first and exits under the call, so gen_server:call
+    %% re-raises `{{shutdown, drain}, _}` (not noproc). Suspending the process
+    %% until both messages are queued makes that ordering deterministic.
+    Socket = counter_socket(),
+    Pid = arizona_socket:live_pid(Socket),
+    ok = sys:suspend(Pid),
+    Pid ! {arizona_drain, erlang:monotonic_time(millisecond) + 5000},
+    true = is_pid(spawn_link(fun() -> resume_when_queued(Pid, 2) end)),
+    ?assertMatch(
+        {{[], {close, 1001, <<>>, _}}, 0},
+        error_logs(fun() -> settle(arizona_socket:handle_in(inc_frame(), Socket), Socket) end)
+    ).
+
+navigate_middleware_noproc_closes_crash(Config) when is_list(Config) ->
+    %% A `noproc` from a process other than the socket's live process -- here a
+    %% navigate middleware calling a server that is not running -- is a crash,
+    %% not the drain race: logged, 4500.
+    Down = fun(_Req, _B) -> gen_server:call(arizona_socket_suite_no_server, ping) end,
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/down" => {arizona_root_counter, #{middlewares => [Down]}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    ?assertMatch(
+        {close, 4500, ~"server crash", _},
+        logged_error(fun() -> arizona_socket:handle_in(navigate_frame(~"/down"), Socket) end)
+    ).
+
+drain_effects_ship_before_close(Config) when is_list(Config) ->
+    %% A drain whose `handle_drain/2` returns effects pushes them, then exits
+    %% `{shutdown, drain}`. When that lands under an event's call, the push sits
+    %% in the socket mailbox ahead of the exit; closing straight from the failed
+    %% call skipped it, losing e.g. a "reconnecting" indicator. The frame is
+    %% dropped instead, and the push ships before the 1001.
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket} = arizona_socket:init(arizona_drainable, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket),
+    ok = sys:suspend(Pid),
+    Pid ! {arizona_drain, erlang:monotonic_time(millisecond) + 5000},
+    true = is_pid(spawn_link(fun() -> resume_when_queued(Pid, 2) end)),
+    Frame = iolist_to_binary(json:encode([null, ~"noop", #{}])),
+    {[Pushed], Close} = settle(arizona_socket:handle_in(Frame, Socket), Socket),
+    ?assertMatch([[_DispatchEvent, ~"draining" | _]], effects(Pushed)),
+    ?assertMatch({close, 1001, <<>>, _}, Close).
+
+drain_effects_ship_before_noproc_close(Config) when is_list(Config) ->
+    %% The same drain finished before the frame arrived: the call finds the live
+    %% process already gone (noproc). Its effects push still sits ahead of its
+    %% exit in the socket mailbox, so it ships before the 1001.
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket} = arizona_socket:init(arizona_drainable, #{}, Req, #{}),
     Pid = arizona_socket:live_pid(Socket),
     Ref = erlang:monitor(process, Pid),
-    ok = gen_server:stop(Pid),
-    receive
-        {'DOWN', Ref, process, Pid, _Reason} -> ok
-    after 2000 -> error(live_process_did_not_stop)
-    end,
-    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
-    ?assertMatch({close, 1001, <<>>, _}, arizona_socket:handle_in(FpsFrame, Socket)).
+    Pid ! {arizona_drain, erlang:monotonic_time(millisecond) + 5000},
+    ok = await_down(Ref, Pid),
+    Frame = iolist_to_binary(json:encode([null, ~"noop", #{}])),
+    {[Pushed], Close} = settle(arizona_socket:handle_in(Frame, Socket), Socket),
+    ?assertMatch([[_DispatchEvent, ~"draining" | _]], effects(Pushed)),
+    ?assertMatch({close, 1001, <<>>, _}, Close).
+
+crash_under_call_closes_crash(Config) when is_list(Config) ->
+    %% A live process that crashes while the frame's call is queued exits under
+    %% the call: the frame is dropped and its queued exit closes 4500, logged
+    %% exactly once.
+    Socket = counter_socket(),
+    Pid = arizona_socket:live_pid(Socket),
+    ok = sys:suspend(Pid),
+    true = is_pid(spawn_link(fun() -> kill_when_queued(Pid) end)),
+    ?assertMatch(
+        {{[], {close, 4500, ~"server crash", _}}, 1},
+        error_logs(fun() -> settle(arizona_socket:handle_in(inc_frame(), Socket), Socket) end)
+    ).
+
+patch_on_drained_live_process_closes_going_away(Config) when is_list(Config) ->
+    %% The patch leg: its call finds the drained live process gone, and the
+    %% queued exit closes 1001.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/rc" => {arizona_root_counter, #{}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    ok = stop_live(Socket, {shutdown, drain}),
+    ?assertMatch(
+        {[], {close, 1001, <<>>, _}},
+        settle(arizona_socket:handle_in(patch_frame(~"/rc"), Socket), Socket)
+    ).
+
+resync_timeout_on_drained_live_process_closes_going_away(Config) when is_list(Config) ->
+    %% The resync backstop through handle_info/2: the flush's call finds the
+    %% drained live process gone, and the queued exit closes 1001.
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket} = arizona_socket:init(
+        arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+    ),
+    ok = stop_live(Socket, {shutdown, drain}),
+    ?assertMatch(
+        {[], {close, 1001, <<>>, _}},
+        settle(arizona_socket:handle_info(arizona_resync_timeout, Socket), Socket)
+    ).
 
 drain_before_mount_closes_going_away(Config) when is_list(Config) ->
     %% A listener drain broadcast landing inside the deferred reconnect window
@@ -1067,20 +1243,94 @@ crashing_flagged_socket() ->
     ),
     Socket.
 
-%% Runs Fun and returns its result, asserting it logged an error on the way: the
-%% crash close must never swallow the reason.
-logged_error(Fun) ->
+%% `{Result, N}`: how many error-level logs running `Fun` produced.
+error_logs(Fun) ->
     HandlerId = ?FUNCTION_NAME,
     ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
         level => error, config => #{pid => self()}
     }),
     try
         Result = Fun(),
-        receive
-            {arizona_test_log_handler, #{level := error}} -> Result
-        after 1000 ->
-            error(no_error_logged)
-        end
+        {Result, count_logs(0)}
     after
         ok = logger:remove_handler(HandlerId)
+    end.
+
+count_logs(N) ->
+    receive
+        {arizona_test_log_handler, #{level := error}} -> count_logs(N + 1)
+    after 100 -> N
+    end.
+
+%% What the transport does after a frame or message: a dropped frame (`{ok, _}`)
+%% leaves the live process's queued pushes and exit to arrive, so feed them to
+%% handle_info/2 in mailbox order until it closes. Returns the frames shipped on
+%% the way and the close.
+settle({ok, Socket0}, Socket) ->
+    Pid = arizona_socket:live_pid(Socket),
+    receive
+        {arizona_push, _, _, _, _} = Push ->
+            case arizona_socket:handle_info(Push, Socket0) of
+                {reply, Frame, Socket1} ->
+                    {Frames, Close} = settle({ok, Socket1}, Socket),
+                    {[Frame | Frames], Close};
+                Other ->
+                    settle(Other, Socket)
+            end;
+        {'EXIT', Pid, _} = Exit ->
+            settle(arizona_socket:handle_info(Exit, Socket0), Socket)
+    after 2000 -> error(no_close)
+    end;
+settle({close, _, _, _} = Close, _Socket) ->
+    {[], Close}.
+
+%% Runs Fun and returns its result, asserting it logged an error on the way: the
+%% crash close must never swallow the reason.
+logged_error(Fun) ->
+    case error_logs(Fun) of
+        {Result, N} when N > 0 -> Result;
+        {_Result, 0} -> error(no_error_logged)
+    end.
+
+counter_socket() ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Socket.
+
+inc_frame() ->
+    iolist_to_binary(json:encode([null, ~"inc", #{}])).
+
+%% Stops the socket's live process with `Reason` and waits for it to be gone;
+%% its linked exit stays queued for the socket (this process traps exits).
+stop_live(Socket, Reason) ->
+    Pid = arizona_socket:live_pid(Socket),
+    Ref = erlang:monitor(process, Pid),
+    ok = gen_server:stop(Pid, Reason, 2000),
+    await_down(Ref, Pid).
+
+await_down(Ref, Pid) ->
+    receive
+        {'DOWN', Ref, process, Pid, _Reason} -> ok
+    after 2000 -> error(live_process_did_not_stop)
+    end.
+
+%% Kills the suspended live process once a call is queued in it, so the caller
+%% sees it die under the call.
+kill_when_queued(Pid) ->
+    case erlang:process_info(Pid, message_queue_len) of
+        {message_queue_len, Len} when Len >= 1 ->
+            true = exit(Pid, boom_under_call),
+            ok;
+        {message_queue_len, _} ->
+            ok = timer:sleep(1),
+            kill_when_queued(Pid)
+    end.
+
+resume_when_queued(Pid, N) ->
+    case erlang:process_info(Pid, message_queue_len) of
+        {message_queue_len, Len} when Len >= N ->
+            ok = sys:resume(Pid);
+        {message_queue_len, _} ->
+            ok = timer:sleep(1),
+            resume_when_queued(Pid, N)
     end.

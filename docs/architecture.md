@@ -1161,7 +1161,15 @@ treats **any non-1000 code as reconnectable**:
 A raise inside the socket itself closes the same way: `handle_in/2` and `handle_info/2` each catch
 anything their handling raises -- a handler crash, or a frame that cannot be JSON-encoded, such as
 a value holding invalid UTF-8 -- and turn it into a logged 4500. The transport has no catch of its
-own, so without that the session would end with no close frame at all (a bare 1006).
+own, so without that the session would end with no close frame at all (a bare 1006). One raise is
+not a socket crash: a call into the live process that fails with the process no longer alive --
+gone before the call, or exited under it (a drain landing while an event, navigate, patch or resync
+frame is in flight). The frame is dropped and the close is left to the queued `'EXIT'`, which
+arrives behind every push the process sent before exiting -- so a drain's `handle_drain/2` effects
+still ship -- and then closes per the mapping above: 1001 for `{shutdown, drain}`, 1000 for a
+deliberate end, a logged 4500 for a crash. A failed call to a live process that is still alive has
+no exit to wait for and is a crash, as is a `noproc` from any other process a middleware or route
+adapter calls.
 
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{reply_many, [iodata()], Socket}` | `{close, Code, Reason, Socket}`. `reply_many` exists for the

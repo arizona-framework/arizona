@@ -1995,17 +1995,14 @@ drain_telemetry_check(Config) ->
     ws_close(Sock).
 
 drain_then_navigate_closes_gracefully(Config) ->
-    %% Race coverage: drain causes live exit; if a navigate frame is
-    %% processed by the WS session BEFORE the {'EXIT', _, normal} signal
-    %% lands, arizona_socket:handle_navigate would do gen_server:call to
-    %% the dead live pid. The try/catch in handle_navigate translates the
-    %% resulting exit({noproc, _}) into a graceful close (1000) instead
-    %% of letting it propagate to a crash close (4500).
+    %% Race coverage: drain causes the live process to exit `{shutdown, drain}`;
+    %% if a navigate frame is processed by the WS session BEFORE that exit
+    %% signal, the navigate's call into the live process raises. The socket's
+    %% entry catch closes per the queued exit (1001) instead of a crash close.
     %%
     %% Race outcome is non-deterministic (the local drain message usually
     %% beats the TCP-delivered navigate frame), so this test asserts only
-    %% the OUTCOME — graceful close — not which code path produced it.
-    %% Without the catch, the navigate-wins path fails with close 4500.
+    %% the OUTCOME -- the going-away close -- not which code path produced it.
     drain_then_navigate_check(Config).
 
 drain_then_navigate_check(Config) ->
