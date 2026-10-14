@@ -560,9 +560,6 @@ keeps without calling `handle_update/3`.
     Value :: term(),
     Views :: {map(), map()},
     Views1 :: {map(), map()}.
-%% When a dynamic is skipped (deps unchanged), carry its child views over
-%% from OldViews to NewViews so they aren't pruned.
-%%
 %% Both the stateful-child form and the container form (a nested template or an
 %% `?each`, which record the views rendered inside them as `child_views`) resolve
 %% what to carry through `live_subtree/2` rather than trusting the set on the
