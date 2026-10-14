@@ -2420,7 +2420,7 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, Inherited
         backend = Backend,
         content_ctx = CCtx
     },
-    State1 = lists:foldl(
+    State1 = fold_fragment_items(
         fun(Elem, State) ->
             {Tag, Attrs0, Children, ElemLine} = extract_element(Elem),
             {Attrs, _ElemOpts} = extract_directives(Attrs0),
@@ -2441,12 +2441,34 @@ compile_mixed_items(Items, Module, Backend, CCtx, Inherited) ->
         backend = Backend,
         content_ctx = CCtx
     },
-    State1 = lists:foldl(
+    State1 = fold_fragment_items(
         fun(Item, State) -> compile_mixed_item(Item, Module, State) end, State0, Items
     ),
     {Statics, DynASTs} = finalize(State1),
     Fingerprint = generate_fingerprint(Statics),
     {Statics, DynASTs, Fingerprint, Opts}.
+
+%% Compile a fragment's top-level items in order, with the backend's children
+%% separator between them as an element's children get one (native joins JSON
+%% array members with a comma). Unlike maybe_children_sep/2 an empty separator
+%% (HTML, terminal) adds no segment at all: a fragment's fingerprint hashes its
+%% static segments, so an extra empty one would re-fingerprint every existing
+%% fragment -- every layout among them.
+fold_fragment_items(Fun, State0, Items) ->
+    {State, _Index} = lists:foldl(
+        fun(Item, {State1, Index}) -> {Fun(Item, fragment_sep(State1, Index)), Index + 1} end,
+        {State0, 0},
+        Items
+    ),
+    State.
+
+fragment_sep(State, 0) ->
+    State;
+fragment_sep(#state{backend = Backend} = State, _Index) ->
+    case Backend:children_sep() of
+        <<>> -> State;
+        Sep -> buf_append(State, Sep)
+    end.
 
 compile_mixed_item(Item, Module, State) ->
     case is_static_binary(Item) of

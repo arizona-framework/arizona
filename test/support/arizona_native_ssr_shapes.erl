@@ -34,7 +34,9 @@ shapes() ->
         {map_each, fun map_each/1},
         {stateless_child, fun stateless_child/1},
         {nodiff, fun nodiff/1},
-        {nodiff_empty_each, fun nodiff_empty_each/1}
+        {nodiff_empty_each, fun nodiff_empty_each/1},
+        {list_fragment, fun list_fragment/1},
+        {branch_fragment, fun branch_fragment/1}
     ].
 
 top(Bindings) ->
@@ -113,5 +115,20 @@ nodiff_empty_each(Bindings) ->
             {'Text', [], [~"a"]},
             ?each(fun(I) -> {'Text', [], [I]} end, ?get(none)),
             {'Text', [], [?get(text)]}
+        ]}
+    ).
+
+%% A content-slot list mixing static text with an element compiles as a fragment; its
+%% members are JSON array members, separated like an element's children.
+list_fragment(Bindings) ->
+    ?native({'Column', [], [[~"x", {'Text', [], [?get(text)]}]]}).
+
+branch_fragment(Bindings) ->
+    ?native(
+        {'Column', [], [
+            case ?get(flag) of
+                true -> [~"x", {'Text', [], [?get(text)]}];
+                false -> ~""
+            end
         ]}
     ).
