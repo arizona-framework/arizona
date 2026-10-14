@@ -36,9 +36,9 @@
 -export([deferred_resync_timeout_flushes_undeduped/1]).
 -export([unmount_skipped_when_never_mounted/1]).
 -export([unmount_runs_after_mount/1]).
--export([resync_mount_crash_on_fps_frame_closes_crash/1]).
--export([resync_mount_crash_on_other_frame_closes_crash/1]).
--export([resync_mount_crash_on_timeout_closes_crash/1]).
+-export([resync_mount_crash_on_fps_frame_closes_mount_failed/1]).
+-export([resync_mount_crash_on_other_frame_closes_mount_failed/1]).
+-export([resync_mount_crash_on_timeout_closes_mount_failed/1]).
 -export([resync_on_dead_live_process_closes_going_away/1]).
 -export([event_on_stopped_live_process_closes_normal/1]).
 -export([event_on_drained_live_process_closes_going_away/1]).
@@ -56,7 +56,13 @@
 -export([foreign_caller_does_not_desync_drain/1]).
 -export([unencodable_event_reply_closes_crash/1]).
 -export([unencodable_push_closes_crash/1]).
--export([unencodable_resync_closes_crash/1]).
+-export([unencodable_resync_closes_mount_failed/1]).
+-export([connect_mount_crash_closes_mount_failed/1]).
+-export([unflagged_reconnect_mount_crash_closes_mount_failed/1]).
+-export([navigate_mount_crash_closes_mount_failed/1]).
+-export([patch_to_crashing_handler_closes_mount_failed/1]).
+-export([navigate_halt_without_redirect_closes_mount_failed/1]).
+-export([crash_after_mount_closes_crash/1]).
 
 all() ->
     [
@@ -86,9 +92,9 @@ all() ->
         deferred_resync_timeout_flushes_undeduped,
         unmount_skipped_when_never_mounted,
         unmount_runs_after_mount,
-        resync_mount_crash_on_fps_frame_closes_crash,
-        resync_mount_crash_on_other_frame_closes_crash,
-        resync_mount_crash_on_timeout_closes_crash,
+        resync_mount_crash_on_fps_frame_closes_mount_failed,
+        resync_mount_crash_on_other_frame_closes_mount_failed,
+        resync_mount_crash_on_timeout_closes_mount_failed,
         resync_on_dead_live_process_closes_going_away,
         event_on_stopped_live_process_closes_normal,
         event_on_drained_live_process_closes_going_away,
@@ -106,7 +112,13 @@ all() ->
         foreign_caller_does_not_desync_drain,
         unencodable_event_reply_closes_crash,
         unencodable_push_closes_crash,
-        unencodable_resync_closes_crash
+        unencodable_resync_closes_mount_failed,
+        connect_mount_crash_closes_mount_failed,
+        unflagged_reconnect_mount_crash_closes_mount_failed,
+        navigate_mount_crash_closes_mount_failed,
+        patch_to_crashing_handler_closes_mount_failed,
+        navigate_halt_without_redirect_closes_mount_failed,
+        crash_after_mount_closes_crash
     ].
 
 %% A `?stateful` inside a stream item re-renders when the item updates, so the item's
@@ -815,39 +827,38 @@ deferred_resync_timeout_flushes_undeduped(Config) when is_list(Config) ->
         error(resync_timeout_never_fired)
     end.
 
-resync_mount_crash_on_fps_frame_closes_crash(Config) when is_list(Config) ->
-    %% The deferred resync is the one mount path that ran outside a crash guard.
-    %% A raise in mount/1, on_mount, or render/1 escaped handle_in/2 and killed
-    %% the ws_session with no close frame, so the client saw a bare 1006 and
-    %% backed off forever instead of the 4500 close its purpose-built
-    %% `crashReload()` guard exists for. The conforming leg -- the promised
-    %% `cached_fps` frame -- must close 4500 like every sibling mount path.
+resync_mount_crash_on_fps_frame_closes_mount_failed(Config) when is_list(Config) ->
+    %% A raise in mount/1, on_mount, or render/1 during the deferred resync is a
+    %% mount failure: the view never reached the client, so the close is 4501
+    %% (the client reloads the page), not the 4500 of a crash after the mount. The
+    %% frame is dropped and the live process's queued exit closes. The conforming
+    %% leg -- the promised `cached_fps` frame.
     Socket = crashing_flagged_socket(),
     FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
     ?assertMatch(
-        {[], {close, 4500, ~"server crash", _}},
+        {[], {close, 4501, ~"mount failed", _}},
         logged_error(fun() -> settle(arizona_socket:handle_in(FpsFrame, Socket), Socket) end)
     ).
 
-resync_mount_crash_on_other_frame_closes_crash(Config) when is_list(Config) ->
+resync_mount_crash_on_other_frame_closes_mount_failed(Config) when is_list(Config) ->
     %% Protocol-violation leg: a non-`cached_fps` first frame flushes the resync
-    %% undeduped before its own reply. A crash there must close 4500 too -- and
-    %% the close outranks the frame's reply, so nothing is shipped alongside it.
+    %% undeduped before its own reply. A crash there is a mount failure too -- and
+    %% the frame is dropped, so nothing is shipped ahead of the close.
     Socket = crashing_flagged_socket(),
     EventFrame = iolist_to_binary(
         json:encode([~"crashable", ~"set_status", #{~"value" => ~"x"}])
     ),
     ?assertMatch(
-        {[], {close, 4500, ~"server crash", _}},
+        {[], {close, 4501, ~"mount failed", _}},
         logged_error(fun() -> settle(arizona_socket:handle_in(EventFrame, Socket), Socket) end)
     ).
 
-resync_mount_crash_on_timeout_closes_crash(Config) when is_list(Config) ->
+resync_mount_crash_on_timeout_closes_mount_failed(Config) when is_list(Config) ->
     %% Backstop leg: the flagged client never announced, so the timer flushes
-    %% the resync from handle_info/2 -- equally unguarded before the fix.
+    %% the resync from handle_info/2.
     Socket = crashing_flagged_socket(),
     ?assertMatch(
-        {[], {close, 4500, ~"server crash", _}},
+        {[], {close, 4501, ~"mount failed", _}},
         logged_error(fun() ->
             settle(arizona_socket:handle_info(arizona_resync_timeout, Socket), Socket)
         end)
@@ -1186,9 +1197,11 @@ unencodable_push_closes_crash(Config) when is_list(Config) ->
         [arizona_root_counter, arizona_native_counter]
     ).
 
-unencodable_resync_closes_crash(Config) when is_list(Config) ->
+unencodable_resync_closes_mount_failed(Config) when is_list(Config) ->
     %% Every leg that settles a deferred resync: the promised `cached_fps`, any
-    %% other first frame (a ping), and the backstop timer.
+    %% other first frame (a ping), and the backstop timer. The frame that fails to
+    %% encode is the one delivering the view, so the view never mounted on the
+    %% client: a mount failure (4501), not a crash after the mount.
     Req = arizona_req_test_adapter:new(),
     FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
     Settle = [
@@ -1205,12 +1218,111 @@ unencodable_resync_closes_crash(Config) when is_list(Config) ->
                 #{reconnect => true, fps_follow => true}
             ),
             ?assertMatch(
-                {close, 4500, ~"server crash", _},
+                {close, 4501, ~"mount failed", _},
                 logged_error(fun() -> Leg(Socket0) end),
                 Handler
             )
         end,
         [{H, L} || H <- [arizona_root_counter, arizona_native_counter], L <- Settle]
+    ).
+
+connect_mount_crash_closes_mount_failed(Config) when is_list(Config) ->
+    %% First connect: the mount runs inside init/4, before any frame.
+    Req = arizona_req_test_adapter:new(),
+    ?assertMatch(
+        {close, 4501, ~"mount failed", _},
+        logged_error(fun() ->
+            arizona_socket:init(arizona_crashable, #{crash_on_mount => true}, Req, #{})
+        end)
+    ).
+
+unflagged_reconnect_mount_crash_closes_mount_failed(Config) when is_list(Config) ->
+    %% A reconnect without the fingerprint-follow promise (a native client)
+    %% mounts and renders inside init/4.
+    Req = arizona_req_test_adapter:new(),
+    ?assertMatch(
+        {close, 4501, ~"mount failed", _},
+        logged_error(fun() ->
+            arizona_socket:init(
+                arizona_crashable, #{crash_on_mount => true}, Req, #{reconnect => true}
+            )
+        end)
+    ).
+
+navigate_mount_crash_closes_mount_failed(Config) when is_list(Config) ->
+    %% A navigate mounts the new page on the live process: its failure is a
+    %% mount failure even though the socket's previous view had mounted. The
+    %% frame is dropped and the live process's queued exit closes.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/boom" => {arizona_crashable, #{bindings => #{crash_on_mount => true}}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    ?assertMatch(
+        {[], {close, 4501, ~"mount failed", _}},
+        logged_error(fun() ->
+            settle(arizona_socket:handle_in(navigate_frame(~"/boom"), Socket), Socket)
+        end)
+    ).
+
+patch_to_crashing_handler_closes_mount_failed(Config) when is_list(Config) ->
+    %% A patch to a different handler degrades to a navigate, and mounts.
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/boom" => {arizona_crashable, #{bindings => #{crash_on_mount => true}}}}
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    ?assertMatch(
+        {[], {close, 4501, ~"mount failed", _}},
+        logged_error(fun() ->
+            settle(arizona_socket:handle_in(patch_frame(~"/boom"), Socket), Socket)
+        end)
+    ).
+
+navigate_halt_without_redirect_closes_mount_failed(Config) when is_list(Config) ->
+    %% A middleware that halts with no redirect refuses the target: nothing to
+    %% send over the socket, and a reconnect's upgrade would be refused by the
+    %% same middleware. 4501 makes the client reload, so the HTTP request gets
+    %% the middleware's full response. Both a navigate and a same-handler patch.
+    Halt = [fun(R, _B) -> {halt, R} end],
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/gated" => {arizona_root_counter, #{middlewares => Halt}}
+        }
+    }),
+    {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+    ?assertMatch(
+        {close, 4501, ~"mount failed", _},
+        arizona_socket:handle_in(navigate_frame(~"/gated"), Socket0)
+    ),
+    {reply, _, Socket1} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    ?assertMatch(
+        {close, 4501, ~"mount failed", _}, arizona_socket:handle_in(patch_frame(~"/gated"), Socket1)
+    ).
+
+crash_after_mount_closes_crash(Config) when is_list(Config) ->
+    %% Once the view mounted, a crash is 4500 -- the client remounts in place --
+    %% whether it raises in an event (under the call) or in handle_info.
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+    CrashFrame = iolist_to_binary(json:encode([~"crashable", ~"crash", #{}])),
+    ?assertMatch(
+        {[], {close, 4500, ~"server crash", _}},
+        logged_error(fun() -> settle(arizona_socket:handle_in(CrashFrame, Socket0), Socket0) end)
+    ),
+    {reply, _, Socket1} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+    AsyncFrame = iolist_to_binary(json:encode([~"crashable", ~"crash_async", #{}])),
+    ?assertMatch(
+        {[], {close, 4500, ~"server crash", _}},
+        logged_error(fun() -> settle(arizona_socket:handle_in(AsyncFrame, Socket1), Socket1) end)
+    ),
+    %% A deferred resync that mounted makes a later crash 4500 too.
+    {reply, _, Socket2} = arizona_socket:init(
+        arizona_crashable, #{}, Req, #{reconnect => true, fps_follow => true}
+    ),
+    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
+    {reply, _, Socket3} = arizona_socket:handle_in(FpsFrame, Socket2),
+    ?assertMatch(
+        {[], {close, 4500, ~"server crash", _}},
+        logged_error(fun() -> settle(arizona_socket:handle_in(CrashFrame, Socket3), Socket3) end)
     ).
 
 navigate_frame(Path) ->

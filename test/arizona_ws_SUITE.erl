@@ -598,7 +598,7 @@ event_non_map_payload_dropped(Config) ->
     %% An event frame whose payload is not a map must be dropped at the socket
     %% (the `is_map/1` guard). A `#{...}`-matching handler would otherwise raise
     %% function_clause on a non-map payload and crash-close the socket
-    %% (4500 -> client reload), a deterministic crash loop from one crafted frame.
+    %% (4500 -> client remount), a deterministic crash loop from one crafted frame.
     {ok, Sock} = ws_connect(Config, <<"/">>),
     ok = ws_send_json(Sock, [~"crashable", ~"set_status", ~"not_a_map"]),
     %% Connection survives: the frame was dropped, not dispatched-and-crashed.
@@ -2210,7 +2210,7 @@ server_frame(Opcode, Payload) ->
 crash_event_closes(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/">>),
     %% Trigger a crash via event -- socket closes with 4500; the client
-    %% reconnects on its own on a fresh handshake.
+    %% reconnects on its own on a fresh handshake and remounts the view.
     ok = ws_send_json(Sock, [~"crashable", ~"crash", #{}]),
     {close, 4500, _} = ws_recv(Sock),
     gen_tcp:close(Sock).
@@ -2227,8 +2227,8 @@ crash_info_closes(Config) ->
 crash_init_closes(Config) ->
     %% Mount crashes before any reply, so there is no names frame to consume.
     {ok, Sock} = ws_connect(Config, <<"/crash_on_mount">>, [{consume_connect, false}]),
-    %% Mount crashes -- socket closes with 4500.
-    {close, 4500, _} = ws_recv(Sock),
+    %% Mount crashes -- socket closes with 4501 (mount failed).
+    {close, 4501, _} = ws_recv(Sock),
     gen_tcp:close(Sock).
 
 normal_exit_closes(Config) ->

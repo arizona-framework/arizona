@@ -39,9 +39,15 @@ The live process is linked. Exits map to WebSocket close codes:
   after any push the process sent before exiting -- a drain's effects
   among them.
 - Anything else (including raises in `handle_in/2` and `handle_info/2`,
-  among them a frame that cannot be encoded) -- crash close `4500`. Client
-  remounts the view by reconnecting, or reloads the page when the mount
-  itself crashed.
+  among them a frame that cannot be encoded) -- crash close `4500`: the
+  view crashed after it mounted. Client remounts it in place by reconnecting.
+
+A failure to mount the view closes `4501` instead, whatever the exit: the
+connect's mount (`init/4`), a reconnect's deferred resync mount, a
+navigate's mount of the new page, and a navigate/patch whose middleware
+halts without a redirect -- each up to the frame that delivers the view.
+The page itself may be stale (a deploy changed the route or the assets), so
+the client reloads it after a jittered delay.
 """.
 
 -include("arizona.hrl").
@@ -83,6 +89,7 @@ The live process is linked. Exits map to WebSocket close codes:
 -define(SYS_PONG, ~"1").
 -define(CLOSE_GOING_AWAY, 1001).
 -define(CLOSE_CRASH, 4500).
+-define(CLOSE_MOUNT_FAILED, 4501).
 %% Backstop for a deferred reconnect resync (`_az_fps_follow`): a client that
 %% set the flag promises its `cached_fps` frame as the first frame after open,
 %% typically in flight already -- the timeout only covers one that then sends
@@ -146,7 +153,12 @@ The live process is linked. Exits map to WebSocket close codes:
     %% mounting + rendering the full-page replace, so the payload dedups
     %% against the announced fingerprints. `undefined` once flushed (or when
     %% the connection never deferred).
-    pending_resync = undefined :: undefined | reference()
+    pending_resync = undefined :: undefined | reference(),
+    %% A mount call (a deferred resync, a navigate) failed with the live process
+    %% exiting under it. The frame was dropped so the exit closes in order behind
+    %% the process's last pushes (crash_close/4); a crash exit then means the
+    %% view could not mount, so it closes 4501 rather than 4500.
+    mount_failed = false :: boolean()
 }).
 
 %% --------------------------------------------------------------------
@@ -403,6 +415,9 @@ do_handle_info({'EXIT', Pid, {shutdown, _}}, #socket{pid = Pid} = Socket) ->
     %% close-1000 semantics as `shutdown` atom; only `{shutdown, drain}`
     %% (matched above) opts into the reconnect path.
     {close, 1000, <<>>, Socket};
+do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid, mount_failed = true} = Socket) ->
+    logger:error("Live process ~p crashed while mounting: ~p", [Pid, Reason]),
+    close_mount_failed(Socket);
 do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) ->
     logger:error("Live process ~p crashed: ~p", [Pid, Reason]),
     close_crash(Socket);
@@ -420,11 +435,14 @@ safe_init(Handler, Socket, Fun) ->
     catch
         Class:Reason:Stacktrace ->
             logger:error("~s in ~p:~p~n~p", [Class, Handler, Reason, Stacktrace]),
-            close_crash(Socket)
+            close_mount_failed(Socket)
     end.
 
 close_crash(Socket) ->
     {close, ?CLOSE_CRASH, ~"server crash", Socket}.
+
+close_mount_failed(Socket) ->
+    {close, ?CLOSE_MOUNT_FAILED, ~"mount failed", Socket}.
 
 %% The catch body of handle_in/2 and handle_info/2. The transport has no catch
 %% of its own, so a raise there -- a handler crash, or a frame that cannot be
@@ -439,7 +457,8 @@ close_crash(Socket) ->
 %% sent before exiting (signals from one process arrive in order) -- a drain's
 %% `handle_drain/2` effects push in particular. So the frame is dropped and the
 %% transport left to deliver both in order: the push ships, then the exit closes
-%% per the mapping (1000, 1001 for `{shutdown, drain}`, or a logged 4500). A
+%% per the mapping (1000, 1001 for `{shutdown, drain}`, or a logged 4500 -- 4501
+%% when the failed call was a mount, see mount_call/1). A
 %% failed call to a process still alive gets no exit to wait for, so it is a
 %% crash, as is a `noproc` from any other process a middleware or route adapter
 %% calls.
@@ -451,7 +470,7 @@ close_crash(Socket) ->
 crash_close(Class, Reason, Stacktrace, Socket) ->
     case live_call_failed(Class, Reason, Socket) of
         true ->
-            {ok, Socket};
+            {ok, Socket#socket{mount_failed = mount_call(Reason)}};
         false ->
             logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
             close_crash(Socket)
@@ -461,6 +480,15 @@ live_call_failed(exit, {_, {gen_server, call, [Pid | _]}}, #socket{pid = Pid}) w
     not is_process_alive(Pid);
 live_call_failed(_Class, _Reason, _Socket) ->
     false.
+
+%% Whether the failed call was a mount -- a reconnect's deferred resync or a
+%% navigate -- that the live process exited under. Its crash exit then closes
+%% 4501 (see `mount_failed`). A process already gone before the call (`noproc`)
+%% exited for some other reason, which decides alone.
+mount_call({noproc, _}) -> false;
+mount_call({_, {gen_server, call, [_Pid, mount_and_render | _]}}) -> true;
+mount_call({_, {gen_server, call, [_Pid, {navigate, _, _, _} | _]}}) -> true;
+mount_call(_Reason) -> false.
 
 %% Is this frame the `cached_fps` announcement? Decoded here only to route the
 %% deferred-resync leg; the announcement leg never re-decodes, and the rare
@@ -474,30 +502,46 @@ decode_cached_fps(Frame) ->
         error:_ -> error
     end.
 
-%% Mount the live process and render the reconnect full-page replace. The
+%% Mount the live process and encode the reconnect full-page replace. The
 %% dedup against `sent_fps` happens inside `mount_and_render` -- any
 %% fingerprints seeded before this call elide their statics from the payload.
 %%
 %% A raise in `mount/1`, `on_mount` or `render/1` kills the live process under
 %% the call, so it reaches the entry catch like the drain/exit race does: the
-%% frame is dropped and the queued exit closes (crash_close/4). Every caller runs
-%% inside handle_in/2 or handle_info/2, and the raise happens while this is still
-%% an argument, so resync_before_frame/2 never runs and the triggering frame
-%% never reaches a live process the flush left unmounted.
+%% frame is dropped and the queued exit closes (crash_close/4) -- 4501, as the
+%% failed call was a mount. Every caller runs inside handle_in/2 or
+%% handle_info/2, and the raise happens while this is still an argument, so
+%% resync_before_frame/2 never runs and the triggering frame never reaches a
+%% live process the flush left unmounted.
 flush_resync(#socket{pid = Pid} = Socket) ->
     {ok, ViewId, PageHTML, Observed} = arizona_live:mount_and_render(Pid),
     {ok, replace_ops(ViewId, PageHTML), note_az([], Observed, Socket#socket{view_id = ViewId})}.
 
 resync_reply({ok, Ops, Socket0}) ->
     {Attrs, Socket} = take_az_pending(Socket0),
-    {reply, encode(resync_frame(Ops, Attrs)), Socket}.
+    deliver_view(fun() -> {reply, encode(resync_frame(Ops, Attrs)), Socket} end, Socket).
 
 %% Ship the resync frame BEFORE the triggering frame's own result: the client
 %% must apply the full-page replace first, then the frame's reply against the
 %% fresh DOM.
 resync_before_frame({ok, Ops, Socket0}, Frame) ->
     {Attrs, Socket} = take_az_pending(Socket0),
-    resync_then(encode(resync_frame(Ops, Attrs)), do_handle_in(Frame, Socket)).
+    case deliver_view(fun() -> {ok, encode(resync_frame(Ops, Attrs))} end, Socket) of
+        {ok, ResyncFrame} -> resync_then(ResyncFrame, do_handle_in(Frame, Socket));
+        {close, _Code, _Reason, _Socket} = Close -> Close
+    end.
+
+%% The frame that delivers a freshly mounted view is part of the mount: until
+%% it reaches the client there is no mounted view there, so failing to encode
+%% it is a mount failure (4501), not a crash after the mount.
+deliver_view(Encode, Socket) ->
+    try
+        Encode()
+    catch
+        Class:Reason:Stacktrace ->
+            logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+            close_mount_failed(Socket)
+    end.
 
 %% A close outranks the resync -- the socket is going away.
 resync_then(ResyncFrame, {ok, Socket}) ->
@@ -648,7 +692,8 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
             %% A live process gone under this call is handled at the entry catch
-            %% (crash_close/4): the frame is dropped and its queued exit closes.
+            %% (crash_close/4): the frame is dropped and its queued exit closes
+            %% -- 4501 when it crashed, since the new page could not be served.
             %%
             %% The socket is the only caller of arizona_live:navigate/4 (it is
             %% transport-facing): the drain below relies on every push before the
@@ -672,12 +717,10 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
             %% behind the barrier, so after this replace.
             {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
             ok = log_dropped_effects(PendEffects),
-            encode_reply(
-                PendOps ++ replace_ops(OldVId, PageHTML),
-                [],
-                (note_az([H], Observed, Socket1))#socket{
-                    view_id = NewVId, handler = H
-                }
+            Socket2 = (note_az([H], Observed, Socket1))#socket{view_id = NewVId, handler = H},
+            deliver_view(
+                fun() -> encode_reply(PendOps ++ replace_ops(OldVId, PageHTML), [], Socket2) end,
+                Socket2
             )
     end.
 
@@ -706,8 +749,11 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
 %% `arizona_js:navigate` client effect. A flash the middleware set via `put_flash/3`
 %% before halting has no `Set-Cookie` leg to ride here, so it is stashed on the
 %% socket for the follow-up frame (`take_pending_flash/2`), delivered exactly once
-%% with no cookie. Halts without a stashed redirect close the socket so the client
-%% reconnects and the next HTTP handshake receives the full middleware response.
+%% with no cookie. A halt without a stashed redirect has nothing to say over the
+%% socket, and the target cannot mount: close 4501, so the client reloads the
+%% page and that HTTP request receives the full middleware response. (A
+%% reconnect would not get there -- the WebSocket upgrade runs the same halting
+%% middleware and is refused.)
 halt_navigate(Requested, HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
@@ -717,7 +763,7 @@ halt_navigate(Requested, HaltReq, Socket) ->
                 stash_halt_flash(Requested, Location, HaltReq, Socket)
             );
         undefined ->
-            close_crash(Socket)
+            close_mount_failed(Socket)
     end.
 
 %% Stash the halting middleware's flash BESIDE the path that produced it. Unlike
