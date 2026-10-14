@@ -219,6 +219,7 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Scan `escape/1` 8 and 4 bytes per step; slice long clean runs | a 201-row escape-heavy table -46% (193 -> 105 us, red/op 24.8k -> 12.1k); per value: clean 10-200 B -46% to -55%, one metacharacter in 64-200 B -30% to -80%, markup -10%, UTF-8 prose -63%; `render_view_page` -6%, `render_each_100` red/op -13% |
 | Skip the document on a fingerprinted mount (`render_snapshot/2`) | reconnect/navigate render+payload red/op -22% to -42% on every fixture; wall -20% to -57% on the larger ones (`arizona_datatable` -38 to -57%, `arizona_bench_many_dyn` -26 to -28%, `arizona_bench_nested_each` -20 to -25%), the small ones under the floor |
 | Skip the document on a first connect too (observe commands in `arizona_eval`) | connect render red/op -22% to -69% against main's `render/2` (`arizona_datatable` 1919 -> 595, `arizona_opaque_nested` -49%, `arizona_bench_nested_each` -35%, `arizona_bench_many_dyn` -33%, `arizona_page` -28%); costs +2% on a reconnect and up to +5% on a full-dep diff, both under the floor |
+| Fold an all-literal list (attribute value or content) into statics at compile time | a 20-item list with three literal-list attributes per item: 61 dynamics -> 1, live render 18.5 -> 0.21 us (2719 -> 60 red), diff 1.9 -> 0.14 us; no `bench-ab` workload uses the shape (six render/diff labels: red/op +0.00%, wall within noise) |
 
 (The whole 2026-08 arc that added the four rows from "Encode the ops frame" to
 "Fuse `render/2`'s triple unzip" -- PRs #759-#762 -- closed with

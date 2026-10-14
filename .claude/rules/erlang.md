@@ -79,6 +79,7 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | Form | Example | Output |
 |------|---------|--------|
 | `{name, <<"value">>}` | `{class, <<"box">>}` | `class="box"` |
+| `{name, [Literal, ...]}` | `{class, [~"btn ", ~"primary"]}` | `class="btn primary"` -- a (nested) list of binary/string/char literals is static: concatenated and escaped at compile time, no dynamic, no `az` |
 | `{name, Expr}` | `{class, Theme}` | Dynamic attr |
 | `name` (atom) | `disabled` | `disabled` |
 | `<<"name">>` (binary) | `<<"hidden">>` | `hidden` |
@@ -89,6 +90,11 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises
 `bad_template_value`; a boolean belongs in a whole-value attribute (`{disabled, ?get(off)}`).
+
+A literal list in **content** (`{p, [], [[~"a", ~"b"], ~"c"]}`) folds the same way, but it
+keeps its meaning as a value: it is escaped exactly as the runtime would escape it, unlike a
+bare binary literal child, which is spliced as raw markup. Inside raw-text elements
+(`script`/`style`/`textarea`/`title`) it is not folded and keeps the dynamic-slot rules.
 
 Two names are reserved because the transform emits them itself and a duplicate would
 misroute a patch: `az` (the element's diff address) and `az-local` (the `?local`
