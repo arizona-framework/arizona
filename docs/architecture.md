@@ -780,12 +780,12 @@ renders `false` → absent / `true` → bare) -- an interpolated value always re
 Mechanism: `arizona_template:local/2` returns `#{diff => false, az_local => Key, v => Init}`
 (attributes add `target => {attr, Name}`). `eval` preserves it; `arizona_diff` skips it via
 its per-dynamic `az_local` clauses (never re-evaluated, never patched); `arizona_render`
-unwraps it. Each content
-slot is an individually comment-marked text node (`<!--az:X-->Init<!--/az-->`), exactly like
-any dynamic text child. The parse transform bakes a self-describing `az-local` descriptor
-attribute (escaped JSON `{c: {slotIdx: key}, a: {attrName: key}, ap: {attrName: [prefix, suffix]}}`)
-onto the element -- `c` maps each content slot's dynamic-slot index to its key, `a` maps each
-attribute name to its key, and `ap` (present only for interpolated attributes) carries the
+unwraps it. Each content slot is an individually comment-marked text node
+(`<!--az:X-->Init<!--/az-->`), exactly like any dynamic text child. The parse transform
+bakes a self-describing `az-local` descriptor attribute (escaped JSON
+`{c: {slotIdx: key}, a: {attrName: key}, ap: {attrName: [prefix, suffix]}}`) onto the element
+-- `c` maps each content slot's dynamic-slot index to its key, `a` maps each attribute name to
+its key, and `ap` (present only for interpolated attributes) carries the
 static prefix/suffix. The client scans `[az-local]` live (no persistent index): for a content
 slot it reconstructs the marker `az` from the element's runtime `az` + the slot index
 (mirroring `arizona_html:text_az/2`); for an interpolated attribute it recomposes
@@ -1614,13 +1614,17 @@ view receives it. A `?stateless` callback is a separate compile unit and keeps i
 `?local` under a nodiff template keeps the `az` and slot marker the client resolves it by, and
 nothing else does.
 
-A slot whose current value is a nodiff template still diffs as a slot. When it re-runs, the
-slot closure's result is compared by scoped fingerprint before anything inside it is evaluated:
-the same template keeps its first render (no op, no `handle_update/3` for a child view inside
-it, cost independent of the region's size), and anything else, another branch or a plain value,
-is replaced through its slot markers like any other change, so a conditional whose branch is
-`az-nodiff` can still leave it. Reads inside a nodiff branch are not tracked on the slot, since
-they can never patch; only the reads that choose the branch re-run it.
+A slot whose current value is a nodiff template still diffs as a slot. A nodiff template's
+fingerprint hashes its dynamics' code beside its statics, so it names the template's site and two
+nodiff branches with the same markup stay distinct. The same template keeps its first render (no
+op); anything else, another branch or a plain value, is replaced through its slot markers like any
+other change, so a conditional whose branch is `az-nodiff` can still leave it. On a view's own
+slots the slot closure's result is compared by scoped fingerprint before anything inside it is
+evaluated, so the same template costs O(1) and a child view inside it gets no `handle_update/3`;
+a nodiff region reached through a list item or a `?stateless` body is evaluated and then compared.
+A child view whose own root is az-nodiff is never updated wherever its descriptor is re-evaluated
+(the same handler at the same id keeps its view). Reads inside a nodiff branch are not tracked on
+the slot, since they can never patch; only the reads that choose the branch re-run it.
 
 The page arrives as an **opaque nested template** (`#{s := [Page], d := []}`), not iodata and not a
 binary. That is what lets a content slot splice it verbatim rather than copying and
