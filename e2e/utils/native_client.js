@@ -218,6 +218,24 @@ export class NativeClient {
         this.wsUrl = u.toString();
     }
 
+    // A `full` navigate: the server cannot serve `path` on this socket (a
+    // middleware halt, different layouts, no live route). Sending the navigate
+    // back would loop, so do what a browser's full page load does: drop this
+    // socket and connect fresh to the path, running its upgrade middlewares and
+    // mount anew. A refused upgrade then takes the normal backoff.
+    reload(path) {
+        const u = new URL(this.wsUrl);
+        u.searchParams.set('_az_path', path.split('?')[0]);
+        this.wsUrl = u.toString();
+        const old = this.ws;
+        old.onmessage = null;
+        old.onclose = null;
+        old.onerror = null;
+        this._stopHeartbeat();
+        old.close(1000);
+        this._open();
+    }
+
     // Interpret a node's tap command prop (an arizona_effect command array) and
     // fire it, like the browser delegating an az-click. Strict: an unexpected
     // command throws. A prop that is not an array (a disabled command reads
@@ -239,7 +257,8 @@ export class NativeClient {
         };
         if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT)
             this.pushEvent(arg(1), cmd[2] ?? {}, view);
-        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE) this.navigate(arg(1));
+        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE)
+            cmd[2]?.full === true ? this.reload(arg(1)) : this.navigate(arg(1));
         else if (strict) throw new Error(`unsupported command: ${JSON.stringify(cmd)}`);
     }
 

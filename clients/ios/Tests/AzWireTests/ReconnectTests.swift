@@ -18,6 +18,7 @@ final class ReconnectTests: XCTestCase {
     /// and one per reconnect it scheduled.
     private final class Recorder {
         var sockets: [MockTransport] = []
+        var urls: [URL] = []
         var scheduled: [DispatchWorkItem] = []
     }
 
@@ -34,7 +35,8 @@ final class ReconnectTests: XCTestCase {
             client = AzClient(
                 baseUrl: "http://localhost:4040",
                 path: "/native/counter",
-                makeTransport: { _ in
+                makeTransport: { url in
+                    rec.urls.append(url)
                     let socket = MockTransport()
                     rec.sockets.append(socket)
                     return socket
@@ -44,6 +46,9 @@ final class ReconnectTests: XCTestCase {
         }
 
         var socketCount: Int { rec.sockets.count }
+
+        /// The URL the client opened its latest socket on.
+        var currentUrl: String { rec.urls[rec.urls.count - 1].absoluteString }
 
         /// Reconnects scheduled but not yet run, ignoring cancelled ones.
         var liveReconnects: [DispatchWorkItem] { rec.scheduled.filter { !$0.isCancelled } }
@@ -132,6 +137,32 @@ final class ReconnectTests: XCTestCase {
         XCTAssertTrue(
             flatText(h.client.root!).contains("Count: 1"),
             "a retired socket's frame must not re-mount the view")
+    }
+
+    // A `full` navigate cannot be served on this socket, and sending it back
+    // would loop: the client connects fresh to the path instead, retiring the
+    // old socket without a reconnect of its own.
+    func testFullNavigateConnectsFreshToThePath() {
+        let h = connected()
+        let old = h.current
+
+        old.simulateText("{\"e\":[[10,\"/gated\",{\"full\":true}]]}")
+
+        XCTAssertFalse(old.sent.contains { $0.contains("\"navigate\"") }, "no navigate frame sent back")
+        XCTAssertTrue(old.cancelled, "the old socket is dropped")
+        XCTAssertEqual(h.socketCount, 2)
+        XCTAssertTrue(h.currentUrl.contains("_az_path=%2Fgated"), h.currentUrl)
+        XCTAssertTrue(h.liveReconnects.isEmpty, "the retired socket schedules no reconnect")
+    }
+
+    // A plain navigate stays on the socket.
+    func testNavigateWithoutFullStaysOnTheSocket() {
+        let h = connected()
+
+        h.current.simulateText("{\"e\":[[10,\"/next\"]]}")
+
+        XCTAssertEqual(h.socketCount, 1)
+        XCTAssertTrue(h.current.sent.last?.hasPrefix("[\"navigate\",") == true, "\(h.current.sent)")
     }
 
     // connect() must retire the socket it replaces: an orphaned socket keeps its

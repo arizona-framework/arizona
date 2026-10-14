@@ -57,6 +57,38 @@ describe('native client effect dispatch', () => {
         expect(JSON.parse(sent[0])).toEqual(['navigate', { path: '/foo', qs: 'x=1' }]);
     });
 
+    // A `full` navigate cannot be served on this socket, and sending it back
+    // would loop: the client connects fresh to the path instead, retiring the old
+    // socket without a reconnect of its own.
+    it('connects fresh to the path of a full navigate', () => {
+        vi.useFakeTimers();
+        const ws = installWebSocketStub();
+        try {
+            const client = newClient();
+            client.connect();
+            const old = ws.latest();
+            old.simulateOpen();
+            old.simulateMessage(
+                JSON.stringify({
+                    o: [[OP_REPLACE, 'native_x', { f: 'R', s: ROOT_STATICS, d: ['native_x', ''] }]],
+                }),
+            );
+            old.simulateMessage(
+                JSON.stringify({ e: [[EFFECT_NAVIGATE, '/gated', { full: true }]] }),
+            );
+
+            expect(old.sent.some((f) => f.includes('"navigate"'))).toBe(false);
+            expect(old.closedWith).toBe(1000);
+            expect(ws.instances).toHaveLength(2);
+            expect(new URL(ws.latest().url).searchParams.get('_az_path')).toBe('/gated');
+            vi.advanceTimersByTime(60000);
+            expect(ws.instances).toHaveLength(2); // the retired socket reconnects nothing
+        } finally {
+            ws.restore();
+            vi.useRealTimers();
+        }
+    });
+
     it('throws on an unsupported command in strict (tap) mode', () => {
         const { client } = clientWithRecorder();
         expect(() => client._runEffect([99, 'nope'], true)).toThrow();
@@ -149,7 +181,10 @@ function installWebSocketStub() {
         send(data) {
             this.sent.push(data);
         }
-        close() {}
+        close(code = 1000) {
+            this.closedWith = code;
+            if (this.onclose) this.onclose({ code });
+        }
         simulateOpen() {
             if (this.onopen) this.onopen();
         }
@@ -160,6 +195,7 @@ function installWebSocketStub() {
     const orig = globalThis.WebSocket;
     globalThis.WebSocket = MockWS;
     return {
+        instances,
         latest: () => instances[instances.length - 1],
         restore: () => {
             globalThis.WebSocket = orig;

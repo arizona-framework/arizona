@@ -61,8 +61,8 @@
 -export([unflagged_reconnect_mount_crash_closes_mount_failed/1]).
 -export([navigate_mount_crash_closes_mount_failed/1]).
 -export([patch_to_crashing_handler_closes_mount_failed/1]).
--export([navigate_halt_without_redirect_closes_mount_failed/1]).
--export([crash_after_mount_closes_crash/1]).
+-export([navigate_halt_without_redirect_loads_full_page/1]).
+-export([crash_after_resync_mount_closes_crash/1]).
 
 all() ->
     [
@@ -117,8 +117,8 @@ all() ->
         unflagged_reconnect_mount_crash_closes_mount_failed,
         navigate_mount_crash_closes_mount_failed,
         patch_to_crashing_handler_closes_mount_failed,
-        navigate_halt_without_redirect_closes_mount_failed,
-        crash_after_mount_closes_crash
+        navigate_halt_without_redirect_loads_full_page,
+        crash_after_resync_mount_closes_crash
     ].
 
 %% A `?stateful` inside a stream item re-renders when the item updates, so the item's
@@ -1277,11 +1277,11 @@ patch_to_crashing_handler_closes_mount_failed(Config) when is_list(Config) ->
         end)
     ).
 
-navigate_halt_without_redirect_closes_mount_failed(Config) when is_list(Config) ->
-    %% A middleware that halts with no redirect refuses the target: nothing to
-    %% send over the socket, and a reconnect's upgrade would be refused by the
-    %% same middleware. 4501 makes the client reload, so the HTTP request gets
-    %% the middleware's full response. Both a navigate and a same-handler patch.
+navigate_halt_without_redirect_loads_full_page(Config) when is_list(Config) ->
+    %% A middleware that halts with no redirect has a response only HTTP can
+    %% deliver (a reconnect's upgrade is refused by the same middleware), so the
+    %% client is told to load the requested URL for real. Both a navigate and a
+    %% same-handler patch.
     Halt = [fun(R, _B) -> {halt, R} end],
     Req = arizona_req_test_adapter:new(#{
         routes => #{
@@ -1289,40 +1289,25 @@ navigate_halt_without_redirect_closes_mount_failed(Config) when is_list(Config) 
         }
     }),
     {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
-    ?assertMatch(
-        {close, 4501, ~"mount failed", _},
-        arizona_socket:handle_in(navigate_frame(~"/gated"), Socket0)
-    ),
+    {reply, NavFrame, _} = arizona_socket:handle_in(navigate_frame(~"/gated"), Socket0),
+    ?assertMatch([[?EFFECT_NAVIGATE, ~"/gated", #{~"full" := true}]], effects(NavFrame)),
     {reply, _, Socket1} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
-    ?assertMatch(
-        {close, 4501, ~"mount failed", _}, arizona_socket:handle_in(patch_frame(~"/gated"), Socket1)
-    ).
+    {reply, PatchFrame, _} = arizona_socket:handle_in(patch_frame(~"/gated"), Socket1),
+    ?assertMatch([[?EFFECT_NAVIGATE, ~"/gated", #{~"full" := true}]], effects(PatchFrame)).
 
-crash_after_mount_closes_crash(Config) when is_list(Config) ->
-    %% Once the view mounted, a crash is 4500 -- the client remounts in place --
-    %% whether it raises in an event (under the call) or in handle_info.
+crash_after_resync_mount_closes_crash(Config) when is_list(Config) ->
+    %% The 4500/4501 boundary: once the deferred resync mounted the view, a crash
+    %% is 4500 (the client remounts in place), not a mount failure.
     Req = arizona_req_test_adapter:new(),
-    {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
-    CrashFrame = iolist_to_binary(json:encode([~"crashable", ~"crash", #{}])),
-    ?assertMatch(
-        {[], {close, 4500, ~"server crash", _}},
-        logged_error(fun() -> settle(arizona_socket:handle_in(CrashFrame, Socket0), Socket0) end)
-    ),
-    {reply, _, Socket1} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
-    AsyncFrame = iolist_to_binary(json:encode([~"crashable", ~"crash_async", #{}])),
-    ?assertMatch(
-        {[], {close, 4500, ~"server crash", _}},
-        logged_error(fun() -> settle(arizona_socket:handle_in(AsyncFrame, Socket1), Socket1) end)
-    ),
-    %% A deferred resync that mounted makes a later crash 4500 too.
-    {reply, _, Socket2} = arizona_socket:init(
+    {reply, _, Socket0} = arizona_socket:init(
         arizona_crashable, #{}, Req, #{reconnect => true, fps_follow => true}
     ),
     FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
-    {reply, _, Socket3} = arizona_socket:handle_in(FpsFrame, Socket2),
+    {reply, _, Socket1} = arizona_socket:handle_in(FpsFrame, Socket0),
+    CrashFrame = iolist_to_binary(json:encode([~"crashable", ~"crash", #{}])),
     ?assertMatch(
         {[], {close, 4500, ~"server crash", _}},
-        logged_error(fun() -> settle(arizona_socket:handle_in(CrashFrame, Socket3), Socket3) end)
+        logged_error(fun() -> settle(arizona_socket:handle_in(CrashFrame, Socket1), Socket1) end)
     ).
 
 navigate_frame(Path) ->

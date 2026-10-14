@@ -230,6 +230,17 @@ public final class AzClient {
         wsUrl = wsBase + Self.encodeURIComponent(p) + "&_az_reconnect=1"
     }
 
+    /// A `full` navigate: the server cannot serve `path` on this socket (a
+    /// middleware halt, different layouts, no live route). Sending the navigate
+    /// back would loop, so do what a browser's full page load does: drop this
+    /// socket and connect fresh to the path, running its upgrade middlewares and
+    /// mount anew. A refused upgrade then takes the normal backoff.
+    func reload(_ path: String) {
+        let p = String(path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)[0])
+        wsUrl = wsBase + Self.encodeURIComponent(p) + "&_az_reconnect=1"
+        connect()
+    }
+
     // MARK: - Op application
 
     private func applyOps(_ ops: [JSONValue]) {
@@ -515,7 +526,11 @@ public final class AzClient {
             pushEvent(name, payload: cmd.count > 2 ? cmd[2] : .object([:]), target: target)
         case Effect.navigate:
             guard let path = effectArg(cmd) else { return }
-            navigate(path)
+            if cmd.count > 2, cmd[2]["full"]?.boolValue == true {
+                reload(path)
+            } else {
+                navigate(path)
+            }
         default: if strict { assertionFailure("unsupported command: \(cmd)") }
         }
     }

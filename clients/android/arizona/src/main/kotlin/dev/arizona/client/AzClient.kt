@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
@@ -112,23 +113,26 @@ class AzClient(baseUrl: String, path: String) {
         ws = http.newWebSocket(
             Request.Builder().url(wsUrl).build(),
             object : WebSocketListener() {
+                // Every callback runs on main, where it is dropped unless it
+                // belongs to the current socket: a socket `reload` retired still
+                // reports its frames and its close.
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     // On main so the fingerprint cache is only ever read/written
                     // from one thread (the op applier owns it).
-                    main.post { handleOpen(webSocket::send) }
+                    main.post { if (webSocket === ws) handleOpen(webSocket::send) }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    main.post { handleText(text) }
+                    main.post { if (webSocket === ws) handleText(text) }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     // A failure is an abrupt drop (no close code): treat as non-1000.
-                    scheduleReconnect(1006)
+                    scheduleReconnect(webSocket, 1006)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    scheduleReconnect(code)
+                    scheduleReconnect(webSocket, code)
                 }
             },
         )
@@ -211,8 +215,9 @@ class AzClient(baseUrl: String, path: String) {
     // a normal close (1000), reopen with backoff -- re-mounting via _az_reconnect=1.
     // All on the main thread, so reconnectAttempt is touched from one thread only.
     // Mirrors the JS reference client's onclose.
-    private fun scheduleReconnect(code: Int) {
+    private fun scheduleReconnect(webSocket: WebSocket, code: Int) {
         main.post {
+            if (webSocket !== ws) return@post
             stopHeartbeat() // the old socket is dead; the new one restarts it
             status.value = ConnStatus.DISCONNECTED
             if (closing || code == 1000) return@post
@@ -266,7 +271,12 @@ class AzClient(baseUrl: String, path: String) {
                     payload = cmd.getOrNull(2)?.jsonObject ?: JsonObject(emptyMap()),
                     target = target,
                 )
-            Effect.NAVIGATE -> navigate(cmd[1].jsonPrimitive.content)
+            Effect.NAVIGATE ->
+                if (isFullNavigate(cmd)) {
+                    reload(cmd[1].jsonPrimitive.content)
+                } else {
+                    navigate(cmd[1].jsonPrimitive.content)
+                }
             else -> if (strict) error("unsupported command: $cmd")
         }
     }
@@ -290,6 +300,23 @@ class AzClient(baseUrl: String, path: String) {
         // re-mounts here, not the launch path. Reconnect is a fresh mount, so only
         // _az_path (the route) matters.
         wsUrl = wsBase + java.net.URLEncoder.encode(parts[0], "UTF-8") + "&_az_reconnect=1"
+    }
+
+    /**
+     * A `full` navigate: the server cannot serve `path` on this socket (a
+     * middleware halt, different layouts, no live route). Sending the navigate
+     * back would loop, so do what a browser's full page load does: drop this
+     * socket and connect fresh to the path, running its upgrade middlewares and
+     * mount anew. A refused upgrade then takes the normal backoff.
+     */
+    private fun reload(path: String) {
+        wsUrl = wsBase + java.net.URLEncoder.encode(path.split("?", limit = 2)[0], "UTF-8") +
+            "&_az_reconnect=1"
+        stopHeartbeat()
+        val old = ws
+        ws = null // retired first, so its close is ignored (see the listener)
+        old?.cancel()
+        connect()
     }
 
     // Send an event frame [ViewId, Event, Payload]. ViewId defaults to the root
@@ -545,6 +572,11 @@ class AzClient(baseUrl: String, path: String) {
 // (`[[0, "inc"], [10, "/n"]]`), told apart by the first element exactly as the
 // web client's executeJS does: a command opens with its op code, a list with a
 // command.
+/** Whether a navigate command carries the `full` opt (`[10, Path, {"full": true}]`). */
+@VisibleForTesting
+internal fun isFullNavigate(cmd: JsonArray): Boolean =
+    (cmd.getOrNull(2) as? JsonObject)?.get("full")?.jsonPrimitive?.booleanOrNull == true
+
 @VisibleForTesting
 internal fun commands(cmds: JsonArray): List<JsonArray> =
     if (cmds.firstOrNull() is JsonArray) cmds.map { it.jsonArray } else listOf(cmds)

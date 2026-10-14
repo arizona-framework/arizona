@@ -43,9 +43,8 @@ The live process is linked. Exits map to WebSocket close codes:
   view crashed after it mounted. Client remounts it in place by reconnecting.
 
 A failure to mount the view closes `4501` instead, whatever the exit: the
-connect's mount (`init/4`), a reconnect's deferred resync mount, a
-navigate's mount of the new page, and a navigate/patch whose middleware
-halts without a redirect -- each up to the frame that delivers the view.
+connect's mount (`init/4`), a reconnect's deferred resync mount, and a
+navigate -- each up to the frame that delivers the view.
 The page itself may be stale (a deploy changed the route or the assets), so
 the client reloads it after a jittered delay.
 """.
@@ -616,12 +615,9 @@ resolve_route(Path, Qs, Req) ->
 %% no `Set-Cookie` leg), so it goes one of two ways: replayed if it can be, and
 %% otherwise dropped loudly.
 %%
-%% The `full` opt is browser-only. The Android and iOS clients read only the
-%% path off a navigate effect and send the frame straight back, so a `full`
-%% reply to one would resolve, differ again, and re-emit -- a loop, not a page
-%% load. Held off today only by native routes declaring no `layouts` (they wrap
-%% no HTTP page), a convention nothing enforces; the unresolvable-route case
-%% above has carried the same latent loop all along.
+%% A native client has no page to load, so it takes a `full` navigate as the
+%% next best thing: it drops this socket and connects fresh to the target path,
+%% which runs the upgrade's middlewares (and mount) anew.
 full_navigate(Path, Qs, Socket0) ->
     Url = url(Path, Qs),
     case flash_replay(Url, Socket0) of
@@ -692,8 +688,9 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
             %% A live process gone under this call is handled at the entry catch
-            %% (crash_close/4): the frame is dropped and its queued exit closes
-            %% -- 4501 when it crashed, since the new page could not be served.
+            %% (crash_close/4): the frame is dropped and its queued exit closes.
+            %% A crash exit under this call -- the new page's mount, or the old
+            %% page's unmount -- closes 4501: the new page could not be served.
             %%
             %% The socket is the only caller of arizona_live:navigate/4 (it is
             %% transport-facing): the drain below relies on every push before the
@@ -749,11 +746,10 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
 %% `arizona_js:navigate` client effect. A flash the middleware set via `put_flash/3`
 %% before halting has no `Set-Cookie` leg to ride here, so it is stashed on the
 %% socket for the follow-up frame (`take_pending_flash/2`), delivered exactly once
-%% with no cookie. A halt without a stashed redirect has nothing to say over the
-%% socket, and the target cannot mount: close 4501, so the client reloads the
-%% page and that HTTP request receives the full middleware response. (A
-%% reconnect would not get there -- the WebSocket upgrade runs the same halting
-%% middleware and is refused.)
+%% with no cookie. A halt without a stashed redirect has a response only HTTP
+%% can deliver, so the client is told to load the requested URL for real -- a
+%% reconnect would not get there, since the WebSocket upgrade runs the same
+%% halting middleware and is refused.
 halt_navigate(Requested, HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
@@ -763,7 +759,7 @@ halt_navigate(Requested, HaltReq, Socket) ->
                 stash_halt_flash(Requested, Location, HaltReq, Socket)
             );
         undefined ->
-            close_mount_failed(Socket)
+            encode_reply([], [arizona_js:navigate(Requested, #{full => true})], Socket)
     end.
 
 %% Stash the halting middleware's flash BESIDE the path that produced it. Unlike
