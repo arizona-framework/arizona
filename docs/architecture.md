@@ -1147,7 +1147,8 @@ lives here independent of the server.
   effects are dropped and logged by op code (a client applies a frame's effects after its ops, so
   they would run against the new page), with a warning for a dropped `navigate`/`patch` that
   carried a flash, at any wrapper depth (`transition`, `on_key`, a `fetch`'s `on_error`). Only
-  this socket navigates its live process: `arizona_live:navigate/4` is transport API
+  this socket navigates its live process: `arizona_live:navigate/3,4` are transport-facing (apps
+  navigate through the `arizona_js:navigate`/`patch` effects)
 
 **Exit reason to close code** -- four cases, and the difference matters because the JS worker
 treats **any non-1000 code as reconnectable**:
@@ -1572,8 +1573,10 @@ old root). Discarding the page is a removal, so it unmounts exactly like a diff 
 root is still mounted, and no handler has to propagate unmount by hand. Note the guarantee is
 against the root: `views` is flat and walked with `maps:foreach`, so nested views unmount in key
 order, not parent-before-child. Then the new handler
-is mounted and gen_server state is reset. Returns `{ok, NewViewId, PageHTML}`. WS handler sends
-`[OP_REPLACE, OldViewId, PageHTML]`. Browser back/forward also triggers navigate via `popstate`.
+is mounted and gen_server state is reset. Returns `{ok, NewViewId, PageHTML, Observed}`. The WS
+handler sends one frame: the old page's pushes queued ahead of the live process's barrier, their
+ops first, then `[OP_REPLACE, OldViewId, PageHTML]` (their effects are dropped with a log line, see
+`handle_info/2` above). Browser back/forward also triggers navigate via `popstate`.
 
 **SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS sends
 `["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for navigate, then

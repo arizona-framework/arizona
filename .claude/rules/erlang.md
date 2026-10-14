@@ -40,7 +40,7 @@ Rule of thumb:
 
 Every handler's `mount/1` must build a fresh map
 literal rather than `maps:merge`-ing or `Bindings#{...}`-updating the input.
-With `arizona_live:navigate/3` the input may carry arbitrary keys from
+After a `navigate` the input may carry arbitrary keys from
 previously visited pages; merging passes them through and lets foreign keys
 collide with handler-owned defaults (e.g. one page's `next_id` overriding
 another's, dup-inserting on a stream). Pull each accepted override out

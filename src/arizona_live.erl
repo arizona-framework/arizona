@@ -409,6 +409,10 @@ handle_event(Pid, ViewId, Event, Payload) ->
 SPA navigation: unmounts the current root handler, mounts a new one,
 and returns fresh page content. Equivalent to
 `navigate(Pid, NewHandler, InitBindings, [])`.
+
+Transport-facing: the transport driving the live process (`arizona_socket`)
+calls it to serve a navigate frame. Apps navigate through the
+`arizona_js:navigate/1,2` and `arizona_js:patch/1,2` effects instead.
 """.
 -spec navigate(Pid, NewHandler, InitBindings) ->
     {ok, binary(), binary() | map(), arizona_event_attrs:observed()}
@@ -421,6 +425,9 @@ navigate(Pid, NewHandler, InitBindings) ->
 
 -doc """
 SPA navigation with `on_mount` hooks for the new handler.
+
+Transport-facing, like `navigate/3`: apps navigate through the
+`arizona_js:navigate/1,2` and `arizona_js:patch/1,2` effects.
 """.
 -spec navigate(Pid, NewHandler, InitBindings, OnMount) ->
     {ok, binary(), binary() | map(), arizona_event_attrs:observed()}
@@ -1323,10 +1330,11 @@ scope_child_ops(_ViewId, []) ->
 scope_child_ops(ViewId, Ops) ->
     [[ViewId, Ops]].
 
-%% A push names the root view that owns it (the page's id at emit time). The
-%% transport sets a push barrier before a navigate and ships the old page's
-%% queued pushes ahead of the replace, so their ops land on the old DOM before
-%% the new page supersedes it.
+%% A push names the root view that owns it (the page's id at emit time). Serving
+%% the transport's navigate call, this process emits a push barrier
+%% (push_barrier/2) before it unmounts, so the transport ships the old page's
+%% queued pushes ahead of the replace: their ops land on the old DOM before the
+%% new page supersedes it.
 push(undefined, _ViewId, _Ops, _Effects) ->
     ok;
 push(_Pid, _ViewId, [], []) ->
