@@ -945,9 +945,10 @@ function forEachElementBetweenMarkers(startMarker, fn) {
 // `mounted()`. Anything else is replaced as before.
 //
 // "The same place" is read off the DOM, where the addresses already are: the slot
-// marker enclosing each element on the way up, and the `az-key` / view id of each
-// ancestor. A slot holds one value, so two regions under the same name and place
-// are items of a plain list, matched by position, as the list diff matches them.
+// marker enclosing each element on the way up, and the `az-key` / view id of the
+// region and each ancestor. A slot holds one value, so two regions under the same
+// name and place are unkeyed items of a plain list -- which nothing can match up,
+// so they are never kept.
 // ---------------------------------------------------------------------------
 
 /** No region kept. Shared, never written. */
@@ -978,77 +979,78 @@ function mayNameRegion(html) {
  * @returns {ReadonlySet<Element>}
  */
 function keepRegions(oldNodes, frag, resync) {
-    const fresh = regionsByIdentity(Array.from(frag.childNodes));
+    const fresh = regionsByIdentity(Array.from(frag.childNodes), frag);
     if (fresh.size === 0) return NO_REGIONS;
-    const old = regionsByIdentity(Array.from(oldNodes));
+    const tops = Array.from(oldNodes);
+    const old = regionsByIdentity(tops, /** @type {ParentNode} */ (tops[0].parentNode));
     const kept = new Set();
     for (const [id, news] of fresh) {
         const olds = old.get(id);
-        if (!olds) continue;
-        const n = Math.min(news.length, olds.length);
-        for (let i = 0; i < n; i++) {
-            const o = olds[i];
-            if (resync && (o.hasAttribute('az-view') || o.querySelector('[az-view]'))) continue;
-            news[i].replaceWith(o);
-            kept.add(o);
-        }
+        // Two regions under one name at one place are items the server could not
+        // tell apart (it re-renders a list wholesale for exactly that reason), so
+        // which old one a new one is cannot be known: keep neither.
+        if (olds?.length !== 1 || news.length !== 1) continue;
+        const o = olds[0];
+        if (resync && (o.hasAttribute('az-view') || o.querySelector('[az-view]'))) continue;
+        news[0].replaceWith(o);
+        kept.add(o);
     }
     return kept;
 }
 
 /**
- * The outermost regions under the sibling range `tops`, grouped by identity in
- * document order. A region inside another is part of it and is not listed.
+ * The outermost regions under the sibling range `tops` (children of `parent`),
+ * grouped by identity in document order. A region inside another is part of it
+ * and is not listed. One query over `parent`, not one per top: a list re-render
+ * has as many tops as items.
  * @param {Node[]} tops
+ * @param {ParentNode} parent
  * @returns {Map<string, Element[]>}
  */
-function regionsByIdentity(tops) {
+function regionsByIdentity(tops, parent) {
     /** @type {Map<string, Element[]>} */
     const byId = new Map();
     /** @type {Map<Node, string>} */
     const slots = new Map();
     slotsOf(tops, slots);
-    for (const top of tops) {
-        if (top.nodeType !== 1) continue;
-        const el = /** @type {Element} */ (top);
-        const found = el.hasAttribute(REGION_ATTR) ? [el] : [];
-        for (const r of el.querySelectorAll(`[${REGION_ATTR}]`)) found.push(r);
-        for (const r of found) {
-            const id = regionIdentity(r, el, slots);
-            if (id === null) continue;
-            const list = byId.get(id);
-            if (list) list.push(r);
-            else byId.set(id, [r]);
-        }
+    for (const r of parent.querySelectorAll(`[${REGION_ATTR}]`)) {
+        const id = regionIdentity(r, parent, slots);
+        if (id === null) continue;
+        const list = byId.get(id);
+        if (list) list.push(r);
+        else byId.set(id, [r]);
     }
     return byId;
 }
 
 /**
- * A region's identity: its name plus, for it and each ancestor up to `top`, the
- * slot it sits in and its `az-key` / view id. Null when an ancestor is itself a
- * region (the outer one carries this one).
+ * A region's identity: its name plus, for it and each ancestor below `parent`,
+ * the slot it sits in and its `az-key` / view id -- the region's own included,
+ * since a child view whose root is the region is that view only under its id.
+ * Null when an ancestor is itself a region (the outer one carries this one), or
+ * when the region is outside the range (`slots` holds the range's tops).
  * @param {Element} region
- * @param {Element} top
+ * @param {ParentNode} parent
  * @param {Map<Node, string>} slots
  * @returns {string|null}
  */
-function regionIdentity(region, top, slots) {
+function regionIdentity(region, parent, slots) {
     let id = /** @type {string} */ (region.getAttribute(REGION_ATTR));
     /** @type {Element} */
     let node = region;
     for (;;) {
-        if (node !== region) {
-            if (node.hasAttribute(REGION_ATTR)) return null;
-            const key = node.getAttribute('az-key') ?? '';
-            const view = node.hasAttribute('az-view') ? node.id : '';
-            id = `${key}#${view}/${id}`;
+        if (node !== region && node.hasAttribute(REGION_ATTR)) return null;
+        const key = node.getAttribute('az-key') ?? '';
+        const view = node.hasAttribute('az-view') ? node.id : '';
+        id = `${key}#${view}/${id}`;
+        const up = /** @type {Element} */ (node.parentNode);
+        if (up === parent) {
+            const slot = slots.get(node);
+            return slot === undefined ? null : `${slot}>${id}`;
         }
-        if (!slots.has(node))
-            slotsOf(Array.from(/** @type {Element} */ (node.parentNode).childNodes), slots);
+        if (!slots.has(node)) slotsOf(Array.from(up.childNodes), slots);
         id = `${slots.get(node)}>${id}`;
-        if (node === top) return id;
-        node = /** @type {Element} */ (node.parentNode);
+        node = up;
     }
 }
 
@@ -1084,8 +1086,12 @@ function mountHooksOutside(root, kept) {
         return;
     }
     if (!anyHookDefs()) return;
+    // Up from each hook to `root`: a kept region on the way means it is inside one.
+    // Each hook costs its depth, where asking every kept region `contains()` cost
+    // the number of regions -- quadratic over a list of widgets.
     const inKept = (/** @type {Element} */ e) => {
-        for (const k of kept) if (k.contains(e)) return true;
+        for (let n = /** @type {Element|null} */ (e); n; n = n === root ? null : n.parentElement)
+            if (kept.has(n)) return true;
         return false;
     };
     if (root.hasAttribute('az-hook') && !inKept(root)) mountHook(root);
@@ -1125,12 +1131,6 @@ function applyTextOp(el, az, val, isHtml) {
             return;
         }
         forEachElementBetweenMarkers(marker, (e) => mountHooksOutside(e, kept));
-    } else if (isHtml && mayNameRegion(val)) {
-        const frag = parseFragmentIn(el, val);
-        const kept = keepRegions(Array.from(el.childNodes), frag, false);
-        destroyChildHooks(el);
-        el.replaceChildren(frag);
-        mountHooksOutside(el, kept);
     } else {
         destroyChildHooks(el);
         if (isHtml) {

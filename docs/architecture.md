@@ -1832,9 +1832,16 @@ region in it, so the client carries the old ones over: each region's root names 
 `arizona_template:region_token/3`), and a region whose old and new copies sit at the same place
 under the same name keeps its existing DOM -- the old element is moved into the new markup in place
 of the new copy, and its hook sees neither `destroyed()` nor `mounted()`. "The same place" is the
-slot that holds it plus, on the way up, each enclosing item's `az-key` and view id, so a region in
-a stream item follows its key and a region in a plain-list item is matched by position, as the list
-diff matches it. A region the new render does not name there is replaced as before.
+slot that holds it plus, on the way up, its own and each enclosing element's `az-key` and view id,
+so a region in a keyed item follows its key and a child view whose root is a region is kept only
+under the same id. A region the new render does not name there is replaced as before.
+
+**List items are kept only when keyed.** Unkeyed items share one template, so nothing tells which
+old item a new one is -- that is exactly why such a list re-renders wholesale. An unkeyed `?each`
+item whose root is a region is therefore not named at all, and when two regions inside unkeyed
+items share a name and place, neither is kept: both remount for their own item. Give the item an
+`az_key` (`{li, ['az-nodiff', {az_key, Id}], [...]}`) and its widget follows it through adds,
+drops, reorders and a reconnect.
 
 A reconnect mounts the view afresh, so what survives it is decided by what the fresh mount
 renders: a region its initial state chooses again keeps its widget and client state; one chosen

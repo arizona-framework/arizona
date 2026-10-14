@@ -35,87 +35,112 @@ function widgetHook() {
     return events;
 }
 
-// `?each(fun(#{v := V}) -> {li, ['az-nodiff', {az_hook, ~"W"}], [V]} end, ...)`:
-// the region is the item itself. Any change to such a list falls back to the
-// wholesale container OP_TEXT.
 const LIST_AZ = 'L46T83-0';
-const ITEM = (v) => `<li az-region="1EOT1I5" az-hook="W">${v}</li>`;
-const ITEM_TMPL = { f: '1EOT1I5', s: ['<li', ' az-hook="W">', '</li>'], t: 0 };
-const listOp = (vs) => [
-    OP.TEXT,
-    `page:${LIST_AZ}`,
-    resolveHtml({ ...ITEM_TMPL, d: vs.map((v) => [' az-region="1EOT1I5"', v]) }),
-    true,
-];
+const items = () => Array.from(document.querySelectorAll('li'));
 
-function setupList(vs) {
-    document.body.innerHTML =
-        `<main id="page" az-view><ul az="${LIST_AZ}"><!--az:${LIST_AZ}-->` +
-        `${vs.map(ITEM).join('')}<!--/az--></ul></main>`;
+function setupList(html) {
+    document.body.innerHTML = `<main id="page" az-view><ul az="${LIST_AZ}"><!--az:${LIST_AZ}-->${html}<!--/az--></ul></main>`;
     mountHooks(document);
 }
 
-const items = () => Array.from(document.querySelectorAll('li'));
+// `?each(fun(I) -> {li, ['az-nodiff', {az_hook, ~"W"}, {az_key, I}], [I]} end, ...)`:
+// each item is a region named with its key. Any change to such a list re-renders it wholesale.
+const KEYED_TMPL = { f: '1E5G6CX', s: ['<li', ' az-hook="W"', '>', '</li>'], t: 0 };
+const KEYED_TOKENS = { x: '1E5G6CX.kSPJT6G', y: '1E5G6CX.k19DTS45' };
+const keyed = (k) => `<li az-region="${KEYED_TOKENS[k]}" az-hook="W" az-key="${k}">${k}</li>`;
+const keyedOp = (ks) => [
+    OP.TEXT,
+    `page:${LIST_AZ}`,
+    resolveHtml({
+        ...KEYED_TMPL,
+        d: ks.map((k) => [` az-region="${KEYED_TOKENS[k]}"`, ` az-key="${k}"`, k]),
+    }),
+    true,
+];
 
-describe('a plain list re-rendered wholesale', () => {
-    it('keeps the regions at their positions and mounts only the new one', () => {
+describe('keyed list items re-rendered wholesale', () => {
+    it('keeps the region of an item still listed when the first is dropped', () => {
         const events = widgetHook();
-        setupList(['a', 'b']);
-        const [a, b] = items();
-        a.dataset.state = 'typed';
-        applyOps([listOp(['a', 'b', 'c'])]);
-        const after = items();
-        expect(after).toHaveLength(3);
-        expect(after[0]).toBe(a);
-        expect(after[1]).toBe(b);
-        expect(a.dataset.state).toBe('typed');
-        expect(after[2].textContent).toBe('c');
-        expect(events).toEqual(['mount:a', 'mount:b', 'mount:c']);
+        setupList(keyed('x') + keyed('y'));
+        const [, y] = items();
+        y.dataset.state = 'typed';
+        applyOps([keyedOp(['y'])]);
+        expect(items()).toEqual([y]);
+        expect(y.dataset.state).toBe('typed');
+        expect(events).toEqual(['mount:x', 'mount:y', 'destroy:x']);
     });
 
-    it('destroys only the regions the new render no longer holds', () => {
+    it('keeps each region with its key across a reorder', () => {
         const events = widgetHook();
-        setupList(['a', 'b', 'c']);
-        const [a] = items();
-        applyOps([listOp(['a'])]);
-        expect(items()).toEqual([a]);
-        expect(events).toEqual(['mount:a', 'mount:b', 'mount:c', 'destroy:b', 'destroy:c']);
-    });
-});
-
-// A stream's items carry their key, so a region follows its item, not its position.
-// The item root names the key in its `az-region` too
-// (`arizona_template:region_token(~"1EOT1I5", undefined, Key)`).
-describe('stream items re-rendered wholesale', () => {
-    const TOKENS = { 1: '1EOT1I5.kPE60I9', 2: '1EOT1I5.kVE5ITL', 3: '1EOT1I5.k1A4SN17' };
-    const KEYED = (k) => `<li az-key="${k}" az-region="${TOKENS[k]}" az-hook="W">${k}</li>`;
-    const keyedHtml = (ks) => ks.map(KEYED).join('');
-
-    it('keeps each region with its key', () => {
-        const events = widgetHook();
-        document.body.innerHTML =
-            `<main id="page" az-view><ul az="${LIST_AZ}"><!--az:${LIST_AZ}-->` +
-            `${keyedHtml(['1', '2'])}<!--/az--></ul></main>`;
-        mountHooks(document);
-        const [one, two] = items();
-        applyOps([[OP.TEXT, `page:${LIST_AZ}`, keyedHtml(['2', '3', '1']), true]]);
-        const after = items();
-        expect(after[0]).toBe(two);
-        expect(after[2]).toBe(one);
-        expect(events).toEqual(['mount:1', 'mount:2', 'mount:3']);
+        setupList(keyed('x') + keyed('y'));
+        const [x, y] = items();
+        applyOps([keyedOp(['y', 'x'])]);
+        expect(items()).toEqual([y, x]);
+        expect(events).toEqual(['mount:x', 'mount:y']);
     });
 
     it('keeps a region inside an item with that item', () => {
         widgetHook();
         const row = (k) =>
             `<li az-key="${k}"><!--az:R-0--><div az-region="W" az-hook="W">${k}</div><!--/az--></li>`;
-        document.body.innerHTML =
-            `<main id="page" az-view><ul az="${LIST_AZ}"><!--az:${LIST_AZ}-->` +
-            `${row('1')}${row('2')}<!--/az--></ul></main>`;
-        mountHooks(document);
+        setupList(row('1') + row('2'));
         const [one, two] = Array.from(document.querySelectorAll('[az-region]'));
         applyOps([[OP.TEXT, `page:${LIST_AZ}`, row('2') + row('1'), true]]);
         expect(Array.from(document.querySelectorAll('[az-region]'))).toEqual([two, one]);
+    });
+});
+
+// Regions in unkeyed plain-list items share one name and place: nothing tells
+// which old item a new one is, so none is kept.
+describe('unkeyed regions under one name', () => {
+    const row = (v) => `<li><!--az:R-0--><div az-region="W" az-hook="W">${v}</div><!--/az--></li>`;
+
+    it('are remounted when the first item is dropped', () => {
+        const events = widgetHook();
+        setupList(row('a') + row('b'));
+        const [a] = items();
+        applyOps([[OP.TEXT, `page:${LIST_AZ}`, row('b'), true]]);
+        expect(a.isConnected).toBe(false);
+        expect(document.querySelector('[az-region]').dataset.state).toBe('client:b');
+        expect(events).toEqual(['mount:a', 'mount:b', 'destroy:a', 'destroy:b', 'mount:b']);
+    });
+
+    it('are remounted when the items are reversed', () => {
+        const events = widgetHook();
+        setupList(row('a') + row('b'));
+        const before = Array.from(document.querySelectorAll('[az-region]'));
+        applyOps([[OP.TEXT, `page:${LIST_AZ}`, row('b') + row('a'), true]]);
+        const after = Array.from(document.querySelectorAll('[az-region]'));
+        expect(after.some((r) => before.includes(r))).toBe(false);
+        expect(after.map((r) => r.dataset.state)).toEqual(['client:b', 'client:a']);
+        expect(events.slice(2)).toEqual(['destroy:a', 'destroy:b', 'mount:b', 'mount:a']);
+    });
+});
+
+// `arizona_nodiff_regions:root_child/1`: a child view whose own root is az-nodiff,
+// its id from a binding. A new id is a new view the server addresses by that id.
+describe('a child view region', () => {
+    const SLOT = '17H5EN6-0';
+    const CHILD = '<div az-region="OAJKXF" az-view id="rc1">1</div>';
+    const SWITCH = resolveHtml({
+        d: [' az-region="OAJKXF"', ' id="rc2"', '1'],
+        f: 'OAJKXF',
+        s: ['<div', ' az-view', '>', '</div>'],
+    });
+
+    it('is replaced when its id changes', () => {
+        document.body.innerHTML = `<main id="page" az-view><div az="${SLOT}"><!--az:${SLOT}-->${CHILD}<!--/az--></div></main>`;
+        const old = document.getElementById('rc1');
+        applyOps([[OP.TEXT, `page:${SLOT}`, SWITCH, true]]);
+        expect(old.isConnected).toBe(false);
+        expect(document.getElementById('rc2')).not.toBeNull();
+    });
+
+    it('is kept under the same id', () => {
+        document.body.innerHTML = `<main id="page" az-view><div az="${SLOT}"><!--az:${SLOT}-->${CHILD}<!--/az--></div></main>`;
+        const old = document.getElementById('rc1');
+        applyOps([[OP.TEXT, `page:${SLOT}`, CHILD, true]]);
+        expect(document.getElementById('rc1')).toBe(old);
     });
 });
 
@@ -161,20 +186,15 @@ describe('a slot re-rendered wholesale', () => {
 
     it('does not move a region into another slot under the same name', () => {
         widgetHook();
+        const slots = (a, b) => `<!--az:A-1-->${a}<!--/az--><!--az:A-2-->${b}<!--/az-->`;
         document.body.innerHTML =
-            `<main id="page" az-view><div az="${SLOT_AZ}"><!--az:A-1-->${LINE}<!--/az-->` +
-            '<!--az:A-2--><!--/az--></div></main>';
+            `<main id="page" az-view><div az="${SLOT_AZ}"><!--az:${SLOT_AZ}-->` +
+            `${slots(LINE, '')}<!--/az--></div></main>`;
         mountHooks(document);
         const region = document.querySelector('[az-region]');
-        applyOps([
-            [
-                OP.TEXT,
-                `page:${SLOT_AZ}`,
-                `<!--az:A-1--><!--/az--><!--az:A-2-->${LINE}<!--/az-->`,
-                true,
-            ],
-        ]);
+        applyOps([[OP.TEXT, `page:${SLOT_AZ}`, slots('', LINE), true]]);
         expect(region.isConnected).toBe(false);
+        expect(document.querySelector('[az-region]')).not.toBeNull();
     });
 
     it('carries a region nested in another along with it, and nothing else', () => {
@@ -190,15 +210,6 @@ describe('a slot re-rendered wholesale', () => {
         applyOps([[OP.TEXT, `page:${SLOT_AZ}`, outer, true]]);
         expect(document.querySelector('[az-region="O"]')).toBe(region);
         expect(mounted).toHaveBeenCalledTimes(2);
-    });
-
-    it('keeps a region on the markerless path too', () => {
-        widgetHook();
-        document.body.innerHTML = `<main id="page" az-view><div az="X-0">${LINE}</div></main>`;
-        mountHooks(document);
-        const region = document.querySelector('[az-region]');
-        applyOps([[OP.TEXT, 'page:X-0', LINE, true]]);
-        expect(document.querySelector('[az-region]')).toBe(region);
     });
 });
 
