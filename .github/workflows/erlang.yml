@@ -347,8 +347,11 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: _build
-          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
-          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
+          # The E2E jobs build inside the Playwright container, where the checkout
+          # sits at /__w: a _build from the host jobs links its deps by host paths
+          # that dangle there, so the container keeps a cache of its own.
+          key: e2e-${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: e2e-${{ needs.cache-erlang.outputs.build-cache-prefix }}
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -442,8 +445,11 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: _build
-          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
-          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
+          # The E2E jobs build inside the Playwright container, where the checkout
+          # sits at /__w: a _build from the host jobs links its deps by host paths
+          # that dangle there, so the container keeps a cache of its own.
+          key: e2e-${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: e2e-${{ needs.cache-erlang.outputs.build-cache-prefix }}
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache
@@ -537,8 +543,11 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: _build
-          key: ${{ needs.cache-erlang.outputs.build-cache-key }}
-          restore-keys: ${{ needs.cache-erlang.outputs.build-cache-prefix }}
+          # The E2E jobs build inside the Playwright container, where the checkout
+          # sits at /__w: a _build from the host jobs links its deps by host paths
+          # that dangle there, so the container keeps a cache of its own.
+          key: e2e-${{ needs.cache-erlang.outputs.build-cache-key }}
+          restore-keys: e2e-${{ needs.cache-erlang.outputs.build-cache-prefix }}
 
       - name: Restore rebar3 cache
         id: restore-rebar3-cache

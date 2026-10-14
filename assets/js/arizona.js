@@ -3224,7 +3224,7 @@ function runDelegated(e, attr, sel, capture) {
     const t = /** @type {Element} */ (e.target);
     // Not always an Element: a viewport `scroll`, the page-level `mouseenter`, and
     // a server-sent `dispatch_event` all target the Document, which has no closest().
-    if (!t || t.nodeType !== 1) return;
+    if (t?.nodeType !== 1) return;
     const el = capture ? (t.hasAttribute(attr) ? t : null) : t.closest(sel);
     if (!el || !_connected) return;
     // Before the empty-value return: `az-<event>=""` with `az-prevent-default`
