@@ -16,7 +16,10 @@ as `type` and the client engine maps it to a real widget. Dynamic text children
 become addressable `#text` nodes so the diff engine can target them by `az`.
 
 String keys and values are escaped via `json:encode/1`, so the zipped statics
-form valid JSON.
+form valid JSON. So do the dynamics in the zipped document (`escape/1`,
+`render_attr/2`): a scalar is a JSON string, exactly what a client builds by
+JSON-encoding the wire value. On the wire itself a value stays raw
+(`wire_escape/1`, `wire_attr/2`), because the client does that encoding.
 """.
 -behaviour(arizona_renderer).
 
@@ -31,6 +34,7 @@ form valid JSON.
 -export([attr_command/2]).
 -export([attr_dyn_name/1]).
 -export([children_sep/0]).
+-export([each_items/1]).
 -export([text_child/1]).
 -export([text_az/2]).
 -export([text_slot_open/1]).
@@ -46,6 +50,8 @@ form valid JSON.
 -export([supports_local/0]).
 -export([escape/1]).
 -export([render_attr/2]).
+-export([wire_escape/1]).
+-export([wire_attr/2]).
 
 -spec name(arizona_renderer:tag()) -> binary().
 name(Bin) when is_binary(Bin) ->
@@ -96,6 +102,10 @@ attr_dyn_name(Name) ->
 -spec children_sep() -> binary().
 children_sep() ->
     ~",".
+
+-spec each_items([iodata()]) -> iodata().
+each_items(Items) ->
+    [$[, lists:join($,, Items), $]].
 
 -spec text_child(binary()) -> binary().
 text_child(Text) ->
@@ -162,12 +172,14 @@ target() -> native.
 
 supports_local() -> false.
 
-%% Native output is a JSON wire, not text with an in-band escape vocabulary --
-%% values are carried as JSON strings (encoded downstream), so nothing is escaped
-%% here. Required by the `arizona_renderer` behaviour; the parse transform never
-%% marks native values, so this is not reached via the escape marker.
+%% A content value in the zipped document is a JSON string.
 -spec escape(binary()) -> binary().
-escape(Bin) when is_binary(Bin) -> Bin.
+escape(Bin) when is_binary(Bin) -> json_str(Bin).
+
+%% On the wire the value stays raw: the client JSON-encodes each `d` value as it
+%% interleaves, so encoding it here would make it a string of a string.
+-spec wire_escape(binary()) -> binary().
+wire_escape(Bin) -> Bin.
 
 %% The native wire has no raw-text elements (raw_text_kind/2 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
@@ -175,12 +187,16 @@ escape(Bin) when is_binary(Bin) -> Bin.
 raw_text(_Tag, Value) -> Value.
 
 %% Render a dynamic attribute value: the prop name is baked into the static by
-%% attr_dyn_name/1, so the dynamic carries just the stringified value (the client
-%% JSON-encodes it like any other dynamic value). escape/1 is the identity here,
-%% so escape_value/2 only classifies out a `?raw`/effect and stringifies.
+%% attr_dyn_name/1, so the dynamic is just the value, JSON-encoded as the client
+%% encodes the wire value.
 -spec render_attr(binary(), term()) -> binary().
-render_attr(_Name, Value) ->
-    arizona_template:escape_value(?MODULE, Value).
+render_attr(Name, Value) ->
+    json_str(wire_attr(Name, Value)).
+
+%% The raw stringified prop the client JSON-encodes.
+-spec wire_attr(binary(), term()) -> binary().
+wire_attr(_Name, Value) ->
+    arizona_template:to_bin(Value).
 
 %% --------------------------------------------------------------------
 %% Internal functions

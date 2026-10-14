@@ -56,6 +56,7 @@ never sanitized.
 -export([attr_command/2]).
 -export([attr_dyn_name/1]).
 -export([children_sep/0]).
+-export([each_items/1]).
 -export([text_child/1]).
 -export([text_az/2]).
 -export([text_slot_open/1]).
@@ -71,6 +72,8 @@ never sanitized.
 -export([supports_local/0]).
 -export([escape/1]).
 -export([render_attr/2]).
+-export([wire_escape/1]).
+-export([wire_attr/2]).
 
 %% Full SGR reset (clears colour and every text style at once); io_ansi has no
 %% whole-reset helper, only per-attribute `*_off` and `default_color`.
@@ -200,6 +203,10 @@ children_sep() ->
     %% Newlines come from `line`/`br`, not from a between-children separator.
     <<>>.
 
+-spec each_items([iodata()]) -> iodata().
+each_items(Items) ->
+    Items.
+
 -spec text_child(binary()) -> binary().
 text_child(Text) ->
     Text.
@@ -315,6 +322,16 @@ raw_text(_Tag, Value) -> Value.
 -spec render_attr(binary(), term()) -> no_return().
 render_attr(Name, _Value) ->
     attr_dyn_name(Name).
+
+%% A frame is repainted from the zipped document, so the wire carries what the
+%% document does.
+-spec wire_escape(binary()) -> binary().
+wire_escape(Bin) ->
+    escape(Bin).
+
+-spec wire_attr(binary(), term()) -> no_return().
+wire_attr(Name, Value) ->
+    render_attr(Name, Value).
 
 %% --------------------------------------------------------------------
 %% Internal functions

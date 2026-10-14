@@ -2059,8 +2059,10 @@ native_backend_not_escaped(Config) when is_list(Config) ->
     ?assertEqual(arizona_native, maps:get(backend, T)),
     ?assertMatch([{_Az, {esc, _Fun}, _Loc}], maps:get(d, T)),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
-    %% The backend's escape/1 is the identity: the value passes through unescaped.
-    ?assertEqual(<<"<not-escaped>">>, arizona_template:escape_value(arizona_native, Fun())).
+    %% Never HTML-escaped: the zipped document carries it as a JSON string, the
+    %% wire carries it raw for the client to JSON-encode.
+    ?assertEqual(<<"\"<not-escaped>\"">>, arizona_template:escape_value(arizona_native, Fun())),
+    ?assertEqual(<<"<not-escaped>">>, arizona_native:wire_escape(Fun())).
 
 %% A bare ?get inside <script> is spliced VERBATIM (raw text decodes no character
 %% references, so escaping cannot apply) -- the value could close the JS string it

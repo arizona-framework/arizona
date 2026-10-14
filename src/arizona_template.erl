@@ -546,8 +546,8 @@ classify_trusted(_Value) -> value.
 
 -doc """
 Renders a value to its output binary, escaping via `Backend` (an
-`arizona_renderer`): HTML entity-escaping, terminal control-char sanitizing, or a
-plain-text/JSON identity. `raw/1`-wrapped values and already-encoded
+`arizona_renderer`): HTML entity-escaping, terminal control-char sanitizing, or
+JSON string encoding. `raw/1`-wrapped values and already-encoded
 `arizona_effect` commands are classified out and pass through unescaped (the
 `?raw` opt-out and effects are trusted, backend-independent).
 """.
