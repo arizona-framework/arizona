@@ -66,7 +66,12 @@ report(Spec, {error, Reason}) ->
 Generated pages are SSR HTML. The client `<script>` / `connect('/ws')` lives in
 your layout, not here: a purely static page uses a layout without the WS connect.
 The output carries the usual `az-view` / `id` markers (inert as static HTML;
-meaningful only if later hydrated by an Arizona server). `generate/2,3` writes
+meaningful only if later hydrated by an Arizona server). A page whose root
+element carries `az-nodiff` drops the per-slot `az` attributes and comment
+markers from every template nested in it. Three things keep theirs: an element
+holding a content `?local` (the client's address for it), templates built inside
+a fun other than an `?each` callback, and `?stateful`/`?stateless` children,
+which are compiled separately. `generate/2,3` writes
 files but does not clean `OutDir`, so a page removed from `Specs` leaves its
 previously generated file behind.
 """.
