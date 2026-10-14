@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { NativeClient } from '../utils/native_client.js';
 
 // Native (JSON) multiple independent counters in one view: incrementing one
-// az-nodiff element updates only its own count (distinct az slots). Proves independent
+// region updates only its own count (distinct az slots). Proves independent
 // event routing + az-numbering on native.
 test.describe('native (JSON) wire -- multi counter', () => {
     test('increments one counter without touching the others', async ({ baseURL }) => {

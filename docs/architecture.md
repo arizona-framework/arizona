@@ -894,9 +894,9 @@ present, `false` => absent.
 Caveats (by design):
 
 - **Wholesale re-render resets it.** A `?local` value survives normal per-slot diffs, but an
-  enclosing az-nodiff element re-rendered as a unit (an `OP_TEXT` replacing a whole slot,
-  `OP_REPLACE`, an `?each` item swap, a conditional template switch) recreates the slot at its SSR
-  initial.
+  enclosing subtree re-rendered as a unit (an `OP_TEXT` replacing a whole slot, `OP_REPLACE`, an
+  `?each` item swap, a conditional template switch) recreates the slot at its SSR initial -- unless
+  it sits inside an az-nodiff element that is kept.
 - **Inside `?each`, items share the slot key.** `?local` keys are compile-time literals (you
   can't build `?local(<<"open_", Id/binary>>, ...)` -- that errors `local_key_not_literal`), so
   every item rendered from the same template carries the **same** key and `set`/`set_all`
