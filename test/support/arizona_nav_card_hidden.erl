@@ -6,8 +6,8 @@
 %% card's statics first leave the server in a push rather than at mount.
 
 -spec mount(az:bindings()) -> az:mount_ret().
-mount(_Bindings) ->
-    {#{id => ~"nca", show => false, label => ~""}, #{}}.
+mount(Bindings) ->
+    {#{id => maps:get(id, Bindings, ~"nca"), show => false, label => ~""}, #{}}.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
@@ -24,4 +24,6 @@ render(Bindings) ->
 handle_info({show_card, Label}, Bindings) ->
     {Bindings#{show => true, label => Label}, #{}, []};
 handle_info({show_card_titled, Label}, Bindings) ->
-    {Bindings#{show => true, label => Label}, #{}, [arizona_js:set_title(Label)]}.
+    {Bindings#{show => true, label => Label}, #{}, [arizona_js:set_title(Label)]};
+handle_info({show_card_with, Label, Effects}, Bindings) ->
+    {Bindings#{show => true, label => Label}, #{}, Effects}.

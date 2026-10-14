@@ -1136,16 +1136,17 @@ lives here independent of the server.
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
   `["navigate", #{~"path" := Path, ~"qs" := Qs}]` (replace), `["patch", #{~"path", ~"qs"}]`
   (in-place, same-handler -> `patch/2`, else falls back to navigate), `[target, event, payload]`
-- `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live`, the
-  `arizona_resync_timeout` backstop, and `EXIT` signals from the live process. On a synchronous
-  event/patch/navigate reply, pushes already queued in the socket mailbox are folded into the
-  reply frame first (causal wire order). On a navigate they ship ahead of the `OP_REPLACE`, still
-  tagged with the old page's view id: one may carry the first statics of a fingerprint the replace
-  then references bare, and the replace supersedes their ops anyway. Their effects are dropped,
-  since a client applies a frame's effects after its ops and they would run against the new page.
-  So for a navigate the socket drives, every push reaching `handle_info/2` names the socket's
-  current root. A navigate called directly on the live process (`arizona_live:navigate/3,4` from
-  another process) does not update the socket's view id, so later pushes are ignored
+- `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live` (ops
+  tagged with the view id the push names), the `arizona_resync_timeout` backstop, and `EXIT`
+  signals from the live process. On a synchronous event/patch/navigate reply, every push already
+  queued in the socket mailbox up to the live process's barrier is taken, whatever view id it
+  names, and shipped first (causal wire order): folded into the event/patch reply frame, and for
+  a navigate sent as a frame of its own ahead of the `OP_REPLACE` frame (`reply_many`). One may
+  carry the first statics of a fingerprint the replace then references bare; the replace
+  supersedes their ops anyway. Their effects run in that earlier frame, against the page that
+  emitted them, except the ones that would act on the new page or on the user's navigation --
+  `push_event` (relayed to the new root), `navigate`/`patch` (also inside `transition`/`on_key`;
+  a flash they carry is dropped with a warning) and `request_pip` -- which are dropped and logged
 
 **Exit reason to close code** -- four cases, and the difference matters because the JS worker
 treats **any non-1000 code as reconnectable**:
