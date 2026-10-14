@@ -4108,20 +4108,22 @@ describe('WS_CLOSE_CRASH reload guard', () => {
         vi.stubGlobal('location', { reload, href: 'http://localhost/' });
     }
 
-    it('reloads on a crash close but stops after the cap to break the loop', async () => {
+    it('stops reloading a crash that follows every open, logging once', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView('page', '<div az="0"></div>');
         mock = setupMockWorker(mod);
-        mock.simulateOpen();
         stubReload();
 
-        // A deterministic mount crash: every close is a 4500 (WS_CLOSE_CRASH).
-        for (let i = 0; i < 5; i++) mock.simulateClose(4500);
+        // A deterministic crash after connect: the server only closes 4500 after
+        // the socket opened, so every cycle is an open followed by the crash.
+        for (let i = 0; i < 5; i++) {
+            mock.simulateOpen(i > 0);
+            mock.simulateClose(4500);
+        }
 
-        // At most 3 reloads, then it gives up (no infinite loop) and logs.
         expect(reload).toHaveBeenCalledTimes(3);
-        expect(errSpy).toHaveBeenCalled();
+        expect(errSpy).toHaveBeenCalledTimes(1);
     });
 
     it('a normal (non-crash) close never reloads', async () => {
@@ -4136,20 +4138,125 @@ describe('WS_CLOSE_CRASH reload guard', () => {
         expect(reload).not.toHaveBeenCalled();
     });
 
-    it('a clean reconnect resets the guard so a later crash reloads again', async () => {
+    it('a connection that stays up clears the count so a later crash reloads again', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView('page', '<div az="0"></div>');
         mock = setupMockWorker(mod);
-        mock.simulateOpen();
+        stubReload();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            for (let i = 0; i < 4; i++) {
+                mock.simulateOpen(i > 0);
+                mock.simulateClose(4500);
+            }
+            expect(reload).toHaveBeenCalledTimes(3);
+
+            mock.simulateOpen(true);
+            vi.advanceTimersByTime(10000); // stable long enough: the loop is over
+            mock.simulateClose(4500);
+            expect(reload).toHaveBeenCalledTimes(4);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a connection that drops before it is stable keeps the count', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        stubReload();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            mock.simulateOpen();
+            mock.simulateClose(4500);
+            expect(reload).toHaveBeenCalledTimes(1);
+
+            // Up for a while, then an ordinary drop: the pending reset is cancelled,
+            // so the reconnect starts its stable period from zero.
+            mock.simulateOpen(true);
+            vi.advanceTimersByTime(9000);
+            mock.simulateClose(1006);
+            mock.simulateOpen(true);
+            vi.advanceTimersByTime(9000);
+            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a reloaded page that still crashes logs again but does not reload', async () => {
+        // The tab already used its reloads: the count survives in sessionStorage,
+        // while a manual reload starts a fresh module (a fresh console).
+        sessionStorage.setItem('arizona:crash-reloads', '3');
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
         stubReload();
 
-        for (let i = 0; i < 4; i++) mock.simulateClose(4500); // 3 reloads, then stop
-        expect(reload).toHaveBeenCalledTimes(3);
-
-        mock.simulateOpen(true); // a clean reconnect clears the crash counter
+        mock.simulateOpen();
         mock.simulateClose(4500);
-        expect(reload).toHaveBeenCalledTimes(4);
+        mock.simulateOpen(true);
+        mock.simulateClose(4500);
+
+        expect(reload).not.toHaveBeenCalled();
+        expect(errSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads a count stored by an older client as no count', async () => {
+        sessionStorage.setItem('arizona:crash-reloads', JSON.stringify({ count: 3 }));
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        stubReload();
+
+        mock.simulateOpen();
+        mock.simulateClose(4500);
+        expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('pagehide cancels the pending reset', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        stubReload();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            mock.simulateOpen();
+            mock.simulateClose(4500);
+            mock.simulateOpen(true);
+            vi.advanceTimersByTime(9000);
+            window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+            vi.advanceTimersByTime(2000);
+            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('disconnect() cancels the pending reset', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        stubReload();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            mock.simulateOpen();
+            mock.simulateClose(4500);
+            mock.simulateOpen(true);
+            vi.advanceTimersByTime(9000);
+            mock.restore();
+            mock = null;
+            vi.advanceTimersByTime(2000);
+            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 
