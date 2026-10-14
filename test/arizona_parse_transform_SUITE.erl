@@ -454,7 +454,7 @@ all() ->
 
 groups() ->
     [
-        %% Traces calls process-wide, so it runs alone.
+        %% Sets global call trace patterns, so it stays out of the parallel groups.
         {deps, [], [parse_transform_deps]},
         %% Tests 1-25: basic element parsing
         {elements, [parallel], [
@@ -9416,8 +9416,9 @@ az_attrs_records_component_modules(Config) when is_list(Config) ->
 %% The transform runs other modules while it compiles a template, and rebar3 only
 %% rebuilds its users after a change to one of them if the transform declares it
 %% (see the behaviour list in arizona_parse_transform). Compile every transform user
-%% in the repo and check each arizona module the compile called is declared, so a
-%% new compile-time call cannot leave incremental builds stale. A compiled module's
+%% in the repo and check the arizona modules the compile called are exactly the declared
+%% ones, so a new compile-time call cannot leave incremental builds stale and a stale
+%% declaration cannot rebuild every user for nothing. A compiled module's
 %% own `behaviour_info/1` lookups are the compiler's, not the transform's.
 parse_transform_deps(Config) when is_list(Config) ->
     Src = proplists:get_value(source, arizona_parse_transform:module_info(compile)),
@@ -9445,7 +9446,7 @@ parse_transform_deps(Config) when is_list(Config) ->
     ?assertEqual([], [R || R <- Compiled, element(1, R) =/= ok]),
     Attrs = arizona_parse_transform:module_info(attributes),
     Declared = lists:append(proplists:get_all_values(behaviour, Attrs)),
-    ?assertEqual([], Called -- Declared).
+    ?assertEqual(lists:sort(Declared), Called).
 
 trace_called(Mods, Fun) ->
     Self = self(),

@@ -69,11 +69,12 @@ render(Bindings) ->
 %% backends, and the command builders it folds with `arizona_effect` beneath
 %% them. rebar3 learns a module's compile-time dependencies only from its
 %% behaviour, include and parse_transform attributes, so they are declared as
-%% behaviours; a change to one then recompiles this module and, through it,
+%% behaviours. The same edges compile them before any transform user on a
+%% clean build, and a change to one recompiles this module and, through it,
 %% every module it compiled, instead of leaving them built from the old code.
 %% None defines callbacks, so the compiler and dialyzer are told not to look
 %% for any. `parse_transform_deps` in arizona_parse_transform_SUITE fails if
-%% the transform starts calling a module missing here.
+%% this list and the modules the transform calls drift apart.
 -compile(nowarn_undefined_behaviour).
 -dialyzer(no_undefined_callbacks).
 -behaviour(arizona_html).
