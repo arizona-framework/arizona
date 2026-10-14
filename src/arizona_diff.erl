@@ -1717,17 +1717,14 @@ make_op(Az, {attr, Attr, true}, _Old) ->
     [?OP_SET_ATTR, Az, Attr, <<>>];
 make_op(Az, {attr, Attr, Val}, _Old) ->
     %% A dynamic attribute value can BECOME a command between renders
-    %% (`{az_hover, ?get(cmd)}` flipping from `false` to a built effect). The
-    %% render paths observe through `Backend:render_attr`, but this in-place
-    %% value patch bypasses them -- unobserved, the DOM would gain a working
-    %% command whose name the client was never told, and nothing later
-    %% re-evaluates an unchanged value to heal it.
+    %% (`{az_hover, ?get(cmd)}` flipping from `false` to a built effect). Its
+    %% name was observed where this cycle evaluated it (arizona_eval): every value
+    %% an op ships comes from that evaluation, since a dep-skipped slot ships none.
     %% A command travels as its JSON array, not the HTML-escaped attribute text:
     %% the value is set verbatim (`setAttribute`, a native prop), where entities
     %% would never be decoded and the command would fail to parse.
     case arizona_template:classify_trusted(Val) of
         {effect, Cmds} ->
-            ok = arizona_event_attrs:observe_attr(Attr),
             [?OP_SET_ATTR, Az, Attr, arizona_effect:json_value(Cmds)];
         _NotACommand ->
             [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)]

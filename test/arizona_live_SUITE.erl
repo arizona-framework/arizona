@@ -78,6 +78,7 @@
     seed_fps_unknown_fp_still_sends/1,
     seed_fps_caps_growth/1,
     live_unknown_view_id_noop/1,
+    child_command_reobserved_on_root_diff/1,
     live_unknown_view_id_warns/1,
     child_stream_survives_next_root_diff/1,
     child_event_leaves_root_snapshot_untouched/1,
@@ -159,6 +160,7 @@ groups() ->
             live_counter2_child_event,
             live_inc_then_dec,
             live_unknown_view_id_noop,
+            child_command_reobserved_on_root_diff,
             child_stream_survives_next_root_diff,
             child_event_leaves_root_snapshot_untouched,
             render_current_full_frame
@@ -554,6 +556,33 @@ live_unknown_view_id_noop(Config) when is_list(Config) ->
     %% Root state is untouched: the next real inc yields count 1, not 2.
     {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"counter">>, <<"inc">>, #{}),
     ?assertMatch([[?OP_TEXT, _, <<"1">>]], Ops).
+
+%% A child event from a caller other than the transport hands that caller the
+%% ops and the observations, and leaves the root's copy of the child stale. The
+%% next root diff that re-renders the child re-emits the attribute op, and since
+%% the diff no longer observes on its own, this pins that the re-evaluation it
+%% ships from observes the command again -- or the client would gain a working
+%% command whose event it was never told to delegate.
+child_command_reobserved_on_root_diff(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(arizona_stale_cmd_root, #{}, self(), []),
+    {ok, ~"scr", _} = arizona_live:mount(Pid),
+    Self = self(),
+    Foreign = spawn_link(fun() ->
+        Self ! {foreign, arizona_live:handle_event(Pid, ~"scc", ~"arm", #{})}
+    end),
+    ForeignReply =
+        receive
+            {foreign, Reply} -> Reply
+        after 1000 -> ct:fail({no_reply, Foreign})
+        end,
+    ?assertMatch(
+        {ok, [[?OP_SET_ATTR, _, ~"az-mouseleave", _]], [], {[~"az-mouseleave"], _}}, ForeignReply
+    ),
+    {ok, Ops, [], Observed} = arizona_live:handle_event(Pid, ~"scr", ~"bump", #{}),
+    ?assertMatch(
+        [[0, _, ~"1"], [~"scc", [[?OP_SET_ATTR, _, ~"az-mouseleave", _]]]], Ops
+    ),
+    ?assertMatch({[~"az-mouseleave"], _}, Observed).
 
 child_stream_survives_next_root_diff(Config) when is_list(Config) ->
     %% A child that patches its own stream leaves the ROOT snapshot holding the

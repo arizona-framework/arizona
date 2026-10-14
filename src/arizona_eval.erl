@@ -399,11 +399,11 @@ eval_one_triple({Az, _Spec} = Dyn) ->
 -spec dyn_value(Dynamic) -> term() when
     Dynamic :: arizona_template:dynamic().
 dyn_value({_Az, {attr, Name, Fun}, _Loc}) when is_function(Fun, 0) ->
-    {attr, Name, eval_val(Fun())};
+    {attr, Name, attr_val(Name, eval_val(Fun()))};
 dyn_value({Az, Spec, _Loc}) ->
     arizona_template:scope_slot(Az, eval_val(Spec));
 dyn_value({_Az, {attr, Name, Fun}}) when is_function(Fun, 0) ->
-    {attr, Name, eval_val(Fun())};
+    {attr, Name, attr_val(Name, eval_val(Fun()))};
 dyn_value({Az, Spec}) ->
     arizona_template:scope_slot(Az, eval_val(Spec)).
 
@@ -437,12 +437,31 @@ eval_val(#{callback := Callback, props := Props}) ->
 eval_val(#{s := Statics, d := Dynamics} = Tmpl) ->
     Snap0 = #{s => Statics, d => eval_dynamics(Dynamics)},
     arizona_template:maybe_propagate(Tmpl, Snap0);
+eval_val(#{az_local := _, target := {attr, Name}, v := V} = Local) ->
+    ok = observe_command(Name, V),
+    Local;
 eval_val(Val) ->
     Val.
 
+%% A dynamic attribute whose value evaluates to a command is the render-time
+%% proof `arizona_event_attrs` needs for a name compile time could not see.
+%% Observing it here, where every live render, mount and diff evaluates it,
+%% declares exactly what the client will receive without building the document;
+%% a stream item outside the visible window is never evaluated, so never observed.
+%% A `?local` attribute's init is observed the same way (eval_val/1, eval_val_v/2).
+attr_val(Name, Val) ->
+    ok = observe_command(Name, Val),
+    Val.
+
+observe_command(Name, Val) ->
+    case arizona_template:classify_trusted(Val) of
+        {effect, _Cmds} -> arizona_event_attrs:observe_attr(Name);
+        _NotACommand -> ok
+    end.
+
 eval_one_v({Az, {attr, Name, Fun}, _Loc}, Views) when is_function(Fun, 0) ->
     erlang:put('$arizona_deps', #{}),
-    Val = eval_val(Fun()),
+    Val = attr_val(Name, eval_val(Fun())),
     Deps = erlang:erase('$arizona_deps'),
     {{Az, {attr, Name, Val}, Deps}, Views};
 eval_one_v({Az, Spec, _Loc}, Views0) ->
@@ -452,7 +471,7 @@ eval_one_v({Az, Spec, _Loc}, Views0) ->
     {{Az, arizona_template:scope_slot(Az, Val), Deps}, Views1};
 eval_one_v({Az, {attr, Name, Fun}}, Views) when is_function(Fun, 0) ->
     erlang:put('$arizona_deps', #{}),
-    Val = eval_val(Fun()),
+    Val = attr_val(Name, eval_val(Fun())),
     Deps = erlang:erase('$arizona_deps'),
     {{Az, {attr, Name, Val}, Deps}, Views};
 eval_one_v({Az, Spec}, Views0) ->
@@ -485,6 +504,9 @@ eval_val_v(#{callback := Callback, props := Props}, Views) ->
     end);
 eval_val_v(#{s := _, d := _} = Tmpl, Views) ->
     eval_template(Tmpl, Views);
+eval_val_v(#{az_local := _, target := {attr, Name}, v := V} = Local, Views) ->
+    ok = observe_command(Name, V),
+    {Local, Views};
 eval_val_v(Val, Views) ->
     {Val, Views}.
 

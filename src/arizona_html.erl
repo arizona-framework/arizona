@@ -510,12 +510,11 @@ render_attr(Name, Value) ->
         {raw, V} ->
             attr_unescaped(Name, arizona_template:to_bin(V));
         {effect, Cmd} ->
-            %% The evaluated value is typed proof that this dynamic attribute
-            %% carries commands -- the proof compile time cannot see for an opaque
-            %% expression like `{az_close, ?get(on_close)}`. Observing it here lets
-            %% the socket ship the name on the same frame that first renders the
-            %% markup declaring it, so the event type is delegated before anything
-            %% can trigger it.
+            %% A live render already observed this name where it evaluated the
+            %% value (arizona_eval). The request-free SSR walk evaluates inline
+            %% and never reaches arizona_eval, so this is where a LAYOUT's opaque
+            %% command is caught: unarmed, observe_attr/1 warns that no frame can
+            %% ever deliver it.
             ok = arizona_event_attrs:observe_attr(Name),
             attr_command(Name, Cmd);
         value ->

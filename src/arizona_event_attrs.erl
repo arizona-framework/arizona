@@ -18,8 +18,11 @@ two proofs, one per moment the question is answerable:
    `-arizona_az_deps([mod, ...]).` itself; every instance of the attribute is
    unioned.
 2. **Render time.** What compile time cannot prove, evaluation can: a dynamic
-   attribute value that classifies as an `{arizona_effect, _}` command names
-   its attribute (`observe_attr/1`), and a `?stateful`/`?stateless`
+   attribute value (or `?local` attribute init) that classifies as an
+   `{arizona_effect, _}` command names its attribute (`observe_attr/1`) where
+   `arizona_eval` evaluates it -- every live mount, render and diff, so a mount
+   observes without building the document and a diff observes every value its
+   ops ship -- and a `?stateful`/`?stateless`
    instantiation names its module (`observe_mod/1`) -- covering a module bound
    at runtime (`?stateful(?get(page), ...)`), which the walk cannot follow.
    A live process arms the collector (`arm/0`) and drains it into every reply
