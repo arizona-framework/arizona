@@ -45,6 +45,9 @@ op-code targets.
 """.
 
 -compile({nowarn_redefined_builtin_type, [{dynamic, 0}]}).
+%% render_view/2 is render_view/3 with the identity: inlined, the compiler folds
+%% the literal fun away, so production pays no call for the shared sequence.
+-compile({inline, [render_view/3]}).
 
 -include("arizona.hrl").
 
