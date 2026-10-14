@@ -649,9 +649,9 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
             %% A live process gone under this call is handled at the entry catch
             %% (crash_close/4): the frame is dropped and its queued exit closes.
             %%
-            %% The socket is the only caller of arizona_live:navigate/4 (transport
-            %% API): the drain below relies on every push before the barrier
-            %% belonging to a page this socket put on screen.
+            %% The socket is the only caller of arizona_live:navigate/4 (it is
+            %% transport-facing): the drain below relies on every push before the
+            %% barrier belonging to a page this socket put on screen.
             {ok, NewVId, PageHTML, Observed} =
                 arizona_live:navigate(Pid, H, Bindings1, OnMount),
             %% The old page's pushes queued ahead of the reply ship in the
@@ -868,20 +868,29 @@ nav_flash_ops(Cmds) ->
 nav_flash_cmd([Op, _Path, #{flash := _}]) when Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH ->
     [Op];
 nav_flash_cmd(Cmd) ->
-    case wrapped_cmds(Cmd) of
-        {ok, Inner} -> nav_flash_ops(Inner);
+    case wrapped(Cmd) of
+        {_When, Inner, _Rewrap} -> nav_flash_ops(Inner);
         none -> []
     end.
 
-%% The commands a command wraps, normalized to a list: `transition`, `on_key`
-%% and a `fetch` `on_error` hold one command (its head is an op code) or a list.
-wrapped_cmds([?EFFECT_TRANSITION, _Opts, Cmds]) -> {ok, cmd_list(Cmds)};
-wrapped_cmds([?EFFECT_ON_KEY, _Key, Cmds]) -> {ok, cmd_list(Cmds)};
-wrapped_cmds([?EFFECT_FETCH, _Url, #{on_error := Cmds}]) -> {ok, cmd_list(Cmds)};
-wrapped_cmds(_Cmd) -> none.
+%% The commands a `transition`, `on_key` or a `fetch` `on_error` wraps, as a
+%% list, with when they run (`now` when the frame lands, `deferred` later, if
+%% ever) and a fun that rebuilds the wrapper around a replacement list.
+wrapped([?EFFECT_TRANSITION, Opts, Cmds]) ->
+    unwrap(now, Cmds, fun(New) -> [?EFFECT_TRANSITION, Opts, New] end);
+wrapped([?EFFECT_ON_KEY, Key, Cmds]) ->
+    unwrap(deferred, Cmds, fun(New) -> [?EFFECT_ON_KEY, Key, New] end);
+wrapped([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts]) ->
+    unwrap(deferred, Cmds, fun(New) -> [?EFFECT_FETCH, Url, Opts#{on_error => New}] end);
+wrapped(_Cmd) ->
+    none.
 
-cmd_list([Op | _] = Cmd) when is_integer(Op) -> [Cmd];
-cmd_list(Cmds) -> Cmds.
+%% A wrapper holds one command (its head is an op code) or a list: the walks get
+%% a list either way, and the rebuild restores the shape it was given.
+unwrap(When, [Op | _] = Cmd, Wrap) when is_integer(Op) ->
+    {When, [Cmd], fun([New]) -> Wrap(New) end};
+unwrap(When, Cmds, Wrap) ->
+    {When, Cmds, Wrap}.
 
 %% The compile-time walk roots for a page: the route handler plus its layout
 %% modules. Layouts render az-* markup too -- once, at SSR -- and no later frame
@@ -992,48 +1001,31 @@ capture_flash_cmd([Op, Path, #{flash := Flash} = Opts], Pending) when
     Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH
 ->
     capture_nav_flash(Op, Path, Flash, Opts, Pending);
-capture_flash_cmd([?EFFECT_TRANSITION, Opts, Cmds0], Pending0) ->
-    {Cmds, Pending} = map_wrapped(fun capture_flash_cmd/2, Pending0, Cmds0),
-    {[?EFFECT_TRANSITION, Opts, Cmds], Pending};
-capture_flash_cmd([?EFFECT_ON_KEY, Key, Cmds], Pending) ->
-    {[?EFFECT_ON_KEY, Key, strip_wrapped_flash(Cmds)], Pending};
-capture_flash_cmd([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts], Pending) ->
-    {[?EFFECT_FETCH, Url, Opts#{on_error => strip_wrapped_flash(Cmds)}], Pending};
-capture_flash_cmd(Cmd, Pending) ->
-    {Cmd, Pending}.
+capture_flash_cmd(Cmd, Pending0) ->
+    case wrapped(Cmd) of
+        {now, Inner0, Rewrap} ->
+            {Inner, Pending} = lists:mapfoldl(fun capture_flash_cmd/2, Pending0, Inner0),
+            {Rewrap(Inner), Pending};
+        {deferred, Inner, Rewrap} ->
+            {Rewrap([strip_flash_cmd(C) || C <- Inner]), Pending0};
+        none ->
+            {Cmd, Pending0}
+    end.
 
-strip_wrapped_flash(Cmds0) ->
-    {Cmds, ok} = map_wrapped(fun strip_flash_cmd/2, ok, Cmds0),
-    Cmds.
-
-strip_flash_cmd([Op, Path, #{flash := _} = Opts], ok) when
+strip_flash_cmd([Op, Path, #{flash := _} = Opts]) when
     Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH
 ->
-    logger:warning(
+    ok = logger:warning(
         "flash dropped from a deferred ~s effect: one an on_key or a fetch's "
         "on_error wraps runs later, if ever, so no frame can carry its flash",
         [effect_name(Op)]
     ),
-    {[Op, Path, maps:remove(flash, Opts)], ok};
-strip_flash_cmd(Cmd, ok) ->
-    case wrapped_cmds(Cmd) of
-        {ok, _Inner} -> {rewrap(Cmd, fun strip_wrapped_flash/1), ok};
-        none -> {Cmd, ok}
+    [Op, Path, maps:remove(flash, Opts)];
+strip_flash_cmd(Cmd) ->
+    case wrapped(Cmd) of
+        {_When, Inner, Rewrap} -> Rewrap([strip_flash_cmd(C) || C <- Inner]);
+        none -> Cmd
     end.
-
-rewrap([?EFFECT_TRANSITION, Opts, Cmds], Fun) ->
-    [?EFFECT_TRANSITION, Opts, Fun(Cmds)];
-rewrap([?EFFECT_ON_KEY, Key, Cmds], Fun) ->
-    [?EFFECT_ON_KEY, Key, Fun(Cmds)];
-rewrap([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts], Fun) ->
-    [?EFFECT_FETCH, Url, Opts#{on_error => Fun(Cmds)}].
-
-%% Map over a wrapper's commands keeping their shape: one command (its head is
-%% an op code) stays one command, a list stays a list.
-map_wrapped(Fun, Acc, [Op | _] = Cmd) when is_integer(Op) ->
-    Fun(Cmd, Acc);
-map_wrapped(Fun, Acc, Cmds) ->
-    lists:mapfoldl(Fun, Acc, Cmds).
 
 %% `flash` is always stripped from the client effect (the browser never sees it),
 %% regardless of its shape -- so no non-map `flash` opt can leak. A non-map value is

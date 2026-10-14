@@ -141,8 +141,7 @@ push_racing_navigate_ships_first(Config) when is_list(Config) ->
     %% shared card's statics for the first time, so the live process records
     %% them as sent and the navigate's page payload references the card bare.
     %% The push's ops must therefore reach the client ahead of the replace, in
-    %% the same frame -- before the fix the push was dropped as stale and the
-    %% client could not resolve the replace's fingerprint.
+    %% the same frame, or the client cannot resolve the replace's fingerprint.
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/next" => {arizona_nav_card_shown, #{}}}
     }),
@@ -162,8 +161,8 @@ push_racing_navigate_ships_first(Config) when is_list(Config) ->
 push_racing_same_id_navigate_ships_first(Config) when is_list(Config) ->
     %% Two routes on one handler share its view id, so a push the old page
     %% emitted just before the navigate looks current afterwards. Its ops must
-    %% ship ahead of the replace, never after it: before the fix they trailed
-    %% into the next frame and applied old-page ops to the new page.
+    %% ship ahead of the replace, never after it: trailing into the next frame
+    %% they would apply old-page ops to the new page.
     Req = arizona_req_test_adapter:new(#{
         routes => #{~"/rc" => {arizona_root_counter, #{bindings => #{count => 7}}}}
     }),
@@ -226,9 +225,10 @@ dropped_navigate_flash_warned_at_any_depth(Config) when is_list(Config) ->
     nothing_left_queued().
 
 push_after_navigate_barrier_ships_after_replace(Config) when is_list(Config) ->
-    %% The new page's own push -- a self-cast from mount/1 answered in
-    %% handle_info/2 -- is emitted after the navigate's barrier, so the drain
-    %% leaves it queued and it ships in a later frame, after the replace.
+    %% Guards the navigate barrier: the new page's own push -- a self-cast from
+    %% mount/1 answered in handle_info/2 -- is emitted after it, so the drain
+    %% leaves that push queued and it ships in a later frame, after the replace.
+    %% Without the barrier in the live process's navigate handle_call this fails.
     Req = arizona_req_test_adapter:new(#{routes => #{~"/page" => {arizona_page, #{}}}}),
     {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     {reply, Frame, Socket1} = arizona_socket:handle_in(navigate_frame(~"/page"), Socket0),
