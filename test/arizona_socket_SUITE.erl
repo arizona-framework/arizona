@@ -3,6 +3,8 @@
 -include("arizona.hrl").
 -include("arizona_effect.hrl").
 
+-define(BAD_UTF8, <<"a", 255, "b">>).
+
 %% Drives arizona_socket directly (init/handle_in/handle_info) with the stub
 %% request adapter -- the calling test process IS the socket process, so live
 %% pushes land in its own mailbox exactly as they do in the real transport.
@@ -34,6 +36,9 @@
 -export([push_emitted_after_reply_not_folded/1]).
 -export([child_push_scoped_to_emitting_view/1]).
 -export([foreign_caller_does_not_desync_drain/1]).
+-export([unencodable_event_reply_closes_crash/1]).
+-export([unencodable_push_closes_crash/1]).
+-export([unencodable_resync_closes_crash/1]).
 
 all() ->
     [
@@ -62,7 +67,10 @@ all() ->
         drain_before_mount_closes_going_away,
         push_emitted_after_reply_not_folded,
         child_push_scoped_to_emitting_view,
-        foreign_caller_does_not_desync_drain
+        foreign_caller_does_not_desync_drain,
+        unencodable_event_reply_closes_crash,
+        unencodable_push_closes_crash,
+        unencodable_resync_closes_crash
     ].
 
 %% A `?stateful` inside a stream item re-renders when the item updates, so the item's
@@ -740,6 +748,69 @@ foreign_caller_does_not_desync_drain(Config) when is_list(Config) ->
     after 0 -> ok
     end.
 
+%% A frame that cannot be JSON-encoded (here a value holding invalid UTF-8) is
+%% only discovered when the socket encodes it, after every inner crash guard. The
+%% transport has no catch of its own, so such a raise ended the session with no
+%% close frame: a bare 1006 the client only backs off from. It must close 4500,
+%% logged, like a crash in the live process.
+unencodable_event_reply_closes_crash(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    %% The queued push is folded into the event's reply, which then fails to encode.
+    arizona_socket:live_pid(Socket0) ! {set_count, ?BAD_UTF8},
+    EventFrame = iolist_to_binary(json:encode([~"counter", ~"noop", #{}])),
+    ?assertMatch(
+        {close, 4500, ~"server crash", _},
+        logged_error(fun() -> arizona_socket:handle_in(EventFrame, Socket0) end)
+    ).
+
+unencodable_push_closes_crash(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    lists:foreach(
+        fun(Handler) ->
+            {reply, _, Socket0} = arizona_socket:init(Handler, #{}, Req, #{}),
+            arizona_socket:live_pid(Socket0) ! {set_count, ?BAD_UTF8},
+            Push =
+                receive
+                    {arizona_push, _, _, _, _} = Msg -> Msg
+                after 1000 -> error({no_push, Handler})
+                end,
+            ?assertMatch(
+                {close, 4500, ~"server crash", _},
+                logged_error(fun() -> arizona_socket:handle_info(Push, Socket0) end),
+                Handler
+            )
+        end,
+        [arizona_root_counter, arizona_native_counter]
+    ).
+
+unencodable_resync_closes_crash(Config) when is_list(Config) ->
+    %% Every leg that settles a deferred resync: the promised `cached_fps`, any
+    %% other first frame (a ping), and the backstop timer.
+    Req = arizona_req_test_adapter:new(),
+    FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
+    Settle = [
+        fun(Socket) -> arizona_socket:handle_in(FpsFrame, Socket) end,
+        fun(Socket) -> arizona_socket:handle_in(~"0", Socket) end,
+        fun(Socket) -> arizona_socket:handle_info(arizona_resync_timeout, Socket) end
+    ],
+    lists:foreach(
+        fun({Handler, Leg}) ->
+            {reply, _, Socket0} = arizona_socket:init(
+                Handler,
+                #{count => ?BAD_UTF8},
+                Req,
+                #{reconnect => true, fps_follow => true}
+            ),
+            ?assertMatch(
+                {close, 4500, ~"server crash", _},
+                logged_error(fun() -> Leg(Socket0) end),
+                Handler
+            )
+        end,
+        [{H, L} || H <- [arizona_root_counter, arizona_native_counter], L <- Settle]
+    ).
+
 navigate_frame(Path) ->
     iolist_to_binary(json:encode([~"navigate", #{~"path" => Path, ~"qs" => <<>>}])).
 
@@ -769,3 +840,21 @@ crashing_flagged_socket() ->
         #{reconnect => true, fps_follow => true}
     ),
     Socket.
+
+%% Runs Fun and returns its result, asserting it logged an error on the way: the
+%% crash close must never swallow the reason.
+logged_error(Fun) ->
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => error, config => #{pid => self()}
+    }),
+    try
+        Result = Fun(),
+        receive
+            {arizona_test_log_handler, #{level := error}} -> Result
+        after 1000 ->
+            error(no_error_logged)
+        end
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.

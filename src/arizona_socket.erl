@@ -34,8 +34,9 @@ The live process is linked. Exits map to WebSocket close codes:
 - `{shutdown, drain}` -- graceful close `1001` ("going away"). Client
   auto-reconnects via the form-state-preserving path; new live
   process mounts against the new server version.
-- Anything else (including raises in `handle_in/2`) -- crash close
-  `4500`. Client triggers `location.reload()` for a fresh start.
+- Anything else (including raises in `handle_in/2` and `handle_info/2`,
+  among them a frame that cannot be encoded) -- crash close `4500`. Client
+  triggers `location.reload()` for a fresh start.
 """.
 
 -include("arizona.hrl").
@@ -278,7 +279,14 @@ non-map payload can't reach a `#{...}`-matching handler and crash it.
 -spec handle_in(Frame, Socket) -> result() when
     Frame :: binary(),
     Socket :: socket().
-handle_in(Frame, #socket{pending_resync = TRef, pid = Pid} = Socket0) when
+handle_in(Frame, Socket) ->
+    try
+        do_handle_in(Frame, Socket)
+    catch
+        Class:Reason:Stacktrace -> crash_close(Class, Reason, Stacktrace, Socket)
+    end.
+
+do_handle_in(Frame, #socket{pending_resync = TRef, pid = Pid} = Socket0) when
     is_reference(TRef)
 ->
     %% Deferred reconnect resync: the first inbound frame settles it. The
@@ -298,12 +306,12 @@ handle_in(Frame, #socket{pending_resync = TRef, pid = Pid} = Socket0) when
         error ->
             resync_before_frame(flush_resync(Socket1), Frame)
     end;
-handle_in(?SYS_PING, Socket) ->
+do_handle_in(?SYS_PING, Socket) ->
     {reply, ?SYS_PONG, Socket};
-handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
+do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
     %% `try ... of` so the catch fires ONLY on a malformed decode -- exceptions
-    %% raised inside the matched clause bodies (the inner navigate/dispatch
-    %% trys) are not caught here, so a genuine handler crash still closes 4500.
+    %% raised inside the matched clause bodies are not caught here, so a genuine
+    %% handler crash reaches handle_in/2's guard and still closes 4500.
     try json:decode(JSON) of
         [~"cached_fps", FpList] when is_list(FpList) ->
             arizona_live:seed_fps(Pid, FpList),
@@ -311,38 +319,20 @@ handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
         [~"navigate", #{~"path" := Path, ~"qs" := Qs}] when
             is_binary(Path), is_binary(Qs)
         ->
-            try
-                handle_navigate(Path, Qs, Socket)
-            catch
-                Class:Reason:Stacktrace ->
-                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-                    close_crash(Socket)
-            end;
+            handle_navigate(Path, Qs, Socket);
         [~"patch", #{~"path" := Path, ~"qs" := Qs}] when
             is_binary(Path), is_binary(Qs)
         ->
-            try
-                handle_patch(Path, Qs, Socket)
-            catch
-                Class:Reason:Stacktrace ->
-                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-                    close_crash(Socket)
-            end;
+            handle_patch(Path, Qs, Socket);
         [Target, Event, Payload] when is_binary(Event), is_map(Payload) ->
             ViewId = event_target(Target, RootViewId),
-            try dispatch_event(Pid, ViewId, Event, Payload) of
-                {AllOps, AllEffects, Observed} ->
-                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
-                    encode_reply(
-                        PendOps ++ AllOps,
-                        PendEffects ++ AllEffects,
-                        note_az([], Observed, Socket1)
-                    )
-            catch
-                Class:Reason:Stacktrace ->
-                    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-                    close_crash(Socket)
-            end;
+            {AllOps, AllEffects, Observed} = dispatch_event(Pid, ViewId, Event, Payload),
+            {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
+            encode_reply(
+                PendOps ++ AllOps,
+                PendEffects ++ AllEffects,
+                note_az([], Observed, Socket1)
+            );
         _ ->
             {ok, Socket}
     catch
@@ -376,7 +366,14 @@ from the linked live process per the mapping in this module's
 -spec handle_info(Info, Socket) -> result() when
     Info :: term(),
     Socket :: socket().
-handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0) when
+handle_info(Info, Socket) ->
+    try
+        do_handle_info(Info, Socket)
+    catch
+        Class:Reason:Stacktrace -> crash_close(Class, Reason, Stacktrace, Socket)
+    end.
+
+do_handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0) when
     is_reference(TRef)
 ->
     %% Backstop: the flagged client never sent its promised `cached_fps`.
@@ -385,34 +382,36 @@ handle_info(arizona_resync_timeout, #socket{pending_resync = TRef} = Socket0) wh
     %% firing timer -- has `pending_resync = undefined` and falls through to
     %% the catch-all below.)
     resync_reply(flush_resync(Socket0#socket{pending_resync = undefined}));
-handle_info({arizona_push, ViewId, Ops, Effects, Observed}, #socket{view_id = ViewId} = Socket) ->
+do_handle_info(
+    {arizona_push, ViewId, Ops, Effects, Observed}, #socket{view_id = ViewId} = Socket
+) ->
     encode_reply(flatten_ops(ViewId, Ops), Effects, note_az([], Observed, Socket));
-handle_info({arizona_push, _StaleViewId, _Ops, _Effects, _Observed}, Socket) ->
+do_handle_info({arizona_push, _StaleViewId, _Ops, _Effects, _Observed}, Socket) ->
     %% Emitted by a page this socket already navigated away from -- drop.
     {ok, Socket};
-handle_info({'EXIT', Pid, {shutdown, drain}}, #socket{pid = Pid} = Socket) ->
+do_handle_info({'EXIT', Pid, {shutdown, drain}}, #socket{pid = Pid} = Socket) ->
     %% Drain-initiated graceful exit. Close with 1001 (going away) so the
     %% JS client's auto-reconnect path runs (Worker treats any non-1000
     %% code as reconnectable; main thread preserves form state). Matches
     %% RFC 6455 §7.4 semantics for "server going away".
     {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
-handle_info({'EXIT', Pid, normal}, #socket{pid = Pid} = Socket) ->
+do_handle_info({'EXIT', Pid, normal}, #socket{pid = Pid} = Socket) ->
     {close, 1000, <<>>, Socket};
-handle_info({'EXIT', Pid, shutdown}, #socket{pid = Pid} = Socket) ->
+do_handle_info({'EXIT', Pid, shutdown}, #socket{pid = Pid} = Socket) ->
     %% OTP graceful shutdown (atom form, e.g. supervisor-initiated).
     %% Close 1000 — same as `normal`, no reconnect. User code that
     %% wants reconnect on a custom shutdown should use the
     %% `{shutdown, drain}` reason explicitly.
     {close, 1000, <<>>, Socket};
-handle_info({'EXIT', Pid, {shutdown, _}}, #socket{pid = Pid} = Socket) ->
+do_handle_info({'EXIT', Pid, {shutdown, _}}, #socket{pid = Pid} = Socket) ->
     %% OTP graceful shutdown (tuple form, custom reason). Same
     %% close-1000 semantics as `shutdown` atom; only `{shutdown, drain}`
     %% (matched above) opts into the reconnect path.
     {close, 1000, <<>>, Socket};
-handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) ->
+do_handle_info({'EXIT', Pid, Reason}, #socket{pid = Pid} = Socket) ->
     logger:error("Live process ~p crashed: ~p", [Pid, Reason]),
     close_crash(Socket);
-handle_info(_Info, Socket) ->
+do_handle_info(_Info, Socket) ->
     {ok, Socket}.
 
 %% --------------------------------------------------------------------
@@ -432,6 +431,15 @@ safe_init(Handler, Socket, Fun) ->
 close_crash(Socket) ->
     {close, ?CLOSE_CRASH, ~"server crash", Socket}.
 
+%% The catch body of handle_in/2 and handle_info/2. The transport has no catch
+%% of its own, so a raise there -- a handler crash, or a frame that cannot be
+%% JSON-encoded -- would end the session with no close frame (a bare 1006).
+%% Close 4500 like every other crash instead. The trys sit inline in both entry
+%% points so no closure is built per frame.
+crash_close(Class, Reason, Stacktrace, Socket) ->
+    logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
+    close_crash(Socket).
+
 %% Is this frame the `cached_fps` announcement? Decoded here only to route the
 %% deferred-resync leg; the announcement leg never re-decodes, and the rare
 %% violation leg (a flagged client's non-announcement first frame) pays one
@@ -448,13 +456,11 @@ decode_cached_fps(Frame) ->
 %% dedup against `sent_fps` happens inside `mount_and_render` -- any
 %% fingerprints seeded before this call elide their statics from the payload.
 %%
-%% This is a mount, so it carries the same guards as every other mount path
-%% (`safe_init/3` at connect, the trys in do_navigate/do_patch/the event leg):
-%% a raise anywhere in `mount/1`, `on_mount`, or `render/1` becomes the 4500
-%% crash close the client's `crashReload()` guard is built for -- unguarded it
-%% escaped both `handle_in/2` and `handle_info/2`, killed the session with no
-%% close frame, and left the client backing off on a bare 1006 forever. The
-%% drain/exit race gets the same 1001 going-away close its siblings give it.
+%% A raise anywhere in `mount/1`, `on_mount`, or `render/1` becomes the 4500
+%% crash close here rather than at the entry guard, because the result must be
+%% a value: resync_before_frame/2 matches a close to keep the triggering frame
+%% from reaching a live process the flush left unmounted. The drain/exit race
+%% gets the same 1001 going-away close do_navigate/do_patch give it.
 %% Returns `{ok, Ops, Socket}` or a ready-made close result.
 flush_resync(#socket{pid = Pid} = Socket) ->
     try arizona_live:mount_and_render(Pid) of
@@ -484,7 +490,7 @@ resync_reply({close, _Code, _Reason, _Socket} = Close) ->
 %% live process the flush left unmounted.
 resync_before_frame({ok, Ops, Socket0}, Frame) ->
     {Attrs, Socket} = take_az_pending(Socket0),
-    resync_then(encode(resync_frame(Ops, Attrs)), handle_in(Frame, Socket));
+    resync_then(encode(resync_frame(Ops, Attrs)), do_handle_in(Frame, Socket));
 resync_before_frame({close, _Code, _Reason, _Socket} = Close, _Frame) ->
     Close.
 
@@ -768,8 +774,7 @@ replace_ops(ViewId, PageHTML) ->
 %% too. Route those to the root view: `handle_event` already dispatches a
 %% non-child id to the root, but the id must be the root's binary id (not `null`)
 %% because `flatten_ops`/`op_encoder` tag every diff op with it, and a
-%% `null`-tagged op is unencodable -- it would crash the transport uncaught (the
-%% encode runs in the `try ... of` body, outside handle_in's catch).
+%% `null`-tagged op is unencodable, and an unencodable frame closes the session.
 event_target(Target, _RootViewId) when is_binary(Target) -> Target;
 event_target(_Target, RootViewId) -> RootViewId.
 
