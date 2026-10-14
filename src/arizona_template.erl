@@ -143,7 +143,7 @@ render(Bindings) ->
     diff => false,
     %% An az-nodiff template's identity beside its fingerprint: the conditional
     %% branch that produced it and the value of its root's `az_key`.
-    branch => non_neg_integer(),
+    branch => pos_integer(),
     az_key => term(),
     backend => module()
 }.
@@ -176,13 +176,13 @@ render(Bindings) ->
     backend => module()
 }.
 
--nominal region() :: {non_neg_integer() | undefined, term()}.
+-nominal region() :: {pos_integer() | undefined, term()}.
 
 -nominal stateful_descriptor() :: #{stateful := module(), props := map()}.
 -nominal stateless_descriptor() :: #{
     callback := fun((map()) -> template()),
     props := map(),
-    branch => non_neg_integer()
+    branch => pos_integer()
 }.
 
 -nominal render_fun() :: fun((bindings()) -> template()).
@@ -736,10 +736,16 @@ scopable(_Val) -> false.
 colon_free(Az) ->
     binary:replace(Az, ~":", ~"-", [global]).
 
-%% The fingerprint a nested template with raw fingerprint `F` carries once
-%% `scope_slot/2` has scoped it into the slot `Az`.
-slot_fingerprint(Az, F) ->
-    <<(colon_free(Az))/binary, "-", F/binary>>.
+%% Whether `OldF` is `F` as scope_slot/2 scoped it into the slot `Az`. The prefix
+%% is that slot's own (`colon_free(Az)` plus `-`, the size of `Az` plus one), so a
+%% match on its size followed by exactly `F` decides it without building the scoped
+%% fingerprint.
+scoped_by(OldF, Az, F) ->
+    Prefix = byte_size(Az) + 1,
+    case OldF of
+        <<_:Prefix/binary, F/binary>> -> true;
+        _ -> false
+    end.
 
 -doc """
 Stamps the value a conditional branch produced with that branch's index within
@@ -753,7 +759,7 @@ The parse transform stamps a literal template itself and calls this only for a
 branch value it cannot see at compile time.
 """.
 -spec branch(Branch, Value) -> Value1 when
-    Branch :: non_neg_integer(),
+    Branch :: pos_integer(),
     Value :: term(),
     Value1 :: term().
 branch(Branch, #{s := _, d := _, diff := false} = Tmpl) ->
@@ -784,7 +790,7 @@ producing branch and the same `az_key`.
     Tmpl :: term(),
     Old :: snapshot().
 same_region(Az, #{s := _, d := _, f := F, diff := false} = Tmpl, #{f := OldF} = Old) ->
-    slot_fingerprint(Az, F) =:= OldF andalso region(Tmpl) =:= snapshot_region(Old);
+    scoped_by(OldF, Az, F) andalso region(Tmpl) =:= snapshot_region(Old);
 same_region(_Az, _Tmpl, _Old) ->
     false.
 
