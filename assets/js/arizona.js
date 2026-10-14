@@ -246,6 +246,21 @@ let _mountProof = null;
 let _outage = false;
 
 /**
+ * An `arizona:connected` went out on this page load: a later one remounts a view
+ * the page already had, whatever the socket's own reconnect flag says (a first
+ * connect that never opened still reconnects with it).
+ * @type {boolean}
+ */
+let _hadMount = false;
+
+/**
+ * Closes seen so far. A mount's `arizona:connected` waits for its frame's ops,
+ * which a view transition defers; a close in between voids the announcement.
+ * @type {number}
+ */
+let _closeCount = 0;
+
+/**
  * Announce a connection change to the page as a `CustomEvent` on `document`.
  * @param {'arizona:connected'|'arizona:disconnected'} type
  * @param {object} detail
@@ -253,6 +268,14 @@ let _outage = false;
 function dispatchConnection(type, detail) {
     _outage = type === 'arizona:disconnected';
     document.dispatchEvent(new CustomEvent(type, { detail }));
+}
+
+/** Announce a mounted view, unless the socket closed after `closes` was read. */
+function announceConnected(/** @type {number} */ closes) {
+    if (closes !== _closeCount) return;
+    const reconnect = _hadMount;
+    _hadMount = true;
+    dispatchConnection('arizona:connected', { reconnect });
 }
 
 // Path + query the server last rendered. Tracked so the popstate handler can
@@ -3606,15 +3629,14 @@ function connect(endpoint, params = {}) {
                     // A navigate's reply is its new view's OP_REPLACE, which proves
                     // that mount too. Only the first proof on a socket is a
                     // connection event: a later one is a navigate on a live socket.
-                    // `connectedAs` is that event's `reconnect` flag, or null.
-                    /** @type {boolean|null} */
-                    let connectedAs = null;
+                    let mounted = false;
+                    const closes = _closeCount;
                     if (
                         _mountProof === 'frame' ||
                         (_mountProof === 'resync' && msg[3]) ||
                         msg[1]?.some((/** @type {Array<*>} */ op) => op[0] === OP.REPLACE)
                     ) {
-                        if (_mountProof !== null) connectedAs = _mountProof === 'resync';
+                        mounted = _mountProof !== null;
                         _mountProof = null;
                         mountSucceeded();
                     }
@@ -3645,6 +3667,9 @@ function connect(endpoint, params = {}) {
                         if (armedScroll?.patch && _pendingScroll === armedScroll) {
                             _pendingScroll = null;
                         }
+                        // Here, not after the dispatch below: a transition defers
+                        // this, and a listener must see the remounted view.
+                        if (mounted) announceConnected(closes);
                     };
                     // A pending transition wraps its batch -- ops and effects
                     // together, in order, so the swap and any effect fall inside
@@ -3668,10 +3693,6 @@ function connect(endpoint, params = {}) {
                             }),
                         });
                     }
-                    // After the frame's ops, so a listener sees the remounted view.
-                    if (connectedAs !== null) {
-                        dispatchConnection('arizona:connected', { reconnect: connectedAs });
-                    }
                     break;
                 }
                 case 1: {
@@ -3688,6 +3709,7 @@ function connect(endpoint, params = {}) {
                 case 2: {
                     // [2, closeCode]
                     const code = msg[1];
+                    _closeCount++;
                     _connected = false;
                     _mountProof = null;
                     document.documentElement.classList.add('az-disconnected');
@@ -3705,9 +3727,10 @@ function connect(endpoint, params = {}) {
                     _replayedForms.clear();
                     _replay = null;
                     // A 1000 close is a deliberate end, which the worker does not
-                    // reconnect after. Once per outage: the worker's failed
-                    // reconnect attempts each report a close too.
-                    if (code !== WS_CLOSE_NORMAL && !_outage) {
+                    // reconnect after. Once per outage, since the worker's failed
+                    // reconnect attempts each report a close too -- and again when
+                    // this close scheduled a reload, the app's cue to save state.
+                    if (code !== WS_CLOSE_NORMAL && (!_outage || reloadInMs !== null)) {
                         dispatchConnection('arizona:disconnected', { code, reloadInMs });
                     }
                     break;

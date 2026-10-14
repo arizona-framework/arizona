@@ -4707,6 +4707,7 @@ describe('connection events', () => {
         vi.useRealTimers();
         random.mockRestore();
         sessionStorage.clear();
+        history.replaceState(null, '', '/'); // a transition test navigates
     });
 
     async function start() {
@@ -4783,9 +4784,7 @@ describe('connection events', () => {
         events.length = 0;
         m.simulateClose(1001); // the server drained
         m.simulateClose(1006); // a reconnect attempt that never opened
-        m.simulateOpen(true); // one that opened...
-        m.simulateMessage(null, null, false);
-        m.simulateClose(4501); // ...and failed to mount
+        m.simulateClose(4500); // one that opened and crashed before mounting
         m.simulateClose(1006);
         expect(events).toEqual([['arizona:disconnected', { code: 1001, reloadInMs: null }]]);
         m.simulateOpen(true);
@@ -4795,6 +4794,24 @@ describe('connection events', () => {
             ['arizona:disconnected', { code: 1001, reloadInMs: null }],
             ['arizona:connected', { reconnect: true }],
             ['arizona:disconnected', { code: 4500, reloadInMs: null }],
+        ]);
+    });
+
+    it('announces again when a reload gets scheduled during the outage', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        events.length = 0;
+        m.simulateClose(1001); // the server drained
+        m.simulateOpen(true); // the retry opened...
+        m.simulateMessage(null, null, false);
+        m.simulateClose(4501); // ...and failed to mount: a reload is now pending
+        m.simulateClose(1006); // still down
+        m.simulateOpen(true);
+        m.simulateClose(4501); // the reload is already pending: nothing new
+        expect(events).toEqual([
+            ['arizona:disconnected', { code: 1001, reloadInMs: null }],
+            ['arizona:disconnected', { code: 4501, reloadInMs: 7500 }],
         ]);
     });
 
@@ -4818,7 +4835,7 @@ describe('connection events', () => {
         }
     });
 
-    it('a first connect that never opens is an outage too', async () => {
+    it("a first connect that never opens is an outage, and its mount the page's first", async () => {
         const m = await start();
         m.simulateClose(1006);
         m.simulateClose(1006);
@@ -4826,8 +4843,72 @@ describe('connection events', () => {
         resync(m);
         expect(events).toEqual([
             ['arizona:disconnected', { code: 1006, reloadInMs: null }],
-            ['arizona:connected', { reconnect: true }],
+            ['arizona:connected', { reconnect: false }],
         ]);
+    });
+
+    /** Defer every view transition's update until the returned `run()`. */
+    function deferTransitions() {
+        /** @type {Array<() => void>} */
+        const pending = [];
+        document.startViewTransition = (arg) => {
+            pending.push(typeof arg === 'object' ? arg.update : arg);
+            return { ready: Promise.resolve() };
+        };
+        return {
+            run: () => {
+                for (const fn of pending.splice(0)) fn();
+            },
+        };
+    }
+    const TRANSITION_NAVIGATE = [20, {}, [10, '/next']]; // transition(navigate(...))
+
+    it('waits for the ops a view transition defers', async () => {
+        const vt = deferTransitions();
+        try {
+            const m = await start();
+            const mod = await import('./arizona.js');
+            m.simulateOpen();
+            mod.executeJS(document.body, null, TRANSITION_NAVIGATE);
+            /** @type {string|null} */
+            let seen = null;
+            document.addEventListener(
+                'arizona:connected',
+                () => {
+                    seen = document.querySelector('#page span').textContent;
+                },
+                { once: true },
+            );
+            m.simulateMessage(
+                [[8, 'page', '<div id="page" az-view><span az="0">swapped</span></div>']],
+                null,
+            );
+            expect(events).toEqual([]); // the update has not run yet
+            vt.run();
+            expect(events).toEqual([['arizona:connected', { reconnect: false }]]);
+            expect(seen).toBe('swapped');
+        } finally {
+            delete document.startViewTransition;
+        }
+    });
+
+    it('a close before the deferred ops run voids the announcement', async () => {
+        const vt = deferTransitions();
+        try {
+            const m = await start();
+            const mod = await import('./arizona.js');
+            m.simulateOpen();
+            mod.executeJS(document.body, null, TRANSITION_NAVIGATE);
+            m.simulateMessage([[8, 'page', VIEW]], null);
+            m.simulateClose(1006);
+            vt.run();
+            expect(events).toEqual([['arizona:disconnected', { code: 1006, reloadInMs: null }]]);
+            m.simulateOpen(true);
+            resync(m); // no transition pending: applied at once
+            expect(events.at(-1)).toEqual(['arizona:connected', { reconnect: false }]);
+        } finally {
+            delete document.startViewTransition;
+        }
     });
 
     it("a reconnected socket's first mount counts even when a navigate reply proves it", async () => {
