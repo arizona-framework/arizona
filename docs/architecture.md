@@ -1840,6 +1840,55 @@ still handles its own events.
   it inserted. Call the exported `mountHooks(root)` on the widget's root after rendering such
   markup; it scans for both.
 
+## Connection events
+
+The client announces connection changes as two `CustomEvent`s on `document`, in the same style
+as `arizona:fetch-error`. They are for client code the server cannot reach while the socket is
+down -- a hooked widget, an embedded component, a status badge:
+
+- **`arizona:disconnected`**, detail `{code, reloadInMs}` -- the connection was lost. Fired once
+  per outage, when the first close of a live (or not yet live) page arrives; the worker's
+  reconnect attempts that fail while the server is still down report closes of their own, which
+  announce nothing until a mount has ended the outage. `code` is the close code the browser
+  reports: the server's (`1001` drain, `4500` crash, `4501` mount failure) or, for a connection
+  that ended without a close frame -- a network drop, a failed handshake, a first connect that
+  never opened -- `1006`. `reloadInMs` is the delay of the page reload a `4501` scheduled, `null`
+  otherwise (a `4501` arriving mid-outage reloads without a second event). A `1000` close (a
+  deliberate end, which the client does not reconnect after), `disconnect()`, and `pagehide` fire
+  nothing: the last two terminate the worker, so no close reaches the page.
+- **`arizona:connected`**, detail `{reconnect}` -- a view mounted on a new socket, fired after the
+  frame that proves it (the first frame of a first connect, the resync of a reconnect) is
+  applied. `reconnect` is `false` for the page's first mount and `true` when a reconnect
+  remounted the view -- including a bfcache restore, which has no `arizona:disconnected` before
+  it, and a page whose first connect failed. A navigate's `OP_REPLACE` reply on a live socket is
+  not a connection event and fires nothing.
+
+So the two alternate, and a widget can pause while the server is unreachable and refresh what it
+may have missed once the view is back:
+
+```javascript
+hooks.Ticker = {
+    mounted() {
+        this.off = new AbortController();
+        const { signal } = this.off;
+        document.addEventListener('arizona:disconnected', () => this.pause(), { signal });
+        document.addEventListener(
+            'arizona:connected',
+            (e) => e.detail.reconnect && this.refresh(),
+            { signal },
+        );
+    },
+    destroyed() {
+        this.off.abort();
+    },
+    pause() { /* stop polling, grey out */ },
+    refresh() { /* refetch, resume */ },
+};
+```
+
+The `az-connected`/`az-disconnected` classes on `<html>` remain the CSS-side view of the same
+state; they flip on the socket's open and close, before the mount the event waits for.
+
 ## Handler callbacks
 
 Two handler kinds, each with its own header:

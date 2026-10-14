@@ -33,6 +33,33 @@ test.describe('crash recovery', () => {
         expect(await page.evaluate(() => /** @type {any} */ (window).__azNoReload)).toBe(true);
     });
 
+    test('a forced close announces disconnected, then connected on the remount', async ({
+        page,
+    }) => {
+        await page.addInitScript(() => {
+            const w = /** @type {any} */ (window);
+            w.__azConnEvents = [];
+            for (const type of ['arizona:connected', 'arizona:disconnected']) {
+                document.addEventListener(type, (e) =>
+                    w.__azConnEvents.push([e.type, /** @type {CustomEvent} */ (e).detail]),
+                );
+            }
+        });
+        const events = () => page.evaluate(() => /** @type {any} */ (window).__azConnEvents);
+        await page.goto('/crashable');
+        await expect.poll(events).toEqual([['arizona:connected', { reconnect: false }]]);
+
+        // handle_event crashes the live process: the server closes 4500.
+        await page.evaluate(() => {
+            window._ws.send(JSON.stringify(['crashable', 'crash', {}]));
+        });
+        await expect.poll(events, { timeout: 5000 }).toEqual([
+            ['arizona:connected', { reconnect: false }],
+            ['arizona:disconnected', { code: 4500, reloadInMs: null }],
+            ['arizona:connected', { reconnect: true }],
+        ]);
+    });
+
     test('a failed mount reloads the page after a 5-10 s delay, without spinning', async ({
         page,
     }) => {
