@@ -33,7 +33,9 @@ The live process is linked. Exits map to WebSocket close codes:
   end of session).
 - `{shutdown, drain}` -- graceful close `1001` ("going away"). Client
   auto-reconnects via the form-state-preserving path; new live
-  process mounts against the new server version.
+  process mounts against the new server version. A frame whose call
+  into the live process races that exit (or finds the process already
+  gone) closes `1001` the same way.
 - Anything else (including raises in `handle_in/2` and `handle_info/2`,
   among them a frame that cannot be encoded) -- crash close `4500`. Client
   triggers `location.reload()` for a fresh start.
@@ -426,6 +428,17 @@ close_crash(Socket) ->
 %% JSON-encoded -- would end the session with no close frame (a bare 1006).
 %% Close 4500 like every other crash instead. The trys sit inline in both entry
 %% points so no closure is built per frame.
+%%
+%% One race is not a crash: a call into the live process that finds it already
+%% gone (`{noproc, _}`), or that it exits `{shutdown, drain}` under (re-raised
+%% by gen_server:call as `{{shutdown, drain}, _}`) -- typically a listener drain
+%% landing while an event, navigate, patch or resync frame is in flight. That
+%% closes 1001 so the client takes the form-state-preserving reconnect instead
+%% of the crash reload, and logs nothing: the drain itself is the reason.
+crash_close(exit, {noproc, _}, _Stacktrace, Socket) ->
+    {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
+crash_close(exit, {{shutdown, drain}, _}, _Stacktrace, Socket) ->
+    {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
 crash_close(Class, Reason, Stacktrace, Socket) ->
     logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
     close_crash(Socket).
@@ -446,43 +459,25 @@ decode_cached_fps(Frame) ->
 %% dedup against `sent_fps` happens inside `mount_and_render` -- any
 %% fingerprints seeded before this call elide their statics from the payload.
 %%
-%% A raise anywhere in `mount/1`, `on_mount`, or `render/1` becomes the 4500
-%% crash close here rather than at the entry guard, because the result must be
-%% a value: resync_before_frame/2 matches a close to keep the triggering frame
-%% from reaching a live process the flush left unmounted. The drain/exit race
-%% gets the same 1001 going-away close do_navigate/do_patch give it.
-%% Returns `{ok, Ops, Socket}` or a ready-made close result.
+%% A raise in `mount/1`, `on_mount` or `render/1` (or the drain/exit race)
+%% propagates to the entry catch, which closes 4500 (or 1001). Every caller runs
+%% inside handle_in/2 or handle_info/2, and the raise happens while this is still
+%% an argument, so resync_before_frame/2 never runs and the triggering frame
+%% never reaches a live process the flush left unmounted.
 flush_resync(#socket{pid = Pid} = Socket) ->
-    try arizona_live:mount_and_render(Pid) of
-        {ok, ViewId, PageHTML, Observed} ->
-            {ok, replace_ops(ViewId, PageHTML),
-                note_az([], Observed, Socket#socket{view_id = ViewId})}
-    catch
-        %% Same drain/exit race as do_navigate (see there).
-        exit:{noproc, _} ->
-            {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
-        exit:{{shutdown, drain}, _} ->
-            {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
-        Class:Reason:Stacktrace ->
-            logger:error("~s: ~p~n~p", [Class, Reason, Stacktrace]),
-            close_crash(Socket)
-    end.
+    {ok, ViewId, PageHTML, Observed} = arizona_live:mount_and_render(Pid),
+    {ok, replace_ops(ViewId, PageHTML), note_az([], Observed, Socket#socket{view_id = ViewId})}.
 
 resync_reply({ok, Ops, Socket0}) ->
     {Attrs, Socket} = take_az_pending(Socket0),
-    {reply, encode(resync_frame(Ops, Attrs)), Socket};
-resync_reply({close, _Code, _Reason, _Socket} = Close) ->
-    Close.
+    {reply, encode(resync_frame(Ops, Attrs)), Socket}.
 
 %% Ship the resync frame BEFORE the triggering frame's own result: the client
 %% must apply the full-page replace first, then the frame's reply against the
-%% fresh DOM. A failed flush closes instead -- the frame must never reach a
-%% live process the flush left unmounted.
+%% fresh DOM.
 resync_before_frame({ok, Ops, Socket0}, Frame) ->
     {Attrs, Socket} = take_az_pending(Socket0),
-    resync_then(encode(resync_frame(Ops, Attrs)), do_handle_in(Frame, Socket));
-resync_before_frame({close, _Code, _Reason, _Socket} = Close, _Frame) ->
-    Close.
+    resync_then(encode(resync_frame(Ops, Attrs)), do_handle_in(Frame, Socket)).
 
 %% A close outranks the resync -- the socket is going away.
 resync_then(ResyncFrame, {ok, Socket}) ->
@@ -632,52 +627,38 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
         {halt, HaltReq} ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
+            %% A drain/exit race on this call closes 1001 at the entry catch
+            %% (crash_close/4); a genuine navigate crash closes 4500.
+            %%
             %% The socket is the only caller of arizona_live:navigate/4 (transport
             %% API): the drain below relies on every push before the barrier
             %% belonging to a page this socket put on screen.
-            try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
-                {ok, NewVId, PageHTML, Observed} ->
-                    %% The old page's pushes queued ahead of the reply ship in the
-                    %% same frame, their ops ahead of the replace: one may carry the
-                    %% first statics of a fingerprint the replace then references
-                    %% bare. Their effects are dropped: a client applies a frame's
-                    %% effects after its ops, so they would run against the NEW
-                    %% page (a relayed push_event reaches the new root, a navigate
-                    %% hijacks the user's own). Old-page ops may mount `az-hook`
-                    %% elements the replace destroys in the same frame -- churn,
-                    %% not a fault.
-                    %%
-                    %% The navigate itself adds no effects: mount/1 has no effects
-                    %% channel (it also runs at SSR, where no client exists to
-                    %% receive one). A view that wants one self-casts from mount/1
-                    %% and answers in handle_info/2, which pushes its own frame --
-                    %% behind the barrier, so after this replace.
-                    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
-                    ok = log_dropped_effects(PendEffects),
-                    encode_reply(
-                        PendOps ++ replace_ops(OldVId, PageHTML),
-                        [],
-                        (note_az([H], Observed, Socket1))#socket{
-                            view_id = NewVId, handler = H
-                        }
-                    )
-            catch
-                %% Live process exited between the navigate frame arriving and
-                %% this gen_server:call landing — typical during a drain where
-                %% handle_drain returned `{stop, _, _}`. Two sub-cases of the
-                %% same race: the call finds the process already gone
-                %% (`{noproc, _}`), or the process exits with `{shutdown, drain}`
-                %% while the call is in flight (gen_server:call re-raises the
-                %% server's exit reason as `{{shutdown, drain}, _}`). Both
-                %% translate to a going-away close so the client's auto-reconnect
-                %% path runs (1001 routes through the reconnect-with-form-state
-                %% flow, not the crash reload). A genuine navigate crash exits
-                %% with a different reason and still propagates to a 4500 close.
-                exit:{noproc, _} ->
-                    {close, ?CLOSE_GOING_AWAY, ~"", Socket};
-                exit:{{shutdown, drain}, _} ->
-                    {close, ?CLOSE_GOING_AWAY, ~"", Socket}
-            end
+            {ok, NewVId, PageHTML, Observed} =
+                arizona_live:navigate(Pid, H, Bindings1, OnMount),
+            %% The old page's pushes queued ahead of the reply ship in the
+            %% same frame, their ops ahead of the replace: one may carry the
+            %% first statics of a fingerprint the replace then references
+            %% bare. Their effects are dropped: a client applies a frame's
+            %% effects after its ops, so they would run against the NEW
+            %% page (a relayed push_event reaches the new root, a navigate
+            %% hijacks the user's own). Old-page ops may mount `az-hook`
+            %% elements the replace destroys in the same frame -- churn,
+            %% not a fault.
+            %%
+            %% The navigate itself adds no effects: mount/1 has no effects
+            %% channel (it also runs at SSR, where no client exists to
+            %% receive one). A view that wants one self-casts from mount/1
+            %% and answers in handle_info/2, which pushes its own frame --
+            %% behind the barrier, so after this replace.
+            {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
+            ok = log_dropped_effects(PendEffects),
+            encode_reply(
+                PendOps ++ replace_ops(OldVId, PageHTML),
+                [],
+                (note_az([H], Observed, Socket1))#socket{
+                    view_id = NewVId, handler = H
+                }
+            )
     end.
 
 %% Same root handler: keep the view, deliver the route's static bindings threaded
@@ -696,16 +677,8 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
         {halt, HaltReq} ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
-            try arizona_live:patch(Pid, Bindings1) of
-                {ok, Ops, Effects, Observed} ->
-                    reply_after_pending(flatten_ops(ViewId, Ops), Effects, Observed, Socket)
-            catch
-                %% Same drain/exit race as do_navigate (see there).
-                exit:{noproc, _} ->
-                    {close, ?CLOSE_GOING_AWAY, ~"", Socket};
-                exit:{{shutdown, drain}, _} ->
-                    {close, ?CLOSE_GOING_AWAY, ~"", Socket}
-            end
+            {ok, Ops, Effects, Observed} = arizona_live:patch(Pid, Bindings1),
+            reply_after_pending(flatten_ops(ViewId, Ops), Effects, Observed, Socket)
     end.
 
 %% Middleware halt during WS navigate -- there is no HTTP response channel

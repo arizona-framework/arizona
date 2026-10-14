@@ -40,6 +40,8 @@
 -export([resync_mount_crash_on_other_frame_closes_crash/1]).
 -export([resync_mount_crash_on_timeout_closes_crash/1]).
 -export([resync_on_dead_live_process_closes_going_away/1]).
+-export([event_on_dead_live_process_closes_going_away/1]).
+-export([event_racing_drain_closes_going_away/1]).
 -export([drain_before_mount_closes_going_away/1]).
 -export([push_emitted_after_reply_not_folded/1]).
 -export([child_push_scoped_to_emitting_view/1]).
@@ -80,6 +82,8 @@ all() ->
         resync_mount_crash_on_other_frame_closes_crash,
         resync_mount_crash_on_timeout_closes_crash,
         resync_on_dead_live_process_closes_going_away,
+        event_on_dead_live_process_closes_going_away,
+        event_racing_drain_closes_going_away,
         drain_before_mount_closes_going_away,
         push_emitted_after_reply_not_folded,
         child_push_scoped_to_emitting_view,
@@ -845,6 +849,41 @@ resync_on_dead_live_process_closes_going_away(Config) when is_list(Config) ->
     FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
     ?assertMatch({close, 1001, <<>>, _}, arizona_socket:handle_in(FpsFrame, Socket)).
 
+event_on_dead_live_process_closes_going_away(Config) when is_list(Config) ->
+    %% An event frame whose call finds the live process already gone (it exited
+    %% under a drain before the frame was handled) is the drain race, not a
+    %% crash: 1001 so the client takes the form-state-preserving reconnect,
+    %% unlogged. The event leg used to let `{noproc, _}` reach the 4500 close.
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket),
+    Ref = erlang:monitor(process, Pid),
+    ok = gen_server:stop(Pid),
+    receive
+        {'DOWN', Ref, process, Pid, _Reason} -> ok
+    after 2000 -> error(live_process_did_not_stop)
+    end,
+    Frame = iolist_to_binary(json:encode([null, ~"inc", #{}])),
+    ?assertMatch(
+        {{close, 1001, <<>>, _}, false},
+        error_log(fun() -> arizona_socket:handle_in(Frame, Socket) end)
+    ).
+
+event_racing_drain_closes_going_away(Config) when is_list(Config) ->
+    %% The drain lands just before the event's call: the live process handles
+    %% the drain first and exits `{shutdown, drain}`, so the call either finds
+    %% it gone or has the exit re-raised as `{{shutdown, drain}, _}`. Both are
+    %% the same race and close 1001.
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Pid = arizona_socket:live_pid(Socket),
+    Pid ! {arizona_drain, erlang:monotonic_time(millisecond) + 5000},
+    Frame = iolist_to_binary(json:encode([null, ~"inc", #{}])),
+    ?assertMatch(
+        {{close, 1001, <<>>, _}, false},
+        error_log(fun() -> arizona_socket:handle_in(Frame, Socket) end)
+    ).
+
 drain_before_mount_closes_going_away(Config) when is_list(Config) ->
     %% A listener drain broadcast landing inside the deferred reconnect window
     %% reaches a live process that has not mounted yet, where the catch-all
@@ -1069,6 +1108,25 @@ crashing_flagged_socket() ->
 
 %% Runs Fun and returns its result, asserting it logged an error on the way: the
 %% crash close must never swallow the reason.
+%% `{Result, Logged}`: whether running `Fun` logged at error level. Logger
+%% handlers run in the logging process, so a log from `Fun` is already queued
+%% when it returns.
+error_log(Fun) ->
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => error, config => #{pid => self()}
+    }),
+    try
+        Result = Fun(),
+        receive
+            {arizona_test_log_handler, #{level := error}} -> {Result, true}
+        after 0 ->
+            {Result, false}
+        end
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.
+
 logged_error(Fun) ->
     HandlerId = ?FUNCTION_NAME,
     ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{

@@ -1161,7 +1161,10 @@ treats **any non-1000 code as reconnectable**:
 A raise inside the socket itself closes the same way: `handle_in/2` and `handle_info/2` each catch
 anything their handling raises -- a handler crash, or a frame that cannot be JSON-encoded, such as
 a value holding invalid UTF-8 -- and turn it into a logged 4500. The transport has no catch of its
-own, so without that the session would end with no close frame at all (a bare 1006).
+own, so without that the session would end with no close frame at all (a bare 1006). One raise is
+not a crash: a call into the live process that finds it already gone (`{noproc, _}`) or that it
+exits `{shutdown, drain}` under (a drain landing while an event, navigate, patch or resync frame is
+in flight) closes 1001 unlogged, the same as the drain exit itself.
 
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{reply_many, [iodata()], Socket}` | `{close, Code, Reason, Socket}`. `reply_many` exists for the
