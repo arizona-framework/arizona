@@ -77,17 +77,20 @@ const WS_CLOSE_MOUNT_FAILED = 4501;
  *   reload at once. The worker keeps reconnecting meanwhile, and a mount that
  *   succeeds first cancels the reload.
  *
- * Consecutive mount-failure reloads are counted per path in localStorage (so the
- * count survives the reload and one broken page does not slow another) and
- * cleared by a successful mount of that path. Past MOUNT_RELOAD_MAX the delay
- * becomes MOUNT_RELOAD_FAILSAFE: a page that cannot mount keeps retrying, slowly,
- * and says why once per page load.
+ * Consecutive mount-failure reloads of one path are counted in sessionStorage,
+ * under one key holding `{path, count}`: it survives the reload of this tab, which
+ * is all the count needs, and is gone when the tab closes, so a path (which may
+ * carry a secret, a reset token or an invite code) never outlives the tab. A
+ * reload of a different path starts over; a successful mount removes the key.
+ * Each tab counts on its own: its jittered delay already spreads the tabs out.
+ * Past MOUNT_RELOAD_MAX the delay becomes MOUNT_RELOAD_FAILSAFE: a page that
+ * cannot mount keeps retrying, slowly, and says why once per page load.
  */
 const MOUNT_RELOAD_DELAY_MIN = 5000;
 const MOUNT_RELOAD_DELAY_MAX = 10000;
 const MOUNT_RELOAD_MAX = 10;
 const MOUNT_RELOAD_FAILSAFE = 30000;
-const MOUNT_RELOAD_KEY = 'arizona:mount-reloads:';
+const MOUNT_RELOAD_KEY = 'arizona:mount-reloads';
 
 /** @type {ReturnType<typeof setTimeout> | null} */
 let _mountReloadTimer = null;
@@ -97,13 +100,15 @@ let _mountReloadLogged = false;
 
 /**
  * @param {string} path
- * @returns {number} consecutive mount-failure reloads of `path`
+ * @returns {number} this tab's consecutive mount-failure reloads of `path`; 0
+ *   when the stored count is for another path, unreadable, or unavailable
  */
 function mountReloadCount(path) {
     try {
-        return Number(localStorage.getItem(MOUNT_RELOAD_KEY + path)) || 0;
+        const stored = JSON.parse(sessionStorage.getItem(MOUNT_RELOAD_KEY) ?? 'null');
+        return stored?.path === path && Number.isInteger(stored.count) ? stored.count : 0;
     } catch {
-        return 0; // localStorage unavailable -- no count to keep
+        return 0;
     }
 }
 
@@ -129,9 +134,12 @@ function scheduleMountReload() {
         // Count the URL actually reloaded: the path may have changed meanwhile.
         const path = location.pathname;
         try {
-            localStorage.setItem(MOUNT_RELOAD_KEY + path, String(mountReloadCount(path) + 1));
+            sessionStorage.setItem(
+                MOUNT_RELOAD_KEY,
+                JSON.stringify({ path, count: mountReloadCount(path) + 1 }),
+            );
         } catch {
-            /* localStorage unavailable -- reload anyway */
+            /* sessionStorage unavailable -- reload anyway */
         }
         location.reload();
     }, delay);
@@ -142,18 +150,15 @@ function cancelMountReload() {
     _mountReloadTimer = null;
 }
 
-/**
- * A view mounted on `path`: a mount-failure loop there, if any, is over.
- * @param {string} path
- */
-function mountSucceeded(path) {
+/** A view mounted: a mount-failure loop in this tab, if any, is over. */
+function mountSucceeded() {
     cancelMountReload();
     // The worker's reconnect backoff keys on mounts too; this is their one source.
     workerPost(W_MOUNTED);
     try {
-        localStorage.removeItem(MOUNT_RELOAD_KEY + path);
+        sessionStorage.removeItem(MOUNT_RELOAD_KEY);
     } catch {
-        /* localStorage unavailable -- nothing to clear */
+        /* sessionStorage unavailable -- nothing to clear */
     }
 }
 
@@ -3548,15 +3553,14 @@ function connect(endpoint, params = {}) {
                 case 0: {
                     // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null]
                     // A navigate's reply is its new view's OP_REPLACE, which proves
-                    // that mount too. `_currentPath` is the path the worker's socket
-                    // (or the navigate) asked for.
+                    // that mount too.
                     if (
                         _mountProof === 'frame' ||
                         (_mountProof === 'resync' && msg[3]) ||
                         msg[1]?.some((/** @type {Array<*>} */ op) => op[0] === OP.REPLACE)
                     ) {
                         _mountProof = null;
-                        mountSucceeded(_currentPath);
+                        mountSucceeded();
                     }
                     // The app's `az-*` vocabulary, collected by the parse transform
                     // and sent on the connect frame. Delegated BEFORE the ops land,

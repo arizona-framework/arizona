@@ -4102,9 +4102,14 @@ describe('crash and mount-failure recovery', () => {
     let reload;
     let errSpy;
     let random;
-    const KEY = 'arizona:mount-reloads:/page';
+    const KEY = 'arizona:mount-reloads';
+    /** The tab's stored count, parsed. */
+    const stored = () => JSON.parse(sessionStorage.getItem(KEY) ?? 'null');
+    /** @param {string} path @param {number} count */
+    const store = (path, count) => sessionStorage.setItem(KEY, JSON.stringify({ path, count }));
 
     beforeEach(() => {
+        sessionStorage.clear();
         localStorage.clear();
         reload = vi.fn();
         errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -4118,6 +4123,7 @@ describe('crash and mount-failure recovery', () => {
         mock = null;
         errSpy.mockRestore();
         random.mockRestore();
+        sessionStorage.clear();
         localStorage.clear();
         history.replaceState(null, '', '/');
     });
@@ -4162,7 +4168,7 @@ describe('crash and mount-failure recovery', () => {
         m.simulateOpen();
         m.simulateClose(4501);
         expect(reloadDelay()).toBe(5000);
-        expect(localStorage.getItem(KEY)).toBe('1');
+        expect(stored()).toEqual({ path: '/page', count: 1 });
     });
 
     it('a mount failure (4501) reloads after a random delay up to 10 s', async () => {
@@ -4181,24 +4187,58 @@ describe('crash and mount-failure recovery', () => {
         expect(reloadDelay()).toBe(5000);
     });
 
-    it('counts reloads per path, leaving other paths alone', async () => {
-        localStorage.setItem('arizona:mount-reloads:/other', '4');
-        localStorage.setItem(KEY, '2');
+    it('counts consecutive reloads of the same path', async () => {
+        store('/page', 2);
         const m = await start();
         m.simulateOpen();
         m.simulateClose(4501);
         expect(reloadDelay()).toBe(5000);
-        expect(localStorage.getItem(KEY)).toBe('3');
-        expect(localStorage.getItem('arizona:mount-reloads:/other')).toBe('4');
+        expect(stored()).toEqual({ path: '/page', count: 3 });
+    });
+
+    it('a reload of a different path starts a new count', async () => {
+        store('/other', 12); // past the cap, but for another path
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000); // no failsafe delay for /page
+        expect(stored()).toEqual({ path: '/page', count: 1 });
+    });
+
+    it('a corrupt or foreign stored value reads as no count', async () => {
+        for (const value of ['not json', '{"path":"/page","count":"9"}', '[1]', '42']) {
+            sessionStorage.setItem(KEY, value);
+            const m = await start();
+            m.simulateOpen();
+            m.simulateClose(4501);
+            expect(reloadDelay()).toBe(5000);
+            expect(stored()).toEqual({ path: '/page', count: 1 });
+            m.restore();
+            mock = null;
+            reload.mockClear();
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('keeps the count in this tab only: nothing goes to localStorage', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+        expect(stored()).toEqual({ path: '/page', count: 1 });
+        m.simulateOpen(true);
+        m.simulateMessage([], null, true);
+        expect(localStorage.length).toBe(0);
     });
 
     it('past 10 consecutive reloads it retries every 30 s and logs once per page load', async () => {
-        localStorage.setItem(KEY, '10');
+        store('/page', 10);
         const m = await start();
         m.simulateOpen();
         m.simulateClose(4501);
         expect(reloadDelay()).toBe(30000);
-        expect(localStorage.getItem(KEY)).toBe('11');
+        expect(stored()).toEqual({ path: '/page', count: 11 });
 
         // The stub reload keeps this page, so the next failure is the same load.
         reload.mockClear();
@@ -4209,7 +4249,7 @@ describe('crash and mount-failure recovery', () => {
     });
 
     it('below the cap it keeps the 5-10 s delay', async () => {
-        localStorage.setItem(KEY, '9');
+        store('/page', 9);
         const m = await start();
         m.simulateOpen();
         m.simulateClose(4501);
@@ -4217,22 +4257,22 @@ describe('crash and mount-failure recovery', () => {
         expect(errSpy).not.toHaveBeenCalled();
     });
 
-    it("a first connect's frame proves the mount and clears the path's count", async () => {
-        localStorage.setItem(KEY, '7');
+    it("a first connect's frame proves the mount and removes the count", async () => {
+        store('/page', 7);
         const m = await start();
         m.simulateOpen();
         m.simulateMessage(null, null);
-        expect(localStorage.getItem(KEY)).toBeNull();
+        expect(sessionStorage.getItem(KEY)).toBeNull();
     });
 
     it("a reconnect's names frame does not prove the mount, its resync does", async () => {
-        localStorage.setItem(KEY, '7');
+        store('/page', 7);
         const m = await start();
         m.simulateOpen(true);
         m.simulateMessage(null, null, false);
-        expect(localStorage.getItem(KEY)).toBe('7');
+        expect(stored()).toEqual({ path: '/page', count: 7 });
         m.simulateMessage([], null, true);
-        expect(localStorage.getItem(KEY)).toBeNull();
+        expect(sessionStorage.getItem(KEY)).toBeNull();
     });
 
     it('tells the worker each time a view mounts, and only then', async () => {
@@ -4250,35 +4290,23 @@ describe('crash and mount-failure recovery', () => {
     });
 
     it('counts the path actually reloaded', async () => {
+        store('/page', 5);
         const m = await start();
         m.simulateOpen();
         m.simulateClose(4501);
         location.pathname = '/other'; // the URL changed before the reload fired
         expect(reloadDelay()).toBe(5000);
-        expect(localStorage.getItem('arizona:mount-reloads:/other')).toBe('1');
-        expect(localStorage.getItem(KEY)).toBeNull();
+        expect(stored()).toEqual({ path: '/other', count: 1 });
     });
 
-    it('a mount clears the count of the path the socket mounted', async () => {
-        localStorage.setItem(KEY, '3');
+    it("a navigate's reply removes the count", async () => {
+        store('/next', 4);
         const m = await start();
-        location.pathname = '/elsewhere'; // not what the socket asked for
-        m.simulateOpen();
-        m.simulateMessage(null, null);
-        expect(localStorage.getItem(KEY)).toBeNull();
-    });
-
-    it("a navigate's reply clears the count of the path it mounted", async () => {
-        localStorage.setItem('arizona:mount-reloads:/next', '4');
-        const m = await start();
-        m.simulateOpen();
-        m.simulateMessage(null, null); // mounted /page
-        location.pathname = '/next'; // back/forward to /next: an SPA navigate
-        m.posted.length = 0;
-        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
-        expect(m.posted.some((d) => d[0] === 3 && d[1].path === '/next')).toBe(true);
+        m.simulateOpen(true);
+        m.simulateMessage(null, null, false); // names only: nothing mounted yet
+        location.pathname = '/next';
         m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null);
-        expect(localStorage.getItem('arizona:mount-reloads:/next')).toBeNull();
+        expect(sessionStorage.getItem(KEY)).toBeNull();
     });
 
     it('a later connection that mounts cancels the pending reload', async () => {
@@ -4290,7 +4318,7 @@ describe('crash and mount-failure recovery', () => {
         m.simulateMessage([], null, true); // the worker's reconnect mounted
         vi.advanceTimersByTime(60000);
         expect(reload).not.toHaveBeenCalled();
-        expect(localStorage.getItem(KEY)).toBeNull();
+        expect(sessionStorage.getItem(KEY)).toBeNull();
     });
 
     it('a reconnect that fails to mount again keeps the one pending reload', async () => {

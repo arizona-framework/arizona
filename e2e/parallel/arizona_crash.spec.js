@@ -49,11 +49,13 @@ test.describe('crash recovery', () => {
         // must not turn into a reload loop.
         await expect.poll(() => loads.length, { timeout: 15000 }).toBe(2);
         expect(loads[1] - loads[0]).toBeGreaterThanOrEqual(5000);
+        // Counted in this tab only, and nothing written to localStorage.
         expect(
-            await page.evaluate(() =>
-                localStorage.getItem('arizona:mount-reloads:/crash-on-connect'),
-            ),
-        ).toBe('1');
+            await page.evaluate(() => [
+                JSON.parse(sessionStorage.getItem('arizona:mount-reloads') ?? 'null'),
+                localStorage.length,
+            ]),
+        ).toEqual([{ path: '/crash-on-connect', count: 1 }, 0]);
 
         // The reloaded page waits again before the next one.
         await page.waitForTimeout(4000);
