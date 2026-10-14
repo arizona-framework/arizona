@@ -489,8 +489,6 @@ resync_then(ResyncFrame, {ok, Socket}) ->
     {reply, ResyncFrame, Socket};
 resync_then(ResyncFrame, {reply, Frame, Socket}) ->
     {reply_many, [ResyncFrame, Frame], Socket};
-resync_then(ResyncFrame, {reply_many, Frames, Socket}) ->
-    {reply_many, [ResyncFrame | Frames], Socket};
 resync_then(_ResyncFrame, {close, _Code, _Reason, _Socket} = Close) ->
     Close.
 
@@ -634,6 +632,9 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
         {halt, HaltReq} ->
             halt_navigate(Requested, HaltReq, Socket);
         {cont, _NewReq1, Bindings1} ->
+            %% The socket is the only caller of arizona_live:navigate/4 (transport
+            %% API): the drain below relies on every push before the barrier
+            %% belonging to a page this socket put on screen.
             try arizona_live:navigate(Pid, H, Bindings1, OnMount) of
                 {ok, NewVId, PageHTML, Observed} ->
                     %% The old page's pushes queued ahead of the reply ship in the
