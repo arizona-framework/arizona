@@ -5,10 +5,10 @@ import { expect } from '@playwright/test';
  * class while it runs.
  *
  * Why this matters: when a server-side handler crashes inside an
- * arizona_live gen_server, the WS closes with code 4500 and
- * `assets/js/arizona.js` reloads the page. Functional tests that only
- * check the destination DOM still pass because SSR re-renders the
- * fresh page. Wrapping a navigation/click/event with this helper
+ * arizona_live gen_server, the WS closes with code 4500 and the client
+ * remounts the view (or 4501, and the client reloads the page, when the
+ * mount itself failed). Functional tests that only check the destination
+ * DOM still pass because the view re-renders. Wrapping a navigation/click/event with this helper
  * surfaces the silent crash by asserting the WebSocket connection
  * survived the action.
  *

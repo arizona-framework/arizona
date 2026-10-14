@@ -41,6 +41,12 @@ const commands = (cmds) => (Array.isArray(cmds) && Array.isArray(cmds[0]) ? cmds
 const SYS_PING = '0';
 const SYS_PONG = '1';
 const HEARTBEAT_MS = 30000;
+// Close codes (must match arizona_socket.erl): a crash after the mount, and a
+// failed mount. A view that crashes within CRASH_STABLE_MS of its mount does not
+// reset the reconnect backoff -- mirrors the browser worker.
+const WS_CLOSE_CRASH = 4500;
+const WS_CLOSE_MOUNT_FAILED = 4501;
+const CRASH_STABLE_MS = 10000;
 
 // Fingerprint-cache bound (mirrors FP_CACHE_MAX in assets/js/arizona-core.js).
 // A fingerprint hashes a template's statics, so every deploy mints a new key and
@@ -84,6 +90,7 @@ export class NativeClient {
         this._reconnectTimer = null;
         this._heartbeatTimer = null;
         this._heartbeatPending = false;
+        this._mountedAt = null; // when the open socket's view last mounted
     }
 
     connect() {
@@ -98,6 +105,7 @@ export class NativeClient {
     // reconnect. The reconnect path re-mounts via _az_reconnect=1 and re-applies
     // the OP_REPLACE the server sends.
     _open() {
+        this._mountedAt = null;
         this.ws = new WebSocket(this.wsUrl);
         this.ws.onopen = () => {
             this.ws.send(JSON.stringify(['cached_fps', this._cachedFps()]));
@@ -111,9 +119,6 @@ export class NativeClient {
         this.ws.onmessage = (e) => {
             this._heartbeatPending = false; // any frame proves the socket is live
             if (e.data === SYS_PONG) return; // pong
-            // Reset the backoff only once a real frame arrives (a working session,
-            // not a bare WS handshake) -- mirrors the worker + AzClient.
-            this._reconnectAttempt = 0;
             // A frame that will not parse is the same class of problem as an op
             // that will not apply: it is the server's output, not the user's, and
             // dropping it must cost one frame rather than the client.
@@ -124,6 +129,9 @@ export class NativeClient {
                 console.warn('[arizona] unparseable frame; skipping', err);
                 return;
             }
+            // An OP_REPLACE is a mount: the reconnect's first render, or a
+            // navigate's new view.
+            if (msg.o?.some((op) => op[0] === OP_REPLACE)) this._mountedAt = Date.now();
             if (msg.o) this._applyOps(msg.o);
             // Handler-returned effects (the "e" array): dispatch the portable
             // ones, skip web-only effects (set_title, dispatch_event, ...).
@@ -137,6 +145,15 @@ export class NativeClient {
             // No reconnect on an intentional close (1000) or a never-connected
             // initial failure; any other drop reconnects with backoff.
             if (this._closing || e.code === 1000 || !this.root) return;
+            // Reset the backoff only after a working session: one that mounted,
+            // did not fail to mount, and did not crash right after its last mount.
+            if (
+                this._mountedAt !== null &&
+                e.code !== WS_CLOSE_MOUNT_FAILED &&
+                (e.code !== WS_CLOSE_CRASH || Date.now() - this._mountedAt >= CRASH_STABLE_MS)
+            ) {
+                this._reconnectAttempt = 0;
+            }
             this._reconnectTimer = setTimeout(
                 () => this._open(),
                 backoff(this._reconnectAttempt++),
@@ -218,6 +235,31 @@ export class NativeClient {
         this.wsUrl = u.toString();
     }
 
+    // A `full` navigate: the server cannot serve `path` on this socket (a
+    // middleware halt, different layouts, no live route). Sending the navigate
+    // back would loop, so do what a browser's full page load does: drop this
+    // socket and connect fresh to the path, running its upgrade middlewares and
+    // mount anew. A refused upgrade then takes the normal backoff.
+    reload(path) {
+        // Path and query, the way the browser connect carries them: the route in
+        // `_az_path`, the query as plain params beside the framework ones.
+        const [p, qs = ''] = path.split('?');
+        const u = new URL(this.wsUrl);
+        u.searchParams.set('_az_path', p);
+        for (const key of [...u.searchParams.keys()]) {
+            if (!key.startsWith('_az_')) u.searchParams.delete(key);
+        }
+        for (const [k, v] of new URLSearchParams(qs)) u.searchParams.append(k, v);
+        this.wsUrl = u.toString();
+        const old = this.ws;
+        old.onmessage = null;
+        old.onclose = null;
+        old.onerror = null;
+        this._stopHeartbeat();
+        old.close(1000);
+        this._open();
+    }
+
     // Interpret a node's tap command prop (an arizona_effect command array) and
     // fire it, like the browser delegating an az-click. Strict: an unexpected
     // command throws. A prop that is not an array (a disabled command reads
@@ -239,7 +281,8 @@ export class NativeClient {
         };
         if (Array.isArray(cmd) && cmd[0] === EFFECT_PUSH_EVENT)
             this.pushEvent(arg(1), cmd[2] ?? {}, view);
-        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE) this.navigate(arg(1));
+        else if (Array.isArray(cmd) && cmd[0] === EFFECT_NAVIGATE)
+            cmd[2]?.full === true ? this.reload(arg(1)) : this.navigate(arg(1));
         else if (strict) throw new Error(`unsupported command: ${JSON.stringify(cmd)}`);
     }
 

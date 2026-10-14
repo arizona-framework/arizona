@@ -55,80 +55,111 @@ const W_CONNECT = 0;
 const W_SEND = 1;
 const W_CLOSE = 2;
 const W_UPDATE_PATH = 3;
+const W_ACK_REPLAY = 4;
+const W_MOUNTED = 5;
 
 /** WebSocket close codes used by Arizona (must match `arizona_socket.erl`). */
 const WS_CLOSE_NORMAL = 1000;
+/** The view crashed after it mounted. */
 const WS_CLOSE_CRASH = 4500;
+/** The view failed to mount. */
+const WS_CLOSE_MOUNT_FAILED = 4501;
 
 /**
- * Crash-reload loop guard: a WS_CLOSE_CRASH triggers a full-page reload, so a view
- * that crashes deterministically would reload forever. Allow at most
- * CRASH_RELOAD_MAX crash reloads (counted in sessionStorage, so the count survives
- * the reload) before giving up. The count clears only once a connection has stayed
- * up for CRASH_RELOAD_STABLE_MS: the server's crash close always arrives after the
- * socket opened, so resetting on open would never let the guard trip. A crash that
- * fires later than that after each connect still reloads every time, but the page
- * is usable in between.
+ * Crash recovery, by the server's close code.
+ *
+ * - WS_CLOSE_CRASH: the page is current, so the worker's backoff reconnect
+ *   remounts the view in place -- no reload, which would throw away client-only
+ *   state for nothing.
+ * - WS_CLOSE_MOUNT_FAILED: the page itself may be stale (a deploy changed the
+ *   route or the assets), so reload it -- after a random
+ *   MOUNT_RELOAD_DELAY_MIN..MAX delay, so the tabs a bad deploy breaks don't all
+ *   reload at once. The worker keeps reconnecting meanwhile, and a mount that
+ *   succeeds first cancels the reload.
+ *
+ * Consecutive mount-failure reloads of one path are counted in sessionStorage,
+ * under one key holding `{path, count}`: it survives the reload of this tab, which
+ * is all the count needs, and is gone when the tab closes, so a path (which may
+ * carry a secret, a reset token or an invite code) never outlives the tab. A
+ * reload of a different path starts over; a successful mount removes the key.
+ * Each tab counts on its own: its jittered delay already spreads the tabs out.
+ * Past MOUNT_RELOAD_MAX the delay becomes MOUNT_RELOAD_FAILSAFE: a page that
+ * cannot mount keeps retrying, slowly, and says why once per page load.
  */
-const CRASH_RELOAD_MAX = 3;
-const CRASH_RELOAD_STABLE_MS = 10000;
-const CRASH_RELOAD_KEY = 'arizona:crash-reloads';
+const MOUNT_RELOAD_DELAY_MIN = 5000;
+const MOUNT_RELOAD_DELAY_MAX = 10000;
+const MOUNT_RELOAD_MAX = 10;
+const MOUNT_RELOAD_FAILSAFE = 30000;
+const MOUNT_RELOAD_KEY = 'arizona:mount-reloads';
 
 /** @type {ReturnType<typeof setTimeout> | null} */
-let _crashResetTimer = null;
+let _mountReloadTimer = null;
 
-/** Whether this page load already explained why it stopped reloading. */
-let _crashLogged = false;
-
-/** Clear the crash count once the connection that just opened proves stable. */
-function armCrashReset() {
-    disarmCrashReset();
-    _crashResetTimer = setTimeout(() => {
-        _crashResetTimer = null;
-        try {
-            sessionStorage.removeItem(CRASH_RELOAD_KEY);
-        } catch {
-            /* sessionStorage unavailable -- nothing to reset */
-        }
-    }, CRASH_RELOAD_STABLE_MS);
-}
-
-function disarmCrashReset() {
-    if (_crashResetTimer !== null) clearTimeout(_crashResetTimer);
-    _crashResetTimer = null;
-}
+/** Whether this page load already logged entering the failsafe delay. */
+let _mountReloadLogged = false;
 
 /**
- * Reload after a server-side crash close, unless CRASH_RELOAD_MAX crash reloads
- * already happened with no stable connection in between (a deterministic crash
- * loop): then stop reloading and leave recovery to the worker's backoff reconnect,
- * which resyncs the page once the server stops crashing. The reason is logged once
- * per page load, so a manual reload of a still-crashing page explains itself.
+ * @param {string} path
+ * @returns {number} this tab's consecutive mount-failure reloads of `path`; 0
+ *   when the stored count is for another path, unreadable, or unavailable
  */
-function crashReload() {
-    let count = 0;
+function mountReloadCount(path) {
     try {
-        count = Number(sessionStorage.getItem(CRASH_RELOAD_KEY)) || 0;
+        const stored = JSON.parse(sessionStorage.getItem(MOUNT_RELOAD_KEY) ?? 'null');
+        return stored?.path === path && Number.isInteger(stored.count) ? stored.count : 0;
     } catch {
-        /* sessionStorage unavailable -- reload without the guard */
+        return 0;
     }
-    if (count >= CRASH_RELOAD_MAX) {
-        if (!_crashLogged) {
-            _crashLogged = true;
+}
+
+/** Schedule the reload for a mount failure, unless one is already pending. */
+function scheduleMountReload() {
+    if (_mountReloadTimer !== null) return;
+    const count = mountReloadCount(location.pathname);
+    let delay =
+        MOUNT_RELOAD_DELAY_MIN +
+        Math.floor(Math.random() * (MOUNT_RELOAD_DELAY_MAX - MOUNT_RELOAD_DELAY_MIN + 1));
+    if (count >= MOUNT_RELOAD_MAX) {
+        delay = MOUNT_RELOAD_FAILSAFE;
+        if (!_mountReloadLogged) {
+            _mountReloadLogged = true;
             console.error(
-                `[arizona] WebSocket closed with a crash after ${count} reloads without ` +
-                    `a stable connection; not reloading again -- the view likely ` +
-                    `crashes deterministically server-side.`,
+                `[arizona] the view failed to mount ${count} times in a row; ` +
+                    `retrying every ${MOUNT_RELOAD_FAILSAFE / 1000} s.`,
             );
         }
-        return;
     }
+    _mountReloadTimer = setTimeout(() => {
+        _mountReloadTimer = null;
+        // Count the URL actually reloaded: the path may have changed meanwhile.
+        const path = location.pathname;
+        try {
+            sessionStorage.setItem(
+                MOUNT_RELOAD_KEY,
+                JSON.stringify({ path, count: mountReloadCount(path) + 1 }),
+            );
+        } catch {
+            /* sessionStorage unavailable -- reload anyway */
+        }
+        location.reload();
+    }, delay);
+}
+
+function cancelMountReload() {
+    if (_mountReloadTimer !== null) clearTimeout(_mountReloadTimer);
+    _mountReloadTimer = null;
+}
+
+/** A view mounted: a mount-failure loop in this tab, if any, is over. */
+function mountSucceeded() {
+    cancelMountReload();
+    // The worker's reconnect backoff keys on mounts too; this is their one source.
+    workerPost(W_MOUNTED);
     try {
-        sessionStorage.setItem(CRASH_RELOAD_KEY, String(count + 1));
+        sessionStorage.removeItem(MOUNT_RELOAD_KEY);
     } catch {
-        /* sessionStorage unavailable -- reload anyway, just without the guard */
+        /* sessionStorage unavailable -- nothing to clear */
     }
-    location.reload();
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +222,16 @@ let _worker = null;
 /** @type {boolean} */
 let _connected = false;
 
+/**
+ * The frame that proves the open connection's view mounted, or null once it
+ * arrived (or with no connection). The server sends nothing before a first
+ * connect's mount, so any frame proves it; a reconnect's first frame only
+ * declares the `az-*` names ahead of the deferred mount, so there the resync
+ * (`firstAfterReconnect`) does.
+ * @type {'frame'|'resync'|null}
+ */
+let _mountProof = null;
+
 // Path + query the server last rendered. Tracked so the popstate handler can
 // tell a real cross-page back/forward (which needs a server navigate) from a
 // same-page fragment change (hash only -- scroll, no round-trip). Mirrors the
@@ -206,8 +247,65 @@ let _currentQs = '';
 /** @type {string} */
 let _connectQs = '';
 
-/** @type {Map<string, {fields: Object<string, string|string[]>, azChange: string|null}>} */
+/**
+ * Typed form fields saved on an abnormal close, restored by the next resync.
+ * `replay` says whether that restore re-sends the form's `az-change`.
+ * @type {Map<string, {fields: Object<string, string|string[]>, azChange: string|null, replay: boolean}>}
+ */
 const _savedForms = new Map();
+
+/**
+ * Forms whose `az-change` the last restore replayed, until the server proves it
+ * handled the replay (see W_ACK_REPLAY). A crash (4500) before that may have been
+ * caused by the replayed values, so the next restore puts them back without
+ * replaying them.
+ * @type {Set<string>}
+ */
+const _replayedForms = new Set();
+
+/**
+ * The current connection's form replay: how many of its parts have yet to post
+ * their events -- the restore itself, plus any command that defers its work (a
+ * view transition's update, a fetch's response effects). The acknowledgement
+ * goes out when it reaches zero, so it always follows every replayed event.
+ * Cleared on close, so a late part of an old replay acknowledges nothing.
+ * @type {{pending: number}|null}
+ */
+let _replay = null;
+
+/** The replay whose commands are executing right now, if any. @type {{pending: number}|null} */
+let _replayRunning = null;
+
+/** @param {{pending: number}} replay */
+function replayPartDone(replay) {
+    replay.pending--;
+    if (replay.pending === 0 && replay === _replay) workerPost(W_ACK_REPLAY);
+}
+
+/**
+ * Hold the replay executing now (if any) open for work a command runs later.
+ * Returns the runner for that work: it runs it as part of the replay, then
+ * releases the hold -- once, however many times it is called.
+ * @returns {(fn: () => void) => void}
+ */
+function holdReplay() {
+    const replay = _replayRunning;
+    if (replay) replay.pending++;
+    let held = replay !== null;
+    return (fn) => {
+        const outer = _replayRunning;
+        if (held) _replayRunning = replay;
+        try {
+            fn();
+        } finally {
+            _replayRunning = outer;
+            if (held) {
+                held = false;
+                replayPartDone(/** @type {{pending: number}} */ (replay));
+            }
+        }
+    };
+}
 
 // Teardown for the connection currently owning the module state, so a second
 // `connect()` can retire the first instead of orphaning its Worker. Cleared by
@@ -2274,17 +2372,20 @@ function execOne(el, event, cmd) {
                 // every caller's containment -- a throwing command would become
                 // one unhandled rejection per dispatch. Same warn-once contract
                 // as runDelegated.
-                runTransition(opts, () => {
-                    try {
-                        executeJS(el, event, inner);
-                    } catch (err) {
-                        const detail = err instanceof Error ? err.message : String(err);
-                        warnOnce(
-                            `[arizona] az-transition command failed: ${detail}`,
-                            'az-transition',
-                        );
-                    }
-                });
+                const later = holdReplay();
+                runTransition(opts, () =>
+                    later(() => {
+                        try {
+                            executeJS(el, event, inner);
+                        } catch (err) {
+                            const detail = err instanceof Error ? err.message : String(err);
+                            warnOnce(
+                                `[arizona] az-transition command failed: ${detail}`,
+                                'az-transition',
+                            );
+                        }
+                    }),
+                );
             }
             break;
         }
@@ -2428,6 +2529,7 @@ function execOne(el, event, cmd) {
                 if (opts.on_error) executeJS(el, event, opts.on_error);
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
+            const later = holdReplay();
             fetch(target, {
                 method,
                 body,
@@ -2436,52 +2538,54 @@ function execOne(el, event, cmd) {
                 keepalive: opts.keep_alive === true,
             })
                 .then((resp) =>
-                    resp.text().then((text) => {
-                        // Apply the effects body whenever it parses -- even on a 4xx, so
-                        // the server can drive inline validation with a real status. The
-                        // effects run against the enclosing view element (not the form, not
-                        // document), so a `push_event` in the response resolves to the
-                        // submitting view and re-renders it via handle_event (no pubsub) --
-                        // without scraping the form's fields into the event payload (the
-                        // view element isn't a form, so autoPayload is empty; the controller
-                        // passes any result explicitly). An empty 2xx body (a cookie-only
-                        // response) applies nothing. on_error runs only when there is no
-                        // usable effects body: a non-JSON page or an empty non-2xx.
-                        let effects = null;
-                        if (text) {
-                            try {
-                                effects = JSON.parse(text).e || [];
-                            } catch {
-                                effects = null;
+                    resp.text().then((text) =>
+                        later(() => {
+                            // Apply the effects body whenever it parses -- even on a 4xx, so
+                            // the server can drive inline validation with a real status. The
+                            // effects run against the enclosing view element (not the form, not
+                            // document), so a `push_event` in the response resolves to the
+                            // submitting view and re-renders it via handle_event (no pubsub) --
+                            // without scraping the form's fields into the event payload (the
+                            // view element isn't a form, so autoPayload is empty; the controller
+                            // passes any result explicitly). An empty 2xx body (a cookie-only
+                            // response) applies nothing. on_error runs only when there is no
+                            // usable effects body: a non-JSON page or an empty non-2xx.
+                            let effects = null;
+                            if (text) {
+                                try {
+                                    effects = JSON.parse(text).e || [];
+                                } catch {
+                                    effects = null;
+                                }
+                            } else if (resp.ok) {
+                                effects = [];
                             }
-                        } else if (resp.ok) {
-                            effects = [];
-                        }
-                        // Effect application is isolated from the trailing network
-                        // .catch: a throw here is an app bug on a request that
-                        // SUCCEEDED (the body parsed), so it is logged -- letting it
-                        // flow into the .catch would fire on_error/arizona:fetch-error
-                        // as a phantom network failure, after effects partially applied.
-                        if (effects !== null) {
-                            try {
-                                executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
-                            } catch (err) {
-                                console.error('[arizona] fetch response effect threw', err);
+                            // Effect application is isolated from the trailing network
+                            // .catch: a throw here is an app bug on a request that
+                            // SUCCEEDED (the body parsed), so it is logged -- letting it
+                            // flow into the .catch would fire on_error/arizona:fetch-error
+                            // as a phantom network failure, after effects partially applied.
+                            if (effects !== null) {
+                                try {
+                                    executeJS(el?.closest?.('[az-view]') ?? el, null, effects);
+                                } catch (err) {
+                                    console.error('[arizona] fetch response effect threw', err);
+                                }
+                            } else onError({ url, status: resp.status });
+                            // Honor az-form-reset only on a 2xx success, so a validation
+                            // error (a non-2xx) keeps the typed fields. Same isolation as
+                            // the effects above.
+                            if (resp.ok && form) {
+                                try {
+                                    maybeResetForm(form);
+                                } catch (err) {
+                                    console.error('[arizona] az-form-reset failed', err);
+                                }
                             }
-                        } else onError({ url, status: resp.status });
-                        // Honor az-form-reset only on a 2xx success, so a validation
-                        // error (a non-2xx) keeps the typed fields. Same isolation as
-                        // the effects above.
-                        if (resp.ok && form) {
-                            try {
-                                maybeResetForm(form);
-                            } catch (err) {
-                                console.error('[arizona] az-form-reset failed', err);
-                            }
-                        }
-                    }),
+                        }),
+                    ),
                 )
-                .catch((error) => onError({ url, error }));
+                .catch((error) => later(() => onError({ url, error })));
             break;
         }
         case JS_FOCUS:
@@ -2731,9 +2835,16 @@ function flushTimer(el) {
 
 /**
  * Save form state for all forms with id attributes. Called on disconnect
- * to preserve user input across reconnections.
+ * to preserve user input across reconnections, and again just before the resync
+ * replaces the view, to keep what the user typed while disconnected.
+ *
+ * The values are always the DOM's, so the user's typing is never lost. Only the
+ * `az-change` replay is withheld: for the `suspect` forms (see `_replayedForms`),
+ * and for a form already saved without it that has not been restored since.
+ * @param {Set<string>|null} [suspect]
  */
-function saveFormState() {
+function saveFormState(suspect = null) {
+    const held = new Map(_savedForms);
     _savedForms.clear();
     // Every hosting document, not just the main one: a view popped out to a PiP
     // window keeps its forms in THAT window's document, and a reconnect has to
@@ -2742,17 +2853,20 @@ function saveFormState() {
         doc.querySelectorAll('form[id]').forEach((form) => {
             const data = formFields(new FormData(/** @type {HTMLFormElement} */ (form)));
             const azChange = form.getAttribute('az-change') || null;
-            _savedForms.set(form.id, { fields: data, azChange });
+            const replay = !suspect?.has(form.id) && (held.get(form.id)?.replay ?? true);
+            _savedForms.set(form.id, { fields: data, azChange, replay });
         });
     }
 }
 
 /**
  * Restore form state after reconnection. Sets field values on matching forms
- * and replays az-change events to sync server state.
+ * and replays az-change events to sync server state, once: a replayed form is
+ * tracked in `_replayedForms` until the server acknowledges the replay.
  */
 function restoreFormState() {
-    for (const [formId, { fields, azChange }] of _savedForms) {
+    _replay = { pending: 1 }; // the restore itself
+    for (const [formId, { fields, azChange, replay }] of _savedForms) {
         // Saved from any hosting document, so look in all of them -- a form popped
         // out to a PiP window is not reachable from the main document.
         let form = null;
@@ -2806,11 +2920,21 @@ function restoreFormState() {
                 }
             }
         }
-        if (azChange && _connected) {
-            executeJS(form, null, JSON.parse(azChange));
+        if (replay && azChange && _connected) {
+            _replayRunning = _replay;
+            try {
+                executeJS(form, null, JSON.parse(azChange));
+            } finally {
+                _replayRunning = null;
+            }
+            _replayedForms.add(formId);
         }
     }
     _savedForms.clear();
+    // The server handles a socket's frames in order, and an event synchronously,
+    // so the pong to a ping sent after every replayed event proves they were
+    // handled without crashing the view.
+    if (_replayedForms.size > 0) replayPartDone(/** @type {{pending: number}} */ (_replay));
 }
 
 /**
@@ -3428,6 +3552,16 @@ function connect(endpoint, params = {}) {
             switch (msg[0]) {
                 case 0: {
                     // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null]
+                    // A navigate's reply is its new view's OP_REPLACE, which proves
+                    // that mount too.
+                    if (
+                        _mountProof === 'frame' ||
+                        (_mountProof === 'resync' && msg[3]) ||
+                        msg[1]?.some((/** @type {Array<*>} */ op) => op[0] === OP.REPLACE)
+                    ) {
+                        _mountProof = null;
+                        mountSucceeded();
+                    }
                     // The app's `az-*` vocabulary, collected by the parse transform
                     // and sent on the connect frame. Delegated BEFORE the ops land,
                     // so a listener exists the moment an element declaring one does.
@@ -3446,6 +3580,9 @@ function connect(endpoint, params = {}) {
                         // unrelated ops-frame can still scroll; there is no reply
                         // id on the wire to do better client-side.
                         const armedScroll = _pendingScroll;
+                        // Re-save what was typed while disconnected: the resync's
+                        // OP_REPLACE is about to discard it.
+                        if (msg[3] && _savedForms.size > 0) saveFormState();
                         if (msg[1]) applyOps(msg[1]);
                         if (msg[2]) applyEffects(msg[2]);
                         if (msg[3]) restoreFormState();
@@ -3480,9 +3617,9 @@ function connect(endpoint, params = {}) {
                 case 1: {
                     // [1, isReconnect]
                     _connected = true;
+                    _mountProof = msg[1] ? 'resync' : 'frame';
                     document.documentElement.classList.add('az-connected');
                     document.documentElement.classList.remove('az-disconnected');
-                    armCrashReset();
                     if (!msg[1]) {
                         mountHooks(document);
                     }
@@ -3490,17 +3627,28 @@ function connect(endpoint, params = {}) {
                 }
                 case 2: {
                     // [2, closeCode]
+                    const code = msg[1];
                     _connected = false;
-                    disarmCrashReset();
+                    _mountProof = null;
                     document.documentElement.classList.add('az-disconnected');
                     document.documentElement.classList.remove('az-connected');
-                    if (msg[1] === WS_CLOSE_CRASH) {
-                        crashReload();
-                        return;
+                    // A crash after the mount needs no reload: the worker's
+                    // reconnect remounts the view in place.
+                    if (code === WS_CLOSE_MOUNT_FAILED) scheduleMountReload();
+                    // A crash before the server acknowledged the last replay may
+                    // come from the replayed values: keep them, but restore them
+                    // next time without replaying.
+                    if (code !== WS_CLOSE_NORMAL) {
+                        saveFormState(code === WS_CLOSE_CRASH ? _replayedForms : null);
                     }
-                    if (msg[1] !== WS_CLOSE_NORMAL) saveFormState();
+                    _replayedForms.clear();
+                    _replay = null;
                     break;
                 }
+                case 3:
+                    // [3] -- the server handled the form replay (see W_ACK_REPLAY).
+                    _replayedForms.clear();
+                    break;
             }
         };
 
@@ -3565,7 +3713,10 @@ function connect(endpoint, params = {}) {
                 _worker.terminate();
                 _worker = null;
                 _connected = false;
-                disarmCrashReset();
+                _mountProof = null;
+                _replayedForms.clear();
+                _replay = null;
+                cancelMountReload();
                 // Reflect the dropped connection so a bfcache-restored snapshot
                 // shows disconnected until `pageshow` reconnects (the worker is
                 // killed abruptly, so no [2, closeCode] arrives to do this).
@@ -3597,7 +3748,10 @@ function connect(endpoint, params = {}) {
             _worker = null;
         }
         _connected = false;
-        disarmCrashReset();
+        _mountProof = null;
+        _replayedForms.clear();
+        _replay = null;
+        cancelMountReload();
         _pendingScroll = null;
         _pendingTransition = null;
         _connectQs = '';

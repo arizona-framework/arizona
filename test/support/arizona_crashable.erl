@@ -4,7 +4,12 @@
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
-    case maps:get(crash_on_mount, Bindings, false) of
+    %% `crash_on_connect` renders at SSR and fails only the live mount: a page
+    %% that loads but cannot mount over the WebSocket.
+    case
+        maps:get(crash_on_mount, Bindings, false) orelse
+            (maps:get(crash_on_connect, Bindings, false) andalso ?connected)
+    of
         true ->
             error(crash_on_mount);
         false ->

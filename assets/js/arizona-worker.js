@@ -9,12 +9,17 @@
  *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] -- resolved message
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
+ *   [3]                                               -- pong to a [4] ping
  *
  * Main -> Worker protocol:
  *   [0, wsUrl, isReconnect] -- connect (full URL; isReconnect resyncs an
  *                              already-rendered DOM, e.g. a bfcache restore)
  *   [1, jsonString]         -- send data (pre-stringified on main)
  *   [2, code]               -- close WS
+ *   [3, {path, qs}]         -- an SPA navigation changed the reconnect path
+ *   [4]                     -- acknowledge the frames sent so far: a ping, whose
+ *                              pong the worker reports as [3]
+ *   [5]                     -- the open socket's view mounted
  */
 
 import {
@@ -147,6 +152,25 @@ let _reconnecting = false;
 /** @type {number} */
 let _attempt = 0;
 
+/** Close codes (must match `arizona_socket.erl`): crash after mount, mount failed. */
+const WS_CLOSE_CRASH = 4500;
+const WS_CLOSE_MOUNT_FAILED = 4501;
+
+/**
+ * When the open socket's view last mounted, as Date.now(), or null before it
+ * has. The main thread tells (the [5] message): it is the one that knows which
+ * frame proves a mount.
+ * @type {number|null}
+ */
+let _mountedAt = null;
+
+/**
+ * A view that crashes (4500) within this long of its mount does not reset the
+ * reconnect backoff: one that crashes right after every remount must keep
+ * backing off instead of reconnecting at backoff[0].
+ */
+const CRASH_STABLE_MS = 10000;
+
 /** @type {ReturnType<typeof setTimeout>|null} */
 let _reconnectTimer = null;
 
@@ -155,6 +179,14 @@ let _heartbeatInterval = null;
 
 /** @type {boolean} */
 let _heartbeatPending = false;
+
+/**
+ * The open socket's pings awaiting their pong, oldest first: `true` for an
+ * acknowledgement ping ([4]), `false` for a heartbeat. The server answers frames
+ * in order, so each pong belongs to the oldest outstanding ping.
+ * @type {boolean[]}
+ */
+let _pings = [];
 
 /** @type {boolean} */
 let _fpsSent = false;
@@ -284,6 +316,8 @@ function openSocket() {
     if (_reconnectTimer) clearTimeout(_reconnectTimer);
     _reconnectTimer = null;
     _fpsSent = false;
+    _mountedAt = null;
+    _pings = [];
     // A reconnect open promises the `cached_fps` announcement as its first
     // frame (`_az_fps_follow=1` below), so the server defers the full-page
     // resync until it arrives and dedups the payload against it. First
@@ -314,6 +348,7 @@ function openSocket() {
                 return;
             }
             _heartbeatPending = true;
+            _pings.push(false);
             ws.send(SYS_PING);
         }, 30000);
 
@@ -325,13 +360,10 @@ function openSocket() {
     ws.onmessage = (e) => {
         if (_ws !== ws) return;
         _heartbeatPending = false;
-        if (e.data === SYS_PONG) return;
-
-        // Reset the backoff only once a real frame arrives -- a working session,
-        // not a bare WS handshake. A server that accepts the socket but drops it
-        // before framing (crashing mount, dead backend) thus keeps backing off
-        // instead of being hammered at backoff[0].
-        _attempt = 0;
+        if (e.data === SYS_PONG) {
+            if (_pings.shift()) postMessage([3]);
+            return;
+        }
 
         const msg = JSON.parse(e.data);
         const ops = msg.o || null;
@@ -373,6 +405,18 @@ function openSocket() {
         postMessage([2, e.code]);
 
         if (e.code === 1000) return;
+        // Reset the backoff only after a working session: one that mounted its
+        // view, did not fail to mount (a navigate), and did not crash right after
+        // its last mount. A server that accepts the socket but never mounts (a
+        // dead backend, a failing mount) thus keeps backing off instead of being
+        // hammered at backoff[0].
+        if (
+            _mountedAt !== null &&
+            e.code !== WS_CLOSE_MOUNT_FAILED &&
+            (e.code !== WS_CLOSE_CRASH || Date.now() - _mountedAt >= CRASH_STABLE_MS)
+        ) {
+            _attempt = 0;
+        }
         _reconnecting = true;
         _reconnectTimer = setTimeout(openSocket, backoff(_attempt++));
     };
@@ -461,5 +505,18 @@ self.onmessage = (e) => {
             _wsUrl = u.toString();
             break;
         }
+        case 4:
+            // [4] -- acknowledge the frames sent so far (see [3] to main).
+            if (_ws && _ws.readyState === 1) {
+                _pings.push(true);
+                _ws.send(SYS_PING);
+            }
+            break;
+        case 5:
+            // [5] -- the open socket's view mounted (a first connect's frame, a
+            // reconnect's resync, a navigate's OP_REPLACE). A message about a
+            // socket that already closed finds none open and is dropped.
+            if (_ws && _ws.readyState === 1) _mountedAt = Date.now();
+            break;
     }
 };

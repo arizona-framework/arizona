@@ -4040,17 +4040,18 @@ describe('connection CSS classes', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
-        document.body.innerHTML = '<form id="f"><input name="x" value="saved"></form>';
+        document.body.innerHTML =
+            '<div id="v" az-view><form id="f"><input name="x" value="saved"></form></div>';
 
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         mock.simulateClose(1006);
 
-        // After abnormal close, form state should be saved
-        // Verify by replacing DOM and restoring
-        document.body.innerHTML = '<form id="f"><input name="x" value=""></form>';
+        // After abnormal close, form state should be saved: the reconnect's
+        // resync replaces the view, and the saved value comes back.
+        const fresh = '<div id="v" az-view><form id="f"><input name="x" value=""></form></div>';
         mock.simulateOpen(true); // reconnect
-        mock.simulateMessage(null, null, true); // firstAfterReconnect
+        mock.simulateMessage([[8, 'v', fresh]], null, true); // firstAfterReconnect
         expect(document.querySelector('input[name="x"]').value).toBe('saved');
     });
 
@@ -4092,185 +4093,520 @@ describe('connection CSS classes', () => {
 });
 
 // ---------------------------------------------------------------------------
-// WS_CLOSE_CRASH (4500) reload loop guard (J6)
+// Crash (4500) and mount-failure (4501) recovery
 // ---------------------------------------------------------------------------
 
-describe('WS_CLOSE_CRASH reload guard', () => {
-    /** @type {ReturnType<typeof setupMockWorker>} */
+describe('crash and mount-failure recovery', () => {
+    /** @type {ReturnType<typeof setupMockWorker> | null} */
     let mock;
     let reload;
     let errSpy;
+    let random;
+    const KEY = 'arizona:mount-reloads';
+    /** The tab's stored count, parsed. */
+    const stored = () => JSON.parse(sessionStorage.getItem(KEY) ?? 'null');
+    /** @param {string} path @param {number} count */
+    const store = (path, count) => sessionStorage.setItem(KEY, JSON.stringify({ path, count }));
 
     beforeEach(() => {
         sessionStorage.clear();
+        localStorage.clear();
         reload = vi.fn();
         errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        random = vi.spyOn(Math, 'random').mockReturnValue(0); // 5 s delay
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllGlobals();
         if (mock) mock.restore();
+        mock = null;
         errSpy.mockRestore();
+        random.mockRestore();
         sessionStorage.clear();
+        localStorage.clear();
+        history.replaceState(null, '', '/');
     });
 
-    // Stub location AFTER connect() runs: connect builds the Worker URL via
-    // `new URL(..., import.meta.url)`, which vitest+jsdom resolves against the real
-    // `location`, so replacing it beforehand throws. crashReload only needs
-    // `location.reload`, and no code path after connect constructs a URL.
-    function stubReload() {
-        vi.stubGlobal('location', { reload, href: 'http://localhost/' });
+    // Stub location and fake the timers AFTER connect() runs: connect builds the
+    // Worker URL via `new URL(..., import.meta.url)`, which vitest+jsdom resolves
+    // against the real `location`, so replacing it beforehand throws.
+    async function start() {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        history.replaceState(null, '', '/page'); // the path connect() mounts
+        mock = setupMockWorker(mod);
+        vi.stubGlobal('location', { reload, href: 'http://localhost/page', pathname: '/page' });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        return mock;
     }
 
-    it('stops reloading a crash that follows every open, logging once', async () => {
-        vi.resetModules();
-        const mod = await import('./arizona.js');
-        setupView('page', '<div az="0"></div>');
-        mock = setupMockWorker(mod);
-        stubReload();
-
-        // A deterministic crash after connect: the server only closes 4500 after
-        // the socket opened, so every cycle is an open followed by the crash.
-        for (let i = 0; i < 5; i++) {
-            mock.simulateOpen(i > 0);
-            mock.simulateClose(4500);
+    /** How long after now the reload fires, or null if none does within 60 s. */
+    function reloadDelay() {
+        for (let t = 0; t <= 60000; t += 1) {
+            if (reload.mock.calls.length > 0) return t;
+            vi.advanceTimersByTime(1);
         }
+        return null;
+    }
 
-        expect(reload).toHaveBeenCalledTimes(3);
+    it('a crash after the mount (4500) never reloads, whatever came before it', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4500); // no frame first: still the server's post-mount code
+        m.simulateOpen(true);
+        m.simulateMessage(null, null, false);
+        m.simulateClose(4500);
+        vi.advanceTimersByTime(60000);
+        expect(reload).not.toHaveBeenCalled();
+        expect(document.documentElement.classList.contains('az-disconnected')).toBe(true);
+    });
+
+    it('a mount failure (4501) reloads after a random delay from 5 s', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+        expect(stored()).toEqual({ path: '/page', count: 1 });
+    });
+
+    it('a mount failure (4501) reloads after a random delay up to 10 s', async () => {
+        random.mockReturnValue(0.9999);
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(10000);
+    });
+
+    it('a mount failure after a mounted session (a navigate) reloads too', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateMessage(null, null); // mounted
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+    });
+
+    it('counts consecutive reloads of the same path', async () => {
+        store('/page', 2);
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+        expect(stored()).toEqual({ path: '/page', count: 3 });
+    });
+
+    it('a reload of a different path starts a new count', async () => {
+        store('/other', 12); // past the cap, but for another path
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000); // no failsafe delay for /page
+        expect(stored()).toEqual({ path: '/page', count: 1 });
+    });
+
+    it('a corrupt or foreign stored value reads as no count', async () => {
+        for (const value of ['not json', '{"path":"/page","count":"9"}', '[1]', '42']) {
+            sessionStorage.setItem(KEY, value);
+            const m = await start();
+            m.simulateOpen();
+            m.simulateClose(4501);
+            expect(reloadDelay()).toBe(5000);
+            expect(stored()).toEqual({ path: '/page', count: 1 });
+            m.restore();
+            mock = null;
+            reload.mockClear();
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('keeps the count in this tab only: nothing goes to localStorage', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+        expect(stored()).toEqual({ path: '/page', count: 1 });
+        m.simulateOpen(true);
+        m.simulateMessage([], null, true);
+        expect(localStorage.length).toBe(0);
+    });
+
+    it('past 10 consecutive reloads it retries every 30 s and logs once per page load', async () => {
+        store('/page', 10);
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(30000);
+        expect(stored()).toEqual({ path: '/page', count: 11 });
+
+        // The stub reload keeps this page, so the next failure is the same load.
+        reload.mockClear();
+        m.simulateOpen(true);
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(30000);
         expect(errSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('a normal (non-crash) close never reloads', async () => {
-        vi.resetModules();
-        const mod = await import('./arizona.js');
-        setupView('page', '<div az="0"></div>');
-        mock = setupMockWorker(mod);
-        mock.simulateOpen();
-        stubReload();
+    it('below the cap it keeps the 5-10 s delay', async () => {
+        store('/page', 9);
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(5000);
+        expect(errSpy).not.toHaveBeenCalled();
+    });
 
-        mock.simulateClose(1006);
+    it("a first connect's frame proves the mount and removes the count", async () => {
+        store('/page', 7);
+        const m = await start();
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        expect(sessionStorage.getItem(KEY)).toBeNull();
+    });
+
+    it("a reconnect's names frame does not prove the mount, its resync does", async () => {
+        store('/page', 7);
+        const m = await start();
+        m.simulateOpen(true);
+        m.simulateMessage(null, null, false);
+        expect(stored()).toEqual({ path: '/page', count: 7 });
+        m.simulateMessage([], null, true);
+        expect(sessionStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('tells the worker each time a view mounts, and only then', async () => {
+        const m = await start();
+        const mountedSignals = () => m.posted.filter((d) => d[0] === 5).length;
+        m.simulateOpen(true);
+        m.simulateMessage(null, null, false); // a reconnect's names frame
+        expect(mountedSignals()).toBe(0);
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null, true);
+        expect(mountedSignals()).toBe(1); // the resync
+        m.simulateMessage([[0, 'page:0', 'x']], null); // an ordinary diff
+        expect(mountedSignals()).toBe(1);
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null); // a navigate
+        expect(mountedSignals()).toBe(2);
+    });
+
+    it('counts the path actually reloaded', async () => {
+        store('/page', 5);
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        location.pathname = '/other'; // the URL changed before the reload fired
+        expect(reloadDelay()).toBe(5000);
+        expect(stored()).toEqual({ path: '/other', count: 1 });
+    });
+
+    it("a navigate's reply removes the count", async () => {
+        store('/next', 4);
+        const m = await start();
+        m.simulateOpen(true);
+        m.simulateMessage(null, null, false); // names only: nothing mounted yet
+        location.pathname = '/next';
+        m.simulateMessage([[8, 'page', '<div id="page" az-view></div>']], null);
+        expect(sessionStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('a later connection that mounts cancels the pending reload', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501); // reload pending
+        expect(vi.getTimerCount()).toBe(1); // the reload is pending
+        m.simulateOpen(true);
+        m.simulateMessage([], null, true); // the worker's reconnect mounted
+        vi.advanceTimersByTime(60000);
         expect(reload).not.toHaveBeenCalled();
+        expect(sessionStorage.getItem(KEY)).toBeNull();
     });
 
-    it('a connection that stays up clears the count so a later crash reloads again', async () => {
-        vi.resetModules();
-        const mod = await import('./arizona.js');
-        setupView('page', '<div az="0"></div>');
-        mock = setupMockWorker(mod);
-        stubReload();
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-        try {
-            for (let i = 0; i < 4; i++) {
-                mock.simulateOpen(i > 0);
-                mock.simulateClose(4500);
-            }
-            expect(reload).toHaveBeenCalledTimes(3);
-
-            mock.simulateOpen(true);
-            vi.advanceTimersByTime(10000); // stable long enough: the loop is over
-            mock.simulateClose(4500);
-            expect(reload).toHaveBeenCalledTimes(4);
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('a connection that drops before it is stable keeps the count', async () => {
-        vi.resetModules();
-        const mod = await import('./arizona.js');
-        setupView('page', '<div az="0"></div>');
-        mock = setupMockWorker(mod);
-        stubReload();
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-        try {
-            mock.simulateOpen();
-            mock.simulateClose(4500);
-            expect(reload).toHaveBeenCalledTimes(1);
-
-            // Up for a while, then an ordinary drop: the pending reset is cancelled,
-            // so the reconnect starts its stable period from zero.
-            mock.simulateOpen(true);
-            vi.advanceTimersByTime(9000);
-            mock.simulateClose(1006);
-            mock.simulateOpen(true);
-            vi.advanceTimersByTime(9000);
-            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('a reloaded page that still crashes logs again but does not reload', async () => {
-        // The tab already used its reloads: the count survives in sessionStorage,
-        // while a manual reload starts a fresh module (a fresh console).
-        sessionStorage.setItem('arizona:crash-reloads', '3');
-        vi.resetModules();
-        const mod = await import('./arizona.js');
-        setupView('page', '<div az="0"></div>');
-        mock = setupMockWorker(mod);
-        stubReload();
-
-        mock.simulateOpen();
-        mock.simulateClose(4500);
-        mock.simulateOpen(true);
-        mock.simulateClose(4500);
-
-        expect(reload).not.toHaveBeenCalled();
-        expect(errSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it('reads a count stored by an older client as no count', async () => {
-        sessionStorage.setItem('arizona:crash-reloads', JSON.stringify({ count: 3 }));
-        vi.resetModules();
-        const mod = await import('./arizona.js');
-        setupView('page', '<div az="0"></div>');
-        mock = setupMockWorker(mod);
-        stubReload();
-
-        mock.simulateOpen();
-        mock.simulateClose(4500);
+    it('a reconnect that fails to mount again keeps the one pending reload', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        vi.advanceTimersByTime(3000);
+        m.simulateOpen(true);
+        m.simulateClose(4501);
+        expect(reloadDelay()).toBe(2000);
         expect(reload).toHaveBeenCalledTimes(1);
     });
 
-    it('pagehide cancels the pending reset', async () => {
-        vi.resetModules();
-        const mod = await import('./arizona.js');
-        setupView('page', '<div az="0"></div>');
-        mock = setupMockWorker(mod);
-        stubReload();
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    it('pagehide cancels the pending reload', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(vi.getTimerCount()).toBe(1); // the reload is pending
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+        vi.advanceTimersByTime(60000);
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('disconnect() cancels the pending reload', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(4501);
+        expect(vi.getTimerCount()).toBe(1); // the reload is pending
+        m.restore();
+        mock = null;
+        vi.advanceTimersByTime(60000);
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('a network drop never reloads', async () => {
+        const m = await start();
+        m.simulateOpen();
+        m.simulateClose(1006);
+        vi.advanceTimersByTime(60000);
+        expect(reload).not.toHaveBeenCalled();
+    });
+
+    /** A view holding forms `f` (with an `az-change`) and `g` (without one). */
+    const VIEW =
+        '<div id="page" az-view>' +
+        '<form id="f" az-change=\'[0,"changed"]\'><input name="q" value=""></form>' +
+        '<form id="g"><input name="r" value=""></form></div>';
+    async function startWithForms() {
+        const m = await start();
+        document.body.innerHTML = VIEW;
+        m.simulateOpen();
+        m.simulateMessage(null, null); // mounted
+        return m;
+    }
+    const field = (name) =>
+        /** @type {HTMLInputElement} */ (document.querySelector(`[name=${name}]`));
+    const changeSends = (m) => m.getSentMessages().filter((s) => s[1] === 'changed').length;
+    /** The worker's reconnect: open + the resync, which rebuilds the view empty. */
+    const remount = (m) => {
+        m.simulateOpen(true);
+        m.simulateMessage([[8, 'page', VIEW]], null, true);
+    };
+
+    it('a crash restores the typed fields and replays az-change once', async () => {
+        const m = await startWithForms();
+        field('q').value = 'typed';
+        m.simulateClose(4500);
+        remount(m);
+        expect(field('q').value).toBe('typed');
+        expect(changeSends(m)).toBe(1);
+    });
+
+    it('keeps what was typed while disconnected', async () => {
+        const m = await startWithForms();
+        field('q').value = 'before';
+        m.simulateClose(1006);
+        field('q').value = 'during';
+        remount(m);
+        expect(field('q').value).toBe('during');
+    });
+
+    it('a crash before any user interaction after a replay restores without replaying', async () => {
+        const m = await startWithForms();
+        field('q').value = 'poison';
+        m.simulateClose(4500);
+        remount(m); // restored + replayed
+        expect(changeSends(m)).toBe(1);
+        field('q').value = 'poison, edited';
+        m.simulateClose(4500); // the replayed values are suspect
+        remount(m);
+        expect(field('q').value).toBe('poison, edited'); // values kept
+        expect(changeSends(m)).toBe(1); // not replayed again
+    });
+
+    it('a mount failure in between keeps the withheld replay withheld', async () => {
+        const m = await startWithForms();
+        field('q').value = 'poison';
+        m.simulateClose(4500);
+        remount(m);
+        m.simulateClose(4500); // suspect
+        m.simulateOpen(true);
+        m.simulateClose(4501); // saved again before any restore
+        remount(m);
+        expect(field('q').value).toBe('poison');
+        expect(changeSends(m)).toBe(1);
+    });
+
+    /** The worker reporting the pong to the main thread's acknowledgement ping. */
+    const ackReplay = (m) => m.worker.onmessage({ data: [3] });
+    const ackRequests = (m) => m.posted.filter((d) => d[0] === 4).length;
+
+    it('asks the worker to acknowledge right after the replayed push_event', async () => {
+        const m = await startWithForms();
+        field('q').value = 'v';
+        m.simulateClose(4500);
+        const before = m.posted.length;
+        remount(m);
+        const after = m.posted.slice(before);
+        const replay = after.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
+        expect(replay).toBeGreaterThanOrEqual(0);
+        expect(after[replay + 1]).toEqual([4]);
+    });
+
+    it('asks for no acknowledgement when nothing was replayed', async () => {
+        const m = await startWithForms();
+        field('r').value = 'only g, which has no az-change';
+        document.querySelector('#f')?.remove();
+        m.simulateClose(4500);
+        remount(m);
+        expect(ackRequests(m)).toBe(0);
+    });
+
+    it('acknowledges only after a replayed event a view transition deferred', async () => {
+        // A transition around a plain command runs it in the transition's update,
+        // later; the push_event nested there must go out before the ping.
+        const deferred =
+            '<div id="page" az-view><form id="f" az-change=\'[20,{},[20,{},[0,"changed"]]]\'>' +
+            '<input name="q" value=""></form></div>';
+        const m = await start();
+        document.body.innerHTML = deferred;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        /** @type {Array<() => void>} */
+        const updates = [];
+        document.startViewTransition = (arg) => {
+            updates.push(typeof arg === 'function' ? arg : arg.update);
+            return {};
+        };
         try {
-            mock.simulateOpen();
-            mock.simulateClose(4500);
-            mock.simulateOpen(true);
-            vi.advanceTimersByTime(9000);
-            window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
-            vi.advanceTimersByTime(2000);
-            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
+            field('q').value = 'v';
+            m.simulateClose(4500);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', deferred]], null, true);
+            expect(changeSends(m)).toBe(0);
+            expect(ackRequests(m)).toBe(0); // the replayed event is still pending
+            for (const update of updates.splice(0)) update();
+            const sends = m.posted.filter((d) => d[0] === 1 || d[0] === 4);
+            const change = sends.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
+            expect(change).toBeGreaterThanOrEqual(0);
+            expect(sends.findIndex((d) => d[0] === 4)).toBeGreaterThan(change);
         } finally {
-            vi.useRealTimers();
+            delete document.startViewTransition;
         }
     });
 
-    it('disconnect() cancels the pending reset', async () => {
-        vi.resetModules();
-        const mod = await import('./arizona.js');
-        setupView('page', '<div az="0"></div>');
-        mock = setupMockWorker(mod);
-        stubReload();
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    it("acknowledges only after a replayed fetch's response events", async () => {
+        // A fetch az-change posts its response's push_event later; the ping must
+        // follow it.
+        const viaFetch =
+            '<div id="page" az-view><form id="f" az-change=\'[22,"/save",{}]\'>' +
+            '<input name="q" value=""></form></div>';
+        const m = await start();
+        document.body.innerHTML = viaFetch;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        /** @type {(v: any) => void} */
+        let respond = () => {};
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(() => new Promise((resolve) => (respond = resolve)));
         try {
-            mock.simulateOpen();
-            mock.simulateClose(4500);
-            mock.simulateOpen(true);
-            vi.advanceTimersByTime(9000);
-            mock.restore();
-            mock = null;
-            vi.advanceTimersByTime(2000);
-            expect(sessionStorage.getItem('arizona:crash-reloads')).toBe('1');
+            field('q').value = 'v';
+            m.simulateClose(4500);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', viaFetch]], null, true);
+            expect(ackRequests(m)).toBe(0); // the response is still pending
+            respond({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'changed']] })),
+            });
+            for (let i = 0; i < 10; i++) await Promise.resolve();
+            const sends = m.posted.filter((d) => d[0] === 1 || d[0] === 4);
+            const change = sends.findIndex((d) => d[0] === 1 && JSON.parse(d[1])[1] === 'changed');
+            expect(change).toBeGreaterThanOrEqual(0);
+            expect(sends.findIndex((d) => d[0] === 4)).toBeGreaterThan(change);
         } finally {
-            vi.useRealTimers();
+            globalThis.fetch = originalFetch;
         }
+    });
+
+    it('a deferred replay part finishing after the close acknowledges nothing', async () => {
+        const deferred =
+            '<div id="page" az-view><form id="f" az-change=\'[20,{},[20,{},[0,"changed"]]]\'>' +
+            '<input name="q" value=""></form></div>';
+        const m = await start();
+        document.body.innerHTML = deferred;
+        m.simulateOpen();
+        m.simulateMessage(null, null);
+        /** @type {Array<() => void>} */
+        const updates = [];
+        document.startViewTransition = (arg) => {
+            updates.push(typeof arg === 'function' ? arg : arg.update);
+            return {};
+        };
+        try {
+            field('q').value = 'v';
+            m.simulateClose(4500);
+            m.simulateOpen(true);
+            m.simulateMessage([[8, 'page', deferred]], null, true);
+            m.simulateClose(1006); // the connection goes before the transition runs
+            for (const update of updates.splice(0)) update();
+            expect(ackRequests(m)).toBe(0);
+        } finally {
+            delete document.startViewTransition;
+        }
+    });
+
+    it('a crash long after the acknowledged replay replays again', async () => {
+        // The server handled the replay; an hour later an unrelated crash must
+        // not withhold the next one.
+        const m = await startWithForms();
+        field('q').value = 'fine';
+        m.simulateClose(4500);
+        remount(m);
+        ackReplay(m);
+        vi.advanceTimersByTime(3_600_000);
+        m.simulateClose(4500);
+        remount(m);
+        expect(changeSends(m)).toBe(2);
+    });
+
+    it('frames before the acknowledgement do not clear the suspicion', async () => {
+        // A handle_info push (or the replay's own reply) arriving after a user
+        // frame proves nothing about the replay: only its acknowledgement does.
+        const m = await startWithForms();
+        field('q').value = 'poison';
+        m.simulateClose(4500);
+        remount(m);
+        window._ws.send(JSON.stringify(['page', 'click', {}]));
+        m.simulateMessage([], null);
+        m.simulateClose(4500);
+        remount(m);
+        expect(changeSends(m)).toBe(1);
+    });
+
+    it('a non-crash close after a replay does not withhold the next one', async () => {
+        const m = await startWithForms();
+        field('q').value = 'fine';
+        m.simulateClose(4500);
+        remount(m);
+        m.simulateClose(1006); // a network drop is not the replay's fault
+        remount(m);
+        expect(changeSends(m)).toBe(2);
+    });
+
+    it('only forms that were replayed are withheld; typing elsewhere survives', async () => {
+        const m = await startWithForms();
+        field('q').value = 'q1';
+        field('r').value = 'r1';
+        m.simulateClose(1006);
+        remount(m); // f replayed, g restored (no az-change)
+        field('r').value = 'r2'; // typed after the remount
+        m.simulateClose(4500); // a quick, unrelated crash
+        remount(m);
+        expect(field('r').value).toBe('r2');
+        expect(field('q').value).toBe('q1');
+    });
+
+    it('the withheld replay comes back after one remount', async () => {
+        const m = await startWithForms();
+        field('q').value = 'v';
+        m.simulateClose(4500);
+        remount(m); // replay 1
+        m.simulateClose(4500); // suspect
+        remount(m); // restored, not replayed
+        m.simulateClose(1006);
+        remount(m); // replay 2
+        expect(changeSends(m)).toBe(2);
     });
 });
 

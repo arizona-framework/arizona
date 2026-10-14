@@ -126,9 +126,19 @@ routes() ->
             layouts => Layouts,
             middlewares => [arizona_middleware:extract([params])]
         }},
+        {live, <<"/crash-on-connect">>, arizona_crashable, #{
+            bindings => #{crash_on_connect => true},
+            layouts => Layouts
+        }},
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},
         {live, <<"/navigate-halt">>, arizona_navigate_halt, #{layouts => Layouts}},
+        %% A middleware that halts with no redirect: HTTP answers 403, and an SPA
+        %% navigate here becomes a full navigation that loads that response.
+        {live, <<"/forbidden">>, arizona_navigate_halt, #{
+            layouts => Layouts,
+            middlewares => [fun(Req, _B) -> {halt, Req} end]
+        }},
         {live, <<"/login">>, arizona_login, #{
             layouts => Layouts,
             middlewares => [{arizona_middleware, fetch_flash}]

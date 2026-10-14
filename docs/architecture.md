@@ -1159,28 +1159,43 @@ lives here independent of the server.
   this socket navigates its live process: `arizona_live:navigate/3,4` are transport-facing (apps
   navigate through the `arizona_js:navigate`/`patch` effects)
 
-**Exit reason to close code** -- four cases, and the difference matters because the JS worker
-treats **any non-1000 code as reconnectable**:
+**Exit reason to close code** -- four cases, plus the mount-failure close, and the difference
+matters because the JS worker treats **any non-1000 code as reconnectable**:
 
 | Exit reason | Close code | Client behaviour |
 | ----------- | ---------- | ---------------- |
 | `{shutdown, drain}` | `?CLOSE_GOING_AWAY` (1001) | **Reconnects** -- the deliberate drain path (RFC 6455 §7.4 "going away"); the main thread preserves form state |
 | `normal` | 1000 | No reconnect |
 | `shutdown` / `{shutdown, _}` (any other reason) | 1000 | No reconnect -- opt into the reconnect path by exiting `{shutdown, drain}` explicitly |
-| anything else (a crash) | `?CLOSE_CRASH` (4500) | The client reloads the page, at most 3 times with no stable (10 s) connection in between, then stops reloading and falls back to the worker's backoff reconnect, which resyncs the page once the server stops crashing; the reason is logged once per page load. Crash remount is deliberately not attempted server-side |
+| anything else, after the view mounted (a crash) | `?CLOSE_CRASH` (4500) | **Reconnects** with no page reload: the worker's backoff reconnect remounts the view in place and the main thread restores typed form fields. A crash within 10 s of the view's last mount (the main thread tells the worker: a first connect's frame, a reconnect's resync, a navigate's `OP_REPLACE`) does not reset the backoff, so a view that crashes right after every remount keeps backing off; the native clients apply the same rule from their `OP_REPLACE`. Crash remount is deliberately not attempted server-side |
+| any failure to mount the view | `?CLOSE_MOUNT_FAILED` (4501) | **Reconnects**, and reloads the page after a random 5-10 s delay (the page may be stale, e.g. after a deploy); a reconnect that mounts first cancels the reload. Consecutive reloads of one path are counted per tab, in one `sessionStorage` key holding `{path, count}` (a reload of another path starts over), so a failing path, which may carry a secret, never outlives the tab; only a successful mount removes it (`pagehide` and `disconnect()` just cancel the pending reload); from the 10th on the delay is 30 s, logged once per page load, and retrying never stops. Form fields saved on the close are lost by the reload, unless a reconnect mounts first and restores them. Never resets the backoff |
 
-A raise inside the socket itself closes the same way: `handle_in/2` and `handle_info/2` each catch
-anything their handling raises -- a handler crash, or a frame that cannot be JSON-encoded, such as
-a value holding invalid UTF-8 -- and turn it into a logged 4500. The transport has no catch of its
-own, so without that the session would end with no close frame at all (a bare 1006). One raise is
-not a socket crash: a call into the live process that fails with the process no longer alive --
-gone before the call, or exited under it (a drain landing while an event, navigate, patch or resync
-frame is in flight). The frame is dropped and the close is left to the queued `'EXIT'`, which
-arrives behind every push the process sent before exiting -- so a drain's `handle_drain/2` effects
-still ship -- and then closes per the mapping above: 1001 for `{shutdown, drain}`, 1000 for a
-deliberate end, a logged 4500 for a crash. A failed call to a live process that is still alive has
-no exit to wait for and is a crash, as is a `noproc` from any other process a middleware or route
-adapter calls.
+The mount sites that close 4501 on any raise: the connect's mount in `init/4` (a first connect,
+and an unflagged reconnect's mount + render), the deferred reconnect resync (`flush_resync/1`,
+whichever leg settles it), and a navigate (including a `patch` that degrades to one) -- a crash
+exit under its call, whether in the new page's mount or the old page's unmount. Each covers
+encoding the frame that delivers the view, since until it arrives the client has no mounted view.
+A resync or navigate mount that crashes takes the live process down under the call, so it follows
+the dropped-frame rule below: the socket notes the failed call was a mount, and the queued crash
+exit then closes 4501 instead of 4500 (a live process already gone before the call closes per its
+own exit). A navigate/patch whose middleware halts without a redirect is not a mount failure but
+a deliberate refusal: the socket replies with a full navigation to the requested URL
+(`arizona_js:navigate(Url, #{full => true})`), so the browser loads it over HTTP and shows the
+middleware's own response at once -- a reconnect's upgrade, refused by the same middleware, never
+would. A native client takes a `full` navigate as a fresh connection to that path and query.
+
+A raise inside the socket itself after the mount closes the same way as a crash: `handle_in/2`
+and `handle_info/2` each catch anything their handling raises -- a handler crash, or a frame that
+cannot be JSON-encoded, such as a value holding invalid UTF-8 -- and turn it into a logged 4500.
+The transport has no catch of its own, so without that the session would end with no close frame
+at all (a bare 1006). One raise is not a socket crash: a call into the live process that fails with
+the process no longer alive -- gone before the call, or exited under it (a drain landing while an
+event, navigate, patch or resync frame is in flight). The frame is dropped and the close is left to
+the queued `'EXIT'`, which arrives behind every push the process sent before exiting -- so a
+drain's `handle_drain/2` effects still ship -- and then closes per the mapping above: 1001 for
+`{shutdown, drain}`, 1000 for a deliberate end, a logged 4500 for a crash (4501 when the failed
+call was a mount). A failed call to a live process that is still alive has no exit to wait for and
+is a crash, as is a `noproc` from any other process a middleware or route adapter calls.
 
 **Return type** (`result()`): `{ok, Socket}` | `{reply, iodata(), Socket}` |
 `{reply_many, [iodata()], Socket}` | `{close, Code, Reason, Socket}`. `reply_many` exists for the
@@ -1204,7 +1219,8 @@ which nothing reproduces, is dropped with a logged warning. A handler effect's f
 from a bare `navigate`/`patch` and from one a `transition` wraps (both run when the frame lands);
 one an `on_key` or a `fetch`'s `on_error` wraps runs later, if ever, so its flash is stripped with a
 warning rather than stashed for whatever navigation comes next. The route adapter is recovered from
-`req` on demand.
+`req` on demand. `mount_failed` marks a dropped frame whose failed live call was a mount, so the
+queued crash exit closes 4501.
 
 **Op scoping happens at JSON-encode time, in two steps.** `flatten_ops/2` walks the nested
 `[[ChildViewId, ChildOps] | ...]` shape `arizona_live` produces and returns a flat list of
@@ -1215,9 +1231,9 @@ into the output iodata, instead of allocating a rewritten op list first. Inner o
 `OP_ITEM_PATCH` stay item-relative and are not scoped.
 
 Other internal functions: `encode_reply/3` (build the `#{<<"o">> => Ops, <<"e">> => Effects}` JSON),
-`flush_resync/1` + `resync_then/2` (the deferred-resync flush), `close_crash/1` (crash close tuple),
-`dispatch_event/4`, `handle_navigate/3` (drives SPA navigate by invoking the adapter's
-`resolve_route/3`).
+`flush_resync/1` + `resync_then/2` (the deferred-resync flush), `close_crash/1` and
+`close_mount_failed/1` (close tuples), `dispatch_event/4`, `handle_navigate/3` (drives SPA
+navigate by invoking the adapter's `resolve_route/3`).
 
 ## SPA navigate / patch route resolution
 
