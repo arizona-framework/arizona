@@ -188,7 +188,7 @@ from the snapshot for the rare root that has none.
     Views1 :: map().
 render_snapshot(Tmpl, Views0) ->
     {Triples, NewViews} = eval_triples(Tmpl, Views0),
-    {D, Deps} = split_triples(Triples),
+    {D, Deps} = arizona_template:split_triples(Triples),
     {snapshot(Tmpl, D, Deps), NewViews}.
 
 eval_triples(#{d := Dynamics}, Views0) ->
@@ -197,12 +197,6 @@ eval_triples(#{d := Dynamics}, Views0) ->
 
 snapshot(#{s := Statics} = Tmpl, D, Deps) ->
     arizona_template:maybe_propagate(Tmpl, #{s => Statics, d => D, deps => Deps}).
-
-split_triples([]) ->
-    {[], []};
-split_triples([{Az, V, Deps} | TRest]) ->
-    {DRest, DepsRest} = split_triples(TRest),
-    {[{Az, V} | DRest], [Deps | DepsRest]}.
 
 -doc """
 The document `render/2` would have returned for `Snapshot`: the same walk over
@@ -330,7 +324,7 @@ zip(Backend, [S | Statics], [D | Dynamics]) ->
 %% (the triple-walking variant) can share the same dispatch without duplicating
 %% the case clauses.
 render_dyn(_Backend, {ssr_rendered, Rendered}) ->
-    %% Already rendered, by render_ssr_val/2's plain-list each clause.
+    %% Already rendered, by render_ssr_val/2's each clauses (list, stream and map).
     Rendered;
 render_dyn(Backend, {arizona_esc, V}) ->
     arizona_template:escape_marked(Backend, V);
