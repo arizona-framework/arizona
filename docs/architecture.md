@@ -102,7 +102,8 @@ HTML output and rendering.
 - `render_to_iolist/2` -- stateful-component SSR (test-only): `render_to_iolist(Handler, Opts)`
   where Opts may contain `layouts => [{Mod, Fun}]` and `bindings => map()`. `on_mount` is not
   honored -- it's a route-level concept
-- `render_view_to_iolist/2` -- production HTTP SSR for views: `render_view_to_iolist(Handler, Opts)`.
+- `render_view_to_iolist/2` -- SSR for a route-level view, page only (static generation):
+  `render_view_to_iolist(Handler, Opts)`.
   Mounts via `arizona_stateful:call_mount/2`, applies `on_mount` hooks, optionally
   wraps in a layout
 - `render_view/2` -- the same, returning `{ContentType, Page}`: the outermost rendered

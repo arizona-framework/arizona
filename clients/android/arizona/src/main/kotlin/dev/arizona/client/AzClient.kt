@@ -171,7 +171,7 @@ class AzClient(baseUrl: String, path: String) {
     // throw is the development signal that a template built a bad command.
     private fun runEffectSafe(cmd: JsonElement) {
         try {
-            for (one in commands(cmd.jsonArray)) runEffect(one, strict = false)
+            runEffect(cmd.jsonArray, strict = false)
         } catch (e: Exception) {
             Log.w(TAG, "effect $cmd failed; skipping", e)
         }

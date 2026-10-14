@@ -198,9 +198,7 @@ public final class AzClient {
         status = .connected
         // Handler-returned effects: dispatch the portable ones, skip web-only.
         if let effects = msg["e"]?.arrayValue {
-            for eff in effects {
-                for cmd in commands(eff.arrayValue ?? []) { runEffect(cmd, strict: false, target: nil) }
-            }
+            for eff in effects { runEffect(eff.arrayValue ?? [], strict: false, target: nil) }
         }
         onChange?()
     }

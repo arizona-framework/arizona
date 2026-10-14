@@ -235,7 +235,7 @@ SSR render for a stateful handler (embedded-component style).
 
 Mounts via `mount/1`, renders, optionally wraps in a layout. Used
 by tests that SSR stateful components in isolation; production
-HTTP SSR goes through `render_view_to_iolist/2`. `on_mount` is a
+HTTP SSR goes through `render_view/2`. `on_mount` is a
 route-level concept and is intentionally not honored here.
 """.
 -spec render_to_iolist(Handler, Opts) -> iolist() when
@@ -248,7 +248,8 @@ render_to_iolist(Handler, Opts) ->
     Page.
 
 -doc """
-SSR render for a route-level page (the production HTTP path).
+SSR render for a route-level page, returning the page alone (static
+generation; the HTTP path uses `render_view/2`, which also names its media type).
 
 Applies the `on_mount` chain, mounts the handler, renders, and optionally
 wraps the page output in a layout module. Request data is supplied as

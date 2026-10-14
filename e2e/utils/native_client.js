@@ -249,7 +249,7 @@ export class NativeClient {
     // the throw is the development signal that a template built a bad command.
     _runEffectSafe(cmd) {
         try {
-            for (const one of commands(cmd)) this._runEffect(one, false, undefined);
+            this._runEffect(cmd, false, undefined);
         } catch (err) {
             // Static format string: the payload goes in an ARGUMENT, never in the
             // format position. Interpolated there, a `%s` in wire data consumes the
