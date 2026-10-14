@@ -1,5 +1,5 @@
-# Version catalog. Align these with your installed Android toolchain; the values
-# below are a known-good late-2024/early-2025 set.
+# Version catalog. Renovate keeps these current; AGP 9 builds Kotlin in, so there is
+# no separate kotlin-android plugin and `kotlin` pins the compose/serialization plugins.
 [versions]
 agp = "9.4.1"
 kotlin = "2.4.21"
