@@ -246,6 +246,16 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?subscribe(Topic)` | `arizona_pubsub:subscribe(Topic, self())` -- subscribe the live process to `Topic` (stateful only) |
 | `?unsubscribe(Topic)` | `arizona_pubsub:unsubscribe(Topic, self())` -- unsubscribe the live process from `Topic` (stateful only) |
 
+## Rendered binaries must be UTF-8
+
+Every target writes UTF-8, so a binary value in any other encoding raises
+`{non_utf8_render, Byte, Offset}` at its template line -- on SSR, the live mount and the
+diff alike, `?raw` included. The usual source is a bare `<<"café">>` outside a template
+(Latin-1: one byte per character). Write `~"café"` or `<<"café"/utf8>>`, or convert
+external Latin-1 data with `unicode:characters_to_binary(Bin, latin1)`. Literals inside a
+template are already folded as UTF-8 text. See "Output is UTF-8" in
+[docs/architecture.md](../../docs/architecture.md).
+
 ## `?each` body must return an element
 
 `?each` compiles each item into a per-item template (`#{s, d, f}`) for fine-grained diffing

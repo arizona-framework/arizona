@@ -62,6 +62,9 @@ render(Bindings) ->
 -export([local/2]).
 -export([each/2]).
 -export([to_bin/1]).
+-export([raw_bin/1]).
+-export([ensure_utf8/1]).
+-export([ensure_utf8/2]).
 -export([raw/1]).
 -export([raw_attr/2]).
 -export([bool_attr/1]).
@@ -415,7 +418,7 @@ to_bin({arizona_esc, V}) ->
 to_bin(V0) ->
     case classify_trusted(V0) of
         {raw, V} ->
-            to_bin(V);
+            raw_bin(V);
         {effect, Cmd} ->
             arizona_effect:encode(Cmd);
         value when is_list(V0) ->
@@ -428,10 +431,24 @@ to_bin(V0) ->
             %% interpolated attribute such as `[~"a-", ?get(on)]`) yields the same
             %% `bad_template_value` as any other unsupported value; the decoder
             %% raises `badarg` for a non-chardata element instead of returning.
+            %% A binary of non-UTF-8 bytes inside the list is the one exception:
+            %% it is text in the wrong encoding, so it is named `non_utf8_render`
+            %% exactly as the same binary outside a list is.
             case chardata_to_binary(V0) of
                 Bin when is_binary(Bin) ->
                     Bin;
-                _ ->
+                {_Status, Valid, Rest} when is_binary(Valid) ->
+                    case first_byte(Rest) of
+                        {ok, Byte} ->
+                            erlang:error({non_utf8_render, Byte, byte_size(Valid)}, [V0], [
+                                {error_info, #{module => ?MODULE}}
+                            ]);
+                        error ->
+                            erlang:error({bad_template_value, V0}, [V0], [
+                                {error_info, #{module => ?MODULE}}
+                            ])
+                    end;
+                error ->
                     erlang:error({bad_template_value, V0}, [V0], [
                         {error_info, #{module => ?MODULE}}
                     ])
@@ -447,6 +464,69 @@ chardata_to_binary(Chardata) ->
         unicode:characters_to_binary(Chardata)
     catch
         error:badarg -> error
+    end.
+
+%% The first unconvertible element the decoder handed back: a byte when it is
+%% binary data (bytes that are not UTF-8), `error` when it is an integer that is
+%% not a code point.
+first_byte(<<Byte, _/binary>>) -> {ok, Byte};
+first_byte([H | _]) -> first_byte(H);
+first_byte(_CodePoint) -> error.
+
+-doc """
+The binary form of a `raw/1` payload. A raw value skips every escaper, so it is
+also the one binary no escape scan sees: it is checked for UTF-8 here instead
+(see `ensure_utf8/1`). Any other shape converts through `to_bin/1`, whose
+outputs are UTF-8 by construction.
+""".
+-spec raw_bin(Value) -> binary() when
+    Value :: term().
+raw_bin(V) when is_binary(V) -> ensure_utf8(V);
+raw_bin(V) -> to_bin(V).
+
+-doc """
+Returns `Bin` when it is valid UTF-8, else raises
+`{non_utf8_render, Byte, Offset}` naming the first byte that does not decode.
+
+Every render target writes UTF-8 -- an HTML response is served as
+`text/html; charset=utf-8`, and a WebSocket frame and a `?native` document are
+JSON -- so a binary holding any other encoding is refused where it would be
+emitted rather than shipped as mojibake (HTTP) or left to fail inside the JSON
+encoder (WebSocket). A binary is the only value shape that can carry such bytes:
+`to_bin/1` produces UTF-8 from integers, floats, atoms and chardata.
+""".
+-spec ensure_utf8(Bin) -> Bin when
+    Bin :: binary().
+ensure_utf8(Bin) ->
+    %% A BIF scan: it returns its input unchanged when valid (no copy), and
+    %% measured several times faster than an Erlang `/utf8` loop past a few bytes.
+    case unicode:characters_to_binary(Bin) of
+        Valid when is_binary(Valid) ->
+            Bin;
+        {_Status, Prefix, <<Byte, _/binary>>} ->
+            erlang:error({non_utf8_render, Byte, byte_size(Prefix)}, [Bin], [
+                {error_info, #{module => ?MODULE}}
+            ])
+    end.
+
+-doc """
+`ensure_utf8/1` for a binary whose first `From` bytes are already known to be
+ASCII, so only the rest is scanned. Returns `ok`; the offset in a raised
+`non_utf8_render` is still from the start of `Bin`. For a backend `escape/1`
+whose own byte scan stops at the first non-ASCII byte.
+""".
+-spec ensure_utf8(Bin, From) -> ok when
+    Bin :: binary(),
+    From :: non_neg_integer().
+ensure_utf8(Bin, From) ->
+    <<_:From/binary, Rest/binary>> = Bin,
+    case unicode:characters_to_binary(Rest) of
+        Valid when is_binary(Valid) ->
+            ok;
+        {_Status, Prefix, <<Byte, _/binary>>} ->
+            erlang:error({non_utf8_render, Byte, From + byte_size(Prefix)}, [Bin, From], [
+                {error_info, #{module => ?MODULE}}
+            ])
     end.
 
 -doc """
@@ -492,8 +572,30 @@ format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
     };
 format_error({bad_template_value, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
+format_error({non_utf8_render, Byte, Offset}, ST) ->
+    #{
+        general => io_lib:format(
+            "rendered value is not valid UTF-8: byte ~s at offset ~b~s. "
+            "A bare <<\"...\">> literal holding non-ASCII characters is Latin-1, "
+            "not UTF-8: write ~~\"...\" or <<\"...\"/utf8>> instead, or convert "
+            "the data with unicode:characters_to_binary(Value, latin1).",
+            [byte_hex(Byte), Offset, value_preview(ST)]
+        )
+    };
 format_error(parse_transform_not_applied = Reason, _ST) ->
     #{general => format_error(Reason)}.
+
+byte_hex(Byte) ->
+    io_lib:format("16#~2.16.0B", [Byte]).
+
+%% The raising call's first argument is the offending value. Its bytes are shown
+%% as integers: `~p` prints a Latin-1 binary as the very text it fails to be.
+value_preview([{_M, _F, [Value | _], _Info} | _]) when byte_size(Value) =< 32 ->
+    io_lib:format(" in ~w", [Value]);
+value_preview([{_M, _F, [Value | _], _Info} | _]) when is_binary(Value) ->
+    io_lib:format(" in ~w...", [binary_part(Value, 0, 32)]);
+value_preview(_ST) ->
+    "".
 
 -doc """
 Materializes an attribute dynamic into its rendered binary through `Backend`
@@ -569,7 +671,7 @@ JSON string encoding. `raw/1`-wrapped values and already-encoded
     Value :: term().
 escape_value(Backend, V0) ->
     case classify_trusted(V0) of
-        {raw, V} -> to_bin(V);
+        {raw, V} -> raw_bin(V);
         {effect, Cmd} -> to_bin(Cmd);
         value -> Backend:escape(to_bin(V0))
     end.

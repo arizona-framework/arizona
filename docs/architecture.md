@@ -85,6 +85,8 @@ Pure helpers for binding access, descriptor construction, and template compositi
 - `each/2` -- template composition: 1-arg `fun(Item)` for lists, 2-arg `fun(Item, Key)` for streams,
   2-arg `fun(Key, Value)` for maps. Returns `#{t, source, template}` descriptor
 - `to_bin/1` -- convert value to binary (binary/integer/float/atom/iolist)
+- `ensure_utf8/1,2` -- return a binary unchanged when it is UTF-8, else raise
+  `{non_utf8_render, Byte, Offset}` (see "Output is UTF-8" below)
 
 ## API -- `arizona_render.erl`
 
@@ -140,6 +142,45 @@ is evaluated without the catch.
 
 The catch is one `try` per located dynamic on the path every slot evaluation already
 takes. It adds no reductions; only a crash pays, for the re-raise.
+
+### Output is UTF-8 -- `non_utf8_render`
+
+Every render target writes UTF-8: an HTML response is served as `text/html;
+charset=utf-8`, and a WebSocket frame and a `?native` document are JSON. A binary
+value holding any other encoding -- typically a bare `<<"café">>` literal outside a
+template, which is Latin-1 -- is refused where it is rendered, with one reason on every
+target: `{non_utf8_render, Byte, Offset}`, naming the first byte that does not decode
+and its offset in the value, tagged with the template line like any other render crash.
+Its `format_error/2` (`arizona_template`) points at the fix: write `~"..."` or
+`<<"..."/utf8>>`, or convert with `unicode:characters_to_binary(Value, latin1)`.
+
+Only a binary can carry such bytes: `to_bin/1` produces UTF-8 from integers, floats,
+atoms and chardata (a list wrapping a non-UTF-8 binary is the same mistake and raises the
+same reason; an integer that is not a code point stays `bad_template_value`). Static
+template text needs no runtime check: the parse transform folds a binary literal into the
+statics as UTF-8 text. So the check sits on the paths a dynamic binary takes out:
+
+- **SSR** -- inside each backend's `escape/1`, folded into the byte scan it already
+  makes. The entry scan's "needs nothing" class is narrowed to ASCII, so a pure-ASCII
+  value with nothing to escape (most values) is proven UTF-8 by the pass that proves it
+  clean, at one extra compare per letter; a value that stops the scan has the rest
+  checked once, from that byte, by `ensure_utf8/2` (a BIF scan that returns its input
+  uncopied) before the escape resumes. `?native` escapes through `json:encode/1`, which
+  already validates, so it only renames the encoder's `unexpected_end`/`invalid_byte`.
+  A `?raw` payload skips every escaper, so `raw_bin/1` checks it in `escape_value/2`,
+  `to_bin/1`'s raw clause and `arizona_html:render_attr/2`.
+- **Live** -- the mount and the diff ship values raw (the client text-nodes or JSON-encodes
+  them), so no escaper scans them in the live process and the socket's JSON encoder would
+  be the first to notice, as an encoder crash far from the template. `arizona_eval` checks
+  each binary a slot evaluates to (content, attribute, `?raw` payload, `?local` init) at
+  the one place every evaluation passes, inside the located `try`. A live mount or diff
+  therefore crashes the live process with the reason and line SSR reports; the socket
+  closes as for any live crash (4500, or 4501 when the failing render was a mount). The
+  cost is one BIF call per evaluated binary, on a path whose values are otherwise only
+  scanned by the JSON encoder in the socket process.
+
+Integers skip all of it. Handler effects are not template values: their arguments are
+JSON-encoded by the socket, whose encoder still rejects non-UTF-8 bytes (a 4500 close).
 
 ## Terminal render target -- `?terminal`
 

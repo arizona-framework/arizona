@@ -1194,8 +1194,9 @@ foreign_caller_does_not_desync_drain(Config) when is_list(Config) ->
     after 0 -> ok
     end.
 
-%% A frame that cannot be JSON-encoded (here a value holding invalid UTF-8) is
-%% only discovered when the socket encodes it, after every inner crash guard. The
+%% A frame that cannot be JSON-encoded (here a handler effect holding invalid
+%% UTF-8 -- a rendered value is refused earlier, in the live process) is only
+%% discovered when the socket encodes it, after every inner crash guard. The
 %% transport has no catch of its own, so such a raise ended the session with no
 %% close frame: a bare 1006 the client only backs off from. It must close 4500,
 %% logged, like a crash in the live process.
@@ -1203,7 +1204,7 @@ unencodable_event_reply_closes_crash(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(),
     {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     %% The queued push is folded into the event's reply, which then fails to encode.
-    arizona_socket:live_pid(Socket0) ! {set_count, ?BAD_UTF8},
+    arizona_socket:live_pid(Socket0) ! {push_effects, [arizona_js:set_title(?BAD_UTF8)]},
     EventFrame = iolist_to_binary(json:encode([~"counter", ~"noop", #{}])),
     ?assertMatch(
         {close, 4500, ~"server crash", _},
@@ -1215,7 +1216,7 @@ unencodable_push_closes_crash(Config) when is_list(Config) ->
     lists:foreach(
         fun(Handler) ->
             {reply, _, Socket0} = arizona_socket:init(Handler, #{}, Req, #{}),
-            arizona_socket:live_pid(Socket0) ! {set_count, ?BAD_UTF8},
+            arizona_socket:live_pid(Socket0) ! {push_effects, [arizona_js:set_title(?BAD_UTF8)]},
             Push =
                 receive
                     {arizona_push, _, _, _, _} = Msg -> Msg
@@ -1232,9 +1233,10 @@ unencodable_push_closes_crash(Config) when is_list(Config) ->
 
 unencodable_resync_closes_mount_failed(Config) when is_list(Config) ->
     %% Every leg that settles a deferred resync: the promised `cached_fps`, any
-    %% other first frame (a ping), and the backstop timer. The frame that fails to
-    %% encode is the one delivering the view, so the view never mounted on the
-    %% client: a mount failure (4501), not a crash after the mount.
+    %% other first frame (a ping), and the backstop timer. The view holds a value
+    %% that is not UTF-8, so it can never be delivered: the live process refuses it
+    %% while rendering the resync (`non_utf8_render`, located), and the view never
+    %% mounted on the client -- a mount failure (4501), not a crash after the mount.
     Req = arizona_req_test_adapter:new(),
     FpsFrame = iolist_to_binary(json:encode([~"cached_fps", []])),
     Settle = [
@@ -1251,8 +1253,8 @@ unencodable_resync_closes_mount_failed(Config) when is_list(Config) ->
                 #{reconnect => true, fps_follow => true}
             ),
             ?assertMatch(
-                {close, 4501, ~"mount failed", _},
-                logged_error(fun() -> Leg(Socket0) end),
+                {[], {close, 4501, ~"mount failed", _}},
+                logged_error(fun() -> settle(Leg(Socket0), Socket0) end),
                 Handler
             )
         end,

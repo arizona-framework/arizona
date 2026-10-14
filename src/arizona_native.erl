@@ -195,7 +195,10 @@ raw_text(_Tag, Value) -> Value.
 %% (attr_command/2) is, a boolean for a typed boolean, else a string.
 -spec render_attr(binary(), term()) -> binary().
 render_attr(Name, Value) ->
-    iolist_to_binary(json:encode(wire_attr(Name, Value))).
+    case wire_attr(Name, Value) of
+        Bin when is_binary(Bin) -> json_str(Bin);
+        Json -> iolist_to_binary(json:encode(Json))
+    end.
 
 %% The prop as the client receives it, before it JSON-encodes it: an effect
 %% command as its array, so a tap prop reads the same dynamic or folded, a typed
@@ -214,6 +217,18 @@ wire_attr(_Name, Value) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
+%% The JSON encoder validates UTF-8 as it escapes, so the check costs nothing
+%% here; only its error is renamed. It raises `unexpected_end` or
+%% `{invalid_byte, _}` for a non-UTF-8 string, which names neither the value nor
+%% the cause, so the failure becomes the `non_utf8_render` every other backend
+%% raises.
 -spec json_str(binary()) -> binary().
 json_str(Bin) ->
-    iolist_to_binary(json:encode(Bin)).
+    try
+        iolist_to_binary(json:encode(Bin))
+    catch
+        error:Reason:ST ->
+            %% Raises for the non-UTF-8 string; any other failure keeps its own.
+            Bin = arizona_template:ensure_utf8(Bin),
+            erlang:raise(error, Reason, ST)
+    end.

@@ -48,6 +48,13 @@ identical to the previous inlined emission.
     (C > $> orelse (C > $' andalso C < $<) orelse C < $" orelse C =:= $= orelse
         (C > $" andalso C < $&))
 ).
+%% ?SAFE narrowed to ASCII: the entry scan of escape/1 stops at a non-ASCII byte
+%% as well as a metacharacter, so a value that is pure ASCII with nothing to
+%% escape -- most of them -- is proven UTF-8 by the same pass that proves it clean.
+-define(ASCII_SAFE(C),
+    ((C > $> andalso C < 128) orelse (C > $' andalso C < $<) orelse C < $" orelse C =:= $= orelse
+        (C > $" andalso C < $&))
+).
 %% Past the first metacharacter, a tail shorter than this has no run long enough
 %% for slicing to pay off, so the plain append loop takes it.
 -define(SHORT_TAIL, 16).
@@ -285,18 +292,62 @@ boolean_attrs() -> presence.
 %% in a row suggest the run is long, so dense markup never pays for a chunk
 %% attempt per byte. Measured shapes and the alternatives that lost
 %% (binary:match/2, SWAR, an iodata result) are in docs/performance.md.
+%%
+%% The output is served as UTF-8, so the value must be UTF-8: the entry scan is
+%% first_unsafe/2, which also stops at a non-ASCII byte. An ASCII value pays one
+%% more compare per letter for that and nothing else; any other value has its
+%% tail from that byte on checked once by arizona_template:ensure_utf8/2 (which
+%% raises `non_utf8_render`) before the escape proper resumes there.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) ->
-    case first_meta(Bin, 0) of
+    case first_unsafe(Bin, 0) of
         none ->
             Bin;
-        Pos when byte_size(Bin) - Pos < ?SHORT_TAIL ->
-            <<Clean:Pos/binary, Rest/binary>> = Bin,
-            escape(Rest, Clean);
-        Pos ->
-            <<Clean:Pos/binary, Rest/binary>> = Bin,
-            escape_runs(Rest, Clean, 0)
+        From ->
+            ok = arizona_template:ensure_utf8(Bin, From),
+            <<_:From/binary, Tail/binary>> = Bin,
+            escape_from(Bin, first_meta(Tail, From))
     end.
+
+escape_from(Bin, none) ->
+    Bin;
+escape_from(Bin, Pos) when byte_size(Bin) - Pos < ?SHORT_TAIL ->
+    <<Clean:Pos/binary, Rest/binary>> = Bin,
+    escape(Rest, Clean);
+escape_from(Bin, Pos) ->
+    <<Clean:Pos/binary, Rest/binary>> = Bin,
+    escape_runs(Rest, Clean, 0).
+
+%% first_meta/2 over ?ASCII_SAFE: the offset of the first metacharacter OR
+%% non-ASCII byte, `none` when there is neither.
+first_unsafe(<<A, B, C, D, E, F, G, H, R/binary>>, Pos) when
+    ?ASCII_SAFE(A),
+    ?ASCII_SAFE(B),
+    ?ASCII_SAFE(C),
+    ?ASCII_SAFE(D),
+    ?ASCII_SAFE(E),
+    ?ASCII_SAFE(F),
+    ?ASCII_SAFE(G),
+    ?ASCII_SAFE(H)
+->
+    first_unsafe(R, Pos + 8);
+first_unsafe(<<A, B, C, D, R/binary>>, Pos) when
+    ?ASCII_SAFE(A), ?ASCII_SAFE(B), ?ASCII_SAFE(C), ?ASCII_SAFE(D)
+->
+    first_unsafe(R, Pos + 4);
+first_unsafe(<<C, R/binary>>, Pos) when ?ASCII_SAFE(C) ->
+    first_unsafe_bytes(R, Pos + 1);
+first_unsafe(<<>>, _Pos) ->
+    none;
+first_unsafe(_Bin, Pos) ->
+    Pos.
+
+first_unsafe_bytes(<<C, R/binary>>, Pos) when ?ASCII_SAFE(C) ->
+    first_unsafe_bytes(R, Pos + 1);
+first_unsafe_bytes(<<>>, _Pos) ->
+    none;
+first_unsafe_bytes(_Bin, Pos) ->
+    Pos.
 
 %% Byte offset of the first character needing an entity, `none` when there is none.
 %% A chunk that fails holds a metacharacter (or is past the end), so the single
@@ -511,7 +562,7 @@ render_attr(Name, true) ->
 render_attr(Name, Value) ->
     case arizona_template:classify_trusted(Value) of
         {raw, V} ->
-            attr_unescaped(Name, arizona_template:to_bin(V));
+            attr_unescaped(Name, arizona_template:raw_bin(V));
         {effect, Cmd} ->
             %% A live render already observed this name where it evaluated the
             %% value (arizona_eval). The request-free SSR walk evaluates inline

@@ -37,4 +37,8 @@ handle_event(~"noop", _Payload, Bindings) ->
 %% change with an event on the same binding (transport push-ordering tests).
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info({set_count, N}, Bindings) ->
-    {Bindings#{count => N}, #{}, []}.
+    {Bindings#{count => N}, #{}, []};
+%% Ships handler effects with no state change, so a suite can push a frame whose
+%% effects (encoded by the socket, unlike rendered values) cannot be encoded.
+handle_info({push_effects, Effects}, Bindings) ->
+    {Bindings, #{}, Effects}.

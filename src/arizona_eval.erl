@@ -575,8 +575,25 @@ eval_val(#{s := Statics, d := Dynamics} = Tmpl) ->
     arizona_template:maybe_propagate(Tmpl, Snap0);
 eval_val(#{az_local := _, target := {attr, Name}, v := V} = Local) ->
     ok = observe_command(Name, V),
-    Local;
+    check_utf8(Local);
 eval_val(Val) ->
+    check_utf8(Val).
+
+%% The live render's UTF-8 check. Every scalar a slot evaluates to ends here --
+%% a content value (escaped or not), an attribute value, a `?raw` payload, a
+%% `?local` init -- and the diff ships it to the client unescaped, so no escaper
+%% scans it on the way. Checking here, inside the slot's located evaluation,
+%% raises `non_utf8_render` at the template line, the error SSR raises, rather
+%% than a JSON encoder failure when the frame is serialized. Only a binary can
+%% hold non-UTF-8 bytes; every other shape is UTF-8 by construction (see
+%% `arizona_template:ensure_utf8/1`).
+check_utf8(Bin) when is_binary(Bin) ->
+    arizona_template:ensure_utf8(Bin);
+check_utf8({arizona_raw, V}) when is_binary(V) ->
+    {arizona_raw, arizona_template:ensure_utf8(V)};
+check_utf8(#{az_local := _, v := V} = Local) when is_binary(V) ->
+    Local#{v := arizona_template:ensure_utf8(V)};
+check_utf8(Val) ->
     Val.
 
 %% A dynamic attribute whose value evaluates to a command is the render-time
@@ -672,9 +689,9 @@ eval_val_v(#{s := _, d := _} = Tmpl, Views) ->
     eval_template(Tmpl, Views);
 eval_val_v(#{az_local := _, target := {attr, Name}, v := V} = Local, Views) ->
     ok = observe_command(Name, V),
-    {Local, Views};
+    {check_utf8(Local), Views};
 eval_val_v(Val, Views) ->
-    {Val, Views}.
+    {check_utf8(Val), Views}.
 
 %% Run Fun with the enclosing dependency scope suspended: nothing Fun reads
 %% reaches it, and it is restored when Fun returns.

@@ -216,6 +216,10 @@ Called at the render boundary on interpolated scalar values
 terminal strips control bytes that would inject escape sequences; native emits a
 JSON string. A `?raw` opt-out is classified out before this callback runs, so it
 never sees trusted fragments.
+
+The output is UTF-8, so a value that is not must raise
+`{non_utf8_render, Byte, Offset}` -- via `arizona_template:ensure_utf8/1,2`, ideally
+folded into the scan the escape already makes (see the built-in backends).
 """.
 -callback escape(Value :: binary()) -> binary().
 

@@ -275,6 +275,9 @@ cannot inject ANSI/OSC/DCS escape sequences (e.g. `\\e]52;c;...` clipboard write
 `\\e[3J` scrollback wipes) into other users' terminals. Bytes `>= 0x80` are kept
 verbatim so UTF-8 multi-byte sequences are not corrupted; dropping `\\e` (0x1B)
 already neutralizes the 7-bit C1 forms and every escape-sequence introducer.
+
+The value must be UTF-8: a binary in another encoding raises
+`{non_utf8_render, Byte, Offset}` (see `arizona_template:ensure_utf8/1`).
 """.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) ->
@@ -283,14 +286,37 @@ escape(Bin) when is_binary(Bin) ->
     %% as-is -- no accumulator, no copy. Only a value that really needs
     %% stripping allocates, and only from that first control byte on (the clean
     %% prefix seeds the accumulator in one slice). The same fast path, and the
-    %% same measured rationale, as arizona_html:escape/1.
-    case first_control(Bin, 0) of
+    %% same measured rationale, as arizona_html:escape/1 -- including its UTF-8
+    %% check: the entry scan also stops at a non-ASCII byte, and the tail from
+    %% there is checked once (`non_utf8_render`) before the strip scan resumes.
+    case first_unsafe(Bin, 0) of
         none ->
             Bin;
-        Pos ->
-            <<Clean:Pos/binary, Rest/binary>> = Bin,
-            escape(Rest, Clean)
+        From ->
+            ok = arizona_template:ensure_utf8(Bin, From),
+            <<_:From/binary, Tail/binary>> = Bin,
+            escape_from(Bin, first_control(Tail, From))
     end.
+
+escape_from(Bin, none) ->
+    Bin;
+escape_from(Bin, Pos) ->
+    <<Clean:Pos/binary, Rest/binary>> = Bin,
+    escape(Rest, Clean).
+
+%% first_control/2 narrowed to ASCII: the offset of the first stripped byte OR
+%% non-ASCII byte, `none` when there is neither. `C < 16#7F` also excludes DEL,
+%% so the kept-byte guard costs no more compares than first_control/2's.
+first_unsafe(<<C, R/binary>>, Pos) when C >= 16#20, C < 16#7F ->
+    first_unsafe(R, Pos + 1);
+first_unsafe(<<$\n, R/binary>>, Pos) ->
+    first_unsafe(R, Pos + 1);
+first_unsafe(<<$\t, R/binary>>, Pos) ->
+    first_unsafe(R, Pos + 1);
+first_unsafe(<<>>, _Pos) ->
+    none;
+first_unsafe(_Bin, Pos) ->
+    Pos.
 
 %% Byte offset of the first stripped byte (a C0 control other than `\n`/`\t`,
 %% or DEL 0x7F), `none` when the value is already clean.

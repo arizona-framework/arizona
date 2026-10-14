@@ -32,4 +32,8 @@ handle_event(~"inc", _Payload, Bindings) ->
 %% on the native target.
 -spec handle_info(term(), az:bindings()) -> az:handle_info_ret().
 handle_info({set_count, N}, Bindings) ->
-    {Bindings#{count => N}, #{}, []}.
+    {Bindings#{count => N}, #{}, []};
+%% Ships handler effects with no state change, so a suite can push a frame whose
+%% effects (encoded by the socket, unlike rendered values) cannot be encoded.
+handle_info({push_effects, Effects}, Bindings) ->
+    {Bindings, #{}, Effects}.

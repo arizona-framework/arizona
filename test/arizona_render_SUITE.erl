@@ -85,7 +85,7 @@
     nested_each_render/1,
     ssr_layouts_empty_list/1,
     ssr_layouts_nest_outer_first/1,
-    ssr_layout_splices_non_utf8_page_unchanged/1,
+    ssr_layout_splices_page_unchanged/1,
     ssr_layout_splice_adds_no_privileged_tag/1,
     ssr_layout_rejects_stateful/1,
     ssr_layout_rejects_stateful_via_stateless/1,
@@ -189,7 +189,7 @@ groups() ->
             nested_each_render,
             ssr_layouts_nest_outer_first,
             ssr_layouts_empty_list,
-            ssr_layout_splices_non_utf8_page_unchanged,
+            ssr_layout_splices_page_unchanged,
             ssr_layout_splice_adds_no_privileged_tag,
             ssr_layout_rejects_stateful,
             ssr_layout_rejects_stateful_via_stateless,
@@ -409,7 +409,22 @@ escape_matches_reference(Config) when is_list(Config) ->
     Alphabet = <<"abcXYZ09 &<>\"'=;:\n\t"/utf8, 0, 127, 128, 195, 169, 240, 159, 152, 128>>,
     Random = random_values(500, Alphabet, rand:seed_s(exsss, {17, 29, 43})),
     Inputs = EveryByte ++ Gaps ++ Dense ++ Utf8 ++ Random,
-    ?assertEqual([], [I || I <- Inputs, arizona_html:escape(I) =/= reference_escape(I)]).
+    ?assertEqual([], [I || I <- Inputs, escape_outcome(I) =/= reference_outcome(I)]).
+
+%% A value that is not UTF-8 never escapes: it is refused, naming the first byte
+%% that does not decode and its offset.
+escape_outcome(Bin) ->
+    try
+        arizona_html:escape(Bin)
+    catch
+        error:{non_utf8_render, _, _} = Reason -> Reason
+    end.
+
+reference_outcome(Bin) ->
+    case unicode:characters_to_binary(Bin) of
+        Valid when is_binary(Valid) -> reference_escape(Bin);
+        {_, Prefix, <<B, _/binary>>} -> {non_utf8_render, B, byte_size(Prefix)}
+    end.
 
 %% Seeded values over `Alphabet`, the rand state threaded explicitly so the
 %% process-global state is left alone.
@@ -535,7 +550,7 @@ raw_text_breakout_neutralized_for_chardata(Config) when is_list(Config) ->
     %% than swallowed here, so to_bin/1 stays the one place that names a bad value.
     Undecodable = [<<255>>],
     ?assertEqual(Undecodable, arizona_html:raw_text(script, Undecodable)),
-    ?assertError({bad_template_value, Undecodable}, arizona_template:to_bin(Undecodable)).
+    ?assertError({non_utf8_render, 255, 0}, arizona_template:to_bin(Undecodable)).
 
 %% A list value is text (chardata). An atom inside one -- a boolean interpolated into
 %% an attribute, `[~"a-", ?get(on)]` -- is not text, so it is refused as a
@@ -1065,23 +1080,32 @@ ssr_layouts_empty_list(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(HTML, <<"<!DOCTYPE html>">>)),
     ?assertNotEqual(nomatch, binary:match(HTML, <<"az-view id=\"about-page\"">>)).
 
-ssr_layout_splices_non_utf8_page_unchanged(Config) when is_list(Config) ->
+ssr_layout_splices_page_unchanged(Config) when is_list(Config) ->
     %% By the time a layout wraps it, the page is framework-produced iodata, not
     %% a user value -- so wrapping must splice it, never re-decode it as
     %% chardata. It used to go through `to_bin/1`'s list clause
     %% (`unicode:characters_to_binary/1`), which copies and full-UTF-8-validates
     %% the whole page once per layer and turned a single non-UTF-8 byte anywhere
     %% on it into `{bad_template_value, <the entire page>}` blamed on the
-    %% (innocent) layout -- while the identical page rendered WITHOUT a layout
-    %% was fine. Same bytes, layout or not.
-    Opts = #{bindings => #{title => <<255>>}},
+    %% (innocent) layout. Same bytes, layout or not.
+    Opts = #{bindings => #{title => ~"日本 😀"}},
     Bare = iolist_to_binary(arizona_render:render_view_to_iolist(arizona_static_page, Opts)),
+    Layout = #{layouts => [{arizona_outer_layout, render}]},
     Wrapped = iolist_to_binary(
-        arizona_render:render_view_to_iolist(
-            arizona_static_page, Opts#{layouts => [{arizona_outer_layout, render}]}
-        )
+        arizona_render:render_view_to_iolist(arizona_static_page, maps:merge(Opts, Layout))
     ),
-    ?assertEqual(<<"<outer>", Bare/binary, "</outer>">>, Wrapped).
+    ?assertEqual(<<"<outer>", Bare/binary, "</outer>">>, Wrapped),
+    %% A non-UTF-8 value is refused where the page renders it, at the page's own
+    %% line, whether or not a layout wraps the page -- never blamed on the layout.
+    BadOpts = #{bindings => #{title => <<255>>}},
+    ?assertError(
+        {arizona_loc, {arizona_static_page, _}, {non_utf8_render, 255, 0}},
+        arizona_render:render_view_to_iolist(arizona_static_page, BadOpts)
+    ),
+    ?assertError(
+        {arizona_loc, {arizona_static_page, _}, {non_utf8_render, 255, 0}},
+        arizona_render:render_view_to_iolist(arizona_static_page, maps:merge(BadOpts, Layout))
+    ).
 
 ssr_layout_splice_adds_no_privileged_tag(Config) when is_list(Config) ->
     %% Splicing the page must not mint a tagged tuple that a *binding* could
@@ -1187,9 +1211,10 @@ layout_html(Mod, Fun) ->
 ssr_invalid_chardata_user_value_still_errors(Config) when is_list(Config) ->
     %% The other half of the same boundary: `to_bin/1`'s list clause stays in
     %% force for a genuine USER value, so a binding that is not valid chardata
-    %% still fails loudly rather than emitting mojibake.
+    %% still fails loudly rather than emitting mojibake -- named for the cause,
+    %% bytes that are not UTF-8.
     ?assertError(
-        {arizona_loc, _, {bad_template_value, [<<255>>]}},
+        {arizona_loc, _, {non_utf8_render, 255, 0}},
         arizona_render:render_view_to_iolist(
             arizona_static_page, #{bindings => #{title => [<<255>>]}}
         )
