@@ -812,12 +812,14 @@ function applyTextOp(el, az, val, isHtml) {
  * flags make attribute writes stop affecting `.value`/`.checked`/`.selected`,
  * so without the property write a server-driven change would silently stop
  * rendering. The server is authoritative; a SET_ATTR of a boolean attribute
- * always means true (false diffs to REM_ATTR).
+ * always means true (false diffs to REM_ATTR). A command value arrives as its
+ * JSON array, not attribute text, so it is written back as JSON.
  * @param {Element} el
  * @param {string} name
- * @param {string} val
+ * @param {string | unknown[]} val
  */
 function applySetAttrOp(el, name, val) {
+    if (typeof val !== 'string') val = JSON.stringify(val);
     // A runtime `arizona_js:set_attr(sel, "az-toggle", ...)` writes a name no
     // template contains, so the compile-time set cannot hold it. Every such write
     // funnels here -- the SET_ATTR op, an ITEM_PATCH inner op, `set_attr`/

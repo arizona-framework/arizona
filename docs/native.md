@@ -46,7 +46,10 @@ handle_event(~"inc", _Payload, Bindings) ->
   string-encoded on the wire; the client coerces (typed props are a future
   addition).
 - **Event handlers are props** whose value is an effect command built with the
-  platform module: `{on_tap, arizona_android:push_event(~"inc")}`. Events flow
+  platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
+  reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into
+  the statics or computed at runtime (`{on_tap, ?get(cmd)}`, carried in `d` and
+  patched by `OP_SET_ATTR`), so a tap prop always reads an array. Events flow
   back exactly as on the web (`[ViewId, Event, Payload]` → `handle_event/3`).
 - **`?each` works uniformly.** A `?each` inside `?native` is compiled for the
   native target automatically — no separate macro. `?stateful`/`?stateless`

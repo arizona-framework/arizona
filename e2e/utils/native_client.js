@@ -513,7 +513,8 @@ export class NativeClient {
     }
 
     _encodeValue(v) {
-        if (v !== null && typeof v === 'object') {
+        // An array is a value too (an effect command prop), encoded like a scalar.
+        if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
             if (v.t === 0) {
                 // an ?each expansion -> a JSON array of items the parent splices
                 const s = this._statics(v);
@@ -523,7 +524,7 @@ export class NativeClient {
             // a nested {f,s,d} template
             return this._interleave(v);
         }
-        return JSON.stringify(v); // scalar: string -> quoted, number -> as-is
+        return JSON.stringify(v); // a value: string -> quoted, number/array -> as-is
     }
 
     _interleaveWith(s, d) {

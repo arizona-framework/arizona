@@ -143,4 +143,21 @@ class InterleaverTest {
         assertEquals(10, cmd[0].jsonPrimitive.int)
         assertEquals("/native/counter", cmd[1].jsonPrimitive.content)
     }
+
+    @Test
+    fun decodesDynamicCommandProp() {
+        // A dynamic command prop rides in "d" as its array (not a string of one),
+        // so it interleaves to the same tappable array a folded prop is.
+        val frame =
+            """
+            {"d":[[0,"inc"]],"f":"DYN1","s":[
+            "{\"type\":\"Button\",\"on_tap\":",",\"children\":[\"+\"]}"]}
+            """.trimIndent()
+        val node = Json.parseToJsonElement(
+            Interleaver(FingerprintCache()).interleave(Json.parseToJsonElement(frame).jsonObject),
+        ).jsonObject
+        val cmd = node.getValue("on_tap").jsonArray
+        assertEquals(0, cmd[0].jsonPrimitive.int)
+        assertEquals("inc", cmd[1].jsonPrimitive.content)
+    }
 }

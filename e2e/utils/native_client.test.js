@@ -197,6 +197,24 @@ describe('native client op application', () => {
         expect(client.tree().children[0]).toMatchObject({ type: 'Text', color: 'red' });
     });
 
+    // A dynamic tap prop carries its command as an array, in the hydration payload
+    // and on a later SET_ATTR alike, so the node stays tappable either way.
+    it('keeps a dynamic command prop an array, mounted and patched', () => {
+        const { client, sent } = clientWithRecorder('native_x');
+        replaceRoot(client);
+        client._applyOps([
+            [
+                OP_TEXT,
+                'native_x:R-0t0',
+                { f: 'B', s: ['{"type":"Button","az":"B-0","on_tap":', '}'], d: [[0, 'a']] },
+            ],
+        ]);
+        expect(client.tree().children[0].on_tap).toEqual([0, 'a']);
+        client._applyOps([[OP_SET_ATTR, 'native_x:B-0', 'on_tap', [0, 'b']]]);
+        client.tap(client.tree().children[0]);
+        expect(JSON.parse(sent.at(-1))).toEqual(['native_x', 'b', {}]);
+    });
+
     // The documented `case ?get(flag) of true -> ?stateful(child, ...)` pattern:
     // the installed payload carries its OWN view id, which must be registered or
     // the child's very first update crashes.

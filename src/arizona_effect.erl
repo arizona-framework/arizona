@@ -24,6 +24,7 @@ that embed the command as a JSON value (the native path).
 
 -export([encode/1]).
 -export([encode_json/1]).
+-export([json_value/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -56,10 +57,8 @@ with `&`, `"`, and `<` escaped to their HTML entity equivalents.
 """.
 -spec encode(Cmds) -> binary() when
     Cmds :: cmd() | [cmd()].
-encode({?MODULE, Cmd}) ->
-    escape_attr(iolist_to_binary(json:encode(Cmd)));
-encode([{?MODULE, _} | _] = Cmds) ->
-    escape_attr(iolist_to_binary(json:encode([C || {?MODULE, C} <:- Cmds]))).
+encode(Cmds) ->
+    escape_attr(encode_json(Cmds)).
 
 -doc """
 Serializes a command (or list of commands) to raw JSON, without the HTML
@@ -68,10 +67,21 @@ embed the command as a JSON value.
 """.
 -spec encode_json(Cmds) -> binary() when
     Cmds :: cmd() | [cmd()].
-encode_json({?MODULE, Cmd}) ->
-    iolist_to_binary(json:encode(Cmd));
-encode_json([{?MODULE, _} | _] = Cmds) ->
-    iolist_to_binary(json:encode([C || {?MODULE, C} <:- Cmds])).
+encode_json(Cmds) ->
+    iolist_to_binary(json:encode(json_value(Cmds))).
+
+-doc """
+The command (or list of commands) as the JSON term it serializes to: `[OpCode |
+Args]`, or a list of those. A wire that JSON-encodes its values itself (a diff
+op, the native hydration payload) carries this, so the client receives the
+command as an array rather than a string of one.
+""".
+-spec json_value(Cmds) -> list() when
+    Cmds :: cmd() | [cmd()].
+json_value({?MODULE, Cmd}) ->
+    Cmd;
+json_value([{?MODULE, _} | _] = Cmds) ->
+    [C || {?MODULE, C} <:- Cmds].
 
 %% --------------------------------------------------------------------
 %% Internal functions
