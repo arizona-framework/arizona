@@ -447,6 +447,9 @@
     list_child_hoisted_html/1,
     list_child_helper_html/1,
     list_child_helper_each/1,
+    helper_arg_each_native/1,
+    helper_arg_each_terminal/1,
+    helper_arg_each_svg/1,
     list_child_inner_content/1,
     list_child_raw_beside_value/1,
     list_child_local_orphaned/1,
@@ -800,6 +803,9 @@ groups() ->
             list_child_hoisted_html,
             list_child_helper_html,
             list_child_helper_each,
+            helper_arg_each_native,
+            helper_arg_each_terminal,
+            helper_arg_each_svg,
             list_child_inner_content,
             list_child_raw_beside_value,
             list_child_local_orphaned,
@@ -10300,6 +10306,71 @@ list_child_helper_each(Config) when is_list(Config) ->
         "kids(Is) -> [<<\"x\">>, arizona_template:each(fun(I) -> {li, [], [I]} end, Is)]. "
     ),
     assert_list_child(Mod, #{items => [~"1", ~"2"]}, #{items => [~"1", ~"3"]}, [~"1", ~"2"], ~"3").
+
+%% An `?each` handed to a local element helper is compiled before the helper is
+%% inlined, so the helper's body is marked around an already-compiled pairing. That
+%% pairing must pass through the marking untouched under every target.
+helper_arg_each_native(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_helper_arg_each_native). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:native({column, [], [wrap(arizona_template:each("
+        "        fun(I) -> {text, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
+        "wrap(X) -> {box, [], [X]}. "
+    ),
+    Wire = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
+    ?assertMatch(
+        #{
+            ~"type" := ~"column",
+            ~"children" := [
+                #{
+                    ~"type" := ~"box",
+                    ~"children" := [
+                        #{
+                            ~"children" := [
+                                [#{~"type" := ~"text"}, #{~"type" := ~"text"}]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        json:decode(Wire)
+    ).
+
+helper_arg_each_terminal(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_helper_arg_each_terminal). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:terminal({col, [], [wrap(arizona_template:each("
+        "        fun(I) -> {line, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
+        "wrap(X) -> {col, [], [X]}. "
+    ),
+    Out = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
+    ?assertEqual(nomatch, binary:match(Out, [~"<", ~"{"])),
+    ?assertNotEqual(nomatch, binary:match(Out, ~"a")),
+    ?assertNotEqual(nomatch, binary:match(Out, ~"b")).
+
+%% Under `?html` the pairing passes through a helper that opens `<svg>`.
+helper_arg_each_svg(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_helper_arg_each_svg). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({main, [], [wrap(arizona_template:each("
+        "        fun(I) -> {title, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
+        "wrap(X) -> {svg, [], [X]}. "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
+    ?assertMatch({match, _}, re:run(HTML, ~"<main><svg[^>]*><!--[^>]*--><title")),
+    ?assertMatch(
+        {match, [[~"a"], [~"b"]]},
+        re:run(HTML, ~"<title[^>]*>(?:<!--[^>]*-->)?([ab])", [
+            global, {capture, all_but_first, binary}
+        ])
+    ).
 
 %% `?inner_content` beside static text in a layout's list gets its own slot.
 list_child_inner_content(Config) when is_list(Config) ->
