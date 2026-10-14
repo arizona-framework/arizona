@@ -152,6 +152,7 @@
     nodiff_region_attr_names_identity/1,
     nodiff_region_attr_follows_same_region/1,
     nodiff_region_attr_item_key/1,
+    nodiff_region_attr_unkeyed_item/1,
     nodiff_region_attr_only_on_regions/1,
     reserved_az_region_attr_raises/1,
     nodiff_branch_swaps_away/1,
@@ -542,6 +543,7 @@ groups() ->
             nodiff_region_attr_names_identity,
             nodiff_region_attr_follows_same_region,
             nodiff_region_attr_item_key,
+            nodiff_region_attr_unkeyed_item,
             nodiff_region_attr_only_on_regions,
             reserved_az_region_attr_raises
         ]},
@@ -10258,6 +10260,35 @@ nodiff_region_attr_item_key(Config) when is_list(Config) ->
     [F, _] = binary:split(A, ~"."),
     ?assertEqual(arizona_template:region_token(F, undefined, 1), A),
     ?assertEqual(arizona_template:region_token(F, undefined, 2), B).
+
+%% An unkeyed `?each` item is not named, bare or through `?html`: every item
+%% shares the one template, so a name would not say which item it is.
+nodiff_region_attr_unkeyed_item(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_region_attr_unkeyed). "
+        "-export([bare/1, wrapped/1]). "
+        "bare(Bindings) -> "
+        "    arizona_template:html({'ul', [], ["
+        "        arizona_template:each(fun(I) -> {'li', ['az-nodiff'], [I]} end, "
+        "            arizona_template:get(items, Bindings))"
+        "    ]}). "
+        "wrapped(Bindings) -> "
+        "    arizona_template:html({'ul', [], ["
+        "        arizona_template:each(fun(I) -> "
+        "            arizona_template:html({'li', ['az-nodiff'], [I]}) "
+        "        end, arizona_template:get(items, Bindings))"
+        "    ]}). "
+    ),
+    [
+        ?assertEqual(
+            nomatch,
+            binary:match(
+                iolist_to_binary(arizona_render:render_to_iolist(Mod:F(#{items => [1, 2]}))),
+                ~"az-region"
+            )
+        )
+     || F <- [bare, wrapped]
+    ].
 
 %% Only a region's own root is named: not the templates nested in it (they are
 %% part of it), not a layout, and not a target whose client keeps no regions.

@@ -2426,7 +2426,7 @@ compile_template(Arg, Line, Module, LiveRender, Backend) ->
 %% inherit_nodiff/1): it compiles nodiff whatever its own attributes say.
 compile_template(Arg, Line, Module, LiveRender, Backend, Inherited) ->
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
-        Arg, Module, LiveRender, Backend, html, Inherited
+        Arg, Module, LiveRender, Backend, html, Inherited, template
     ),
     Opts = Opts0#{backend => Backend},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
@@ -2573,7 +2573,7 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
             %% (an SVG `<title>`) is treated the same as if it were written
             %% literally at that position.
             {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
-                ElemAST, Module, false, Backend, CCtx, Inherited
+                ElemAST, Module, false, Backend, CCtx, Inherited, each_item
             ),
             Opts1 = Opts0#{backend => Backend},
             Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
@@ -2722,10 +2722,16 @@ is_fragile_each_item({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}
 is_fragile_each_item(_Item) ->
     false.
 
-compile_body_parts(ExprAST, Module, LiveRender, Backend, CCtx, Inherited) ->
-    compile_classified_body(
-        classify_body(ExprAST), ExprAST, Module, LiveRender, Backend, CCtx, Inherited
-    ).
+%% `Unit` says what is being compiled: a `template`, or an `each_item` -- the
+%% per-item template of an `?each`, whose root is a region only when keyed (see
+%% is_region_root/4).
+compile_body_parts(ExprAST, Module, LiveRender, Backend, CCtx, Inherited, Unit) ->
+    case classify_body(ExprAST) of
+        element_tuple ->
+            compile_fragment_parts([ExprAST], Module, LiveRender, Backend, CCtx, {Inherited, Unit});
+        Class ->
+            compile_classified_body(Class, ExprAST, Module, LiveRender, Backend, CCtx, Inherited)
+    end.
 
 classify_body(AST) ->
     case is_static_binary(AST) of
@@ -2756,11 +2762,9 @@ compile_classified_body(
 ) ->
     Statics = [[extract_binary_value(ExprAST)]],
     {Statics, [], generate_fingerprint(Statics), #{}};
-compile_classified_body(element_tuple, ExprAST, Module, LiveRender, Backend, CCtx, Inherited) ->
-    compile_fragment_parts([ExprAST], Module, LiveRender, Backend, CCtx, Inherited);
 compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend, CCtx, Inherited) ->
     compile_fragment_parts(
-        ast_list_to_list(ExprAST), Module, LiveRender, Backend, CCtx, Inherited
+        ast_list_to_list(ExprAST), Module, LiveRender, Backend, CCtx, {Inherited, template}
     );
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx, Inherited) ->
     compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend, CCtx, Inherited);
@@ -2801,9 +2805,9 @@ reject_orphaned_local(ExprAST) ->
         false -> ok
     end.
 
-compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, Inherited) ->
+compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, {Inherited, Unit}) ->
     Opts = prescan_directives(ElementASTs, Inherited),
-    Region = is_region_root(ElementASTs, Inherited, Backend),
+    Region = is_region_root(ElementASTs, Inherited, Unit, Backend),
     State0 = #state{
         module = Module,
         nodiff = maps:is_key(diff, Opts),
@@ -2836,18 +2840,33 @@ compile_fragment_parts(ElementASTs, Module, LiveRender, Backend, CCtx, Inherited
 %% part of that region, and not a layout, which is nodiff for `?inner_content`.
 %% Its root is named by an `az-region` attribute when the backend's client keeps
 %% regions across a wholesale re-render (`supports_region_keep/0`).
-is_region_root([Elem], false, Backend) ->
+%%
+%% An `?each` item is named only when it carries an `az_key`. Every item shares one
+%% template, so an unkeyed item's name says nothing about WHICH item it is, and a
+%% list re-renders wholesale exactly when the server cannot match items up -- a
+%% client matching them by position would hand one item's widget to another.
+is_region_root([Elem], false, Unit, Backend) ->
     case is_element_tuple(Elem) of
         true ->
             {_Tag, Attrs, _Children, _Line} = extract_element(Elem),
             {_Rest, ElemOpts} = extract_directives(Attrs),
             maps:is_key(diff, ElemOpts) andalso not contains_inner_content(Elem) andalso
+                (Unit =:= template orelse has_az_key(Attrs)) andalso
                 Backend:supports_region_keep();
         false ->
             false
     end;
-is_region_root(_ElementASTs, _Inherited, _Backend) ->
+is_region_root(_ElementASTs, _Inherited, _Unit, _Backend) ->
     false.
+
+has_az_key(Attrs) ->
+    lists:any(
+        fun
+            ({tuple, _, [NameAST, _V]}) -> is_az_key(NameAST);
+            (_Attr) -> false
+        end,
+        Attrs
+    ).
 
 %% The `az-region` value: `arizona_template:region_token/3` over the template's
 %% fingerprint, the branch that produced it and its `az_key` -- the identity the
