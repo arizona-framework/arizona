@@ -136,6 +136,7 @@
     nodiff_each/1,
     nodiff_inherited_branch/1,
     nodiff_bare_branch_inherited/1,
+    nodiff_branch_swaps_away/1,
     nodiff_inherited_nested_html/1,
     nodiff_inherited_each/1,
     nodiff_inherited_each_in_each/1,
@@ -614,6 +615,7 @@ groups() ->
             nodiff_each,
             nodiff_inherited_branch,
             nodiff_bare_branch_inherited,
+            nodiff_branch_swaps_away,
             nodiff_inherited_nested_html,
             nodiff_inherited_each,
             nodiff_inherited_each_in_each,
@@ -4782,6 +4784,51 @@ nodiff_section() ->
     "    arizona_template:html({'i', [], [arizona_template:get(b, Bindings)]}), "
     "    arizona_template:each(fun(X) -> {'li', [], [X]} end, arizona_template:get(xs, Bindings))"
     "]}".
+
+%% A slot holding an az-nodiff branch still switches branches: only that template
+%% renders once, the slot itself keeps diffing.
+nodiff_branch_swaps_away(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Name, Branch}) ->
+            Mod = compile_module(
+                "-module(" ++ Name ++
+                    "). "
+                    "-export([render/1]). "
+                    "render(Bindings) -> "
+                    "    arizona_template:html("
+                    "        {'div', [], ["
+                    "            case arizona_template:get(f, Bindings) of "
+                    "                true -> " ++ Branch ++
+                    "; "
+                    "                _ -> {'p', [], [<<\"off\">>]} "
+                    "            end"
+                    "        ]}"
+                    "    ). "
+            ),
+            On = #{f => true, b => ~"B1"},
+            {_, OnSnap, _} = arizona_render:render(Mod:render(On), #{}),
+            %% Same branch, changed inner binding: rendered once, nothing to patch.
+            ?assertMatch(
+                {[], _, _},
+                arizona_diff:diff(Mod:render(On#{b => ~"B2"}), OnSnap, #{}, #{b => true})
+            ),
+            %% Away from the nodiff branch, then back to it.
+            {Away, OffSnap, _} =
+                arizona_diff:diff(Mod:render(On#{f => false}), OnSnap, #{}, #{f => true}),
+            ?assertMatch([[?OP_TEXT, _, _]], Away),
+            ?assertMatch(
+                {[[?OP_TEXT, _, _]], _, _},
+                arizona_diff:diff(Mod:render(On), OffSnap, #{}, #{f => true})
+            )
+        end,
+        [
+            {"pt_nodiff_swap_bare",
+                "{'section', ['az-nodiff'], [arizona_template:get(b, Bindings)]}"},
+            {"pt_nodiff_swap_wrapped",
+                "arizona_template:html({'section', ['az-nodiff'], "
+                "[arizona_template:get(b, Bindings)]})"}
+        ]
+    ).
 
 nodiff_inherited_nested_html(Config) when is_list(Config) ->
     Mod = compile_module(

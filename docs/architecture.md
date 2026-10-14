@@ -1613,6 +1613,11 @@ view receives it. A `?stateless` callback is a separate compile unit and keeps i
 `?local` under a nodiff template keeps the `az` and slot marker the client resolves it by, and
 nothing else does.
 
+A slot whose current value is a nodiff template still diffs as a slot. While it holds the same
+template (same statics) nothing is patched -- the template rendered once -- but when it switches to
+anything else, another branch or a plain value, it is replaced through its slot markers like any
+other change, so a conditional whose branch is `az-nodiff` can still leave it.
+
 The page arrives as an **opaque nested template** (`#{s := [Page], d := []}`), not iodata and not a
 binary. That is what lets a content slot splice it verbatim rather than copying and
 UTF-8-re-decoding the whole page once per layout layer. Consequences: it belongs in a content slot

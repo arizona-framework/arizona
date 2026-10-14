@@ -220,8 +220,6 @@ diff_dynamics([{undefined, _} | NR], [{undefined, _} | OR], Tail, Views) ->
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so never emit an op -- carry it forward as-is.
     diff_dynamics(NR, OR, Tail, Views);
-diff_dynamics([{Az, _} | NR], [{Az, #{diff := false}} | OR], Tail, Views) ->
-    diff_dynamics(NR, OR, Tail, Views);
 diff_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail, Views) ->
     diff_dynamics(NR, OR, Tail, Views);
 %% A stream each nested inside another template (what a `?stateless` child
@@ -398,9 +396,10 @@ diff_dynamics_v(
     %% Markerless render-once slot (raw-text element content, or az-nodiff): no
     %% comment marker to target, so skip it -- never re-evaluate, never emit an op.
     skip_dynamic(OldD, ODeps, DR, OR, DepsR, ChangedKeys, Views0);
+%% A `?local` slot belongs to the browser: never re-evaluated, never patched.
 diff_dynamics_v(
     [_Def | DR],
-    [{_Az, #{diff := false}} = OldD | OR],
+    [{_Az, #{az_local := _}} = OldD | OR],
     [ODeps | DepsR],
     ChangedKeys,
     Views0
@@ -1826,6 +1825,14 @@ make_op(Az, New, _Old) ->
 %% side carries `source` and the stored side does not -- the incremental stream
 %% path settles its snapshot without it -- so the two never compare term-equal
 %% even when they render identically.
+%% A `diff => false` value renders once. A `?local` slot is the browser's, and an
+%% az-nodiff template keeps its first render for as long as the slot still holds
+%% that template (same statics); a slot that switches to anything else -- another
+%% branch, a value -- is patched like any other, or it would freeze on that branch.
+make_ops(_Az, _New, #{az_local := _}, Tail, Views) ->
+    {Tail, Views};
+make_ops(_Az, #{s := S}, #{diff := false, s := S}, Tail, Views) ->
+    {Tail, Views};
 make_ops(
     _Az,
     #{t := ?EACH, items := Items, order := Order, template := #{f := Fp}},
@@ -1886,8 +1893,6 @@ markerless_changed([_New | NR], [_Old | OR]) ->
 %% render-once, like a root-level raw-text slot.
 diff_item_dynamics_v([], [], Views) ->
     {[], Views};
-diff_item_dynamics_v([{Az, _, _} | NR], [{Az, #{diff := false}, _} | OR], Views0) ->
-    diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{Az, Same, _} | NR], [{Az, Same, _} | OR], Views0) ->
     diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{undefined, _New, _} | NR], [{undefined, _Old, _} | OR], Views0) ->
@@ -1918,8 +1923,6 @@ diff_child_dynamics([], [], Tail) ->
 diff_child_dynamics([{undefined, _} | NR], [{undefined, _} | OR], Tail) ->
     %% Markerless render-once slot (raw-text element content): no comment
     %% marker to target, so never emit an op -- mirrors diff_dynamics/3.
-    diff_child_dynamics(NR, OR, Tail);
-diff_child_dynamics([{Az, _New} | NR], [{Az, #{diff := false}} | OR], Tail) ->
     diff_child_dynamics(NR, OR, Tail);
 diff_child_dynamics([{Az, Same} | NR], [{Az, Same} | OR], Tail) ->
     diff_child_dynamics(NR, OR, Tail);
