@@ -1973,7 +1973,7 @@ The **list -> stream** switch and every other stream **container full render** n
 `OP_TEXT`, so a stream `?each` sharing a content slot with static siblings re-renders in place
 instead of clobbering them.
 
-**Stream incremental ops are anchored to the slot span**, and one case remains refused.
+**Stream incremental ops are anchored to the slot span.**
 `insertItemEl` and `moveItemEl` resolve `slotBounds(el, az)` and place relative to the slot's
 markers when the container has them -- a tail insert goes before the closing `<!--/az-->`, a
 move-to-head after the opening one, and `keyedChildren` restricts positional indexing to the span.
@@ -1984,8 +1984,10 @@ The **marker-only** container (no element carries the slot az at all -- a stream
 root's static siblings, or in a content-slot list fragment) works the same way: `resolveOpTarget`
 resolves it through its opening marker to the enclosing element, and the markers are that
 element's direct children, so `slotBounds` finds the span and `OP_INSERT`/`OP_MOVE` place within
-it. Only a marker-resolved target whose slot cannot be delimited (no closing marker) is refused,
-with a warning, rather than appended outside the slot.
+it. Only a target whose slot cannot be delimited (an opening marker with no closing one, reached
+through the marker or through a compound slot's base element) is refused, with a warning, rather
+than appended outside the slot. Attribute ops (`OP_SET_ATTR`/`OP_REM_ATTR`) on a marker-only hit
+are refused too, at view level and inside items, since the resolved element is the slot's parent.
 
 The same holds **inside a stream item**. An item's `innerOps` resolve through the same three arms
 scoped to the item (element, compound base, marker), so a nested stream whose marker sits in a

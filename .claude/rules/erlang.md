@@ -417,9 +417,10 @@ mutating one keyed child rather than the container's whole content -- so the ful
 does not govern them. Placement is anchored to the slot span: the client
 resolves the slot's markers and inserts before the closing one (or after the opening one for a
 move-to-head), so an each sharing its container with static siblings keeps its items inside the
-slot. The remaining case is a **marker-only** container, where no element carries the slot az at
-all -- there the client refuses `?OP_INSERT`/`?OP_MOVE` (warn + skip) rather than misplace the
-node, and only the key-addressed `?OP_REMOVE`/`?OP_ITEM_PATCH` still apply.
+slot. A **marker-only** container, where no element carries the slot az at all, is placed the
+same way: the client resolves it through its opening marker to the enclosing element and places
+within the span. Only a slot whose span cannot be delimited (an opening marker with no closing
+one) is refused (warn + skip) rather than letting the node land outside the slot.
 
 **Component as an `?each` item child.** A `?stateless` descriptor **inside** an item element
 (`{li, [], [?stateless(...)]}`) renders at SSR and diffs per-item like any other item content:

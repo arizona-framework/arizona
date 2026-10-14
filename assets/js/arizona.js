@@ -906,10 +906,11 @@ function removeEl(el) {
  *   connected-but-wrong hit would need a duplicate az within one view, which the
  *   compiler prevents.) Nulls are not cached, so an element created mid-batch is
  *   found.
- * - `streams` maps a stream container to a key -> item map of its direct keyed
- *   children, built on first keyed lookup and maintained by the batch's
- *   INSERT/REMOVE ops -- an N-op reorder is O(N), not O(N^2) scans (mirrors
- *   applyListPatch's one-snapshot-per-batch shape).
+ * - `streams` is the batch's StreamCache (`newStreamCache`): key -> item maps per
+ *   container and slot span, plus the slot spans themselves, built on first
+ *   lookup and maintained by the batch's INSERT/REMOVE ops -- an N-op reorder is
+ *   O(N), not O(N^2) scans (mirrors applyListPatch's one-snapshot-per-batch
+ *   shape).
  * @param {Array<Array<*>>} ops
  */
 function applyOps(ops) {
@@ -950,9 +951,9 @@ function applyOps(ops) {
             if (found.marker && MARKER_UNSAFE_OPS.has(op[0])) {
                 // A marker-only hit is the slot's PARENT element, not the slot:
                 // it exists to give the marker-aware ops something to scan. An op
-                // that rewrites the element or places a node by container position
-                // would destroy or misplace content outside the slot -- see
-                // MARKER_UNSAFE_OPS. Refuse it as an unresolved target is refused.
+                // that rewrites that element or writes its attributes would act on
+                // content outside the slot -- see MARKER_UNSAFE_OPS. Refuse it as an
+                // unresolved target is refused.
                 console.warn(
                     `[arizona] op ${op[0]} target "${op[1]}" resolves only to a slot marker; ` +
                         `refusing an op that acts on the enclosing element`,
@@ -994,7 +995,7 @@ function applyOps(ops) {
                     dropSpans(streams);
                     break;
                 case OP.INSERT:
-                    if (found.marker && !spanOf(streams, el, az)) {
+                    if (!placeable(found, streams, el, az)) {
                         warnUnplaceable(op);
                         break;
                     }
@@ -1007,7 +1008,7 @@ function applyOps(ops) {
                     applyItemPatch(el, op[2], op[3], streams, az);
                     break;
                 case OP.MOVE:
-                    if (found.marker && !spanOf(streams, el, az)) {
+                    if (!placeable(found, streams, el, az)) {
                         warnUnplaceable(op);
                         break;
                     }
@@ -1048,10 +1049,11 @@ function applyOps(ops) {
  * Ops that act on the element they resolve to as a whole, so they cannot be
  * applied to a marker-only resolution -- whose element is the slot's PARENT, not
  * the slot. `replaceWith` / `remove` on the parent takes the slot's static
- * siblings with it, and when the parent is the live root, the whole view. The
- * server never addresses these to a marker-anchored slot (the diff emits the
- * marker-aware `?OP_TEXT`), so this is a guard against a stray op, not a
- * supported path.
+ * siblings with it, and when the parent is the live root, the whole view; an
+ * attribute write (`SET_ATTR` / `REM_ATTR`) would land on the parent, not on
+ * anything the slot owns. The server never addresses these to a marker-anchored
+ * slot (the diff emits the marker-aware `?OP_TEXT`), so this is a guard against
+ * a stray op, not a supported path -- the same rule item ops apply.
  *
  * The stream placement ops (`INSERT`, `MOVE`) are NOT here: on a marker-only hit
  * the slot's markers are direct children of the resolved parent, so
@@ -1060,7 +1062,7 @@ function applyOps(ops) {
  * unbounded tail insert would land after the slot's static siblings.
  * @type {Set<number>}
  */
-const MARKER_UNSAFE_OPS = new Set([OP.REPLACE, OP.REMOVE_NODE]);
+const MARKER_UNSAFE_OPS = new Set([OP.REPLACE, OP.REMOVE_NODE, OP.SET_ATTR, OP.REM_ATTR]);
 
 /**
  * Warn about a stream placement op whose marker-only target has no delimited slot
@@ -1072,6 +1074,24 @@ function warnUnplaceable(op) {
     console.warn(
         `[arizona] op ${op[0]} target "${op[1]}" has no slot span to place within; skipping`,
     );
+}
+
+/**
+ * Whether a stream placement op (`INSERT` / `MOVE`) can be placed in `el`. A
+ * container that owns the stream outright carries no slot markers for `az`, and
+ * places among its own keyed children. Otherwise the op needs the slot's span:
+ * a marker-only hit, or a compound slot resolved through its base element, whose
+ * opening marker has no closing one cannot be delimited, and an unbounded tail
+ * insert would land after the slot's static siblings.
+ * @param {Resolution} found
+ * @param {StreamCache|null} streams
+ * @param {Element} el
+ * @param {string} az
+ * @returns {boolean}
+ */
+function placeable(found, streams, el, az) {
+    if (spanOf(streams, el, az)) return true;
+    return !found.marker && !(az && findMarker(el, az));
 }
 
 /**
@@ -1951,7 +1971,7 @@ function applyItemOps(item, innerOps, streams = null) {
                     }
                     break;
                 case OP.INSERT:
-                    if (found.marker && !spanOf(streams, el, az)) {
+                    if (!placeable(found, streams, el, az)) {
                         warnUnplaceable(op);
                         break;
                     }
@@ -1961,7 +1981,7 @@ function applyItemOps(item, innerOps, streams = null) {
                     removeItemEl(el, op[2], streams, az);
                     break;
                 case OP.MOVE:
-                    if (found.marker && !spanOf(streams, el, az)) {
+                    if (!placeable(found, streams, el, az)) {
                         warnUnplaceable(op);
                         break;
                     }
