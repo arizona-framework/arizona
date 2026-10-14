@@ -92,6 +92,8 @@ render(Bindings) ->
 -ignore_xref([format_error/2]).
 %% Emitted by the parse transform for a conditional branch value it cannot see.
 -ignore_xref([branch/2]).
+%% Emitted by the parse transform as an az-nodiff region root's `az-region` value.
+-ignore_xref([region_token/3]).
 %% Public escape opt-out for template authors; no internal callers by design.
 -ignore_xref([raw/1]).
 %% Emitted by the parse transform around an interpolated attribute with a `?raw` part.
