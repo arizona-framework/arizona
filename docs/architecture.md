@@ -1379,7 +1379,7 @@ puts it back on the socket for the redirect; a replayable one keeps its original
 of gates replays from the first, but only when the gated navigation is the redirect it was armed
 for (a navigation that beat the follow-up frame is never rerouted through that gate). A gate that
 flashes replaces it, so the live path and the replay agree. A `fetch_flash` step that read it
-before the gate halted spends it (`arizona_req:seeded_flash_read/1`), as that read clears the
+before the gate halted spends it (`arizona_req` records that read), as that read clears the
 cookie on the 3xx. A halt without a redirect is a full load like any other, replayed or dropped
 loudly. A handler effect's flash is captured
 from a bare `navigate`/`patch` and from one a `transition` wraps (both run when the frame lands);
