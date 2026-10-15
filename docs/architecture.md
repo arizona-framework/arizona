@@ -1433,7 +1433,14 @@ Both modes resolve the target route the same way. `arizona_socket` invokes the o
 On a live route the callback returns `{ok, Handler, RouteOpts, NavReq}` -- a handler module, the
 route's static options (`t:arizona_live:route_opts/0` -- `bindings`, `on_mount`, `layouts`,
 `middlewares`), and a navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the
-returned Request are inherited from the original upgrade Req; `path`, `bindings` (path bindings
+returned Request are inherited from the original upgrade Req (rebuilt from its raw value), except
+the session cookie: when the upgrade itself wrote the session (a route middleware, flushed onto the
+`101`), `arizona_socket` replays that cookie onto the rebuilt request (`arizona_req:seed_session/2`),
+so a navigate's middlewares see what the browser now holds -- in store mode the signed id, resolved
+through the store on read, so an in-place store write or a revocation is seen as well. The replay
+is read-only (nothing re-emits or re-commits it), and it is the cookie as of connect: one the
+browser receives later (a controller fetch that rewrites it) is invisible to the socket until the
+next reconnect. `path`, `bindings` (path bindings
 from the router), and `params` reflect the new path/qs. In particular `path` is the **resolved
 route path** (the `_az_path` value), not the `/ws` transport path the WebSocket rode in on, so a
 middleware reading `arizona_req:path/1` on a navigate/upgrade sees the same logical route as a

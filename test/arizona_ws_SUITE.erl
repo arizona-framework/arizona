@@ -15,6 +15,7 @@
     ws_upgrade_halt_flushes_cookie_without_upgrading/1,
     ws_upgrade_commits_middleware_session_write/1,
     ws_upgrade_commits_middleware_session_clear/1,
+    ws_upgrade_rotated_session_reaches_navigate/1,
     navigate_non_live_path_full_navigate/1,
     event_with_effects/1,
     event_no_change/1,
@@ -223,7 +224,8 @@ groups() ->
         controller_put_req_commits_action_session_write,
         controller_without_put_req_flushes_pre_action_req,
         ws_upgrade_commits_middleware_session_write,
-        ws_upgrade_commits_middleware_session_clear
+        ws_upgrade_commits_middleware_session_clear,
+        ws_upgrade_rotated_session_reaches_navigate
     ],
     Crash = [
         crash_event_closes,
@@ -504,6 +506,26 @@ init_per_group(roadrunner, Config) ->
         }},
         {live, <<"/upgrade_logout">>, arizona_crashable, #{
             middlewares => [fun(Req, B) -> {cont, arizona_req:clear_session(Req), B} end]
+        }},
+        %% Login rotation on the upgrade, and a page gated on its result.
+        {live, <<"/upgrade_rotate">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    Rotated = arizona_req:clear_session(Req),
+                    {cont, arizona_req:put_session(Rotated, ~"user", ~"ada"), B}
+                end
+            ]
+        }},
+        {live, <<"/require_user">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req0, B) ->
+                    {Session, Req} = arizona_req:read_session(Req0),
+                    case Session of
+                        #{~"user" := _} -> {cont, Req, B};
+                        #{} -> {halt, arizona_req:redirect(Req, ~"/login")}
+                    end
+                end
+            ]
         }},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
@@ -1106,6 +1128,19 @@ ws_upgrade_commits_middleware_session_clear(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, Head),
     ?assertNotEqual(nomatch, binary:match(Head, ~"set-cookie: az_session=;")),
     ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
+
+ws_upgrade_rotated_session_reaches_navigate(Config) ->
+    %% Store mode, end to end: the upgrade rotates the session (clear then put --
+    %% the login pattern), which mints a fresh id and deletes the one the browser
+    %% sent. A navigate on that socket must resolve the rotated session, not the
+    %% deleted id in the upgrade's raw Cookie header.
+    Id = seed_stored_session(),
+    {ok, Sock} = ws_connect(Config, ~"/upgrade_rotate", [{headers, stored_session_cookie(Id)}]),
+    ?assertEqual(no_session, arizona_session_store_ets:get(Id)),
+    ok = ws_send_json(Sock, [~"navigate", #{~"path" => ~"/require_user", ~"qs" => ~""}]),
+    {text, Resp} = ws_recv(Sock),
+    ?assertMatch(#{~"o" := [[?OP_REPLACE, _, _]]}, json:decode(Resp)),
+    ws_close(Sock).
 
 %% The raw response head of a WS upgrade to the live route `Path`, sending the
 %% extra request header lines `Extra`.
@@ -2424,6 +2459,8 @@ ws_handshake(Sock, Port, Path, Opts) ->
         Key,
         "\r\n",
         "Sec-WebSocket-Version: 13\r\n",
+        %% Extra request header lines (e.g. a `Cookie:`), each ending in CRLF.
+        proplists:get_value(headers, Opts, []),
         "\r\n"
     ],
     ok = gen_tcp:send(Sock, Req),

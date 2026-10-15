@@ -88,6 +88,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([read_session/1]).
 -export([session_id/1]).
 -export([session_error/1]).
+-export([session_carry/1]).
+-export([seed_session/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -145,6 +147,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([session/0]).
 -export_type([resp_cookie_opts/0]).
 -export_type([qs/0]).
+-export_type([session_carry/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -189,6 +192,11 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -nominal cookies() :: [{binary(), binary()}].
 -nominal headers() :: #{binary() => iodata()}.
 -nominal body() :: binary().
+
+%% What a response did to the session cookie, as the browser's jar sees it once the
+%% response lands: `none` (untouched), `clear` (the cookie was cleared), or the new
+%% cookie value. See `session_carry/1`.
+-nominal session_carry() :: none | clear | {set, binary()}.
 
 %% HTTP redirect status codes (RFC 9110 §15.4). The most common are
 %% 301 (moved permanently), 302 (found), 303 (see other), 307
@@ -706,6 +714,53 @@ consume_flash(Req0) ->
 seed_flash(Req, Flash) when is_map(Flash) ->
     Current = maps:get(flash_in, Req, #{}),
     Req#{flash_in => maps:merge(Current, Flash)}.
+
+%% Internal use only -- carry plumbing for `arizona_socket`. The session cookie
+%% this request's response sets, in the terms of the browser's cookie jar once it
+%% lands: `none` when the session was not written, `clear` when it was cleared,
+%% `{set, Value}` otherwise (cookie mode: the encrypted map; store mode: the signed
+%% id). The socket takes it from the WebSocket upgrade -- the one exchange of a live
+%% session that can write the session, since the `101` carries a `Set-Cookie` -- and
+%% replays it onto every request it rebuilds for a navigate/patch (`seed_session/2`),
+%% which otherwise start from the upgrade's raw `Cookie` header and so predate the
+%% upgrade's own write. In cookie mode the value is a fresh encryption of the map
+%% the flush encrypted (the expiry a few milliseconds later); in store mode the
+%% flush already committed the entry, and this only signs its id again.
+-doc false.
+-spec session_carry(Request) -> session_carry() when
+    Request :: request().
+session_carry(Req) ->
+    case session_outcome(Req) of
+        untouched ->
+            none;
+        clear ->
+            clear;
+        {write, _SessionOut} ->
+            {_Name, Value, _Opts} = session_resp_cookie(Req),
+            {set, Value}
+    end.
+
+%% Internal use only -- applies a `session_carry/1` result to a request rebuilt
+%% from the upgrade's raw value, as the browser's jar would: the session cookie is
+%% replaced (or removed) before anything reads it, so `read_session/1` decodes it
+%% through the normal path -- in store mode that is a store lookup by the carried
+%% id, so the entry's current state (a later write under the same id, a revocation)
+%% is what a navigate sees. The request stays unwritten, so the session is never
+%% re-emitted or re-committed on its behalf. App code never calls this.
+-doc false.
+-spec seed_session(Request, Carry) -> Request when
+    Request :: request(),
+    Carry :: session_carry().
+seed_session(Req, none) ->
+    Req;
+seed_session(Req0, Carry) ->
+    {Cookies0, Req} = cookies(Req0),
+    Name = arizona_session:cookie_name(),
+    Cookies = [Cookie || {CookieName, _} = Cookie <:- Cookies0, CookieName =/= Name],
+    case Carry of
+        {set, Value} -> Req#{cookies => [{Name, Value} | Cookies]};
+        clear -> Req#{cookies => Cookies}
+    end.
 
 -doc """
 Writes `Key => Value` into the session. On the response the session serializes to a

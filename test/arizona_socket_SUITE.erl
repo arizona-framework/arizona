@@ -64,6 +64,10 @@
 -export([patch_to_crashing_handler_closes_mount_failed/1]).
 -export([navigate_halt_without_redirect_loads_full_page/1]).
 -export([crash_after_resync_mount_closes_crash/1]).
+-export([navigate_sees_session_written_at_upgrade/1]).
+-export([navigate_sees_session_cleared_at_upgrade/1]).
+-export([navigate_sees_session_rotated_at_upgrade_in_store_mode/1]).
+-export([navigate_reads_carried_store_id_live/1]).
 
 all() ->
     [
@@ -120,7 +124,11 @@ all() ->
         navigate_mount_crash_closes_mount_failed,
         patch_to_crashing_handler_closes_mount_failed,
         navigate_halt_without_redirect_loads_full_page,
-        crash_after_resync_mount_closes_crash
+        crash_after_resync_mount_closes_crash,
+        navigate_sees_session_written_at_upgrade,
+        navigate_sees_session_cleared_at_upgrade,
+        navigate_sees_session_rotated_at_upgrade_in_store_mode,
+        navigate_reads_carried_store_id_live
     ].
 
 %% A `?stateful` inside a stream item re-renders when the item updates, so the item's
@@ -1342,6 +1350,137 @@ crash_after_resync_mount_closes_crash(Config) when is_list(Config) ->
         {[], {close, 4500, ~"server crash", _}},
         logged_error(fun() -> settle(arizona_socket:handle_in(CrashFrame, Socket1), Socket1) end)
     ).
+
+%% A route middleware may write the session on the WebSocket upgrade, and the 101
+%% carries the new cookie (#844). Every navigate/patch rebuilds its request from
+%% the upgrade's RAW value, whose Cookie header predates that write, so without
+%% the carry the next navigate's middlewares read the pre-upgrade session. The
+%% carried cookie is also never re-emitted: the rebuilt request is unwritten.
+navigate_sees_session_written_at_upgrade(Config) when is_list(Config) ->
+    with_secret(fun() ->
+        Login = fun(R, B) -> {cont, arizona_req:put_session(R, ~"user", ~"ada"), B} end,
+        {H, B, ArzReq} = upgrade(#{cookies => []}, [Login]),
+        {reply, _, Socket0} = arizona_socket:init(H, B, ArzReq, #{}),
+        {reply, NavFrame, Socket1} = arizona_socket:handle_in(navigate_frame(~"/account"), Socket0),
+        ?assertMatch([[?OP_REPLACE | _]], ops(NavFrame)),
+        ?assertEqual({{ok, ~"ada"}, []}, seen()),
+        %% A same-handler patch rebuilds its request the same way.
+        %% (No ops: nothing on the page changed.)
+        {ok, _} = arizona_socket:handle_in(patch_frame(~"/account"), Socket1),
+        ?assertEqual({{ok, ~"ada"}, []}, seen())
+    end).
+
+%% The clearing leg: a session the browser held before the upgrade, which the
+%% upgrade cleared (a logout gate), must not resurface from the raw Cookie header.
+navigate_sees_session_cleared_at_upgrade(Config) when is_list(Config) ->
+    with_secret(fun() ->
+        Logout = fun(R, B) -> {cont, arizona_req:clear_session(R), B} end,
+        Cookie = arizona_session:encode(#{~"user" => ~"ada"}),
+        {H, B, ArzReq} = upgrade(#{cookies => [{~"az_session", Cookie}]}, [Logout]),
+        {reply, _, Socket0} = arizona_socket:init(H, B, ArzReq, #{}),
+        {reply, NavFrame, _} = arizona_socket:handle_in(navigate_frame(~"/account"), Socket0),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/login" | _]], effects(NavFrame)),
+        ?assertEqual({error, []}, seen())
+    end).
+
+%% Store mode with login rotation at the upgrade: clear then put mints a fresh id
+%% and the flush drops the old entry, so a navigate resolving the RAW cookie's
+%% (old) id finds nothing. The carried id resolves to the rotated session.
+navigate_sees_session_rotated_at_upgrade_in_store_mode(Config) when is_list(Config) ->
+    with_store(fun() ->
+        OldId = arizona_session:new_id(),
+        ok = arizona_session_store_ets:put(OldId, #{~"user" => ~"anon"}, 60),
+        Rotate = fun(R0, B) ->
+            R = arizona_req:put_session(arizona_req:clear_session(R0), ~"user", ~"ada"),
+            {cont, R, B}
+        end,
+        {H, B, ArzReq} = upgrade(#{cookies => [stored_cookie(OldId)]}, [Rotate]),
+        %% What the transport does on the 101 (arizona_roadrunner_resp:flush/2).
+        ok = arizona_req:commit_session(ArzReq),
+        NewId = arizona_req:session_id(ArzReq),
+        ?assertNotEqual(OldId, NewId),
+        ?assertEqual(no_session, arizona_session_store_ets:get(OldId)),
+        {reply, _, Socket0} = arizona_socket:init(H, B, ArzReq, #{}),
+        {reply, NavFrame, _} = arizona_socket:handle_in(navigate_frame(~"/account"), Socket0),
+        ?assertMatch([[?OP_REPLACE | _]], ops(NavFrame)),
+        ?assertEqual({{ok, ~"ada"}, []}, seen()),
+        %% Nothing re-committed on the navigate's behalf.
+        ?assertEqual({ok, #{~"user" => ~"ada"}}, arizona_session_store_ets:get(NewId))
+    end).
+
+%% The store-mode carry is the id, not a snapshot: a later write under the same id
+%% (a controller updating the session in place) is what the next navigate reads,
+%% and a revocation of it signs the navigate out.
+navigate_reads_carried_store_id_live(Config) when is_list(Config) ->
+    with_store(fun() ->
+        Login = fun(R, B) -> {cont, arizona_req:put_session(R, ~"user", ~"ada"), B} end,
+        {H, B, ArzReq} = upgrade(#{cookies => []}, [Login]),
+        ok = arizona_req:commit_session(ArzReq),
+        Id = arizona_req:session_id(ArzReq),
+        {reply, _, Socket0} = arizona_socket:init(H, B, ArzReq, #{}),
+        ok = arizona_session_store_ets:put(Id, #{~"user" => ~"bob"}, 60),
+        {reply, _, Socket1} = arizona_socket:handle_in(navigate_frame(~"/account"), Socket0),
+        ?assertEqual({{ok, ~"bob"}, []}, seen()),
+        ok = arizona_session_store_ets:delete(Id),
+        {reply, NavFrame, _} = arizona_socket:handle_in(navigate_frame(~"/account"), Socket1),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/login" | _]], effects(NavFrame)),
+        ?assertEqual({error, []}, seen())
+    end).
+
+%% Prepare a WebSocket upgrade to `/` running `Middlewares`, beside an `/account`
+%% route gated on a `user` session key. The gate reports what it read (and the
+%% session cookies its request would emit) to the test process -- the socket runs
+%% in it.
+upgrade(Raw, Middlewares) ->
+    Self = self(),
+    RequireUser = fun(R0, B) ->
+        {_Session, R} = arizona_req:read_session(R0),
+        User = arizona_req:get_session(R, ~"user"),
+        Self ! {seen, User, arizona_req:resp_cookies(R)},
+        case User of
+            {ok, _} -> {cont, R, B};
+            error -> {halt, arizona_req:redirect(R, ~"/login")}
+        end
+    end,
+    Routes = #{
+        ~"/" => {arizona_root_counter, #{middlewares => Middlewares}},
+        ~"/account" => {arizona_root_counter, #{middlewares => [RequireUser]}}
+    },
+    {cont, #{handler := H, bindings := B, req := ArzReq}} =
+        arizona_ws:prepare(
+            [{~"_az_path", ~"/"}],
+            arizona_req_test_adapter,
+            Raw#{headers => #{}, routes => Routes}
+        ),
+    {H, B, ArzReq}.
+
+seen() ->
+    receive
+        {seen, User, RespCookies} -> {User, RespCookies}
+    after 0 -> error(no_navigate_middleware_run)
+    end.
+
+stored_cookie(Id) ->
+    {Name, Value, _Opts} = arizona_session:set_cookie_id(Id),
+    {Name, Value}.
+
+with_secret(Fun) ->
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        Fun()
+    after
+        ok = application:unset_env(arizona, secret_key)
+    end.
+
+with_store(Fun) ->
+    ok = application:set_env(arizona, session_store, arizona_session_store_ets),
+    {ok, Store} = arizona_session_store_ets:start_link(),
+    try
+        with_secret(Fun)
+    after
+        ok = gen_server:stop(Store),
+        ok = application:unset_env(arizona, session_store)
+    end.
 
 navigate_frame(Path) ->
     iolist_to_binary(json:encode([~"navigate", #{~"path" => Path, ~"qs" => <<>>}])).
