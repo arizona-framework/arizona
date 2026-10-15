@@ -848,9 +848,10 @@ top:
 - **Drop events** → `{data_transfer: "dragged-key", drop_index: N}` -- drag data from `dataTransfer`
   and the position, among the `az-drop` container's `[az-key]` children, of the child the drop
   landed in; `-1` when it landed on the container itself (an empty column, the gap after the last
-  item). The whole container is the drop zone, so an empty one accepts a drop; outside any `az-drop`
-  container `dragover`/`drop` are not cancelled, leaving the browser's own drop (text into an
-  input) alone
+  item). The whole container is the drop zone, so an empty one accepts a drop. Only an **item drag**
+  is claimed -- one whose `dragstart` began on an `[az-key]` element in the page: any other drag (text
+  or a file dropped onto an input in the container's header, onto its blank space, or anywhere outside
+  a container) is the browser's own, and `dragover`/`drop` are left uncancelled
 - **Forms** → `new FormData(form, submitter)` as a map -- all form field values keyed by
   `name`; when the form was submitted by a named submit button, that button's `name`/`value` is
   included too (the native `FormData` submitter arg), so a form with two submit buttons reports

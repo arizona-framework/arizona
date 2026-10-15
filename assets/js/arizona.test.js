@@ -6379,7 +6379,17 @@ describe('drag-and-drop', () => {
         expect(reorderMsg[2]).toEqual({ data_transfer: 'a', drop_index: 2 });
     });
 
-    it('dragover with az-key ancestor prevents default', async () => {
+    /** Dispatch a drag event carrying `data` as its text/plain payload. */
+    function drag(type, el, data = '') {
+        const ev = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'dataTransfer', {
+            value: { getData: () => data, setData: () => {} },
+        });
+        el.dispatchEvent(ev);
+        return ev;
+    }
+
+    it('dragover with az-key ancestor prevents default during an item drag', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
         setupView(
@@ -6392,18 +6402,9 @@ describe('drag-and-drop', () => {
         mock.simulateOpen();
 
         const item = document.querySelector('[az-key="a"]');
-        const ev = new Event('dragover', { bubbles: true, cancelable: true });
-        item.dispatchEvent(ev);
-        expect(ev.defaultPrevented).toBe(true);
+        drag('dragstart', item);
+        expect(drag('dragover', item).defaultPrevented).toBe(true);
     });
-
-    /** Dispatch a drag event carrying `data` as its text/plain payload. */
-    function drag(type, el, data = '') {
-        const ev = new Event(type, { bubbles: true, cancelable: true });
-        Object.defineProperty(ev, 'dataTransfer', { value: { getData: () => data } });
-        el.dispatchEvent(ev);
-        return ev;
-    }
 
     it('an empty az-drop container accepts a drop, reported at drop_index -1', async () => {
         // A kanban column with no cards yet: no [az-key] under the pointer.
@@ -6417,6 +6418,7 @@ describe('drag-and-drop', () => {
         mock = setupMockWorker(mod);
         mock.simulateOpen();
 
+        drag('dragstart', document.querySelector('[az-key="1"]'));
         const b = document.getElementById('b');
         expect(drag('dragover', b).defaultPrevented).toBe(true);
         const ev = drag('drop', b, '1');
@@ -6441,6 +6443,7 @@ describe('drag-and-drop', () => {
         mock = setupMockWorker(mod);
         mock.simulateOpen();
 
+        drag('dragstart', document.querySelector('[az-key="1"]'));
         drag('drop', document.getElementById('inner'), '1');
         expect(mock.getSentMessages()).toEqual([
             ['page', 'moved', { data_transfer: '1', drop_index: 1 }],
@@ -6459,6 +6462,46 @@ describe('drag-and-drop', () => {
         const input = document.getElementById('in');
         expect(drag('dragover', input).defaultPrevented).toBe(false);
         expect(drag('drop', input, 'some text').defaultPrevented).toBe(false);
+        expect(mock.getSentMessages()).toEqual([]);
+    });
+
+    it('leaves a native drop alone inside an az-drop container when no item is dragged', async () => {
+        // Text or a file dropped onto an input in the container's header, or on
+        // its blank space, did not start from an [az-key] dragstart: it is the
+        // browser's drop, not a reorder.
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<div id="col" az-drop='[[0,"moved"]]'><input id="title" />
+                <div az-key="1" draggable="true">1</div></div>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const title = document.getElementById('title');
+        expect(drag('dragover', title).defaultPrevented).toBe(false);
+        expect(drag('drop', title, 'some text').defaultPrevented).toBe(false);
+        const col = document.getElementById('col');
+        expect(drag('drop', col, 'more text').defaultPrevented).toBe(false);
+        expect(mock.getSentMessages()).toEqual([]);
+    });
+
+    it('an item drag that ended does not claim a later native drop', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<div id="col" az-drop='[[0,"moved"]]'><input id="title" />
+                <div az-key="1" draggable="true">1</div></div>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const item = document.querySelector('[az-key="1"]');
+        drag('dragstart', item);
+        drag('dragend', item); // cancelled: dropped outside, or Escape
+        expect(drag('drop', document.getElementById('title'), 'text').defaultPrevented).toBe(false);
         expect(mock.getSentMessages()).toEqual([]);
     });
 });

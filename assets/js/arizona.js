@@ -3601,6 +3601,14 @@ function scanEvents(root) {
 }
 
 /**
+ * Whether an [az-key] item drag is in flight: set on its `dragstart`, cleared
+ * on `dragend` or when an az-drop claims the drop. Module-wide, not per
+ * document, so an item dragged between the main page and a popped-out view is
+ * still recognised.
+ */
+let _itemDrag = false;
+
+/**
  * Bind every delegated DOM event on `target` (a Document): the az-* event types
  * plus form submit and drag-and-drop. Called for the main document on connect,
  * and for a PiP document when a view is popped out. Page-level concerns
@@ -3646,31 +3654,46 @@ function bindDocumentEvents(target, signal, abort) {
     // Drag-and-drop: uses az-key on draggable items and az-drop on the
     // container. dragstart stores the item's key; drop executes the az-drop
     // command with auto-collected {data_transfer, drop_index} payload. The drop
-    // zone is the az-drop container itself, not its items: an empty container
-    // must accept a drop (drop_index -1), and outside any container the
-    // browser's own drop (text into an input) is left alone -- `dragover` and
-    // `drop` are cancelled only inside one.
+    // zone is the az-drop container itself, not its items, so an empty container
+    // accepts a drop (drop_index -1). Only an item drag is claimed: `dragover`
+    // and `drop` are cancelled inside a container, and only while a drag that
+    // began on an [az-key] is in flight -- a text or file drop (into an input in
+    // the container's header, onto blank space, or anywhere outside one) is the
+    // browser's own and is left alone.
     target.addEventListener(
         'dragstart',
         (e) => {
             const keyEl = /** @type {Element} */ (e.target).closest('[az-key]');
-            if (keyEl && e.dataTransfer)
+            if (keyEl && e.dataTransfer) {
                 e.dataTransfer.setData('text/plain', keyEl.getAttribute('az-key') || '');
+                _itemDrag = true;
+            }
+        },
+        { signal },
+    );
+    // Fires on the source after a drop, a cancel (Escape) or a drop outside.
+    target.addEventListener(
+        'dragend',
+        () => {
+            _itemDrag = false;
         },
         { signal },
     );
     target.addEventListener(
         'dragover',
         (e) => {
-            if (/** @type {Element} */ (e.target).closest('[az-drop]')) e.preventDefault();
+            if (_itemDrag && /** @type {Element} */ (e.target).closest('[az-drop]'))
+                e.preventDefault();
         },
         { signal },
     );
     target.addEventListener(
         'drop',
         (e) => {
+            if (!_itemDrag) return;
             const container = /** @type {Element} */ (e.target).closest('[az-drop]');
             if (!container) return;
+            _itemDrag = false;
             e.preventDefault();
             if (!_connected) return;
             const raw = container.getAttribute('az-drop');
@@ -4112,6 +4135,7 @@ function connect(endpoint, params = {}) {
         cancelMountReload();
         _pendingScroll = null;
         _pendingTransition = null;
+        _itemDrag = false;
         _connectQs = '';
         _savedForms.clear();
         // Close any floating (PiP) view windows; each window's pagehide handler

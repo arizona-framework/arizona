@@ -1205,6 +1205,21 @@ test.describe('SPA navigation', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('drag-and-drop reorder', () => {
+    test('reorder by dragging an item onto another', async ({ page }) => {
+        // A real HTML5 drag: dragstart on the item marks an item drag, so the
+        // container claims the drop and pushes reorder_todo.
+        await page.goto('/');
+        await wsReady(page);
+        await addTodoBtn(page).click();
+        await addTodoBtn(page).click();
+        await addTodoBtn(page).click();
+        await expect(todoItems(page)).toHaveCount(3);
+
+        await todoInput(page, '1').dragTo(todoInput(page, '3'));
+        await expect(todoItems(page).nth(2)).toHaveAttribute('az-key', '1');
+        await expect(todoItems(page).nth(0)).toHaveAttribute('az-key', '2');
+    });
+
     test('reorder via WebSocket message', async ({ page }) => {
         await page.goto('/');
         await wsReady(page);
