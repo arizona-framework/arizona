@@ -221,6 +221,20 @@ describe('navigate page-swap window', () => {
         expect(events()).toEqual([]);
     });
 
+    it('a dropped event is reported by name, not silently', async () => {
+        await connected();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        navigate('/next');
+        click();
+        expect(events()).toEqual([]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('"bump"'));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('navigate'));
+        // The payload never reaches the log (it may carry form fields).
+        warn.mockClear();
+        mod.pushEvent('secretive', { password: 'hunter2' });
+        expect(warn.mock.calls.flat().join(' ')).not.toContain('hunter2');
+    });
+
     it('back-to-back navigates keep the window open until the last reply', async () => {
         await connected();
         navigate('/a');

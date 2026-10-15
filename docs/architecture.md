@@ -1777,9 +1777,11 @@ full-page navigate effect (the server kept the old view) -- exactly as a full pa
 redirect reply is itself a navigate and re-arms. The window counts navigates in flight, so
 back-to-back navigates keep it open until the last reply (the server answers each navigate frame
 once, in order); an old-page push carrying a navigate effect ahead of the reply is
-indistinguishable from a reply and settles one early. A `patch` does not arm the window: it usually
-keeps the view, and the client cannot know ahead that the server will degrade a cross-handler patch
-to a replace, so that case keeps the window. The native clients (Android/iOS) do not gate yet.
+indistinguishable from a reply and settles one early, as is the `OP_REPLACE` of a patch the server
+degrades to a replace while a navigate is in flight. A dropped event is logged by name. A `patch`
+does not arm the window: it usually keeps the view, and the client cannot know ahead that the
+server will degrade a cross-handler patch to a replace, so that case keeps the window. The native
+clients (Android/iOS) do not gate yet.
 
 **SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS
 sends `["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for

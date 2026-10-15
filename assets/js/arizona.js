@@ -543,10 +543,18 @@ let _pendingTransition = null;
 // (`settleNavReplies`). A close loses every reply still owed: the count moves to
 // `_navAwaitResync`, which the reconnect's resync `OP_REPLACE` clears.
 //
-// Residual: a navigate effect in an old-page push frame (a timer redirect) that
-// lands ahead of the reply is indistinguishable from a reply on the wire, so it
-// settles one navigate early. A patch does not arm: it usually keeps the view,
-// and the client cannot know ahead that the server will degrade it to a replace.
+// There is no timeout escape hatch, on purpose: every server answer to a navigate
+// frame (replace, redirect, full load) settles it, and a crash closes the socket,
+// which hands over to the resync. A server change that could leave a navigate
+// frame unanswered must add one, or the page stops sending events.
+//
+// Residuals, both where the wire carries no reply id: a navigate effect in an
+// old-page push frame (a timer redirect) that lands ahead of the reply settles
+// one navigate early; so does the `OP_REPLACE` of a patch the server degrades to
+// a replace (a cross-handler patch) while a navigate is in flight, letting a
+// stale click through before the navigate's own reply. A patch does not arm:
+// it usually keeps the view, and the client cannot know ahead that the server
+// will degrade it.
 let _navInFlight = 0;
 let _navAwaitResync = false;
 // Bumped per armed navigate, so a send scheduled before it (a debounced or
@@ -556,11 +564,20 @@ let _navEpoch = 0;
 /**
  * Send a view event unless it was raised on a page a navigate is replacing.
  * Framework frames (navigate, patch, cached_fps, ping) do not come through here.
+ * A drop is reported, like the worker's socket-down drop: silence would read as
+ * a handler that never fired. By event name only -- the payload may carry the
+ * auto-collected form fields.
+ * @param {string} name event name, for the warning
  * @param {string} msg encoded `[target, event, payload]` frame
  * @param {number} [epoch] `_navEpoch` when the event was raised
  */
-function sendEvent(msg, epoch = _navEpoch) {
-    if (_navInFlight > 0 || _navAwaitResync || epoch !== _navEpoch) return;
+function sendEvent(name, msg, epoch = _navEpoch) {
+    if (_navInFlight > 0 || _navAwaitResync || epoch !== _navEpoch) {
+        console.warn(
+            `[arizona] dropped event "${name}": a navigate is replacing the page it came from`,
+        );
+        return;
+    }
     workerPost(W_SEND, msg);
 }
 
@@ -784,7 +801,7 @@ function mountHook(el) {
     instance.__name = name;
     /** @param {string} eventName @param {*} payload */
     instance.pushEvent = (eventName, payload) => {
-        sendEvent(JSON.stringify([resolveTarget(el), eventName, payload || {}]));
+        sendEvent(eventName, JSON.stringify([resolveTarget(el), eventName, payload || {}]));
     };
     _hooks.set(el, instance);
     if (def.mounted) runHookCallback(instance, def.mounted, 'mounted');
@@ -2464,7 +2481,7 @@ function pushEvent(event, payload) {
  * @param {*} [payload]
  */
 function pushEventTo(view, event, payload) {
-    sendEvent(JSON.stringify([view ?? null, event, payload]));
+    sendEvent(event, JSON.stringify([view ?? null, event, payload]));
 }
 
 /**
@@ -2741,10 +2758,10 @@ function execOne(el, event, cmd) {
             if (event) {
                 const epoch = _navEpoch;
                 scheduleSend(el, event, () => {
-                    sendEvent(msg, epoch);
+                    sendEvent(evt, msg, epoch);
                 });
             } else {
-                sendEvent(msg);
+                sendEvent(evt, msg);
             }
             break;
         }
