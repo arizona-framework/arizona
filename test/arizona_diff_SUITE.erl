@@ -71,6 +71,8 @@
     diff_stream_child_views_follow_drop_eviction/1,
     diff_stream_child_views_follow_window/1,
     diff_stream_child_views_keep_reinserted_key/1,
+    diff_stream_child_views_follow_item_render/1,
+    diff_nested_stream_child_views_follow_items/1,
     diff_stream_among_siblings_child_view_uses_text_op/1,
     diff_text_op/1,
     no_diff_diff3/1,
@@ -216,6 +218,8 @@ groups() ->
             diff_stream_child_views_follow_drop_eviction,
             diff_stream_child_views_follow_window,
             diff_stream_child_views_keep_reinserted_key,
+            diff_stream_child_views_follow_item_render,
+            diff_nested_stream_child_views_follow_items,
             diff_stream_among_siblings_child_view_uses_text_op,
             diff_only_changed_emits_ops,
             diff_bool_attr_add,
@@ -1193,6 +1197,55 @@ diff_stream_child_views_keep_reinserted_key(Config) when is_list(Config) ->
             arizona_stream:insert(arizona_stream:delete(S, ~"a"), #{id => ~"a"})
         end)
     ).
+
+%% A kept item whose new render no longer holds its child drops that child.
+diff_stream_child_views_follow_item_render(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) ->
+            arizona_stream:update(S, ~"a", #{id => ~"a", on => false})
+        end)
+    ).
+
+%% A stream nested in a stream item: its children follow its items too.
+diff_nested_stream_child_views_follow_items(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-g-b"],
+        nested_stream_child_view_ids([~"a", ~"b"], #{}, fun(S) ->
+            arizona_stream:delete(S, ~"a")
+        end)
+    ),
+    ?assertEqual(
+        [],
+        nested_stream_child_view_ids([~"a", ~"b"], #{}, fun(S) -> arizona_stream:reset(S, []) end)
+    ),
+    ?assertEqual(
+        [~"c-g-b"],
+        nested_stream_child_view_ids([~"a"], #{limit => 1, on_limit => drop}, fun(S) ->
+            arizona_stream:insert(S, #{id => ~"b"})
+        end)
+    ),
+    ?assertEqual(
+        [~"c-g-b"],
+        nested_stream_child_view_ids([~"a"], #{limit => 1}, fun(S) ->
+            arizona_stream:insert(S, #{id => ~"b"}, 0)
+        end)
+    ).
+
+%% Mutate the inner stream of `arizona_stream_nested_lifecycle_root`'s one group
+%% and return the view ids the dependency-aware diff keeps, sorted.
+nested_stream_child_view_ids(Keys, Opts, Mutate) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Inner = arizona_stream:new(KeyFun, [#{id => K} || K <- Keys], Opts),
+    G0 = arizona_stream:new(KeyFun, [#{id => ~"g", inner => Inner}]),
+    B = #{id => ~"snl", notify => self()},
+    T0 = arizona_stream_nested_lifecycle_root:render(B#{groups => G0}),
+    {_HTML, Snap0, Views0} = arizona_render:render(T0, #{}),
+    G1 = arizona_stream:update(G0, ~"g", #{id => ~"g", inner => Mutate(Inner)}),
+    T1 = arizona_stream_nested_lifecycle_root:render(B#{groups => G1}),
+    {_Ops, _Snap1, Views1} = arizona_diff:diff(T1, Snap0, Views0, #{groups => true}),
+    ok = flush_child_lifecycle(),
+    lists:sort(maps:keys(Views1)).
 
 %% Mutate the stream of `arizona_stream_lifecycle_root` and return the view ids
 %% the dependency-aware diff keeps, sorted.

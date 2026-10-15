@@ -4,9 +4,10 @@
 -export([render/1]).
 -export([handle_event/3]).
 
-%% A stream whose items each embed `arizona_stream_lifecycle_child`. Each event
-%% takes items out of (or back into) the visible window through a different
-%% stream API, so a suite can assert the item children follow.
+%% A stream whose items each embed `arizona_stream_lifecycle_child` while their
+%% `on` field is true (the default). Each event takes items, or an item's child,
+%% out of (or back into) the visible window through a different stream API, so a
+%% suite can assert the item children follow.
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
@@ -27,11 +28,16 @@ render(Bindings) ->
         {'div', [{id, ?get(id)}], [
             {ul, [], [
                 ?each(
-                    fun(_Item, Key) ->
+                    fun(Item, Key) ->
                         {li, [{az_key, Key}], [
-                            ?stateful(arizona_stream_lifecycle_child, #{
-                                id => <<"c-", Key/binary>>, notify => ?get(notify)
-                            })
+                            case arizona_template:get(on, Item, true) of
+                                true ->
+                                    ?stateful(arizona_stream_lifecycle_child, #{
+                                        id => <<"c-", Key/binary>>, notify => ?get(notify)
+                                    });
+                                false ->
+                                    ~"off"
+                            end
                         ]}
                     end,
                     ?get(items)
@@ -55,6 +61,8 @@ handle_event(~"reset", #{~"ids" := Ids}, #{items := S} = Bindings) ->
     {Bindings#{items => arizona_stream:reset(S, [#{id => K} || K <- Ids])}, #{}, []};
 handle_event(~"renew", #{~"ids" := Ids}, Bindings) ->
     {Bindings#{items => arizona_stream:new(fun key/1, [#{id => K} || K <- Ids])}, #{}, []};
+handle_event(~"switch_off", #{~"id" := Id}, #{items := S} = Bindings) ->
+    {Bindings#{items => arizona_stream:update(S, Id, #{id => Id, on => false})}, #{}, []};
 handle_event(~"sort_desc", _Payload, #{items := S} = Bindings) ->
     Desc = fun(#{id := A}, #{id := B}) -> A >= B end,
     {Bindings#{items => arizona_stream:sort(S, Desc)}, #{}, []}.

@@ -286,6 +286,14 @@ maybe_make_ops(Az, New, Old, Tail, Views) ->
 %% on it answers `stale`, for the caller to reconcile against `New` instead. Items
 %% that read no binding render from their item alone, which the queue does account
 %% for, so they skip the comparison.
+%%
+%% A render that holds child views is never drained: the drain renders the items
+%% the queued ops touch a second time, and each `?stateful` among them would run
+%% `mount/1` (or `handle_update/3`) again, discarding the instance the first render
+%% made without unmounting it. It answers `stale`, so the caller reconciles against
+%% `New`, which renders nothing.
+nested_drain(_Az, #{child_views := ChildViews}, _Old, _Views0) when map_size(ChildViews) > 0 ->
+    stale;
 nested_drain(Az, #{source := Src, template := Tmpl} = New, Old, Views0) ->
     {StreamOps, Drained, Views1} =
         diff_stream(Az, #{source => Src, template => Tmpl}, Old, Views0),

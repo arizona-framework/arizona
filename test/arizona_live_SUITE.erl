@@ -116,6 +116,12 @@
     stream_child_unmounted_on_window_push_out/1,
     stream_child_unmounted_on_sort_push_out/1,
     stream_child_reinserted_stays_mounted_once/1,
+    stream_child_unmounted_on_item_switch_off/1,
+    nested_stream_child_unmounted_on_delete/1,
+    nested_stream_child_mounted_once_on_insert/1,
+    nested_stream_child_unmounted_on_reset/1,
+    nested_stream_child_unmounted_on_drop_eviction/1,
+    nested_stream_child_unmounted_on_window_push_out/1,
     on_mount_transforms_bindings/1,
     on_mount_works_on_navigate/1,
     on_mount_empty_is_noop/1,
@@ -248,7 +254,13 @@ groups() ->
             stream_child_unmounted_on_drop_eviction,
             stream_child_unmounted_on_window_push_out,
             stream_child_unmounted_on_sort_push_out,
-            stream_child_reinserted_stays_mounted_once
+            stream_child_reinserted_stays_mounted_once,
+            stream_child_unmounted_on_item_switch_off,
+            nested_stream_child_unmounted_on_delete,
+            nested_stream_child_mounted_once_on_insert,
+            nested_stream_child_unmounted_on_reset,
+            nested_stream_child_unmounted_on_drop_eviction,
+            nested_stream_child_unmounted_on_window_push_out
         ]},
         {on_mount, [parallel], [
             on_mount_transforms_bindings,
@@ -1939,18 +1951,83 @@ stream_child_reinserted_stays_mounted_once(Config) when is_list(Config) ->
         stream_lifecycle_event(Pid, ~"delete", #{~"id" => ~"a"})
     ).
 
-start_stream_lifecycle(Init) ->
-    {ok, Pid} = arizona_live:start_link(
-        arizona_stream_lifecycle_root, Init#{notify => self()}, undefined, []
+%% A child that its item stops rendering -- the item is kept, but a conditional in
+%% it switches the child off -- unmounts like one whose item left.
+stream_child_unmounted_on_item_switch_off(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual(
+        [{child_unmounted, ~"c-a"}],
+        stream_lifecycle_event(Pid, ~"switch_off", #{~"id" => ~"a"})
+    ).
+
+%% The same lifecycle for a stream nested in a stream item
+%% (`arizona_stream_nested_lifecycle_root`): the outer item is updated with its
+%% inner stream changed, and the inner items' children follow them.
+nested_stream_child_unmounted_on_delete(Config) when is_list(Config) ->
+    Pid = start_nested_lifecycle(#{}),
+    ?assertEqual(
+        [{child_unmounted, ~"c-g-a"}],
+        nested_lifecycle_event(Pid, ~"delete", #{~"id" => ~"a"})
+    ).
+
+nested_stream_child_mounted_once_on_insert(Config) when is_list(Config) ->
+    Pid = start_nested_lifecycle(#{}),
+    ?assertEqual(
+        [{child_mounted, ~"c-g-c"}],
+        nested_lifecycle_event(Pid, ~"insert", #{~"id" => ~"c"})
+    ).
+
+nested_stream_child_unmounted_on_reset(Config) when is_list(Config) ->
+    Pid = start_nested_lifecycle(#{}),
+    ?assertEqual(
+        [{child_mounted, ~"c-g-c"}, {child_unmounted, ~"c-g-a"}],
+        nested_lifecycle_event(Pid, ~"reset", #{~"ids" => [~"b", ~"c"]})
     ),
+    ?assertEqual(
+        [{child_unmounted, ~"c-g-b"}, {child_unmounted, ~"c-g-c"}],
+        nested_lifecycle_event(Pid, ~"reset", #{~"ids" => []})
+    ).
+
+nested_stream_child_unmounted_on_drop_eviction(Config) when is_list(Config) ->
+    Pid = start_nested_lifecycle(#{keys => [~"a"], opts => #{limit => 1, on_limit => drop}}),
+    ?assertEqual(
+        [{child_mounted, ~"c-g-b"}, {child_unmounted, ~"c-g-a"}],
+        nested_lifecycle_event(Pid, ~"insert", #{~"id" => ~"b"})
+    ).
+
+nested_stream_child_unmounted_on_window_push_out(Config) when is_list(Config) ->
+    Pid = start_nested_lifecycle(#{keys => [~"a"], opts => #{limit => 1}}),
+    ?assertEqual(
+        [{child_mounted, ~"c-g-b"}, {child_unmounted, ~"c-g-a"}],
+        nested_lifecycle_event(Pid, ~"insert_at", #{~"id" => ~"b", ~"pos" => 0})
+    ),
+    ?assertEqual(
+        [{child_mounted, ~"c-g-a"}, {child_unmounted, ~"c-g-b"}],
+        nested_lifecycle_event(Pid, ~"delete", #{~"id" => ~"b"})
+    ).
+
+start_stream_lifecycle(Init) ->
+    start_lifecycle(arizona_stream_lifecycle_root, Init).
+
+start_nested_lifecycle(Init) ->
+    start_lifecycle(arizona_stream_nested_lifecycle_root, Init).
+
+start_lifecycle(Handler, Init) ->
+    {ok, Pid} = arizona_live:start_link(Handler, Init#{notify => self()}, undefined, []),
     {ok, _, _} = arizona_live:mount(Pid),
     [_ | _] = lifecycle_messages(),
     Pid.
 
+stream_lifecycle_event(Pid, Event, Payload) ->
+    lifecycle_event(Pid, ~"slr", Event, Payload).
+
+nested_lifecycle_event(Pid, Event, Payload) ->
+    lifecycle_event(Pid, ~"snl", Event, Payload).
+
 %% Mounts (which run during the diff) before unmounts (which run after it), each
 %% sorted: `arizona_live` walks the removed views in map order.
-stream_lifecycle_event(Pid, Event, Payload) ->
-    {ok, _Ops, _Effects, _} = arizona_live:handle_event(Pid, ~"slr", Event, Payload),
+lifecycle_event(Pid, ViewId, Event, Payload) ->
+    {ok, _Ops, _Effects, _} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
     Msgs = lifecycle_messages(),
     lists:sort([M || {child_mounted, _} = M <- Msgs]) ++
         lists:sort([M || {child_unmounted, _} = M <- Msgs]).
