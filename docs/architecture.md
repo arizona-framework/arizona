@@ -2881,6 +2881,12 @@ fall to the `Other` clause and pass through untouched, so an operator-supplied l
 _}` sitting inside a route's `bindings`/`state` is never rewritten. Resolution is idempotent, so
 resolving in `start/2` is safe even if a caller already resolved.
 
+The flip side is that `env` is a **reserved tag**: a reference is recognised by shape alone, so a
+proplist pair that merely happens to be keyed `env` (`{env, "production"}` among a listener's
+options) is read as a reference to the variable `production` -- substituted when it is set, and
+raising `env_not_set` when it is not. That message says `{env, _}` is the reference form, so a
+hijacked pair is diagnosable; the fix is to key the option something else.
+
 ## MCP server
 
 An Arizona app exposes a Model Context Protocol (MCP) server to AI agents (Claude Code, Cursor,

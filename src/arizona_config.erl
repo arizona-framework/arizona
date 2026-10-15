@@ -60,6 +60,16 @@ descend into tuples of three or more elements: route tuples (`{live, Path,
 Handler, Opts}` and friends) pass through untouched, so an operator-supplied
 `{env, _, _}` term sitting inside a route's `bindings`/`state` is never rewritten.
 
+## `env` is a reserved tag
+
+Because 2-tuples are descended into, the reference forms are recognised by
+shape alone: anywhere in the resolved config, `{env, String}` and
+`{env, String, Default}` **are** env-var references. A proplist pair that merely
+happens to be keyed `env` (`{env, "production"}` among a listener's options) is
+read as a reference to the variable `production` -- substituted when that
+variable is set, and raising `env_not_set` when it is not (the message names
+this collision). Do not use `env` as a key for a string value in the `arizona`
+config; spell such an option under another key.
 """.
 
 %% --------------------------------------------------------------------
@@ -147,8 +157,11 @@ format_error({env_not_set, Var}, _ST) ->
         general =>
             io_lib:format(
                 "required environment variable ~ts is not set; either export it or "
-                "declare a default with `{env, ~tp, Default}`",
-                [Var, Var]
+                "declare a default with `{env, ~tp, Default}`. `env` is a reserved tag "
+                "in arizona config: any `{env, String}` term, including a proplist pair "
+                "keyed `env`, is read as an environment-variable reference -- if `{env, ~tp}` "
+                "was meant as a plain option value, put it under another key",
+                [Var, Var, Var]
             )
     };
 format_error({unsupported_default, Var, Default}, _ST) ->
