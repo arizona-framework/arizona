@@ -3488,7 +3488,8 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
     case each_body_unwrap(LastExpr, Backend) of
         {compiled, Map} ->
             build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, Map);
-        {element, ElemAST} ->
+        {element, ElemAST0} ->
+            ElemAST = unwrap_one_root_list(Kind, ElemAST0),
             Classification = classify_body(ElemAST),
             ok = validate_each_body(Kind, Classification, ElemAST),
             %% The per-item template compiles in the content context its `?each`
@@ -3503,6 +3504,17 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
     end.
+
+%% A keyed body written as a one-element list (`[{li, [{az_key, K}], [I]}]`) is a single
+%% root in a list wrapper: unwrapped like a whole-body `?html`, so it compiles to the
+%% same per-item template as the bare element instead of tripping the multi-root check.
+unwrap_one_root_list(stream, {cons, _, Elem, {nil, _}} = Body) ->
+    case is_element_tuple(Elem) of
+        true -> Elem;
+        false -> Body
+    end;
+unwrap_one_root_list(_Kind, Body) ->
+    Body.
 
 %% A single-root list item (one top-level element per item, the `element_tuple`
 %% classification) lets the diff address items by DOM-order position between the
@@ -3616,8 +3628,14 @@ validate_each_body(stream, Classification, LastExpr) when
 ->
     %% Keyed ops (OP_REMOVE/OP_MOVE/OP_INSERT/OP_ITEM_PATCH) address an item by the one
     %% element carrying its `az-key`, so a sibling root (another element, or text) is
-    %% left behind on a delete and out of order on a move.
-    parse_error(each_stream_body_multi_root, anno(LastExpr));
+    %% left behind on a delete and out of order on a move. A list with no element at
+    %% all (empty, or values only) is the not-an-element mistake instead.
+    Reason =
+        case lists:any(fun is_markup_item/1, ast_list_to_list(LastExpr)) of
+            true -> each_stream_body_multi_root;
+            false -> each_stream_body_not_element
+        end,
+    parse_error(Reason, anno(LastExpr));
 validate_each_body(Kind, list_ast, LastExpr) ->
     %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
     %% ?html/?native/?terminal map literal) or a ?stateful/?stateless descriptor: those land
