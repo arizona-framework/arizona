@@ -243,8 +243,8 @@ diff_dynamics(
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
     {Old0, New0} = Views1,
     case stream_drainable(Src, Old) andalso nested_drain(Az, New, Old, {Old0, #{}}) of
-        {drained, StreamOps, {_, LocalNew}} ->
-            LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
+        {drained, StreamOps, Drained, {_, LocalNew}} ->
+            LocalNew1 = merge_stream_child_views(Old, Drained, LocalNew, Old0),
             %% A drain takes no tail. Threading one through every stream helper
             %% would buy this site alone: the other two stream containers drain
             %% BEFORE their siblings, so they have no tail to hand it.
@@ -286,11 +286,19 @@ maybe_make_ops(Az, New, Old, Tail, Views) ->
 %% on it answers `stale`, for the caller to reconcile against `New` instead. Items
 %% that read no binding render from their item alone, which the queue does account
 %% for, so they skip the comparison.
+%%
+%% A render that holds child views is never drained: the drain renders the items
+%% the queued ops touch a second time, and each `?stateful` among them would run
+%% `mount/1` (or `handle_update/3`) again, discarding the instance the first render
+%% made without unmounting it. It answers `stale`, so the caller reconciles against
+%% `New`, which renders nothing.
+nested_drain(_Az, #{child_views := ChildViews}, _Old, _Views0) when map_size(ChildViews) > 0 ->
+    stale;
 nested_drain(Az, #{source := Src, template := Tmpl} = New, Old, Views0) ->
     {StreamOps, Drained, Views1} =
         diff_stream(Az, #{source => Src, template => Tmpl}, Old, Views0),
     case drain_matches_render(Drained, New) of
-        true -> {drained, StreamOps, Views1};
+        true -> {drained, StreamOps, Drained, Views1};
         false -> stale
     end.
 
@@ -496,7 +504,7 @@ changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1) ->
 %% stays dependent on a binding read only inside the `?each` callback.
 diff_each(
     Az,
-    #{source := #stream{} = Source, template := Tmpl} = EachDesc,
+    #{source := #stream{}, template := Tmpl} = EachDesc,
     Deps,
     Old,
     DR,
@@ -524,7 +532,7 @@ diff_each(
             true -> DrainDeps;
             false -> maps:merge(OldItemDeps, DrainDeps)
         end,
-    LocalNew1 = merge_stream_child_views(Source, Old, LocalNew, Old0),
+    LocalNew1 = merge_stream_child_views(Old, NewSnap0, LocalNew, Old0),
     NewSnap = NewSnap0#{
         child_views => arizona_eval:child_view_set(LocalNew1), item_deps => ItemDeps
     },
@@ -621,25 +629,108 @@ append_ops(Ops, []) ->
 append_ops(Ops, Tail) ->
     Ops ++ Tail.
 
-%% Incremental stream child_views: old - deleted + rendered.
+%% Stream child views after a drain: the children of the items the client still
+%% holds, which is exactly the drained snapshot's `items` -- the drain keeps it in
+%% step with the DOM. Deriving it from the queued `delete` ops instead missed every
+%% other way an item leaves: a `reset/2`, a fresh stream bound over the slot, a
+%% `drop` eviction, a sort or insert pushing it out of a `limit` window. Its child
+%% then stayed in the views map, so `arizona_live` never unmounted it.
 %%
-%% A stream holding no child views -- items of plain markup, which most streams are --
-%% has nothing to carry: removing deleted keys from an empty set leaves it empty, and
-%% carrying an empty set leaves `LocalNew` exactly as it is. Settling that from the set
-%% skips naming the deleted item children, and naming them means draining the stream's
-%% ENTIRE pending queue (`pending_ops/1`, not the undrained suffix) into a list and
-%% walking it. A stream nested inside another value is never cleared, so that queue
-%% holds one op per mutation for the life of the view -- the walk grew with the
-%% session while the answer stayed `LocalNew`.
-merge_stream_child_views(Source, Old, LocalNew, Old0) ->
+%% Worked out as the old stream's live views minus what the drain took away, plus
+%% what it rendered. Taken away is every view an old item reached through a value
+%% that is no longer there as it was: the item left, or the drain re-evaluated that
+%% value. A value the drain kept is the same term, so an unchanged item costs one
+%% comparison and is never walked. A re-evaluated value's views, if it still holds
+%% them, are back in `LocalNew` with their fresh subtrees, so subtracting the old
+%% subtree also drops a grandchild the new render no longer reaches.
+%%
+%% The old views are taken through `live_subtree/2`, not straight from the
+%% recorded set: a grandchild a child rendered on its own event is recorded on no
+%% container, and carrying the set verbatim dropped it.
+%%
+%% `LocalNew` is the whole answer, with nothing carried, when no old value was
+%% kept as it was: a stream that held no child views, an old slot that held a list
+%% rather than a stream, or a drain that took every old value -- what reconciling a
+%% nested stream does, since its items were all evaluated again.
+merge_stream_child_views(Old, #{items := Items}, LocalNew, Old0) ->
     case Old of
-        #{child_views := OldChildViews} when map_size(OldChildViews) > 0 ->
-            #{items := OldItems} = Old,
-            Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
-            carry_item_children(maps:without(Deleted, OldChildViews), Old0, LocalNew);
+        #{child_views := OldChildViews, items := OldItems} when
+            map_size(OldChildViews) > 0, is_map(OldItems)
+        ->
+            case taken_views(maps:iterator(OldItems), Items, {[], false}) of
+                {_Taken, false} ->
+                    LocalNew;
+                {Taken, true} ->
+                    Carried = live_subtree(OldChildViews, Old0),
+                    maps:merge(
+                        without_stale(stale_views(Taken, LocalNew, Old0), Carried, Old0), LocalNew
+                    )
+            end;
         #{} ->
             LocalNew
     end.
+
+without_stale([], Carried, _Old0) ->
+    Carried;
+without_stale(Stale, Carried, Old0) ->
+    maps:without(maps:keys(live_subtree(maps:from_keys(Stale, true), Old0)), Carried).
+
+%% The views old items reached through values the drain did not keep as they were,
+%% and whether it kept any old value as it was.
+taken_views(Iter, Items, {Taken, AnyKept} = Acc) ->
+    case maps:next(Iter) of
+        none ->
+            Acc;
+        {Key, OldD, Iter1} ->
+            case Items of
+                #{Key := OldD} ->
+                    taken_views(Iter1, Items, {Taken, true});
+                #{Key := NewD} ->
+                    taken_views(Iter1, Items, changed_value_views(OldD, NewD, Acc));
+                #{} ->
+                    taken_views(Iter1, Items, {item_views(OldD, Taken), AnyKept})
+            end
+    end.
+
+%% The roots of the subtrees to subtract: a taken view the drain did not render
+%% again, and the old descendants of every view it did. A re-rendered view's own
+%% entry, and every descendant its new render still reaches, are in `LocalNew` and
+%% win the merge anyway, so only what lies below it needs naming -- and most such
+%% views are leaves, which name nothing.
+%%
+%% Every view the drain rendered, not only the taken ones: a value can be kept
+%% (equal to the stored one) while the view in it was re-rendered. A child that
+%% rendered a grandchild on its own event leaves the stream's stored copy of it
+%% behind, and a later update that drops the grandchild renders a value equal to
+%% that stale copy, so nothing is taken while the grandchild is gone.
+stale_views(Taken, LocalNew, Old0) ->
+    [View || View <- Taken, not is_map_key(View, LocalNew)] ++
+        [Id || View := _ <- LocalNew, Id <- old_descendants(View, Old0)].
+
+old_descendants(View, Old0) ->
+    case Old0 of
+        #{View := #{snapshot := #{child_views := ChildIds}}} -> maps:keys(ChildIds);
+        #{} -> []
+    end.
+
+%% A kept value counts as keeping something only when it holds a view: an item's
+%% attribute or text slot is kept far more often than not, and counting it would
+%% send every reconcile down the carrying path.
+changed_value_views(
+    [{_Az, V, _Deps} | OldRest], [{_NewAz, V, _NewDeps} | NewRest], {Taken, AnyKept}
+) ->
+    changed_value_views(OldRest, NewRest, {Taken, AnyKept orelse value_views(V, []) =/= []});
+changed_value_views([{_Az, V, _Deps} | OldRest], [_New | NewRest], {Taken, AnyKept}) ->
+    changed_value_views(OldRest, NewRest, {value_views(V, Taken), AnyKept});
+changed_value_views(OldD, _NewD, {Taken, AnyKept}) ->
+    {item_views(OldD, Taken), AnyKept}.
+
+item_views(ItemD, Acc) ->
+    [Id || {_Az, V, _Deps} <:- ItemD, Id <- value_views(V, [])] ++ Acc.
+
+value_views(#{view_id := VId}, Acc) -> [VId | Acc];
+value_views(#{child_views := ChildIds}, Acc) -> maps:keys(ChildIds) ++ Acc;
+value_views(_V, Acc) -> Acc.
 
 -doc """
 Carries a skipped value's child views (and their live subtrees) from the old
@@ -749,29 +840,6 @@ expand_uncovered(Missing, Rest, Old, Acc) ->
     Acc1 = expand_subtree(Missing, Old, maps:merge(Acc, maps:with(Missing, Old))),
     expand_subtree(Rest, Old, Acc1).
 
-%% Extract child view IDs from deleted stream items only. The result is
-%% only ever `maps:without/2`'s key list (`OldChildViews` minus these), so
-%% neither order nor duplicates matter -- safe to use a flat comp instead of
-%% a fold-with-prepend.
-deleted_item_children(PendingOps, OldItems) ->
-    [
-        VId
-     || {delete, Key} <- PendingOps,
-        {_Az, #{view_id := VId}, _Deps} <-
-            case OldItems of
-                #{Key := ItemD} -> ItemD;
-                #{} -> []
-            end
-    ].
-
-%% Copy child views from OldViews to NewViews for children not already present.
-%% `maps:intersect/2` takes its values from the SECOND map, so this is
-%% `maps:with(maps:keys(ChildViewIds), Old)` without materializing the key list
-%% -- and it iterates whichever map is smaller. `New` is merged on top so a
-%% freshly rendered child always beats the carried-over copy of itself.
-carry_item_children(ChildViewIds, Old, New) ->
-    maps:merge(maps:intersect(ChildViewIds, Old), New).
-
 -doc """
 Returns `true` when any key in `ChangedKeys` appears in `Deps`. Used by
 `diff/4` and the per-item skipping renderer to decide whether a dynamic
@@ -862,7 +930,7 @@ stream_full_render(Az, Source, Tmpl, Views0) ->
 %% The same question `outgrows_re_render/3` asks for a list, with two differences.
 %%
 %% A stream carrying CHILD VIEWS is never collapsed. The incremental path keeps their
-%% bookkeeping (`merge_stream_child_views/4`: old minus deleted plus rendered); the
+%% bookkeeping (`merge_stream_child_views/4`: the drained items' children); the
 %% full render has none, so re-rendering would re-mount every child and reset its
 %% state. Bytes are not worth that.
 %%
@@ -965,18 +1033,22 @@ diff_stream_op(Az, {reset, OldItems}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) 
     stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views).
 
 %% The visibility window as a set, computed once per drain from the (constant)
-%% stream record. An unlimited stream keeps every key, so it needs no set. The
-%% stream record is already the post-op state, so this is the *final* window --
-%% skipping an op for a key outside it is safe in both directions, since
-%% `apply_limit/6` back-fills any visible key missing from the snapshot at its
-%% ordered position, so a key that slides into view later still lands.
-visible_set(#stream{limit = infinity}) ->
-    all;
+%% stream record. The stream record is already the post-op state, so this is the
+%% *final* window -- skipping an op for a key outside it is safe in both
+%% directions, since `apply_limit/6` back-fills any visible key missing from the
+%% snapshot at its ordered position, so a key that slides into view later still
+%% lands. An unlimited stream shows every key it still holds, so its own items map
+%% is the set.
+%%
+%% Skipping matters beyond the wire. A key a later op in the same batch deletes,
+%% or pushes out of the window, would otherwise be rendered on the way: its item
+%% children run `mount/1` (or `handle_update/3`) for a node the batch then removes,
+%% and a child mounted there is named by no views map, so nothing unmounts it.
+visible_set(#stream{limit = infinity, items = Items}) ->
+    Items;
 visible_set(#stream{order = Order, limit = Limit}) ->
     maps:from_keys(arizona_template:visible_keys(Order, Limit), true).
 
-is_visible(_Key, all) ->
-    true;
 is_visible(Key, Vis) ->
     is_map_key(Key, Vis).
 
@@ -1024,8 +1096,14 @@ stream_delete(Az, Key, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
-stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+%% A key the client holds but the final window does not is left as it is: the
+%% node goes either way (see `visible_set/1`).
+stream_update(
+    Az, Key, NewItem, Changed, Rest, {_Source, Vis} = SV, Tmpl, SnapAcc, OldOrder, Views0
+) ->
     case SnapAcc of
+        #{Key := _} when not is_map_key(Key, Vis) ->
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0);
         #{Key := OldD} ->
             {NewD, Views1} =
                 arizona_eval:render_stream_item_skipping(
@@ -1063,10 +1141,11 @@ stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, V
 %% or keeps it out when it is not in the final window. Inserting here at -1 put
 %% a newly-visible mid-window key at the tail and, being in `SnapAcc`, made the
 %% back-fill skip it -- permanently diverging the client's order from the
-%% server's (e.g. a hidden key moved to the front and updated in one frame).
+%% server's (e.g. a hidden key moved to the front and updated in one frame). An
+%% upsert a later op in the same batch deletes is not rendered (see `visible_set/1`).
 stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SV of
-        {#stream{limit = infinity}, _Vis} ->
+        {#stream{limit = infinity}, #{Key := _}} ->
             {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, NewD),
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
@@ -2060,7 +2139,7 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             %% evaluate to snapshots without it, so they fall to the make_ops
             %% clause below and re-render wholesale via the ?OP_TEXT each clause.
             case nested_drain(Az, New, Old, Views0) of
-                {drained, EachOps, Views1} ->
+                {drained, EachOps, _Drained, Views1} ->
                     {RestOps, Views2} = diff_item_dynamics_v(NR, OR, Views1),
                     %% Same ordering as `diff_each/9`'s stream clause: the drain
                     %% feeds the rest of the walk its views, so its ops have no

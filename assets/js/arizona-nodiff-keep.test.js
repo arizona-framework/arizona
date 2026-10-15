@@ -238,6 +238,65 @@ describe('a slot re-rendered wholesale', () => {
     });
 });
 
+// A conditional between `<<>>` and an az-nodiff element: one side of the re-render
+// holds no node at all.
+describe('a slot with an empty side', () => {
+    it('renders an az-nodiff element into an empty slot', () => {
+        const events = widgetHook();
+        setupPage('');
+        applyOps([[OP.TEXT, `page:${SLOT_AZ}`, LINE, true]]);
+        expect(document.querySelector('#slot [az-nodiff]').dataset.state).toBe('client:0');
+        expect(events).toEqual(['mount:0']);
+    });
+
+    it('renders an az-nodiff element nested in new markup into an empty slot', () => {
+        widgetHook();
+        setupPage('');
+        const nested = `<section az="S-0"><!--az:S-0-->${LINE}<!--/az--> after</section>`;
+        applyOps([[OP.TEXT, `page:${SLOT_AZ}`, nested, true]]);
+        expect(document.querySelector('#slot section [az-nodiff]').dataset.state).toBe('client:0');
+    });
+
+    it('renders an az-nodiff element into a slot holding only text', () => {
+        const events = widgetHook();
+        setupPage('none');
+        applyOps([[OP.TEXT, `page:${SLOT_AZ}`, LINE, true]]);
+        expect(document.getElementById('slot').textContent).toBe('0');
+        expect(events).toEqual(['mount:0']);
+    });
+
+    it('removes an az-nodiff element when the slot empties', () => {
+        const events = widgetHook();
+        const widget = setupPage(LINE);
+        applyOps([[OP.TEXT, `page:${SLOT_AZ}`, '', true]]);
+        expect(widget.isConnected).toBe(false);
+        expect(document.getElementById('slot').textContent).toBe('');
+        expect(events).toEqual(['mount:0', 'destroy:0']);
+    });
+
+    it('leaves an empty slot empty', () => {
+        setupPage('');
+        applyOps([[OP.TEXT, `page:${SLOT_AZ}`, '', true]]);
+        expect(document.getElementById('slot').innerHTML).toBe(`<!--az:${SLOT_AZ}--><!--/az-->`);
+    });
+
+    it('renders keyed az-nodiff items into an empty list', () => {
+        const events = widgetHook();
+        setupList('');
+        applyOps([keyedOp(['x', 'y'])]);
+        expect(items().map((li) => li.dataset.state)).toEqual(['client:x', 'client:y']);
+        expect(events).toEqual(['mount:x', 'mount:y']);
+    });
+
+    it('empties a keyed az-nodiff list', () => {
+        const events = widgetHook();
+        setupList(keyed('x'));
+        applyOps([keyedOp([])]);
+        expect(items()).toEqual([]);
+        expect(events).toEqual(['mount:x', 'destroy:x']);
+    });
+});
+
 describe('OP.REPLACE', () => {
     it('keeps an az-nodiff element named again on a resync', () => {
         const events = widgetHook();

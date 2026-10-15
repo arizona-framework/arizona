@@ -15,7 +15,7 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 %%           | {Az, term(), Loc}                     -- static value with location
 %% Az = binary() (diff target) | undefined (az-nodiff -- never used as op target)
 %% Loc = {Module, Line} -- source location for error reporting
-%% f = fingerprint -- base-36 phash2 of statics
+%% f = fingerprint -- base-36 phash2 of statics (dynamic attribute names included)
 %% Optional: diff => false -- skip diff after initial render (from az-nodiff directive)
 
 %% Snapshot: #{s => [binary()], d => [{Az, Value}], deps => [#{key() => true}]}
@@ -86,6 +86,10 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `{name, true}` | `{hidden, true}` | `hidden` |
 | `{name, false}` | `{hidden, false}` | Stripped (`?native` keeps a typed `false` prop) |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Emits `diff => false`; the HTML keeps a compiler-owned `az-nodiff` (token or bare) |
+
+A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target
+(appended after its attributes), so a submit made before the client script runs never puts the
+fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
 
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises
@@ -404,8 +408,13 @@ A control-flow expression in a **content slot** -- `case`, `if`, `begin`, `recei
 `try`, or `maybe` -- may return a bare element tuple, an element list, or a mixed fragment
 (static text/values interleaved with elements) directly from a tail position. The parse
 transform compiles each tail into a nested template, exactly as a literal
-`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target. No
-`?html` wrap is needed:
+`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target and the
+content context of the slot, so a branch's `<script>` or `<title>` under `<svg>` is foreign
+content exactly as when written directly there. A whole-tail wrapper of the enclosing target
+around markup (`true -> ?html({title, [], [?get(t)]})` in an element's child) is unwrapped to
+that markup first, so the wrapped and bare forms compile identically; a wrapper anywhere else
+(bound to a variable, passed as an argument, nested below the tail) still starts its own
+template at the root context. No `?html` wrap is needed:
 
 ```erlang
 %% both branches accepted: <<>> renders empty, the tuple becomes a nested template
@@ -535,6 +544,21 @@ ran, so a read in one branch, in a helper the callback calls, in an inner
 written as `arizona_template:get(text, Item)` counts too, so a view binding of
 the same name also re-evaluates the each (harmless: nothing differs, nothing
 ships). Reads in an az-nodiff item (or az-nodiff element) never count -- it renders once.
+
+A **stream** item changed by `arizona_stream:update/3` (or kept by a reset) skips
+re-evaluating a dynamic only when the parse transform could prove its deps name
+every field it read: the dynamic references nothing but the item key outside the
+map argument of a tracked `get`/`get_lazy`/`with` in its own closure, and that map
+is the item itself (the bare item parameter, or the variable side of a
+`#{...} = Item` head) or the view `Bindings`. A plain `maps:get(n, Item)`, a
+head-destructured field or sub-map (even read with a tracked `get` -- its deps name
+the sub-map's keys, not the item field holding it), a value bound in the callback
+body, or a read inside a nested branch template makes that dynamic re-evaluate on
+every change of its item -- always correct, just not skipped. Write
+`arizona_template:get(n, Item)` (or, when the parameter binds the whole item, name
+it `Bindings` and use `?get(n)`) where a wide item's per-field skipping matters. A
+dynamic that reads nothing and references no item (a static value, `?connected`, the
+key) is kept as-is on an item update.
 
 Reads **hoisted into the render function body** do track: the parse transform
 inlines each interpolated variable back into its slot closure, so the `?get`

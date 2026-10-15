@@ -293,10 +293,15 @@ render_stream_item(Key, Item, #{d := DFun}, Views0) ->
 
 -doc """
 Re-renders a stream item using `Changed` (set of fields differing between
-old and new item) and the previous `OldItemD` to skip per-item dynamics
-whose deps don't intersect with `Changed`. Reused dynamics carry their
-old `{Az, Val, Deps}` triple, so the downstream value comparison emits
-no op for them.
+old and new item) and the previous `OldItemD`, keeping the old
+`{Az, Val, Deps}` triple of each per-item dynamic that cannot have changed, so
+the downstream value comparison emits no op for it.
+
+A dynamic qualifies only when the parse transform flagged it in the template's
+`reuse` list (every item read it makes is tracked in its own closure, so its
+deps name every field it read) and its deps miss `Changed`. Any other dynamic
+re-evaluates, as does every dynamic of a template without the list: a read the
+deps never recorded is an input the item change may have touched.
 """.
 -spec render_stream_item_skipping(Key, NewItem, OldItemD, Changed, Template, Views) ->
     {ItemD, Views1}
@@ -309,37 +314,35 @@ when
     Views :: {map(), map()},
     ItemD :: [{arizona_template:az(), term(), map()}],
     Views1 :: {map(), map()}.
-render_stream_item_skipping(Key, NewItem, OldItemD, Changed, #{d := DFun}, Views0) ->
-    case map_size(Changed) of
-        0 ->
+render_stream_item_skipping(Key, NewItem, OldItemD, Changed, #{d := DFun} = Tmpl, Views0) ->
+    case {map_size(Changed), Tmpl} of
+        {0, _} ->
             %% No fields differ -- old item triples are reusable as-is.
             {OldItemD, Views0};
-        _ ->
-            Dynamics = DFun(NewItem, Key),
+        {_, #{reuse := Reuse}} ->
             %% The changed keys are fixed across the item's dynamics --
             %% materialize once, probe per dynamic (see deps_changed/2).
-            eval_or_reuse_per_item(Dynamics, OldItemD, maps:keys(Changed), Views0)
+            eval_or_reuse_per_item(
+                DFun(NewItem, Key), OldItemD, Reuse, maps:keys(Changed), Views0
+            );
+        {_, #{}} ->
+            eval_dynamics_v(DFun(NewItem, Key), Views0)
     end.
 
-%% Empty per-item deps mean either "static" or "uses pattern destructure"
-%% (e.g. `fun(#{text := T}, _) -> {li, [], T} end`). We can't tell, so we
-%% must re-evaluate to be safe. Skipping is only sound when deps are
-%% explicit and don't intersect the changed keys.
-eval_or_reuse_per_item([], [], _ChangedKeys, Views) ->
+eval_or_reuse_per_item([], [], [], _ChangedKeys, Views) ->
     {[], Views};
-eval_or_reuse_per_item([Def | DR], [{Az, OldVal, OldDeps} | OR], ChangedKeys, Views0) ->
-    case can_reuse(OldDeps, ChangedKeys) of
+eval_or_reuse_per_item(
+    [Def | DR], [{_Az, _OldVal, OldDeps} = Old | OR], [Reuse | RR], ChangedKeys, Views0
+) ->
+    case Reuse andalso not arizona_diff:deps_changed(OldDeps, ChangedKeys) of
         true ->
-            {Rest, Views1} = eval_or_reuse_per_item(DR, OR, ChangedKeys, Views0),
-            {[{Az, OldVal, OldDeps} | Rest], Views1};
+            {Rest, Views1} = eval_or_reuse_per_item(DR, OR, RR, ChangedKeys, Views0),
+            {[Old | Rest], Views1};
         false ->
             {NewAz, NewVal, NewDeps, Views1} = eval_one_v_flat(Def, Views0),
-            {Rest, Views2} = eval_or_reuse_per_item(DR, OR, ChangedKeys, Views1),
+            {Rest, Views2} = eval_or_reuse_per_item(DR, OR, RR, ChangedKeys, Views1),
             {[{NewAz, NewVal, NewDeps} | Rest], Views2}
     end.
-
-can_reuse(OldDeps, ChangedKeys) ->
-    map_size(OldDeps) > 0 andalso not arizona_diff:deps_changed(OldDeps, ChangedKeys).
 
 %% Renders stream items without view tracking. Returns `#{Key => ItemD}`.
 %%
