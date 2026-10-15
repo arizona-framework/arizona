@@ -93,6 +93,12 @@ The set of types is **collected at compile time**: the parse transform records e
 %% Template: multiple commands
 {'button', [{az_click, [arizona_js:push_event(~"inc"), arizona_js:toggle(~"#modal")]}], [<<"Both">>]}
 
+%% Template: a conditional command -- a command list may nest, and `[]` is no command
+{'button', [{az_click, [
+    arizona_js:push_event(~"save"),
+    case ?get(dirty) of true -> arizona_js:hide(~"#hint"); false -> [] end
+]}], [<<"Save">>]}
+
 %% Handler: effects
 handle_event(~"inc", _P, B) ->
     {B#{count => Count + 1}, #{}, [arizona_js:set_title(~"Updated")]}.
