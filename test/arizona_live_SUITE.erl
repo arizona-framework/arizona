@@ -51,6 +51,7 @@
     live_inc_then_dec/1,
     render_current_full_frame/1,
     render_current_runs_no_child_lifecycle/1,
+    render_current_shows_child_own_state/1,
     live_init_bindings/1,
     live_mount/1,
     live_multiple_events/1,
@@ -171,7 +172,8 @@ groups() ->
             child_stream_survives_next_root_diff,
             child_event_leaves_root_snapshot_untouched,
             render_current_full_frame,
-            render_current_runs_no_child_lifecycle
+            render_current_runs_no_child_lifecycle,
+            render_current_shows_child_own_state
         ]},
         {mount_and_render, [parallel], [
             mount_and_render_basic,
@@ -915,6 +917,25 @@ render_current_runs_no_child_lifecycle(Config) when is_list(Config) ->
     ?assertEqual([], collect_lifecycle(100)),
     %% The count slot sits between comment markers: `count=<!--az:..-->1<!--/az-->`.
     [?assertNotEqual(nomatch, binary:match(F, ~"-->1<!--/az-->")) || F <- Frames].
+
+render_current_shows_child_own_state(Config) when is_list(Config) ->
+    %% A child whose handle_update/3 is not idempotent: arizona_counter merges
+    %% the parent's `count => 0` prop over its own count. Re-rendering the tree
+    %% for a repaint ran that merge, so after the child's own `inc` the frame
+    %% showed Count: 0 while the live state was 1. The repaint must show the
+    %% state the live process actually holds.
+    {ok, Pid} = arizona_live:start_link(arizona_stream_with_child, #{}, undefined, []),
+    {ok, ~"swc", _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ~"counter-1", ~"inc", #{}),
+    ?assertMatch(
+        #{views := #{~"counter-1" := #{bindings := #{count := 1}}}},
+        arizona_live:view_state(Pid)
+    ),
+    {ok, Frame, _} = arizona_live:render_current(Pid),
+    [_, AfterCounter] = binary:split(Frame, ~"id=\"counter-1\""),
+    [Counter, _] = binary:split(AfterCounter, ~"id=\"extra-1\""),
+    %% The count slot sits between comment markers: `Count: <!--az:..-->1<!--/az-->`.
+    ?assertNotEqual(nomatch, binary:match(Counter, ~"-->1<!--/az-->")).
 
 collect_lifecycle(Timeout) ->
     receive

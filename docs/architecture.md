@@ -232,6 +232,14 @@ is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
 (`arizona_live:render_current/1`) rather than applying diff ops, so the backend
 writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
 
+The frame is printed from the live process's **diffed snapshot** (the root's, with each
+child view's current copy refreshed in), not from a fresh render of the template, so a
+repaint runs no `mount/1` or `handle_update/3` and shows exactly the state the process
+holds. It follows that a terminal sees what a web client sees: `az-nodiff` content
+renders once, and a slot whose reads are not tracked freezes after its first render.
+After a hot reload, edited template text appears once a slot depending on it changes --
+the terminal does not repaint on reload.
+
 Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
 bytes except `\n`/`\t`, and DEL; preserves UTF-8), native emits a JSON string. Native
