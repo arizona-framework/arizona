@@ -31,7 +31,9 @@
     nested_crash_restores_enclosing_deps_scope/1,
     each_def_crash_restores_deps_scope/1,
     unless_same_nodiff_crash_restores_deps_scope/1,
-    items_crash_restores_deps_scope/1
+    items_crash_restores_deps_scope/1,
+    caught_nested_crash_keeps_its_reads_on_the_slot/1,
+    caught_crash_through_suspended_scope_keeps_slot_reads/1
 ]).
 
 all() ->
@@ -74,7 +76,9 @@ groups() ->
             nested_crash_restores_enclosing_deps_scope,
             each_def_crash_restores_deps_scope,
             unless_same_nodiff_crash_restores_deps_scope,
-            items_crash_restores_deps_scope
+            items_crash_restores_deps_scope,
+            caught_nested_crash_keeps_its_reads_on_the_slot,
+            caught_crash_through_suspended_scope_keeps_slot_reads
         ]},
         {child_streams, [parallel], [
             child_stream_pending_cleared_on_eval_path,
@@ -86,15 +90,18 @@ groups() ->
 
 %% --- dependency scope on exceptions ---
 
-%% A process that catches a render crash and carries on (an HTTP keep-alive
-%% connection, a static-generation batch) must find no dependency scope left
-%% open: a later `track/1` outside any slot would record into it, and the next
-%% render's top-level slots would merge their reads into it.
+%% Code that runs a live render or a diff inside a `try` and carries on (an app,
+%% a test) must find no dependency scope left open: a later `track/1` outside any
+%% slot would record into it, and the next render's top-level slots would merge
+%% their reads into it. Every exception class is covered.
 slot_crash_restores_deps_scope(Config) when is_list(Config) ->
-    Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}},
-    ?assertError(
-        {arizona_loc, _, missing_binding},
-        arizona_eval:eval_dynamics_v([Crash], {#{}, #{}})
+    [slot_crash_restores_deps_scope(Class) || Class <- classes()],
+    ok;
+slot_crash_restores_deps_scope(Class) ->
+    Crash = {~"0", crash(Class), {?MODULE, ?LINE}},
+    ?assertMatch(
+        {Class, {arizona_loc, _, boom}},
+        caught(fun() -> arizona_eval:eval_dynamics_v([Crash], {#{}, #{}}) end)
     ),
     ?assertEqual(undefined, erlang:get('$arizona_deps')),
     %% Outside any slot, track/1 records nothing.
@@ -109,64 +116,158 @@ slot_crash_restores_deps_scope(Config) when is_list(Config) ->
     ?assertEqual(undefined, erlang:get('$arizona_deps')).
 
 unlocated_slot_crash_restores_deps_scope(Config) when is_list(Config) ->
-    Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end},
-    ?assertError(missing_binding, arizona_eval:eval_dynamics_v([Crash], {#{}, #{}})),
+    [unlocated_slot_crash_restores_deps_scope(Class) || Class <- classes()],
+    ok;
+unlocated_slot_crash_restores_deps_scope(Class) ->
+    Crash = {~"0", crash(Class)},
+    ?assertEqual(
+        {Class, boom},
+        caught(fun() -> arizona_eval:eval_dynamics_v([Crash], {#{}, #{}}) end)
+    ),
     ?assertEqual(undefined, erlang:get('$arizona_deps')).
 
 attr_slot_crash_restores_deps_scope(Config) when is_list(Config) ->
-    Crash =
-        {~"0", {attr, ~"title", fun() -> arizona_template:get(missing, #{}) end}, {?MODULE, ?LINE}},
-    ?assertError(
-        {arizona_loc, _, missing_binding},
-        arizona_eval:eval_dynamics_v([Crash], {#{}, #{}})
+    [attr_slot_crash_restores_deps_scope(Class) || Class <- classes()],
+    ok;
+attr_slot_crash_restores_deps_scope(Class) ->
+    Crash = {~"0", {attr, ~"title", crash(Class)}, {?MODULE, ?LINE}},
+    ?assertMatch(
+        {Class, {arizona_loc, _, boom}},
+        caught(fun() -> arizona_eval:eval_dynamics_v([Crash], {#{}, #{}}) end)
     ),
     ?assertEqual(undefined, erlang:get('$arizona_deps')).
 
 %% A crash deep inside a nested template under a `?stateless` descriptor crosses
 %% several scopes (the outer slot's, the suspended one of with_saved_deps/1, the
-%% inner slot's); the scope that was open before the render is the one left.
+%% inner slot's). The scope open before the render is the one left, holding what
+%% the outer slot read itself (`a`), as it would had the render returned, but not
+%% what the isolated nested template read.
 nested_crash_restores_enclosing_deps_scope(Config) when is_list(Config) ->
-    Inner = #{
-        s => [~"<b>", ~"</b>"],
-        d => [{~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}}],
-        f => ~"inner"
-    },
-    Desc = #{callback => fun(_Props) -> Inner end, props => #{}},
-    Outer = {
+    [nested_crash_restores_enclosing_deps_scope(Class) || Class <- classes()],
+    ok;
+nested_crash_restores_enclosing_deps_scope(Class) ->
+    undefined = erlang:put('$arizona_deps', #{enclosing => true}),
+    Failing = reads_a_then_crashes(Class),
+    ?assertMatch(
+        {Class, {arizona_loc, _, boom}},
+        caught(fun() -> arizona_eval:eval_dynamics_v([Failing], {#{}, #{}}) end)
+    ),
+    ?assertEqual(#{enclosing => true, a => true}, erlang:erase('$arizona_deps')).
+
+%% A slot closure that catches a nested render crash and carries on still
+%% depends on what the failed render read, so it re-renders once the binding
+%% whose absence caused the crash appears.
+caught_nested_crash_keeps_its_reads_on_the_slot(Config) when is_list(Config) ->
+    [caught_nested_crash_keeps_its_reads_on_the_slot(Class) || Class <- classes()],
+    ok;
+caught_nested_crash_keeps_its_reads_on_the_slot(Class) ->
+    Inner = {~"0", crash(Class), {?MODULE, ?LINE}},
+    Slot = {
         ~"0",
         fun() ->
-            arizona_template:get(a, #{a => 1}),
-            Desc
+            {Class, {arizona_loc, _, boom}} =
+                caught(fun() -> arizona_eval:eval_dynamics_v([Inner], {#{}, #{}}) end),
+            ~"fallback"
         end,
         {?MODULE, ?LINE}
     },
-    undefined = erlang:put('$arizona_deps', #{enclosing => true}),
-    ?assertError(
-        {arizona_loc, _, missing_binding},
-        arizona_eval:eval_dynamics_v([Outer], {#{}, #{}})
+    ?assertMatch(
+        {[{~"0", ~"fallback", Deps}], _} when Deps =:= #{missing => true},
+        arizona_eval:eval_dynamics_v([Slot], {#{}, #{}})
     ),
-    ?assertEqual(#{enclosing => true}, erlang:erase('$arizona_deps')).
+    ?assertEqual(undefined, erlang:get('$arizona_deps')).
+
+%% The same, with the caught crash passing through a suspended scope: the slot
+%% keeps the reads of the dynamic that failed (`a`) and its own later ones (`b`),
+%% not those of the isolated nested template (`missing`).
+caught_crash_through_suspended_scope_keeps_slot_reads(Config) when is_list(Config) ->
+    [caught_crash_through_suspended_scope_keeps_slot_reads(Class) || Class <- classes()],
+    ok;
+caught_crash_through_suspended_scope_keeps_slot_reads(Class) ->
+    Failing = reads_a_then_crashes(Class),
+    Slot = {
+        ~"0",
+        fun() ->
+            {Class, {arizona_loc, _, boom}} =
+                caught(fun() -> arizona_eval:eval_dynamics_v([Failing], {#{}, #{}}) end),
+            arizona_template:get(b, #{b => ~"fallback"})
+        end,
+        {?MODULE, ?LINE}
+    },
+    ?assertMatch(
+        {[{~"0", ~"fallback", Deps}], _} when Deps =:= #{a => true, b => true},
+        arizona_eval:eval_dynamics_v([Slot], {#{}, #{}})
+    ),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')).
 
 each_def_crash_restores_deps_scope(Config) when is_list(Config) ->
-    Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}},
-    ?assertError({arizona_loc, _, missing_binding}, arizona_eval:eval_each_def(Crash, {#{}, #{}})),
+    [each_def_crash_restores_deps_scope(Class) || Class <- classes()],
+    ok;
+each_def_crash_restores_deps_scope(Class) ->
+    Crash = {~"0", crash(Class), {?MODULE, ?LINE}},
+    ?assertMatch(
+        {Class, {arizona_loc, _, boom}},
+        caught(fun() -> arizona_eval:eval_each_def(Crash, {#{}, #{}}) end)
+    ),
     ?assertEqual(undefined, erlang:get('$arizona_deps')).
 
 unless_same_nodiff_crash_restores_deps_scope(Config) when is_list(Config) ->
-    Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}},
-    ?assertError(
-        {arizona_loc, _, missing_binding},
-        arizona_eval:eval_unless_same_nodiff(Crash, #{s => [~""], d => []}, {#{}, #{}})
+    [unless_same_nodiff_crash_restores_deps_scope(Class) || Class <- classes()],
+    ok;
+unless_same_nodiff_crash_restores_deps_scope(Class) ->
+    Crash = {~"0", crash(Class), {?MODULE, ?LINE}},
+    Old = #{s => [~""], d => []},
+    ?assertMatch(
+        {Class, {arizona_loc, _, boom}},
+        caught(fun() -> arizona_eval:eval_unless_same_nodiff(Crash, Old, {#{}, #{}}) end)
     ),
     ?assertEqual(undefined, erlang:get('$arizona_deps')).
 
 %% The diff renders an each's items in a scope of its own, outside any slot's.
 items_crash_restores_deps_scope(Config) when is_list(Config) ->
-    ?assertError(
-        missing_binding,
-        arizona_eval:eval_items(#{}, fun() -> arizona_template:get(missing, #{}) end)
+    [items_crash_restores_deps_scope(Class) || Class <- classes()],
+    ok;
+items_crash_restores_deps_scope(Class) ->
+    ?assertEqual(
+        {Class, boom},
+        caught(fun() -> arizona_eval:eval_items(#{}, crash(Class)) end)
     ),
     ?assertEqual(undefined, erlang:get('$arizona_deps')).
+
+classes() ->
+    [error, throw, exit].
+
+%% A closure that reads `missing` (recorded on its scope) and then raises.
+crash(Class) ->
+    fun() ->
+        ok = arizona_template:track(missing),
+        erlang:raise(Class, boom, [])
+    end.
+
+%% A dynamic that reads `a`, then yields a `?stateless` descriptor whose nested
+%% template's slot crashes.
+reads_a_then_crashes(Class) ->
+    Inner = #{
+        s => [~"<b>", ~"</b>"],
+        d => [{~"0", crash(Class), {?MODULE, ?LINE}}],
+        f => ~"inner"
+    },
+    Desc = #{callback => fun(_Props) -> Inner end, props => #{}},
+    {
+        ~"0",
+        fun() ->
+            1 = arizona_template:get(a, #{a => 1}),
+            Desc
+        end,
+        {?MODULE, ?LINE}
+    }.
+
+caught(Fun) ->
+    try Fun() of
+        Result -> {returned, Result}
+    catch
+        Class:Reason -> {Class, Reason}
+    end.
 
 %% --- child streams ---
 
