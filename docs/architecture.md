@@ -1477,7 +1477,15 @@ a destination that stays on the socket: a target degrading to a full-page naviga
 the stashed requested path instead of the target -- the halt re-runs over HTTP and redirects with a
 real flash cookie. `flash_replay` holds the redirect target beside that path so the reroute fires
 only for the redirect it belongs to, never hijacking an unrelated navigation. A handler-set flash,
-which nothing reproduces, is dropped with a logged warning. A handler effect's flash is captured
+which nothing reproduces, is dropped with a logged warning. A gate on the navigation a flash was
+carried into treats it the way HTTP treats the signed cookie on a 3xx. A gate that only redirects
+puts it back on the socket for the redirect; a replayable one keeps its original path so a chain
+of gates replays from the first, but only when the gated navigation is the redirect it was armed
+for (a navigation that beat the follow-up frame is never rerouted through that gate). A gate that
+flashes replaces it, so the live path and the replay agree. A `fetch_flash` step that read it
+before the gate halted spends it (`arizona_req` records that read), as that read clears the
+cookie on the 3xx. A halt without a redirect is a full load like any other, replayed or dropped
+loudly. A handler effect's flash is captured
 from a bare `navigate`/`patch` and from one a `transition` wraps (both run when the frame lands);
 one an `on_key` or a `fetch`'s `on_error` wraps runs later, if ever, so its flash is stripped with a
 warning rather than stashed for whatever navigation comes next. The route adapter is recovered from
