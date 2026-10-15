@@ -856,11 +856,18 @@ top:
   included too (the native `FormData` submitter arg), so a form with two submit buttons reports
   which one fired. A non-submit trigger (a plain `az-click` button) has no submitter, so it never
   drags the enclosing form's fields along -- gathering is a property of submitting the form (the
-  **Other** case below stays `{}`). A repeated name is a list. A `<select multiple>` and a checkbox
-  **group** (more than one checkbox sharing a name) are lists by their markup, whatever is selected:
-  `["a"]` for one value and `[]` for none, never a bare string or a missing key, so a handler matches
-  one shape. A lone checkbox stays a single field (its value when checked, absent when not), and a
-  disabled field is left out as the browser leaves it out of a native submit
+  **Other** case below stays `{}`). A repeated name is a list. Three kinds of field are lists by
+  their markup, whatever is selected -- `["a"]` for one value and `[]` for none, never a bare string
+  or a missing key, so a handler matches one shape: a `<select multiple>`, a checkbox **group** (more
+  than one checkbox sharing a name), and any field whose name ends in `[]`. The `[]` suffix is the one
+  to use for a group whose rendered size comes from data: a group that can render a **single** box
+  has no second box to mark it as a group, so `name="tags"` would send a string with one tag and a
+  list with two, while `name="tags[]"` always sends a list. The key keeps its brackets (`"tags[]"`),
+  exactly as a native form POST or a `fetch` body sends it (the server's query-string parser keeps
+  keys verbatim). A lone checkbox without the suffix stays a single field (its value when checked,
+  absent when not), and a disabled field is left out as the browser leaves it out of a native
+  submit. **Behaviour change:** a checkbox group or multiple select with one value used to arrive as
+  a bare string, and with none as a missing key; a handler matching those shapes must now match a list
 - **Inputs/selects/textareas** → `{value: el.value}` -- current input value; a checkbox/radio adds
   `checked`, and a `<select multiple>` sends `value` as the list of selected values
 - **Other** → `{}` -- empty

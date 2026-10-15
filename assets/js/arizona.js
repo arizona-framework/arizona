@@ -2417,8 +2417,12 @@ function submitter(event) {
 
 /**
  * The names in `form` that hold a list by their markup: a `<select multiple>`,
- * and a checkbox name shared by more than one box (a group). Only enabled ones,
- * since FormData leaves a disabled control out entirely.
+ * a checkbox name shared by more than one box (a group), and any field whose
+ * name ends in `[]` -- the convention for a list whose rendered size can be one
+ * (a data-driven group showing a single box), which markup alone cannot tell
+ * apart from a single field. Only enabled ones, since FormData leaves a
+ * disabled control out entirely; buttons never count (only the submitter is
+ * submitted, and it is a single value).
  * @param {HTMLFormElement} form
  * @returns {Set<string>}
  */
@@ -2431,7 +2435,9 @@ function multiValuedNames(form) {
         const f = /** @type {any} */ (el);
         if (!f.name) continue;
         const enabled = !el.matches(':disabled');
-        if (el.tagName === 'SELECT' && f.multiple) {
+        if (f.name.endsWith('[]') && isSubmittableField(el)) {
+            if (enabled) names.add(f.name);
+        } else if (el.tagName === 'SELECT' && f.multiple) {
             if (enabled) names.add(f.name);
         } else if (el.tagName === 'INPUT' && f.type === 'checkbox') {
             const g = groups.get(f.name) || { boxes: 0, enabled: false };
@@ -2445,12 +2451,26 @@ function multiValuedNames(form) {
 }
 
 /**
+ * Whether `el` contributes its own value to FormData: an input other than a
+ * button-like one, a select or a textarea.
+ * @param {Element} el
+ * @returns {boolean}
+ */
+function isSubmittableField(el) {
+    if (el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') return true;
+    if (el.tagName !== 'INPUT') return false;
+    const t = /** @type {HTMLInputElement} */ (el).type;
+    return t !== 'submit' && t !== 'button' && t !== 'image' && t !== 'reset';
+}
+
+/**
  * Collect a form's fields, keeping a duplicate name as an array. A checkbox
  * group and a `<select multiple>` each submit one entry per selected value, so
  * the flat `Object.fromEntries` shape silently keeps only the last of them --
- * and those two are arrays even with one value or none (`[]`), chosen by the
- * field's markup rather than by how many values happen to be selected, so a
- * handler sees one shape.
+ * and those two, plus any `name[]` field, are arrays even with one value or
+ * none (`[]`), chosen by the field's markup rather than by how many values
+ * happen to be selected, so a handler sees one shape. The key is the name as
+ * written, brackets included, as a native form POST sends it.
  * @param {FormData} fd
  * @param {HTMLFormElement} form
  * @returns {Object<string, string|string[]>}

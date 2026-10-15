@@ -6211,6 +6211,33 @@ describe('form submit', () => {
         ]);
     });
 
+    it('a name ending in [] is always an array, even for a lone field', async () => {
+        // A data-driven group can render a single box: its markup alone cannot say
+        // "list", so the `name[]` convention does. The key keeps its brackets,
+        // as it does in a native form POST (roadrunner_qs keeps keys verbatim).
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[0,"save"]]'>
+                <input type="checkbox" name="tags[]" value="a" checked />
+                <input type="checkbox" name="off[]" value="a" />
+                <input name="emails[]" value="ada@example.com" />
+                <select name="pick[]"><option value="x" selected>x</option></select>
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document
+            .getElementById('f')
+            .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+        const raw = mock.posted.filter((d) => d[0] === 1).map((d) => d[1]);
+        expect(raw).toContain(
+            '["page","save",{"tags[]":["a"],"off[]":[],"emails[]":["ada@example.com"],"pick[]":["x"]}]',
+        );
+    });
+
     it('a disabled multi-valued field is left out, like the browser leaves it', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
