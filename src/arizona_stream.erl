@@ -37,7 +37,8 @@ reorder everything with one `sort/2`, instead of K positional calls.
   are rejected (kept in `items` but not visible)
 - `{Limit, drop}` -- a bounded tail -f buffer: an **append** (`insert/2`,
   or the `update/3` upsert of a missing key) to a full stream evicts the
-  oldest (front-of-order) item from the source to make room, so the
+  oldest (front-of-order) item from the source to make room, queueing a
+  `{delete, Key}` for it, so the
   visible window slides onto the new tail item. Only appends evict --
   "oldest" is well-defined only for the append flow; a positional
   `insert/3` declares a window position rather than an age, and
@@ -54,7 +55,7 @@ reorder everything with one `sort/2`, instead of K positional calls.
 {update, Key, NewItem, Changed}  %% Changed :: #{key() => true}, captured at update/3 time
 {move, Key, AfterKey}    %% AfterKey is `null` for first position
 reorder                  %% from sort/2 when order changes
-{reset, OldItems}        %% from reset/1,2 -- OldItems captured pre-mutation for per-item skipping
+reset                    %% reset/1,2 and the genesis of new/1,2,3: reconcile to now
 ```
 
 ## Drain marks -- and the nested-stream memory limit
@@ -223,7 +224,7 @@ new(KeyFun, Items) when is_function(KeyFun, 1), is_list(Items) ->
 -doc """
 Creates a stream pre-populated with `Items` and the given options.
 
-The queue opens with a **genesis reset** -- a `{reset, #{}}` op -- so the
+The queue opens with a **genesis reset** -- a `reset` op -- so the
 first render emits the ops for `Items`. A constructor states a whole
 collection, not a delta from one; queueing the items as pending INSERTS
 instead described the delta from empty, which is only a truthful log when
@@ -425,8 +426,8 @@ key_changed(K, OldItem, NewItem) ->
 
 -doc """
 Moves the item with `Key` to a new zero-based position and queues a
-move op. No-op if `Key` is not present. The position is clamped to the
-last index.
+move op. No-op if `Key` is not present, or already at that position (no op
+is queued). The position is clamped to the last index.
 """.
 -spec move(Stream, Key, NewPos) -> Stream1 when
     Stream :: stream(),
@@ -447,12 +448,17 @@ move(
         #{Key := _} ->
             Flat = flat_order(Order),
             Order1 = order_delete(Flat, Key),
-            Order2 = order_insert_at(Order1, Key, min(NewPos, Size - 1)),
-            AfterKey = key_before(Key, Order2),
-            S#stream{
-                order = {Order2, []},
-                pending = queue_op({move, Key, AfterKey}, Pending)
-            };
+            case order_insert_at(Order1, Key, min(NewPos, Size - 1)) of
+                %% Already there: nothing moved, so nothing is queued -- the
+                %% differ would only ship a move of a node onto itself.
+                Flat ->
+                    S#stream{order = {Flat, []}};
+                Order2 ->
+                    S#stream{
+                        order = {Order2, []},
+                        pending = queue_op({move, Key, key_before(Key, Order2)}, Pending)
+                    }
+            end;
         #{} ->
             S
     end.
@@ -463,11 +469,11 @@ Empties the stream and queues a reset op.
 -spec reset(Stream) -> Stream1 when
     Stream :: stream(),
     Stream1 :: stream().
-reset(#stream{items = OldItems} = S) ->
+reset(#stream{} = S) ->
     S#stream{
         items = #{},
         order = {[], []},
-        pending = queue_op({reset, OldItems}, queue:new()),
+        pending = queue_op(reset, queue:new()),
         size = 0
     }.
 
@@ -476,6 +482,12 @@ Replaces all items with `NewItems` and queues a reset op. The differ
 will reuse client-side keys that are still present, only emitting ops
 for the actual delta.
 
+The op carries no items: what a kept item changed is measured against the
+item the client last rendered, which the differ keeps on its snapshot. The
+source as it stood just before the reset is not that item whenever the same
+event touched it first -- an earlier `update/3` is in the queue this call
+discards.
+
 Crashes with `{stream_duplicate_key_in_list, Key}` when `NewItems` names a key
 more than once -- the bulk counterpart of `insert/2`'s duplicate refusal.
 """.
@@ -483,13 +495,13 @@ more than once -- the bulk counterpart of `insert/2`'s duplicate refusal.
     Stream :: stream(),
     NewItems :: [item()],
     Stream1 :: stream().
-reset(#stream{key = KeyFun, items = OldItems} = S, NewItems) when is_list(NewItems) ->
+reset(#stream{key = KeyFun} = S, NewItems) when is_list(NewItems) ->
     {ItemsMap, Order, Count} = keyed_items(KeyFun, NewItems),
     ok = reject_repeated_key(ItemsMap, Count, Order, [S, NewItems]),
     S#stream{
         items = ItemsMap,
         order = {Order, []},
-        pending = queue_op({reset, OldItems}, queue:new()),
+        pending = queue_op(reset, queue:new()),
         size = map_size(ItemsMap)
     }.
 
@@ -785,10 +797,12 @@ append_key(S0, Key, Item, PendingOp) ->
 %% `Limit` keys of `order` -- evicting the front slides the window forward
 %% onto the new tail). Evicts down to `Limit - 1` so an overfull stream (a
 %% `new/3`/`reset/2` population or positional insert past the limit leaves a
-%% hidden tail, exactly like `halt`) converges to `size =< Limit`. No delete
-%% op is queued: the differ reconciles the visible window itself
-%% (`apply_limit` removes evicted keys from the DOM, and a pending op for an
-%% evicted key is window-skipped at drain).
+%% hidden tail, exactly like `halt`) converges to `size =< Limit`.
+%%
+%% Each eviction queues a `{delete, Key}`. The final window alone cannot say that a
+%% key left and came back within one drain: an evicted key re-appended in the same
+%% event is in both the client's DOM and the final window, so its insert read as a
+%% replay and its upsert as a no-op, and the client kept the evicted item's content.
 drop_oldest_for_append(#stream{limit = infinity} = S) ->
     S;
 drop_oldest_for_append(#stream{on_limit = halt} = S) ->
@@ -803,11 +817,17 @@ drop_oldest_for_append(#stream{size = Size, limit = Limit} = S) when Size < Limi
 %% bounded tail-buffer shape `drop` exists for. Refilling `Front` from `Back` only
 %% when it runs dry moves each key across once, so an append is amortized O(1) again.
 drop_oldest_for_append(
-    #stream{items = Items, order = {[Oldest | RestFront], Back}, size = Size} = S
+    #stream{
+        items = Items,
+        order = {[Oldest | RestFront], Back},
+        pending = Pending,
+        size = Size
+    } = S
 ) ->
     drop_oldest_for_append(S#stream{
         items = maps:remove(Oldest, Items),
         order = {RestFront, Back},
+        pending = queue_op({delete, Oldest}, Pending),
         size = Size - 1
     });
 drop_oldest_for_append(#stream{order = {[], Back}} = S) ->
@@ -823,10 +843,9 @@ queue_op(Op, Pending) ->
 unstamp(Pending) ->
     [Op || {_Seq, Op} <:- queue:to_list(Pending)].
 
-%% A constructed stream's queue opens from genesis: the same op `reset/1,2`
-%% queues, with `#{}` for the pre-reset items because nothing preceded it.
+%% A constructed stream's queue opens from genesis: the same op `reset/1,2` queues.
 genesis_pending() ->
-    queue_op({reset, #{}}, queue:new()).
+    queue_op(reset, queue:new()).
 
 %% The items map and the key order for a bulk load. `reset/2` is the documented
 %% bulk-mutation path, so this is the walk a view re-deriving its whole list per event

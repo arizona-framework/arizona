@@ -1123,7 +1123,7 @@ That guard sits at one call site, so the other two ways into `diff_stream/4` -- 
 (`diff_each/9`, which `diff/4` uses, i.e. production) and the stream-inside-a-stream-item walk
 (`diff_item_dynamics_v/3`) -- reached the drain straight and dropped the change: on identical
 input `diff/3` emitted the removals and `diff/4` emitted nothing. `diff_stream/4` now reconciles
-an empty drain itself (`drainable_ops/1` substitutes a `{reset, #{}}`), so every entry point
+an empty drain itself (`drainable_ops/3` substitutes a `{reset, #{}}`), so every entry point
 agrees. The two mechanisms are complementary rather than redundant: `stream_relist/7` diffs
 against the state the enclosing walk already evaluated, which `diff_each/9` does not have.
 
@@ -1137,10 +1137,36 @@ stream over a slot that already holds one (rather than mutating the stream that 
 those inserts were all the differ had: keys the new stream dropped were never mentioned, and keys
 present in both were skipped as replays, so a shrink, a reorder and an in-place content change
 each diffed to NOTHING and the stale list stayed on screen with no self-heal. The constructors
-therefore open the queue with a **genesis reset** (`{reset, #{}}`) -- the op that already means
+therefore open the queue with a **genesis reset** (`reset`) -- the op that already means
 "reconcile the client to my current state" -- which makes the log truthful for any consumer.
 It costs the incremental path nothing: a resume that finds its mark skips past it, and replaying
 it in a re-drain is idempotent.
+
+**A log that reorders drains as one reconcile.** The drain replays ops one at a time against
+what the client holds, and the one thing it cannot always follow op by op is order: a `reorder`
+(`sort/2`) carries no order of its own, so the only order the drain can see is the final one,
+not the one the client has reached by that point. A positional op after it was placed against an
+order the client did not hold yet, and a second sort then found the client "already" in the
+final order and moved nothing. So a drained log holding a `reorder` or a
+`reset` is replaced by one reset (`drainable_ops/3`): remove what left, patch what stayed, move
+the stayers into order, then insert each arrival at its final index. A log of sorts alone needs
+no item walk and drains as one `reorder` from the client's order to the final window instead.
+A `move` and a positional insert are different: each is placed by where it sits in the source
+when it is queued (`move/3` records the key it lands after, `insert/3` an index), so on an
+unlimited stream, whose client holds the whole source in order at every step, they replay op
+by op exactly. On a limited stream hidden keys count toward that placement but are not on the
+page, so there they take the reset too. A log of appends, deletes and updates keeps the
+op-by-op drain, and a `move/3` to the position a key already holds queues nothing. The
+invariant, checked by a randomized model test in `arizona_stream_SUITE`: after a frame's ops the
+client shows exactly an SSR of the stream's final state.
+
+**A reset measures kept items against the snapshot, not against the pre-reset source.** The
+`reset` op carries no items. The drain re-renders a kept item only where its fields differ from
+the item the client's DOM was rendered from, which is the `source` the stream's snapshot keeps
+(every stream snapshot does, the post-drain one included). The source as it stood just before
+`reset/1,2` is not that item whenever the same event touched it first: `reset/2` rebuilds the
+queue, so an earlier `update/3` is gone by the drain, and measuring from the updated item found
+nothing to ship.
 
 The queue of an unclearable nested stream still grows, one retained op term per mutation. Keep a
 stream that mutates over a long-lived session as a top-level binding.
@@ -1158,7 +1184,9 @@ stream that mutates over a long-lived session as a top-level binding.
   the window slides onto the new tail. **Only appends evict**: "oldest" is well-defined only for
   the append flow, so a positional `insert/3` (a window position, not an age) and pre-population
   (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics. An append to an
-  overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`.
+  overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`. Each
+  eviction queues a `{delete, Key}`, so a key evicted and re-appended in one event reaches the
+  client as a removal and a fresh insert rather than as a replay of a key it already shows.
 
 **Window reconciliation is shared by both modes** (`apply_limit/6` in `arizona_diff`). By the time
 the diff runs, `order` already reflects the halt/drop retention decision, so reconciliation is
