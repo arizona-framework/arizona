@@ -34,6 +34,7 @@
     compile_routes_cors_opens_options/1,
     compile_routes_cors_keeps_declared_options/1,
     compile_routes_cors_defers_to_declared_options/1,
+    compile_routes_cors_shadowing_declared_options_errors/1,
     compile_routes_ws/1
 ]).
 
@@ -68,7 +69,8 @@ groups() ->
         compile_routes_http_transform_errors,
         compile_routes_cors_opens_options,
         compile_routes_cors_keeps_declared_options,
-        compile_routes_cors_defers_to_declared_options
+        compile_routes_cors_defers_to_declared_options,
+        compile_routes_cors_shadowing_declared_options_errors
     ],
     [
         {roadrunner, [sequence], Cases}
@@ -669,22 +671,12 @@ compile_routes_cors_keeps_declared_options(Config) ->
     ).
 
 compile_routes_cors_defers_to_declared_options(Config) ->
-    %% Opening OPTIONS on a cors route must never shadow a route that declares
-    %% OPTIONS itself -- that would fail compilation with an unreachable route
-    %% naming a method the author never wrote on the cors route.
+    %% A route declaring OPTIONS listed first keeps the URLs it matches; the cors
+    %% route still opens OPTIONS for everything else.
     Cors = arizona_middleware:cors(#{origins => [~"https://app.example"]}),
-    %% Declared OPTIONS after the cors route, same path: left to it.
-    compile(Config, [
-        {post, <<"/o1">>, cors_controller, #{middlewares => [Cors]}},
-        {options, <<"/o1">>, options_controller, #{}}
-    ]),
-    ?assertMatch(
-        {arizona_roadrunner_controller, #{handler := options_controller}},
-        route_match(~"OPTIONS", <<"/o1">>)
-    ),
-    %% Declared OPTIONS first: it still takes the path's OPTIONS.
     compile(Config, [
         {options, <<"/o2">>, options_controller, #{}},
+        {post, <<"/o2/:id">>, cors_controller, #{middlewares => [Cors]}},
         {post, <<"/o2">>, cors_controller, #{middlewares => [Cors]}}
     ]),
     ?assertMatch(
@@ -692,13 +684,40 @@ compile_routes_cors_defers_to_declared_options(Config) ->
         route_match(~"OPTIONS", <<"/o2">>)
     ),
     ?assertMatch({ok, _, _, _, _}, match_result(~"POST", <<"/o2">>)),
-    %% A later declared OPTIONS the cors pattern covers only in part: it stays
-    %% reachable, so the cors route does not take OPTIONS for the URLs they share.
-    compile(Config, [
-        {post, <<"/u/:id">>, cors_controller, #{middlewares => [Cors]}},
-        {options, <<"/u/me">>, options_controller, #{}}
-    ]),
     ?assertMatch(
-        {arizona_roadrunner_controller, #{handler := options_controller}},
-        route_match(~"OPTIONS", <<"/u/me">>)
+        {arizona_roadrunner_controller, #{handler := cors_controller}},
+        route_match(~"OPTIONS", <<"/o2/42">>)
     ).
+
+compile_routes_cors_shadowing_declared_options_errors(Config) ->
+    %% Listed after the cors route, a declared OPTIONS route would be
+    %% unreachable once OPTIONS opens. Keeping OPTIONS closed instead would
+    %% silently 405 every preflight to the cors route, so compilation fails,
+    %% naming both routes -- for an identical path and a partial overlap alike.
+    Router = ?config(router, Config),
+    Cors = arizona_middleware:cors(#{origins => [~"https://app.example"]}),
+    Shadowing = fun(CorsPath, OptionsPath) ->
+        [
+            {get, <<"/other">>, my_controller, #{}},
+            {post, CorsPath, cors_controller, #{middlewares => [Cors]}},
+            {options, OptionsPath, options_controller, #{}}
+        ]
+    end,
+    ?assertError(
+        {cors_options_shadows_route, {2, <<"/o1">>}, {3, <<"/o1">>}},
+        Router:routes(Shadowing(<<"/o1">>, <<"/o1">>))
+    ),
+    ?assertError(
+        {cors_options_shadows_route, {2, <<"/u/:id">>}, {3, <<"/u/me">>}},
+        Router:routes(Shadowing(<<"/u/:id">>, <<"/u/me">>))
+    ),
+    #{general := Msg} = Router:format_error(
+        {cors_options_shadows_route, {2, <<"/u/:id">>}, {3, <<"/u/me">>}},
+        [{Router, routes, 1, []}]
+    ),
+    Bin = iolist_to_binary(Msg),
+    [
+        ?assertNotEqual(nomatch, binary:match(Bin, Part))
+     || Part <- [~"/u/:id", ~"/u/me", ~"#2", ~"#3", ~"first"]
+    ],
+    ok.

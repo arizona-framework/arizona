@@ -272,6 +272,20 @@ format_error({asset_middleware_not_transform, Steps}, [{_M, _F, _Args, _Info} | 
             [Steps]
         )
     };
+format_error(
+    {cors_options_shadows_route, {CorsPos, CorsPath}, {ShadowedPos, ShadowedPath}},
+    [{_M, _F, _Args, _Info} | _]
+) ->
+    #{
+        general => io_lib:format(
+            "route #~b (~ts) carries a CORS transform, so it must answer OPTIONS "
+            "for the browser's preflight -- but route #~b (~ts) declares OPTIONS "
+            "on URLs route #~b also matches, and would never be reached. List the "
+            "OPTIONS route first, give it a path that does not overlap, or drop "
+            "the cors transform from route #~b.",
+            [CorsPos, CorsPath, ShadowedPos, ShadowedPath, CorsPos, CorsPos]
+        )
+    };
 format_error(wildcard_in_method_list, [{_M, _F, _Args, _Info} | _]) ->
     #{
         general =>
@@ -569,12 +583,14 @@ cors_options(undefined, Transforms) ->
     Transforms.
 
 %% Open `OPTIONS` on each marked route, with `options_reply/3` answering the
-%% plain `OPTIONS` the transform passes through -- unless that would leave a
+%% plain `OPTIONS` the transform passes through. When that would leave a later
 %% route declaring `OPTIONS` itself unreachable (the cors route ahead of it
-%% takes the method on every URL they share). Compilation would then fail
-%% naming a method the author never wrote on the cors route, so the declared
-%% route keeps `OPTIONS` and owns the preflight. Decided by roadrunner's own
-%% reachability check, against the table as the earlier routes left it.
+%% takes the method on every URL they share), fail with an error naming both:
+%% keeping `OPTIONS` closed instead would 405 every preflight to the cors route
+%% with nothing at boot to say why, and roadrunner's own unreachable-route
+%% error would name a method the author never wrote on the cors route. Decided
+%% by roadrunner's reachability check, against the table as the earlier routes
+%% left it.
 open_cors_options(Entries) ->
     lists:foldl(fun open_cors_options/2, Entries, lists:seq(1, length(Entries))).
 
@@ -595,8 +611,17 @@ open_cors_options(Pos, Entries) ->
                             ],
                     Closed = Before ++ [Entry#{middlewares => Mws -- [cors_options]} | After],
                     case {roadrunner_router:validate(Opened), roadrunner_router:validate(Closed)} of
-                        {{error, {unreachable_route, _, _, _}}, ok} -> Closed;
-                        {_, _} -> Opened
+                        {{error, {unreachable_route, ShadowedPos, ShadowedPath, _By}}, ok} ->
+                            #{path := CorsPath} = Entry,
+                            error(
+                                {cors_options_shadows_route, {Pos, CorsPath}, {
+                                    ShadowedPos, ShadowedPath
+                                }},
+                                none,
+                                [{error_info, #{module => ?MODULE}}]
+                            );
+                        {_, _} ->
+                            Opened
                     end;
                 false ->
                     Entries

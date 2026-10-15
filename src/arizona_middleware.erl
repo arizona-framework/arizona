@@ -381,8 +381,9 @@ then reaches this transform and gets its `204`, and a plain `OPTIONS` (no
 `Access-Control-Request-Method`) is answered `204` with the `Allow` set a
 `405` on that URL would carry, never reaching the controller action or live
 page. A route that declares `OPTIONS` itself, or allows any method, keeps the
-plain `OPTIONS` for its own handler, and so does a later route declaring
-`OPTIONS` on a URL this one also matches.
+plain `OPTIONS` for its own handler. A route declaring `OPTIONS` on a URL this
+one also matches must be listed before it; listed after, it would never be
+reached, and route compilation fails naming both.
 
 The default Origin check still runs on the request that follows a preflight,
 so an origin listed here must also be in `csrf_origins` (or the route sets
