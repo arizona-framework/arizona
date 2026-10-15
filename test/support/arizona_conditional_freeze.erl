@@ -41,6 +41,9 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([raw_in_branch/1]).
 -export([raw_attr/1]).
 -export([raw_interp_attr/1]).
+-export([attr_name_swap/1]).
+-export([event_attr_name_swap/1]).
+-export([native_attr_name_swap/1]).
 
 %% Constant scrutinee (`flag`), branch reads `val`: a change to `val` must
 %% re-render the `<p>` even though `flag` is unchanged.
@@ -429,3 +432,42 @@ raw_attr(Bindings) ->
 -spec raw_interp_attr(az:bindings()) -> az:template().
 raw_interp_attr(Bindings) ->
     ?html({a, [{href, [~"/a?q=\"<&", ?raw(?get(h)), ~"&z=", ?get(v)]}], []}).
+
+%% Two branches whose only difference is the NAME of a dynamic attribute: switching
+%% `mode` must replace the branch, not patch the shared value under the new name and
+%% leave the old attribute on the element.
+-spec attr_name_swap(az:bindings()) -> az:template().
+attr_name_swap(Bindings) ->
+    ?html(
+        {'div', [], [
+            case ?get(mode) of
+                a -> {span, [{class, ?get(v)}], [~"x"]};
+                b -> {span, [{title, ?get(v)}], [~"x"]}
+            end
+        ]}
+    ).
+
+%% The same swap on an event attribute holding a runtime command (not folded into
+%% a static), where a stale name leaves the old listener bound.
+-spec event_attr_name_swap(az:bindings()) -> az:template().
+event_attr_name_swap(Bindings) ->
+    ?html(
+        {'div', [], [
+            case ?get(mode) of
+                a -> {form, [{az_click, ?get(cmd)}], [~"x"]};
+                b -> {form, [{az_submit, ?get(cmd)}], [~"x"]}
+            end
+        ]}
+    ).
+
+%% The `?native` counterpart of attr_name_swap/1.
+-spec native_attr_name_swap(az:bindings()) -> az:template().
+native_attr_name_swap(Bindings) ->
+    ?native(
+        {'Column', [], [
+            case ?get(mode) of
+                a -> {'Text', [{color, ?get(v)}], [~"x"]};
+                b -> {'Text', [{weight, ?get(v)}], [~"x"]}
+            end
+        ]}
+    ).

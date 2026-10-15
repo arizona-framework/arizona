@@ -159,6 +159,7 @@ process clears it after every drain and neither the memory nor the queue grows.
     get/2,
     get/3,
     get_lazy/3,
+    pending_ops/1,
     format_error/2
 ]).
 
