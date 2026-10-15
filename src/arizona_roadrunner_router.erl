@@ -27,6 +27,9 @@ reload without restarting the listener.
 `Verb` is `get`/`post`/`put`/`patch`/`delete`/`head`/`options`; `match`'s `Spec` is a
 single verb, a list of verbs, a custom uppercase method binary, or `'*'` (any method).
 
+An `{asset, ...}` route answers GET and HEAD only (plus `OPTIONS` when it carries a
+CORS transform, for the preflight); any other method gets `405` + `Allow`.
+
 An `{asset, ...}` route's optional `Opts` is `#{cache_control => binary()}` -- a
 `Cache-Control` header set verbatim on cacheable responses (off by default); use it
 only for content-hashed assets, never arizona's own stable bundle filenames.
@@ -401,13 +404,18 @@ asset_route(Path, Dir, Opts, BuildOpts) ->
     %% No Arizona pipeline runs on an asset route, so a request-to-bindings
     %% step in its `middlewares` would silently never run -- fail loudly.
     case split_middlewares(Opts) of
-        {Transforms, []} ->
+        {Transforms0, []} ->
+            %% roadrunner_static serves the file whatever the method, so the
+            %% allowlist is what makes a POST/DELETE to an asset path a 405.
+            Methods = [~"GET", ~"HEAD"],
+            Transforms = cors_options(Methods, Transforms0),
             [
                 with_compress(
                     with_transforms(
                         #{
                             path => <<Path/binary, "/*path">>,
                             handler => roadrunner_static,
+                            methods => Methods,
                             state => asset_state(Dir, Opts)
                         },
                         Transforms
