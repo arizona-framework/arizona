@@ -675,6 +675,60 @@ function navigateTo(path, qs, hash, opts) {
 }
 
 /**
+ * Load `url` as a real page. `replace` finishes a navigation already in history
+ * -- the server degrading the client's own navigate frame, whose entry was pushed
+ * before asking -- so it must not add a second entry; the browser only folds the
+ * load into the current entry by itself when the URL is identical.
+ *
+ * Only an http(s) URL may be loaded. Any other scheme (`javascript:`, `data:`)
+ * would run in this page, and the URL can come from a server that echoed a
+ * request parameter -- so it is dropped with a warning, never loaded.
+ * @param {string} url
+ * @param {boolean} [replace]
+ */
+function leavePage(url, replace) {
+    const { protocol } = new URL(url, location.href);
+    if (protocol !== 'http:' && protocol !== 'https:') {
+        console.warn('[arizona] refusing to navigate to a non-http(s) URL:', url);
+        return;
+    }
+    if (replace) location.replace(url);
+    else location.assign(url);
+}
+
+/**
+ * Run a `navigate`/`patch` effect. The URL resolves against the CURRENT page,
+ * as `pushState` resolves it, so the frame asks the server for the page the
+ * address bar will show (`?page=2` on `/users/1/` is `/users/1/?page=2`).
+ * Another origin cannot be SPA-navigated (`pushState` refuses it), so it loads
+ * as a page; a new fragment on this page just scrolls, like an in-page
+ * `az-navigate` click, with no server round trip.
+ * @param {string} full
+ * @param {{replace?: boolean, noscroll?: boolean}} opts
+ * @param {'navigate'|'patch'} kind
+ */
+function navigateEffect(full, opts, kind) {
+    const u = new URL(full, location.href);
+    if (u.origin !== location.origin) {
+        leavePage(full, opts.replace);
+        return;
+    }
+    const hash = u.hash ? u.hash.slice(1) : '';
+    const qs = u.search ? u.search.slice(1) : '';
+    if (hash && u.pathname === location.pathname && u.search === location.search) {
+        if (opts.replace) {
+            history.replaceState(history.state, '', u.href);
+        } else {
+            saveCurrentScroll();
+            history.pushState(null, '', u.href);
+        }
+        if (!opts.noscroll) applyScroll({ kind: 'push', hash });
+        return;
+    }
+    navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full, kind });
+}
+
+/**
  * Post a control message to the Worker. No-op if the Worker isn't
  * spawned. The Worker is the authority on transport state -- pre-open
  * `W_SEND` messages are dropped by the Worker itself, so the main
@@ -980,9 +1034,12 @@ function mayNameNodiff(html) {
  * @returns {ReadonlySet<Element>}
  */
 function keepNodiff(oldNodes, frag, resync) {
+    const tops = Array.from(oldNodes);
+    // An empty old slot (a conditional switching from `<<>>` to an az-nodiff element)
+    // holds nothing to keep, and has no node to find its parent from.
+    if (tops.length === 0) return NO_KEPT;
     const fresh = nodiffByIdentity(Array.from(frag.childNodes), frag);
     if (fresh.size === 0) return NO_KEPT;
-    const tops = Array.from(oldNodes);
     const old = nodiffByIdentity(tops, /** @type {ParentNode} */ (tops[0].parentNode));
     const kept = new Set();
     for (const [id, news] of fresh) {
@@ -1209,9 +1266,7 @@ function applySetAttrOp(el, name, val) {
     // synchronously dispatch the very event the attribute names.
     noteAzAttr(name);
     el.setAttribute(name, val);
-    if (name === 'value' && 'value' in el) el.value = val;
-    else if (name === 'checked' && 'checked' in el) el.checked = true;
-    else if (name === 'selected' && 'selected' in el) el.selected = true;
+    if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
     notifyUpdated(el);
 }
 
@@ -1227,10 +1282,55 @@ function applySetAttrOp(el, name, val) {
  */
 function applyRemAttrOp(el, name) {
     el.removeAttribute(name);
-    if (name === 'value' && 'value' in el) el.value = '';
-    else if (name === 'checked' && 'checked' in el) el.checked = false;
-    else if (name === 'selected' && 'selected' in el) el.selected = false;
+    if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
     notifyUpdated(el);
+}
+
+// The <input> types in the "value" value mode, the only ones whose `value` property
+// holds user state apart from the attribute. The rest reflect it ("default" and
+// "default/on": hidden, checkbox, radio, the buttons) or refuse a write ("filename":
+// file), and an unknown type reads back as `text`.
+const VALUE_MODE_INPUTS = new Set([
+    'text',
+    'search',
+    'url',
+    'tel',
+    'email',
+    'password',
+    'date',
+    'month',
+    'week',
+    'time',
+    'datetime-local',
+    'number',
+    'range',
+    'color',
+]);
+
+/**
+ * Does `name` on `el` have a live property that user interaction detaches from the
+ * attribute (the dirty value/checkedness/selectedness flags)? Only then must a write
+ * set the property too, and a `?local` read report it. Elsewhere `value` merely
+ * reflects the attribute, coerced -- a property write would put a removed attribute
+ * back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>` and on a
+ * hidden/checkbox/radio/button `<input>`, and an `<option>` loses its fallback to its
+ * text) or coerce a set one. Matched by local
+ * name, not `instanceof`: a popped-out (PiP) document's elements come from another
+ * realm.
+ * @param {Element} el
+ * @param {string} name
+ * @returns {boolean}
+ */
+function syncsProp(el, name) {
+    if (el.namespaceURI !== 'http://www.w3.org/1999/xhtml') return false;
+    if (name === 'value') {
+        if (el.localName === 'input')
+            return VALUE_MODE_INPUTS.has(/** @type {HTMLInputElement} */ (el).type);
+        return el.localName === 'textarea' || el.localName === 'select';
+    }
+    if (name === 'checked') return el.localName === 'input';
+    if (name === 'selected') return el.localName === 'option';
+    return false;
 }
 
 /**
@@ -1694,11 +1794,15 @@ function writeLocalValue(el, target, value) {
     }
     const name = target[1];
     if (target.length === 4) {
-        // Interpolated: recompose prefix + value + suffix (always a string attr).
-        applySetAttrOp(el, name, target[2] + String(value) + target[3]);
+        // Interpolated: recompose prefix + value + suffix (always a string attr). An
+        // absent value interpolates as empty, as a content slot renders it.
+        applySetAttrOp(el, name, target[2] + (value == null ? '' : String(value)) + target[3]);
     } else if (value === false || value == null) {
-        el.removeAttribute(name);
-        notifyUpdated(el);
+        // Through the canonical writer, like a set: after user interaction the
+        // dirty value/checkedness flags detach `.checked`/`.selected`/`.value` from
+        // the attribute, so a bare removal would leave the control showing the old
+        // state.
+        applyRemAttrOp(el, name);
     } else if (value === true) {
         applySetAttrOp(el, name, '');
     } else {
@@ -1731,6 +1835,10 @@ function readLocalValue(el, target) {
         const v = el.getAttribute(name) ?? '';
         return v.slice(target[2].length, v.length - target[3].length);
     }
+    // The form-control properties hold what the user sees once they interacted
+    // (the attributes are only the defaults by then) -- the same three
+    // applySetAttrOp/applyRemAttrOp keep in step on a write.
+    if (syncsProp(el, name)) return /** @type {any} */ (el)[name];
     if (!el.hasAttribute(name)) return false;
     const v = el.getAttribute(name);
     return v === '' ? true : v;
@@ -2605,22 +2713,31 @@ function maybeResetForm(form) {
 }
 
 /**
- * True when a parsed az-submit command (single or list) is/contains a `fetch`, so the
- * submit listener can defer `az-form-reset` to the fetch response instead of resetting
- * synchronously on submit.
+ * What a parsed command (single or list) needs the WebSocket for, so a submit made
+ * while it is down can be settled up front: `event` (a `push_event`), `fetch`, and
+ * `nav`, the first SPA `navigate`/`patch` that runs unconditionally (a `full`
+ * navigate is a plain page load and needs no socket). A navigation under `on_key`
+ * runs only on a matching key, so it counts as `event`: it cannot be degraded to a
+ * page load that may never have been asked for. `fetch` also tells the submit
+ * listener to leave `az-form-reset` to the fetch's own response, wherever the fetch
+ * sits (a transition runs it inside its callback, an on_key on a matching key).
  * @param {Array<*>} cmds
- * @returns {boolean}
+ * @param {{event?: boolean, fetch?: boolean, nav?: Array<*>}} acc
+ * @param {boolean} conditional
+ * @returns {{event?: boolean, fetch?: boolean, nav?: Array<*>}}
  */
-function commandsIncludeFetch(cmds) {
+function socketNeeds(cmds, acc, conditional) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
-    return list.some((c) => {
-        if (c[0] === JS_FETCH) return true;
-        // transition(...)/on_key(...) wrap their inner command(s) in c[2]; a fetch
-        // nested there still runs (inside the transition callback), so it must also
-        // defer the reset -- recurse instead of only checking the top level.
-        if (c[0] === JS_TRANSITION || c[0] === JS_ON_KEY) return commandsIncludeFetch(c[2]);
-        return false;
-    });
+    for (const c of list) {
+        if (c[0] === JS_PUSH_EVENT) acc.event = true;
+        else if (c[0] === JS_FETCH) acc.fetch = true;
+        else if (c[0] === JS_PATCH || (c[0] === JS_NAVIGATE && !c[2]?.full)) {
+            if (conditional) acc.event = true;
+            else acc.nav ??= c;
+        } else if (c[0] === JS_TRANSITION) socketNeeds(c[2], acc, conditional);
+        else if (c[0] === JS_ON_KEY) socketNeeds(c[2], acc, true);
+    }
+    return acc;
 }
 
 /**
@@ -2666,8 +2783,21 @@ function withQueryAll(sel, fn) {
  * @param {Array<*>} cmds - parsed JSON command(s)
  */
 function executeJS(el, event, cmds) {
+    runCommands(el, event, cmds, '');
+}
+
+/**
+ * `executeJS` with the position of `cmds` in the attribute's command tree: `prefix`
+ * is the index path of the wrapper (transition/on_key) holding them, '' at the
+ * top level. A debounced/throttled push_event keys its timer by that position.
+ * @param {Element} el
+ * @param {Event|null} event
+ * @param {Array<*>} cmds
+ * @param {string} prefix
+ */
+function runCommands(el, event, cmds, prefix) {
     const commands = Array.isArray(cmds[0]) ? cmds : [cmds];
-    for (const cmd of commands) execOne(el, event, cmd);
+    for (let i = 0; i < commands.length; i++) execOne(el, event, commands[i], prefix, i);
 }
 
 /**
@@ -2675,8 +2805,10 @@ function executeJS(el, event, cmds) {
  * @param {Element} el
  * @param {Event|null} event
  * @param {Array<*>} cmd
+ * @param {string} [prefix] index path of the wrapper holding `cmd` (see runCommands)
+ * @param {number} [index] position of `cmd` in its list
  */
-function execOne(el, event, cmd) {
+function execOne(el, event, cmd, prefix = '', index = 0) {
     const op = cmd[0];
     switch (op) {
         case JS_TRANSITION: {
@@ -2696,7 +2828,7 @@ function execOne(el, event, cmd) {
                   : null;
             if (kind) {
                 _pendingTransition = { types: opts.types, kind };
-                executeJS(el, event, inner);
+                runCommands(el, event, inner, `${prefix}${index}.`);
             } else {
                 // The update callback runs inside startViewTransition, OUTSIDE
                 // every caller's containment -- a throwing command would become
@@ -2706,7 +2838,7 @@ function execOne(el, event, cmd) {
                 runTransition(opts, () =>
                     later(() => {
                         try {
-                            executeJS(el, event, inner);
+                            runCommands(el, event, inner, `${prefix}${index}.`);
                         } catch (err) {
                             const detail = err instanceof Error ? err.message : String(err);
                             warnOnce(
@@ -2725,7 +2857,7 @@ function execOne(el, event, cmd) {
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
             const msg = JSON.stringify([resolveTarget(el), evt, payload]);
             if (event) {
-                scheduleSend(el, event, () => {
+                scheduleSend(el, event, prefix, index, () => {
                     workerPost(W_SEND, msg);
                 });
             } else {
@@ -2799,30 +2931,21 @@ function execOne(el, event, cmd) {
             }
             break;
         case JS_NAVIGATE: {
-            const full = cmd[1];
             const opts = cmd[2] || {};
             if (opts.full) {
                 // Full-page navigation: let the browser load the URL normally.
                 // Used when the target isn't a live route (a controller/asset
                 // path, or a 404) and so can't be SPA-navigated.
-                location.assign(full);
+                leavePage(cmd[1], opts.replace);
                 break;
             }
-            const u = new URL(full, location.origin);
-            const hash = u.hash ? u.hash.slice(1) : '';
-            const qs = u.search ? u.search.slice(1) : '';
-            navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full });
+            navigateEffect(cmd[1], opts, 'navigate');
             break;
         }
-        case JS_PATCH: {
+        case JS_PATCH:
             // In-place SPA navigation: keep the view, re-render via handle_update.
-            const full = cmd[1];
-            const u = new URL(full, location.origin);
-            const hash = u.hash ? u.hash.slice(1) : '';
-            const qs = u.search ? u.search.slice(1) : '';
-            navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full, kind: 'patch' });
+            navigateEffect(cmd[1], cmd[2] || {}, 'patch');
             break;
-        }
         case JS_FETCH: {
             // HTTP request via fetch() with no page reload. Unlike push_event (WS,
             // can't set cookies), the response can carry a real Set-Cookie, applied
@@ -2856,7 +2979,7 @@ function execOne(el, event, cmd) {
                 );
             }
             const onError = (/** @type {object} */ detail) => {
-                if (opts.on_error) executeJS(el, event, opts.on_error);
+                if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
             const later = holdReplay();
@@ -3003,7 +3126,7 @@ function execOne(el, event, cmd) {
                     ? /** @type {any} */ (event).key.toLowerCase()
                     : '';
             if (Array.isArray(f) ? f.includes(lk) : new RegExp(f).test(lk))
-                executeJS(el, event, cmd[2]);
+                runCommands(el, event, cmd[2], `${prefix}${index}.`);
             break;
         }
         case JS_SET_LOCAL: {
@@ -3044,11 +3167,13 @@ function execOne(el, event, cmd) {
 }
 
 /**
+ * One deferred send's state. An element holds one per (event type, command
+ * position), so two push_events in one command list, or `az-input` beside
+ * `az-keydown`, each keep their own timer instead of the later one replacing the
+ * earlier.
  * @typedef {{
  *   id?: ReturnType<typeof setTimeout>,
  *   pending?: Function|null,
- *   eventBound?: boolean,
- *   blurBound?: boolean,
  *   prevKey?: string
  * }} TimerState
  */
@@ -3056,9 +3181,16 @@ function execOne(el, event, cmd) {
 /**
  * Per-element timer state, keyed by DOM element. WeakMap so entries are
  * GC'd when elements are removed from the document.
- * @type {WeakMap<Element, TimerState>}
+ * @type {WeakMap<Element, {slots: Map<string, TimerState>, eventBound?: boolean, blurBound?: boolean}>}
  */
 const _timers = new WeakMap();
+
+/**
+ * Bumped by every `disconnect()`. A deferred send captures it, so a timer that
+ * outlives its connection -- `disconnect()` cannot reach the timers, a WeakMap is
+ * not iterable -- never sends an old view's event over the next connection.
+ */
+let _connGen = 0;
 
 /**
  * Three send modes controlled by az-debounce and az-throttle attributes:
@@ -3077,11 +3209,20 @@ const _timers = new WeakMap();
  *
  * For modes 2 and 3, blur auto-flushes pending sends so data isn't lost
  * when the user tabs away or clicks elsewhere.
+ *
+ * Timing is per (event type, command position), not per element: two commands
+ * in one list, or two event types on one element, each keep their own timer,
+ * while a repeat at the same position collapses -- including one whose command
+ * the server re-rendered mid-window (a changed payload), which is why the slot is
+ * the position and not the command's value. A deferred send is dropped when it
+ * fires after `disconnect()`.
  * @param {Element} el
  * @param {Event|KeyboardEvent} event
+ * @param {string} prefix index path of the wrapper holding the command
+ * @param {number} index the command's position in its list
  * @param {Function} sendFn
  */
-function scheduleSend(el, event, sendFn) {
+function scheduleSend(el, event, prefix, index, sendFn) {
     const debounceAttr = el.getAttribute('az-debounce') || '';
     const debounceMs = parseInt(debounceAttr, 10);
     const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
@@ -3090,39 +3231,53 @@ function scheduleSend(el, event, sendFn) {
         sendFn();
         return;
     }
-    if (!_timers.has(el)) _timers.set(el, {});
-    const t = /** @type {TimerState} */ (_timers.get(el));
+    const gen = _connGen;
+    const send = () => {
+        if (gen === _connGen) sendFn();
+    };
+    let rec = _timers.get(el);
+    if (!rec) {
+        rec = { slots: new Map() };
+        _timers.set(el, rec);
+    }
+    const slotKey = `${event.type} ${prefix}${index}`;
+    let t = rec.slots.get(slotKey);
+    if (!t) {
+        t = {};
+        rec.slots.set(slotKey, t);
+    }
+    const slot = t;
     // Event-name debounce: just store the latest send, flush on the named event.
     if (debounceEvent) {
-        t.pending = sendFn;
-        if (!t.eventBound) {
-            t.eventBound = true;
+        slot.pending = send;
+        if (!rec.eventBound) {
+            rec.eventBound = true;
             el.addEventListener(debounceEvent, () => flushTimer(el));
         }
         return;
     }
     if (debounceMs > 0) {
         // Classic debounce: reset timer on every event.
-        clearTimeout(t.id);
-        t.pending = sendFn;
-        t.id = setTimeout(() => {
-            t.id = undefined;
-            t.pending = null;
-            sendFn();
+        clearTimeout(slot.id);
+        slot.pending = send;
+        slot.id = setTimeout(() => {
+            slot.id = undefined;
+            slot.pending = null;
+            send();
         }, debounceMs);
     } else {
         // Throttle: send immediately, suppress duplicates for the interval.
         // For keydown, a different key resets the cooldown so the new key
         // isn't swallowed by the previous key's throttle window.
-        if (event.type === 'keydown' && t.prevKey !== /** @type {KeyboardEvent} */ (event).key) {
-            clearTimeout(t.id);
-            t.id = undefined;
+        if (event.type === 'keydown' && slot.prevKey !== /** @type {KeyboardEvent} */ (event).key) {
+            clearTimeout(slot.id);
+            slot.id = undefined;
         }
-        if (event.type === 'keydown') t.prevKey = /** @type {KeyboardEvent} */ (event).key;
-        t.pending = sendFn;
-        if (t.id) return;
-        sendFn();
-        t.pending = null;
+        if (event.type === 'keydown') slot.prevKey = /** @type {KeyboardEvent} */ (event).key;
+        slot.pending = send;
+        if (slot.id) return;
+        send();
+        slot.pending = null;
         // The tick re-arms itself while events are still arriving, and only goes
         // idle when it finds nothing pending. Clearing the window BEFORE the
         // trailing send instead left the throttle idle the instant that send
@@ -3130,37 +3285,39 @@ function scheduleSend(el, event, sendFn) {
         // all -- on a pointer drag, two sends stamped at the same millisecond,
         // the first already stale when it left.
         const tick = () => {
-            const pending = t.pending;
-            t.pending = null;
+            const pending = slot.pending;
+            slot.pending = null;
             if (pending) {
                 pending();
-                t.id = setTimeout(tick, throttleMs);
+                slot.id = setTimeout(tick, throttleMs);
             } else {
-                t.id = undefined;
+                slot.id = undefined;
             }
         };
-        t.id = setTimeout(tick, throttleMs);
+        slot.id = setTimeout(tick, throttleMs);
     }
     // Auto-flush on blur so pending data isn't lost when focus leaves.
-    if (!t.blurBound) {
-        t.blurBound = true;
+    if (!rec.blurBound) {
+        rec.blurBound = true;
         el.addEventListener('blur', () => flushTimer(el));
     }
 }
 
 /**
- * Immediately send any pending debounced/throttled message for this element.
+ * Immediately send every pending debounced/throttled message for this element.
  * Used by blur auto-flush and form submit (to capture in-flight input values).
  * @param {Element} el
  */
 function flushTimer(el) {
-    const t = _timers.get(el);
-    if (!t) return;
-    if (t.id) clearTimeout(t.id);
-    const pending = t.pending;
-    t.id = undefined;
-    t.pending = null;
-    if (pending) pending();
+    const rec = _timers.get(el);
+    if (!rec) return;
+    for (const t of rec.slots.values()) {
+        if (t.id) clearTimeout(t.id);
+        const pending = t.pending;
+        t.id = undefined;
+        t.pending = null;
+        if (pending) pending();
+    }
 }
 
 /**
@@ -3297,10 +3454,13 @@ function runDelegated(e, attr, sel, capture) {
     // a server-sent `dispatch_event` all target the Document, which has no closest().
     if (t?.nodeType !== 1) return;
     const el = capture ? (t.hasAttribute(attr) ? t : null) : t.closest(sel);
-    if (!el || !_connected) return;
+    if (!el) return;
     // Before the empty-value return: `az-<event>=""` with `az-prevent-default`
-    // declares no command but still asks for the default to be suppressed.
+    // declares no command but still asks for the default to be suppressed. Before
+    // the connection check too: a declared suppression holds while disconnected
+    // (a submit button's click would otherwise submit its form natively).
     if (el.hasAttribute('az-prevent-default')) e.preventDefault();
+    if (!_connected) return;
     const raw = el.getAttribute(attr);
     if (!raw) return;
     // The value is a command list by DECLARATION, so it is not inspected to decide
@@ -3630,13 +3790,49 @@ function bindDocumentEvents(target, signal, abort) {
         'submit',
         (e) => {
             const form = /** @type {Element} */ (e.target).closest('[az-submit]');
-            if (!form || !_connected) return;
+            if (!form) return;
+            // Unconditionally, before anything can return: an az-submit form that is
+            // let through submits natively with its own method -- a GET unless it
+            // says otherwise -- which puts every field, a password included, in the
+            // URL. Before the first open and during reconnect backoff that used to
+            // be exactly what happened.
             e.preventDefault();
-            form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
             const raw = form.getAttribute('az-submit');
-            let cmds = null;
+            /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
+            let needs = {};
             try {
-                cmds = raw ? JSON.parse(raw) : null;
+                const cmds = raw ? JSON.parse(raw) : null;
+                if (cmds) needs = socketNeeds(cmds, {}, false);
+                // While the socket is down (the worker drops pre-open sends):
+                // - an SPA navigation alone degrades to a full load of its URL, as a
+                //   disconnected az-navigate click does;
+                // - anything else needing the socket drops the submission whole rather
+                //   than run it in part, keeping the typed fields (no reset), with a
+                //   warning and `arizona:submit-dropped` on the form for app feedback.
+                //   A navigation beside a fetch drops too: the load would cancel it.
+                // - a `fetch` needs no socket and runs, so an HTTP login form works
+                //   before the first open.
+                if (!_connected && needs.nav && !needs.event && !needs.fetch) {
+                    leavePage(needs.nav[1], needs.nav[2]?.replace);
+                    return;
+                }
+                if (!_connected && (needs.event || needs.nav)) {
+                    console.warn(
+                        '[arizona] az-submit dropped: its command needs the WebSocket, which is not connected',
+                    );
+                    form.dispatchEvent(
+                        new CustomEvent('arizona:submit-dropped', {
+                            bubbles: true,
+                            detail: { reason: 'disconnected' },
+                        }),
+                    );
+                    return;
+                }
+                // Flush pending debounced inputs so the server sees them before the
+                // submit. Only while connected: a flush now would send them into a
+                // closed socket, while a still-armed timer can deliver them later.
+                if (_connected)
+                    form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
@@ -3647,7 +3843,7 @@ function bindDocumentEvents(target, signal, abort) {
             }
             // A fetch command resets on its own 2xx response (so a validation error
             // keeps the typed fields); everything else resets synchronously here.
-            if (!(cmds && commandsIncludeFetch(cmds))) maybeResetForm(form);
+            if (!needs.fetch) maybeResetForm(form);
         },
         { signal },
     );
@@ -3778,8 +3974,16 @@ function connect(endpoint, params = {}) {
                 /** @type {Element} */ (e.target).closest('[az-navigate], [az-patch]')
             );
             if (!el || !_connected) return;
+            // An app listener already handled the click, or the browser is meant
+            // to open the link elsewhere (`target`) or save it (`download`).
+            if (e.defaultPrevented || el.hasAttribute('download')) return;
+            const target = el.getAttribute('target');
+            if (target && target.toLowerCase() !== '_self') return;
             const href = el.getAttribute('href');
             if (!href) return;
+            // Another origin cannot be SPA-navigated (pushState refuses it, and
+            // its pathname is not ours to request): the browser follows the link.
+            if (el.origin !== location.origin) return;
             const isPatch = el.hasAttribute('az-patch');
             // Anchors implement the URL interface -- use browser-parsed parts.
             const path = el.pathname;
@@ -4165,10 +4369,11 @@ function connect(endpoint, params = {}) {
         // arizona didn't observe (third-party libs, test teardown via
         // `document.body.innerHTML = ''`).
         for (const el of [..._hooks.keys()]) destroyHook(el);
-        // Debounce/throttle timers live in a WeakMap keyed by element and
-        // aren't iterable. They all guard on `_connected` inside their fun,
-        // so after setting `_connected = false` above a late-firing timer
-        // won't actually send anything -- leave them to expire naturally.
+        // Debounce/throttle timers live in a WeakMap keyed by element and aren't
+        // iterable, so they are left to expire: each captured the generation
+        // this bump retires and drops its send, which would otherwise reach the
+        // NEXT connection's worker carrying this one's view id.
+        _connGen++;
         document.documentElement.classList.remove('az-connected');
         document.documentElement.classList.remove('az-disconnected');
         if ('scrollRestoration' in history) {

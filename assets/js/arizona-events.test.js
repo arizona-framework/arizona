@@ -40,6 +40,7 @@ function mockWorker(mod) {
         /** The connect frame: the app's whole `az-*` vocabulary, ops optional. */
         names: (azAttrs, ops = null) => inst.onmessage({ data: [0, ops, null, false, azAttrs] }),
         ops: (ops) => inst.onmessage({ data: [0, ops, null, false, null] }),
+        close: (code = 1006) => inst.onmessage({ data: [2, code] }),
         sent: () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1])),
         restore: () => {
             disconnect();
@@ -495,6 +496,21 @@ describe('open event delegation', () => {
         w.names(['az-prevent-default']);
 
         const ev = fire(document.getElementById('l'), 'click', true, true);
+        expect(ev.defaultPrevented).toBe(true);
+        expect(w.sent()).toEqual([]);
+    });
+
+    // A declared suppression is not a server round-trip, so it holds while the
+    // socket is down: a submit button's click would otherwise submit natively.
+    it('prevents the default while disconnected, sending nothing', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view><form><button id="b" az-click='[0,"go"]' az-prevent-default>x</button></form></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click', 'az-prevent-default']);
+        w.close();
+
+        const ev = fire(document.getElementById('b'), 'click', true, true);
         expect(ev.defaultPrevented).toBe(true);
         expect(w.sent()).toEqual([]);
     });

@@ -61,6 +61,10 @@
     each_multi_root_no_single_root_flag/1,
     each_stream_no_single_root_flag/1,
     each_native_no_single_root_flag/1,
+    each_stream_reuse_flags/1,
+    each_stream_reuse_flags_compiled_body/1,
+    each_stream_no_reuse_without_tracked_reads/1,
+    each_stream_reuse_map_must_be_item/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -291,10 +295,26 @@
     slot_tracks_only_reads_in_its_own_closure/1,
     each_param_rename_avoids_shadow_warning/1,
     inline_hoisted_html_unrelated_key_skipped/1,
+    inline_branch_local_hoist_tracks/1,
+    inline_branch_local_hoist_live_root/1,
+    inline_branch_local_hoist_live_root_id/1,
+    inline_branch_local_hoist_tail_forms/1,
+    inline_branch_local_hoist_outer_chain/1,
+    inline_branch_local_hoist_scoping/1,
     helper_zero_arity_inlines/1,
     helper_with_args_renders_and_tracks/1,
     helper_body_read_tracks/1,
     helper_body_var_shadows_caller_var/1,
+    helper_param_in_case_pattern/1,
+    helper_param_in_pattern_caller_same_name/1,
+    helper_param_in_guard/1,
+    helper_param_in_guard_caller_same_name/1,
+    helper_param_in_map_key_and_bin_size/1,
+    helper_param_in_fun_guard/1,
+    helper_param_in_maybe_and_match/1,
+    helper_param_in_generator_key/1,
+    helper_param_shadowed_by_fun_param/1,
+    helper_param_in_each_guard_error/1,
     helper_whole_body_html_unwraps_and_tracks/1,
     helper_nested_calls_inline/1,
     helper_element_list_body_tracks/1,
@@ -309,6 +329,10 @@
     helper_scalar_body_read_still_tracks/1,
     helper_multi_clause_scalar_untouched/1,
     helper_wrapped_multi_statement_untouched/1,
+    helper_multi_clause_data_arg_untouched/1,
+    helper_guarded_data_arg_untouched/1,
+    helper_multi_clause_comprehension_error/1,
+    helper_multi_clause_comprehension_arg_untouched/1,
     tracked_get_submap_errors/1,
     tracked_get_submap_az_errors/1,
     tracked_get_lazy_submap_errors/1,
@@ -336,6 +360,15 @@
     guard_untracked_local_ok/1,
     guard_tracked_read_in_scrutinee_ok/1,
     guard_pattern_bound_from_tracked_case_ok/1,
+    pattern_equality_hoisted_tracks/1,
+    pattern_equality_in_each_tracks/1,
+    pattern_map_key_hoisted_tracks/1,
+    pattern_bin_size_hoisted_tracks/1,
+    pattern_maybe_match_hoisted_tracks/1,
+    pattern_equality_and_body_tracks/1,
+    pattern_match_expr_hoisted_tracks/1,
+    pattern_generator_map_key_tracks/1,
+    pattern_fun_head_map_key_tracks/1,
     void_element/1,
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
@@ -343,6 +376,7 @@
     void_tag_case_insensitive/1,
     void_tag_case_insensitive_rejects_children/1,
     reserved_attr_case_insensitive/1,
+    az_submit_form_implies_post/1,
     az_view_attr_case_insensitive/1,
     nodiff_directive_case_insensitive/1,
     void_two_element_dynamic_attr/1,
@@ -382,6 +416,7 @@
     local_attr_interp_render/1,
     local_attr_interp_affix/1,
     local_attr_multiple_error/1,
+    local_attr_affix_non_ascii/1,
     local_attr_mixed_error/1,
     local_attr_interp_boolean/1,
     local_attr_interp_numeric/1,
@@ -425,6 +460,9 @@
     raw_text_svg_title_diffable/1,
     raw_text_svg_title_factoring/1,
     raw_text_svg_title_local/1,
+    raw_text_svg_branch_context/1,
+    raw_text_svg_wrapped_branch_context/1,
+    wrapped_branch_reads_tracked/1,
     raw_text_foreign_script_style_escaped/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
@@ -500,7 +538,9 @@
     cond_begin_block_tail/1,
     cond_try_bare_element/1,
     cond_maybe_bare_element/1,
-    cond_receive_bare_element/1
+    cond_receive_bare_element/1,
+    template_free_tails_untouched/1,
+    template_free_tails_beside_nodiff_template/1
 ]).
 -export([scope_keeps_static_marker_text/1]).
 -export([scope_keeps_static_marker_text_in_each_item/1]).
@@ -605,6 +645,7 @@ groups() ->
             void_tag_case_insensitive,
             void_tag_case_insensitive_rejects_children,
             reserved_attr_case_insensitive,
+            az_submit_form_implies_post,
             az_view_attr_case_insensitive,
             nodiff_directive_case_insensitive,
             static_after_dynamic_attr
@@ -624,6 +665,7 @@ groups() ->
             local_attr_interp_render,
             local_attr_interp_affix,
             local_attr_multiple_error,
+            local_attr_affix_non_ascii,
             local_attr_mixed_error,
             local_attr_interp_boolean,
             local_attr_interp_numeric,
@@ -696,6 +738,10 @@ groups() ->
             each_multi_root_no_single_root_flag,
             each_stream_no_single_root_flag,
             each_native_no_single_root_flag,
+            each_stream_reuse_flags,
+            each_stream_reuse_flags_compiled_body,
+            each_stream_no_reuse_without_tracked_reads,
+            each_stream_reuse_map_must_be_item,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -805,6 +851,9 @@ groups() ->
             raw_text_svg_title_diffable,
             raw_text_svg_title_factoring,
             raw_text_svg_title_local,
+            raw_text_svg_branch_context,
+            raw_text_svg_wrapped_branch_context,
+            wrapped_branch_reads_tracked,
             raw_text_foreign_script_style_escaped,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
@@ -882,7 +931,9 @@ groups() ->
             cond_begin_block_tail,
             cond_try_bare_element,
             cond_maybe_bare_element,
-            cond_receive_bare_element
+            cond_receive_bare_element,
+            template_free_tails_untouched,
+            template_free_tails_beside_nodiff_template
         ]},
         %% Binding-read inlining: reads hoisted out of ?html still track per-slot
         {inline, [parallel], [
@@ -923,7 +974,13 @@ groups() ->
             inline_hoisted_html_each_body_single_root,
             slot_tracks_only_reads_in_its_own_closure,
             each_param_rename_avoids_shadow_warning,
-            inline_hoisted_html_unrelated_key_skipped
+            inline_hoisted_html_unrelated_key_skipped,
+            inline_branch_local_hoist_tracks,
+            inline_branch_local_hoist_live_root,
+            inline_branch_local_hoist_live_root_id,
+            inline_branch_local_hoist_tail_forms,
+            inline_branch_local_hoist_outer_chain,
+            inline_branch_local_hoist_scoping
         ]},
         %% Local element-returning helper calls inlined at the template call site
         {helper, [parallel], [
@@ -931,6 +988,16 @@ groups() ->
             helper_with_args_renders_and_tracks,
             helper_body_read_tracks,
             helper_body_var_shadows_caller_var,
+            helper_param_in_case_pattern,
+            helper_param_in_pattern_caller_same_name,
+            helper_param_in_guard,
+            helper_param_in_guard_caller_same_name,
+            helper_param_in_map_key_and_bin_size,
+            helper_param_in_fun_guard,
+            helper_param_in_maybe_and_match,
+            helper_param_in_generator_key,
+            helper_param_shadowed_by_fun_param,
+            helper_param_in_each_guard_error,
             helper_whole_body_html_unwraps_and_tracks,
             helper_nested_calls_inline,
             helper_element_list_body_tracks,
@@ -944,7 +1011,11 @@ groups() ->
             helper_recursive_error,
             helper_scalar_body_read_still_tracks,
             helper_multi_clause_scalar_untouched,
-            helper_wrapped_multi_statement_untouched
+            helper_wrapped_multi_statement_untouched,
+            helper_multi_clause_data_arg_untouched,
+            helper_guarded_data_arg_untouched,
+            helper_multi_clause_comprehension_error,
+            helper_multi_clause_comprehension_arg_untouched
         ]},
         %% Reject the tracked accessor reading a non-bindings (sub-)map
         {tracked_get, [parallel], [
@@ -978,7 +1049,16 @@ groups() ->
             guard_pattern_var_ok,
             guard_untracked_local_ok,
             guard_tracked_read_in_scrutinee_ok,
-            guard_pattern_bound_from_tracked_case_ok
+            guard_pattern_bound_from_tracked_case_ok,
+            pattern_equality_hoisted_tracks,
+            pattern_equality_in_each_tracks,
+            pattern_map_key_hoisted_tracks,
+            pattern_bin_size_hoisted_tracks,
+            pattern_maybe_match_hoisted_tracks,
+            pattern_equality_and_body_tracks,
+            pattern_match_expr_hoisted_tracks,
+            pattern_generator_map_key_tracks,
+            pattern_fun_head_map_key_tracks
         ]},
         %% Tests 68-77c: layout tests
         {layout, [parallel], [
@@ -1462,6 +1542,32 @@ local_attr_interp_affix(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"href=\"/u/1/edit\"")),
     ?assertEqual(
         #{~"a" => #{~"href" => ~"id"}, ~"ap" => #{~"href" => [~"/u/", ~"/edit"]}},
+        decode_local_descriptor(HTML)
+    ).
+
+%% The descriptor is generated as a binary literal and then folded like any authored
+%% attribute value, so a non-ASCII affix must come back as the same UTF-8 text: the client
+%% recomposes the attribute from it on `set`, and a double-encoded `\x{e9}` would turn
+%% `href` into mojibake on the first client write.
+local_attr_affix_non_ascii(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_affix_utf8). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'a', [{href, [<<\"\\x{e9}/\"/utf8>>, "
+        "            arizona_template:local(<<\"id\">>, <<\"1\">>), <<\"/\\x{fc}\"/utf8>>]}], "
+        "            [<<\"e\">>]}"
+        "    ). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"href=\"\x{e9}/1/\x{fc}\""/utf8>>)),
+    ?assertEqual(
+        #{
+            ~"a" => #{~"href" => ~"id"},
+            ~"ap" => #{~"href" => [<<"\x{e9}/"/utf8>>, <<"/\x{fc}"/utf8>>]}
+        },
         decode_local_descriptor(HTML)
     ).
 
@@ -2593,6 +2699,79 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
     {EachHTML, _} = arizona_render:render(Mod:each(#{rows => [~"A"]})),
     ?assertMatch({_, _}, binary:match(iolist_to_binary(EachHTML), ~"<title az=")).
 
+%% A conditional tail's element compiles into a template of its own, but it renders in
+%% the slot that holds it, so it takes that slot's content context: under `<svg>` a
+%% branch's `<script>` is foreign content (a plain diffable slot, not raw text that
+%% must be a `?raw`) and its `<title>` keeps its markers, exactly as when written
+%% directly in the `<svg>`.
+raw_text_svg_branch_context(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_branch). "
+        "-export([script/1, title/1]). "
+        "script(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {script, [], [arizona_template:get(x, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+        "title(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+    ),
+    {ScriptHTML, _} = arizona_render:render(Mod:script(#{f => true, x => ~"A"})),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(ScriptHTML), ~"<script[^>]*><!--az:")),
+    B0 = #{f => true, t => ~"A"},
+    {TitleHTML, TitleSnap, _} = arizona_render:render(Mod:title(B0), #{}),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(TitleHTML), ~"<title[^>]*><!--az:")),
+    %% The same branch re-rendered patches only the title's own slot.
+    {TitleOps, _, _} = arizona_diff:diff(
+        Mod:title(B0#{t => ~"B"}), TitleSnap, #{}, #{t => true}
+    ),
+    ?assertMatch([[_Op, _Az, ~"B"]], TitleOps).
+
+%% A whole-tail `?html(...)` in a branch is the bare element in a wrapper, so it compiles
+%% in the slot's content context too: an SVG `<title>` keeps its markers and diffs, the
+%% same as the bare branch. A non-tail `?html` (bound, passed, or nested deeper) still
+%% starts its own template at the root context.
+raw_text_svg_wrapped_branch_context(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_wrapped). "
+        "-export([bare/1, wrapped/1]). "
+        "bare(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+        "wrapped(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:html({title, [], [arizona_template:get(t, Bindings)]}); "
+        "        false -> ~\"\" end]}). "
+    ),
+    B0 = #{f => true, t => ~"A"},
+    Run = fun(F) ->
+        {H0, Snap, _} = arizona_render:render(Mod:F(B0), #{}),
+        {Ops, _, _} = arizona_diff:diff(Mod:F(B0#{t => ~"B"}), Snap, #{}, #{t => true}),
+        {iolist_to_binary(H0), Ops}
+    end,
+    {WrappedHTML, WrappedOps} = Run(wrapped),
+    ?assertMatch({match, _}, re:run(WrappedHTML, ~"<title[^>]*><!--az:")),
+    ?assertMatch([[_Op, _Az, ~"B"]], WrappedOps),
+    ?assertEqual(Run(bare), {WrappedHTML, WrappedOps}).
+
+%% Unwrapping a whole-tail `?html` also gives it the bare branch's read tracking: a
+%% binding read only inside the wrapped branch is a dependency of the slot, so a change to
+%% it alone patches the branch instead of leaving it frozen at its first render.
+wrapped_branch_reads_tracked(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_wrapped_branch_reads). -export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:html({b, [], [arizona_template:get(t, Bindings)]}); "
+        "        false -> ~\"\" end]}). "
+    ),
+    B0 = #{f => true, t => ~"A"},
+    {_, Snap, _} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, _, _} = arizona_diff:diff(Mod:render(B0#{t => ~"B"}), Snap, #{}, #{t => true}),
+    ?assertMatch([[_Op, _Az, ~"B"]], Ops).
+
 %% A content `?local` under a raw-text element is a compile error -- the client
 %% resolves a local slot through its markers, and raw-text content has none. An
 %% SVG `<title>` is not raw text, so it carries markers and a `?local` there is
@@ -3028,7 +3207,10 @@ raw_text_attr_diffs_content_render_once(Config) when is_list(Config) ->
     {OpsSrc, _} = arizona_diff:diff(Mod:render(#{src => <<"/b.js">>, body => <<"A">>}), Snap0),
     ?assertNotEqual([], OpsSrc),
     {OpsBody, _} = arizona_diff:diff(Mod:render(#{src => <<"/a.js">>, body => <<"B">>}), Snap0),
-    ?assertMatch([[_Op, <<"QP3ZUD-0">>, #{~"d" := [~"B"]}]], OpsBody).
+    {match, [ElemAz]} = re:run(
+        HTML, ~"<script az=\"([^\"]+)\"", [{capture, all_but_first, binary}]
+    ),
+    ?assertMatch([[_Op, ElemAz, #{~"d" := [~"B"]}]], OpsBody).
 
 %% Escapable (<title>) and raw (<script>) raw-text elements adjacent under <head>,
 %% followed by a normal element: both kinds restore context, so the trailing
@@ -3333,6 +3515,63 @@ cond_receive_bare_element(Config) when is_list(Config) ->
     ),
     {HTML, _} = arizona_render:render(Mod:render(#{})),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), <<"<p>timeout</p>">>)).
+
+%% A conditional outside every template is plain Erlang: its tails are data, so
+%% a tuple shaped like `{Tag, List}` / `{Tag, List, _}` there -- a key/value pair,
+%% a fold accumulator, an improper list -- must reach the compiler untouched rather
+%% than be read as an element (it used to raise `computed_element_tag` or crash
+%% the transform with a `function_clause`).
+template_free_tails_untouched(Config) when is_list(Config) ->
+    Pair = compile_module_strict(
+        "-module(pt_template_free_pair). "
+        "-export([pair/2]). "
+        "pair(K, V) -> "
+        "    case V of undefined -> {K, []}; _ -> {K, [V]} end. "
+    ),
+    ?assertEqual({k, []}, Pair:pair(k, undefined)),
+    ?assertEqual({k, [v]}, Pair:pair(k, v)),
+    Fold = compile_module_strict(
+        "-module(pt_template_free_fold). "
+        "-export([count/1]). "
+        "count(L) -> "
+        "    lists:foldl(fun(X, {N, Acc}) -> "
+        "        case X > 0 of true -> {N + 1, [X | Acc]}; false -> {N, Acc} end "
+        "    end, {0, []}, L). "
+    ),
+    ?assertEqual({2, [3, 1]}, Fold:count([1, -2, 3])),
+    Improper = compile_module_strict(
+        "-module(pt_template_free_improper). "
+        "-export([pop/1]). "
+        "pop([H | T]) -> "
+        "    case T of [] -> {popped, [H | T], T}; _ -> {ok, [<<\"a\">> | <<\"b\">>]} end. "
+    ),
+    ?assertEqual({popped, [x], []}, Improper:pop([x])),
+    {ok, Iodata} = Improper:pop([x, y]),
+    ?assertEqual(<<"ab">>, iolist_to_binary(Iodata)).
+
+%% The same data tails beside a template whose conditional branch still inherits
+%% the enclosing `az-nodiff`: leaving template-free code alone must not stop the
+%% inheritance a real template context carries.
+template_free_tails_beside_nodiff_template(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_template_free_tails_nodiff). "
+        "-export([pair/2, render/1]). "
+        "pair(K, V) -> "
+        "    case V of undefined -> {K, []}; _ -> {K, [V]} end. "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ['az-nodiff'], ["
+        "            case arizona_template:get(f, Bindings) of "
+        "                true -> {'span', [], [arizona_template:get(b, Bindings)]}; "
+        "                _ -> <<>> "
+        "            end"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual({k, [v]}, Mod:pair(k, v)),
+    ?assertEqual(
+        <<"<div><span>B</span></div>">>, render_markerless(Mod:render(#{f => true, b => ~"B"}))
+    ).
 
 %% Test 14: Two dynamic attributes -- both share az, statics split between both.
 two_dynamic_attrs(Config) when is_list(Config) ->
@@ -3764,6 +4003,83 @@ reserved_attr_case_insensitive(Config) when is_list(Config) ->
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
     ?assertEqual(<<"<p AZ-KEY=\"k\" az-click=\"c\"></p>">>, iolist_to_binary(HTML0)).
+
+%% A submit before arizona.js runs is native, and a method-less form submits as a
+%% GET with every field -- a password included -- in the URL. The html target
+%% gives a method-less az-submit form `method="post"`; an author's method, of any
+%% kind, is left alone.
+az_submit_form_implies_post(Config) when is_list(Config) ->
+    Render = fun(Mod, Form) ->
+        M = compile_module(
+            lists:flatten([
+                "-module(",
+                Mod,
+                "). -export([render/1]). render(Bindings) -> ",
+                "_ = Bindings, arizona_template:html(",
+                Form,
+                "). "
+            ])
+        ),
+        {HTML, _Snap} = arizona_render:render(M:render(#{m => <<"get">>})),
+        iolist_to_binary(HTML)
+    end,
+    Cmd = "arizona_js:push_event(<<\"login\">>)",
+    ?assertEqual(
+        <<"<form az-submit=\"[0,&quot;login&quot;]\" method=\"post\"></form>">>,
+        Render("pt_sub_post", "{form, [{az_submit, " ++ Cmd ++ "}], []}")
+    ),
+    %% Any spelling of the tag and the attribute.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_sub_bin", "{<<\"FORM\">>, [{<<\"az-submit\">>, " ++ Cmd ++ "}], []}"),
+            <<" method=\"post\"">>
+        )
+    ),
+    %% A static `false` method renders nothing, so it is still method-less.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_sub_false", "{form, [{method, false}, {az_submit, " ++ Cmd ++ "}], []}"),
+            <<" method=\"post\"">>
+        )
+    ),
+    %% The author's method wins, static or dynamic, in any casing.
+    lists:foreach(
+        fun({Mod, Form, Method}) ->
+            HTML = Render(Mod, Form),
+            ?assertEqual(nomatch, binary:match(HTML, <<"post">>), HTML),
+            ?assertMatch({_, _}, binary:match(HTML, Method), HTML)
+        end,
+        [
+            {"pt_sub_get", "{form, [{method, <<\"get\">>}, {az_submit, " ++ Cmd ++ "}], []}",
+                <<"method=\"get\"">>},
+            {"pt_sub_up", "{form, [{'METHOD', <<\"dialog\">>}, {az_submit, " ++ Cmd ++ "}], []}",
+                <<"METHOD=\"dialog\"">>},
+            {"pt_sub_dyn",
+                "{form, [{method, arizona_template:get(m, Bindings)}, {az_submit, " ++ Cmd ++
+                    "}], []}",
+                <<"method=\"get\"">>}
+        ]
+    ),
+    %% Only a form, and only one that is an az-submit form.
+    ?assertEqual(<<"<form></form>">>, Render("pt_sub_none", "{form, [], []}")),
+    ?assertEqual(
+        nomatch,
+        binary:match(
+            Render("pt_sub_div", "{'div', [{az_submit, " ++ Cmd ++ "}], []}"), <<"method">>
+        )
+    ),
+    %% Other targets have no native form submission to guard.
+    ?assertEqual([], arizona_native:implied_attrs(form, [<<"az-submit">>])),
+    ?assertEqual([], arizona_terminal:implied_attrs(form, [<<"az-submit">>])),
+    NativeMod = compile_module(
+        "-module(pt_sub_native). -export([render/1]). render(Bindings) -> "
+        "_ = Bindings, arizona_template:native({form, [{az_submit, "
+        "arizona_js:push_event(<<\"login\">>)}], []}). "
+    ),
+    {Native, _} = arizona_render:render(NativeMod:render(#{})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Native), <<"method">>)).
 
 %% az-view is injected on a live root and rejected anywhere else, for the same
 %% reason: the browser reads `AZ-VIEW="x"` as `az-view`.
@@ -7486,6 +7802,103 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
     %% items by `az-key` and never reaches the positional walk.
     ?assertEqual(true, maps:get(single_root, Tmpl, undefined)).
 
+%% A changed stream item keeps a dynamic's old render only where the template says
+%% its deps name every item field it read: the key attribute, a tracked item read
+%% and a tracked binding read in the slot's own closure qualify; a plain
+%% `maps:get/2` of the item, and a read inside a nested template's closure, do not.
+each_stream_reuse_flags(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item, Key) -> "
+        "        {'li', [{'az-key', Key}], [ "
+        "            arizona_template:get(a, Item), "
+        "            maps:get(b, Item), "
+        "            az:get(x, Bindings), "
+        "            case arizona_template:get(on, Item) of "
+        "                true -> {'b', [], [arizona_template:get(c, Item)]}; "
+        "                false -> <<>> "
+        "            end "
+        "        ]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, true, false, true, false]}, stream_each_template(Mod)).
+
+%% A whole-body `?html` callback compiles through the already-compiled path.
+each_stream_reuse_flags_compiled_body(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse_compiled). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item, Key) -> "
+        "        az:html({'li', [{'az-key', Key}], [ "
+        "            arizona_template:get(a, Item), maps:get(b, Item) "
+        "        ]}) "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, true, false]}, stream_each_template(Mod)).
+
+%% With no qualifying dynamic the list is left out, and every changed item re-renders.
+each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_no_reuse). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(#{n := N}, _Key) -> "
+        "        {'li', [], [N]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertNot(is_map_key(reuse, stream_each_template(Mod))).
+
+%% A tracked read vouches for an item read only when its map IS the item (the bare
+%% parameter, or the variable side of a `Pat = Var` head) or the view bindings. A
+%% sub-map bound in the head or the body records the sub-map's keys, not the item
+%% field that holds it, so those dynamics are not reusable.
+each_stream_reuse_map_must_be_item(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse_item_map). "
+        "-export([sub/1, sub_alias/1, sub_bindings/1, sub_with/1, alias/1, whole/1]). "
+        "sub(Bindings) -> "
+        "    az:each(fun(#{sub := Sub}, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_alias(Bindings) -> "
+        "    az:each(fun(#{sub := Sub} = I, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub), az:get(n, I)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_bindings(Bindings) -> "
+        "    az:each(fun(#{sub := Bindings}, K) -> "
+        "        {'li', [{'az-key', K}], [az:get(v, Bindings)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_with(Bindings) -> "
+        "    az:each(fun(#{sub := Sub}, K) -> "
+        "        {'li', [{'az-key', K}], [maps:get(v, arizona_template:with([v], Sub))]} "
+        "    end, az:get(stream, Bindings)). "
+        "alias(Bindings) -> "
+        "    az:each(fun(I, K) -> "
+        "        I2 = I, "
+        "        {'li', [{'az-key', K}], [arizona_template:get(n, I2)]} "
+        "    end, az:get(stream, Bindings)). "
+        "whole(Bindings) -> "
+        "    az:each(fun(I = #{}, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(n, I), az:get(x, Bindings)]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub)),
+    ?assertMatch(#{reuse := [true, false, true]}, stream_each_template(Mod, sub_alias)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub_bindings)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub_with)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, alias)),
+    ?assertMatch(#{reuse := [true, true, true]}, stream_each_template(Mod, whole)).
+
+stream_each_template(Mod) ->
+    stream_each_template(Mod, render).
+
+stream_each_template(Mod, Fun) ->
+    Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, []),
+    maps:get(template, Mod:Fun(#{stream => Stream})).
+
 %% A `?native` single-root list each is NOT flagged single_root: the gate is the
 %% backend's `supports_list_patch/0` callback (asked at compile time), and
 %% arizona_native returns false because no native client implements `?OP_LIST_PATCH`
@@ -9022,6 +9435,168 @@ inline_hoisted_html_unrelated_key_skipped(Config) when is_list(Config) ->
     {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
     ?assertEqual([], Ops).
 
+%% A variable hoisted inside a branch of the render function's tail control flow
+%% is inlined into that branch's slots like a top-level one: changing it ships an
+%% op, and a change to an unrelated key still skips the slot.
+inline_branch_local_hoist_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_branchlocal). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        a -> N = arizona_template:get(n, Bindings), "
+        "             arizona_template:html({'p', [], [N]}); "
+        "        b -> arizona_template:html({'p', [], [<<\"b\">>]}) "
+        "    end. "
+    ),
+    B0 = #{mode => a, n => ~"1", other => 1},
+    ?assertMatch([_ | _], branch_hoist_ops(Mod, B0, B0#{n => ~"2"})),
+    ?assertEqual([], branch_hoist_ops(Mod, B0, B0#{other => 2})).
+
+%% The same shape on a stateful live root, whose root may sit at every tail of a
+%% control-flow expression.
+inline_branch_local_hoist_live_root(Config) when is_list(Config) ->
+    B0 = #{id => ~"v", mode => a, n => ~"1", other => 1},
+    Mod = compile_live_branch_hoist(
+        "pt_inline_branchlocal_live",
+        "N = arizona_template:get(n, Bindings), "
+        "arizona_template:html({'p', [{id, arizona_template:get(id, Bindings)}], [N]})"
+    ),
+    ?assertMatch([_ | _], branch_hoist_ops(Mod, B0, B0#{n => ~"2"})),
+    ?assertEqual([], branch_hoist_ops(Mod, B0, B0#{other => 2})).
+
+%% A live root id hoisted inside the branch resolves through the branch's inline
+%% map, like a top-level one (inline_hoisted_root_id).
+inline_branch_local_hoist_live_root_id(Config) when is_list(Config) ->
+    Mod = compile_live_branch_hoist(
+        "pt_inline_branchlocal_liveid",
+        "Id = arizona_template:get(id, Bindings), "
+        "arizona_template:html({'p', [{id, Id}], [<<\"a\">>]})"
+    ),
+    T = Mod:render(#{id => ~"v", mode => a}),
+    [IdFun] = [F || {_Az, {attr, ~"id", F}, _Loc} <- maps:get(d, T)],
+    ?assertEqual(~"v", IdFun()),
+    ?assertEqual(#{id => true}, slot_deps(IdFun)).
+
+compile_live_branch_hoist(Name, BranchA) ->
+    compile_module_strict(
+        "-module(" ++ Name ++
+            "). "
+            "-behaviour(arizona_stateful). "
+            "-export([mount/1, render/1]). "
+            "mount(B) -> {B, #{}}. "
+            "render(Bindings) -> "
+            "    case arizona_template:get(mode, Bindings) of "
+            "        a -> " ++ BranchA ++
+            "; "
+            "        b -> arizona_template:html("
+            "                 {'p', [{id, arizona_template:get(id, Bindings)}], [<<\"b\">>]}) "
+            "    end. "
+    ).
+
+%% Every tail form the live root accepts scopes its own bodies: nested control
+%% flow, a `try` body binding a var its `of` clause uses, a `maybe` body, a
+%% `maybe` else clause, and a `receive` after body.
+inline_branch_local_hoist_tail_forms(Config) when is_list(Config) ->
+    Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
+    Tmpl = "arizona_template:html({'p', [], [N]})",
+    Other = "arizona_template:html({'p', [], [<<\"x\">>]})",
+    Forms = [
+        {"if",
+            "M = " ++ Get("mode") ++ ", if M =:= a -> N = " ++ Get("n") ++ ", " ++ Tmpl ++
+                "; true -> " ++ Other ++ " end. "},
+        {"begin", "begin N = " ++ Get("n") ++ ", " ++ Tmpl ++ " end. "},
+        {"nested",
+            "case " ++ Get("mode") ++ " of a -> X = " ++ Get("x") ++ ", case X of 1 -> N = " ++
+                Get("n") ++ ", " ++ Tmpl ++ "; _ -> " ++ Other ++ " end; _ -> " ++ Other ++
+                " end. "},
+        {"try_of",
+            "try N = " ++ Get("n") ++ ", " ++ Get("mode") ++ " of a -> " ++ Tmpl ++ "; _ -> " ++
+                Other ++ " catch _:_ -> " ++ Other ++ " end. "},
+        {"try_body", "try N = " ++ Get("n") ++ ", " ++ Tmpl ++ " catch _:_ -> ok end. "},
+        {"maybe", "maybe a ?= " ++ Get("mode") ++ ", N = " ++ Get("n") ++ ", " ++ Tmpl ++ " end. "},
+        {"maybe_else",
+            "maybe b ?= " ++ Get("mode") ++ ", " ++ Other ++ " else _ -> N = " ++ Get("n") ++
+                ", " ++ Tmpl ++ " end. "},
+        {"receive", "receive never -> ok after 0 -> N = " ++ Get("n") ++ ", " ++ Tmpl ++ " end. "}
+    ],
+    B0 = #{mode => a, n => ~"1", x => 1},
+    Frozen = [
+        Name
+     || {Name, Body} <- Forms,
+        [] =:=
+            branch_hoist_ops(
+                compile_module_strict(
+                    "-module(pt_inline_branchlocal_" ++ Name ++
+                        "). "
+                        "-export([render/1]). "
+                        "render(Bindings) -> " ++ Body
+                ),
+                B0,
+                B0#{n => ~"2"}
+            )
+    ],
+    ?assertEqual([], Frozen).
+
+%% A branch-local definition may build on a top-level hoisted one; the slot then
+%% tracks the outer read.
+inline_branch_local_hoist_outer_chain(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_branchlocal_chain). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    M = arizona_template:get(m, Bindings), "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        a -> N = <<M/binary, \"!\">>, "
+        "             arizona_template:html({'p', [], [N]}); "
+        "        b -> arizona_template:html({'p', [], [M]}) "
+        "    end. "
+    ),
+    B0 = #{mode => a, m => ~"1"},
+    ?assertMatch([_ | _], branch_hoist_ops(Mod, B0, B0#{m => ~"2"})).
+
+%% A clause pattern's own variables stay captured (like a head-destructured
+%% binding), but a branch-local read built from one still tracks its read. A
+%% branch match on a name bound outside the branch is an equality test, not a
+%% definition: it is left alone, so the outer binding stays used.
+inline_branch_local_hoist_scoping(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_branchlocal_pat). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    case arizona_template:get(user, Bindings) of "
+        "        {admin, Name} -> "
+        "            L = <<Name/binary, (arizona_template:get(sfx, Bindings))/binary>>, "
+        "            arizona_template:html({'p', [], [L]}); "
+        "        _ -> arizona_template:html({'p', [], [<<\"guest\">>]}) "
+        "    end. "
+    ),
+    T = Mod:render(#{user => {admin, ~"Ada"}, sfx => ~"!"}),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"Ada!", Fun()),
+    ?assertEqual(#{sfx => true}, slot_deps(Fun)),
+    Mod2 = compile_module_strict(
+        "-module(pt_inline_branchlocal_rebound). "
+        "-export([render/1]). "
+        "render(#{n := N} = Bindings) -> "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        a -> N = arizona_template:get(n, Bindings), "
+        "             arizona_template:html({'p', [], [N]}); "
+        "        b -> arizona_template:html({'p', [], [<<\"b\">>]}) "
+        "    end. "
+    ),
+    T2 = Mod2:render(#{mode => a, n => ~"1"}),
+    [{_Az2, {esc, Fun2}, _Loc2}] = maps:get(d, T2),
+    ?assertEqual(~"1", Fun2()),
+    ?assertEqual(#{}, slot_deps(Fun2)).
+
+branch_hoist_ops(Mod, B0, B1) ->
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(
+        Mod:render(B1), Snap0, V0, compute_changed(B0, B1)
+    ),
+    Ops.
+
 %% ============================================================================
 %% Local element-returning helper calls inlined at the template call site
 %% ============================================================================
@@ -9144,6 +9719,174 @@ helper_body_var_shadows_caller_var(Config) when is_list(Config) ->
     %% The caller's `side` reaches the class, the helper's reaches the span.
     ?assertMatch({_, _}, binary:match(HTMLBin, ~"class=\"buy\"")),
     ?assertMatch({_, _}, binary:match(HTMLBin, ~"sell")).
+
+%% A helper parameter used in a pattern or guard cannot take the argument expression
+%% (a call is not a pattern), so the inlined helper binds it to a fresh variable right
+%% ahead of the expression that tests it, inside the slot: the pattern compares against
+%% the argument's value (not a fresh binder that matches anything, nor a caller variable
+%% of the same name), and the argument's read runs in the slot's bracket so it tracks.
+helper_param_in_case_pattern(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_pat). "
+        "-export([render/1]). "
+        "mark(Sel, Id) -> {span, [], [case Id of Sel -> <<\"yes\">>; _ -> <<\"no\">> end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        mark(arizona_template:get(sel, Bindings), arizona_template:get(id, Bindings))"
+        "    ]}). "
+    ),
+    ?assertMatch({_, _}, binary:match(helper_param_ssr(Mod, #{sel => 2, id => 1}), ~"no")),
+    assert_helper_param_tracks(Mod, #{sel => 1, id => 1}, #{sel => 2}, ~"yes", ~"no").
+
+helper_param_in_pattern_caller_same_name(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_pat_caller). "
+        "-export([render/1]). "
+        "mark(Sel, Id) -> {span, [], [case Id of Sel -> <<\"yes\">>; _ -> <<\"no\">> end]}. "
+        "render(Bindings) -> "
+        "    Sel = 1, "
+        "    arizona_template:html({'div', [], [integer_to_binary(Sel), "
+        "        mark(arizona_template:get(sel, Bindings), arizona_template:get(id, Bindings))"
+        "    ]}). "
+    ),
+    SSR = helper_param_ssr(Mod, #{sel => 2, id => 1}),
+    ?assertEqual(nomatch, binary:match(SSR, ~"yes"), SSR).
+
+helper_param_in_guard(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_guard). "
+        "-export([render/1]). "
+        "lim(Max, N) -> {span, [], [if N > Max -> <<\"over\">>; true -> <<\"ok\">> end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        lim(arizona_template:get(max, Bindings), arizona_template:get(n, Bindings))"
+        "    ]}). "
+    ),
+    assert_helper_param_tracks(Mod, #{max => 5, n => 3}, #{max => 1}, ~"ok", ~"over").
+
+helper_param_in_guard_caller_same_name(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_guard_caller). "
+        "-export([render/1]). "
+        "lim(Max, N) -> {span, [], [if N > Max -> <<\"over\">>; true -> <<\"ok\">> end]}. "
+        "render(Bindings) -> "
+        "    Max = 100, N = 0, "
+        "    arizona_template:html({'div', [], [integer_to_binary(Max + N), "
+        "        lim(arizona_template:get(max, Bindings), arizona_template:get(n, Bindings))"
+        "    ]}). "
+    ),
+    SSR = helper_param_ssr(Mod, #{max => 1, n => 3}),
+    ?assertMatch({_, _}, binary:match(SSR, ~"over"), SSR).
+
+helper_param_in_map_key_and_bin_size(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_keysize). "
+        "-export([render/1]). "
+        "pick(K, N, M, S) -> {span, [], ["
+        "    case M of #{K := V} -> V; _ -> <<\"none\">> end, "
+        "    case S of <<P:N/binary, _/binary>> -> P; _ -> <<\"short\">> end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [pick("
+        "        arizona_template:get(k, Bindings), arizona_template:get(n, Bindings), "
+        "        #{a => <<\"AA\">>, b => <<\"BB\">>}, <<\"xyz\">>)]}). "
+    ),
+    B0 = #{k => a, n => 1},
+    SSR = helper_param_ssr(Mod, B0),
+    ?assertMatch({_, _}, binary:match(SSR, ~"AA"), SSR),
+    ?assertMatch({_, _}, binary:match(SSR, ~">x<"), SSR),
+    assert_helper_param_tracks(Mod, B0, #{k => b}, ~"AA", ~"BB"),
+    assert_helper_param_tracks(Mod, B0, #{n => 2}, ~">x<", ~"xy").
+
+helper_param_in_fun_guard(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_funguard). "
+        "-export([render/1]). "
+        "size_of(Min, N) -> {span, [], ["
+        "    (fun(X) when X > Min -> <<\"big\">>; (_) -> <<\"small\">> end)(N)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        size_of(arizona_template:get(min, Bindings), arizona_template:get(n, Bindings))"
+        "    ]}). "
+    ),
+    assert_helper_param_tracks(Mod, #{min => 0, n => 3}, #{min => 5}, ~"big", ~"small").
+
+helper_param_in_maybe_and_match(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_maybe). "
+        "-export([render/1]). "
+        "chk(Want, Have) -> {span, [], ["
+        "    maybe Want ?= Have, <<\"match\">> else _ -> <<\"miss\">> end, "
+        "    try {Want, X} = {Have, <<\"!\">>}, X catch error:{badmatch, _} -> <<\"?\">> end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        chk(arizona_template:get(want, Bindings), arizona_template:get(have, Bindings))"
+        "    ]}). "
+    ),
+    B0 = #{want => 1, have => 1},
+    SSR = helper_param_ssr(Mod, B0),
+    ?assertMatch({_, _}, binary:match(SSR, ~"match"), SSR),
+    ?assertMatch({_, _}, binary:match(SSR, ~"!"), SSR),
+    assert_helper_param_tracks(Mod, B0, #{want => 2}, ~"match", ~"miss"),
+    assert_helper_param_tracks(Mod, B0, #{want => 2}, ~"!", ~"?").
+
+%% A generator's pattern binds, but its map key reads the helper parameter.
+helper_param_in_generator_key(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_gen). "
+        "-export([render/1]). "
+        "col(K, Rows) -> {span, [], [[V || #{K := V} <- Rows]]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [col(arizona_template:get(k, Bindings), "
+        "        [#{a => <<\"AA\">>, b => <<\"BB\">>}])]}). "
+    ),
+    assert_helper_param_tracks(Mod, #{k => a}, #{k => b}, ~"AA", ~"BB").
+
+%% A fun parameter of the same name shadows the helper parameter: the inner pattern
+%% tests the fun's own argument, untouched.
+helper_param_shadowed_by_fun_param(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_helper_param_shadow). "
+        "-export([render/1]). "
+        "inner(Sel) -> {span, [], [Sel, "
+        "    (fun(Sel) -> case 7 of Sel -> <<\"seven\">>; _ -> <<\"other\">> end end)(7)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [inner(arizona_template:get(sel, Bindings))]}). "
+    ),
+    SSR = helper_param_ssr(Mod, #{sel => ~"S"}),
+    ?assertMatch({_, _}, binary:match(SSR, ~"seven"), SSR),
+    ?assertMatch({_, _}, binary:match(SSR, ~"S"), SSR).
+
+%% An `?each` callback must stay a fun literal, so there is no expression to bind a
+%% helper parameter ahead of when the callback's own guard reads it: a compile error
+%% naming the helper, instead of an unbound variable or a caller variable read in its place.
+helper_param_in_each_guard_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_param_each_guard). "
+        "-export([render/1]). "
+        "row(Min, Items) -> {ul, [], [arizona_template:each("
+        "    fun(I) when I > Min -> {li, [], [integer_to_binary(I)]} end, Items)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [row(arizona_template:get(min, Bindings), "
+        "        arizona_template:get(items, Bindings))]}). ",
+        fun(R) -> R =:= {helper_param_in_each_guard, row, 2} end
+    ),
+    Message = arizona_parse_transform:format_error({helper_param_in_each_guard, row, 2}),
+    ?assertNotEqual(nomatch, string:find(Message, "row/2")).
+
+helper_param_ssr(Mod, Bindings) ->
+    iolist_to_binary(arizona_render:render_to_iolist(Mod:render(Bindings))).
+
+%% Render with B0, then diff with B0 updated by Delta, marking ONLY Delta's keys as
+%% changed (the dep-aware diff): a slot that recorded no dependency on them emits nothing.
+assert_helper_param_tracks(Mod, B0, Delta, Shown, New) ->
+    SSR = helper_param_ssr(Mod, B0),
+    ?assertNotEqual(nomatch, binary:match(SSR, Shown), SSR),
+    {_Live, Snap, _Views} = arizona_render:render(Mod:render(B0), #{}),
+    Changed = maps:map(fun(_K, _V) -> true end, Delta),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(
+        Mod:render(maps:merge(B0, Delta)), Snap, #{}, Changed
+    ),
+    ?assertNotEqual(nomatch, binary:match(term_to_binary(Ops), New), Ops).
 
 helper_nested_calls_inline(Config) when is_list(Config) ->
     Mod = compile_module_strict(
@@ -9358,6 +10101,74 @@ helper_wrapped_multi_statement_untouched(Config) when is_list(Config) ->
     Changed = compute_changed(B0, B1),
     {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
     ?assertEqual([], Ops).
+
+%% A multi-clause function returning an atom-tagged tuple is data, not markup,
+%% when its value is an argument rather than content: it is left as a call and
+%% never rejected.
+helper_multi_clause_data_arg_untouched(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_multidata). "
+        "-export([render/1]). "
+        "color(red) -> {rgb, 255, 0, 0}; "
+        "color(_) -> {rgb, 0, 0, 0}. "
+        "hex({rgb, R, G, B}) -> "
+        "    iolist_to_binary(io_lib:format(\"#~2.16.0B~2.16.0B~2.16.0B\", [R, G, B])). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], "
+        "        [hex(color(arizona_template:get(c, Bindings)))]}). "
+    ),
+    B0 = #{c => red},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"#FF0000")),
+    B1 = #{c => blue},
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, compute_changed(B0, B1)),
+    ?assertMatch([_ | _], Ops).
+
+%% A guarded data function used as an argument is likewise left as a call.
+helper_guarded_data_arg_untouched(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_guardeddata). "
+        "-export([render/1]). "
+        "point(X, Y) when is_integer(X), is_integer(Y) -> {point, X, Y, 0}. "
+        "show({point, X, Y, _}) -> "
+        "    iolist_to_binary([integer_to_binary(X), $,, integer_to_binary(Y)]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], "
+        "        [show(point(arizona_template:get(x, Bindings), 2))]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{x => 7})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"7,2")).
+
+%% A comprehension in a content slot renders the list it builds, so an element
+%% helper called as its body is content too: one that cannot be inlined is
+%% rejected, as it would crash at render.
+helper_multi_clause_comprehension_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_multi_lc). "
+        "-export([render/1]). "
+        "row(ok) -> {'li', [], [<<\"OK\">>]}; "
+        "row(_) -> {'li', [], [<<\"ERR\">>]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], "
+        "        [[row(X) || X <- arizona_template:get(xs, Bindings)]]}). ",
+        fun(R) -> R =:= {helper_multi_clause, row, 1} end
+    ).
+
+%% The same comprehension handed to a function is data, so its body is left as a
+%% call.
+helper_multi_clause_comprehension_arg_untouched(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_multi_lc_arg). "
+        "-export([render/1]). "
+        "color(red) -> {rgb, 255, 0, 0}; "
+        "color(_) -> {rgb, 0, 0, 0}. "
+        "count(L) -> integer_to_binary(length([R || {rgb, R, _, _} <- L, R > 0])). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], "
+        "        [count([color(C) || C <- arizona_template:get(cs, Bindings)])]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{cs => [red, blue, red]})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"2")).
 
 %% ============================================================================
 %% Tracked get/get_lazy on a non-bindings map
@@ -9791,6 +10602,165 @@ guard_pattern_bound_from_tracked_case_ok(Config) when is_list(Config) ->
     ),
     {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{show => true}), #{}),
     ?assertEqual([#{show => true}], maps:get(deps, Snap)).
+
+%% A hoisted variable read in a PATTERN -- an equality test against its bound value, a
+%% map-pattern key, a binary segment size -- cannot be substituted with its definition
+%% (a call is not a pattern), so the transform touches the definition ahead of the
+%% pattern, exactly as it does for a guard. Changing only that binding re-renders the
+%% slot; without the touch the slot recorded no dependency on it and froze.
+pattern_equality_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_eq). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sel = arizona_template:get(sel, Bindings), "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(id, Bindings) of "
+        "            Sel -> <<\"yes\">>; "
+        "            _ -> <<\"no\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(Mod, #{sel => 1, id => 1}, #{sel => 2}, ~"yes", ~"no").
+
+%% The "selected row" idiom: an `?each` item compared against a hoisted selection.
+pattern_equality_in_each_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sel = arizona_template:get(sel, Bindings), "
+        "    arizona_template:html({ul, [], [arizona_template:each("
+        "        fun(I) -> {li, [], [case I of Sel -> <<\"*\">>; _ -> <<\"-\">> end]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{sel => 1, items => [1, 2]}, #{sel => 2}, ~"*", ~"*"
+    ).
+
+pattern_map_key_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_mapkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    K = arizona_template:get(k, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(m, Bindings) of "
+        "            #{K := V} -> V; "
+        "            _ -> <<\"none\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{k => a, m => #{a => ~"AA", b => ~"BB"}}, #{k => b}, ~"AA", ~"BB"
+    ).
+
+pattern_bin_size_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_binsize). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(s, Bindings) of "
+        "            <<P:N/binary, _/binary>> -> P; "
+        "            _ -> <<\"short\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(Mod, #{n => 1, s => ~"xyz"}, #{n => 2}, ~">x<", ~"xy").
+
+pattern_maybe_match_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_maybe). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Want = arizona_template:get(want, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        maybe "
+        "            Want ?= arizona_template:get(have, Bindings), "
+        "            <<\"match\">> "
+        "        else "
+        "            _ -> <<\"miss\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(Mod, #{want => 1, have => 1}, #{want => 2}, ~"match", ~"miss").
+
+%% A hoisted variable in a `case` pattern is already bound, so the pattern tests it
+%% rather than rebinding it: the clause body's use of the same name is the hoisted
+%% value and is substituted like any other read.
+pattern_equality_and_body_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_body). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sel = arizona_template:get(sel, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(id, Bindings) of "
+        "            {Sel, X} -> [Sel, X]; "
+        "            _ -> <<\"no\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{sel => ~"a", id => {~"a", ~"1"}}, #{sel => ~"b"}, ~"a1", ~"no"
+    ).
+
+%% A match expression's pattern tests a hoisted variable the same way.
+pattern_match_expr_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_match). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sel = arizona_template:get(sel, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        try "
+        "            {Sel, X} = arizona_template:get(id, Bindings), "
+        "            X "
+        "        catch "
+        "            error:{badmatch, _} -> <<\"no\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{sel => ~"a", id => {~"a", ~"1"}}, #{sel => ~"b"}, ~">1<", ~"no"
+    ).
+
+%% A generator pattern and a fun head bind their own variables, but a map key in them
+%% is still a read of the enclosing scope.
+pattern_generator_map_key_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_genkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    K = arizona_template:get(k, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        [V || #{K := V} <- arizona_template:get(rows, Bindings)]]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{k => a, rows => [#{a => ~"AA", b => ~"BB"}]}, #{k => b}, ~"AA", ~"BB"
+    ).
+
+pattern_fun_head_map_key_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_funkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    K = arizona_template:get(k, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        (fun(#{K := V}) -> V; (_) -> <<\"none\">> end)("
+        "            arizona_template:get(row, Bindings))]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{k => a, row => #{a => ~"AA", b => ~"BB"}}, #{k => b}, ~"AA", ~"BB"
+    ).
+
+%% Render with B0, then diff with B0 updated by Delta, marking ONLY Delta's keys as
+%% changed (the dep-aware diff): a slot that recorded no dependency on them emits nothing.
+assert_pattern_tracks(Mod, B0, Delta, Shown, New) ->
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
+    ?assertNotEqual(nomatch, binary:match(SSR, Shown), SSR),
+    {_Live, Snap, _Views} = arizona_render:render(Mod:render(B0), #{}),
+    Changed = maps:map(fun(_K, _V) -> true end, Delta),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(
+        Mod:render(maps:merge(B0, Delta)), Snap, #{}, Changed
+    ),
+    ?assertNotEqual(nomatch, binary:match(term_to_binary(Ops), New), Ops).
 
 %% ============================================================================
 %% az scoping vs. user-authored marker lookalikes
@@ -11067,7 +12037,14 @@ markup_var_in_content_list_rejected(Config) when is_list(Config) ->
             {"tail",
                 "Hdr = [<<\"x\">>, {b, [], []}], "
                 "arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
-                "    true -> [Hdr, <<\"y\">>]; false -> <<>> end]}). "}
+                "    true -> [Hdr, <<\"y\">>]; false -> <<>> end]}). "},
+            {"branch",
+                "case arizona_template:get(f, Bindings) of "
+                "    true -> Hdr = arizona_template:html({h1, [], [<<\"T\">>]}), "
+                "        arizona_template:html({ul, [], [[Hdr, arizona_template:each("
+                "            fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings))]]}); "
+                "    false -> arizona_template:html({p, [], [<<\"x\">>]}) "
+                "end. "}
         ]
     ],
     ok.
