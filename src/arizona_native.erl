@@ -43,7 +43,7 @@ the wire value. On the wire itself a value stays raw
 -export([is_void/1]).
 -export([raw_text_kind/2]).
 -export([content_context/2]).
--export([raw_text/2]).
+-export([raw_text/4]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
@@ -186,8 +186,8 @@ wire_escape(Bin) -> Bin.
 
 %% The native wire has no raw-text elements (raw_text_kind/2 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
--spec raw_text(atom(), term()) -> term().
-raw_text(_Tag, Value) -> Value.
+-spec raw_text(atom(), binary(), binary(), term()) -> term().
+raw_text(_Tag, _Before, _After, Value) -> Value.
 
 %% Render a dynamic attribute value: the prop name is baked into the static by
 %% attr_dyn_name/1, so the dynamic is just the value -- the JSON the client builds
