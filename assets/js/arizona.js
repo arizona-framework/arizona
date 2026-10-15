@@ -980,9 +980,12 @@ function mayNameNodiff(html) {
  * @returns {ReadonlySet<Element>}
  */
 function keepNodiff(oldNodes, frag, resync) {
+    const tops = Array.from(oldNodes);
+    // An empty old slot (a conditional switching from `<<>>` to an az-nodiff element)
+    // holds nothing to keep, and has no node to find its parent from.
+    if (tops.length === 0) return NO_KEPT;
     const fresh = nodiffByIdentity(Array.from(frag.childNodes), frag);
     if (fresh.size === 0) return NO_KEPT;
-    const tops = Array.from(oldNodes);
     const old = nodiffByIdentity(tops, /** @type {ParentNode} */ (tops[0].parentNode));
     const kept = new Set();
     for (const [id, news] of fresh) {
