@@ -511,6 +511,7 @@
 -export([az_attrs_keeps_prevent_default_with_a_value/1]).
 -export([az_attrs_skips_injected_az_view/1]).
 -export([az_attrs_records_component_modules/1]).
+-export([az_attrs_records_remote_callees/1]).
 
 all() ->
     [
@@ -1107,7 +1108,8 @@ groups() ->
             az_attrs_skips_unproven_values,
             az_attrs_keeps_prevent_default_with_a_value,
             az_attrs_skips_injected_az_view,
-            az_attrs_records_component_modules
+            az_attrs_records_component_modules,
+            az_attrs_records_remote_callees
         ]}
     ].
 
@@ -10052,6 +10054,35 @@ az_attrs_records_component_modules(Config) when is_list(Config) ->
     ),
     ?assertEqual(
         [child_view, other_component],
+        proplists:get_value(arizona_az_deps, Mod:module_info(attributes), [])
+    ).
+
+%% A remote helper's template carries that module's FOLDED names in its statics,
+%% which no render re-proves, so every module this one can take markup from is an
+%% edge: a literal remote call, an import, and a `fun Mod:F/A` -- anywhere in the
+%% module, since a mount may store a helper's template for a later `?get`. The
+%% module itself and the macro expansion targets are not edges; a callee bound to
+%% a variable is unresolvable and not recorded.
+az_attrs_records_remote_callees(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_az_remote_deps). "
+        "-import(imported_helper, [chip/0]). "
+        "-export([mount/1, render/1, local/0]). "
+        "mount(_) -> {#{card => card_helper:card()}, #{}}. "
+        "local() -> <<\"l\">>. "
+        "render(Bindings) -> "
+        "    M = az:get(mod, Bindings), "
+        "    arizona_template:html("
+        "        {'div', [], ["
+        "            button_helper:button(),"
+        "            pt_az_remote_deps:local(),"
+        "            M:dynamic(),"
+        "            lists:map(fun row_helper:row/1, az:get(rows, Bindings))"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual(
+        [button_helper, card_helper, imported_helper, lists, row_helper],
         proplists:get_value(arizona_az_deps, Mod:module_info(attributes), [])
     ).
 

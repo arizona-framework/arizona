@@ -64,6 +64,7 @@
 -export([patch_to_crashing_handler_closes_mount_failed/1]).
 -export([navigate_halt_without_redirect_loads_full_page/1]).
 -export([crash_after_resync_mount_closes_crash/1]).
+-export([remote_helper_names_ride_the_connect_frame/1]).
 
 all() ->
     [
@@ -120,7 +121,8 @@ all() ->
         navigate_mount_crash_closes_mount_failed,
         patch_to_crashing_handler_closes_mount_failed,
         navigate_halt_without_redirect_loads_full_page,
-        crash_after_resync_mount_closes_crash
+        crash_after_resync_mount_closes_crash,
+        remote_helper_names_ride_the_connect_frame
     ].
 
 %% A `?stateful` inside a stream item re-renders when the item updates, so the item's
@@ -1342,6 +1344,15 @@ crash_after_resync_mount_closes_crash(Config) when is_list(Config) ->
         {[], {close, 4500, ~"server crash", _}},
         logged_error(fun() -> settle(arizona_socket:handle_in(CrashFrame, Socket1), Socket1) end)
     ).
+
+%% A template returned by a remote helper module carries the helper's FOLDED
+%% `az-dblclick` in its statics, so no render re-proves it: only the compile-time
+%% walk can put it on the connect frame, and only if the page's call to the
+%% helper is a recorded edge.
+remote_helper_names_ride_the_connect_frame(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, Frame, _} = arizona_socket:init(arizona_remote_helper_page, #{}, Req, #{}),
+    ?assertMatch(#{~"a" := [~"az-dblclick"]}, decode(Frame)).
 
 navigate_frame(Path) ->
     iolist_to_binary(json:encode([~"navigate", #{~"path" => Path, ~"qs" => <<>>}])).

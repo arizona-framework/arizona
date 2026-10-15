@@ -10,8 +10,12 @@ two proofs, one per moment the question is answerable:
 
 1. **Compile time.** The parse transform records per module the `az-*` names
    whose values it can prove are commands (the `arizona_az_attrs` module
-   attribute) and the component modules its templates name literally
-   (`arizona_az_deps`). `all/1` walks that graph from a set of roots (a
+   attribute) and the modules it can take markup from (`arizona_az_deps`):
+   the component modules its templates name literally, and every module it
+   calls, imports, or takes a `fun Mod:F/A` of by a literal name -- a remote
+   helper's template (`other_mod:button()`) carries that module's folded
+   names in its statics, which no render re-proves. `all/1` walks that graph
+   from a set of roots (a
    route's handler plus its layout modules), so the connect frame delivers a
    page's whole vocabulary up front -- including names sitting in branches
    nothing has rendered yet. A handler may extend the graph by declaring
@@ -56,6 +60,15 @@ Known limits, all loud or documented rather than silent:
   ops, which the stale-snapshot mechanism re-emits on the next root diff, an
   unchanged value is never re-proven. In-repo the only such callers are the
   terminal transports, which have no DOM to delegate on.
+- A helper template reached through no literal edge -- a module bound at
+  runtime (`Mod:button()`), a fun value, `apply/3`, or an intermediate module
+  compiled without the Arizona headers (it carries no `arizona_az_deps`, so
+  the walk stops there) -- delivers only the names a render re-proves, never
+  its FOLDED ones. Declare the edge by hand with `-arizona_az_deps([mod]).`
+  on the page (or the intermediate module). The recorded edges also
+  over-approximate: every literal callee counts whether or not its markup
+  renders, at the same per-module grain as a `?stateful` in an untaken
+  branch.
 """.
 
 -export([all/1]).
