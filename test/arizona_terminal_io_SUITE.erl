@@ -1,6 +1,9 @@
 -module(arizona_terminal_io_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 
+%% U+FFFD REPLACEMENT CHARACTER, UTF-8 encoded.
+-define(FFFD, 16#EF, 16#BF, 16#BD).
+
 -export([all/0]).
 -export([printable_to_char_code/1]).
 -export([named_control_bytes/1]).
@@ -24,6 +27,11 @@
 -export([default_paint_sanitizes_title/1]).
 -export([terminal_escape_sanitizes/1]).
 -export([terminal_escape_clean_value_identity/1]).
+-export([terminal_escape_strips_utf8_c1/1]).
+-export([terminal_escape_replaces_invalid_utf8/1]).
+-export([terminal_escape_utf8_table_edges/1]).
+-export([terminal_escape_output_always_valid/1]).
+-export([terminal_frame_writes_to_unicode_device/1]).
 
 %% arizona_terminal_io:keys/1 decodes raw terminal reads into idiomatic keys;
 %% arizona_terminal_default_driver turns those into events (quitting on Ctrl-D),
@@ -52,7 +60,12 @@ all() ->
         default_paint_title_bell_and_unknown,
         default_paint_sanitizes_title,
         terminal_escape_sanitizes,
-        terminal_escape_clean_value_identity
+        terminal_escape_clean_value_identity,
+        terminal_escape_strips_utf8_c1,
+        terminal_escape_replaces_invalid_utf8,
+        terminal_escape_utf8_table_edges,
+        terminal_escape_output_always_valid,
+        terminal_frame_writes_to_unicode_device
     ].
 
 printable_to_char_code(Config) when is_list(Config) ->
@@ -271,9 +284,166 @@ terminal_escape_clean_value_identity(Config) when is_list(Config) ->
     ?assertEqual(<<>>, arizona_terminal:escape(<<>>)),
     ?assertEqual(~"prefix-suffix\n", arizona_terminal:escape(<<"prefix", 27, "-suffix\n", 7>>)).
 
+%% U+0080-U+009F are the C1 controls; xterm honours them UTF-8 encoded, so U+009B
+%% (CSI) and U+009D (OSC) open the same sequences ESC [ and ESC ] do. The whole
+%% two-byte sequence goes, never just the lead byte.
+terminal_escape_strips_utf8_c1(Config) when is_list(Config) ->
+    ?assertEqual(
+        ~"a31mb52;c;SGk=",
+        arizona_terminal:escape(
+            <<"a", 16#C2, 16#9B, "31mb", 16#C2, 16#9D, "52;c;SGk=", 16#C2, 16#9C>>
+        )
+    ),
+    ?assertEqual(~"", arizona_terminal:escape(<<16#C2, 16#80, 16#C2, 16#9F>>)),
+    %% U+00A0 (the first code point past C1) and U+00FF share the C2/C3 lead byte.
+    ?assertEqual(
+        <<16#C2, 16#A0, 16#C3, 16#BF>>, arizona_terminal:escape(<<16#C2, 16#A0, 16#C3, 16#BF>>)
+    ),
+    %% Continuation bytes in 0x80-0x9F belong to their sequence: ā is C4 81,
+    %% € is E2 82 AC, 𝄞 is F0 9D 84 9E.
+    Utf8 = <<"éā€𝄞"/utf8>>,
+    ?assertEqual(Utf8, arizona_terminal:escape(Utf8)),
+    ?assertEqual(
+        <<"é€"/utf8, "x", "𝄞"/utf8>>,
+        arizona_terminal:escape(<<"é€"/utf8, 16#C2, 16#9B, "x", "𝄞"/utf8>>)
+    ).
+
+%% Every byte outside a well-formed UTF-8 sequence becomes U+FFFD, so the output
+%% is always valid UTF-8 (the guarantee assumes a UTF-8 terminal). A bare 0x9B is
+%% CSI to a lenient decoder, a stray lead byte would pair with what follows (`C2`
+%% then `[` reads as U+009B), and a Latin-1 byte is refused outright by a unicode
+%% io device.
+terminal_escape_replaces_invalid_utf8(Config) when is_list(Config) ->
+    ?assertEqual(<<"a", ?FFFD, "2Jb">>, arizona_terminal:escape(<<"a", 16#9B, "2Jb">>)),
+    ?assertEqual(
+        <<"a", ?FFFD, ?FFFD, ?FFFD, "b">>,
+        arizona_terminal:escape(<<"a", 16#80, 16#9D, 16#9F, "b">>)
+    ),
+    ?assertEqual(<<?FFFD, "[2J">>, arizona_terminal:escape(<<16#C2, "[2J">>)),
+    ?assertEqual(<<"x", ?FFFD>>, arizona_terminal:escape(<<"x", 16#C2>>)),
+    %% A truncated sequence: neither byte is part of a well-formed one.
+    ?assertEqual(<<?FFFD, ?FFFD, "x">>, arizona_terminal:escape(<<16#E2, 16#82, "x">>)),
+    %% Latin-1 é (0xE9) on its own.
+    ?assertEqual(<<"caf", ?FFFD>>, arizona_terminal:escape(<<"caf", 16#E9>>)),
+    ?assertEqual(<<?FFFD, ?FFFD>>, arizona_terminal:escape(<<16#C0, 16#FF>>)).
+
+%% The edges of the well-formed byte table: an overlong form, a UTF-16 surrogate,
+%% and a code point past U+10FFFF are not characters, so each byte is replaced;
+%% the neighbouring valid code points are kept.
+terminal_escape_utf8_table_edges(Config) when is_list(Config) ->
+    Bad = fun(Bin) -> binary:copy(<<?FFFD>>, byte_size(Bin)) end,
+    [
+        ?assertEqual(Bad(B), arizona_terminal:escape(B))
+     || B <- [
+            %% overlong U+009B and U+0000
+            <<16#E0, 16#82, 16#9B>>,
+            <<16#E0, 16#80, 16#80>>,
+            %% F0 needs a second byte >= 0x90
+            <<16#F0, 16#80, 16#80, 16#80>>,
+            <<16#F0, 16#8F, 16#BF, 16#BF>>,
+            %% surrogates U+D800 and U+DFFF
+            <<16#ED, 16#A0, 16#80>>,
+            <<16#ED, 16#BF, 16#BF>>,
+            %% U+110000, past the last code point
+            <<16#F4, 16#90, 16#80, 16#80>>,
+            <<16#F5, 16#80, 16#80, 16#80>>
+        ]
+    ],
+    [
+        ?assertEqual(B, arizona_terminal:escape(B))
+     || B <- [
+            %% U+0800, U+D7FF, U+E000, U+10000, U+10FFFF
+            <<16#E0, 16#A0, 16#80>>,
+            <<16#ED, 16#9F, 16#BF>>,
+            <<16#EE, 16#80, 16#80>>,
+            <<16#F0, 16#90, 16#80, 16#80>>,
+            <<16#F4, 16#8F, 16#BF, 16#BF>>
+        ]
+    ].
+
+%% Whatever bytes come in, what goes out is valid UTF-8 holding no C0 control
+%% (bar `\n`/`\t`), no DEL and no C1 control. A fixed seed keeps it reproducible.
+terminal_escape_output_always_valid(Config) when is_list(Config) ->
+    {_Alg, _AlgState} = rand:seed(exsss, {16#C1, 16#9B, 16#FFFD}),
+    Pool = [
+        0,
+        7,
+        9,
+        10,
+        27,
+        32,
+        65,
+        127,
+        16#80,
+        16#8F,
+        16#90,
+        16#9B,
+        16#9F,
+        16#A0,
+        16#BF,
+        16#C0,
+        16#C2,
+        16#C3,
+        16#DF,
+        16#E0,
+        16#E2,
+        16#ED,
+        16#EF,
+        16#F0,
+        16#F4,
+        16#F5,
+        16#FF
+    ],
+    Byte = fun() ->
+        case rand:uniform(2) of
+            1 -> lists:nth(rand:uniform(length(Pool)), Pool);
+            2 -> rand:uniform(256) - 1
+        end
+    end,
+    Inputs = [
+        list_to_binary([Byte() || _ <- lists:seq(1, rand:uniform(16))])
+     || _ <- lists:seq(1, 20000)
+    ],
+    Bad = [
+        In
+     || In <- Inputs,
+        Out <- [arizona_terminal:escape(In)],
+        not valid_terminal_text(Out)
+    ],
+    ?assertEqual([], lists:sublist(Bad, 3)).
+
+%% The local TTY writes frames with `io:put_chars/1`, and a unicode io device
+%% refuses bytes that are not UTF-8 (put_chars raises on that refusal). A value
+%% carrying a stray Latin-1 byte must still produce a frame such a device accepts.
+%% The device is sent the same `put_chars` request `io:put_chars/2` sends.
+terminal_frame_writes_to_unicode_device(Config) when is_list(Config) ->
+    Frame = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_term_value:render(#{v => <<"caf", 16#E9>>}))
+    ),
+    Path = filename:join(proplists:get_value(priv_dir, Config), "unicode_frame.txt"),
+    {ok, Fd} = file:open(Path, [write, {encoding, unicode}]),
+    try
+        ?assertEqual(ok, io:request(Fd, {put_chars, unicode, Frame}))
+    after
+        ok = file:close(Fd)
+    end,
+    ?assertMatch({ok, <<"caf", ?FFFD, _/binary>>}, file:read_file(Path)).
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+valid_terminal_text(Bin) ->
+    case unicode:characters_to_list(Bin) of
+        Chars when is_list(Chars) ->
+            [C || C <- Chars, is_stripped_char(C)] =:= [];
+        _Invalid ->
+            false
+    end.
+
+is_stripped_char($\n) -> false;
+is_stripped_char($\t) -> false;
+is_stripped_char(C) -> C < 16#20 orelse (C >= 16#7F andalso C =< 16#9F).
 
 driver_keys(Bytes) ->
     {Commands, _State} = arizona_terminal_default_driver:keys(Bytes, #{}),
