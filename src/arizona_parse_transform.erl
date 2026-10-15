@@ -4334,8 +4334,8 @@ finalize(State) ->
     {Statics, Dynamics}.
 
 %% Render a static's segments to bytes, each `az` marker built from `Prefix`
-%% plus its id. `Prefix` is empty for the fingerprint pass (the fingerprint is
-%% taken over the unscoped bytes) and `<Fp>-` for the emitted statics.
+%% plus its id. `Prefix` is `<Fp>-`, scoping the emitted statics to their
+%% template.
 -spec render_static(module(), binary(), [segment()]) -> static().
 render_static(Backend, Prefix, Segments) ->
     iolist_to_binary([render_segment(Backend, Prefix, Seg) || Seg <- Segments]).

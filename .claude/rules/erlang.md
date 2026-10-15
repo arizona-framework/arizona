@@ -15,7 +15,7 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 %%           | {Az, term(), Loc}                     -- static value with location
 %% Az = binary() (diff target) | undefined (az-nodiff -- never used as op target)
 %% Loc = {Module, Line} -- source location for error reporting
-%% f = fingerprint -- base-36 phash2 of statics
+%% f = fingerprint -- base-36 phash2 of statics (dynamic attribute names included)
 %% Optional: diff => false -- skip diff after initial render (from az-nodiff directive)
 
 %% Snapshot: #{s => [binary()], d => [{Az, Value}], deps => [#{key() => true}]}
