@@ -2744,7 +2744,9 @@ build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, {map, MapLine, F
     DFunAST =
         {'fun', Line, {clauses, [{clause, Line, Vars1, Guards1, Prefix1 ++ [DListAST1]}]}},
     TField = {map_field_assoc, MapLine, {atom, MapLine, t}, {integer, MapLine, 0}},
-    NewFields = [TField | [set_template_map_d_field(Field, DFunAST) || Field <- Fields]],
+    NewFields =
+        [TField | [set_template_map_d_field(Field, DFunAST) || Field <- Fields]] ++
+            reuse_field(MapLine, Vars1, DListAST1),
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, {map, MapLine, NewFields}
     ]}.
@@ -4522,10 +4524,92 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
         {map_field_assoc, Line, {atom, Line, f}, FpAST}
     ],
     TmplAST =
-        {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)},
+        {map, Line,
+            BaseFields ++ opts_to_map_fields(Opts, Line) ++
+                reuse_field(Line, Vars1, DynamicsAST1)},
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, TmplAST
     ]}.
+
+%% When a stream item changes, the diff may keep a per-item dynamic's old render
+%% only if its deps prove the changed fields were not read. Deps record a read
+%% only when it is a tracked `get` running in the slot's own closure: a plain
+%% `maps:get(n, Item)`, a head-destructured field, a value bound in the callback
+%% body, or a read inside a nested template's closure never reaches them, and
+%% reusing on such deps ships no op for a change that happened. The template
+%% carries `reuse => [boolean()]`, one flag per dynamic: `true` only when the
+%% dynamic references no variable but the item key, outside the map argument of a
+%% tracked read in its own closure. Omitted when no dynamic qualifies, and for a
+%% 1-arg callback, whose list source re-renders every item anyway.
+reuse_field(Line, [_ItemPat, KeyPat], DynamicsAST) ->
+    KeyVars = ordsets:from_list(collect_var_names(KeyPat)),
+    Flags = [reusable_dynamic(D, KeyVars) || D <- ast_list_to_list(DynamicsAST)],
+    case lists:member(true, Flags) of
+        true ->
+            [
+                {map_field_assoc, Line, {atom, Line, reuse},
+                    ast_list([{atom, Line, F} || F <- Flags])}
+            ];
+        false ->
+            []
+    end;
+reuse_field(_Line, _Vars, _DynamicsAST) ->
+    [].
+
+reusable_dynamic({tuple, L, [Az, Spec | Rest]}, KeyVars) ->
+    Masked = {tuple, L, [Az, mask_slot_spec(Spec) | Rest]},
+    Tree = erl_syntax_lib:annotate_bindings(Masked, ordsets:new()),
+    Free = proplists:get_value(free, erl_syntax:get_ann(Tree)),
+    ordsets:is_subset(Free, KeyVars);
+reusable_dynamic(_Dynamic, _KeyVars) ->
+    false.
+
+%% The slot closure is the bare fun or the one an `{esc, F}` / `{attr, Name, F}`
+%% spec wraps; only there does a tracked read land in the dynamic's own deps.
+mask_slot_spec({tuple, L, [{atom, _, esc} = Tag, Fun]}) ->
+    {tuple, L, [Tag, mask_slot_fun(Fun)]};
+mask_slot_spec({tuple, L, [{atom, _, attr} = Tag, Name, Fun]}) ->
+    {tuple, L, [Tag, Name, mask_slot_fun(Fun)]};
+mask_slot_spec(Spec) ->
+    mask_slot_fun(Spec).
+
+mask_slot_fun({'fun', L, {clauses, [{clause, CL, [], [], Body}]}}) ->
+    {'fun', L, {clauses, [{clause, CL, [], [], mask_tracked_reads(Body)}]}};
+mask_slot_fun(Spec) ->
+    Spec.
+
+%% Replace the map argument of each tracked read with an atom, so it no longer
+%% counts as a reference. A nested fun is left alone: its body runs later, in a
+%% dependency scope of its own (a nested template's closure), or never.
+mask_tracked_reads({'fun', _, _} = Fun) ->
+    Fun;
+mask_tracked_reads({named_fun, _, _, _} = Fun) ->
+    Fun;
+mask_tracked_reads(
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}} = Callee, [Key, {var, VL, _} | Rest]} =
+        Call
+) when Mod =:= arizona_template; Mod =:= az ->
+    case is_tracked_read(F, Rest) of
+        true ->
+            Args = [mask_tracked_reads(Key), {atom, VL, tracked} | mask_tracked_reads(Rest)],
+            {call, L, Callee, Args};
+        false ->
+            list_to_tuple(mask_tracked_reads(tuple_to_list(Call)))
+    end;
+mask_tracked_reads(Node) when is_tuple(Node) ->
+    list_to_tuple(mask_tracked_reads(tuple_to_list(Node)));
+mask_tracked_reads(Nodes) when is_list(Nodes) ->
+    [mask_tracked_reads(N) || N <- Nodes];
+mask_tracked_reads(Leaf) ->
+    Leaf.
+
+%% `get/2,3`, `get_lazy/3` and `with/2` track the key they read (`with/2` every
+%% key it projects to), given the arguments after the key and the map.
+is_tracked_read(get, []) -> true;
+is_tracked_read(get, [_Default]) -> true;
+is_tracked_read(get_lazy, [_DefaultFun]) -> true;
+is_tracked_read(with, []) -> true;
+is_tracked_read(_F, _Rest) -> false.
 
 ast_binary(Bin) ->
     {bin, 0, [{bin_element, 0, {string, 0, binary_to_list(Bin)}, default, default}]}.

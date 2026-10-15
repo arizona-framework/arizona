@@ -158,6 +158,9 @@ render(Bindings) ->
     %% An item element carrying az-nodiff compiles its per-item template nodiff.
     diff => false,
     single_root => true,
+    %% Per dynamic: may a changed stream item keep its old render when the deps
+    %% miss the changed fields (every item read tracked in its own closure)?
+    reuse => [boolean()],
     backend => module()
 }.
 

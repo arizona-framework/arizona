@@ -131,6 +131,9 @@
     each_stream_op_alone_stays_incremental/1,
     each_stream_insert_with_callback_change/1,
     each_stream_update_with_callback_change/1,
+    each_stream_update_untracked_field/1,
+    each_stream_reset_untracked_field/1,
+    each_nested_stream_untracked_inner_insert/1,
     each_stream_callback_change_settles/1,
     each_nested_list_in_list_tracks/1,
     each_nested_stream_in_list_tracks/1,
@@ -292,6 +295,9 @@ groups() ->
             each_stream_op_alone_stays_incremental,
             each_stream_insert_with_callback_change,
             each_stream_update_with_callback_change,
+            each_stream_update_untracked_field,
+            each_stream_reset_untracked_field,
+            each_nested_stream_untracked_inner_insert,
             each_stream_callback_change_settles,
             each_nested_list_in_list_tracks,
             each_nested_stream_in_list_tracks,
@@ -2628,6 +2634,50 @@ each_stream_update_with_callback_change(Config) when is_list(Config) ->
         Ops
     ).
 
+%% An item slot that reads a field with plain `maps:get/2` and a binding with `?get`
+%% has deps naming only the binding. The item value is an input those deps cannot
+%% see, so a changed item must re-render the slot rather than reuse its old value.
+each_stream_update_untracked_field(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"Ax">>]]]],
+        each_stream_op_diff(
+            stream_mixed, fun(S) -> arizona_stream:update(S, 1, #{id => 1, n => <<"A">>}) end
+        )
+    ).
+
+%% A reset keeps item 1 and changes its field: the kept-item path reuses by the same rule.
+each_stream_reset_untracked_field(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"Ax">>]]]],
+        each_stream_op_diff(
+            stream_mixed,
+            fun(S) ->
+                arizona_stream:reset(S, [#{id => 1, n => <<"A">>}, #{id => 2, n => <<"b">>}])
+            end
+        )
+    ).
+
+%% The inner stream reaches the outer item through `maps:get(inner, G)`, and the outer
+%% item's each slot depends on `suffix` (read by the inner items). An insert into the
+%% inner stream changes the outer item, so it must reach the inner each.
+each_nested_stream_untracked_inner_insert(Config) when is_list(Config) ->
+    B0 = each_bindings(),
+    GS = maps:get(gs, B0),
+    #{inner := In} = arizona_stream:get(GS, 1),
+    In1 = arizona_stream:insert(In, #{id => 3, n => <<"c">>}),
+    GS1 = arizona_stream:update(GS, 1, #{id => 1, inner => In1}),
+    ?assertMatch(
+        [
+            [
+                ?OP_ITEM_PATCH,
+                _,
+                <<"1">>,
+                [[?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<"c">>, <<"x">>]}]]
+            ]
+        ],
+        each_diff(nested_stream_in_stream, B0, B0#{gs => GS1}, #{gs => true})
+    ).
+
 %% The snapshot left by such a cycle matches a fresh render, so the next cycle has
 %% nothing stale to build on.
 each_stream_callback_change_settles(Config) when is_list(Config) ->
@@ -2773,6 +2823,15 @@ each_stream_cycle(Op, Suffix) ->
         end,
     {Ops, Snap1, _V1} = arizona_diff:diff(M:stream(B1), Snap0, V0, Changed),
     {Ops, Snap1, B1}.
+
+%% One live-like cycle on fixture `Fn` that only queues `Op` on stream `s`.
+each_stream_op_diff(Fn, Op) ->
+    M = arizona_each_tracking,
+    B0 = each_bindings(),
+    {_HTML, Snap0, V0} = arizona_render:render(M:Fn(B0), #{}),
+    B1 = B0#{s => Op(maps:get(s, B0))},
+    {Ops, _Snap1, _V1} = arizona_diff:diff(M:Fn(B1), Snap0, V0, #{s => true}),
+    Ops.
 
 %% The rendered value of every slot of every visible stream item, keyed by item.
 stream_item_values(#{d := [{_Az, #{items := Items}}]}) ->

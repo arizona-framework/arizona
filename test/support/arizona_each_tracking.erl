@@ -7,6 +7,7 @@ change to it must reach the items. Each function is a distinct scenario driven b
 -include("arizona_stateless.hrl").
 -export([list/1]).
 -export([stream/1]).
+-export([stream_mixed/1]).
 -export([map/1]).
 -export([attr/1]).
 -export([branch/1]).
@@ -31,6 +32,12 @@ list(Bindings) ->
 stream(Bindings) ->
     ?html(
         {ul, [], [?each(fun(I, _K) -> {li, [], [maps:get(n, I), ?get(suffix)]} end, ?get(s))]}
+    ).
+
+%% One slot reads both an item field (plain `maps:get/2`, untracked) and a binding.
+stream_mixed(Bindings) ->
+    ?html(
+        {ul, [], [?each(fun(I, _K) -> {li, [], [[maps:get(n, I), ?get(suffix)]]} end, ?get(s))]}
     ).
 
 map(Bindings) ->

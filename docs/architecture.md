@@ -394,9 +394,10 @@ item dynamic keeps its own deps too, which is what per-item skipping reads. Two
 consequences of collecting at runtime:
 
 - Every tracked read in an item counts, including an item-field read with an
-  explicit `arizona_template:get(text, Item)` (the form stream per-item skipping
-  keys on), so a view binding that happens to share that name re-evaluates the
-  each too. That over-tracks; the item diff then emits nothing.
+  explicit `arizona_template:get(text, Item)` (the only form stream per-item
+  skipping can vouch for; see "A changed stream item reuses only what its deps can
+  vouch for" below), so a view binding that happens to share that name
+  re-evaluates the each too. That over-tracks; the item diff then emits nothing.
 - An az-nodiff item template renders once, so its items are evaluated with the
   scope suspended (`eval_items/2`) and their reads never reach the slot.
 
@@ -585,16 +586,26 @@ is present, because Erlang evaluates the default argument eagerly and `?get(b)`
 tracks unconditionally. `?get_lazy(a, fun() -> ?get(b) end)` tracks the fallback key
 only when the default is actually taken.
 
-**Stream items re-evaluate empty deps on purpose.** The main per-dynamic diff path
-skips a slot whose deps are empty (the documented frozen residue above). The `?each`
-item path does the opposite: its reuse predicate in `arizona_eval` (`can_reuse/2`) is
-`map_size(OldDeps) > 0 andalso not deps_changed`, so an empty-deps item is always
-re-evaluated. This is a
-deliberate safety net for item callbacks that head-destructure fields
-(`fun(#{text := T}, _) -> ...`): those reads are untracked, so the item would have
-empty deps and freeze, except the item path re-evaluates it. The asymmetry is the
-boundary: head-destructured *render* reads freeze in top-level slots but stay current
-inside `?each` items.
+**A changed stream item reuses only what its deps can vouch for.** The main
+per-dynamic diff path skips a slot whose deps are empty (the documented frozen residue
+above). A changed stream item (`arizona_stream:update/3`, or a kept item of a reset)
+cannot trust its deps that way: the item value is an input to every dynamic, and deps
+record only the reads that went through `get`. A plain `maps:get(n, Item)`, a
+head-destructured field (`fun(#{text := T}, _) -> ...`), a value derived in the
+callback body, or a read inside a nested template's closure (a conditional branch, an
+inner `?each` callback) never reaches them -- and a dynamic that also reads a view
+binding has non-empty deps that name none of the fields it used. So the parse
+transform decides which dynamics are provable: a per-item template carries
+`reuse => [boolean()]`, one flag per dynamic, `true` only when the dynamic references
+no variable but the item key outside the map argument of a tracked read
+(`arizona_template:get/2,3`, `get_lazy/3`, `with/2`, or their `az` aliases) in its
+own closure. `arizona_eval:render_stream_item_skipping/6` keeps a dynamic's old
+`{Az, Val, Deps}` only when it is flagged and its deps miss the changed fields;
+everything else re-evaluates, and a template without the list (none qualified, a
+1-arg callback, a hand-built template) re-renders the whole changed item. An item
+whose value did not change at all is still reused whole. The result: untracked item
+reads stay current inside stream items, and only a fully tracked dynamic gets
+skipped.
 
 **`?each` item bodies must be elements.** Because each item compiles into a per-item
 template (`#{s, d, f}`), the callback body must be an element (`{Tag, Attrs, Children}`),

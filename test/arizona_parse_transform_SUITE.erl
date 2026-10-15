@@ -61,6 +61,9 @@
     each_multi_root_no_single_root_flag/1,
     each_stream_no_single_root_flag/1,
     each_native_no_single_root_flag/1,
+    each_stream_reuse_flags/1,
+    each_stream_reuse_flags_compiled_body/1,
+    each_stream_no_reuse_without_tracked_reads/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -696,6 +699,9 @@ groups() ->
             each_multi_root_no_single_root_flag,
             each_stream_no_single_root_flag,
             each_native_no_single_root_flag,
+            each_stream_reuse_flags,
+            each_stream_reuse_flags_compiled_body,
+            each_stream_no_reuse_without_tracked_reads,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -7485,6 +7491,59 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
     %% (`arizona_diff:diff_map/4`); a stream ignores it outright, since it keys
     %% items by `az-key` and never reaches the positional walk.
     ?assertEqual(true, maps:get(single_root, Tmpl, undefined)).
+
+%% A changed stream item keeps a dynamic's old render only where the template says
+%% its deps name every item field it read: the key attribute, a tracked item read
+%% and a tracked binding read in the slot's own closure qualify; a plain
+%% `maps:get/2` of the item, and a read inside a nested template's closure, do not.
+each_stream_reuse_flags(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item, Key) -> "
+        "        {'li', [{'az-key', Key}], [ "
+        "            arizona_template:get(a, Item), "
+        "            maps:get(b, Item), "
+        "            az:get(x, Bindings), "
+        "            case arizona_template:get(on, Item) of "
+        "                true -> {'b', [], [arizona_template:get(c, Item)]}; "
+        "                false -> <<>> "
+        "            end "
+        "        ]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, true, false, true, false]}, stream_each_template(Mod)).
+
+%% A whole-body `?html` callback compiles through the already-compiled path.
+each_stream_reuse_flags_compiled_body(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse_compiled). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item, Key) -> "
+        "        az:html({'li', [{'az-key', Key}], [ "
+        "            arizona_template:get(a, Item), maps:get(b, Item) "
+        "        ]}) "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, true, false]}, stream_each_template(Mod)).
+
+%% With no qualifying dynamic the list is left out, and every changed item re-renders.
+each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_no_reuse). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(#{n := N}, _Key) -> "
+        "        {'li', [], [N]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertNot(is_map_key(reuse, stream_each_template(Mod))).
+
+stream_each_template(Mod) ->
+    Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, []),
+    maps:get(template, Mod:render(#{stream => Stream})).
 
 %% A `?native` single-root list each is NOT flagged single_root: the gate is the
 %% backend's `supports_list_patch/0` callback (asked at compile time), and

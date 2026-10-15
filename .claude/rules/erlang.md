@@ -536,6 +536,16 @@ written as `arizona_template:get(text, Item)` counts too, so a view binding of
 the same name also re-evaluates the each (harmless: nothing differs, nothing
 ships). Reads in an az-nodiff item (or az-nodiff element) never count -- it renders once.
 
+A **stream** item changed by `arizona_stream:update/3` (or kept by a reset) skips
+re-evaluating a dynamic only when the parse transform could prove its deps name
+every field it read: the dynamic references nothing but the item key outside the
+map argument of a tracked `get`/`get_lazy`/`with` in its own closure. A plain
+`maps:get(n, Item)`, a head-destructured field, a value bound in the callback body,
+or a read inside a nested branch template makes that dynamic re-evaluate on every
+change of its item -- always correct, just not skipped. Write
+`arizona_template:get(n, Item)` (or name the item parameter `Bindings` and use
+`?get(n)`) where a wide item's per-field skipping matters.
+
 Reads **hoisted into the render function body** do track: the parse transform
 inlines each interpolated variable back into its slot closure, so the `?get`
 re-runs inside the dependency bracket.
