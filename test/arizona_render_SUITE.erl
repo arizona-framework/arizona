@@ -16,6 +16,7 @@
     error_page_arizona_loc/1,
     error_page_empty_stacktrace/1,
     error_page_error_summaries/1,
+    error_page_compile_error_locations/1,
     error_page_escapes_unsafe_chars/1,
     error_page_format_reason_unwraps_loc/1,
     error_page_title_is_user_frame_location/1,
@@ -239,7 +240,8 @@ groups() ->
             error_page_title_is_user_frame_location,
             error_page_format_error_sentence_in_body,
             error_page_title_falls_back_to_arizona_loc,
-            error_page_error_summaries
+            error_page_error_summaries,
+            error_page_compile_error_locations
         ]},
         {nodiff, [parallel], [
             no_diff_render,
@@ -2086,6 +2088,28 @@ error_page_error_summaries(Config) when is_list(Config) ->
     ?assertMatch({match, _}, re:run(CaseClause, <<"no case clause matching">>)),
     Badarg = RenderError(Base#{class => error, reason => badarg}),
     ?assertMatch({match, _}, re:run(Badarg, <<"bad argument">>)).
+
+%% The compiler reports an undefined (or crashing) parse transform with location
+%% `none`; the page must render it beside line-only and `{Line, Col}` diagnostics
+%% instead of crashing exactly when it is needed.
+error_page_compile_error_locations(Config) when is_list(Config) ->
+    File = filename:join(proplists:get_value(priv_dir, Config), "error_page_none_loc.erl"),
+    ok = file:write_file(
+        File, ~"-module(error_page_none_loc).\n-compile({parse_transform, error_page_no_pt}).\n"
+    ),
+    {error, [{_, PtErrors}], _} = compile:file(File, [return_errors, binary]),
+    ?assertMatch([{none, compile, {undef_parse_transform, error_page_no_pt}}], PtErrors),
+    Errors = [
+        {File, PtErrors},
+        {"src/b.erl", [{7, erl_lint, {unbound_var, 'Y'}}, {{9, 3}, erl_lint, {unbound_var, 'Z'}}]}
+    ],
+    EI = #{class => error, reason => {compile_error, Errors}, stacktrace => []},
+    Result = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => EI}))
+    ),
+    ?assertMatch({match, _}, re:run(Result, ~"error_page_no_pt")),
+    ?assertMatch({match, _}, re:run(Result, ~"line 7: variable &#39;Y&#39; is unbound")),
+    ?assertMatch({match, _}, re:run(Result, ~"line 9: variable &#39;Z&#39; is unbound")).
 
 %% =============================================================================
 %% 11. Unified layout (nodiff) render tests
