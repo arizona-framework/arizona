@@ -3368,7 +3368,8 @@ template_free_tails_untouched(Config) when is_list(Config) ->
         "    case T of [] -> {popped, [H | T], T}; _ -> {ok, [<<\"a\">> | <<\"b\">>]} end. "
     ),
     ?assertEqual({popped, [x], []}, Improper:pop([x])),
-    ?assertEqual({ok, [<<"a">> | <<"b">>]}, Improper:pop([x, y])).
+    {ok, Iodata} = Improper:pop([x, y]),
+    ?assertEqual(<<"ab">>, iolist_to_binary(Iodata)).
 
 %% The same data tails beside a template whose conditional branch still inherits
 %% the enclosing `az-nodiff`: leaving template-free code alone must not stop the
