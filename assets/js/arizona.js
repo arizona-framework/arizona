@@ -2546,22 +2546,31 @@ function maybeResetForm(form) {
 }
 
 /**
- * True when a parsed az-submit command (single or list) is/contains a `fetch`, so the
- * submit listener can defer `az-form-reset` to the fetch response instead of resetting
- * synchronously on submit.
+ * What a parsed command (single or list) needs the WebSocket for, so a submit made
+ * while it is down can be settled up front: `event` (a `push_event`), `fetch`, and
+ * `nav`, the first SPA `navigate`/`patch` that runs unconditionally (a `full`
+ * navigate is a plain page load and needs no socket). A navigation under `on_key`
+ * runs only on a matching key, so it counts as `event`: it cannot be degraded to a
+ * page load that may never have been asked for. `fetch` also tells the submit
+ * listener to leave `az-form-reset` to the fetch's own response, wherever the fetch
+ * sits (a transition runs it inside its callback, an on_key on a matching key).
  * @param {Array<*>} cmds
- * @returns {boolean}
+ * @param {{event?: boolean, fetch?: boolean, nav?: Array<*>}} acc
+ * @param {boolean} conditional
+ * @returns {{event?: boolean, fetch?: boolean, nav?: Array<*>}}
  */
-function commandsIncludeFetch(cmds) {
+function socketNeeds(cmds, acc, conditional) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
-    return list.some((c) => {
-        if (c[0] === JS_FETCH) return true;
-        // transition(...)/on_key(...) wrap their inner command(s) in c[2]; a fetch
-        // nested there still runs (inside the transition callback), so it must also
-        // defer the reset -- recurse instead of only checking the top level.
-        if (c[0] === JS_TRANSITION || c[0] === JS_ON_KEY) return commandsIncludeFetch(c[2]);
-        return false;
-    });
+    for (const c of list) {
+        if (c[0] === JS_PUSH_EVENT) acc.event = true;
+        else if (c[0] === JS_FETCH) acc.fetch = true;
+        else if (c[0] === JS_PATCH || (c[0] === JS_NAVIGATE && !c[2]?.full)) {
+            if (conditional) acc.event = true;
+            else acc.nav ??= c;
+        } else if (c[0] === JS_TRANSITION) socketNeeds(c[2], acc, conditional);
+        else if (c[0] === JS_ON_KEY) socketNeeds(c[2], acc, true);
+    }
+    return acc;
 }
 
 /**
@@ -3278,10 +3287,13 @@ function runDelegated(e, attr, sel, capture) {
     // a server-sent `dispatch_event` all target the Document, which has no closest().
     if (t?.nodeType !== 1) return;
     const el = capture ? (t.hasAttribute(attr) ? t : null) : t.closest(sel);
-    if (!el || !_connected) return;
+    if (!el) return;
     // Before the empty-value return: `az-<event>=""` with `az-prevent-default`
-    // declares no command but still asks for the default to be suppressed.
+    // declares no command but still asks for the default to be suppressed. Before
+    // the connection check too: a declared suppression holds while disconnected
+    // (a submit button's click would otherwise submit its form natively).
     if (el.hasAttribute('az-prevent-default')) e.preventDefault();
+    if (!_connected) return;
     const raw = el.getAttribute(attr);
     if (!raw) return;
     // The value is a command list by DECLARATION, so it is not inspected to decide
@@ -3603,13 +3615,51 @@ function bindDocumentEvents(target, signal, abort) {
         'submit',
         (e) => {
             const form = /** @type {Element} */ (e.target).closest('[az-submit]');
-            if (!form || !_connected) return;
+            if (!form) return;
+            // Unconditionally, before anything can return: an az-submit form that is
+            // let through submits natively with its own method -- a GET unless it
+            // says otherwise -- which puts every field, a password included, in the
+            // URL. Before the first open and during reconnect backoff that used to
+            // be exactly what happened.
             e.preventDefault();
-            form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
             const raw = form.getAttribute('az-submit');
-            let cmds = null;
+            /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
+            let needs = {};
             try {
-                cmds = raw ? JSON.parse(raw) : null;
+                const cmds = raw ? JSON.parse(raw) : null;
+                if (cmds) needs = socketNeeds(cmds, {}, false);
+                // While the socket is down (the worker drops pre-open sends):
+                // - an SPA navigation alone degrades to a full load of its URL, as a
+                //   disconnected az-navigate click does;
+                // - anything else needing the socket drops the submission whole rather
+                //   than run it in part, keeping the typed fields (no reset), with a
+                //   warning and `arizona:submit-dropped` on the form for app feedback.
+                //   A navigation beside a fetch drops too: the load would cancel it.
+                // - a `fetch` needs no socket and runs, so an HTTP login form works
+                //   before the first open.
+                if (!_connected && needs.nav && !needs.event && !needs.fetch) {
+                    const url = needs.nav[1];
+                    if (needs.nav[2]?.replace) location.replace(url);
+                    else location.assign(url);
+                    return;
+                }
+                if (!_connected && (needs.event || needs.nav)) {
+                    console.warn(
+                        '[arizona] az-submit dropped: its command needs the WebSocket, which is not connected',
+                    );
+                    form.dispatchEvent(
+                        new CustomEvent('arizona:submit-dropped', {
+                            bubbles: true,
+                            detail: { reason: 'disconnected' },
+                        }),
+                    );
+                    return;
+                }
+                // Flush pending debounced inputs so the server sees them before the
+                // submit. Only while connected: a flush now would send them into a
+                // closed socket, while a still-armed timer can deliver them later.
+                if (_connected)
+                    form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
@@ -3620,7 +3670,7 @@ function bindDocumentEvents(target, signal, abort) {
             }
             // A fetch command resets on its own 2xx response (so a validation error
             // keeps the typed fields); everything else resets synchronously here.
-            if (!(cmds && commandsIncludeFetch(cmds))) maybeResetForm(form);
+            if (!needs.fetch) maybeResetForm(form);
         },
         { signal },
     );

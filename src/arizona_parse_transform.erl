@@ -3255,7 +3255,7 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             N ->
                 buf_az_attr(State3, integer_to_binary(N))
         end,
-    State5 = compile_attrs(Attrs, ElemAz, State4, Line),
+    State5 = compile_element_attrs(Tag, Attrs, ElemAz, State4, Line),
     case Backend:is_void(Tag) andalso Children =/= [] of
         true -> parse_error({void_with_children, Tag}, Line);
         false -> ok
@@ -3356,6 +3356,36 @@ compile_static_false(NameAST, State0, ElemLine) ->
         Bytes ->
             buf_append(State0, Bytes)
     end.
+
+%% The author's attributes, then the static ones the backend implies from them
+%% (`arizona_renderer:implied_attrs/2`).
+compile_element_attrs(Tag, Attrs, ElemAz, State0, Line) ->
+    Backend = State0#state.backend,
+    State1 = compile_attrs(Attrs, ElemAz, State0, Line),
+    Names = [N || A <- Attrs, N <- [implied_attr_name(Backend, A)], is_binary(N)],
+    case Backend:implied_attrs(Tag, Names) of
+        [] ->
+            State1;
+        Implied ->
+            buf_append(State1, <<
+                <<(emit_backend(fun() -> Backend:attr(N, V) end, Line))/binary>>
+             || {N, V} <:- Implied
+            >>)
+    end.
+
+%% A static `false` renders nothing, so it is not an attribute the element carries.
+implied_attr_name(_Backend, {tuple, _, [_NameAST, {atom, _, false}]}) ->
+    undefined;
+implied_attr_name(Backend, {tuple, _, [{atom, _, _} = NameAST, _Value]}) ->
+    extract_attr_name(Backend, NameAST);
+implied_attr_name(Backend, {tuple, _, [{bin, _, _} = NameAST, _Value]}) ->
+    extract_attr_name(Backend, NameAST);
+implied_attr_name(_Backend, {bin, _, _} = Bin) ->
+    extract_binary_value(Bin);
+implied_attr_name(Backend, {atom, _, Name}) ->
+    Backend:name(Name);
+implied_attr_name(_Backend, _Other) ->
+    undefined.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
     State;

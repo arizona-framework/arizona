@@ -6374,6 +6374,189 @@ describe('form submit', () => {
         expect(sent).toContainEqual(['page', 'picked', { value: ['erl', 'js'] }]);
     });
 
+    // A submit let through while disconnected is submitted natively with the form's
+    // own method -- a GET by default, so every field, a password included, lands
+    // in the URL. Before the first open and during reconnect backoff.
+    it.each([
+        ['before the first open', false],
+        ['during reconnect backoff', true],
+    ])('never submits natively %s; a socket command is dropped', async (_label, opened) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[0,"login"]' az-form-reset>
+                <input name="user" value="u" />
+                <input type="password" name="pw" value="secret" />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        if (opened) {
+            mock.simulateOpen();
+            mock.simulateClose(1006);
+        }
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const resetSpy = vi.spyOn(HTMLFormElement.prototype, 'reset');
+        try {
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            document.getElementById('f').dispatchEvent(ev);
+            expect(ev.defaultPrevented).toBe(true);
+            // Dropped whole, fields kept: the reset would discard what was typed.
+            expect(mock.getSentMessages()).toHaveLength(0);
+            expect(resetSpy).not.toHaveBeenCalled();
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining('az-submit dropped'));
+        } finally {
+            warn.mockRestore();
+            resetSpy.mockRestore();
+        }
+    });
+
+    // A one-time console line is invisible to the user who pressed submit; every
+    // drop warns and tells the app on the form, so it can show feedback.
+    it('warns and dispatches arizona:submit-dropped on every dropped submit', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='[0,"login"]'></form>`);
+        mock = setupMockWorker(mod);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const form = document.getElementById('f');
+        const seen = [];
+        const onDrop = (e) => seen.push(e);
+        document.addEventListener('arizona:submit-dropped', onDrop);
+        try {
+            for (let n = 0; n < 2; n++)
+                form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            expect(warn.mock.calls.filter(([m]) => m.includes('az-submit dropped'))).toHaveLength(
+                2,
+            );
+            expect(seen).toHaveLength(2);
+            expect(seen[0].target).toBe(form);
+            expect(seen[0].detail).toEqual({ reason: 'disconnected' });
+            expect(seen[0].cancelable).toBe(false);
+        } finally {
+            document.removeEventListener('arizona:submit-dropped', onDrop);
+            warn.mockRestore();
+        }
+    });
+
+    // An SPA navigation cannot travel a down socket, but the page it names can be
+    // loaded for real -- what a disconnected az-navigate click does.
+    it.each([
+        ['navigate', '[10,"/next"]', 'assign'],
+        ['patch', '[24,"/next?tab=2"]', 'assign'],
+        ['transition-wrapped navigate', '[20,{},[10,"/next"]]', 'assign'],
+        ['replace navigate', '[10,"/next",{"replace":true}]', 'replace'],
+    ])('degrades a disconnected %s submit to a full page load', async (_label, cmd, how) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='${cmd}'></form>`);
+        mock = setupMockWorker(mod);
+        const assign = vi.fn();
+        const replace = vi.fn();
+        const ev = new Event('submit', { bubbles: true, cancelable: true });
+        vi.stubGlobal('location', { assign, replace, origin: 'http://localhost' });
+        try {
+            document.getElementById('f').dispatchEvent(ev);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        expect(ev.defaultPrevented).toBe(true);
+        const url = JSON.parse(cmd)
+            .flat(2)
+            .find((x) => typeof x === 'string');
+        expect({ assign, replace }[how]).toHaveBeenCalledWith(url);
+        expect(mock.getSentMessages()).toHaveLength(0);
+    });
+
+    it.each([
+        ['a push_event', '[[10,"/next"],[0,"saved"]]'],
+        ['a fetch', '[[22,"/save",{}],[10,"/next"]]'],
+    ])('drops a disconnected navigate submit beside %s', async (_label, cmd) => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='${cmd}'></form>`);
+        mock = setupMockWorker(mod);
+        const assign = vi.fn();
+        const originalFetch = globalThis.fetch;
+        const fetchMock = vi.fn(() => Promise.resolve(new Response('')));
+        globalThis.fetch = fetchMock;
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.stubGlobal('location', { assign, replace: assign, origin: 'http://localhost' });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } finally {
+            vi.unstubAllGlobals();
+            globalThis.fetch = originalFetch;
+            warn.mockRestore();
+        }
+        // Loading the page would cancel the fetch; neither half runs.
+        expect(assign).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(mock.getSentMessages()).toHaveLength(0);
+    });
+
+    it('runs a fetch az-submit while disconnected (it needs no socket)', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" method="post" az-submit='[22,"/login",{}]'>
+                <input name="user" value="u" />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(() => Promise.resolve(new Response('')));
+        try {
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            document.getElementById('f').dispatchEvent(ev);
+            expect(ev.defaultPrevented).toBe(true);
+            expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+            expect(globalThis.fetch.mock.calls[0][0]).toBe('/login');
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
+
+    it('drops a list mixing a fetch with a socket command while disconnected', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[22,"/login",{}],[20,{},[0,"saved"]]]'>
+                <input name="user" value="u" />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(() => Promise.resolve(new Response('')));
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const ev = new Event('submit', { bubbles: true, cancelable: true });
+            document.getElementById('f').dispatchEvent(ev);
+            expect(ev.defaultPrevented).toBe(true);
+            // Never run in part: the transition-wrapped push_event needs the socket.
+            expect(globalThis.fetch).not.toHaveBeenCalled();
+            expect(mock.getSentMessages()).toHaveLength(0);
+        } finally {
+            globalThis.fetch = originalFetch;
+            warn.mockRestore();
+        }
+    });
+
+    it('runs client-only az-submit commands while disconnected', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='[1,"#panel"]'></form><div id="panel"></div>`);
+        mock = setupMockWorker(mod);
+        const ev = new Event('submit', { bubbles: true, cancelable: true });
+        document.getElementById('f').dispatchEvent(ev);
+        expect(ev.defaultPrevented).toBe(true);
+        expect(document.getElementById('panel').hidden).toBe(true);
+    });
+
     it('submit without az-submit does nothing', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
