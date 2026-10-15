@@ -274,20 +274,20 @@ load_edges(Mod) ->
     end.
 
 loaded_edges(Mod) ->
-    try erlang:get_module_info(Mod, md5) of
-        MD5 ->
-            case persistent_term:get(?CACHE_KEY(Mod), undefined) of
-                {MD5, Names, Deps} ->
-                    {Names, Deps};
-                _MissOrStale ->
-                    Attrs = erlang:get_module_info(Mod, attributes),
-                    Names = proplists:append_values(arizona_az_attrs, Attrs),
-                    Deps = proplists:append_values(arizona_az_deps, Attrs),
-                    ok = persistent_term:put(?CACHE_KEY(Mod), {MD5, Names, Deps}),
-                    {Names, Deps}
-            end
+    try
+        MD5 = Mod:module_info(md5),
+        case persistent_term:get(?CACHE_KEY(Mod), undefined) of
+            {MD5, Names, Deps} ->
+                {Names, Deps};
+            _MissOrStale ->
+                Attrs = Mod:module_info(attributes),
+                Names = proplists:append_values(arizona_az_attrs, Attrs),
+                Deps = proplists:append_values(arizona_az_deps, Attrs),
+                ok = persistent_term:put(?CACHE_KEY(Mod), {MD5, Names, Deps}),
+                {Names, Deps}
+        end
     catch
-        error:badarg ->
-            %% Purged between the `module_loaded` check and the read.
+        error:undef ->
+            %% Purged between the `module_loaded` check and a read.
             {[], []}
     end.
