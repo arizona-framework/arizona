@@ -553,7 +553,12 @@ Name = ?get(name),                 ?html({p, [], [Name]}).
 User = ?get(user), N = maps:get(name, User), ?html({p, [], [N]}).  %% tracks `user`
 Label = case ?get(mode) of dark -> ?get(a); _ -> ?get(b) end, ?html({p, [], [Label]}).
 case ?get(mode) of dark -> X = ?get(a); _ -> X = ?get(b) end, ?html({p, [], [X]}).
+case ?get(mode) of dark -> N = ?get(n), ?html({p, [], [N]}); _ -> ?html({p, [], []}) end.
 ```
+
+The last form hoists inside a branch of the render function's result -- any tail of a
+`case`/`if`/`begin`/`try`/`maybe`/`receive` there, nested or not (on a live root too). The
+read inlines into that branch's templates only.
 
 A hoisted **template constructor** also compiles and tracks:
 `Header = ?html({h1, [], [?get(title)]})`, `Items = ?each(...)`, or
@@ -589,9 +594,10 @@ rather than read, put the read inside the slot (`f(?get(k))`).
 
 Exceptions that stay un-tracked (slot frozen after SSR): a binding destructured
 in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
-(`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a variable
-bound inside a `case` branch whose clause head binds a variable, and a rebound
-variable.
+(`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), including a
+variable a clause pattern binds (`{admin, Name} ->`); a variable bound by a
+statement-form `case` some of whose clause heads bind a variable (it is not lifted
+to value form); and a rebound variable.
 
 A tracked read used in a **guard** inside a template (`case Status of active when
 Confirming -> ...`, an `if`, a nested fun) is **auto-tracked**, so the slot stays
