@@ -1152,9 +1152,13 @@ callback, broadcasts changed files via `arizona_pubsub`.
 PubSub for cross-view communication. Thin wrapper around `pg` with scope `arizona_pubsub`. Channels
 are arbitrary terms. Messages are raw data (no wrapper tuple).
 
-- `subscribe(Channel, Pid)` -- subscribe `Pid` to `Channel`. Duplicate-safe: checks membership
-  first, no-op if already subscribed
-- `unsubscribe(Channel, Pid)` -- remove `Pid` from `Channel`
+- `subscribe(Channel, Pid)` -- subscribe `Pid` to `Channel`; `ok`, or `{error, already_joined}`
+  when `Pid` is already subscribed (the membership is checked first, so it is never joined twice).
+  `?subscribe(Topic)` subscribes the live process, which every view in it shares: a second view
+  subscribing the same topic gets `{error, already_joined}`, so do not match its result against
+  `ok`
+- `unsubscribe(Channel, Pid)` -- remove `Pid` from `Channel`; `ok`, or `{error, not_joined}` when
+  `Pid` was not subscribed
 - `broadcast(Channel, Data)` -- send `Data` to all subscribers via `Pid ! Data`
 - `broadcast_from(From, Channel, Data)` -- same but excludes `From` pid
 - `subscribers(Channel)` -- return list of subscriber pids
@@ -1256,6 +1260,11 @@ id, so `handle_info/2` raises `{unknown_view, OldViewId, Msg}` and the live proc
 new page happens to reuse the same view id, the stale message is delivered to a different handler).
 So **do not arm timers in `unmount/1`** -- it is a teardown callback, and the ordering is chosen so
 the cancel cannot race a timer the old page armed while it was still running.
+
+The same goes for a plain `?send` from `unmount/1`, and not only on navigate: a child removed by a
+diff has its queued view messages flushed **before** its `unmount/1` runs, so a message the callback
+sends to its own id lands after the view is gone and raises `{unknown_view, ViewId, Msg}` once the
+live process reads it. Release resources in `unmount/1`; never message the view being torn down.
 
 ### Process-dictionary keys
 
@@ -2127,7 +2136,9 @@ any caller-side concatenation. See "SPA navigate / patch route resolution".
 
 `unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional
 or navigate) or the live process is shutting down. Use it to release resources (timers, external
-subscriptions). Return value is discarded.
+subscriptions). Return value is discarded. Do not `?send` or `?send_after` to the view from it: the
+view is gone by the time the message arrives, and the live process raises `{unknown_view, ...}` (see
+"Per-view messages and the timer registry").
 
 ## Dynamic `eval` return values
 

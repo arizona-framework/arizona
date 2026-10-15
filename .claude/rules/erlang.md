@@ -249,8 +249,8 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?send(ViewId, Msg)` | `arizona_live:send(ViewId, Msg)` -- send to specific view (stateful only) |
 | `?send_after(Time, Msg)` | `arizona_live:send_after(map_get(id, Bindings), Time, Msg)` -- delayed send to current view (stateful only). Reads `id` with the `map_get` BIF, not `?get`, so it records no dependency |
 | `?send_after(ViewId, Time, Msg)` | `arizona_live:send_after(ViewId, Time, Msg)` -- delayed send to specific view (stateful only) |
-| `?subscribe(Topic)` | `arizona_pubsub:subscribe(Topic, self())` -- subscribe the live process to `Topic` (stateful only) |
-| `?unsubscribe(Topic)` | `arizona_pubsub:unsubscribe(Topic, self())` -- unsubscribe the live process from `Topic` (stateful only) |
+| `?subscribe(Topic)` | `arizona_pubsub:subscribe(Topic, self())` -- subscribe the live process to `Topic` (stateful only). Returns `ok`, or `{error, already_joined}` when the process is already subscribed -- every view in a live process shares its pid, so a second view subscribing the same topic gets the error; don't match it against `ok` |
+| `?unsubscribe(Topic)` | `arizona_pubsub:unsubscribe(Topic, self())` -- unsubscribe the live process from `Topic` (stateful only). Returns `ok`, or `{error, not_joined}` |
 
 ## Rendered binaries must be UTF-8
 
