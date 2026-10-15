@@ -359,6 +359,8 @@
     tracked_get_rebound_bindings_ok/1,
     tracked_get_maps_get_submap_errors/1,
     tracked_get_submap_alias_errors/1,
+    tracked_get_map_pattern_value_errors/1,
+    tracked_get_map_pattern_key_param_ok/1,
     with_handoff_freezes_without_tracking/1,
     with_handoff_tracks_outer_slot/1,
     with_handoff_hoisted_tracks_outer_slot/1,
@@ -1064,6 +1066,8 @@ groups() ->
             tracked_get_rebound_bindings_ok,
             tracked_get_maps_get_submap_errors,
             tracked_get_submap_alias_errors,
+            tracked_get_map_pattern_value_errors,
+            tracked_get_map_pattern_key_param_ok,
             with_handoff_freezes_without_tracking,
             with_handoff_tracks_outer_slot,
             with_handoff_hoisted_tracks_outer_slot
@@ -10626,6 +10630,43 @@ tracked_get_submap_alias_errors(Config) when is_list(Config) ->
         "    arizona_template:html({'p', [], [arizona_template:get(bar, F)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
+
+%% A variable a map pattern binds to a value is a nested value, not the bindings,
+%% wherever the pattern sits: a match, the function head, a case clause, a fun head.
+tracked_get_map_pattern_value_errors(Config) when is_list(Config) ->
+    Read = "arizona_template:html({'p', [], [arizona_template:get(x, U)]})",
+    Cases = [
+        {"match", "render(Bindings) -> #{user := U} = Bindings, " ++ Read ++ ". "},
+        {"head", "render(#{user := U}) -> " ++ Read ++ ". "},
+        {"headalias", "render(#{user := U} = _Bindings) -> " ++ Read ++ ". "},
+        {"case",
+            "render(Bindings) -> case Bindings of #{user := U} -> " ++ Read ++
+                "; _ -> ok end. "},
+        {"fun", "render(Bindings) -> (fun(#{user := U}) -> " ++ Read ++ " end)(Bindings). "},
+        {"nested", "render(#{user := #{profile := U}}) -> " ++ Read ++ ". "}
+    ],
+    [
+        assert_parse_error(
+            "-module(pt_tg_mappat_" ++ Name ++ "). -export([render/1]). " ++ Body,
+            fun(R) -> R =:= tracked_get_on_non_bindings_map end
+        )
+     || {Name, Body} <- Cases
+    ],
+    ok.
+
+%% The whole map a pattern matches is still the bindings: a head alias of the
+%% bindings and a bare fun parameter read with the tracked accessor pass.
+tracked_get_map_pattern_key_param_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_mappat_ok). "
+        "-export([render/1]). "
+        "render(#{x := _} = Bindings) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    T = Mod:render(#{x => <<"y">>}),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
+    ?assertEqual(<<"y">>, Fun()),
+    ?assertEqual(#{x => true}, slot_deps(Fun)).
 
 %% Finding A, baseline: a child template handed off via a raw function call freezes.
 %% The outer slot is `fun() -> inner(Bindings) end`; building `inner` fires no tracked

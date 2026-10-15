@@ -646,8 +646,9 @@ test; `{Sel, X} -> [Sel, X]` uses the hoisted `Sel` in the body too.
 `track/1` regardless of which map they read, so reading a nested map records the
 inner key as a spurious top-level dep. The parse transform rejects a tracked read
 whose map argument is a local provably holding a value read out of a map -- bound
-by `V = ?get(...)`/`get_lazy`/`maps:get`/`map_get`, or an alias of one -- with
-`tracked_get_on_non_bindings_map`. Any other local may be the bindings (a parameter,
+by `V = ?get(...)`/`get_lazy`/`maps:get`/`map_get`, bound to a value by a map
+pattern (`#{user := U}` in a match, a head or a case clause), or an alias of
+one -- with `tracked_get_on_non_bindings_map`. Any other local may be the bindings (a parameter,
 a `Bindings = bump(Bindings0)` threaded through a helper, a `case`), so it is not
 flagged. Read sub-structures with plain `maps:get/2`: `User = ?get(user), Name =
 maps:get(name, User)`.

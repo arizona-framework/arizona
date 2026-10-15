@@ -1194,14 +1194,16 @@ parse_error(Reason, Anno) ->
 %% regardless of which map they read, so reading a sub-map records the inner key
 %% as a top-level slot dependency. Reject a tracked read whose map argument is a
 %% variable PROVABLY holding a value read out of a map: bound by `V = Read` where Read
-%% is a tracked accessor or `maps:get/2,3` / `map_get/2`, or aliased from such a
-%% variable. Anything else may be the bindings -- a parameter, a value threaded
+%% is a tracked accessor or `maps:get/2,3` / `map_get/2`, bound to a value by a map
+%% pattern (`#{user := U}` in a match, a function or fun head, a case clause), or
+%% aliased from such a variable. Anything else may be the bindings -- a parameter, a value threaded
 %% through a helper (`Bindings = bump(Bindings0)`), a `case` or `maps:merge` -- and
 %% the transform cannot tell, so it is left alone: a false rejection blocks correct
 %% code, a missed one only over-tracks. A non-variable map argument is never flagged.
 check_tracked_get_targets(Patterns, Body) ->
     Params = collect_fun_param_vars(Body, collect_pattern_vars(Patterns, #{})),
-    walk_tracked_gets(Body, map_value_vars(Body, Params)).
+    PatternValues = map_pattern_values({clause, 0, Patterns, [], Body}, #{}),
+    walk_tracked_gets(Body, map_value_vars(Body, Params, PatternValues)).
 
 %% Every fun/named_fun parameter anywhere in Body. Flat across nesting depth:
 %% over-inclusion only drops a flag (false negative), never adds one.
@@ -1225,15 +1227,50 @@ collect_clause_param_vars(Clauses, Acc) ->
         Clauses
     ).
 
-%% The variables bound to a value read out of a map (`V = Read`), grown through
-%% `V = W` aliases to a fixpoint (`Foo = ?get(foo), F = Foo`). A name that is also a
-%% parameter somewhere in the clause is dropped: the scan is flat across nesting
-%% depth, and a dropped name only loses a flag, never adds one.
-map_value_vars(Body, Params) ->
+%% The variables bound to a value read out of a map (`V = Read`, or a map pattern's
+%% value), grown through `V = W` aliases to a fixpoint (`Foo = ?get(foo), F = Foo`).
+%% A name that is also a parameter somewhere in the clause -- other than one a map
+%% pattern binds to a value -- is dropped: the scan is flat across nesting depth, and
+%% a dropped name only loses a flag, never adds one.
+map_value_vars(Body, Params, PatternValues) ->
     Matches = collect_matches(Body, []),
     Reads = #{V => true || {match, _, {var, _, V}, Expr} <- Matches, is_map_value_read(Expr)},
     VarAliases = [{V, W} || {match, _, {var, _, V}, {var, _, W}} <- Matches],
-    maps:without(maps:keys(Params), alias_fixpoint(VarAliases, Reads)).
+    Exempt = maps:without(maps:keys(PatternValues), Params),
+    Values = alias_fixpoint(VarAliases, maps:merge(Reads, PatternValues)),
+    maps:without(maps:keys(Exempt), Values).
+
+%% Every variable a map pattern binds to a value, in any pattern position: clause
+%% heads (function, fun, case, receive, try), match left-hand sides and generators.
+%% Only patterns are walked -- `M#{k := V}` in an expression is an update, not a binder.
+map_pattern_values({clause, _, Patterns, _Guards, Body}, Acc) ->
+    map_pattern_values(Body, pattern_map_values(Patterns, Acc));
+map_pattern_values({match, _, Pattern, Expr}, Acc) ->
+    map_pattern_values(Expr, pattern_map_values(Pattern, Acc));
+map_pattern_values({Gen, _, Pattern, Expr}, Acc) when
+    Gen =:= generate;
+    Gen =:= generate_strict;
+    Gen =:= b_generate;
+    Gen =:= b_generate_strict;
+    Gen =:= m_generate;
+    Gen =:= m_generate_strict
+->
+    map_pattern_values(Expr, pattern_map_values(Pattern, Acc));
+map_pattern_values(T, Acc) when is_tuple(T) ->
+    map_pattern_values(tuple_to_list(T), Acc);
+map_pattern_values([H | T], Acc) ->
+    map_pattern_values(T, map_pattern_values(H, Acc));
+map_pattern_values(_Leaf, Acc) ->
+    Acc.
+
+pattern_map_values({map_field_exact, _, _Key, Value}, Acc) ->
+    collect_pattern_vars(Value, Acc);
+pattern_map_values(T, Acc) when is_tuple(T) ->
+    pattern_map_values(tuple_to_list(T), Acc);
+pattern_map_values([H | T], Acc) ->
+    pattern_map_values(T, pattern_map_values(H, Acc));
+pattern_map_values(_Leaf, Acc) ->
+    Acc.
 
 is_map_value_read({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, [_Key, _Map | _]}) when
     Mod =:= arizona_template; Mod =:= az
