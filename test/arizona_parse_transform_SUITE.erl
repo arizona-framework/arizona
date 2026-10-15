@@ -295,6 +295,16 @@
     helper_with_args_renders_and_tracks/1,
     helper_body_read_tracks/1,
     helper_body_var_shadows_caller_var/1,
+    helper_param_in_case_pattern/1,
+    helper_param_in_pattern_caller_same_name/1,
+    helper_param_in_guard/1,
+    helper_param_in_guard_caller_same_name/1,
+    helper_param_in_map_key_and_bin_size/1,
+    helper_param_in_fun_guard/1,
+    helper_param_in_maybe_and_match/1,
+    helper_param_in_generator_key/1,
+    helper_param_shadowed_by_fun_param/1,
+    helper_param_in_each_guard_error/1,
     helper_whole_body_html_unwraps_and_tracks/1,
     helper_nested_calls_inline/1,
     helper_element_list_body_tracks/1,
@@ -931,6 +941,16 @@ groups() ->
             helper_with_args_renders_and_tracks,
             helper_body_read_tracks,
             helper_body_var_shadows_caller_var,
+            helper_param_in_case_pattern,
+            helper_param_in_pattern_caller_same_name,
+            helper_param_in_guard,
+            helper_param_in_guard_caller_same_name,
+            helper_param_in_map_key_and_bin_size,
+            helper_param_in_fun_guard,
+            helper_param_in_maybe_and_match,
+            helper_param_in_generator_key,
+            helper_param_shadowed_by_fun_param,
+            helper_param_in_each_guard_error,
             helper_whole_body_html_unwraps_and_tracks,
             helper_nested_calls_inline,
             helper_element_list_body_tracks,
@@ -9144,6 +9164,174 @@ helper_body_var_shadows_caller_var(Config) when is_list(Config) ->
     %% The caller's `side` reaches the class, the helper's reaches the span.
     ?assertMatch({_, _}, binary:match(HTMLBin, ~"class=\"buy\"")),
     ?assertMatch({_, _}, binary:match(HTMLBin, ~"sell")).
+
+%% A helper parameter used in a pattern or guard cannot take the argument expression
+%% (a call is not a pattern), so the inlined helper binds it to a fresh variable right
+%% ahead of the expression that tests it, inside the slot: the pattern compares against
+%% the argument's value (not a fresh binder that matches anything, nor a caller variable
+%% of the same name), and the argument's read runs in the slot's bracket so it tracks.
+helper_param_in_case_pattern(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_pat). "
+        "-export([render/1]). "
+        "mark(Sel, Id) -> {span, [], [case Id of Sel -> <<\"yes\">>; _ -> <<\"no\">> end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        mark(arizona_template:get(sel, Bindings), arizona_template:get(id, Bindings))"
+        "    ]}). "
+    ),
+    ?assertMatch({_, _}, binary:match(helper_param_ssr(Mod, #{sel => 2, id => 1}), ~"no")),
+    assert_helper_param_tracks(Mod, #{sel => 1, id => 1}, #{sel => 2}, ~"yes", ~"no").
+
+helper_param_in_pattern_caller_same_name(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_pat_caller). "
+        "-export([render/1]). "
+        "mark(Sel, Id) -> {span, [], [case Id of Sel -> <<\"yes\">>; _ -> <<\"no\">> end]}. "
+        "render(Bindings) -> "
+        "    Sel = 1, "
+        "    arizona_template:html({'div', [], [integer_to_binary(Sel), "
+        "        mark(arizona_template:get(sel, Bindings), arizona_template:get(id, Bindings))"
+        "    ]}). "
+    ),
+    SSR = helper_param_ssr(Mod, #{sel => 2, id => 1}),
+    ?assertEqual(nomatch, binary:match(SSR, ~"yes"), SSR).
+
+helper_param_in_guard(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_guard). "
+        "-export([render/1]). "
+        "lim(Max, N) -> {span, [], [if N > Max -> <<\"over\">>; true -> <<\"ok\">> end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        lim(arizona_template:get(max, Bindings), arizona_template:get(n, Bindings))"
+        "    ]}). "
+    ),
+    assert_helper_param_tracks(Mod, #{max => 5, n => 3}, #{max => 1}, ~"ok", ~"over").
+
+helper_param_in_guard_caller_same_name(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_guard_caller). "
+        "-export([render/1]). "
+        "lim(Max, N) -> {span, [], [if N > Max -> <<\"over\">>; true -> <<\"ok\">> end]}. "
+        "render(Bindings) -> "
+        "    Max = 100, N = 0, "
+        "    arizona_template:html({'div', [], [integer_to_binary(Max + N), "
+        "        lim(arizona_template:get(max, Bindings), arizona_template:get(n, Bindings))"
+        "    ]}). "
+    ),
+    SSR = helper_param_ssr(Mod, #{max => 1, n => 3}),
+    ?assertMatch({_, _}, binary:match(SSR, ~"over"), SSR).
+
+helper_param_in_map_key_and_bin_size(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_keysize). "
+        "-export([render/1]). "
+        "pick(K, N, M, S) -> {span, [], ["
+        "    case M of #{K := V} -> V; _ -> <<\"none\">> end, "
+        "    case S of <<P:N/binary, _/binary>> -> P; _ -> <<\"short\">> end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [pick("
+        "        arizona_template:get(k, Bindings), arizona_template:get(n, Bindings), "
+        "        #{a => <<\"AA\">>, b => <<\"BB\">>}, <<\"xyz\">>)]}). "
+    ),
+    B0 = #{k => a, n => 1},
+    SSR = helper_param_ssr(Mod, B0),
+    ?assertMatch({_, _}, binary:match(SSR, ~"AA"), SSR),
+    ?assertMatch({_, _}, binary:match(SSR, ~">x<"), SSR),
+    assert_helper_param_tracks(Mod, B0, #{k => b}, ~"AA", ~"BB"),
+    assert_helper_param_tracks(Mod, B0, #{n => 2}, ~">x<", ~"xy").
+
+helper_param_in_fun_guard(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_funguard). "
+        "-export([render/1]). "
+        "size_of(Min, N) -> {span, [], ["
+        "    (fun(X) when X > Min -> <<\"big\">>; (_) -> <<\"small\">> end)(N)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        size_of(arizona_template:get(min, Bindings), arizona_template:get(n, Bindings))"
+        "    ]}). "
+    ),
+    assert_helper_param_tracks(Mod, #{min => 0, n => 3}, #{min => 5}, ~"big", ~"small").
+
+helper_param_in_maybe_and_match(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_maybe). "
+        "-export([render/1]). "
+        "chk(Want, Have) -> {span, [], ["
+        "    maybe Want ?= Have, <<\"match\">> else _ -> <<\"miss\">> end, "
+        "    try {Want, X} = {Have, <<\"!\">>}, X catch error:{badmatch, _} -> <<\"?\">> end]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        chk(arizona_template:get(want, Bindings), arizona_template:get(have, Bindings))"
+        "    ]}). "
+    ),
+    B0 = #{want => 1, have => 1},
+    SSR = helper_param_ssr(Mod, B0),
+    ?assertMatch({_, _}, binary:match(SSR, ~"match"), SSR),
+    ?assertMatch({_, _}, binary:match(SSR, ~"!"), SSR),
+    assert_helper_param_tracks(Mod, B0, #{want => 2}, ~"match", ~"miss"),
+    assert_helper_param_tracks(Mod, B0, #{want => 2}, ~"!", ~"?").
+
+%% A generator's pattern binds, but its map key reads the helper parameter.
+helper_param_in_generator_key(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_param_gen). "
+        "-export([render/1]). "
+        "col(K, Rows) -> {span, [], [[V || #{K := V} <- Rows]]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [col(arizona_template:get(k, Bindings), "
+        "        [#{a => <<\"AA\">>, b => <<\"BB\">>}])]}). "
+    ),
+    assert_helper_param_tracks(Mod, #{k => a}, #{k => b}, ~"AA", ~"BB").
+
+%% A fun parameter of the same name shadows the helper parameter: the inner pattern
+%% tests the fun's own argument, untouched.
+helper_param_shadowed_by_fun_param(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_helper_param_shadow). "
+        "-export([render/1]). "
+        "inner(Sel) -> {span, [], [Sel, "
+        "    (fun(Sel) -> case 7 of Sel -> <<\"seven\">>; _ -> <<\"other\">> end end)(7)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [inner(arizona_template:get(sel, Bindings))]}). "
+    ),
+    SSR = helper_param_ssr(Mod, #{sel => ~"S"}),
+    ?assertMatch({_, _}, binary:match(SSR, ~"seven"), SSR),
+    ?assertMatch({_, _}, binary:match(SSR, ~"S"), SSR).
+
+%% An `?each` callback must stay a fun literal, so there is no expression to bind a
+%% helper parameter ahead of when the callback's own guard reads it: a compile error
+%% naming the helper, instead of an unbound variable or a caller variable read in its place.
+helper_param_in_each_guard_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_param_each_guard). "
+        "-export([render/1]). "
+        "row(Min, Items) -> {ul, [], [arizona_template:each("
+        "    fun(I) when I > Min -> {li, [], [integer_to_binary(I)]} end, Items)]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], [row(arizona_template:get(min, Bindings), "
+        "        arizona_template:get(items, Bindings))]}). ",
+        fun(R) -> R =:= {helper_param_in_each_guard, row, 2} end
+    ),
+    Message = arizona_parse_transform:format_error({helper_param_in_each_guard, row, 2}),
+    ?assertNotEqual(nomatch, string:find(Message, "row/2")).
+
+helper_param_ssr(Mod, Bindings) ->
+    iolist_to_binary(arizona_render:render_to_iolist(Mod:render(Bindings))).
+
+%% Render with B0, then diff with B0 updated by Delta, marking ONLY Delta's keys as
+%% changed (the dep-aware diff): a slot that recorded no dependency on them emits nothing.
+assert_helper_param_tracks(Mod, B0, Delta, Shown, New) ->
+    SSR = helper_param_ssr(Mod, B0),
+    ?assertNotEqual(nomatch, binary:match(SSR, Shown), SSR),
+    {_Live, Snap, _Views} = arizona_render:render(Mod:render(B0), #{}),
+    Changed = maps:map(fun(_K, _V) -> true end, Delta),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(
+        Mod:render(maps:merge(B0, Delta)), Snap, #{}, Changed
+    ),
+    ?assertNotEqual(nomatch, binary:match(term_to_binary(Ops), New), Ops).
 
 helper_nested_calls_inline(Config) when is_list(Config) ->
     Mod = compile_module_strict(

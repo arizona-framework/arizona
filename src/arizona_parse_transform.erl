@@ -126,6 +126,13 @@ render(Bindings) ->
 %% while compiling a module (see extract_binary_value/1 and latin1_warnings/2).
 -define(FOLDED_KEY, arizona_folded_literals).
 
+%% Process-dictionary counter naming the variables an inlined helper binds its
+%% pattern- and guard-read parameters to (see bind_param_tests/5). Per module, so the
+%% names stay byte-identical across compiles, and unique within it, so two inlined
+%% calls in one scope never bind the same name (a second binding would silently
+%% become an equality test against the first).
+-define(PARAM_SEQ_KEY, arizona_helper_param_seq).
+
 %% Module a template-constructor call is re-spelled under when it sits inside an
 %% `az-nodiff` template (see inherit_nodiff/1). The constructors compile
 %% bottom-up, so a nested `?each`/`?html` is a finished map before the enclosing
@@ -195,6 +202,7 @@ parse_transform(Forms, _Options) ->
     _ = erase(?AZ_ATTRS_KEY),
     _ = erase(?FOLDED_KEY),
     undefined = put(?FOLDED_KEY, #{}),
+    _ = put(?PARAM_SEQ_KEY, 0),
     try
         Transformed = [
             transform_form(mark_targets(Form, none), Module, IsLive, FunDefs)
@@ -209,6 +217,8 @@ parse_transform(Forms, _Options) ->
         throw:{arizona_parse_error, Line, Reason} ->
             _ = erase(?FOLDED_KEY),
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
+    after
+        _ = erase(?PARAM_SEQ_KEY)
     end.
 
 with_warnings(Forms, []) ->
@@ -1028,6 +1038,16 @@ format_helper_error(helper_recursive, Name, Arity) ->
             "?stateless/?stateful child",
             [Name, Arity]
         )
+    );
+format_helper_error(helper_param_in_each_guard, Name, Arity) ->
+    lists:flatten(
+        io_lib:format(
+            "local element helper ~ts/~p reads a parameter in the head or guard "
+            "of an ?each callback -- the callback must stay a fun literal, so "
+            "the inlined argument has nowhere to be bound. Test it inside the "
+            "item element (a case on the item) instead",
+            [Name, Arity]
+        )
     ).
 
 %% --------------------------------------------------------------------
@@ -1492,7 +1512,9 @@ ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch, Tail) -
                 #{{Name, Arity} := _} -> parse_error({helper_recursive, Name, Arity}, L);
                 #{} -> ok
             end,
-            BodyExpr1 = rename_inlined_body(Name, Arity, Params, BodyExpr),
+            BodyExpr1 = bind_param_tests(
+                rename_inlined_body(Name, Arity, Params, BodyExpr), Params, Name, Arity, L
+            ),
             Spliced = mark_targets(subst_helper_args(BodyExpr1, Params, Args), Target),
             Ctx1 = {Module, FunDefs, Target, Stack#{{Name, Arity} => true}},
             {Spliced1, true} = ih(Spliced, Ctx1, true, Tail),
@@ -1512,7 +1534,8 @@ ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch, Tail) -
 %% Pass one renames each param occurrence to a fresh variable no caller
 %% expression can contain; pass two binds the fresh variable to the argument
 %% -- both terminate, and iv's scope handling (shadowing funs, patterns,
-%% guards untouched) applies unchanged.
+%% guards untouched) applies unchanged. A param read in a pattern or guard was
+%% already moved out of it by bind_param_tests/5.
 subst_helper_args(BodyExpr, [], []) ->
     BodyExpr;
 subst_helper_args(BodyExpr, Params, Args) ->
@@ -1525,6 +1548,317 @@ fresh_helper_var(P) ->
     list_to_atom(
         "AzHelperArg" ++ integer_to_list(erlang:unique_integer([positive])) ++ atom_to_list(P)
     ).
+
+%% A parameter the helper body reads in a pattern or a guard -- an equality test
+%% (`case Id of Sel -> ...`), a map key, a binary size, a `?=`, a guard (`if N > Max`)
+%% -- cannot take the argument expression subst_helper_args/3 puts in its place: a call
+%% is not a pattern, nor legal in a guard. Left as written, the name is no longer the
+%% parameter once spliced: a pattern turns it into a fresh binder that matches anything
+%% or an equality test against a caller variable of the same name, and a guard reads
+%% that caller variable or fails to compile.
+%%
+%% So each expression whose own patterns or guards read a parameter is wrapped in a
+%% block that first binds a fresh variable to the parameter, and the reads in those
+%% patterns and guards are renamed to it: `begin AzArg = Sel, case Id of AzArg -> ...
+%% end end`. The `AzArg = Sel` match is an ordinary read, so substitution then puts the
+%% argument there. The block lands inside the slot closure the expression compiles
+%% into, so the argument's binding reads run in that slot's dependency bracket and the
+%% slot tracks them. A fun head or a generator binds its own variables, shadowing a
+%% parameter of the same name below it; only its map keys and binary sizes read one.
+bind_param_tests(Body, [], _Name, _Arity, _Line) ->
+    Body;
+bind_param_tests(Body, Params, Name, Arity, Line) ->
+    pt(Body, maps:from_keys(Params, true), {Name, Arity, Line}).
+
+pt(Expr, Live, _Ctx) when map_size(Live) =:= 0 ->
+    Expr;
+pt({maybe_match, L, P, E}, Live, Ctx) ->
+    %% Its pattern is renamed by the enclosing `maybe` (a `?=` cannot be wrapped).
+    {maybe_match, L, P, pt(E, Live, Ctx)};
+pt(
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}} = F, [{'fun', FL, {clauses, Cs}}, Src]},
+    Live,
+    Ctx
+) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    %% An ?each callback must stay a fun literal: nothing can be bound ahead of it.
+    case pt_tests(fun_heads(Cs), Live) of
+        [] -> ok;
+        [_ | _] -> pt_each_error(Ctx)
+    end,
+    {call, L, F, [{'fun', FL, {clauses, pt_fun_clauses(Cs, Live, Ctx)}}, pt(Src, Live, Ctx)]};
+pt(T, Live, Ctx) when is_tuple(T) ->
+    case is_test_node(T) of
+        true -> pt_wrap(pt_node(T, Live, Ctx), element(2, T), node_live(T, Live));
+        false -> list_to_tuple(pt(tuple_to_list(T), Live, Ctx))
+    end;
+pt(List, Live, Ctx) when is_list(List) ->
+    [pt(E, Live, Ctx) || E <- List];
+pt(Leaf, _Live, _Ctx) ->
+    Leaf.
+
+%% The expressions with patterns or guards of their own.
+is_test_node({'fun', _, {clauses, _}}) ->
+    true;
+is_test_node({Comp, _, _, _}) when Comp =:= lc; Comp =:= bc; Comp =:= mc -> true;
+is_test_node({match, _, _, _}) ->
+    true;
+is_test_node(T) ->
+    lists:member(element(1, T), [named_fun, 'case', 'if', 'receive', 'try', 'maybe']).
+
+%% A named fun's name shadows a parameter of the same name in its own clauses.
+node_live({named_fun, _, FName, _}, Live) -> maps:remove(FName, Live);
+node_live(_Node, Live) -> Live.
+
+%% Walk a node's subexpressions; its own heads are left for pt_wrap/3.
+pt_node({'case', L, E, Cs}, Live, Ctx) ->
+    {'case', L, pt(E, Live, Ctx), pt_clauses(Cs, Live, Ctx)};
+pt_node({'if', L, Cs}, Live, Ctx) ->
+    {'if', L, pt_clauses(Cs, Live, Ctx)};
+pt_node({'receive', L, Cs}, Live, Ctx) ->
+    {'receive', L, pt_clauses(Cs, Live, Ctx)};
+pt_node({'receive', L, Cs, AE, AB}, Live, Ctx) ->
+    {'receive', L, pt_clauses(Cs, Live, Ctx), pt(AE, Live, Ctx), pt(AB, Live, Ctx)};
+pt_node({'try', L, B, OfCs, CatchCs, Aft}, Live, Ctx) ->
+    {'try', L, pt(B, Live, Ctx), pt_clauses(OfCs, Live, Ctx), pt_clauses(CatchCs, Live, Ctx),
+        pt(Aft, Live, Ctx)};
+pt_node({'maybe', L, B}, Live, Ctx) ->
+    {'maybe', L, pt(B, Live, Ctx)};
+pt_node({'maybe', L, B, {'else', L2, Cs}}, Live, Ctx) ->
+    {'maybe', L, pt(B, Live, Ctx), {'else', L2, pt_clauses(Cs, Live, Ctx)}};
+pt_node(Node, Live, Ctx) ->
+    pt_binding_node(Node, Live, Ctx).
+
+pt_binding_node({match, L, P, E}, Live, Ctx) ->
+    {match, L, P, pt(E, Live, Ctx)};
+pt_binding_node({'fun', L, {clauses, Cs}}, Live, Ctx) ->
+    {'fun', L, {clauses, pt_fun_clauses(Cs, Live, Ctx)}};
+pt_binding_node({named_fun, L, FName, Cs}, Live, Ctx) ->
+    {named_fun, L, FName, pt_fun_clauses(Cs, maps:remove(FName, Live), Ctx)};
+pt_binding_node({Comp, L, T, Qs}, Live, Ctx) ->
+    {Qs1, Live1} = lists:mapfoldl(fun(Q, Lv) -> pt_qual(Q, Lv, Ctx) end, Live, Qs),
+    {Comp, L, pt(T, Live1, Ctx), Qs1}.
+
+pt_each_error({Name, Arity, Line}) ->
+    parse_error({helper_param_in_each_guard, Name, Arity}, Line).
+
+%% Clause bodies: a case-like pattern tests a parameter rather than binding it, so the
+%% parameters stay live in the body.
+pt_clauses(Cs, Live, Ctx) ->
+    [{clause, L, Ps, Gs, pt(B, Live, Ctx)} || {clause, L, Ps, Gs, B} <:- Cs].
+
+pt_fun_clauses(Cs, Live, Ctx) ->
+    [
+        {clause, L, Ps, Gs, pt(B, maps:without(pattern_vars(Ps), Live), Ctx)}
+     || {clause, L, Ps, Gs, B} <:- Cs
+    ].
+
+%% A generator's source sees the scope before it; its pattern binds for what follows.
+pt_qual({zip, L, Gens}, Live, Ctx) ->
+    Gens1 = [{G, GL, P, pt(E, Live, Ctx)} || {G, GL, P, E} <:- Gens],
+    {{zip, L, Gens1}, maps:without(pattern_vars([P || {_, _, P, _} <:- Gens]), Live)};
+pt_qual({Gen, L, P, E}, Live, Ctx) when
+    Gen =:= generate;
+    Gen =:= generate_strict;
+    Gen =:= b_generate;
+    Gen =:= b_generate_strict;
+    Gen =:= m_generate;
+    Gen =:= m_generate_strict
+->
+    {{Gen, L, P, pt(E, Live, Ctx)}, maps:without(pattern_vars(P), Live)};
+pt_qual(Filter, Live, Ctx) ->
+    {pt(Filter, Live, Ctx), Live}.
+
+%% Bind a fresh variable to each live parameter the node's own patterns and guards
+%% read, and rename those reads to it. `Live` is the scope the node sits in.
+pt_wrap(Node, L, Live) ->
+    case node_tests(Node, Live) of
+        [] ->
+            Node;
+        Params ->
+            Ren = #{P => fresh_param_var(P) || P <- Params},
+            Binds = [{match, L, {var, L, V}, {var, L, P}} || P := V <- Ren],
+            {block, L, Binds ++ [rename_heads(Node, Ren)]}
+    end.
+
+fresh_param_var(P) ->
+    N = get(?PARAM_SEQ_KEY),
+    _ = put(?PARAM_SEQ_KEY, N + 1),
+    list_to_atom("AzArg@" ++ integer_to_list(N) ++ "@" ++ atom_to_list(P)).
+
+node_tests({Comp, _, _, Qs}, Live) when Comp =:= lc; Comp =:= bc; Comp =:= mc ->
+    generator_tests(Qs, Live);
+node_tests(Node, Live) ->
+    pt_tests(node_heads(Node), Live).
+
+%% The parameters (in first-seen order) a node's heads read. A head is
+%% `{test, Form}` -- every variable in it is a read -- or `{bind, Pattern, Guards}`,
+%% whose pattern binds (shadowing for its guards) and reads only map keys and
+%% binary sizes.
+pt_tests(Heads, Live) ->
+    lists:reverse(lists:foldl(fun(H, Acc) -> head_tests(H, Live, Acc) end, [], Heads)).
+
+head_tests({test, Form}, Live, Acc) ->
+    collect_live_vars(Form, Live, Acc);
+head_tests({bind, Pattern, Guards}, Live, Acc) ->
+    Acc1 = collect_live_vars(pattern_reads(Pattern), Live, Acc),
+    collect_live_vars(Guards, maps:without(pattern_vars(Pattern), Live), Acc1).
+
+collect_live_vars({var, _, V}, Live, Acc) ->
+    case is_map_key(V, Live) andalso not lists:member(V, Acc) of
+        true -> [V | Acc];
+        false -> Acc
+    end;
+collect_live_vars(T, Live, Acc) when is_tuple(T) ->
+    collect_live_vars(tuple_to_list(T), Live, Acc);
+collect_live_vars([H | T], Live, Acc) ->
+    collect_live_vars(T, Live, collect_live_vars(H, Live, Acc));
+collect_live_vars(_Leaf, _Live, Acc) ->
+    Acc.
+
+node_heads({'case', _, _, Cs}) -> clause_heads(Cs);
+node_heads({'if', _, Cs}) -> clause_heads(Cs);
+node_heads({'receive', _, Cs}) -> clause_heads(Cs);
+node_heads({'receive', _, Cs, _, _}) -> clause_heads(Cs);
+node_heads({'try', _, _, OfCs, CatchCs, _}) -> clause_heads(OfCs ++ CatchCs);
+node_heads({'maybe', _, B}) -> maybe_heads(B);
+node_heads({'maybe', _, B, {'else', _, Cs}}) -> maybe_heads(B) ++ clause_heads(Cs);
+node_heads({match, _, P, _}) -> [{test, P}];
+node_heads({'fun', _, {clauses, Cs}}) -> fun_heads(Cs);
+node_heads({named_fun, _, _, Cs}) -> fun_heads(Cs).
+
+clause_heads(Cs) ->
+    [{test, [Ps, Gs]} || {clause, _, Ps, Gs, _} <:- Cs].
+
+maybe_heads(B) ->
+    [{test, P} || {maybe_match, _, P, _} <- B].
+
+fun_heads(Cs) ->
+    [{bind, Ps, Gs} || {clause, _, Ps, Gs, _} <:- Cs].
+
+%% Each generator binds for the qualifiers after it, so a later generator's map key or
+%% binary size reads a parameter only when no earlier one rebound its name. A map
+%% generator's `K := V` binds both sides.
+generator_tests(Qs, Live) ->
+    {Acc, _} = lists:foldl(
+        fun(Q, {Acc0, Lv}) ->
+            Ps = [map_gen_as_tuple(P) || P <- qual_patterns(Q)],
+            {collect_live_vars(pattern_reads(Ps), Lv, Acc0), maps:without(pattern_vars(Ps), Lv)}
+        end,
+        {[], Live},
+        Qs
+    ),
+    lists:reverse(Acc).
+
+qual_patterns({zip, _, Gens}) ->
+    [P || {_, _, P, _} <:- Gens];
+qual_patterns({G, _, P, _}) when
+    G =:= generate;
+    G =:= generate_strict;
+    G =:= b_generate;
+    G =:= b_generate_strict;
+    G =:= m_generate;
+    G =:= m_generate_strict
+->
+    [P];
+qual_patterns(_Filter) ->
+    [].
+
+map_gen_as_tuple({map_field_exact, L, K, V}) -> {tuple, L, [K, V]};
+map_gen_as_tuple(P) -> P.
+
+%% Rename the parameter reads in a node's own heads (never its bodies, which read the
+%% parameter as an expression and are substituted with the argument).
+rename_heads({'case', L, E, Cs}, Ren) ->
+    {'case', L, E, rename_clause_heads(Cs, Ren)};
+rename_heads({'if', L, Cs}, Ren) ->
+    {'if', L, rename_clause_heads(Cs, Ren)};
+rename_heads({'receive', L, Cs}, Ren) ->
+    {'receive', L, rename_clause_heads(Cs, Ren)};
+rename_heads({'receive', L, Cs, AE, AB}, Ren) ->
+    {'receive', L, rename_clause_heads(Cs, Ren), AE, AB};
+rename_heads({'try', L, B, OfCs, CatchCs, Aft}, Ren) ->
+    {'try', L, B, rename_clause_heads(OfCs, Ren), rename_clause_heads(CatchCs, Ren), Aft};
+rename_heads({'maybe', L, B}, Ren) ->
+    {'maybe', L, rename_maybe_body(B, Ren)};
+rename_heads({'maybe', L, B, {'else', L2, Cs}}, Ren) ->
+    {'maybe', L, rename_maybe_body(B, Ren), {'else', L2, rename_clause_heads(Cs, Ren)}};
+rename_heads({match, L, P, E}, Ren) ->
+    {match, L, rename_vars(P, Ren), E};
+rename_heads({'fun', L, {clauses, Cs}}, Ren) ->
+    {'fun', L, {clauses, rename_fun_heads(Cs, Ren)}};
+rename_heads({named_fun, L, FName, Cs}, Ren) ->
+    {named_fun, L, FName, rename_fun_heads(Cs, Ren)};
+rename_heads({Comp, L, T, Qs}, Ren) ->
+    {Comp, L, T, rename_generators(Qs, Ren)}.
+
+rename_clause_heads(Cs, Ren) ->
+    [{clause, L, rename_vars(Ps, Ren), rename_vars(Gs, Ren), B} || {clause, L, Ps, Gs, B} <:- Cs].
+
+rename_maybe_body(B, Ren) ->
+    [
+        case E of
+            {maybe_match, L, P, X} -> {maybe_match, L, rename_vars(P, Ren), X};
+            _ -> E
+        end
+     || E <- B
+    ].
+
+rename_fun_heads(Cs, Ren) ->
+    [
+        {clause, L, rename_reads(Ps, Ren), rename_vars(Gs, maps:without(pattern_vars(Ps), Ren)), B}
+     || {clause, L, Ps, Gs, B} <:- Cs
+    ].
+
+%% Generators are renamed in order: once one binds a parameter's name, the later ones
+%% read their own binding, not the parameter.
+rename_generators(Qs, Ren) ->
+    {Qs1, _} = lists:mapfoldl(fun rename_generator/2, Ren, Qs),
+    Qs1.
+
+rename_generator({zip, L, Gens}, Ren) ->
+    Gens1 = [{G, GL, rename_gen_pattern(P, Ren), E} || {G, GL, P, E} <:- Gens],
+    {{zip, L, Gens1}, maps:without(pattern_vars([P || {_, _, P, _} <:- Gens]), Ren)};
+rename_generator(Q, Ren) ->
+    case qual_patterns(Q) of
+        [P] ->
+            {G, L, P, E} = Q,
+            {{G, L, rename_gen_pattern(P, Ren), E}, maps:without(pattern_vars(P), Ren)};
+        [] ->
+            {Q, Ren}
+    end.
+
+rename_gen_pattern({map_field_exact, L, K, V}, Ren) ->
+    {map_field_exact, L, rename_reads(K, Ren), rename_reads(V, Ren)};
+rename_gen_pattern(P, Ren) ->
+    rename_reads(P, Ren).
+
+rename_vars({var, L, V} = Var, Ren) ->
+    case Ren of
+        #{V := New} -> {var, L, New};
+        #{} -> Var
+    end;
+rename_vars(T, Ren) when is_tuple(T) ->
+    list_to_tuple(rename_vars(tuple_to_list(T), Ren));
+rename_vars(List, Ren) when is_list(List) ->
+    [rename_vars(E, Ren) || E <- List];
+rename_vars(Leaf, _Ren) ->
+    Leaf.
+
+%% In a binding pattern only the map keys and binary sizes are reads.
+rename_reads({map_field_exact, L, K, V}, Ren) ->
+    {map_field_exact, L, rename_vars(K, Ren), rename_reads(V, Ren)};
+rename_reads({bin_element, L, V, Size, Types}, Ren) ->
+    {bin_element, L, rename_reads(V, Ren), rename_vars(Size, Ren), Types};
+rename_reads({var, _, _} = Var, _Ren) ->
+    Var;
+rename_reads(T, Ren) when is_tuple(T) ->
+    list_to_tuple(rename_reads(tuple_to_list(T), Ren));
+rename_reads(List, Ren) when is_list(List) ->
+    [rename_reads(E, Ren) || E <- List];
+rename_reads(Leaf, _Ren) ->
+    Leaf.
 
 %% Decide what to do with a local call: `skip` (leave the call -- a scalar
 %% helper, an unresolvable callee, or a wrapped body that renders fine as-is)
