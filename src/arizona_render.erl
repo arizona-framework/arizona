@@ -576,10 +576,11 @@ format_error({cross_target_layout, Mod, Fun, LayoutBackend, PageBackend}, _ST) -
 format_error({multi_root_layout, Mod, Fun, Backend}, _ST) ->
     #{
         general => io_lib:format(
-            "layout ~s:~s/1 is a ~s template with several top-level nodes, but a "
-            "~s document is a single node, so the nodes would be served side by "
-            "side as a document no client can parse. Wrap them in one container "
-            "node, as a ~s view's render/1 already must.",
+            "layout ~s:~s/1 is a ~s template with several top-level nodes, and no "
+            "layer above it wraps them in one, so they are the document root. A ~s "
+            "document is a single node, so the nodes would be served side by side as "
+            "a document no client can parse. Wrap them in one container node, in this "
+            "layout or an outer one, as a ~s view's render/1 already must.",
             [Mod, Fun, macro_of(Backend), macro_of(Backend), macro_of(Backend)]
         )
     };
@@ -624,7 +625,12 @@ finish_page(PageTmpl, Bindings, Opts) ->
     Backend = backend(PageTmpl),
     PageHTML = zip_ssr(Backend, maps:get(s, PageTmpl), maps:get(d, PageTmpl)),
     Layouts = maps:get(layouts, Opts, []),
-    apply_layouts(Layouts, Backend, {Backend, PageHTML}, Bindings).
+    %% The page's own root is held to one node at compile time.
+    {DocBackend, Root, Doc} = apply_layouts(
+        Layouts, Backend, {Backend, single, PageHTML}, Bindings
+    ),
+    ok = assert_document_root(Root),
+    {DocBackend, Doc}.
 
 %% A hand-built template carries no backend; it renders as the default target.
 content_type(undefined) -> arizona_html:content_type();
@@ -655,12 +661,15 @@ content_type(Backend) -> Backend:content_type().
 apply_layouts([], _PageBackend, Inner, _Bindings) ->
     Inner;
 apply_layouts([{Mod, Fun} | Rest], PageBackend, Inner, Bindings) ->
-    {InnerBackend, Wrapped} = apply_layouts(Rest, PageBackend, Inner, Bindings),
+    {InnerBackend, InnerRoot, Wrapped} = apply_layouts(Rest, PageBackend, Inner, Bindings),
     Tmpl = Mod:Fun(Bindings#{inner_content => #{s => [Wrapped], d => []}}),
     LayoutBackend = backend(Tmpl),
     ok = assert_layout_target(Mod, Fun, LayoutBackend, PageBackend),
-    ok = assert_layout_root(Mod, Fun, Tmpl),
-    {layer_backend(LayoutBackend, InnerBackend), render_layout(Mod, Fun, Tmpl)}.
+    {
+        layer_backend(LayoutBackend, InnerBackend),
+        layer_root(Mod, Fun, Tmpl, InnerRoot),
+        render_layout(Mod, Fun, Tmpl)
+    }.
 
 %% A layer that records no backend adds no target of its own, so the document is
 %% still what it wraps.
@@ -685,21 +694,38 @@ assert_layout_target(Mod, Fun, LayoutBackend, PageBackend) ->
         [{error_info, #{module => ?MODULE}}]
     ).
 
-%% On a backend whose document is one node (native), a layout with several
-%% top-level nodes renders them comma-joined, which is no JSON document. Every
-%% layer is held to one root, not just the outermost: a passthrough layer above
-%% would serve the fragment as the document, and the page itself is held to one
-%% root at compile time, so one root per layer is what makes the whole document
-%% one node. The parse transform stamps the shape (it cannot know which
-%% templates are layouts); the backend decides at compile time whether to stamp.
-assert_layout_root(Mod, Fun, #{multi_root := true} = Tmpl) ->
+%% On a backend whose document is one node (native), a document root of several
+%% top-level nodes renders them comma-joined, which is no JSON document. Only the
+%% root of the final document matters: a multi-root layout wrapped in a
+%% single-root one is just that layer's children. So each layer says what the
+%% document root is once it has wrapped: its own several roots (the parse
+%% transform's stamp, asked of the backend at compile time), whatever it wraps
+%% when it adds no node itself (a backendless `?inner_content`, or a body that is
+%% one bare dynamic, such as `?native(?inner_content)`), or one node otherwise.
+%% The layer that made it several is kept to name in the error.
+layer_root(Mod, Fun, #{multi_root := true} = Tmpl, _InnerRoot) ->
+    {multi, Mod, Fun, backend(Tmpl)};
+layer_root(_Mod, _Fun, Tmpl, InnerRoot) ->
+    case adds_no_node(Tmpl) of
+        true -> InnerRoot;
+        false -> single
+    end.
+
+adds_no_node(#{backend := _, s := Statics, d := [_Dynamic]}) ->
+    lists:all(fun(Static) -> Static =:= <<>> end, Statics);
+adds_no_node(#{backend := _}) ->
+    false;
+adds_no_node(#{}) ->
+    true.
+
+assert_document_root(single) ->
+    ok;
+assert_document_root({multi, Mod, Fun, Backend}) ->
     erlang:error(
-        {multi_root_layout, Mod, Fun, backend(Tmpl)},
+        {multi_root_layout, Mod, Fun, Backend},
         none,
         [{error_info, #{module => ?MODULE}}]
-    );
-assert_layout_root(_Mod, _Fun, _Tmpl) ->
-    ok.
+    ).
 
 %% Mark the layer so `render_ssr_val/2` can refuse a `?stateful` inside it. The
 %% inner layers have already rendered into `Wrapped` by the time this runs, and
