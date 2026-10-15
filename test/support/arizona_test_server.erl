@@ -140,6 +140,10 @@ routes() ->
         }},
         {live, <<"/scroll-home">>, arizona_scroll_home, #{layouts => Layouts}},
         {live, <<"/scroll-about">>, arizona_scroll_about, #{layouts => Layouts}},
+        %% Same page, another layout list: an SPA navigate here degrades to a full load.
+        {live, <<"/scroll-section">>, arizona_scroll_about, #{
+            layouts => Layouts ++ [{arizona_scroll_layout, render}]
+        }},
         {live, <<"/navigate-halt">>, arizona_navigate_halt, #{layouts => Layouts}},
         %% A middleware that halts with no redirect: HTTP answers 403, and an SPA
         %% navigate here becomes a full navigation that loads that response.

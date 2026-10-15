@@ -125,7 +125,7 @@ handler-owned default.
 - `arizona_datatable.erl` -- stream sort/move/reset, 5 initial rows
 - `arizona_mixed_children.erl` -- stateless + dynamic children, az numbering correctness
 - `arizona_os_demo.erl` -- native-shell (OS) capability seam e2e fixture (route `/os`): capability-gated UI via the `?connected` binding pattern, server-emitted + client-triggered `arizona_os` commands, inbound OS events into `handle_event/3`
-- `arizona_scroll_home.erl` / `arizona_scroll_about.erl` -- dedicated E2E scroll fixtures (tall content + hash anchor + replace-nav button). Routed at `/scroll-home` and `/scroll-about`; kept off the demo nav to avoid polluting the other E2E cases.
+- `arizona_scroll_home.erl` / `arizona_scroll_about.erl` -- dedicated E2E scroll fixtures (tall content + hash anchor + replace-nav button). Routed at `/scroll-home` and `/scroll-about`; kept off the demo nav to avoid polluting the other E2E cases. `/scroll-section` routes `arizona_scroll_about` under an extra layout (`arizona_scroll_layout`), so an SPA navigate there degrades to a full page load.
 - `arizona_todo.erl` -- stream operations (add/remove/update/clear/move/insert_at/reset_with)
 - `arizona_timer.erl` -- `handle_info/2` with set_message/set_message_with_effect
 - `arizona_effectful.erl` -- dispatch_event effects (notify/multi/noop)

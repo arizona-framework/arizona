@@ -466,6 +466,16 @@ function findViewRoot(viewId) {
 let _pendingScroll = null;
 
 /**
+ * Set right before an unload the framework starts while the current history
+ * entry already names a page the DOM is not showing: a navigate degraded to a
+ * full load (the new URL was pushed, then `location.assign`ed) and a popstate
+ * served by `location.reload()` (the browser already moved to the destination
+ * entry). The scroll on screen belongs to the previous page, so the unload
+ * stamp must not write it onto that entry. Cleared by `pagehide`.
+ */
+let _unloadingToOtherPage = false;
+
+/**
  * Apply a scroll intent. pop+saved restores prior position; otherwise scroll
  * to #hash target if present, else to top.
  * @param {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null}} p
@@ -2746,6 +2756,7 @@ function execOne(el, event, cmd) {
                 // Full-page navigation: let the browser load the URL normally.
                 // Used when the target isn't a live route (a controller/asset
                 // path, or a 404) and so can't be SPA-navigated.
+                _unloadingToOtherPage = true;
                 location.assign(full);
                 break;
             }
@@ -3754,6 +3765,7 @@ function connect(endpoint, params = {}) {
             // shows, like a disconnected az-navigate click falls through to the
             // browser.
             if (!_connected) {
+                _unloadingToOtherPage = true;
                 location.reload();
                 return;
             }
@@ -3995,10 +4007,12 @@ function connect(endpoint, params = {}) {
     // per scroll. Both events: Chromium snapshots a reloading entry's state
     // before `pagehide` runs, so only a `beforeunload` write survives a reload,
     // while `pagehide` is the one that fires on every unload (iOS Safari skips
-    // `beforeunload`). Neither listener blocks the bfcache. A throw (Safari's
-    // history-write rate limit) only loses the restore, so it is swallowed
-    // rather than allowed to abort the `pagehide` teardown.
+    // `beforeunload`). Neither listener kept a page out of Chromium's bfcache
+    // (checked with its own eligibility report); other engines unverified. A
+    // throw (Safari's history-write rate limit) only loses the restore, so it
+    // is swallowed rather than allowed to abort the `pagehide` teardown.
     const stampUnloadScroll = () => {
+        if (_unloadingToOtherPage) return;
         try {
             const st = history.state || {};
             history.replaceState(
@@ -4019,6 +4033,7 @@ function connect(endpoint, params = {}) {
         'pagehide',
         () => {
             stampUnloadScroll();
+            _unloadingToOtherPage = false;
             if (_worker) {
                 // Preserve typed form fields first: the pageshow reconnect asks
                 // the server for a full resync, whose OP_REPLACE rebuilds the
@@ -4069,6 +4084,7 @@ function connect(endpoint, params = {}) {
         _replay = null;
         cancelMountReload();
         _pendingScroll = null;
+        _unloadingToOtherPage = false;
         _pendingTransition = null;
         _connectQs = '';
         _savedForms.clear();
