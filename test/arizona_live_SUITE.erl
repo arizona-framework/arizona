@@ -127,6 +127,8 @@
     stream_wrapped_child_unmounted_on_switch_off/1,
     stream_rerendered_child_drops_grandchild/1,
     stream_own_event_grandchild_dropped_by_prop/1,
+    stream_child_not_mounted_for_transient_key/1,
+    stream_child_unmounted_on_update_then_delete/1,
     on_mount_transforms_bindings/1,
     on_mount_works_on_navigate/1,
     on_mount_empty_is_noop/1,
@@ -270,7 +272,9 @@ groups() ->
             stream_wrapped_children_unmounted_on_delete,
             stream_wrapped_child_unmounted_on_switch_off,
             stream_rerendered_child_drops_grandchild,
-            stream_own_event_grandchild_dropped_by_prop
+            stream_own_event_grandchild_dropped_by_prop,
+            stream_child_not_mounted_for_transient_key,
+            stream_child_unmounted_on_update_then_delete
         ]},
         {on_mount, [parallel], [
             on_mount_transforms_bindings,
@@ -2105,6 +2109,33 @@ stream_own_event_grandchild_dropped_by_prop(Config) when is_list(Config) ->
         end
      || Transport <- [undefined, self()]
     ].
+
+%% A key added and removed again in one event never reaches the client, so its
+%% child must not mount at all -- a mount here had no matching unmount and left
+%% the view registered. Both through `insert/2` and the `update/3` upsert, on the
+%% unlimited stream (a limited one already skipped keys outside its final window).
+stream_child_not_mounted_for_transient_key(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual([], stream_lifecycle_event(Pid, ~"insert_delete", #{~"id" => ~"x"})),
+    ?assertEqual([], stream_lifecycle_event(Pid, ~"upsert_delete", #{~"id" => ~"y"})),
+    ?assertEqual(
+        [{child_unmounted, ~"c-a"}, {child_unmounted, ~"c-b"}],
+        stream_lifecycle_event(Pid, ~"reset", #{~"ids" => []})
+    ).
+
+%% An existing item updated and then deleted in one event: the drain re-renders
+%% its child before the delete removes the item, and that render must not keep the
+%% child registered.
+stream_child_unmounted_on_update_then_delete(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual(
+        [{child_unmounted, ~"c-a"}],
+        stream_lifecycle_event(Pid, ~"update_delete", #{~"id" => ~"a"})
+    ),
+    ?assertEqual(
+        [{child_unmounted, ~"c-b"}],
+        stream_lifecycle_event(Pid, ~"reset", #{~"ids" => []})
+    ).
 
 start_lifecycle(Handler, Init) ->
     start_lifecycle(Handler, Init, undefined).
