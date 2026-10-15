@@ -40,7 +40,8 @@ diff pipeline.
 - `$arizona_timers` -- `#{ViewId => [Ref]}` from `send_after/3`. A fired
   ref is pruned when its message is delivered; a removed child view's
   timers are cancelled synchronously (and its queued view messages
-  flushed) on unmount; `navigate/3,4` cancels them all so stale timers
+  flushed) on unmount -- including a child whose id a render keeps but
+  whose handler it swaps; `navigate/3,4` cancels them all so stale timers
   don't fire after a page change.
 - `$arizona_deps` -- per-dynamic dependency capture set, used by
   `arizona_eval` and `arizona_template:track/1`.
@@ -82,6 +83,7 @@ fingerprints already shipped in the initial HTML.
 -export([dedup_fps/2]).
 -export([apply_on_mount/2]).
 -export([format_error/2]).
+-export([swap_out_view/3]).
 -export([view_state/1]).
 
 %% --------------------------------------------------------------------
@@ -360,16 +362,15 @@ mount_and_render(Pid) ->
     gen_server:call(Pid, mount_and_render, infinity).
 
 -doc """
-Re-renders the current view tree to a complete output binary from the
-live process's current bindings and child views.
+Renders the current view tree to a complete output binary from the live
+process's last rendered snapshot and its child views' current snapshots.
 
 Unlike `mount_and_render/1` (which returns a fingerprint payload meant for
 client-side diff application), this always materializes the full output --
 intended for transports that repaint the whole view each frame (e.g. a
-terminal renderer) instead of applying diff ops. Because it re-renders
-through `arizona_render:render/2`, it threads the live `views` map and so
-reflects current root *and* nested child state; the freshly produced
-snapshot/views are discarded (read-only render).
+terminal renderer) instead of applying diff ops. It reflects current root
+*and* nested child state without evaluating the template: no `mount/1` or
+`handle_update/3` runs, and the process state is left untouched.
 """.
 -spec render_current(Pid) -> {ok, binary(), arizona_event_attrs:observed()} when
     Pid :: pid().
@@ -604,9 +605,15 @@ handle_call(
     {reply, {ok, ViewId, PageContent1, arizona_event_attrs:drain()}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1, pending_refresh = #{}
     }};
-handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
-    Tmpl = arizona_stateful:call_render(H, B),
-    {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
+handle_call(render_current, _From, #state{snapshot = Snap0, views = V} = State) ->
+    %% A repaint reads the live tree; it must not run it. Rendering the template
+    %% again would evaluate every child descriptor -- handle_update/3, or mount/1
+    %% on a swapped handler -- and then discard that state. The root snapshot
+    %% already holds the last render; refresh every child's copy from `views`
+    %% (a child's own event updates only its entry there, and a foreign caller's
+    %% event is not even marked pending) and print it.
+    Snap = apply_pending_refresh(#{Id => true || Id := _ <- V}, V, Snap0),
+    HTML = arizona_render:snapshot_html(Snap),
     {reply, {ok, iolist_to_binary(HTML), arizona_event_attrs:drain()}, State};
 handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings = B0} = State) ->
     ok = push_barrier(From, State),
@@ -738,7 +745,9 @@ terminate(_Reason, #state{snapshot = Snap, handler = H, bindings = B, views = V}
 ->
     %% Unmount every child view, then the root -- the same children-first
     %% removal semantics as navigate, for any exit reason terminate sees.
-    ok = unmount_removed_views(V),
+    %% A diff that raised after swapping a child's handler has unmounted the
+    %% swapped-out instance already, though the state still lists it.
+    ok = unmount_removed_views(still_mounted_views(V)),
     ok = arizona_stateful:call_unmount(H, B);
 terminate(_Reason, _State) ->
     %% Never mounted: `mount/1` has not run, so `bindings` are still the raw
@@ -773,6 +782,57 @@ format_error({unknown_view, ViewId, Msg}, [{_M, _F, [_, _B, V0], _Info} | _]) ->
             [ViewId, Msg, lists:sort(maps:keys(V0))]
         )
     }.
+
+%% Internal: the one place a child view leaves the live process. Cancels its
+%% `send_after/3` timers and flushes its queued view messages BEFORE `unmount/1`,
+%% so a late tick can never reach a view that is gone. Besides the removals this
+%% module reconciles after a diff, `swap_out_view/3` calls it when a render keeps
+%% an id but swaps its handler -- before the new handler mounts, since the new
+%% instance's own timers are registered under the same id.
+-spec unmount_view(ViewId, Handler, Bindings) -> ok when
+    ViewId :: binary(),
+    Handler :: module(),
+    Bindings :: map().
+unmount_view(ViewId, Handler, Bindings) ->
+    ok = cancel_view_timers(ViewId),
+    ok = flush_view_messages(ViewId),
+    arizona_stateful:call_unmount(Handler, Bindings).
+
+%% Internal: `unmount_view/3` for the instance a render replaces by keeping its id
+%% and switching its handler, called by `arizona_eval` mid-diff. The diff has not
+%% returned yet, so the gen_server state still lists this instance; if the rest
+%% of the diff raises (the new handler's mount/1, say), terminate/2 runs on that
+%% state. Remember the instance until the diff returns, so terminate/2 does not
+%% unmount it a second time.
+-doc false.
+-spec swap_out_view(ViewId, Handler, Bindings) -> ok when
+    ViewId :: binary(),
+    Handler :: module(),
+    Bindings :: map().
+swap_out_view(ViewId, Handler, Bindings) ->
+    ok = unmount_view(ViewId, Handler, Bindings),
+    SwappedOut =
+        case erlang:get('$arizona_swapped_out') of
+            undefined -> #{};
+            S -> S
+        end,
+    _ = erlang:put('$arizona_swapped_out', SwappedOut#{ViewId => {Handler, Bindings}}),
+    ok.
+
+%% The views a crash mid-diff left listed in the state but already unmounted by
+%% swap_out_view/3. Empty outside a failed pass: every render or diff that can
+%% evaluate child views erases the record as soon as it returns.
+still_mounted_views(Views) ->
+    case erlang:erase('$arizona_swapped_out') of
+        undefined ->
+            Views;
+        SwappedOut ->
+            #{
+                Id => View
+             || Id := #{handler := H, bindings := B} = View <- Views,
+                not is_map_key(Id, SwappedOut) orelse map_get(Id, SwappedOut) =/= {H, B}
+            }
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -840,6 +900,7 @@ do_mount(H, B0, V0, OnMount) ->
     ViewId = maps:get(id, B2),
     Tmpl = arizona_stateful:call_render(H, B2),
     Rendered = arizona_render:render_snapshot(Tmpl, V0),
+    _ = erlang:erase('$arizona_swapped_out'),
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
     B4 = maps:merge(B3, Resets),
     {ViewId, Rendered, B4}.
@@ -935,6 +996,7 @@ process_root_change(
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap, V0, Changed),
+    _ = erlang:erase('$arizona_swapped_out'),
     Effects1 = arizona_eval:drain_update_effects(),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
@@ -965,6 +1027,7 @@ process_child_change(
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
     {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
+    _ = erlang:erase('$arizona_swapped_out'),
     Effects1 = arizona_eval:drain_update_effects(),
     {Ops1, Fps1} = dedup_fps_if_noted(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
@@ -1231,11 +1294,7 @@ clear_streams_and_apply_resets(B1, Resets) ->
 %% and crash the session with unknown_view.
 unmount_removed_views(RemovedViews) ->
     maps:foreach(
-        fun(Id, #{handler := H, bindings := B}) ->
-            ok = cancel_view_timers(Id),
-            ok = flush_view_messages(Id),
-            ok = arizona_stateful:call_unmount(H, B)
-        end,
+        fun(Id, #{handler := H, bindings := B}) -> ok = unmount_view(Id, H, B) end,
         RemovedViews
     ).
 

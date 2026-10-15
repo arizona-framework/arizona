@@ -270,10 +270,13 @@ Triggers a SPA navigation to `Path` with options.
   server strips it from the effect (the browser never sees it) and carries it
   in-process to the target's `flash` binding, so an in-view Post/Redirect/Get
   (`submit -> flash -> navigate`) shows its message just like an HTTP redirect flash.
-- `full` -- do a real full-page navigation (`location.assign`) instead of a SPA
-  navigation. For a target that is not a live route (a controller/asset path, a
-  404); the framework itself emits this to degrade a navigate/patch whose path
-  does not resolve to a live view.
+- `full` -- do a real full-page navigation (`location.assign`, or `location.replace`
+  with `replace`) instead of a SPA navigation. For a target that is not a live route
+  (a controller/asset path, a 404); the framework itself emits this to degrade a
+  navigate/patch whose path does not resolve to a live view. An `http`/`https`
+  `Path` on another origin is always loaded this way, since `pushState` refuses it.
+  Any other scheme (`javascript:`, `data:`) is never loaded: the client drops the
+  effect with a warning, since loading it would run it in the page.
 """.
 -spec navigate(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),
@@ -293,7 +296,11 @@ patch(Path) -> {arizona_effect, [?EFFECT_PATCH, Path]}.
 -doc """
 Triggers an in-place SPA navigation (`patch`) to `Path` with options. Accepts the
 same `flash` opt as `navigate/2` (carried in-process to the patched route's `flash`
-binding, stripped from the client effect).
+binding, stripped from the client effect) and its `replace` opt.
+
+An `http`/`https` `Path` on another origin cannot be patched in place: the client
+loads it as a page (`location.assign`, or `location.replace` with `replace`). Any
+other scheme is dropped with a warning, as for `navigate/2`.
 """.
 -spec patch(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),

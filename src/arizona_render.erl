@@ -92,6 +92,7 @@ op-code targets.
 %% --------------------------------------------------------------------
 
 -ignore_xref([render/1]).
+-ignore_xref([render/2]).
 -ignore_xref([render_to_iolist/2]).
 -ignore_xref([resolve_id/1]).
 -ignore_xref([zip/2]).

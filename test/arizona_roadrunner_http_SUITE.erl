@@ -11,6 +11,11 @@
 -export([manual_body_read_keeps_pipelining_intact/1]).
 -export([transforms_apply_over_the_wire/1]).
 -export([page_carries_its_targets_content_type/1]).
+-export([cors_answers_a_preflight/1]).
+-export([cors_route_answers_a_plain_options/1]).
+-export([cors_route_keeps_its_verbs_and_405/1]).
+-export([cors_plain_options_allow_follows_pattern_overlaps/1]).
+-export([cors_beside_default_origin_check/1]).
 
 all() ->
     [
@@ -18,7 +23,12 @@ all() ->
         handle_returns_the_threaded_raw_request_on_a_render_crash,
         manual_body_read_keeps_pipelining_intact,
         transforms_apply_over_the_wire,
-        page_carries_its_targets_content_type
+        page_carries_its_targets_content_type,
+        cors_answers_a_preflight,
+        cors_route_answers_a_plain_options,
+        cors_route_keeps_its_verbs_and_405,
+        cors_plain_options_allow_follows_pattern_overlaps,
+        cors_beside_default_origin_check
     ].
 
 init_per_suite(Config) ->
@@ -42,7 +52,34 @@ init_per_suite(Config) ->
             },
             middlewares => [arizona_middleware:etag()]
         }},
-        {live, ~"/native_page", arizona_native_counter_demo, #{}}
+        {live, ~"/native_page", arizona_native_counter_demo, #{}},
+        %% CORS wire fixtures: a POST controller sharing its path with a
+        %% cors-less DELETE sibling, and a live page.
+        {post, ~"/cors_api", arizona_transform_probe_controller, #{
+            check_origin => false, middlewares => [cors_transform()]
+        }},
+        {delete, ~"/cors_api", arizona_transform_probe_controller, #{}},
+        {live, ~"/cors_page", arizona_about, #{
+            check_origin => false, middlewares => [cors_transform()]
+        }},
+        %% Siblings that match the same URLs through a different pattern: a
+        %% param under another name, a param beside a literal, a wildcard.
+        {post, ~"/ov/:id", arizona_transform_probe_controller, #{
+            check_origin => false, middlewares => [cors_transform()]
+        }},
+        {delete, ~"/ov/:name", arizona_transform_probe_controller, #{}},
+        {post, ~"/ovl/me", arizona_transform_probe_controller, #{
+            check_origin => false, middlewares => [cors_transform()]
+        }},
+        {delete, ~"/ovl/:id", arizona_transform_probe_controller, #{}},
+        {post, ~"/ovw/x", arizona_transform_probe_controller, #{
+            check_origin => false, middlewares => [cors_transform()]
+        }},
+        {delete, ~"/ovw/*rest", arizona_transform_probe_controller, #{}},
+        %% cors without opting out of the default Origin check.
+        {post, ~"/cors_guarded", arizona_transform_probe_controller, #{
+            middlewares => [cors_transform()]
+        }}
     ],
     {ok, _} = arizona_roadrunner_server:start(Listener, #{
         transport_opts => [{port, Port}],
@@ -219,6 +256,123 @@ page_carries_its_targets_content_type(Config) when is_list(Config) ->
         {~"content-type", ~"text/html; charset=utf-8"},
         lists:keyfind(~"content-type", 1, CrashHeaders)
     ).
+
+%% --------------------------------------------------------------------
+%% CORS
+%% --------------------------------------------------------------------
+
+%% roadrunner gates a route's method allowlist before any per-route middleware,
+%% so the router must open OPTIONS on a cors route or the transform never sees
+%% the preflight -- it would be a 405 on both route kinds.
+cors_answers_a_preflight(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    Preflight = [
+        {~"origin", ~"https://other.example"},
+        {~"access-control-request-method", ~"POST"}
+    ],
+    ?assertMatch(
+        {204,
+            #{
+                ~"access-control-allow-origin" := ~"https://other.example",
+                ~"access-control-allow-methods" := ~"POST",
+                ~"vary" := ~"Origin"
+            },
+            <<>>},
+        raw_request(Port, ~"OPTIONS", ~"/cors_api", Preflight)
+    ),
+    ?assertMatch(
+        {204, #{~"access-control-allow-origin" := ~"https://other.example"}, <<>>},
+        raw_request(Port, ~"OPTIONS", ~"/cors_page", Preflight)
+    ),
+    %% A disallowed origin still gets the transform's answer (no
+    %% allow-origin), not a 405.
+    {204, Denied, <<>>} = raw_request(Port, ~"OPTIONS", ~"/cors_api", [
+        {~"origin", ~"https://evil.example"},
+        {~"access-control-request-method", ~"POST"}
+    ]),
+    ?assertNot(is_map_key(~"access-control-allow-origin", Denied)).
+
+%% An OPTIONS that is not a preflight passes through the transform; it must be
+%% answered with the path's Allow set, never run the controller action or
+%% render the live page, which declared no OPTIONS.
+cors_route_answers_a_plain_options(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    {204, ApiHeaders, <<>>} = raw_request(Port, ~"OPTIONS", ~"/cors_api", []),
+    %% The DELETE sibling shares the path, so it is listed too.
+    ?assertEqual(~"DELETE, OPTIONS, POST", maps:get(~"allow", ApiHeaders)),
+    ?assertNot(is_map_key(~"content-type", ApiHeaders)),
+    {204, PageHeaders, <<>>} = raw_request(Port, ~"OPTIONS", ~"/cors_page", []),
+    ?assertEqual(~"GET, HEAD, OPTIONS", maps:get(~"allow", PageHeaders)),
+    %% With an Origin but no Access-Control-Request-Method it is an actual
+    %% CORS request: same answer, decorated by the transform.
+    ?assertMatch(
+        {204,
+            #{
+                ~"allow" := ~"DELETE, OPTIONS, POST",
+                ~"access-control-allow-origin" := ~"https://other.example"
+            },
+            <<>>},
+        raw_request(Port, ~"OPTIONS", ~"/cors_api", [{~"origin", ~"https://other.example"}])
+    ).
+
+%% Opening OPTIONS changes nothing else: the declared verbs still reach their
+%% handlers (decorated when cross-origin), and a 405 advertises OPTIONS now
+%% that the path answers it.
+cors_route_keeps_its_verbs_and_405(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    Len0 = [{~"content-length", ~"0"}],
+    ?assertMatch(
+        {200, #{~"access-control-allow-origin" := ~"https://other.example"},
+            ~"stable-transform-probe-body"},
+        raw_request(Port, ~"POST", ~"/cors_api", [{~"origin", ~"https://other.example"} | Len0])
+    ),
+    ?assertMatch(
+        {200, _, ~"stable-transform-probe-body"}, raw_request(Port, ~"DELETE", ~"/cors_api", Len0)
+    ),
+    ?assertMatch(
+        {405, #{~"allow" := ~"DELETE, OPTIONS, POST"}, _},
+        raw_request(Port, ~"PUT", ~"/cors_api", Len0)
+    ),
+    ?assertMatch(
+        {405, #{~"allow" := ~"GET, HEAD, OPTIONS"}, _},
+        raw_request(Port, ~"POST", ~"/cors_page", Len0)
+    ),
+    ?assertMatch({200, _, _}, raw_get(Port, ~"/cors_page", [])).
+
+%% The Allow set is the one a 405 on that URL carries, so a sibling matching
+%% the same URL through a different pattern is listed too.
+cors_plain_options_allow_follows_pattern_overlaps(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    [
+        ?assertMatch(
+            {204, #{~"allow" := ~"DELETE, OPTIONS, POST"}, <<>>},
+            raw_request(Port, ~"OPTIONS", Path, [])
+        )
+     || Path <- [~"/ov/42", ~"/ovl/me", ~"/ovw/x"]
+    ],
+    ok.
+
+%% The transform answers the preflight, but the default Origin check still
+%% refuses the cross-origin request that follows: an origin a cors route
+%% serves must also be trusted (csrf_origins) or the route opt out.
+cors_beside_default_origin_check(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    ?assertMatch(
+        {204, #{~"access-control-allow-origin" := ~"https://other.example"}, <<>>},
+        raw_request(Port, ~"OPTIONS", ~"/cors_guarded", [
+            {~"origin", ~"https://other.example"},
+            {~"access-control-request-method", ~"POST"}
+        ])
+    ),
+    ?assertMatch(
+        {403, _, _},
+        raw_request(Port, ~"POST", ~"/cors_guarded", [
+            {~"origin", ~"https://other.example"}, {~"content-length", ~"0"}
+        ])
+    ).
+
+cors_transform() ->
+    arizona_middleware:cors(#{origins => [~"https://other.example"], methods => [~"POST"]}).
 
 raw_get(Port, Path, ExtraHeaders) ->
     raw_request(Port, ~"GET", Path, ExtraHeaders).

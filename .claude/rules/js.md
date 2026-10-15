@@ -25,7 +25,7 @@ Exports (the full list, alphabetical as in the module): `applyEffects`, `applyOp
 - `executeJS(el, event, cmds)` -- the shared command interpreter (`execOne` per command); exported so a hook can run an `arizona_js` command list itself.
 - `set(viewId, key, value)` / `setAll(key, value)` / `get(key)` / `get(viewId, key)` -- the client-owned slot (`?local`) API; see below.
 - `requestPip(viewId, opts?)` / `exitPip(viewId)` -- pop a view out into a document-picture-in-picture window / close it.
-- `saveFormState()` / `restoreFormState()` -- snapshot and re-apply typed form fields around a resync that rebuilds the DOM (an abnormal close, a bfcache round-trip).
+- `saveFormState()` / `restoreFormState()` -- snapshot and re-apply typed form fields around a resync that rebuilds the DOM (an abnormal close, a bfcache round-trip). A `readonly` field is server-owned, so it keeps the resync's fresh value (its saved value is still consumed, keeping a repeated name's positions aligned). A `type=hidden` input **is** restored, deliberately: a client widget (a rich-text editor, a date picker, a tag input) keeps the user's input in one, and losing that on a reconnect is worse than the cost -- a server-owned hidden field (a version stamp, a record id) can come back stale after a reconnect resync. Render a server-owned value that must stay fresh as `readonly`, or outside a form with an `id`.
 
 ## Event delegation (`az-<event>`)
 
@@ -120,6 +120,38 @@ defers the reset to a `fetch` response; drop carries the drag bookkeeping), so d
 well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-*` names that are
 directives rather than events.
 
+**An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
+submits it with the form's own method -- a GET by default, putting every field (a password
+included) in the URL -- which is what happened before the first open and during reconnect backoff.
+That holds for a form with an explicit `method`/`action` too: it no longer falls back to a native
+submission while disconnected. The listener always calls `preventDefault`, then decides by what
+the commands need (`socketNeeds`):
+
+- **An SPA `navigate`/`patch` alone** (top level or under `transition`) degrades to a full load of
+  its URL (`location.assign`, or `location.replace` for a `replace` navigate), exactly what a
+  disconnected `az-navigate` click does.
+- **Anything else needing the socket** -- a `push_event`, a navigation under `on_key` (it runs only
+  on a matching key), or a navigation beside a `fetch` (the load would cancel the request) -- drops
+  the submission **whole**, with no `az-form-reset`: the worker drops pre-open sends, so running
+  the rest would apply half a submission and discard the typed fields. Every drop warns and
+  dispatches a non-cancelable, bubbling `arizona:submit-dropped` `CustomEvent` on the form,
+  `detail: {reason: 'disconnected'}`, so the app can tell the user.
+- **A `fetch` or client-only list** runs: an HTTP login form needs no socket.
+
+Queueing for the reconnect was rejected: a submit replayed seconds later, against a view the resync
+may have remounted, is not what the user pressed. To disable the submit button while down, style it
+off `:not(.az-connected)` rather than `.az-disconnected`: before the first open `<html>` carries
+neither class. Likewise `az-prevent-default` on a delegated event is honored before the connection
+check, since a declared suppression needs no server.
+
+The listener cannot act before `arizona.js` has run (Enter while the deferred module still loads),
+so the server closes that window: the `?html` target renders `method="post"` on a `form` carrying
+`az-submit` and no `method` of its own (`arizona_renderer:implied_attrs/2`). Such a submit is then a
+POST with the fields in the body -- a live route answers `405` -- never a GET with them in the URL.
+The client's `fetch` already treats a method-less form as POST, so nothing else changes; an
+author's `method` (static, dynamic, any casing) is never overridden, and `?native`/`?terminal`
+imply nothing.
+
 **Three cases the compile-time set cannot cover, and how each is handled:**
 
 - **A runtime attribute write** (`arizona_js:set_attr(sel, "az-toggle", ...)`) uses a name no
@@ -146,9 +178,9 @@ shadow-less custom element is unaffected, since `composed` only matters at a bou
 
 - `set(viewId, key, value)` -- `findViewRoot(viewId)`, then `forEachLocal` writes every matching slot in that view. Always 3-arg; the 2-arg `arizona_js:set/2` ("closest view of the trigger") is a template-only form the client resolves from the trigger element.
 - `setAll(key, value)` -- every matching slot in **every** hosting document (main + popped-out PiP documents), no view scoping.
-- `get(key)` -> first match anywhere; `get(viewId, key)` -> first match in that view. Reads come back as DOM strings (no type preservation); an absent boolean attribute reads `false` and a bare one `true`.
+- `get(key)` -> first match anywhere; `get(viewId, key)` -> first match in that view. Reads come back as DOM strings (no type preservation); an absent boolean attribute reads `false` and a bare one `true`. A form control's binding is the exception: it reads the live property -- `checked` on an `<input>` and `selected` on an `<option>` as a boolean, `value` on a `<textarea>`/`<select>` or an `<input>` in the HTML value mode "value" (text-like types) as a string -- since after user interaction the dirty value/checkedness flags leave the attribute holding only the default. Which element/attribute pairs sync is `syncsProp`, matched by local name (a PiP document's elements come from another realm, so `instanceof` would miss them). Anywhere else `value` only reflects the attribute, coerced, so it is neither read nor written as a property: a write would put a removed attribute back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>` and on a hidden/checkbox/radio/button `<input>`) or coerce a set one.
 
-A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. `set`/`setAll` on a missing view or key are silent no-ops.
+A slot binds either element **content** or an **attribute value**; the descriptor rides on the reserved `az-local` attribute, which is why a template may not write `az-local` (or `az`) itself. Both writers go through `writeLocalValue(el, target, value)`, so a content slot and an attribute slot update the same way from the caller's view. An attribute write goes through the canonical `applySetAttrOp`/`applyRemAttrOp` in both directions -- `false`/`null` removes through `applyRemAttrOp`, so it unchecks, deselects or clears a control the user already changed, exactly as `true` checks it -- and an interpolated slot renders `null`/`undefined` as empty. `set`/`setAll` on a missing view or key are silent no-ops.
 
 Every item of an `?each` shares the slot **key** (keys are compile-time literals), so a `set` hits all of them; `?local` cannot hold per-item independent client state.
 
@@ -158,7 +190,9 @@ Every item of an `?each` shares the slot **key** (keys are compile-time literals
 - Replace nav (`arizona_js:navigate(Path, {replace: true})`): `replaceState` only. Does NOT save outgoing, does NOT reset.
 - Popstate (back): restores `e.state._azScroll` after OP_REPLACE, falls through to `#hash` target or top.
 - Forward-after-back: destination entry has null state -> scroll to top. Documented non-goal; future restore would need a state-ID-keyed map backed by sessionStorage, not `replaceState`-on-scroll.
-- Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate` links fall through to the browser.
+- Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate`/`az-patch` links fall through to the browser, as do a link with a `target` other than `_self` (another browsing context), one with `download`, and a click an app listener already `preventDefault`ed.
+- A `navigate`/`patch` effect URL resolves against the **current page** (`navigateEffect`), as `pushState` resolves it, so the frame asks for the page the address bar shows (`?page=2` on `/users/1/` is `/users/1/?page=2`). A new fragment on the current path + query just pushes (or, with `replace`, replaces) the entry and scrolls, with no server round trip -- the effect form of the in-page `az-navigate` click.
+- Full nav (`{full: true}`, or any `navigate`/`patch` http(s) URL on another origin -- `pushState` refuses one -- and an `az-navigate` link to another origin, which falls through to the browser): `location.assign`, or `location.replace` when the effect also carries `replace`. The server sends `replace` on every full load it degrades a navigate/patch frame to, since the client already pushed that entry; the browser folds a same-URL load into the current entry by itself, but not one whose URL differs (a halt replayed through the gated path, a dropped fragment). Only `http:`/`https:` ever loads: `leavePage` drops any other scheme (`javascript:`, `data:`) with a warning, since loading it would run it in the page.
 
 ### Patch nav (`az-patch`) and the `_azNav` tag
 

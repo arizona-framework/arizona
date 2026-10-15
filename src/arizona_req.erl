@@ -67,6 +67,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([redirect/2]).
 -export([redirect/3]).
 -export([halted_redirect/1]).
+-export([location_kind/1]).
 -export([put_resp_header/3]).
 -export([put_resp_cookie/4]).
 -export([put_resp_status/2]).
@@ -89,6 +90,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([read_session/1]).
 -export([session_id/1]).
 -export([session_error/1]).
+-export([carried_cookies/1]).
+-export([seed_cookies/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -146,6 +149,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([session/0]).
 -export_type([resp_cookie_opts/0]).
 -export_type([qs/0]).
+-export_type([carried_cookies/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -192,6 +196,11 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -nominal cookies() :: [{binary(), binary()}].
 -nominal headers() :: #{binary() => iodata()}.
 -nominal body() :: binary().
+
+%% Framework cookies a response changed, as the browser's jar sees them once it
+%% lands: each name with the value it now sends, or `clear` when the cookie is gone.
+%% See `carried_cookies/1`.
+-nominal carried_cookies() :: [{binary(), binary() | clear}].
 
 %% HTTP redirect status codes (RFC 9110 §15.4). The most common are
 %% 301 (moved permanently), 302 (found), 303 (see other), 307
@@ -433,7 +442,10 @@ Middleware authors should return `{halt, arizona_req:redirect(Req,
 Location)}` instead of writing a transport-specific response
 directly. HTTP transports read the intent and emit a proper redirect
 reply; WS navigate transports emit an `arizona_js:navigate/1`
-client effect so the browser pushes the new URL.
+client effect so the browser pushes the new URL. Only a path on this origin
+(see `location_kind/1`) can be followed that way: for any other `Location` --
+an identity provider, another subdomain -- the WS transport has the browser load
+the gated path over HTTP instead, where this redirect is a real 3xx.
 """.
 -spec redirect(Request, Location) -> Request when
     Request :: request(),
@@ -461,6 +473,60 @@ client-visible response.
     Request :: request().
 halted_redirect(#{redirect := Redirect}) -> Redirect;
 halted_redirect(_) -> undefined.
+
+-doc """
+Classifies a redirect `Location` the way a browser will read it, for a transport
+that must deliver it as a client navigation rather than an HTTP 3xx.
+
+- `local` -- a path on this origin (a single leading `/`), the only form a SPA
+  navigation can follow.
+- `external` -- a page load is needed: an `http`/`https` URL, a scheme-relative one
+  (`//host`, and `/\host`, which browsers read the same way), or a relative path,
+  which a browser resolves against the current URL, exactly as it would an HTTP
+  `Location`. It may still be same-origin, but the server cannot tell -- behind a
+  proxy it does not know its public origin -- and a page load is correct for any URL.
+- `unsafe` -- any other scheme (`javascript:`, `data:`, ...). Loading it would run
+  it in the page, so no transport may hand it to the client.
+
+The input is normalized as a browser's URL parser does first: leading C0
+controls and spaces are trimmed and every tab, LF and CR is removed, so
+`/<TAB>/host` is `//host` and `java<TAB>script:` is `javascript:`.
+""".
+-spec location_kind(Location) -> local | external | unsafe when
+    Location :: binary().
+location_kind(Location) ->
+    case url_normalize(Location) of
+        <<"/", C, _/binary>> when C =:= $/; C =:= $\\ -> external;
+        <<"/", _/binary>> -> local;
+        Normalized -> scheme_kind(url_scheme(Normalized, <<>>))
+    end.
+
+%% Bytes, not characters: a Location is client-influenced and need not be UTF-8.
+%% Only the head decides the kind, so the trailing trim is not needed.
+url_normalize(<<C, Rest/binary>>) when C =< 32 ->
+    url_normalize(Rest);
+url_normalize(Bin) ->
+    <<<<C>> || <<C>> <= Bin, C =/= $\t, C =/= $\n, C =/= $\r>>.
+
+%% RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":". No scheme means a
+%% relative reference.
+url_scheme(<<C, Rest/binary>>, Acc) when C >= $a, C =< $z ->
+    url_scheme(Rest, <<Acc/binary, C>>);
+url_scheme(<<C, Rest/binary>>, Acc) when C >= $A, C =< $Z ->
+    url_scheme(Rest, <<Acc/binary, (C bor 16#20)>>);
+url_scheme(<<C, Rest/binary>>, <<_, _/binary>> = Acc) when C >= $0, C =< $9 ->
+    url_scheme(Rest, <<Acc/binary, C>>);
+url_scheme(<<C, Rest/binary>>, <<_, _/binary>> = Acc) when C =:= $+; C =:= $-; C =:= $. ->
+    url_scheme(Rest, <<Acc/binary, C>>);
+url_scheme(<<$:, _/binary>>, <<_, _/binary>> = Acc) ->
+    {scheme, Acc};
+url_scheme(_, _Acc) ->
+    relative.
+
+scheme_kind({scheme, ~"http"}) -> external;
+scheme_kind({scheme, ~"https"}) -> external;
+scheme_kind({scheme, _Other}) -> unsafe;
+scheme_kind(relative) -> external.
 
 -doc """
 Stashes a response header on `Request`. Transports flush stashed headers
@@ -721,6 +787,64 @@ seed_flash(Req, Flash) when is_map(Flash) ->
     Request :: request().
 seeded_flash_read(#{flash_seed := read}) -> true;
 seeded_flash_read(_) -> false.
+
+%% Internal use only -- carry plumbing for `arizona_socket`. The framework cookies
+%% this request's response changes, in the terms of the browser's cookie jar once it
+%% lands. The socket takes them from the WebSocket upgrade -- the one exchange of a
+%% live session with a `Set-Cookie` leg -- and replays them onto every request it
+%% rebuilds for a navigate/patch (`seed_cookies/2`), which otherwise start from the
+%% upgrade's raw `Cookie` header and so predate what the upgrade itself did:
+%%
+%% - The session, when written: its new value (cookie mode: a fresh encryption of
+%%   the map the flush encrypted; store mode: the signed id of the entry the flush
+%%   committed), or `clear` when cleared.
+%% - The flash, when the upgrade consumed it or set a new one: `clear` either way. A
+%%   consumed flash is gone from the browser, so replaying it would show it again;
+%%   a new one belongs to the browser's next HTTP request, and a navigate taking it
+%%   would show it twice (once here, once there), since nothing over the socket can
+%%   clear the cookie the browser holds.
+-doc false.
+-spec carried_cookies(Request) -> carried_cookies() when
+    Request :: request().
+carried_cookies(Req) ->
+    carried_session_cookie(Req) ++ carried_flash_cookie(Req).
+
+carried_session_cookie(Req) ->
+    case session_outcome(Req) of
+        untouched ->
+            [];
+        clear ->
+            [{arizona_session:cookie_name(), clear}];
+        {write, _SessionOut} ->
+            {Name, Value, _Opts} = session_resp_cookie(Req),
+            [{Name, Value}]
+    end.
+
+carried_flash_cookie(Req) ->
+    FlashOut = maps:get(flash_out, Req, #{}),
+    Consumed = maps:get(flash_consumed, Req, false),
+    case arizona_flash:resp_cookie(FlashOut, Consumed) of
+        none -> [];
+        {Name, _Value, _Opts} -> [{Name, clear}]
+    end.
+
+%% Internal use only -- applies a `carried_cookies/1` result to a request rebuilt
+%% from the upgrade's raw value, as the browser's jar would: each carried cookie is
+%% replaced (or removed) before anything reads it, so the normal readers decode it --
+%% in store mode `read_session/1` is a store lookup by the carried id, so the
+%% entry's current state (a later write under the same id, a revocation) is what a
+%% navigate sees. The request stays unwritten, so nothing is re-emitted or
+%% re-committed on its behalf. App code never calls this.
+-doc false.
+-spec seed_cookies(Request, Carried) -> Request when
+    Request :: request(),
+    Carried :: carried_cookies().
+seed_cookies(Req, []) ->
+    Req;
+seed_cookies(Req0, Carried) ->
+    {Cookies0, Req} = cookies(Req0),
+    Kept = [Cookie || {Name, _} = Cookie <:- Cookies0, not lists:keymember(Name, 1, Carried)],
+    Req#{cookies => [{Name, Value} || {Name, Value} <:- Carried, Value =/= clear] ++ Kept}.
 
 -doc """
 Writes `Key => Value` into the session. On the response the session serializes to a
