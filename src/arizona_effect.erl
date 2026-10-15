@@ -36,6 +36,7 @@ content shipped to the page.
 -export([encode_json/1]).
 -export([json_value/1]).
 -export([format_error/2]).
+-export([wrapped/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -114,6 +115,25 @@ by `erl_error:format_exception/3`.
 format_error({flash_outside_live_effect, Op}, _Stacktrace) ->
     #{general => flash_message(Op)}.
 
+-doc """
+The commands a bare command (`[OpCode | Args]`, as `json_value/1` yields) wraps --
+a `transition`, an `on_key`, or a `fetch`'s `on_error` -- as a list, with when they
+run (`now` when the command does, `deferred` later, if ever) and a fun that
+rebuilds the wrapper around a replacement list. `none` for any other command.
+The one list of wrapper shapes, shared by every walk that must see inside them
+(`arizona_socket`'s flash capture, this module's flash refusal).
+""".
+-spec wrapped(Cmd) -> {now | deferred, [list()], fun(([list()]) -> list())} | none when
+    Cmd :: list().
+wrapped([?EFFECT_TRANSITION, Opts, Cmds]) ->
+    unwrap(now, Cmds, fun(New) -> [?EFFECT_TRANSITION, Opts, New] end);
+wrapped([?EFFECT_ON_KEY, Key, Cmds]) ->
+    unwrap(deferred, Cmds, fun(New) -> [?EFFECT_ON_KEY, Key, New] end);
+wrapped([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts]) ->
+    unwrap(deferred, Cmds, fun(New) -> [?EFFECT_FETCH, Url, Opts#{on_error => New}] end);
+wrapped(_Cmd) ->
+    none.
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -124,26 +144,23 @@ no_flash(Cmd) ->
     Cmd.
 
 %% Refuse a navigate/patch `flash` opt in a command or in a command it wraps
-%% (`transition`, `on_key`, a `fetch` `on_error`). One head match per command on
-%% the common path.
+%% (see wrapped/1).
 refuse_flash([Op, _Path, #{flash := _}]) when Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH ->
     erlang:error({flash_outside_live_effect, op_name(Op)}, none, [
         {error_info, #{module => ?MODULE}}
     ]);
-refuse_flash([?EFFECT_TRANSITION, _Opts, Inner]) ->
-    refuse_flash_inner(Inner);
-refuse_flash([?EFFECT_ON_KEY, _Key, Inner]) ->
-    refuse_flash_inner(Inner);
-refuse_flash([?EFFECT_FETCH, _Url, #{on_error := Inner}]) ->
-    refuse_flash_inner(Inner);
-refuse_flash(_Cmd) ->
-    ok.
+refuse_flash(Cmd) ->
+    case wrapped(Cmd) of
+        {_When, Inner, _Rewrap} -> lists:foreach(fun(C) -> ok = refuse_flash(C) end, Inner);
+        none -> ok
+    end.
 
-%% A wrapper holds one bare command (its head is an op code) or a list of them.
-refuse_flash_inner([Op | _] = Inner) when is_integer(Op) ->
-    refuse_flash(Inner);
-refuse_flash_inner(Inner) ->
-    lists:foreach(fun(Cmd) -> ok = refuse_flash(Cmd) end, Inner).
+%% A wrapper holds one command (its head is an op code) or a list: the walks get
+%% a list either way, and the rebuild restores the shape it was given.
+unwrap(When, [Op | _] = Cmd, Wrap) when is_integer(Op) ->
+    {When, [Cmd], fun([New]) -> Wrap(New) end};
+unwrap(When, Cmds, Wrap) ->
+    {When, Cmds, Wrap}.
 
 op_name(?EFFECT_NAVIGATE) -> navigate;
 op_name(?EFFECT_PATCH) -> patch.
