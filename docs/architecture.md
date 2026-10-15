@@ -1607,8 +1607,9 @@ There are two SPA navigation modes, picked per-link by the client:
   menus) all survive. `arizona_socket` decides per frame: it tracks the current root `handler` on
   the `#socket{}`, and a patch whose path resolves to the **same** handler is applied in place
   (`arizona_live:patch/2`); a patch to a **different** handler can't keep the view, so it degrades
-  to a full navigate/replace, and so does one whose route bindings name an `id` other than the
-  live view's (two routes on one handler with different ids are two views). Persistent live chrome
+  to a full navigate/replace, and so does one whose bindings -- the route's, after its middlewares
+  -- name an `id` other than the live view's (two routes on one handler with different ids are two
+  views; the replace reuses those bindings, so no middleware runs twice). Persistent live chrome
   is therefore an ordinary app pattern (a view with a swappable `?stateful(?get(page), ...)`
   child), not a framework feature -- demo fixture `arizona_patch_demo` (`/patch-demo/:section`).
 
@@ -2016,8 +2017,9 @@ back/forward also triggers navigate via `popstate`.
 sends `["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for
 navigate, then compares the resolved handler against the tracked root `handler`: same handler ->
 `arizona_live:patch/2` (the root's `handle_update/3` runs, then a diff-in-place, returning `{ok,
-Ops, Effects}` -- no unmount/remount/`OP_REPLACE`); different handler, or a route `id` binding
-other than the live view's -> falls back to the navigate/replace path above. The client tags the
+Ops, Effects}` -- no unmount/remount/`OP_REPLACE`); different handler -> falls back to the
+navigate/replace path above, and so does a post-middleware `id` binding other than the live view's
+(mounted with the bindings already produced). The client tags the
 history entry (`_azNav`) and stamps the outgoing entry so back/forward replays the patch, keeping
 live chrome across the edge. See "SPA navigate / patch route resolution".
 
@@ -2340,8 +2342,9 @@ The `id` serves three roles simultaneously: DOM id (`document.getElementById`), 
 (server-side state tracking), and wire protocol target (op scoping). All three must be the same
 value. Using `?get(id)` ensures the template renders the same value the parent passed in Props and
 the server uses for tracking. `id` is a restricted key -- the handler's mount callback cannot
-override the value passed by the parent in Props, and no later callback (`handle_update/3`,
-`handle_event/3`, `handle_info/2`, `handle_drain/2`) may change or drop it: each raises
+override the value passed by the parent in Props, and no later callback that keeps the view
+running (`handle_update/3` or the default patch merge, `handle_event/3`, `handle_info/2`, a
+`handle_drain/2` that does not stop) may change or drop it: each raises
 `restricted_key_modified`.
 
 **Dispatcher error tagging.** Each `arizona_stateful:call_*` wrapper catches `error:undef` and

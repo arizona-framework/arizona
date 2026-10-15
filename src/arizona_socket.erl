@@ -619,20 +619,9 @@ handle_patch(Path, Qs, Socket) ->
     end.
 
 patch_or_navigate(H, RouteOpts, NewReq, Requested, #socket{handler = H} = Socket) ->
-    case same_view_id(RouteOpts, Socket) of
-        true -> do_patch(RouteOpts, NewReq, Requested, Socket);
-        false -> do_navigate(H, RouteOpts, NewReq, Requested, Socket)
-    end;
+    do_patch(H, RouteOpts, NewReq, Requested, Socket);
 patch_or_navigate(H, RouteOpts, NewReq, Requested, Socket) ->
     do_navigate(H, RouteOpts, NewReq, Requested, Socket).
-
-%% Two routes on one handler whose bindings name different `id`s are different
-%% views, and a patch keeps the view it is on: the live process and the client
-%% route by its id, which no callback may change. So such a patch replaces the
-%% view instead. A route that names no `id` leaves the handler's own.
-same_view_id(#{bindings := #{id := ViewId}}, #socket{view_id = ViewId}) -> true;
-same_view_id(#{bindings := #{id := _Other}}, #socket{}) -> false;
-same_view_id(#{}, #socket{}) -> true.
 
 %% Does the target route wrap its page in different layouts than the ones
 %% already on screen? Term equality on the whole list, deliberately: a
@@ -731,48 +720,51 @@ drop_pending_flash(Path, Socket) ->
     Socket#socket{pending_flash = #{}}.
 
 do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
-    {NewReq, #socket{pid = Pid, view_id = OldVId} = Socket} =
-        take_pending_flash(NewReq0, Socket0),
+    {NewReq, Socket} = take_pending_flash(NewReq0, Socket0),
     IB = maps:get(bindings, RouteOpts, #{}),
-    OnMount = maps:get(on_mount, RouteOpts, []),
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
             halt_navigate(Requested, HaltReq, untake_pending_flash(HaltReq, Socket0, Socket));
         {cont, _NewReq1, Bindings1} ->
-            %% A live process gone under this call is handled at the entry catch
-            %% (crash_close/4): the frame is dropped and its queued exit closes.
-            %% A crash exit under this call -- the new page's mount, or the old
-            %% page's unmount -- closes 4501: the new page could not be served.
-            %%
-            %% The socket is the only caller of arizona_live:navigate/4 (it is
-            %% transport-facing): the drain below relies on every push before the
-            %% barrier belonging to a page this socket put on screen.
-            {ok, NewVId, PageHTML, Observed} =
-                arizona_live:navigate(Pid, H, Bindings1, OnMount),
-            %% The old page's pushes queued ahead of the reply ship in the
-            %% same frame, their ops ahead of the replace: one may carry the
-            %% first statics of a fingerprint the replace then references
-            %% bare. Their effects are dropped: a client applies a frame's
-            %% effects after its ops, so they would run against the NEW
-            %% page (a relayed push_event reaches the new root, a navigate
-            %% hijacks the user's own). Old-page ops may mount `az-hook`
-            %% elements the replace destroys in the same frame -- churn,
-            %% not a fault.
-            %%
-            %% The navigate itself adds no effects: mount/1 has no effects
-            %% channel (it also runs at SSR, where no client exists to
-            %% receive one). A view that wants one self-casts from mount/1
-            %% and answers in handle_info/2, which pushes its own frame --
-            %% behind the barrier, so after this replace.
-            {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
-            ok = log_dropped_effects(PendEffects),
-            Socket2 = (note_az([H], Observed, Socket1))#socket{view_id = NewVId, handler = H},
-            deliver_view(
-                fun() -> encode_reply(PendOps ++ replace_ops(OldVId, PageHTML), [], Socket2) end,
-                Socket2
-            )
+            replace_view(H, Bindings1, maps:get(on_mount, RouteOpts, []), Socket)
     end.
+
+%% A navigate once the route's middlewares have produced the new page's bindings:
+%% mount it in the live process and replace the view on screen.
+replace_view(H, Bindings1, OnMount, #socket{pid = Pid, view_id = OldVId} = Socket) ->
+    %% A live process gone under this call is handled at the entry catch
+    %% (crash_close/4): the frame is dropped and its queued exit closes.
+    %% A crash exit under this call -- the new page's mount, or the old
+    %% page's unmount -- closes 4501: the new page could not be served.
+    %%
+    %% The socket is the only caller of arizona_live:navigate/4 (it is
+    %% transport-facing): the drain below relies on every push before the
+    %% barrier belonging to a page this socket put on screen.
+    {ok, NewVId, PageHTML, Observed} =
+        arizona_live:navigate(Pid, H, Bindings1, OnMount),
+    %% The old page's pushes queued ahead of the reply ship in the
+    %% same frame, their ops ahead of the replace: one may carry the
+    %% first statics of a fingerprint the replace then references
+    %% bare. Their effects are dropped: a client applies a frame's
+    %% effects after its ops, so they would run against the NEW
+    %% page (a relayed push_event reaches the new root, a navigate
+    %% hijacks the user's own). Old-page ops may mount `az-hook`
+    %% elements the replace destroys in the same frame -- churn,
+    %% not a fault.
+    %%
+    %% The navigate itself adds no effects: mount/1 has no effects
+    %% channel (it also runs at SSR, where no client exists to
+    %% receive one). A view that wants one self-casts from mount/1
+    %% and answers in handle_info/2, which pushes its own frame --
+    %% behind the barrier, so after this replace.
+    {PendOps, PendEffects, Socket1} = drain_pending_pushes(Socket),
+    ok = log_dropped_effects(PendEffects),
+    Socket2 = (note_az([H], Observed, Socket1))#socket{view_id = NewVId, handler = H},
+    deliver_view(
+        fun() -> encode_reply(PendOps ++ replace_ops(OldVId, PageHTML), [], Socket2) end,
+        Socket2
+    ).
 
 %% Same root handler: keep the view, deliver the route's static bindings threaded
 %% through its middlewares to handle_update/3, and ship the diff ops + effects on
@@ -781,7 +773,13 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
 %% copies them over. Runs the route middlewares first, exactly like navigate
 %% -- but deliberately does NOT read `on_mount` (contrast do_navigate): on_mount
 %% is a mount-phase hook and a patch does not remount (see arizona_live:patch/2).
-do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
+%%
+%% Unless those bindings name an `id` other than the one on screen: that is
+%% another view (a navigate would mount it under that id), and a patch cannot
+%% move a live view's id, which events, timers and the client route by. So it
+%% replaces the view with the bindings already produced, running no middleware
+%% twice.
+do_patch(H, RouteOpts, NewReq0, Requested, Socket0) ->
     {NewReq, #socket{pid = Pid, view_id = ViewId} = Socket} =
         take_pending_flash(NewReq0, Socket0),
     IB = maps:get(bindings, RouteOpts, #{}),
@@ -789,10 +787,17 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
             halt_navigate(Requested, HaltReq, untake_pending_flash(HaltReq, Socket0, Socket));
+        {cont, _NewReq1, #{id := ViewId} = Bindings1} ->
+            patch_view(Pid, ViewId, Bindings1, Socket);
+        {cont, _NewReq1, #{id := _OtherId} = Bindings1} ->
+            replace_view(H, Bindings1, maps:get(on_mount, RouteOpts, []), Socket);
         {cont, _NewReq1, Bindings1} ->
-            {ok, Ops, Effects, Observed} = arizona_live:patch(Pid, Bindings1),
-            reply_after_pending(flatten_ops(ViewId, Ops), Effects, Observed, Socket)
+            patch_view(Pid, ViewId, Bindings1, Socket)
     end.
+
+patch_view(Pid, ViewId, Bindings1, Socket) ->
+    {ok, Ops, Effects, Observed} = arizona_live:patch(Pid, Bindings1),
+    reply_after_pending(flatten_ops(ViewId, Ops), Effects, Observed, Socket).
 
 %% Middleware halt during WS navigate -- there is no HTTP response channel
 %% mid-session, so we translate an `arizona_req:redirect/2` halt into an

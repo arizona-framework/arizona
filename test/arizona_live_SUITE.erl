@@ -755,12 +755,22 @@ root_callbacks_reject_restricted_id(Config) when is_list(Config) ->
 %% `handle_update/3`, whose default merges the params in. arizona_socket turns
 %% such a patch into a navigate; called directly it is refused, not obeyed.
 default_patch_rejects_restricted_id(Config) when is_list(Config) ->
-    ?assertEqual(
-        restricted_key_modified,
-        restricted_crash(arizona_route_id_view, #{id => ~"a"}, fun(Pid) ->
-            {ok, ~"a", _} = arizona_live:mount(Pid),
-            arizona_live:patch(Pid, #{id => ~"b"})
-        end)
+    process_flag(trap_exit, true),
+    {ok, Pid} = arizona_live:start_link(arizona_route_id_view, #{id => ~"a"}, undefined, []),
+    {ok, ~"a", _} = arizona_live:mount(Pid),
+    {Reason, ST} =
+        try arizona_live:patch(Pid, #{id => ~"b"}) of
+            Result -> {no_crash, [Result]}
+        catch
+            exit:{{R, S}, {gen_server, call, _}} when is_list(S) -> {R, S}
+        end,
+    ?assertEqual(restricted_key_modified, Reason),
+    %% The handler wrote no callback: the message names the default merge of the
+    %% patch params, not a `handle_update/3` it does not have.
+    #{general := Msg} = arizona_eval:format_error(Reason, ST),
+    ?assertMatch(
+        {match, _},
+        re:run(Msg, "arizona_route_id_view has no handle_update/3, so the patch params")
     ).
 
 %% Nor may an embedded child's `handle_update/3` on a parent prop change (the
