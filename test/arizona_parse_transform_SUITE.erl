@@ -282,6 +282,8 @@
     inline_destructuring_not_inlined/1,
     inline_comprehension_source/1,
     inline_strict_generator_shadow/1,
+    inline_comprehension_binder_not_hoisted/1,
+    inline_fun_param_not_hoisted/1,
     hoisted_var_captured_rejected/1,
     hoisted_var_captured_message/1,
     hoisted_var_pattern_reads_not_captured/1,
@@ -964,6 +966,8 @@ groups() ->
             inline_destructuring_not_inlined,
             inline_comprehension_source,
             inline_strict_generator_shadow,
+            inline_comprehension_binder_not_hoisted,
+            inline_fun_param_not_hoisted,
             hoisted_var_captured_rejected,
             hoisted_var_captured_message,
             hoisted_var_pattern_reads_not_captured,
@@ -9106,6 +9110,42 @@ inline_strict_generator_shadow(Config) when is_list(Config) ->
     HTMLBin = iolist_to_binary(HTML),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"F")),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, ~"ab")).
+
+%% A comprehension's generator binds its own `X`: it neither makes `L` derive from
+%% the hoisted `X` (so `L` stays a plain statement) nor counts as a use of it.
+inline_comprehension_binder_not_hoisted(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_lc_binder). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    L = [X || X <- [1]], "
+        "    X = arizona_template:get(x, Bindings), "
+        "    arizona_template:html({'p', [], [integer_to_binary(length(L)), X]}). "
+    ),
+    B0 = #{x => ~"a"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"1<!--/az--><!--az:")),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~">a<")),
+    B1 = #{x => ~"b"},
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, compute_changed(B0, B1)),
+    ?assertMatch([[_, _, ~"b"]], Ops).
+
+%% A fun parameter shadows the same way.
+inline_fun_param_not_hoisted(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_fun_param). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    F = fun(X) -> <<X/binary, \"!\">> end, "
+        "    X = arizona_template:get(x, Bindings), "
+        "    arizona_template:html({'p', [], [F(<<\"hi\">>), X]}). "
+    ),
+    B0 = #{x => ~"a"},
+    {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"hi!")),
+    B1 = #{x => ~"b"},
+    {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, compute_changed(B0, B1)),
+    ?assertMatch([[_, _, ~"b"]], Ops).
 
 %% A hoisted definition is re-read inside the template so it stays tracked. A fun
 %% parameter, a named fun or a generator there that rebinds a name the definition reads
