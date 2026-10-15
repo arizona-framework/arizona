@@ -212,7 +212,7 @@ invalid_value_error_is_formatted(Config) when is_list(Config) ->
 %% is set, and says so through `format_error/2` instead of a bare function_clause.
 resolve_unsupported_default_crashes_formatted(Config) when is_list(Config) ->
     Defaults = [#{a => 1}, {a, b}, [a, b]],
-    without_env("AZ_CFG_BADDEFAULT", fun() ->
+    [ok, ok, ok] = without_env("AZ_CFG_BADDEFAULT", fun() ->
         [
             ?assertError(
                 {unsupported_default, "AZ_CFG_BADDEFAULT", Default},
