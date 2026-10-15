@@ -1435,7 +1435,7 @@ route's static options (`t:arizona_live:route_opts/0` -- `bindings`, `on_mount`,
 `middlewares`), and a navigate-scoped `arizona_req` carrying the new URL. Cookies/headers on the
 returned Request are inherited from the original upgrade Req (rebuilt from its raw value), except
 the framework cookies the upgrade itself changed (a route middleware, flushed onto the `101`):
-`arizona_socket` replays them onto the rebuilt request (`arizona_req:seed_cookies/2`). A written or
+`arizona_socket` replays them onto the rebuilt request (internally, in `arizona_req`). A written or
 cleared session is replayed as the browser now holds it, so a navigate's middlewares see it -- in
 store mode the signed id, resolved through the store on read, so an in-place store write or a
 revocation is seen as well. A flash the upgrade consumed or newly set is dropped from the rebuilt
