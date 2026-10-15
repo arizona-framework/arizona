@@ -411,7 +411,11 @@ of draining (`diff_stream/5`'s `Reconcile`: a single `{reset, #{}}`, which
 re-renders the visible items and patches only those that differ). A stream nested
 inside an item is diffed from a value the walk already evaluated whole, so there
 the drain is checked against that render and the container reconciles against it
-(`stream_relist/7`) when the queue does not account for it (`nested_drain/4`).
+(`stream_relist/7`) when the queue does not account for it (`nested_drain/4`). A
+nested stream whose render holds child views always reconciles that way, without
+draining: the drain renders the items its ops touch a second time, so each
+`?stateful` among them would run `mount/1` twice and the first instance would be
+dropped without `unmount/1`.
 
 **Content-slot conditional branches:** a `case`/`if`/`maybe` in a content slot
 compiles each *element* branch into a nested template, so by this invariant the
@@ -677,7 +681,9 @@ lives exactly as long as its item is in the DOM: whichever way the item leaves -
 `reset/2`, a new stream bound over the slot, a `drop` eviction, or a sort or insert pushing it
 out of a `limit` window -- its child unmounts, and an item that comes back into the window
 mounts a fresh one. A key deleted and re-inserted within one update keeps its child (the new
-render reaches it through `handle_update/3`, not `mount/1`).
+render reaches it through `handle_update/3`, not `mount/1`), while the client gets an
+`OP_REMOVE` and a fresh `OP_INSERT`, so state the browser holds inside it (`?local` values,
+hooks) starts over.
 
 **A keyed container reached through a `?stateful` child stays per-item, but by a different
 route.** `diff_stream/4` derives its ops by draining the stream's pending op log, and
