@@ -120,6 +120,19 @@ defers the reset to a `fetch` response; drop carries the drag bookkeeping), so d
 well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-*` names that are
 directives rather than events.
 
+**An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
+submits it with the form's own method -- a GET by default, putting every field (a password
+included) in the URL -- which is what happened before the first open and during reconnect backoff.
+The listener always calls `preventDefault`, then decides by what the commands need
+(`commandsNeedSocket`): while disconnected, a list holding a `push_event` or an SPA
+`navigate`/`patch` is **dropped whole** with a warning and no `az-form-reset` (the worker drops
+pre-open sends, so running the rest would apply half a submission and discard the typed fields),
+while a `fetch` or client-only list runs -- an HTTP login form needs no socket. Queueing for the
+reconnect was rejected: a submit replayed seconds later, against a view the resync may have
+remounted, is not what the user pressed. Apps can style the submit button off the `az-disconnected`
+class. Likewise `az-prevent-default` on a delegated event is honored before the connection check,
+since a declared suppression needs no server.
+
 **Three cases the compile-time set cannot cover, and how each is handled:**
 
 - **A runtime attribute write** (`arizona_js:set_attr(sel, "az-toggle", ...)`) uses a name no

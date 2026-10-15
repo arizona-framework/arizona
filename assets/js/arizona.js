@@ -2562,6 +2562,23 @@ function commandsIncludeFetch(cmds) {
 }
 
 /**
+ * True when a parsed command (single or list) is/contains one that only works over
+ * the WebSocket: `push_event`, and an SPA `navigate`/`patch` (a `full` navigate is a
+ * plain page load and needs none). Wrappers are searched like `commandsIncludeFetch`.
+ * @param {Array<*>} cmds
+ * @returns {boolean}
+ */
+function commandsNeedSocket(cmds) {
+    const list = Array.isArray(cmds[0]) ? cmds : [cmds];
+    return list.some((c) => {
+        if (c[0] === JS_PUSH_EVENT || c[0] === JS_PATCH) return true;
+        if (c[0] === JS_NAVIGATE) return !c[2]?.full;
+        if (c[0] === JS_TRANSITION || c[0] === JS_ON_KEY) return commandsNeedSocket(c[2]);
+        return false;
+    });
+}
+
+/**
  * Call `fn` with the FIRST element matching `sel` (cast to `HTMLElement`),
  * searched across the main document and any PiP documents. First-match only --
  * the single-target effects `focus`/`blur`/`scroll_to` use this, since those act
@@ -3226,10 +3243,13 @@ function runDelegated(e, attr, sel, capture) {
     // a server-sent `dispatch_event` all target the Document, which has no closest().
     if (t?.nodeType !== 1) return;
     const el = capture ? (t.hasAttribute(attr) ? t : null) : t.closest(sel);
-    if (!el || !_connected) return;
+    if (!el) return;
     // Before the empty-value return: `az-<event>=""` with `az-prevent-default`
-    // declares no command but still asks for the default to be suppressed.
+    // declares no command but still asks for the default to be suppressed. Before
+    // the connection check too: a declared suppression holds while disconnected
+    // (a submit button's click would otherwise submit its form natively).
     if (el.hasAttribute('az-prevent-default')) e.preventDefault();
+    if (!_connected) return;
     const raw = el.getAttribute(attr);
     if (!raw) return;
     // The value is a command list by DECLARATION, so it is not inspected to decide
@@ -3551,13 +3571,34 @@ function bindDocumentEvents(target, signal, abort) {
         'submit',
         (e) => {
             const form = /** @type {Element} */ (e.target).closest('[az-submit]');
-            if (!form || !_connected) return;
+            if (!form) return;
+            // Unconditionally, before anything can return: an az-submit form that is
+            // let through submits natively with its own method -- a GET unless it
+            // says otherwise -- which puts every field, a password included, in the
+            // URL. Before the first open and during reconnect backoff that used to
+            // be exactly what happened.
             e.preventDefault();
-            form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
             const raw = form.getAttribute('az-submit');
             let cmds = null;
             try {
                 cmds = raw ? JSON.parse(raw) : null;
+                // A command that needs the socket cannot run while it is down (the
+                // worker drops pre-open sends), so the submission is dropped whole
+                // rather than run in part, and the typed fields are kept: no reset.
+                // A `fetch` needs no socket and runs, so an HTTP login form works
+                // before the first open.
+                if (cmds && !_connected && commandsNeedSocket(cmds)) {
+                    warnOnce(
+                        '[arizona] az-submit dropped: its command needs the WebSocket, which is not connected',
+                        'az-submit-disconnected',
+                    );
+                    return;
+                }
+                // Flush pending debounced inputs so the server sees them before the
+                // submit. Only while connected: a flush now would send them into a
+                // closed socket, while a still-armed timer can deliver them later.
+                if (_connected)
+                    form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);
