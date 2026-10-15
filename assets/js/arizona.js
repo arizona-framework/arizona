@@ -1209,9 +1209,7 @@ function applySetAttrOp(el, name, val) {
     // synchronously dispatch the very event the attribute names.
     noteAzAttr(name);
     el.setAttribute(name, val);
-    if (name === 'value' && 'value' in el) el.value = val;
-    else if (name === 'checked' && 'checked' in el) el.checked = true;
-    else if (name === 'selected' && 'selected' in el) el.selected = true;
+    if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
     notifyUpdated(el);
 }
 
@@ -1227,10 +1225,32 @@ function applySetAttrOp(el, name, val) {
  */
 function applyRemAttrOp(el, name) {
     el.removeAttribute(name);
-    if (name === 'value' && 'value' in el) el.value = '';
-    else if (name === 'checked' && 'checked' in el) el.checked = false;
-    else if (name === 'selected' && 'selected' in el) el.selected = false;
+    if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
     notifyUpdated(el);
+}
+
+// Form controls whose `value` property holds user state apart from the attribute.
+const VALUE_CONTROLS = new Set(['input', 'textarea', 'select']);
+
+/**
+ * Does `name` on `el` have a live property that user interaction detaches from the
+ * attribute (the dirty value/checkedness/selectedness flags)? Only then must a write
+ * set the property too, and a `?local` read report it. Elsewhere `value` merely
+ * reflects the attribute, coerced -- a property write would put a removed attribute
+ * back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>`, and an
+ * `<option>` loses its fallback to its text) or coerce a set one. Matched by local
+ * name, not `instanceof`: a popped-out (PiP) document's elements come from another
+ * realm.
+ * @param {Element} el
+ * @param {string} name
+ * @returns {boolean}
+ */
+function syncsProp(el, name) {
+    if (el.namespaceURI !== 'http://www.w3.org/1999/xhtml') return false;
+    if (name === 'value') return VALUE_CONTROLS.has(el.localName);
+    if (name === 'checked') return el.localName === 'input';
+    if (name === 'selected') return el.localName === 'option';
+    return false;
 }
 
 /**
@@ -1738,9 +1758,7 @@ function readLocalValue(el, target) {
     // The form-control properties hold what the user sees once they interacted
     // (the attributes are only the defaults by then) -- the same three
     // applySetAttrOp/applyRemAttrOp keep in step on a write.
-    if (name === 'value' && 'value' in el) return el.value;
-    if (name === 'checked' && 'checked' in el) return el.checked;
-    if (name === 'selected' && 'selected' in el) return el.selected;
+    if (syncsProp(el, name)) return /** @type {any} */ (el)[name];
     if (!el.hasAttribute(name)) return false;
     const v = el.getAttribute(name);
     return v === '' ? true : v;

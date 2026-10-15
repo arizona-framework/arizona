@@ -564,6 +564,34 @@ describe('applyOps -- OP.REM_ATTR', () => {
         expect(el.hasAttribute('value')).toBe(false);
         expect(el.value).toBe('');
     });
+
+    // `value` is also a property of elements that are not form controls, where it
+    // reflects the attribute (coerced) rather than holding user state: writing it
+    // after the removal would put the attribute back, as "0" on <li>/<progress>/
+    // <meter> (which turns an indeterminate bar determinate) and "" on <button>/
+    // <data>. Only a form control's property is synced.
+    it('leaves a non-control value attribute removed', () => {
+        setupView(
+            'v',
+            '<ol><li az="0" value="5">a</li></ol><progress az="1" value="3" max="10"></progress>' +
+                '<meter az="2" value="3"></meter><button az="3" value="b">b</button>' +
+                '<data az="4" value="d">d</data><select><option az="5" value="o">text</option></select>',
+        );
+        applyOps(['0', '1', '2', '3', '4', '5'].map((az) => [OP.REM_ATTR, `v:${az}`, 'value']));
+        for (const az of ['0', '1', '2', '3', '4', '5']) {
+            expect(resolveEl(`v:${az}`).hasAttribute('value')).toBe(false);
+        }
+        expect(/** @type {HTMLProgressElement} */ (resolveEl('v:1')).position).toBe(-1);
+        expect(/** @type {HTMLOptionElement} */ (resolveEl('v:5')).value).toBe('text');
+    });
+});
+
+describe('applyOps -- OP.SET_ATTR value on a non-control', () => {
+    it('sets the attribute verbatim, never coerced through the property', () => {
+        setupView('v', '<ol><li az="0" value="5">a</li></ol>');
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', 'x']]);
+        expect(resolveEl('v:0').getAttribute('value')).toBe('x');
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -3425,6 +3453,38 @@ describe('?local -- set/get attribute', () => {
         expect(get('v', 'c')).toBe(false);
         expect(get('v', 't')).toBe('typed');
         expect(get('v', 's')).toBe(false);
+    });
+
+    // On anything but a form control `value` is an ordinary attribute: get reads
+    // the attribute string, and a null removes it without the property writing it
+    // back ("0" on <li>/<progress>/<meter>, "" on <button>/<data>, the text-less
+    // fallback lost on <option>).
+    it('treats value on a non-control as a plain attribute', () => {
+        setupView(
+            'v',
+            `<ol><li az="0" az-local='{"a":{"value":"li"}}' value="5">a</li></ol>` +
+                `<progress az="1" az-local='{"a":{"value":"pr"}}' value="3" max="10"></progress>` +
+                `<meter az="2" az-local='{"a":{"value":"me"}}' value="3"></meter>` +
+                `<button az="3" az-local='{"a":{"value":"bu"}}' value="b">b</button>` +
+                `<data az="4" az-local='{"a":{"value":"da"}}' value="d">d</data>` +
+                `<select><option az="5" az-local='{"a":{"value":"op"}}' value="o">text</option></select>`,
+        );
+        expect(get('v', 'li')).toBe('5');
+        expect(get('v', 'pr')).toBe('3');
+        for (const [az, key] of [
+            ['0', 'li'],
+            ['1', 'pr'],
+            ['2', 'me'],
+            ['3', 'bu'],
+            ['4', 'da'],
+            ['5', 'op'],
+        ]) {
+            set('v', key, null);
+            expect(document.querySelector(`[az="${az}"]`).hasAttribute('value')).toBe(false);
+        }
+        expect(document.querySelector('progress').position).toBe(-1);
+        expect(document.querySelector('option').value).toBe('text');
+        expect(get('v', 'li')).toBe(false);
     });
 });
 
