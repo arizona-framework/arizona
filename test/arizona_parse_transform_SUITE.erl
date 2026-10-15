@@ -61,6 +61,10 @@
     each_multi_root_no_single_root_flag/1,
     each_stream_no_single_root_flag/1,
     each_native_no_single_root_flag/1,
+    each_stream_reuse_flags/1,
+    each_stream_reuse_flags_compiled_body/1,
+    each_stream_no_reuse_without_tracked_reads/1,
+    each_stream_reuse_map_must_be_item/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -343,6 +347,7 @@
     void_tag_case_insensitive/1,
     void_tag_case_insensitive_rejects_children/1,
     reserved_attr_case_insensitive/1,
+    az_submit_form_implies_post/1,
     az_view_attr_case_insensitive/1,
     nodiff_directive_case_insensitive/1,
     void_two_element_dynamic_attr/1,
@@ -382,6 +387,7 @@
     local_attr_interp_render/1,
     local_attr_interp_affix/1,
     local_attr_multiple_error/1,
+    local_attr_affix_non_ascii/1,
     local_attr_mixed_error/1,
     local_attr_interp_boolean/1,
     local_attr_interp_numeric/1,
@@ -425,6 +431,9 @@
     raw_text_svg_title_diffable/1,
     raw_text_svg_title_factoring/1,
     raw_text_svg_title_local/1,
+    raw_text_svg_branch_context/1,
+    raw_text_svg_wrapped_branch_context/1,
+    wrapped_branch_reads_tracked/1,
     raw_text_foreign_script_style_escaped/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
@@ -605,6 +614,7 @@ groups() ->
             void_tag_case_insensitive,
             void_tag_case_insensitive_rejects_children,
             reserved_attr_case_insensitive,
+            az_submit_form_implies_post,
             az_view_attr_case_insensitive,
             nodiff_directive_case_insensitive,
             static_after_dynamic_attr
@@ -624,6 +634,7 @@ groups() ->
             local_attr_interp_render,
             local_attr_interp_affix,
             local_attr_multiple_error,
+            local_attr_affix_non_ascii,
             local_attr_mixed_error,
             local_attr_interp_boolean,
             local_attr_interp_numeric,
@@ -696,6 +707,10 @@ groups() ->
             each_multi_root_no_single_root_flag,
             each_stream_no_single_root_flag,
             each_native_no_single_root_flag,
+            each_stream_reuse_flags,
+            each_stream_reuse_flags_compiled_body,
+            each_stream_no_reuse_without_tracked_reads,
+            each_stream_reuse_map_must_be_item,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -805,6 +820,9 @@ groups() ->
             raw_text_svg_title_diffable,
             raw_text_svg_title_factoring,
             raw_text_svg_title_local,
+            raw_text_svg_branch_context,
+            raw_text_svg_wrapped_branch_context,
+            wrapped_branch_reads_tracked,
             raw_text_foreign_script_style_escaped,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
@@ -1462,6 +1480,32 @@ local_attr_interp_affix(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"href=\"/u/1/edit\"")),
     ?assertEqual(
         #{~"a" => #{~"href" => ~"id"}, ~"ap" => #{~"href" => [~"/u/", ~"/edit"]}},
+        decode_local_descriptor(HTML)
+    ).
+
+%% The descriptor is generated as a binary literal and then folded like any authored
+%% attribute value, so a non-ASCII affix must come back as the same UTF-8 text: the client
+%% recomposes the attribute from it on `set`, and a double-encoded `\x{e9}` would turn
+%% `href` into mojibake on the first client write.
+local_attr_affix_non_ascii(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_affix_utf8). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'a', [{href, [<<\"\\x{e9}/\"/utf8>>, "
+        "            arizona_template:local(<<\"id\">>, <<\"1\">>), <<\"/\\x{fc}\"/utf8>>]}], "
+        "            [<<\"e\">>]}"
+        "    ). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"href=\"\x{e9}/1/\x{fc}\""/utf8>>)),
+    ?assertEqual(
+        #{
+            ~"a" => #{~"href" => ~"id"},
+            ~"ap" => #{~"href" => [<<"\x{e9}/"/utf8>>, <<"/\x{fc}"/utf8>>]}
+        },
         decode_local_descriptor(HTML)
     ).
 
@@ -2593,6 +2637,79 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
     {EachHTML, _} = arizona_render:render(Mod:each(#{rows => [~"A"]})),
     ?assertMatch({_, _}, binary:match(iolist_to_binary(EachHTML), ~"<title az=")).
 
+%% A conditional tail's element compiles into a template of its own, but it renders in
+%% the slot that holds it, so it takes that slot's content context: under `<svg>` a
+%% branch's `<script>` is foreign content (a plain diffable slot, not raw text that
+%% must be a `?raw`) and its `<title>` keeps its markers, exactly as when written
+%% directly in the `<svg>`.
+raw_text_svg_branch_context(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_branch). "
+        "-export([script/1, title/1]). "
+        "script(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {script, [], [arizona_template:get(x, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+        "title(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+    ),
+    {ScriptHTML, _} = arizona_render:render(Mod:script(#{f => true, x => ~"A"})),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(ScriptHTML), ~"<script[^>]*><!--az:")),
+    B0 = #{f => true, t => ~"A"},
+    {TitleHTML, TitleSnap, _} = arizona_render:render(Mod:title(B0), #{}),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(TitleHTML), ~"<title[^>]*><!--az:")),
+    %% The same branch re-rendered patches only the title's own slot.
+    {TitleOps, _, _} = arizona_diff:diff(
+        Mod:title(B0#{t => ~"B"}), TitleSnap, #{}, #{t => true}
+    ),
+    ?assertMatch([[_Op, _Az, ~"B"]], TitleOps).
+
+%% A whole-tail `?html(...)` in a branch is the bare element in a wrapper, so it compiles
+%% in the slot's content context too: an SVG `<title>` keeps its markers and diffs, the
+%% same as the bare branch. A non-tail `?html` (bound, passed, or nested deeper) still
+%% starts its own template at the root context.
+raw_text_svg_wrapped_branch_context(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_wrapped). "
+        "-export([bare/1, wrapped/1]). "
+        "bare(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+        "wrapped(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:html({title, [], [arizona_template:get(t, Bindings)]}); "
+        "        false -> ~\"\" end]}). "
+    ),
+    B0 = #{f => true, t => ~"A"},
+    Run = fun(F) ->
+        {H0, Snap, _} = arizona_render:render(Mod:F(B0), #{}),
+        {Ops, _, _} = arizona_diff:diff(Mod:F(B0#{t => ~"B"}), Snap, #{}, #{t => true}),
+        {iolist_to_binary(H0), Ops}
+    end,
+    {WrappedHTML, WrappedOps} = Run(wrapped),
+    ?assertMatch({match, _}, re:run(WrappedHTML, ~"<title[^>]*><!--az:")),
+    ?assertMatch([[_Op, _Az, ~"B"]], WrappedOps),
+    ?assertEqual(Run(bare), {WrappedHTML, WrappedOps}).
+
+%% Unwrapping a whole-tail `?html` also gives it the bare branch's read tracking: a
+%% binding read only inside the wrapped branch is a dependency of the slot, so a change to
+%% it alone patches the branch instead of leaving it frozen at its first render.
+wrapped_branch_reads_tracked(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_wrapped_branch_reads). -export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:html({b, [], [arizona_template:get(t, Bindings)]}); "
+        "        false -> ~\"\" end]}). "
+    ),
+    B0 = #{f => true, t => ~"A"},
+    {_, Snap, _} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, _, _} = arizona_diff:diff(Mod:render(B0#{t => ~"B"}), Snap, #{}, #{t => true}),
+    ?assertMatch([[_Op, _Az, ~"B"]], Ops).
+
 %% A content `?local` under a raw-text element is a compile error -- the client
 %% resolves a local slot through its markers, and raw-text content has none. An
 %% SVG `<title>` is not raw text, so it carries markers and a `?local` there is
@@ -3028,7 +3145,10 @@ raw_text_attr_diffs_content_render_once(Config) when is_list(Config) ->
     {OpsSrc, _} = arizona_diff:diff(Mod:render(#{src => <<"/b.js">>, body => <<"A">>}), Snap0),
     ?assertNotEqual([], OpsSrc),
     {OpsBody, _} = arizona_diff:diff(Mod:render(#{src => <<"/a.js">>, body => <<"B">>}), Snap0),
-    ?assertMatch([[_Op, <<"QP3ZUD-0">>, #{~"d" := [~"B"]}]], OpsBody).
+    {match, [ElemAz]} = re:run(
+        HTML, ~"<script az=\"([^\"]+)\"", [{capture, all_but_first, binary}]
+    ),
+    ?assertMatch([[_Op, ElemAz, #{~"d" := [~"B"]}]], OpsBody).
 
 %% Escapable (<title>) and raw (<script>) raw-text elements adjacent under <head>,
 %% followed by a normal element: both kinds restore context, so the trailing
@@ -3764,6 +3884,83 @@ reserved_attr_case_insensitive(Config) when is_list(Config) ->
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
     ?assertEqual(<<"<p AZ-KEY=\"k\" az-click=\"c\"></p>">>, iolist_to_binary(HTML0)).
+
+%% A submit before arizona.js runs is native, and a method-less form submits as a
+%% GET with every field -- a password included -- in the URL. The html target
+%% gives a method-less az-submit form `method="post"`; an author's method, of any
+%% kind, is left alone.
+az_submit_form_implies_post(Config) when is_list(Config) ->
+    Render = fun(Mod, Form) ->
+        M = compile_module(
+            lists:flatten([
+                "-module(",
+                Mod,
+                "). -export([render/1]). render(Bindings) -> ",
+                "_ = Bindings, arizona_template:html(",
+                Form,
+                "). "
+            ])
+        ),
+        {HTML, _Snap} = arizona_render:render(M:render(#{m => <<"get">>})),
+        iolist_to_binary(HTML)
+    end,
+    Cmd = "arizona_js:push_event(<<\"login\">>)",
+    ?assertEqual(
+        <<"<form az-submit=\"[0,&quot;login&quot;]\" method=\"post\"></form>">>,
+        Render("pt_sub_post", "{form, [{az_submit, " ++ Cmd ++ "}], []}")
+    ),
+    %% Any spelling of the tag and the attribute.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_sub_bin", "{<<\"FORM\">>, [{<<\"az-submit\">>, " ++ Cmd ++ "}], []}"),
+            <<" method=\"post\"">>
+        )
+    ),
+    %% A static `false` method renders nothing, so it is still method-less.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_sub_false", "{form, [{method, false}, {az_submit, " ++ Cmd ++ "}], []}"),
+            <<" method=\"post\"">>
+        )
+    ),
+    %% The author's method wins, static or dynamic, in any casing.
+    lists:foreach(
+        fun({Mod, Form, Method}) ->
+            HTML = Render(Mod, Form),
+            ?assertEqual(nomatch, binary:match(HTML, <<"post">>), HTML),
+            ?assertMatch({_, _}, binary:match(HTML, Method), HTML)
+        end,
+        [
+            {"pt_sub_get", "{form, [{method, <<\"get\">>}, {az_submit, " ++ Cmd ++ "}], []}",
+                <<"method=\"get\"">>},
+            {"pt_sub_up", "{form, [{'METHOD', <<\"dialog\">>}, {az_submit, " ++ Cmd ++ "}], []}",
+                <<"METHOD=\"dialog\"">>},
+            {"pt_sub_dyn",
+                "{form, [{method, arizona_template:get(m, Bindings)}, {az_submit, " ++ Cmd ++
+                    "}], []}",
+                <<"method=\"get\"">>}
+        ]
+    ),
+    %% Only a form, and only one that is an az-submit form.
+    ?assertEqual(<<"<form></form>">>, Render("pt_sub_none", "{form, [], []}")),
+    ?assertEqual(
+        nomatch,
+        binary:match(
+            Render("pt_sub_div", "{'div', [{az_submit, " ++ Cmd ++ "}], []}"), <<"method">>
+        )
+    ),
+    %% Other targets have no native form submission to guard.
+    ?assertEqual([], arizona_native:implied_attrs(form, [<<"az-submit">>])),
+    ?assertEqual([], arizona_terminal:implied_attrs(form, [<<"az-submit">>])),
+    NativeMod = compile_module(
+        "-module(pt_sub_native). -export([render/1]). render(Bindings) -> "
+        "_ = Bindings, arizona_template:native({form, [{az_submit, "
+        "arizona_js:push_event(<<\"login\">>)}], []}). "
+    ),
+    {Native, _} = arizona_render:render(NativeMod:render(#{})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Native), <<"method">>)).
 
 %% az-view is injected on a live root and rejected anywhere else, for the same
 %% reason: the browser reads `AZ-VIEW="x"` as `az-view`.
@@ -7485,6 +7682,103 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
     %% (`arizona_diff:diff_map/4`); a stream ignores it outright, since it keys
     %% items by `az-key` and never reaches the positional walk.
     ?assertEqual(true, maps:get(single_root, Tmpl, undefined)).
+
+%% A changed stream item keeps a dynamic's old render only where the template says
+%% its deps name every item field it read: the key attribute, a tracked item read
+%% and a tracked binding read in the slot's own closure qualify; a plain
+%% `maps:get/2` of the item, and a read inside a nested template's closure, do not.
+each_stream_reuse_flags(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item, Key) -> "
+        "        {'li', [{'az-key', Key}], [ "
+        "            arizona_template:get(a, Item), "
+        "            maps:get(b, Item), "
+        "            az:get(x, Bindings), "
+        "            case arizona_template:get(on, Item) of "
+        "                true -> {'b', [], [arizona_template:get(c, Item)]}; "
+        "                false -> <<>> "
+        "            end "
+        "        ]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, true, false, true, false]}, stream_each_template(Mod)).
+
+%% A whole-body `?html` callback compiles through the already-compiled path.
+each_stream_reuse_flags_compiled_body(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse_compiled). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(Item, Key) -> "
+        "        az:html({'li', [{'az-key', Key}], [ "
+        "            arizona_template:get(a, Item), maps:get(b, Item) "
+        "        ]}) "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, true, false]}, stream_each_template(Mod)).
+
+%% With no qualifying dynamic the list is left out, and every changed item re-renders.
+each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_no_reuse). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    az:each(fun(#{n := N}, _Key) -> "
+        "        {'li', [], [N]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertNot(is_map_key(reuse, stream_each_template(Mod))).
+
+%% A tracked read vouches for an item read only when its map IS the item (the bare
+%% parameter, or the variable side of a `Pat = Var` head) or the view bindings. A
+%% sub-map bound in the head or the body records the sub-map's keys, not the item
+%% field that holds it, so those dynamics are not reusable.
+each_stream_reuse_map_must_be_item(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse_item_map). "
+        "-export([sub/1, sub_alias/1, sub_bindings/1, sub_with/1, alias/1, whole/1]). "
+        "sub(Bindings) -> "
+        "    az:each(fun(#{sub := Sub}, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_alias(Bindings) -> "
+        "    az:each(fun(#{sub := Sub} = I, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub), az:get(n, I)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_bindings(Bindings) -> "
+        "    az:each(fun(#{sub := Bindings}, K) -> "
+        "        {'li', [{'az-key', K}], [az:get(v, Bindings)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_with(Bindings) -> "
+        "    az:each(fun(#{sub := Sub}, K) -> "
+        "        {'li', [{'az-key', K}], [maps:get(v, arizona_template:with([v], Sub))]} "
+        "    end, az:get(stream, Bindings)). "
+        "alias(Bindings) -> "
+        "    az:each(fun(I, K) -> "
+        "        I2 = I, "
+        "        {'li', [{'az-key', K}], [arizona_template:get(n, I2)]} "
+        "    end, az:get(stream, Bindings)). "
+        "whole(Bindings) -> "
+        "    az:each(fun(I = #{}, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(n, I), az:get(x, Bindings)]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub)),
+    ?assertMatch(#{reuse := [true, false, true]}, stream_each_template(Mod, sub_alias)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub_bindings)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub_with)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, alias)),
+    ?assertMatch(#{reuse := [true, true, true]}, stream_each_template(Mod, whole)).
+
+stream_each_template(Mod) ->
+    stream_each_template(Mod, render).
+
+stream_each_template(Mod, Fun) ->
+    Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, []),
+    maps:get(template, Mod:Fun(#{stream => Stream})).
 
 %% A `?native` single-root list each is NOT flagged single_root: the gate is the
 %% backend's `supports_list_patch/0` callback (asked at compile time), and

@@ -201,6 +201,15 @@ is stripped. A backend capability, declared by each backend.
 -callback supports_nodiff_keep() -> boolean().
 
 -doc """
+Static attributes this backend adds to an element because of what its own
+attributes imply, given the tag and the wire names of the attributes it carries
+(a `false` one excluded: it renders nothing). Emitted after the author's
+attributes. HTML gives a method-less `az-submit` form `method="post"`; a backend
+with nothing to imply returns `[]`.
+""".
+-callback implied_attrs(Tag :: tag(), AttrNames :: [binary()]) -> [{binary(), binary()}].
+
+-doc """
 What a dynamic boolean attribute means on this backend's wire. `presence` (HTML): `true`
 renders the bare attribute and `false` removes it. `value`: a boolean is a typed prop
 value, sent as JSON `true`/`false` and present in both states, the same shape a static
