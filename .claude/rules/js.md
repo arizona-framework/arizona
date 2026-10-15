@@ -160,6 +160,10 @@ Every item of an `?each` shares the slot **key** (keys are compile-time literals
 - Forward-after-back: destination entry has null state -> scroll to top. Documented non-goal; future restore would need a state-ID-keyed map backed by sessionStorage, not `replaceState`-on-scroll.
 - Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate` links fall through to the browser.
 
+### The navigate page-swap window (`_navPending`)
+
+Every view event goes out through `sendEvent` (delegated `push_event`, a hook's `pushEvent`, the exported `pushEvent`/`pushEventTo`, a relayed `push_event` effect). It drops the event while a navigate is in flight: `sendNav` arms `_navPending` when it posts a `navigate` frame on a live socket, and the window closes on any `OP_REPLACE` in `applyOps` (the reply, or the resync of a reconnect that interrupted it -- a close keeps it armed, since the reconnect mounts the new path under the old DOM) or a full-page navigate effect (the server kept the old view). The server replaced the root when it read the frame, so an event from the old DOM would reach the NEW root by id, and nothing on the wire lets the server tell it from a fresh one. A `patch` does not arm: it usually keeps the view, and a cross-handler patch that the server degrades to a replace cannot be predicted client-side. A debounced/throttled `push_event` captures `_navEpoch` when raised, so one that fires after the swap is dropped too.
+
 ### Patch nav (`az-patch`) and the `_azNav` tag
 
 `navigateTo` takes a `kind` -- `'navigate'` (default) or `'patch'` -- which is both the WS frame verb (`[kind, {path, qs}]`) and a history tag. A patch push writes `_azNav: 'patch'` onto **both** the new entry (in the `pushState` state) and the outgoing entry (via `saveCurrentScroll(kind)`), so a later back/forward across that edge replays the same mode; popstate reads `e.state?._azNav === 'patch' ? 'patch' : 'navigate'`. The tag is only a hint -- the server still corrects the verb, degrading a cross-handler patch to a navigate. Tagging the *outgoing* entry matters when it was a full page load, which carries no state of its own.

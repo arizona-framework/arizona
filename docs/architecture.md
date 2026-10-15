@@ -1764,6 +1764,20 @@ queued ahead of the live process's barrier, their ops first, then `[OP_REPLACE, 
 PageHTML]` (their effects are dropped with a log line, see `handle_info/2` above). Browser
 back/forward also triggers navigate via `popstate`.
 
+**The page-swap window is closed by the client.** The server replaces the root while handling the
+navigate frame, but the old DOM stays on screen until the `OP_REPLACE` arrives, and an event sent
+from it in between is dispatched by view id alone -- to the *new* root, which often shares the id
+(`page`), where it either crashes on an event it does not handle or runs the old page's intent.
+The server cannot protect itself without a wire change: frames are handled in order, so by the
+time the stale event is read the replace has already happened, and the event carries nothing that
+tells it from one sent after the client applied the swap (dropping the root id for "a while" would
+eat legitimate events from the new page). So the web client drops every view event raised between
+posting a `navigate` and its reply -- the `OP_REPLACE`, a reconnect's resync `OP_REPLACE`, or a
+full-page navigate effect (the server kept the old view) -- exactly as a full page load would; a
+redirect reply is itself a navigate and re-arms. A `patch` does not arm the window: it usually
+keeps the view, and the client cannot know ahead that the server will degrade a cross-handler patch
+to a replace, so that case keeps the window. The native clients (Android/iOS) do not gate yet.
+
 **SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS
 sends `["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for
 navigate, then compares the resolved handler against the tracked root `handler`: same handler ->
