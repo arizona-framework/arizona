@@ -425,8 +425,8 @@ key_changed(K, OldItem, NewItem) ->
 
 -doc """
 Moves the item with `Key` to a new zero-based position and queues a
-move op. No-op if `Key` is not present. The position is clamped to the
-last index.
+move op. No-op if `Key` is not present, or already at that position (no op
+is queued). The position is clamped to the last index.
 """.
 -spec move(Stream, Key, NewPos) -> Stream1 when
     Stream :: stream(),
@@ -447,12 +447,17 @@ move(
         #{Key := _} ->
             Flat = flat_order(Order),
             Order1 = order_delete(Flat, Key),
-            Order2 = order_insert_at(Order1, Key, min(NewPos, Size - 1)),
-            AfterKey = key_before(Key, Order2),
-            S#stream{
-                order = {Order2, []},
-                pending = queue_op({move, Key, AfterKey}, Pending)
-            };
+            case order_insert_at(Order1, Key, min(NewPos, Size - 1)) of
+                %% Already there: nothing moved, so nothing is queued -- the
+                %% differ would only ship a move of a node onto itself.
+                Flat ->
+                    S#stream{order = {Flat, []}};
+                Order2 ->
+                    S#stream{
+                        order = {Order2, []},
+                        pending = queue_op({move, Key, key_before(Key, Order2)}, Pending)
+                    }
+            end;
         #{} ->
             S
     end.

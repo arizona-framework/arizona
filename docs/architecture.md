@@ -1106,16 +1106,20 @@ It costs the incremental path nothing: a resume that finds its mark skips past i
 it in a re-drain is idempotent.
 
 **A log that reorders drains as one reconcile.** The drain replays ops one at a time against
-what the client holds, and the one thing it cannot follow op by op is order: a `reorder`
-(`sort/2`) or `move/3` says "the source is now in this order", and the only order the drain can
-see is the final one, not the one the client has reached by that point. A positional op after it
-was placed against an order the client did not hold yet, and a second sort then found the client
-"already" in the final order and moved nothing. So a drained log holding a `reorder`, a `move`,
-a `reset`, or -- on a limited stream, where hidden keys count toward a source index but are not
-on the page -- a positional insert is replaced by one reset (`drainable_ops/3`): remove what
-left, patch what stayed, move the stayers into order, then insert each arrival at its final
-index. A log of appends, deletes and updates (and positional inserts on an unlimited stream,
-whose client holds the whole source in order at every step) keeps the op-by-op drain. The
+what the client holds, and the one thing it cannot always follow op by op is order: a `reorder`
+(`sort/2`) carries no order of its own, so the only order the drain can see is the final one,
+not the one the client has reached by that point. A positional op after it was placed against an
+order the client did not hold yet, and a second sort then found the client "already" in the
+final order and moved nothing. So a drained log holding a `reorder` or a
+`reset` is replaced by one reset (`drainable_ops/3`): remove what left, patch what stayed, move
+the stayers into order, then insert each arrival at its final index. A log of sorts alone needs
+no item walk and drains as one `reorder` from the client's order to the final window instead.
+A `move` and a positional insert are different: each is placed by where it sits in the source
+when it is queued (`move/3` records the key it lands after, `insert/3` an index), so on an
+unlimited stream, whose client holds the whole source in order at every step, they replay op
+by op exactly. On a limited stream hidden keys count toward that placement but are not on the
+page, so there they take the reset too. A log of appends, deletes and updates keeps the
+op-by-op drain, and a `move/3` to the position a key already holds queues nothing. The
 invariant, checked by a randomized model test in `arizona_stream_SUITE`: after a frame's ops the
 client shows exactly an SSR of the stream's final state.
 

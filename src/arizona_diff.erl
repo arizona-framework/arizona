@@ -942,9 +942,24 @@ drainable_ops([], _Source, _OldSnap) ->
     [{reset, #{}}];
 drainable_ops(Ops, #stream{limit = Limit}, OldSnap) ->
     case reorders(Ops, Limit) of
-        true -> [{reset, baseline(OldSnap)}];
+        true -> reconcile_ops(Ops, OldSnap);
         false -> Ops
     end.
+
+%% A log of nothing but sorts changed no item and no membership, only the order, so
+%% one `reorder` from the client's order to the final one says all of it -- the
+%% items need no walk. Anything else in the log goes to the full reconcile.
+reconcile_ops([reorder | Rest], OldSnap) ->
+    case only_reorders(Rest) of
+        true -> [reorder];
+        false -> [{reset, baseline(OldSnap)}]
+    end;
+reconcile_ops(_Ops, OldSnap) ->
+    [{reset, baseline(OldSnap)}].
+
+only_reorders([]) -> true;
+only_reorders([reorder | Rest]) -> only_reorders(Rest);
+only_reorders([_ | _]) -> false.
 
 stream_ops(_Source, _OldSnap, true) ->
     [{reset, #{}}];
@@ -956,30 +971,32 @@ stream_ops(Source, OldSnap, false) ->
     ).
 
 %% The drain replays ops one at a time against what the client holds, and the one
-%% thing it cannot follow op by op is ORDER. A `reorder` or `move` is queued as "the
-%% source is now in this order", and the order it can see is the FINAL one, not the
-%% one the client reaches by that point of the drain: a positional op after it was
-%% placed against an order the client did not have yet, and a second reorder then
-%% found the client "already" in the final order and moved nothing. A `reset` jumped
-%% to the final order the same way and then replayed moves queued against
-%% intermediate ones.
+%% thing it cannot follow op by op is ORDER. A `reorder` carries no order of its own:
+%% the only order the drain can read for it is the FINAL one, not the one the client
+%% reaches by that point of the drain, so a positional op after it was placed against
+%% an order the client did not have yet, and a second reorder then found the client
+%% "already" in the final order and moved nothing. A `reset` jumped to the final
+%% order the same way and then replayed moves queued against intermediate ones.
 %%
-%% So a log holding any of them is drained as ONE reconcile of the client's state at
-%% the start of the drain against the final window: the reset path, which removes
-%% what left, patches what stayed (re-rendering only fields that changed since the
-%% client's render), inserts what arrived and emits the minimal moves. Appends,
-%% deletes and updates never consult an order the client might not hold, so a log of
-%% only those -- the ordinary event -- keeps the cheap op-by-op drain.
+%% So a log holding either is drained as ONE reconcile of the client's state at the
+%% start of the drain against the final window: the reset path, which removes what
+%% left, patches what stayed (re-rendering only fields that changed since the
+%% client's render), inserts what arrived and emits the minimal moves -- or, for a
+%% log of sorts alone, one reorder (`reconcile_ops/2`). Appends, deletes and updates
+%% never consult an order the client might not hold, so a log of only those -- the
+%% ordinary event -- keeps the cheap op-by-op drain.
 %%
-%% A positional insert is placed by SOURCE index. On an unlimited stream the client
-%% holds the whole source in order at every step of the drain, so that index is the
-%% client's too. On a limited one it is not: hidden keys count toward the index but
-%% are not on the page, and keys leaving the window are on the page until the
-%% end-of-drain prune.
+%% A `move` and a positional insert are placed by where they sit in the SOURCE at the
+%% moment they are queued -- `move/3` names the key it lands after, `insert/3` an
+%% index. On an unlimited stream the client holds the whole source in order at every
+%% step of the drain, so that placement is the client's too, and replaying them op by
+%% op is exact. On a limited one it is not: hidden keys count toward the index (or
+%% are the key landed after) but are not on the page, and keys leaving the window are
+%% on the page until the end-of-drain prune.
 reorders([], _Limit) -> false;
 reorders([reset | _], _Limit) -> true;
 reorders([reorder | _], _Limit) -> true;
-reorders([{move, _, _} | _], _Limit) -> true;
+reorders([{move, _, _} | _], Limit) when Limit =/= infinity -> true;
 reorders([{insert, _, _, -1} | Rest], Limit) -> reorders(Rest, Limit);
 reorders([{insert, _, _, _Pos} | _], Limit) when Limit =/= infinity -> true;
 reorders([_ | Rest], Limit) -> reorders(Rest, Limit).
@@ -1005,8 +1022,40 @@ diff_stream_op(Az, {delete, Key}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_delete(Az, Key, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, {update, Key, NewItem, Changed}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, {move, Key, AfterKey}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, reorder, [], SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_reorder(Az, SV, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, {reset, OldItems}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views).
+
+%% Only an unlimited stream drains a `move` op by op (`reorders/2`), and its client
+%% holds every live key in source order, so the key the move lands after is on the
+%% page. A key the client does not hold is a replay of an op whose key a later one
+%% deleted.
+stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    case SnapAcc of
+        #{Key := _} ->
+            MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), move_ref(AfterKey)],
+            {RestOps, FinalSnap, Views1} =
+                diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0),
+            {[MoveOp | RestOps], FinalSnap, Views1};
+        #{} ->
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
+
+move_ref(null) -> null;
+move_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
+
+%% A log of sorts alone (`reconcile_ops/2`): no item changed, so the window is
+%% reconciled (`apply_limit/6` against the final keys -- removals, then back-fill at
+%% each index) behind the minimal moves from the client's order to the final one.
+%% The moves name only keys the client holds and the back-fill follows them, so
+%% each lands where the final order puts it.
+stream_reorder(Az, {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
+    VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
+    {LimitOps, FinalSnap, Views1} = apply_limit(Az, Source, Tmpl, SnapAcc, VKeys, Views0),
+    {compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc, LimitOps), FinalSnap, Views1}.
 
 %% The visibility window as a set, computed once per drain from the (constant)
 %% stream record. An unlimited stream keeps every key, so it needs no set. The

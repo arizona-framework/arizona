@@ -169,7 +169,11 @@
     sort_append_sort/1,
     drop_reappend_of_evicted_key/1,
     random_events_keep_client_equal_to_ssr/1,
-    sort_reuses_every_item/1
+    sort_reuses_every_item/1,
+    single_move_ships_one_move/1,
+    two_moves_replay_in_order/1,
+    sort_only_log_ships_moves_only/1,
+    move_to_own_position_queues_nothing/1
 ]).
 
 all() ->
@@ -366,7 +370,11 @@ groups() ->
             sort_append_sort,
             drop_reappend_of_evicted_key,
             random_events_keep_client_equal_to_ssr,
-            sort_reuses_every_item
+            sort_reuses_every_item,
+            single_move_ships_one_move,
+            two_moves_replay_in_order,
+            sort_only_log_ships_moves_only,
+            move_to_own_position_queues_nothing
         ]},
         %% DataTable handler tests
         {datatable, [parallel], [
@@ -4209,6 +4217,55 @@ sort_reuses_every_item(Config) when is_list(Config) ->
     ?assert(
         lists:all(fun(K) -> erts_debug:same(map_get(K, Items0), map_get(K, Items1)) end, [a, b])
     ).
+
+%% A single `move/3` on an unlimited stream -- drag and drop's normal path -- ships
+%% exactly its one move, with no item walked: the key it lands after is recorded at
+%% queue time, and the client holds every key in source order.
+single_move_ships_one_move(Config) when is_list(Config) ->
+    S0 = arizona_stream:new(fun(#{id := Id}) -> Id end, [it(a, ~"l1"), it(b, ~"l1"), it(c, ~"l1")]),
+    {_, Snap0, Views0} = arizona_render:render(drain_template(S0), #{}),
+    S1 = arizona_stream:move(clear_pending(S0), c, 0),
+    {Ops, Snap1, _} = arizona_diff:diff(drain_template(S1), Snap0, Views0, #{items => true}),
+    ?assertEqual([[?OP_MOVE, <<"0">>, ~"c", null]], Ops),
+    #{d := [{<<"0">>, #{items := Items0}}]} = Snap0,
+    #{d := [{<<"0">>, #{items := Items1}}]} = Snap1,
+    ?assert(erts_debug:same(Items0, Items1)).
+
+%% Two moves in one event replay in order, each against the order the one before it
+%% left.
+two_moves_replay_in_order(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"c", ~"l1"}, {~"b", ~"l1"}, {~"a", ~"l1"}],
+        client_after_events([it(a, ~"l1"), it(b, ~"l1"), it(c, ~"l1")], #{}, [
+            fun(S0) -> arizona_stream:move(arizona_stream:move(S0, c, 0), a, 2) end
+        ])
+    ).
+
+%% A log of sorts alone ships only the minimal moves from the client's order to the
+%% final one -- three sorts, one reorder.
+sort_only_log_ships_moves_only(Config) when is_list(Config) ->
+    S0 = arizona_stream:new(
+        fun(#{id := Id}) -> Id end, [it(a, ~"l3"), it(b, ~"l2"), it(c, ~"l1")]
+    ),
+    {_, Snap0, Views0} = arizona_render:render(drain_template(S0), #{}),
+    S1 = sort_by_text(sort_by_text(sort_by_text(clear_pending(S0), asc), desc), asc),
+    {Ops, Snap1, _} = arizona_diff:diff(drain_template(S1), Snap0, Views0, #{items => true}),
+    ?assertMatch([[?OP_MOVE, _, _, _], [?OP_MOVE, _, _, _]], Ops),
+    %% No item walked: the snapshot's items map is the one the drain started from.
+    #{d := [{<<"0">>, #{items := Items0}}]} = Snap0,
+    #{d := [{<<"0">>, #{items := Items1}}]} = Snap1,
+    ?assert(erts_debug:same(Items0, Items1)),
+    ?assertEqual(
+        [{~"c", ~"l1"}, {~"b", ~"l2"}, {~"a", ~"l3"}],
+        apply_client_ops(ssr_client(S0), Ops, #{})
+    ).
+
+move_to_own_position_queues_nothing(Config) when is_list(Config) ->
+    S0 = clear_pending(
+        arizona_stream:new(fun(#{id := Id}) -> Id end, [it(a, ~"l1"), it(b, ~"l1")])
+    ),
+    ?assertEqual([], arizona_stream:pending_ops(arizona_stream:move(S0, b, 1))),
+    ?assertEqual([], arizona_stream:pending_ops(arizona_stream:move(S0, b, 7))).
 
 it(Id, Text) -> #{id => Id, text => Text}.
 
