@@ -74,6 +74,7 @@
     descriptor_root_nested_anchor/1,
     ssr_stateful_child_rejects_restricted_id/1,
     stateful_child_rejects_dropped_id/1,
+    ssr_root_rejects_restricted_id/1,
     render_to_iolist_nodiff_multi/1,
     render_to_iolist_nodiff_static/1,
     render_to_iolist_nodiff/1,
@@ -183,7 +184,8 @@ groups() ->
             stateless_descriptor_from_conditional_live,
             stateful_descriptor_from_conditional_live,
             ssr_stateful_child_rejects_restricted_id,
-            stateful_child_rejects_dropped_id
+            stateful_child_rejects_dropped_id,
+            ssr_root_rejects_restricted_id
         ]},
         {ssr, [parallel], [
             ssr_counter,
@@ -1839,6 +1841,38 @@ stateful_child_rejects_dropped_id(Config) when is_list(Config) ->
         {arizona_loc, _, restricted_key_modified},
         iolist_to_binary(arizona_render:render_to_iolist(Tmpl))
     ).
+
+%% A route root's `mount/1` that changes or drops the `id` its bindings carried
+%% must fail the HTTP render the way the WebSocket mount does, rather than SSR
+%% cleanly (changed) or surface as an unrelated `missing_binding` (dropped).
+ssr_root_rejects_restricted_id(Config) when is_list(Config) ->
+    [
+        ?assertEqual(
+            {Mode, {error, restricted_key_modified}},
+            {Mode,
+                ssr_raised(fun() ->
+                    arizona_render:render_view_to_iolist(arizona_restricted_id_root, #{
+                        bindings => #{id => ~"rroot", mode => Mode}
+                    })
+                end)}
+        )
+     || Mode <- [change, drop]
+    ],
+    ?assertEqual(
+        {error, restricted_key_modified},
+        ssr_raised(fun() ->
+            arizona_render:render_to_iolist(arizona_restricted_id_root, #{
+                bindings => #{id => ~"rroot", mode => change}
+            })
+        end)
+    ).
+
+ssr_raised(Fun) ->
+    try Fun() of
+        Page -> {rendered, iolist_to_binary(Page)}
+    catch
+        Class:Reason -> {Class, Reason}
+    end.
 
 %% Regression: a repeated stateless whose body has an inline conditional, a
 %% client-owned `?local`, and a nested stateless grandchild. With no `?each`,

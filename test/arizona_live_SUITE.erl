@@ -84,6 +84,8 @@
     live_connected_bad_value_mounts/1,
     live_mount_crash_location/1,
     live_diff_crash_location/1,
+    root_mount_rejects_restricted_id/1,
+    navigate_mount_rejects_restricted_id/1,
     child_command_reobserved_on_root_diff/1,
     live_unknown_view_id_warns/1,
     child_stream_survives_next_root_diff/1,
@@ -198,6 +200,8 @@ groups() ->
             live_connected_bad_value_mounts,
             live_mount_crash_location,
             live_diff_crash_location,
+            root_mount_rejects_restricted_id,
+            navigate_mount_rejects_restricted_id,
             child_command_reobserved_on_root_diff,
             child_stream_survives_next_root_diff,
             child_event_leaves_root_snapshot_untouched,
@@ -699,6 +703,47 @@ live_crash_reason(Bindings, Then) ->
     receive
         {'EXIT', Pid, _} -> Reason
     after 1000 -> ct:fail(no_exit)
+    end.
+
+%% A route root's `mount/1` that changes or drops the `id` its bindings carried
+%% (route config or middleware) is rejected by name, both on a first mount and
+%% on a navigate's mount of the new route.
+root_mount_rejects_restricted_id(Config) when is_list(Config) ->
+    [
+        ?assertEqual(
+            {Mode, restricted_key_modified},
+            {Mode, restricted_crash(#{id => ~"rroot", mode => Mode}, fun arizona_live:mount/1)}
+        )
+     || Mode <- [change, drop]
+    ].
+
+navigate_mount_rejects_restricted_id(Config) when is_list(Config) ->
+    [
+        ?assertEqual(
+            {Mode, restricted_key_modified},
+            {Mode,
+                restricted_crash(#{}, fun(Pid) ->
+                    {ok, ~"rroot", _} = arizona_live:mount(Pid),
+                    arizona_live:navigate(
+                        Pid, arizona_restricted_id_root, #{id => ~"rroot", mode => Mode}
+                    )
+                end)}
+        )
+     || Mode <- [change, drop]
+    ].
+
+restricted_crash(Bindings, Then) ->
+    process_flag(trap_exit, true),
+    {ok, Pid} = arizona_live:start_link(arizona_restricted_id_root, Bindings, undefined, []),
+    Reason =
+        try Then(Pid) of
+            Result -> {no_crash, Result}
+        catch
+            exit:{{R, ST}, {gen_server, call, _}} when is_list(ST) -> R
+        end,
+    receive
+        {'EXIT', Pid, _} -> Reason
+    after 1000 -> {no_exit, Reason}
     end.
 
 %% A child event from a caller other than the transport hands that caller the
