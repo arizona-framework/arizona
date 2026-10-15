@@ -40,6 +40,8 @@
     compile_module_name_differs_from_basename/1,
     compile_error_stores_error/1,
     compile_error_cleared_on_success/1,
+    compile_error_kept_across_unrelated_wave/1,
+    compile_error_dropped_when_file_deleted/1,
     non_erl_files_skip_compile/1,
     mixed_files_only_compile_erl/1,
     deleted_file_skips_compile/1,
@@ -106,6 +108,8 @@ groups() ->
             compile_module_name_differs_from_basename,
             compile_error_stores_error,
             compile_error_cleared_on_success,
+            compile_error_kept_across_unrelated_wave,
+            compile_error_dropped_when_file_deleted,
             non_erl_files_skip_compile,
             mixed_files_only_compile_erl,
             deleted_file_skips_compile,
@@ -319,11 +323,12 @@ watch_delegates_to_watcher(Config) ->
 get_error_default_undefined(Config) when is_list(Config) ->
     ?assertEqual(undefined, arizona_reloader:get_error()).
 
-clear_error_resets(Config) when is_list(Config) ->
-    %% Simulate a stored error, then clear it.
-    persistent_term:put(arizona_compile_error, #{errors => []}),
-    ?assertMatch(#{errors := []}, arizona_reloader:get_error()),
-    arizona_reloader:clear_error(),
+clear_error_resets(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_bad.erl"),
+    ok = file:write_file(File, bad_module_src()),
+    {error, _} = arizona_reloader:compile([File]),
+    ?assertMatch(#{errors := [_ | _]}, arizona_reloader:get_error()),
+    ok = arizona_reloader:clear_error(),
     ?assertEqual(undefined, arizona_reloader:get_error()).
 
 compile_success_reloads_module(Config) ->
@@ -357,17 +362,40 @@ compile_error_stores_error(Config) ->
     ?assertMatch({error, #{errors := [_ | _]}}, arizona_reloader:compile([File])),
     ?assertMatch(#{errors := [_ | _]}, arizona_reloader:get_error()).
 
+%% Fixing the broken file clears its error.
 compile_error_cleared_on_success(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_good2.erl"),
+    ok = file:write_file(File, bad_module_src2()),
+    ?assertMatch({error, _}, arizona_reloader:compile([File])),
+    ?assertMatch(#{errors := [{File, _} | _]}, arizona_reloader:get_error()),
+    ok = file:write_file(File, good_module_src2()),
+    ?assertEqual(ok, arizona_reloader:compile([File])),
+    ?assertEqual(undefined, arizona_reloader:get_error()).
+
+%% Saving an unrelated file that compiles must not hide a file still broken:
+%% errors are kept per file and only a wave carrying the file clears them.
+compile_error_kept_across_unrelated_wave(Config) ->
     Dir = proplists:get_value(tmp_dir, Config),
     BadFile = filename:join(Dir, "arizona_dev_ct_bad2.erl"),
     GoodFile = filename:join(Dir, "arizona_dev_ct_good2.erl"),
     ok = file:write_file(BadFile, bad_module_src2()),
-    %% First: compile error.
-    ?assertMatch({error, _}, arizona_reloader:compile([BadFile])),
-    ?assertMatch(#{errors := _}, arizona_reloader:get_error()),
-    %% Second: successful compile clears error.
     ok = file:write_file(GoodFile, good_module_src2()),
+    {error, #{errors := BadErrors}} = arizona_reloader:compile([BadFile]),
     ?assertEqual(ok, arizona_reloader:compile([GoodFile])),
+    ?assertEqual(#{errors => BadErrors}, arizona_reloader:get_error()),
+    %% A second broken file joins the first rather than replacing it.
+    ok = file:write_file(GoodFile, bad_module_src2()),
+    {error, #{errors := GoodErrors}} = arizona_reloader:compile([GoodFile]),
+    #{errors := Both} = arizona_reloader:get_error(),
+    ?assertEqual(lists:sort(BadErrors ++ GoodErrors), lists:sort(Both)).
+
+%% A broken file deleted in a later wave is no longer an error.
+compile_error_dropped_when_file_deleted(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_bad2.erl"),
+    ok = file:write_file(File, bad_module_src2()),
+    {error, _} = arizona_reloader:compile([File]),
+    ok = file:delete(File),
+    ?assertEqual(ok, arizona_reloader:compile([File])),
     ?assertEqual(undefined, arizona_reloader:get_error()).
 
 non_erl_files_skip_compile(Config) when is_list(Config) ->
