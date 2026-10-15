@@ -120,6 +120,9 @@
     error_names_included_file/1,
     error_after_include_names_main_file/1,
     error_keeps_column/1,
+    error_in_included_helper_names_its_file/1,
+    error_in_included_each_fun_names_its_file/1,
+    element_error_keeps_file_and_column/1,
     invalid_child_tuple_literal/1,
     invalid_each_fun_arity/1,
     invalid_each_multi_clause/1,
@@ -1135,7 +1138,10 @@ groups() ->
             improper_attr_value_is_text,
             error_names_included_file,
             error_after_include_names_main_file,
-            error_keeps_column
+            error_keeps_column,
+            error_in_included_helper_names_its_file,
+            error_in_included_each_fun_names_its_file,
+            element_error_keeps_file_and_column
         ]},
         %% Inline cross-target nesting guard (?html in ?native and vice-versa)
         {cross_target, [parallel], [
@@ -7664,6 +7670,62 @@ error_keeps_column(Config) when is_list(Config) ->
             "-module(pt_err_column).\n"
             "-export([render/1]).\n"
             "render(_B) -> ok, ok, ok, arizona_template:html({'div', [], [], extra}).\n",
+            {1, 1}
+        )
+    ).
+
+%% An inlined element helper is compiled where it is called, but an error in its
+%% body names the file the helper is defined in: an included header here.
+error_in_included_helper_names_its_file(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{"pt_inc.hrl", [{{7, 22}, arizona_parse_transform, dynamic_in_raw_text}]}], []},
+        transform_source(
+            "-file(\"pt_main.erl\", 1).\n"
+            "-module(pt_helper_inc).\n"
+            "-export([render/1]).\n"
+            "render(Bindings) ->\n"
+            "    arizona_template:html({'div', [], [s(), arizona_template:get(y, Bindings)]}).\n"
+            "-file(\"pt_inc.hrl\", 1).\n"
+            "s() -> {script, [], [foo()]}.\n"
+            "foo() -> <<\"x\">>.\n"
+            "-file(\"pt_main.erl\", 6).\n",
+            {1, 1}
+        )
+    ).
+
+%% The same for a named `?each` callback defined in an included header.
+error_in_included_each_fun_names_its_file(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{"pt_inc.hrl", [{{7, 11}, arizona_parse_transform, {reserved_attr, <<"az">>}}]}],
+            []},
+        transform_source(
+            "-file(\"pt_main.erl\", 1).\n"
+            "-module(pt_each_inc).\n"
+            "-export([render/1]).\n"
+            "render(Bindings) -> arizona_template:html({ul, [],\n"
+            "    [arizona_template:each(fun row/1, arizona_template:get(xs, Bindings))]}).\n"
+            "-file(\"pt_inc.hrl\", 1).\n"
+            "row(X) -> {li, [{az, <<\"bad\">>}], [X]}.\n"
+            "-file(\"pt_main.erl\", 6).\n",
+            {1, 1}
+        )
+    ).
+
+%% An error located by its element (not by one of its children) keeps the
+%% element's column and the file the element is written in.
+element_error_keeps_file_and_column(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{"pt_inc.hrl", [{{7, 8}, arizona_parse_transform, {void_with_children, br}}]}],
+            []},
+        transform_source(
+            "-file(\"pt_main.erl\", 1).\n"
+            "-module(pt_elem_inc).\n"
+            "-export([render/1]).\n"
+            "render(Bindings) ->\n"
+            "    arizona_template:html({'div', [], [b(), arizona_template:get(y, Bindings)]}).\n"
+            "-file(\"pt_inc.hrl\", 1).\n"
+            "b() -> {br, [], [<<\"x\">>]}.\n"
+            "-file(\"pt_main.erl\", 6).\n",
             {1, 1}
         )
     ).
