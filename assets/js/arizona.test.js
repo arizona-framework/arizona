@@ -6367,6 +6367,71 @@ describe('drag-and-drop', () => {
         item.dispatchEvent(ev);
         expect(ev.defaultPrevented).toBe(true);
     });
+
+    /** Dispatch a drag event carrying `data` as its text/plain payload. */
+    function drag(type, el, data = '') {
+        const ev = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'dataTransfer', { value: { getData: () => data } });
+        el.dispatchEvent(ev);
+        return ev;
+    }
+
+    it('an empty az-drop container accepts a drop, reported at drop_index -1', async () => {
+        // A kanban column with no cards yet: no [az-key] under the pointer.
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<ul id="a" az-drop='[[0,"moved"]]'><li az-key="1" draggable="true">1</li></ul>
+             <ul id="b" az-drop='[[0,"moved"]]'></ul>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const b = document.getElementById('b');
+        expect(drag('dragover', b).defaultPrevented).toBe(true);
+        const ev = drag('drop', b, '1');
+        expect(ev.defaultPrevented).toBe(true);
+        expect(mock.getSentMessages()).toEqual([
+            ['page', 'moved', { data_transfer: '1', drop_index: -1 }],
+        ]);
+    });
+
+    it('a drop on a non-item part of the container reports the item it is inside', async () => {
+        // Dropping on an item's descendant names that item's position -- even a
+        // keyed descendant (a nested list's item), which is not a container child.
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<ul id="l" az-drop='[[0,"moved"]]'>
+                <li az-key="1">1</li>
+                <li az-key="2"><span id="inner" az-key="x">2</span></li>
+            </ul>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        drag('drop', document.getElementById('inner'), '1');
+        expect(mock.getSentMessages()).toEqual([
+            ['page', 'moved', { data_transfer: '1', drop_index: 1 }],
+        ]);
+    });
+
+    it('leaves a native drop alone outside any az-drop container', async () => {
+        // Text dragged into an <input> inside a keyed item with no az-drop
+        // ancestor: cancelling it would stop the browser inserting the text.
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<ul><li az-key="1"><input id="in" /></li></ul>`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const input = document.getElementById('in');
+        expect(drag('dragover', input).defaultPrevented).toBe(false);
+        expect(drag('drop', input, 'some text').defaultPrevented).toBe(false);
+        expect(mock.getSentMessages()).toEqual([]);
+    });
 });
 
 // ---------------------------------------------------------------------------

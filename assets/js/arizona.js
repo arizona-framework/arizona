@@ -2485,11 +2485,15 @@ function formFields(fd, form) {
  */
 function autoPayload(el, event) {
     if (event && /** @type {any} */ (event).dataTransfer) {
-        const dropTarget = /** @type {Element} */ (event.target).closest('[az-key]');
+        // The container's own child the drop landed in -- not the nearest
+        // [az-key], which may be a keyed descendant of an item (a nested list)
+        // or, on an empty container, an ancestor of the container itself.
+        let item = /** @type {Element|null} */ (event.target);
+        while (item && item.parentElement !== el) item = item.parentElement;
         const children = Array.from(el.querySelectorAll(':scope > [az-key]'));
         return {
             data_transfer: /** @type {any} */ (event).dataTransfer.getData('text/plain'),
-            drop_index: dropTarget ? children.indexOf(dropTarget) : -1,
+            drop_index: item ? children.indexOf(item) : -1,
         };
     }
     const tag = el.tagName;
@@ -3619,7 +3623,11 @@ function bindDocumentEvents(target, signal, abort) {
 
     // Drag-and-drop: uses az-key on draggable items and az-drop on the
     // container. dragstart stores the item's key; drop executes the az-drop
-    // command with auto-collected {data_transfer, drop_index} payload.
+    // command with auto-collected {data_transfer, drop_index} payload. The drop
+    // zone is the az-drop container itself, not its items: an empty container
+    // must accept a drop (drop_index -1), and outside any container the
+    // browser's own drop (text into an input) is left alone -- `dragover` and
+    // `drop` are cancelled only inside one.
     target.addEventListener(
         'dragstart',
         (e) => {
@@ -3632,18 +3640,17 @@ function bindDocumentEvents(target, signal, abort) {
     target.addEventListener(
         'dragover',
         (e) => {
-            if (/** @type {Element} */ (e.target).closest('[az-key]')) e.preventDefault();
+            if (/** @type {Element} */ (e.target).closest('[az-drop]')) e.preventDefault();
         },
         { signal },
     );
     target.addEventListener(
         'drop',
         (e) => {
-            const dropTarget = /** @type {Element} */ (e.target).closest('[az-key]');
-            if (!dropTarget) return;
+            const container = /** @type {Element} */ (e.target).closest('[az-drop]');
+            if (!container) return;
             e.preventDefault();
-            const container = dropTarget.closest('[az-drop]');
-            if (!container || !_connected) return;
+            if (!_connected) return;
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
             try {
