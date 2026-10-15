@@ -39,8 +39,9 @@ Evaluation recurses into the following dynamic value shapes:
 
 ## Restricted keys
 
-`check_restricted_keys/3` enforces that a handler's mount callback
-cannot modify framework-owned bindings like `id`. Violations raise
+`check_restricted_keys/3,4` enforces that a handler's callbacks (mount and
+every later one that returns bindings) cannot modify or drop framework-owned
+bindings like `id`. Violations raise
 `restricted_key_modified` with a human-readable message via `format_error/2`.
 """.
 
@@ -66,6 +67,7 @@ cannot modify framework-owned bindings like `id`. Violations raise
 -export([render_list_items/3]).
 -export([render_map_items/3]).
 -export([check_restricted_keys/3]).
+-export([check_restricted_keys/4]).
 -export([restricted_keys/0]).
 -export([child_view_set/1]).
 -export([set_update_effects/1]).
@@ -389,14 +391,28 @@ Asserts that `Bindings` did not modify any framework-restricted keys
 (currently just `id`) compared to the original `Props`.
 
 Raises `restricted_key_modified` with handler info if a restricted key
-was changed by the handler's mount callback.
+was changed or dropped by the handler's mount callback.
 """.
 -spec check_restricted_keys(Bindings, Props, Handler) -> ok when
     Bindings :: map(),
     Props :: map(),
     Handler :: module().
 check_restricted_keys(Bindings, Props, Handler) ->
-    [check_restricted_key(Key, Bindings, Props, Handler) || Key <- ?RESTRICTED_KEYS],
+    check_restricted_keys(Bindings, Props, Handler, mount).
+
+-doc """
+`check_restricted_keys/3` for bindings returned by `Callback` rather than by
+`mount/1`: `Props` is then what the callback was handed (a child's props, or
+the bindings the view held before the callback ran), and the error names it.
+""".
+-spec check_restricted_keys(Bindings, Props, Handler, Callback) -> ok when
+    Bindings :: map(),
+    Props :: map(),
+    Handler :: module(),
+    Callback ::
+        mount | handle_update | handle_event | handle_info | handle_drain | default_patch_merge.
+check_restricted_keys(Bindings, Props, Handler, Callback) ->
+    [check_restricted_key(Key, Bindings, Props, Handler, Callback) || Key <- ?RESTRICTED_KEYS],
     ok.
 
 -doc """
@@ -470,14 +486,15 @@ relocate(Class, {arizona_loc, _, _} = Reason, ST, _Loc) ->
 relocate(Class, Reason, ST, Loc) ->
     erlang:raise(Class, {arizona_loc, Loc, Reason}, ST).
 
-check_restricted_key(Key, Bindings, Props, Handler) ->
+check_restricted_key(Key, Bindings, Props, Handler, Callback) ->
     case Props of
         #{Key := Expected} ->
             case Bindings of
                 #{Key := Expected} ->
                     ok;
-                #{Key := _} ->
-                    error(restricted_key_modified, [Key, Handler], [
+                #{} ->
+                    %% Dropping the key is a modification too.
+                    error(restricted_key_modified, [Key, Handler, Callback], [
                         {error_info, #{module => ?MODULE}}
                     ])
             end;
@@ -487,18 +504,27 @@ check_restricted_key(Key, Bindings, Props, Handler) ->
 
 -doc """
 Formats `restricted_key_modified` errors into a human-readable message
-naming the offending handler and key.
+naming the offending handler, callback and key.
 """.
 -spec format_error(Reason, StackTrace) -> ErrorInfo when
     Reason :: term(),
     StackTrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
-format_error(restricted_key_modified, [{_M, _F, [Key, Handler], _Info} | _]) ->
+format_error(restricted_key_modified, [{_M, _F, [Key, Handler, default_patch_merge], _Info} | _]) ->
     #{
         general => io_lib:format(
-            "~s's mount callback modified restricted key '~s'. "
-            "This key is owned by the framework and cannot be changed.",
+            "~s has no handle_update/3, so the patch params were merged into its "
+            "bindings, changing or dropping restricted key '~s'. This key is owned by "
+            "the framework: a patch must not carry another value for it.",
             [Handler, Key]
+        )
+    };
+format_error(restricted_key_modified, [{_M, _F, [Key, Handler, Callback], _Info} | _]) ->
+    #{
+        general => io_lib:format(
+            "~s's ~s callback changed or dropped restricted key '~s'. "
+            "This key is owned by the framework: every callback must return it unchanged.",
+            [Handler, Callback, Key]
         )
     }.
 
@@ -762,7 +788,9 @@ eval_stateful_lifecycle(H, Props, Id, {Old, New}) ->
 mount_or_update_stateful(H, Props, Id, Old, Effects0) ->
     case Old of
         #{Id := #{handler := H, bindings := B}} ->
-            arizona_stateful:call_handle_update(H, Props, B, Effects0);
+            {B1, Resets, Effects1} = arizona_stateful:call_handle_update(H, Props, B, Effects0),
+            ok = check_restricted_keys(B1, Props, H, handle_update),
+            {B1, Resets, Effects1};
         #{Id := #{handler := OldH, bindings := OldB}} ->
             %% Same id, different handler: unmount the old instance before
             %% mounting the new one so it can release resources.
@@ -1011,7 +1039,7 @@ check_restricted_keys_modified_test() ->
 
 format_error_restricted_key_test() ->
     %% format_error produces readable message with handler and key
-    StackFrame = [{arizona_eval, check, [id, my_handler], []}],
+    StackFrame = [{arizona_eval, check, [id, my_handler, mount], []}],
     #{general := Msg} = format_error(restricted_key_modified, StackFrame),
     MsgBin = iolist_to_binary(Msg),
     ?assertNotEqual(nomatch, binary:match(MsgBin, ~"my_handler's mount callback")),

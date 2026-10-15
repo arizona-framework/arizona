@@ -656,7 +656,7 @@ handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) -
     %% effect accumulator seeds empty (the patch is the originating action).
     {B1, Resets, Effects} = arizona_stateful:call_handle_update(H, Params, B0, []),
     {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
-        H, B1, Resets, Effects, State
+        patch_callback(H), H, B1, Resets, Effects, State
     ),
     {reply, {ok, Ops1, Effects1, arizona_event_attrs:drain()}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
@@ -847,7 +847,7 @@ do_mount(H, B0, V0, OnMount) ->
 handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
     {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
-        H, B1, Resets, Effects, State
+        handle_event, H, B1, Resets, Effects, State
     ),
     {reply, {ok, Ops1, Effects1, arizona_event_attrs:drain()}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
@@ -856,7 +856,9 @@ handle_root_event(Event, Payload, #state{handler = H, bindings = B0} = State) ->
 handle_child_event(ViewId, Event, Payload, From, #state{views = V0} = State) ->
     #{ViewId := #{handler := H, bindings := B0} = View} = V0,
     {B1, Resets, Effects} = arizona_stateful:call_handle_event(H, Event, Payload, B0),
-    {Ops1, V1, Fps1, Effects1} = process_child_change(H, B1, Resets, Effects, ViewId, View, State),
+    {Ops1, V1, Fps1, Effects1} = process_child_change(
+        handle_event, H, B1, Resets, Effects, ViewId, View, State
+    ),
     NewState = mark_pending_refresh(ViewId, From, State#state{views = V1, sent_fps = Fps1}),
     {reply, {ok, Ops1, Effects1, arizona_event_attrs:drain()}, NewState}.
 
@@ -866,7 +868,7 @@ handle_root_info(Info, #state{handler = H, bindings = B0, transport_pid = TPid} 
             {noreply, State};
         {B1, Resets, Effects} ->
             {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
-                H, B1, Resets, Effects, State
+                handle_info, H, B1, Resets, Effects, State
             ),
             push(TPid, root_view_id(State), Ops1, Effects1),
             {noreply, NewState#state{
@@ -881,7 +883,7 @@ handle_child_info(ViewId, Msg, #state{views = V0, transport_pid = TPid} = State)
             {noreply, State};
         {B1, Resets, Effects} ->
             {Ops1, V1, Fps1, Effects1} = process_child_change(
-                H, B1, Resets, Effects, ViewId, View, State
+                handle_info, H, B1, Resets, Effects, ViewId, View, State
             ),
             push(TPid, root_view_id(State), scope_child_ops(ViewId, Ops1), Effects1),
             NewState = mark_pending_refresh(ViewId, State#state{views = V1, sent_fps = Fps1}),
@@ -905,7 +907,7 @@ handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = T
             {stop, {shutdown, drain}, State#state{bindings = B1}};
         {B1, Resets, Effects} ->
             {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
-                H, B1, Resets, Effects, State
+                handle_drain, H, B1, Resets, Effects, State
             ),
             push(TPid, root_view_id(State), Ops1, Effects1),
             {noreply, NewState#state{
@@ -922,6 +924,7 @@ handle_drain_info(Deadline, #state{handler = H, bindings = B0, transport_pid = T
 %% folds its own effects onto the accumulator; the drained result is the full
 %% list to ship -- no caller-side concatenation.
 process_root_change(
+    Callback,
     H,
     B1,
     Resets,
@@ -930,6 +933,9 @@ process_root_change(
         bindings = B0, snapshot = Snap0, views = V0, sent_fps = Fps0, pending_refresh = Pending
     } = State
 ) ->
+    %% The view id is what events, timers and the client route by, so no callback
+    %% may move it: a changed one would strand them under the old id.
+    ok = arizona_eval:check_restricted_keys(B1, B0, H, Callback),
     Snap = apply_pending_refresh(Pending, V0, Snap0),
     Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
@@ -942,7 +948,7 @@ process_root_change(
     B3 = clear_streams_and_apply_resets(B1, Resets),
     {Ops1, Snap1, V1, B3, Fps1, State#state{pending_refresh = #{}}, Effects1}.
 
-%% Same idea as process_root_change/5 but for a nested child view. Diffs through
+%% Same idea as process_root_change/6 but for a nested child view. Diffs through
 %% the dep-gated view-tracking path (diff/4, mirroring the root): only the
 %% dynamics whose deps intersect the child's changed bindings re-evaluate, so a
 %% grandchild stateful descriptor with untouched props is skipped (no spurious
@@ -957,10 +963,11 @@ process_root_change(
 %% and folds its effects onto the accumulator; the drained result is the full
 %% list the caller ships (reply or push).
 process_child_change(
-    H, B1, Resets, Effects0, ViewId, #{bindings := B0, snapshot := Snap0} = View, #state{
+    Callback, H, B1, Resets, Effects0, ViewId, #{bindings := B0, snapshot := Snap0} = View, #state{
         views = V0, sent_fps = Fps0
     }
 ) ->
+    ok = arizona_eval:check_restricted_keys(B1, B0, H, Callback),
     Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
@@ -996,7 +1003,7 @@ process_child_change(
 %% container map, on every child event. That is linear in the list length on the
 %% one shape this fix exists for, so a list whose rows each tick would make the
 %% update cycle quadratic. Nothing reads the root snapshot between a child change
-%% and the next root diff (`process_root_change/5` is its only reader), so the
+%% and the next root diff (`process_root_change/6` is its only reader), so the
 %% work belongs there, where an O(snapshot) diff is already being paid.
 mark_pending_refresh(ViewId, #state{pending_refresh = Pending} = State) ->
     State#state{pending_refresh = Pending#{ViewId => true}}.
@@ -1379,6 +1386,14 @@ push_barrier(_From, #state{}) ->
 
 root_view_id(#state{bindings = Bindings}) ->
     maps:get(id, Bindings).
+
+%% What produced a patch's bindings, for a restricted-key error to name: the
+%% handler's handle_update/3, or, without one, the default merge of the params.
+patch_callback(H) ->
+    case erlang:function_exported(H, handle_update, 3) of
+        true -> handle_update;
+        false -> default_patch_merge
+    end.
 
 -doc false.
 -spec merge_seed_fps(Fps, FpList) -> Fps1 when

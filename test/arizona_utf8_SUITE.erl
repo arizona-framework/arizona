@@ -514,7 +514,7 @@ dev_child_restricted_key_error_matches_prod(Config) when is_list(Config) ->
     ?assertEqual(element(1, Prod), element(1, Dev)),
     [ProdTop | _] = element(2, Prod),
     [DevTop | _] = element(2, Dev),
-    ?assertMatch({arizona_eval, _, [id, arizona_utf8_rekey_child], _}, ProdTop),
+    ?assertMatch({arizona_eval, _, [id, arizona_utf8_rekey_child, mount], _}, ProdTop),
     ?assertEqual(ProdTop, DevTop).
 
 %% --------------------------------------------------------------------
