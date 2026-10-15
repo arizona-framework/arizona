@@ -15,7 +15,7 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 %%           | {Az, term(), Loc}                     -- static value with location
 %% Az = binary() (diff target) | undefined (az-nodiff -- never used as op target)
 %% Loc = {Module, Line} -- source location for error reporting
-%% f = fingerprint -- base-36 phash2 of statics
+%% f = fingerprint -- base-36 phash2 of statics (dynamic attribute names included)
 %% Optional: diff => false -- skip diff after initial render (from az-nodiff directive)
 
 %% Snapshot: #{s => [binary()], d => [{Az, Value}], deps => [#{key() => true}]}
@@ -86,6 +86,10 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `{name, true}` | `{hidden, true}` | `hidden` |
 | `{name, false}` | `{hidden, false}` | Stripped (`?native` keeps a typed `false` prop) |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Emits `diff => false`; the HTML keeps a compiler-owned `az-nodiff` (token or bare) |
+
+A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target
+(appended after its attributes), so a submit made before the client script runs never puts the
+fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
 
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises
@@ -404,8 +408,13 @@ A control-flow expression in a **content slot** -- `case`, `if`, `begin`, `recei
 `try`, or `maybe` -- may return a bare element tuple, an element list, or a mixed fragment
 (static text/values interleaved with elements) directly from a tail position. The parse
 transform compiles each tail into a nested template, exactly as a literal
-`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target. No
-`?html` wrap is needed:
+`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target and the
+content context of the slot, so a branch's `<script>` or `<title>` under `<svg>` is foreign
+content exactly as when written directly there. A whole-tail wrapper of the enclosing target
+around markup (`true -> ?html({title, [], [?get(t)]})` in an element's child) is unwrapped to
+that markup first, so the wrapped and bare forms compile identically; a wrapper anywhere else
+(bound to a variable, passed as an argument, nested below the tail) still starts its own
+template at the root context. No `?html` wrap is needed:
 
 ```erlang
 %% both branches accepted: <<>> renders empty, the tuple becomes a nested template

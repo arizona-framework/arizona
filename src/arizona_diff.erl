@@ -1033,18 +1033,22 @@ diff_stream_op(Az, {reset, OldItems}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) 
     stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views).
 
 %% The visibility window as a set, computed once per drain from the (constant)
-%% stream record. An unlimited stream keeps every key, so it needs no set. The
-%% stream record is already the post-op state, so this is the *final* window --
-%% skipping an op for a key outside it is safe in both directions, since
-%% `apply_limit/6` back-fills any visible key missing from the snapshot at its
-%% ordered position, so a key that slides into view later still lands.
-visible_set(#stream{limit = infinity}) ->
-    all;
+%% stream record. The stream record is already the post-op state, so this is the
+%% *final* window -- skipping an op for a key outside it is safe in both
+%% directions, since `apply_limit/6` back-fills any visible key missing from the
+%% snapshot at its ordered position, so a key that slides into view later still
+%% lands. An unlimited stream shows every key it still holds, so its own items map
+%% is the set.
+%%
+%% Skipping matters beyond the wire. A key a later op in the same batch deletes,
+%% or pushes out of the window, would otherwise be rendered on the way: its item
+%% children run `mount/1` (or `handle_update/3`) for a node the batch then removes,
+%% and a child mounted there is named by no views map, so nothing unmounts it.
+visible_set(#stream{limit = infinity, items = Items}) ->
+    Items;
 visible_set(#stream{order = Order, limit = Limit}) ->
     maps:from_keys(arizona_template:visible_keys(Order, Limit), true).
 
-is_visible(_Key, all) ->
-    true;
 is_visible(Key, Vis) ->
     is_map_key(Key, Vis).
 
@@ -1092,8 +1096,14 @@ stream_delete(Az, Key, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
-stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+%% A key the client holds but the final window does not is left as it is: the
+%% node goes either way (see `visible_set/1`).
+stream_update(
+    Az, Key, NewItem, Changed, Rest, {_Source, Vis} = SV, Tmpl, SnapAcc, OldOrder, Views0
+) ->
     case SnapAcc of
+        #{Key := _} when not is_map_key(Key, Vis) ->
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0);
         #{Key := OldD} ->
             {NewD, Views1} =
                 arizona_eval:render_stream_item_skipping(
@@ -1131,10 +1141,11 @@ stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, V
 %% or keeps it out when it is not in the final window. Inserting here at -1 put
 %% a newly-visible mid-window key at the tail and, being in `SnapAcc`, made the
 %% back-fill skip it -- permanently diverging the client's order from the
-%% server's (e.g. a hidden key moved to the front and updated in one frame).
+%% server's (e.g. a hidden key moved to the front and updated in one frame). An
+%% upsert a later op in the same batch deletes is not rendered (see `visible_set/1`).
 stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SV of
-        {#stream{limit = infinity}, _Vis} ->
+        {#stream{limit = infinity}, #{Key := _}} ->
             {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, NewD),
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],

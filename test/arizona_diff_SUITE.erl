@@ -100,6 +100,9 @@
     conditional_computed_key_not_tracked/1,
     conditional_two_slot_fine_grained/1,
     conditional_nested_element_recurses/1,
+    conditional_attr_name_swap_replaces_branch/1,
+    conditional_event_attr_name_swap_replaces_branch/1,
+    conditional_native_attr_name_swap_replaces_branch/1,
     wire_get_value_raw/1,
     wire_raw_value_tagged_html/1,
     wire_helper_raw_value_escaped/1,
@@ -258,7 +261,10 @@ groups() ->
             conditional_with_macro_branch_tracks,
             conditional_computed_key_not_tracked,
             conditional_two_slot_fine_grained,
-            conditional_nested_element_recurses
+            conditional_nested_element_recurses,
+            conditional_attr_name_swap_replaces_branch,
+            conditional_event_attr_name_swap_replaces_branch,
+            conditional_native_attr_name_swap_replaces_branch
         ]},
         {wire_payload, [parallel], [
             wire_get_value_raw,
@@ -1907,6 +1913,33 @@ conditional_nested_element_recurses(Config) when is_list(Config) ->
     B1 = B0#{val => <<"B">>},
     Ops = cond_diff(nested_element, B0, B1, #{val => true}),
     ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% Branches that differ only in a dynamic attribute's NAME are different templates:
+%% the switch replaces the branch (one ?OP_TEXT carrying the new element), never an
+%% ?OP_SET_ATTR of the new name that leaves the old attribute in the DOM.
+conditional_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
+    B0 = #{mode => a, v => ~"hi"},
+    Ops = cond_diff(attr_name_swap, B0, B0#{mode => b}, #{mode => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, ~"title")),
+    ?assertNot(cond_payload_has(Ops, ~"class")).
+
+%% The event-attribute form: a stale `az-click` would keep the old command bound.
+conditional_event_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
+    B0 = #{mode => a, cmd => arizona_js:push_event(~"go")},
+    Ops = cond_diff(event_attr_name_swap, B0, B0#{mode => b}, #{mode => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, ~"az-submit")),
+    ?assertNot(cond_payload_has(Ops, ~"az-click")).
+
+%% `?native` bakes the prop name into the statics, so its branches fingerprint
+%% apart on their own; this pins that.
+conditional_native_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
+    B0 = #{mode => a, v => ~"hi"},
+    Ops = cond_diff(native_attr_name_swap, B0, B0#{mode => b}, #{mode => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, ~"weight")),
+    ?assertNot(cond_payload_has(Ops, ~"color")).
 
 %% A scalar `?get` value is sent RAW on the diff wire (a bare binary) -- escaping happens
 %% client-side (a text node shows `<` literally, matching SSR). It is NOT HTML-tagged, so

@@ -57,6 +57,15 @@ handle_event(~"insert", #{~"id" := Id}, #{items := S} = Bindings) ->
     {Bindings#{items => arizona_stream:insert(S, #{id => Id})}, #{}, []};
 handle_event(~"insert_at", #{~"id" := Id, ~"pos" := Pos}, #{items := S} = Bindings) ->
     {Bindings#{items => arizona_stream:insert(S, #{id => Id}, Pos)}, #{}, []};
+handle_event(~"insert_delete", #{~"id" := Id}, #{items := S} = Bindings) ->
+    S1 = arizona_stream:delete(arizona_stream:insert(S, #{id => Id}), Id),
+    {Bindings#{items => S1}, #{}, []};
+handle_event(~"upsert_delete", #{~"id" := Id}, #{items := S} = Bindings) ->
+    S1 = arizona_stream:delete(arizona_stream:update(S, Id, #{id => Id}), Id),
+    {Bindings#{items => S1}, #{}, []};
+handle_event(~"update_delete", #{~"id" := Id}, #{items := S} = Bindings) ->
+    S1 = arizona_stream:delete(arizona_stream:update(S, Id, #{id => Id, grand => true}), Id),
+    {Bindings#{items => S1}, #{}, []};
 handle_event(~"reinsert", #{~"id" := Id}, #{items := S} = Bindings) ->
     S1 = arizona_stream:insert(arizona_stream:delete(S, Id), #{id => Id}),
     {Bindings#{items => S1}, #{}, []};

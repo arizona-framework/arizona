@@ -234,11 +234,13 @@ writes **no `az`/slot markers** -- the diff engine's ops are computed but ignore
 
 Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
-bytes except `\n`/`\t`, and DEL; preserves UTF-8), native emits a JSON string. Native
-alone carries a value differently on the wire: its client JSON-encodes each `d` value
-itself, so the fingerprint payload takes the raw value from
-`c:arizona_renderer:wire_escape/1` (`wire_attr/2` for a prop) while the zipped document
-keeps the JSON string.
+bytes except `\n`/`\t`, DEL, and the C1 controls, and replaces every byte outside
+well-formed UTF-8 with U+FFFD, so the output is always valid UTF-8; this assumes a UTF-8
+terminal, since an 8-bit one reads UTF-8 continuation bytes `80`-`9F` as C1 controls), native
+emits a JSON string. Native alone carries a value
+differently on the wire: its client JSON-encodes each `d` value itself, so the
+fingerprint payload takes the raw value from `c:arizona_renderer:wire_escape/1`
+(`wire_attr/2` for a prop) while the zipped document keeps the JSON string.
 So a dynamic value in a `?terminal` view cannot inject ANSI/OSC escape sequences into
 another user's terminal (the terminal analog of XSS). The `?raw` opt-out bypasses it --
 never wrap untrusted data in `?raw` in a `?terminal` template.
@@ -2521,7 +2523,10 @@ search-and-replace blindly:
   list of segments, with the markers it emits held as tagged `{az_attr, Id}` / `{az_slot, Id}`
   entries rather than bytes; scoping rebuilds exactly those through the backend's `az_attr/1` /
   `text_slot_open/1` with the fingerprint prepended, and copies literal segments through untouched.
-  The fingerprint is still taken over the *unscoped* bytes, so it is unchanged by this.
+  The fingerprint is taken over the *unscoped* segments, so scoping does not change it. Each dynamic
+  attribute also leaves a `{dyn_attr, Name, Bytes}` segment carrying its name: HTML renders the name
+  inside the dynamic, so without it two templates differing only in a dynamic attribute's name
+  would share a fingerprint and the diff would patch one into the other, leaving the old attribute.
 - **Runtime** (the `scope_static/3` renderer callback) has only bytes, so it anchors on the
   template's own fingerprint: every framework `az` in a compiled static is `<Fp>-<id>`, so the
   backend matches `az="<Fp>` / `<!--az:<Fp>` (HTML) or `"az":"<Fp>` (native), never the bare marker
