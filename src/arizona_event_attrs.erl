@@ -38,10 +38,25 @@ The collector is process-dictionary state, armed only inside a live process:
 the request-free SSR paths (HTTP render, static generation) never arm it, so
 observation there is a no-op.
 
-The walk itself is deliberately uncached: it costs microseconds against the
-milliseconds of the application scan it replaced, cheap enough that a cache
-would only add a staleness bug -- the previous one went stale on hot reload
-and served a page's events short. The per-socket dedup the socket keeps on
+The walk follows every literal callee a module records, so it loads any of
+them not loaded yet -- running that module's `-on_load`, as its first call
+would. Each module's names and edges are cached in `persistent_term`, keyed by
+module and stamped with the loaded code's MD5: a hit costs a `module_loaded`
+check, the MD5 read, and a lookup, where re-reading the attributes of a large
+framework callee costs microseconds per module on every connect. The stamp is
+what keeps the cache honest across a hot reload (a cache keyed by module alone
+once went stale there and served a page's events short): new code has a new
+MD5, so its first walk re-reads it and replaces the entry -- one
+`persistent_term` write per module version. The compiler's MD5 covers code,
+not attributes; the transform-recorded ones follow the code (a folded name is
+a template static, an edge is a call or a component atom), but a reload that
+changes only a hand-written `-arizona_az_deps`/`-arizona_az_attrs` keeps the
+previous version's entry until the code itself changes or the VM restarts.
+A module that fails to load is cached as absent, so a dangling edge does not
+cost a code-server round trip on every connect; that entry is ignored once
+the module is loaded by any other means (a deploy, the dev reloader).
+
+The per-socket dedup the socket keeps on
 top of it (`az_walked`/`az_sent`) is a narrower memo with a narrower window:
 a hot reload that adds a FOLDED command attribute (a literal builder call
 bakes into the statics, so no dynamic slot ever re-proves it) leaves already
@@ -86,6 +101,7 @@ Known limits, all loud or documented rather than silent:
 
 -define(ATTRS_KEY, '$arizona_observed_attrs').
 -define(MODS_KEY, '$arizona_observed_mods').
+-define(CACHE_KEY(Mod), {?MODULE, Mod}).
 
 -doc """
 Every compile-time-proven `az-*` attribute reachable from `Roots`, themselves
@@ -212,27 +228,48 @@ walk(_Seen, [], Acc) ->
 walk(Seen, [Mod | Rest], Acc) when is_map_key(Mod, Seen) ->
     walk(Seen, Rest, Acc);
 walk(Seen, [Mod | Rest], Acc) ->
-    Attrs = module_attrs(Mod),
-    walk(
-        Seen#{Mod => true},
-        proplists:append_values(arizona_az_deps, Attrs) ++ Rest,
-        proplists:append_values(arizona_az_attrs, Attrs) ++ Acc
-    ).
+    {Names, Deps} = module_edges(Mod),
+    walk(Seen#{Mod => true}, Deps ++ Rest, Names ++ Acc).
 
-module_attrs(Mod) ->
-    try
-        Mod:module_info(attributes)
-    catch
-        error:undef ->
-            %% A handler for a route nobody has visited is typically not loaded
-            %% yet, and an unloaded module answers `undef` rather than an empty
-            %% list. Loading only on that miss keeps the code-server round trip
-            %% off every walk of an already-loaded module (each connect walks).
-            module_attrs_loaded(Mod)
+%% `{Names, Deps}` of a module, through the MD5-stamped cache (see the
+%% moduledoc). A handler for a route nobody has visited is typically not loaded
+%% yet, so an unloaded module is loaded once; one that cannot be is cached as
+%% `absent` so the code server is not asked again on every connect.
+module_edges(Mod) ->
+    case erlang:module_loaded(Mod) of
+        true ->
+            loaded_edges(Mod);
+        false ->
+            case persistent_term:get(?CACHE_KEY(Mod), undefined) of
+                absent -> {[], []};
+                _NotLoadedYet -> load_edges(Mod)
+            end
     end.
 
-module_attrs_loaded(Mod) ->
+load_edges(Mod) ->
     case code:ensure_loaded(Mod) of
-        {module, Mod} -> Mod:module_info(attributes);
-        {error, _NotFound} -> []
+        {module, Mod} ->
+            loaded_edges(Mod);
+        {error, _NotFound} ->
+            ok = persistent_term:put(?CACHE_KEY(Mod), absent),
+            {[], []}
+    end.
+
+loaded_edges(Mod) ->
+    try erlang:get_module_info(Mod, md5) of
+        MD5 ->
+            case persistent_term:get(?CACHE_KEY(Mod), undefined) of
+                {MD5, Names, Deps} ->
+                    {Names, Deps};
+                _MissOrStale ->
+                    Attrs = erlang:get_module_info(Mod, attributes),
+                    Names = proplists:append_values(arizona_az_attrs, Attrs),
+                    Deps = proplists:append_values(arizona_az_deps, Attrs),
+                    ok = persistent_term:put(?CACHE_KEY(Mod), {MD5, Names, Deps}),
+                    {Names, Deps}
+            end
+    catch
+        error:badarg ->
+            %% Purged between the `module_loaded` check and the read.
+            {[], []}
     end.
