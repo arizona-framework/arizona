@@ -33,6 +33,7 @@
     compile_routes_http_transform_errors/1,
     compile_routes_cors_opens_options/1,
     compile_routes_cors_keeps_declared_options/1,
+    compile_routes_cors_defers_to_declared_options/1,
     compile_routes_ws/1
 ]).
 
@@ -66,7 +67,8 @@ groups() ->
         compile_routes_http_transforms,
         compile_routes_http_transform_errors,
         compile_routes_cors_opens_options,
-        compile_routes_cors_keeps_declared_options
+        compile_routes_cors_keeps_declared_options,
+        compile_routes_cors_defers_to_declared_options
     ],
     [
         {roadrunner, [sequence], Cases}
@@ -484,10 +486,10 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
                     {roadrunner_cors, #{origins := [~"https://app.example"]}},
                     roadrunner_security_headers,
                     {roadrunner_security_headers, #{frame_options := ~"DENY"}},
-                    {_OptionsReply, ~"GET, HEAD, OPTIONS"}
+                    OptionsReply
                 ]
             }
-        ],
+        ] when is_function(OptionsReply, 3),
         Router:routes([
             {live, ~"/", my_page, #{
                 middlewares => [
@@ -545,9 +547,9 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
             methods := [~"POST", ~"OPTIONS"],
             middlewares := [
                 {roadrunner_cors, #{origins := [~"https://app.example"]}},
-                {_OptionsReply, ~"OPTIONS, POST"}
+                OptionsReply
             ]
-        },
+        } when is_function(OptionsReply, 3),
         CorsRoute
     ),
     #{state := #{arizona := #{middlewares := CorsArizonaMws}}} = CorsRoute,
@@ -637,24 +639,15 @@ compile_routes_cors_opens_options(Config) ->
     %% No cors, no change.
     ?assertEqual({method_not_allowed, [~"POST"]}, match_result(~"OPTIONS", <<"/plain-api">>)),
     %% The plain-OPTIONS reply sits innermost, under the transform (compress
-    %% stays outermost), carrying the whole path's Allow set.
+    %% stays outermost).
     Router = ?config(router, Config),
-    [Api, _Delete] = Router:routes([
-        {post, <<"/cors-api">>, my_controller, #{middlewares => [Cors]}},
-        {delete, <<"/cors-api">>, my_controller, #{}}
-    ]),
-    ?assertMatch(
-        #{middlewares := [{roadrunner_cors, _}, {_, ~"DELETE, OPTIONS, POST"}]}, Api
-    ),
     ?assertMatch(
         [
             #{
                 methods := [~"GET", ~"HEAD", ~"OPTIONS"],
-                middlewares := [
-                    roadrunner_compress, {roadrunner_cors, _}, {_, ~"GET, HEAD, OPTIONS"}
-                ]
+                middlewares := [roadrunner_compress, {roadrunner_cors, _}, OptionsReply]
             }
-        ],
+        ] when is_function(OptionsReply, 3),
         Router:routes([{live, <<"/cors-page">>, my_page, #{middlewares => [Cors]}}])
     ).
 
@@ -673,4 +666,39 @@ compile_routes_cors_keeps_declared_options(Config) ->
     ?assertMatch(
         [#{methods := undefined, middlewares := [{roadrunner_cors, _}]}],
         Router:routes([{match, '*', <<"/any">>, my_controller, #{middlewares => [Cors]}}])
+    ).
+
+compile_routes_cors_defers_to_declared_options(Config) ->
+    %% Opening OPTIONS on a cors route must never shadow a route that declares
+    %% OPTIONS itself -- that would fail compilation with an unreachable route
+    %% naming a method the author never wrote on the cors route.
+    Cors = arizona_middleware:cors(#{origins => [~"https://app.example"]}),
+    %% Declared OPTIONS after the cors route, same path: left to it.
+    compile(Config, [
+        {post, <<"/o1">>, cors_controller, #{middlewares => [Cors]}},
+        {options, <<"/o1">>, options_controller, #{}}
+    ]),
+    ?assertMatch(
+        {arizona_roadrunner_controller, #{handler := options_controller}},
+        route_match(~"OPTIONS", <<"/o1">>)
+    ),
+    %% Declared OPTIONS first: it still takes the path's OPTIONS.
+    compile(Config, [
+        {options, <<"/o2">>, options_controller, #{}},
+        {post, <<"/o2">>, cors_controller, #{middlewares => [Cors]}}
+    ]),
+    ?assertMatch(
+        {arizona_roadrunner_controller, #{handler := options_controller}},
+        route_match(~"OPTIONS", <<"/o2">>)
+    ),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"POST", <<"/o2">>)),
+    %% A later declared OPTIONS the cors pattern covers only in part: it stays
+    %% reachable, so the cors route does not take OPTIONS for the URLs they share.
+    compile(Config, [
+        {post, <<"/u/:id">>, cors_controller, #{middlewares => [Cors]}},
+        {options, <<"/u/me">>, options_controller, #{}}
+    ]),
+    ?assertMatch(
+        {arizona_roadrunner_controller, #{handler := options_controller}},
+        route_match(~"OPTIONS", <<"/u/me">>)
     ).

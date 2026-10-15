@@ -14,6 +14,8 @@
 -export([cors_answers_a_preflight/1]).
 -export([cors_route_answers_a_plain_options/1]).
 -export([cors_route_keeps_its_verbs_and_405/1]).
+-export([cors_plain_options_allow_follows_pattern_overlaps/1]).
+-export([cors_beside_default_origin_check/1]).
 
 all() ->
     [
@@ -24,7 +26,9 @@ all() ->
         page_carries_its_targets_content_type,
         cors_answers_a_preflight,
         cors_route_answers_a_plain_options,
-        cors_route_keeps_its_verbs_and_405
+        cors_route_keeps_its_verbs_and_405,
+        cors_plain_options_allow_follows_pattern_overlaps,
+        cors_beside_default_origin_check
     ].
 
 init_per_suite(Config) ->
@@ -57,6 +61,24 @@ init_per_suite(Config) ->
         {delete, ~"/cors_api", arizona_transform_probe_controller, #{}},
         {live, ~"/cors_page", arizona_about, #{
             check_origin => false, middlewares => [cors_transform()]
+        }},
+        %% Siblings that match the same URLs through a different pattern: a
+        %% param under another name, a param beside a literal, a wildcard.
+        {post, ~"/ov/:id", arizona_transform_probe_controller, #{
+            check_origin => false, middlewares => [cors_transform()]
+        }},
+        {delete, ~"/ov/:name", arizona_transform_probe_controller, #{}},
+        {post, ~"/ovl/me", arizona_transform_probe_controller, #{
+            check_origin => false, middlewares => [cors_transform()]
+        }},
+        {delete, ~"/ovl/:id", arizona_transform_probe_controller, #{}},
+        {post, ~"/ovw/x", arizona_transform_probe_controller, #{
+            check_origin => false, middlewares => [cors_transform()]
+        }},
+        {delete, ~"/ovw/*rest", arizona_transform_probe_controller, #{}},
+        %% cors without opting out of the default Origin check.
+        {post, ~"/cors_guarded", arizona_transform_probe_controller, #{
+            middlewares => [cors_transform()]
         }}
     ],
     {ok, _} = arizona_roadrunner_server:start(Listener, #{
@@ -316,6 +338,38 @@ cors_route_keeps_its_verbs_and_405(Config) when is_list(Config) ->
         raw_request(Port, ~"POST", ~"/cors_page", Len0)
     ),
     ?assertMatch({200, _, _}, raw_get(Port, ~"/cors_page", [])).
+
+%% The Allow set is the one a 405 on that URL carries, so a sibling matching
+%% the same URL through a different pattern is listed too.
+cors_plain_options_allow_follows_pattern_overlaps(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    [
+        ?assertMatch(
+            {204, #{~"allow" := ~"DELETE, OPTIONS, POST"}, <<>>},
+            raw_request(Port, ~"OPTIONS", Path, [])
+        )
+     || Path <- [~"/ov/42", ~"/ovl/me", ~"/ovw/x"]
+    ],
+    ok.
+
+%% The transform answers the preflight, but the default Origin check still
+%% refuses the cross-origin request that follows: an origin a cors route
+%% serves must also be trusted (csrf_origins) or the route opt out.
+cors_beside_default_origin_check(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    ?assertMatch(
+        {204, #{~"access-control-allow-origin" := ~"https://other.example"}, <<>>},
+        raw_request(Port, ~"OPTIONS", ~"/cors_guarded", [
+            {~"origin", ~"https://other.example"},
+            {~"access-control-request-method", ~"POST"}
+        ])
+    ),
+    ?assertMatch(
+        {403, _, _},
+        raw_request(Port, ~"POST", ~"/cors_guarded", [
+            {~"origin", ~"https://other.example"}, {~"content-length", ~"0"}
+        ])
+    ).
 
 cors_transform() ->
     arizona_middleware:cors(#{origins => [~"https://other.example"], methods => [~"POST"]}).
