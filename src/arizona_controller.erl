@@ -90,12 +90,25 @@ effects on **any** status, so a controller can return a real `422` for a validat
 -- keeping the form's typed fields (a fetch form only resets on a 2xx) while still
 rendering the error, e.g.
 `reply_effects(422, [arizona_js:push_event(~"invalid", #{~"field" => ~"password"})])`.
+
+A `navigate`/`patch` with a `flash` opt is refused (`flash_outside_live_effect`):
+that opt is carried by the WebSocket, for an effect a live handler returns, and a
+SPA navigate cannot see a cookie set after its socket opened. To show a flash on
+the page a controller sends the user to, set it on this response and navigate in
+full, so the browser's next GET carries the cookie:
+
+```erlang
+handle(Req) ->
+    ArzReq = arizona_req:put_flash(arizona_controller:req(Req), info, ~"Saved."),
+    Resp = arizona_controller:reply_effects([arizona_js:navigate(~"/done", #{full => true})]),
+    {Resp, arizona_controller:put_req(Req, ArzReq)}.
+```
 """.
 -spec reply_effects(Status, Effects) -> roadrunner_resp:buffered_response() when
     Status :: roadrunner_http:status(),
     Effects :: [arizona_effect:cmd()].
 reply_effects(Status, Effects) ->
-    roadrunner_resp:json(Status, #{~"e" => [Cmd || {arizona_effect, Cmd} <:- Effects]}).
+    roadrunner_resp:json(Status, #{~"e" => [arizona_effect:json_value(Cmd) || Cmd <- Effects]}).
 
 -doc """
 Builds a response that sends the client to `Location` via a SPA navigation. Sugar for

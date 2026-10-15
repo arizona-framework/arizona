@@ -3370,6 +3370,12 @@ emit_backend(Fun, Line) ->
         Fun()
     catch
         error:{arizona_render_reject, Message} ->
+            parse_error({render_reject, Message}, Line);
+        %% A folded command the encoder refuses (arizona_effect): reported at the
+        %% attribute's line with the encoder's message, rather than as a crash of
+        %% the transform itself.
+        error:{flash_outside_live_effect, _Op} = Reason ->
+            #{general := Message} = arizona_effect:format_error(Reason, []),
             parse_error({render_reject, Message}, Line)
     end.
 

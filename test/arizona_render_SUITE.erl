@@ -41,6 +41,7 @@
     snapshot_html_matches_render_unprinted/1,
     fingerprint_payload_cross_target_child_raises/1,
     static_attr_escaped/1,
+    nav_flash_in_attribute_refused/1,
     escape_clean_value_not_rebuilt/1,
     escape_matches_reference/1,
     raw_text_breakout_neutralized/1,
@@ -148,6 +149,7 @@ groups() ->
             render_text,
             render_attr,
             static_attr_escaped,
+            nav_flash_in_attribute_refused,
             escape_clean_value_not_rebuilt,
             escape_matches_reference,
             raw_text_breakout_neutralized,
@@ -349,6 +351,40 @@ static_attr_escaped(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(HTML, ~"&amp;amp;")),
     %% Folded effect command: escaped once by encode/1, emitted verbatim (not re-escaped).
     ?assertNotEqual(nomatch, binary:match(HTML, ~"az-click=\"[0,&quot;inc&quot;]\"")).
+
+%% A navigate/patch `flash` is carried in-process by the socket, for an effect a
+%% live handler returns. Rendered into an event attribute, nothing carries it: the
+%% browser would navigate without it, losing the message silently and exposing its
+%% content in the markup. Refused at render, inside a wrapper too.
+nav_flash_in_attribute_refused(Config) when is_list(Config) ->
+    Flash = #{~"info" => ~"Saved"},
+    Nav = arizona_js:navigate(~"/x", #{flash => Flash}),
+    Refused = [
+        Nav,
+        arizona_js:patch(~"/x", #{flash => Flash}),
+        [arizona_js:push_event(~"a"), Nav],
+        arizona_js:on_key(enter, Nav),
+        arizona_js:transition([Nav]),
+        arizona_js:fetch(~"/f", #{on_error => [Nav]})
+    ],
+    [
+        ?assertMatch(
+            {flash_outside_live_effect, _}, render_refusal(#{cmd => Cmd})
+        )
+     || Cmd <- Refused
+    ],
+    {HTML, _Snap} = arizona_render:render(
+        arizona_command_attr:render(#{cmd => arizona_js:navigate(~"/x", #{replace => true})})
+    ),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"az-click=\"[10,")).
+
+render_refusal(Bindings) ->
+    try arizona_render:render(arizona_command_attr:render(Bindings)) of
+        {HTML, _Snap} -> {rendered, iolist_to_binary(HTML)}
+    catch
+        error:{arizona_loc, _Loc, Reason} -> Reason;
+        error:Reason -> Reason
+    end.
 
 %% Escaping runs on every dynamic scalar, and almost every value carries no
 %% metacharacter at all. A clean value must come back as the *same term* -- term
