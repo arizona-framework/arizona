@@ -27,6 +27,8 @@
 -export([navigate_changing_layouts_forces_full_load/1]).
 -export([patch_changing_layouts_forces_full_load/1]).
 -export([patch_to_other_handler_changing_layouts_forces_full_load/1]).
+-export([patch_to_route_with_other_id_replaces_view/1]).
+-export([patch_to_route_with_same_id_stays_in_place/1]).
 -export([middleware_flash_replays_requested_path_on_full_load/1]).
 -export([flash_replay_does_not_hijack_an_unrelated_navigation/1]).
 -export([unflagged_reconnect_replies_immediately/1]).
@@ -84,6 +86,8 @@ all() ->
         navigate_changing_layouts_forces_full_load,
         patch_changing_layouts_forces_full_load,
         patch_to_other_handler_changing_layouts_forces_full_load,
+        patch_to_route_with_other_id_replaces_view,
+        patch_to_route_with_same_id_stays_in_place,
         middleware_flash_replays_requested_path_on_full_load,
         flash_replay_does_not_hijack_an_unrelated_navigation,
         unflagged_reconnect_replies_immediately,
@@ -523,6 +527,42 @@ patch_changing_layouts_forces_full_load(Config) when is_list(Config) ->
     }),
     {reply, Frame, _Socket1} = arizona_socket:handle_in(patch_frame(~"/rc"), Socket0),
     ?assertMatch([[?EFFECT_NAVIGATE, ~"/rc", #{~"full" := true}]], effects(Frame)).
+
+%% Two routes on one handler whose bindings name different `id`s are two
+%% different views: patching from one to the other cannot keep the view (its id
+%% is what the live process and the client route by), so it replaces it.
+patch_to_route_with_other_id_replaces_view(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/b" => {arizona_route_id_view, #{bindings => #{id => ~"b"}}},
+            ~"/a2" => {arizona_route_id_view, #{bindings => #{id => ~"a"}}}
+        }
+    }),
+    {reply, _, Socket0} = arizona_socket:init(arizona_route_id_view, #{id => ~"a"}, Req, #{}),
+    %% The replace targets the view on screen and brings in the new one.
+    {Ops1, Socket1} = patch_ops(~"/b", Socket0),
+    ?assertMatch([[?OP_REPLACE, ~"a", #{~"d" := [~" id=\"b\""]}]], Ops1),
+    %% The replaced view is now `b`, so a patch to its own route stays in place,
+    %% and one back to `a` replaces it again.
+    {Ops2, Socket2} = patch_ops(~"/b", Socket1),
+    ?assertEqual([], Ops2),
+    {Ops3, _Socket3} = patch_ops(~"/a2", Socket2),
+    ?assertMatch([[?OP_REPLACE, ~"b", #{~"d" := [~" id=\"a\""]}]], Ops3).
+
+%% The same route id as the live view's keeps the patch in place.
+patch_to_route_with_same_id_stays_in_place(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/a2" => {arizona_route_id_view, #{bindings => #{id => ~"a"}}}}
+    }),
+    {reply, _, Socket0} = arizona_socket:init(arizona_route_id_view, #{id => ~"a"}, Req, #{}),
+    ?assertMatch({[], _}, patch_ops(~"/a2", Socket0)).
+
+%% A patch's ops, or none when the socket had nothing to send.
+patch_ops(Path, Socket0) ->
+    case arizona_socket:handle_in(patch_frame(Path), Socket0) of
+        {reply, Frame, Socket} -> {maps:get(~"o", decode(Frame), []), Socket};
+        {ok, Socket} -> {[], Socket}
+    end.
 
 patch_to_other_handler_changing_layouts_forces_full_load(Config) when is_list(Config) ->
     %% A patch to a DIFFERENT handler already degrades to a navigate. That

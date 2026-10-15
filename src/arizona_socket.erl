@@ -603,9 +603,20 @@ handle_patch(Path, Qs, #socket{req = Req} = Socket) ->
     end.
 
 patch_or_navigate(H, RouteOpts, NewReq, Requested, #socket{handler = H} = Socket) ->
-    do_patch(RouteOpts, NewReq, Requested, Socket);
+    case same_view_id(RouteOpts, Socket) of
+        true -> do_patch(RouteOpts, NewReq, Requested, Socket);
+        false -> do_navigate(H, RouteOpts, NewReq, Requested, Socket)
+    end;
 patch_or_navigate(H, RouteOpts, NewReq, Requested, Socket) ->
     do_navigate(H, RouteOpts, NewReq, Requested, Socket).
+
+%% Two routes on one handler whose bindings name different `id`s are different
+%% views, and a patch keeps the view it is on: the live process and the client
+%% route by its id, which no callback may change. So such a patch replaces the
+%% view instead. A route that names no `id` leaves the handler's own.
+same_view_id(#{bindings := #{id := ViewId}}, #socket{view_id = ViewId}) -> true;
+same_view_id(#{bindings := #{id := _Other}}, #socket{}) -> false;
+same_view_id(#{}, #socket{}) -> true.
 
 %% Does the target route wrap its page in different layouts than the ones
 %% already on screen? Term equality on the whole list, deliberately: a

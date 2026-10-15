@@ -83,6 +83,9 @@
     live_diff_crash_location/1,
     root_mount_rejects_restricted_id/1,
     navigate_mount_rejects_restricted_id/1,
+    root_callbacks_reject_restricted_id/1,
+    default_patch_rejects_restricted_id/1,
+    child_callbacks_reject_restricted_id/1,
     child_command_reobserved_on_root_diff/1,
     live_unknown_view_id_warns/1,
     child_stream_survives_next_root_diff/1,
@@ -170,6 +173,9 @@ groups() ->
             live_diff_crash_location,
             root_mount_rejects_restricted_id,
             navigate_mount_rejects_restricted_id,
+            root_callbacks_reject_restricted_id,
+            default_patch_rejects_restricted_id,
+            child_callbacks_reject_restricted_id,
             child_command_reobserved_on_root_diff,
             child_stream_survives_next_root_diff,
             child_event_leaves_root_snapshot_untouched,
@@ -670,9 +676,87 @@ navigate_mount_rejects_restricted_id(Config) when is_list(Config) ->
      || Mode <- [change, drop]
     ].
 
-restricted_crash(Bindings, Then) ->
+%% The restricted keys hold past mount too: no root callback may change or drop
+%% `id`, which the live process routes events and timers by. A patch delivers new
+%% params to `handle_update/3`, an event to `handle_event/3`, a message to
+%% `handle_info/2`.
+root_callbacks_reject_restricted_id(Config) when is_list(Config) ->
+    [
+        ?assertEqual(
+            {Trigger, Mode, restricted_key_modified},
+            {Trigger, Mode, root_callback_crash(Trigger, Mode)}
+        )
+     || Trigger <- [patch, event, info], Mode <- [change, drop]
+    ].
+
+%% A patch whose route bindings carry another `id` reaches a root with no
+%% `handle_update/3`, whose default merges the params in. arizona_socket turns
+%% such a patch into a navigate; called directly it is refused, not obeyed.
+default_patch_rejects_restricted_id(Config) when is_list(Config) ->
+    ?assertEqual(
+        restricted_key_modified,
+        restricted_crash(arizona_route_id_view, #{id => ~"a"}, fun(Pid) ->
+            {ok, ~"a", _} = arizona_live:mount(Pid),
+            arizona_live:patch(Pid, #{id => ~"b"})
+        end)
+    ).
+
+%% Nor may an embedded child's `handle_update/3` on a parent prop change (the
+%% raise is located at the slot that rendered it) or its own `handle_event/3`.
+child_callbacks_reject_restricted_id(Config) when is_list(Config) ->
+    [
+        ?assertMatch(
+            {Mode, {arizona_loc, _, restricted_key_modified}},
+            {Mode,
+                restricted_crash(#{}, fun(Pid) ->
+                    {ok, ~"rroot", _} = arizona_live:mount(Pid),
+                    arizona_live:handle_event(
+                        Pid, ~"rroot", ~"child_mode", #{~"mode" => atom_to_binary(Mode)}
+                    )
+                end)}
+        )
+     || Mode <- [change, drop]
+    ],
+    [
+        ?assertEqual(
+            {Mode, restricted_key_modified},
+            {Mode,
+                restricted_crash(#{}, fun(Pid) ->
+                    {ok, ~"rroot", _} = arizona_live:mount(Pid),
+                    arizona_live:handle_event(
+                        Pid, ~"ruc", ~"own_id", #{~"mode" => atom_to_binary(Mode)}
+                    )
+                end)}
+        )
+     || Mode <- [change, drop]
+    ].
+
+root_callback_crash(patch, Mode) ->
+    restricted_crash(#{}, fun(Pid) ->
+        {ok, ~"rroot", _} = arizona_live:mount(Pid),
+        arizona_live:patch(Pid, #{mode => Mode})
+    end);
+root_callback_crash(event, Mode) ->
+    restricted_crash(#{}, fun(Pid) ->
+        {ok, ~"rroot", _} = arizona_live:mount(Pid),
+        arizona_live:handle_event(Pid, ~"rroot", ~"root_id", #{~"mode" => atom_to_binary(Mode)})
+    end);
+root_callback_crash(info, Mode) ->
     process_flag(trap_exit, true),
-    {ok, Pid} = arizona_live:start_link(arizona_restricted_id_root, Bindings, undefined, []),
+    {ok, Pid} = arizona_live:start_link(arizona_restricted_id_root, #{}, undefined, []),
+    {ok, ~"rroot", _} = arizona_live:mount(Pid),
+    Pid ! {root_id, Mode},
+    receive
+        {'EXIT', Pid, {Reason, ST}} when is_list(ST) -> Reason
+    after 1000 -> {no_exit, sys:get_state(Pid)}
+    end.
+
+restricted_crash(Bindings, Then) ->
+    restricted_crash(arizona_restricted_id_root, Bindings, Then).
+
+restricted_crash(Handler, Bindings, Then) ->
+    process_flag(trap_exit, true),
+    {ok, Pid} = arizona_live:start_link(Handler, Bindings, undefined, []),
     Reason =
         try Then(Pid) of
             Result -> {no_crash, Result}
