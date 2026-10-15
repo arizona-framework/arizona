@@ -35,10 +35,11 @@ than silently dropped.
 ## Escaping
 
 Dynamic content values are **control-char sanitized** at render (`escape/1`, the
-`arizona_renderer` escape callback): C0 bytes (except `\\n`/`\\t`) and DEL are
-stripped so an interpolated value cannot inject ANSI/OSC escape sequences into
-the terminal (the terminal analog of XSS -- e.g. an OSC 52 clipboard write or a
-scrollback wipe in a shared-channel app). UTF-8 is preserved. The `?raw`
+`arizona_renderer` escape callback): C0 bytes (except `\\n`/`\\t`), DEL and the
+C1 controls (UTF-8 encoded or bare 8-bit) are stripped so an interpolated value
+cannot inject ANSI/OSC escape sequences into the terminal (the terminal analog of
+XSS -- e.g. an OSC 52 clipboard write or a scrollback wipe in a shared-channel
+app). UTF-8 is preserved. The `?raw`
 opt-out bypasses this, so never wrap untrusted data in `?raw` in a `?terminal`
 template. Static styling escapes (the `s` bytes above) are framework-emitted and
 never sanitized.
@@ -80,6 +81,9 @@ never sanitized.
 %% Full SGR reset (clears colour and every text style at once); io_ansi has no
 %% whole-reset helper, only per-attribute `*_off` and `default_color`.
 -define(RESET, ~"\e[0m").
+
+%% A UTF-8 continuation byte, 0x80-0xBF.
+-define(CONT(B), ((B) band 16#C0 =:= 16#80)).
 
 -spec name(arizona_renderer:tag()) -> binary().
 name(Bin) when is_binary(Bin) ->
@@ -270,52 +274,97 @@ boolean_attrs() -> presence.
 
 -doc """
 Sanitize a dynamic value's bytes for terminal output. Strips the C0 control bytes
-`0x00-0x1F` (keeping `\\n` and `\\t`) and `0x7F` (DEL), so an interpolated value
-cannot inject ANSI/OSC/DCS escape sequences (e.g. `\\e]52;c;...` clipboard writes,
-`\\e[3J` scrollback wipes) into other users' terminals. Bytes `>= 0x80` are kept
-verbatim so UTF-8 multi-byte sequences are not corrupted; dropping `\\e` (0x1B)
-already neutralizes the 7-bit C1 forms and every escape-sequence introducer.
+`0x00-0x1F` (keeping `\\n` and `\\t`), `0x7F` (DEL) and the C1 controls, so an
+interpolated value cannot inject ANSI/OSC/DCS escape sequences (e.g. `\\e]52;c;...`
+clipboard writes, `\\e[3J` scrollback wipes) into other users' terminals. Dropping
+`\\e` (0x1B) neutralizes the 7-bit escape forms; the C1 controls are their one-code
+introducers (U+009B is CSI, U+009D is OSC), which a terminal honours both UTF-8
+encoded (`C2 80`-`C2 9F`) and as a bare 8-bit byte `0x80-0x9F`. Both forms are
+stripped. A byte in that range that belongs to a valid UTF-8 sequence (the `81` of
+`ā`, the `82` of `€`) is part of a character, not a control, and is kept; any other
+byte `>= 0xA0` is kept verbatim.
 """.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) ->
     %% Almost every rendered value carries no stripped byte at all, so locate
     %% the first one before building anything: with none, the input is returned
     %% as-is -- no accumulator, no copy. Only a value that really needs
-    %% stripping allocates, and only from that first control byte on (the clean
-    %% prefix seeds the accumulator in one slice). The same fast path, and the
-    %% same measured rationale, as arizona_html:escape/1.
-    case first_control(Bin, 0) of
+    %% stripping allocates, and it copies the clean runs between controls as
+    %% whole slices. The same fast path, and the same measured rationale, as
+    %% arizona_html:escape/1.
+    case first_control(Bin) of
         none ->
             Bin;
-        Pos ->
-            <<Clean:Pos/binary, Rest/binary>> = Bin,
-            escape(Rest, Clean)
+        RestSize ->
+            strip(Bin, RestSize, <<>>)
     end.
 
-%% Byte offset of the first stripped byte (a C0 control other than `\n`/`\t`,
-%% or DEL 0x7F), `none` when the value is already clean.
-first_control(<<C, R/binary>>, Pos) when C >= 16#20, C =/= 16#7F ->
-    first_control(R, Pos + 1);
-first_control(<<$\n, R/binary>>, Pos) ->
-    first_control(R, Pos + 1);
-first_control(<<$\t, R/binary>>, Pos) ->
-    first_control(R, Pos + 1);
-first_control(<<>>, _Pos) ->
+%% Size of the remainder that starts at the first stripped byte, `none` when the
+%% value is already clean. Stripped: a C0 control other than `\n`/`\t`, DEL 0x7F,
+%% and a C1 control, which is either UTF-8 encoded (`C2 80`-`C2 9F`) or a bare
+%% 0x80-0x9F byte outside a well-formed sequence. A raw-byte test alone would cut
+%% the continuation bytes of `ā`/`€`, so each well-formed sequence (the RFC 3629
+%% byte table: no overlong form, no surrogate) is stepped over whole; a byte that
+%% starts none is kept when >= 0xA0 and is a C1 control otherwise. Matched byte
+%% by byte rather than with `/utf8`, which measured about twice as slow on CJK.
+first_control(<<C, R/binary>>) when C >= 16#20 andalso C < 16#7F ->
+    first_control(R);
+first_control(<<$\n, R/binary>>) ->
+    first_control(R);
+first_control(<<$\t, R/binary>>) ->
+    first_control(R);
+first_control(<<L, C, R/binary>>) when
+    L >= 16#C2 andalso L =< 16#DF andalso ?CONT(C) andalso (L =/= 16#C2 orelse C >= 16#A0)
+->
+    first_control(R);
+first_control(<<L, C1, C2, R/binary>>) when
+    L >= 16#E0 andalso
+        L =< 16#EF andalso
+        ?CONT(C1) andalso
+        ?CONT(C2) andalso
+        (L =/= 16#E0 orelse C1 >= 16#A0) andalso
+        (L =/= 16#ED orelse C1 =< 16#9F)
+->
+    first_control(R);
+first_control(<<L, C1, C2, C3, R/binary>>) when
+    L >= 16#F0 andalso
+        L =< 16#F4 andalso
+        ?CONT(C1) andalso
+        ?CONT(C2) andalso
+        ?CONT(C3) andalso
+        (L =/= 16#F0 orelse C1 >= 16#90) andalso
+        (L =/= 16#F4 orelse C1 =< 16#8F)
+->
+    first_control(R);
+first_control(<<16#C2, C, _/binary>> = Rest) when C >= 16#80 andalso C =< 16#9F ->
+    byte_size(Rest);
+first_control(<<C, R/binary>>) when C >= 16#A0 ->
+    first_control(R);
+first_control(<<>>) ->
     none;
-first_control(_Bin, Pos) ->
-    Pos.
+first_control(Rest) ->
+    byte_size(Rest).
 
-escape(<<>>, Acc) ->
-    Acc;
-escape(<<C, R/binary>>, Acc) when C >= 16#20, C =/= 16#7F ->
-    escape(R, <<Acc/binary, C>>);
-escape(<<$\n, R/binary>>, Acc) ->
-    escape(R, <<Acc/binary, $\n>>);
-escape(<<$\t, R/binary>>, Acc) ->
-    escape(R, <<Acc/binary, $\t>>);
-escape(<<_C, R/binary>>, Acc) ->
-    %% Any other C0 control (incl. ESC 0x1B, BEL 0x07) or DEL 0x7F: drop it.
-    escape(R, Acc).
+%% Bin's last RestSize bytes start with a stripped control: keep the clean run
+%% before it, drop it, and scan on from there.
+strip(Bin, RestSize, Acc) ->
+    Pos = byte_size(Bin) - RestSize,
+    <<Clean:Pos/binary, Rest/binary>> = Bin,
+    Tail = drop_control(Rest),
+    case first_control(Tail) of
+        none ->
+            <<Acc/binary, Clean/binary, Tail/binary>>;
+        Next ->
+            strip(Tail, Next, <<Acc/binary, Clean/binary>>)
+    end.
+
+%% first_control/1 stops on `C2` only when a C1 continuation follows it (any other
+%% `C2` either starts a well-formed sequence or is a kept stray byte), so the two
+%% bytes are one UTF-8 encoded C1 control. Anything else it stops on is one byte.
+drop_control(<<16#C2, _, R/binary>>) ->
+    R;
+drop_control(<<_, R/binary>>) ->
+    R.
 
 %% Terminal output has no raw-text elements (raw_text_kind/2 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.

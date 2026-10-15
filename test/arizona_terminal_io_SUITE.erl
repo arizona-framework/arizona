@@ -24,6 +24,8 @@
 -export([default_paint_sanitizes_title/1]).
 -export([terminal_escape_sanitizes/1]).
 -export([terminal_escape_clean_value_identity/1]).
+-export([terminal_escape_strips_utf8_c1/1]).
+-export([terminal_escape_strips_raw_c1/1]).
 
 %% arizona_terminal_io:keys/1 decodes raw terminal reads into idiomatic keys;
 %% arizona_terminal_default_driver turns those into events (quitting on Ctrl-D),
@@ -52,7 +54,9 @@ all() ->
         default_paint_title_bell_and_unknown,
         default_paint_sanitizes_title,
         terminal_escape_sanitizes,
-        terminal_escape_clean_value_identity
+        terminal_escape_clean_value_identity,
+        terminal_escape_strips_utf8_c1,
+        terminal_escape_strips_raw_c1
     ].
 
 printable_to_char_code(Config) when is_list(Config) ->
@@ -270,6 +274,44 @@ terminal_escape_clean_value_identity(Config) when is_list(Config) ->
     ?assertEqual(Utf8, arizona_terminal:escape(Utf8)),
     ?assertEqual(<<>>, arizona_terminal:escape(<<>>)),
     ?assertEqual(~"prefix-suffix\n", arizona_terminal:escape(<<"prefix", 27, "-suffix\n", 7>>)).
+
+%% U+0080-U+009F are the C1 controls; xterm honours them UTF-8 encoded, so U+009B
+%% (CSI) and U+009D (OSC) open the same sequences ESC [ and ESC ] do. The whole
+%% two-byte sequence goes, never just the lead byte.
+terminal_escape_strips_utf8_c1(Config) when is_list(Config) ->
+    ?assertEqual(
+        ~"a31mb52;c;SGk=",
+        arizona_terminal:escape(
+            <<"a", 16#C2, 16#9B, "31mb", 16#C2, 16#9D, "52;c;SGk=", 16#C2, 16#9C>>
+        )
+    ),
+    ?assertEqual(~"", arizona_terminal:escape(<<16#C2, 16#80, 16#C2, 16#9F>>)),
+    %% U+00A0 (the first code point past C1) and U+00FF share the C2/C3 lead byte.
+    ?assertEqual(
+        <<16#C2, 16#A0, 16#C3, 16#BF>>, arizona_terminal:escape(<<16#C2, 16#A0, 16#C3, 16#BF>>)
+    ),
+    %% Continuation bytes in 0x80-0x9F belong to their sequence: ā is C4 81,
+    %% € is E2 82 AC, 𝄞 is F0 9D 84 9E.
+    Utf8 = <<"éā€𝄞"/utf8>>,
+    ?assertEqual(Utf8, arizona_terminal:escape(Utf8)),
+    ?assertEqual(
+        <<"é€"/utf8, "x", "𝄞"/utf8>>,
+        arizona_terminal:escape(<<"é€"/utf8, 16#C2, 16#9B, "x", "𝄞"/utf8>>)
+    ).
+
+%% A bare 0x80-0x9F byte is not UTF-8, but in an 8-bit terminal it is a C1
+%% control (0x9B is CSI), and nothing on the terminal path refuses invalid UTF-8.
+%% A byte that is not a C1 control is kept even when it is not valid UTF-8.
+terminal_escape_strips_raw_c1(Config) when is_list(Config) ->
+    ?assertEqual(~"a2Jb", arizona_terminal:escape(<<"a", 16#9B, "2Jb">>)),
+    ?assertEqual(~"ab", arizona_terminal:escape(<<"a", 16#80, 16#9D, 16#9F, "b">>)),
+    %% A truncated sequence: the lead byte stays, the stray continuation goes.
+    ?assertEqual(<<16#E2, "x">>, arizona_terminal:escape(<<16#E2, 16#82, "x">>)),
+    %% An overlong encoding of U+009B is not well-formed: its bytes are judged one
+    %% by one, so the 0x80-0x9F ones go.
+    ?assertEqual(<<16#E0>>, arizona_terminal:escape(<<16#E0, 16#82, 16#9B>>)),
+    %% Latin-1 é (0xE9) is not a C1 control.
+    ?assertEqual(<<"caf", 16#E9>>, arizona_terminal:escape(<<"caf", 16#E9>>)).
 
 %% --------------------------------------------------------------------
 %% Helpers

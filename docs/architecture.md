@@ -234,11 +234,11 @@ writes **no `az`/slot markers** -- the diff engine's ops are computed but ignore
 
 Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
-bytes except `\n`/`\t`, and DEL; preserves UTF-8), native emits a JSON string. Native
-alone carries a value differently on the wire: its client JSON-encodes each `d` value
-itself, so the fingerprint payload takes the raw value from
-`c:arizona_renderer:wire_escape/1` (`wire_attr/2` for a prop) while the zipped document
-keeps the JSON string.
+bytes except `\n`/`\t`, DEL, and the C1 controls, UTF-8 encoded or bare 8-bit;
+preserves UTF-8), native emits a JSON string. Native alone carries a value
+differently on the wire: its client JSON-encodes each `d` value itself, so the
+fingerprint payload takes the raw value from `c:arizona_renderer:wire_escape/1`
+(`wire_attr/2` for a prop) while the zipped document keeps the JSON string.
 So a dynamic value in a `?terminal` view cannot inject ANSI/OSC escape sequences into
 another user's terminal (the terminal analog of XSS). The `?raw` opt-out bypasses it --
 never wrap untrusted data in `?raw` in a `?terminal` template.
