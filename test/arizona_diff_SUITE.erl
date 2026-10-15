@@ -6,6 +6,7 @@
 -export([
     diff_attr_op/1,
     diff_attr_command_op_is_json_array/1,
+    diff_attr_nav_flash_refused/1,
     diff_slot_invisible_change_emits_no_op/1,
     diff_attr_invisible_change_emits_no_op/1,
     diff_attr_boolean_vs_string_still_emits/1,
@@ -165,6 +166,7 @@ groups() ->
             diff_text_op,
             diff_attr_op,
             diff_attr_command_op_is_json_array,
+            diff_attr_nav_flash_refused,
             diff_slot_invisible_change_emits_no_op,
             diff_attr_invisible_change_emits_no_op,
             diff_attr_boolean_vs_string_still_emits,
@@ -418,6 +420,14 @@ diff_attr_command_op_is_json_array(Config) when is_list(Config) ->
     Cmds = [arizona_js:push_event(~"x"), arizona_js:toggle(~"#m")],
     {[[?OP_SET_ATTR, _, _, Value]], _} = attr_diff(Old, Cmds),
     ?assertEqual(~"[[0,\"x\"],[1,\"#m\"]]", iolist_to_binary(json:encode(Value))).
+
+%% A command attribute that becomes a navigate carrying a `flash` on a live update
+%% is refused like at SSR: the op would ship the flash to a client that drops it.
+diff_attr_nav_flash_refused(Config) when is_list(Config) ->
+    Nav = arizona_js:navigate(~"/x", #{flash => #{~"info" => ~"Saved"}}),
+    ?assertError(
+        {flash_outside_live_effect, navigate}, attr_diff(arizona_js:push_event(~"a"), Nav)
+    ).
 
 %% Bool attr: false -> true produces OP_SET_ATTR with empty value.
 diff_bool_attr_add(Config) when is_list(Config) ->

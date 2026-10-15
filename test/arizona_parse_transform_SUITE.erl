@@ -440,6 +440,7 @@
     local_attr_render/1,
     local_diff_skipped/1,
     local_key_not_literal_error/1,
+    nav_flash_in_folded_attribute_error/1,
     local_content_multi_slot/1,
     local_in_nodiff/1,
     local_descriptor_merge/1,
@@ -697,6 +698,7 @@ groups() ->
             local_attr_render,
             local_diff_skipped,
             local_key_not_literal_error,
+            nav_flash_in_folded_attribute_error,
             local_content_multi_slot,
             local_in_nodiff,
             local_descriptor_merge,
@@ -1447,6 +1449,26 @@ local_diff_skipped(Config) when is_list(Config) ->
     T2 = Mod:render(#{count => 2}),
     {Ops, _Snap2} = arizona_diff:diff(T2, Snap),
     ?assertEqual([], Ops).
+
+%% A literal navigate whose `flash` opt would fold into an event attribute is a
+%% compile error at the attribute's line: no carrier delivers that flash (only a
+%% live handler's returned effect has one).
+nav_flash_in_folded_attribute_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_nav_flash). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'a', [{az_click, arizona_js:navigate(<<\"/x\">>,"
+        "            #{flash => #{<<\"info\">> => <<\"Saved\">>}})}], [<<\"go\">>]}"
+        "    ). ",
+        fun
+            ({render_reject, Message}) ->
+                string:find(Message, "navigate effect's `flash` opt") =/= nomatch;
+            (_) ->
+                false
+        end
+    ).
 
 %% ?local: a non-literal key is a compile-time error.
 local_key_not_literal_error(Config) when is_list(Config) ->
