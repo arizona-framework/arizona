@@ -667,18 +667,25 @@ function reconnectUserQs(qs) {
  * or a transition command): on a push it is stamped onto both ends of the new
  * edge -- the outgoing entry's `_azTransitionNext`, the new entry's
  * `_azTransitionPrev` -- so popstate replays it only when traversing this edge.
+ * A replace creates no edge: it keeps the replaced entry's stamps.
  */
 function navigateTo(path, qs, hash, opts) {
     const kind = opts.kind === 'patch' ? 'patch' : 'navigate';
     const pathAndQs = qs ? `${path}?${qs}` : path;
     const fullUrl = opts.fullUrl || (hash ? `${pathAndQs}#${hash}` : pathAndQs);
-    /** @type {{_azTransitionPrev?: typeof _pendingTransition, _azNav?: string, _azIdx?: number}} */
+    /** @type {{_azTransitionPrev?: typeof _pendingTransition, _azTransitionNext?: typeof _pendingTransition, _azNav?: string, _azIdx?: number}} */
     const navState = {};
     if (kind === 'patch') navState._azNav = 'patch';
     if (opts.replace) {
-        // Same position, a different page: neither of its edges was made by
-        // this transition, so none is stamped.
+        // Same position, a different page: the edges into and out of this
+        // position are unchanged, so the replaced entry's stamps carry over
+        // (Forward into the new page crosses the same edge Back out of it
+        // does) and a pending transition stamps nothing -- it animates this
+        // swap, not an edge.
+        const cur = history.state || {};
         navState._azIdx = _historyIdx;
+        if (cur._azTransitionPrev) navState._azTransitionPrev = cur._azTransitionPrev;
+        if (cur._azTransitionNext) navState._azTransitionNext = cur._azTransitionNext;
         history.replaceState(navState, '', fullUrl);
     } else {
         // One replaceState: saveCurrentScroll stamps scroll, patch tag, index
@@ -3753,14 +3760,17 @@ function connect(endpoint, params = {}) {
             const saved = e.state?._azScroll || null;
             // Which edge this traversal crossed: going back, the one from the
             // destination to its next entry; going forward, the one into it from
-            // its previous entry. An entry with no index has no SPA edge.
+            // its previous entry. An entry with no index has no SPA edge, and a
+            // multi-step jump (`history.go(+-2)`) crossed several, so it is not
+            // animated at all rather than by whichever edge sits next to the
+            // destination (which would differ between the two directions).
             const idx = e.state?._azIdx;
             const hasIdx = typeof idx === 'number';
             const transition = !hasIdx
                 ? null
-                : idx < _historyIdx
+                : idx === _historyIdx - 1
                   ? e.state._azTransitionNext
-                  : idx > _historyIdx
+                  : idx === _historyIdx + 1
                     ? e.state._azTransitionPrev
                     : null;
             if (hasIdx) _historyIdx = idx;

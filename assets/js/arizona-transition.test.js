@@ -343,6 +343,34 @@ describe('view transitions -- back/forward', () => {
         expect(fn).toHaveBeenCalledTimes(2);
     });
 
+    it('a multi-step traversal does not animate, in either direction', async () => {
+        // history.go(+-2) crosses two edges at once; replaying the destination's
+        // adjacent one would animate going back but not forward (or vice versa).
+        const fn = document.startViewTransition;
+        nav('/b', 'slide');
+        nav('/c');
+        expect(fn).toHaveBeenCalledTimes(1);
+        await traverse(-2); // C -> A
+        expect(fn).toHaveBeenCalledTimes(1);
+        await traverse(2); // A -> C
+        expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('a replace navigation keeps the edges of the entry it replaces', async () => {
+        // A -(transition)-> B, then B is replaced by B2 in place: Back to A and
+        // Forward to B2 both cross the same transitioned edge.
+        const fn = document.startViewTransition;
+        nav('/b', 'slide');
+        executeJS(document.body, null, [JS_NAVIGATE, '/b2', { replace: true }]);
+        _mock.simulateMessage([replaceOp('/b2')]);
+        expect(fn).toHaveBeenCalledTimes(1);
+        await traverse(-1); // B2 -> A
+        expect(fn).toHaveBeenCalledTimes(2);
+        await traverse(1); // A -> B2
+        expect(fn).toHaveBeenCalledTimes(3);
+        expect(location.pathname).toBe('/b2');
+    });
+
     it('a plain re-navigation from an entry clears its old transitioned edge', async () => {
         // A -(transition)-> B, Back to A, then A -(plain)-> D replaces the
         // forward history: Back from D traverses the new plain edge.
