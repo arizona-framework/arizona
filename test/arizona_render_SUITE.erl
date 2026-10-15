@@ -54,6 +54,10 @@
     raw_text_partial_sequence_at_slot_edge/1,
     raw_text_value_end_completed_by_static/1,
     raw_text_tag_name_needs_delimiter/1,
+    rawtext_elements_markerless/1,
+    rawtext_elements_diff_through_element/1,
+    noscript_content_is_ordinary_html/1,
+    rawtext_element_static_lead_neutralized/1,
     render_nested_sd/1,
     render_nodiff_layout_location_success/1,
     render_nodiff_layout_location_wrapping/1,
@@ -174,6 +178,10 @@ groups() ->
             raw_text_partial_sequence_at_slot_edge,
             raw_text_value_end_completed_by_static,
             raw_text_tag_name_needs_delimiter,
+            rawtext_elements_markerless,
+            rawtext_elements_diff_through_element,
+            noscript_content_is_ordinary_html,
+            rawtext_element_static_lead_neutralized,
             render_nested_sd,
             render_with_views_no_children,
             repeated_stateless_distinct_az,
@@ -746,6 +754,78 @@ style_content(HTML) ->
     [_OpenTagAttrs, Rest] = binary:split(Rest0, ~">"),
     [Content, _After] = binary:split(Rest, ~"</style>"),
     Content.
+
+%% `<xmp>`, `<iframe>`, `<noembed>` and `<noframes>` are RAWTEXT to the HTML parser,
+%% exactly like `<style>`: a comment marker or an entity in their content is literal
+%% text. A slot there must therefore be markerless and verbatim, and a value must not
+%% close the element -- whose end tag is its OWN name, not `</script`/`</style`.
+rawtext_elements_markerless(Config) when is_list(Config) ->
+    [
+        begin
+            HTML = render_rawtext_element(Fun, ~"a&b"),
+            ?assertEqual(nomatch, binary:match(HTML, [~"<!--az:", ~"&amp;"])),
+            ?assertNotEqual(nomatch, binary:match(HTML, <<">a&b</", Name/binary, ">">>)),
+            Upper = string:uppercase(Name),
+            Hostile = render_rawtext_element(
+                Fun, <<"</", Upper/binary, "><img src=x onerror=alert(1)>">>
+            ),
+            ?assertEqual(nomatch, binary:match(Hostile, <<"</", Upper/binary, "><img">>)),
+            ?assertEqual(1, length(binary:matches(Hostile, <<"</", Name/binary, ">">>)))
+        end
+     || {Fun, Name} <- rawtext_elements()
+    ].
+
+%% Markerless does not mean frozen: like `<style>`, the content folds into one nested
+%% template at the element's own `az`, so a change re-renders that element's content.
+rawtext_elements_diff_through_element(Config) when is_list(Config) ->
+    [
+        begin
+            T0 = arizona_raw_text_elements:Fun(#{v => ~"a"}),
+            {HTML0, Snap0, _V0} = arizona_render:render(T0, #{}),
+            {Ops, _Snap1} = arizona_diff:diff(arizona_raw_text_elements:Fun(#{v => ~"b"}), Snap0),
+            ?assertMatch([[?OP_TEXT, _, #{~"d" := [~"b"]}]], Ops),
+            [[?OP_TEXT, Az, _Payload]] = Ops,
+            %% The target is the element itself, not a marker inside it.
+            ?assertNotEqual(
+                nomatch,
+                binary:match(
+                    iolist_to_binary(HTML0), <<"<", Name/binary, " az=\"", Az/binary, "\"">>
+                )
+            )
+        end
+     || {Fun, Name} <- rawtext_elements()
+    ].
+
+%% The static-neighbour rule reaches the other RAWTEXT elements too: a static `<`
+%% then a value `/xmp>...` closes an `<xmp>`. Nothing decodes there, so the break is
+%% a backslash, which an `<xmp>` shows; `</script>` cannot close an `<xmp>`, so it is
+%% left alone rather than given a visible backslash for nothing.
+rawtext_element_static_lead_neutralized(Config) when is_list(Config) ->
+    Img = ~"<img src=x onerror=alert(1)>",
+    HTML = render_rawtext_element(xmp_lead, <<"/xmp>", Img/binary>>),
+    ?assertEqual(nomatch, binary:match(HTML, <<"</xmp>", Img/binary>>)),
+    ?assertEqual(1, length(binary:matches(HTML, ~"</xmp>"))),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<">a<\\/xmp>", Img/binary, "</xmp>">>)),
+    Cross = render_rawtext_element(xmp, ~"a</script>b</style>"),
+    ?assertNotEqual(nomatch, binary:match(Cross, ~">a</script>b</style></xmp>")).
+
+%% `<noscript>` stays ordinary content. It is RAWTEXT only where scripting is on, and
+%% there it is never displayed; it is shown only where scripting is off, which parses
+%% it as HTML -- markers are comments, entities decode, and no live view ever connects
+%% to patch it. Raw-text treatment would force `?raw` on its values and splice them,
+%% unescaped, into the HTML that audience parses.
+noscript_content_is_ordinary_html(Config) when is_list(Config) ->
+    HTML = render_rawtext_element(noscript, ~"a<b"),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"a&lt;b")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"<!--az:")).
+
+rawtext_elements() ->
+    [{xmp, ~"xmp"}, {iframe, ~"iframe"}, {noembed, ~"noembed"}, {noframes, ~"noframes"}].
+
+render_rawtext_element(Fun, V) ->
+    iolist_to_binary(
+        element(1, arizona_render:render(arizona_raw_text_elements:Fun(#{v => V})))
+    ).
 
 %% A list value is text (chardata). An atom inside one -- a boolean interpolated into
 %% an attribute, `[~"a-", ?get(on)]` -- is not text, so it is refused as a

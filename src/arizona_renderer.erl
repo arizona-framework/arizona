@@ -95,8 +95,9 @@ is emitted.
 
 `none` for ordinary elements: a content slot gets the usual comment-marker diff
 target (`<!--az:X-->...<!--/az-->`) and is fully diffable. `raw` for raw-text
-elements (`script`/`style`): the browser never decodes character references or
-HTML comments there, so the slot is emitted verbatim, markerless and render-once
+elements (`script`, and the RAWTEXT `style`/`xmp`/`iframe`/`noembed`/`noframes`):
+the browser never decodes character references or HTML comments there, so the
+slot is emitted verbatim, markerless and render-once
 (comment markers would become literal bytes and corrupt the script/CSS).
 `escapable` for escapable-raw-text elements (`textarea`/`title`): character
 references ARE decoded, so a scalar slot is HTML-escaped, but it is still
@@ -136,7 +137,7 @@ classifying, so which form is written never changes how a tag is classified.
 How a dynamic content slot inside an element must be rendered.
 
 `none` is an ordinary parsed-markup element: the slot is comment-anchored and
-diffable. `raw` (`script`/`style` in HTML) is emitted verbatim, since the browser
+diffable. `raw` (`script` and the RAWTEXT elements in HTML) is emitted verbatim, since the browser
 decodes no character references there, so escaping would corrupt it. `escapable`
 (`textarea`/`title`) escapes a scalar because references ARE decoded, but comments
 are still literal, so the slot carries no markers either way. Non-HTML backends
@@ -259,7 +260,7 @@ value. The zipped document always uses `escape/1`.
 
 -doc """
 Neutralize a dynamic value spliced into a **raw-text** element (`raw_text_kind/2
-=:= raw` -- HTML `script`/`style`). Such content is emitted verbatim (the browser
+=:= raw` -- HTML `script` and the RAWTEXT elements). Such content is emitted verbatim (the browser
 decodes nothing there), so HTML entity-escaping does not apply, yet a value
 carrying a close-tag sequence (`</script>`) would still break out of the element
 into HTML parsing. The parse transform wraps every raw-text dynamic in this
