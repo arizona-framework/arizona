@@ -115,7 +115,14 @@ render(Bindings) ->
 %% never touch user-authored content that happens to look like a marker (a
 %% static text child is spliced verbatim -- it is the documented raw-HTML seam
 %% -- so ` az="` / `<!--az:` in a page *about* markup is ordinary content).
--type segment() :: binary() | {az_attr, binary()} | {az_slot, binary()}.
+%% `{dyn_attr, Name, Bytes}` is the static part of a dynamic attribute: it renders
+%% as the backend's `attr_dyn_name/1` bytes, but carries `Name` into the
+%% fingerprint. HTML renders the name inside the dynamic and contributes no bytes,
+%% so without it two templates differing only in a dynamic attribute's name share
+%% a fingerprint, and the diff patches one into the other, leaving the old
+%% attribute on the element.
+-type segment() ::
+    binary() | {az_attr, binary()} | {az_slot, binary()} | {dyn_attr, binary(), binary()}.
 
 %% Compile state threaded through element/attribute/child compilation.
 %% Process-dictionary key for the `az-*` attribute names collected while
@@ -3397,18 +3404,14 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST0, ElemAz, State0) ->
             );
         error when State0#state.nodiff ->
             Module = State0#state.module,
-            State1 = buf_append(
-                State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
-            ),
+            State1 = buf_dyn_attr(State0, Backend, NameBin, ValLine),
             DynAST = make_nodiff_attr_dynamic_ast(
                 NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST);
         error ->
             Module = State0#state.module,
-            State1 = buf_append(
-                State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
-            ),
+            State1 = buf_dyn_attr(State0, Backend, NameBin, ValLine),
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(
                 AzBin, NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
@@ -3453,7 +3456,7 @@ typed_attr_ast(Backend, ValueAST) ->
 %% not match it.
 compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     Module = State0#state.module,
-    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+    State1 = buf_dyn_attr(State0, Backend, NameBin, line(ValueAST)),
     Expr = local_attr_expr_ast(NameBin, ValueAST),
     DynAST = make_text_dynamic_ast(local_attr_az(ElemAz), Expr, Module, line(ValueAST)),
     flush(State1, DynAST).
@@ -3475,7 +3478,7 @@ local_attr_expr_ast(NameBin, LocalCallAST) ->
 %% stores the affixes (descriptor `ap`) to recompose on set / strip on read.
 compile_interp_local_attr(Backend, NameBin, LocalCall, Prefix, Suffix, ElemAz, State0) ->
     Module = State0#state.module,
-    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+    State1 = buf_dyn_attr(State0, Backend, NameBin, line(LocalCall)),
     Expr = local_attr_interp_expr_ast(NameBin, LocalCall, Prefix, Suffix),
     DynAST = make_text_dynamic_ast(local_attr_az(ElemAz), Expr, Module, line(LocalCall)),
     flush(State1, DynAST).
@@ -4314,6 +4317,10 @@ buf_az_attr(State, Az) ->
 buf_az_slot(State, Az) ->
     State#state{buf = [{az_slot, Az} | State#state.buf]}.
 
+buf_dyn_attr(State, Backend, NameBin, Line) ->
+    Bin = emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, Line),
+    State#state{buf = [{dyn_attr, NameBin, Bin} | State#state.buf]}.
+
 flush(State, DynAST) ->
     State#state{
         statics = State#state.statics ++ [lists:reverse(State#state.buf)],
@@ -4327,8 +4334,8 @@ finalize(State) ->
     {Statics, Dynamics}.
 
 %% Render a static's segments to bytes, each `az` marker built from `Prefix`
-%% plus its id. `Prefix` is empty for the fingerprint pass (the fingerprint is
-%% taken over the unscoped bytes) and `<Fp>-` for the emitted statics.
+%% plus its id. `Prefix` is `<Fp>-`, scoping the emitted statics to their
+%% template.
 -spec render_static(module(), binary(), [segment()]) -> static().
 render_static(Backend, Prefix, Segments) ->
     iolist_to_binary([render_segment(Backend, Prefix, Seg) || Seg <- Segments]).
@@ -4338,7 +4345,9 @@ render_segment(_Backend, _Prefix, Bin) when is_binary(Bin) ->
 render_segment(Backend, Prefix, {az_attr, Az}) ->
     Backend:az_attr(<<Prefix/binary, Az/binary>>);
 render_segment(Backend, Prefix, {az_slot, Az}) ->
-    Backend:text_slot_open(<<Prefix/binary, Az/binary>>).
+    Backend:text_slot_open(<<Prefix/binary, Az/binary>>);
+render_segment(_Backend, _Prefix, {dyn_attr, _Name, Bin}) ->
+    Bin.
 
 %% Prefix az values with the template fingerprint to prevent collisions
 %% when stateless children are inlined in a parent template. The markers are
@@ -4359,10 +4368,11 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
     {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
 
 %% Hashes the template's shape over its `Statics` *segments* (`binary()` literals
-%% interleaved with `{az_attr, _}` / `{az_slot, _}` markers), not their rendered
-%% bytes. Segments distinguish a framework marker from literal bytes that merely
-%% look like one, so two templates differing only in that respect -- exactly the
-%% pair the scoping bug used to conflate -- get different fingerprints; hashing
+%% interleaved with `{az_attr, _}` / `{az_slot, _}` markers and `{dyn_attr, _, _}`
+%% dynamic attribute names), not their rendered bytes. Segments distinguish a
+%% framework marker from literal bytes that merely look like one, so two
+%% templates differing only in that respect -- exactly the pair the scoping bug
+%% used to conflate -- get different fingerprints; hashing
 %% the rendered bytes would give a repaired template the same `f` as its
 %% corrupted predecessor, and since `f` keys the client's persistent (IndexedDB)
 %% statics cache, the repair would never reach a client holding the broken entry.
