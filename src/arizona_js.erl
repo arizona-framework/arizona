@@ -342,8 +342,10 @@ cookie for the *same* identity (e.g. password change) needs no reload.
   `application/x-www-form-urlencoded`. A GET/HEAD has no request body, so either
   payload goes in the query string instead, ahead of any `#fragment`: the form's
   fields as they are, a `body` map one parameter per key (a list repeats its key,
-  `null` is left out, a nested map is JSON-encoded). A GET `body` that is not a
-  map is not sent, with a console warning.
+  `null` is left out, a nested map is JSON-encoded). Only the atom `null` is left
+  out: any other atom is sent as its name, so `undefined` arrives as the text
+  `"undefined"`. A GET `body` that is not a map is not sent, with a console
+  warning.
 - `headers` -- extra request headers, merged on top.
 - `credentials` -- cookie/credential mode. Default `same_origin`.
 - `on_error` -- a command (or list) run on a non-2xx with no effects body, or a
