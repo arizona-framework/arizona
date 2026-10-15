@@ -10,6 +10,11 @@
     event_dispatch/1,
     event_dispatch_null_target/1,
     ws_upgrade_non_live_path_404/1,
+    ws_upgrade_flushes_middleware_cookie/1,
+    ws_upgrade_flushes_cookie_mode_session_write/1,
+    ws_upgrade_halt_flushes_cookie_without_upgrading/1,
+    ws_upgrade_commits_middleware_session_write/1,
+    ws_upgrade_commits_middleware_session_clear/1,
     navigate_non_live_path_full_navigate/1,
     event_with_effects/1,
     event_no_change/1,
@@ -118,6 +123,9 @@ groups() ->
         event_dispatch,
         event_dispatch_null_target,
         ws_upgrade_non_live_path_404,
+        ws_upgrade_flushes_middleware_cookie,
+        ws_upgrade_flushes_cookie_mode_session_write,
+        ws_upgrade_halt_flushes_cookie_without_upgrading,
         navigate_non_live_path_full_navigate,
         event_with_effects,
         event_no_change,
@@ -213,7 +221,9 @@ groups() ->
     %% instead of leaking cookie-mode assumptions into the rest of the suite.
     SessionStore = [
         controller_put_req_commits_action_session_write,
-        controller_without_put_req_flushes_pre_action_req
+        controller_without_put_req_flushes_pre_action_req,
+        ws_upgrade_commits_middleware_session_write,
+        ws_upgrade_commits_middleware_session_clear
     ],
     Crash = [
         crash_event_closes,
@@ -478,6 +488,23 @@ init_per_group(roadrunner, Config) ->
         }},
         %% Native-shell capability negotiation chain (`_az_caps` -> ?capability).
         {live, <<"/caps_probe">>, arizona_os_caps_probe, #{}},
+        %% Live routes whose middleware stashes response state on the WS upgrade:
+        %% the dispatcher must flush it onto the 101, as it does over HTTP.
+        {live, <<"/upgrade_cookie">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {cont, arizona_req:put_resp_cookie(Req, ~"probe", ~"ws", #{path => ~"/"}), B}
+                end
+            ]
+        }},
+        {live, <<"/upgrade_session">>, arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) -> {cont, arizona_req:put_session(Req, ~"seen", ~"ws"), B} end
+            ]
+        }},
+        {live, <<"/upgrade_logout">>, arizona_crashable, #{
+            middlewares => [fun(Req, B) -> {cont, arizona_req:clear_session(Req), B} end]
+        }},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
         {reload, <<"/reload">>, #{}}
@@ -1033,6 +1060,79 @@ http_req(Config, Method, Path, ExtraHeaders) ->
     {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
     gen_tcp:close(Sock),
     Resp.
+
+ws_upgrade_flushes_middleware_cookie(Config) ->
+    %% A cookie a route middleware stashes on the upgrade reaches the 101. The
+    %% WS dispatcher used to return the upgrade without flushing the stash, so
+    %% the cookie vanished with no error.
+    Head = ws_upgrade_head(proplists:get_value(port, Config), ~"/upgrade_cookie", []),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, Head),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"set-cookie: probe=ws")).
+
+ws_upgrade_flushes_cookie_mode_session_write(Config) ->
+    %% Cookie mode: a session write on the upgrade reaches the 101 as the
+    %% encrypted session cookie.
+    Head = ws_upgrade_head(proplists:get_value(port, Config), ~"/upgrade_session", []),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, Head),
+    ?assertEqual(#{~"seen" => ~"ws"}, arizona_session:decode(session_cookie_value(Head))).
+
+ws_upgrade_halt_flushes_cookie_without_upgrading(Config) ->
+    %% The halting path is unchanged: a middleware that stashes a cookie then
+    %% halts with a redirect gets the redirect (cookie included), not a 101.
+    Head = ws_upgrade_head(proplists:get_value(port, Config), ~"/halt_set_cookie", []),
+    ?assertMatch(<<"HTTP/1.1 303", _/binary>>, Head),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"set-cookie: session=abc")).
+
+ws_upgrade_commits_middleware_session_write(Config) ->
+    %% Store mode: a session write on the upgrade lands in the store and its
+    %% cookie rides the 101, the same commit the HTTP dispatchers run.
+    Id = seed_stored_session(),
+    Head = ws_upgrade_head(
+        proplists:get_value(port, Config), ~"/upgrade_session", [stored_session_cookie(Id)]
+    ),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, Head),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"set-cookie: az_session=")),
+    ?assertMatch(
+        {ok, #{~"user_id" := ~"u1", ~"seen" := ~"ws"}}, arizona_session_store_ets:get(Id)
+    ).
+
+ws_upgrade_commits_middleware_session_clear(Config) ->
+    %% Store mode: clearing the session on the upgrade deletes the store entry
+    %% and the clearing cookie rides the 101.
+    Id = seed_stored_session(),
+    Head = ws_upgrade_head(
+        proplists:get_value(port, Config), ~"/upgrade_logout", [stored_session_cookie(Id)]
+    ),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, Head),
+    ?assertNotEqual(nomatch, binary:match(Head, ~"set-cookie: az_session=;")),
+    ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
+
+%% The raw response head of a WS upgrade to the live route `Path`, sending the
+%% extra request header lines `Extra`.
+ws_upgrade_head(Port, Path, Extra) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Sock, [
+        "GET /ws?_az_path=",
+        Path,
+        " HTTP/1.1\r\nHost: localhost:",
+        integer_to_list(Port),
+        "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ",
+        base64:encode(crypto:strong_rand_bytes(16)),
+        "\r\nSec-WebSocket-Version: 13\r\n",
+        Extra,
+        "\r\n"
+    ]),
+    Head = recv_head(Sock, <<>>),
+    ok = gen_tcp:close(Sock),
+    Head.
+
+recv_head(Sock, Acc0) ->
+    {ok, Data} = gen_tcp:recv(Sock, 0, 5000),
+    Acc = <<Acc0/binary, Data/binary>>,
+    case binary:split(Acc, ~"\r\n\r\n") of
+        [Head, _] -> Head;
+        [_] -> recv_head(Sock, Acc)
+    end.
 
 %% Send a raw WS upgrade for `/` with the given extra header lines; return the response
 %% status code (101 on upgrade, 403 when check_origin rejects).

@@ -8,7 +8,7 @@
 -export([flush_adds_header_to_stream_loop_and_sendfile/1]).
 -export([flush_flattens_iodata_header_value/1]).
 -export([flush_empty_stash_leaves_response_untouched/1]).
--export([flush_onto_websocket_upgrade_errors/1]).
+-export([flush_adds_header_and_cookie_to_websocket_upgrade/1]).
 
 all() ->
     [{group, flush}].
@@ -20,7 +20,7 @@ groups() ->
             flush_adds_header_to_stream_loop_and_sendfile,
             flush_flattens_iodata_header_value,
             flush_empty_stash_leaves_response_untouched,
-            flush_onto_websocket_upgrade_errors
+            flush_adds_header_and_cookie_to_websocket_upgrade
         ]}
     ].
 
@@ -67,19 +67,25 @@ flush_flattens_iodata_header_value(Config) when is_list(Config) ->
     ?assertEqual(~"ab", proplists:get_value(~"x-io", Headers)).
 
 flush_empty_stash_leaves_response_untouched(Config) when is_list(Config) ->
-    %% Nothing stashed means nothing to fold -- including onto a websocket
-    %% upgrade, which has no header section to fold into.
+    %% Nothing stashed means nothing to fold -- a bare websocket upgrade keeps
+    %% its three-element shape.
     Req = arizona_req_test_adapter:new(#{}),
     Resp = {websocket, some_ws_handler, state},
     ?assertEqual(Resp, arizona_roadrunner_resp:flush(Req, Resp)).
 
-flush_onto_websocket_upgrade_errors(Config) when is_list(Config) ->
-    %% A websocket upgrade has nowhere to put a Set-Cookie. Dropping it silently
-    %% would lose a cleared flash or a rotated session, so it fails loudly.
-    ?assertError(
-        {unflushable_response, websocket},
-        arizona_roadrunner_resp:flush(stashed_req(), {websocket, some_ws_handler, state})
-    ).
+flush_adds_header_and_cookie_to_websocket_upgrade(Config) when is_list(Config) ->
+    %% The upgrade's headers ride the 101: a bare upgrade grows the headers
+    %% element, one that already has it keeps its own entries.
+    {websocket, some_ws_handler, state, Headers} = arizona_roadrunner_resp:flush(
+        stashed_req(), {websocket, some_ws_handler, state}
+    ),
+    ?assertEqual(~"1", proplists:get_value(~"x-a", Headers)),
+    ?assertMatch({_, _}, binary:match(proplists:get_value(~"set-cookie", Headers), ~"probe=set")),
+    {websocket, some_ws_handler, state, Kept} = arizona_roadrunner_resp:flush(
+        stashed_req(), {websocket, some_ws_handler, state, [{~"x-own", ~"2"}]}
+    ),
+    ?assertEqual(~"2", proplists:get_value(~"x-own", Kept)),
+    ?assertEqual(~"1", proplists:get_value(~"x-a", Kept)).
 
 %% --------------------------------------------------------------------
 %% Helpers

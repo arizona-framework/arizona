@@ -21,10 +21,6 @@ dispatcher happened to run it.
 
 -export([halt/1]).
 -export([flush/2]).
--export([format_error/2]).
-
-%% Called by `erl_error` via the `error_info` annotation, not directly.
--ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -65,13 +61,10 @@ flush is the commit-on-success point, so the store write happens only once a
 response has actually been built, never as a side effect of reading
 `arizona_req:resp_cookies/1`.
 
-Accepts every header-bearing `t:roadrunner_handler:response/0` shape: the
-buffered triple and the `stream`/`loop`/`sendfile` quadruples. A `websocket`
-upgrade has no header section at all, so a stashed header on one raises
-`{unflushable_response, websocket}` rather than being dropped -- a silently
-skipped `Set-Cookie` (a cleared flash, a rotated session) is a correctness bug
-the caller cannot see. Flushing an empty stash onto a `websocket` response is
-a no-op, as it is for any other shape.
+Accepts every `t:roadrunner_handler:response/0` shape: the buffered triple, the
+`stream`/`loop`/`sendfile` quadruples, and a `websocket` upgrade, whose headers
+ride the `101 Switching Protocols` (a bare `{websocket, Module, State}` grows the
+headers element). Flushing an empty stash leaves any shape unchanged.
 """.
 -spec flush(Request, Resp) -> Resp when
     Request :: arizona_req:request(),
@@ -89,28 +82,8 @@ flush(ArzReq, Resp0) ->
         Resp1,
         arizona_req:resp_cookies(ArzReq)
     ),
-    %% After the folds: an unflushable response shape raises above, so a session
-    %% whose cookie cannot reach the client is never committed either.
     ok = arizona_req:commit_session(ArzReq),
     Resp.
-
--doc """
-Renders the error raised when a stashed header cannot be flushed onto the
-handler's response shape. Picked up by `erl_error` via the `error_info`
-annotation.
-""".
--spec format_error(Reason, Stacktrace) -> ErrorInfo when
-    Reason :: term(),
-    Stacktrace :: [tuple()],
-    ErrorInfo :: #{general := iolist()}.
-format_error({unflushable_response, websocket}, [{_M, _F, _Args, _Info} | _]) ->
-    #{
-        general =>
-            "a websocket upgrade response carries no headers, so the response "
-            "headers/cookies stashed by a middleware cannot be flushed onto it. "
-            "Drop the stashing middleware from the route, or set the header on "
-            "the upgrade response the handler builds itself."
-    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -118,14 +91,15 @@ format_error({unflushable_response, websocket}, [{_M, _F, _Args, _Info} | _]) ->
 
 %% Prepend one header onto a handler response. The buffered triple goes through
 %% roadrunner's own builder (it guards the name and flattens an iodata value);
-%% the streaming shapes carry their headers in the third position.
+%% the streaming shapes carry their headers in the third position, a websocket
+%% upgrade in the fourth.
 add_header({Status, _Headers, _Body} = Resp, Name, Value) when is_integer(Status) ->
     roadrunner_resp:add_header(Resp, Name, Value);
 add_header({Kind, Status, Headers, Payload}, Name, Value) when
     Kind =:= stream; Kind =:= loop; Kind =:= sendfile
 ->
     {Kind, Status, [{Name, iolist_to_binary(Value)} | Headers], Payload};
-add_header({websocket, _Module, _State}, _Name, _Value) ->
-    erlang:error(
-        {unflushable_response, websocket}, none, [{error_info, #{module => ?MODULE}}]
-    ).
+add_header({websocket, Module, State}, Name, Value) ->
+    add_header({websocket, Module, State, []}, Name, Value);
+add_header({websocket, Module, State, Headers}, Name, Value) ->
+    {websocket, Module, State, [{Name, iolist_to_binary(Value)} | Headers]}.
