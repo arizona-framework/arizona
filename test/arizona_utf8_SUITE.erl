@@ -142,6 +142,7 @@ warns_latin1_literal_in_unfolded_list(Config) when is_list(Config) ->
         ~"        {p, [], [[?get(x), <<\"café \">>]]}, %% warn",
         ~"        {p, [], [[<<\"café \">>, ?raw(?get(x))]]}, %% static",
         ~"        {p, [{title, [<<\"atributo é\">>, ?get(x)]}], []}, %% warn",
+        ~"        {p, [{title, [<<\"atributo é\">>, ?raw(?get(x))]}], []}, %% warn",
         ~"        {title, [], [[<<\"título é\">>, ~\"x\"]]}, %% warn",
         ~"        {p, [], [[<<\"lista é \">>, ~\"x\"]]}, %% static",
         ~"        {p, [{title, [<<\"atributo é \">>, ~\"x\"]}], []} %% static",
