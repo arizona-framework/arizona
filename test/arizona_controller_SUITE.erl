@@ -8,6 +8,7 @@
 -export([reply_effects_status_and_content_type/1]).
 -export([reply_effects_with_status_for_error_leg/1]).
 -export([reply_redirect_emits_navigate_effect/1]).
+-export([reply_redirect_off_origin_loads_full_page/1]).
 -export([set_cookie_layers_onto_reply/1]).
 
 all() ->
@@ -20,6 +21,7 @@ groups() ->
             reply_effects_status_and_content_type,
             reply_effects_with_status_for_error_leg,
             reply_redirect_emits_navigate_effect,
+            reply_redirect_off_origin_loads_full_page,
             set_cookie_layers_onto_reply
         ]}
     ].
@@ -66,6 +68,27 @@ reply_redirect_emits_navigate_effect(Config) when is_list(Config) ->
     ?assertEqual(
         #{~"e" => [[10, ~"/login"]]},
         json:decode(iolist_to_binary(Body))
+    ).
+
+%% A Location off this origin cannot be SPA-navigated (the client would
+%% pushState it, which throws), so it goes out as a full-page navigation. The
+%% scheme-relative forms count as off-origin: `/\host` is read like `//host`.
+reply_redirect_off_origin_loads_full_page(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Location) ->
+            {200, _Headers, Body} = arizona_controller:reply_redirect(Location),
+            ?assertEqual(
+                #{~"e" => [[10, Location, #{~"full" => true}]]},
+                json:decode(iolist_to_binary(Body)),
+                Location
+            )
+        end,
+        [
+            ~"https://idp.example.com/authorize?client_id=x",
+            ~"//idp.example.com/authorize",
+            ~"/\\idp.example.com/authorize",
+            ~"login"
+        ]
     ).
 
 %% --------------------------------------------------------------------

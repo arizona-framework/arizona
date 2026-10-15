@@ -675,6 +675,28 @@ function navigateTo(path, qs, hash, opts) {
 }
 
 /**
+ * Load `url` as a real page. `replace` finishes a navigation already in history
+ * -- the server degrading the client's own navigate frame, whose entry was pushed
+ * before asking -- so it must not add a second entry; the browser only folds the
+ * load into the current entry by itself when the URL is identical.
+ * @param {string} url
+ * @param {boolean} [replace]
+ */
+function leavePage(url, replace) {
+    if (replace) location.replace(url);
+    else location.assign(url);
+}
+
+/**
+ * Does `url` (resolved the way a SPA navigation resolves it) leave this origin?
+ * @param {string} url
+ * @returns {boolean}
+ */
+function offOrigin(url) {
+    return new URL(url, location.origin).origin !== location.origin;
+}
+
+/**
  * Post a control message to the Worker. No-op if the Worker isn't
  * spawned. The Worker is the authority on transport state -- pre-open
  * `W_SEND` messages are dropped by the Worker itself, so the main
@@ -2739,11 +2761,12 @@ function execOne(el, event, cmd) {
         case JS_NAVIGATE: {
             const full = cmd[1];
             const opts = cmd[2] || {};
-            if (opts.full) {
+            if (opts.full || offOrigin(full)) {
                 // Full-page navigation: let the browser load the URL normally.
                 // Used when the target isn't a live route (a controller/asset
-                // path, or a 404) and so can't be SPA-navigated.
-                location.assign(full);
+                // path, or a 404) and so can't be SPA-navigated -- nor can
+                // another origin, which pushState refuses.
+                leavePage(full, opts.replace);
                 break;
             }
             const u = new URL(full, location.origin);
@@ -2755,6 +2778,10 @@ function execOne(el, event, cmd) {
         case JS_PATCH: {
             // In-place SPA navigation: keep the view, re-render via handle_update.
             const full = cmd[1];
+            if (offOrigin(full)) {
+                leavePage(full, cmd[2]?.replace);
+                break;
+            }
             const u = new URL(full, location.origin);
             const hash = u.hash ? u.hash.slice(1) : '';
             const qs = u.search ? u.search.slice(1) : '';
@@ -3683,6 +3710,9 @@ function connect(endpoint, params = {}) {
             if (!el || !_connected) return;
             const href = el.getAttribute('href');
             if (!href) return;
+            // Another origin cannot be SPA-navigated (pushState refuses it, and
+            // its pathname is not ours to request): the browser follows the link.
+            if (el.origin !== location.origin) return;
             const isPatch = el.hasAttribute('az-patch');
             // Anchors implement the URL interface -- use browser-parsed parts.
             const path = el.pathname;

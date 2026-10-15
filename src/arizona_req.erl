@@ -67,6 +67,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([redirect/2]).
 -export([redirect/3]).
 -export([halted_redirect/1]).
+-export([local_location/1]).
 -export([put_resp_header/3]).
 -export([put_resp_cookie/4]).
 -export([put_resp_status/2]).
@@ -430,7 +431,10 @@ Middleware authors should return `{halt, arizona_req:redirect(Req,
 Location)}` instead of writing a transport-specific response
 directly. HTTP transports read the intent and emit a proper redirect
 reply; WS navigate transports emit an `arizona_js:navigate/1`
-client effect so the browser pushes the new URL.
+client effect so the browser pushes the new URL. Only a path on this origin
+(see `local_location/1`) can be followed that way: for any other `Location` --
+an identity provider, another subdomain -- the WS transport has the browser load
+the gated path over HTTP instead, where this redirect is a real 3xx.
 """.
 -spec redirect(Request, Location) -> Request when
     Request :: request(),
@@ -458,6 +462,23 @@ client-visible response.
     Request :: request().
 halted_redirect(#{redirect := Redirect}) -> Redirect;
 halted_redirect(_) -> undefined.
+
+-doc """
+Returns `true` when a redirect `Location` is a path on this origin -- a single
+leading `/` -- the only form a SPA navigation can follow.
+
+Anything else is `false`: a scheme-qualified URL, a scheme-relative one (`//host`,
+and `/\host`, which browsers read the same way), and a relative path, which a
+browser resolves against the current URL rather than the origin root. A `false`
+`Location` may still be same-origin, but the server cannot tell -- behind a proxy
+it does not know its public origin -- so the caller takes the full-page road,
+which is correct for any URL.
+""".
+-spec local_location(Location) -> boolean() when
+    Location :: binary().
+local_location(<<"/", C, _/binary>>) when C =:= $/; C =:= $\\ -> false;
+local_location(<<"/", _/binary>>) -> true;
+local_location(<<_/binary>>) -> false.
 
 -doc """
 Stashes a response header on `Request`. Transports flush stashed headers

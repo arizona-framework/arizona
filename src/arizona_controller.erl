@@ -103,6 +103,10 @@ Builds a response that sends the client to `Location` via a SPA navigation. Suga
 a SPA navigation (its `Location` is unreadable), so a redirect is delivered as a
 `navigate` effect instead.
 
+A `Location` that is not a path on this origin (`arizona_req:local_location/1`) -- an
+identity provider, an absolute URL -- cannot be SPA-navigated, so it is sent with the
+`full` option and the browser loads it for real.
+
 This is a SPA navigation over the existing WebSocket, so it suits same-identity
 redirects. After an **identity change** (login/logout) use `arizona_js:reload/0`
 instead, so the socket re-handshakes with the new session.
@@ -110,7 +114,10 @@ instead, so the socket re-handshakes with the new session.
 -spec reply_redirect(Location) -> roadrunner_resp:buffered_response() when
     Location :: binary().
 reply_redirect(Location) ->
-    reply_effects([arizona_js:navigate(Location)]).
+    case arizona_req:local_location(Location) of
+        true -> reply_effects([arizona_js:navigate(Location)]);
+        false -> reply_effects([arizona_js:navigate(Location, #{full => true})])
+    end.
 
 -doc """
 The post-middleware `arizona_req:request()` for this controller request,

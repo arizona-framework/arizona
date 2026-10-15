@@ -5722,6 +5722,70 @@ describe('navigation scroll', () => {
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
     });
 
+    it('JS_NAVIGATE with {full: true, replace: true} loads the page in place of the current entry', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const assign = vi.fn();
+        const replace = vi.fn();
+        vi.stubGlobal('location', { assign, replace, origin: window.location.origin });
+        // The server degrading the client's own navigate frame (no live route, a
+        // layout change, a halt replayed over HTTP): the client already pushed the
+        // entry, so a second one would make Back revisit the same navigation.
+        mod.applyEffects([[10, '/gate', { full: true, replace: true }]]);
+        vi.unstubAllGlobals();
+        expect(replace).toHaveBeenCalledWith('/gate');
+        expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('JS_NAVIGATE / JS_PATCH to another origin load the page instead of pushState', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const assign = vi.fn();
+        const replace = vi.fn();
+        const logged = [];
+        const errSpy = vi.spyOn(console, 'error').mockImplementation((...a) => logged.push(a));
+        const pushSpy = vi.spyOn(history, 'pushState');
+        vi.stubGlobal('location', { assign, replace, origin: window.location.origin });
+        // pushState throws a SecurityError on a cross-origin URL, which used to
+        // drop the effect and leave the user on the page.
+        const idp = 'https://idp.example.com/authorize?x=1';
+        mod.applyEffects([[10, idp]]);
+        mod.applyEffects([[24, '//idp.example.com/p', { replace: true }]]);
+        vi.unstubAllGlobals();
+        errSpy.mockRestore();
+        expect(assign).toHaveBeenCalledWith(idp);
+        expect(replace).toHaveBeenCalledWith('//idp.example.com/p');
+        expect(pushSpy).not.toHaveBeenCalled();
+        pushSpy.mockRestore();
+        expect(logged).toEqual([]);
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
+    it('az-navigate link to another origin is left to the browser', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const pushSpy = vi.spyOn(history, 'pushState');
+        // jsdom reports the default action it cannot perform; keep it off the output.
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const { event } = clickLink('https://other.example.com/x');
+        errSpy.mockRestore();
+        expect(event.defaultPrevented).toBe(false);
+        expect(pushSpy).not.toHaveBeenCalled();
+        pushSpy.mockRestore();
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
     it('popstate with saved state restores exact coordinates after OP_REPLACE', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
