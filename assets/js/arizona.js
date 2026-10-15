@@ -2524,24 +2524,79 @@ function submitter(event) {
 }
 
 /**
+ * The names in `form` that hold a list by their markup: a `<select multiple>`,
+ * a checkbox name shared by more than one box (a group), and any field whose
+ * name ends in `[]` -- the convention for a list whose rendered size can be one
+ * (a data-driven group showing a single box), which markup alone cannot tell
+ * apart from a single field. Only enabled ones, since FormData leaves a
+ * disabled control out entirely; buttons never count (only the submitter is
+ * submitted, and it is a single value).
+ * @param {HTMLFormElement} form
+ * @returns {Set<string>}
+ */
+function multiValuedNames(form) {
+    /** @type {Set<string>} */
+    const names = new Set();
+    /** @type {Map<string, {boxes: number, enabled: boolean}>} */
+    const groups = new Map();
+    for (const el of form.elements) {
+        const f = /** @type {any} */ (el);
+        const name = f.name;
+        if (!name) continue;
+        // `:disabled` is a selector match, asked only of a field that can hold a
+        // list: a form payload runs this walk on every event the form raises.
+        if (name.endsWith('[]') ? isSubmittableField(el) : el.tagName === 'SELECT' && f.multiple) {
+            if (!el.matches(':disabled')) names.add(name);
+        } else if (el.tagName === 'INPUT' && f.type === 'checkbox') {
+            const g = groups.get(name) || { boxes: 0, enabled: false };
+            g.boxes += 1;
+            g.enabled ||= !el.matches(':disabled');
+            groups.set(name, g);
+        }
+    }
+    for (const [name, g] of groups) if (g.boxes > 1 && g.enabled) names.add(name);
+    return names;
+}
+
+/**
+ * Whether `el` contributes its own value to FormData: an input other than a
+ * button-like one, a select or a textarea.
+ * @param {Element} el
+ * @returns {boolean}
+ */
+function isSubmittableField(el) {
+    if (el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') return true;
+    if (el.tagName !== 'INPUT') return false;
+    const t = /** @type {HTMLInputElement} */ (el).type;
+    return t !== 'submit' && t !== 'button' && t !== 'image' && t !== 'reset';
+}
+
+/**
  * Collect a form's fields, keeping a duplicate name as an array. A checkbox
  * group and a `<select multiple>` each submit one entry per selected value, so
- * the flat `Object.fromEntries` shape silently keeps only the last of them.
+ * the flat `Object.fromEntries` shape silently keeps only the last of them --
+ * and those two, plus any `name[]` field, are arrays even with one value or
+ * none (`[]`), chosen by the field's markup rather than by how many values
+ * happen to be selected, so a handler sees one shape. The key is the name as
+ * written, brackets included, as a native form POST sends it.
  * @param {FormData} fd
+ * @param {HTMLFormElement} form
  * @returns {Object<string, string|string[]>}
  */
-function formFields(fd) {
+function formFields(fd, form) {
     // Prototype-less: a field name is author data, and on a plain object one named
     // `constructor` or `toString` would read back the inherited method (`in` is
     // true, so the value became `[fn, v]`) and `__proto__` would hit the setter.
     /** @type {Object<string, string|string[]>} */
     const data = Object.create(null);
+    for (const name of multiValuedNames(form)) data[name] = [];
     for (const [k, v] of fd.entries()) {
         if (k in data) {
             const prev = data[k];
-            data[k] = Array.isArray(prev)
-                ? prev.concat(/** @type {string} */ (v))
-                : [prev, /** @type {string} */ (v)];
+            // Every array here was built by this function, so it is extended in
+            // place: a long list (a big multiple select) stays linear.
+            if (Array.isArray(prev)) prev.push(/** @type {string} */ (v));
+            else data[k] = [prev, /** @type {string} */ (v)];
         } else {
             data[k] = /** @type {string} */ (v);
         }
@@ -2559,16 +2614,23 @@ function formFields(fd) {
  */
 function autoPayload(el, event) {
     if (event && /** @type {any} */ (event).dataTransfer) {
-        const dropTarget = /** @type {Element} */ (event.target).closest('[az-key]');
+        // The container's own child the drop landed in -- not the nearest
+        // [az-key], which may be a keyed descendant of an item (a nested list)
+        // or, on an empty container, an ancestor of the container itself.
+        let item = /** @type {Element|null} */ (event.target);
+        while (item && item.parentElement !== el) item = item.parentElement;
         const children = Array.from(el.querySelectorAll(':scope > [az-key]'));
         return {
             data_transfer: /** @type {any} */ (event).dataTransfer.getData('text/plain'),
-            drop_index: dropTarget ? children.indexOf(dropTarget) : -1,
+            drop_index: item ? children.indexOf(item) : -1,
         };
     }
     const tag = el.tagName;
     if (tag === 'FORM')
-        return formFields(new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)));
+        return formFields(
+            new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
+            /** @type {HTMLFormElement} */ (el),
+        );
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
         const field = /** @type {any} */ (el);
         // A checkbox/radio reports what it WOULD submit, which is the same string
@@ -3276,7 +3338,10 @@ function saveFormState(suspect = null) {
     // preserve the user's typing there exactly as it does on the main page.
     for (const doc of allDocs()) {
         doc.querySelectorAll('form[id]').forEach((form) => {
-            const data = formFields(new FormData(/** @type {HTMLFormElement} */ (form)));
+            const data = formFields(
+                new FormData(/** @type {HTMLFormElement} */ (form)),
+                /** @type {HTMLFormElement} */ (form),
+            );
             const azChange = form.getAttribute('az-change') || null;
             const replay = !suspect?.has(form.id) && (held.get(form.id)?.replay ?? true);
             _savedForms.set(form.id, { fields: data, azChange, replay });
@@ -3326,7 +3391,13 @@ function restoreFormState() {
                     el.checked = fields[el.name] === el.value;
                 } else if (el.name in fields) {
                     const v = nextValue(el.name);
-                    if (v !== undefined) el.value = v;
+                    // A readonly field is server-owned -- the user cannot have
+                    // typed into it -- so the resync's fresh value stands. Its
+                    // saved value is still consumed above, keeping a repeated
+                    // name's positions aligned. A hidden input is restored: a
+                    // widget (rich text, date picker, tags) may hold the user's
+                    // input there, which outweighs a stale server-owned value.
+                    if (v !== undefined && !el.readOnly) el.value = v;
                 }
             } else if (el instanceof HTMLSelectElement) {
                 if (!el.name || !(el.name in fields)) continue;
@@ -3341,7 +3412,7 @@ function restoreFormState() {
             } else if (el instanceof HTMLTextAreaElement) {
                 if (el.name && el.name in fields) {
                     const v = nextValue(el.name);
-                    if (v !== undefined) el.value = v;
+                    if (v !== undefined && !el.readOnly) el.value = v;
                 }
             }
         }
@@ -3691,6 +3762,14 @@ function scanEvents(root) {
 }
 
 /**
+ * Whether an [az-key] item drag is in flight: set on its `dragstart`, cleared
+ * on `dragend` or when an az-drop claims the drop. Module-wide, not per
+ * document, so an item dragged between the main page and a popped-out view is
+ * still recognised.
+ */
+let _itemDrag = false;
+
+/**
  * Bind every delegated DOM event on `target` (a Document): the az-* event types
  * plus form submit and drag-and-drop. Called for the main document on connect,
  * and for a PiP document when a view is popped out. Page-level concerns
@@ -3771,31 +3850,49 @@ function bindDocumentEvents(target, signal, abort) {
 
     // Drag-and-drop: uses az-key on draggable items and az-drop on the
     // container. dragstart stores the item's key; drop executes the az-drop
-    // command with auto-collected {data_transfer, drop_index} payload.
+    // command with auto-collected {data_transfer, drop_index} payload. The drop
+    // zone is the az-drop container itself, not its items, so an empty container
+    // accepts a drop (drop_index -1). Only an item drag is claimed: `dragover`
+    // and `drop` are cancelled inside a container, and only while a drag that
+    // began on an [az-key] is in flight -- a text or file drop (into an input in
+    // the container's header, onto blank space, or anywhere outside one) is the
+    // browser's own and is left alone.
     target.addEventListener(
         'dragstart',
         (e) => {
             const keyEl = /** @type {Element} */ (e.target).closest('[az-key]');
-            if (keyEl && e.dataTransfer)
+            if (keyEl && e.dataTransfer) {
                 e.dataTransfer.setData('text/plain', keyEl.getAttribute('az-key') || '');
+                _itemDrag = true;
+            }
+        },
+        { signal },
+    );
+    // Fires on the source after a drop, a cancel (Escape) or a drop outside.
+    target.addEventListener(
+        'dragend',
+        () => {
+            _itemDrag = false;
         },
         { signal },
     );
     target.addEventListener(
         'dragover',
         (e) => {
-            if (/** @type {Element} */ (e.target).closest('[az-key]')) e.preventDefault();
+            if (_itemDrag && /** @type {Element} */ (e.target).closest('[az-drop]'))
+                e.preventDefault();
         },
         { signal },
     );
     target.addEventListener(
         'drop',
         (e) => {
-            const dropTarget = /** @type {Element} */ (e.target).closest('[az-key]');
-            if (!dropTarget) return;
+            if (!_itemDrag) return;
+            const container = /** @type {Element} */ (e.target).closest('[az-drop]');
+            if (!container) return;
+            _itemDrag = false;
             e.preventDefault();
-            const container = dropTarget.closest('[az-drop]');
-            if (!container || !_connected) return;
+            if (!_connected) return;
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
             try {
@@ -4243,6 +4340,7 @@ function connect(endpoint, params = {}) {
         cancelMountReload();
         _pendingScroll = null;
         _pendingTransition = null;
+        _itemDrag = false;
         _connectQs = '';
         _savedForms.clear();
         // Close any floating (PiP) view windows; each window's pagehide handler

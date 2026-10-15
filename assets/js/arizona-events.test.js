@@ -409,7 +409,11 @@ describe('open event delegation', () => {
 
         // `drop` is submit's twin: a real DOM event name AND a dedicated listener
         // (it carries the drag bookkeeping), so generic delegation would run the
-        // command a second time with the same payload.
+        // command a second time with the same payload. The drop is claimed only
+        // during an item drag, so one starts first.
+        const start = new Event('dragstart', { bubbles: true, cancelable: true });
+        Object.defineProperty(start, 'dataTransfer', { value: { setData: () => {} } });
+        document.getElementById('item').dispatchEvent(start);
         fireDrop(document.getElementById('item'), 'a');
         expect(w.sent()).toEqual([['v', 'reorder', { data_transfer: 'a', drop_index: 0 }]]);
     });
