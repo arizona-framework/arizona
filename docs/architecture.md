@@ -1266,7 +1266,7 @@ the render/diff, which runs in the same process -- the "Set by" column is author
 | Key | Set by | Read by |
 | --- | ------ | ------- |
 | `$arizona_connected` | set `true` while a transport is attached | `connected/0` (the `?connected` macro) -- SSR vs live |
-| `$arizona_reconnected` | set `true` when this connection is a reconnection | `reconnected/0` (the `?reconnected` macro) -- gate one-shot commands with `?connected andalso not ?reconnected` |
+| `$arizona_reconnected` | set `true` when this connection is a reconnection; erased by `navigate/3,4` (the new page's mount is its first), kept by `patch/2` | `reconnected/0` (the `?reconnected` macro) -- gate one-shot commands with `?connected andalso not ?reconnected` |
 | `$arizona_capabilities` | the `_az_caps` map the client advertised at connect | `capabilities/0` / `capability/1` (`?capabilities` / `?capability`). A UI/effect hint, **never** authorization |
 | `$arizona_timers` | `send_after/3` | unmount and `navigate/3,4`, to cancel |
 | `$arizona_deps` | the per-dynamic eval bracket | `arizona_eval`, `arizona_template:track/1` -- the dependency capture set |
@@ -1725,8 +1725,10 @@ Handlers detect the connected context via the `?connected` macro (delegates to
 `?reconnected` (`arizona_live:reconnected()`) additionally distinguishes a re-opened socket from a
 first connect, so a **one-shot** command (`notify`, `focus`) can be gated with `?connected andalso
 not ?reconnected` while a **declarative** one (`set_title`, `fullscreen`) is re-asserted on every
-connect. For post-connection effects, handlers use `?send(arizona_connected)` in mount and handle it
-in `handle_info/2`.
+connect. The flag describes the current page's mount: a `navigate` after a reconnect clears it,
+since the page it mounts is new to this connection, and a `patch` keeps it with the view. For
+post-connection effects, handlers use `?send(arizona_connected)` in mount and handle it in
+`handle_info/2`.
 
 **Server push (`handle_info`) -- per-view routing:** Messages sent via `?send(Msg)` /
 `arizona_live:send(ViewId, Msg)` are tagged as `{arizona_view, ViewId, Msg}` and routed to the
