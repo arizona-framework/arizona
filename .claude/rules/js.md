@@ -44,7 +44,11 @@ command-versus-data question is answerable, and the delivery uses both (`arizona
   (`arizona_js`/`arizona_android`/`arizona_os`) is visible anywhere in its value expression --
   builders are the only producers of effect tuples, so the call is proof. The names land in an
   `arizona_az_attrs` module attribute beside `arizona_az_deps` (the component modules the templates
-  name literally); `arizona_event_attrs:all/1` walks that graph from the route's handler **and
+  name literally, plus every module the module calls by a literal name -- a remote helper's
+  template carries its folded names in statics no render re-proves, so a call such as
+  `other_mod:button()` must be an edge; a callee reached only through a variable, a fun value, or a
+  module compiled without the headers is not, so declare `-arizona_az_deps([mod]).` by hand);
+  `arizona_event_attrs:all/1` walks that graph from the route's handler **and
   layout modules** (layouts render once, at SSR, so no frame can ever carry their markup) and the
   socket ships the union on the connect frame, under JSON key `"a"` alongside `"o"`/`"e"`.
 - **Render time.** What compile time cannot prove, evaluation can: an opaque dynamic
