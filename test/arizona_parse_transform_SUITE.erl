@@ -26,6 +26,8 @@
     each_stream_control_flow_body_rejected_with_wrapper_advice/1,
     each_stream_multi_root_body_rejected/1,
     each_stream_static_body_rejected/1,
+    each_stream_elementless_list_body_rejected/1,
+    each_stream_one_element_list_body_unwrapped/1,
     computed_element_tag_rejected_with_idiom/1,
     malformed_element_still_invalid_element/1,
     each_stream_control_flow_wrapper_fix_keys_per_item/1,
@@ -663,6 +665,8 @@ groups() ->
             each_stream_control_flow_body_rejected_with_wrapper_advice,
             each_stream_multi_root_body_rejected,
             each_stream_static_body_rejected,
+            each_stream_elementless_list_body_rejected,
+            each_stream_one_element_list_body_unwrapped,
             computed_element_tag_rejected_with_idiom,
             malformed_element_still_invalid_element,
             each_stream_control_flow_wrapper_fix_keys_per_item,
@@ -6650,6 +6654,39 @@ each_stream_static_body_rejected(Config) when is_list(Config) ->
         "        fun(_I, _K) -> ~\"x\" end, arizona_template:get(items, Bindings))]}). ",
         fun(R) -> R =:= each_stream_body_not_element end
     ).
+
+%% A list body holding no element at all (empty, or values only) has no root a keyed op
+%% could address -- the "not an element" mistake, not the multi-root one.
+each_stream_elementless_list_body_rejected(Config) when is_list(Config) ->
+    Src = fun(Name, Body) ->
+        "-module(" ++ Name ++
+            "). -export([render/1]). render(Bindings) -> "
+            "arizona_template:html({'ul', [], [arizona_template:each(fun(I, K) -> " ++ Body ++
+            " end, arizona_template:get(items, Bindings))]}). "
+    end,
+    IsNotElement = fun(R) -> R =:= each_stream_body_not_element end,
+    assert_parse_error(Src("pt_each_stream_nil", "_ = {I, K}, []"), IsNotElement),
+    assert_parse_error(Src("pt_each_stream_text", "[I, ~\"-\", K]"), IsNotElement).
+
+%% A one-element list is a single root, so it is the bare element in a list wrapper and
+%% compiles to the very same per-item template, the way a whole-body ?html does.
+each_stream_one_element_list_body_unwrapped(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_stream_one). -export([bare/1, listed/1]). "
+        "bare(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each("
+        "fun(I, K) -> {li, [{az_key, K}], [I]} end, arizona_template:get(s, Bindings))]}). "
+        "listed(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each("
+        "fun(I, K) -> [{li, [{az_key, K}], [I]}] end, arizona_template:get(s, Bindings))]}). "
+    ),
+    S0 = arizona_stream:new(fun(X) -> X end, [~"a", ~"b"]),
+    Run = fun(F) ->
+        {H0, Snap, _} = arizona_render:render(Mod:F(#{s => S0}), #{}),
+        #{s := C} = arizona_stream:clear_stream_pending(#{s => S0}, [s]),
+        S1 = arizona_stream:insert(arizona_stream:delete(C, ~"a"), ~"c"),
+        {Ops, _, _} = arizona_diff:diff(Mod:F(#{s => S1}), Snap, #{}, #{s => true}),
+        {iolist_to_binary(H0), Ops}
+    end,
+    ?assertEqual(Run(bare), Run(listed)).
 
 %% The shape that error tells the author to write must actually work: one stable keyed
 %% item element with the branch as a child, still diffing per item by key.

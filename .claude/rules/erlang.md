@@ -291,7 +291,12 @@ element (wrap the value: `fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end`).
 **one** element, too: a list of elements or a mixed text+element fragment is
 `each_stream_body_multi_root`, because a keyed op (insert, remove, move, item patch) addresses an
 item by the single element carrying its `az_key`, so a sibling root would be orphaned on a remove
-and out of order on a move -- put the parts inside the item element. When that body is a
+and out of order on a move -- put the parts inside the item element. A one-element list
+(`[{li, ...}]`) is taken as its element; a list with no element at all (`[]`, values only) is
+`each_stream_body_not_element`. Over a **stream**, that root must also carry `az_key`: the
+client finds an item by it, so without one every keyed op on the item silently no-ops. This is
+not a compile error, because the same 2-arg callback may iterate a map, which diffs
+positionally and needs no key. When that body is a
 **conditional**, the error is `each_stream_body_control_flow` and the fix is different. Every item
 shares ONE compiled per-item template, so an item's **outer tag is fixed at compile time** -- that
 is what makes per-item diffing cheap (statics once, dynamics per item). The branches may be
