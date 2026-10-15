@@ -509,7 +509,9 @@
     cond_begin_block_tail/1,
     cond_try_bare_element/1,
     cond_maybe_bare_element/1,
-    cond_receive_bare_element/1
+    cond_receive_bare_element/1,
+    template_free_tails_untouched/1,
+    template_free_tails_beside_nodiff_template/1
 ]).
 -export([scope_keeps_static_marker_text/1]).
 -export([scope_keeps_static_marker_text_in_each_item/1]).
@@ -900,7 +902,9 @@ groups() ->
             cond_begin_block_tail,
             cond_try_bare_element,
             cond_maybe_bare_element,
-            cond_receive_bare_element
+            cond_receive_bare_element,
+            template_free_tails_untouched,
+            template_free_tails_beside_nodiff_template
         ]},
         %% Binding-read inlining: reads hoisted out of ?html still track per-slot
         {inline, [parallel], [
@@ -3453,6 +3457,63 @@ cond_receive_bare_element(Config) when is_list(Config) ->
     ),
     {HTML, _} = arizona_render:render(Mod:render(#{})),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), <<"<p>timeout</p>">>)).
+
+%% A conditional outside every template is plain Erlang: its tails are data, so
+%% a tuple shaped like `{Tag, List}` / `{Tag, List, _}` there -- a key/value pair,
+%% a fold accumulator, an improper list -- must reach the compiler untouched rather
+%% than be read as an element (it used to raise `computed_element_tag` or crash
+%% the transform with a `function_clause`).
+template_free_tails_untouched(Config) when is_list(Config) ->
+    Pair = compile_module_strict(
+        "-module(pt_template_free_pair). "
+        "-export([pair/2]). "
+        "pair(K, V) -> "
+        "    case V of undefined -> {K, []}; _ -> {K, [V]} end. "
+    ),
+    ?assertEqual({k, []}, Pair:pair(k, undefined)),
+    ?assertEqual({k, [v]}, Pair:pair(k, v)),
+    Fold = compile_module_strict(
+        "-module(pt_template_free_fold). "
+        "-export([count/1]). "
+        "count(L) -> "
+        "    lists:foldl(fun(X, {N, Acc}) -> "
+        "        case X > 0 of true -> {N + 1, [X | Acc]}; false -> {N, Acc} end "
+        "    end, {0, []}, L). "
+    ),
+    ?assertEqual({2, [3, 1]}, Fold:count([1, -2, 3])),
+    Improper = compile_module_strict(
+        "-module(pt_template_free_improper). "
+        "-export([pop/1]). "
+        "pop([H | T]) -> "
+        "    case T of [] -> {popped, [H | T], T}; _ -> {ok, [<<\"a\">> | <<\"b\">>]} end. "
+    ),
+    ?assertEqual({popped, [x], []}, Improper:pop([x])),
+    {ok, Iodata} = Improper:pop([x, y]),
+    ?assertEqual(<<"ab">>, iolist_to_binary(Iodata)).
+
+%% The same data tails beside a template whose conditional branch still inherits
+%% the enclosing `az-nodiff`: leaving template-free code alone must not stop the
+%% inheritance a real template context carries.
+template_free_tails_beside_nodiff_template(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_template_free_tails_nodiff). "
+        "-export([pair/2, render/1]). "
+        "pair(K, V) -> "
+        "    case V of undefined -> {K, []}; _ -> {K, [V]} end. "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'div', ['az-nodiff'], ["
+        "            case arizona_template:get(f, Bindings) of "
+        "                true -> {'span', [], [arizona_template:get(b, Bindings)]}; "
+        "                _ -> <<>> "
+        "            end"
+        "        ]}"
+        "    ). "
+    ),
+    ?assertEqual({k, [v]}, Mod:pair(k, v)),
+    ?assertEqual(
+        <<"<div><span>B</span></div>">>, render_markerless(Mod:render(#{f => true, b => ~"B"}))
+    ).
 
 %% Test 14: Two dynamic attributes -- both share az, statics split between both.
 two_dynamic_attrs(Config) when is_list(Config) ->

@@ -578,10 +578,12 @@ mark_targets({tuple, L, [{atom, _, Tag}, _Attrs, _Children] = Parts}, Ctx, CCtx)
     mark_element_children(L, Tag, Parts, Ctx, CCtx);
 %% A bare element in a control-flow tail compiles into its own template, exactly
 %% as a literal `?html` there would (expand_element_leaf/4), so it takes the same
-%% nodiff inheritance the `?html` clause above gives a wrapped one.
+%% nodiff inheritance the `?html` clause above gives a wrapped one. Only inside a
+%% template: outside one (`none`) a tail is plain data -- `{K, [V]}` is a pair,
+%% not an element -- and nothing compiles it.
 mark_targets(Node, Ctx, CCtx) when is_tuple(Node) ->
     Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
-    case is_control_flow_ast(Node) of
+    case Ctx =/= none andalso is_control_flow_ast(Node) of
         true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
         false -> Marked
     end;
