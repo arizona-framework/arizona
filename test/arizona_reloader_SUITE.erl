@@ -37,6 +37,7 @@
     get_error_default_undefined/1,
     clear_error_resets/1,
     compile_success_reloads_module/1,
+    compile_attr_only_edit_refreshes_event_walk/1,
     compile_module_name_differs_from_basename/1,
     compile_error_stores_error/1,
     compile_error_cleared_on_success/1,
@@ -117,6 +118,7 @@ groups() ->
             get_error_default_undefined,
             clear_error_resets,
             compile_success_reloads_module,
+            compile_attr_only_edit_refreshes_event_walk,
             compile_module_name_differs_from_basename,
             compile_error_stores_error,
             compile_error_cleared_on_success,
@@ -367,6 +369,21 @@ compile_success_reloads_module(Config) ->
     ok = file:write_file(File, good_module_src(2)),
     ?assertEqual(ok, arizona_reloader:compile([File])),
     ?assertEqual(2, erlang:apply(arizona_dev_ct_good, value, [])).
+
+%% The connect walk caches each module's az names stamped with the code MD5,
+%% which the compiler computes without attributes. An edit to only a
+%% hand-written `-arizona_az_attrs` leaves the MD5 unchanged, so the reloader
+%% must drop the module's entry when it loads the new code, or the walk keeps
+%% serving the old names.
+compile_attr_only_edit_refreshes_event_walk(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    File = filename:join(Dir, "arizona_dev_ct_az_attrs.erl"),
+    ok = file:write_file(File, az_attrs_module_src("az-copy")),
+    ?assertEqual(ok, arizona_reloader:compile([File])),
+    ?assertEqual([~"az-copy"], arizona_event_attrs:all([arizona_dev_ct_az_attrs])),
+    ok = file:write_file(File, az_attrs_module_src("az-paste")),
+    ?assertEqual(ok, arizona_reloader:compile([File])),
+    ?assertEqual([~"az-paste"], arizona_event_attrs:all([arizona_dev_ct_az_attrs])).
 
 %% A file whose `-module` differs from its filename compiles to the *declared*
 %% module name, not the basename. manual_compile/2 must bind and reload that
@@ -893,6 +910,15 @@ good_module_src(Value) ->
         "-export([value/0]).\n"
         "value() -> ~b.\n",
         [Value]
+    ).
+
+az_attrs_module_src(Name) ->
+    io_lib:format(
+        "-module(arizona_dev_ct_az_attrs).\n"
+        "-arizona_az_attrs([<<\"~s\">>]).\n"
+        "-export([value/0]).\n"
+        "value() -> ok.\n",
+        [Name]
     ).
 
 good_module_src2() ->

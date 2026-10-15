@@ -49,9 +49,13 @@ once went stale there and served a page's events short): new code has a new
 MD5, so its first walk re-reads it and replaces the entry -- one
 `persistent_term` write per module version. The compiler's MD5 covers code,
 not attributes; the transform-recorded ones follow the code (a folded name is
-a template static, an edge is a call or a component atom), but a reload that
-changes only a hand-written `-arizona_az_deps`/`-arizona_az_attrs` keeps the
-previous version's entry until the code itself changes or the VM restarts.
+a template static, an edge is a call or a component atom), and the dev
+reloader drops the entry of every module it loads itself, so a dev edit to
+only a hand-written `-arizona_az_deps`/`-arizona_az_attrs` is seen too. Any
+other load path (a release upgrade) keeps the previous version's entry for
+such an edit until the code itself changes or the VM restarts. (Under `rebar3
+shell` the agent never reloads an attribute-only edit at all: it decides what
+changed by the same MD5.)
 A module that fails to load is cached as absent, so a dangling edge does not
 cost a code-server round trip on every connect; that entry is ignored once
 the module is loaded by any other means (a deploy, the dev reloader).
@@ -89,6 +93,7 @@ Known limits, all loud or documented rather than silent:
 -export([all/1]).
 -export([arm/0]).
 -export([drain/0]).
+-export([forget/1]).
 -export([observe_attr/1]).
 -export([observe_callback/1]).
 -export([observe_mod/1]).
@@ -111,6 +116,19 @@ included.
     Roots :: [module()].
 all(Roots) ->
     lists:usort(walk(#{}, Roots, [])).
+
+%% Drops `Mod`'s walk cache entry, so the next walk re-reads it. Called by the
+%% dev reloader after loading a module: the MD5 stamp covers code, not
+%% attributes, so an edit to only a hand-written `-arizona_az_deps` or
+%% `-arizona_az_attrs` would otherwise keep the previous entry.
+-doc false.
+-spec forget(Mod) -> ok when
+    Mod :: module().
+forget(Mod) ->
+    case persistent_term:erase(?CACHE_KEY(Mod)) of
+        true -> ok;
+        false -> ok
+    end.
 
 -doc """
 Arms the render-time collector in the calling process. Until armed,
