@@ -49,6 +49,7 @@ the wire value. On the wire itself a value stays raw
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
+-export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
 -export([boolean_attrs/0]).
 -export([escape/1]).
@@ -170,6 +171,8 @@ target() -> native.
 content_type() -> ~"application/json".
 
 supports_local() -> false.
+
+single_root_document() -> true.
 
 supports_nodiff_keep() -> false.
 

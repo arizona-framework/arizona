@@ -147,6 +147,9 @@ render(Bindings) ->
     %% branch that produced it and the value of its root's `az_key`.
     branch => pos_integer(),
     az_key => term(),
+    %% Stamped when the backend's document must be one node (see
+    %% arizona_renderer:single_root_document/0) and the body is several.
+    multi_root => true,
     backend => module()
 }.
 

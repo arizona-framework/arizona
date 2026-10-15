@@ -201,6 +201,17 @@ is stripped. A backend capability, declared by each backend.
 -callback supports_nodiff_keep() -> boolean().
 
 -doc """
+Whether a whole document of this backend must be a single root node. `true` for
+native, whose document is one JSON value; `false` where a fragment is a valid
+document (an HTML doctype beside `<html>`, terminal lines). When `true`, the parse
+transform stamps `multi_root => true` on a template whose body is a literal list of
+more than one node (at any depth of nested literal lists), and the render refuses
+a layout chain whose final document root is so stamped (`multi_root_layout`). A
+live view root is already refused at compile time.
+""".
+-callback single_root_document() -> boolean().
+
+-doc """
 What a dynamic boolean attribute means on this backend's wire. `presence` (HTML): `true`
 renders the bare attribute and `false` removes it. `value`: a boolean is a typed prop
 value, sent as JSON `true`/`false` and present in both states, the same shape a static

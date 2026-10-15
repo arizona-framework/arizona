@@ -78,6 +78,9 @@
     ssr_cross_target_child_raises/1,
     ssr_cross_target_layout_raises/1,
     ssr_same_target_native_layout/1,
+    ssr_multi_root_native_layout_raises/1,
+    ssr_nested_multi_root_native_layout_raises/1,
+    ssr_multi_root_inner_native_layout_renders/1,
     ssr_backendless_layout_keeps_page_target/1,
     ssr_backendless_page_in_layout/1,
     ssr_counter_with_bindings/1,
@@ -175,6 +178,9 @@ groups() ->
             snapshot_html_matches_render_unprinted,
             ssr_cross_target_layout_raises,
             ssr_same_target_native_layout,
+            ssr_multi_root_native_layout_raises,
+            ssr_nested_multi_root_native_layout_raises,
+            ssr_multi_root_inner_native_layout_renders,
             ssr_backendless_layout_keeps_page_target,
             ssr_backendless_page_in_layout,
             ssr_counter_with_bindings,
@@ -795,6 +801,85 @@ ssr_cross_target_layout_raises(Config) when is_list(Config) ->
             arizona_counter, #{layouts => [{arizona_native_layout, render}]}
         )
     ).
+
+%% A native document is one JSON node; a layout with several top-level nodes
+%% would serve them comma-joined, which no client parses. A layer that adds no
+%% node of its own (backendless, or `?native([?inner_content])`) leaves the
+%% fragment as the document root, so it is refused through those too.
+ssr_multi_root_native_layout_raises(Config) when is_list(Config) ->
+    Reason = {multi_root_layout, arizona_native_multi_root_layout, render, arizona_native},
+    ?assertError(
+        Reason,
+        arizona_render:render_view(
+            arizona_native_counter_demo,
+            #{layouts => [{arizona_native_multi_root_layout, render}]}
+        )
+    ),
+    ?assertError(
+        Reason,
+        arizona_render:render_view(
+            arizona_native_counter_demo,
+            #{
+                layouts => [
+                    {arizona_passthrough_layout, render}, {arizona_native_multi_root_layout, render}
+                ]
+            }
+        )
+    ),
+    ?assertError(
+        Reason,
+        arizona_render:render_view(
+            arizona_native_counter_demo,
+            #{
+                layouts => [
+                    {arizona_native_passthrough_layout, render},
+                    {arizona_native_multi_root_layout, render}
+                ]
+            }
+        )
+    ),
+    #{general := Msg} = arizona_render:format_error(Reason, []),
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            unicode:characters_to_binary(Msg), ~"arizona_native_multi_root_layout:render/1"
+        )
+    ).
+
+%% The same nodes one literal list deeper still make a two-node document root.
+ssr_nested_multi_root_native_layout_raises(Config) when is_list(Config) ->
+    ?assertError(
+        {multi_root_layout, arizona_native_nested_multi_root_layout, render, arizona_native},
+        arizona_render:render_view(
+            arizona_native_counter_demo,
+            #{layouts => [{arizona_native_nested_multi_root_layout, render}]}
+        )
+    ).
+
+%% Only the document root must be one node. Wrapped by a single-root layout, a
+%% multi-root one is just that layout's children.
+ssr_multi_root_inner_native_layout_renders(Config) when is_list(Config) ->
+    {ContentType, Doc} = arizona_render:render_view(
+        arizona_native_counter_demo,
+        #{
+            layouts => [
+                {arizona_native_layout, render}, {arizona_native_multi_root_layout, render}
+            ]
+        }
+    ),
+    ?assertEqual(~"application/json", ContentType),
+    ?assertMatch(
+        #{
+            ~"type" := ~"Column",
+            ~"children" := [#{~"type" := ~"Banner"}, #{~"id" := ~"native_counter"}]
+        },
+        json:decode(iolist_to_binary(Doc))
+    ),
+    %% A layer that adds no node over a single-root page is still one node.
+    {_, Passed} = arizona_render:render_view(
+        arizona_native_counter_demo, #{layouts => [{arizona_native_passthrough_layout, render}]}
+    ),
+    ?assertMatch(#{~"id" := ~"native_counter"}, json:decode(iolist_to_binary(Passed))).
 
 ssr_same_target_native_layout(Config) when is_list(Config) ->
     Doc = iolist_to_binary(
