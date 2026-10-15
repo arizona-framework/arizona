@@ -2543,31 +2543,14 @@ function maybeResetForm(form) {
 }
 
 /**
- * True when a parsed az-submit command (single or list) is/contains a `fetch`, so the
- * submit listener can defer `az-form-reset` to the fetch response instead of resetting
- * synchronously on submit.
- * @param {Array<*>} cmds
- * @returns {boolean}
- */
-function commandsIncludeFetch(cmds) {
-    const list = Array.isArray(cmds[0]) ? cmds : [cmds];
-    return list.some((c) => {
-        if (c[0] === JS_FETCH) return true;
-        // transition(...)/on_key(...) wrap their inner command(s) in c[2]; a fetch
-        // nested there still runs (inside the transition callback), so it must also
-        // defer the reset -- recurse instead of only checking the top level.
-        if (c[0] === JS_TRANSITION || c[0] === JS_ON_KEY) return commandsIncludeFetch(c[2]);
-        return false;
-    });
-}
-
-/**
  * What a parsed command (single or list) needs the WebSocket for, so a submit made
  * while it is down can be settled up front: `event` (a `push_event`), `fetch`, and
  * `nav`, the first SPA `navigate`/`patch` that runs unconditionally (a `full`
  * navigate is a plain page load and needs no socket). A navigation under `on_key`
  * runs only on a matching key, so it counts as `event`: it cannot be degraded to a
- * page load that may never have been asked for.
+ * page load that may never have been asked for. `fetch` also tells the submit
+ * listener to leave `az-form-reset` to the fetch's own response, wherever the fetch
+ * sits (a transition runs it inside its callback, an on_key on a matching key).
  * @param {Array<*>} cmds
  * @param {{event?: boolean, fetch?: boolean, nav?: Array<*>}} acc
  * @param {boolean} conditional
@@ -3588,9 +3571,11 @@ function bindDocumentEvents(target, signal, abort) {
             // be exactly what happened.
             e.preventDefault();
             const raw = form.getAttribute('az-submit');
-            let cmds = null;
+            /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
+            let needs = {};
             try {
-                cmds = raw ? JSON.parse(raw) : null;
+                const cmds = raw ? JSON.parse(raw) : null;
+                if (cmds) needs = socketNeeds(cmds, {}, false);
                 // While the socket is down (the worker drops pre-open sends):
                 // - an SPA navigation alone degrades to a full load of its URL, as a
                 //   disconnected az-navigate click does;
@@ -3600,14 +3585,13 @@ function bindDocumentEvents(target, signal, abort) {
                 //   A navigation beside a fetch drops too: the load would cancel it.
                 // - a `fetch` needs no socket and runs, so an HTTP login form works
                 //   before the first open.
-                const needs = cmds && !_connected ? socketNeeds(cmds, {}, false) : {};
-                if (needs.nav && !needs.event && !needs.fetch) {
+                if (!_connected && needs.nav && !needs.event && !needs.fetch) {
                     const url = needs.nav[1];
                     if (needs.nav[2]?.replace) location.replace(url);
                     else location.assign(url);
                     return;
                 }
-                if (needs.event || needs.nav) {
+                if (!_connected && (needs.event || needs.nav)) {
                     console.warn(
                         '[arizona] az-submit dropped: its command needs the WebSocket, which is not connected',
                     );
@@ -3634,7 +3618,7 @@ function bindDocumentEvents(target, signal, abort) {
             }
             // A fetch command resets on its own 2xx response (so a validation error
             // keeps the typed fields); everything else resets synchronously here.
-            if (!(cmds && commandsIncludeFetch(cmds))) maybeResetForm(form);
+            if (!needs.fetch) maybeResetForm(form);
         },
         { signal },
     );
