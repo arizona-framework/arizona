@@ -4607,8 +4607,24 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
         SourceAST, TmplAST
     ]}.
 
+%% A binary literal AST holding exactly `Bin`'s bytes. Generated literals are read
+%% back as template text (an injected `az-local` value folds through compile_attr/4,
+%% which takes a string element's characters as code points), so non-ASCII UTF-8 is
+%% spelled as its characters with the `utf8` type: spelled byte by byte, each byte
+%% would be read back as a code point and encoded a second time. Bytes that are not
+%% UTF-8 keep the byte spelling, which no text reading applies to.
 ast_binary(Bin) ->
-    {bin, 0, [{bin_element, 0, {string, 0, binary_to_list(Bin)}, default, default}]}.
+    case unicode:characters_to_list(Bin) of
+        Chars when is_list(Chars) ->
+            Type =
+                case lists:all(fun(C) -> C < 128 end, Chars) of
+                    true -> default;
+                    false -> [utf8]
+                end,
+            {bin, 0, [{bin_element, 0, {string, 0, Chars}, default, Type}]};
+        _ ->
+            {bin, 0, [{bin_element, 0, {string, 0, binary_to_list(Bin)}, default, default}]}
+    end.
 
 ast_list([]) ->
     {nil, 0};
