@@ -123,16 +123,18 @@ start(Name, #{routes := _} = Opts0) ->
         port => Port,
         routes => arizona_roadrunner_router:routes(Routes, BuildOpts)
     },
-    %% Validate (and inject) TLS before any persistent_term writes so an
-    %% https-without-tls misconfig crashes cleanly instead of leaving a
-    %% half-written dispatch behind.
-    ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
     %% The stash is shared with a running listener of the same name, whose WS
     %% upgrades read it: a clash is refused before it is touched, or they would
     %% resolve against the rejected routes until roadrunner refused the start.
     case whereis(Name) of
-        undefined -> start_listener(Name, ListenerOpts1, {Routes, BuildOpts});
-        Pid -> {error, {already_started, Pid}}
+        undefined ->
+            %% Validate (and inject) TLS before any persistent_term writes so an
+            %% https-without-tls misconfig crashes cleanly instead of leaving a
+            %% half-written dispatch behind.
+            ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
+            start_listener(Name, ListenerOpts1, {Routes, BuildOpts});
+        Pid ->
+            {error, {already_started, Pid}}
     end.
 
 -doc """
