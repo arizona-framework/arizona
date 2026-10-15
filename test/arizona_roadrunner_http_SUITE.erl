@@ -11,6 +11,7 @@
 -export([manual_body_read_keeps_pipelining_intact/1]).
 -export([transforms_apply_over_the_wire/1]).
 -export([page_carries_its_targets_content_type/1]).
+-export([asset_route_answers_get_and_head_only/1]).
 
 all() ->
     [
@@ -18,7 +19,8 @@ all() ->
         handle_returns_the_threaded_raw_request_on_a_render_crash,
         manual_body_read_keeps_pipelining_intact,
         transforms_apply_over_the_wire,
-        page_carries_its_targets_content_type
+        page_carries_its_targets_content_type,
+        asset_route_answers_get_and_head_only
     ].
 
 init_per_suite(Config) ->
@@ -26,7 +28,14 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(roadrunner),
     Listener = arizona_roadrunner_http_test,
     Port = arizona_test_port:pick(),
+    AssetDir = filename:join(?config(priv_dir, Config), "assets"),
+    ok = filelib:ensure_path(AssetDir),
+    ok = file:write_file(filename:join(AssetDir, "app.txt"), ~"asset-bytes"),
     Routes = [
+        {asset, ~"/files", {dir, AssetDir}},
+        {asset, ~"/cors_files", {dir, AssetDir}, #{
+            middlewares => [arizona_middleware:cors(#{origins => [~"https://other.example"]})]
+        }},
         {live, ~"/echo_body", arizona_about, #{
             middlewares => [arizona_middleware:extract([body])]
         }},
@@ -218,6 +227,34 @@ page_carries_its_targets_content_type(Config) when is_list(Config) ->
     ?assertEqual(
         {~"content-type", ~"text/html; charset=utf-8"},
         lists:keyfind(~"content-type", 1, CrashHeaders)
+    ).
+
+%% An asset route serves files: GET and HEAD. roadrunner_static ignores the
+%% method, so without an allowlist any other verb would be served the file
+%% too; the router gates it to a 405 with the Allow set.
+asset_route_answers_get_and_head_only(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    ?assertMatch({200, _, ~"asset-bytes"}, raw_get(Port, ~"/files/app.txt", [])),
+    ?assertMatch({200, _, <<>>}, raw_request(Port, ~"HEAD", ~"/files/app.txt", [])),
+    Len0 = [{~"content-length", ~"0"}],
+    [
+        ?assertMatch(
+            {405, #{~"allow" := ~"GET, HEAD"}, _},
+            raw_request(Port, Method, ~"/files/app.txt", Len0)
+        )
+     || Method <- [~"POST", ~"DELETE", ~"OPTIONS"]
+    ],
+    %% A cors asset route still lets the preflight through to the transform.
+    ?assertMatch(
+        {204, #{~"access-control-allow-origin" := ~"https://other.example"}, <<>>},
+        raw_request(Port, ~"OPTIONS", ~"/cors_files/app.txt", [
+            {~"origin", ~"https://other.example"},
+            {~"access-control-request-method", ~"GET"}
+        ])
+    ),
+    ?assertMatch(
+        {405, #{~"allow" := ~"GET, HEAD, OPTIONS"}, _},
+        raw_request(Port, ~"POST", ~"/cors_files/app.txt", Len0)
     ).
 
 raw_get(Port, Path, ExtraHeaders) ->

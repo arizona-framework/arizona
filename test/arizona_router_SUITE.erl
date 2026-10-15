@@ -210,7 +210,19 @@ compile_routes_asset_dir(Config) ->
     ]),
     {Handler, Opts} = route_match(<<"/static/foo.js">>),
     ?assertEqual(?config(static_handler, Config), Handler),
-    ?assertEqual(#{dir => "/tmp/assets"}, Opts).
+    ?assertEqual(#{dir => "/tmp/assets"}, Opts),
+    %% roadrunner_static serves whatever the method, so the allowlist is
+    %% what turns a non-read verb into a 405.
+    ?assertMatch({ok, _, _, _, _}, match_result(~"HEAD", <<"/static/foo.js">>)),
+    ?assertEqual(
+        {method_not_allowed, [~"GET", ~"HEAD"]}, match_result(~"POST", <<"/static/foo.js">>)
+    ),
+    compile(Config, [
+        {asset, <<"/static">>, {dir, "/tmp/assets"}, #{
+            middlewares => [arizona_middleware:cors(#{origins => [~"https://app.example"]})]
+        }}
+    ]),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"OPTIONS", <<"/static/foo.js">>)).
 
 compile_routes_asset_priv_dir(Config) ->
     compile(Config, [
