@@ -127,19 +127,12 @@ start(Name, #{routes := _} = Opts0) ->
     %% https-without-tls misconfig crashes cleanly instead of leaving a
     %% half-written dispatch behind.
     ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
-    %% Written BEFORE the listener starts so its first WS upgrade already
-    %% resolves, which is also why a failed start must put back whatever was
-    %% there: a stash for a listener that never came up sends
-    %% `recompile_routes/0` to a dead process, and a name clash with a running
-    %% listener would otherwise leave it dispatching the rejected routes.
-    Previous = persistent_term:get({?ROUTES_KEY, Name}, undefined),
-    ok = put_routes(Name, {Routes, BuildOpts}),
-    case roadrunner:start_listener(Name, ListenerOpts1) of
-        {ok, _Pid} = Ok ->
-            Ok;
-        {error, _Reason} = Error ->
-            ok = restore_routes(Name, Previous),
-            Error
+    %% The stash is shared with a running listener of the same name, whose WS
+    %% upgrades read it: a clash is refused before it is touched, or they would
+    %% resolve against the rejected routes until roadrunner refused the start.
+    case whereis(Name) of
+        undefined -> start_listener(Name, ListenerOpts1, {Routes, BuildOpts});
+        Pid -> {error, {already_started, Pid}}
     end.
 
 -doc """
@@ -215,6 +208,21 @@ format_error({unsupported_transport_opt, Opt}, _ST) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% The routes are written BEFORE the listener starts so its first WS upgrade
+%% already resolves, which is also why a failed start must put back whatever
+%% was there: a stash for a listener that never came up sends
+%% `recompile_routes/0` to a dead process.
+start_listener(Name, ListenerOpts, Stash) ->
+    Previous = persistent_term:get({?ROUTES_KEY, Name}, undefined),
+    ok = put_routes(Name, Stash),
+    case roadrunner:start_listener(Name, ListenerOpts) of
+        {ok, _Pid} = Ok ->
+            Ok;
+        {error, _Reason} = Error ->
+            ok = restore_routes(Name, Previous),
+            Error
+    end.
 
 %% Store this listener's WS dispatch under its own `{dispatch, Name}` key so a
 %% second listener does not overwrite it, and stash {Routes, BuildOpts}

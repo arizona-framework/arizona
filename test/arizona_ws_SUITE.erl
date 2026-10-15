@@ -89,6 +89,7 @@
     unsupported_transport_opt_errors/1,
     failed_start_leaves_no_routes_behind/1,
     failed_start_keeps_running_listener_routes/1,
+    clashing_start_never_exposes_its_routes/1,
     recompile_routes_skips_dead_listener/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
@@ -203,6 +204,7 @@ groups() ->
         unsupported_transport_opt_errors,
         failed_start_leaves_no_routes_behind,
         failed_start_keeps_running_listener_routes,
+        clashing_start_never_exposes_its_routes,
         recompile_routes_skips_dead_listener,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
@@ -1928,6 +1930,44 @@ failed_start_keeps_running_listener_routes(Config) when is_list(Config) ->
     ),
     ?assertEqual(StashBefore, persistent_term:get({arizona_roadrunner_routes, ws_test})),
     ?assertEqual(DispatchBefore, persistent_term:get({arizona_roadrunner_dispatch, ws_test})).
+
+%% Restoring after the clash is not enough: until roadrunner answers, the
+%% running listener's WS upgrades would resolve against the rejected routes.
+%% Holding the supervisor widens that window; the clash must be refused before
+%% the stash is touched, so the running listener's routes never change.
+clashing_start_never_exposes_its_routes(Config) when is_list(Config) ->
+    StashBefore = persistent_term:get({arizona_roadrunner_routes, ws_test}),
+    DispatchBefore = persistent_term:get({arizona_roadrunner_dispatch, ws_test}),
+    Self = self(),
+    ok = sys:suspend(roadrunner_sup),
+    {Pid, MRef} =
+        try
+            Spawned = spawn_monitor(fun() ->
+                Self !
+                    {clash,
+                        arizona_roadrunner_server:start(ws_test, #{
+                            routes => [{live, ~"/clash", arizona_crashable, #{}}],
+                            transport_opts => [{port, arizona_test_port:pick()}]
+                        })}
+            end),
+            InWindow =
+                receive
+                    {clash, Result} -> {returned, Result}
+                after 300 -> blocked
+                end,
+            ?assertEqual(StashBefore, persistent_term:get({arizona_roadrunner_routes, ws_test})),
+            ?assertEqual(
+                DispatchBefore, persistent_term:get({arizona_roadrunner_dispatch, ws_test})
+            ),
+            ?assertMatch({returned, {error, {already_started, _}}}, InWindow),
+            Spawned
+        after
+            ok = sys:resume(roadrunner_sup)
+        end,
+    receive
+        {'DOWN', MRef, process, Pid, _} -> ok
+    after 5000 -> error(clashing_start_never_returned)
+    end.
 
 %% A stash whose listener is gone (stopped without going through stop/1, or
 %% given up on by its supervisor) is skipped: the reload still reaches the
