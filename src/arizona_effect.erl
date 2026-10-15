@@ -52,12 +52,15 @@ content shipped to the page.
 %% --------------------------------------------------------------------
 
 -export_type([cmd/0]).
+-export_type([cmds/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
 %% --------------------------------------------------------------------
 
 -nominal cmd() :: {?MODULE, list()}.
+%% A command list, nested to any depth; `[]` is no command.
+-type cmds() :: [cmd() | cmds()].
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -68,7 +71,7 @@ Encodes a command (or list of commands) as an HTML-attribute-safe binary: JSON
 with `&`, `"`, and `<` escaped to their HTML entity equivalents.
 """.
 -spec encode(Cmds) -> binary() when
-    Cmds :: cmd() | [cmd()].
+    Cmds :: cmd() | cmds().
 encode(Cmds) ->
     escape_attr(encode_json(Cmds)).
 
@@ -78,7 +81,7 @@ attribute escaping `encode/1` applies. Used by non-HTML backends (native) that
 embed the command as a JSON value.
 """.
 -spec encode_json(Cmds) -> binary() when
-    Cmds :: cmd() | [cmd()].
+    Cmds :: cmd() | cmds().
 encode_json(Cmds) ->
     %% A string argument that is not UTF-8 is named `non_utf8_render`, not left
     %% as the encoder's `unexpected_end` (arizona_utf8:refuse/3, as in
@@ -96,13 +99,18 @@ The command (or list of commands) as the JSON term it serializes to: `[OpCode |
 Args]`, or a list of those. A wire that JSON-encodes its values itself (a diff
 op, the native hydration payload) carries this, so the client receives the
 command as an array rather than a string of one.
+
+A list may nest, and `[]` stands for no command: the list is flattened in order
+and empty items dropped, so a conditional item (`case ... of true ->
+arizona_js:hide(Sel); false -> [] end`) needs no filtering at the call site. Any
+other item fails with `function_clause`.
 """.
 -spec json_value(Cmds) -> list() when
-    Cmds :: cmd() | [cmd()].
+    Cmds :: cmd() | cmds().
 json_value({?MODULE, Cmd}) ->
     no_flash(Cmd);
-json_value([{?MODULE, _} | _] = Cmds) ->
-    [no_flash(C) || {?MODULE, C} <:- Cmds].
+json_value(Cmds) when is_list(Cmds) ->
+    [no_flash(C) || C <- lists:reverse(flatten(Cmds, []))].
 
 -doc """
 Formats the errors this module raises with an `error_info` annotation. Picked up
@@ -137,6 +145,13 @@ wrapped(_Cmd) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+flatten([], Acc) ->
+    Acc;
+flatten([{?MODULE, Cmd} | Rest], Acc) ->
+    flatten(Rest, [Cmd | Acc]);
+flatten([Nested | Rest], Acc) when is_list(Nested) ->
+    flatten(Rest, flatten(Nested, Acc)).
 
 %% The command as given, once refuse_flash/1 passed it -- see the moduledoc.
 no_flash(Cmd) ->

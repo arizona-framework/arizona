@@ -462,7 +462,16 @@ to_bin(V) when is_list(V) ->
                     ])
             end;
         error ->
-            erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}])
+            %% A command list leading with a nested list or `[]` is not text either;
+            %% asked only once the decoder refused, so text pays nothing for it.
+            case leads_with_effect(V) of
+                true ->
+                    arizona_effect:encode(V);
+                false ->
+                    erlang:error({bad_template_value, V}, [V], [
+                        {error_info, #{module => ?MODULE}}
+                    ])
+            end
     end;
 to_bin(V) ->
     erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}]).
@@ -597,7 +606,23 @@ and re-escapes a helper-produced raw).
 classify_trusted({arizona_raw, V}) -> {raw, V};
 classify_trusted({arizona_effect, _} = Cmd) -> {effect, Cmd};
 classify_trusted([{arizona_effect, _} | _] = Cmds) -> {effect, Cmds};
+classify_trusted([Nested | _] = Cmds) when is_list(Nested) -> classify_nested(Cmds);
 classify_trusted(_Value) -> value.
+
+%% A command list may lead with a nested list or `[]` (a conditional command item,
+%% see arizona_effect:json_value/1), so its first leaf decides. Only the path to
+%% that leaf is walked: text leads with a binary or a code point and is settled at
+%% once, and a list of nothing but empty items is the empty value it renders as.
+classify_nested(Cmds) ->
+    case leads_with_effect(Cmds) of
+        true -> {effect, Cmds};
+        false -> value
+    end.
+
+leads_with_effect([{arizona_effect, _} | _]) -> true;
+leads_with_effect([[] | Rest]) -> leads_with_effect(Rest);
+leads_with_effect([[Head | Tail] | Rest]) -> leads_with_effect([Head, Tail | Rest]);
+leads_with_effect(_) -> false.
 
 -doc """
 Renders a value to its output binary, escaping via `Backend` (an

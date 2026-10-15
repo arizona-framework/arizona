@@ -44,6 +44,7 @@
     fingerprint_payload_cross_target_child_raises/1,
     static_attr_escaped/1,
     nav_flash_in_attribute_refused/1,
+    nested_command_list_renders_flat/1,
     escape_clean_value_not_rebuilt/1,
     escape_matches_reference/1,
     raw_text_breakout_neutralized/1,
@@ -167,6 +168,7 @@ groups() ->
             render_float_any_magnitude,
             static_attr_escaped,
             nav_flash_in_attribute_refused,
+            nested_command_list_renders_flat,
             escape_clean_value_not_rebuilt,
             escape_matches_reference,
             raw_text_breakout_neutralized,
@@ -437,6 +439,32 @@ render_refusal(Bindings) ->
         error:{arizona_loc, _Loc, Reason} -> Reason;
         error:Reason -> Reason
     end.
+
+%% A command list item may itself be a list of commands, or `[]` for none -- the
+%% shape a conditional command takes. The list renders as the flat command list
+%% it denotes, whichever position the nested or empty item holds, and a list that
+%% holds no command at all renders an empty value, which the client skips.
+nested_command_list_renders_flat(Config) when is_list(Config) ->
+    On = render_bin(arizona_nested_commands:render(#{on => true})),
+    Off = render_bin(arizona_nested_commands:render(#{on => false})),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(On, ~"az-click=\"[[0,&quot;x&quot;],[3,&quot;#a&quot;],[2,&quot;#b&quot;]]\"")
+    ),
+    ?assertNotEqual(nomatch, binary:match(Off, ~"az-click=\"[[0,&quot;x&quot;]]\"")),
+    ?assertNotEqual(
+        nomatch, binary:match(On, ~"az-dblclick=\"[[3,&quot;#a&quot;],[0,&quot;y&quot;]]\"")
+    ),
+    ?assertNotEqual(nomatch, binary:match(Off, ~"az-dblclick=\"[[0,&quot;y&quot;]]\"")),
+    ?assertNotEqual(nomatch, binary:match(On, ~"az-mouseenter=\"[[3,&quot;#a&quot;]]\"")),
+    ?assertNotEqual(nomatch, binary:match(Off, ~"az-mouseenter=\"\"")),
+    ?assertNotEqual(
+        nomatch, binary:match(Off, ~"az-keyup=\"[[0,&quot;k&quot;],[3,&quot;#k&quot;]]\"")
+    ).
+
+render_bin(Template) ->
+    {HTML, _Snap} = arizona_render:render(Template),
+    iolist_to_binary(HTML).
 
 %% Escaping runs on every dynamic scalar, and almost every value carries no
 %% metacharacter at all. A clean value must come back as the *same term* -- term
