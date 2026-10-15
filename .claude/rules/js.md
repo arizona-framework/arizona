@@ -190,7 +190,9 @@ Every item of an `?each` shares the slot **key** (keys are compile-time literals
 - Replace nav (`arizona_js:navigate(Path, {replace: true})`): `replaceState` only. Does NOT save outgoing, does NOT reset.
 - Popstate (back): restores `e.state._azScroll` after OP_REPLACE, falls through to `#hash` target or top.
 - Forward-after-back: destination entry has null state -> scroll to top. Documented non-goal; future restore would need a state-ID-keyed map backed by sessionStorage, not `replaceState`-on-scroll.
-- Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate` links fall through to the browser.
+- Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate`/`az-patch` links fall through to the browser, as do a link with a `target` other than `_self` (another browsing context), one with `download`, and a click an app listener already `preventDefault`ed.
+- A `navigate`/`patch` effect URL resolves against the **current page** (`navigateEffect`), as `pushState` resolves it, so the frame asks for the page the address bar shows (`?page=2` on `/users/1/` is `/users/1/?page=2`). A new fragment on the current path + query just pushes (or, with `replace`, replaces) the entry and scrolls, with no server round trip -- the effect form of the in-page `az-navigate` click.
+- Full nav (`{full: true}`, or any `navigate`/`patch` http(s) URL on another origin -- `pushState` refuses one -- and an `az-navigate` link to another origin, which falls through to the browser): `location.assign`, or `location.replace` when the effect also carries `replace`. The server sends `replace` on every full load it degrades a navigate/patch frame to, since the client already pushed that entry; the browser folds a same-URL load into the current entry by itself, but not one whose URL differs (a halt replayed through the gated path, a dropped fragment). Only `http:`/`https:` ever loads: `leavePage` drops any other scheme (`javascript:`, `data:`) with a warning, since loading it would run it in the page.
 
 ### Patch nav (`az-patch`) and the `_azNav` tag
 

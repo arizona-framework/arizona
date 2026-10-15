@@ -63,6 +63,9 @@
 -export([navigate_mount_crash_closes_mount_failed/1]).
 -export([patch_to_crashing_handler_closes_mount_failed/1]).
 -export([navigate_halt_without_redirect_loads_full_page/1]).
+-export([navigate_halt_redirect_replaces_history_entry/1]).
+-export([navigate_halt_redirect_off_origin_replays_gated_path/1]).
+-export([full_load_replaces_history_entry/1]).
 -export([crash_after_resync_mount_closes_crash/1]).
 
 all() ->
@@ -120,6 +123,9 @@ all() ->
         navigate_mount_crash_closes_mount_failed,
         patch_to_crashing_handler_closes_mount_failed,
         navigate_halt_without_redirect_loads_full_page,
+        navigate_halt_redirect_replaces_history_entry,
+        navigate_halt_redirect_off_origin_replays_gated_path,
+        full_load_replaces_history_entry,
         crash_after_resync_mount_closes_crash
     ].
 
@@ -576,13 +582,16 @@ middleware_flash_replays_requested_path_on_full_load(Config) when is_list(Config
         %% stashed server-side and never reaches the browser.
         {reply, HaltFrame, Socket1} =
             arizona_socket:handle_in(navigate_frame(~"/gate"), Socket0),
-        ?assertMatch([[?EFFECT_NAVIGATE, ~"/target"]], effects(HaltFrame)),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/target", #{~"replace" := true}]], effects(HaltFrame)),
         %% The follow-up frame for the redirect target crosses shells. Rather
         %% than drop the flash, the socket sends the browser back through the
         %% gate over HTTP, where the redirect can carry the flash cookie.
         {reply, FullFrame, _Socket2} =
             arizona_socket:handle_in(navigate_frame(~"/target"), Socket1),
-        ?assertMatch([[?EFFECT_NAVIGATE, ~"/gate", #{~"full" := true}]], effects(FullFrame)),
+        ?assertMatch(
+            [[?EFFECT_NAVIGATE, ~"/gate", #{~"full" := true, ~"replace" := true}]],
+            effects(FullFrame)
+        ),
         %% Nothing was dropped, so nothing was warned about.
         receive
             {arizona_test_log_handler, Unexpected} -> error({unexpected_warning, Unexpected})
@@ -1327,6 +1336,81 @@ navigate_halt_without_redirect_loads_full_page(Config) when is_list(Config) ->
     {reply, _, Socket1} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
     {reply, PatchFrame, _} = arizona_socket:handle_in(patch_frame(~"/gated"), Socket1),
     ?assertMatch([[?EFFECT_NAVIGATE, ~"/gated", #{~"full" := true}]], effects(PatchFrame)).
+
+navigate_halt_redirect_replaces_history_entry(Config) when is_list(Config) ->
+    %% The client pushes the requested URL before the server answers. Over HTTP a
+    %% 3xx never leaves the gated URL in history, so the WS redirect must replace
+    %% that entry -- a push would make Back from /login land on /admin, which
+    %% redirects again. Both a navigate and a same-handler patch.
+    Gate = [fun(R, _B) -> {halt, arizona_req:redirect(R, ~"/login")} end],
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{~"/admin" => {arizona_root_counter, #{middlewares => Gate}}}
+    }),
+    {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+    {reply, NavFrame, _} = arizona_socket:handle_in(navigate_frame(~"/admin"), Socket0),
+    ?assertMatch([[?EFFECT_NAVIGATE, ~"/login", #{~"replace" := true}]], effects(NavFrame)),
+    {reply, _, Socket1} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, PatchFrame, _} = arizona_socket:handle_in(patch_frame(~"/admin"), Socket1),
+    ?assertMatch([[?EFFECT_NAVIGATE, ~"/login", #{~"replace" := true}]], effects(PatchFrame)).
+
+navigate_halt_redirect_off_origin_replays_gated_path(Config) when is_list(Config) ->
+    %% A gate redirecting to an identity provider: the client cannot SPA-navigate
+    %% off its origin (pushState throws), so the browser loads the GATED path over
+    %% HTTP, where the same middleware answers with a real 302 -- one that also
+    %% carries any cookie the gate set (an OAuth `state`), which a WS frame cannot.
+    %% The scheme-relative forms count: `/\host` is read like `//host`.
+    lists:foreach(
+        fun(Location) ->
+            Gate = [fun(R, _B) -> {halt, arizona_req:redirect(R, Location)} end],
+            Req = arizona_req_test_adapter:new(#{
+                routes => #{~"/admin" => {arizona_root_counter, #{middlewares => Gate}}}
+            }),
+            {reply, _, Socket} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+            {reply, Frame, _} = arizona_socket:handle_in(navigate_frame(~"/admin"), Socket),
+            ?assertMatch(
+                [[?EFFECT_NAVIGATE, ~"/admin", #{~"full" := true, ~"replace" := true}]],
+                effects(Frame),
+                Location
+            )
+        end,
+        [
+            ~"https://idp.example.com/authorize?client_id=x",
+            ~"//idp.example.com/authorize",
+            ~"/\\idp.example.com/authorize",
+            %% A browser drops tab/LF/CR before parsing: these are `//evil.com`.
+            ~"/\t/evil.com",
+            ~"/\n/evil.com",
+            ~"/\r\\evil.com",
+            %% Never a client effect: the replayed HTTP 302 is one no browser follows.
+            ~"javascript:alert(1)"
+        ]
+    ).
+
+full_load_replaces_history_entry(Config) when is_list(Config) ->
+    %% A full load the socket degrades to finishes a navigation the client already
+    %% pushed, so it must replace that entry: the browser only folds a load into
+    %% the current entry on its own when the URL is identical, and the replay
+    %% through a gate (or a fragment the frame did not carry) makes it differ.
+    Halt = [fun(R, _B) -> {halt, R} end],
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/gated" => {arizona_root_counter, #{middlewares => Halt}},
+            ~"/framed" => {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+        }
+    }),
+    {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    lists:foreach(
+        fun(Path) ->
+            {reply, Frame, _} = arizona_socket:handle_in(navigate_frame(Path), Socket),
+            ?assertMatch(
+                [[?EFFECT_NAVIGATE, Path, #{~"full" := true, ~"replace" := true}]],
+                effects(Frame),
+                Path
+            )
+        end,
+        %% Halt without redirect, a layout change, and no live route at all.
+        [~"/gated", ~"/framed", ~"/nowhere"]
+    ).
 
 crash_after_resync_mount_closes_crash(Config) when is_list(Config) ->
     %% The 4500/4501 boundary: once the deferred resync mounted the view, a crash

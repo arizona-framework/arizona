@@ -675,6 +675,60 @@ function navigateTo(path, qs, hash, opts) {
 }
 
 /**
+ * Load `url` as a real page. `replace` finishes a navigation already in history
+ * -- the server degrading the client's own navigate frame, whose entry was pushed
+ * before asking -- so it must not add a second entry; the browser only folds the
+ * load into the current entry by itself when the URL is identical.
+ *
+ * Only an http(s) URL may be loaded. Any other scheme (`javascript:`, `data:`)
+ * would run in this page, and the URL can come from a server that echoed a
+ * request parameter -- so it is dropped with a warning, never loaded.
+ * @param {string} url
+ * @param {boolean} [replace]
+ */
+function leavePage(url, replace) {
+    const { protocol } = new URL(url, location.href);
+    if (protocol !== 'http:' && protocol !== 'https:') {
+        console.warn('[arizona] refusing to navigate to a non-http(s) URL:', url);
+        return;
+    }
+    if (replace) location.replace(url);
+    else location.assign(url);
+}
+
+/**
+ * Run a `navigate`/`patch` effect. The URL resolves against the CURRENT page,
+ * as `pushState` resolves it, so the frame asks the server for the page the
+ * address bar will show (`?page=2` on `/users/1/` is `/users/1/?page=2`).
+ * Another origin cannot be SPA-navigated (`pushState` refuses it), so it loads
+ * as a page; a new fragment on this page just scrolls, like an in-page
+ * `az-navigate` click, with no server round trip.
+ * @param {string} full
+ * @param {{replace?: boolean, noscroll?: boolean}} opts
+ * @param {'navigate'|'patch'} kind
+ */
+function navigateEffect(full, opts, kind) {
+    const u = new URL(full, location.href);
+    if (u.origin !== location.origin) {
+        leavePage(full, opts.replace);
+        return;
+    }
+    const hash = u.hash ? u.hash.slice(1) : '';
+    const qs = u.search ? u.search.slice(1) : '';
+    if (hash && u.pathname === location.pathname && u.search === location.search) {
+        if (opts.replace) {
+            history.replaceState(history.state, '', u.href);
+        } else {
+            saveCurrentScroll();
+            history.pushState(null, '', u.href);
+        }
+        if (!opts.noscroll) applyScroll({ kind: 'push', hash });
+        return;
+    }
+    navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full, kind });
+}
+
+/**
  * Post a control message to the Worker. No-op if the Worker isn't
  * spawned. The Worker is the authority on transport state -- pre-open
  * `W_SEND` messages are dropped by the Worker itself, so the main
@@ -2764,30 +2818,21 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             }
             break;
         case JS_NAVIGATE: {
-            const full = cmd[1];
             const opts = cmd[2] || {};
             if (opts.full) {
                 // Full-page navigation: let the browser load the URL normally.
                 // Used when the target isn't a live route (a controller/asset
                 // path, or a 404) and so can't be SPA-navigated.
-                location.assign(full);
+                leavePage(cmd[1], opts.replace);
                 break;
             }
-            const u = new URL(full, location.origin);
-            const hash = u.hash ? u.hash.slice(1) : '';
-            const qs = u.search ? u.search.slice(1) : '';
-            navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full });
+            navigateEffect(cmd[1], opts, 'navigate');
             break;
         }
-        case JS_PATCH: {
+        case JS_PATCH:
             // In-place SPA navigation: keep the view, re-render via handle_update.
-            const full = cmd[1];
-            const u = new URL(full, location.origin);
-            const hash = u.hash ? u.hash.slice(1) : '';
-            const qs = u.search ? u.search.slice(1) : '';
-            navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full, kind: 'patch' });
+            navigateEffect(cmd[1], cmd[2] || {}, 'patch');
             break;
-        }
         case JS_FETCH: {
             // HTTP request via fetch() with no page reload. Unlike push_event (WS,
             // can't set cookies), the response can carry a real Set-Cookie, applied
@@ -3638,9 +3683,7 @@ function bindDocumentEvents(target, signal, abort) {
                 // - a `fetch` needs no socket and runs, so an HTTP login form works
                 //   before the first open.
                 if (!_connected && needs.nav && !needs.event && !needs.fetch) {
-                    const url = needs.nav[1];
-                    if (needs.nav[2]?.replace) location.replace(url);
-                    else location.assign(url);
+                    leavePage(needs.nav[1], needs.nav[2]?.replace);
                     return;
                 }
                 if (!_connected && (needs.event || needs.nav)) {
@@ -3783,8 +3826,16 @@ function connect(endpoint, params = {}) {
                 /** @type {Element} */ (e.target).closest('[az-navigate], [az-patch]')
             );
             if (!el || !_connected) return;
+            // An app listener already handled the click, or the browser is meant
+            // to open the link elsewhere (`target`) or save it (`download`).
+            if (e.defaultPrevented || el.hasAttribute('download')) return;
+            const target = el.getAttribute('target');
+            if (target && target.toLowerCase() !== '_self') return;
             const href = el.getAttribute('href');
             if (!href) return;
+            // Another origin cannot be SPA-navigated (pushState refuses it, and
+            // its pathname is not ours to request): the browser follows the link.
+            if (el.origin !== location.origin) return;
             const isPatch = el.hasAttribute('az-patch');
             // Anchors implement the URL interface -- use browser-parsed parts.
             const path = el.pathname;

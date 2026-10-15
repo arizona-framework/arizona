@@ -5709,16 +5709,211 @@ describe('navigation scroll', () => {
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         // jsdom's location.assign is non-configurable (can't spyOn it); stub the
-        // whole global for just this call -- the full-nav branch only touches
-        // location.assign.
+        // whole global for just this call -- the full-nav branch only reads
+        // location.origin/href (to vet the scheme) and calls location.assign.
         const assign = vi.fn();
-        vi.stubGlobal('location', { assign });
+        vi.stubGlobal('location', {
+            assign,
+            origin: window.location.origin,
+            href: window.location.href,
+        });
         // arizona_js:navigate(~"/api", #{full => true}) -- the server emits this to
         // degrade a navigate/patch whose path is not a live route.
         mod.applyEffects([[10, '/api', { full: true }]]);
         vi.unstubAllGlobals();
         expect(assign).toHaveBeenCalledWith('/api');
         // Browser handles it -- no SPA navigate frame is sent to the server.
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+    });
+
+    it('JS_NAVIGATE with {full: true, replace: true} loads the page in place of the current entry', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const assign = vi.fn();
+        const replace = vi.fn();
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin: window.location.origin,
+            href: window.location.href,
+        });
+        // The server degrading the client's own navigate frame (no live route, a
+        // layout change, a halt replayed over HTTP): the client already pushed the
+        // entry, so a second one would make Back revisit the same navigation.
+        mod.applyEffects([[10, '/gate', { full: true, replace: true }]]);
+        vi.unstubAllGlobals();
+        expect(replace).toHaveBeenCalledWith('/gate');
+        expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('JS_NAVIGATE / JS_PATCH to another origin load the page instead of pushState', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const assign = vi.fn();
+        const replace = vi.fn();
+        const logged = [];
+        const errSpy = vi.spyOn(console, 'error').mockImplementation((...a) => logged.push(a));
+        const pushSpy = vi.spyOn(history, 'pushState');
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin: window.location.origin,
+            href: window.location.href,
+        });
+        // pushState throws a SecurityError on a cross-origin URL, which used to
+        // drop the effect and leave the user on the page.
+        const idp = 'https://idp.example.com/authorize?x=1';
+        mod.applyEffects([[10, idp]]);
+        mod.applyEffects([[24, '//idp.example.com/p', { replace: true }]]);
+        vi.unstubAllGlobals();
+        errSpy.mockRestore();
+        expect(assign).toHaveBeenCalledWith(idp);
+        expect(replace).toHaveBeenCalledWith('//idp.example.com/p');
+        expect(pushSpy).not.toHaveBeenCalled();
+        pushSpy.mockRestore();
+        expect(logged).toEqual([]);
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
+    it('a navigate/patch effect never loads a non-http(s) URL', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const assign = vi.fn();
+        const replace = vi.fn();
+        const warned = [];
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation((...a) => warned.push(a));
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin: window.location.origin,
+            href: window.location.href,
+        });
+        // Loading one of these runs it in the page: a server echoing a request
+        // parameter into a navigate would be script injection. Every route out --
+        // the cross-origin guard, `full`, `full` + `replace`, and a patch.
+        const js = "javascript:void(document.title='PWNED')";
+        mod.applyEffects([[10, js]]);
+        mod.applyEffects([[10, js, { full: true }]]);
+        mod.applyEffects([[10, 'data:text/html,<p>x</p>', { full: true, replace: true }]]);
+        mod.applyEffects([[24, js]]);
+        mod.applyEffects([[24, ` ${js}`, { replace: true }]]);
+        vi.unstubAllGlobals();
+        warnSpy.mockRestore();
+        errSpy.mockRestore();
+        expect(assign).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(warned.length).toBe(5);
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
+    it('a relative navigate/patch effect asks the server for the page the address bar shows', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        // pushState resolves a relative URL against the current page, so the frame
+        // must too -- resolving against the origin would render another page.
+        history.replaceState(null, '', '/users/1/');
+        mod.applyEffects([[10, '?page=2']]);
+        expect(location.pathname + location.search).toBe('/users/1/?page=2');
+        history.replaceState(null, '', '/users/1/');
+        mod.applyEffects([[24, 'edit']]);
+        expect(location.pathname).toBe('/users/1/edit');
+        const frames = mock
+            .getSentMessages()
+            .filter((m) => m[0] === 'navigate' || m[0] === 'patch');
+        expect(frames).toEqual([
+            ['navigate', { path: '/users/1/', qs: 'page=2' }],
+            ['patch', { path: '/users/1/edit', qs: '' }],
+        ]);
+    });
+
+    it('a hash-only navigate/patch effect scrolls in place, no server round trip', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        history.replaceState(null, '', '/users/1');
+        setupView('page', '<section id="sec">x</section>');
+        const len0 = history.length;
+        mod.applyEffects([[10, '#sec']]);
+        expect(location.pathname + location.hash).toBe('/users/1#sec');
+        expect(history.length).toBe(len0 + 1);
+        const sivMock = /** @type {any} */ (Element.prototype.scrollIntoView).mock;
+        expect(sivMock.contexts[0]).toBe(document.getElementById('sec'));
+        // `replace` keeps the entry, as for any other replace nav.
+        mod.applyEffects([[24, '#top', { replace: true }]]);
+        expect(location.hash).toBe('#top');
+        expect(history.length).toBe(len0 + 1);
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
+    it('az-navigate click is left alone for a new browsing context, a download, or an app preventDefault', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const pushSpy = vi.spyOn(history, 'pushState');
+        // jsdom reports the default actions it cannot perform; keep them off the output.
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const click = (attrs, onClick) => {
+            const a = document.createElement('a');
+            a.setAttribute('az-navigate', '');
+            a.setAttribute('href', '/other');
+            for (const [k, v] of Object.entries(attrs)) a.setAttribute(k, v);
+            if (onClick) a.addEventListener('click', onClick);
+            document.body.appendChild(a);
+            const evt = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+            a.dispatchEvent(evt);
+            return evt;
+        };
+        // The browser opens these elsewhere or saves the file: not an SPA navigation.
+        expect(click({ target: '_blank' }).defaultPrevented).toBe(false);
+        expect(click({ target: 'frame1' }).defaultPrevented).toBe(false);
+        expect(click({ download: '' }).defaultPrevented).toBe(false);
+        // The app already handled this click.
+        click({}, (e) => e.preventDefault());
+        errSpy.mockRestore();
+        expect(pushSpy).not.toHaveBeenCalled();
+        pushSpy.mockRestore();
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+        // `_self` (and no target) is this tab: still an SPA navigation.
+        click({ target: '_self' });
+        expect(mock.getSentMessages()).toContainEqual(['navigate', { path: '/other', qs: '' }]);
+    });
+
+    it('az-navigate link to another origin is left to the browser', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const pushSpy = vi.spyOn(history, 'pushState');
+        // jsdom reports the default action it cannot perform; keep it off the output.
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const { event } = clickLink('https://other.example.com/x');
+        errSpy.mockRestore();
+        expect(event.defaultPrevented).toBe(false);
+        expect(pushSpy).not.toHaveBeenCalled();
+        pushSpy.mockRestore();
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
     });
 
@@ -6454,7 +6649,12 @@ describe('form submit', () => {
         const assign = vi.fn();
         const replace = vi.fn();
         const ev = new Event('submit', { bubbles: true, cancelable: true });
-        vi.stubGlobal('location', { assign, replace, origin: 'http://localhost' });
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin: 'http://localhost',
+            href: 'http://localhost/',
+        });
         try {
             document.getElementById('f').dispatchEvent(ev);
         } finally {
@@ -6466,6 +6666,35 @@ describe('form submit', () => {
             .find((x) => typeof x === 'string');
         expect({ assign, replace }[how]).toHaveBeenCalledWith(url);
         expect(mock.getSentMessages()).toHaveLength(0);
+    });
+
+    // The full load goes through the same http(s)-only guard as every other one.
+    it('refuses a disconnected navigate submit to a non-http(s) URL', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<form id="f" az-submit='[10,"javascript:alert(1)"]'></form>`);
+        mock = setupMockWorker(mod);
+        const assign = vi.fn();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.stubGlobal('location', {
+            assign,
+            replace: assign,
+            origin: 'http://localhost',
+            href: 'http://localhost/',
+        });
+        try {
+            document
+                .getElementById('f')
+                .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            expect(warn).toHaveBeenCalledWith(
+                '[arizona] refusing to navigate to a non-http(s) URL:',
+                'javascript:alert(1)',
+            );
+        } finally {
+            vi.unstubAllGlobals();
+            warn.mockRestore();
+        }
+        expect(assign).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -6481,7 +6710,12 @@ describe('form submit', () => {
         const fetchMock = vi.fn(() => Promise.resolve(new Response('')));
         globalThis.fetch = fetchMock;
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        vi.stubGlobal('location', { assign, replace: assign, origin: 'http://localhost' });
+        vi.stubGlobal('location', {
+            assign,
+            replace: assign,
+            origin: 'http://localhost',
+            href: 'http://localhost/',
+        });
         try {
             document
                 .getElementById('f')

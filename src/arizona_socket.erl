@@ -652,12 +652,12 @@ full_navigate(Path, Qs, Socket0) ->
             %% refresh, a prefetch, back/forward all re-run them).
             encode_reply(
                 [],
-                [arizona_js:navigate(Replay, #{full => true})],
+                [replace_load(Replay)],
                 Socket0#socket{pending_flash = #{}, flash_replay = undefined}
             );
         error ->
             Socket = drop_pending_flash(Path, Socket0),
-            encode_reply([], [arizona_js:navigate(Url, #{full => true})], Socket)
+            encode_reply([], [replace_load(Url)], Socket)
     end.
 
 %% The stashed replay is good for exactly ONE destination: the redirect the halt
@@ -762,24 +762,48 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
 
 %% Middleware halt during WS navigate -- there is no HTTP response channel
 %% mid-session, so we translate an `arizona_req:redirect/2` halt into an
-%% `arizona_js:navigate` client effect. A flash the middleware set via `put_flash/3`
-%% before halting has no `Set-Cookie` leg to ride here, so it is stashed on the
-%% socket for the follow-up frame (`take_pending_flash/2`), delivered exactly once
-%% with no cookie. A halt without a stashed redirect has a response only HTTP
-%% can deliver, so the client is told to load the requested URL for real -- a
-%% reconnect would not get there, since the WebSocket upgrade runs the same
-%% halting middleware and is refused.
+%% `arizona_js:navigate` client effect. It REPLACES the history entry: the client
+%% pushed `Requested` before asking, and over HTTP a 3xx never leaves the gated
+%% URL in history, so a push here would make Back land on the gate and bounce.
+%% A flash the middleware set via `put_flash/3` before halting has no
+%% `Set-Cookie` leg to ride here, so it is stashed on the socket for the
+%% follow-up frame (`take_pending_flash/2`), delivered exactly once with no
+%% cookie.
+%%
+%% Two halts have a response only HTTP can deliver, so the client is told to
+%% load `Requested` for real, where the same middleware halts again as a real
+%% response (a reconnect would not get there: the WebSocket upgrade runs the
+%% same halting middleware and is refused). One redirects nowhere. The other
+%% redirects to a `Location` that is not a path on this origin -- an identity
+%% provider -- which the client cannot SPA-navigate to; replaying it over HTTP
+%% rather than navigating there directly also keeps any cookie the gate set
+%% before redirecting (an OAuth `state`, a flash), which a WS frame would drop.
+%% An unsafe `Location` (`javascript:`) takes the same road, so it never reaches
+%% the client as an effect: the replayed 3xx is one no browser follows.
 halt_navigate(Requested, HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
-            encode_reply(
-                [],
-                [arizona_js:navigate(Location)],
-                stash_halt_flash(Requested, Location, HaltReq, Socket)
-            );
+            case arizona_req:location_kind(Location) of
+                local ->
+                    encode_reply(
+                        [],
+                        [arizona_js:navigate(Location, #{replace => true})],
+                        stash_halt_flash(Requested, Location, HaltReq, Socket)
+                    );
+                _ExternalOrUnsafe ->
+                    encode_reply([], [replace_load(Requested)], Socket)
+            end;
         undefined ->
-            encode_reply([], [arizona_js:navigate(Requested, #{full => true})], Socket)
+            encode_reply([], [replace_load(Requested)], Socket)
     end.
+
+%% Every full load the socket issues finishes a navigation the client already
+%% recorded: it pushed (or popped to) the history entry before sending the frame
+%% this answers. So the load replaces that entry rather than adding a second one
+%% -- which the browser would do whenever the URL differs from the recorded one
+%% (a flash replay through the gate, a fragment the frame did not carry).
+replace_load(Url) ->
+    arizona_js:navigate(Url, #{full => true, replace => true}).
 
 %% Stash the halting middleware's flash BESIDE the path that produced it. Unlike
 %% an in-view handler's flash, this one is reproducible: any later request to
@@ -803,12 +827,9 @@ stash_halt_flash(Requested, Location, HaltReq, Socket) ->
 
 %% A navigate frame carries path + query only (the client parses the URL and
 %% sends `u.pathname`/`u.search`), so a fragment on the redirect Location would
-%% never match the follow-up and would silently disable the replay. Two other
-%% Location forms miss for the same reason and are deliberately left to: an
-%% absolute URL (a cross-origin redirect cannot carry our flash cookie anyway),
-%% and a relative one with no leading slash, which the client resolves against
-%% the origin so `target` arrives as `/target`. Both degrade to the
-%% drop-with-warning, never to a wrong destination.
+%% never match the follow-up and would silently disable the replay. Only a
+%% path on this origin gets here (`halt_navigate/3`): every other Location form
+%% is replayed over HTTP at once.
 strip_fragment(Location) ->
     [Base | _Fragment] = binary:split(Location, ~"#"),
     Base.
