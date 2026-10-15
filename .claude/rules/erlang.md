@@ -593,6 +593,31 @@ in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
 bound inside a `case` branch whose clause head binds a variable, and a rebound
 variable.
 
+**Template code is a pure function of the bindings.** Everything a slot evaluates
+is evaluated lazily: the slot expression itself, the definition of a hoisted
+variable the template reads (re-inlined into every slot that uses it, and still run
+once in the body), and the arguments of an inlined local element helper
+(substituted at each use of the parameter, and not evaluated at all when the
+parameter is unused). A slot runs once on first render, then again only when its
+own dependencies change, while the render function's body runs on every diff
+cycle. So one source expression may run zero, one or several times per render, in
+no fixed order, and two slots that read the same variable each compute it
+themselves. Keep that code deterministic and free of side effects. A value that
+must be generated once and shared -- a unique id pairing a `label` with its
+`input`, a timestamp, a random token -- belongs in state: create it in `mount/1` or
+`handle_event/3` and read it with `?get`, or derive it from bindings
+(`<<"field-", (?get(name))/binary>>`).
+
+The transform rejects the cases it can see (`template_impure_expr`): a send,
+`receive`, `make_ref`, `erlang:unique_integer`, a clock read
+(`erlang:now`/`timestamp`/`system_time`/`monotonic_time`, `os:system_time`,
+`calendar:local_time`/`universal_time`), `put`/`erase`, `spawn*`, or any call into
+`rand`, `os`, `ets`, `io` or `logger`, written in a hoisted definition that reads a
+binding and is used in a template, or in a helper argument whose parameter is not
+used exactly once. A definition that reads no binding is not re-inlined (every slot
+sees its one value), a fun that is only constructed is not entered, and calls into
+your own functions are not checked.
+
 A tracked read used in a **guard** inside a template (`case Status of active when
 Confirming -> ...`, an `if`, a nested fun) is **auto-tracked**, so the slot stays
 reactive. A guard cannot hold the `get/2` call (Erlang rejects it as an illegal guard
@@ -626,7 +651,8 @@ header(Bindings) -> {h1, [], [?get(title)]}.
 
 The body replaces the call (a whole-body `?html(...)` wrapper unwraps first,
 exactly as `?each` callbacks do), each parameter is substituted with its argument
-expression, the helper's own body variables are alpha-renamed so a name the caller
+expression (so an argument runs once per use of its parameter -- see the purity
+contract above), the helper's own body variables are alpha-renamed so a name the caller
 also bound cannot collide (its parameters excepted -- those are what the arguments
 replace; a `case` pattern inside the element is the shape that would otherwise bite),
 and the spliced element compiles like a literal one -- it flattens into
