@@ -11,6 +11,7 @@
     dispatch_tools_call_structured/1,
     dispatch_tools_call_tool_error/1,
     dispatch_tools_call_stateless_no_accumulate/1,
+    dispatch_non_object_arguments_invalid_params/1,
     streaming_tool_relays_progress/1,
     streaming_tool_unknown/1,
     streaming_tool_crash/1,
@@ -91,6 +92,7 @@ all() ->
         dispatch_tools_call_structured,
         dispatch_tools_call_tool_error,
         dispatch_tools_call_stateless_no_accumulate,
+        dispatch_non_object_arguments_invalid_params,
         streaming_tool_relays_progress,
         streaming_tool_unknown,
         streaming_tool_crash,
@@ -239,6 +241,27 @@ dispatch_tools_call_tool_error(_Config) ->
     ?assertEqual(
         #{~"content" => [#{~"type" => ~"text", ~"text" => ~"kaboom"}], ~"isError" => true},
         Result
+    ).
+
+%% `arguments` is an optional JSON object and the callbacks are promised a map:
+%% any other value is the client's error (-32602), never a crash in the
+%% callback (an opaque -32603).
+dispatch_non_object_arguments_invalid_params(_Config) ->
+    Calls = [
+        {~"tools/call", #{~"name" => ~"echo", ~"arguments" => ~"oops"}},
+        {~"tools/call", #{~"name" => ~"echo", ~"arguments" => [1, 2]}},
+        {~"prompts/get", #{~"name" => ~"greet", ~"arguments" => ~"oops"}}
+    ],
+    Expected = #{
+        ~"code" => -32602, ~"message" => ~"Invalid params: arguments must be an object"
+    },
+    ?assertEqual(
+        [{error, Expected} || _ <- Calls],
+        [
+            {error, Error}
+         || {Method, Params} <- Calls,
+            {error, #{~"error" := Error}} <- [dispatch(Method, Params, 50)]
+        ]
     ).
 
 dispatch_tools_call_stateless_no_accumulate(_Config) ->

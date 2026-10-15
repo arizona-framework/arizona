@@ -242,27 +242,32 @@ handle_tool(Tool, Args, Ctx, State) ->
 
 dispatch_tool(~"list_routes", _Args, _Ctx, State) ->
     {reply, list_routes(), State};
-dispatch_tool(~"describe_component", #{~"module" := ModBin}, _Ctx, State) ->
-    outcome(with_module(ModBin, fun describe_component/1), State);
-dispatch_tool(~"get_docs", #{~"module" := ModBin} = Args, _Ctx, State) ->
-    outcome(with_module(ModBin, fun(Mod) -> get_docs(Mod, Args) end), State);
-dispatch_tool(~"get_source_location", #{~"module" := ModBin} = Args, _Ctx, State) ->
-    outcome(with_module(ModBin, fun(Mod) -> get_source_location(Mod, Args) end), State);
+dispatch_tool(~"describe_component", Args, _Ctx, State) ->
+    outcome(with_module(Args, fun describe_component/1), State);
+dispatch_tool(~"get_docs", Args, _Ctx, State) ->
+    outcome(with_module_function(Args, fun get_docs/2), State);
+dispatch_tool(~"get_source_location", Args, _Ctx, State) ->
+    outcome(with_module_function(Args, fun get_source_location/2), State);
 dispatch_tool(~"reloader_status", _Args, _Ctx, State) ->
     {reply, reloader_status(), State};
 dispatch_tool(~"reload", _Args, _Ctx, State) ->
     outcome(reload(), State);
 dispatch_tool(~"app_info", _Args, _Ctx, State) ->
     {reply, app_info(), State};
-dispatch_tool(~"render_component", #{~"module" := ModBin} = Args, _Ctx, State) ->
-    Bindings = maps:get(~"bindings", Args, #{}),
-    outcome(with_module(ModBin, fun(Mod) -> render_component(Mod, Bindings) end), State);
-dispatch_tool(~"eval", #{~"code" := Code}, _Ctx, #{bindings := Bindings} = State) ->
-    case eval_code(Code, Bindings) of
-        {ok, Value, NewBindings} ->
-            {reply, format_value(Value), State#{bindings := NewBindings}};
+dispatch_tool(~"render_component", Args, _Ctx, State) ->
+    case arg(~"bindings", object, #{}, Args) of
+        {ok, Bindings} ->
+            outcome(with_module(Args, fun(Mod) -> render_component(Mod, Bindings) end), State);
         {error, Message} ->
             {error, Message, State}
+    end;
+dispatch_tool(~"eval", Args, _Ctx, #{bindings := Bindings} = State) ->
+    maybe
+        {ok, Code} ?= arg(~"code", string, required, Args),
+        {ok, Value, NewBindings} ?= eval_code(Code, Bindings),
+        {reply, format_value(Value), State#{bindings := NewBindings}}
+    else
+        {error, Message} -> {error, Message, State}
     end;
 dispatch_tool(~"get_logs", Args, _Ctx, State) ->
     outcome(get_logs(Args), State);
@@ -300,21 +305,21 @@ describe_component(Module) ->
     ]),
     {ok, Text}.
 
-get_docs(Module, #{~"function" := FnBin}) ->
+get_docs(Module, undefined) ->
+    {ok, module_docs(Module)};
+get_docs(Module, FnBin) ->
     case to_existing_atom(FnBin) of
         {ok, Fn} -> {ok, function_docs(Module, Fn)};
         error -> {ok, ~"(no documentation for that function)"}
-    end;
-get_docs(Module, _Args) ->
-    {ok, module_docs(Module)}.
+    end.
 
-get_source_location(Module, #{~"function" := FnBin}) ->
+get_source_location(Module, undefined) ->
+    {ok, source_file(Module)};
+get_source_location(Module, FnBin) ->
     case to_existing_atom(FnBin) of
         {ok, Fn} -> {ok, function_location(Module, Fn)};
         error -> {ok, fmt("~ts (no such function ~ts)", [source_file(Module), FnBin])}
-    end;
-get_source_location(Module, _Args) ->
-    {ok, source_file(Module)}.
+    end.
 
 reloader_status() ->
     case arizona_reloader:get_error() of
@@ -586,18 +591,58 @@ module_function_arg_schema() ->
         required => [~"module"]
     }.
 
-%% Resolve a binary module name to a loaded module, then run `Fun`. A name that
-%% isn't an already-known module answers in-band rather than crashing.
-with_module(ModBin, Fun) ->
+%% Resolve the `module` argument to a loaded module, then run `Fun`. A missing
+%% or mistyped argument, or a name that isn't an already-known module, answers
+%% in-band rather than crashing.
+with_module(Args, Fun) ->
+    maybe
+        {ok, ModBin} ?= arg(~"module", string, required, Args),
+        {ok, Module} ?= known_module(ModBin),
+        Fun(Module)
+    end.
+
+%% As `with_module/2`, also handing `Fun` the optional `function` argument
+%% (`undefined` when absent).
+with_module_function(Args, Fun) ->
+    maybe
+        {ok, FnBin} ?= arg(~"function", string, undefined, Args),
+        with_module(Args, fun(Module) -> Fun(Module, FnBin) end)
+    end.
+
+known_module(ModBin) ->
     case to_existing_atom(ModBin) of
         {ok, Module} ->
             case code:ensure_loaded(Module) of
-                {module, Module} -> Fun(Module);
+                {module, Module} -> {ok, Module};
                 {error, Reason} -> {error, fmt("module not loaded: ~ts (~p)", [ModBin, Reason])}
             end;
         error ->
             {error, fmt("unknown module: ~ts", [ModBin])}
     end.
+
+%% Read a tool argument of the JSON type its schema advertises. The input
+%% schema is advice to the client, not a check the transport runs, so an
+%% argument can arrive missing or as any JSON value; naming it in-band tells the
+%% agent what to fix, where a crash answers an opaque -32603. `IfAbsent` is
+%% `required` or the value an omitted optional argument takes.
+arg(Key, Type, IfAbsent, Args) ->
+    case Args of
+        #{Key := Value} ->
+            case is_type(Type, Value) of
+                true -> {ok, Value};
+                false -> {error, fmt("~ts must be ~ts, got: ~tp", [Key, type_name(Type), Value])}
+            end;
+        #{} when IfAbsent =:= required ->
+            {error, fmt("missing required argument: ~ts", [Key])};
+        #{} ->
+            {ok, IfAbsent}
+    end.
+
+is_type(string, Value) -> is_binary(Value);
+is_type(object, Value) -> is_map(Value).
+
+type_name(string) -> ~"a string";
+type_name(object) -> ~"an object".
 
 %% Resolve a binary to an already-known atom. Returns `error` for an unknown name
 %% rather than minting an atom from agent input (atom-table safety).
