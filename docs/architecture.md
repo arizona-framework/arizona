@@ -234,8 +234,10 @@ writes **no `az`/slot markers** -- the diff engine's ops are computed but ignore
 
 Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
-bytes except `\n`/`\t`, DEL, and the C1 controls, UTF-8 encoded or bare 8-bit;
-preserves UTF-8), native emits a JSON string. Native alone carries a value
+bytes except `\n`/`\t`, DEL, and the C1 controls, and replaces every byte outside
+well-formed UTF-8 with U+FFFD, so the output is always valid UTF-8; this assumes a UTF-8
+terminal, since an 8-bit one reads UTF-8 continuation bytes `80`-`9F` as C1 controls), native
+emits a JSON string. Native alone carries a value
 differently on the wire: its client JSON-encodes each `d` value itself, so the
 fingerprint payload takes the raw value from `c:arizona_renderer:wire_escape/1`
 (`wire_attr/2` for a prop) while the zipped document keeps the JSON string.

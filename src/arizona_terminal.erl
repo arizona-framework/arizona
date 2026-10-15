@@ -36,10 +36,11 @@ than silently dropped.
 
 Dynamic content values are **control-char sanitized** at render (`escape/1`, the
 `arizona_renderer` escape callback): C0 bytes (except `\\n`/`\\t`), DEL and the
-C1 controls (UTF-8 encoded or bare 8-bit) are stripped so an interpolated value
-cannot inject ANSI/OSC escape sequences into the terminal (the terminal analog of
-XSS -- e.g. an OSC 52 clipboard write or a scrollback wipe in a shared-channel
-app). UTF-8 is preserved. The `?raw`
+C1 controls are stripped, and every byte outside well-formed UTF-8 becomes U+FFFD,
+so an interpolated value cannot inject ANSI/OSC escape sequences into the terminal
+(the terminal analog of XSS -- e.g. an OSC 52 clipboard write or a scrollback wipe
+in a shared-channel app) and the output is always valid UTF-8. That guarantee
+assumes a UTF-8 terminal (see `escape/1`). The `?raw`
 opt-out bypasses this, so never wrap untrusted data in `?raw` in a `?terminal`
 template. Static styling escapes (the `s` bytes above) are framework-emitted and
 never sanitized.
@@ -279,10 +280,19 @@ interpolated value cannot inject ANSI/OSC/DCS escape sequences (e.g. `\\e]52;c;.
 clipboard writes, `\\e[3J` scrollback wipes) into other users' terminals. Dropping
 `\\e` (0x1B) neutralizes the 7-bit escape forms; the C1 controls are their one-code
 introducers (U+009B is CSI, U+009D is OSC), which a terminal honours both UTF-8
-encoded (`C2 80`-`C2 9F`) and as a bare 8-bit byte `0x80-0x9F`. Both forms are
-stripped. A byte in that range that belongs to a valid UTF-8 sequence (the `81` of
-`ā`, the `82` of `€`) is part of a character, not a control, and is kept; any other
-byte `>= 0xA0` is kept verbatim.
+encoded (`C2 80`-`C2 9F`) and, to a lenient decoder, as a bare byte `0x80-0x9F`.
+
+The output is always valid UTF-8: the UTF-8 encoded C1 controls are stripped, and
+every byte outside a well-formed sequence (a bare `0x80-0x9F`, a stray lead byte,
+Latin-1 text, an overlong form, a surrogate, anything past U+10FFFF) becomes
+U+FFFD. A stray lead byte cannot then pair with what follows it (`C2` then `[`
+would read as U+009B), and a unicode io device, which refuses invalid UTF-8, can
+always write the frame. A byte in `0x80-0x9F` that belongs to a well-formed
+sequence (the `81` of `ā`, the `82` of `€`) is part of a character and is kept.
+
+This assumes a UTF-8 terminal. An 8-bit (ISO-8859-1) terminal reads those same
+continuation bytes as C1 controls, and no sanitizer can protect it without
+dropping UTF-8 text.
 """.
 -spec escape(binary()) -> binary().
 escape(Bin) when is_binary(Bin) ->
@@ -299,14 +309,14 @@ escape(Bin) when is_binary(Bin) ->
             strip(Bin, RestSize, <<>>)
     end.
 
-%% Size of the remainder that starts at the first stripped byte, `none` when the
-%% value is already clean. Stripped: a C0 control other than `\n`/`\t`, DEL 0x7F,
-%% and a C1 control, which is either UTF-8 encoded (`C2 80`-`C2 9F`) or a bare
-%% 0x80-0x9F byte outside a well-formed sequence. A raw-byte test alone would cut
-%% the continuation bytes of `ā`/`€`, so each well-formed sequence (the RFC 3629
-%% byte table: no overlong form, no surrogate) is stepped over whole; a byte that
-%% starts none is kept when >= 0xA0 and is a C1 control otherwise. Matched byte
-%% by byte rather than with `/utf8`, which measured about twice as slow on CJK.
+%% Size of the remainder that starts at the first byte to strip or replace,
+%% `none` when the value is already clean. Stripped: a C0 control other than
+%% `\n`/`\t`, DEL 0x7F, and a UTF-8 encoded C1 control (`C2 80`-`C2 9F`).
+%% Replaced: any byte that starts no well-formed sequence (the RFC 3629 byte table:
+%% no overlong form, no surrogate, nothing past U+10FFFF). Each well-formed
+%% sequence is stepped over whole, so a continuation byte of `ā`/`€` in 0x80-0x9F
+%% is never mistaken for a control. Matched byte by byte rather than with
+%% `/utf8`, which measured about twice as slow on CJK.
 first_control(<<C, R/binary>>) when C >= 16#20 andalso C < 16#7F ->
     first_control(R);
 first_control(<<$\n, R/binary>>) ->
@@ -336,35 +346,33 @@ first_control(<<L, C1, C2, C3, R/binary>>) when
         (L =/= 16#F4 orelse C1 =< 16#8F)
 ->
     first_control(R);
-first_control(<<16#C2, C, _/binary>> = Rest) when C >= 16#80 andalso C =< 16#9F ->
-    byte_size(Rest);
-first_control(<<C, R/binary>>) when C >= 16#A0 ->
-    first_control(R);
 first_control(<<>>) ->
     none;
 first_control(Rest) ->
     byte_size(Rest).
 
-%% Bin's last RestSize bytes start with a stripped control: keep the clean run
-%% before it, drop it, and scan on from there.
+%% Bin's last RestSize bytes start with a byte to strip or replace: keep the
+%% clean run before it, swap that out, and scan on from there.
 strip(Bin, RestSize, Acc) ->
     Pos = byte_size(Bin) - RestSize,
     <<Clean:Pos/binary, Rest/binary>> = Bin,
-    Tail = drop_control(Rest),
+    {Swap, Tail} = swap_unsafe(Rest),
     case first_control(Tail) of
         none ->
-            <<Acc/binary, Clean/binary, Tail/binary>>;
+            <<Acc/binary, Clean/binary, Swap/binary, Tail/binary>>;
         Next ->
-            strip(Tail, Next, <<Acc/binary, Clean/binary>>)
+            strip(Tail, Next, <<Acc/binary, Clean/binary, Swap/binary>>)
     end.
 
-%% first_control/1 stops on `C2` only when a C1 continuation follows it (any other
-%% `C2` either starts a well-formed sequence or is a kept stray byte), so the two
-%% bytes are one UTF-8 encoded C1 control. Anything else it stops on is one byte.
-drop_control(<<16#C2, _, R/binary>>) ->
-    R;
-drop_control(<<_, R/binary>>) ->
-    R.
+%% What first_control/1 stopped on: a UTF-8 encoded C1 control (two bytes) or an
+%% ASCII control (one byte) is dropped; any other byte starts no well-formed
+%% sequence and becomes U+FFFD, one per byte.
+swap_unsafe(<<16#C2, C, R/binary>>) when C >= 16#80 andalso C =< 16#9F ->
+    {<<>>, R};
+swap_unsafe(<<C, R/binary>>) when C < 16#80 ->
+    {<<>>, R};
+swap_unsafe(<<_, R/binary>>) ->
+    {~"\x{FFFD}", R}.
 
 %% Terminal output has no raw-text elements (raw_text_kind/2 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
