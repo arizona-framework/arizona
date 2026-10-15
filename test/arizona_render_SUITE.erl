@@ -49,6 +49,8 @@
     raw_text_breakout_neutralized_for_atom/1,
     raw_text_static_lead_neutralized/1,
     raw_text_static_trail_neutralized/1,
+    raw_text_partial_sequence_at_slot_edge/1,
+    raw_text_value_end_completed_by_static/1,
     raw_text_tag_name_needs_delimiter/1,
     render_nested_sd/1,
     render_nodiff_layout_location_success/1,
@@ -163,6 +165,8 @@ groups() ->
             raw_text_breakout_neutralized_for_atom,
             raw_text_static_lead_neutralized,
             raw_text_static_trail_neutralized,
+            raw_text_partial_sequence_at_slot_edge,
+            raw_text_value_end_completed_by_static,
             raw_text_tag_name_needs_delimiter,
             render_nested_sd,
             render_with_views_no_children,
@@ -490,8 +494,8 @@ raw_text_breakout_neutralized(Config) when is_list(Config) ->
     %% carry those sequences is neutralized without being corrupted.
     ?assertEqual(#{~"x" => Nasty}, json:decode(script_content(Double))),
     %% Tag names match case-insensitively, as the HTML tokenizer does. `<!--`
-    %% and `<script` become `<` rather than the close tag's `<\` because
-    %% `\!`/`\s` are not valid JSON escapes while `<` is (and both decode
+    %% and `<script` become `\u003c` rather than the close tag's `<\` because
+    %% `\!`/`\s` are not valid JSON escapes while `\u003c` is (and both decode
     %% back to `<` in a JSON or JavaScript string).
     ?assertEqual(~"\\u003c!--", arizona_html:raw_text(script, <<>>, <<>>, ~"<!--")),
     ?assertEqual(~"\\u003cSCRIPT>", arizona_html:raw_text(script, <<>>, <<>>, ~"<SCRIPT>")),
@@ -600,6 +604,56 @@ raw_text_static_trail_neutralized(Config) when is_list(Config) ->
     ?assertEqual(~"h = 'x<\\/script>';", script_content(HTML)),
     %% `</s` + `ipt>` spells no tag: untouched.
     ?assertEqual(~"h = 'x</sipt>';", script_content(render_raw_text(trail, ~"x</s"))).
+
+%% Where another slot follows (or precedes) a value, the bytes on the other side are
+%% unknown when the value is checked, so a value ENDING in a strict prefix of a
+%% breakout sequence (`<`, `</scr`, `<!`, `<scr`) is neutralized as if the rest
+%% followed. Without that, one attacker-controlled slot beside a constant one, or
+%% two slots split across a static, reassemble a close tag or the double escape.
+raw_text_partial_sequence_at_slot_edge(Config) when is_list(Config) ->
+    Img = ~"<img src=x onerror=alert(1)>",
+    Nasty = <<"/script>", Img/binary>>,
+    Contained = fun(HTML) ->
+        ?assertEqual(nomatch, binary:match(HTML, <<"</script>", Img/binary>>)),
+        ?assertEqual(1, length(binary:matches(HTML, ~"</script>")))
+    end,
+    %% A constant `?raw` ending in `<`, then the attacker's slot.
+    Const = render_raw_text(const_lead, Nasty),
+    Contained(Const),
+    ?assertEqual(<<"var s='\\u003c/script>", Img/binary, "';">>, script_content(Const)),
+    %% Same through a conditional `?raw`.
+    Contained(render_script(cond_lead, #{m => a, v => Nasty})),
+    %% Two slots split by a static byte: `</scr` + `i` + `pt>`.
+    Split = render_script(split, #{a => ~"</scr", b => <<"pt>", Img/binary>>}),
+    Contained(Split),
+    ?assertEqual(<<"x='<\\/script>", Img/binary, "';">>, script_content(Split)),
+    %% A static `<`, then `/scr`, then `ipt>` in the next slot.
+    Two = render_script(lead_two, #{a => ~"/scr", b => <<"ipt>", Img/binary>>}),
+    Contained(Two),
+    ?assertEqual(<<"x='<\\u002fscript>", Img/binary, "';">>, script_content(Two)),
+    %% Three slots reaching the double escape (`<!` / `--<scr` / `ipt>`), which
+    %% would swallow the rest of the document.
+    Three = render_script(three, #{a => ~"<!", b => ~"--<scr", c => ~"ipt>"}),
+    ?assertEqual([], binary:matches(Three, ~"<!--")),
+    ?assertEqual(1, length(binary:matches(Three, ~"<script"))),
+    ?assertEqual(~"x='\\u003c!--\\u003cscript>';", script_content(Three)),
+    %% <style>: a constant `<`, then `/style>...`.
+    Style = render_raw_text(style_const_lead, <<"/style>", Img/binary>>),
+    ?assertEqual(nomatch, binary:match(Style, <<"</style>", Img/binary>>)),
+    ?assertEqual(<<"a{content:'<\\/style>", Img/binary, "'}">>, style_content(Style)).
+
+%% A value ending in `<` or `<!` that the static after it completes is caught at the
+%% value's own `<`.
+raw_text_value_end_completed_by_static(Config) when is_list(Config) ->
+    Bang = render_raw_text(trail_static, ~"<!"),
+    ?assertEqual([], binary:matches(Bang, ~"<!--")),
+    ?assertEqual(~"x='\\u003c!--<script>'", script_content(Bang)),
+    ?assertEqual(~"x='<--<script>'", script_content(render_raw_text(trail_static, ~"<"))),
+    %% Nothing to complete: untouched.
+    ?assertEqual(~"x='a<b--<script>'", script_content(render_raw_text(trail_static, ~"a<b"))).
+
+render_script(Fun, Bindings) ->
+    iolist_to_binary(element(1, arizona_render:render(arizona_raw_text_script:Fun(Bindings)))).
 
 %% The tokenizer reads `script`/`style` as a tag name only when whitespace (tab, LF,
 %% FF, CR -- which preprocessing turns into LF -- or space), `/` or `>` follows it.

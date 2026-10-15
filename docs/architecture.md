@@ -2598,16 +2598,16 @@ breakout through on the very form the compile error recommends -- and a `?raw` w
 those. An integer, a float and an effect command (whose JSON `arizona_effect:encode/1` already
 HTML-escapes) cannot spell a sequence, so they pass through.
 
-**Known limit -- adjacent dynamic slots.** Only *static* neighbours are visible to a slot, so two
-**adjacent** `?raw` slots in one raw-text element whose halves are both attacker-controlled
-reassemble a sequence after both have passed: `~"</scr"` followed by `~"ipt><img src=x ...>"`
-emits a working close tag, since neither half is a breakout by itself. Treat adjacent `?raw` slots
-in one `<script>`/`<style>` as a single trust boundary and build the value in one slot. Two slots
-cannot reach the script-data-*escaped* states (whichever of `<!--` / `<script` lands whole in a
-slot is neutralized there), but three can (`~"<!"`, `~"--<scr"`, `~"ipt>"`), so the
-document-swallowing variant is reachable, just harder. A neighbouring dynamic's bytes exist only at
-render time, in another slot -- closing this needs the element's whole content assembled before the
-check, which the render path does not do.
+**Where the known text ends, a partial sequence counts.** A slot sees at most 8 bytes of each
+static neighbour; past them -- another slot, whose bytes exist only at render time, or the
+element's end -- the next bytes are unknown, so a value ending in a **strict prefix** of a sequence
+(`<`, `</scr`, `<!`, `<!-`, `<scr`) is neutralized as if the rest followed. Every slot therefore
+defuses the partial it holds, whatever its neighbours are: a constant `?raw(~"x='<")` before an
+attacker's `/script>...`, two values split by a static (`~"</scr"`, `~"i"`, `~"pt>"`), and three
+slots reaching the double escape (`~"<!"`, `~"--<scr"`, `~"ipt>"`) all stay inside the element.
+The one thing not checked is the template's own static text, which is the author's markup: statics
+spelling a close tag around an *empty* value (`~"</scr"`, empty, `~"ipt>"`) are the author's own,
+and an empty value has no byte to escape.
 A dynamic *attribute* on a raw-text element
 stays fully diffable -- only
 the content slot is markerless. Limitation: the slot will not update after the initial render, and

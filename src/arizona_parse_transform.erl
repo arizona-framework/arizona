@@ -129,6 +129,11 @@ render(Bindings) ->
 %% compiling a module. See `inject_az_attrs/1`.
 -define(AZ_ATTRS_KEY, arizona_az_attrs).
 
+%% How many bytes of a raw-text slot's static neighbours reach `Backend:raw_text/4`
+%% -- the bound `arizona_renderer` sets on that callback, so the call embeds this
+%% many bytes per side rather than the whole static.
+-define(RAW_TEXT_NEIGHBOUR_BYTES, 8).
+
 %% Process-dictionary key for the binary literals folded into template statics
 %% while compiling a module (see extract_binary_value/1 and latin1_warnings/2).
 -define(FOLDED_KEY, arizona_folded_literals).
@@ -4654,7 +4659,8 @@ compile_children([Child | Rest], ElemAz, State0, Slot, Index) ->
 %% The bytes the static children after a raw-text slot emit, up to the next child
 %% that is not static text. Only a `raw` element's slot reads them.
 static_run_after(Rest, #state{raw_text_kind = raw, backend = Backend}) ->
-    iolist_to_binary(static_run(Rest, Backend));
+    After = iolist_to_binary(static_run(Rest, Backend)),
+    binary_part(After, 0, min(?RAW_TEXT_NEIGHBOUR_BYTES, byte_size(After)));
 static_run_after(_Rest, _State) ->
     <<>>.
 
@@ -4675,7 +4681,8 @@ static_run([], _Backend) ->
 %% The static bytes already buffered right before a slot (newest segment first),
 %% back to the previous dynamic or a framework marker.
 static_run_before(Buf) ->
-    iolist_to_binary(lists:reverse(static_segments(Buf))).
+    Before = iolist_to_binary(lists:reverse(static_segments(Buf))),
+    binary_part(Before, byte_size(Before), -min(?RAW_TEXT_NEIGHBOUR_BYTES, byte_size(Before))).
 
 static_segments([Bin | Rest]) when is_binary(Bin) ->
     [Bin | static_segments(Rest)];
