@@ -466,7 +466,8 @@ encrypt_ttl_expiry_boundary_test() ->
     application:unset_env(arizona, secret_key).
 
 %% `arizona_config` refuses an improper list before it gets here, so the bad-tail
-%% position is only reachable directly.
+%% position is only reachable directly. The bad inputs are ill-typed on purpose.
+-dialyzer({nowarn_function, previous_keys_names_improper_tail_position_test/0}).
 previous_keys_names_improper_tail_position_test() ->
     ?assertError({secret_key_previous_invalid, 2}, previous_keys([?EUNIT_SECRET | bad])),
     ?assertError({secret_key_previous_invalid, 0}, previous_keys(bad)).

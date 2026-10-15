@@ -1,5 +1,6 @@
 -module(arizona_crypto_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-dialyzer({nowarn_function, previous_key_improper_list_fails_loudly/1}).
 
 -export([all/0]).
 -export([init_per_suite/1]).
