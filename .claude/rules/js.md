@@ -120,6 +120,38 @@ defers the reset to a `fetch` response; drop carries the drag bookkeeping), so d
 well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-*` names that are
 directives rather than events.
 
+**An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
+submits it with the form's own method -- a GET by default, putting every field (a password
+included) in the URL -- which is what happened before the first open and during reconnect backoff.
+That holds for a form with an explicit `method`/`action` too: it no longer falls back to a native
+submission while disconnected. The listener always calls `preventDefault`, then decides by what
+the commands need (`socketNeeds`):
+
+- **An SPA `navigate`/`patch` alone** (top level or under `transition`) degrades to a full load of
+  its URL (`location.assign`, or `location.replace` for a `replace` navigate), exactly what a
+  disconnected `az-navigate` click does.
+- **Anything else needing the socket** -- a `push_event`, a navigation under `on_key` (it runs only
+  on a matching key), or a navigation beside a `fetch` (the load would cancel the request) -- drops
+  the submission **whole**, with no `az-form-reset`: the worker drops pre-open sends, so running
+  the rest would apply half a submission and discard the typed fields. Every drop warns and
+  dispatches a non-cancelable, bubbling `arizona:submit-dropped` `CustomEvent` on the form,
+  `detail: {reason: 'disconnected'}`, so the app can tell the user.
+- **A `fetch` or client-only list** runs: an HTTP login form needs no socket.
+
+Queueing for the reconnect was rejected: a submit replayed seconds later, against a view the resync
+may have remounted, is not what the user pressed. To disable the submit button while down, style it
+off `:not(.az-connected)` rather than `.az-disconnected`: before the first open `<html>` carries
+neither class. Likewise `az-prevent-default` on a delegated event is honored before the connection
+check, since a declared suppression needs no server.
+
+The listener cannot act before `arizona.js` has run (Enter while the deferred module still loads),
+so the server closes that window: the `?html` target renders `method="post"` on a `form` carrying
+`az-submit` and no `method` of its own (`arizona_renderer:implied_attrs/2`). Such a submit is then a
+POST with the fields in the body -- a live route answers `405` -- never a GET with them in the URL.
+The client's `fetch` already treats a method-less form as POST, so nothing else changes; an
+author's `method` (static, dynamic, any casing) is never overridden, and `?native`/`?terminal`
+imply nothing.
+
 **Three cases the compile-time set cannot cover, and how each is handled:**
 
 - **A runtime attribute write** (`arizona_js:set_attr(sel, "az-toggle", ...)`) uses a name no
@@ -158,7 +190,9 @@ Every item of an `?each` shares the slot **key** (keys are compile-time literals
 - Replace nav (`arizona_js:navigate(Path, {replace: true})`): `replaceState` only. Does NOT save outgoing, does NOT reset.
 - Popstate (back): restores `e.state._azScroll` after OP_REPLACE, falls through to `#hash` target or top.
 - Forward-after-back: destination entry has null state -> scroll to top. Documented non-goal; future restore would need a state-ID-keyed map backed by sessionStorage, not `replaceState`-on-scroll.
-- Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate` links fall through to the browser.
+- Modifier clicks (ctrl/cmd/shift/alt, non-primary button) on `az-navigate`/`az-patch` links fall through to the browser, as do a link with a `target` other than `_self` (another browsing context), one with `download`, and a click an app listener already `preventDefault`ed.
+- A `navigate`/`patch` effect URL resolves against the **current page** (`navigateEffect`), as `pushState` resolves it, so the frame asks for the page the address bar shows (`?page=2` on `/users/1/` is `/users/1/?page=2`). A new fragment on the current path + query just pushes (or, with `replace`, replaces) the entry and scrolls, with no server round trip -- the effect form of the in-page `az-navigate` click.
+- Full nav (`{full: true}`, or any `navigate`/`patch` http(s) URL on another origin -- `pushState` refuses one -- and an `az-navigate` link to another origin, which falls through to the browser): `location.assign`, or `location.replace` when the effect also carries `replace`. The server sends `replace` on every full load it degrades a navigate/patch frame to, since the client already pushed that entry; the browser folds a same-URL load into the current entry by itself, but not one whose URL differs (a halt replayed through the gated path, a dropped fragment). Only `http:`/`https:` ever loads: `leavePage` drops any other scheme (`javascript:`, `data:`) with a warning, since loading it would run it in the page.
 
 ### Patch nav (`az-patch`) and the `_azNav` tag
 

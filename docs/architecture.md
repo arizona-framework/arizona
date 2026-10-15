@@ -232,13 +232,23 @@ is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
 (`arizona_live:render_current/1`) rather than applying diff ops, so the backend
 writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
 
+The frame is printed from the live process's **diffed snapshot** (the root's, with each
+child view's current copy refreshed in), not from a fresh render of the template, so a
+repaint runs no `mount/1` or `handle_update/3` and shows exactly the state the process
+holds. It follows that a terminal sees what a web client sees: `az-nodiff` content
+renders once, and a slot whose reads are not tracked freezes after its first render.
+After a hot reload, edited template text appears once a slot depending on it changes --
+the terminal does not repaint on reload.
+
 Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
-bytes except `\n`/`\t`, and DEL; preserves UTF-8), native emits a JSON string. Native
-alone carries a value differently on the wire: its client JSON-encodes each `d` value
-itself, so the fingerprint payload takes the raw value from
-`c:arizona_renderer:wire_escape/1` (`wire_attr/2` for a prop) while the zipped document
-keeps the JSON string.
+bytes except `\n`/`\t`, DEL, and the C1 controls, and replaces every byte outside
+well-formed UTF-8 with U+FFFD, so the output is always valid UTF-8; this assumes a UTF-8
+terminal, since an 8-bit one reads UTF-8 continuation bytes `80`-`9F` as C1 controls), native
+emits a JSON string. Native alone carries a value
+differently on the wire: its client JSON-encodes each `d` value itself, so the
+fingerprint payload takes the raw value from `c:arizona_renderer:wire_escape/1`
+(`wire_attr/2` for a prop) while the zipped document keeps the JSON string.
 So a dynamic value in a `?terminal` view cannot inject ANSI/OSC escape sequences into
 another user's terminal (the terminal analog of XSS). The `?raw` opt-out bypasses it --
 never wrap untrusted data in `?raw` in a `?terminal` template.
@@ -394,9 +404,10 @@ item dynamic keeps its own deps too, which is what per-item skipping reads. Two
 consequences of collecting at runtime:
 
 - Every tracked read in an item counts, including an item-field read with an
-  explicit `arizona_template:get(text, Item)` (the form stream per-item skipping
-  keys on), so a view binding that happens to share that name re-evaluates the
-  each too. That over-tracks; the item diff then emits nothing.
+  explicit `arizona_template:get(text, Item)` (the only form stream per-item
+  skipping can vouch for; see "A changed stream item reuses only what its deps can
+  vouch for" below), so a view binding that happens to share that name
+  re-evaluates the each too. That over-tracks; the item diff then emits nothing.
 - An az-nodiff item template renders once, so its items are evaluated with the
   scope suspended (`eval_items/2`) and their reads never reach the slot.
 
@@ -411,7 +422,11 @@ of draining (`diff_stream/5`'s `Reconcile`: a single `{reset, #{}}`, which
 re-renders the visible items and patches only those that differ). A stream nested
 inside an item is diffed from a value the walk already evaluated whole, so there
 the drain is checked against that render and the container reconciles against it
-(`stream_relist/7`) when the queue does not account for it (`nested_drain/4`).
+(`stream_relist/7`) when the queue does not account for it (`nested_drain/4`). A
+nested stream whose render holds child views always reconciles that way, without
+draining: the drain renders the items its ops touch a second time, so each
+`?stateful` among them would run `mount/1` twice and the first instance would be
+dropped without `unmount/1`.
 
 **Content-slot conditional branches:** a `case`/`if`/`maybe` in a content slot
 compiles each *element* branch into a nested template, so by this invariant the
@@ -491,11 +506,18 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
   into the slot bracket or its tracking runs outside any bracket and freezes).
   Rebound vars are dropped; a derivation with no read (e.g. `Id = make_uuid()`)
   is left captured, so a pure side effect is never re-run per slot.
+- **`transform_scoped_tail/4`** does the same per body along the tail of the
+  clause's last expression (the `case`/`if`/`begin`/`try`/`maybe`/`receive`
+  tails the live root accepts), so a read hoisted inside a branch
+  (`a -> N = ?get(n), ?html({p, [], [N]})`) inlines into that branch's templates,
+  on top of the enclosing map. A match on a name already bound outside the body
+  is an equality test, not a definition, and is not collected.
 - **`inline_vars/2`** substitutes those variables wherever they appear in a
   `?html`/`?each` argument -- including inside a `case` scrutinee or an opaque
   call -- recursively and scope-aware (fun parameters and comprehension
   generators shadow; patterns and guards are never substituted, so a
-  substitution can never form an illegal pattern or a guard `?get`). A
+  substitution can never form an illegal pattern or a guard `?get` -- a pattern or
+  guard that reads one is tracked by a touch instead, see below). A
   substitution under a fun parameter, named fun or generator that rebinds a
   name the definition reads is a compile error (`hoisted_var_captured`): the
   copy would read the inner binding.
@@ -538,12 +560,22 @@ and the slot would silently freeze on that binding. Instead, the guard-bearing `
 a nested `fun`) wraps itself in a block that first reads each tracked binding its clause
 guards reference -- `begin _ = arizona_template:get(K, Bindings), ..., <expr> end` -- for
 the `track/1` side effect, recording those bindings as slot dependencies
-(`wrap_guard_touches/4`, collecting via `guard_tracked_vars/2` with per-clause shadow
-handling). The guard keeps using the captured value, which each diff cycle rebuilds from
-current bindings, so a change to a guard binding re-renders the slot. Reusing the inline
-expansion as the touch (`iv({var,L,V}, Inline)`) handles `get`/`get_lazy`/`with` and
-transitively-derived vars uniformly. A non-tracked local or a pattern-bound variable in a
-guard needs no touch (no binding dependency). The one fun NOT wrapped is a top-level
+(`wrap_touches/4`, collecting via `clause_tracked_vars/2` / `fun_tracked_vars/2` with
+per-clause shadow handling). The guard keeps using the captured value, which each diff
+cycle rebuilds from current bindings, so a change to a guard binding re-renders the slot.
+Reusing the inline expansion as the touch (`iv({var,L,V}, Inline)`) handles
+`get`/`get_lazy`/`with` and transitively-derived vars uniformly. A non-tracked local or a
+pattern-bound variable in a guard needs no touch (no binding dependency).
+
+**Patterns get the same touch.** A pattern cannot hold the call either, and an inlined
+variable a pattern reads would freeze the slot the same way: an equality test against a
+hoisted variable (`case I of Sel -> ...` -- the variable is already bound, so the clause
+tests it and its body's `Sel` is the same value, substituted as usual), a map-pattern key,
+a binary segment size, or a `maybe` `?=`. Case-like clauses, match expressions, fun
+heads (keys and sizes only -- a fun parameter binds) and comprehension generators (keys and
+sizes only, the generator's own bindings shadowing later qualifiers) all collect them. A
+`?=` must stay a direct expression of its `maybe` body, so its touches are placed ahead of
+it in that body rather than in a wrapping block. The one fun NOT wrapped is a top-level
 `?each` callback (handled in `inline_vars/2`): `compile_each` needs a single-clause fun,
 and its guards are over the item param, not outer tracked vars.
 
@@ -581,16 +613,31 @@ is present, because Erlang evaluates the default argument eagerly and `?get(b)`
 tracks unconditionally. `?get_lazy(a, fun() -> ?get(b) end)` tracks the fallback key
 only when the default is actually taken.
 
-**Stream items re-evaluate empty deps on purpose.** The main per-dynamic diff path
-skips a slot whose deps are empty (the documented frozen residue above). The `?each`
-item path does the opposite: its reuse predicate in `arizona_eval` (`can_reuse/2`) is
-`map_size(OldDeps) > 0 andalso not deps_changed`, so an empty-deps item is always
-re-evaluated. This is a
-deliberate safety net for item callbacks that head-destructure fields
-(`fun(#{text := T}, _) -> ...`): those reads are untracked, so the item would have
-empty deps and freeze, except the item path re-evaluates it. The asymmetry is the
-boundary: head-destructured *render* reads freeze in top-level slots but stay current
-inside `?each` items.
+**A changed stream item reuses only what its deps can vouch for.** The main
+per-dynamic diff path skips a slot whose deps are empty (the documented frozen residue
+above). A changed stream item (`arizona_stream:update/3`, or a kept item of a reset)
+cannot trust its deps that way: the item value is an input to every dynamic, and deps
+record only the reads that went through `get`. A plain `maps:get(n, Item)`, a
+head-destructured field (`fun(#{text := T}, _) -> ...`), a value derived in the
+callback body, or a read inside a nested template's closure (a conditional branch, an
+inner `?each` callback) never reaches them -- and a dynamic that also reads a view
+binding has non-empty deps that name none of the fields it used. So the parse
+transform decides which dynamics are provable: a per-item template carries
+`reuse => [boolean()]`, one flag per dynamic, `true` only when the dynamic references
+no variable but the item key outside the map argument of a tracked read
+(`arizona_template:get/2,3`, `get_lazy/3`, `with/2`, or their `az` aliases) in its
+own closure. That map must be the item itself (the bare item parameter, or the
+variable side of a `Pat = Var` head) or the view bindings (bound outside the
+callback): a sub-map bound in the head or the body records its own keys, not the
+item field that holds it. A dynamic with no reads and no item reference (a static
+value, `?connected`, the key attribute) is kept on an item update.
+`arizona_eval:render_stream_item_skipping/6` keeps a dynamic's old
+`{Az, Val, Deps}` only when it is flagged and its deps miss the changed fields;
+everything else re-evaluates, and a template without the list (none qualified, a
+1-arg callback, a hand-built template) re-renders the whole changed item. An item
+whose value did not change at all is still reused whole. The result: untracked item
+reads stay current inside stream items, and only a fully tracked dynamic gets
+skipped.
 
 **`?each` item bodies must be elements.** Because each item compiles into a per-item
 template (`#{s, d, f}`), the callback body must be an element (`{Tag, Attrs, Children}`),
@@ -672,7 +719,14 @@ re-render. A plain list bearing per-item `?stateful` children therefore falls ba
 marker `OP_TEXT`, re-rendering every item on any change. When you want self-diffing children, use a
 **stream** `?each`: items are keyed by `az_key`, each `?stateful` item is its own self-diffing
 live view (an entry in the root live process's `views` map, not a process of its own),
-and `merge_stream_child_views/4` carries the child ids incrementally across diffs.
+and `merge_stream_child_views/4` carries the child ids incrementally across diffs. A child
+lives exactly as long as its item is in the DOM: whichever way the item leaves -- `delete/2`,
+`reset/2`, a new stream bound over the slot, a `drop` eviction, or a sort or insert pushing it
+out of a `limit` window -- its child unmounts, and an item that comes back into the window
+mounts a fresh one. A key deleted and re-inserted within one update keeps its child (the new
+render reaches it through `handle_update/3`, not `mount/1`), while the client gets an
+`OP_REMOVE` and a fresh `OP_INSERT`, so state the browser holds inside it (`?local` values,
+hooks) starts over.
 
 **A keyed container reached through a `?stateful` child stays per-item, but by a different
 route.** `diff_stream/4` derives its ops by draining the stream's pending op log, and
@@ -1086,7 +1140,7 @@ That guard sits at one call site, so the other two ways into `diff_stream/4` -- 
 (`diff_each/9`, which `diff/4` uses, i.e. production) and the stream-inside-a-stream-item walk
 (`diff_item_dynamics_v/3`) -- reached the drain straight and dropped the change: on identical
 input `diff/3` emitted the removals and `diff/4` emitted nothing. `diff_stream/4` now reconciles
-an empty drain itself (`drainable_ops/1` substitutes a `{reset, #{}}`), so every entry point
+an empty drain itself (`drainable_ops/3` substitutes a `{reset, #{}}`), so every entry point
 agrees. The two mechanisms are complementary rather than redundant: `stream_relist/7` diffs
 against the state the enclosing walk already evaluated, which `diff_each/9` does not have.
 
@@ -1100,10 +1154,36 @@ stream over a slot that already holds one (rather than mutating the stream that 
 those inserts were all the differ had: keys the new stream dropped were never mentioned, and keys
 present in both were skipped as replays, so a shrink, a reorder and an in-place content change
 each diffed to NOTHING and the stale list stayed on screen with no self-heal. The constructors
-therefore open the queue with a **genesis reset** (`{reset, #{}}`) -- the op that already means
+therefore open the queue with a **genesis reset** (`reset`) -- the op that already means
 "reconcile the client to my current state" -- which makes the log truthful for any consumer.
 It costs the incremental path nothing: a resume that finds its mark skips past it, and replaying
 it in a re-drain is idempotent.
+
+**A log that reorders drains as one reconcile.** The drain replays ops one at a time against
+what the client holds, and the one thing it cannot always follow op by op is order: a `reorder`
+(`sort/2`) carries no order of its own, so the only order the drain can see is the final one,
+not the one the client has reached by that point. A positional op after it was placed against an
+order the client did not hold yet, and a second sort then found the client "already" in the
+final order and moved nothing. So a drained log holding a `reorder` or a
+`reset` is replaced by one reset (`drainable_ops/3`): remove what left, patch what stayed, move
+the stayers into order, then insert each arrival at its final index. A log of sorts alone needs
+no item walk and drains as one `reorder` from the client's order to the final window instead.
+A `move` and a positional insert are different: each is placed by where it sits in the source
+when it is queued (`move/3` records the key it lands after, `insert/3` an index), so on an
+unlimited stream, whose client holds the whole source in order at every step, they replay op
+by op exactly. On a limited stream hidden keys count toward that placement but are not on the
+page, so there they take the reset too. A log of appends, deletes and updates keeps the
+op-by-op drain, and a `move/3` to the position a key already holds queues nothing. The
+invariant, checked by a randomized model test in `arizona_stream_SUITE`: after a frame's ops the
+client shows exactly an SSR of the stream's final state.
+
+**A reset measures kept items against the snapshot, not against the pre-reset source.** The
+`reset` op carries no items. The drain re-renders a kept item only where its fields differ from
+the item the client's DOM was rendered from, which is the `source` the stream's snapshot keeps
+(every stream snapshot does, the post-drain one included). The source as it stood just before
+`reset/1,2` is not that item whenever the same event touched it first: `reset/2` rebuilds the
+queue, so an earlier `update/3` is gone by the drain, and measuring from the updated item found
+nothing to ship.
 
 The queue of an unclearable nested stream still grows, one retained op term per mutation. Keep a
 stream that mutates over a long-lived session as a top-level binding.
@@ -1121,7 +1201,9 @@ stream that mutates over a long-lived session as a top-level binding.
   the window slides onto the new tail. **Only appends evict**: "oldest" is well-defined only for
   the append flow, so a positional `insert/3` (a window position, not an age) and pre-population
   (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics. An append to an
-  overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`.
+  overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`. Each
+  eviction queues a `{delete, Key}`, so a key evicted and re-appended in one event reaches the
+  client as a removal and a fresh insert rather than as a replay of a key it already shows.
 
 **Window reconciliation is shared by both modes** (`apply_limit/6` in `arizona_diff`). By the time
 the diff runs, `order` already reflects the halt/drop retention decision, so reconciliation is
@@ -1244,7 +1326,11 @@ it can never address an embedded child, so `?send`/`?send_after` are the API.
 `send_after/3` additionally registers its ref in the `$arizona_timers` process-dictionary map,
 `#{ViewId => [reference()]}`. A fired ref is pruned when its message is delivered; a removed child
 view's timers are cancelled synchronously (and its queued view messages flushed) on unmount; and
-`navigate/3,4` cancels them all.
+`navigate/3,4` cancels them all. A render that keeps a child's id but switches its handler
+(`case ?get(k) of a -> ?stateful(a, #{id => ~"c"}); b -> ?stateful(b, #{id => ~"c"}) end`) is a
+removal of the old instance too: its timers and queued messages are dropped before its `unmount/1`,
+and before the new handler mounts, so they never reach the new handler's `handle_info/2` while a
+timer the new handler arms at mount survives.
 
 **What the navigate sweep does and does not guarantee.** The sweep runs **before** the unmount
 callbacks, so it covers every timer armed during the old page's normal lifetime -- `mount/1`,
@@ -1269,6 +1355,7 @@ the render/diff, which runs in the same process -- the "Set by" column is author
 | `$arizona_reconnected` | set `true` when this connection is a reconnection | `reconnected/0` (the `?reconnected` macro) -- gate one-shot commands with `?connected andalso not ?reconnected` |
 | `$arizona_capabilities` | the `_az_caps` map the client advertised at connect | `capabilities/0` / `capability/1` (`?capabilities` / `?capability`). A UI/effect hint, **never** authorization |
 | `$arizona_timers` | `send_after/3` | unmount and `navigate/3,4`, to cancel |
+| `$arizona_swapped_out` | `swap_out_view/3`, when a render keeps a child's id but switches its handler; erased as soon as the render or diff that set it returns (root and child diffs, `do_mount/4`, `render_current`) | `terminate/2`, so a diff that raised after the swap does not unmount the swapped-out instance a second time |
 | `$arizona_deps` | the per-dynamic eval bracket | `arizona_eval`, `arizona_template:track/1` -- the dependency capture set |
 | `$arizona_update_effects` | `arizona_eval:set_update_effects/1`, seeded with the originating callback's effects before a diff | `current_update_effects/0` while child `handle_update/3`s fold onto it; `drain_update_effects/0` erases and returns the final list. Threading it here is what lets a child's effects join the root's with no concatenation at the call site |
 | `{'$arizona_scoped_statics', Prefix, Fp}` | `scoped_statics/4` in `arizona_template` | itself -- a memo for the per-slot static prefixing (`scope_static/3` on the render backend, per element), keyed by scope prefix + template fingerprint |
@@ -1511,6 +1598,11 @@ is flushed (a flash has its own in-process carry instead).
   reply, or `arizona_js:navigate` effect on WS navigate)
 - `halted_redirect/1` -- returns `{Status, Location}` if `redirect/2,3` was called, else
   `undefined`
+- `location_kind/1` -- reads a `Location` as a browser will (leading C0/space trimmed, tab/LF/CR
+  removed): `local` for a path on this origin (one leading `/`), the only form a SPA navigation
+  follows; `external` for an `http`/`https` URL, a scheme-relative `//host` or `/\host`, or a
+  relative path (resolved against the current URL, as an HTTP `Location` is), which the
+  transports send as a full load; `unsafe` for any other scheme, which never reaches the client
 - flash (one-request): `put_flash/3` (set), `flash/1` (read) -- signed messages cleared on read;
   survive a full-page HTTP redirect (signed `az_flash` cookie) and a WebSocket SPA navigate
   (`arizona_socket` in-process carry, exactly-once, no cookie). The WS carry needs a destination
@@ -1537,6 +1629,7 @@ read, forge, nor outlive it.
 
 | App env | Default | Effect |
 | ------- | ------- | ------ |
+| `secret_key_previous` | `[]` | Rotated-out keys `verify`/`decrypt` still accept (signing uses `secret_key` only). Each must be a non-empty binary like the primary, else every sign, encrypt, verify and decrypt raises `secret_key_previous_invalid`: an empty key is a public constant. From an env var, write `{env, "OLD_SECRET_KEY", []}` (unset or empty resolves to `[]`), not a `~""` default, which resolves to `[<<>>]` |
 | `session_max_age` | 604800 (7 days) | Session cookie `Max-Age` and the expiry baked into the ciphertext (or, in store mode, into the signed id) |
 | `session_max_bytes` | 4096 | Cap on the **serialized `Set-Cookie` line** -- name + value + attributes, what browsers actually count. `arizona_session:encode/1` errors `{session_too_large, ...}` past it instead of letting the browser silently drop the cookie |
 | `session_secure` | `false` | The session cookie's `Secure` flag |
@@ -1568,7 +1661,11 @@ default `handle` -- with the route's `state` restored into the request.
   still run (inline validation) while the form's typed fields survive
 - `reply_redirect/1(Location)` -- sugar for `reply_effects([arizona_js:navigate(Location)])`. A
   fetch-followed HTTP 3xx cannot drive a SPA navigation (`redirect: 'manual'` yields an
-  opaque-redirect whose `Location` is unreadable), so a redirect is delivered as an effect
+  opaque-redirect whose `Location` is unreadable), so a redirect is delivered as an effect. A
+  `Location` that is not a path on this origin (`arizona_req:location_kind/1`) goes out with
+  `full => true`, since `pushState` refuses another origin; a relative one loads resolved
+  against the current URL, as over HTTP. An unsafe scheme (`javascript:`, `data:`) raises
+  `{unsafe_redirect, Location}` rather than reach the client
 - `req/1(RoadrunnerReq)` -- the **post-middleware** `arizona_req:request()`, so an action can call
   `arizona_req:get_session/2,3` after a `fetch_session` step
 - `bindings/1(RoadrunnerReq)` -- the bindings the middleware pipeline produced
@@ -1748,13 +1845,23 @@ envelope `{"o": scopedOps, "e": effects}`.
 `history.pushState`, sends `["navigate", {path, qs}]` over WebSocket. `arizona_socket`'s navigate
 handler resolves the new route via the adapter, then runs the new route's middlewares (lifecycle
 parity with HTTP init and WS upgrade). If middleware halts with `arizona_req:redirect/2,3`, the
-socket emits `[arizona_js:navigate(Location)]` as a client effect -- no `arizona_live:navigate` call
-happens; the browser pushes the new URL and the fresh HTTP handshake runs middleware again on the
-redirect target. On `cont`, `arizona_live:navigate/4` is called. Before mounting the new handler it
-cancels every pending `send_after` timer (`cancel_pending_timers/0`, over the whole
-`$arizona_timers` registry) and then unmounts the outgoing page **children first, then the root**
-(`unmount_removed_views/1` over the old views map, then `arizona_stateful:call_unmount/2` on the old
-root). Discarding the page is a removal, so it unmounts exactly like a diff removal does, and
+socket emits `[arizona_js:navigate(Location, #{replace => true})]` as a client effect -- no
+`arizona_live:navigate` call happens; the browser **replaces** the gated URL it already pushed
+(an HTTP 3xx never leaves it in history either, so Back does not bounce off the gate) and the
+follow-up navigate frame runs middleware again on the redirect target. That needs a `Location`
+that is a path on this origin (`arizona_req:location_kind/1`); any other -- an identity
+provider -- cannot be SPA-navigated, so the socket instead has the browser load the gated path
+over HTTP, where the same halt is a real 3xx that also carries any cookie the middleware set
+before redirecting (the gate's middlewares run twice, the cost the flash replay already pays).
+An unsafe-scheme `Location` takes the same road, so it never reaches the client. Every full load
+the socket degrades a navigate/patch frame to (no live route, a layout change, these halts, the
+flash replay) carries `replace => true` and runs as `location.replace`: it finishes a navigation
+the client already recorded. On `cont`, `arizona_live:navigate/4` is called. Before mounting the
+new handler it cancels every pending `send_after` timer (`cancel_pending_timers/0`, over the
+whole `$arizona_timers` registry) and then unmounts the outgoing page **children first, then the
+root** (`unmount_removed_views/1` over the old views map, then `arizona_stateful:call_unmount/2`
+on the old root).
+Discarding the page is a removal, so it unmounts exactly like a diff removal does, and
 `terminate/2` uses the same order for any exit reason -- every child's `unmount/1` runs while the
 root is still mounted, and no handler has to propagate unmount by hand. Note the guarantee is
 against the root: `views` is flat and walked with `maps:foreach`, so nested views unmount in key
@@ -2123,9 +2230,9 @@ queued for this update cycle; return it extended with this callback's own effect
 returns it verbatim) -- so a patch reaction can set the document title or redirect, threaded without
 any caller-side concatenation. See "SPA navigate / patch route resolution".
 
-`unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional
-or navigate) or the live process is shutting down. Use it to release resources (timers, external
-subscriptions). Return value is discarded.
+`unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional,
+a list or stream item leaving the DOM, or navigate) or the live process is shutting down. Use it to
+release resources (timers, external subscriptions). Return value is discarded.
 
 ## Dynamic `eval` return values
 
@@ -2494,7 +2601,10 @@ search-and-replace blindly:
   list of segments, with the markers it emits held as tagged `{az_attr, Id}` / `{az_slot, Id}`
   entries rather than bytes; scoping rebuilds exactly those through the backend's `az_attr/1` /
   `text_slot_open/1` with the fingerprint prepended, and copies literal segments through untouched.
-  The fingerprint is still taken over the *unscoped* bytes, so it is unchanged by this.
+  The fingerprint is taken over the *unscoped* segments, so scoping does not change it. Each dynamic
+  attribute also leaves a `{dyn_attr, Name, Bytes}` segment carrying its name: HTML renders the name
+  inside the dynamic, so without it two templates differing only in a dynamic attribute's name
+  would share a fingerprint and the diff would patch one into the other, leaving the old attribute.
 - **Runtime** (the `scope_static/3` renderer callback) has only bytes, so it anchors on the
   template's own fingerprint: every framework `az` in a compiled static is `<Fp>-<id>`, so the
   backend matches `az="<Fp>` / `<!--az:<Fp>` (HTML) or `"az":"<Fp>` (native), never the bare marker
