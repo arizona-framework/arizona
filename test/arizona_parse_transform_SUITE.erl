@@ -24,6 +24,8 @@
     each_named_fun_ref_non_element_rejected/1,
     each_named_fun_ref_arity_2_non_element_rejected/1,
     each_stream_control_flow_body_rejected_with_wrapper_advice/1,
+    each_stream_multi_root_body_rejected/1,
+    each_stream_static_body_rejected/1,
     computed_element_tag_rejected_with_idiom/1,
     malformed_element_still_invalid_element/1,
     each_stream_control_flow_wrapper_fix_keys_per_item/1,
@@ -659,6 +661,8 @@ groups() ->
             each_named_fun_ref_non_element_rejected,
             each_named_fun_ref_arity_2_non_element_rejected,
             each_stream_control_flow_body_rejected_with_wrapper_advice,
+            each_stream_multi_root_body_rejected,
+            each_stream_static_body_rejected,
             computed_element_tag_rejected_with_idiom,
             malformed_element_still_invalid_element,
             each_stream_control_flow_wrapper_fix_keys_per_item,
@@ -6577,6 +6581,74 @@ each_stream_control_flow_body_rejected_with_wrapper_advice(Config) when is_list(
         "        end "
         "    end, arizona_template:get(items, Bindings, [])). ",
         fun(R) -> R =:= each_stream_body_control_flow end
+    ).
+
+%% A keyed op addresses an item by the one element carrying its az-key, so every other
+%% root of a multi-root item -- a sibling element or a text node -- would be orphaned on
+%% a remove and out of order on a move. Rejected in each form a body reaches the check:
+%% inline, whole-body ?html, and a named 2-arg ref.
+each_stream_multi_root_body_rejected(Config) when is_list(Config) ->
+    IsMultiRoot = fun(R) -> R =:= each_stream_body_multi_root end,
+    Each = fun(Name, Fun, Defs) ->
+        "-module(" ++ Name ++ "). -export([render/1]). " ++ Defs ++
+            "render(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each(" ++
+            Fun ++ ", arizona_template:get(items, Bindings))]}). "
+    end,
+    assert_parse_error(
+        Each(
+            "pt_each_stream_multi_elems",
+            "fun(I, K) -> [{li, [{az_key, K}], [I]}, {li, [], [~\"sep\"]}] end",
+            ""
+        ),
+        IsMultiRoot
+    ),
+    assert_parse_error(
+        Each(
+            "pt_each_stream_multi_text",
+            "fun(I, K) -> [~\"Item: \", {b, [{az_key, K}], [I]}] end",
+            ""
+        ),
+        IsMultiRoot
+    ),
+    assert_parse_error(
+        Each(
+            "pt_each_stream_multi_html",
+            "fun(I, K) -> arizona_template:html([{li, [{az_key, K}], [I]}, {li, [], []}]) end",
+            ""
+        ),
+        IsMultiRoot
+    ),
+    assert_parse_error(
+        Each(
+            "pt_each_stream_multi_named",
+            "fun row/2",
+            "row(I, K) -> [{li, [{az_key, K}], [I]}, {li, [], [~\"sep\"]}]. "
+        ),
+        IsMultiRoot
+    ),
+    %% The fix the error names compiles: the parts inside one keyed item element.
+    Mod = compile_module(
+        Each(
+            "pt_each_stream_multi_fix",
+            "fun(I, K) -> {li, [{az_key, K}], [{b, [], [I]}, ~\"sep\"]} end",
+            ""
+        )
+    ),
+    S0 = arizona_stream:new(fun(X) -> X end, [~"a", ~"b"]),
+    {HTML, _, _} = arizona_render:render(Mod:render(#{items => S0}), #{}),
+    ?assertMatch(
+        {match, _}, re:run(iolist_to_binary(HTML), ~"<li[^>]*az-key=\"a\"[^>]*><b[^>]*>.*sep</li>")
+    ).
+
+%% A bare static binary has no element at all for a keyed op to address.
+each_stream_static_body_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_each_stream_static). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "        fun(_I, _K) -> ~\"x\" end, arizona_template:get(items, Bindings))]}). ",
+        fun(R) -> R =:= each_stream_body_not_element end
     ).
 
 %% The shape that error tells the author to write must actually work: one stable keyed
