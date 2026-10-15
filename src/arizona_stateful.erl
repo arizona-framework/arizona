@@ -308,6 +308,19 @@ Two sources deliver props here, with identical semantics:
 
 If not exported, the framework merges `Props` into `Bindings` directly.
 
+For an embedded child it runs whenever the parent slot holding the
+`?stateful` re-evaluates, which is whenever a binding read anywhere in that
+slot changed -- not only when the props did. A read outside the props (an
+enclosing `case ?get(tab) of ...`) or a prop derived from a changed binding
+whose value did not change (`x => ?get(n) div 10`) delivers props term-equal
+to the previous ones. The framework does not filter those out: a view keeps
+its bindings, which this callback may have transformed, not the props it was
+last given, so there is nothing to compare against. Keep the callback
+idempotent for equal props, and compare against your own bindings when a side
+effect (a subscribe, a timer) must happen only on an actual change. A slot
+none of whose reads changed is skipped and does not call it. A `patch` calls
+it on every patch.
+
 `Effects` is the accumulator of effects already queued for this update cycle
 (the originating event's effects, then each child's, folded through the
 render). Return it extended with this callback's own effects -- they are all
