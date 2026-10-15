@@ -1273,7 +1273,11 @@ it can never address an embedded child, so `?send`/`?send_after` are the API.
 `send_after/3` additionally registers its ref in the `$arizona_timers` process-dictionary map,
 `#{ViewId => [reference()]}`. A fired ref is pruned when its message is delivered; a removed child
 view's timers are cancelled synchronously (and its queued view messages flushed) on unmount; and
-`navigate/3,4` cancels them all.
+`navigate/3,4` cancels them all. A render that keeps a child's id but switches its handler
+(`case ?get(k) of a -> ?stateful(a, #{id => ~"c"}); b -> ?stateful(b, #{id => ~"c"}) end`) is a
+removal of the old instance too: its timers and queued messages are dropped before its `unmount/1`,
+and before the new handler mounts, so they never reach the new handler's `handle_info/2` while a
+timer the new handler arms at mount survives.
 
 **What the navigate sweep does and does not guarantee.** The sweep runs **before** the unmount
 callbacks, so it covers every timer armed during the old page's normal lifetime -- `mount/1`,
@@ -1298,6 +1302,7 @@ the render/diff, which runs in the same process -- the "Set by" column is author
 | `$arizona_reconnected` | set `true` when this connection is a reconnection | `reconnected/0` (the `?reconnected` macro) -- gate one-shot commands with `?connected andalso not ?reconnected` |
 | `$arizona_capabilities` | the `_az_caps` map the client advertised at connect | `capabilities/0` / `capability/1` (`?capabilities` / `?capability`). A UI/effect hint, **never** authorization |
 | `$arizona_timers` | `send_after/3` | unmount and `navigate/3,4`, to cancel |
+| `$arizona_swapped_out` | `swap_out_view/3`, when a render keeps a child's id but switches its handler; erased as soon as the render or diff that set it returns (root and child diffs, `do_mount/4`, `render_current`) | `terminate/2`, so a diff that raised after the swap does not unmount the swapped-out instance a second time |
 | `$arizona_deps` | the per-dynamic eval bracket | `arizona_eval`, `arizona_template:track/1` -- the dependency capture set |
 | `$arizona_update_effects` | `arizona_eval:set_update_effects/1`, seeded with the originating callback's effects before a diff | `current_update_effects/0` while child `handle_update/3`s fold onto it; `drain_update_effects/0` erases and returns the final list. Threading it here is what lets a child's effects join the root's with no concatenation at the call site |
 | `{'$arizona_scoped_statics', Prefix, Fp}` | `scoped_statics/4` in `arizona_template` | itself -- a memo for the per-slot static prefixing (`scope_static/3` on the render backend, per element), keyed by scope prefix + template fingerprint |

@@ -101,6 +101,8 @@
     unmount_children_on_navigate/1,
     unmount_children_on_terminate/1,
     removed_child_timer_cancelled/1,
+    swapped_child_timer_cancelled/1,
+    swapped_child_unmounted_once_when_new_mount_crashes/1,
     fired_timer_ref_pruned/1,
     live_reaped_on_transport_disconnect/1,
     child_in_stream_survives_dep_skip/1,
@@ -249,6 +251,8 @@ groups() ->
             unmount_children_on_navigate,
             unmount_children_on_terminate,
             removed_child_timer_cancelled,
+            swapped_child_timer_cancelled,
+            swapped_child_unmounted_once_when_new_mount_crashes,
             fired_timer_ref_pruned,
             live_reaped_on_transport_disconnect,
             child_in_stream_survives_dep_skip,
@@ -1710,6 +1714,50 @@ removed_child_timer_cancelled(Config) when is_list(Config) ->
     after 1000 -> ok
     end,
     ?assert(is_process_alive(Pid)).
+
+swapped_child_timer_cancelled(Config) when is_list(Config) ->
+    %% A render that keeps a child's id but swaps its handler removes the old
+    %% instance as surely as dropping it would: its timers and queued view
+    %% messages are addressed to the id, so unless they die with it the
+    %% swapped-in handler's handle_info/2 receives the old instance's ticks.
+    %% The new instance's own timer, armed at mount under the same id, must
+    %% survive the teardown.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_swap_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ~"swap_parent", ~"swap", #{}),
+    ?assertEqual(
+        [{unmounted, arizona_swap_a}, {b_got, b_tick}],
+        collect_messages(300)
+    ).
+
+swapped_child_unmounted_once_when_new_mount_crashes(Config) when is_list(Config) ->
+    %% A swap unmounts the old instance during the render, before the new
+    %% handler mounts. When that mount raises, the process exits from the state
+    %% it had before the event, which still lists the old instance, so
+    %% terminate/2 must not unmount it a second time.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_swap_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    ?assertExit(
+        {{{arizona_loc, _, crash_on_mount}, _}, {gen_server, call, _}},
+        arizona_live:handle_event(Pid, ~"swap_parent", ~"swap_crash", #{})
+    ),
+    receive
+        {'DOWN', Ref, process, Pid, {{arizona_loc, _, crash_on_mount}, _}} -> ok
+    after 1000 -> error(timeout_live_exit)
+    end,
+    ?assertEqual([{unmounted, arizona_swap_a}], collect_messages(200)).
+
+collect_messages(Timeout) ->
+    receive
+        Msg -> [Msg | collect_messages(Timeout)]
+    after Timeout -> []
+    end.
 
 fired_timer_ref_pruned(Config) when is_list(Config) ->
     %% A fired timer's ref must be pruned from the tracked set when its message
