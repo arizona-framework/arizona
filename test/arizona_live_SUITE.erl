@@ -122,6 +122,9 @@
     nested_stream_child_unmounted_on_reset/1,
     nested_stream_child_unmounted_on_drop_eviction/1,
     nested_stream_child_unmounted_on_window_push_out/1,
+    stream_grandchild_survives_unrelated_insert/1,
+    stream_wrapped_children_unmounted_on_delete/1,
+    stream_wrapped_child_unmounted_on_switch_off/1,
     on_mount_transforms_bindings/1,
     on_mount_works_on_navigate/1,
     on_mount_empty_is_noop/1,
@@ -260,7 +263,10 @@ groups() ->
             nested_stream_child_mounted_once_on_insert,
             nested_stream_child_unmounted_on_reset,
             nested_stream_child_unmounted_on_drop_eviction,
-            nested_stream_child_unmounted_on_window_push_out
+            nested_stream_child_unmounted_on_window_push_out,
+            stream_grandchild_survives_unrelated_insert,
+            stream_wrapped_children_unmounted_on_delete,
+            stream_wrapped_child_unmounted_on_switch_off
         ]},
         {on_mount, [parallel], [
             on_mount_transforms_bindings,
@@ -2004,6 +2010,40 @@ nested_stream_child_unmounted_on_window_push_out(Config) when is_list(Config) ->
     ?assertEqual(
         [{child_mounted, ~"c-g-a"}, {child_unmounted, ~"c-g-b"}],
         nested_lifecycle_event(Pid, ~"delete", #{~"id" => ~"b"})
+    ).
+
+%% A grandchild an item child rendered on its own event is recorded on no
+%% container the root snapshot holds; an unrelated change to the stream must still
+%% carry it, and removing its item must unmount it with its parent.
+stream_grandchild_survives_unrelated_insert(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual(
+        [{child_mounted, ~"c-a-g"}],
+        lifecycle_event(Pid, ~"c-a", ~"grand_on", #{})
+    ),
+    ?assertEqual(
+        [{child_mounted, ~"c-c"}],
+        stream_lifecycle_event(Pid, ~"insert", #{~"id" => ~"c"})
+    ),
+    ?assertEqual(
+        [{child_unmounted, ~"c-a"}, {child_unmounted, ~"c-a-g"}],
+        stream_lifecycle_event(Pid, ~"delete", #{~"id" => ~"a"})
+    ).
+
+%% Children an item reaches through a nested snapshot -- an element a conditional
+%% returns, a `?stateless`, a content-slot list -- unmount with their item.
+stream_wrapped_children_unmounted_on_delete(Config) when is_list(Config) ->
+    Pid = start_lifecycle(arizona_stream_wrapped_lifecycle_root, #{}),
+    ?assertEqual(
+        [{child_unmounted, ~"cl-a"}, {child_unmounted, ~"cs-a"}, {child_unmounted, ~"cw-a"}],
+        lifecycle_event(Pid, ~"swl", ~"delete", #{~"id" => ~"a"})
+    ).
+
+stream_wrapped_child_unmounted_on_switch_off(Config) when is_list(Config) ->
+    Pid = start_lifecycle(arizona_stream_wrapped_lifecycle_root, #{}),
+    ?assertEqual(
+        [{child_unmounted, ~"cw-a"}],
+        lifecycle_event(Pid, ~"swl", ~"switch_off", #{~"id" => ~"a"})
     ).
 
 start_stream_lifecycle(Init) ->
