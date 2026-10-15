@@ -5865,6 +5865,41 @@ describe('navigation scroll', () => {
         );
     });
 
+    it('az-navigate click is left alone for a new browsing context, a download, or an app preventDefault', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const pushSpy = vi.spyOn(history, 'pushState');
+        // jsdom reports the default actions it cannot perform; keep them off the output.
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const click = (attrs, onClick) => {
+            const a = document.createElement('a');
+            a.setAttribute('az-navigate', '');
+            a.setAttribute('href', '/other');
+            for (const [k, v] of Object.entries(attrs)) a.setAttribute(k, v);
+            if (onClick) a.addEventListener('click', onClick);
+            document.body.appendChild(a);
+            const evt = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+            a.dispatchEvent(evt);
+            return evt;
+        };
+        // The browser opens these elsewhere or saves the file: not an SPA navigation.
+        expect(click({ target: '_blank' }).defaultPrevented).toBe(false);
+        expect(click({ target: 'frame1' }).defaultPrevented).toBe(false);
+        expect(click({ download: '' }).defaultPrevented).toBe(false);
+        // The app already handled this click.
+        click({}, (e) => e.preventDefault());
+        errSpy.mockRestore();
+        expect(pushSpy).not.toHaveBeenCalled();
+        pushSpy.mockRestore();
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
+        // `_self` (and no target) is this tab: still an SPA navigation.
+        click({ target: '_self' });
+        expect(mock.getSentMessages()).toContainEqual(['navigate', { path: '/other', qs: '' }]);
+    });
+
     it('az-navigate link to another origin is left to the browser', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');

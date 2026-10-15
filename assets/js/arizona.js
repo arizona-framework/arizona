@@ -3726,6 +3726,11 @@ function connect(endpoint, params = {}) {
                 /** @type {Element} */ (e.target).closest('[az-navigate], [az-patch]')
             );
             if (!el || !_connected) return;
+            // An app listener already handled the click, or the browser is meant
+            // to open the link elsewhere (`target`) or save it (`download`).
+            if (e.defaultPrevented || el.hasAttribute('download')) return;
+            const target = el.getAttribute('target');
+            if (target && target.toLowerCase() !== '_self') return;
             const href = el.getAttribute('href');
             if (!href) return;
             // Another origin cannot be SPA-navigated (pushState refuses it, and
