@@ -63,6 +63,9 @@
 -export([navigate_mount_crash_closes_mount_failed/1]).
 -export([patch_to_crashing_handler_closes_mount_failed/1]).
 -export([navigate_halt_without_redirect_loads_full_page/1]).
+-export([handler_flash_survives_gate_on_target/1]).
+-export([chained_gate_flash_replays_first_gate/1]).
+-export([handler_flash_dropped_loudly_on_halt_without_redirect/1]).
 -export([crash_after_resync_mount_closes_crash/1]).
 
 all() ->
@@ -120,6 +123,9 @@ all() ->
         navigate_mount_crash_closes_mount_failed,
         patch_to_crashing_handler_closes_mount_failed,
         navigate_halt_without_redirect_loads_full_page,
+        handler_flash_survives_gate_on_target,
+        chained_gate_flash_replays_first_gate,
+        handler_flash_dropped_loudly_on_halt_without_redirect,
         crash_after_resync_mount_closes_crash
     ].
 
@@ -1309,6 +1315,105 @@ patch_to_crashing_handler_closes_mount_failed(Config) when is_list(Config) ->
             settle(arizona_socket:handle_in(patch_frame(~"/boom"), Socket), Socket)
         end)
     ).
+
+handler_flash_survives_gate_on_target(Config) when is_list(Config) ->
+    %% An in-view handler flashes and navigates to /show_flash, whose gate
+    %% redirects to /login. Over HTTP the signed flash cookie rides through the
+    %% gate's 302 and shows on /login; the socket must carry it the same way rather
+    %% than spend it on the request the gate answered. Both a navigate and a
+    %% same-handler patch (/show_flash is served by the current root on a patch).
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        Gate = fun(R, _B) -> {halt, arizona_req:redirect(R, ~"/login")} end,
+        Req = arizona_req_test_adapter:new(#{
+            %% No flash cookie: /login can only show what the socket carried.
+            cookies => [],
+            routes => #{
+                ~"/show_flash" => {arizona_crashable, #{middlewares => [Gate]}},
+                ~"/login" =>
+                    {arizona_login, #{middlewares => [{arizona_middleware, fetch_flash}]}}
+            }
+        }),
+        lists:foreach(
+            fun({Event, Frame, Msg}) ->
+                {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+                EventFrame = iolist_to_binary(json:encode([~"crashable", Event, #{}])),
+                {reply, _, Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+                {reply, HaltFrame, Socket2} =
+                    arizona_socket:handle_in(Frame(~"/show_flash"), Socket1),
+                ?assertMatch([[?EFFECT_NAVIGATE, ~"/login" | _]], effects(HaltFrame)),
+                {reply, LoginFrame, _} =
+                    arizona_socket:handle_in(navigate_frame(~"/login"), Socket2),
+                ?assertMatch([[?OP_REPLACE, _, _]], ops(LoginFrame)),
+                ?assertNotEqual(nomatch, binary:match(iolist_to_binary(LoginFrame), Msg), Event)
+            end,
+            [
+                {~"flash_navigate", fun navigate_frame/1, ~"from_handler"},
+                {~"flash_patch", fun patch_frame/1, ~"from_patch"}
+            ]
+        )
+    after
+        ok = application:unset_env(arizona, secret_key)
+    end.
+
+chained_gate_flash_replays_first_gate(Config) when is_list(Config) ->
+    %% Gate A flashes and redirects to /target, whose own gate B redirects on to
+    %% /login. When /login then needs a full page load, the flash can only survive
+    %% by replaying over HTTP -- and only from /gate_a, the path that reproduces it:
+    %% replaying /target would run gate B alone, which sets no flash.
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        GateA = fun(R, _B) ->
+            {halt, arizona_req:redirect(arizona_req:put_flash(R, error, ~"Sign in."), ~"/target")}
+        end,
+        GateB = fun(R, _B) -> {halt, arizona_req:redirect(R, ~"/login")} end,
+        Req = arizona_req_test_adapter:new(#{
+            routes => #{
+                ~"/gate_a" => {arizona_root_counter, #{middlewares => [GateA]}},
+                ~"/target" => {arizona_root_counter, #{middlewares => [GateB]}},
+                ~"/login" =>
+                    {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+            }
+        }),
+        {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+        {reply, _, Socket1} = arizona_socket:handle_in(navigate_frame(~"/gate_a"), Socket0),
+        {reply, HaltFrame, Socket2} =
+            arizona_socket:handle_in(navigate_frame(~"/target"), Socket1),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/login" | _]], effects(HaltFrame)),
+        {reply, FullFrame, _} = arizona_socket:handle_in(navigate_frame(~"/login"), Socket2),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/gate_a", #{~"full" := true}]], effects(FullFrame))
+    after
+        ok = application:unset_env(arizona, secret_key)
+    end.
+
+handler_flash_dropped_loudly_on_halt_without_redirect(Config) when is_list(Config) ->
+    %% A gate that halts with no redirect sends the browser to the requested URL
+    %% over HTTP. A handler-set flash cannot cross that load, so it is dropped with
+    %% the same warning as any other full load -- never silently.
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning, config => #{pid => self()}
+    }),
+    try
+        Halt = fun(R, _B) -> {halt, R} end,
+        Req = arizona_req_test_adapter:new(#{
+            routes => #{~"/show_flash" => {arizona_root_counter, #{middlewares => [Halt]}}}
+        }),
+        {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+        EventFrame = iolist_to_binary(json:encode([~"crashable", ~"flash_navigate", #{}])),
+        {reply, _, Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+        {reply, Frame, _} = arizona_socket:handle_in(navigate_frame(~"/show_flash"), Socket1),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/show_flash", #{~"full" := true}]], effects(Frame)),
+        receive
+            {arizona_test_log_handler, #{level := warning, msg := {Fmt, Args}}} ->
+                Msg = iolist_to_binary(io_lib:format(Fmt, Args)),
+                ?assertMatch({_, _}, binary:match(Msg, ~"/show_flash"))
+        after 1000 ->
+            error(no_flash_drop_warning)
+        end
+    after
+        ok = logger:remove_handler(HandlerId)
+    end.
 
 navigate_halt_without_redirect_loads_full_page(Config) when is_list(Config) ->
     %% A middleware that halts with no redirect has a response only HTTP can
