@@ -1376,7 +1376,13 @@ navigate_halt_redirect_off_origin_replays_gated_path(Config) when is_list(Config
         [
             ~"https://idp.example.com/authorize?client_id=x",
             ~"//idp.example.com/authorize",
-            ~"/\\idp.example.com/authorize"
+            ~"/\\idp.example.com/authorize",
+            %% A browser drops tab/LF/CR before parsing: these are `//evil.com`.
+            ~"/\t/evil.com",
+            ~"/\n/evil.com",
+            ~"/\r\\evil.com",
+            %% Never a client effect: the replayed HTTP 302 is one no browser follows.
+            ~"javascript:alert(1)"
         ]
     ).
 

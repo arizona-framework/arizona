@@ -56,6 +56,7 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 -export([req/1]).
 -export([put_req/2]).
 -export([bindings/1]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -67,6 +68,8 @@ rather than the streaming `read_body/1` so a controller stays unit-testable.
 -ignore_xref([req/1]).
 -ignore_xref([put_req/2]).
 -ignore_xref([bindings/1]).
+%% Called by `erl_error` via the `error_info` annotation, not directly.
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -103,9 +106,13 @@ Builds a response that sends the client to `Location` via a SPA navigation. Suga
 a SPA navigation (its `Location` is unreadable), so a redirect is delivered as a
 `navigate` effect instead.
 
-A `Location` that is not a path on this origin (`arizona_req:local_location/1`) -- an
+A `Location` that is not a path on this origin (`arizona_req:location_kind/1`) -- an
 identity provider, an absolute URL -- cannot be SPA-navigated, so it is sent with the
-`full` option and the browser loads it for real.
+`full` option and the browser loads it for real. A relative one (`~"login"`) loads too,
+resolved against the current URL exactly as an HTTP `Location` would be. A scheme other
+than `http`/`https` (`javascript:`, `data:`) raises `{unsafe_redirect, Location}`: the
+client would run it in the page, so a `Location` taken from the request (a `next`
+parameter) would be script injection.
 
 This is a SPA navigation over the existing WebSocket, so it suits same-identity
 redirects. After an **identity change** (login/logout) use `arizona_js:reload/0`
@@ -114,10 +121,34 @@ instead, so the socket re-handshakes with the new session.
 -spec reply_redirect(Location) -> roadrunner_resp:buffered_response() when
     Location :: binary().
 reply_redirect(Location) ->
-    case arizona_req:local_location(Location) of
-        true -> reply_effects([arizona_js:navigate(Location)]);
-        false -> reply_effects([arizona_js:navigate(Location, #{full => true})])
+    case arizona_req:location_kind(Location) of
+        local ->
+            reply_effects([arizona_js:navigate(Location)]);
+        external ->
+            reply_effects([arizona_js:navigate(Location, #{full => true})]);
+        unsafe ->
+            erlang:error({unsafe_redirect, Location}, [Location], [
+                {error_info, #{module => ?MODULE}}
+            ])
     end.
+
+-doc """
+Renders the error `reply_redirect/1` raises for a `Location` with an unsafe scheme.
+Picked up by `erl_error` via the `error_info` annotation.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({unsafe_redirect, Location}, _ST) ->
+    #{
+        general => io_lib:format(
+            "refusing to redirect to ~0tp: only a path or an http(s) URL may be "
+            "navigated to. Any other scheme (javascript:, data:, ...) would run in "
+            "the page; validate a request-supplied redirect target before using it.",
+            [Location]
+        )
+    }.
 
 -doc """
 The post-middleware `arizona_req:request()` for this controller request,

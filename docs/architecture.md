@@ -1511,9 +1511,11 @@ is flushed (a flash has its own in-process carry instead).
   reply, or `arizona_js:navigate` effect on WS navigate)
 - `halted_redirect/1` -- returns `{Status, Location}` if `redirect/2,3` was called, else
   `undefined`
-- `local_location/1` -- `true` for a `Location` that is a path on this origin (one leading `/`),
-  the only form a SPA navigation follows; a URL with a scheme, a scheme-relative `//host` or
-  `/\host`, and a relative path are `false`, and the transports send those as a full load
+- `location_kind/1` -- reads a `Location` as a browser will (leading C0/space trimmed, tab/LF/CR
+  removed): `local` for a path on this origin (one leading `/`), the only form a SPA navigation
+  follows; `external` for an `http`/`https` URL, a scheme-relative `//host` or `/\host`, or a
+  relative path (resolved against the current URL, as an HTTP `Location` is), which the
+  transports send as a full load; `unsafe` for any other scheme, which never reaches the client
 - flash (one-request): `put_flash/3` (set), `flash/1` (read) -- signed messages cleared on read;
   survive a full-page HTTP redirect (signed `az_flash` cookie) and a WebSocket SPA navigate
   (`arizona_socket` in-process carry, exactly-once, no cookie). The WS carry needs a destination
@@ -1572,8 +1574,10 @@ default `handle` -- with the route's `state` restored into the request.
 - `reply_redirect/1(Location)` -- sugar for `reply_effects([arizona_js:navigate(Location)])`. A
   fetch-followed HTTP 3xx cannot drive a SPA navigation (`redirect: 'manual'` yields an
   opaque-redirect whose `Location` is unreadable), so a redirect is delivered as an effect. A
-  `Location` that is not a path on this origin (`arizona_req:local_location/1`) goes out with
-  `full => true`, since `pushState` refuses another origin
+  `Location` that is not a path on this origin (`arizona_req:location_kind/1`) goes out with
+  `full => true`, since `pushState` refuses another origin; a relative one loads resolved
+  against the current URL, as over HTTP. An unsafe scheme (`javascript:`, `data:`) raises
+  `{unsafe_redirect, Location}` rather than reach the client
 - `req/1(RoadrunnerReq)` -- the **post-middleware** `arizona_req:request()`, so an action can call
   `arizona_req:get_session/2,3` after a `fetch_session` step
 - `bindings/1(RoadrunnerReq)` -- the bindings the middleware pipeline produced
@@ -1757,16 +1761,18 @@ socket emits `[arizona_js:navigate(Location, #{replace => true})]` as a client e
 `arizona_live:navigate` call happens; the browser **replaces** the gated URL it already pushed
 (an HTTP 3xx never leaves it in history either, so Back does not bounce off the gate) and the
 follow-up navigate frame runs middleware again on the redirect target. That needs a `Location`
-that is a path on this origin (`arizona_req:local_location/1`); any other -- an identity
+that is a path on this origin (`arizona_req:location_kind/1`); any other -- an identity
 provider -- cannot be SPA-navigated, so the socket instead has the browser load the gated path
 over HTTP, where the same halt is a real 3xx that also carries any cookie the middleware set
-before redirecting. Every full load the socket degrades a navigate/patch frame to (no live
-route, a layout change, these halts, the flash replay) carries `replace => true` and runs as
-`location.replace`: it finishes a navigation the client already recorded. On `cont`,
-`arizona_live:navigate/4` is called. Before mounting the new handler it cancels every pending
-`send_after` timer (`cancel_pending_timers/0`, over the whole `$arizona_timers` registry) and
-then unmounts the outgoing page **children first, then the root** (`unmount_removed_views/1`
-over the old views map, then `arizona_stateful:call_unmount/2` on the old root).
+before redirecting (the gate's middlewares run twice, the cost the flash replay already pays).
+An unsafe-scheme `Location` takes the same road, so it never reaches the client. Every full load
+the socket degrades a navigate/patch frame to (no live route, a layout change, these halts, the
+flash replay) carries `replace => true` and runs as `location.replace`: it finishes a navigation
+the client already recorded. On `cont`, `arizona_live:navigate/4` is called. Before mounting the
+new handler it cancels every pending `send_after` timer (`cancel_pending_timers/0`, over the
+whole `$arizona_timers` registry) and then unmounts the outgoing page **children first, then the
+root** (`unmount_removed_views/1` over the old views map, then `arizona_stateful:call_unmount/2`
+on the old root).
 Discarding the page is a removal, so it unmounts exactly like a diff removal does, and
 `terminate/2` uses the same order for any exit reason -- every child's `unmount/1` runs while the
 root is still mounted, and no handler has to propagate unmount by hand. Note the guarantee is

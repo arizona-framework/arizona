@@ -5709,10 +5709,10 @@ describe('navigation scroll', () => {
         mock = setupMockWorker(mod);
         mock.simulateOpen();
         // jsdom's location.assign is non-configurable (can't spyOn it); stub the
-        // whole global for just this call -- the full-nav branch only touches
-        // location.assign.
+        // whole global for just this call -- the full-nav branch only reads
+        // location.origin (to vet the scheme) and calls location.assign.
         const assign = vi.fn();
-        vi.stubGlobal('location', { assign });
+        vi.stubGlobal('location', { assign, origin: window.location.origin });
         // arizona_js:navigate(~"/api", #{full => true}) -- the server emits this to
         // degrade a navigate/patch whose path is not a live route.
         mod.applyEffects([[10, '/api', { full: true }]]);
@@ -5764,6 +5764,38 @@ describe('navigation scroll', () => {
         expect(pushSpy).not.toHaveBeenCalled();
         pushSpy.mockRestore();
         expect(logged).toEqual([]);
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
+    it('a navigate/patch effect never loads a non-http(s) URL', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        const assign = vi.fn();
+        const replace = vi.fn();
+        const warned = [];
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation((...a) => warned.push(a));
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.stubGlobal('location', { assign, replace, origin: window.location.origin });
+        // Loading one of these runs it in the page: a server echoing a request
+        // parameter into a navigate would be script injection. Every route out --
+        // the cross-origin guard, `full`, `full` + `replace`, and a patch.
+        const js = "javascript:void(document.title='PWNED')";
+        mod.applyEffects([[10, js]]);
+        mod.applyEffects([[10, js, { full: true }]]);
+        mod.applyEffects([[10, 'data:text/html,<p>x</p>', { full: true, replace: true }]]);
+        mod.applyEffects([[24, js]]);
+        mod.applyEffects([[24, ` ${js}`, { replace: true }]]);
+        vi.unstubAllGlobals();
+        warnSpy.mockRestore();
+        errSpy.mockRestore();
+        expect(assign).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(warned.length).toBe(5);
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
             false,
         );

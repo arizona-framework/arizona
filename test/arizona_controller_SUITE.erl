@@ -9,6 +9,8 @@
 -export([reply_effects_with_status_for_error_leg/1]).
 -export([reply_redirect_emits_navigate_effect/1]).
 -export([reply_redirect_off_origin_loads_full_page/1]).
+-export([reply_redirect_reads_location_as_a_browser_does/1]).
+-export([reply_redirect_refuses_unsafe_scheme/1]).
 -export([set_cookie_layers_onto_reply/1]).
 
 all() ->
@@ -22,6 +24,8 @@ groups() ->
             reply_effects_with_status_for_error_leg,
             reply_redirect_emits_navigate_effect,
             reply_redirect_off_origin_loads_full_page,
+            reply_redirect_reads_location_as_a_browser_does,
+            reply_redirect_refuses_unsafe_scheme,
             set_cookie_layers_onto_reply
         ]}
     ].
@@ -88,6 +92,48 @@ reply_redirect_off_origin_loads_full_page(Config) when is_list(Config) ->
             ~"//idp.example.com/authorize",
             ~"/\\idp.example.com/authorize",
             ~"login"
+        ]
+    ).
+
+%% A browser drops tab, LF and CR from a URL before parsing it, so a path that
+%% hides one between its slashes is a scheme-relative URL to another host. One
+%% whose second character merely LOOKS odd stays a path.
+reply_redirect_reads_location_as_a_browser_does(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Location, Expected}) ->
+            {200, _Headers, Body} = arizona_controller:reply_redirect(Location),
+            ?assertEqual(#{~"e" => [Expected]}, json:decode(iolist_to_binary(Body)), Location)
+        end,
+        [
+            {~"/\t/evil.com", [10, ~"/\t/evil.com", #{~"full" => true}]},
+            {~"/\n/evil.com", [10, ~"/\n/evil.com", #{~"full" => true}]},
+            {~"/\r\\evil.com", [10, ~"/\r\\evil.com", #{~"full" => true}]},
+            {~" //evil.com", [10, ~" //evil.com", #{~"full" => true}]},
+            {~"/%2F%2Fevil", [10, ~"/%2F%2Fevil"]},
+            {~"/ /evil", [10, ~"/ /evil"]}
+        ]
+    ).
+
+%% Only http(s) may leave the page. A `javascript:` (or `data:`) Location would run
+%% in the page if the client loaded it, and a controller redirecting to a
+%% request-supplied `next` parameter would hand that to any attacker, so it is
+%% refused at the call -- in every spelling a browser reads as that scheme.
+reply_redirect_refuses_unsafe_scheme(Config) when is_list(Config) ->
+    lists:foreach(
+        fun(Location) ->
+            ?assertError({unsafe_redirect, Location}, arizona_controller:reply_redirect(Location)),
+            ?assertMatch(
+                #{general := [_ | _]},
+                arizona_controller:format_error({unsafe_redirect, Location}, [])
+            )
+        end,
+        [
+            ~"javascript:alert(1)",
+            ~"JavaScript:alert(1)",
+            ~" javascript:alert(1)",
+            ~"java\tscript:alert(1)",
+            ~"data:text/html,<script>alert(1)</script>",
+            ~"vbscript:x"
         ]
     ).
 

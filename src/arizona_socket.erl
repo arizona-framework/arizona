@@ -652,12 +652,12 @@ full_navigate(Path, Qs, Socket0) ->
             %% refresh, a prefetch, back/forward all re-run them).
             encode_reply(
                 [],
-                [full_load(Replay)],
+                [replace_load(Replay)],
                 Socket0#socket{pending_flash = #{}, flash_replay = undefined}
             );
         error ->
             Socket = drop_pending_flash(Path, Socket0),
-            encode_reply([], [full_load(Url)], Socket)
+            encode_reply([], [replace_load(Url)], Socket)
     end.
 
 %% The stashed replay is good for exactly ONE destination: the redirect the halt
@@ -778,21 +778,23 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
 %% provider -- which the client cannot SPA-navigate to; replaying it over HTTP
 %% rather than navigating there directly also keeps any cookie the gate set
 %% before redirecting (an OAuth `state`, a flash), which a WS frame would drop.
+%% An unsafe `Location` (`javascript:`) takes the same road, so it never reaches
+%% the client as an effect: the replayed 3xx is one no browser follows.
 halt_navigate(Requested, HaltReq, Socket) ->
     case arizona_req:halted_redirect(HaltReq) of
         {_Status, Location} ->
-            case arizona_req:local_location(Location) of
-                true ->
+            case arizona_req:location_kind(Location) of
+                local ->
                     encode_reply(
                         [],
                         [arizona_js:navigate(Location, #{replace => true})],
                         stash_halt_flash(Requested, Location, HaltReq, Socket)
                     );
-                false ->
-                    encode_reply([], [full_load(Requested)], Socket)
+                _ExternalOrUnsafe ->
+                    encode_reply([], [replace_load(Requested)], Socket)
             end;
         undefined ->
-            encode_reply([], [full_load(Requested)], Socket)
+            encode_reply([], [replace_load(Requested)], Socket)
     end.
 
 %% Every full load the socket issues finishes a navigation the client already
@@ -800,7 +802,7 @@ halt_navigate(Requested, HaltReq, Socket) ->
 %% this answers. So the load replaces that entry rather than adding a second one
 %% -- which the browser would do whenever the URL differs from the recorded one
 %% (a flash replay through the gate, a fragment the frame did not carry).
-full_load(Url) ->
+replace_load(Url) ->
     arizona_js:navigate(Url, #{full => true, replace => true}).
 
 %% Stash the halting middleware's flash BESIDE the path that produced it. Unlike

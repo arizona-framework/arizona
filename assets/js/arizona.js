@@ -679,10 +679,19 @@ function navigateTo(path, qs, hash, opts) {
  * -- the server degrading the client's own navigate frame, whose entry was pushed
  * before asking -- so it must not add a second entry; the browser only folds the
  * load into the current entry by itself when the URL is identical.
+ *
+ * Only an http(s) URL may be loaded. Any other scheme (`javascript:`, `data:`)
+ * would run in this page, and the URL can come from a server that echoed a
+ * request parameter -- so it is dropped with a warning, never loaded.
  * @param {string} url
  * @param {boolean} [replace]
  */
 function leavePage(url, replace) {
+    const { protocol } = new URL(url, location.origin);
+    if (protocol !== 'http:' && protocol !== 'https:') {
+        console.warn('[arizona] refusing to navigate to a non-http(s) URL:', url);
+        return;
+    }
     if (replace) location.replace(url);
     else location.assign(url);
 }
