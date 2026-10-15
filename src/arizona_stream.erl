@@ -55,7 +55,7 @@ reorder everything with one `sort/2`, instead of K positional calls.
 {update, Key, NewItem, Changed}  %% Changed :: #{key() => true}, captured at update/3 time
 {move, Key, AfterKey}    %% AfterKey is `null` for first position
 reorder                  %% from sort/2 when order changes
-{reset, OldItems}        %% from reset/1,2 -- OldItems captured pre-mutation for per-item skipping
+reset                    %% reset/1,2 and the genesis of new/1,2,3: reconcile to now
 ```
 
 ## Drain marks -- and the nested-stream memory limit
@@ -223,7 +223,7 @@ new(KeyFun, Items) when is_function(KeyFun, 1), is_list(Items) ->
 -doc """
 Creates a stream pre-populated with `Items` and the given options.
 
-The queue opens with a **genesis reset** -- a `{reset, #{}}` op -- so the
+The queue opens with a **genesis reset** -- a `reset` op -- so the
 first render emits the ops for `Items`. A constructor states a whole
 collection, not a delta from one; queueing the items as pending INSERTS
 instead described the delta from empty, which is only a truthful log when
@@ -463,11 +463,11 @@ Empties the stream and queues a reset op.
 -spec reset(Stream) -> Stream1 when
     Stream :: stream(),
     Stream1 :: stream().
-reset(#stream{items = OldItems} = S) ->
+reset(#stream{} = S) ->
     S#stream{
         items = #{},
         order = {[], []},
-        pending = queue_op({reset, OldItems}, queue:new()),
+        pending = queue_op(reset, queue:new()),
         size = 0
     }.
 
@@ -476,6 +476,12 @@ Replaces all items with `NewItems` and queues a reset op. The differ
 will reuse client-side keys that are still present, only emitting ops
 for the actual delta.
 
+The op carries no items: what a kept item changed is measured against the
+item the client last rendered, which the differ keeps on its snapshot. The
+source as it stood just before the reset is not that item whenever the same
+event touched it first -- an earlier `update/3` is in the queue this call
+discards.
+
 Crashes with `{stream_duplicate_key_in_list, Key}` when `NewItems` names a key
 more than once -- the bulk counterpart of `insert/2`'s duplicate refusal.
 """.
@@ -483,13 +489,13 @@ more than once -- the bulk counterpart of `insert/2`'s duplicate refusal.
     Stream :: stream(),
     NewItems :: [item()],
     Stream1 :: stream().
-reset(#stream{key = KeyFun, items = OldItems} = S, NewItems) when is_list(NewItems) ->
+reset(#stream{key = KeyFun} = S, NewItems) when is_list(NewItems) ->
     {ItemsMap, Order, Count} = keyed_items(KeyFun, NewItems),
     ok = reject_repeated_key(ItemsMap, Count, Order, [S, NewItems]),
     S#stream{
         items = ItemsMap,
         order = {Order, []},
-        pending = queue_op({reset, OldItems}, queue:new()),
+        pending = queue_op(reset, queue:new()),
         size = map_size(ItemsMap)
     }.
 
@@ -831,10 +837,9 @@ queue_op(Op, Pending) ->
 unstamp(Pending) ->
     [Op || {_Seq, Op} <:- queue:to_list(Pending)].
 
-%% A constructed stream's queue opens from genesis: the same op `reset/1,2`
-%% queues, with `#{}` for the pre-reset items because nothing preceded it.
+%% A constructed stream's queue opens from genesis: the same op `reset/1,2` queues.
 genesis_pending() ->
-    queue_op({reset, #{}}, queue:new()).
+    queue_op(reset, queue:new()).
 
 %% The items map and the key order for a bulk load. `reset/2` is the documented
 %% bulk-mutation path, so this is the walk a view re-deriving its whole list per event

@@ -138,7 +138,7 @@
     stream_to_list_preserves_order/1,
     update_pending_op_carries_changed/1,
     update_on_missing_key_yields_empty_changed/1,
-    reset_pending_op_carries_old_items/1,
+    reset_rebuilds_the_queue_to_one_reset/1,
     stream_to_list/1,
     stream_update_no_change/1,
     stream_update_nonexistent_key/1,
@@ -157,7 +157,10 @@
     drop_evict_then_reinsert_same_key/1,
     drop_evict_then_upsert_same_key/1,
     drop_evict_then_insert_at/1,
-    drop_eviction_queues_a_delete/1
+    drop_eviction_queues_a_delete/1,
+    update_then_reset_ships_the_update/1,
+    reset_update_reset_ships_the_update/1,
+    reset_skips_kept_items_the_client_already_shows/1
 ]).
 
 all() ->
@@ -277,7 +280,7 @@ groups() ->
             stream_limit_reset,
             update_pending_op_carries_changed,
             update_on_missing_key_yields_empty_changed,
-            reset_pending_op_carries_old_items
+            reset_rebuilds_the_queue_to_one_reset
         ]},
         %% Edge case tests
         {stream_edge_cases, [parallel], [
@@ -342,7 +345,10 @@ groups() ->
             drop_evict_then_reinsert_same_key,
             drop_evict_then_upsert_same_key,
             drop_evict_then_insert_at,
-            drop_eviction_queues_a_delete
+            drop_eviction_queues_a_delete,
+            update_then_reset_ships_the_update,
+            reset_update_reset_ships_the_update,
+            reset_skips_kept_items_the_client_already_shows
         ]},
         %% DataTable handler tests
         {datatable, [parallel], [
@@ -2118,7 +2124,7 @@ update_pending_op_carries_changed(Config) when is_list(Config) ->
     S0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"old">>, other => v}]),
     S1 = arizona_stream:update(S0, 1, #{id => 1, text => <<"new">>, other => v}),
     %% First op is new/2's genesis reset; the second is our update.
-    [{reset, #{}}, {update, 1, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
+    [reset, {update, 1, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
     ?assert(maps:is_key(text, Changed)),
     ?assertNot(maps:is_key(other, Changed)),
     ?assertNot(maps:is_key(id, Changed)).
@@ -2128,24 +2134,20 @@ update_on_missing_key_yields_empty_changed(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun),
     S1 = arizona_stream:update(S0, 999, #{id => 999, text => <<"new">>}),
-    [{reset, #{}}, {update, 999, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
+    [reset, {update, 999, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
     ?assertEqual(#{}, Changed).
 
-%% --- reset/1,2 captures the pre-mutation items map in the pending op -------
-reset_pending_op_carries_old_items(Config) when is_list(Config) ->
+%% --- reset/1,2 rebuild the queue to a lone reset op ---------------------------
+%% The op carries no items: the differ measures kept items against its snapshot.
+reset_rebuilds_the_queue_to_one_reset(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
-    OldItem1 = #{id => 1, text => <<"A">>},
-    OldItem2 = #{id => 2, text => <<"B">>},
-    S0 = arizona_stream:new(KeyFun, [OldItem1, OldItem2]),
-    %% reset/2 with a fresh set
-    Ops1 = arizona_stream:pending_ops(arizona_stream:reset(S0, [#{id => 1, text => <<"A2">>}])),
-    %% reset REBUILDS the queue, so the reset op is the only one left.
-    {reset, OldItems1} = lists:last(Ops1),
-    ?assertEqual(#{1 => OldItem1, 2 => OldItem2}, OldItems1),
-    %% reset/1 (full clear) also captures old items
-    Ops2 = arizona_stream:pending_ops(arizona_stream:reset(S0)),
-    {reset, OldItems2} = lists:last(Ops2),
-    ?assertEqual(#{1 => OldItem1, 2 => OldItem2}, OldItems2).
+    S0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"A">>}, #{id => 2, text => <<"B">>}]),
+    S1 = arizona_stream:update(S0, 1, #{id => 1, text => <<"A1">>}),
+    ?assertEqual(
+        [reset],
+        arizona_stream:pending_ops(arizona_stream:reset(S1, [#{id => 1, text => <<"A2">>}]))
+    ),
+    ?assertEqual([reset], arizona_stream:pending_ops(arizona_stream:reset(S1))).
 
 %% =============================================================================
 %% Edge case tests
@@ -3127,12 +3129,12 @@ divergent_stream_forks_do_not_share_a_drain_mark(Config) when is_list(Config) ->
     %% these are raw stream values, so nothing cleared it. What matters is that
     %% the fork's OWN insert is in there.
     ?assertEqual(
-        [{reset, #{}}, {insert, 2, #{id => 2, v => ~"b"}, -1}],
+        [reset, {insert, 2, #{id => 2, v => ~"b"}, -1}],
         arizona_stream:undrained_ops(SB, MarkA)
     ),
     %% Symmetric: SA's op must equally survive a mark taken from SB.
     ?assertEqual(
-        [{reset, #{}}, {insert, 1, #{id => 1, v => ~"a"}, -1}],
+        [reset, {insert, 1, #{id => 1, v => ~"a"}, -1}],
         arizona_stream:undrained_ops(SA, arizona_stream:drain_mark(SB))
     ).
 
@@ -3158,14 +3160,14 @@ drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt(Config) when is_list(C
     %% the client still holds for the slot to the new stream's contents.
     Fresh = arizona_stream:new(KeyFun, [#{id => 3, v => ~"c"}]),
     ?assertEqual(
-        [{reset, #{}}],
+        [reset],
         arizona_stream:undrained_ops(Fresh, Mark)
     ),
     %% Rolled back to an ancestor: the mark names an op the ancestor never had.
     %% `S0`'s queue was never cleared, so its full drain still opens with the
     %% genesis reset it was constructed with.
     ?assertEqual(
-        [{reset, #{}}, {insert, 1, #{id => 1, v => ~"a"}, -1}],
+        [reset, {insert, 1, #{id => 1, v => ~"a"}, -1}],
         arizona_stream:undrained_ops(S0, arizona_stream:drain_mark(Refilled))
     ).
 
@@ -3177,16 +3179,16 @@ drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt(Config) when is_list(C
 %% for every consumer, at no cost to the incremental path.
 constructed_stream_queues_a_genesis_reset(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
-    ?assertEqual([{reset, #{}}], arizona_stream:pending_ops(arizona_stream:new(KeyFun))),
-    ?assertEqual([{reset, #{}}], arizona_stream:pending_ops(arizona_stream:new(KeyFun, []))),
+    ?assertEqual([reset], arizona_stream:pending_ops(arizona_stream:new(KeyFun))),
+    ?assertEqual([reset], arizona_stream:pending_ops(arizona_stream:new(KeyFun, []))),
     Items = [#{id => 1, v => ~"a"}, #{id => 2, v => ~"b"}],
     Populated = arizona_stream:new(KeyFun, Items),
-    ?assertEqual([{reset, #{}}], arizona_stream:pending_ops(Populated)),
+    ?assertEqual([reset], arizona_stream:pending_ops(Populated)),
     %% The items themselves are in the collection, not the log.
     ?assertEqual(Items, arizona_stream:to_list(Populated)),
     %% Later mutations still append behind it.
     ?assertEqual(
-        [{reset, #{}}, {insert, 3, #{id => 3, v => ~"c"}, -1}],
+        [reset, {insert, 3, #{id => 3, v => ~"c"}, -1}],
         arizona_stream:pending_ops(arizona_stream:insert(Populated, #{id => 3, v => ~"c"}))
     ),
     %% And the live process still clears it, so the incremental path is unchanged.
@@ -4150,6 +4152,44 @@ drop_eviction_queues_a_delete(Config) when is_list(Config) ->
     ),
     S1 = arizona_stream:insert(clear_pending(S0), it(c, ~"l1")),
     ?assertMatch([{delete, a}, {insert, c, _, -1}], arizona_stream:pending_ops(S1)).
+
+%% `reset/2` rebuilds the queue, so an earlier `update/3` in the same event is gone by
+%% the drain. Measuring the kept item's change from the source as it stood just before
+%% the reset found none, and the client kept the pre-update content.
+update_then_reset_ships_the_update(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"b", ~"l2"}],
+        client_after_events([it(b, ~"l1")], #{}, [
+            fun(S0) ->
+                S1 = arizona_stream:update(S0, b, it(b, ~"l2")),
+                arizona_stream:reset(S1, [it(b, ~"l2")])
+            end
+        ])
+    ).
+
+reset_update_reset_ships_the_update(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"b", ~"l3"}],
+        client_after_events([it(b, ~"l1")], #{}, [
+            fun(S0) ->
+                S1 = arizona_stream:reset(S0, [it(b, ~"l2")]),
+                S2 = arizona_stream:update(S1, b, it(b, ~"l3")),
+                arizona_stream:reset(S2, [it(b, ~"l3")])
+            end
+        ])
+    ).
+
+%% The skipping that makes a bulk `reset/2` cheap still holds: an item the client
+%% already shows unchanged is reused, not re-rendered, so it ships nothing.
+reset_skips_kept_items_the_client_already_shows(Config) when is_list(Config) ->
+    S0 = arizona_stream:new(fun(#{id := Id}) -> Id end, [it(a, ~"l1"), it(b, ~"l1")]),
+    {_, Snap0, Views0} = arizona_render:render(drain_template(S0), #{}),
+    S1 = arizona_stream:reset(clear_pending(S0), [it(a, ~"l1"), it(b, ~"l2")]),
+    {Ops, Snap1, _} = arizona_diff:diff(drain_template(S1), Snap0, Views0, #{items => true}),
+    ?assertMatch([[?OP_ITEM_PATCH, <<"0">>, ~"b", [[?OP_TEXT, <<"1">>, ~"l2"]]]], Ops),
+    #{d := [{<<"0">>, #{items := #{a := ItemA0}}}]} = Snap0,
+    #{d := [{<<"0">>, #{items := #{a := ItemA1}}}]} = Snap1,
+    ?assert(erts_debug:same(ItemA0, ItemA1)).
 
 it(Id, Text) -> #{id => Id, text => Text}.
 

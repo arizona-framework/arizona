@@ -1100,10 +1100,18 @@ stream over a slot that already holds one (rather than mutating the stream that 
 those inserts were all the differ had: keys the new stream dropped were never mentioned, and keys
 present in both were skipped as replays, so a shrink, a reorder and an in-place content change
 each diffed to NOTHING and the stale list stayed on screen with no self-heal. The constructors
-therefore open the queue with a **genesis reset** (`{reset, #{}}`) -- the op that already means
+therefore open the queue with a **genesis reset** (`reset`) -- the op that already means
 "reconcile the client to my current state" -- which makes the log truthful for any consumer.
 It costs the incremental path nothing: a resume that finds its mark skips past it, and replaying
 it in a re-drain is idempotent.
+
+**A reset measures kept items against the snapshot, not against the pre-reset source.** The
+`reset` op carries no items. The drain re-renders a kept item only where its fields differ from
+the item the client's DOM was rendered from, which is the `source` the stream's snapshot keeps
+(every stream snapshot does, the post-drain one included). The source as it stood just before
+`reset/1,2` is not that item whenever the same event touched it first: `reset/2` rebuilds the
+queue, so an earlier `update/3` is gone by the drain, and measuring from the updated item found
+nothing to ship.
 
 The queue of an unclearable nested stream still grows, one retained op term per mutation. Keep a
 stream that mutates over a long-lived session as a top-level binding.

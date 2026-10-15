@@ -944,7 +944,24 @@ drainable_ops(Ops) -> Ops.
 stream_ops(_Source, _OldSnap, true) ->
     [{reset, #{}}];
 stream_ops(Source, OldSnap, false) ->
-    drainable_ops(arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none))).
+    with_baseline(
+        drainable_ops(arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none))),
+        OldSnap
+    ).
+
+%% The drain's `{reset, Baseline}` skips re-rendering what a kept item did not change,
+%% measured from `Baseline` -- so `Baseline` must be the items the client's DOM was
+%% rendered from, the source on the snapshot the drain starts from. A queued `reset`
+%% always heads its queue (`reset/1,2` rebuilds it), so it applies to exactly that
+%% snapshot. The source as it stood just before the reset is not it: an `update/3`
+%% earlier in the same event went with the queue the reset discarded, and measuring
+%% from the updated item found nothing to ship. `#{}` re-renders every kept item.
+with_baseline([reset | Rest], #{source := #stream{items = Baseline}}) ->
+    [{reset, Baseline} | Rest];
+with_baseline([reset | Rest], #{}) ->
+    [{reset, #{}} | Rest];
+with_baseline(Ops, _OldSnap) ->
+    Ops.
 
 diff_stream_pending(Az, [], {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
     apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
@@ -1651,11 +1668,14 @@ apply_limit(
 %% locates that stamp rather than counting positions, so a queue the mark does not
 %% belong to (a divergent successor of the same stream, a reset, a clear) falls
 %% back to a full drain instead of dropping its ops.
+%% It keeps `source` for the same reason the eval-built snapshot does: its items are
+%% what the DOM was rendered from, the baseline a later reset is measured against.
 post_drain_snap(SnapItems, Order, Tmpl, Source) ->
     #{
         t => ?EACH,
         items => SnapItems,
         order => Order,
+        source => Source,
         template => Tmpl,
         drained => arizona_stream:drain_mark(Source)
     }.
