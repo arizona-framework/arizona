@@ -7624,7 +7624,6 @@ invalid_element_single(Config) when is_list(Config) ->
         end
     ).
 
-%% Test 104: Wrong arity element tuple (4-element).
 %% An error inside an included file names that file, not the module's: the
 %% `-file` attribute epp emits at the include boundary is honored.
 error_names_included_file(Config) when is_list(Config) ->
@@ -7741,6 +7740,7 @@ transform_source(Source, StartLoc) ->
     ],
     arizona_parse_transform:parse_transform(Forms, []).
 
+%% Test 104: Wrong arity element tuple (4-element).
 invalid_element_four(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_invalid_elem_four). "
