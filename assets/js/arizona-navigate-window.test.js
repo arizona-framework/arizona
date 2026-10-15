@@ -154,7 +154,7 @@ describe('navigate page-swap window', () => {
         await connected();
         navigate('/next');
         const assign = vi.fn();
-        vi.stubGlobal('location', { assign });
+        vi.stubGlobal('location', { assign, href: 'http://localhost/' });
         mock.frame(null, [[JS_NAVIGATE, '/next', { full: true }]]);
         vi.unstubAllGlobals();
         expect(assign).toHaveBeenCalledWith('/next');
@@ -265,9 +265,10 @@ describe('navigate page-swap window', () => {
         navigate('/a');
         navigate('/b');
         const assign = vi.fn();
-        vi.stubGlobal('location', { assign });
+        vi.stubGlobal('location', { assign, href: 'http://localhost/' });
         mock.frame(null, [[JS_NAVIGATE, '/a', { full: true }]]);
         vi.unstubAllGlobals();
+        expect(assign).toHaveBeenCalledWith('/a');
         click();
         expect(events()).toEqual([]);
     });
