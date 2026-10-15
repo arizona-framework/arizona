@@ -1244,7 +1244,11 @@ it can never address an embedded child, so `?send`/`?send_after` are the API.
 `send_after/3` additionally registers its ref in the `$arizona_timers` process-dictionary map,
 `#{ViewId => [reference()]}`. A fired ref is pruned when its message is delivered; a removed child
 view's timers are cancelled synchronously (and its queued view messages flushed) on unmount; and
-`navigate/3,4` cancels them all.
+`navigate/3,4` cancels them all. A render that keeps a child's id but switches its handler
+(`case ?get(k) of a -> ?stateful(a, #{id => ~"c"}); b -> ?stateful(b, #{id => ~"c"}) end`) is a
+removal of the old instance too: its timers and queued messages are dropped before its `unmount/1`,
+and before the new handler mounts, so they never reach the new handler's `handle_info/2` while a
+timer the new handler arms at mount survives.
 
 **What the navigate sweep does and does not guarantee.** The sweep runs **before** the unmount
 callbacks, so it covers every timer armed during the old page's normal lifetime -- `mount/1`,

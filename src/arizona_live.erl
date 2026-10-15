@@ -40,7 +40,8 @@ diff pipeline.
 - `$arizona_timers` -- `#{ViewId => [Ref]}` from `send_after/3`. A fired
   ref is pruned when its message is delivered; a removed child view's
   timers are cancelled synchronously (and its queued view messages
-  flushed) on unmount; `navigate/3,4` cancels them all so stale timers
+  flushed) on unmount -- including a child whose id a render keeps but
+  whose handler it swaps; `navigate/3,4` cancels them all so stale timers
   don't fire after a page change.
 - `$arizona_deps` -- per-dynamic dependency capture set, used by
   `arizona_eval` and `arizona_template:track/1`.
@@ -82,6 +83,7 @@ fingerprints already shipped in the initial HTML.
 -export([dedup_fps/2]).
 -export([apply_on_mount/2]).
 -export([format_error/2]).
+-export([unmount_view/3]).
 -export([view_state/1]).
 
 %% --------------------------------------------------------------------
@@ -774,6 +776,22 @@ format_error({unknown_view, ViewId, Msg}, [{_M, _F, [_, _B, V0], _Info} | _]) ->
         )
     }.
 
+%% Internal: the one place a child view leaves the live process. Cancels its
+%% `send_after/3` timers and flushes its queued view messages BEFORE `unmount/1`,
+%% so a late tick can never reach a view that is gone. Besides the removals this
+%% module reconciles after a diff, `arizona_eval` calls it when a render keeps an
+%% id but swaps its handler -- before the new handler mounts, since the new
+%% instance's own timers are registered under the same id.
+-doc false.
+-spec unmount_view(ViewId, Handler, Bindings) -> ok when
+    ViewId :: binary(),
+    Handler :: module(),
+    Bindings :: map().
+unmount_view(ViewId, Handler, Bindings) ->
+    ok = cancel_view_timers(ViewId),
+    ok = flush_view_messages(ViewId),
+    arizona_stateful:call_unmount(Handler, Bindings).
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -1231,11 +1249,7 @@ clear_streams_and_apply_resets(B1, Resets) ->
 %% and crash the session with unknown_view.
 unmount_removed_views(RemovedViews) ->
     maps:foreach(
-        fun(Id, #{handler := H, bindings := B}) ->
-            ok = cancel_view_timers(Id),
-            ok = flush_view_messages(Id),
-            ok = arizona_stateful:call_unmount(H, B)
-        end,
+        fun(Id, #{handler := H, bindings := B}) -> ok = unmount_view(Id, H, B) end,
         RemovedViews
     ).
 
