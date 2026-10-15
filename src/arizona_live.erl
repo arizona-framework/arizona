@@ -38,7 +38,8 @@ diff pipeline.
 - `$arizona_reconnected` -- `true` when this connection is a reconnection (vs the
   first connect); set while a transport is attached and read by `reconnected/0`.
   Erased by `navigate/3,4` (the new page's mount is its first), kept across
-  `patch/2` (the same view stays mounted).
+  `patch/2` (the same view stays mounted; the socket turns a patch to a
+  different handler into a navigate).
 - `$arizona_timers` -- `#{ViewId => {Count, Limit, [Ref]}}` from
   `send_after/3`. A fired ref is pruned when its message is delivered, and a
   view's dead refs (fired or cancelled by the app) when an arm takes its list
@@ -258,7 +259,8 @@ re-assert (`set_title`, `fullscreen`) can fire on every connect.
 It describes the current page's mount, not the socket: a `navigate/3,4` after a
 reconnect mounts a page this connection has not shown before, so it reads
 `false` from that mount on, and its first-connect one-shots fire. A `patch/2`
-keeps the view mounted, so it keeps the value.
+keeps the view mounted, so it keeps the value; the socket only patches within
+the same handler, and a patch to another handler arrives here as a navigate.
 """.
 -spec reconnected() -> boolean().
 reconnected() ->
