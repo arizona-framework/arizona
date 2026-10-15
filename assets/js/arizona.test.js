@@ -610,6 +610,23 @@ describe('applyOps -- OP.REM_ATTR value on an attribute-reflecting input', () =>
         expect(input.value).toBe('');
     });
 
+    it('treats a missing, uppercase or unknown type as text', () => {
+        const inputs = [
+            '<input az="0" value="a" />',
+            '<input az="1" type="TEXT" value="a" />',
+            '<input az="2" type="bogus" value="a" />',
+        ];
+        setupView('v', inputs.join(''));
+        for (const az of ['0', '1', '2']) {
+            /** @type {HTMLInputElement} */ (resolveEl(`v:${az}`)).value = 'typed';
+        }
+        applyOps(['0', '1', '2'].map((az) => [OP.REM_ATTR, `v:${az}`, 'value']));
+        for (const az of ['0', '1', '2']) {
+            const input = /** @type {HTMLInputElement} */ (resolveEl(`v:${az}`));
+            expect([az, input.hasAttribute('value'), input.value]).toEqual([az, false, '']);
+        }
+    });
+
     it('get reads a checkbox value as its attribute', () => {
         setupView(
             'v',
