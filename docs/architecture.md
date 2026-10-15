@@ -1022,6 +1022,9 @@ build-opts variant supports hot-reload-safe rebuilds.
 - `{asset, Path, {priv_dir, App, SubDir}}` -- static asset from priv (served via zero-copy
   sendfile by roadrunner's built-in `roadrunner_static`)
 - `{asset, Path, {dir, Dir}}` -- static asset from absolute directory
+- Either asset form is GET/HEAD-only (`roadrunner_static` serves the file whatever the method,
+  so any other verb gets `405` + `Allow` from the router); a `cors/1` transform on it also lets
+  `OPTIONS` through so the preflight reaches the transform.
 - Either asset form compiles to `Path/*path`, so the catch-all is generated and never appears
   in the route list. Matching is first-match-wins in list order, so a shorter asset path listed
   ahead of a longer one it prefixes swallows it -- order the longer prefix first.

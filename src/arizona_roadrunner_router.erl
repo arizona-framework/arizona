@@ -27,6 +27,9 @@ reload without restarting the listener.
 `Verb` is `get`/`post`/`put`/`patch`/`delete`/`head`/`options`; `match`'s `Spec` is a
 single verb, a list of verbs, a custom uppercase method binary, or `'*'` (any method).
 
+An `{asset, ...}` route answers GET and HEAD only (plus `OPTIONS` when it carries a
+CORS transform, for the preflight); any other method gets `405` + `Allow`.
+
 An `{asset, ...}` route's optional `Opts` is `#{cache_control => binary()}` -- a
 `Cache-Control` header set verbatim on cacheable responses (off by default); use it
 only for content-hashed assets, never arizona's own stable bundle filenames.
@@ -352,6 +355,7 @@ asset_route(Path, Dir, Opts, BuildOpts) ->
                         #{
                             path => <<Path/binary, "/*path">>,
                             handler => roadrunner_static,
+                            methods => asset_methods(Transforms),
                             state => asset_state(Dir, Opts)
                         },
                         Transforms
@@ -363,6 +367,16 @@ asset_route(Path, Dir, Opts, BuildOpts) ->
             error({asset_middleware_not_transform, Steps}, none, [
                 {error_info, #{module => ?MODULE}}
             ])
+    end.
+
+%% roadrunner_static serves the file whatever the method, so the allowlist is
+%% what makes a POST/DELETE to an asset path a 405 instead of a download. A
+%% CORS transform needs OPTIONS let through: the allowlist is enforced before
+%% any transform runs, so without it the preflight would 405 as well.
+asset_methods(Transforms) ->
+    case lists:keymember(roadrunner_cors, 1, Transforms) of
+        true -> [~"GET", ~"HEAD", ~"OPTIONS"];
+        false -> [~"GET", ~"HEAD"]
     end.
 
 %% roadrunner_static's state is a plain `#{dir => Dir}`; `cache_control` is
