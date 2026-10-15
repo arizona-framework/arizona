@@ -1198,6 +1198,67 @@ test.describe('SPA navigation', () => {
         const y = await page.evaluate(() => window.scrollY);
         expect(y).toBe(0);
     });
+
+    test('reload restores the scroll position', async ({ page }) => {
+        // scrollRestoration is 'manual' for the SPA, which also switches off the
+        // browser's own restore on a full reload -- connect() has to do it.
+        await page.goto('/scroll-home');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.evaluate(() => window.scrollTo(0, 600));
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+
+        await page.reload();
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page
+            .waitForFunction(() => window.scrollY > 0, null, { timeout: 2000 })
+            .catch(() => {});
+        const y = await page.evaluate(() => window.scrollY);
+        expect(Math.abs(y - 600)).toBeLessThanOrEqual(2);
+    });
+
+    test('back to a full-document page restores its scroll position', async ({ page }) => {
+        await page.goto('/scroll-home');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.evaluate(() => window.scrollTo(0, 600));
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+
+        // A full-document navigation away. The unload listener makes the page
+        // bfcache-ineligible, so Back loads it again instead of restoring it.
+        await page.evaluate(() => {
+            window.addEventListener('unload', () => {});
+            location.href = '/scroll-about';
+        });
+        await expect(page.locator('main h1')).toHaveText('Scroll About');
+        await page.waitForSelector('#status:has-text("Connected")');
+
+        await page.goBack();
+        await expect(page.locator('main h1')).toHaveText('Scroll Home');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page
+            .waitForFunction(() => window.scrollY > 0, null, { timeout: 2000 })
+            .catch(() => {});
+        const y = await page.evaluate(() => window.scrollY);
+        expect(Math.abs(y - 600)).toBeLessThanOrEqual(2);
+    });
+
+    test('a fresh load of a URL does not restore a stale scroll position', async ({ page }) => {
+        // A new history entry carries no saved scroll, so a plain visit lands at
+        // the top even after the same URL was scrolled in an earlier entry. (A
+        // visit from the same URL would not do: Chromium keeps the entry, and
+        // its state, for that -- and restores it under 'auto' as well.)
+        await page.goto('/scroll-home');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.evaluate(() => window.scrollTo(0, 600));
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+
+        await page.goto('/scroll-about');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.goto('/scroll-home');
+        await page.waitForSelector('#status:has-text("Connected")');
+        await page.evaluate(() => new Promise((r) => setTimeout(r, 100)));
+        const y = await page.evaluate(() => window.scrollY);
+        expect(y).toBe(0);
+    });
 });
 
 // ---------------------------------------------------------------------------
