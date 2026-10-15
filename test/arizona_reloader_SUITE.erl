@@ -43,7 +43,8 @@
     non_erl_files_skip_compile/1,
     mixed_files_only_compile_erl/1,
     deleted_file_skips_compile/1,
-    deleted_file_alongside_good_compiles_good/1
+    deleted_file_alongside_good_compiles_good/1,
+    load_failure_stashes_error/1
 ]).
 
 %% blacklist group tests
@@ -108,7 +109,8 @@ groups() ->
             non_erl_files_skip_compile,
             mixed_files_only_compile_erl,
             deleted_file_skips_compile,
-            deleted_file_alongside_good_compiles_good
+            deleted_file_alongside_good_compiles_good,
+            load_failure_stashes_error
         ]},
         {blacklist, [sequence], [
             blacklisted_app_module_not_reloaded,
@@ -402,6 +404,38 @@ deleted_file_alongside_good_compiles_good(Config) ->
     ?assertEqual(ok, arizona_reloader:compile([Missing, Good])),
     ?assertEqual(undefined, arizona_reloader:get_error()),
     ?assertEqual(ok, erlang:apply(arizona_dev_ct_alive, check, [])).
+
+%% A module that compiles but fails to load (`-on_load` not returning `ok`) is
+%% reported like a compile error -- stashed for the error page, which renders
+%% it -- instead of raising out of the watcher callback, and the rest of the
+%% wave still loads.
+load_failure_stashes_error(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    OnLoad = filename:join(Dir, "arizona_dev_ct_onload.erl"),
+    Good = filename:join(Dir, "arizona_dev_ct_after_onload.erl"),
+    ok = file:write_file(
+        OnLoad,
+        "-module(arizona_dev_ct_onload).\n-on_load(init/0).\n-export([init/0]).\ninit() -> error.\n"
+    ),
+    ok = file:write_file(
+        Good, "-module(arizona_dev_ct_after_onload).\n-export([check/0]).\ncheck() -> ok.\n"
+    ),
+    Reason = {load_failed, arizona_dev_ct_onload, on_load_failure},
+    ?assertEqual(
+        {error, #{errors => [{OnLoad, [{none, arizona_reloader, Reason}]}]}},
+        arizona_reloader:compile([OnLoad, Good])
+    ),
+    ?assertEqual(ok, erlang:apply(arizona_dev_ct_after_onload, check, [])),
+    ?assertMatch(#{errors := [{OnLoad, _}]}, arizona_reloader:get_error()),
+    ErrorInfo = #{
+        class => error,
+        reason => {compile_error, [{OnLoad, [{none, arizona_reloader, Reason}]}]},
+        stacktrace => []
+    },
+    Page = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => ErrorInfo}))
+    ),
+    ?assertMatch({match, _}, re:run(Page, ~"arizona_dev_ct_onload compiled but did not load")).
 
 %% ============================================================================
 %% consistency group tests (arizona_reloader_consistency)
