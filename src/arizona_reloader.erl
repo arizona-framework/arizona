@@ -52,12 +52,15 @@ recompile would otherwise log a supervisor report.
 -export([compile/1]).
 -export([get_error/0]).
 -export([clear_error/0]).
+-export([format_error/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([broadcast/0, reload_erl/1, reload_css/0, reload_css/1, compile/1, clear_error/0]).
+-ignore_xref([
+    broadcast/0, reload_erl/1, reload_css/0, reload_css/1, compile/1, clear_error/0, format_error/1
+]).
 -ignore_xref({rebar_agent, do, 1}).
 -ignore_xref({rebar_state, get, 3}).
 
@@ -222,6 +225,18 @@ clear_error() ->
     persistent_term:put(?COMPILE_ERROR_KEY, undefined),
     ok.
 
+-doc """
+Formats a diagnostic this module adds to the stashed compile errors, the way
+`erl_lint:format_error/1` formats its own: the dev error page calls it through
+the `{Location, Module, Reason}` triple.
+""".
+-spec format_error(Reason) -> string() when
+    Reason :: {load_failed, module(), term()}.
+format_error({load_failed, Mod, on_load_failure}) ->
+    io_lib:format("module ~ts compiled but did not load: its -on_load function failed", [Mod]);
+format_error({load_failed, Mod, Reason}) ->
+    io_lib:format("module ~ts compiled but did not load: ~tp", [Mod, Reason]).
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
@@ -354,13 +369,13 @@ manual_compile([File | Rest], Errors) ->
     %% file whose `-module` differs from its filename otherwise `case_clause`es).
     Mod = list_to_atom(filename:basename(File, ".erl")),
     Opts = get_compile_opts(Mod),
-    case compile:file(File, [binary, return_errors | Opts]) of
-        {ok, ActualMod, Binary} ->
-            reload_module(ActualMod, File, Binary),
-            manual_compile(Rest, Errors);
+    %% `return_warnings` pins the success shape to the 4-tuple whatever the
+    %% recovered options hold; nothing here reports warnings either way.
+    case compile:file(File, [binary, return_errors, return_warnings | Opts]) of
         {ok, ActualMod, Binary, _Warnings} ->
-            reload_module(ActualMod, File, Binary),
-            manual_compile(Rest, Errors);
+            manual_compile(
+                Rest, load_errors(File, reload_module(ActualMod, File, Binary)) ++ Errors
+            );
         {error, FileErrors, _Warnings} ->
             manual_compile(Rest, FileErrors ++ Errors)
     end.
@@ -388,10 +403,21 @@ collect_errors(Files) ->
             {error, #{errors => lists:reverse(Errors)}}
     end.
 
+%% A module that compiles can still fail to load (`-on_load` not returning
+%% `ok`). That is reported like a compile error rather than raised: the watcher
+%% runs this in its own callback, so a raise would crash it and skip the rest of
+%% the wave along with the route recompile.
 reload_module(Mod, File, Binary) ->
     code:purge(Mod),
-    {module, Mod} = code:load_binary(Mod, File, Binary),
-    ok.
+    case code:load_binary(Mod, File, Binary) of
+        {module, Mod} -> ok;
+        {error, Reason} -> {error, {load_failed, Mod, Reason}}
+    end.
+
+load_errors(_File, ok) ->
+    [];
+load_errors(File, {error, Reason}) ->
+    [{File, [{none, ?MODULE, Reason}]}].
 
 get_compile_opts(Mod) ->
     try
