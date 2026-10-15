@@ -1537,7 +1537,7 @@ read, forge, nor outlive it.
 
 | App env | Default | Effect |
 | ------- | ------- | ------ |
-| `secret_key_previous` | `[]` | Rotated-out keys `verify`/`decrypt` still accept (signing uses `secret_key` only). Each must be a non-empty binary like the primary, else `secret_key_previous_invalid` is raised: an empty key is a public constant. From an env var, write `{env, "OLD_SECRET_KEY", []}` (unset or empty resolves to `[]`), not a `~""` default, which resolves to `[<<>>]` |
+| `secret_key_previous` | `[]` | Rotated-out keys `verify`/`decrypt` still accept (signing uses `secret_key` only). Each must be a non-empty binary like the primary, else every sign, encrypt, verify and decrypt raises `secret_key_previous_invalid`: an empty key is a public constant. From an env var, write `{env, "OLD_SECRET_KEY", []}` (unset or empty resolves to `[]`), not a `~""` default, which resolves to `[<<>>]` |
 | `session_max_age` | 604800 (7 days) | Session cookie `Max-Age` and the expiry baked into the ciphertext (or, in store mode, into the signed id) |
 | `session_max_bytes` | 4096 | Cap on the **serialized `Set-Cookie` line** -- name + value + attributes, what browsers actually count. `arizona_session:encode/1` errors `{session_too_large, ...}` past it instead of letting the browser silently drop the cookie |
 | `session_secure` | `false` | The session cookie's `Secure` flag |

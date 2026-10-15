@@ -42,6 +42,10 @@
 -export([consumers_refuse_empty_previous_key/1]).
 -export([previous_key_refuses_non_binary_entry/1]).
 -export([previous_key_refuses_non_list_value/1]).
+-export([previous_key_improper_list_fails_loudly/1]).
+-export([previous_key_error_trace_carries_position/1]).
+-export([sign_refuses_empty_previous_key/1]).
+-export([encrypt_refuses_empty_previous_key/1]).
 -export([previous_key_list_env_default_means_none/1]).
 -export([previous_key_warns_once_when_short/1]).
 -export([format_error_renders_secret_message/1]).
@@ -91,6 +95,10 @@ all() ->
         consumers_refuse_empty_previous_key,
         previous_key_refuses_non_binary_entry,
         previous_key_refuses_non_list_value,
+        previous_key_improper_list_fails_loudly,
+        previous_key_error_trace_carries_position,
+        sign_refuses_empty_previous_key,
+        encrypt_refuses_empty_previous_key,
         previous_key_list_env_default_means_none,
         previous_key_warns_once_when_short,
         format_error_renders_secret_message,
@@ -437,6 +445,56 @@ previous_key_refuses_non_list_value(Config) when is_list(Config) ->
     application:set_env(arizona, secret_key_previous, ?SECRET),
     try
         ?assertError({secret_key_previous_invalid, 0}, arizona_crypto:decrypt(?PURPOSE, Blob))
+    after
+        application:unset_env(arizona, secret_key_previous)
+    end.
+
+previous_key_improper_list_fails_loudly(Config) when is_list(Config) ->
+    %% `[Key | bad]` never verifies: env-reference resolution (`arizona_config`)
+    %% already refuses the improper list before the key check sees it.
+    Signed = arizona_crypto:sign(?PURPOSE, ~"payload"),
+    application:set_env(arizona, secret_key_previous, [?SECRET | bad]),
+    try
+        ?assertError({bad_generator, bad}, arizona_crypto:verify(?PURPOSE, Signed))
+    after
+        application:unset_env(arizona, secret_key_previous)
+    end.
+
+previous_key_error_trace_carries_position(Config) when is_list(Config) ->
+    %% The raising frame shows its real argument (the position), so the trace names
+    %% `invalid_previous_key/1` with the entry, never an empty argument list.
+    Signed = arizona_crypto:sign(?PURPOSE, ~"payload"),
+    application:set_env(arizona, secret_key_previous, [<<>>]),
+    try arizona_crypto:verify(?PURPOSE, Signed) of
+        Result -> ct:fail({expected_error, Result})
+    catch
+        error:{secret_key_previous_invalid, 1}:Stacktrace ->
+            ?assertMatch([{arizona_crypto, invalid_previous_key, [1], _} | _], Stacktrace)
+    after
+        application:unset_env(arizona, secret_key_previous)
+    end.
+
+sign_refuses_empty_previous_key(Config) when is_list(Config) ->
+    %% The write paths fail too, so a bad previous key breaks the first response
+    %% instead of setting cookies that crash every later request carrying one.
+    ok = set_empty_previous_key(),
+    try
+        ?assertError({secret_key_previous_invalid, 1}, arizona_crypto:sign(?PURPOSE, ~"x")),
+        ?assertError(
+            {secret_key_previous_invalid, 1}, arizona_crypto:sign(?PURPOSE, ~"x", #{ttl => 60})
+        )
+    after
+        application:unset_env(arizona, secret_key_previous)
+    end.
+
+encrypt_refuses_empty_previous_key(Config) when is_list(Config) ->
+    ok = set_empty_previous_key(),
+    try
+        ?assertError({secret_key_previous_invalid, 1}, arizona_crypto:encrypt(?PURPOSE, ~"x")),
+        ?assertError(
+            {secret_key_previous_invalid, 1},
+            arizona_crypto:encrypt(?PURPOSE, ~"x", #{ttl => 60})
+        )
     after
         application:unset_env(arizona, secret_key_previous)
     end.
