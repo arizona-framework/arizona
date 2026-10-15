@@ -1657,8 +1657,10 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
 
 - `generate/2,3(OutDir, Specs[, DefaultOpts])` -- renders each spec under `OutDir`, writes the
   HTML files, and returns `{Written, Failed}` (the paths plus `{Spec, Reason}` for any spec that
-  failed -- a `mount`/`render` crash or a write error; one failure does not stop the batch). A
-  spec is `{Handler, Outfile}` or `{Handler, Outfile, Opts}`; `Outfile` is joined onto `OutDir`.
+  failed -- a `mount`/`render` crash, a non-map `Opts`, or a write error; one failure does not
+  stop the batch). A spec is `{Handler, Outfile}` or `{Handler, Outfile, Opts}`; `Outfile` is
+  joined onto `OutDir` (an absolute `Outfile` bypasses it and `..` segments are honoured: it is the
+  caller's own path, not untrusted input).
   `Opts` (and the optional `DefaultOpts`, which each spec's `Opts` override) is the offline subset
   of `t:arizona_live:route_opts/0` (`bindings`/`on_mount`/`layouts`; no `middlewares`). The client
   `<script>` / `connect('/ws')` lives in the layout, so a pure-static page omits the WS connect.
