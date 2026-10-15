@@ -505,7 +505,9 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
   (`with` tracks too, so a hoisted `Sub = with(Keys, Bindings)` must inline back
   into the slot bracket or its tracking runs outside any bracket and freezes).
   Rebound vars are dropped; a derivation with no read (e.g. `Id = make_uuid()`)
-  is left captured, so a pure side effect is never re-run per slot.
+  is left captured: it runs once in the body and every slot sees that one value.
+  A definition that does read runs in the body *and* again in each slot that
+  uses it (see "Template code is a pure function of the bindings" below).
 - **`transform_scoped_tail/4`** does the same per body along the tail of the
   clause's last expression (the `case`/`if`/`begin`/`try`/`maybe`/`receive`
   tails the live root accepts), so a read hoisted inside a branch
@@ -549,6 +551,35 @@ variable, and a rebound variable. Use `?get` for the top-level binding and plain
 `maps:get/2` for sub-structures (only the `?get` records a dep, which is the
 correct grain). In these cases the read is left captured and the slot keeps its
 SSR value.
+
+**Template code is a pure function of the bindings.** Everything a slot evaluates
+is evaluated lazily: the slot expression itself, the definition of a hoisted
+variable the template reads (re-inlined into every slot that uses it, and still run
+once in the body), and the arguments of an inlined local element helper
+(substituted at each use of the parameter, and not evaluated at all when the
+parameter is unused). A slot runs once on first render, then again only when its
+own dependencies change, while the render function's body runs on every diff
+cycle. So one source expression may run zero, one or several times per render, in
+no fixed order, and two slots that read the same variable each compute it
+themselves -- capturing the value once would not help, since the body and the
+slots run on different schedules. Keep that code deterministic and free of side
+effects. A value that must be generated once and shared -- a unique id pairing a
+`label` with its `input`, a timestamp, a random token -- belongs in state: create
+it in `mount/1` or `handle_event/3` and read it with `?get`, or derive it from
+bindings (`<<"field-", (?get(name))/binary>>`).
+
+The transform rejects the cases it can see with `template_impure_expr`, located at
+the offending call: a construct from a fixed always-impure set -- a send (`!`),
+`receive`, `make_ref`, `erlang:unique_integer`, the clock reads
+(`erlang:now`/`timestamp`/`system_time`/`monotonic_time`, `os:system_time`,
+`calendar:local_time`/`universal_time`), `put`/`erase`, `spawn*`, and any call into
+`rand`, `os`, `ets`, `io` or `logger` -- anywhere in a hoisted definition that is
+re-inlined (`check_hoisted_pure/3`, at substitution time in `iv/2`, so a
+definition no template uses runs once and is never checked), or in a helper
+argument whose parameter does not occur exactly once in the helper body
+(`check_helper_args_pure/5`, counted on the source body, patterns and guards
+included). A fun that is only constructed there is not entered, since its body
+runs where it is called. Calls into your own functions are not checked.
 
 **A tracked read used in a guard is auto-tracked, not frozen:** a binding read in a
 **guard** (`case Status of active when Confirming -> ...`, an `if`) can't run inside the
