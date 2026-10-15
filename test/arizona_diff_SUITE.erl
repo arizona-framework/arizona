@@ -65,6 +65,12 @@
     diff_stream_bulk_grow_collapses/1,
     diff_stream_bulk_append_stays_incremental/1,
     diff_stream_child_views_never_collapse/1,
+    diff_stream_child_views_follow_delete/1,
+    diff_stream_child_views_follow_reset/1,
+    diff_stream_child_views_follow_renew/1,
+    diff_stream_child_views_follow_drop_eviction/1,
+    diff_stream_child_views_follow_window/1,
+    diff_stream_child_views_keep_reinserted_key/1,
     diff_stream_among_siblings_child_view_uses_text_op/1,
     diff_text_op/1,
     no_diff_diff3/1,
@@ -204,6 +210,12 @@ groups() ->
             diff_stream_bulk_grow_collapses,
             diff_stream_bulk_append_stays_incremental,
             diff_stream_child_views_never_collapse,
+            diff_stream_child_views_follow_delete,
+            diff_stream_child_views_follow_reset,
+            diff_stream_child_views_follow_renew,
+            diff_stream_child_views_follow_drop_eviction,
+            diff_stream_child_views_follow_window,
+            diff_stream_child_views_keep_reinserted_key,
             diff_stream_among_siblings_child_view_uses_text_op,
             diff_only_changed_emits_ops,
             diff_bool_attr_add,
@@ -1120,6 +1132,86 @@ diff_stream_child_views_never_collapse(Config) when is_list(Config) ->
     Ops = bulk_stream_diff(arizona_stream_bulk_child, 20, 400),
     ?assertNotMatch([[?OP_TEXT, _, #{~"t" := ?EACH}]], Ops),
     ?assertMatch([[?OP_INSERT, _Az, _Key, _Pos, _HTML] | _], Ops).
+
+%% The views map a dependency-aware diff returns holds a stream item's child only
+%% while the item is in the client's DOM. `arizona_live` unmounts exactly the views
+%% missing from it, so a child left in the map after its item left -- by any route
+%% other than `delete/2` -- never ran `unmount/1`.
+diff_stream_child_views_follow_delete(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) -> arizona_stream:delete(S, ~"a") end)
+    ).
+
+diff_stream_child_views_follow_reset(Config) when is_list(Config) ->
+    ?assertEqual(
+        [],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) -> arizona_stream:reset(S, []) end)
+    ),
+    ?assertEqual(
+        [~"c-b", ~"c-c"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) ->
+            arizona_stream:reset(S, [#{id => ~"b"}, #{id => ~"c"}])
+        end)
+    ).
+
+diff_stream_child_views_follow_renew(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-c"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(_S) ->
+            arizona_stream:new(fun(#{id := Id}) -> Id end, [#{id => ~"c"}])
+        end)
+    ).
+
+diff_stream_child_views_follow_drop_eviction(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a"], #{limit => 1, on_limit => drop}, fun(S) ->
+            arizona_stream:insert(S, #{id => ~"b"})
+        end)
+    ).
+
+diff_stream_child_views_follow_window(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a"], #{limit => 1}, fun(S) ->
+            arizona_stream:insert(S, #{id => ~"b"}, 0)
+        end)
+    ),
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a", ~"b"], #{limit => 1}, fun(S) ->
+            arizona_stream:sort(S, fun(#{id := A}, #{id := B}) -> A >= B end)
+        end)
+    ).
+
+%% A key deleted and re-inserted in one diff keeps one child, under its own id.
+diff_stream_child_views_keep_reinserted_key(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-a", ~"c-b"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) ->
+            arizona_stream:insert(arizona_stream:delete(S, ~"a"), #{id => ~"a"})
+        end)
+    ).
+
+%% Mutate the stream of `arizona_stream_lifecycle_root` and return the view ids
+%% the dependency-aware diff keeps, sorted.
+stream_child_view_ids(Keys, Opts, Mutate) ->
+    S0 = arizona_stream:new(fun(#{id := Id}) -> Id end, [#{id => K} || K <- Keys], Opts),
+    B = #{id => ~"slr", notify => self()},
+    T0 = arizona_stream_lifecycle_root:render(B#{items => S0}),
+    {_HTML, Snap0, Views0} = arizona_render:render(T0, #{}),
+    T1 = arizona_stream_lifecycle_root:render(B#{items => Mutate(S0)}),
+    {_Ops, _Snap1, Views1} = arizona_diff:diff(T1, Snap0, Views0, #{items => true}),
+    ok = flush_child_lifecycle(),
+    lists:sort(maps:keys(Views1)).
+
+flush_child_lifecycle() ->
+    receive
+        {child_mounted, _} -> flush_child_lifecycle();
+        {child_unmounted, _} -> flush_child_lifecycle()
+    after 0 -> ok
+    end.
 
 %% Grow or shrink a keyed stream through `reset/2`, the documented bulk path.
 bulk_stream_diff(Mod, From, To) ->

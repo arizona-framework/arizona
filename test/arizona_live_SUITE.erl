@@ -108,6 +108,14 @@
     multiple_children_in_stream_survive_dep_skip/1,
     child_in_stream_survives_item_update/1,
     two_children_per_item_survive_dep_skip/1,
+    stream_child_unmounted_on_delete/1,
+    stream_child_unmounted_on_reset_empty/1,
+    stream_child_unmounted_on_reset_replace/1,
+    stream_child_unmounted_on_renew/1,
+    stream_child_unmounted_on_drop_eviction/1,
+    stream_child_unmounted_on_window_push_out/1,
+    stream_child_unmounted_on_sort_push_out/1,
+    stream_child_reinserted_stays_mounted_once/1,
     on_mount_transforms_bindings/1,
     on_mount_works_on_navigate/1,
     on_mount_empty_is_noop/1,
@@ -232,7 +240,15 @@ groups() ->
             child_in_stream_removed_on_delete,
             multiple_children_in_stream_survive_dep_skip,
             child_in_stream_survives_item_update,
-            two_children_per_item_survive_dep_skip
+            two_children_per_item_survive_dep_skip,
+            stream_child_unmounted_on_delete,
+            stream_child_unmounted_on_reset_empty,
+            stream_child_unmounted_on_reset_replace,
+            stream_child_unmounted_on_renew,
+            stream_child_unmounted_on_drop_eviction,
+            stream_child_unmounted_on_window_push_out,
+            stream_child_unmounted_on_sort_push_out,
+            stream_child_reinserted_stays_mounted_once
         ]},
         {on_mount, [parallel], [
             on_mount_transforms_bindings,
@@ -1849,6 +1865,101 @@ two_children_per_item_survive_dep_skip(Config) when is_list(Config) ->
             ?assertMatch([[<<"extra-1">>, [[?OP_TEXT, _, <<"20">>]]]], Ops2)
     after 1000 ->
         error(timeout)
+    end.
+
+%% A stream item's `?stateful` child is unmounted whichever way the item leaves
+%% the client's DOM, not only through `arizona_stream:delete/2`. Each case starts
+%% `arizona_stream_lifecycle_root`, whose item children message the test pid on
+%% mount and unmount, and reads the lifecycle messages one event produced -- the
+%% event is a synchronous call and the child callbacks run in the live process
+%% before it replies, so they are already in the mailbox.
+stream_child_unmounted_on_delete(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual(
+        [{child_unmounted, ~"c-a"}],
+        stream_lifecycle_event(Pid, ~"delete", #{~"id" => ~"a"})
+    ).
+
+stream_child_unmounted_on_reset_empty(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual(
+        [{child_unmounted, ~"c-a"}, {child_unmounted, ~"c-b"}],
+        stream_lifecycle_event(Pid, ~"reset", #{~"ids" => []})
+    ).
+
+stream_child_unmounted_on_reset_replace(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual(
+        [{child_mounted, ~"c-c"}, {child_unmounted, ~"c-a"}],
+        stream_lifecycle_event(Pid, ~"reset", #{~"ids" => [~"b", ~"c"]})
+    ).
+
+%% A brand-new stream bound over the slot, not derived from the old one.
+stream_child_unmounted_on_renew(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual(
+        [{child_mounted, ~"c-c"}, {child_unmounted, ~"c-a"}, {child_unmounted, ~"c-b"}],
+        stream_lifecycle_event(Pid, ~"renew", #{~"ids" => [~"c"]})
+    ).
+
+stream_child_unmounted_on_drop_eviction(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{keys => [~"a"], opts => #{limit => 1, on_limit => drop}}),
+    ?assertEqual(
+        [{child_mounted, ~"c-b"}, {child_unmounted, ~"c-a"}],
+        stream_lifecycle_event(Pid, ~"insert", #{~"id" => ~"b"})
+    ).
+
+%% `halt` keeps an item pushed out of the window in the source, but not in the
+%% DOM: its child unmounts, and coming back into the window mounts a fresh one.
+stream_child_unmounted_on_window_push_out(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{keys => [~"a"], opts => #{limit => 1}}),
+    ?assertEqual(
+        [{child_mounted, ~"c-b"}, {child_unmounted, ~"c-a"}],
+        stream_lifecycle_event(Pid, ~"insert_at", #{~"id" => ~"b", ~"pos" => 0})
+    ),
+    ?assertEqual(
+        [{child_mounted, ~"c-a"}, {child_unmounted, ~"c-b"}],
+        stream_lifecycle_event(Pid, ~"delete", #{~"id" => ~"b"})
+    ).
+
+stream_child_unmounted_on_sort_push_out(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{opts => #{limit => 1}}),
+    ?assertEqual(
+        [{child_mounted, ~"c-b"}, {child_unmounted, ~"c-a"}],
+        stream_lifecycle_event(Pid, ~"sort_desc", #{})
+    ).
+
+%% Deleting and re-inserting a key in one event leaves its child mounted once:
+%% no lifecycle runs for it, and a later delete still finds it to unmount.
+stream_child_reinserted_stays_mounted_once(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual([], stream_lifecycle_event(Pid, ~"reinsert", #{~"id" => ~"a"})),
+    ?assertEqual(
+        [{child_unmounted, ~"c-a"}],
+        stream_lifecycle_event(Pid, ~"delete", #{~"id" => ~"a"})
+    ).
+
+start_stream_lifecycle(Init) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_stream_lifecycle_root, Init#{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    [_ | _] = lifecycle_messages(),
+    Pid.
+
+%% Mounts (which run during the diff) before unmounts (which run after it), each
+%% sorted: `arizona_live` walks the removed views in map order.
+stream_lifecycle_event(Pid, Event, Payload) ->
+    {ok, _Ops, _Effects, _} = arizona_live:handle_event(Pid, ~"slr", Event, Payload),
+    Msgs = lifecycle_messages(),
+    lists:sort([M || {child_mounted, _} = M <- Msgs]) ++
+        lists:sort([M || {child_unmounted, _} = M <- Msgs]).
+
+lifecycle_messages() ->
+    receive
+        {child_mounted, _} = Msg -> [Msg | lifecycle_messages()];
+        {child_unmounted, _} = Msg -> [Msg | lifecycle_messages()]
+    after 0 -> []
     end.
 
 %% =============================================================================

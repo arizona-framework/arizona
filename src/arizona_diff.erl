@@ -243,8 +243,8 @@ diff_dynamics(
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
     {Old0, New0} = Views1,
     case stream_drainable(Src, Old) andalso nested_drain(Az, New, Old, {Old0, #{}}) of
-        {drained, StreamOps, {_, LocalNew}} ->
-            LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
+        {drained, StreamOps, Drained, {_, LocalNew}} ->
+            LocalNew1 = merge_stream_child_views(Old, Drained, LocalNew, Old0),
             %% A drain takes no tail. Threading one through every stream helper
             %% would buy this site alone: the other two stream containers drain
             %% BEFORE their siblings, so they have no tail to hand it.
@@ -290,7 +290,7 @@ nested_drain(Az, #{source := Src, template := Tmpl} = New, Old, Views0) ->
     {StreamOps, Drained, Views1} =
         diff_stream(Az, #{source => Src, template => Tmpl}, Old, Views0),
     case drain_matches_render(Drained, New) of
-        true -> {drained, StreamOps, Views1};
+        true -> {drained, StreamOps, Drained, Views1};
         false -> stale
     end.
 
@@ -496,7 +496,7 @@ changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1) ->
 %% stays dependent on a binding read only inside the `?each` callback.
 diff_each(
     Az,
-    #{source := #stream{} = Source, template := Tmpl} = EachDesc,
+    #{source := #stream{}, template := Tmpl} = EachDesc,
     Deps,
     Old,
     DR,
@@ -524,7 +524,7 @@ diff_each(
             true -> DrainDeps;
             false -> maps:merge(OldItemDeps, DrainDeps)
         end,
-    LocalNew1 = merge_stream_child_views(Source, Old, LocalNew, Old0),
+    LocalNew1 = merge_stream_child_views(Old, NewSnap0, LocalNew, Old0),
     NewSnap = NewSnap0#{
         child_views => arizona_eval:child_view_set(LocalNew1), item_deps => ItemDeps
     },
@@ -621,25 +621,38 @@ append_ops(Ops, []) ->
 append_ops(Ops, Tail) ->
     Ops ++ Tail.
 
-%% Incremental stream child_views: old - deleted + rendered.
+%% Stream child views after a drain: the children of the items the client still
+%% holds, which is exactly the drained snapshot's `items` -- the drain keeps it in
+%% step with the DOM. Deriving it from the queued `delete` ops instead missed every
+%% other way an item leaves: a `reset/2`, a fresh stream bound over the slot, a
+%% `drop` eviction, a sort or insert pushing it out of a `limit` window. Its child
+%% then stayed in the views map, so `arizona_live` never unmounted it.
 %%
-%% A stream holding no child views -- items of plain markup, which most streams are --
-%% has nothing to carry: removing deleted keys from an empty set leaves it empty, and
-%% carrying an empty set leaves `LocalNew` exactly as it is. Settling that from the set
-%% skips naming the deleted item children, and naming them means draining the stream's
-%% ENTIRE pending queue (`pending_ops/1`, not the undrained suffix) into a list and
-%% walking it. A stream nested inside another value is never cleared, so that queue
-%% holds one op per mutation for the life of the view -- the walk grew with the
-%% session while the answer stayed `LocalNew`.
-merge_stream_child_views(Source, Old, LocalNew, Old0) ->
+%% A child the drain rendered is in `LocalNew` with its fresh subtree. The rest are
+%% carried from `Old0` with their subtrees; seeding the carry with a re-rendered
+%% child would pull back a grandchild its new render dropped.
+%%
+%% A stream that held no child views settles from the set: anything it holds now
+%% was rendered by this drain, so `LocalNew` is already the answer.
+merge_stream_child_views(Old, #{items := Items}, LocalNew, Old0) ->
     case Old of
         #{child_views := OldChildViews} when map_size(OldChildViews) > 0 ->
-            #{items := OldItems} = Old,
-            Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
-            carry_item_children(maps:without(Deleted, OldChildViews), Old0, LocalNew);
+            Carried =
+                #{
+                    Id => true
+                 || _Key := ItemD <- Items,
+                    {_Az, V, _Deps} <- ItemD,
+                    Id <- value_view_ids(V),
+                    not is_map_key(Id, LocalNew)
+                },
+            maps:merge(live_subtree(Carried, Old0), LocalNew);
         #{} ->
             LocalNew
     end.
+
+value_view_ids(#{view_id := VId}) -> [VId];
+value_view_ids(#{child_views := ChildIds}) -> maps:keys(ChildIds);
+value_view_ids(_V) -> [].
 
 -doc """
 Carries a skipped value's child views (and their live subtrees) from the old
@@ -749,29 +762,6 @@ expand_uncovered(Missing, Rest, Old, Acc) ->
     Acc1 = expand_subtree(Missing, Old, maps:merge(Acc, maps:with(Missing, Old))),
     expand_subtree(Rest, Old, Acc1).
 
-%% Extract child view IDs from deleted stream items only. The result is
-%% only ever `maps:without/2`'s key list (`OldChildViews` minus these), so
-%% neither order nor duplicates matter -- safe to use a flat comp instead of
-%% a fold-with-prepend.
-deleted_item_children(PendingOps, OldItems) ->
-    [
-        VId
-     || {delete, Key} <- PendingOps,
-        {_Az, #{view_id := VId}, _Deps} <-
-            case OldItems of
-                #{Key := ItemD} -> ItemD;
-                #{} -> []
-            end
-    ].
-
-%% Copy child views from OldViews to NewViews for children not already present.
-%% `maps:intersect/2` takes its values from the SECOND map, so this is
-%% `maps:with(maps:keys(ChildViewIds), Old)` without materializing the key list
-%% -- and it iterates whichever map is smaller. `New` is merged on top so a
-%% freshly rendered child always beats the carried-over copy of itself.
-carry_item_children(ChildViewIds, Old, New) ->
-    maps:merge(maps:intersect(ChildViewIds, Old), New).
-
 -doc """
 Returns `true` when any key in `ChangedKeys` appears in `Deps`. Used by
 `diff/4` and the per-item skipping renderer to decide whether a dynamic
@@ -862,7 +852,7 @@ stream_full_render(Az, Source, Tmpl, Views0) ->
 %% The same question `outgrows_re_render/3` asks for a list, with two differences.
 %%
 %% A stream carrying CHILD VIEWS is never collapsed. The incremental path keeps their
-%% bookkeeping (`merge_stream_child_views/4`: old minus deleted plus rendered); the
+%% bookkeeping (`merge_stream_child_views/4`: the drained items' children); the
 %% full render has none, so re-rendering would re-mount every child and reset its
 %% state. Bytes are not worth that.
 %%
@@ -2060,7 +2050,7 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             %% evaluate to snapshots without it, so they fall to the make_ops
             %% clause below and re-render wholesale via the ?OP_TEXT each clause.
             case nested_drain(Az, New, Old, Views0) of
-                {drained, EachOps, Views1} ->
+                {drained, EachOps, _Drained, Views1} ->
                     {RestOps, Views2} = diff_item_dynamics_v(NR, OR, Views1),
                     %% Same ordering as `diff_each/9`'s stream clause: the drain
                     %% feeds the rest of the walk its views, so its ops have no
