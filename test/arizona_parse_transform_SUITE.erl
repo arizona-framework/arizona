@@ -382,6 +382,7 @@
     local_attr_interp_render/1,
     local_attr_interp_affix/1,
     local_attr_multiple_error/1,
+    local_attr_affix_non_ascii/1,
     local_attr_mixed_error/1,
     local_attr_interp_boolean/1,
     local_attr_interp_numeric/1,
@@ -624,6 +625,7 @@ groups() ->
             local_attr_interp_render,
             local_attr_interp_affix,
             local_attr_multiple_error,
+            local_attr_affix_non_ascii,
             local_attr_mixed_error,
             local_attr_interp_boolean,
             local_attr_interp_numeric,
@@ -1462,6 +1464,32 @@ local_attr_interp_affix(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"href=\"/u/1/edit\"")),
     ?assertEqual(
         #{~"a" => #{~"href" => ~"id"}, ~"ap" => #{~"href" => [~"/u/", ~"/edit"]}},
+        decode_local_descriptor(HTML)
+    ).
+
+%% The descriptor is generated as a binary literal and then folded like any authored
+%% attribute value, so a non-ASCII affix must come back as the same UTF-8 text: the client
+%% recomposes the attribute from it on `set`, and a double-encoded `\x{e9}` would turn
+%% `href` into mojibake on the first client write.
+local_attr_affix_non_ascii(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_affix_utf8). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'a', [{href, [<<\"\\x{e9}/\"/utf8>>, "
+        "            arizona_template:local(<<\"id\">>, <<\"1\">>), <<\"/\\x{fc}\"/utf8>>]}], "
+        "            [<<\"e\">>]}"
+        "    ). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"href=\"\x{e9}/1/\x{fc}\""/utf8>>)),
+    ?assertEqual(
+        #{
+            ~"a" => #{~"href" => ~"id"},
+            ~"ap" => #{~"href" => [<<"\x{e9}/"/utf8>>, <<"/\x{fc}"/utf8>>]}
+        },
         decode_local_descriptor(HTML)
     ).
 
