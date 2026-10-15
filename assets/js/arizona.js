@@ -2433,17 +2433,17 @@ function multiValuedNames(form) {
     const groups = new Map();
     for (const el of form.elements) {
         const f = /** @type {any} */ (el);
-        if (!f.name) continue;
-        const enabled = !el.matches(':disabled');
-        if (f.name.endsWith('[]') && isSubmittableField(el)) {
-            if (enabled) names.add(f.name);
-        } else if (el.tagName === 'SELECT' && f.multiple) {
-            if (enabled) names.add(f.name);
+        const name = f.name;
+        if (!name) continue;
+        // `:disabled` is a selector match, asked only of a field that can hold a
+        // list: a form payload runs this walk on every event the form raises.
+        if (name.endsWith('[]') ? isSubmittableField(el) : el.tagName === 'SELECT' && f.multiple) {
+            if (!el.matches(':disabled')) names.add(name);
         } else if (el.tagName === 'INPUT' && f.type === 'checkbox') {
-            const g = groups.get(f.name) || { boxes: 0, enabled: false };
+            const g = groups.get(name) || { boxes: 0, enabled: false };
             g.boxes += 1;
-            g.enabled ||= enabled;
-            groups.set(f.name, g);
+            g.enabled ||= !el.matches(':disabled');
+            groups.set(name, g);
         }
     }
     for (const [name, g] of groups) if (g.boxes > 1 && g.enabled) names.add(name);
@@ -2485,9 +2485,10 @@ function formFields(fd, form) {
     for (const [k, v] of fd.entries()) {
         if (k in data) {
             const prev = data[k];
-            data[k] = Array.isArray(prev)
-                ? prev.concat(/** @type {string} */ (v))
-                : [prev, /** @type {string} */ (v)];
+            // Every array here was built by this function, so it is extended in
+            // place: a long list (a big multiple select) stays linear.
+            if (Array.isArray(prev)) prev.push(/** @type {string} */ (v));
+            else data[k] = [prev, /** @type {string} */ (v)];
         } else {
             data[k] = /** @type {string} */ (v);
         }
