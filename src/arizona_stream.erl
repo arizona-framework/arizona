@@ -37,7 +37,8 @@ reorder everything with one `sort/2`, instead of K positional calls.
   are rejected (kept in `items` but not visible)
 - `{Limit, drop}` -- a bounded tail -f buffer: an **append** (`insert/2`,
   or the `update/3` upsert of a missing key) to a full stream evicts the
-  oldest (front-of-order) item from the source to make room, so the
+  oldest (front-of-order) item from the source to make room, queueing a
+  `{delete, Key}` for it, so the
   visible window slides onto the new tail item. Only appends evict --
   "oldest" is well-defined only for the append flow; a positional
   `insert/3` declares a window position rather than an age, and
@@ -784,10 +785,12 @@ append_key(S0, Key, Item, PendingOp) ->
 %% `Limit` keys of `order` -- evicting the front slides the window forward
 %% onto the new tail). Evicts down to `Limit - 1` so an overfull stream (a
 %% `new/3`/`reset/2` population or positional insert past the limit leaves a
-%% hidden tail, exactly like `halt`) converges to `size =< Limit`. No delete
-%% op is queued: the differ reconciles the visible window itself
-%% (`apply_limit` removes evicted keys from the DOM, and a pending op for an
-%% evicted key is window-skipped at drain).
+%% hidden tail, exactly like `halt`) converges to `size =< Limit`.
+%%
+%% Each eviction queues a `{delete, Key}`. The final window alone cannot say that a
+%% key left and came back within one drain: an evicted key re-appended in the same
+%% event is in both the client's DOM and the final window, so its insert read as a
+%% replay and its upsert as a no-op, and the client kept the evicted item's content.
 drop_oldest_for_append(#stream{limit = infinity} = S) ->
     S;
 drop_oldest_for_append(#stream{on_limit = halt} = S) ->
@@ -802,11 +805,17 @@ drop_oldest_for_append(#stream{size = Size, limit = Limit} = S) when Size < Limi
 %% bounded tail-buffer shape `drop` exists for. Refilling `Front` from `Back` only
 %% when it runs dry moves each key across once, so an append is amortized O(1) again.
 drop_oldest_for_append(
-    #stream{items = Items, order = {[Oldest | RestFront], Back}, size = Size} = S
+    #stream{
+        items = Items,
+        order = {[Oldest | RestFront], Back},
+        pending = Pending,
+        size = Size
+    } = S
 ) ->
     drop_oldest_for_append(S#stream{
         items = maps:remove(Oldest, Items),
         order = {RestFront, Back},
+        pending = queue_op({delete, Oldest}, Pending),
         size = Size - 1
     });
 drop_oldest_for_append(#stream{order = {[], Back}} = S) ->

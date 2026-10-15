@@ -1121,7 +1121,9 @@ stream that mutates over a long-lived session as a top-level binding.
   the window slides onto the new tail. **Only appends evict**: "oldest" is well-defined only for
   the append flow, so a positional `insert/3` (a window position, not an age) and pre-population
   (`new/3`, `reset/2`, which set the whole order at once) keep `halt` semantics. An append to an
-  overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`.
+  overfull `drop` stream evicts down to the limit, so it converges to `size =< Limit`. Each
+  eviction queues a `{delete, Key}`, so a key evicted and re-appended in one event reaches the
+  client as a removal and a fresh insert rather than as a replay of a key it already shows.
 
 **Window reconciliation is shared by both modes** (`apply_limit/6` in `arizona_diff`). By the time
 the diff runs, `order` already reflects the halt/drop retention decision, so reconciliation is

@@ -152,7 +152,12 @@
     repro_shuffle_after_insert_dup_then_delete_crashes/1,
     datatable_navigate_from_page_then_add_row_no_crash/1,
     format_error_missing_stream_key_suggests_close_match/1,
-    format_error_missing_stream_key_no_suggestion_for_far_match/1
+    format_error_missing_stream_key_no_suggestion_for_far_match/1,
+    %% --- one drain per event: client DOM == SSR of the final state ----------
+    drop_evict_then_reinsert_same_key/1,
+    drop_evict_then_upsert_same_key/1,
+    drop_evict_then_insert_at/1,
+    drop_eviction_queues_a_delete/1
 ]).
 
 all() ->
@@ -171,7 +176,8 @@ all() ->
         {group, nested_stream},
         {group, datatable},
         {group, list_type_switch},
-        {group, shuffle_crash_repro}
+        {group, shuffle_crash_repro},
+        {group, stream_drain_consistency}
     ].
 
 groups() ->
@@ -329,6 +335,14 @@ groups() ->
             drain_mark_falls_back_to_full_drain_when_queue_is_rebuilt,
             constructed_stream_queues_a_genesis_reset,
             derived_stream_bindings_ship_every_insert
+        ]},
+        %% One event's mutations drain to ops that leave the client showing exactly
+        %% the SSR of the final state.
+        {stream_drain_consistency, [parallel], [
+            drop_evict_then_reinsert_same_key,
+            drop_evict_then_upsert_same_key,
+            drop_evict_then_insert_at,
+            drop_eviction_queues_a_delete
         ]},
         %% DataTable handler tests
         {datatable, [parallel], [
@@ -1529,11 +1543,11 @@ stream_limit_drop_delete(Config) when is_list(Config) ->
     ?assertEqual([#{id => 3, text => <<"C">>}], arizona_stream:to_list(Stream)),
     ?assertEqual([3], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))),
-    %% Ops: append 3, remove the deleted 2, remove the evicted 1.
+    %% Ops: remove the evicted 1, append 3, remove the deleted 2.
     InsKeys = [K || [?OP_INSERT, _, K | _] <- Ops],
     RemKeys = [K || [?OP_REMOVE, _, K] <- Ops],
     ?assertEqual([<<"3">>], InsKeys),
-    ?assertEqual([<<"2">>, <<"1">>], RemKeys).
+    ?assertEqual([<<"1">>, <<"2">>], RemKeys).
 
 %% drop + append-at-limit (the canonical tail -f case): the oldest item is
 %% evicted from the SOURCE (items + order), the window slides onto the new
@@ -1552,9 +1566,10 @@ stream_limit_drop_insert(Config) when is_list(Config) ->
         [#{id => 2, text => <<"B">>}, #{id => 3, text => <<"C">>}],
         arizona_stream:to_list(Stream)
     ),
-    %% Ops: the new tail item is inserted and the evicted oldest removed.
+    %% Ops: the evicted oldest is removed and the new tail item inserted, in the
+    %% order the stream did them.
     ?assertMatch(
-        [[?OP_INSERT, <<"0">>, <<"3">>, -1, _], [?OP_REMOVE, <<"0">>, <<"1">>]], Ops
+        [[?OP_REMOVE, <<"0">>, <<"1">>], [?OP_INSERT, <<"0">>, <<"3">>, -1, _]], Ops
     ),
     ?assertEqual([2, 3], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))).
@@ -1644,13 +1659,13 @@ stream_limit_drop_append_overfull(Config) when is_list(Config) ->
     ),
     ?assertEqual([3, 4], Order),
     ?assertEqual(lists:sort(Order), lists:sort(maps:keys(SnapItems))),
-    %% DOM [1,2]: insert 4 (append), remove evicted 1 and 2, back-fill 3 at
+    %% DOM [1,2]: remove evicted 1 and 2, insert 4 (append), back-fill 3 at
     %% its window position (front).
     ?assertMatch(
         [
-            [?OP_INSERT, <<"0">>, <<"4">>, -1, _],
             [?OP_REMOVE, <<"0">>, <<"1">>],
             [?OP_REMOVE, <<"0">>, <<"2">>],
+            [?OP_INSERT, <<"0">>, <<"4">>, -1, _],
             [?OP_INSERT, <<"0">>, <<"3">>, 0, _]
         ],
         Ops
@@ -1917,12 +1932,12 @@ stream_limit_drop_sort_after_append(Config) when is_list(Config) ->
         arizona_stream:to_list(Stream)
     ),
     ?assertEqual([3, 2], Order),
-    %% DOM [1,2]: append 3, move it to the front, remove evicted 1.
+    %% DOM [1,2]: remove evicted 1, append 3, move it to the front.
     ?assertMatch(
         [
+            [?OP_REMOVE, <<"0">>, <<"1">>],
             [?OP_INSERT, <<"0">>, <<"3">>, -1, _],
-            [?OP_MOVE, <<"0">>, <<"3">>, null],
-            [?OP_REMOVE, <<"0">>, <<"1">>]
+            [?OP_MOVE, <<"0">>, <<"3">>, null]
         ],
         Ops
     ).
@@ -4081,3 +4096,162 @@ arizona_live_dedup_fp_dlist([H | T], Fps0) ->
     {H1, Fps1} = arizona_live_dedup_fp_val(H, Fps0),
     {T1, Fps2} = arizona_live_dedup_fp_dlist(T, Fps1),
     {[H1 | T1], Fps2}.
+
+%% ====================================================================
+%% One drain per event: client DOM == SSR of the final state
+%% ====================================================================
+
+%% A drop eviction followed, in the same event, by re-appending the evicted key: the
+%% key is in the client's DOM and in the final window, so with the eviction not on
+%% record the re-insert read as a replay and nothing shipped -- the client kept the
+%% evicted item's old content.
+drop_evict_then_reinsert_same_key(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"b", ~"l2"}],
+        client_after_events([it(b, ~"l1")], #{limit => 1, on_limit => drop}, [
+            fun(S0) ->
+                S1 = arizona_stream:insert(S0, it(c, ~"l1")),
+                arizona_stream:insert(S1, it(b, ~"l2"))
+            end
+        ])
+    ).
+
+%% The same through the `update/3` upsert, whose queued op carried no changed keys
+%% for a key the client still showed.
+drop_evict_then_upsert_same_key(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"b", ~"l2"}],
+        client_after_events([it(b, ~"l1")], #{limit => 1, on_limit => drop}, [
+            fun(S0) ->
+                S1 = arizona_stream:update(S0, c, it(c, ~"l1")),
+                arizona_stream:update(S1, b, it(b, ~"l2"))
+            end
+        ])
+    ).
+
+%% An evicted key stayed in the client's DOM until the end-of-drain prune, so a
+%% positional insert, placed by source index, landed one slot off.
+drop_evict_then_insert_at(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"y", ~"l1"}, {~"w", ~"l1"}],
+        client_after_events([it(x, ~"l1"), it(y, ~"l1")], #{limit => 2, on_limit => drop}, [
+            fun(S0) ->
+                S1 = arizona_stream:insert(S0, it(z, ~"l1")),
+                arizona_stream:insert(S1, it(w, ~"l1"), 1)
+            end
+        ])
+    ).
+
+drop_eviction_queues_a_delete(Config) when is_list(Config) ->
+    S0 = arizona_stream:new(
+        fun(#{id := Id}) -> Id end,
+        [it(a, ~"l1"), it(b, ~"l1")],
+        #{limit => 2, on_limit => drop}
+    ),
+    S1 = arizona_stream:insert(clear_pending(S0), it(c, ~"l1")),
+    ?assertMatch([{delete, a}, {insert, c, _, -1}], arizona_stream:pending_ops(S1)).
+
+it(Id, Text) -> #{id => Id, text => Text}.
+
+%% Renders a stream of `Items0` under `Opts`, then diffs once per fun in `Events`
+%% (each mutates the stream as one event's handler would) and applies every diff's
+%% ops to a model of the client. Returns what the client shows after the last event,
+%% as `[{KeyBin, Text}]` in DOM order, and fails on the first event that leaves the
+%% client apart from an SSR of the stream's state at that point.
+client_after_events(Items0, Opts, Events) ->
+    S0 = arizona_stream:new(fun(#{id := Id}) -> Id end, Items0, Opts),
+    {_, Snap0, Views0} = arizona_render:render(drain_template(S0), #{}),
+    {Client, _S, _Snap, _Views} = lists:foldl(
+        fun drain_event/2,
+        {ssr_client(S0), clear_pending(S0), Snap0, Views0},
+        lists:enumerate(Events)
+    ),
+    Client.
+
+drain_event({N, Event}, {Client0, S0, Snap0, Views0}) ->
+    S1 = Event(S0),
+    {Ops, Snap1, Views1} =
+        arizona_diff:diff(drain_template(S1), Snap0, Views0, #{items => true}),
+    #{d := [{<<"0">>, StreamSnap}]} = Snap1,
+    Client = apply_client_ops(Client0, Ops, StreamSnap),
+    case ssr_client(S1) of
+        Client -> {Client, clear_pending(S1), Snap1, Views1};
+        Expected -> ct:fail({client_diverged, N, Ops, Client, Expected})
+    end.
+
+clear_pending(S) ->
+    #{s := S1} = arizona_stream:clear_stream_pending(#{s => S}, [s]),
+    S1.
+
+drain_template(Stream) ->
+    ItemTmpl = #{
+        t => 0,
+        s => [<<"<li az-key=\"">>, <<"\">">>, <<"</li>">>],
+        d => fun(Item, Key) ->
+            [
+                {<<"0">>, fun() -> arizona_template:to_bin(Key) end},
+                {<<"1">>, fun() -> maps:get(text, Item) end}
+            ]
+        end,
+        f => <<"i">>
+    },
+    Bindings = #{items => Stream},
+    #{
+        s => [<<"<ul az=\"0\">">>, <<"</ul>">>],
+        d => [
+            {<<"0">>,
+                fun() ->
+                    arizona_template:each(arizona_template:get(items, Bindings), ItemTmpl)
+                end,
+                {m, 1}}
+        ],
+        f => <<"p">>
+    }.
+
+%% What an SSR of `Stream` shows: its visible window, each item's key and text.
+ssr_client(#stream{items = Items, order = Order, limit = Limit}) ->
+    [
+        {arizona_template:to_bin(K), maps:get(text, maps:get(K, Items))}
+     || K <- arizona_template:visible_keys(Order, Limit)
+    ].
+
+%% Applies one diff's ops as the client does. Strict where the client would fall
+%% back: a MOVE after an absent ref, or a REMOVE/MOVE/ITEM_PATCH of an absent key,
+%% crashes, so a pass proves every op named only what the DOM held. A container
+%% `?OP_TEXT` is a whole re-render of the final state, read back off the snapshot.
+apply_client_ops(_Client, [[?OP_TEXT, <<"0">>, _HTML]], #{order := Order, items := Items}) ->
+    [{arizona_template:to_bin(K), item_text(maps:get(K, Items))} || K <- Order];
+apply_client_ops(Client, Ops, _StreamSnap) ->
+    lists:foldl(fun apply_client_op/2, Client, Ops).
+
+apply_client_op([?OP_INSERT, <<"0">>, Key, Pos, #{~"d" := [_, Text]}], Client) ->
+    false = lists:keymember(Key, 1, Client),
+    case Pos =:= -1 orelse Pos >= length(Client) of
+        true ->
+            Client ++ [{Key, Text}];
+        false ->
+            {Before, After} = lists:split(Pos, Client),
+            Before ++ [{Key, Text} | After]
+    end;
+apply_client_op([?OP_REMOVE, <<"0">>, Key], Client) ->
+    true = lists:keymember(Key, 1, Client),
+    lists:keydelete(Key, 1, Client);
+apply_client_op([?OP_MOVE, <<"0">>, Key, null], Client) ->
+    {value, Entry, Rest} = lists:keytake(Key, 1, Client),
+    [Entry | Rest];
+apply_client_op([?OP_MOVE, <<"0">>, Key, Ref], Client) ->
+    {value, Entry, Rest} = lists:keytake(Key, 1, Client),
+    {Before, [RefEntry | After]} = lists:splitwith(fun({K, _}) -> K =/= Ref end, Rest),
+    Before ++ [RefEntry, Entry | After];
+apply_client_op([?OP_ITEM_PATCH, <<"0">>, Key, InnerOps], Client) ->
+    {Key, Text0} = lists:keyfind(Key, 1, Client),
+    Text = lists:foldl(fun patched_text/2, Text0, InnerOps),
+    lists:keyreplace(Key, 1, Client, {Key, Text}).
+
+patched_text([?OP_TEXT, <<"1">>, Text], _Text0) -> Text;
+patched_text([?OP_SET_ATTR, <<"0">> | _], Text0) -> Text0;
+patched_text([?OP_TEXT, <<"0">>, _], Text0) -> Text0.
+
+item_text(ItemD) ->
+    {<<"1">>, Text, _Deps} = lists:keyfind(<<"1">>, 1, ItemD),
+    Text.
