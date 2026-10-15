@@ -1339,7 +1339,8 @@ is_track_touch(_Stmt) ->
 %% call runs inside the slot closure, so its reads already fire in-bracket.
 %% Rejections fire ONLY for shapes that would otherwise crash at render (a
 %% BARE-element body that cannot be cleanly inlined): multi-clause, guarded,
-%% non-variable/repeated params, statements before the element, and recursion.
+%% non-variable/repeated params, statements before the element, and recursion --
+%% and only where the call's value is content (see `Tail` below).
 %% A `?html`-wrapped body that cannot be cleanly inlined is NOT rejected -- it
 %% already renders as a runtime nested template (the az:with handoff pattern)
 %% and keeps doing so. Genuinely remote calls, imported functions (invisible
@@ -1486,7 +1487,7 @@ ih_body(Body, Ctx, Ch, Tail) ->
 
 ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch, Tail) ->
     Arity = length(Args),
-    case helper_plan(Name, Arity, FunDefs, Target, L) of
+    case helper_plan(Name, Arity, FunDefs, Target, L, Tail) of
         {inline, Params, BodyExpr, Wrap} when Tail; Wrap =:= bare ->
             case Stack of
                 #{{Name, Arity} := _} -> parse_error({helper_recursive, Name, Arity}, L);
@@ -1529,10 +1530,13 @@ fresh_helper_var(P) ->
 %% Decide what to do with a local call: `skip` (leave the call -- a scalar
 %% helper, an unresolvable callee, or a wrapped body that renders fine as-is)
 %% or `{inline, ParamNames, BodyExpr, bare | wrapped}`. Raises the helper_* errors only for
-%% bare-element bodies, which pre-fix compiled clean and crashed at render.
-helper_plan(Name, Arity, FunDefs, Target, CallLine) ->
+%% bare-element bodies called where the value is content: there it crashed at render.
+%% Anywhere else (a function argument, a scrutinee) the value is consumed as data, and
+%% an atom-tagged tuple is indistinguishable from an ordinary data function's result.
+helper_plan(Name, Arity, FunDefs, Target, CallLine, Tail) ->
     case helper_plan_shape(Name, Arity, FunDefs, Target) of
-        {reject, Reason} -> parse_error(Reason, CallLine);
+        {reject, Reason} when Tail -> parse_error(Reason, CallLine);
+        {reject, _Reason} -> skip;
         Plan -> Plan
     end.
 
