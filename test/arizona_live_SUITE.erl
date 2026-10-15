@@ -107,6 +107,7 @@
     swapped_child_timer_cancelled/1,
     swapped_child_unmounted_once_when_new_mount_crashes/1,
     fired_timer_ref_pruned/1,
+    cancelled_timer_ref_pruned/1,
     live_reaped_on_transport_disconnect/1,
     child_in_stream_survives_dep_skip/1,
     child_gated_by_untracked_item_field/1,
@@ -260,6 +261,7 @@ groups() ->
             swapped_child_timer_cancelled,
             swapped_child_unmounted_once_when_new_mount_crashes,
             fired_timer_ref_pruned,
+            cancelled_timer_ref_pruned,
             live_reaped_on_transport_disconnect,
             child_in_stream_survives_dep_skip,
             child_gated_by_untracked_item_field,
@@ -1868,6 +1870,21 @@ fired_timer_ref_pruned(Config) when is_list(Config) ->
     %% Tracked timers are keyed by view id; every fired ref has been pruned on
     %% delivery, so after the last fire nothing is tracked at all.
     ?assertEqual(#{}, proplists:get_value('$arizona_timers', Dict, #{})).
+
+cancelled_timer_ref_pruned(Config) when is_list(Config) ->
+    %% A timer the app cancels itself (an idle watchdog re-armed on every
+    %% event) never delivers a message, so the prune-on-delivery never sees its
+    %% ref. Arming the next timer must drop it, or the registry grows by one ref
+    %% per event for the page's lifetime.
+    {ok, Pid} = arizona_live:start_link(arizona_idle_watchdog, #{}, undefined, []),
+    {ok, _, _} = arizona_live:mount(Pid),
+    [
+        {ok, _, _, _} = arizona_live:handle_event(Pid, ~"watchdog", ~"bump", #{})
+     || _ <- lists:seq(1, 500)
+    ],
+    #{bindings := #{ref := LiveRef}} = arizona_live:view_state(Pid),
+    {dictionary, Dict} = erlang:process_info(Pid, dictionary),
+    ?assertEqual(#{~"watchdog" => [LiveRef]}, proplists:get_value('$arizona_timers', Dict)).
 
 live_reaped_on_transport_disconnect(Config) when is_list(Config) ->
     %% The live process is start_linked to its transport (the WS session

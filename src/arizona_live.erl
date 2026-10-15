@@ -38,7 +38,8 @@ diff pipeline.
 - `$arizona_reconnected` -- `true` when this connection is a reconnection (vs the
   first connect); set while a transport is attached and read by `reconnected/0`.
 - `$arizona_timers` -- `#{ViewId => [Ref]}` from `send_after/3`. A fired
-  ref is pruned when its message is delivered; a removed child view's
+  ref is pruned when its message is delivered, and a view's dead refs
+  (fired or cancelled by the app) when it arms another; a removed child view's
   timers are cancelled synchronously (and its queued view messages
   flushed) on unmount -- including a child whose id a render keeps but
   whose handler it swaps; `navigate/3,4` cancels them all so stale timers
@@ -268,7 +269,10 @@ Like `send/2` but delivers after `Time` milliseconds. Returns the timer
 ref, which is also tracked in the process dictionary (keyed by `ViewId`)
 so a removed child view's pending timers can be cancelled on unmount and
 `navigate/3,4` can cancel them all on page change. A fired ref is pruned
-from the tracked set when its message is delivered.
+from the tracked set when its message is delivered, and every dead ref of
+`ViewId` -- fired, or cancelled by the caller with `erlang:cancel_timer/1`
+-- when the view arms its next timer, so the set stays bounded by the
+view's live timers.
 """.
 -spec send_after(ViewId, Time, Msg) -> reference() when
     ViewId :: binary(),
@@ -281,7 +285,12 @@ send_after(ViewId, Time, Msg) ->
             undefined -> #{};
             T -> T
         end,
-    ViewRefs = maps:get(ViewId, Timers, []),
+    %% Drop this view's dead refs while adding the new one: a ref the app
+    %% cancelled itself (`erlang:cancel_timer/1`, a debounce or idle watchdog)
+    %% never delivers a message, so the prune on delivery would never see it.
+    %% Pruning here bounds the registry by the view's live timers, at a cost
+    %% linear in those alone.
+    ViewRefs = live_timer_refs(maps:get(ViewId, Timers, [])),
     _ = erlang:put('$arizona_timers', Timers#{ViewId => [Ref | ViewRefs]}),
     Ref.
 
@@ -1344,7 +1353,7 @@ prune_fired_timers(ViewId) ->
         undefined ->
             ok;
         #{ViewId := Refs} = Timers ->
-            case [Ref || Ref <- Refs, is_integer(erlang:read_timer(Ref))] of
+            case live_timer_refs(Refs) of
                 [] -> _ = erlang:put('$arizona_timers', maps:remove(ViewId, Timers));
                 Live -> _ = erlang:put('$arizona_timers', Timers#{ViewId => Live})
             end,
@@ -1352,6 +1361,9 @@ prune_fired_timers(ViewId) ->
         #{} ->
             ok
     end.
+
+live_timer_refs(Refs) ->
+    [Ref || Ref <- Refs, is_integer(erlang:read_timer(Ref))].
 
 flush_view_messages() ->
     receive
