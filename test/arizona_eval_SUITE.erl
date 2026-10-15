@@ -25,13 +25,21 @@
     child_stream_pending_cleared_on_eval_path/1,
     child_stream_emits_no_op_on_unchanged_ticks/1,
     child_stream_untouched_by_prop_bump_emits_nothing/1,
-    child_stream_replayed_drain_emits_no_duplicate_insert/1
+    child_stream_replayed_drain_emits_no_duplicate_insert/1,
+    slot_crash_restores_deps_scope/1,
+    unlocated_slot_crash_restores_deps_scope/1,
+    attr_slot_crash_restores_deps_scope/1,
+    nested_crash_restores_enclosing_deps_scope/1,
+    each_def_crash_restores_deps_scope/1,
+    unless_same_nodiff_crash_restores_deps_scope/1,
+    items_crash_restores_deps_scope/1
 ]).
 
 all() ->
     [
         {group, eval_api},
         {group, dep_isolation},
+        {group, dep_scope_exceptions},
         {group, per_item_optimization},
         {group, child_streams}
     ].
@@ -61,6 +69,15 @@ groups() ->
             stateless_callback_returning_fun_no_leak,
             stateful_mount_eager_read_no_leak
         ]},
+        {dep_scope_exceptions, [parallel], [
+            slot_crash_restores_deps_scope,
+            unlocated_slot_crash_restores_deps_scope,
+            attr_slot_crash_restores_deps_scope,
+            nested_crash_restores_enclosing_deps_scope,
+            each_def_crash_restores_deps_scope,
+            unless_same_nodiff_crash_restores_deps_scope,
+            items_crash_restores_deps_scope
+        ]},
         {child_streams, [parallel], [
             child_stream_pending_cleared_on_eval_path,
             child_stream_emits_no_op_on_unchanged_ticks,
@@ -68,6 +85,90 @@ groups() ->
             child_stream_replayed_drain_emits_no_duplicate_insert
         ]}
     ].
+
+%% --- dependency scope on exceptions ---
+
+%% A process that catches a render crash and carries on (an HTTP keep-alive
+%% connection, a static-generation batch) must find no dependency scope left
+%% open: a later `track/1` outside any slot would record into it, and the next
+%% render's top-level slots would merge their reads into it.
+slot_crash_restores_deps_scope(Config) when is_list(Config) ->
+    Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}},
+    ?assertError(
+        {arizona_loc, _, missing_binding},
+        arizona_eval:eval_dynamics_v([Crash], {#{}, #{}})
+    ),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')),
+    %% Outside any slot, track/1 records nothing.
+    ok = arizona_template:track(outside),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')),
+    %% A follow-up render tracks exactly its own reads and closes its scope.
+    Read = {~"0", fun() -> arizona_template:get(a, #{a => 1}) end, {?MODULE, ?LINE}},
+    ?assertMatch(
+        {[{~"0", 1, Deps}], _} when Deps =:= #{a => true},
+        arizona_eval:eval_dynamics_v([Read], {#{}, #{}})
+    ),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')).
+
+unlocated_slot_crash_restores_deps_scope(Config) when is_list(Config) ->
+    Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end},
+    ?assertError(missing_binding, arizona_eval:eval_dynamics_v([Crash], {#{}, #{}})),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')).
+
+attr_slot_crash_restores_deps_scope(Config) when is_list(Config) ->
+    Crash =
+        {~"0", {attr, ~"title", fun() -> arizona_template:get(missing, #{}) end}, {?MODULE, ?LINE}},
+    ?assertError(
+        {arizona_loc, _, missing_binding},
+        arizona_eval:eval_dynamics_v([Crash], {#{}, #{}})
+    ),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')).
+
+%% A crash deep inside a nested template under a `?stateless` descriptor crosses
+%% several scopes (the outer slot's, the suspended one of with_saved_deps/1, the
+%% inner slot's); the scope that was open before the render is the one left.
+nested_crash_restores_enclosing_deps_scope(Config) when is_list(Config) ->
+    Inner = #{
+        s => [~"<b>", ~"</b>"],
+        d => [{~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}}],
+        f => ~"inner"
+    },
+    Desc = #{callback => fun(_Props) -> Inner end, props => #{}},
+    Outer = {
+        ~"0",
+        fun() ->
+            arizona_template:get(a, #{a => 1}),
+            Desc
+        end,
+        {?MODULE, ?LINE}
+    },
+    undefined = erlang:put('$arizona_deps', #{enclosing => true}),
+    ?assertError(
+        {arizona_loc, _, missing_binding},
+        arizona_eval:eval_dynamics_v([Outer], {#{}, #{}})
+    ),
+    ?assertEqual(#{enclosing => true}, erlang:erase('$arizona_deps')).
+
+each_def_crash_restores_deps_scope(Config) when is_list(Config) ->
+    Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}},
+    ?assertError({arizona_loc, _, missing_binding}, arizona_eval:eval_each_def(Crash, {#{}, #{}})),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')).
+
+unless_same_nodiff_crash_restores_deps_scope(Config) when is_list(Config) ->
+    Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}},
+    ?assertError(
+        {arizona_loc, _, missing_binding},
+        arizona_eval:eval_unless_same_nodiff(Crash, #{}, {#{}, #{}})
+    ),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')).
+
+%% The diff renders an each's items in a scope of its own, outside any slot's.
+items_crash_restores_deps_scope(Config) when is_list(Config) ->
+    ?assertError(
+        missing_binding,
+        arizona_eval:eval_items(#{}, fun() -> arizona_template:get(missing, #{}) end)
+    ),
+    ?assertEqual(undefined, erlang:get('$arizona_deps')).
 
 %% --- child streams ---
 
