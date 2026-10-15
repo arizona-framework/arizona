@@ -50,7 +50,9 @@
     render_component_stateless/1,
     render_component_other/1,
     render_component_bad_bindings/1,
-    render_component_unknown_key/1
+    render_component_unknown_key/1,
+    missing_required_argument_is_in_band/1,
+    mistyped_argument_is_in_band/1
 ]).
 
 all() ->
@@ -102,7 +104,9 @@ all() ->
         render_component_stateless,
         render_component_other,
         render_component_bad_bindings,
-        render_component_unknown_key
+        render_component_unknown_key,
+        missing_required_argument_is_in_band,
+        mistyped_argument_is_in_band
     ].
 
 init_per_suite(Config) ->
@@ -510,8 +514,53 @@ render_component_unknown_key(_Config) ->
     ?assertMatch({error, Bin, _} when is_binary(Bin), call(~"render_component", Args)).
 
 %% --------------------------------------------------------------------
+%% argument validation
+%% --------------------------------------------------------------------
+
+%% An input schema is advice to the client, not a check the transport runs: a
+%% call can omit a required argument. It answers in-band naming the argument,
+%% rather than crashing into an opaque -32603.
+missing_required_argument_is_in_band(_Config) ->
+    Expected = [
+        {~"describe_component", ~"missing required argument: module"},
+        {~"get_docs", ~"missing required argument: module"},
+        {~"get_source_location", ~"missing required argument: module"},
+        {~"render_component", ~"missing required argument: module"},
+        {~"eval", ~"missing required argument: code"}
+    ],
+    ?assertEqual(Expected, [{Tool, error_message(call(Tool, #{}))} || {Tool, _} <- Expected]).
+
+mistyped_argument_is_in_band(_Config) ->
+    Expected = [
+        {~"describe_component", #{~"module" => 42}, ~"module must be a string, got: 42"},
+        {
+            ~"get_docs",
+            #{~"module" => ~"lists", ~"function" => 42},
+            ~"function must be a string, got: 42"
+        },
+        {
+            ~"get_source_location",
+            #{~"module" => ~"lists", ~"function" => 42},
+            ~"function must be a string, got: 42"
+        },
+        {
+            ~"render_component",
+            #{~"module" => ~"arizona_counter", ~"bindings" => [1]},
+            ~"bindings must be an object, got: [1]"
+        },
+        {~"eval", #{~"code" => 1}, ~"code must be a string, got: 1"}
+    ],
+    ?assertEqual(
+        Expected,
+        [{Tool, Args, error_message(call(Tool, Args))} || {Tool, Args, _} <- Expected]
+    ).
+
+%% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+error_message({error, Message, _State}) ->
+    Message.
 
 state() ->
     {ok, _Info, _Caps, State} = arizona_dev_mcp:init(#{}),

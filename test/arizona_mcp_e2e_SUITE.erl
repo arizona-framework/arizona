@@ -9,6 +9,7 @@
     post_tools_call/1,
     post_streaming_progress/1,
     post_progress_without_accept_buffered/1,
+    post_streaming_non_object_arguments_invalid_params/1,
     post_fractional_id_invalid_request/1,
     stateless_disconnect_kills_worker/1,
     stateless_conn_kill_kills_worker/1,
@@ -58,6 +59,7 @@ all() ->
         post_tools_call,
         post_streaming_progress,
         post_progress_without_accept_buffered,
+        post_streaming_non_object_arguments_invalid_params,
         post_fractional_id_invalid_request,
         stateless_disconnect_kills_worker,
         stateless_conn_kill_kills_worker,
@@ -232,6 +234,19 @@ post_progress_without_accept_buffered(Config) ->
         #{~"content" => [#{~"type" => ~"text", ~"text" => ~"done"}], ~"isError" => false},
         Result
     ).
+
+%% A token-bearing tools/call whose `arguments` is not an object is rejected
+%% (-32602) like a buffered one, instead of starting a streaming worker that
+%% hands the tool a non-map.
+post_streaming_non_object_arguments_invalid_params(Config) ->
+    Body =
+        ~"""
+    {"jsonrpc":"2.0","id":12,"method":"tools/call",
+     "params":{"name":"progress","arguments":"oops","_meta":{"progressToken":"tok-3"}}}
+    """,
+    Data = post_stream_until(Config, "/mcp", [], Body, ~"must be an object"),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"-32602")),
+    ?assertEqual(nomatch, binary:match(Data, ~"notifications/progress")).
 
 post_fractional_id_invalid_request(Config) ->
     %% A fractional id is not an MCP request id. The client still expects an

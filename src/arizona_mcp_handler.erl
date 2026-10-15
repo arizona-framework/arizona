@@ -409,17 +409,17 @@ accepts_sse(Req) ->
     end.
 
 %% Recognise a well-formed token-bearing `tools/call`. A missing/non-binary
-%% name or absent token falls through to the buffered path (which produces the
-%% matching error); declared-ness is checked later, where the handler module is
-%% in hand.
+%% name, non-object arguments or absent token falls through to the buffered path
+%% (which produces the matching error); declared-ness is checked later, where the
+%% handler module is in hand.
 streaming_progress(#{method := ~"tools/call", id := Id, params := Params}) when
     Id =/= undefined
 ->
-    case Params of
-        #{~"name" := Name, ~"_meta" := #{~"progressToken" := Token}} when is_binary(Name) ->
-            {stream, #{
-                name => Name, args => maps:get(~"arguments", Params, #{}), token => Token, id => Id
-            }};
+    case {Params, call_arguments(Params)} of
+        {#{~"name" := Name, ~"_meta" := #{~"progressToken" := Token}}, {ok, Args}} when
+            is_binary(Name)
+        ->
+            {stream, #{name => Name, args => Args, token => Token, id => Id}};
         _ ->
             none
     end;
@@ -953,10 +953,27 @@ call_tool(Params, Id, #{mod := Mod, state := State} = Session) ->
         fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing tool name") end,
         fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown tool: ", Name/binary>>) end,
         fun(Name) ->
-            Args = maps:get(~"arguments", Params, #{}),
-            tool_reply(Mod:handle_tool(Name, Args, inert_ctx(), State), Id, Session)
+            case call_arguments(Params) of
+                {ok, Args} ->
+                    tool_reply(Mod:handle_tool(Name, Args, inert_ctx(), State), Id, Session);
+                error ->
+                    {{error, invalid_arguments(Id)}, Session}
+            end
         end
     ).
+
+%% `arguments` is an optional JSON object; `handle_tool/4` and `get_prompt/3`
+%% are promised a map, so any other value is the client's error (-32602) rather
+%% than a crash inside the callback (an opaque -32603).
+call_arguments(#{~"arguments" := Args}) when is_map(Args) ->
+    {ok, Args};
+call_arguments(#{~"arguments" := _NotAnObject}) ->
+    error;
+call_arguments(#{}) ->
+    {ok, #{}}.
+
+invalid_arguments(Id) ->
+    arizona_jsonrpc:error(Id, -32602, ~"Invalid params: arguments must be an object").
 
 %% The progress context for a buffered (non-streaming) `tools/call`: inert, so
 %% `arizona_mcp:progress/2,3` is a no-op. Streaming calls build a live context
@@ -1022,8 +1039,10 @@ get_prompt(Params, Id, #{mod := Mod, state := State} = Session) ->
         fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing prompt name") end,
         fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown prompt: ", Name/binary>>) end,
         fun(Name) ->
-            Args = maps:get(~"arguments", Params, #{}),
-            prompt_messages(Mod:get_prompt(Name, Args, State), Id, Session)
+            case call_arguments(Params) of
+                {ok, Args} -> prompt_messages(Mod:get_prompt(Name, Args, State), Id, Session);
+                error -> {{error, invalid_arguments(Id)}, Session}
+            end
         end
     ).
 
