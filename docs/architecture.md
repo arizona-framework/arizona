@@ -506,6 +506,12 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
   into the slot bracket or its tracking runs outside any bracket and freezes).
   Rebound vars are dropped; a derivation with no read (e.g. `Id = make_uuid()`)
   is left captured, so a pure side effect is never re-run per slot.
+- **`transform_scoped_tail/4`** does the same per body along the tail of the
+  clause's last expression (the `case`/`if`/`begin`/`try`/`maybe`/`receive`
+  tails the live root accepts), so a read hoisted inside a branch
+  (`a -> N = ?get(n), ?html({p, [], [N]})`) inlines into that branch's templates,
+  on top of the enclosing map. A match on a name already bound outside the body
+  is an equality test, not a definition, and is not collected.
 - **`inline_vars/2`** substitutes those variables wherever they appear in a
   `?html`/`?each` argument -- including inside a `case` scrutinee or an opaque
   call -- recursively and scope-aware (fun parameters and comprehension

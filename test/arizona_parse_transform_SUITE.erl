@@ -295,6 +295,12 @@
     slot_tracks_only_reads_in_its_own_closure/1,
     each_param_rename_avoids_shadow_warning/1,
     inline_hoisted_html_unrelated_key_skipped/1,
+    inline_branch_local_hoist_tracks/1,
+    inline_branch_local_hoist_live_root/1,
+    inline_branch_local_hoist_live_root_id/1,
+    inline_branch_local_hoist_tail_forms/1,
+    inline_branch_local_hoist_outer_chain/1,
+    inline_branch_local_hoist_scoping/1,
     helper_zero_arity_inlines/1,
     helper_with_args_renders_and_tracks/1,
     helper_body_read_tracks/1,
@@ -964,7 +970,13 @@ groups() ->
             inline_hoisted_html_each_body_single_root,
             slot_tracks_only_reads_in_its_own_closure,
             each_param_rename_avoids_shadow_warning,
-            inline_hoisted_html_unrelated_key_skipped
+            inline_hoisted_html_unrelated_key_skipped,
+            inline_branch_local_hoist_tracks,
+            inline_branch_local_hoist_live_root,
+            inline_branch_local_hoist_live_root_id,
+            inline_branch_local_hoist_tail_forms,
+            inline_branch_local_hoist_outer_chain,
+            inline_branch_local_hoist_scoping
         ]},
         %% Local element-returning helper calls inlined at the template call site
         {helper, [parallel], [
@@ -9415,6 +9427,168 @@ inline_hoisted_html_unrelated_key_skipped(Config) when is_list(Config) ->
     {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
     ?assertEqual([], Ops).
 
+%% A variable hoisted inside a branch of the render function's tail control flow
+%% is inlined into that branch's slots like a top-level one: changing it ships an
+%% op, and a change to an unrelated key still skips the slot.
+inline_branch_local_hoist_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_branchlocal). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        a -> N = arizona_template:get(n, Bindings), "
+        "             arizona_template:html({'p', [], [N]}); "
+        "        b -> arizona_template:html({'p', [], [<<\"b\">>]}) "
+        "    end. "
+    ),
+    B0 = #{mode => a, n => ~"1", other => 1},
+    ?assertMatch([_ | _], branch_hoist_ops(Mod, B0, B0#{n => ~"2"})),
+    ?assertEqual([], branch_hoist_ops(Mod, B0, B0#{other => 2})).
+
+%% The same shape on a stateful live root, whose root may sit at every tail of a
+%% control-flow expression.
+inline_branch_local_hoist_live_root(Config) when is_list(Config) ->
+    B0 = #{id => ~"v", mode => a, n => ~"1", other => 1},
+    Mod = compile_live_branch_hoist(
+        "pt_inline_branchlocal_live",
+        "N = arizona_template:get(n, Bindings), "
+        "arizona_template:html({'p', [{id, arizona_template:get(id, Bindings)}], [N]})"
+    ),
+    ?assertMatch([_ | _], branch_hoist_ops(Mod, B0, B0#{n => ~"2"})),
+    ?assertEqual([], branch_hoist_ops(Mod, B0, B0#{other => 2})).
+
+%% A live root id hoisted inside the branch resolves through the branch's inline
+%% map, like a top-level one (inline_hoisted_root_id).
+inline_branch_local_hoist_live_root_id(Config) when is_list(Config) ->
+    Mod = compile_live_branch_hoist(
+        "pt_inline_branchlocal_liveid",
+        "Id = arizona_template:get(id, Bindings), "
+        "arizona_template:html({'p', [{id, Id}], [<<\"a\">>]})"
+    ),
+    T = Mod:render(#{id => ~"v", mode => a}),
+    [IdFun] = [F || {_Az, {attr, ~"id", F}, _Loc} <- maps:get(d, T)],
+    ?assertEqual(~"v", IdFun()),
+    ?assertEqual(#{id => true}, slot_deps(IdFun)).
+
+compile_live_branch_hoist(Name, BranchA) ->
+    compile_module_strict(
+        "-module(" ++ Name ++
+            "). "
+            "-behaviour(arizona_stateful). "
+            "-export([mount/1, render/1]). "
+            "mount(B) -> {B, #{}}. "
+            "render(Bindings) -> "
+            "    case arizona_template:get(mode, Bindings) of "
+            "        a -> " ++ BranchA ++
+            "; "
+            "        b -> arizona_template:html("
+            "                 {'p', [{id, arizona_template:get(id, Bindings)}], [<<\"b\">>]}) "
+            "    end. "
+    ).
+
+%% Every tail form the live root accepts scopes its own bodies: nested control
+%% flow, a `try` body binding a var its `of` clause uses, a `maybe` body, a
+%% `maybe` else clause, and a `receive` after body.
+inline_branch_local_hoist_tail_forms(Config) when is_list(Config) ->
+    Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
+    Tmpl = "arizona_template:html({'p', [], [N]})",
+    Other = "arizona_template:html({'p', [], [<<\"x\">>]})",
+    Forms = [
+        {"if",
+            "M = " ++ Get("mode") ++ ", if M =:= a -> N = " ++ Get("n") ++ ", " ++ Tmpl ++
+                "; true -> " ++ Other ++ " end. "},
+        {"begin", "begin N = " ++ Get("n") ++ ", " ++ Tmpl ++ " end. "},
+        {"nested",
+            "case " ++ Get("mode") ++ " of a -> X = " ++ Get("x") ++ ", case X of 1 -> N = " ++
+                Get("n") ++ ", " ++ Tmpl ++ "; _ -> " ++ Other ++ " end; _ -> " ++ Other ++
+                " end. "},
+        {"try_of",
+            "try N = " ++ Get("n") ++ ", " ++ Get("mode") ++ " of a -> " ++ Tmpl ++ "; _ -> " ++
+                Other ++ " catch _:_ -> " ++ Other ++ " end. "},
+        {"try_body", "try N = " ++ Get("n") ++ ", " ++ Tmpl ++ " catch _:_ -> ok end. "},
+        {"maybe", "maybe a ?= " ++ Get("mode") ++ ", N = " ++ Get("n") ++ ", " ++ Tmpl ++ " end. "},
+        {"maybe_else",
+            "maybe b ?= " ++ Get("mode") ++ ", " ++ Other ++ " else _ -> N = " ++ Get("n") ++
+                ", " ++ Tmpl ++ " end. "},
+        {"receive", "receive never -> ok after 0 -> N = " ++ Get("n") ++ ", " ++ Tmpl ++ " end. "}
+    ],
+    B0 = #{mode => a, n => ~"1", x => 1},
+    Frozen = [
+        Name
+     || {Name, Body} <- Forms,
+        [] =:=
+            branch_hoist_ops(
+                compile_module_strict(
+                    "-module(pt_inline_branchlocal_" ++ Name ++
+                        "). "
+                        "-export([render/1]). "
+                        "render(Bindings) -> " ++ Body
+                ),
+                B0,
+                B0#{n => ~"2"}
+            )
+    ],
+    ?assertEqual([], Frozen).
+
+%% A branch-local definition may build on a top-level hoisted one; the slot then
+%% tracks the outer read.
+inline_branch_local_hoist_outer_chain(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_branchlocal_chain). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    M = arizona_template:get(m, Bindings), "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        a -> N = <<M/binary, \"!\">>, "
+        "             arizona_template:html({'p', [], [N]}); "
+        "        b -> arizona_template:html({'p', [], [M]}) "
+        "    end. "
+    ),
+    B0 = #{mode => a, m => ~"1"},
+    ?assertMatch([_ | _], branch_hoist_ops(Mod, B0, B0#{m => ~"2"})).
+
+%% A clause pattern's own variables stay captured (like a head-destructured
+%% binding), but a branch-local read built from one still tracks its read. A
+%% branch match on a name bound outside the branch is an equality test, not a
+%% definition: it is left alone, so the outer binding stays used.
+inline_branch_local_hoist_scoping(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_branchlocal_pat). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    case arizona_template:get(user, Bindings) of "
+        "        {admin, Name} -> "
+        "            L = <<Name/binary, (arizona_template:get(sfx, Bindings))/binary>>, "
+        "            arizona_template:html({'p', [], [L]}); "
+        "        _ -> arizona_template:html({'p', [], [<<\"guest\">>]}) "
+        "    end. "
+    ),
+    T = Mod:render(#{user => {admin, ~"Ada"}, sfx => ~"!"}),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
+    ?assertEqual(~"Ada!", Fun()),
+    ?assertEqual(#{sfx => true}, slot_deps(Fun)),
+    Mod2 = compile_module_strict(
+        "-module(pt_inline_branchlocal_rebound). "
+        "-export([render/1]). "
+        "render(#{n := N} = Bindings) -> "
+        "    case arizona_template:get(mode, Bindings) of "
+        "        a -> N = arizona_template:get(n, Bindings), "
+        "             arizona_template:html({'p', [], [N]}); "
+        "        b -> arizona_template:html({'p', [], [<<\"b\">>]}) "
+        "    end. "
+    ),
+    T2 = Mod2:render(#{mode => a, n => ~"1"}),
+    [{_Az2, {esc, Fun2}, _Loc2}] = maps:get(d, T2),
+    ?assertEqual(~"1", Fun2()),
+    ?assertEqual(#{}, slot_deps(Fun2)).
+
+branch_hoist_ops(Mod, B0, B1) ->
+    {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, _Snap1, _V1} = arizona_diff:diff(
+        Mod:render(B1), Snap0, V0, compute_changed(B0, B1)
+    ),
+    Ops.
+
 %% ============================================================================
 %% Local element-returning helper calls inlined at the template call site
 %% ============================================================================
@@ -11787,7 +11961,14 @@ markup_var_in_content_list_rejected(Config) when is_list(Config) ->
             {"tail",
                 "Hdr = [<<\"x\">>, {b, [], []}], "
                 "arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
-                "    true -> [Hdr, <<\"y\">>]; false -> <<>> end]}). "}
+                "    true -> [Hdr, <<\"y\">>]; false -> <<>> end]}). "},
+            {"branch",
+                "case arizona_template:get(f, Bindings) of "
+                "    true -> Hdr = arizona_template:html({h1, [], [<<\"T\">>]}), "
+                "        arizona_template:html({ul, [], [[Hdr, arizona_template:each("
+                "            fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings))]]}); "
+                "    false -> arizona_template:html({p, [], [<<\"x\">>]}) "
+                "end. "}
         ]
     ],
     ok.

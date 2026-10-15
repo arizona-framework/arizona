@@ -1252,7 +1252,15 @@ transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     Body = normalize_tail_binds(Body0),
     Inline = prepare_inline(collect_inline(Body), Body),
     ok = check_markup_vars(Body, Inline),
-    Body1 = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Body],
+    {Init, [Last]} = lists:split(length(Body) - 1, Body),
+    Transform = fun(Expr, Inl) -> transform_expr(Expr, Module, Inl, FunDefs) end,
+    Body1 =
+        [Transform(Expr, Inline) || Expr <- Init] ++
+            [
+                transform_scoped_tail(
+                    Last, Inline, clause_bound(Patterns, Init), {Transform, Transform}
+                )
+            ],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
 transform_expr(Expr, Module, Inline, FunDefs) ->
@@ -2030,26 +2038,141 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
     check_tracked_get_targets(Patterns, Body),
     {Init0, [Last]} = lists:split(length(Body) - 1, Body),
     %% Only the init statements are normalized: the last expr carries the live root
-    %% template and is handled by transform_live_render_last/4.
+    %% template and is handled by transform_scoped_tail/4.
     Init = normalize_tail_binds(Init0),
     Inline = prepare_inline(collect_inline(Init ++ [Last]), Init ++ [Last]),
     ok = check_markup_vars(Init ++ [Last], Inline),
-    TransformedInit = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Init],
-    TransformedLast = transform_live_render_last(Last, Module, Inline, FunDefs),
+    Transform = fun(Expr, Inl) -> transform_expr(Expr, Module, Inl, FunDefs) end,
+    TransformedInit = [Transform(Expr, Inline) || Expr <- Init],
+    %% The last expression carries the live-root template -- a direct ?html/?native
+    %% call, or a control-flow expression whose every tail carries a root, compiled
+    %% at each leaf.
+    TransformedLast = transform_scoped_tail(
+        Last,
+        Inline,
+        clause_bound(Patterns, Init),
+        {fun(Leaf, Inl) -> transform_live_render_leaf(Leaf, Module, Inl, FunDefs) end, Transform}
+    ),
     Body1 = TransformedInit ++ [TransformedLast],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
 
-%% The render clause's last expression carries the live-root template -- a direct
-%% ?html/?native call, or a control-flow expression whose every tail carries a
-%% root. Walk each tail position (shared with content-slot expansion via
-%% map_tail_exprs/3), compiling the root at each leaf; non-tail sub-expressions
-%% are transformed normally.
-transform_live_render_last(Expr, Module, Inline, FunDefs) ->
-    map_tail_exprs(
-        Expr,
-        fun(Leaf) -> transform_live_render_leaf(Leaf, Module, Inline, FunDefs) end,
-        fun(NonTail) -> transform_expr(NonTail, Module, Inline, FunDefs) end
-    ).
+%% The value of a render clause is the value of its last expression, so a template
+%% there may sit at any tail of a control-flow expression, after statements that
+%% belong to its branch alone:
+%%
+%%     case ?get(mode) of
+%%         a -> N = ?get(n), ?html({p, [], [N]});
+%%         b -> ...
+%%     end.
+%%
+%% A hoisted read in a branch needs inlining exactly as a top-level one does, but
+%% only that branch's templates may see it. Walk the tail positions (the forms and
+%% positions map_tail_exprs/3 defines) and give every body on the way its own
+%% inline map: the enclosing map plus the body's own hoisted reads. `Leaf` compiles
+%% each tail leaf and `NonTail` every other sub-expression, both given the map in
+%% scope there. `Bound` holds every name bound outside the body being entered: a
+%% match on one of those is an equality test, not a definition, so it is never
+%% collected (and never underscored, which would drop the test and leave the outer
+%% binding unused).
+transform_scoped_tail(Expr, Inline, Bound, {Leaf, NonTail} = Fns) ->
+    case erl_syntax:revert(Expr) of
+        {'case', L, Scrutinee, Cs} ->
+            Cs1 = scoped_tail_clauses(Cs, Inline, stmt_bound(Scrutinee, Bound), Fns),
+            {'case', L, NonTail(Scrutinee, Inline), Cs1};
+        {'if', L, Cs} ->
+            {'if', L, scoped_tail_clauses(Cs, Inline, Bound, Fns)};
+        {block, L, Body} ->
+            {block, L, scoped_tail_body(Body, Inline, Bound, Fns)};
+        {'receive', L, Cs} ->
+            {'receive', L, scoped_tail_clauses(Cs, Inline, Bound, Fns)};
+        {'receive', L, Cs, AfterExpr, AfterBody} ->
+            {'receive', L, scoped_tail_clauses(Cs, Inline, Bound, Fns), NonTail(AfterExpr, Inline),
+                scoped_tail_body(AfterBody, Inline, Bound, Fns)};
+        {'try', L, Body0, OfCs0, CatchCs0, After0} ->
+            %% The try body's definitions stay in scope in its `of` clauses, so they
+            %% inline there too, and whether one is left unused is counted over the
+            %% whole `try`.
+            {Body, BodyInline, BodyBound, Local} = scoped_body(Body0, Inline, Bound, Fns),
+            OfCs = scoped_tail_clauses(OfCs0, BodyInline, BodyBound, Fns),
+            CatchCs = scoped_tail_clauses(CatchCs0, Inline, BodyBound, Fns),
+            After = [NonTail(E, Inline) || E <- After0],
+            Try = {'try', L, Body, OfCs, CatchCs, After},
+            {'try', L, [maybe_underscore_match(S, Local, Try) || S <- Body], OfCs, CatchCs, After};
+        {'maybe', L, Body} ->
+            {'maybe', L, scoped_tail_body(Body, Inline, Bound, Fns)};
+        {'maybe', L, Body, {'else', L2, Cs}} ->
+            {'maybe', L, scoped_tail_body(Body, Inline, Bound, Fns),
+                {'else', L2, scoped_tail_clauses(Cs, Inline, Bound, Fns)}};
+        _ ->
+            Leaf(Expr, Inline)
+    end.
+
+scoped_tail_clauses(Clauses, Inline, Bound, Fns) ->
+    [
+        {clause, L, Ps, Gs,
+            scoped_tail_body(Body, Inline, bind_names(pattern_vars(Ps), Bound), Fns)}
+     || {clause, L, Ps, Gs, Body} <:- Clauses
+    ].
+
+scoped_tail_body(Body0, Inline, Bound, Fns) ->
+    {Body, _Inline, _Bound, Local} = scoped_body(Body0, Inline, Bound, Fns),
+    suppress_unused_inline_matches(Body, Local).
+
+%% Transform one body: its init statements with its inline map, its last
+%% expression as a tail. Returns the map in scope at its end, the names bound by
+%% then, and the reads it hoisted itself (the matches it may leave unused).
+scoped_body(Body0, Outer, Bound0, {_Leaf, NonTail} = Fns) ->
+    {Init0, [Last]} = lists:split(length(Body0) - 1, Body0),
+    Init = normalize_tail_binds(Init0),
+    Body = Init ++ [Last],
+    {Local, Inline} = body_inline(Body, Outer, Bound0),
+    ok = check_markup_vars(Body, Inline),
+    Last1 = transform_scoped_tail(Last, Inline, body_bound(Init, Bound0), Fns),
+    {[NonTail(E, Inline) || E <- Init] ++ [Last1], Inline, body_bound(Body, Bound0), Local}.
+
+%% A body's own hoisted reads (collect_inline/1 for a nested body: a read may
+%% reach through a name the enclosing map already inlines), and the enclosing map
+%% extended with them.
+body_inline(Body, Outer, Bound) ->
+    {Raw, Poisoned} = scan_scoped_matches(Body, Bound, #{}, #{}),
+    Candidates = maps:without(maps:keys(Poisoned), Raw),
+    Reaching = reaching_fixpoint(Candidates, #{V => true || V := _ <- Outer}),
+    Local = maps:with(maps:keys(Reaching), Candidates),
+    {Local, prepare_inline(Local, Body, Outer)}.
+
+%% scan_top_matches/3, also refusing a name bound before the match -- outside the
+%% body, or by an earlier statement that is not a plain match.
+scan_scoped_matches([], _Bound, Raw, Poisoned) ->
+    {Raw, Poisoned};
+scan_scoped_matches([Stmt | Rest], Bound, Raw0, Poisoned0) ->
+    {Raw, Poisoned} =
+        case Stmt of
+            {match, _, {var, _, '_'}, _RHS} ->
+                {Raw0, Poisoned0};
+            {match, _, {var, _, V}, _RHS} when is_map_key(V, Bound) ->
+                {Raw0, Poisoned0#{V => true}};
+            {match, _, {var, _, V}, RHS} ->
+                {Raw0#{V => RHS}, Poisoned0};
+            _ ->
+                {Raw0, Poisoned0}
+        end,
+    scan_scoped_matches(Rest, stmt_bound(Stmt, Bound), Raw, Poisoned).
+
+%% The names bound once a clause's head and its init statements have run.
+clause_bound(Patterns, Init) ->
+    body_bound(Init, bind_names(pattern_vars(Patterns), #{})).
+
+body_bound(Body, Bound) ->
+    lists:foldl(fun stmt_bound/2, Bound, Body).
+
+stmt_bound(Stmt, Bound) ->
+    Env = ordsets:from_list(maps:keys(Bound)),
+    Ann = erl_syntax:get_ann(erl_syntax_lib:annotate_bindings(Stmt, Env)),
+    {bound, Names} = lists:keyfind(bound, 1, Ann),
+    bind_names(Names, Bound).
+
+bind_names(Names, Bound) ->
+    maps:merge(Bound, #{N => true || N <- Names}).
 
 transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
     case erl_syntax:revert(Expr) of
@@ -2080,12 +2203,13 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
 %% and `NonTailFun` at every non-tail sub-expression: a `case` scrutinee, the
 %% init statements before a body's last expression, a `receive` timeout, a `try`
 %% `after` body. Tails that are themselves control-flow recurse; a
-%% non-control-flow `Expr` is itself a tail leaf. This is the single definition
-%% of "tail position" shared by the live-render-root transform
-%% (transform_live_render_last/3) and the content-slot element expansion
-%% (expand_block_element_tails/3). `try` body last is treated as a tail even with
-%% `of` clauses (its value is then matched by `of`, but this mirrors the original
-%% live-render behaviour and never matters for real templates).
+%% non-control-flow `Expr` is itself a tail leaf. This is the definition of "tail
+%% position" for the content-slot element expansion (expand_block_element_tails/3);
+%% transform_scoped_tail/4 walks the same forms and positions for a render clause's
+%% last expression, adding a scope per body, so the two change together. `try`
+%% body last is treated as a tail even with `of` clauses (its value is then
+%% matched by `of`, but this mirrors the original live-render behaviour and never
+%% matters for real templates).
 map_tail_exprs(Expr, TailFun, NonTailFun) ->
     {Mapped, none} = mapfold_tail_exprs(
         Expr, fun(Leaf, none) -> {TailFun(Leaf), none} end, NonTailFun, none
@@ -2322,10 +2446,15 @@ collect_inline(Body) ->
 %% exactly as before. A fun-literal RHS is never wrapped: its reads fire
 %% wherever the fun is called, and a wrap would break splicing it as an ?each
 %% callback.
-prepare_inline(Raw, _Body) when map_size(Raw) =:= 0 ->
-    Raw;
+%% prepare_inline/3 extends an enclosing map (a branch body's, see
+%% transform_scoped_tail/4), so a branch read can build on an outer one.
 prepare_inline(Raw, Body) ->
-    lists:foldl(fun(Stmt, Acc) -> prepare_inline_stmt(Stmt, Raw, Acc) end, #{}, Body).
+    prepare_inline(Raw, Body, #{}).
+
+prepare_inline(Raw, _Body, Outer) when map_size(Raw) =:= 0 ->
+    Outer;
+prepare_inline(Raw, Body, Outer) ->
+    lists:foldl(fun(Stmt, Acc) -> prepare_inline_stmt(Stmt, Raw, Acc) end, Outer, Body).
 
 prepare_inline_stmt({match, _, {var, _, V}, _RHS}, Raw, Acc) ->
     case Raw of
