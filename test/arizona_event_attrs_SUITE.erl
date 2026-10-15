@@ -165,16 +165,21 @@ walk_terminates_on_a_cycle(Config) when is_list(Config) ->
 %% any number of times.
 load_edges_module(Mod, Names, Deps) ->
     Forms = [
-        {attribute, 1, module, Mod},
-        {attribute, 1, export, [{markup, 0}]},
-        {attribute, 1, arizona_az_attrs, Names},
-        {attribute, 1, arizona_az_deps, Deps},
-        {function, 1, markup, 0, [{clause, 1, [], [], [erl_parse:abstract(Names)]}]}
+        parse_form(io_lib:format("-module(~w).", [Mod])),
+        parse_form("-export([markup/0])."),
+        parse_form(io_lib:format("-arizona_az_attrs(~w).", [Names])),
+        parse_form(io_lib:format("-arizona_az_deps(~w).", [Deps])),
+        parse_form(io_lib:format("markup() -> ~w.", [Names]))
     ],
     {ok, Mod, Bin} = compile:forms(Forms, []),
     true = code:soft_purge(Mod),
     {module, Mod} = code:load_binary(Mod, "", Bin),
     ok.
+
+parse_form(Src) ->
+    {ok, Tokens, _} = erl_scan:string(lists:flatten(Src)),
+    {ok, Form} = erl_parse:parse_form(Tokens),
+    Form.
 
 collect_ensure_loaded(Mod, N) ->
     receive
