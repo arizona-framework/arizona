@@ -709,6 +709,11 @@ non-variable/repeated/`_` parameters (`helper_params_not_vars`), statements befo
 the element (`helper_body_not_single_expr`), and recursion (`helper_recursive`); a
 parameter read in an `?each` callback's head or guard (`helper_param_in_each_guard`, above)
 is rejected whichever form the body takes.
+Only a call whose value **is** content (the positions listed above, plus the body of a
+list comprehension sitting in one, whose results the slot renders) is rejected: a
+function argument or a `case` scrutinee consumes the value as data, and an ordinary
+data function returning an atom-tagged tuple (`color(red) -> {rgb, 255, 0, 0}`)
+looks the same as an element there, so the call is left to run.
 The same shapes with a whole-body `?html` wrapper are **not** rejected -- they
 already render as a runtime nested template and keep doing so (body reads frozen;
 hand a subset over with `?with` below). Genuinely remote calls (`mod:helper()`),

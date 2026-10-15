@@ -1434,7 +1434,8 @@ is_track_touch(_Stmt) ->
 %% call runs inside the slot closure, so its reads already fire in-bracket.
 %% Rejections fire ONLY for shapes that would otherwise crash at render (a
 %% BARE-element body that cannot be cleanly inlined): multi-clause, guarded,
-%% non-variable/repeated params, statements before the element, and recursion.
+%% non-variable/repeated params, statements before the element, and recursion --
+%% and only where the call's value is content (see `Tail` below).
 %% A `?html`-wrapped body that cannot be cleanly inlined is NOT rejected -- it
 %% already renders as a runtime nested template (the az:with handoff pattern)
 %% and keeps doing so. Genuinely remote calls, imported functions (invisible
@@ -1453,7 +1454,9 @@ inline_helper_calls(Expr, Module, FunDefs, Target) ->
 %% data. A bare-element body spliced there is the same value the call returned, so it
 %% is inlined anywhere; a `?html`-wrapped body is not (unwrapping it would hand the
 %% consumer the inner element or list instead of the template the call returned), so
-%% off a tail the call is left to run.
+%% off a tail the call is left to run. A comprehension in content builds the list the
+%% slot renders, so its body is `lc_body`: content for rejecting a helper that would
+%% crash at render, data for inlining (the comprehension is not compiled as markup).
 ih({call, L, {atom, _, Name}, Args} = Call, Ctx, Ch, Tail) ->
     ih_call(Call, Name, Args, L, Ctx, Ch, Tail);
 ih(
@@ -1478,6 +1481,10 @@ ih({tuple, L, [Tag, Attrs, Children]} = T, Ctx, Ch, Tail) ->
         false ->
             ih_generic(T, Ctx, Ch, Tail)
     end;
+ih({lc, L, Body, Quals}, Ctx, Ch, true) ->
+    ih_content_lc(L, Body, Quals, Ctx, Ch);
+ih({lc, L, Body, Quals}, Ctx, Ch, lc_body) ->
+    ih_content_lc(L, Body, Quals, Ctx, Ch);
 ih({cons, L, H, T}, Ctx, Ch, true) ->
     %% A list nested inside the list is a single value, not content.
     {H1, Ch1} = ih(H, Ctx, Ch, not is_list_ast(H)),
@@ -1499,6 +1506,11 @@ ih(L, Ctx, Ch, _Tail) when is_list(L) ->
     ih_list(L, Ctx, Ch, false);
 ih(Other, _Ctx, Ch, _Tail) ->
     {Other, Ch}.
+
+ih_content_lc(L, Body, Quals, Ctx, Ch) ->
+    {Body1, Ch1} = ih(Body, Ctx, Ch, lc_body),
+    {Quals1, Ch2} = ih_list(Quals, Ctx, Ch1, false),
+    {{lc, L, Body1, Quals1}, Ch2}.
 
 %% Control flow: a clause body's last expression carries the value, so it
 %% inherits `Tail`; scrutinees, timeouts and `after` bodies never do.
@@ -1581,7 +1593,7 @@ ih_body(Body, Ctx, Ch, Tail) ->
 
 ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch, Tail) ->
     Arity = length(Args),
-    case helper_plan(Name, Arity, FunDefs, Target, L) of
+    case helper_plan(Name, Arity, FunDefs, Target, L, Tail) of
         {inline, Params, BodyExpr, Wrap} when Tail; Wrap =:= bare ->
             case Stack of
                 #{{Name, Arity} := _} -> parse_error({helper_recursive, Name, Arity}, L);
@@ -1925,11 +1937,14 @@ rename_reads(Leaf, _Ren) ->
 %% Decide what to do with a local call: `skip` (leave the call -- a scalar
 %% helper, an unresolvable callee, or a wrapped body that renders fine as-is)
 %% or `{inline, ParamNames, BodyExpr, bare | wrapped}`. Raises the helper_* errors only for
-%% bare-element bodies, which pre-fix compiled clean and crashed at render.
-helper_plan(Name, Arity, FunDefs, Target, CallLine) ->
-    case helper_plan_shape(Name, Arity, FunDefs, Target) of
-        {reject, Reason} -> parse_error(Reason, CallLine);
-        Plan -> Plan
+%% bare-element bodies called where the value is content: there it crashed at render.
+%% Anywhere else (a function argument, a scrutinee) the value is consumed as data, and
+%% an atom-tagged tuple is indistinguishable from an ordinary data function's result.
+helper_plan(Name, Arity, FunDefs, Target, CallLine, Tail) ->
+    case {helper_plan_shape(Name, Arity, FunDefs, Target), Tail} of
+        {{reject, _Reason}, false} -> skip;
+        {{reject, Reason}, _Content} -> parse_error(Reason, CallLine);
+        {Plan, _Tail} -> Plan
     end.
 
 %% The non-throwing decision core -- also reused by the position-blind
