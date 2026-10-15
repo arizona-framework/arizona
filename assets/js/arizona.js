@@ -1694,11 +1694,15 @@ function writeLocalValue(el, target, value) {
     }
     const name = target[1];
     if (target.length === 4) {
-        // Interpolated: recompose prefix + value + suffix (always a string attr).
-        applySetAttrOp(el, name, target[2] + String(value) + target[3]);
+        // Interpolated: recompose prefix + value + suffix (always a string attr). An
+        // absent value interpolates as empty, as a content slot renders it.
+        applySetAttrOp(el, name, target[2] + (value == null ? '' : String(value)) + target[3]);
     } else if (value === false || value == null) {
-        el.removeAttribute(name);
-        notifyUpdated(el);
+        // Through the canonical writer, like a set: after user interaction the
+        // dirty value/checkedness flags detach `.checked`/`.selected`/`.value` from
+        // the attribute, so a bare removal would leave the control showing the old
+        // state.
+        applyRemAttrOp(el, name);
     } else if (value === true) {
         applySetAttrOp(el, name, '');
     } else {
@@ -1731,6 +1735,12 @@ function readLocalValue(el, target) {
         const v = el.getAttribute(name) ?? '';
         return v.slice(target[2].length, v.length - target[3].length);
     }
+    // The form-control properties hold what the user sees once they interacted
+    // (the attributes are only the defaults by then) -- the same three
+    // applySetAttrOp/applyRemAttrOp keep in step on a write.
+    if (name === 'value' && 'value' in el) return el.value;
+    if (name === 'checked' && 'checked' in el) return el.checked;
+    if (name === 'selected' && 'selected' in el) return el.selected;
     if (!el.hasAttribute(name)) return false;
     const v = el.getAttribute(name);
     return v === '' ? true : v;

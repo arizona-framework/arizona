@@ -3365,6 +3365,67 @@ describe('?local -- set/get attribute', () => {
         expect(input.getAttribute('value')).toBe('typed');
         expect(input.value).toBe('typed');
     });
+
+    // Once the user has toggled a checkbox its checkedness is dirty, so the
+    // attribute no longer drives `.checked`: a removal must write the property too,
+    // exactly as set(true) does through the attribute writer.
+    it('false unchecks a checkbox the user already toggled', () => {
+        setupView('v', `<input az="0" az-local='{"a":{"checked":"c"}}' type="checkbox" checked />`);
+        const cb = document.querySelector('input');
+        cb.click();
+        cb.click();
+        expect(cb.checked).toBe(true);
+        set('v', 'c', false);
+        expect(cb.hasAttribute('checked')).toBe(false);
+        expect(cb.checked).toBe(false);
+        cb.click();
+        set('v', 'c', true);
+        expect(cb.checked).toBe(true);
+    });
+
+    // A multi-select: a single-select always keeps one option selected, so there
+    // the browser itself reselects the first option once the last one is cleared.
+    it('false deselects an option whose selectedness the user changed', () => {
+        setupView(
+            'v',
+            `<select multiple><option az="0" az-local='{"a":{"selected":"s"}}' value="a" selected>a</option>` +
+                '<option value="b">b</option></select>',
+        );
+        const opt = document.querySelector('option');
+        opt.selected = false;
+        opt.selected = true;
+        expect(opt.selected).toBe(true);
+        set('v', 's', false);
+        expect(opt.hasAttribute('selected')).toBe(false);
+        expect(opt.selected).toBe(false);
+    });
+
+    it('null clears a value the user typed', () => {
+        setupView('v', `<input az="0" az-local='{"a":{"value":"field"}}' value="init" />`);
+        const input = document.querySelector('input');
+        input.value = 'typed';
+        set('v', 'field', null);
+        expect(input.hasAttribute('value')).toBe(false);
+        expect(input.value).toBe('');
+    });
+
+    // `get` reports what the user sees: after interaction the form-control
+    // properties, not the attributes, hold the live state.
+    it('get reads the live checked, selected and value properties', () => {
+        setupView(
+            'v',
+            `<input id="cb" az="0" az-local='{"a":{"checked":"c"}}' type="checkbox" checked />` +
+                `<input id="t" az="1" az-local='{"a":{"value":"t"}}' value="init" />` +
+                `<select multiple><option az="2" az-local='{"a":{"selected":"s"}}' value="a" selected>a</option>` +
+                '<option value="b">b</option></select>',
+        );
+        document.getElementById('cb').click();
+        document.getElementById('t').value = 'typed';
+        document.querySelector('option').selected = false;
+        expect(get('v', 'c')).toBe(false);
+        expect(get('v', 't')).toBe('typed');
+        expect(get('v', 's')).toBe(false);
+    });
 });
 
 describe('?local -- descriptor cache and early exit', () => {
@@ -3441,6 +3502,18 @@ describe('?local -- interpolated attribute', () => {
         const input = document.querySelector('input');
         expect(input.getAttribute('value')).toBe('$50');
         expect(input.value).toBe('$50');
+    });
+
+    it('null or undefined interpolates as empty, never the text "null"', () => {
+        setupView(
+            'v',
+            `<a az="0" az-local='{"a":{"href":"id"},"ap":{"href":["/u/","/edit"]}}' href="/u/1/edit">e</a>`,
+        );
+        const a = document.querySelector('a');
+        set('v', 'id', null);
+        expect(a.getAttribute('href')).toBe('/u//edit');
+        set('v', 'id', undefined);
+        expect(a.getAttribute('href')).toBe('/u//edit');
     });
 
     it('sets the recomposed value literally -- no markup injection', () => {
