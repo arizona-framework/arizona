@@ -1090,10 +1090,11 @@ format_each_error(each_body_not_element) ->
     "text/value child: {li, [], [case ... of ... end]}";
 format_each_error(each_stream_body_not_element) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
-    "Attrs, Children}) or, over a map only, a list of elements -- a stream/map keys each "
-    "item for per-item diffing, which a single-value body throws away. Unlike a list there "
-    "is no comprehension fallback (a comprehension has no stream/keyed semantics): wrap the "
-    "value in an element, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
+    "Attrs, Children}); a map source may also take a list of elements or a static/mixed "
+    "fragment -- a stream/map keys each item for per-item diffing, which a single-value "
+    "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
+    "has no stream/keyed semantics): wrap the value in an element, e.g. "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
 format_each_error(each_stream_body_control_flow) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
     "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
