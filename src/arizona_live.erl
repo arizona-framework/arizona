@@ -37,6 +37,8 @@ diff pipeline.
   read by `capabilities/0` / `capability/1`. A UI/effect hint only.
 - `$arizona_reconnected` -- `true` when this connection is a reconnection (vs the
   first connect); set while a transport is attached and read by `reconnected/0`.
+  Erased by `navigate/3,4` (the new page's mount is its first), kept across
+  `patch/2` (the same view stays mounted).
 - `$arizona_timers` -- `#{ViewId => {Count, Limit, [Ref]}}` from
   `send_after/3`. A fired ref is pruned when its message is delivered, and a
   view's dead refs (fired or cancelled by the app) when an arm takes its list
@@ -243,14 +245,20 @@ capability(Key) ->
     end.
 
 -doc """
-Returns `true` if this connection is a **reconnection** (the client dropped and
-re-opened the WebSocket), `false` on the first connect and during SSR.
+Returns `true` while the page mounted by a **reconnection** (the client dropped
+and re-opened the WebSocket) is the current page, `false` on the first connect
+and during SSR.
 
 Mirrors `connected/0`. The live process re-mounts on every reconnect, so
 `connected/0` alone cannot tell first-connect from reconnection. Use this to
 suppress one-shot OS commands: `connected() andalso not reconnected()` fires a
 one-shot (`notify`, `focus`) on the first connect only, while a declarative
 re-assert (`set_title`, `fullscreen`) can fire on every connect.
+
+It describes the current page's mount, not the socket: a `navigate/3,4` after a
+reconnect mounts a page this connection has not shown before, so it reads
+`false` from that mount on, and its first-connect one-shots fire. A `patch/2`
+keeps the view mounted, so it keeps the value.
 """.
 -spec reconnected() -> boolean().
 reconnected() ->
@@ -905,6 +913,10 @@ do_navigate_call(NewHandler, NewIB, NewOnMount, From, State) ->
     %% old one.
     OldB1 = maps:without(arizona_eval:restricted_keys(), OldB),
     Merged = maps:merge(OldB1, NewIB),
+    %% A reconnect re-mounts the page it reconnected to; a page reached by
+    %% navigate after it mounts for the first time on this connection, so
+    %% `reconnected/0` must not keep naming the reconnect for it.
+    _ = erlang:erase('$arizona_reconnected'),
     %% The old page is unmounted, so the state must stop marking it mounted
     %% before the new one mounts: terminate/2 unmounts the handler and views of
     %% a state with a snapshot, and a mount that raises here would otherwise run

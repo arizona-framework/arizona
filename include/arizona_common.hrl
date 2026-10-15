@@ -1,8 +1,9 @@
 %% Connection context -- true inside a connected live process, false during SSR
 -define(connected, arizona_live:connected()).
 
-%% Reconnect signal -- true when the connected live process is a reconnection (the
-%% client re-opened the WebSocket), false on the first connect and during SSR.
+%% Reconnect signal -- true while the current page is the one a reconnection (the
+%% client re-opened the WebSocket) mounted, false on the first connect, during SSR,
+%% and on a page reached by navigate after the reconnect (a patch keeps it).
 %% Gate one-shot OS commands with `?connected andalso not ?reconnected`.
 -define(reconnected, arizona_live:reconnected()).
 
