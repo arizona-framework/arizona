@@ -12,6 +12,13 @@ no-ops. (`text_az/2` still hands out distinct slot ids so the snapshot's
 `d`-list stays well-formed for the diff engine, whose ops the terminal
 transport ignores.)
 
+The frame is printed from the live process's diffed snapshot, not from a
+fresh render of the template, so a repaint runs no child `mount/1` or
+`handle_update/3`. A terminal therefore sees what a web client sees:
+`az-nodiff` content renders once, a slot whose reads are not tracked freezes
+after its first render, and after a hot reload edited template text appears
+once a slot depending on it changes (the terminal does not repaint on reload).
+
 ## Vocabulary
 
 - `col` / `row` -- transparent containers (a trailing style reset on close).
