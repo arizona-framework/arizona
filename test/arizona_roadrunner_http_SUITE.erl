@@ -11,6 +11,7 @@
 -export([manual_body_read_keeps_pipelining_intact/1]).
 -export([manual_body_over_the_cap_halts_with_413/1]).
 -export([manual_body_cut_short_halts_with_400/1]).
+-export([manual_body_oversized_trailer_halts_with_431/1]).
 -export([body_read_across_recvs_is_a_binary/1]).
 -export([transforms_apply_over_the_wire/1]).
 -export([page_carries_its_targets_content_type/1]).
@@ -27,6 +28,7 @@ all() ->
         manual_body_read_keeps_pipelining_intact,
         manual_body_over_the_cap_halts_with_413,
         manual_body_cut_short_halts_with_400,
+        manual_body_oversized_trailer_halts_with_431,
         body_read_across_recvs_is_a_binary,
         transforms_apply_over_the_wire,
         page_carries_its_targets_content_type,
@@ -146,6 +148,20 @@ manual_body_over_the_cap_halts_with_413(Config) when is_list(Config) ->
 manual_body_cut_short_halts_with_400(Config) when is_list(Config) ->
     Req = framed_body_req(~"0123456789", ~"01234", 1024, arizona_about, #{}),
     ?assertMatch({{400, _, _}, _}, arizona_roadrunner_http:handle(Req)).
+
+%% A chunked body's trailer block obeys the request-header limits; auto mode
+%% answers an oversized trailer field 431, like an oversized header.
+manual_body_oversized_trailer_halts_with_431(Config) when is_list(Config) ->
+    #{body_reader := Reader} =
+        Raw0 = framed_body_req(<<>>, <<>>, 1024, arizona_about, #{}),
+    Raw = Raw0#{
+        body_reader := Reader#{
+            framing := chunked,
+            buffered := ~"0\r\nx-trailer: far-longer-than-the-line-limit\r\n\r\n",
+            trailer_limits := {16, 10240, 100}
+        }
+    },
+    ?assertMatch({{431, _, _}, _}, arizona_roadrunner_http:handle(Raw)).
 
 %% Roadrunner hands back a body that arrived in several socket reads as
 %% iodata; `arizona_req:body()` is a binary, so the adapter flattens it.

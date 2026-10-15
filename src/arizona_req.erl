@@ -204,9 +204,10 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -nominal carried_cookies() :: [{binary(), binary() | clear}].
 
 %% Why a body could not be read, transport-neutral: `too_large` (over the
-%% server's body cap), `timeout` (the client stalled), `invalid` (malformed
-%% framing, or the connection closed mid-body).
--nominal body_error() :: too_large | timeout | invalid.
+%% server's body cap), `trailers_too_large` (a chunked body's trailer block
+%% over the request-header limits), `timeout` (the client stalled or sent too
+%% slowly), `invalid` (malformed framing, or the connection closed mid-body).
+-nominal body_error() :: too_large | trailers_too_large | timeout | invalid.
 
 %% HTTP redirect status codes (RFC 9110 §15.4). The most common are
 %% 301 (moved permanently), 302 (found), 303 (see other), 307
@@ -423,7 +424,7 @@ Returns `{error, Reason}` when the transport could not deliver the body (see
 `t:body_error/0`) -- a body over the server's cap read on demand, a stalled or
 vanished client. Nothing is cached then, so the caller answers from the
 request it already holds (`arizona_middleware:extract/1`'s `body` key halts
-with `413`, `408` or `400`).
+with `413`, `431`, `408` or `400`).
 """.
 -spec body(request()) -> {ok, body(), request()} | {error, body_error()}.
 body(#{body := Body} = Req) ->
