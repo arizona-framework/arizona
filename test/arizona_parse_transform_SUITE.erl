@@ -309,6 +309,16 @@
     helper_scalar_body_read_still_tracks/1,
     helper_multi_clause_scalar_untouched/1,
     helper_wrapped_multi_statement_untouched/1,
+    impure_hoisted_rhs_rejected/1,
+    impure_hoisted_rhs_location/1,
+    impure_helper_arg_multi_use_rejected/1,
+    impure_helper_arg_unused_rejected/1,
+    impure_expr_message/1,
+    impure_hoisted_no_read_accepted/1,
+    impure_hoisted_not_in_template_accepted/1,
+    impure_helper_arg_single_use_accepted/1,
+    impure_user_function_accepted/1,
+    impure_constructed_fun_accepted/1,
     tracked_get_submap_errors/1,
     tracked_get_submap_az_errors/1,
     tracked_get_lazy_submap_errors/1,
@@ -523,6 +533,7 @@ all() ->
         {group, conditional_elements},
         {group, inline},
         {group, helper},
+        {group, impure_expr},
         {group, tracked_get},
         {group, tracked_guard},
         {group, layout},
@@ -945,6 +956,19 @@ groups() ->
             helper_scalar_body_read_still_tracks,
             helper_multi_clause_scalar_untouched,
             helper_wrapped_multi_statement_untouched
+        ]},
+        %% Reject an always-impure call in code the transform evaluates lazily
+        {impure_expr, [parallel], [
+            impure_hoisted_rhs_rejected,
+            impure_hoisted_rhs_location,
+            impure_helper_arg_multi_use_rejected,
+            impure_helper_arg_unused_rejected,
+            impure_expr_message,
+            impure_hoisted_no_read_accepted,
+            impure_hoisted_not_in_template_accepted,
+            impure_helper_arg_single_use_accepted,
+            impure_user_function_accepted,
+            impure_constructed_fun_accepted
         ]},
         %% Reject the tracked accessor reading a non-bindings (sub-)map
         {tracked_get, [parallel], [
@@ -9903,6 +9927,228 @@ compile_module_strict(Source) ->
     {ok, Mod, Bin} = compile:forms(TransformedForms, [return_errors, warnings_as_errors]),
     {module, Mod} = code:load_binary(Mod, "", Bin),
     Mod.
+
+%% ----------------------------------------------------------------------------
+%% template_impure_expr: an always-impure call where the transform evaluates
+%% lazily (a re-inlined hoisted definition, an inlined helper argument)
+%% ----------------------------------------------------------------------------
+
+%% Every construct on the fixed impure list, written as an expression. The
+%% nested one sits inside an argument, so the walk descends into calls.
+impure_exprs() ->
+    [
+        "self() ! x",
+        "receive _ -> ok after 0 -> ok end",
+        "make_ref()",
+        "erlang:make_ref()",
+        "erlang:unique_integer()",
+        "erlang:unique_integer([positive])",
+        "integer_to_binary(erlang:unique_integer([positive]))",
+        "now()",
+        "erlang:now()",
+        "erlang:timestamp()",
+        "erlang:system_time()",
+        "erlang:system_time(millisecond)",
+        "erlang:monotonic_time()",
+        "erlang:monotonic_time(millisecond)",
+        "os:system_time()",
+        "os:system_time(second)",
+        "put(k, v)",
+        "erlang:put(k, v)",
+        "erase()",
+        "erase(k)",
+        "erlang:erase()",
+        "erlang:erase(k)",
+        "spawn(fun() -> ok end)",
+        "erlang:spawn_link(fun() -> ok end)",
+        "spawn_monitor(fun() -> ok end)",
+        "rand:uniform()",
+        "os:getenv(\"HOME\")",
+        "ets:new(t, [])",
+        "io:format(\"x\")",
+        "logger:info(\"x\")",
+        "calendar:local_time()",
+        "calendar:universal_time()"
+    ].
+
+%% {Line, Reason} of the transform's single error for Source.
+impure_parse_error(Source) ->
+    {ok, Tokens, _} = erl_scan:string(Source),
+    ParsedForms = [
+        begin
+            {ok, F} = erl_parse:parse_form(Toks),
+            F
+        end
+     || Toks <- split_forms(Tokens)
+    ],
+    {error, [{_File, [{Line, arizona_parse_transform, Reason}]}], []} =
+        arizona_parse_transform:parse_transform(ParsedForms, []),
+    {Line, Reason}.
+
+%% A hoisted definition that reads a binding is re-inlined into the slot and
+%% still runs in the body, so an impure call in it runs more than once.
+impure_hoisted_rhs_rejected(Config) when is_list(Config) ->
+    [
+        ?assertMatch(
+            {_, {template_impure_expr, {hoisted, 'X'}, _}},
+            impure_parse_error(
+                "-module(pt_impure_hoisted). -export([render/1]). "
+                "render(Bindings) -> "
+                "    X = {arizona_template:get(a, Bindings), " ++ Expr ++
+                    "}, "
+                    "    arizona_template:html({p, [], [element(1, X)]}). "
+            ),
+            Expr
+        )
+     || Expr <- impure_exprs()
+    ],
+    ok.
+
+%% The error points at the impure call, not at the template using the variable.
+impure_hoisted_rhs_location(Config) when is_list(Config) ->
+    ?assertMatch(
+        {3, {template_impure_expr, {hoisted, 'Id'}, "a call to erlang:unique_integer/1"}},
+        impure_parse_error(
+            "-module(pt_impure_loc). -export([render/1]).\n"
+            "render(Bindings) ->\n"
+            "    Id = [arizona_template:get(p, Bindings), erlang:unique_integer([positive])],\n"
+            "    arizona_template:html({'div', [], [\n"
+            "        {label, [{for, Id}], []}, {input, [{id, Id}]}\n"
+            "    ]}).\n"
+        )
+    ).
+
+%% A helper argument is substituted at each use of its parameter: used twice, an
+%% impure argument runs twice.
+impure_helper_arg_multi_use_rejected(Config) when is_list(Config) ->
+    [
+        ?assertMatch(
+            {_, {template_impure_expr, {helper_arg, twice, 1, 'V', 2}, _}},
+            impure_parse_error(
+                "-module(pt_impure_twice). -export([render/1]). "
+                "twice(V) -> {p, [{title, V}], [V]}. "
+                "render(_Bindings) -> "
+                "    arizona_template:html({'div', [], [twice(" ++ Expr ++ ")]}). "
+            ),
+            Expr
+        )
+     || Expr <- impure_exprs()
+    ],
+    ok.
+
+%% An unused parameter's argument is never evaluated at all.
+impure_helper_arg_unused_rejected(Config) when is_list(Config) ->
+    [
+        ?assertMatch(
+            {_, {template_impure_expr, {helper_arg, unused, 2, '_V', 0}, _}},
+            impure_parse_error(
+                "-module(pt_impure_unused). -export([render/1]). "
+                "unused(_V, T) -> {p, [], [T]}. "
+                "render(Bindings) -> "
+                "    arizona_template:html({'div', [], ["
+                "        unused(" ++ Expr ++
+                    ", arizona_template:get(t, Bindings))]}). "
+            ),
+            Expr
+        )
+     || Expr <- impure_exprs()
+    ],
+    ok.
+
+impure_expr_message(Config) when is_list(Config) ->
+    Hoisted = arizona_parse_transform:format_error(
+        {template_impure_expr, {hoisted, 'Id'}, "a call to rand:uniform/0"}
+    ),
+    Twice = arizona_parse_transform:format_error(
+        {template_impure_expr, {helper_arg, field, 1, 'Id', 2}, "a send (!)"}
+    ),
+    Unused = arizona_parse_transform:format_error(
+        {template_impure_expr, {helper_arg, plain, 2, '_U', 0}, "a receive"}
+    ),
+    [
+        ?assertNotEqual(nomatch, string:find(Msg, Part), {Msg, Part})
+     || {Msg, Part} <- [
+            {Hoisted, "Id contains a call to rand:uniform/0"},
+            {Hoisted, "again in each of those slots"},
+            {Twice, "parameter Id of local element helper field/1 contains a send (!)"},
+            {Twice, "used 2 times, so the argument runs once per use"},
+            {Unused, "the argument never runs at all"}
+        ]
+    ],
+    [
+        ?assertNotEqual(nomatch, string:find(Msg, "mount/1 or handle_event/3"))
+     || Msg <- [Hoisted, Twice, Unused]
+    ],
+    ok.
+
+%% No binding read: the definition is not re-inlined, the slot captures its one
+%% value, and both attributes agree.
+impure_hoisted_no_read_accepted(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_impure_noread). -export([render/1]). "
+        "render(Bindings) -> "
+        "    Id = integer_to_binary(erlang:unique_integer([positive])), "
+        "    arizona_template:html({'div', [], ["
+        "        {label, [{for, Id}], [arizona_template:get(t, Bindings)]},"
+        "        {input, [{id, Id}]}"
+        "    ]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{t => ~"T"}))),
+    {match, [For]} = re:run(HTML, ~"for=\"([0-9]+)\"", [{capture, all_but_first, binary}]),
+    {match, [Id]} = re:run(HTML, ~" id=\"([0-9]+)\"", [{capture, all_but_first, binary}]),
+    ?assertEqual(For, Id).
+
+%% The recommended place for a generated value: a reading definition that never
+%% reaches a template runs once, like any Erlang expression.
+impure_hoisted_not_in_template_accepted(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_impure_mount). -export([mount/1]). "
+        "mount(Bindings) -> "
+        "    Id = [arizona_template:get(p, Bindings), erlang:unique_integer([positive])], "
+        "    {#{id => Id}, #{}}. "
+    ),
+    ?assertMatch({#{id := [~"p", N]}, #{}} when is_integer(N), Mod:mount(#{p => ~"p"})).
+
+%% Used exactly once, the argument runs exactly once, as in Erlang.
+impure_helper_arg_single_use_accepted(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_impure_once). -export([render/1]). "
+        "once(V) -> {p, [{title, V}], []}. "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        once(integer_to_binary(erlang:unique_integer([positive])))]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertMatch({match, _}, re:run(HTML, ~"title=\"[0-9]+\"")).
+
+%% Calls into the user's own functions are assumed pure and not checked.
+impure_user_function_accepted(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_impure_user). -export([render/1]). "
+        "suffix() -> integer_to_binary(erlang:unique_integer([positive])). "
+        "twice(V) -> {p, [{title, V}], [V]}. "
+        "render(Bindings) -> "
+        "    Id = <<(arizona_template:get(p, Bindings))/binary, (suffix())/binary>>, "
+        "    arizona_template:html({'div', [], [{span, [{id, Id}], []}, twice(suffix())]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{p => ~"p"}))),
+    ?assertMatch({match, _}, re:run(HTML, ~"id=\"p[0-9]+\"")).
+
+%% A fun that is only constructed runs its body when called, not where it is
+%% written, so an impure call inside it is not refused.
+impure_constructed_fun_accepted(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_impure_fun). -export([render/1]). "
+        "call(F) -> {p, [], [F(), F()]}. "
+        "render(Bindings) -> "
+        "    X = {arizona_template:get(a, Bindings), fun() -> self() ! clicked end}, "
+        "    arizona_template:html({'div', [], ["
+        "        {span, [], [element(1, X)]},"
+        "        call(fun() -> integer_to_binary(erlang:unique_integer([positive])) end)"
+        "    ]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{a => ~"A"}))),
+    ?assertMatch({match, _}, re:run(HTML, ~"<span[^>]*>(<!--az:[^>]*-->)?A<")).
 
 %% Evaluate a slot closure under a dependency bracket (mirrors arizona_eval) and
 %% return the captured deps.

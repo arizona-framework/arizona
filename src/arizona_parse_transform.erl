@@ -865,8 +865,9 @@ format_error(local_orphaned) ->
     "conditional-branch value there is no enclosing element to carry the "
     "az-local descriptor, so the client could never bind the key and "
     "set/set_all would be silent no-ops";
-%% The helper_* rejection reasons are the only 3-tuple reasons; dispatch to
-%% format_helper_error/3 to keep format_error/1's clause complexity in check.
+%% The helper_* rejection reasons and template_impure_expr are the only 3-tuple
+%% reasons; dispatch to format_helper_error/3 to keep format_error/1's clause
+%% complexity in check.
 format_error({HelperReason, Name, Arity}) ->
     format_helper_error(HelperReason, Name, Arity);
 format_error(markup_in_raw_text) ->
@@ -981,6 +982,43 @@ format_each_error(each_remote_fun_ref) ->
     "boundary. Inline it (fun(I) -> {li, [], [...]} end), or move the body into a single-clause "
     "local function and pass fun name/1".
 
+format_impure_error({hoisted, Var}, What) ->
+    lists:flatten(
+        io_lib:format(
+            "~s contains ~s, but ~s is defined outside the template and reads a binding, so "
+            "the transform re-inlines its definition into every slot that uses it to keep "
+            "it tracked: it runs once in the function body and again in each of those "
+            "slots, on first render and whenever that slot's dependencies change. Each run "
+            "gets its own result, so two places reading ~s disagree. ~s",
+            [Var, What, Var, Var, impure_remedy()]
+        )
+    );
+format_impure_error({helper_arg, Name, Arity, Param, Uses}, What) ->
+    lists:flatten(
+        io_lib:format(
+            "the argument for parameter ~s of local element helper ~ts/~p contains ~s. The "
+            "helper is inlined by substituting the argument at each use of its parameter, "
+            "~s. ~s",
+            [Param, Name, Arity, What, helper_arg_runs(Uses), impure_remedy()]
+        )
+    ).
+
+helper_arg_runs(0) ->
+    "and the parameter is unused, so the argument never runs at all";
+helper_arg_runs(Uses) ->
+    io_lib:format(
+        "and the parameter is used ~p times, so the argument runs once per use and the "
+        "uses disagree",
+        [Uses]
+    ).
+
+impure_remedy() ->
+    "Template code must be a pure function of the bindings. Generate the value once and "
+    "keep it in state -- create it in mount/1 or handle_event/3 and read it with ?get -- "
+    "or derive it from bindings, e.g. <<\"field-\", (?get(name))/binary>>".
+
+format_helper_error(template_impure_expr, Where, What) ->
+    format_impure_error(Where, What);
 format_helper_error(helper_multi_clause, Name, Arity) ->
     lists:flatten(
         io_lib:format(
@@ -1492,6 +1530,7 @@ ih_call(Call, Name, Args, L, {Module, FunDefs, Target, Stack} = Ctx, Ch, Tail) -
                 #{{Name, Arity} := _} -> parse_error({helper_recursive, Name, Arity}, L);
                 #{} -> ok
             end,
+            ok = check_helper_args_pure(Name, Arity, Params, Args, BodyExpr),
             BodyExpr1 = rename_inlined_body(Name, Arity, Params, BodyExpr),
             Spliced = mark_targets(subst_helper_args(BodyExpr1, Params, Args), Target),
             Ctx1 = {Module, FunDefs, Target, Stack#{{Name, Arity} => true}},
@@ -1518,8 +1557,31 @@ subst_helper_args(BodyExpr, [], []) ->
 subst_helper_args(BodyExpr, Params, Args) ->
     Fresh = [fresh_helper_var(P) || P <- Params],
     Rename = maps:from_list([{P, {var, 0, F}} || {P, F} <:- lists:zip(Params, Fresh)]),
-    Bind = maps:from_list(lists:zip(Fresh, Args)),
+    %% The arguments were checked against their use count (check_helper_args_pure/5);
+    %% the marker exempts them from the hoisted-definition check in iv/2.
+    Bind = (maps:from_list(lists:zip(Fresh, Args)))#{'$helper_args' => true},
     inline_vars(inline_vars(BodyExpr, Rename), Bind).
+
+%% An argument runs once per use of its parameter in the inlined body, so an impure
+%% one is refused unless that count is exactly one. Occurrences are counted on the
+%% source body, patterns and guards included, before any renaming.
+check_helper_args_pure(Name, Arity, Params, Args, BodyExpr) ->
+    _ = [
+        check_helper_arg_pure(Name, Arity, P, count_var(P, BodyExpr), Arg)
+     || {P, Arg} <:- lists:zip(Params, Args)
+    ],
+    ok.
+
+check_helper_arg_pure(_Name, _Arity, _Param, 1, _Arg) ->
+    ok;
+check_helper_arg_pure(Name, Arity, Param, Uses, Arg) ->
+    case impure_expr(Arg) of
+        none ->
+            ok;
+        {Line, What} ->
+            Where = {helper_arg, Name, Arity, Param, Uses},
+            parse_error({template_impure_expr, Where, What}, Line)
+    end.
 
 fresh_helper_var(P) ->
     list_to_atom(
@@ -1818,9 +1880,10 @@ is_az_view_attr(Attr) ->
 
 %% Build the inline map for a clause body: top-level `Var = RHS` matches whose RHS
 %% transitively reaches an `arizona_template`/`az` `get`/`get_lazy`/`track`/`with` call.
-%% Variables bound more than once are dropped (ambiguous to inline); a binding-derived
-%% expression with no read (e.g. `Id = make_uuid()`) is left captured so a pure
-%% side effect is never re-run per slot.
+%% Variables bound more than once are dropped (ambiguous to inline); an expression
+%% with no read (e.g. `Id = make_uuid()`) is left captured, so it runs once and every
+%% slot sees that value. One that reads runs in the body and again in each slot using
+%% it, so an always-impure call there is refused (check_hoisted_pure/3).
 %% A content-slot list compiles its markup items only where they are written in it;
 %% a variable item is a value. A hoisted read is substituted back first (it is in
 %% `Inline`), but a variable bound to markup that reads nothing stays a variable and
@@ -2158,6 +2221,7 @@ iv({var, _, V} = Var, Inline) ->
     case Inline of
         #{V := RHS} ->
             ok = check_capture(V, RHS, Inline),
+            ok = check_hoisted_pure(V, RHS, Inline),
             iv(RHS, Inline);
         #{} ->
             Var
@@ -2306,6 +2370,87 @@ collect_guard_vars([H | T], Inline, Acc) ->
     collect_guard_vars(T, Inline, collect_guard_vars(H, Inline, Acc));
 collect_guard_vars(_Other, _Inline, Acc) ->
     Acc.
+
+%% A hoisted definition substituted into a slot runs there as well as in the body, so
+%% an impure one would produce a different value in each place. Helper arguments are
+%% exempt here: they are substituted once per use and checked against that count.
+check_hoisted_pure(_V, _RHS, #{'$helper_args' := true}) ->
+    ok;
+check_hoisted_pure(V, RHS, _Inline) ->
+    case impure_expr(RHS) of
+        none -> ok;
+        {Line, What} -> parse_error({template_impure_expr, {hoisted, V}, What}, Line)
+    end.
+
+%% The first always-impure construct in an expression, as `{Line, Description}`, or
+%% `none`. A fun that is only constructed is not entered: its body runs when called,
+%% not where it is written. Calls into user code are assumed pure.
+impure_expr({op, L, '!', _, _}) ->
+    {L, "a send (!)"};
+impure_expr({'receive', L, _}) ->
+    {L, "a receive"};
+impure_expr({'receive', L, _, _, _}) ->
+    {L, "a receive"};
+impure_expr({'fun', _, _}) ->
+    none;
+impure_expr({named_fun, _, _, _}) ->
+    none;
+impure_expr({call, L, Callee, Args}) ->
+    case impure_call(Callee, length(Args)) of
+        false -> impure_expr_list([Callee | Args]);
+        What -> {L, What}
+    end;
+impure_expr(T) when is_tuple(T) ->
+    impure_expr_list(tuple_to_list(T));
+impure_expr(L) when is_list(L) ->
+    impure_expr_list(L);
+impure_expr(_Leaf) ->
+    none.
+
+impure_expr_list([]) ->
+    none;
+impure_expr_list([H | T]) ->
+    case impure_expr(H) of
+        none -> impure_expr_list(T);
+        Found -> Found
+    end.
+
+impure_call({remote, _, {atom, _, M}, {atom, _, F}}, A) ->
+    case is_impure_mfa(M, F, A) of
+        true -> lists:flatten(io_lib:format("a call to ~s:~s/~p", [M, F, A]));
+        false -> false
+    end;
+impure_call({atom, _, F}, A) ->
+    case is_impure_mfa(erlang, F, A) andalso erl_internal:bif(F, A) of
+        true -> lists:flatten(io_lib:format("a call to ~s/~p", [F, A]));
+        false -> false
+    end;
+impure_call(_Callee, _A) ->
+    false.
+
+is_impure_mfa(M, _F, _A) when
+    M =:= rand; M =:= os; M =:= ets; M =:= io; M =:= logger
+->
+    true;
+is_impure_mfa(calendar, F, 0) ->
+    F =:= local_time orelse F =:= universal_time;
+is_impure_mfa(erlang, F, A) ->
+    lists:member({F, A}, [
+        {make_ref, 0},
+        {unique_integer, 0},
+        {unique_integer, 1},
+        {now, 0},
+        {timestamp, 0},
+        {system_time, 0},
+        {system_time, 1},
+        {monotonic_time, 0},
+        {monotonic_time, 1},
+        {put, 2},
+        {erase, 0},
+        {erase, 1}
+    ]) orelse lists:prefix("spawn", atom_to_list(F));
+is_impure_mfa(_M, _F, _A) ->
+    false.
 
 %% A body is a sequence; a `Var = RHS` match binds Var (shadowing) for later exprs.
 iv_body(Exprs, Inline) ->
