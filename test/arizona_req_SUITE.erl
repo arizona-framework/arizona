@@ -18,6 +18,7 @@
 -export([user_agent_returns_header/1]).
 -export([user_agent_absent_is_empty/1]).
 -export([body_threads_updated_raw/1]).
+-export([body_read_error_is_returned/1]).
 -export([put_resp_header_accumulates/1]).
 -export([put_resp_cookie_accumulates/1]).
 -export([put_resp_status_stashes/1]).
@@ -56,6 +57,7 @@ groups() ->
             user_agent_returns_header,
             user_agent_absent_is_empty,
             body_threads_updated_raw,
+            body_read_error_is_returned,
             put_resp_header_accumulates,
             put_resp_cookie_accumulates,
             put_resp_status_stashes,
@@ -180,13 +182,18 @@ user_agent_absent_is_empty(Config) when is_list(Config) ->
     ?assertEqual(<<>>, Got).
 
 body_threads_updated_raw(Config) when is_list(Config) ->
-    %% read_body in the test adapter returns {Body, Raw#{body_read => true}}.
+    %% read_body in the test adapter returns {ok, Body, Raw#{body_read => true}}.
     %% The accessor must update both the cached body and the raw.
     Raw = #{body => ~"hello"},
     Req0 = arizona_req_test_adapter:new(Raw),
-    {Body, Req1} = arizona_req:body(Req0),
+    {ok, Body, Req1} = arizona_req:body(Req0),
     ?assertEqual(~"hello", Body),
     ?assertEqual(#{body => ~"hello", body_read => true}, arizona_req:raw(Req1)).
+
+body_read_error_is_returned(Config) when is_list(Config) ->
+    %% A failed read surfaces the adapter's reason instead of crashing.
+    Req = arizona_req_test_adapter:new(#{body_error => too_large}),
+    ?assertEqual({error, too_large}, arizona_req:body(Req)).
 
 %% --------------------------------------------------------------------
 %% Response stash -- put_resp_header/3, put_resp_cookie/4, put_resp_status/2

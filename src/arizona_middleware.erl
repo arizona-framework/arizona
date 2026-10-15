@@ -232,6 +232,15 @@ Each key targets a binding:
 - `params` / `headers` / `cookies` / `body` / `method` / `user_agent` --
   stored under the same-named key
 
+`body` is the one key that can fail: when the transport cannot deliver the body
+(only possible when the server reads it on demand, e.g. roadrunner's
+`body_buffering => manual`), the step halts with `413` (over the body cap),
+`431` (a chunked body's trailers over the request-header limits), `408` (the
+client stalled or sent too slowly) or `400` (malformed, or the connection
+dropped). These match what the server answers when it buffers the body itself,
+except that a server may drop a too-slow client without any response where
+this step still answers it `408`.
+
 ```erlang
 #{middlewares => [arizona_middleware:extract([path_bindings, params])]}
 ```
@@ -242,10 +251,7 @@ wrapper around it instead -- see "Declaring steps" in the module doc.
 """.
 -spec extract(Keys) -> middleware() when Keys :: [extract_key()].
 extract(Keys) ->
-    fun(Req, Bindings) ->
-        {Req1, Bindings1} = lists:foldl(fun extract_into/2, {Req, Bindings}, Keys),
-        {cont, Req1, Bindings1}
-    end.
+    fun(Req, Bindings) -> extract_keys(Keys, Req, Bindings) end.
 
 -doc """
 Middleware that exposes the whole request to a handler under the `request`
@@ -428,26 +434,39 @@ forwarded_scheme(#{}) ->
 call({Mod, Fun}, Req, Bindings) -> Mod:Fun(Req, Bindings);
 call(Fun, Req, Bindings) -> Fun(Req, Bindings).
 
-%% One step of `extract/1`'s fold: copy the keyed request datum into bindings,
-%% threading the lazy request forward. `path_bindings` spreads the path-binding
-%% map; the rest land under their key; `method` is eager (no request update).
-extract_into(path_bindings, {Req, Bindings}) ->
+%% `extract/1`'s loop: copy each keyed request datum into bindings, threading
+%% the lazy request forward. `path_bindings` spreads the path-binding map; the
+%% rest land under their key; `method` is eager (no request update). `body` is
+%% the one read that can fail (a manual-mode body over the cap, a stalled or
+%% vanished client), and halts with the status the server answers it with.
+extract_keys([], Req, Bindings) ->
+    {cont, Req, Bindings};
+extract_keys([path_bindings | Keys], Req, Bindings) ->
     {PathBindings, Req1} = arizona_req:bindings(Req),
-    {Req1, maps:merge(Bindings, PathBindings)};
-extract_into(params, {Req, Bindings}) ->
+    extract_keys(Keys, Req1, maps:merge(Bindings, PathBindings));
+extract_keys([params | Keys], Req, Bindings) ->
     {Params, Req1} = arizona_req:params(Req),
-    {Req1, Bindings#{params => Params}};
-extract_into(headers, {Req, Bindings}) ->
+    extract_keys(Keys, Req1, Bindings#{params => Params});
+extract_keys([headers | Keys], Req, Bindings) ->
     {Headers, Req1} = arizona_req:headers(Req),
-    {Req1, Bindings#{headers => Headers}};
-extract_into(cookies, {Req, Bindings}) ->
+    extract_keys(Keys, Req1, Bindings#{headers => Headers});
+extract_keys([cookies | Keys], Req, Bindings) ->
     {Cookies, Req1} = arizona_req:cookies(Req),
-    {Req1, Bindings#{cookies => Cookies}};
-extract_into(body, {Req, Bindings}) ->
-    {Body, Req1} = arizona_req:body(Req),
-    {Req1, Bindings#{body => Body}};
-extract_into(user_agent, {Req, Bindings}) ->
+    extract_keys(Keys, Req1, Bindings#{cookies => Cookies});
+extract_keys([body | Keys], Req, Bindings) ->
+    case arizona_req:body(Req) of
+        {ok, Body, Req1} ->
+            extract_keys(Keys, Req1, Bindings#{body => Body});
+        {error, Reason} ->
+            {halt, arizona_req:put_resp_status(Req, body_error_status(Reason))}
+    end;
+extract_keys([user_agent | Keys], Req, Bindings) ->
     {UserAgent, Req1} = arizona_req:user_agent(Req),
-    {Req1, Bindings#{user_agent => UserAgent}};
-extract_into(method, {Req, Bindings}) ->
-    {Req, Bindings#{method => arizona_req:method(Req)}}.
+    extract_keys(Keys, Req1, Bindings#{user_agent => UserAgent});
+extract_keys([method | Keys], Req, Bindings) ->
+    extract_keys(Keys, Req, Bindings#{method => arizona_req:method(Req)}).
+
+body_error_status(too_large) -> 413;
+body_error_status(trailers_too_large) -> 431;
+body_error_status(timeout) -> 408;
+body_error_status(invalid) -> 400.
