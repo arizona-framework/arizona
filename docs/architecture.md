@@ -1022,8 +1022,11 @@ element scopes/morphs just it (and must be unique among rendered elements or the
 
 Guards: no-op (instant swap) when `startViewTransition` is absent or `prefers-reduced-motion`;
 `types` use the object-form call only when `:active-view-transition-type()` is supported.
-Back/forward is symmetric: a transitioned nav stamps `_azTransition` onto both history entries and
-popstate replays it. Cross-document (real `<a href>`) navigations animate via the user's
+Back/forward is per edge: a transitioned nav stamps both ends of the edge it creates (the outgoing
+entry's `_azTransitionNext`, the new entry's `_azTransitionPrev`), every SPA entry records its
+position (`_azIdx`), and popstate replays the transition of the edge it crossed -- so traversing that
+edge animates in either direction, and Back over a plain edge into an entry that was reached by a
+transition does not. Cross-document (real `<a href>`) navigations animate via the user's
 `@view-transition { navigation: auto; }` CSS with no framework code. All styling
 (`view-transition-name`, `::view-transition-*`, `:active-view-transition-type`) is user CSS. See
 `.claude/rules/js.md` for the client surface.
