@@ -433,7 +433,7 @@ init_per_group(roadrunner, Config) ->
                 fun(Req, B) ->
                     {Cookies, Req1} = arizona_req:cookies(Req),
                     {Headers, Req2} = arizona_req:headers(Req1),
-                    {Body, Req3} = arizona_req:body(Req2),
+                    {ok, Body, Req3} = arizona_req:body(Req2),
                     CookieCount = integer_to_binary(length(Cookies)),
                     HeaderCount = integer_to_binary(map_size(Headers)),
                     BodyLen = integer_to_binary(byte_size(Body)),

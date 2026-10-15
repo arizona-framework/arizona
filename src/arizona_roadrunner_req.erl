@@ -95,11 +95,21 @@ parse_headers(RoadrunnerReq) ->
         roadrunner_req:headers(RoadrunnerReq)
     ).
 
--spec read_body(RoadrunnerReq) -> {arizona_req:body(), RoadrunnerReq} when
+-spec read_body(RoadrunnerReq) ->
+    {ok, arizona_req:body(), RoadrunnerReq} | {error, arizona_req:body_error()}
+when
     RoadrunnerReq :: roadrunner_req:request().
 read_body(RoadrunnerReq) ->
-    {ok, Body, RoadrunnerReq1} = roadrunner_req:read_body(RoadrunnerReq),
-    {Body, RoadrunnerReq1}.
+    %% Only a `body_buffering => manual` read can fail here: auto mode answers an
+    %% oversized/stalled/malformed body itself before any handler runs. The
+    %% reasons map the way auto mode answers them (413, 408, 400).
+    case roadrunner_req:read_body(RoadrunnerReq) of
+        {ok, Body, RoadrunnerReq1} -> {ok, Body, RoadrunnerReq1};
+        {error, content_length_too_large} -> {error, too_large};
+        {error, request_timeout} -> {error, timeout};
+        {error, slow_client} -> {error, timeout};
+        {error, _Reason} -> {error, invalid}
+    end.
 
 -spec scheme(RoadrunnerReq) -> arizona_req:scheme() when
     RoadrunnerReq :: roadrunner_req:request().
