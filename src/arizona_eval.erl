@@ -689,11 +689,22 @@ open_deps() ->
     erlang:put('$arizona_deps', #{}).
 
 %% Restores the scope enclosing a failed one, dropping its reads, and re-raises.
+-spec abort_deps(Class, Reason, Stacktrace, Outer) -> no_return() when
+    Class :: error | exit | throw,
+    Reason :: term(),
+    Stacktrace :: erlang:stacktrace(),
+    Outer :: map() | undefined.
 abort_deps(Class, Reason, ST, Outer) ->
     _FailedDeps = restore_deps(Outer),
     erlang:raise(Class, Reason, ST).
 
 %% relocate/4 for a dynamic that opened a dependency scope.
+-spec relocate(Class, Reason, Stacktrace, Loc, Outer) -> no_return() when
+    Class :: error | exit | throw,
+    Reason :: term(),
+    Stacktrace :: erlang:stacktrace(),
+    Loc :: {module(), pos_integer()},
+    Outer :: map() | undefined.
 relocate(Class, Reason, ST, Loc, Outer) ->
     _FailedDeps = restore_deps(Outer),
     relocate(Class, Reason, ST, Loc).
