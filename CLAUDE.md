@@ -106,6 +106,8 @@ handle_event(~"inc", _P, B) ->
 
 `push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_effect.hrl`.
 
+Nesting and `[]` items are flattened wherever a command list is encoded as data -- an event attribute or prop, a command a `transition`/`on_key`/`fetch` `on_error` wraps, a controller response (`arizona_controller:reply_effects/1,2`). The effects a **handler returns** are not: the socket threads them as a flat `[arizona_effect:cmd()]` (flash capture, the old-page drop on navigate, `arizona_socket:unwrap_effects/1`), so build that list flat (`[arizona_js:hide(~"#hint") || Dirty]`).
+
 ### HTTP fetch -- `arizona_js:fetch/2`
 
 Three form-submission modes, by what each can do: a plain `{method, post}` form does a native POST (can `Set-Cookie`, but full reload); `az_submit` sends a WebSocket event (no reload, but WS can't set cookies); `arizona_js:fetch/2` issues a `fetch()` request (no reload **and** a real `Set-Cookie`, HttpOnly honored). `fetch` is the only mode that gives cookies without a reload, so it suits password-change / login / logout flows that rotate the session cookie while keeping the typed fields and showing inline validation.
