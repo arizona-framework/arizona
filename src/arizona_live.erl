@@ -84,6 +84,7 @@ fingerprints already shipped in the initial HTML.
 -export([apply_on_mount/2]).
 -export([format_error/2]).
 -export([unmount_view/3]).
+-export([swap_out_view/3]).
 -export([view_state/1]).
 
 %% --------------------------------------------------------------------
@@ -740,7 +741,9 @@ terminate(_Reason, #state{snapshot = Snap, handler = H, bindings = B, views = V}
 ->
     %% Unmount every child view, then the root -- the same children-first
     %% removal semantics as navigate, for any exit reason terminate sees.
-    ok = unmount_removed_views(V),
+    %% A diff that raised after swapping a child's handler has unmounted the
+    %% swapped-out instance already, though the state still lists it.
+    ok = unmount_removed_views(still_mounted_views(V)),
     ok = arizona_stateful:call_unmount(H, B);
 terminate(_Reason, _State) ->
     %% Never mounted: `mount/1` has not run, so `bindings` are still the raw
@@ -791,6 +794,42 @@ unmount_view(ViewId, Handler, Bindings) ->
     ok = cancel_view_timers(ViewId),
     ok = flush_view_messages(ViewId),
     arizona_stateful:call_unmount(Handler, Bindings).
+
+%% Internal: `unmount_view/3` for the instance a render replaces by keeping its id
+%% and switching its handler, called by `arizona_eval` mid-diff. The diff has not
+%% returned yet, so the gen_server state still lists this instance; if the rest
+%% of the diff raises (the new handler's mount/1, say), terminate/2 runs on that
+%% state. Remember the instance until the diff returns, so terminate/2 does not
+%% unmount it a second time.
+-doc false.
+-spec swap_out_view(ViewId, Handler, Bindings) -> ok when
+    ViewId :: binary(),
+    Handler :: module(),
+    Bindings :: map().
+swap_out_view(ViewId, Handler, Bindings) ->
+    ok = unmount_view(ViewId, Handler, Bindings),
+    SwappedOut =
+        case erlang:get('$arizona_swapped_out') of
+            undefined -> #{};
+            S -> S
+        end,
+    _ = erlang:put('$arizona_swapped_out', SwappedOut#{ViewId => {Handler, Bindings}}),
+    ok.
+
+%% The views a crash mid-diff left listed in the state but already unmounted by
+%% swap_out_view/3. Empty outside a failed diff: every diff erases the record as
+%% soon as it returns.
+still_mounted_views(Views) ->
+    case erlang:erase('$arizona_swapped_out') of
+        undefined ->
+            Views;
+        SwappedOut ->
+            #{
+                Id => View
+             || Id := #{handler := H, bindings := B} = View <- Views,
+                not is_map_key(Id, SwappedOut) orelse map_get(Id, SwappedOut) =/= {H, B}
+            }
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -953,6 +992,7 @@ process_root_change(
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap, V0, Changed),
+    _ = erlang:erase('$arizona_swapped_out'),
     Effects1 = arizona_eval:drain_update_effects(),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
@@ -983,6 +1023,7 @@ process_child_change(
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
     {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
+    _ = erlang:erase('$arizona_swapped_out'),
     Effects1 = arizona_eval:drain_update_effects(),
     {Ops1, Fps1} = dedup_fps_if_noted(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),

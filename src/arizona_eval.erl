@@ -768,7 +768,7 @@ mount_or_update_stateful(H, Props, Id, Old, Effects0) ->
             %% mounting the new one so it can release resources. Its timers and
             %% queued messages carry the id, not the handler, so they must die
             %% here too or they reach the new handler's handle_info/2.
-            ok = arizona_live:unmount_view(Id, OldH, OldB),
+            ok = arizona_live:swap_out_view(Id, OldH, OldB),
             {B1, Resets} = fresh_mount_stateful(H, Props),
             {B1, Resets, Effects0};
         #{} ->
