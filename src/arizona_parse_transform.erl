@@ -3071,7 +3071,7 @@ iv_quals(Qs, Inline) ->
 
 iv_qual({zip, L, Gens}, Inline) ->
     Gens1 = [{Gen, GL, P, iv(E, Inline)} || {Gen, GL, P, E} <:- Gens],
-    {{zip, L, Gens1}, bind_generators([P || {_, _, P, _} <:- Gens], L, Inline)};
+    {{zip, L, Gens1}, bind_generators([generator_pattern(G) || G <- Gens], L, Inline)};
 iv_qual({Gen, L, P, E}, Inline) when
     Gen =:= generate;
     Gen =:= generate_strict;
@@ -3080,12 +3080,22 @@ iv_qual({Gen, L, P, E}, Inline) when
     Gen =:= m_generate;
     Gen =:= m_generate_strict
 ->
-    {{Gen, L, P, iv(E, Inline)}, bind_generators([P], L, Inline)};
+    {{Gen, L, P, iv(E, Inline)}, bind_generators([generator_pattern({Gen, L, P, E})], L, Inline)};
 iv_qual(Filter, Inline) ->
     {iv(Filter, Inline), Inline}.
 
 bind_generators(Patterns, L, Inline) ->
     bind(pattern_binders(Patterns), generator, L, maps:without(pattern_vars(Patterns), Inline)).
+
+%% A map generator's `K := V` is two patterns, not a map pattern: its key binds like its
+%% value, where a map pattern's key is a read. Seen as a tuple, binder_vars/2 and
+%% pattern_reads/1 treat both sides as the patterns they are.
+generator_pattern({Gen, _, {map_field_exact, L, K, V}, _}) when
+    Gen =:= m_generate; Gen =:= m_generate_strict
+->
+    {tuple, L, [K, V]};
+generator_pattern({_Gen, _, P, _}) ->
+    P.
 
 %% A fun head, a named fun and a generator bind names in a new scope. A hoisted
 %% definition substituted inside that scope was written against the enclosing one, so
@@ -3193,7 +3203,7 @@ free_vars_quals([Filter | Rest], T, Bound, Acc) ->
     free_vars_quals(Rest, T, Bound, free_vars(Filter, Bound, Acc)).
 
 free_vars_generators(Gens, Rest, T, Bound, Acc) ->
-    Patterns = [P || {_, _, P, _} <:- Gens],
+    Patterns = [generator_pattern(G) || G <- Gens],
     Acc1 = free_vars([[E || {_, _, _, E} <:- Gens] | pattern_reads(Patterns)], Bound, Acc),
     free_vars_quals(Rest, T, binder_vars(Patterns, Bound), Acc1).
 

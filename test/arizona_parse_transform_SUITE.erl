@@ -297,6 +297,7 @@
     hoisted_var_case_binder_not_captured/1,
     hoisted_var_case_binder_copies_in_one_slot/1,
     hoisted_var_bound_before_pattern_captured/1,
+    hoisted_var_internal_map_generator_key_not_captured/1,
     hoisted_var_zip_pattern_binds/1,
     inline_hoisted_html_renders_and_tracks/1,
     inline_hoisted_html_nested_chain/1,
@@ -984,6 +985,7 @@ groups() ->
             hoisted_var_case_binder_not_captured,
             hoisted_var_case_binder_copies_in_one_slot,
             hoisted_var_bound_before_pattern_captured,
+            hoisted_var_internal_map_generator_key_not_captured,
             hoisted_var_zip_pattern_binds,
             inline_hoisted_html_renders_and_tracks,
             inline_hoisted_html_nested_chain,
@@ -9307,6 +9309,14 @@ hoisted_var_captured_rejected(Config) when is_list(Config) ->
             Outer ++
                 "arizona_template:html({p, [], [[[Z, Y] || Y <- [<<\"i\">>] && _W <- [1]]]}). ",
             {generator, 'Y', 'Z'}},
+        {"mapgen_key",
+            Outer ++
+                "arizona_template:html({p, [], [[[Z] || Y := _ <- #{<<\"i\">> => 1}]]}). ",
+            {generator, 'Y', 'Z'}},
+        {"mapgen_strict_key",
+            Outer ++
+                "arizona_template:html({p, [], [[[Z] || Y := _ <:- #{<<\"i\">> => 1}]]}). ",
+            {generator, 'Y', 'Z'}},
         {"named",
             "Self = <<\"outer\">>, "
             "Z = <<Self/binary, (arizona_template:get(a, Bindings))/binary>>, "
@@ -9436,6 +9446,19 @@ hoisted_var_bound_before_pattern_captured(Config) when is_list(Config) ->
         "        arizona_template:get(items, Bindings))]}). ",
         fun(R) -> R =:= {hoisted_var_captured, fun_param, 'N', 'Owner'} end
     ).
+
+%% A map generator's key binds like its value: a name the hoisted definition binds
+%% as a map-generator key is internal to it, not a read of the enclosing scope.
+hoisted_var_internal_map_generator_key_not_captured(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_captured_internal_mapkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Lbl = iolist_to_binary([K || K := _ <- arizona_template:get(m, Bindings)]), "
+        "    arizona_template:html({p, [], ["
+        "        (fun(K) -> <<Lbl/binary, K/binary>> end)(<<\"!\">>)]}). "
+    ),
+    assert_captured_tracks(Mod, #{m => #{~"a" => 1}}, #{m => #{~"c" => 1}}, [~"a!"], [~"c!"]).
 
 %% A zip generator's patterns bind like any generator's: a hoisted name used as one is
 %% not substituted into it, and its source sees the enclosing scope.
