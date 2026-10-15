@@ -23,6 +23,8 @@
 -export([req_clear_session_without_read_deletes_from_store/1]).
 -export([req_login_rotation_without_read_drops_incoming_entry/1]).
 -export([req_login_rotation_mints_fresh_id/1]).
+-export([req_repeated_rotation_drops_incoming_entry/1]).
+-export([req_rotation_then_clear_to_empty_drops_incoming_entry/1]).
 -export([req_clear_then_put_without_read_mints_fresh_id/1]).
 -export([req_revocation_empties_session/1]).
 -export([req_revocation_records_no_error/1]).
@@ -56,6 +58,8 @@ all() ->
         req_clear_session_without_read_deletes_from_store,
         req_login_rotation_without_read_drops_incoming_entry,
         req_login_rotation_mints_fresh_id,
+        req_repeated_rotation_drops_incoming_entry,
+        req_rotation_then_clear_to_empty_drops_incoming_entry,
         req_clear_then_put_without_read_mints_fresh_id,
         req_revocation_empties_session,
         req_revocation_records_no_error,
@@ -288,6 +292,45 @@ req_login_rotation_mints_fresh_id(Config) when is_list(Config) ->
     ?assertEqual(OutId, arizona_req:session_id(Req3)),
     %% The authenticated session lives under the fresh id; the incoming id is gone.
     ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(OutId)),
+    ?assertEqual(no_session, arizona_session_store_ets:get(IncomingId)).
+
+%% Two rotations in one request (a login helper that rotates, called by a flow
+%% that already did) must still drop the INCOMING entry. The second rotation used
+%% to record the first one's fresh id -- never stored, the store write happens
+%% once at flush -- as the id to drop, leaving the pre-login entry resolvable.
+req_repeated_rotation_drops_incoming_entry(Config) when is_list(Config) ->
+    IncomingId = arizona_session:new_id(),
+    ok = arizona_session_store_ets:put(IncomingId, #{~"pre" => ~"login"}, 3600),
+    Req0 = arizona_req_test_adapter:new(#{
+        cookies => [{~"az_session", arizona_session:encode_id(IncomingId)}]
+    }),
+    Req1 = arizona_req:put_session(arizona_req:clear_session(Req0), user_id, ~"42"),
+    FirstId = arizona_req:session_id(Req1),
+    Req2 = arizona_req:put_session(arizona_req:clear_session(Req1), user_id, ~"42"),
+    [{~"az_session", Value, _}] = arizona_req:resp_cookies(Req2),
+    ok = arizona_req:commit_session(Req2),
+    {ok, OutId} = arizona_session:decode_id(Value),
+    %% Each rotation minted its own id; only the last one is stored.
+    ?assertNotEqual(IncomingId, OutId),
+    ?assertNotEqual(FirstId, OutId),
+    ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(OutId)),
+    ?assertEqual(no_session, arizona_session_store_ets:get(FirstId)),
+    ?assertEqual(no_session, arizona_session_store_ets:get(IncomingId)).
+
+%% A rotation followed by a logout written back to empty -- clear_session, then a
+%% delete_session that re-enters the reset rotation -- must still clear the
+%% cookie and drop the INCOMING entry, not just the never-stored rotation ids.
+req_rotation_then_clear_to_empty_drops_incoming_entry(Config) when is_list(Config) ->
+    IncomingId = arizona_session:new_id(),
+    ok = arizona_session_store_ets:put(IncomingId, #{~"pre" => ~"login"}, 3600),
+    Req0 = arizona_req_test_adapter:new(#{
+        cookies => [{~"az_session", arizona_session:encode_id(IncomingId)}]
+    }),
+    Req1 = arizona_req:put_session(arizona_req:clear_session(Req0), user_id, ~"42"),
+    Req2 = arizona_req:delete_session(arizona_req:clear_session(Req1), user_id),
+    ?assertEqual(#{}, arizona_req:session(Req2)),
+    ?assertMatch([{~"az_session", <<>>, #{max_age := 0}}], arizona_req:resp_cookies(Req2)),
+    ok = arizona_req:commit_session(Req2),
     ?assertEqual(no_session, arizona_session_store_ets:get(IncomingId)).
 
 %% Regression (crash): clear_session then put_session with NO prior read used to
