@@ -1881,7 +1881,13 @@ a `?stateful` under a user `az-nodiff` renders on the live path, is registered, 
 `?stateless` for layout chrome; chrome that must stay live across navigation belongs in a view the
 routes share, linked with `az_patch`. A layout must share the page's render target
 (`cross_target_layout` otherwise): the page reaches it as a backendless template, which the
-nested-template target check waves through. `layouts` is always a list, applied outermost-first
+nested-template target check waves through. A `?native` layout, like a `?native` view, must have
+a single root node (`multi_root_layout` otherwise), at every depth: a native document is one JSON
+value, and a literal list of several top-level nodes would be served comma-joined. The parse
+transform stamps that shape (`multi_root`) when the backend's `single_root_document/0` asks for
+it, and the render refuses a stamped layout, since only the route config says which functions are
+layouts. `?html` and `?terminal` layouts may have several roots. `layouts` is always a list,
+applied outermost-first
 (`[Root, Section]` produces `Root(Section(Page))`); an empty list renders the page directly, with no
 wrapper. Route config provides `bindings`, `on_mount`, `layouts`, `middlewares`, and `check_origin`
 -- the single canonical `t:arizona_live:route_opts/0`. URL data (path bindings, query params) does

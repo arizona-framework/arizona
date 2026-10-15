@@ -161,6 +161,15 @@ page, or the reverse, is a render-time error (`cross_target_layout`). The page r
 layout as a backendless nested template, so the nested-template target check cannot see it;
 the layout boundary compares the two instead.
 
+A `?native` layout must have a single root node, like a `?native` view: a native document
+is one JSON value, so `?native([{'Banner', [], [~"top"]}, ?inner_content])` is a render-time
+error (`multi_root_layout`) -- wrap the nodes in one container. It holds at every depth, not
+just the outermost layout, since a passthrough layer above would serve the fragment as the
+document. Only a literal list of several nodes is caught (the parse transform stamps
+`multi_root` on it when the backend's `single_root_document/0` says so; a layout is just a
+function a route names, so the check runs at render). An `?html` or `?terminal` layout may
+have several roots (a doctype beside `<html>`).
+
 Layouts render **once, at SSR** -- a live navigate/patch replaces only the view *inside* them, so no frame can re-render one. `arizona_socket` therefore compares a navigate/patch target's `layouts` against the ones already on screen and degrades to a full page load (`arizona_js:navigate(Url, #{full => true})`) when they differ, instead of dropping the new page into the old page's shell. Whole-list term equality: a difference at any depth disqualifies an in-place swap, since an inner layer wraps the replaced view exactly as the outer one does. Crossing layout families therefore needs no hand-written `<a href>` -- `az_navigate`/`az_patch` degrade themselves, including on a server-issued redirect.
 
 ### CSRF Origin check

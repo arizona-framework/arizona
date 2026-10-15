@@ -79,6 +79,7 @@
     ssr_cross_target_child_raises/1,
     ssr_cross_target_layout_raises/1,
     ssr_same_target_native_layout/1,
+    ssr_multi_root_native_layout_raises/1,
     ssr_backendless_layout_keeps_page_target/1,
     ssr_backendless_page_in_layout/1,
     ssr_counter_with_bindings/1,
@@ -176,6 +177,7 @@ groups() ->
             snapshot_html_matches_render_unprinted,
             ssr_cross_target_layout_raises,
             ssr_same_target_native_layout,
+            ssr_multi_root_native_layout_raises,
             ssr_backendless_layout_keeps_page_target,
             ssr_backendless_page_in_layout,
             ssr_counter_with_bindings,
@@ -795,6 +797,49 @@ ssr_cross_target_layout_raises(Config) when is_list(Config) ->
         {cross_target_layout, arizona_native_layout, render, arizona_native, arizona_html},
         arizona_render:render_view_to_iolist(
             arizona_counter, #{layouts => [{arizona_native_layout, render}]}
+        )
+    ).
+
+%% A native document is one JSON node; a layout with several top-level nodes
+%% would serve them comma-joined, which no client parses. Refused at any depth:
+%% under a passthrough layer it would be the document, and every layer being
+%% single-root is what makes the whole document single-root.
+ssr_multi_root_native_layout_raises(Config) when is_list(Config) ->
+    Reason = {multi_root_layout, arizona_native_multi_root_layout, render, arizona_native},
+    ?assertError(
+        Reason,
+        arizona_render:render_view(
+            arizona_native_counter_demo,
+            #{layouts => [{arizona_native_multi_root_layout, render}]}
+        )
+    ),
+    ?assertError(
+        Reason,
+        arizona_render:render_view(
+            arizona_native_counter_demo,
+            #{
+                layouts => [
+                    {arizona_passthrough_layout, render}, {arizona_native_multi_root_layout, render}
+                ]
+            }
+        )
+    ),
+    ?assertError(
+        Reason,
+        arizona_render:render_view(
+            arizona_native_counter_demo,
+            #{
+                layouts => [
+                    {arizona_native_layout, render}, {arizona_native_multi_root_layout, render}
+                ]
+            }
+        )
+    ),
+    #{general := Msg} = arizona_render:format_error(Reason, []),
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            unicode:characters_to_binary(Msg), ~"arizona_native_multi_root_layout:render/1"
         )
     ).
 

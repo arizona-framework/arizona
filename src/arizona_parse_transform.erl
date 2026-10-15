@@ -3365,13 +3365,28 @@ compile_template(Arg, Line, Module, LiveRender, Backend, Inherited, CCtx) ->
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
         Arg, Module, LiveRender, Backend, CCtx, Inherited, template
     ),
-    Opts = Opts0#{backend => Backend},
+    Opts = maybe_multi_root_opt(Backend, Arg, Opts0#{backend => Backend}),
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
     TmplAST = build_template_ast(Line, S1, D1, Fingerprint, Opts),
     case {Opts, Inherited} of
         {#{diff := false}, false} -> put_nodiff_key(Arg, TmplAST);
         _ -> TmplAST
     end.
+
+%% A template nested as a child may hold several nodes, but one that is a whole
+%% document may not on a backend whose document is one node (native: a JSON
+%% value). Only render knows which templates are documents (a layout is any
+%% function a route names), so stamp the shape here, asking the backend at compile
+%% time, and arizona_render refuses a stamped layout. A literal list of more than
+%% one node is the shape a compile can see; a dynamic body is not judged.
+maybe_multi_root_opt(Backend, Arg, Opts) ->
+    case Backend:single_root_document() andalso is_multi_node_list(Arg) of
+        true -> Opts#{multi_root => true};
+        false -> Opts
+    end.
+
+is_multi_node_list({cons, _, _, {cons, _, _, _}}) -> true;
+is_multi_node_list(_Arg) -> false.
 
 %% An `az_key` on an az-nodiff root names the az-nodiff element beside its fingerprint and
 %% branch, so a new key value replaces the az-nodiff element. The key is built with the

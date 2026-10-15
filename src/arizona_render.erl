@@ -573,6 +573,16 @@ format_error({cross_target_layout, Mod, Fun, LayoutBackend, PageBackend}, _ST) -
             [Mod, Fun, macro_of(LayoutBackend), macro_of(PageBackend)]
         )
     };
+format_error({multi_root_layout, Mod, Fun, Backend}, _ST) ->
+    #{
+        general => io_lib:format(
+            "layout ~s:~s/1 is a ~s template with several top-level nodes, but a "
+            "~s document is a single node, so the nodes would be served side by "
+            "side as a document no client can parse. Wrap them in one container "
+            "node, as a ~s view's render/1 already must.",
+            [Mod, Fun, macro_of(Backend), macro_of(Backend), macro_of(Backend)]
+        )
+    };
 format_error({stateful_in_layout, Mod, Fun, Handler}, _ST) ->
     #{
         general => io_lib:format(
@@ -649,6 +659,7 @@ apply_layouts([{Mod, Fun} | Rest], PageBackend, Inner, Bindings) ->
     Tmpl = Mod:Fun(Bindings#{inner_content => #{s => [Wrapped], d => []}}),
     LayoutBackend = backend(Tmpl),
     ok = assert_layout_target(Mod, Fun, LayoutBackend, PageBackend),
+    ok = assert_layout_root(Mod, Fun, Tmpl),
     {layer_backend(LayoutBackend, InnerBackend), render_layout(Mod, Fun, Tmpl)}.
 
 %% A layer that records no backend adds no target of its own, so the document is
@@ -673,6 +684,22 @@ assert_layout_target(Mod, Fun, LayoutBackend, PageBackend) ->
         none,
         [{error_info, #{module => ?MODULE}}]
     ).
+
+%% On a backend whose document is one node (native), a layout with several
+%% top-level nodes renders them comma-joined, which is no JSON document. Every
+%% layer is held to one root, not just the outermost: a passthrough layer above
+%% would serve the fragment as the document, and the page itself is held to one
+%% root at compile time, so one root per layer is what makes the whole document
+%% one node. The parse transform stamps the shape (it cannot know which
+%% templates are layouts); the backend decides at compile time whether to stamp.
+assert_layout_root(Mod, Fun, #{multi_root := true} = Tmpl) ->
+    erlang:error(
+        {multi_root_layout, Mod, Fun, backend(Tmpl)},
+        none,
+        [{error_info, #{module => ?MODULE}}]
+    );
+assert_layout_root(_Mod, _Fun, _Tmpl) ->
+    ok.
 
 %% Mark the layer so `render_ssr_val/2` can refuse a `?stateful` inside it. The
 %% inner layers have already rendered into `Wrapped` by the time this runs, and
