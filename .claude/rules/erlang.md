@@ -15,7 +15,7 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 %%           | {Az, term(), Loc}                     -- static value with location
 %% Az = binary() (diff target) | undefined (az-nodiff -- never used as op target)
 %% Loc = {Module, Line} -- source location for error reporting
-%% f = fingerprint -- base-36 phash2 of statics
+%% f = fingerprint -- base-36 phash2 of statics (dynamic attribute names included)
 %% Optional: diff => false -- skip diff after initial render (from az-nodiff directive)
 
 %% Snapshot: #{s => [binary()], d => [{Az, Value}], deps => [#{key() => true}]}
@@ -87,6 +87,10 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `{name, false}` | `{hidden, false}` | Stripped (`?native` keeps a typed `false` prop) |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Emits `diff => false`; the HTML keeps a compiler-owned `az-nodiff` (token or bare) |
 
+A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target
+(appended after its attributes), so a submit made before the client script runs never puts the
+fields in the URL; an explicit `method` is kept as written. See [js.md](js.md).
+
 A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, so an
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises
 `bad_template_value`; a boolean belongs in a whole-value attribute (`{disabled, ?get(off)}`).
@@ -138,7 +142,7 @@ A route's static config is the single canonical type `arizona_live:route_opts/0`
 
 Used in route declarations, `arizona_render:render_view_to_iolist/2`, `arizona_http:render/3`, and the optional `arizona_req:resolve_route/3` callback's return tuple. All keys are optional; consumers default at use-site (`maps:get(K, M, Default)`).
 
-`middlewares` holds two kinds of entry in one list. A **step** (a 2-arity fun or `{Module, Function}`) is Arizona's request-to-bindings pipeline -- it runs before any render, and also where no HTTP response exists (the WS upgrade, navigate/patch). An **HTTP response transform** -- built with `arizona_middleware:etag/0`, `compress/0`, `cors/1`, or `security_headers/0,1` -- wraps the whole HTTP exchange instead: the router splits transforms out at compile time into the server's own response pipeline (the underlying `roadrunner_etag`/`roadrunner_cors`/... middlewares), where they can see and rewrite the response a step never could. Order has phase semantics, not list semantics: steps run in list order during the request phase; transforms wrap the exchange in list order, first outermost -- except compression, which the router keeps OUTERMOST as an invariant wherever it is written (or attaches itself), so an etag always hashes the pre-compression body, the composition its weak validator is designed for. Transforms are inert on pipeline runs with no HTTP response (skipped, never crashing). The named set is the whole vocabulary on purpose -- a transform names an HTTP semantic the server adapter implements, so a route never says which server runs beneath it; a custom server-level middleware belongs in the server-specific `proto_opts` listener config instead. Accepted on `live`, controller, and `asset` routes -- but an asset route runs no Arizona pipeline, so a step there fails route compilation loudly (`asset_middleware_not_transform`). A transform is a plain tagged term (`{http_transform, etag}`), so a `sys.config` route can spell it literally where a constructor call cannot be written.
+`middlewares` holds two kinds of entry in one list. A **step** (a 2-arity fun or `{Module, Function}`) is Arizona's request-to-bindings pipeline -- it runs before any render, and also where no HTTP response exists (the WS upgrade, navigate/patch). An **HTTP response transform** -- built with `arizona_middleware:etag/0`, `compress/0`, `cors/1`, or `security_headers/0,1` -- wraps the whole HTTP exchange instead: the router splits transforms out at compile time into the server's own response pipeline (the underlying `roadrunner_etag`/`roadrunner_cors`/... middlewares), where they can see and rewrite the response a step never could. Order has phase semantics, not list semantics: steps run in list order during the request phase; transforms wrap the exchange in list order, first outermost -- except compression, which the router keeps OUTERMOST as an invariant wherever it is written (or attaches itself), so an etag always hashes the pre-compression body, the composition its weak validator is designed for. Transforms are inert on pipeline runs with no HTTP response (skipped, never crashing). The named set is the whole vocabulary on purpose -- a transform names an HTTP semantic the server adapter implements, so a route never says which server runs beneath it; a custom server-level middleware belongs in the server-specific `proto_opts` listener config instead. A route's method allowlist is enforced before any transform runs, so the router adds `OPTIONS` to a route carrying `cors/1` that does not declare it -- the preflight reaches the transform (`204` + `Access-Control-*`), a plain `OPTIONS` gets `204` + the `Allow` set a `405` on that URL would carry without reaching the action or page, and a `405` there lists `OPTIONS`. A cors origin must also be in `csrf_origins` (or the route sets `check_origin => false`), else the preflight `204` is followed by a `403`. Accepted on `live`, controller, and `asset` routes -- but an asset route runs no Arizona pipeline, so a step there fails route compilation loudly (`asset_middleware_not_transform`). A transform is a plain tagged term (`{http_transform, etag}`), so a `sys.config` route can spell it literally where a constructor call cannot be written.
 
 `layouts` is always a list, applied outermost-first: `[Root, Section]` produces `Root(Section(Page))`. Empty list = no wrap.
 
@@ -404,8 +408,13 @@ A control-flow expression in a **content slot** -- `case`, `if`, `begin`, `recei
 `try`, or `maybe` -- may return a bare element tuple, an element list, or a mixed fragment
 (static text/values interleaved with elements) directly from a tail position. The parse
 transform compiles each tail into a nested template, exactly as a literal
-`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target. No
-`?html` wrap is needed:
+`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target and the
+content context of the slot, so a branch's `<script>` or `<title>` under `<svg>` is foreign
+content exactly as when written directly there. A whole-tail wrapper of the enclosing target
+around markup (`true -> ?html({title, [], [?get(t)]})` in an element's child) is unwrapped to
+that markup first, so the wrapped and bare forms compile identically; a wrapper anywhere else
+(bound to a variable, passed as an argument, nested below the tail) still starts its own
+template at the root context. No `?html` wrap is needed:
 
 ```erlang
 %% both branches accepted: <<>> renders empty, the tuple becomes a nested template
@@ -536,6 +545,21 @@ written as `arizona_template:get(text, Item)` counts too, so a view binding of
 the same name also re-evaluates the each (harmless: nothing differs, nothing
 ships). Reads in an az-nodiff item (or az-nodiff element) never count -- it renders once.
 
+A **stream** item changed by `arizona_stream:update/3` (or kept by a reset) skips
+re-evaluating a dynamic only when the parse transform could prove its deps name
+every field it read: the dynamic references nothing but the item key outside the
+map argument of a tracked `get`/`get_lazy`/`with` in its own closure, and that map
+is the item itself (the bare item parameter, or the variable side of a
+`#{...} = Item` head) or the view `Bindings`. A plain `maps:get(n, Item)`, a
+head-destructured field or sub-map (even read with a tracked `get` -- its deps name
+the sub-map's keys, not the item field holding it), a value bound in the callback
+body, or a read inside a nested branch template makes that dynamic re-evaluate on
+every change of its item -- always correct, just not skipped. Write
+`arizona_template:get(n, Item)` (or, when the parameter binds the whole item, name
+it `Bindings` and use `?get(n)`) where a wide item's per-field skipping matters. A
+dynamic that reads nothing and references no item (a static value, `?connected`, the
+key) is kept as-is on an item update.
+
 Reads **hoisted into the render function body** do track: the parse transform
 inlines each interpolated variable back into its slot closure, so the `?get`
 re-runs inside the dependency bracket.
@@ -602,6 +626,15 @@ effect) each binding the guards reference, recording them as slot dependencies. 
 keeps using the captured value, which each diff cycle rebuilds from current bindings, so a
 change to a guard binding re-renders the slot. A non-tracked local or a pattern-bound
 variable in a guard needs nothing -- there is no binding dependency to record.
+
+The same holds for a tracked read used in a **pattern**: a hoisted variable a pattern tests
+(`Sel = ?get(sel)` then `case I of Sel -> ...`, the "selected row" idiom), a map-pattern
+key (`#{K := V}`), a binary segment size (`<<P:N/binary, _/binary>>`), or a `maybe`
+`Want ?= ...` -- in a `case`/`receive`/`try`/`maybe` clause, a match, a fun head's keys and
+sizes, or a generator's keys and sizes. A pattern cannot hold the call either, so the
+transform touches each such binding ahead of the expression, and a change to it re-renders
+the slot. A hoisted variable is already bound, so in a `case` pattern it is an equality
+test; `{Sel, X} -> [Sel, X]` uses the hoisted `Sel` in the body too.
 
 `?get`/`get_lazy`/`with` are for the **view bindings**, not sub-maps: they call
 `track/1` regardless of which map they read, so reading a nested map records the

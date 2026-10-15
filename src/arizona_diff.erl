@@ -243,8 +243,8 @@ diff_dynamics(
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
     {Old0, New0} = Views1,
     case stream_drainable(Src, Old) andalso nested_drain(Az, New, Old, {Old0, #{}}) of
-        {drained, StreamOps, {_, LocalNew}} ->
-            LocalNew1 = merge_stream_child_views(Src, Old, LocalNew, Old0),
+        {drained, StreamOps, Drained, {_, LocalNew}} ->
+            LocalNew1 = merge_stream_child_views(Old, Drained, LocalNew, Old0),
             %% A drain takes no tail. Threading one through every stream helper
             %% would buy this site alone: the other two stream containers drain
             %% BEFORE their siblings, so they have no tail to hand it.
@@ -286,11 +286,19 @@ maybe_make_ops(Az, New, Old, Tail, Views) ->
 %% on it answers `stale`, for the caller to reconcile against `New` instead. Items
 %% that read no binding render from their item alone, which the queue does account
 %% for, so they skip the comparison.
+%%
+%% A render that holds child views is never drained: the drain renders the items
+%% the queued ops touch a second time, and each `?stateful` among them would run
+%% `mount/1` (or `handle_update/3`) again, discarding the instance the first render
+%% made without unmounting it. It answers `stale`, so the caller reconciles against
+%% `New`, which renders nothing.
+nested_drain(_Az, #{child_views := ChildViews}, _Old, _Views0) when map_size(ChildViews) > 0 ->
+    stale;
 nested_drain(Az, #{source := Src, template := Tmpl} = New, Old, Views0) ->
     {StreamOps, Drained, Views1} =
         diff_stream(Az, #{source => Src, template => Tmpl}, Old, Views0),
     case drain_matches_render(Drained, New) of
-        true -> {drained, StreamOps, Views1};
+        true -> {drained, StreamOps, Drained, Views1};
         false -> stale
     end.
 
@@ -334,10 +342,10 @@ stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views).
 
 %% Per-key walk for `stream_relist/7`: a key the client already holds is patched
-%% only where its dynamics differ, one it lacks is inserted at the tail. Mirrors
-%% `smart_reset_items/8`'s op shapes exactly, minus the re-render -- the item
-%% dynamics are taken from the already-evaluated `New` -- and its difference-list
-%% shape too: each op conses onto `Tail`, the ops that follow this walk.
+%% only where its dynamics differ, one it lacks is inserted at the tail. Patches as
+%% `smart_reset_items/8` does, minus the re-render -- the item dynamics are taken
+%% from the already-evaluated `New` -- and each op conses onto `Tail`, the ops that
+%% follow this walk.
 relist_items(_Az, [], _NewItems, _OldItems, _Tmpl, Views, Tail) ->
     {Tail, Views};
 relist_items(Az, [K | Rest], NewItems, OldItems, Tmpl, Views0, Tail) ->
@@ -496,7 +504,7 @@ changed_dynamic(Az, New, NewDeps, Old, DR, OR, DepsR, ChangedKeys, Views1) ->
 %% stays dependent on a binding read only inside the `?each` callback.
 diff_each(
     Az,
-    #{source := #stream{} = Source, template := Tmpl} = EachDesc,
+    #{source := #stream{}, template := Tmpl} = EachDesc,
     Deps,
     Old,
     DR,
@@ -524,7 +532,7 @@ diff_each(
             true -> DrainDeps;
             false -> maps:merge(OldItemDeps, DrainDeps)
         end,
-    LocalNew1 = merge_stream_child_views(Source, Old, LocalNew, Old0),
+    LocalNew1 = merge_stream_child_views(Old, NewSnap0, LocalNew, Old0),
     NewSnap = NewSnap0#{
         child_views => arizona_eval:child_view_set(LocalNew1), item_deps => ItemDeps
     },
@@ -621,25 +629,108 @@ append_ops(Ops, []) ->
 append_ops(Ops, Tail) ->
     Ops ++ Tail.
 
-%% Incremental stream child_views: old - deleted + rendered.
+%% Stream child views after a drain: the children of the items the client still
+%% holds, which is exactly the drained snapshot's `items` -- the drain keeps it in
+%% step with the DOM. Deriving it from the queued `delete` ops instead missed every
+%% other way an item leaves: a `reset/2`, a fresh stream bound over the slot, a
+%% `drop` eviction, a sort or insert pushing it out of a `limit` window. Its child
+%% then stayed in the views map, so `arizona_live` never unmounted it.
 %%
-%% A stream holding no child views -- items of plain markup, which most streams are --
-%% has nothing to carry: removing deleted keys from an empty set leaves it empty, and
-%% carrying an empty set leaves `LocalNew` exactly as it is. Settling that from the set
-%% skips naming the deleted item children, and naming them means draining the stream's
-%% ENTIRE pending queue (`pending_ops/1`, not the undrained suffix) into a list and
-%% walking it. A stream nested inside another value is never cleared, so that queue
-%% holds one op per mutation for the life of the view -- the walk grew with the
-%% session while the answer stayed `LocalNew`.
-merge_stream_child_views(Source, Old, LocalNew, Old0) ->
+%% Worked out as the old stream's live views minus what the drain took away, plus
+%% what it rendered. Taken away is every view an old item reached through a value
+%% that is no longer there as it was: the item left, or the drain re-evaluated that
+%% value. A value the drain kept is the same term, so an unchanged item costs one
+%% comparison and is never walked. A re-evaluated value's views, if it still holds
+%% them, are back in `LocalNew` with their fresh subtrees, so subtracting the old
+%% subtree also drops a grandchild the new render no longer reaches.
+%%
+%% The old views are taken through `live_subtree/2`, not straight from the
+%% recorded set: a grandchild a child rendered on its own event is recorded on no
+%% container, and carrying the set verbatim dropped it.
+%%
+%% `LocalNew` is the whole answer, with nothing carried, when no old value was
+%% kept as it was: a stream that held no child views, an old slot that held a list
+%% rather than a stream, or a drain that took every old value -- what reconciling a
+%% nested stream does, since its items were all evaluated again.
+merge_stream_child_views(Old, #{items := Items}, LocalNew, Old0) ->
     case Old of
-        #{child_views := OldChildViews} when map_size(OldChildViews) > 0 ->
-            #{items := OldItems} = Old,
-            Deleted = deleted_item_children(arizona_stream:pending_ops(Source), OldItems),
-            carry_item_children(maps:without(Deleted, OldChildViews), Old0, LocalNew);
+        #{child_views := OldChildViews, items := OldItems} when
+            map_size(OldChildViews) > 0, is_map(OldItems)
+        ->
+            case taken_views(maps:iterator(OldItems), Items, {[], false}) of
+                {_Taken, false} ->
+                    LocalNew;
+                {Taken, true} ->
+                    Carried = live_subtree(OldChildViews, Old0),
+                    maps:merge(
+                        without_stale(stale_views(Taken, LocalNew, Old0), Carried, Old0), LocalNew
+                    )
+            end;
         #{} ->
             LocalNew
     end.
+
+without_stale([], Carried, _Old0) ->
+    Carried;
+without_stale(Stale, Carried, Old0) ->
+    maps:without(maps:keys(live_subtree(maps:from_keys(Stale, true), Old0)), Carried).
+
+%% The views old items reached through values the drain did not keep as they were,
+%% and whether it kept any old value as it was.
+taken_views(Iter, Items, {Taken, AnyKept} = Acc) ->
+    case maps:next(Iter) of
+        none ->
+            Acc;
+        {Key, OldD, Iter1} ->
+            case Items of
+                #{Key := OldD} ->
+                    taken_views(Iter1, Items, {Taken, true});
+                #{Key := NewD} ->
+                    taken_views(Iter1, Items, changed_value_views(OldD, NewD, Acc));
+                #{} ->
+                    taken_views(Iter1, Items, {item_views(OldD, Taken), AnyKept})
+            end
+    end.
+
+%% The roots of the subtrees to subtract: a taken view the drain did not render
+%% again, and the old descendants of every view it did. A re-rendered view's own
+%% entry, and every descendant its new render still reaches, are in `LocalNew` and
+%% win the merge anyway, so only what lies below it needs naming -- and most such
+%% views are leaves, which name nothing.
+%%
+%% Every view the drain rendered, not only the taken ones: a value can be kept
+%% (equal to the stored one) while the view in it was re-rendered. A child that
+%% rendered a grandchild on its own event leaves the stream's stored copy of it
+%% behind, and a later update that drops the grandchild renders a value equal to
+%% that stale copy, so nothing is taken while the grandchild is gone.
+stale_views(Taken, LocalNew, Old0) ->
+    [View || View <- Taken, not is_map_key(View, LocalNew)] ++
+        [Id || View := _ <- LocalNew, Id <- old_descendants(View, Old0)].
+
+old_descendants(View, Old0) ->
+    case Old0 of
+        #{View := #{snapshot := #{child_views := ChildIds}}} -> maps:keys(ChildIds);
+        #{} -> []
+    end.
+
+%% A kept value counts as keeping something only when it holds a view: an item's
+%% attribute or text slot is kept far more often than not, and counting it would
+%% send every reconcile down the carrying path.
+changed_value_views(
+    [{_Az, V, _Deps} | OldRest], [{_NewAz, V, _NewDeps} | NewRest], {Taken, AnyKept}
+) ->
+    changed_value_views(OldRest, NewRest, {Taken, AnyKept orelse value_views(V, []) =/= []});
+changed_value_views([{_Az, V, _Deps} | OldRest], [_New | NewRest], {Taken, AnyKept}) ->
+    changed_value_views(OldRest, NewRest, {value_views(V, Taken), AnyKept});
+changed_value_views(OldD, _NewD, {Taken, AnyKept}) ->
+    {item_views(OldD, Taken), AnyKept}.
+
+item_views(ItemD, Acc) ->
+    [Id || {_Az, V, _Deps} <:- ItemD, Id <- value_views(V, [])] ++ Acc.
+
+value_views(#{view_id := VId}, Acc) -> [VId | Acc];
+value_views(#{child_views := ChildIds}, Acc) -> maps:keys(ChildIds) ++ Acc;
+value_views(_V, Acc) -> Acc.
 
 -doc """
 Carries a skipped value's child views (and their live subtrees) from the old
@@ -749,29 +840,6 @@ expand_uncovered(Missing, Rest, Old, Acc) ->
     Acc1 = expand_subtree(Missing, Old, maps:merge(Acc, maps:with(Missing, Old))),
     expand_subtree(Rest, Old, Acc1).
 
-%% Extract child view IDs from deleted stream items only. The result is
-%% only ever `maps:without/2`'s key list (`OldChildViews` minus these), so
-%% neither order nor duplicates matter -- safe to use a flat comp instead of
-%% a fold-with-prepend.
-deleted_item_children(PendingOps, OldItems) ->
-    [
-        VId
-     || {delete, Key} <- PendingOps,
-        {_Az, #{view_id := VId}, _Deps} <-
-            case OldItems of
-                #{Key := ItemD} -> ItemD;
-                #{} -> []
-            end
-    ].
-
-%% Copy child views from OldViews to NewViews for children not already present.
-%% `maps:intersect/2` takes its values from the SECOND map, so this is
-%% `maps:with(maps:keys(ChildViewIds), Old)` without materializing the key list
-%% -- and it iterates whichever map is smaller. `New` is merged on top so a
-%% freshly rendered child always beats the carried-over copy of itself.
-carry_item_children(ChildViewIds, Old, New) ->
-    maps:merge(maps:intersect(ChildViewIds, Old), New).
-
 -doc """
 Returns `true` when any key in `ChangedKeys` appears in `Deps`. Used by
 `diff/4` and the per-item skipping renderer to decide whether a dynamic
@@ -862,7 +930,7 @@ stream_full_render(Az, Source, Tmpl, Views0) ->
 %% The same question `outgrows_re_render/3` asks for a list, with two differences.
 %%
 %% A stream carrying CHILD VIEWS is never collapsed. The incremental path keeps their
-%% bookkeeping (`merge_stream_child_views/4`: old minus deleted plus rendered); the
+%% bookkeeping (`merge_stream_child_views/4`: the drained items' children); the
 %% full render has none, so re-rendering would re-mount every child and reset its
 %% state. Bytes are not worth that.
 %%
@@ -938,13 +1006,78 @@ sum_item_value_bytes([ItemD | Rest], Acc) ->
 %% instead -- a reset against the CURRENT source is the answer the log cannot give, and
 %% it costs nothing when nothing did change, since every kept item's dynamics compare
 %% equal and emit no op.
-drainable_ops([]) -> [{reset, #{}}];
-drainable_ops(Ops) -> Ops.
+drainable_ops([], _Source, _OldSnap) ->
+    [{reset, #{}}];
+drainable_ops(Ops, #stream{limit = Limit}, OldSnap) ->
+    case reorders(Ops, Limit) of
+        true -> reconcile_ops(Ops, OldSnap);
+        false -> Ops
+    end.
+
+%% A log of nothing but sorts changed no item and no membership, only the order, so
+%% one `reorder` from the client's order to the final one says all of it -- the
+%% items need no walk. Anything else in the log goes to the full reconcile.
+reconcile_ops([reorder | Rest], OldSnap) ->
+    case only_reorders(Rest) of
+        true -> [reorder];
+        false -> [{reset, baseline(OldSnap)}]
+    end;
+reconcile_ops(_Ops, OldSnap) ->
+    [{reset, baseline(OldSnap)}].
+
+only_reorders([]) -> true;
+only_reorders([reorder | Rest]) -> only_reorders(Rest);
+only_reorders([_ | _]) -> false.
 
 stream_ops(_Source, _OldSnap, true) ->
     [{reset, #{}}];
 stream_ops(Source, OldSnap, false) ->
-    drainable_ops(arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none))).
+    drainable_ops(
+        arizona_stream:undrained_ops(Source, maps:get(drained, OldSnap, none)),
+        Source,
+        OldSnap
+    ).
+
+%% The drain replays ops one at a time against what the client holds, and the one
+%% thing it cannot follow op by op is ORDER. A `reorder` carries no order of its own:
+%% the only order the drain can read for it is the FINAL one, not the one the client
+%% reaches by that point of the drain, so a positional op after it was placed against
+%% an order the client did not have yet, and a second reorder then found the client
+%% "already" in the final order and moved nothing. A `reset` jumped to the final
+%% order the same way and then replayed moves queued against intermediate ones.
+%%
+%% So a log holding either is drained as ONE reconcile of the client's state at the
+%% start of the drain against the final window: the reset path, which removes what
+%% left, patches what stayed (re-rendering only fields that changed since the
+%% client's render), inserts what arrived and emits the minimal moves -- or, for a
+%% log of sorts alone, one reorder (`reconcile_ops/2`). Appends, deletes and updates
+%% never consult an order the client might not hold, so a log of only those -- the
+%% ordinary event -- keeps the cheap op-by-op drain.
+%%
+%% A `move` and a positional insert are placed by where they sit in the SOURCE at the
+%% moment they are queued -- `move/3` names the key it lands after, `insert/3` an
+%% index. On an unlimited stream the client holds the whole source in order at every
+%% step of the drain, so that placement is the client's too, and replaying them op by
+%% op is exact. On a limited one it is not: hidden keys count toward the index (or
+%% are the key landed after) but are not on the page, and keys leaving the window are
+%% on the page until the end-of-drain prune.
+reorders([], _Limit) -> false;
+reorders([reset | _], _Limit) -> true;
+reorders([reorder | _], _Limit) -> true;
+reorders([{move, _, _} | _], Limit) when Limit =/= infinity -> true;
+reorders([{insert, _, _, -1} | Rest], Limit) -> reorders(Rest, Limit);
+reorders([{insert, _, _, _Pos} | _], Limit) when Limit =/= infinity -> true;
+reorders([_ | Rest], Limit) -> reorders(Rest, Limit).
+
+%% The drain's `{reset, Baseline}` skips re-rendering what a kept item did not change,
+%% measured from `Baseline` -- so `Baseline` must be the items the client's DOM was
+%% rendered from, the source on the snapshot the drain starts from, and the reset must
+%% be the drain's only op. The source as it stood just before a `reset/1,2` is not it:
+%% an `update/3` earlier in the same event went with the queue the reset discarded,
+%% and measuring from the updated item found nothing to ship. `#{}` re-renders every
+%% kept item.
+baseline(#{source := #stream{items = Baseline}}) -> Baseline;
+baseline(#{}) -> #{}.
 
 diff_stream_pending(Az, [], {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
     apply_limit(Az, Source, Tmpl, SnapAcc, OldOrder, Views0);
@@ -959,24 +1092,56 @@ diff_stream_op(Az, {update, Key, NewItem, Changed}, Rest, SV, Tmpl, SnapAcc, Old
     stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, {move, Key, AfterKey}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
-diff_stream_op(Az, reorder, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
-    stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views);
+diff_stream_op(Az, reorder, [], SV, Tmpl, SnapAcc, OldOrder, Views) ->
+    stream_reorder(Az, SV, Tmpl, SnapAcc, OldOrder, Views);
 diff_stream_op(Az, {reset, OldItems}, Rest, SV, Tmpl, SnapAcc, OldOrder, Views) ->
     stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views).
 
+%% Only an unlimited stream drains a `move` op by op (`reorders/2`), and its client
+%% holds every live key in source order, so the key the move lands after is on the
+%% page. A key the client does not hold is a replay of an op whose key a later one
+%% deleted.
+stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+    case SnapAcc of
+        #{Key := _} ->
+            MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), move_ref(AfterKey)],
+            {RestOps, FinalSnap, Views1} =
+                diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0),
+            {[MoveOp | RestOps], FinalSnap, Views1};
+        #{} ->
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
+    end.
+
+move_ref(null) -> null;
+move_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
+
+%% A log of sorts alone (`reconcile_ops/2`): no item changed, so the window is
+%% reconciled (`apply_limit/6` against the final keys -- removals, then back-fill at
+%% each index) behind the minimal moves from the client's order to the final one.
+%% The moves name only keys the client holds and the back-fill follows them, so
+%% each lands where the final order puts it.
+stream_reorder(Az, {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
+    VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
+    {LimitOps, FinalSnap, Views1} = apply_limit(Az, Source, Tmpl, SnapAcc, VKeys, Views0),
+    {compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc, LimitOps), FinalSnap, Views1}.
+
 %% The visibility window as a set, computed once per drain from the (constant)
-%% stream record. An unlimited stream keeps every key, so it needs no set. The
-%% stream record is already the post-op state, so this is the *final* window --
-%% skipping an op for a key outside it is safe in both directions, since
-%% `apply_limit/6` back-fills any visible key missing from the snapshot at its
-%% ordered position, so a key that slides into view later still lands.
-visible_set(#stream{limit = infinity}) ->
-    all;
+%% stream record. The stream record is already the post-op state, so this is the
+%% *final* window -- skipping an op for a key outside it is safe in both
+%% directions, since `apply_limit/6` back-fills any visible key missing from the
+%% snapshot at its ordered position, so a key that slides into view later still
+%% lands. An unlimited stream shows every key it still holds, so its own items map
+%% is the set.
+%%
+%% Skipping matters beyond the wire. A key a later op in the same batch deletes,
+%% or pushes out of the window, would otherwise be rendered on the way: its item
+%% children run `mount/1` (or `handle_update/3`) for a node the batch then removes,
+%% and a child mounted there is named by no views map, so nothing unmounts it.
+visible_set(#stream{limit = infinity, items = Items}) ->
+    Items;
 visible_set(#stream{order = Order, limit = Limit}) ->
     maps:from_keys(arizona_template:visible_keys(Order, Limit), true).
 
-is_visible(_Key, all) ->
-    true;
 is_visible(Key, Vis) ->
     is_map_key(Key, Vis).
 
@@ -989,8 +1154,8 @@ is_visible(Key, Vis) ->
 %% holds can only be the re-drain of a pending queue that was never cleared --
 %% a `#stream{}` nested inside another value (a field of a parent stream's
 %% item) is out of `clear_stream_pending`'s reach, so every re-eval of the
-%% enclosing slot re-drains it. Skipping the replay (delete/update/move/
-%% reorder/reset replays are already no-ops against the post-drain SnapAcc)
+%% enclosing slot re-drains it. Skipping the replay (delete/update/
+%% reset replays are already no-ops against the post-drain SnapAcc)
 %% makes the whole re-drain idempotent instead of emitting duplicate
 %% OP_INSERTs (duplicate DOM nodes under one az-key).
 stream_insert(Az, Key, Item, Pos, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
@@ -1011,7 +1176,7 @@ stream_insert(Az, Key, Item, Pos, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
 %% `SnapAcc` tracks what the client's DOM holds as the ops are applied, so a key
 %% absent from it has no node to remove -- the case for a key the limit kept out
 %% of the window, whether this batch skipped its insert or an earlier cycle pruned
-%% it. Mirrors the guard `stream_move/9` already applies.
+%% it.
 stream_delete(Az, Key, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SnapAcc of
         #{Key := _} ->
@@ -1024,8 +1189,14 @@ stream_delete(Az, Key, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
-stream_update(Az, Key, NewItem, Changed, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
+%% A key the client holds but the final window does not is left as it is: the
+%% node goes either way (see `visible_set/1`).
+stream_update(
+    Az, Key, NewItem, Changed, Rest, {_Source, Vis} = SV, Tmpl, SnapAcc, OldOrder, Views0
+) ->
     case SnapAcc of
+        #{Key := _} when not is_map_key(Key, Vis) ->
+            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0);
         #{Key := OldD} ->
             {NewD, Views1} =
                 arizona_eval:render_stream_item_skipping(
@@ -1063,10 +1234,11 @@ stream_update_existing(Az, Key, NewD, OldD, Rest, SV, Tmpl, SnapAcc, OldOrder, V
 %% or keeps it out when it is not in the final window. Inserting here at -1 put
 %% a newly-visible mid-window key at the tail and, being in `SnapAcc`, made the
 %% back-fill skip it -- permanently diverging the client's order from the
-%% server's (e.g. a hidden key moved to the front and updated in one frame).
+%% server's (e.g. a hidden key moved to the front and updated in one frame). An
+%% upsert a later op in the same batch deletes is not rendered (see `visible_set/1`).
 stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
     case SV of
-        {#stream{limit = infinity}, _Vis} ->
+        {#stream{limit = infinity}, #{Key := _}} ->
             {NewD, Views1} = arizona_eval:render_stream_item(Key, NewItem, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, NewD),
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(Key), -1, HTML],
@@ -1078,64 +1250,29 @@ stream_update_missing(Az, Key, NewItem, Rest, SV, Tmpl, SnapAcc, OldOrder, Views
             diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
     end.
 
-stream_move(Az, Key, AfterKey, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
-    case SnapAcc of
-        #{Key := _} ->
-            case after_ref_in_dom(AfterKey, SnapAcc) of
-                true ->
-                    Ref = move_after_ref(AfterKey),
-                    MoveOp = [?OP_MOVE, Az, arizona_template:to_bin(Key), Ref],
-                    {RestOps, FinalSnap, Views1} =
-                        diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0),
-                    {[MoveOp | RestOps], FinalSnap, Views1};
-                false ->
-                    %% The after-reference is a limit-hidden key the client DOM
-                    %% doesn't hold; a MOVE with a missing ref makes the client's
-                    %% moveItemEl fall back to appending, scrambling surviving
-                    %% order. Remove the item instead and let `apply_limit/6`'s
-                    %% left-to-right back-fill re-insert it at its exact final
-                    %% window index (or keep it out when it moved past the
-                    %% window). Only reachable on a limited stream -- an
-                    %% unlimited stream's SnapAcc holds every live key.
-                    RemOp = [?OP_REMOVE, Az, arizona_template:to_bin(Key)],
-                    NewSnapAcc = maps:remove(Key, SnapAcc),
-                    {RestOps, FinalSnap, Views1} =
-                        diff_stream_pending(Az, Rest, SV, Tmpl, NewSnapAcc, OldOrder, Views0),
-                    {[RemOp | RestOps], FinalSnap, Views1}
-            end;
-        #{} ->
-            diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0)
-    end.
-
-after_ref_in_dom(null, _SnapAcc) -> true;
-after_ref_in_dom(AfterKey, SnapAcc) -> is_map_key(AfterKey, SnapAcc).
-
-move_after_ref(null) -> null;
-move_after_ref(AfterKey) -> arizona_template:to_bin(AfterKey).
-
-stream_reorder(Az, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {Source, _Vis} = SV,
-    VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
-    %% Drain what follows first, so the moves cons straight onto it.
-    {RestOps, FinalSnap, Views1} =
-        diff_stream_pending(Az, Rest, SV, Tmpl, SnapAcc, VKeys, Views0),
-    {compute_reorder_ops(Az, OldOrder, VKeys, SnapAcc, SnapAcc, RestOps), FinalSnap, Views1}.
-
-stream_reset(Az, OldItems, Rest, SV, Tmpl, SnapAcc, OldOrder, Views0) ->
-    {Source, _Vis} = SV,
-    VKeys = arizona_template:visible_keys(Source#stream.order, Source#stream.limit),
+%% A reset is always the drain's only op (`drainable_ops/3`), so it reconciles the
+%% client's state at the start of the drain straight to the final window: remove what
+%% left, patch what stayed, move the stayers into their final relative order, then
+%% insert each arrival at its final index. Inserting last, left to right, is what lets
+%% an arrival land in place -- every key before it is already settled -- instead of
+%% at the tail and then moved.
+stream_reset(Az, OldItems, [], {Source, _Vis}, Tmpl, SnapAcc, OldOrder, Views0) ->
+    #stream{items = ItemsMap, order = Order, limit = Limit} = Source,
+    VKeys = arizona_template:visible_keys(Order, Limit),
     Kept = maps:with(VKeys, SnapAcc),
-    {DiffOps, NewSnaps, Views1} =
-        smart_reset_items(Az, VKeys, Kept, OldItems, Source#stream.items, Tmpl, Views0, #{}),
-    {RestOps, FinalSnap, Views2} =
-        diff_stream_pending(Az, Rest, SV, Tmpl, NewSnaps, VKeys, Views1),
-    %% This append is structural: the moves and the rest of the drain both need the
-    %% post-reset snapshot, which only the item walk above can produce -- so the
-    %% walk's ops cannot cons onto a tail that does not exist when it runs. The
+    {PatchOps, KeptSnaps, Views1} =
+        smart_reset_items(Az, VKeys, Kept, OldItems, ItemsMap, Tmpl, Views0, #{}),
+    {InsOps, FinalSnaps, Views2} = snap_add_missing(Az, VKeys, KeptSnaps, ItemsMap, Tmpl, Views1),
+    %% This append is structural: the patches need the walk's views before the
+    %% inserts can render, so their ops exist only once that walk has run. The
     %% removals lead everything, and those do cons.
-    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, NewSnaps, RestOps),
-    ResetOps = append_ops(DiffOps, MoveOps),
-    {pruned_key_ops(Az, maps:iterator(SnapAcc), Kept, ResetOps), FinalSnap, Views2}.
+    MoveOps = compute_reorder_ops(Az, OldOrder, VKeys, Kept, Kept, InsOps),
+    ResetOps = append_ops(PatchOps, MoveOps),
+    {
+        pruned_key_ops(Az, maps:iterator(SnapAcc), Kept, ResetOps),
+        post_drain_snap(FinalSnaps, VKeys, Tmpl, Source),
+        Views2
+    }.
 
 diff_list(Az, #{source := Items, template := Tmpl}, OldSnap, Views0) ->
     {NewItemsList, Views1} = arizona_eval:render_list_items(Items, Tmpl, Views0),
@@ -1553,9 +1690,8 @@ smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
         #{K := OldD} ->
             {NewD, Views1} =
                 render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0),
+            {InnerOps, Views2} = kept_item_ops(NewD, OldD, Views1),
             NewSnaps = Snaps#{K => NewD},
-            %% Render-once markerless slots: same rule as stream_update_existing.
-            {InnerOps, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
             case InnerOps of
                 [] ->
                     smart_reset_items(
@@ -1570,23 +1706,29 @@ smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
                     {[PatchOp | RestOps], FinalSnaps, Views3}
             end;
         #{} ->
-            {NewD, Views1} = arizona_eval:render_stream_item(K, NewItem, Tmpl, Views0),
-            NewSnaps = Snaps#{K => NewD},
-            HTML = arizona_render:zip_item(Tmpl, NewD),
-            InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), -1, HTML],
-            {RestOps, FinalSnaps, Views2} =
-                smart_reset_items(
-                    Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views1, NewSnaps
-                ),
-            {[InsOp | RestOps], FinalSnaps, Views2}
+            %% An arrival: `stream_reset/8` inserts it at its index once the kept
+            %% keys are in order.
+            smart_reset_items(Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
     end.
 
+%% An item reused whole has nothing to diff -- the common case for a reorder, whose
+%% items are all reused -- so the walk over its dynamics is skipped.
+kept_item_ops(Same, Same, Views) ->
+    {[], Views};
+%% Render-once markerless slots: same rule as stream_update_existing.
+kept_item_ops(NewD, OldD, Views) ->
+    diff_item_dynamics_v(NewD, OldD, Views).
+
 %% Render a kept item via the per-item skipping path when its old source
-%% is recoverable from the captured `OldItems`. Falls back to a full
-%% render if the key wasn't in the pre-reset items map (rare: limit-hidden
-%% then re-shown).
+%% is recoverable from `OldItems`, the items the client's DOM was rendered
+%% from. Falls back to a full render when it is not (no baseline on the
+%% snapshot, or a reconcile that must re-render every item).
 render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0) ->
     case OldItems of
+        %% The same term: a reorder or a move leaves the item itself untouched, and
+        %% the match settles that on the pointer before any field is compared.
+        #{K := NewItem} ->
+            {OldD, Views0};
         #{K := OldItem} ->
             Changed = arizona_stream:compute_item_changed(OldItem, NewItem),
             arizona_eval:render_stream_item_skipping(K, NewItem, OldD, Changed, Tmpl, Views0);
@@ -1651,11 +1793,14 @@ apply_limit(
 %% locates that stamp rather than counting positions, so a queue the mark does not
 %% belong to (a divergent successor of the same stream, a reset, a clear) falls
 %% back to a full drain instead of dropping its ops.
+%% It keeps `source` for the same reason the eval-built snapshot does: its items are
+%% what the DOM was rendered from, the baseline a later reset is measured against.
 post_drain_snap(SnapItems, Order, Tmpl, Source) ->
     #{
         t => ?EACH,
         items => SnapItems,
         order => Order,
+        source => Source,
         template => Tmpl,
         drained => arizona_stream:drain_mark(Source)
     }.
@@ -1772,19 +1917,19 @@ lis_backtrack(Idx, Parent, Acc) ->
 
 %% `Kept` is the LIS base (keys the client held BEFORE this reconciliation --
 %% their old positions anchor the stable subsequence). `Present` is what the
-%% client DOM holds when the emitted moves apply: for a plain reorder the same
-%% as `Kept` (hidden keys are back-filled only later, by `apply_limit/6`); for
-%% a reset it also includes the keys `smart_reset_items/8` just inserted, whose
-%% tail (-1) inserts precede these moves on the wire.
+%% client DOM holds when the emitted moves apply: for a reset the same as `Kept`
+%% (arrivals are inserted at their index only after the moves); for
+%% `stream_relist/7` it also includes the keys `relist_items/7` inserted at the
+%% tail (-1) ahead of these moves on the wire.
 %% The moves cons onto `Tail` -- the ops that follow them on the wire -- so a
 %% reorder never materialises its own list to append.
 compute_reorder_ops(_Az, OldOrder, OldOrder, _Kept, _Present, Tail) ->
     Tail;
 compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present, Tail) ->
     %% Pure tail append: every old key kept, in order, with the new ones after
-    %% them. `smart_reset_items/8` inserts each missing key at -1 walking the new
-    %% order, so they land at the tail in that order and the DOM already equals
-    %% `NewOrder` -- every move the LIS would emit is a node moved onto itself.
+    %% them. The new keys land at the tail in that order (a reset inserts them at
+    %% their index, a relist at -1), so the DOM already equals `NewOrder` --
+    %% every move the LIS would emit is a node moved onto itself.
     %% Worth the check: an append-only list (a log, a growing series) hits this on
     %% every update, and the LIS treats each inserted key as unplaced, so it was
     %% emitting one redundant move per insert (360 inserts -> 360 extra moves).
@@ -2060,7 +2205,7 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
             %% evaluate to snapshots without it, so they fall to the make_ops
             %% clause below and re-render wholesale via the ?OP_TEXT each clause.
             case nested_drain(Az, New, Old, Views0) of
-                {drained, EachOps, Views1} ->
+                {drained, EachOps, _Drained, Views1} ->
                     {RestOps, Views2} = diff_item_dynamics_v(NR, OR, Views1),
                     %% Same ordering as `diff_each/9`'s stream clause: the drain
                     %% feeds the rest of the walk its views, so its ops have no

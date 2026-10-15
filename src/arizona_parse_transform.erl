@@ -115,7 +115,14 @@ render(Bindings) ->
 %% never touch user-authored content that happens to look like a marker (a
 %% static text child is spliced verbatim -- it is the documented raw-HTML seam
 %% -- so ` az="` / `<!--az:` in a page *about* markup is ordinary content).
--type segment() :: binary() | {az_attr, binary()} | {az_slot, binary()}.
+%% `{dyn_attr, Name, Bytes}` is the static part of a dynamic attribute: it renders
+%% as the backend's `attr_dyn_name/1` bytes, but carries `Name` into the
+%% fingerprint. HTML renders the name inside the dynamic and contributes no bytes,
+%% so without it two templates differing only in a dynamic attribute's name share
+%% a fingerprint, and the diff patches one into the other, leaving the old
+%% attribute on the element.
+-type segment() ::
+    binary() | {az_attr, binary()} | {az_slot, binary()} | {dyn_attr, binary(), binary()}.
 
 %% Compile state threaded through element/attribute/child compilation.
 %% Process-dictionary key for the `az-*` attribute names collected while
@@ -132,6 +139,11 @@ render(Bindings) ->
 %% calls in one scope never bind the same name (a second binding would silently
 %% become an equality test against the first).
 -define(PARAM_SEQ_KEY, arizona_helper_param_seq).
+
+-define(IS_GENERATOR(Gen),
+    (Gen =:= generate orelse Gen =:= generate_strict orelse Gen =:= b_generate orelse
+        Gen =:= b_generate_strict orelse Gen =:= m_generate orelse Gen =:= m_generate_strict)
+).
 
 %% Module a template-constructor call is re-spelled under when it sits inside an
 %% `az-nodiff` template (see inherit_nodiff/1). The constructors compile
@@ -581,10 +593,12 @@ mark_targets({tuple, L, [{atom, _, Tag}, _Attrs, _Children] = Parts}, Ctx, CCtx)
     mark_element_children(L, Tag, Parts, Ctx, CCtx);
 %% A bare element in a control-flow tail compiles into its own template, exactly
 %% as a literal `?html` there would (expand_element_leaf/4), so it takes the same
-%% nodiff inheritance the `?html` clause above gives a wrapped one.
+%% nodiff inheritance the `?html` clause above gives a wrapped one. Only inside a
+%% template: outside one (`none`) a tail is plain data -- `{K, [V]}` is a pair,
+%% not an element -- and nothing compiles it.
 mark_targets(Node, Ctx, CCtx) when is_tuple(Node) ->
     Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
-    case is_control_flow_ast(Node) of
+    case Ctx =/= none andalso is_control_flow_ast(Node) of
         true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
         false -> Marked
     end;
@@ -595,7 +609,59 @@ mark_targets(Node, _Ctx, _CCtx) ->
 
 mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
     ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
-    {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- Parts]}.
+    {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- unwrap_child_tail_wrappers(Parts, Ctx)]}.
+
+%% A whole-tail `?html`/`?native`/`?terminal` (matching the enclosing target) in a
+%% conditional child is the bare element in a wrapper: unwrap it here, before the
+%% bottom-up pass compiles it at the root content context, so the branch compiles in
+%% the context of the slot holding it exactly as the bare form does (an SVG `<title>`
+%% stays diffable). Only markup is unwrapped: a wrapped value list renders its binaries
+%% as raw statics, which a bare value tail would escape. A wrapper anywhere else (bound,
+%% passed, or below the tail) keeps starting its own template.
+unwrap_child_tail_wrappers([Tag, Attrs, Children], Ctx) when
+    Ctx =:= html; Ctx =:= native; Ctx =:= terminal
+->
+    Unwrap = fun(Child) ->
+        case is_control_flow_ast(Child) of
+            true ->
+                map_tail_exprs(Child, fun(Leaf) -> unwrap_tail_wrapper(Leaf, Ctx) end, fun(E) ->
+                    E
+                end);
+            false ->
+                Child
+        end
+    end,
+    Children1 =
+        case is_list_ast(Children) of
+            true -> map_cons_items(Unwrap, Children);
+            false -> Unwrap(Children)
+        end,
+    [Tag, Attrs, Children1];
+unwrap_child_tail_wrappers(Parts, _Ctx) ->
+    Parts.
+
+unwrap_tail_wrapper(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, Ctx}}, [Inner]} = Leaf, Ctx
+) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    case classify_body(Inner) of
+        Class when Class =:= element_tuple; Class =:= element_list -> Inner;
+        list_ast ->
+            case list_has_markup_item(Inner) of
+                true -> Inner;
+                false -> Leaf
+            end;
+        _ ->
+            Leaf
+    end;
+unwrap_tail_wrapper(Leaf, _Ctx) ->
+    Leaf.
+
+map_cons_items(F, {cons, L, Head, Tail}) ->
+    {cons, L, F(Head), map_cons_items(F, Tail)};
+map_cons_items(_F, Tail) ->
+    Tail.
 
 %% The backend for a marking context. `none` (no target entered yet) uses the
 %% default target's backend so the two callbacks above always have an answer.
@@ -1753,20 +1819,6 @@ generator_tests(Qs, Live) ->
     ),
     lists:reverse(Acc).
 
-qual_patterns({zip, _, Gens}) ->
-    [P || {_, _, P, _} <:- Gens];
-qual_patterns({G, _, P, _}) when
-    G =:= generate;
-    G =:= generate_strict;
-    G =:= b_generate;
-    G =:= b_generate_strict;
-    G =:= m_generate;
-    G =:= m_generate_strict
-->
-    [P];
-qual_patterns(_Filter) ->
-    [].
-
 map_gen_as_tuple({map_field_exact, L, K, V}) -> {tuple, L, [K, V]};
 map_gen_as_tuple(P) -> P.
 
@@ -2476,7 +2528,8 @@ strip_tail_bind({clause, L, Patterns, Guards, [{match, _, {var, _, _V}, E}]}) ->
 %% Recursively substitute interpolated variables with their inlined defining
 %% expression. Scope-aware: variables shadowed by fun parameters or comprehension
 %% generators are not substituted, and patterns/guards are left untouched so a
-%% substitution can never produce an illegal pattern.
+%% substitution can never produce an illegal pattern. A pattern or guard that reads an
+%% inlined variable instead gets a touch of its definition ahead of it (wrap_touches/4).
 inline_vars(Expr, Inline) when map_size(Inline) =:= 0 ->
     Expr;
 %% A bare top-level fun is an ?each callback (compile_each is the only caller that passes a
@@ -2516,11 +2569,11 @@ iv({'catch', L, E}, Inline) ->
     {'catch', L, iv(E, Inline)};
 iv({Comp, L, T, Qs}, Inline) when Comp =:= lc; Comp =:= bc; Comp =:= mc ->
     {Qs1, Inline1} = iv_quals(Qs, Inline),
-    {Comp, L, iv(T, Inline1), Qs1};
+    wrap_touches({Comp, L, iv(T, Inline1), Qs1}, L, generator_tracked_vars(Qs, Inline), Inline);
 iv({block, L, B}, Inline) ->
     {block, L, iv_body(B, Inline)};
 iv({match, L, P, E}, Inline) ->
-    {match, L, P, iv(E, Inline)};
+    wrap_touches({match, L, P, iv(E, Inline)}, L, collect_tracked_vars(P, Inline), Inline);
 iv({'maybe', L, B}, Inline) ->
     {'maybe', L, iv_body(B, Inline)};
 iv({'maybe', L, B, {'else', L2, Cs}}, Inline) ->
@@ -2540,42 +2593,46 @@ iv_clauses(Cs, Inline) ->
 iv_fun_clauses(Cs, Inline) ->
     [iv_fun_clause(C, Inline) || C <- Cs].
 
-%% Guard-bearing forms build their node and wrap it (wrap_guard_touches/4) so a tracked
-%% binding read in a clause guard is recorded as a slot dependency. Kept as separate
-%% helpers so iv/2 stays a thin dispatcher.
+%% Clause-bearing forms build their node and wrap it (wrap_touches/4) so a tracked
+%% binding read in a clause pattern or guard is recorded as a slot dependency. Kept as
+%% separate helpers so iv/2 stays a thin dispatcher.
 iv_fun(L, Cs, Inline) ->
-    wrap_guard_touches({'fun', L, {clauses, iv_fun_clauses(Cs, Inline)}}, L, Cs, Inline).
+    Node = {'fun', L, {clauses, iv_fun_clauses(Cs, Inline)}},
+    wrap_touches(Node, L, fun_tracked_vars(Cs, Inline), Inline).
 
 iv_named_fun(L, Name, Cs, Inline) ->
     Inline1 = bind([Name], named_fun, L, maps:remove(Name, Inline)),
-    wrap_guard_touches({named_fun, L, Name, iv_fun_clauses(Cs, Inline1)}, L, Cs, Inline1).
+    Node = {named_fun, L, Name, iv_fun_clauses(Cs, Inline1)},
+    wrap_touches(Node, L, fun_tracked_vars(Cs, Inline1), Inline1).
 
 iv_case(L, E, Cs, Inline) ->
-    wrap_guard_touches({'case', L, iv(E, Inline), iv_clauses(Cs, Inline)}, L, Cs, Inline).
+    Node = {'case', L, iv(E, Inline), iv_clauses(Cs, Inline)},
+    wrap_touches(Node, L, clause_tracked_vars(Cs, Inline), Inline).
 
 iv_if(L, Cs, Inline) ->
-    wrap_guard_touches({'if', L, iv_clauses(Cs, Inline)}, L, Cs, Inline).
+    wrap_touches({'if', L, iv_clauses(Cs, Inline)}, L, clause_tracked_vars(Cs, Inline), Inline).
 
 iv_receive(L, Cs, Inline) ->
-    wrap_guard_touches({'receive', L, iv_clauses(Cs, Inline)}, L, Cs, Inline).
+    Node = {'receive', L, iv_clauses(Cs, Inline)},
+    wrap_touches(Node, L, clause_tracked_vars(Cs, Inline), Inline).
 
 iv_receive(L, Cs, AE, AB, Inline) ->
     Node = {'receive', L, iv_clauses(Cs, Inline), iv(AE, Inline), iv_body(AB, Inline)},
-    wrap_guard_touches(Node, L, Cs, Inline).
+    wrap_touches(Node, L, clause_tracked_vars(Cs, Inline), Inline).
 
 iv_try(L, B, OfCs, CatchCs, Aft, Inline) ->
     Node =
         {'try', L, iv_body(B, Inline), iv_clauses(OfCs, Inline), iv_clauses(CatchCs, Inline),
             iv_body(Aft, Inline)},
-    wrap_guard_touches(Node, L, OfCs ++ CatchCs, Inline).
+    wrap_touches(Node, L, clause_tracked_vars(OfCs ++ CatchCs, Inline), Inline).
 
 iv_maybe_else(L, B, L2, Cs, Inline) ->
     Node = {'maybe', L, iv_body(B, Inline), {'else', L2, iv_clauses(Cs, Inline)}},
-    wrap_guard_touches(Node, L, Cs, Inline).
+    wrap_touches(Node, L, clause_tracked_vars(Cs, Inline), Inline).
 
 %% Fun clause: parameters bind and shadow; drop them from the map for the body. Guards
 %% stay untouched (a binding read can't live in a guard); a tracked binding read in a
-%% nested fun's guard is auto-tracked by the enclosing fun node (wrap_guard_touches/4 in
+%% nested fun's guard is auto-tracked by the enclosing fun node (wrap_touches/4 in
 %% iv/2). A top-level ?each callback fun is inlined through here too but not wrapped (see
 %% inline_vars/2: compile_each needs a single-clause fun, whose guards are over the item
 %% param, not outer tracked vars).
@@ -2586,47 +2643,89 @@ iv_fun_clause({clause, L, Params, Guards, Body}, Inline) ->
     {clause, L, Params, Guards, iv_body(Body, Inline1)}.
 
 %% case/receive/try-of/catch clause: patterns match the (already inlined) scrutinee,
-%% so patterns and guards are left untouched. Any name a pattern binds is dropped from
-%% the map for the body as a conservative shadow guard. A tracked binding read in a guard
-%% is handled by the enclosing node via wrap_guard_touches/4, not here.
+%% so patterns and guards are left untouched. An inline-map variable is bound in the
+%% enclosing scope, so in such a pattern it is an equality test, not a new binding: the
+%% clause body's use of it is the same value and stays substituted. A tracked binding
+%% read in a pattern or guard is handled by the enclosing node via wrap_touches/4.
 iv_clause({clause, L, Patterns, Guards, Body}, Inline) ->
-    Inline1 = maps:without(pattern_vars(Patterns), Inline),
-    {clause, L, Patterns, Guards, iv_body(Body, Inline1)}.
+    {clause, L, Patterns, Guards, iv_body(Body, Inline)}.
 
 %% A binding read (`?get`/`get_lazy`/`with`-derived, hence in the inline map) cannot live
-%% in a guard -- Erlang forbids a function call there -- so guards are left as bound
-%% variables. The read then never re-runs inside the slot's dependency bracket, and the
-%% slot would silently freeze on that binding. To keep the slot reactive, wrap the
-%% guard-bearing expression in a block that first reads (for the `track/1` side effect)
-%% each tracked binding its guards reference, recording them as slot dependencies. The
-%% guard keeps using the captured value, which each diff cycle rebuilds from the current
-%% bindings, so a change to a guard binding re-renders the slot. No tracked guard var ->
-%% node returned unchanged.
-wrap_guard_touches(Node, L, Clauses, Inline) ->
-    case guard_tracked_vars(Clauses, Inline) of
-        [] -> Node;
-        Vars -> {block, L, [guard_touch(V, L, Inline) || V <- Vars] ++ [Node]}
-    end.
+%% in a pattern or a guard -- Erlang forbids a function call there -- so both are left as
+%% bound variables. The read then never re-runs inside the slot's dependency bracket, and
+%% the slot would silently freeze on that binding. To keep the slot reactive, wrap the
+%% expression in a block that first reads (for the `track/1` side effect) each tracked
+%% binding its patterns and guards reference, recording them as slot dependencies. The
+%% pattern or guard keeps using the captured value, which each diff cycle rebuilds from
+%% the current bindings, so a change to that binding re-renders the slot. No tracked
+%% var -> node returned unchanged.
+wrap_touches(Node, _L, [], _Inline) ->
+    Node;
+wrap_touches(Node, L, Vars, Inline) ->
+    {block, L, touches(Vars, L, Inline) ++ [Node]}.
 
-%% Read V's inlined definition (its get/get_lazy/with call) for the track side effect,
-%% discarding the value. Reusing the inline expansion handles get/get_lazy/with and
-%% transitively-derived vars uniformly without extracting the binding key.
-guard_touch(V, L, Inline) ->
-    {match, L, {var, L, '_'}, iv({var, L, V}, Inline)}.
+%% Read each var's inlined definition (its get/get_lazy/with call) for the track side
+%% effect, discarding the value. Reusing the inline expansion handles get/get_lazy/with
+%% and transitively-derived vars uniformly without extracting the binding key.
+touches(Vars, L, Inline) ->
+    [{match, L, {var, L, '_'}, iv({var, L, V}, Inline)} || V <- Vars].
 
-%% Union (first-seen order) of inline-map variables referenced in any clause guard,
-%% respecting each clause's own pattern/parameter shadowing.
-guard_tracked_vars(Clauses, Inline) ->
+%% Inline-map variables read by case-like clauses (first-seen order). Every one in a
+%% pattern is a read: it is already bound, so the pattern tests it.
+clause_tracked_vars(Clauses, Inline) ->
+    collect_tracked_vars(
+        [[Patterns, Guards] || {clause, _, Patterns, Guards, _} <:- Clauses], Inline
+    ).
+
+%% Fun clauses bind their parameters, which shadow the enclosing scope for the guard;
+%% only a parameter pattern's map keys and binary sizes read it.
+fun_tracked_vars(Clauses, Inline) ->
     lists:reverse(
         lists:foldl(
-            fun({clause, _, Patterns, Guards, _}, Acc) ->
-                ClauseInline = maps:without(pattern_vars(Patterns), Inline),
-                collect_guard_vars(Guards, ClauseInline, Acc)
+            fun({clause, _, Params, Guards, _}, Acc) ->
+                Acc1 = collect_guard_vars(pattern_reads(Params), Inline, Acc),
+                collect_guard_vars(Guards, maps:without(pattern_vars(Params), Inline), Acc1)
             end,
             [],
             Clauses
         )
     ).
+
+%% Generator patterns bind (shadowing for later qualifiers), but their map keys and
+%% binary sizes read the scope the generator sits in.
+generator_tracked_vars(Qs, Inline) ->
+    {Reads, _} = lists:foldl(
+        fun(Q, {Acc, Inl}) ->
+            Acc1 = collect_guard_vars(generator_reads(Q), Inl, Acc),
+            {Acc1, maps:without(pattern_vars(qual_patterns(Q)), Inl)}
+        end,
+        {[], Inline},
+        Qs
+    ),
+    lists:reverse(Reads).
+
+qual_patterns({zip, _, Gens}) ->
+    [P || {_, _, P, _} <:- Gens];
+qual_patterns({Gen, _, P, _}) when ?IS_GENERATOR(Gen) ->
+    [P];
+qual_patterns(_Filter) ->
+    [].
+
+%% A map generator's `K := V` is two patterns (both bind), not a map pattern whose key
+%% is read.
+generator_reads({zip, _, Gens}) ->
+    lists:append([generator_reads(G) || G <- Gens]);
+generator_reads({Gen, _, {map_field_exact, _, K, V}, _}) when
+    Gen =:= m_generate; Gen =:= m_generate_strict
+->
+    pattern_reads([K, V]);
+generator_reads({Gen, _, P, _}) when ?IS_GENERATOR(Gen) ->
+    pattern_reads(P);
+generator_reads(_Filter) ->
+    [].
+
+collect_tracked_vars(Form, Inline) ->
+    lists:reverse(collect_guard_vars(Form, Inline, [])).
 
 %% Depth-first collect of inline-map variable names in a guard AST (they may be nested in
 %% `andalso`/`is_binary(...)`/comparisons). The `{var, _, _}` clause is matched ahead of
@@ -2643,21 +2742,29 @@ collect_guard_vars([H | T], Inline, Acc) ->
 collect_guard_vars(_Other, _Inline, Acc) ->
     Acc.
 
-%% A body is a sequence; a `Var = RHS` match binds Var (shadowing) for later exprs.
+%% A body is a sequence; a `Var = RHS` match binds Var (shadowing) for later exprs. A
+%% `?=` must stay a direct expression of its `maybe` body, so the touches for the
+%% variables its pattern tests go ahead of it there rather than in a wrapping block.
 iv_body(Exprs, Inline) ->
     {Rev, _} = lists:foldl(
         fun(E, {Acc, Inl}) ->
             Inl1 =
                 case E of
                     {match, _, P, _} -> maps:without(pattern_vars(P), Inl);
+                    {maybe_match, _, P, _} -> maps:without(pattern_vars(P), Inl);
                     _ -> Inl
                 end,
-            {[iv(E, Inl) | Acc], Inl1}
+            {[iv(E, Inl) | lists:reverse(maybe_match_touches(E, Inl)) ++ Acc], Inl1}
         end,
         {[], Inline},
         Exprs
     ),
     lists:reverse(Rev).
+
+maybe_match_touches({maybe_match, L, P, _}, Inline) ->
+    touches(collect_tracked_vars(P, Inline), L, Inline);
+maybe_match_touches(_E, _Inline) ->
+    [].
 
 %% Comprehension qualifiers, left to right: generator patterns bind for subsequent
 %% qualifiers and the template; filters are plain expressions. A zip generator
@@ -2846,8 +2953,14 @@ compile_template(Arg, Line, Module, LiveRender, Backend) ->
 %% `Inherited` is true for a template nested in an `az-nodiff` one (see
 %% inherit_nodiff/1): it compiles nodiff whatever its own attributes say.
 compile_template(Arg, Line, Module, LiveRender, Backend, Inherited) ->
+    compile_template(Arg, Line, Module, LiveRender, Backend, Inherited, html).
+
+%% `CCtx` is the content context the template renders in: a conditional tail's
+%% element compiles in the context of the slot holding it (an SVG `<script>` or
+%% `<title>` in a branch under `<svg>` is foreign content, as it is written directly).
+compile_template(Arg, Line, Module, LiveRender, Backend, Inherited, CCtx) ->
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
-        Arg, Module, LiveRender, Backend, html, Inherited, template
+        Arg, Module, LiveRender, Backend, CCtx, Inherited, template
     ),
     Opts = Opts0#{backend => Backend},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
@@ -3080,7 +3193,9 @@ build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, {map, MapLine, F
     DFunAST =
         {'fun', Line, {clauses, [{clause, Line, Vars1, Guards1, Prefix1 ++ [DListAST1]}]}},
     TField = {map_field_assoc, MapLine, {atom, MapLine, t}, {integer, MapLine, 0}},
-    NewFields = [TField | [set_template_map_d_field(Field, DFunAST) || Field <- Fields]],
+    NewFields =
+        [TField | [set_template_map_d_field(Field, DFunAST) || Field <- Fields]] ++
+            reuse_field(MapLine, Vars1, Prefix1, DListAST1),
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, {map, MapLine, NewFields}
     ]}.
@@ -3189,14 +3304,14 @@ compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend, CCtx
     );
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx, Inherited) ->
     compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend, CCtx, Inherited);
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, _CCtx, true) ->
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, true) ->
     %% Nodiff by inheritance: the enclosing template never diffs, so the slot needs
     %% no anchor and renders once, like any nodiff value.
     ok = reject_orphaned_local(ExprAST),
-    DynASTs = [make_nodiff_dynamic_ast(ExprAST, Module, line(ExprAST), Backend)],
+    DynASTs = [make_nodiff_dynamic_ast(ExprAST, Module, line(ExprAST), Backend, CCtx)],
     Statics = [[], []],
     {Statics, DynASTs, generate_fingerprint(Statics), #{diff => false}};
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, _CCtx, false) ->
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, false) ->
     %% The slot's own markers anchor it (see below), but a marker is not an
     %% ELEMENT, so it still cannot carry an `az-local` attribute -- an orphaned
     %% ?local here stays a compile error.
@@ -3211,7 +3326,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, _CC
     %% conditional-only child) target an az that exists nowhere in the DOM
     %% and the client drops them.
     Statics = [[{az_slot, ~"0"}], [Backend:text_slot_close()]],
-    DynASTs = [make_esc_text_dynamic_ast(~"0", ExprAST, Module, line(ExprAST), Backend)],
+    DynASTs = [make_esc_text_dynamic_ast(~"0", ExprAST, Module, line(ExprAST), Backend, CCtx)],
     {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
 %% A ?local outside an element -- a whole template body, a fragment top-level
@@ -3429,7 +3544,9 @@ compile_mixed_non_static(Item, Module, State) ->
     end.
 
 compile_mixed_dynamic(Item, Module, #state{nodiff = true, backend = Backend} = State) ->
-    flush(State, make_nodiff_dynamic_ast(Item, Module, line(Item), Backend));
+    flush(
+        State, make_nodiff_dynamic_ast(Item, Module, line(Item), Backend, State#state.content_ctx)
+    );
 compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     %% A bare (non-element) dynamic at the fragment top level. Allocate it a
     %% unique az from the shared element counter and wrap it in text-slot markers,
@@ -3441,7 +3558,9 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     Az = integer_to_binary(State0#state.az),
     State1 = State0#state{az = State0#state.az + 1},
     State2 = buf_az_slot(State1, Az),
-    DynAST = make_esc_text_dynamic_ast(Az, Item, Module, line(Item), Backend),
+    DynAST = make_esc_text_dynamic_ast(
+        Az, Item, Module, line(Item), Backend, State0#state.content_ctx
+    ),
     State3 = flush(State2, DynAST),
     State3#state{buf = [Backend:text_slot_close()]}.
 
@@ -3522,7 +3641,7 @@ compile_element(Tag, Attrs0, Children, Line, State0) ->
             N ->
                 buf_az_attr(State3, integer_to_binary(N))
         end,
-    State5 = compile_attrs(Attrs, ElemAz, State4, Line),
+    State5 = compile_element_attrs(Tag, Attrs, ElemAz, State4, Line),
     case Backend:is_void(Tag) andalso Children =/= [] of
         true -> parse_error({void_with_children, Tag}, Line);
         false -> ok
@@ -3623,6 +3742,36 @@ compile_static_false(NameAST, State0, ElemLine) ->
         Bytes ->
             buf_append(State0, Bytes)
     end.
+
+%% The author's attributes, then the static ones the backend implies from them
+%% (`arizona_renderer:implied_attrs/2`).
+compile_element_attrs(Tag, Attrs, ElemAz, State0, Line) ->
+    Backend = State0#state.backend,
+    State1 = compile_attrs(Attrs, ElemAz, State0, Line),
+    Names = [N || A <- Attrs, N <- [implied_attr_name(Backend, A)], is_binary(N)],
+    case Backend:implied_attrs(Tag, Names) of
+        [] ->
+            State1;
+        Implied ->
+            buf_append(State1, <<
+                <<(emit_backend(fun() -> Backend:attr(N, V) end, Line))/binary>>
+             || {N, V} <:- Implied
+            >>)
+    end.
+
+%% A static `false` renders nothing, so it is not an attribute the element carries.
+implied_attr_name(_Backend, {tuple, _, [_NameAST, {atom, _, false}]}) ->
+    undefined;
+implied_attr_name(Backend, {tuple, _, [{atom, _, _} = NameAST, _Value]}) ->
+    extract_attr_name(Backend, NameAST);
+implied_attr_name(Backend, {tuple, _, [{bin, _, _} = NameAST, _Value]}) ->
+    extract_attr_name(Backend, NameAST);
+implied_attr_name(_Backend, {bin, _, _} = Bin) ->
+    extract_binary_value(Bin);
+implied_attr_name(Backend, {atom, _, Name}) ->
+    Backend:name(Name);
+implied_attr_name(_Backend, _Other) ->
+    undefined.
 
 compile_attrs([], _ElemAz, State, _ElemLine) ->
     State;
@@ -3733,18 +3882,14 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST0, ElemAz, State0) ->
             );
         error when State0#state.nodiff ->
             Module = State0#state.module,
-            State1 = buf_append(
-                State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
-            ),
+            State1 = buf_dyn_attr(State0, Backend, NameBin, ValLine),
             DynAST = make_nodiff_attr_dynamic_ast(
                 NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
             ),
             flush(State1, DynAST);
         error ->
             Module = State0#state.module,
-            State1 = buf_append(
-                State0, emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, ValLine)
-            ),
+            State1 = buf_dyn_attr(State0, Backend, NameBin, ValLine),
             AzBin = integer_to_binary(ElemAz),
             DynAST = make_attr_dynamic_ast(
                 AzBin, NameBin, typed_attr_ast(Backend, ValueAST), Module, line(ValueAST)
@@ -3789,7 +3934,7 @@ typed_attr_ast(Backend, ValueAST) ->
 %% not match it.
 compile_local_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
     Module = State0#state.module,
-    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+    State1 = buf_dyn_attr(State0, Backend, NameBin, line(ValueAST)),
     Expr = local_attr_expr_ast(NameBin, ValueAST),
     DynAST = make_text_dynamic_ast(local_attr_az(ElemAz), Expr, Module, line(ValueAST)),
     flush(State1, DynAST).
@@ -3811,7 +3956,7 @@ local_attr_expr_ast(NameBin, LocalCallAST) ->
 %% stores the affixes (descriptor `ap`) to recompose on set / strip on read.
 compile_interp_local_attr(Backend, NameBin, LocalCall, Prefix, Suffix, ElemAz, State0) ->
     Module = State0#state.module,
-    State1 = buf_append(State0, Backend:attr_dyn_name(NameBin)),
+    State1 = buf_dyn_attr(State0, Backend, NameBin, line(LocalCall)),
     Expr = local_attr_interp_expr_ast(NameBin, LocalCall, Prefix, Suffix),
     DynAST = make_text_dynamic_ast(local_attr_az(ElemAz), Expr, Module, line(LocalCall)),
     flush(State1, DynAST).
@@ -4143,7 +4288,7 @@ is_value_constructor(_Expr) ->
 %% HTML-escape inside raw text, so a marked value was spliced with no
 %% neutralization and an unmarked one drew no compile error. The `escapable`
 %% clause stays below nodiff because the two agree there: both HTML-escape the
-%% scalar through make_nodiff_dynamic_ast/4.
+%% scalar through make_nodiff_dynamic_ast/5.
 emit_child_dynamic(
     Child,
     _ElemAz,
@@ -4157,7 +4302,9 @@ emit_child_dynamic(
     %% Diffing is impossible by construction (no marker to patch), so the slot
     %% renders once -- the diff engine skips its `undefined` az.
     ok = assert_raw_text_opt_out(Child),
-    DynAST = make_raw_text_dynamic_ast(Child, Tag, Module, line(Child), Backend),
+    DynAST = make_raw_text_dynamic_ast(
+        Child, Tag, Module, line(Child), Backend, State0#state.content_ctx
+    ),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(
     Child, ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
@@ -4168,7 +4315,9 @@ emit_child_dynamic(
         true ->
             emit_marked_child(Child, ElemAz, State0, Slot);
         false ->
-            DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
+            DynAST = make_nodiff_dynamic_ast(
+                Child, Module, line(Child), Backend, State0#state.content_ctx
+            ),
             {flush(State0, DynAST), Slot + 1}
     end;
 emit_child_dynamic(
@@ -4181,7 +4330,9 @@ emit_child_dynamic(
     %% references, so a scalar is HTML-escaped (make_nodiff_dynamic_ast's
     %% esc_spec), but comments are still literal -- so the slot is markerless and
     %% render-once, exactly like the layout/nodiff value path.
-    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
+    DynAST = make_nodiff_dynamic_ast(
+        Child, Module, line(Child), Backend, State0#state.content_ctx
+    ),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(Child, ElemAz, State0, Slot) ->
     emit_marked_child(Child, ElemAz, State0, Slot).
@@ -4190,7 +4341,9 @@ emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = St
     ElemAzBin = integer_to_binary(ElemAz),
     MarkerAz = Backend:text_az(ElemAzBin, Slot),
     State1 = buf_az_slot(State0, MarkerAz),
-    DynAST = make_esc_text_dynamic_ast(MarkerAz, Child, Module, line(Child), Backend),
+    DynAST = make_esc_text_dynamic_ast(
+        MarkerAz, Child, Module, line(Child), Backend, State0#state.content_ctx
+    ),
     State2 = flush(State1, DynAST),
     {State2#state{buf = [Backend:text_slot_close()]}, Slot + 1}.
 
@@ -4232,8 +4385,8 @@ make_text_dynamic_ast(Az, ExprAST, Module, ExprLine) ->
 %% template, ?each, ?inner_content, ?stateful/?stateless, a map, or raw/1 -- is
 %% left untagged and rendered structurally (escaping is decided at compile time
 %% so the runtime can never confuse user scalars with spliced framework HTML).
-make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
-    ExprAST = stamp_branches(expand_block_element_tails(ExprAST0, Module, Backend, false)),
+make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend, CCtx) ->
+    ExprAST = stamp_branches(expand_block_element_tails(ExprAST0, Module, Backend, false, CCtx)),
     LocAST = loc_ast(Module, ExprLine),
     Body = branch_track_touches(ExprAST0) ++ [ExprAST],
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], Body}]}},
@@ -4303,7 +4456,7 @@ branch_call(N, L, Leaf) ->
 %% skipped and the branch freezes. (A *value* branch does not freeze: its read fires
 %% eagerly in the slot closure when that branch is taken, and a non-taken value
 %% branch's read is genuinely not a dependency.) Mirror the guard auto-tracking
-%% (wrap_guard_touches/4): prepend a `track/1` for each binding key read in a branch
+%% (wrap_touches/4): prepend a `track/1` for each binding key read in a branch
 %% tail that becomes a nested template, so those keys become deps of the conditional
 %% dynamic itself. `track/1` records the key without reading the binding, so a key
 %% present only in a non-taken (and possibly absent) branch never raises
@@ -4467,7 +4620,7 @@ track_call_ast(KeyAST) ->
 %% sub-expressions and non-element tails are left untouched (a non-element tail
 %% renders as an escaped scalar, as before). The set of walked forms is shared
 %% with the live-render-root transform via map_tail_exprs/3.
-expand_block_element_tails(Expr, Module, Backend, Nodiff) ->
+expand_block_element_tails(Expr, Module, Backend, Nodiff, CCtx) ->
     case is_local_marker(Expr) of
         true ->
             %% A direct ?local content child: a legit slot (the enclosing
@@ -4478,7 +4631,7 @@ expand_block_element_tails(Expr, Module, Backend, Nodiff) ->
         false ->
             map_tail_exprs(
                 Expr,
-                fun(Leaf) -> expand_element_leaf(Leaf, Module, Backend, Nodiff) end,
+                fun(Leaf) -> expand_element_leaf(Leaf, Module, Backend, Nodiff, CCtx) end,
                 fun(NonTail) -> NonTail end
             )
     end.
@@ -4488,14 +4641,14 @@ expand_block_element_tails(Expr, Module, Backend, Nodiff) ->
 %% there would; leave plain values (and pure value lists) untouched. A ?local
 %% leaf is rejected: a conditional-branch ?local emits no az-local descriptor
 %% (see reject_orphaned_local/1).
-expand_element_leaf(Expr, Module, Backend, Nodiff) ->
+expand_element_leaf(Expr, Module, Backend, Nodiff, CCtx) ->
     ok = reject_orphaned_local(Expr),
     case classify_body(Expr) of
         Class when Class =:= element_tuple; Class =:= element_list ->
-            compile_template(Expr, line(Expr), Module, false, Backend, Nodiff);
+            compile_template(Expr, line(Expr), Module, false, Backend, Nodiff, CCtx);
         list_ast ->
             case list_has_markup_item(Expr) of
-                true -> compile_template(Expr, line(Expr), Module, false, Backend, Nodiff);
+                true -> compile_template(Expr, line(Expr), Module, false, Backend, Nodiff, CCtx);
                 false -> Expr
             end;
         _ ->
@@ -4595,23 +4748,23 @@ make_attr_dynamic_ast(AzBin, AttrNameBin, ExprAST, Module, ExprLine) ->
         LocAST
     ]}.
 
-%% Same value/block classification as make_esc_text_dynamic_ast/5, but for the
+%% Same value/block classification as make_esc_text_dynamic_ast/6, but for the
 %% nodiff (layout) path: a value interpolation (e.g. a layout `title`) is tagged
 %% `{esc, Fun}` so SSR HTML-escapes it; a block (?inner_content, nested template)
 %% is left untagged and spliced raw.
-make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
-    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, true),
+make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend, CCtx) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, true, CCtx),
     LocAST = loc_ast(Module, ExprLine),
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, esc_spec(ExprAST, FunAST), LocAST]}.
 
 %% Markerless render-once for a `raw` raw-text element (script/style). Unlike
-%% make_nodiff_dynamic_ast/4 the value is left bare (never `{esc, Fun}`): the
+%% make_nodiff_dynamic_ast/5 the value is left bare (never `{esc, Fun}`): the
 %% browser does not decode character references inside these, so HTML-escaping a
 %% scalar would corrupt it (`&` -> `&amp;`). `undefined` az makes it non-diffable
 %% -- there is no comment marker to patch.
-make_raw_text_dynamic_ast(ExprAST0, Tag, Module, ExprLine, Backend) ->
-    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, false),
+make_raw_text_dynamic_ast(ExprAST0, Tag, Module, ExprLine, Backend, CCtx) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, false, CCtx),
     LocAST = loc_ast(Module, ExprLine),
     %% Neutralize a tokenizer breakout (`</script>`, `<!--`) in the value: the
     %% content is emitted verbatim, so the backend that owns raw-text elements
@@ -4650,6 +4803,10 @@ buf_az_attr(State, Az) ->
 buf_az_slot(State, Az) ->
     State#state{buf = [{az_slot, Az} | State#state.buf]}.
 
+buf_dyn_attr(State, Backend, NameBin, Line) ->
+    Bin = emit_backend(fun() -> Backend:attr_dyn_name(NameBin) end, Line),
+    State#state{buf = [{dyn_attr, NameBin, Bin} | State#state.buf]}.
+
 flush(State, DynAST) ->
     State#state{
         statics = State#state.statics ++ [lists:reverse(State#state.buf)],
@@ -4663,8 +4820,8 @@ finalize(State) ->
     {Statics, Dynamics}.
 
 %% Render a static's segments to bytes, each `az` marker built from `Prefix`
-%% plus its id. `Prefix` is empty for the fingerprint pass (the fingerprint is
-%% taken over the unscoped bytes) and `<Fp>-` for the emitted statics.
+%% plus its id. `Prefix` is `<Fp>-`, scoping the emitted statics to their
+%% template.
 -spec render_static(module(), binary(), [segment()]) -> static().
 render_static(Backend, Prefix, Segments) ->
     iolist_to_binary([render_segment(Backend, Prefix, Seg) || Seg <- Segments]).
@@ -4674,7 +4831,9 @@ render_segment(_Backend, _Prefix, Bin) when is_binary(Bin) ->
 render_segment(Backend, Prefix, {az_attr, Az}) ->
     Backend:az_attr(<<Prefix/binary, Az/binary>>);
 render_segment(Backend, Prefix, {az_slot, Az}) ->
-    Backend:text_slot_open(<<Prefix/binary, Az/binary>>).
+    Backend:text_slot_open(<<Prefix/binary, Az/binary>>);
+render_segment(_Backend, _Prefix, {dyn_attr, _Name, Bin}) ->
+    Bin.
 
 %% Prefix az values with the template fingerprint to prevent collisions
 %% when stateless children are inlined in a parent template. The markers are
@@ -4695,10 +4854,11 @@ scope_dynamic_ast(Fp, {tuple, L, [AzAST | Rest]}) ->
     {tuple, L, [ast_binary(<<Fp/binary, "-", AzBin/binary>>) | Rest]}.
 
 %% Hashes the template's shape over its `Statics` *segments* (`binary()` literals
-%% interleaved with `{az_attr, _}` / `{az_slot, _}` markers), not their rendered
-%% bytes. Segments distinguish a framework marker from literal bytes that merely
-%% look like one, so two templates differing only in that respect -- exactly the
-%% pair the scoping bug used to conflate -- get different fingerprints; hashing
+%% interleaved with `{az_attr, _}` / `{az_slot, _}` markers and `{dyn_attr, _, _}`
+%% dynamic attribute names), not their rendered bytes. Segments distinguish a
+%% framework marker from literal bytes that merely look like one, so two
+%% templates differing only in that respect -- exactly the pair the scoping bug
+%% used to conflate -- get different fingerprints; hashing
 %% the rendered bytes would give a repaired template the same `f` as its
 %% corrupted predecessor, and since `f` keys the client's persistent (IndexedDB)
 %% statics cache, the repair would never reach a client holding the broken entry.
@@ -4858,13 +5018,136 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
         {map_field_assoc, Line, {atom, Line, f}, FpAST}
     ],
     TmplAST =
-        {map, Line, BaseFields ++ opts_to_map_fields(Opts, Line)},
+        {map, Line,
+            BaseFields ++ opts_to_map_fields(Opts, Line) ++
+                reuse_field(Line, Vars1, Prefix1, DynamicsAST1)},
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, TmplAST
     ]}.
 
+%% When a stream item changes, the diff may keep a per-item dynamic's old render
+%% only if its deps prove the changed fields were not read. Deps record a read
+%% only when it is a tracked `get` running in the slot's own closure: a plain
+%% `maps:get(n, Item)`, a head-destructured field, a value bound in the callback
+%% body, or a read inside a nested template's closure never reaches them, and
+%% reusing on such deps ships no op for a change that happened. The template
+%% carries `reuse => [boolean()]`, one flag per dynamic: `true` only when the
+%% dynamic references no variable but the item key, outside the map argument of a
+%% tracked read in its own closure. Omitted when no dynamic qualifies, and for a
+%% 1-arg callback, whose list source re-renders every item anyway.
+%%
+%% The map argument is masked only when it is the item itself (the bare parameter,
+%% or the variable side of a `Pat = Var` head) or bound outside the callback (the
+%% view bindings). A sub-map bound in the head or the body records ITS keys, while
+%% the item changes in the field holding it, so that read vouches for nothing.
+reuse_field(Line, [ItemPat, KeyPat], Prefix, DynamicsAST) ->
+    KeyVars = ordsets:from_list(collect_var_names(KeyPat)),
+    HeadVars = collect_var_names(ItemPat) ++ collect_var_names(KeyPat),
+    Local = (HeadVars ++ prefix_bound(Prefix, HeadVars)) -- item_vars(ItemPat),
+    Flags = [reusable_dynamic(D, KeyVars, Local) || D <- ast_list_to_list(DynamicsAST)],
+    case lists:member(true, Flags) of
+        true ->
+            [
+                {map_field_assoc, Line, {atom, Line, reuse},
+                    ast_list([{atom, Line, F} || F <- Flags])}
+            ];
+        false ->
+            []
+    end;
+reuse_field(_Line, _Vars, _Prefix, _DynamicsAST) ->
+    [].
+
+%% The variables a head pattern binds to the whole item.
+item_vars({var, _, Name}) -> [Name];
+item_vars({match, _, Left, Right}) -> item_vars(Left) ++ item_vars(Right);
+item_vars(_Pattern) -> [].
+
+prefix_bound([], _HeadVars) ->
+    [];
+prefix_bound(Prefix, HeadVars) ->
+    Block = erl_syntax:block_expr(Prefix),
+    Tree = erl_syntax_lib:annotate_bindings(Block, ordsets:from_list(HeadVars)),
+    proplists:get_value(bound, erl_syntax:get_ann(Tree)).
+
+reusable_dynamic({tuple, L, [Az, Spec | Rest]}, KeyVars, Local) ->
+    Masked = {tuple, L, [Az, mask_slot_spec(Spec, Local) | Rest]},
+    Tree = erl_syntax_lib:annotate_bindings(Masked, ordsets:new()),
+    Free = proplists:get_value(free, erl_syntax:get_ann(Tree)),
+    ordsets:is_subset(Free, KeyVars);
+reusable_dynamic(_Dynamic, _KeyVars, _Local) ->
+    false.
+
+%% The slot closure is the bare fun or the one an `{esc, F}` / `{attr, Name, F}`
+%% spec wraps; only there does a tracked read land in the dynamic's own deps.
+mask_slot_spec({tuple, L, [{atom, _, esc} = Tag, Fun]}, Local) ->
+    {tuple, L, [Tag, mask_slot_fun(Fun, Local)]};
+mask_slot_spec({tuple, L, [{atom, _, attr} = Tag, Name, Fun]}, Local) ->
+    {tuple, L, [Tag, Name, mask_slot_fun(Fun, Local)]};
+mask_slot_spec(Spec, Local) ->
+    mask_slot_fun(Spec, Local).
+
+mask_slot_fun({'fun', L, {clauses, [{clause, CL, [], [], Body}]}}, Local) ->
+    {'fun', L, {clauses, [{clause, CL, [], [], mask_tracked_reads(Body, Local)}]}};
+mask_slot_fun(Spec, _Local) ->
+    Spec.
+
+%% Replace the map argument of each tracked read of the item or the view bindings
+%% (a variable not in `Local`) with an atom, so it no longer counts as a reference.
+%% A nested fun is left alone: its body runs later, in a dependency scope of its
+%% own (a nested template's closure), or never.
+mask_tracked_reads({'fun', _, _} = Fun, _Local) ->
+    Fun;
+mask_tracked_reads({named_fun, _, _, _} = Fun, _Local) ->
+    Fun;
+mask_tracked_reads(
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}} = Callee, [Key, {var, VL, V} | Rest]} =
+        Call,
+    Local
+) when Mod =:= arizona_template; Mod =:= az ->
+    case is_tracked_read(F, Rest) andalso not lists:member(V, Local) of
+        true ->
+            Args = [
+                mask_tracked_reads(Key, Local),
+                {atom, VL, tracked}
+                | mask_tracked_reads(Rest, Local)
+            ],
+            {call, L, Callee, Args};
+        false ->
+            list_to_tuple(mask_tracked_reads(tuple_to_list(Call), Local))
+    end;
+mask_tracked_reads(Node, Local) when is_tuple(Node) ->
+    list_to_tuple(mask_tracked_reads(tuple_to_list(Node), Local));
+mask_tracked_reads(Nodes, Local) when is_list(Nodes) ->
+    [mask_tracked_reads(N, Local) || N <- Nodes];
+mask_tracked_reads(Leaf, _Local) ->
+    Leaf.
+
+%% `get/2,3`, `get_lazy/3` and `with/2` track the key they read (`with/2` every
+%% key it projects to), given the arguments after the key and the map.
+is_tracked_read(get, []) -> true;
+is_tracked_read(get, [_Default]) -> true;
+is_tracked_read(get_lazy, [_DefaultFun]) -> true;
+is_tracked_read(with, []) -> true;
+is_tracked_read(_F, _Rest) -> false.
+
+%% A binary literal AST holding exactly `Bin`'s bytes. Generated literals are read
+%% back as template text (an injected `az-local` value folds through compile_attr/4,
+%% which takes a string element's characters as code points), so non-ASCII UTF-8 is
+%% spelled as its characters with the `utf8` type: spelled byte by byte, each byte
+%% would be read back as a code point and encoded a second time. Bytes that are not
+%% UTF-8 keep the byte spelling, which no text reading applies to.
 ast_binary(Bin) ->
-    {bin, 0, [{bin_element, 0, {string, 0, binary_to_list(Bin)}, default, default}]}.
+    case unicode:characters_to_list(Bin) of
+        Chars when is_list(Chars) ->
+            Type =
+                case lists:all(fun(C) -> C < 128 end, Chars) of
+                    true -> default;
+                    false -> [utf8]
+                end,
+            {bin, 0, [{bin_element, 0, {string, 0, Chars}, default, Type}]};
+        _ ->
+            {bin, 0, [{bin_element, 0, {string, 0, binary_to_list(Bin)}, default, default}]}
+    end.
 
 ast_list([]) ->
     {nil, 0};

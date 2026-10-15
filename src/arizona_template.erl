@@ -158,6 +158,9 @@ render(Bindings) ->
     %% An item element carrying az-nodiff compiles its per-item template nodiff.
     diff => false,
     single_root => true,
+    %% Per dynamic: may a changed stream item keep its old render when the deps
+    %% miss the changed fields (every item read tracked in its own closure)?
+    reuse => [boolean()],
     backend => module()
 }.
 
@@ -920,8 +923,8 @@ scope_val(_Prefix, Val) -> Val.
 
 -doc """
 Splits a list of `{Az, Val, Deps}` triples into the snapshot d-list and
-deps list. (`arizona_render:render/2`, used by a first connect and `render_current`,
-needs the document too and fuses this split into its zip walk, `zip_triples/3`.)
+deps list. (`arizona_render:render/2` needs the document too and fuses this
+split into its zip walk, `zip_triples/3`.)
 """.
 -spec split_triples(Triples) -> {DList, DepsList} when
     Triples :: [{az(), term(), deps()}],
