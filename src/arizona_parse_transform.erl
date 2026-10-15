@@ -1054,6 +1054,7 @@ format_helper_error(helper_param_in_each_guard, Name, Arity) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
+-spec parse_error(term(), term()) -> no_return().
 parse_error(Reason, Line) ->
     throw({arizona_parse_error, Line, Reason}).
 
@@ -1640,6 +1641,7 @@ pt_binding_node({Comp, L, T, Qs}, Live, Ctx) ->
     {Qs1, Live1} = lists:mapfoldl(fun(Q, Lv) -> pt_qual(Q, Lv, Ctx) end, Live, Qs),
     {Comp, L, pt(T, Live1, Ctx), Qs1}.
 
+-spec pt_each_error({atom(), arity(), term()}) -> no_return().
 pt_each_error({Name, Arity, Line}) ->
     parse_error({helper_param_in_each_guard, Name, Arity}, Line).
 
