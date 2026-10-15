@@ -425,6 +425,7 @@
     raw_text_svg_title_diffable/1,
     raw_text_svg_title_factoring/1,
     raw_text_svg_title_local/1,
+    raw_text_svg_branch_context/1,
     raw_text_foreign_script_style_escaped/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
@@ -805,6 +806,7 @@ groups() ->
             raw_text_svg_title_diffable,
             raw_text_svg_title_factoring,
             raw_text_svg_title_local,
+            raw_text_svg_branch_context,
             raw_text_foreign_script_style_escaped,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
@@ -2592,6 +2594,35 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
     %% Pinned against the component case above, which cannot.
     {EachHTML, _} = arizona_render:render(Mod:each(#{rows => [~"A"]})),
     ?assertMatch({_, _}, binary:match(iolist_to_binary(EachHTML), ~"<title az=")).
+
+%% A conditional tail's element compiles into a template of its own, but it renders in
+%% the slot that holds it, so it takes that slot's content context: under `<svg>` a
+%% branch's `<script>` is foreign content (a plain diffable slot, not raw text that
+%% must be a `?raw`) and its `<title>` keeps its markers, exactly as when written
+%% directly in the `<svg>`.
+raw_text_svg_branch_context(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_branch). "
+        "-export([script/1, title/1]). "
+        "script(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {script, [], [arizona_template:get(x, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+        "title(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+    ),
+    {ScriptHTML, _} = arizona_render:render(Mod:script(#{f => true, x => ~"A"})),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(ScriptHTML), ~"<script[^>]*><!--az:")),
+    B0 = #{f => true, t => ~"A"},
+    {TitleHTML, TitleSnap, _} = arizona_render:render(Mod:title(B0), #{}),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(TitleHTML), ~"<title[^>]*><!--az:")),
+    %% The same branch re-rendered patches only the title's own slot.
+    {TitleOps, _, _} = arizona_diff:diff(
+        Mod:title(B0#{t => ~"B"}), TitleSnap, #{}, #{t => true}
+    ),
+    ?assertMatch([[_Op, _Az, ~"B"]], TitleOps).
 
 %% A content `?local` under a raw-text element is a compile error -- the client
 %% resolves a local slot through its markers, and raw-text content has none. An

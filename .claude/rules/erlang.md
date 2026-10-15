@@ -404,8 +404,10 @@ A control-flow expression in a **content slot** -- `case`, `if`, `begin`, `recei
 `try`, or `maybe` -- may return a bare element tuple, an element list, or a mixed fragment
 (static text/values interleaved with elements) directly from a tail position. The parse
 transform compiles each tail into a nested template, exactly as a literal
-`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target. No
-`?html` wrap is needed:
+`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target -- and,
+unlike a literal wrapper (which starts its own template at the root context), the content
+context of the slot, so a branch's `<script>` or `<title>` under `<svg>` is foreign content
+exactly as when written directly there. No `?html` wrap is needed:
 
 ```erlang
 %% both branches accepted: <<>> renders empty, the tuple becomes a nested template

@@ -2510,8 +2510,14 @@ compile_template(Arg, Line, Module, LiveRender, Backend) ->
 %% `Inherited` is true for a template nested in an `az-nodiff` one (see
 %% inherit_nodiff/1): it compiles nodiff whatever its own attributes say.
 compile_template(Arg, Line, Module, LiveRender, Backend, Inherited) ->
+    compile_template(Arg, Line, Module, LiveRender, Backend, Inherited, html).
+
+%% `CCtx` is the content context the template renders in: a conditional tail's
+%% element compiles in the context of the slot holding it (an SVG `<script>` or
+%% `<title>` in a branch under `<svg>` is foreign content, as it is written directly).
+compile_template(Arg, Line, Module, LiveRender, Backend, Inherited, CCtx) ->
     {Statics, DynASTs, Fingerprint, Opts0} = compile_body_parts(
-        Arg, Module, LiveRender, Backend, html, Inherited, template
+        Arg, Module, LiveRender, Backend, CCtx, Inherited, template
     ),
     Opts = Opts0#{backend => Backend},
     {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
@@ -2853,14 +2859,14 @@ compile_classified_body(element_list, ExprAST, Module, LiveRender, Backend, CCtx
     );
 compile_classified_body(list_ast, ExprAST, Module, _LiveRender, Backend, CCtx, Inherited) ->
     compile_mixed_items(ast_list_to_list(ExprAST), Module, Backend, CCtx, Inherited);
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, _CCtx, true) ->
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, true) ->
     %% Nodiff by inheritance: the enclosing template never diffs, so the slot needs
     %% no anchor and renders once, like any nodiff value.
     ok = reject_orphaned_local(ExprAST),
-    DynASTs = [make_nodiff_dynamic_ast(ExprAST, Module, line(ExprAST), Backend)],
+    DynASTs = [make_nodiff_dynamic_ast(ExprAST, Module, line(ExprAST), Backend, CCtx)],
     Statics = [[], []],
     {Statics, DynASTs, generate_fingerprint(Statics), #{diff => false}};
-compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, _CCtx, false) ->
+compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCtx, false) ->
     %% The slot's own markers anchor it (see below), but a marker is not an
     %% ELEMENT, so it still cannot carry an `az-local` attribute -- an orphaned
     %% ?local here stays a compile error.
@@ -2875,7 +2881,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, _CC
     %% conditional-only child) target an az that exists nowhere in the DOM
     %% and the client drops them.
     Statics = [[{az_slot, ~"0"}], [Backend:text_slot_close()]],
-    DynASTs = [make_esc_text_dynamic_ast(~"0", ExprAST, Module, line(ExprAST), Backend)],
+    DynASTs = [make_esc_text_dynamic_ast(~"0", ExprAST, Module, line(ExprAST), Backend, CCtx)],
     {Statics, DynASTs, generate_fingerprint(Statics), #{}}.
 
 %% A ?local outside an element -- a whole template body, a fragment top-level
@@ -3093,7 +3099,9 @@ compile_mixed_non_static(Item, Module, State) ->
     end.
 
 compile_mixed_dynamic(Item, Module, #state{nodiff = true, backend = Backend} = State) ->
-    flush(State, make_nodiff_dynamic_ast(Item, Module, line(Item), Backend));
+    flush(
+        State, make_nodiff_dynamic_ast(Item, Module, line(Item), Backend, State#state.content_ctx)
+    );
 compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     %% A bare (non-element) dynamic at the fragment top level. Allocate it a
     %% unique az from the shared element counter and wrap it in text-slot markers,
@@ -3105,7 +3113,9 @@ compile_mixed_dynamic(Item, Module, #state{backend = Backend} = State0) ->
     Az = integer_to_binary(State0#state.az),
     State1 = State0#state{az = State0#state.az + 1},
     State2 = buf_az_slot(State1, Az),
-    DynAST = make_esc_text_dynamic_ast(Az, Item, Module, line(Item), Backend),
+    DynAST = make_esc_text_dynamic_ast(
+        Az, Item, Module, line(Item), Backend, State0#state.content_ctx
+    ),
     State3 = flush(State2, DynAST),
     State3#state{buf = [Backend:text_slot_close()]}.
 
@@ -3807,7 +3817,7 @@ is_value_constructor(_Expr) ->
 %% HTML-escape inside raw text, so a marked value was spliced with no
 %% neutralization and an unmarked one drew no compile error. The `escapable`
 %% clause stays below nodiff because the two agree there: both HTML-escape the
-%% scalar through make_nodiff_dynamic_ast/4.
+%% scalar through make_nodiff_dynamic_ast/5.
 emit_child_dynamic(
     Child,
     _ElemAz,
@@ -3821,7 +3831,9 @@ emit_child_dynamic(
     %% Diffing is impossible by construction (no marker to patch), so the slot
     %% renders once -- the diff engine skips its `undefined` az.
     ok = assert_raw_text_opt_out(Child),
-    DynAST = make_raw_text_dynamic_ast(Child, Tag, Module, line(Child), Backend),
+    DynAST = make_raw_text_dynamic_ast(
+        Child, Tag, Module, line(Child), Backend, State0#state.content_ctx
+    ),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(
     Child, ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
@@ -3832,7 +3844,9 @@ emit_child_dynamic(
         true ->
             emit_marked_child(Child, ElemAz, State0, Slot);
         false ->
-            DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
+            DynAST = make_nodiff_dynamic_ast(
+                Child, Module, line(Child), Backend, State0#state.content_ctx
+            ),
             {flush(State0, DynAST), Slot + 1}
     end;
 emit_child_dynamic(
@@ -3845,7 +3859,9 @@ emit_child_dynamic(
     %% references, so a scalar is HTML-escaped (make_nodiff_dynamic_ast's
     %% esc_spec), but comments are still literal -- so the slot is markerless and
     %% render-once, exactly like the layout/nodiff value path.
-    DynAST = make_nodiff_dynamic_ast(Child, Module, line(Child), Backend),
+    DynAST = make_nodiff_dynamic_ast(
+        Child, Module, line(Child), Backend, State0#state.content_ctx
+    ),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(Child, ElemAz, State0, Slot) ->
     emit_marked_child(Child, ElemAz, State0, Slot).
@@ -3854,7 +3870,9 @@ emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = St
     ElemAzBin = integer_to_binary(ElemAz),
     MarkerAz = Backend:text_az(ElemAzBin, Slot),
     State1 = buf_az_slot(State0, MarkerAz),
-    DynAST = make_esc_text_dynamic_ast(MarkerAz, Child, Module, line(Child), Backend),
+    DynAST = make_esc_text_dynamic_ast(
+        MarkerAz, Child, Module, line(Child), Backend, State0#state.content_ctx
+    ),
     State2 = flush(State1, DynAST),
     {State2#state{buf = [Backend:text_slot_close()]}, Slot + 1}.
 
@@ -3896,8 +3914,8 @@ make_text_dynamic_ast(Az, ExprAST, Module, ExprLine) ->
 %% template, ?each, ?inner_content, ?stateful/?stateless, a map, or raw/1 -- is
 %% left untagged and rendered structurally (escaping is decided at compile time
 %% so the runtime can never confuse user scalars with spliced framework HTML).
-make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend) ->
-    ExprAST = stamp_branches(expand_block_element_tails(ExprAST0, Module, Backend, false)),
+make_esc_text_dynamic_ast(AzBin, ExprAST0, Module, ExprLine, Backend, CCtx) ->
+    ExprAST = stamp_branches(expand_block_element_tails(ExprAST0, Module, Backend, false, CCtx)),
     LocAST = loc_ast(Module, ExprLine),
     Body = branch_track_touches(ExprAST0) ++ [ExprAST],
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], Body}]}},
@@ -4131,7 +4149,7 @@ track_call_ast(KeyAST) ->
 %% sub-expressions and non-element tails are left untouched (a non-element tail
 %% renders as an escaped scalar, as before). The set of walked forms is shared
 %% with the live-render-root transform via map_tail_exprs/3.
-expand_block_element_tails(Expr, Module, Backend, Nodiff) ->
+expand_block_element_tails(Expr, Module, Backend, Nodiff, CCtx) ->
     case is_local_marker(Expr) of
         true ->
             %% A direct ?local content child: a legit slot (the enclosing
@@ -4142,7 +4160,7 @@ expand_block_element_tails(Expr, Module, Backend, Nodiff) ->
         false ->
             map_tail_exprs(
                 Expr,
-                fun(Leaf) -> expand_element_leaf(Leaf, Module, Backend, Nodiff) end,
+                fun(Leaf) -> expand_element_leaf(Leaf, Module, Backend, Nodiff, CCtx) end,
                 fun(NonTail) -> NonTail end
             )
     end.
@@ -4152,14 +4170,14 @@ expand_block_element_tails(Expr, Module, Backend, Nodiff) ->
 %% there would; leave plain values (and pure value lists) untouched. A ?local
 %% leaf is rejected: a conditional-branch ?local emits no az-local descriptor
 %% (see reject_orphaned_local/1).
-expand_element_leaf(Expr, Module, Backend, Nodiff) ->
+expand_element_leaf(Expr, Module, Backend, Nodiff, CCtx) ->
     ok = reject_orphaned_local(Expr),
     case classify_body(Expr) of
         Class when Class =:= element_tuple; Class =:= element_list ->
-            compile_template(Expr, line(Expr), Module, false, Backend, Nodiff);
+            compile_template(Expr, line(Expr), Module, false, Backend, Nodiff, CCtx);
         list_ast ->
             case list_has_markup_item(Expr) of
-                true -> compile_template(Expr, line(Expr), Module, false, Backend, Nodiff);
+                true -> compile_template(Expr, line(Expr), Module, false, Backend, Nodiff, CCtx);
                 false -> Expr
             end;
         _ ->
@@ -4259,23 +4277,23 @@ make_attr_dynamic_ast(AzBin, AttrNameBin, ExprAST, Module, ExprLine) ->
         LocAST
     ]}.
 
-%% Same value/block classification as make_esc_text_dynamic_ast/5, but for the
+%% Same value/block classification as make_esc_text_dynamic_ast/6, but for the
 %% nodiff (layout) path: a value interpolation (e.g. a layout `title`) is tagged
 %% `{esc, Fun}` so SSR HTML-escapes it; a block (?inner_content, nested template)
 %% is left untagged and spliced raw.
-make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
-    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, true),
+make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend, CCtx) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, true, CCtx),
     LocAST = loc_ast(Module, ExprLine),
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [ExprAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, esc_spec(ExprAST, FunAST), LocAST]}.
 
 %% Markerless render-once for a `raw` raw-text element (script/style). Unlike
-%% make_nodiff_dynamic_ast/4 the value is left bare (never `{esc, Fun}`): the
+%% make_nodiff_dynamic_ast/5 the value is left bare (never `{esc, Fun}`): the
 %% browser does not decode character references inside these, so HTML-escaping a
 %% scalar would corrupt it (`&` -> `&amp;`). `undefined` az makes it non-diffable
 %% -- there is no comment marker to patch.
-make_raw_text_dynamic_ast(ExprAST0, Tag, Module, ExprLine, Backend) ->
-    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, false),
+make_raw_text_dynamic_ast(ExprAST0, Tag, Module, ExprLine, Backend, CCtx) ->
+    ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, false, CCtx),
     LocAST = loc_ast(Module, ExprLine),
     %% Neutralize a tokenizer breakout (`</script>`, `<!--`) in the value: the
     %% content is emitted verbatim, so the backend that owns raw-text elements
