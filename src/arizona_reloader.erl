@@ -406,10 +406,13 @@ wave_errors(Files, FileErrors) ->
 %% `return_warnings` pins the success shape to the 4-tuple whatever the
 %% recovered options hold; nothing here reports warnings either way. The module
 %% is whatever the compiler reports, not the basename (a file whose `-module`
-%% differs from its filename otherwise `case_clause`es).
+%% differs from its filename otherwise `case_clause`es). A module whose source
+%% sets `warnings_as_errors` fails on warnings alone, reported as `{error, [],
+%% Warnings}`: it is not reloaded, so those warnings are its errors.
 compile_file(File) ->
     case compile:file(File, [binary, return_errors, return_warnings | compile_opts(File)]) of
         {ok, Mod, Binary, _Warnings} -> {ok, Mod, Binary};
+        {error, [], Warnings} -> {error, Warnings};
         {error, FileErrors, _Warnings} -> {error, FileErrors}
     end.
 
