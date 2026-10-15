@@ -3417,9 +3417,11 @@ function saveFormState(suspect = null) {
 
 /**
  * Record each hosting document's focused element before a resync replaces the
- * view, by what the fresh markup will carry again: its id, or its form's id
- * plus its name and position among that form's same-named fields. The caret and
- * selection ride along -- restoring values moves the caret to the end.
+ * view: the element itself (a kept az-nodiff element survives the resync as the
+ * same node), and what the fresh markup will carry again for one that is
+ * rebuilt -- its id, or its form's id plus its name and position among that
+ * form's same-named fields. The caret and selection ride along -- restoring
+ * values moves the caret to the end.
  * @returns {FocusMark[]}
  */
 function captureFocus() {
@@ -3432,8 +3434,6 @@ function captureFocus() {
         const owner = f.form;
         const form = owner?.id || null;
         const name = f.name || null;
-        // Nothing the fresh markup carries again identifies it.
-        if (!el.id && !(form && name)) continue;
         let nth = 0;
         if (owner && form && name) {
             nth = [...owner.elements]
@@ -3464,14 +3464,20 @@ function captureFocus() {
  */
 function restoreFocus(marks) {
     for (const { doc, el, id, form, name, nth, sel } of marks) {
-        // Kept (an az-nodiff element) or untouched: focus and caret survived.
-        if (el.isConnected) continue;
         const active = doc.activeElement;
+        if (active === el) continue; // untouched: focus and caret survived
         if (active && active !== doc.body && active !== doc.documentElement) continue;
         // Duck-typed, not `instanceof`: a popped-out (PiP) view's elements belong
         // to another window's constructors.
         /** @type {any} */
-        let target = id ? doc.getElementById(id) : null;
+        let target = null;
+        if (el.isConnected) {
+            // Kept (inside a kept az-nodiff element): the same node, but moving
+            // it through the parsed fragment detached it, which dropped focus.
+            target = el;
+        } else if (id) {
+            target = doc.getElementById(id);
+        }
         if (!target && form && name) {
             const f = /** @type {any} */ (doc.getElementById(form));
             if (f?.elements) {

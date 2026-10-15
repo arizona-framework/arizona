@@ -4384,6 +4384,28 @@ describe('reconnect resync keeps the focused field', () => {
         expect(document.activeElement).toBe(document.getElementById('b'));
     });
 
+    it('refocuses a field inside a kept az-nodiff element, by reference', () => {
+        // The resync keeps the widget's own DOM node, but moving it through the
+        // parsed fragment detaches it, which drops focus (a browser also fires
+        // blur; jsdom only drops it). The field has no id and no form: the kept
+        // node itself is what gets refocused.
+        const slot =
+            '<div az="S-1" id="slot"><!--az:S-1-->' +
+            '<div az-nodiff="TOK" az-key="0"><input class="w"></div><!--/az--></div>';
+        const html = `<div id="v" az-view az="S-0">${slot}</div>`;
+        document.body.innerHTML = html;
+        const w = document.querySelector('.w');
+        w.focus();
+        w.value = 'widget text';
+        w.setSelectionRange(3, 6);
+        mock.simulateClose(1006);
+        mock.simulateOpen(true);
+        mock.simulateMessage([[OP.REPLACE, 'v', html]], null, true);
+        expect(document.querySelector('.w')).toBe(w); // kept, not rebuilt
+        expect(document.activeElement).toBe(w);
+        expect([w.selectionStart, w.selectionEnd]).toEqual([3, 6]);
+    });
+
     it('leaves focus alone when the focused field is gone after the resync', () => {
         document.body.innerHTML =
             '<div id="v" az-view><form id="f"><input id="q" name="q" value=""></form></div>';
