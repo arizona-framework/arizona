@@ -156,7 +156,7 @@ unless_same_nodiff_crash_restores_deps_scope(Config) when is_list(Config) ->
     Crash = {~"0", fun() -> arizona_template:get(missing, #{}) end, {?MODULE, ?LINE}},
     ?assertError(
         {arizona_loc, _, missing_binding},
-        arizona_eval:eval_unless_same_nodiff(Crash, #{}, {#{}, #{}})
+        arizona_eval:eval_unless_same_nodiff(Crash, #{s => [~""], d => []}, {#{}, #{}})
     ),
     ?assertEqual(undefined, erlang:get('$arizona_deps')).
 
