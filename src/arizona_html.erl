@@ -37,6 +37,7 @@ identical to the previous inlined emission.
 -export([supports_nodiff_keep/0]).
 -export([implied_attrs/2]).
 -export([boolean_attrs/0]).
+-export([attr_key/1]).
 -export([escape/1]).
 -export([raw_text/4]).
 -export([render_attr/2]).
@@ -292,6 +293,11 @@ implied_attrs(Tag, Names) ->
     end.
 
 boolean_attrs() -> presence.
+
+%% A browser keeps the FIRST of a duplicate attribute pair, whatever its case.
+-spec attr_key(binary()) -> binary().
+attr_key(Name) ->
+    string:lowercase(Name).
 
 %% HTML-escape the five metacharacters; safe for element content and
 %% double/single-quoted attribute values. Comparisons are per byte, so UTF-8 is

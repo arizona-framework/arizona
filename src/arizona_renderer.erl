@@ -230,6 +230,16 @@ wraps the attribute expression in an internal boolean tag for a `value` backend.
 -callback boolean_attrs() -> presence | value.
 
 -doc """
+The key two attributes on one element collide under, asked by the parse transform at
+compile time to reject a duplicate (`duplicate_attr`). `Name` is the wire name (after
+`name/1`). HTML folds ASCII case, as its attribute names are case-insensitive; a backend
+whose attribute names are case-sensitive returns `Name` itself. `repeatable` when
+repeating an attribute is meaningful on this backend's wire (the terminal's styles are
+SGR escapes that compose in order).
+""".
+-callback attr_key(Name :: binary()) -> binary() | repeatable.
+
+-doc """
 Escape a dynamic value's rendered bytes for this backend's zipped document.
 Called at the render boundary on interpolated scalar values
 (`arizona_template:escape_value/2`). HTML entity-escapes (`<`, `&`, ...); the
