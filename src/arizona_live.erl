@@ -360,16 +360,15 @@ mount_and_render(Pid) ->
     gen_server:call(Pid, mount_and_render, infinity).
 
 -doc """
-Re-renders the current view tree to a complete output binary from the
-live process's current bindings and child views.
+Renders the current view tree to a complete output binary from the live
+process's last rendered snapshot and its child views' current snapshots.
 
 Unlike `mount_and_render/1` (which returns a fingerprint payload meant for
 client-side diff application), this always materializes the full output --
 intended for transports that repaint the whole view each frame (e.g. a
-terminal renderer) instead of applying diff ops. Because it re-renders
-through `arizona_render:render/2`, it threads the live `views` map and so
-reflects current root *and* nested child state; the freshly produced
-snapshot/views are discarded (read-only render).
+terminal renderer) instead of applying diff ops. It reflects current root
+*and* nested child state without evaluating the template: no `mount/1` or
+`handle_update/3` runs, and the process state is left untouched.
 """.
 -spec render_current(Pid) -> {ok, binary(), arizona_event_attrs:observed()} when
     Pid :: pid().
@@ -604,9 +603,15 @@ handle_call(
     {reply, {ok, ViewId, PageContent1, arizona_event_attrs:drain()}, State#state{
         bindings = B2, snapshot = Snap, views = V1, sent_fps = Fps1, pending_refresh = #{}
     }};
-handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
-    Tmpl = arizona_stateful:call_render(H, B),
-    {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
+handle_call(render_current, _From, #state{snapshot = Snap0, views = V} = State) ->
+    %% A repaint reads the live tree; it must not run it. Rendering the template
+    %% again would evaluate every child descriptor -- handle_update/3, or mount/1
+    %% on a swapped handler -- and then discard that state. The root snapshot
+    %% already holds the last render; refresh every child's copy from `views`
+    %% (a child's own event updates only its entry there, and a foreign caller's
+    %% event is not even marked pending) and print it.
+    Snap = apply_pending_refresh(#{Id => true || Id := _ <- V}, V, Snap0),
+    HTML = arizona_render:snapshot_html(Snap),
     {reply, {ok, iolist_to_binary(HTML), arizona_event_attrs:drain()}, State};
 handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings = B0} = State) ->
     ok = push_barrier(From, State),
