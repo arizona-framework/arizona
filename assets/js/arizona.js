@@ -2663,7 +2663,7 @@ function execOne(el, event, cmd) {
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
             const msg = JSON.stringify([resolveTarget(el), evt, payload]);
             if (event) {
-                scheduleSend(el, event, () => {
+                scheduleSend(el, event, JSON.stringify(cmd), () => {
                     workerPost(W_SEND, msg);
                 });
             } else {
@@ -2982,11 +2982,12 @@ function execOne(el, event, cmd) {
 }
 
 /**
+ * One deferred send's state. An element holds one per (event type, command), so
+ * two push_events in one command list, or `az-input` beside `az-keydown`, each
+ * keep their own timer instead of the later one replacing the earlier.
  * @typedef {{
  *   id?: ReturnType<typeof setTimeout>,
  *   pending?: Function|null,
- *   eventBound?: boolean,
- *   blurBound?: boolean,
  *   prevKey?: string
  * }} TimerState
  */
@@ -2994,9 +2995,16 @@ function execOne(el, event, cmd) {
 /**
  * Per-element timer state, keyed by DOM element. WeakMap so entries are
  * GC'd when elements are removed from the document.
- * @type {WeakMap<Element, TimerState>}
+ * @type {WeakMap<Element, {slots: Map<string, TimerState>, eventBound?: boolean, blurBound?: boolean}>}
  */
 const _timers = new WeakMap();
+
+/**
+ * Bumped by every `disconnect()`. A deferred send captures it, so a timer that
+ * outlives its connection -- `disconnect()` cannot reach the timers, a WeakMap is
+ * not iterable -- never sends an old view's event over the next connection.
+ */
+let _connGen = 0;
 
 /**
  * Three send modes controlled by az-debounce and az-throttle attributes:
@@ -3015,11 +3023,18 @@ const _timers = new WeakMap();
  *
  * For modes 2 and 3, blur auto-flushes pending sends so data isn't lost
  * when the user tabs away or clicks elsewhere.
+ *
+ * Timing is per `key` (the event type and the command), not per element: only a
+ * repeat of the same command for the same event collapses. A deferred send is
+ * dropped when it fires after `disconnect()`, or after the view enclosing `el`
+ * left the document (a navigate or resync replaced it): its message names the old
+ * view, and a new page mounted under the same id would take it as its own.
  * @param {Element} el
  * @param {Event|KeyboardEvent} event
+ * @param {string} key identifies the command among `el`'s commands for `event`
  * @param {Function} sendFn
  */
-function scheduleSend(el, event, sendFn) {
+function scheduleSend(el, event, key, sendFn) {
     const debounceAttr = el.getAttribute('az-debounce') || '';
     const debounceMs = parseInt(debounceAttr, 10);
     const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
@@ -3028,39 +3043,54 @@ function scheduleSend(el, event, sendFn) {
         sendFn();
         return;
     }
-    if (!_timers.has(el)) _timers.set(el, {});
-    const t = /** @type {TimerState} */ (_timers.get(el));
+    const gen = _connGen;
+    const scope = el.closest('[az-view]') || el;
+    const send = () => {
+        if (gen === _connGen && scope.isConnected) sendFn();
+    };
+    let rec = _timers.get(el);
+    if (!rec) {
+        rec = { slots: new Map() };
+        _timers.set(el, rec);
+    }
+    const slotKey = `${event.type} ${key}`;
+    let t = rec.slots.get(slotKey);
+    if (!t) {
+        t = {};
+        rec.slots.set(slotKey, t);
+    }
+    const slot = t;
     // Event-name debounce: just store the latest send, flush on the named event.
     if (debounceEvent) {
-        t.pending = sendFn;
-        if (!t.eventBound) {
-            t.eventBound = true;
+        slot.pending = send;
+        if (!rec.eventBound) {
+            rec.eventBound = true;
             el.addEventListener(debounceEvent, () => flushTimer(el));
         }
         return;
     }
     if (debounceMs > 0) {
         // Classic debounce: reset timer on every event.
-        clearTimeout(t.id);
-        t.pending = sendFn;
-        t.id = setTimeout(() => {
-            t.id = undefined;
-            t.pending = null;
-            sendFn();
+        clearTimeout(slot.id);
+        slot.pending = send;
+        slot.id = setTimeout(() => {
+            slot.id = undefined;
+            slot.pending = null;
+            send();
         }, debounceMs);
     } else {
         // Throttle: send immediately, suppress duplicates for the interval.
         // For keydown, a different key resets the cooldown so the new key
         // isn't swallowed by the previous key's throttle window.
-        if (event.type === 'keydown' && t.prevKey !== /** @type {KeyboardEvent} */ (event).key) {
-            clearTimeout(t.id);
-            t.id = undefined;
+        if (event.type === 'keydown' && slot.prevKey !== /** @type {KeyboardEvent} */ (event).key) {
+            clearTimeout(slot.id);
+            slot.id = undefined;
         }
-        if (event.type === 'keydown') t.prevKey = /** @type {KeyboardEvent} */ (event).key;
-        t.pending = sendFn;
-        if (t.id) return;
-        sendFn();
-        t.pending = null;
+        if (event.type === 'keydown') slot.prevKey = /** @type {KeyboardEvent} */ (event).key;
+        slot.pending = send;
+        if (slot.id) return;
+        send();
+        slot.pending = null;
         // The tick re-arms itself while events are still arriving, and only goes
         // idle when it finds nothing pending. Clearing the window BEFORE the
         // trailing send instead left the throttle idle the instant that send
@@ -3068,37 +3098,39 @@ function scheduleSend(el, event, sendFn) {
         // all -- on a pointer drag, two sends stamped at the same millisecond,
         // the first already stale when it left.
         const tick = () => {
-            const pending = t.pending;
-            t.pending = null;
+            const pending = slot.pending;
+            slot.pending = null;
             if (pending) {
                 pending();
-                t.id = setTimeout(tick, throttleMs);
+                slot.id = setTimeout(tick, throttleMs);
             } else {
-                t.id = undefined;
+                slot.id = undefined;
             }
         };
-        t.id = setTimeout(tick, throttleMs);
+        slot.id = setTimeout(tick, throttleMs);
     }
     // Auto-flush on blur so pending data isn't lost when focus leaves.
-    if (!t.blurBound) {
-        t.blurBound = true;
+    if (!rec.blurBound) {
+        rec.blurBound = true;
         el.addEventListener('blur', () => flushTimer(el));
     }
 }
 
 /**
- * Immediately send any pending debounced/throttled message for this element.
+ * Immediately send every pending debounced/throttled message for this element.
  * Used by blur auto-flush and form submit (to capture in-flight input values).
  * @param {Element} el
  */
 function flushTimer(el) {
-    const t = _timers.get(el);
-    if (!t) return;
-    if (t.id) clearTimeout(t.id);
-    const pending = t.pending;
-    t.id = undefined;
-    t.pending = null;
-    if (pending) pending();
+    const rec = _timers.get(el);
+    if (!rec) return;
+    for (const t of rec.slots.values()) {
+        if (t.id) clearTimeout(t.id);
+        const pending = t.pending;
+        t.id = undefined;
+        t.pending = null;
+        if (pending) pending();
+    }
 }
 
 /**
@@ -4067,10 +4099,11 @@ function connect(endpoint, params = {}) {
         // arizona didn't observe (third-party libs, test teardown via
         // `document.body.innerHTML = ''`).
         for (const el of [..._hooks.keys()]) destroyHook(el);
-        // Debounce/throttle timers live in a WeakMap keyed by element and
-        // aren't iterable. They all guard on `_connected` inside their fun,
-        // so after setting `_connected = false` above a late-firing timer
-        // won't actually send anything -- leave them to expire naturally.
+        // Debounce/throttle timers live in a WeakMap keyed by element and aren't
+        // iterable, so they are left to expire: each captured the generation
+        // this bump retires and drops its send, which would otherwise reach the
+        // NEXT connection's worker carrying this one's view id.
+        _connGen++;
         document.documentElement.classList.remove('az-connected');
         document.documentElement.classList.remove('az-disconnected');
         if ('scrollRestoration' in history) {

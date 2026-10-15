@@ -6032,6 +6032,113 @@ describe('scheduleSend -- debounce / throttle', () => {
         expect(mock.getSentMessages()).toHaveLength(1);
     });
 
+    // One timer per element let the later command replace the earlier: only
+    // `autosave` was ever sent.
+    it('debounces each push_event in one command list separately', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<input id="inp" az-debounce="100" az-input='[[0,"validate"],[0,"autosave"]]' />`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        vi.advanceTimersByTime(200);
+        // Each sent once: a repeat of the same command still collapses.
+        expect(mock.getSentMessages().map((m) => m[1])).toEqual(['validate', 'autosave']);
+    });
+
+    it('debounces each event type on one element separately', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<input id="inp" az-debounce="100" az-keydown='[0,"key"]' az-input='[0,"typed"]' />`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        inp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        vi.advanceTimersByTime(200);
+        expect(mock.getSentMessages().map((m) => m[1])).toEqual(['key', 'typed']);
+    });
+
+    it('flushes every pending command of the element on blur', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<input id="inp" az-debounce="500" az-input='[[0,"validate"],[0,"autosave"]]' />`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('blur', { bubbles: true }));
+        expect(mock.getSentMessages().map((m) => m[1])).toEqual(['validate', 'autosave']);
+        vi.advanceTimersByTime(1000);
+        expect(mock.getSentMessages()).toHaveLength(2);
+    });
+
+    // disconnect() cannot reach the timers, so a pending send fired on the NEXT
+    // connection's worker, carrying the old view's id.
+    it('drops a pending send after disconnect() instead of using the next connection', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('old', `<input id="inp" az-debounce="300" az-input='[0,"save"]' />`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.getElementById('inp').dispatchEvent(new Event('input', { bubbles: true }));
+        mock.restore();
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        vi.advanceTimersByTime(400);
+        expect(mock.getSentMessages()).toEqual([]);
+    });
+
+    // A navigate's OP_REPLACE swaps the view out; a trailing send still names the
+    // old view, which the next page can carry too (`id => ~"page"` is common).
+    it('drops a trailing throttle send once its view was replaced', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', `<input id="inp" az-throttle="200" az-input='[0,"moved"]' />`);
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        const inp = document.getElementById('inp');
+        inp.dispatchEvent(new Event('input', { bubbles: true })); // leading edge
+        inp.dispatchEvent(new Event('input', { bubbles: true })); // trailing, pending
+        expect(mock.getSentMessages()).toHaveLength(1);
+        mod.applyOps([[mod.OP.REPLACE, 'page', '<div id="page" az-view><p>next</p></div>']]);
+        vi.advanceTimersByTime(250);
+        expect(mock.getSentMessages()).toHaveLength(1);
+    });
+
+    // The view survives a re-render of the input inside it, and so does the send.
+    it('keeps a pending send whose element was re-rendered inside a live view', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<div id="slot"><input id="inp" az-debounce="100" az-input='[0,"typed"]' /></div>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.getElementById('inp').dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('slot').innerHTML = '<input id="inp2" />';
+        vi.advanceTimersByTime(200);
+        expect(mock.getSentMessages().map((m) => m[1])).toEqual(['typed']);
+    });
+
     it('blur auto-flushes pending debounced send', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
