@@ -512,11 +512,8 @@ await_mailbox(Pid, Kinds, Timeout) ->
             await_mailbox(Pid, Kinds, Timeout - 10)
     end.
 
-%% The idle expiry is matched in both shapes it has had, so the test stays a
-%% probe of the race rather than of the timer's message format.
 message_kind({'$gen_call', _From, {dispatch, _Method, _Params, _Id}}) -> dispatch;
 message_kind({timeout, _Ref, session_ttl_expired}) -> expiry;
-message_kind(session_ttl_expired) -> expiry;
 message_kind(_Other) -> other.
 
 buffered_cancel_frees_caller(_Config) ->
