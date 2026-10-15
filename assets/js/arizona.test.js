@@ -586,6 +586,42 @@ describe('applyOps -- OP.REM_ATTR', () => {
     });
 });
 
+// An <input> whose value mode is not "value" (hidden, checkbox, radio, the buttons)
+// has a `value` property that reflects the attribute, like a non-control's: clearing
+// it after the removal would write `value=""` back. A text-like input keeps its
+// dirty value apart from the attribute, so only that one is cleared through the
+// property.
+describe('applyOps -- OP.REM_ATTR value on an attribute-reflecting input', () => {
+    it('leaves the value attribute removed', () => {
+        const types = ['hidden', 'checkbox', 'radio', 'submit', 'reset', 'button', 'image'];
+        setupView('v', types.map((t, i) => `<input az="${i}" type="${t}" value="x" />`).join(''));
+        applyOps(types.map((_t, i) => [OP.REM_ATTR, `v:${i}`, 'value']));
+        types.forEach((t, i) => {
+            expect([t, resolveEl(`v:${i}`).hasAttribute('value')]).toEqual([t, false]);
+        });
+    });
+
+    it('still clears a value-mode input the user typed into', () => {
+        setupView('v', '<input az="0" type="email" value="a@b" />');
+        const input = /** @type {HTMLInputElement} */ (resolveEl('v:0'));
+        input.value = 'typed@b';
+        applyOps([[OP.REM_ATTR, 'v:0', 'value']]);
+        expect(input.hasAttribute('value')).toBe(false);
+        expect(input.value).toBe('');
+    });
+
+    it('get reads a checkbox value as its attribute', () => {
+        setupView(
+            'v',
+            `<input az="0" az-local='{"a":{"value":"cv"}}' type="checkbox" value="yes" />`,
+        );
+        expect(get('v', 'cv')).toBe('yes');
+        set('v', 'cv', null);
+        expect(document.querySelector('input').hasAttribute('value')).toBe(false);
+        expect(get('v', 'cv')).toBe(false);
+    });
+});
+
 describe('applyOps -- OP.SET_ATTR value on a non-control', () => {
     it('sets the attribute verbatim, never coerced through the property', () => {
         setupView('v', '<ol><li az="0" value="5">a</li></ol>');

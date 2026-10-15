@@ -1229,16 +1229,35 @@ function applyRemAttrOp(el, name) {
     notifyUpdated(el);
 }
 
-// Form controls whose `value` property holds user state apart from the attribute.
-const VALUE_CONTROLS = new Set(['input', 'textarea', 'select']);
+// The <input> types in the "value" value mode, the only ones whose `value` property
+// holds user state apart from the attribute. The rest reflect it ("default" and
+// "default/on": hidden, checkbox, radio, the buttons) or refuse a write ("filename":
+// file), and an unknown type reads back as `text`.
+const VALUE_MODE_INPUTS = new Set([
+    'text',
+    'search',
+    'url',
+    'tel',
+    'email',
+    'password',
+    'date',
+    'month',
+    'week',
+    'time',
+    'datetime-local',
+    'number',
+    'range',
+    'color',
+]);
 
 /**
  * Does `name` on `el` have a live property that user interaction detaches from the
  * attribute (the dirty value/checkedness/selectedness flags)? Only then must a write
  * set the property too, and a `?local` read report it. Elsewhere `value` merely
  * reflects the attribute, coerced -- a property write would put a removed attribute
- * back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>`, and an
- * `<option>` loses its fallback to its text) or coerce a set one. Matched by local
+ * back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>` and on a
+ * hidden/checkbox/radio/button `<input>`, and an `<option>` loses its fallback to its
+ * text) or coerce a set one. Matched by local
  * name, not `instanceof`: a popped-out (PiP) document's elements come from another
  * realm.
  * @param {Element} el
@@ -1247,7 +1266,11 @@ const VALUE_CONTROLS = new Set(['input', 'textarea', 'select']);
  */
 function syncsProp(el, name) {
     if (el.namespaceURI !== 'http://www.w3.org/1999/xhtml') return false;
-    if (name === 'value') return VALUE_CONTROLS.has(el.localName);
+    if (name === 'value') {
+        if (el.localName === 'input')
+            return VALUE_MODE_INPUTS.has(/** @type {HTMLInputElement} */ (el).type);
+        return el.localName === 'textarea' || el.localName === 'select';
+    }
     if (name === 'checked') return el.localName === 'input';
     if (name === 'selected') return el.localName === 'option';
     return false;
