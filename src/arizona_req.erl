@@ -927,6 +927,11 @@ ensure_session_out(Req0) ->
 %% id; the old id (if a read resolved one) is kept as session_prev_id to drop from
 %% the store on flush. Otherwise reuse the id `read_session` resolved, else mint a
 %% fresh one. No-op in cookie mode, or when an unreset id is already present.
+%%
+%% Only the FIRST rotation records session_prev_id. A second clear+put in the same
+%% request would otherwise overwrite it with the first rotation's fresh id, which
+%% was never stored (the store write happens once, at flush), and the incoming
+%% entry -- the one that must die -- would stay resolvable until its TTL.
 ensure_session_id(#{session_reset := true} = Req0) ->
     Req = maps:remove(session_reset, Req0),
     case session_store() of
@@ -934,9 +939,10 @@ ensure_session_id(#{session_reset := true} = Req0) ->
             Req;
         _ ->
             Fresh = Req#{session_id => arizona_session:new_id()},
-            case maps:get(session_id, Req0, undefined) of
-                undefined -> Fresh;
-                OldId -> Fresh#{session_prev_id => OldId}
+            case Req0 of
+                #{session_prev_id := _} -> Fresh;
+                #{session_id := OldId} -> Fresh#{session_prev_id => OldId};
+                #{} -> Fresh
             end
     end;
 ensure_session_id(#{session_id := _} = Req) ->
