@@ -288,6 +288,7 @@ loaded_edges(Mod) ->
         end
     catch
         error:undef ->
-            %% Purged between the `module_loaded` check and a read.
+            %% Purged between the `module_loaded` check and a read, and could not
+            %% be loaded again.
             {[], []}
     end.
