@@ -54,13 +54,14 @@ protocol contract holds even when a tool raises.
 %% negotiated at initialize, the list page size, and the minimum log severity
 %% the client set (via `logging/setLevel`). `arizona_mcp_session` holds one
 %% across a stateful connection; `dispatch/3` builds an ephemeral one per
-%% request.
+%% request, marked `stateless`.
 -type session() :: #{
     mod := module(),
     state := arizona_mcp:state(),
     caps := arizona_mcp:capabilities(),
     page_size := pos_integer(),
-    log_min_severity := 0..7
+    log_min_severity := 0..7,
+    stateless => true
 }.
 
 %% An optional per-route auth hook, run after the Origin check and before any
@@ -329,7 +330,7 @@ dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
             %% Nothing outlives the request, so the threaded-back session is
             %% discarded -- the next request rebuilds from `init/1`.
             {_ServerInfo, Session} = open_session(Mod, #{}, PageSize),
-            {Outcome, _Session1} = handle_method(Method, Params, Id, Session),
+            {Outcome, _Session1} = handle_method(Method, Params, Id, Session#{stateless => true}),
             Outcome
     end.
 
@@ -1001,16 +1002,26 @@ resource_templates(Mod, State) ->
     end.
 
 %% `resources/subscribe` / `unsubscribe` join/leave the per-uri pubsub channel as
-%% the calling process. In session mode that is the session process, so the
+%% the calling process -- the session process in session mode, so the
 %% subscription persists and `arizona_mcp:resource_updated/1` broadcasts reach it
-%% (forwarded as `notifications/resources/updated`); in stateless mode the request
-%% process dies after the reply -- a harmless no-op, since stateless has no SSE
-%% channel to deliver on. Both answer the MCP empty result.
+%% (forwarded as `notifications/resources/updated`). Stateless mode has no SSE
+%% channel to deliver on, so it accepts the subscription and joins nothing, as a
+%% push to a session without a channel is dropped. Joining there would subscribe
+%% the connection process, which a keep-alive connection keeps alive for every
+%% later request: a membership no request ever leaves, collecting updates in a
+%% mailbox nothing reads. Both answer the MCP empty result.
+subscribe_resource(Params, Id, #{stateless := true} = Session) ->
+    resource_subscription(Params, Id, Session, fun no_subscription/1);
 subscribe_resource(Params, Id, Session) ->
     resource_subscription(Params, Id, Session, fun join_resource/1).
 
+unsubscribe_resource(Params, Id, #{stateless := true} = Session) ->
+    resource_subscription(Params, Id, Session, fun no_subscription/1);
 unsubscribe_resource(Params, Id, Session) ->
     resource_subscription(Params, Id, Session, fun leave_resource/1).
+
+no_subscription(_Channel) ->
+    ok.
 
 resource_subscription(#{~"uri" := Uri}, Id, Session, Fun) when is_binary(Uri) ->
     ok = Fun({mcp_resource, Uri}),
