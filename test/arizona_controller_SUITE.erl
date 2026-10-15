@@ -9,6 +9,7 @@
 -export([reply_effects_with_status_for_error_leg/1]).
 -export([reply_redirect_emits_navigate_effect/1]).
 -export([set_cookie_layers_onto_reply/1]).
+-export([reply_effects_flattens_nested_commands/1]).
 
 all() ->
     [{group, reply}].
@@ -20,7 +21,8 @@ groups() ->
             reply_effects_status_and_content_type,
             reply_effects_with_status_for_error_leg,
             reply_redirect_emits_navigate_effect,
-            set_cookie_layers_onto_reply
+            set_cookie_layers_onto_reply,
+            reply_effects_flattens_nested_commands
         ]}
     ].
 
@@ -38,6 +40,21 @@ reply_effects_builds_effects_payload(Config) when is_list(Config) ->
         #{~"e" => [[7, ~"#error", ~"hidden", ~""]]},
         json:decode(iolist_to_binary(Body))
     ).
+
+%% A response is a command list like any other: a conditional item that yields a
+%% list of commands, or `[]` for none, is flattened into it.
+reply_effects_flattens_nested_commands(Config) when is_list(Config) ->
+    {200, _Headers, Body} = arizona_controller:reply_effects([
+        [],
+        arizona_js:set_title(~"t"),
+        [arizona_js:hide(~"#a"), []]
+    ]),
+    ?assertEqual(
+        #{~"e" => [[14, ~"t"], [3, ~"#a"]]},
+        json:decode(iolist_to_binary(Body))
+    ),
+    {200, _, EmptyBody} = arizona_controller:reply_effects([[]]),
+    ?assertEqual(#{~"e" => []}, json:decode(iolist_to_binary(EmptyBody))).
 
 reply_effects_status_and_content_type(Config) when is_list(Config) ->
     {Status, Headers, _Body} = arizona_controller:reply_effects([

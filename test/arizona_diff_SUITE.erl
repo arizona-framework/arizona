@@ -6,6 +6,7 @@
 -export([
     diff_attr_op/1,
     diff_attr_command_op_is_json_array/1,
+    diff_attr_nested_command_list_flattens/1,
     diff_slot_invisible_change_emits_no_op/1,
     diff_attr_invisible_change_emits_no_op/1,
     diff_attr_boolean_vs_string_still_emits/1,
@@ -150,6 +151,7 @@ groups() ->
             diff_text_op,
             diff_attr_op,
             diff_attr_command_op_is_json_array,
+            diff_attr_nested_command_list_flattens,
             diff_slot_invisible_change_emits_no_op,
             diff_attr_invisible_change_emits_no_op,
             diff_attr_boolean_vs_string_still_emits,
@@ -388,6 +390,17 @@ diff_attr_command_op_is_json_array(Config) when is_list(Config) ->
     Cmds = [arizona_js:push_event(~"x"), arizona_js:toggle(~"#m")],
     {[[?OP_SET_ATTR, _, _, Value]], _} = attr_diff(Old, Cmds),
     ?assertEqual(~"[[0,\"x\"],[1,\"#m\"]]", iolist_to_binary(json:encode(Value))).
+
+%% A command list holding a nested list or `[]` (a conditional command) ships as
+%% the flat command list it denotes, wherever the nested or empty item sits.
+diff_attr_nested_command_list_flattens(Config) when is_list(Config) ->
+    Old = arizona_js:push_event(~"a"),
+    Trailing = [arizona_js:push_event(~"x"), [arizona_js:hide(~"#a"), []], []],
+    {[[?OP_SET_ATTR, _, _, Value1]], _} = attr_diff(Old, Trailing),
+    ?assertEqual(~"[[0,\"x\"],[3,\"#a\"]]", iolist_to_binary(json:encode(Value1))),
+    Leading = [[], [[], arizona_js:hide(~"#a")], arizona_js:push_event(~"x")],
+    {[[?OP_SET_ATTR, _, _, Value2]], _} = attr_diff(Old, Leading),
+    ?assertEqual(~"[[3,\"#a\"],[0,\"x\"]]", iolist_to_binary(json:encode(Value2))).
 
 %% Bool attr: false -> true produces OP_SET_ATTR with empty value.
 diff_bool_attr_add(Config) when is_list(Config) ->

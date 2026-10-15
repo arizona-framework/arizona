@@ -93,12 +93,20 @@ The set of types is **collected at compile time**: the parse transform records e
 %% Template: multiple commands
 {'button', [{az_click, [arizona_js:push_event(~"inc"), arizona_js:toggle(~"#modal")]}], [<<"Both">>]}
 
+%% Template: a conditional command -- a command list may nest, and `[]` is no command
+{'button', [{az_click, [
+    arizona_js:push_event(~"save"),
+    case ?get(dirty) of true -> arizona_js:hide(~"#hint"); false -> [] end
+]}], [<<"Save">>]}
+
 %% Handler: effects
 handle_event(~"inc", _P, B) ->
     {B#{count => Count + 1}, #{}, [arizona_js:set_title(~"Updated")]}.
 ```
 
 `push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_effect.hrl`.
+
+Nesting and `[]` items are flattened wherever a command list is encoded as data -- an event attribute or prop, a command a `transition`/`on_key`/`fetch` `on_error` wraps, a controller response (`arizona_controller:reply_effects/1,2`). The effects a **handler returns** are not: the socket threads them as a flat `[arizona_effect:cmd()]` (flash capture, the old-page drop on navigate, `arizona_socket:unwrap_effects/1`), so build that list flat (`[arizona_js:hide(~"#hint") || Dirty]`).
 
 ### HTTP fetch -- `arizona_js:fetch/2`
 
