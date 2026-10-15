@@ -1496,6 +1496,12 @@ adapter's behaviour callbacks on first access and cached in the returned request
   is the write that persists the session, so the persist is **commit-on-success**: a handler that
   crashes after `put_session/3` leaves the store untouched
 
+Every response a transport builds flushes the stash, the WebSocket upgrade included: a cookie, a
+header or a session write a route middleware stashes during `arizona_ws:prepare/3` rides the
+`101 Switching Protocols` (and, in store mode, commits to the store) exactly as it would ride a
+page response. A navigate/patch frame has no HTTP response, so no cookie or header stashed there
+is flushed (a flash has its own in-process carry instead).
+
 **Other:**
 
 - `set_raw/2` -- swap the native raw value, clear all lazy caches
@@ -1662,13 +1668,13 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
 - `arizona_roadrunner_http.erl` -- thin HTTP handler. Delegates the pipeline to
   `arizona_http:render/3` and translates its result into roadrunner's `{Response, Req}` reply shape
 - `arizona_roadrunner_ws.erl` -- thin WebSocket handler. Delegates the upgrade to
-  `arizona_ws:prepare/3` and forwards frames to `arizona_socket`. Translates
-  `arizona_socket:result()` to roadrunner return tuples
+  `arizona_ws:prepare/3`, flushes the middlewares' stash onto the 101, and forwards
+  frames to `arizona_socket`. Translates `arizona_socket:result()` to roadrunner
+  return tuples
 - `arizona_roadrunner_resp.erl` -- shared response side. `flush/2` folds the request's
   middleware-stashed response headers/cookies onto the outgoing response, for every
-  header-bearing shape (buffered triple plus the `stream`/`loop`/`sendfile` quadruples);
-  a stashed header on a `websocket` upgrade (which has no header section) raises
-  `{unflushable_response, websocket}` instead of being dropped
+  shape (buffered triple, the `stream`/`loop`/`sendfile` quadruples, and a `websocket`
+  upgrade, whose headers ride the 101) and commits a written session
 
 ## Data flow
 
@@ -2506,8 +2512,8 @@ roadrunner's callbacks and Arizona's shared pipeline:
 - `arizona_roadrunner_server` -- boots the listener and compiles routes
 - `arizona_roadrunner_router` -- compiles route specs into roadrunner's dispatch
 - `arizona_roadrunner_http` -- HTTP handler; delegates to `arizona_http:render/3`
-- `arizona_roadrunner_ws` -- WebSocket handler; delegates the upgrade to `arizona_ws:prepare/3`
-  and forwards frames to `arizona_socket`
+- `arizona_roadrunner_ws` -- WebSocket handler; delegates the upgrade to `arizona_ws:prepare/3`,
+  flushes the middlewares' stash onto the 101, and forwards frames to `arizona_socket`
 - `arizona_roadrunner_controller` -- controller-route handler; runs the middleware pipeline
   (Origin check default-on), restores the route's `state` into the request, then dispatches
   `Handler:Action/1` (the `action` opt, default `handle`)

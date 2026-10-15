@@ -60,8 +60,11 @@ handle(Req) ->
             %% The client-supplied `_az_path` did not resolve to a live route.
             %% Reject the upgrade with 404 rather than crashing the handler.
             {roadrunner_resp:not_found(), Req};
-        {cont, State} ->
-            {{websocket, ?MODULE, State}, Req}
+        {cont, #{req := ArzReq} = State} ->
+            %% Fold what the route's middlewares stashed (cookies, headers, a
+            %% session write) onto the 101, as the HTTP dispatchers do onto
+            %% theirs.
+            {arizona_roadrunner_resp:flush(ArzReq, {websocket, ?MODULE, State}), Req}
     end.
 
 -doc """

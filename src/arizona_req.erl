@@ -567,9 +567,8 @@ in cookie mode or when the session is untouched.
 
 Called by the transports at response flush, beside serializing `resp_cookies/1`
 (a pure getter that performs no store writes). Flushing is the commit point, so
-the cookie and the store entry always agree: a response that cannot be built
-(an unflushable shape raises in the header fold, before this call) commits
-nothing. A `{live, ...}` render crash is not such a case -- it is caught and
+the cookie and the store entry always agree: a response that is never built
+commits nothing. A `{live, ...}` render crash is not such a case -- it is caught and
 flushed as a 500 error page, so a session written before the crash does commit.
 Idempotent -- committing the same request again repeats the same put/delete.
 """.
