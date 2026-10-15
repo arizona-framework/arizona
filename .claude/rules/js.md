@@ -25,7 +25,7 @@ Exports (the full list, alphabetical as in the module): `applyEffects`, `applyOp
 - `executeJS(el, event, cmds)` -- the shared command interpreter (`execOne` per command); exported so a hook can run an `arizona_js` command list itself.
 - `set(viewId, key, value)` / `setAll(key, value)` / `get(key)` / `get(viewId, key)` -- the client-owned slot (`?local`) API; see below.
 - `requestPip(viewId, opts?)` / `exitPip(viewId)` -- pop a view out into a document-picture-in-picture window / close it.
-- `saveFormState()` / `restoreFormState()` -- snapshot and re-apply typed form fields around a resync that rebuilds the DOM (an abnormal close, a bfcache round-trip). Only what the user can type is re-applied: a `type=hidden` or `readonly` field is server-owned, so it keeps the resync's fresh value (its saved value is still consumed, keeping a repeated name's positions aligned).
+- `saveFormState()` / `restoreFormState()` -- snapshot and re-apply typed form fields around a resync that rebuilds the DOM (an abnormal close, a bfcache round-trip). A `readonly` field is server-owned, so it keeps the resync's fresh value (its saved value is still consumed, keeping a repeated name's positions aligned). A `type=hidden` input **is** restored, deliberately: a client widget (a rich-text editor, a date picker, a tag input) keeps the user's input in one, and losing that on a reconnect is worse than the cost -- a server-owned hidden field (a version stamp, a record id) can come back stale after a reconnect resync. Render a server-owned value that must stay fresh as `readonly`, or outside a form with an `id`.
 
 ## Event delegation (`az-<event>`)
 

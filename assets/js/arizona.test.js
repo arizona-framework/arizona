@@ -3854,17 +3854,19 @@ describe('saveFormState / restoreFormState with Object.prototype member names', 
 // ---------------------------------------------------------------------------
 
 describe('saveFormState / restoreFormState edge cases', () => {
-    it('keeps the fresh server value of a hidden input', () => {
-        // A hidden input is server-owned (a version stamp, an id): the user
-        // cannot have typed into it, so the resync's value is the true one.
+    it('restores a hidden input, which a widget may have written user data into', () => {
+        // A rich-text editor, date picker or tag input keeps what the user
+        // entered in a hidden input; dropping it on a reconnect loses their work.
+        // The cost: a server-owned hidden value can come back stale.
         document.body.innerHTML =
-            '<form id="f"><input type="hidden" name="ver" value="1"><input name="t" value=""></form>';
+            '<form id="f"><input type="hidden" name="body" value=""><input name="t" value=""></form>';
+        document.querySelector('[name=body]').value = '<p>draft</p>';
         document.querySelector('[name=t]').value = 'typed';
         saveFormState();
         document.body.innerHTML =
-            '<form id="f"><input type="hidden" name="ver" value="2"><input name="t" value=""></form>';
+            '<form id="f"><input type="hidden" name="body" value=""><input name="t" value=""></form>';
         restoreFormState();
-        expect(document.querySelector('[name=ver]').value).toBe('2');
+        expect(document.querySelector('[name=body]').value).toBe('<p>draft</p>');
         expect(document.querySelector('[name=t]').value).toBe('typed');
     });
 
@@ -3879,16 +3881,16 @@ describe('saveFormState / restoreFormState edge cases', () => {
         expect(document.querySelector('[name=b]').value).toBe('y');
     });
 
-    it('a skipped hidden field still consumes its position in a repeated name', () => {
+    it('a skipped readonly field still consumes its position in a repeated name', () => {
         document.body.innerHTML =
-            '<form id="f"><input type="hidden" name="n" value="h1"><input name="n" value=""></form>';
+            '<form id="f"><input readonly name="n" value="r1"><input name="n" value=""></form>';
         document.querySelectorAll('[name=n]')[1].value = 'typed';
         saveFormState();
         document.body.innerHTML =
-            '<form id="f"><input type="hidden" name="n" value="h2"><input name="n" value=""></form>';
+            '<form id="f"><input readonly name="n" value="r2"><input name="n" value=""></form>';
         restoreFormState();
-        const [h, t] = document.querySelectorAll('[name=n]');
-        expect(h.value).toBe('h2');
+        const [r, t] = document.querySelectorAll('[name=n]');
+        expect(r.value).toBe('r2');
         expect(t.value).toBe('typed');
     });
 

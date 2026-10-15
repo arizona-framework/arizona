@@ -3213,11 +3213,13 @@ function restoreFormState() {
                     el.checked = fields[el.name] === el.value;
                 } else if (el.name in fields) {
                     const v = nextValue(el.name);
-                    // A hidden or readonly field is server-owned -- the user
-                    // cannot have typed into it -- so the resync's fresh value
-                    // stands. Its saved value is still consumed above, keeping a
-                    // repeated name's positions aligned.
-                    if (v !== undefined && el.type !== 'hidden' && !el.readOnly) el.value = v;
+                    // A readonly field is server-owned -- the user cannot have
+                    // typed into it -- so the resync's fresh value stands. Its
+                    // saved value is still consumed above, keeping a repeated
+                    // name's positions aligned. A hidden input is restored: a
+                    // widget (rich text, date picker, tags) may hold the user's
+                    // input there, which outweighs a stale server-owned value.
+                    if (v !== undefined && !el.readOnly) el.value = v;
                 }
             } else if (el instanceof HTMLSelectElement) {
                 if (!el.name || !(el.name in fields)) continue;
