@@ -6,6 +6,7 @@
     ":pinDevDependencies",
     ":pinDigestsDisabled"
   ],
+  "gitIgnoredAuthors": ["174219110+arizona-bot[bot]@users.noreply.github.com"],
   "packageRules": [
     {
       "matchFileNames": [".github/**/*.yml", ".tool-versions"],
