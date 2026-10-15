@@ -221,6 +221,78 @@ describe('navigate page-swap window', () => {
         expect(events()).toEqual([]);
     });
 
+    it('back-to-back navigates keep the window open until the last reply', async () => {
+        await connected();
+        navigate('/a');
+        navigate('/b');
+        replace(); // /a's reply: /b is still in flight
+        click();
+        expect(events()).toEqual([]);
+        replace(); // /b's reply
+        click();
+        expect(events()).toEqual([['page', 'inc', {}]]);
+    });
+
+    it('a redirect reply while another navigate is in flight keeps the count', async () => {
+        await connected();
+        navigate('/admin');
+        navigate('/b');
+        mock.frame(null, [[JS_NAVIGATE, '/login']]); // /admin's reply re-arms for /login
+        replace(); // /b's reply: /login still in flight
+        click();
+        expect(events()).toEqual([]);
+        replace(); // /login's reply
+        click();
+        expect(events()).toEqual([['page', 'inc', {}]]);
+    });
+
+    it('a full-page navigate reply closes only its own navigate', async () => {
+        await connected();
+        navigate('/a');
+        navigate('/b');
+        const assign = vi.fn();
+        vi.stubGlobal('location', { assign });
+        mock.frame(null, [[JS_NAVIGATE, '/a', { full: true }]]);
+        vi.unstubAllGlobals();
+        click();
+        expect(events()).toEqual([]);
+    });
+
+    it('a close with navigates in flight waits for the resync, not their replies', async () => {
+        await connected();
+        navigate('/a');
+        navigate('/b');
+        mock.close(1006);
+        mock.open(true);
+        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], null, true);
+        click();
+        expect(events()).toEqual([['page', 'inc', {}]]);
+    });
+
+    it('a bfcache round trip with a navigate in flight waits for the resync', async () => {
+        await connected();
+        navigate('/a');
+        window.dispatchEvent(new Event('pagehide'));
+        const show = new Event('pageshow');
+        Object.defineProperty(show, 'persisted', { value: true });
+        window.dispatchEvent(show);
+        mock.open(true);
+        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], null, true);
+        click();
+        expect(events()).toEqual([['page', 'inc', {}]]);
+    });
+
+    it('a client-triggered navigate effect is not taken as a reply', async () => {
+        await connected();
+        navigate('/a');
+        // An event-attribute navigate the user fires runs through executeJS, not
+        // a server frame: it adds a navigate, it does not answer one.
+        navigate('/b');
+        replace();
+        click();
+        expect(events()).toEqual([]);
+    });
+
     it('disconnect() clears a pending window', async () => {
         await connected();
         navigate('/next');

@@ -533,12 +533,22 @@ let _pendingTransition = null;
 // often shares the id (`page`) and then either crashes on an event it does not
 // know or runs the old page's intent. The server cannot tell such an event from
 // one sent after the swap (frames carry no page epoch), so the client drops it,
-// exactly as a full page load would. Ends on any `OP_REPLACE` (the reply, or the
-// resync of a reconnect that interrupted it) or a full-page navigate effect (the
-// server kept the old view). A redirect reply is a navigate effect too, which
-// re-arms for its own reply. A patch does not arm: it usually keeps the view, and
-// the client cannot know ahead that the server will degrade it to a replace.
-let _navPending = false;
+// exactly as a full page load would.
+//
+// Counted, not flagged: navigates can be in flight back to back, and the window
+// must stay open until the LAST one is answered. The server answers each navigate
+// frame exactly once and in order -- with its `OP_REPLACE`, or with a navigate
+// effect (a middleware redirect, which re-arms through `sendNav`, or a full-page
+// load, where the server kept the old view) -- so each such frame settles one
+// (`settleNavReplies`). A close loses every reply still owed: the count moves to
+// `_navAwaitResync`, which the reconnect's resync `OP_REPLACE` clears.
+//
+// Residual: a navigate effect in an old-page push frame (a timer redirect) that
+// lands ahead of the reply is indistinguishable from a reply on the wire, so it
+// settles one navigate early. A patch does not arm: it usually keeps the view,
+// and the client cannot know ahead that the server will degrade it to a replace.
+let _navInFlight = 0;
+let _navAwaitResync = false;
 // Bumped per armed navigate, so a send scheduled before it (a debounced or
 // throttled push_event) is dropped when it fires after the window has closed.
 let _navEpoch = 0;
@@ -550,7 +560,7 @@ let _navEpoch = 0;
  * @param {number} [epoch] `_navEpoch` when the event was raised
  */
 function sendEvent(msg, epoch = _navEpoch) {
-    if (_navPending || epoch !== _navEpoch) return;
+    if (_navInFlight > 0 || _navAwaitResync || epoch !== _navEpoch) return;
     workerPost(W_SEND, msg);
 }
 
@@ -700,8 +710,29 @@ function navigateTo(path, qs, hash, opts) {
 }
 
 /**
+ * Settle the navigate replies a server frame carries: its `OP_REPLACE` or a
+ * top-level navigate effect. The first frame after a reconnect is the resync,
+ * which clears the post-close wait instead. Called
+ * before the frame is applied, so its own effects -- a redirect re-arming, the new
+ * page's push_event -- see the settled count.
+ * @param {Array<Array<*>>|null} ops
+ * @param {Array<Array<*>>|null} effects
+ * @param {boolean} resync
+ */
+function settleNavReplies(ops, effects, resync) {
+    if (resync) {
+        _navAwaitResync = false;
+        return;
+    }
+    if (_navInFlight === 0) return;
+    if (ops?.some((op) => op[0] === OP.REPLACE) || effects?.some((eff) => eff[0] === JS_NAVIGATE)) {
+        _navInFlight--;
+    }
+}
+
+/**
  * Post a navigate/patch frame and retarget the reconnect URL. A navigate arms the
- * page-swap window (`_navPending`) -- only on a live socket: a frame posted while
+ * page-swap window (`_navInFlight`) -- only on a live socket: a frame posted while
  * disconnected is dropped by the worker and gets no reply, and the reconnect's
  * resync is what puts the new page on screen.
  * @param {'navigate'|'patch'} kind
@@ -710,7 +741,7 @@ function navigateTo(path, qs, hash, opts) {
  */
 function sendNav(kind, path, qs) {
     if (kind === 'navigate' && _connected) {
-        _navPending = true;
+        _navInFlight++;
         _navEpoch++;
     }
     workerPost(W_SEND, JSON.stringify([kind, { path, qs }]));
@@ -1340,10 +1371,6 @@ function applyOps(ops, resync = false) {
         return found;
     };
     for (const op of ops) {
-        // A root replace closes a navigate's page-swap window (`_navPending`),
-        // resolved or not: the server swapped its view either way. Cleared before
-        // the frame's effects run, so the new page's own push_event goes out.
-        if (op[0] === OP.REPLACE) _navPending = false;
         // Isolate each op: a bad selector or a throwing hook must not abort the
         // rest of the batch, or the DOM desyncs from the already-advanced server
         // snapshot until a reload.
@@ -2792,10 +2819,7 @@ function execOne(el, event, cmd) {
             if (opts.full) {
                 // Full-page navigation: let the browser load the URL normally.
                 // Used when the target isn't a live route (a controller/asset
-                // path, or a 404) and so can't be SPA-navigated. The server kept
-                // the old view, so a pending navigate window is over: a URL the
-                // browser does not unload for (a download) leaves the page live.
-                _navPending = false;
+                // path, or a 404) and so can't be SPA-navigated.
                 location.assign(full);
                 break;
             }
@@ -3902,6 +3926,9 @@ function connect(endpoint, params = {}) {
                         // unrelated ops-frame can still scroll; there is no reply
                         // id on the wire to do better client-side.
                         const armedScroll = _pendingScroll;
+                        // Here, not on arrival: a transition defers this, and the
+                        // old DOM stays live (and gated) until the swap is applied.
+                        settleNavReplies(msg[1], msg[2], !!msg[3]);
                         // Re-save what was typed while disconnected: the resync's
                         // OP_REPLACE is about to discard it.
                         if (msg[3] && _savedForms.size > 0) saveFormState();
@@ -3956,6 +3983,12 @@ function connect(endpoint, params = {}) {
                     _closeCount++;
                     _connected = false;
                     _mountProof = null;
+                    // The replies still owed died with the socket; the reconnect's
+                    // resync is what replaces the page now.
+                    if (_navInFlight > 0) {
+                        _navInFlight = 0;
+                        _navAwaitResync = true;
+                    }
                     document.documentElement.classList.add('az-disconnected');
                     document.documentElement.classList.remove('az-connected');
                     // A crash after the mount needs no reload: the worker's
@@ -4048,6 +4081,11 @@ function connect(endpoint, params = {}) {
                 _worker = null;
                 _connected = false;
                 _mountProof = null;
+                // Same as a close: the owed navigate replies die with the socket.
+                if (_navInFlight > 0) {
+                    _navInFlight = 0;
+                    _navAwaitResync = true;
+                }
                 _replayedForms.clear();
                 _replay = null;
                 cancelMountReload();
@@ -4089,7 +4127,8 @@ function connect(endpoint, params = {}) {
         cancelMountReload();
         _pendingScroll = null;
         _pendingTransition = null;
-        _navPending = false;
+        _navInFlight = 0;
+        _navAwaitResync = false;
         _connectQs = '';
         _savedForms.clear();
         // Close any floating (PiP) view windows; each window's pagehide handler
