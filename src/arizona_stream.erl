@@ -12,6 +12,12 @@ operations to the client.
 This avoids re-rendering whole lists when only a few items change --
 the differ knows exactly which keys to insert, remove, update, or move.
 
+Keys must be unique **once rendered**, not just as terms: an item is
+addressed on the wire and in the DOM by its key's text
+(`arizona_template:to_bin/1`), so keys such as `1` and `~"1"` are two
+items here but one address to the client, and an op meant for one
+patches the other. Use keys of one type.
+
 ## Complexity -- prefer reset/2 and sort/2 for bulk mutation
 
 `items` is a map (effectively O(1) per-key access); `order` is a list with
