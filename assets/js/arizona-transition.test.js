@@ -268,13 +268,13 @@ describe('view transitions -- az-transition attribute', () => {
         document
             .getElementById('lnk')
             .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
-        // One merged write: separate _azScroll and _azTransition replaceState
+        // One merged write: separate _azScroll and _azTransitionNext replaceState
         // calls double the history writes per nav, tripping Safari's ~100/30s
         // SecurityError rate limit twice as fast.
         expect(replaceSpy).toHaveBeenCalledTimes(1);
         const state = replaceSpy.mock.calls[0][0];
         expect(state._azScroll).toEqual({ x: window.scrollX, y: window.scrollY });
-        expect(state._azTransition).toEqual({ types: ['slide'], kind: 'replace' });
+        expect(state._azTransitionNext).toEqual({ types: ['slide'], kind: 'replace' });
         replaceSpy.mockRestore();
     });
 });
@@ -284,18 +284,75 @@ describe('view transitions -- az-transition attribute', () => {
 // ---------------------------------------------------------------------------
 
 describe('view transitions -- back/forward', () => {
-    it('replays the transition stamped on the history entry', () => {
+    /** Click an SPA link: `href`, with `az-transition` when `types` is given. */
+    function nav(href, types) {
+        const t = types === undefined ? '' : ` az-transition="${types}"`;
+        document.body.innerHTML = `<div id="page" az-view><a id="lnk" href="${href}" az-navigate${t}>go</a></div>`;
+        document
+            .getElementById('lnk')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        _mock.simulateMessage([replaceOp(href)]);
+    }
+
+    /** Traverse history by `delta` and answer the resulting navigate frame. */
+    async function traverse(delta) {
+        const popped = new Promise((r) => window.addEventListener('popstate', r, { once: true }));
+        history.go(delta);
+        await popped;
+        _mock.simulateMessage([replaceOp(location.pathname)]);
+    }
+
+    it('back and forward across a transitioned edge replay its transition', async () => {
         const fn = document.startViewTransition;
-        document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
-        history.pushState({ _azTransition: { types: ['back'], kind: 'replace' } }, '', '/x');
-        window.dispatchEvent(
-            new PopStateEvent('popstate', {
-                state: { _azTransition: { types: ['back'], kind: 'replace' } },
-            }),
-        );
-        _mock.simulateMessage([replaceOp('popped')]);
-        expect(fn).toHaveBeenCalledOnce();
-        expect(fn.mock.calls[0][0].types).toEqual(['back']);
+        nav('/b', 'back');
+        expect(fn).toHaveBeenCalledTimes(1);
+        await traverse(-1); // B -> A crosses the transitioned edge
+        expect(fn).toHaveBeenCalledTimes(2);
+        expect(fn.mock.calls[1][0].types).toEqual(['back']);
+        await traverse(1); // A -> B crosses it again
+        expect(fn).toHaveBeenCalledTimes(3);
+        expect(fn.mock.calls[2][0].types).toEqual(['back']);
+    });
+
+    it('back across a plain edge does not animate, even into a transitioned entry', async () => {
+        // A -(transition)-> B -(plain)-> C: B was reached by a transition, but
+        // Back from C traverses the plain B-C edge.
+        const fn = document.startViewTransition;
+        nav('/b', 'slide');
+        nav('/c');
+        expect(fn).toHaveBeenCalledTimes(1);
+        await traverse(-1); // C -> B: plain edge
+        expect(fn).toHaveBeenCalledTimes(1);
+        await traverse(-1); // B -> A: transitioned edge
+        expect(fn).toHaveBeenCalledTimes(2);
+        await traverse(1); // A -> B: transitioned edge
+        expect(fn).toHaveBeenCalledTimes(3);
+        await traverse(1); // B -> C: plain edge
+        expect(fn).toHaveBeenCalledTimes(3);
+    });
+
+    it('back across a transitioned edge animates when the next one was plain', async () => {
+        // A -(plain)-> B -(transition)-> C.
+        const fn = document.startViewTransition;
+        nav('/b');
+        nav('/c', 'slide');
+        expect(fn).toHaveBeenCalledTimes(1);
+        await traverse(-1); // C -> B: transitioned edge
+        expect(fn).toHaveBeenCalledTimes(2);
+        await traverse(-1); // B -> A: plain edge
+        expect(fn).toHaveBeenCalledTimes(2);
+    });
+
+    it('a plain re-navigation from an entry clears its old transitioned edge', async () => {
+        // A -(transition)-> B, Back to A, then A -(plain)-> D replaces the
+        // forward history: Back from D traverses the new plain edge.
+        const fn = document.startViewTransition;
+        nav('/b', 'slide');
+        await traverse(-1);
+        expect(fn).toHaveBeenCalledTimes(2);
+        nav('/d');
+        await traverse(-1); // D -> A: plain edge
+        expect(fn).toHaveBeenCalledTimes(2);
     });
 });
 
