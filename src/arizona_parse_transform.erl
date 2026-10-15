@@ -804,18 +804,10 @@ format_error(live_render_id_must_be_get_id) ->
 format_error(az_view_not_allowed) ->
     "az_view attribute is auto-injected by the parse transform in "
     "arizona_stateful render/1 and must not be set manually";
-format_error({reserved_attr, Name}) ->
-    lists:flatten(
-        io_lib:format(
-            "the ~ts attribute is reserved -- the parse transform emits it itself "
-            "(az addresses an element for the diff, az-local describes its ?local "
-            "slots), so a template-authored one renders as a duplicate whose value "
-            "can collide with a real slot address and misroute a patch. Remove it: "
-            "az-key, the az-* event attributes and any az-* name of your own are "
-            "unaffected",
-            [Name]
-        )
-    );
+%% The authored-attribute errors live in their own function, like the ?each family
+%% below, to keep format_error/1 under the cyclomatic limit.
+format_error({Kind, Name}) when Kind =:= reserved_attr; Kind =:= duplicate_attr ->
+    format_attr_error(Kind, Name);
 format_error({invalid_child, ValueStr}) ->
     lists:flatten(
         io_lib:format(
@@ -934,6 +926,29 @@ format_source_error(tracked_get_on_non_bindings_map) ->
     "nested map, read it with maps:get/2 (`User = arizona_template:get(user, Bindings), "
     "Name = maps:get(name, User)`); if it is a bindings value reached through a "
     "case/merge the transform cannot see into, alias it directly with `B = Bindings` first".
+
+format_attr_error(reserved_attr, Name) ->
+    lists:flatten(
+        io_lib:format(
+            "the ~ts attribute is reserved -- the parse transform emits it itself "
+            "(az addresses an element for the diff, az-local describes its ?local "
+            "slots), so a template-authored one renders as a duplicate whose value "
+            "can collide with a real slot address and misroute a patch. Remove it: "
+            "az-key, the az-* event attributes and any az-* name of your own are "
+            "unaffected",
+            [Name]
+        )
+    );
+format_attr_error(duplicate_attr, Name) ->
+    lists:flatten(
+        io_lib:format(
+            "the ~ts attribute is set twice on one element. Both render, the browser "
+            "keeps the first and a diff patches the dynamic one, so the page stops "
+            "matching what the server would render. Write it once; to combine values, "
+            "use one list value, e.g. {class, [~~\"btn \", ?get(kind)]}",
+            [Name]
+        )
+    ).
 
 binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
@@ -3160,8 +3175,8 @@ is_literal_tag({char, _, _}) -> true;
 is_literal_tag(_Evaluated) -> false.
 
 compile_element(Tag, Attrs0, Children, Line, State0) ->
-    ok = reject_framework_attrs(Attrs0, Line),
     Backend = State0#state.backend,
+    ok = reject_framework_attrs(Backend, Attrs0, Line),
     RawKind = Backend:raw_text_kind(Tag, State0#state.content_ctx),
     ChildCtx = Backend:content_context(Tag, State0#state.content_ctx),
     Attrs1 = maybe_inject_nodiff(maybe_inject_or_raise_az_view(Attrs0, Line, State0), Line, State0),
@@ -4785,13 +4800,14 @@ directive_opts(Name) ->
 directive_opts_1(~"az-nodiff") -> {ok, #{diff => false}};
 directive_opts_1(_Other) -> false.
 
-%% Attribute names the template author may not write, checked on the element's
+%% Attribute names the template author may not write (or write twice), checked on the element's
 %% ORIGINAL attrs -- before az-view / az-local injection, so an injected name is
 %% never mistaken for an authored one.
-reject_framework_attrs(Attrs, Line) ->
+reject_framework_attrs(Backend, Attrs, Line) ->
     ok = reject_nested_directives(Attrs, Line),
     ok = reject_nodiff_value(Attrs, Line),
-    reject_reserved_attrs(Attrs, Line).
+    ok = reject_reserved_attrs(Attrs, Line),
+    reject_duplicate_attrs(Backend, Attrs, Line).
 
 %% `az-nodiff` is a bare directive. Its value in the HTML is the compiler's (the
 %% token the client keeps the element by), so an authored one -- any value,
@@ -4874,6 +4890,35 @@ reject_reserved_attrs(Attrs, Line) ->
         [] -> ok;
         [Name | _] -> parse_error({reserved_attr, Name}, Line)
     end.
+
+%% Two attributes of one name render both: a browser keeps the first, while the diff
+%% patches whichever one is dynamic, so after an update the DOM no longer matches a
+%% fresh render of the same state. Names are compared as the backend emits and keys
+%% them (`az_click` and `<<"AZ-CLICK">>` are one HTML attribute).
+reject_duplicate_attrs(Backend, Attrs, Line) ->
+    Keys = [
+        Key
+     || Attr <- Attrs,
+        {ok, Name} <- [authored_attr_name(Backend, Attr)],
+        Key <- [Backend:attr_key(Name)],
+        Key =/= repeatable
+    ],
+    case Keys -- lists:usort(Keys) of
+        [] -> ok;
+        [Key | _] -> parse_error({duplicate_attr, Key}, Line)
+    end.
+
+authored_attr_name(Backend, {tuple, _, [NameAST, _Value]}) ->
+    authored_attr_name(Backend, NameAST);
+authored_attr_name(Backend, {atom, _, Name}) ->
+    {ok, Backend:name(Name)};
+authored_attr_name(_Backend, {bin, _, _} = Bin) ->
+    case is_static_binary(Bin) of
+        true -> {ok, extract_binary_value(Bin)};
+        false -> error
+    end;
+authored_attr_name(_Backend, _Attr) ->
+    error.
 
 %% The literal name of an attribute in any of its forms (`name`, `<<"name">>`,
 %% `{name, Value}`), normalized like a directive so `az_local` and `'az-local'`
