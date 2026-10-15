@@ -656,7 +656,7 @@ handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) -
     %% effect accumulator seeds empty (the patch is the originating action).
     {B1, Resets, Effects} = arizona_stateful:call_handle_update(H, Params, B0, []),
     {Ops1, Snap1, V1, B3, Fps1, NewState, Effects1} = process_root_change(
-        handle_update, H, B1, Resets, Effects, State
+        patch_callback(H), H, B1, Resets, Effects, State
     ),
     {reply, {ok, Ops1, Effects1, arizona_event_attrs:drain()}, NewState#state{
         bindings = B3, snapshot = Snap1, views = V1, sent_fps = Fps1
@@ -1386,6 +1386,14 @@ push_barrier(_From, #state{}) ->
 
 root_view_id(#state{bindings = Bindings}) ->
     maps:get(id, Bindings).
+
+%% What produced a patch's bindings, for a restricted-key error to name: the
+%% handler's handle_update/3, or, without one, the default merge of the params.
+patch_callback(H) ->
+    case erlang:function_exported(H, handle_update, 3) of
+        true -> handle_update;
+        false -> default_patch_merge
+    end.
 
 -doc false.
 -spec merge_seed_fps(Fps, FpList) -> Fps1 when

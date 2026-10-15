@@ -409,7 +409,8 @@ the bindings the view held before the callback ran), and the error names it.
     Bindings :: map(),
     Props :: map(),
     Handler :: module(),
-    Callback :: mount | handle_update | handle_event | handle_info | handle_drain.
+    Callback ::
+        mount | handle_update | handle_event | handle_info | handle_drain | default_patch_merge.
 check_restricted_keys(Bindings, Props, Handler, Callback) ->
     [check_restricted_key(Key, Bindings, Props, Handler, Callback) || Key <- ?RESTRICTED_KEYS],
     ok.
@@ -509,6 +510,15 @@ naming the offending handler, callback and key.
     Reason :: term(),
     StackTrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
+format_error(restricted_key_modified, [{_M, _F, [Key, Handler, default_patch_merge], _Info} | _]) ->
+    #{
+        general => io_lib:format(
+            "~s has no handle_update/3, so the patch params were merged into its "
+            "bindings, changing or dropping restricted key '~s'. This key is owned by "
+            "the framework: a patch must not carry another value for it.",
+            [Handler, Key]
+        )
+    };
 format_error(restricted_key_modified, [{_M, _F, [Key, Handler, Callback], _Info} | _]) ->
     #{
         general => io_lib:format(

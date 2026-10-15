@@ -29,6 +29,7 @@
 -export([patch_to_other_handler_changing_layouts_forces_full_load/1]).
 -export([patch_to_route_with_other_id_replaces_view/1]).
 -export([patch_to_route_with_same_id_stays_in_place/1]).
+-export([patch_compares_the_middleware_produced_id/1]).
 -export([middleware_flash_replays_requested_path_on_full_load/1]).
 -export([flash_replay_does_not_hijack_an_unrelated_navigation/1]).
 -export([unflagged_reconnect_replies_immediately/1]).
@@ -88,6 +89,7 @@ all() ->
         patch_to_other_handler_changing_layouts_forces_full_load,
         patch_to_route_with_other_id_replaces_view,
         patch_to_route_with_same_id_stays_in_place,
+        patch_compares_the_middleware_produced_id,
         middleware_flash_replays_requested_path_on_full_load,
         flash_replay_does_not_hijack_an_unrelated_navigation,
         unflagged_reconnect_replies_immediately,
@@ -556,6 +558,27 @@ patch_to_route_with_same_id_stays_in_place(Config) when is_list(Config) ->
     }),
     {reply, _, Socket0} = arizona_socket:init(arizona_route_id_view, #{id => ~"a"}, Req, #{}),
     ?assertMatch({[], _}, patch_ops(~"/a2", Socket0)).
+
+%% The id a patch is compared on is the one its route's pipeline produces, as a
+%% navigate would mount with: a middleware may supply it, or override a static
+%% one back to the id on screen.
+patch_compares_the_middleware_produced_id(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    SetId = fun(Id) -> fun(Req, B) -> {cont, Req, B#{id => Id}} end end,
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/mw-b" => {arizona_route_id_view, #{middlewares => [SetId(~"b")]}},
+            ~"/back-to-a" =>
+                {arizona_route_id_view, #{
+                    bindings => #{id => ~"b"}, middlewares => [SetId(~"a")]
+                }}
+        }
+    }),
+    {reply, _, Socket0} = arizona_socket:init(arizona_route_id_view, #{id => ~"a"}, Req, #{}),
+    {Ops1, Socket1} = patch_ops(~"/back-to-a", Socket0),
+    ?assertEqual([], Ops1),
+    {Ops2, _Socket2} = patch_ops(~"/mw-b", Socket1),
+    ?assertMatch([[?OP_REPLACE, ~"a", #{~"d" := [~" id=\"b\""]}]], Ops2).
 
 %% A patch's ops, or none when the socket had nothing to send.
 patch_ops(Path, Socket0) ->
