@@ -83,7 +83,6 @@ fingerprints already shipped in the initial HTML.
 -export([dedup_fps/2]).
 -export([apply_on_mount/2]).
 -export([format_error/2]).
--export([unmount_view/3]).
 -export([swap_out_view/3]).
 -export([view_state/1]).
 
@@ -783,10 +782,9 @@ format_error({unknown_view, ViewId, Msg}, [{_M, _F, [_, _B, V0], _Info} | _]) ->
 %% Internal: the one place a child view leaves the live process. Cancels its
 %% `send_after/3` timers and flushes its queued view messages BEFORE `unmount/1`,
 %% so a late tick can never reach a view that is gone. Besides the removals this
-%% module reconciles after a diff, `arizona_eval` calls it when a render keeps an
-%% id but swaps its handler -- before the new handler mounts, since the new
+%% module reconciles after a diff, `swap_out_view/3` calls it when a render keeps
+%% an id but swaps its handler -- before the new handler mounts, since the new
 %% instance's own timers are registered under the same id.
--doc false.
 -spec unmount_view(ViewId, Handler, Bindings) -> ok when
     ViewId :: binary(),
     Handler :: module(),

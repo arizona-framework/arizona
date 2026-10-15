@@ -28,7 +28,7 @@ render(Bindings) ->
 -spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
     az:handle_event_ret().
 handle_event(~"swap", _Payload, Bindings) ->
-    ?send(~"swapped", queued_for_a),
+    {arizona_view, ~"swapped", queued_for_a} = ?send(~"swapped", queued_for_a),
     {Bindings#{which => b}, #{}, []};
 handle_event(~"swap_crash", _Payload, Bindings) ->
     {Bindings#{which => crash}, #{}, []}.
