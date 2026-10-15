@@ -158,15 +158,17 @@ the client reloads it after a jittered delay.
     %% the process's last pushes (crash_close/4); a crash exit then means the
     %% view could not mount, so it closes 4501 rather than 4500.
     mount_failed = false :: boolean(),
-    %% The session cookie the WebSocket upgrade's `101` set, if any
-    %% (`arizona_req:session_carry/1`). Every navigate/patch rebuilds its request
-    %% from the upgrade's raw value, whose `Cookie` header predates that write, so
-    %% it is replayed onto each one (`resolve_route/3`) -- otherwise a session a
-    %% route middleware wrote at the upgrade (a login, a store-mode rotation that
-    %% deleted the old id) is invisible to the next navigate's middlewares. Taken
-    %% once, at connect: the socket sees no later cookie change (a controller fetch
-    %% that rewrites the cookie reaches the browser, not this socket).
-    session_carry = none :: arizona_req:session_carry()
+    %% The framework cookies the WebSocket upgrade's `101` changed
+    %% (`arizona_req:carried_cookies/1`: a written or cleared session, a consumed
+    %% or newly set flash). Every navigate/patch rebuilds its request from the
+    %% upgrade's raw value, whose `Cookie` header predates the upgrade, so they are
+    %% replayed onto each one (`resolve_route/3`) -- otherwise a session a route
+    %% middleware wrote at the upgrade (a login, a store-mode rotation that deleted
+    %% the old id) is invisible to the next navigate's middlewares, and a flash the
+    %% upgrade already showed shows again. Taken once, at connect: the socket sees
+    %% no later cookie change (a controller fetch that rewrites the cookie reaches
+    %% the browser, not this socket).
+    carried_cookies = [] :: arizona_req:carried_cookies()
 }).
 
 %% --------------------------------------------------------------------
@@ -238,7 +240,7 @@ init(Handler, Bindings, Req, Opts) ->
         req = Req,
         handler = Handler,
         layouts = Layouts,
-        session_carry = arizona_req:session_carry(Req)
+        carried_cookies = arizona_req:carried_cookies(Req)
     },
     safe_init(Handler, Socket, fun() ->
         %% `push_barrier` opts this transport into the ordering marker the
@@ -632,11 +634,11 @@ layout_changed(RouteOpts, #socket{layouts = Layouts}) ->
         _Different -> true
     end.
 
-resolve_route(Path, Qs, #socket{req = Req, session_carry = Carry}) ->
+resolve_route(Path, Qs, #socket{req = Req, carried_cookies = Carried}) ->
     Adapter = arizona_req:adapter(Req),
     case arizona_req:call_resolve_route(Adapter, Path, Qs, arizona_req:raw(Req)) of
         {ok, H, RouteOpts, NavReq} ->
-            {ok, H, RouteOpts, arizona_req:seed_session(NavReq, Carry)};
+            {ok, H, RouteOpts, arizona_req:seed_cookies(NavReq, Carried)};
         error ->
             error
     end.

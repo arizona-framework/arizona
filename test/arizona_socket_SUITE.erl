@@ -68,6 +68,8 @@
 -export([navigate_sees_session_cleared_at_upgrade/1]).
 -export([navigate_sees_session_rotated_at_upgrade_in_store_mode/1]).
 -export([navigate_reads_carried_store_id_live/1]).
+-export([navigate_does_not_replay_flash_consumed_at_upgrade/1]).
+-export([navigate_does_not_take_flash_set_at_upgrade/1]).
 
 all() ->
     [
@@ -128,7 +130,9 @@ all() ->
         navigate_sees_session_written_at_upgrade,
         navigate_sees_session_cleared_at_upgrade,
         navigate_sees_session_rotated_at_upgrade_in_store_mode,
-        navigate_reads_carried_store_id_live
+        navigate_reads_carried_store_id_live,
+        navigate_does_not_replay_flash_consumed_at_upgrade,
+        navigate_does_not_take_flash_set_at_upgrade
     ].
 
 %% A `?stateful` inside a stream item re-renders when the item updates, so the item's
@@ -1427,10 +1431,38 @@ navigate_reads_carried_store_id_live(Config) when is_list(Config) ->
         ?assertEqual({error, []}, seen())
     end).
 
+%% A flash the upgrade consumed (its route runs `fetch_flash`, and the 101 carries
+%% the clearing cookie) is gone from the browser. A navigate whose route also runs
+%% `fetch_flash` rebuilds its request from the upgrade's raw Cookie header, which
+%% still holds it, so without the carry the message shows a second time.
+navigate_does_not_replay_flash_consumed_at_upgrade(Config) when is_list(Config) ->
+    with_secret(fun() ->
+        Flash = {arizona_flash:cookie_name(), arizona_flash:encode(#{~"notice" => ~"hi"})},
+        {H, B, ArzReq} = upgrade(#{cookies => [Flash]}, [{arizona_middleware, fetch_flash}]),
+        ?assertEqual(#{~"notice" => ~"hi"}, arizona_req:flash(ArzReq)),
+        {reply, _, Socket0} = arizona_socket:init(H, B, ArzReq, #{}),
+        {reply, _, _} = arizona_socket:handle_in(navigate_frame(~"/notice"), Socket0),
+        ?assertEqual(#{}, seen_flash())
+    end).
+
+%% A flash the upgrade SET (a middleware that flashes and continues) rides the 101
+%% for the browser's next HTTP request. A navigate on this socket must not take it
+%% too -- nothing over the socket can clear the browser's cookie, so it would show
+%% twice -- nor fall back to an older flash in the raw Cookie header.
+navigate_does_not_take_flash_set_at_upgrade(Config) when is_list(Config) ->
+    with_secret(fun() ->
+        Old = {arizona_flash:cookie_name(), arizona_flash:encode(#{~"notice" => ~"old"})},
+        Flash = fun(R, B) -> {cont, arizona_req:put_flash(R, ~"notice", ~"new"), B} end,
+        {H, B, ArzReq} = upgrade(#{cookies => [Old]}, [Flash]),
+        {reply, _, Socket0} = arizona_socket:init(H, B, ArzReq, #{}),
+        {reply, _, _} = arizona_socket:handle_in(navigate_frame(~"/notice"), Socket0),
+        ?assertEqual(#{}, seen_flash())
+    end).
+
 %% Prepare a WebSocket upgrade to `/` running `Middlewares`, beside an `/account`
-%% route gated on a `user` session key. The gate reports what it read (and the
-%% session cookies its request would emit) to the test process -- the socket runs
-%% in it.
+%% route gated on a `user` session key and a `/notice` route reporting its flash.
+%% Both report what they read (the gate also the session cookies its request would
+%% emit) to the test process -- the socket runs in it.
 upgrade(Raw, Middlewares) ->
     Self = self(),
     RequireUser = fun(R0, B) ->
@@ -1442,9 +1474,17 @@ upgrade(Raw, Middlewares) ->
             error -> {halt, arizona_req:redirect(R, ~"/login")}
         end
     end,
+    ReportFlash = fun(R, B) ->
+        Self ! {flash, arizona_req:flash(R)},
+        {cont, R, B}
+    end,
     Routes = #{
         ~"/" => {arizona_root_counter, #{middlewares => Middlewares}},
-        ~"/account" => {arizona_root_counter, #{middlewares => [RequireUser]}}
+        ~"/account" => {arizona_root_counter, #{middlewares => [RequireUser]}},
+        ~"/notice" =>
+            {arizona_root_counter, #{
+                middlewares => [{arizona_middleware, fetch_flash}, ReportFlash]
+            }}
     },
     {cont, #{handler := H, bindings := B, req := ArzReq}} =
         arizona_ws:prepare(
@@ -1457,6 +1497,12 @@ upgrade(Raw, Middlewares) ->
 seen() ->
     receive
         {seen, User, RespCookies} -> {User, RespCookies}
+    after 0 -> error(no_navigate_middleware_run)
+    end.
+
+seen_flash() ->
+    receive
+        {flash, Flash} -> Flash
     after 0 -> error(no_navigate_middleware_run)
     end.
 
