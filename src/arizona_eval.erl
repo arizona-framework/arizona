@@ -40,7 +40,7 @@ Evaluation recurses into the following dynamic value shapes:
 ## Restricted keys
 
 `check_restricted_keys/3` enforces that a handler's mount callback
-cannot modify framework-owned bindings like `id`. Violations raise
+cannot modify or drop framework-owned bindings like `id`. Violations raise
 `restricted_key_modified` with a human-readable message via `format_error/2`.
 """.
 
@@ -392,7 +392,7 @@ Asserts that `Bindings` did not modify any framework-restricted keys
 (currently just `id`) compared to the original `Props`.
 
 Raises `restricted_key_modified` with handler info if a restricted key
-was changed by the handler's mount callback.
+was changed or dropped by the handler's mount callback.
 """.
 -spec check_restricted_keys(Bindings, Props, Handler) -> ok when
     Bindings :: map(),
@@ -479,7 +479,8 @@ check_restricted_key(Key, Bindings, Props, Handler) ->
             case Bindings of
                 #{Key := Expected} ->
                     ok;
-                #{Key := _} ->
+                #{} ->
+                    %% Dropping the key is a modification too.
                     error(restricted_key_modified, [Key, Handler], [
                         {error_info, #{module => ?MODULE}}
                     ])
@@ -499,8 +500,8 @@ naming the offending handler and key.
 format_error(restricted_key_modified, [{_M, _F, [Key, Handler], _Info} | _]) ->
     #{
         general => io_lib:format(
-            "~s's mount callback modified restricted key '~s'. "
-            "This key is owned by the framework and cannot be changed.",
+            "~s's mount callback changed or dropped restricted key '~s'. "
+            "This key is owned by the framework: mount must return it unchanged.",
             [Handler, Key]
         )
     }.
