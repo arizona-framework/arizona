@@ -599,7 +599,12 @@ transform decides which dynamics are provable: a per-item template carries
 `reuse => [boolean()]`, one flag per dynamic, `true` only when the dynamic references
 no variable but the item key outside the map argument of a tracked read
 (`arizona_template:get/2,3`, `get_lazy/3`, `with/2`, or their `az` aliases) in its
-own closure. `arizona_eval:render_stream_item_skipping/6` keeps a dynamic's old
+own closure. That map must be the item itself (the bare item parameter, or the
+variable side of a `Pat = Var` head) or the view bindings (bound outside the
+callback): a sub-map bound in the head or the body records its own keys, not the
+item field that holds it. A dynamic with no reads and no item reference (a static
+value, `?connected`, the key attribute) is kept on an item update.
+`arizona_eval:render_stream_item_skipping/6` keeps a dynamic's old
 `{Az, Val, Deps}` only when it is flagged and its deps miss the changed fields;
 everything else re-evaluates, and a template without the list (none qualified, a
 1-arg callback, a hand-built template) re-renders the whole changed item. An item

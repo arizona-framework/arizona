@@ -64,6 +64,7 @@
     each_stream_reuse_flags/1,
     each_stream_reuse_flags_compiled_body/1,
     each_stream_no_reuse_without_tracked_reads/1,
+    each_stream_reuse_map_must_be_item/1,
     stateless_with_atom_callback/1,
     stateless_with_fun_ref_callback/1,
     stateless_with_remote_fun_ref_callback/1,
@@ -702,6 +703,7 @@ groups() ->
             each_stream_reuse_flags,
             each_stream_reuse_flags_compiled_body,
             each_stream_no_reuse_without_tracked_reads,
+            each_stream_reuse_map_must_be_item,
             stateless_with_atom_callback,
             stateless_with_fun_ref_callback,
             stateless_with_remote_fun_ref_callback
@@ -7541,9 +7543,53 @@ each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
     ),
     ?assertNot(is_map_key(reuse, stream_each_template(Mod))).
 
+%% A tracked read vouches for an item read only when its map IS the item (the bare
+%% parameter, or the variable side of a `Pat = Var` head) or the view bindings. A
+%% sub-map bound in the head or the body records the sub-map's keys, not the item
+%% field that holds it, so those dynamics are not reusable.
+each_stream_reuse_map_must_be_item(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_reuse_item_map). "
+        "-export([sub/1, sub_alias/1, sub_bindings/1, sub_with/1, alias/1, whole/1]). "
+        "sub(Bindings) -> "
+        "    az:each(fun(#{sub := Sub}, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_alias(Bindings) -> "
+        "    az:each(fun(#{sub := Sub} = I, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub), az:get(n, I)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_bindings(Bindings) -> "
+        "    az:each(fun(#{sub := Bindings}, K) -> "
+        "        {'li', [{'az-key', K}], [az:get(v, Bindings)]} "
+        "    end, az:get(stream, Bindings)). "
+        "sub_with(Bindings) -> "
+        "    az:each(fun(#{sub := Sub}, K) -> "
+        "        {'li', [{'az-key', K}], [maps:get(v, arizona_template:with([v], Sub))]} "
+        "    end, az:get(stream, Bindings)). "
+        "alias(Bindings) -> "
+        "    az:each(fun(I, K) -> "
+        "        I2 = I, "
+        "        {'li', [{'az-key', K}], [arizona_template:get(n, I2)]} "
+        "    end, az:get(stream, Bindings)). "
+        "whole(Bindings) -> "
+        "    az:each(fun(I = #{}, K) -> "
+        "        {'li', [{'az-key', K}], [arizona_template:get(n, I), az:get(x, Bindings)]} "
+        "    end, az:get(stream, Bindings)). "
+    ),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub)),
+    ?assertMatch(#{reuse := [true, false, true]}, stream_each_template(Mod, sub_alias)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub_bindings)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub_with)),
+    ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, alias)),
+    ?assertMatch(#{reuse := [true, true, true]}, stream_each_template(Mod, whole)).
+
 stream_each_template(Mod) ->
+    stream_each_template(Mod, render).
+
+stream_each_template(Mod, Fun) ->
     Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, []),
-    maps:get(template, Mod:render(#{stream => Stream})).
+    maps:get(template, Mod:Fun(#{stream => Stream})).
 
 %% A `?native` single-root list each is NOT flagged single_root: the gate is the
 %% backend's `supports_list_patch/0` callback (asked at compile time), and

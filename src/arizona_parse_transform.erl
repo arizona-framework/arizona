@@ -2746,7 +2746,7 @@ build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, {map, MapLine, F
     TField = {map_field_assoc, MapLine, {atom, MapLine, t}, {integer, MapLine, 0}},
     NewFields =
         [TField | [set_template_map_d_field(Field, DFunAST) || Field <- Fields]] ++
-            reuse_field(MapLine, Vars1, DListAST1),
+            reuse_field(MapLine, Vars1, Prefix1, DListAST1),
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, {map, MapLine, NewFields}
     ]}.
@@ -4526,7 +4526,7 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
     TmplAST =
         {map, Line,
             BaseFields ++ opts_to_map_fields(Opts, Line) ++
-                reuse_field(Line, Vars1, DynamicsAST1)},
+                reuse_field(Line, Vars1, Prefix1, DynamicsAST1)},
     {call, Line, {remote, Line, {atom, Line, arizona_template}, {atom, Line, each}}, [
         SourceAST, TmplAST
     ]}.
@@ -4541,9 +4541,16 @@ build_each_ast(Line, SourceAST, Vars, Guards, Prefix, Statics, DynASTs, Fingerpr
 %% dynamic references no variable but the item key, outside the map argument of a
 %% tracked read in its own closure. Omitted when no dynamic qualifies, and for a
 %% 1-arg callback, whose list source re-renders every item anyway.
-reuse_field(Line, [_ItemPat, KeyPat], DynamicsAST) ->
+%%
+%% The map argument is masked only when it is the item itself (the bare parameter,
+%% or the variable side of a `Pat = Var` head) or bound outside the callback (the
+%% view bindings). A sub-map bound in the head or the body records ITS keys, while
+%% the item changes in the field holding it, so that read vouches for nothing.
+reuse_field(Line, [ItemPat, KeyPat], Prefix, DynamicsAST) ->
     KeyVars = ordsets:from_list(collect_var_names(KeyPat)),
-    Flags = [reusable_dynamic(D, KeyVars) || D <- ast_list_to_list(DynamicsAST)],
+    HeadVars = collect_var_names(ItemPat) ++ collect_var_names(KeyPat),
+    Local = (HeadVars ++ prefix_bound(Prefix, HeadVars)) -- item_vars(ItemPat),
+    Flags = [reusable_dynamic(D, KeyVars, Local) || D <- ast_list_to_list(DynamicsAST)],
     case lists:member(true, Flags) of
         true ->
             [
@@ -4553,54 +4560,72 @@ reuse_field(Line, [_ItemPat, KeyPat], DynamicsAST) ->
         false ->
             []
     end;
-reuse_field(_Line, _Vars, _DynamicsAST) ->
+reuse_field(_Line, _Vars, _Prefix, _DynamicsAST) ->
     [].
 
-reusable_dynamic({tuple, L, [Az, Spec | Rest]}, KeyVars) ->
-    Masked = {tuple, L, [Az, mask_slot_spec(Spec) | Rest]},
+%% The variables a head pattern binds to the whole item.
+item_vars({var, _, Name}) -> [Name];
+item_vars({match, _, Left, Right}) -> item_vars(Left) ++ item_vars(Right);
+item_vars(_Pattern) -> [].
+
+prefix_bound([], _HeadVars) ->
+    [];
+prefix_bound(Prefix, HeadVars) ->
+    Block = erl_syntax:block_expr(Prefix),
+    Tree = erl_syntax_lib:annotate_bindings(Block, ordsets:from_list(HeadVars)),
+    proplists:get_value(bound, erl_syntax:get_ann(Tree)).
+
+reusable_dynamic({tuple, L, [Az, Spec | Rest]}, KeyVars, Local) ->
+    Masked = {tuple, L, [Az, mask_slot_spec(Spec, Local) | Rest]},
     Tree = erl_syntax_lib:annotate_bindings(Masked, ordsets:new()),
     Free = proplists:get_value(free, erl_syntax:get_ann(Tree)),
     ordsets:is_subset(Free, KeyVars);
-reusable_dynamic(_Dynamic, _KeyVars) ->
+reusable_dynamic(_Dynamic, _KeyVars, _Local) ->
     false.
 
 %% The slot closure is the bare fun or the one an `{esc, F}` / `{attr, Name, F}`
 %% spec wraps; only there does a tracked read land in the dynamic's own deps.
-mask_slot_spec({tuple, L, [{atom, _, esc} = Tag, Fun]}) ->
-    {tuple, L, [Tag, mask_slot_fun(Fun)]};
-mask_slot_spec({tuple, L, [{atom, _, attr} = Tag, Name, Fun]}) ->
-    {tuple, L, [Tag, Name, mask_slot_fun(Fun)]};
-mask_slot_spec(Spec) ->
-    mask_slot_fun(Spec).
+mask_slot_spec({tuple, L, [{atom, _, esc} = Tag, Fun]}, Local) ->
+    {tuple, L, [Tag, mask_slot_fun(Fun, Local)]};
+mask_slot_spec({tuple, L, [{atom, _, attr} = Tag, Name, Fun]}, Local) ->
+    {tuple, L, [Tag, Name, mask_slot_fun(Fun, Local)]};
+mask_slot_spec(Spec, Local) ->
+    mask_slot_fun(Spec, Local).
 
-mask_slot_fun({'fun', L, {clauses, [{clause, CL, [], [], Body}]}}) ->
-    {'fun', L, {clauses, [{clause, CL, [], [], mask_tracked_reads(Body)}]}};
-mask_slot_fun(Spec) ->
+mask_slot_fun({'fun', L, {clauses, [{clause, CL, [], [], Body}]}}, Local) ->
+    {'fun', L, {clauses, [{clause, CL, [], [], mask_tracked_reads(Body, Local)}]}};
+mask_slot_fun(Spec, _Local) ->
     Spec.
 
-%% Replace the map argument of each tracked read with an atom, so it no longer
-%% counts as a reference. A nested fun is left alone: its body runs later, in a
-%% dependency scope of its own (a nested template's closure), or never.
-mask_tracked_reads({'fun', _, _} = Fun) ->
+%% Replace the map argument of each tracked read of the item or the view bindings
+%% (a variable not in `Local`) with an atom, so it no longer counts as a reference.
+%% A nested fun is left alone: its body runs later, in a dependency scope of its
+%% own (a nested template's closure), or never.
+mask_tracked_reads({'fun', _, _} = Fun, _Local) ->
     Fun;
-mask_tracked_reads({named_fun, _, _, _} = Fun) ->
+mask_tracked_reads({named_fun, _, _, _} = Fun, _Local) ->
     Fun;
 mask_tracked_reads(
-    {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}} = Callee, [Key, {var, VL, _} | Rest]} =
-        Call
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}} = Callee, [Key, {var, VL, V} | Rest]} =
+        Call,
+    Local
 ) when Mod =:= arizona_template; Mod =:= az ->
-    case is_tracked_read(F, Rest) of
+    case is_tracked_read(F, Rest) andalso not lists:member(V, Local) of
         true ->
-            Args = [mask_tracked_reads(Key), {atom, VL, tracked} | mask_tracked_reads(Rest)],
+            Args = [
+                mask_tracked_reads(Key, Local),
+                {atom, VL, tracked}
+                | mask_tracked_reads(Rest, Local)
+            ],
             {call, L, Callee, Args};
         false ->
-            list_to_tuple(mask_tracked_reads(tuple_to_list(Call)))
+            list_to_tuple(mask_tracked_reads(tuple_to_list(Call), Local))
     end;
-mask_tracked_reads(Node) when is_tuple(Node) ->
-    list_to_tuple(mask_tracked_reads(tuple_to_list(Node)));
-mask_tracked_reads(Nodes) when is_list(Nodes) ->
-    [mask_tracked_reads(N) || N <- Nodes];
-mask_tracked_reads(Leaf) ->
+mask_tracked_reads(Node, Local) when is_tuple(Node) ->
+    list_to_tuple(mask_tracked_reads(tuple_to_list(Node), Local));
+mask_tracked_reads(Nodes, Local) when is_list(Nodes) ->
+    [mask_tracked_reads(N, Local) || N <- Nodes];
+mask_tracked_reads(Leaf, _Local) ->
     Leaf.
 
 %% `get/2,3`, `get_lazy/3` and `with/2` track the key they read (`with/2` every

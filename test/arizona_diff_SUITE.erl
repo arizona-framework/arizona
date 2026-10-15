@@ -133,6 +133,7 @@
     each_stream_update_with_callback_change/1,
     each_stream_update_untracked_field/1,
     each_stream_reset_untracked_field/1,
+    each_stream_update_head_sub_map/1,
     each_nested_stream_untracked_inner_insert/1,
     each_stream_callback_change_settles/1,
     each_nested_list_in_list_tracks/1,
@@ -297,6 +298,7 @@ groups() ->
             each_stream_update_with_callback_change,
             each_stream_update_untracked_field,
             each_stream_reset_untracked_field,
+            each_stream_update_head_sub_map,
             each_nested_stream_untracked_inner_insert,
             each_stream_callback_change_settles,
             each_nested_list_in_list_tracks,
@@ -2657,6 +2659,19 @@ each_stream_reset_untracked_field(Config) when is_list(Config) ->
         )
     ).
 
+%% A tracked read on a sub-map bound in the callback head records the sub-map's key
+%% (`v`), while the item changes in the field holding it (`sub`): the read must not
+%% count as an item read the deps can vouch for.
+each_stream_update_head_sub_map(Config) when is_list(Config) ->
+    ?assertMatch(
+        [[?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"b">>]]]],
+        each_stream_op_diff(
+            stream_head_sub,
+            ss,
+            fun(S) -> arizona_stream:update(S, 1, #{id => 1, sub => #{v => <<"b">>}}) end
+        )
+    ).
+
 %% The inner stream reaches the outer item through `maps:get(inner, G)`, and the outer
 %% item's each slot depends on `suffix` (read by the inner items). An insert into the
 %% inner stream changes the outer item, so it must reach the inner each.
@@ -2826,11 +2841,14 @@ each_stream_cycle(Op, Suffix) ->
 
 %% One live-like cycle on fixture `Fn` that only queues `Op` on stream `s`.
 each_stream_op_diff(Fn, Op) ->
+    each_stream_op_diff(Fn, s, Op).
+
+each_stream_op_diff(Fn, Src, Op) ->
     M = arizona_each_tracking,
     B0 = each_bindings(),
     {_HTML, Snap0, V0} = arizona_render:render(M:Fn(B0), #{}),
-    B1 = B0#{s => Op(maps:get(s, B0))},
-    {Ops, _Snap1, _V1} = arizona_diff:diff(M:Fn(B1), Snap0, V0, #{s => true}),
+    B1 = B0#{Src => Op(maps:get(Src, B0))},
+    {Ops, _Snap1, _V1} = arizona_diff:diff(M:Fn(B1), Snap0, V0, #{Src => true}),
     Ops.
 
 %% The rendered value of every slot of every visible stream item, keyed by item.
@@ -2846,9 +2864,10 @@ each_bindings() ->
         items => [<<"a">>, <<"b">>],
         m => #{k1 => <<"a">>},
         s => Stream([#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}]),
+        ss => Stream([#{id => 1, sub => #{v => <<"a">>}}]),
         groups => [Stream([#{id => 1, n => <<"a">>}]), Stream([#{id => 2, n => <<"b">>}])],
         gs => Stream([
             #{id => 1, inner => Stream([#{id => 1, n => <<"a">>}, #{id => 2, n => <<"b">>}])}
         ])
     },
-    arizona_stream:clear_stream_pending(B, [s, gs]).
+    arizona_stream:clear_stream_pending(B, [s, ss, gs]).

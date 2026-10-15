@@ -8,6 +8,7 @@ change to it must reach the items. Each function is a distinct scenario driven b
 -export([list/1]).
 -export([stream/1]).
 -export([stream_mixed/1]).
+-export([stream_head_sub/1]).
 -export([map/1]).
 -export([attr/1]).
 -export([branch/1]).
@@ -38,6 +39,20 @@ stream(Bindings) ->
 stream_mixed(Bindings) ->
     ?html(
         {ul, [], [?each(fun(I, _K) -> {li, [], [[maps:get(n, I), ?get(suffix)]]} end, ?get(s))]}
+    ).
+
+%% A tracked read whose map is a sub-map destructured in the head, not the item:
+%% its deps name `v`, but the change arrives as the item field `sub`.
+stream_head_sub(Bindings) ->
+    ?html(
+        {ul, [], [
+            ?each(
+                fun(#{sub := Sub}, K) ->
+                    {li, [{az_key, K}], [arizona_template:get(v, Sub)]}
+                end,
+                ?get(ss)
+            )
+        ]}
     ).
 
 map(Bindings) ->
