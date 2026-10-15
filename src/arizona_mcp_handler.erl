@@ -965,9 +965,12 @@ call_tool(Params, Id, #{mod := Mod, state := State} = Session) ->
 
 %% `arguments` is an optional JSON object; `handle_tool/4` and `get_prompt/3`
 %% are promised a map, so any other value is the client's error (-32602) rather
-%% than a crash inside the callback (an opaque -32603).
+%% than a crash inside the callback (an opaque -32603). A null is absent, as a
+%% null `id` is (`arizona_jsonrpc`).
 call_arguments(#{~"arguments" := Args}) when is_map(Args) ->
     {ok, Args};
+call_arguments(#{~"arguments" := null}) ->
+    {ok, #{}};
 call_arguments(#{~"arguments" := _NotAnObject}) ->
     error;
 call_arguments(#{}) ->
