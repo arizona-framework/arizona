@@ -89,6 +89,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([read_session/1]).
 -export([session_id/1]).
 -export([session_error/1]).
+-export([carried_cookies/1]).
+-export([seed_cookies/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -146,6 +148,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([session/0]).
 -export_type([resp_cookie_opts/0]).
 -export_type([qs/0]).
+-export_type([carried_cookies/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -190,6 +193,11 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -nominal cookies() :: [{binary(), binary()}].
 -nominal headers() :: #{binary() => iodata()}.
 -nominal body() :: binary().
+
+%% Framework cookies a response changed, as the browser's jar sees them once it
+%% lands: each name with the value it now sends, or `clear` when the cookie is gone.
+%% See `carried_cookies/1`.
+-nominal carried_cookies() :: [{binary(), binary() | clear}].
 
 %% HTTP redirect status codes (RFC 9110 §15.4). The most common are
 %% 301 (moved permanently), 302 (found), 303 (see other), 307
@@ -764,6 +772,64 @@ consume_flash(Req0) ->
 seed_flash(Req, Flash) when is_map(Flash) ->
     Current = maps:get(flash_in, Req, #{}),
     Req#{flash_in => maps:merge(Current, Flash)}.
+
+%% Internal use only -- carry plumbing for `arizona_socket`. The framework cookies
+%% this request's response changes, in the terms of the browser's cookie jar once it
+%% lands. The socket takes them from the WebSocket upgrade -- the one exchange of a
+%% live session with a `Set-Cookie` leg -- and replays them onto every request it
+%% rebuilds for a navigate/patch (`seed_cookies/2`), which otherwise start from the
+%% upgrade's raw `Cookie` header and so predate what the upgrade itself did:
+%%
+%% - The session, when written: its new value (cookie mode: a fresh encryption of
+%%   the map the flush encrypted; store mode: the signed id of the entry the flush
+%%   committed), or `clear` when cleared.
+%% - The flash, when the upgrade consumed it or set a new one: `clear` either way. A
+%%   consumed flash is gone from the browser, so replaying it would show it again;
+%%   a new one belongs to the browser's next HTTP request, and a navigate taking it
+%%   would show it twice (once here, once there), since nothing over the socket can
+%%   clear the cookie the browser holds.
+-doc false.
+-spec carried_cookies(Request) -> carried_cookies() when
+    Request :: request().
+carried_cookies(Req) ->
+    carried_session_cookie(Req) ++ carried_flash_cookie(Req).
+
+carried_session_cookie(Req) ->
+    case session_outcome(Req) of
+        untouched ->
+            [];
+        clear ->
+            [{arizona_session:cookie_name(), clear}];
+        {write, _SessionOut} ->
+            {Name, Value, _Opts} = session_resp_cookie(Req),
+            [{Name, Value}]
+    end.
+
+carried_flash_cookie(Req) ->
+    FlashOut = maps:get(flash_out, Req, #{}),
+    Consumed = maps:get(flash_consumed, Req, false),
+    case arizona_flash:resp_cookie(FlashOut, Consumed) of
+        none -> [];
+        {Name, _Value, _Opts} -> [{Name, clear}]
+    end.
+
+%% Internal use only -- applies a `carried_cookies/1` result to a request rebuilt
+%% from the upgrade's raw value, as the browser's jar would: each carried cookie is
+%% replaced (or removed) before anything reads it, so the normal readers decode it --
+%% in store mode `read_session/1` is a store lookup by the carried id, so the
+%% entry's current state (a later write under the same id, a revocation) is what a
+%% navigate sees. The request stays unwritten, so nothing is re-emitted or
+%% re-committed on its behalf. App code never calls this.
+-doc false.
+-spec seed_cookies(Request, Carried) -> Request when
+    Request :: request(),
+    Carried :: carried_cookies().
+seed_cookies(Req, []) ->
+    Req;
+seed_cookies(Req0, Carried) ->
+    {Cookies0, Req} = cookies(Req0),
+    Kept = [Cookie || {Name, _} = Cookie <:- Cookies0, not lists:keymember(Name, 1, Carried)],
+    Req#{cookies => [{Name, Value} || {Name, Value} <:- Carried, Value =/= clear] ++ Kept}.
 
 -doc """
 Writes `Key => Value` into the session. On the response the session serializes to a

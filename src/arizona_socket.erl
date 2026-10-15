@@ -157,7 +157,18 @@ the client reloads it after a jittered delay.
     %% exiting under it. The frame was dropped so the exit closes in order behind
     %% the process's last pushes (crash_close/4); a crash exit then means the
     %% view could not mount, so it closes 4501 rather than 4500.
-    mount_failed = false :: boolean()
+    mount_failed = false :: boolean(),
+    %% The framework cookies the WebSocket upgrade's `101` changed
+    %% (`arizona_req:carried_cookies/1`: a written or cleared session, a consumed
+    %% or newly set flash). Every navigate/patch rebuilds its request from the
+    %% upgrade's raw value, whose `Cookie` header predates the upgrade, so they are
+    %% replayed onto each one (`resolve_route/3`) -- otherwise a session a route
+    %% middleware wrote at the upgrade (a login, a store-mode rotation that deleted
+    %% the old id) is invisible to the next navigate's middlewares, and a flash the
+    %% upgrade already showed shows again. Taken once, at connect: the socket sees
+    %% no later cookie change (a controller fetch that rewrites the cookie reaches
+    %% the browser, not this socket).
+    carried_cookies = [] :: arizona_req:carried_cookies()
 }).
 
 %% --------------------------------------------------------------------
@@ -225,7 +236,12 @@ init(Handler, Bindings, Req, Opts) ->
     %% place) vs different-view (fall back to a full navigate/replace), and the
     %% layouts so either can tell an in-place swap from one that needs the whole
     %% page rebuilt.
-    Socket = #socket{req = Req, handler = Handler, layouts = Layouts},
+    Socket = #socket{
+        req = Req,
+        handler = Handler,
+        layouts = Layouts,
+        carried_cookies = arizona_req:carried_cookies(Req)
+    },
     safe_init(Handler, Socket, fun() ->
         %% `push_barrier` opts this transport into the ordering marker the
         %% event/patch/navigate drain below relies on -- see drain_pending_pushes/1.
@@ -569,8 +585,8 @@ resync_then(ResyncFrame, {reply, Frame, Socket}) ->
 resync_then(_ResyncFrame, {close, _Code, _Reason, _Socket} = Close) ->
     Close.
 
-handle_navigate(Path, Qs, #socket{req = Req} = Socket) ->
-    case resolve_route(Path, Qs, Req) of
+handle_navigate(Path, Qs, Socket) ->
+    case resolve_route(Path, Qs, Socket) of
         {ok, H, RouteOpts, NewReq} ->
             case layout_changed(RouteOpts, Socket) of
                 true ->
@@ -589,8 +605,8 @@ handle_navigate(Path, Qs, #socket{req = Req} = Socket) ->
 %% full-page navigation -- as does one whose layouts differ, which neither
 %% branch can serve (a patch keeps the shell, and a replace only swaps what is
 %% inside it).
-handle_patch(Path, Qs, #socket{req = Req} = Socket) ->
-    case resolve_route(Path, Qs, Req) of
+handle_patch(Path, Qs, Socket) ->
+    case resolve_route(Path, Qs, Socket) of
         {ok, H, RouteOpts, NewReq} ->
             case layout_changed(RouteOpts, Socket) of
                 true ->
@@ -618,9 +634,14 @@ layout_changed(RouteOpts, #socket{layouts = Layouts}) ->
         _Different -> true
     end.
 
-resolve_route(Path, Qs, Req) ->
+resolve_route(Path, Qs, #socket{req = Req, carried_cookies = Carried}) ->
     Adapter = arizona_req:adapter(Req),
-    arizona_req:call_resolve_route(Adapter, Path, Qs, arizona_req:raw(Req)).
+    case arizona_req:call_resolve_route(Adapter, Path, Qs, arizona_req:raw(Req)) of
+        {ok, H, RouteOpts, NavReq} ->
+            {ok, H, RouteOpts, arizona_req:seed_cookies(NavReq, Carried)};
+        error ->
+            error
+    end.
 
 %% A navigate/patch target this socket cannot serve in place -- one that doesn't
 %% resolve to a live route (a typo, a controller/asset path, a 404), or one whose
