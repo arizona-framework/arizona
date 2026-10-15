@@ -443,8 +443,13 @@ handle_info(mcp_keepalive, #state{channel = ChannelPid} = State) ->
     %% no event id, so it is never buffered for resumption.
     ChannelPid ! {mcp_event, roadrunner_sse:comment(~"keepalive")},
     {noreply, arm_keepalive(State)};
-handle_info(session_ttl_expired, State) ->
+handle_info({timeout, Ref, session_ttl_expired}, #state{ttl_timer = Ref} = State) ->
     {stop, normal, State};
+handle_info({timeout, _StaleRef, session_ttl_expired}, State) ->
+    %% A timer that fired before refresh_ttl/1 cancelled it: its message was
+    %% already queued (cancelling does not flush it), behind the very request
+    %% that refreshed the session. Only the current timer's expiry is idleness.
+    {noreply, State};
 handle_info({'EXIT', _Pid, _Reason}, State) ->
     %% A linked worker's exit signal (exits are trapped). Worker outcomes are
     %% fully handled through their monitors (`'DOWN'` / `dispatch_done` /
@@ -712,7 +717,7 @@ refresh_ttl(#state{ttl_timer = Old, ttl_ms = TtlMs} = State) ->
         true ->
             State#state{ttl_timer = undefined};
         false ->
-            Ref = erlang:send_after(TtlMs, self(), session_ttl_expired),
+            Ref = erlang:start_timer(TtlMs, self(), session_ttl_expired),
             State#state{ttl_timer = Ref}
     end.
 
