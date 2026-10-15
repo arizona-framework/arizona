@@ -656,7 +656,11 @@ template/descriptor and raises `bad_template_value`. So `compile_each` rejects a
 `text_dynamic` body (`each_body_not_element` for a 1-arg/list callback,
 `each_stream_body_not_element` for a 2-arg/stream-or-map callback -- the two differ only in fix
 advice, since a list has a comprehension fallback and a stream/map, keyed per item, does not)
-at compile time. A keyed callback whose body is a *conditional* raises
+at compile time. A keyed callback must also return exactly **one** element: a list of elements
+or a text+element fragment raises `each_stream_body_multi_root`, since the keyed ops
+(`OP_INSERT`/`OP_REMOVE`/`OP_MOVE`/`OP_ITEM_PATCH`) address an item by the single element
+carrying its `az-key`, and any other root of the item would be left behind on a remove and out
+of order on a move. A keyed callback whose body is a *conditional* raises
 `each_stream_body_control_flow` instead, because the fix is different: "wrap the value in an
 element" reads as advice to pick a tag, when the real constraint is that every item shares ONE
 compiled per-item template, so an item's **outer tag is fixed at compile time**. That shared

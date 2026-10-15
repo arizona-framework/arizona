@@ -291,7 +291,11 @@ template or descriptor wrapped in a bare list (`[?stateless(...)]`) is the same 
 transform rejects all of these at compile time (`each_body_not_element`). A 2-arg (stream/map)
 callback is rejected the same way but with `each_stream_body_not_element`: a stream/map keys
 each item for per-item diffing and has **no comprehension fallback**, so the body must be an
-element (wrap the value: `fun(Item, Key) -> {li, [], [Item]} end`). When that body is a
+element (wrap the value: `fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end`). It must be
+**one** element, too: a list of elements or a mixed text+element fragment is
+`each_stream_body_multi_root`, because a keyed op (insert, remove, move, item patch) addresses an
+item by the single element carrying its `az_key`, so a sibling root would be orphaned on a remove
+and out of order on a move -- put the parts inside the item element. When that body is a
 **conditional**, the error is `each_stream_body_control_flow` and the fix is different. Every item
 shares ONE compiled per-item template, so an item's **outer tag is fixed at compile time** -- that
 is what makes per-item diffing cheap (statics once, dynamics per item). The branches may be

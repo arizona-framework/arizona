@@ -1037,6 +1037,7 @@ format_error(cross_target_nesting) ->
 format_error(Reason) when
     Reason =:= each_body_not_element;
     Reason =:= each_stream_body_not_element;
+    Reason =:= each_stream_body_multi_root;
     Reason =:= each_stream_body_control_flow;
     Reason =:= each_named_fun_multi_clause;
     Reason =:= each_named_fun_undefined;
@@ -1090,10 +1091,17 @@ format_each_error(each_body_not_element) ->
     "text/value child: {li, [], [case ... of ... end]}";
 format_each_error(each_stream_body_not_element) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
-    "Attrs, Children}) or a list of elements -- a stream/map keys each item for per-item "
-    "diffing, which a single-value body throws away. Unlike a list there is no comprehension "
-    "fallback (a comprehension has no stream/keyed semantics): wrap the value in an element, "
-    "e.g. fun(Item, Key) -> {li, [], [Item]} end";
+    "Attrs, Children}) -- a stream/map keys each item for per-item diffing, which a "
+    "single-value body throws away. Unlike a list there is no comprehension fallback (a "
+    "comprehension has no stream/keyed semantics): wrap the value in an element, e.g. "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
+format_each_error(each_stream_body_multi_root) ->
+    "an ?each callback over a stream or map (a 2-arg fun) must return ONE element, not a "
+    "list of elements or a fragment mixing text and elements: a keyed op (insert, remove, "
+    "move, item patch) addresses an item by the single element carrying its az_key, so "
+    "any sibling root -- another element or a text node -- would be left behind on a "
+    "remove and out of order on a move. Put the parts inside one item element, e.g. "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [{b, [], [Item]}, ~\"sep\"]} end";
 format_each_error(each_stream_body_control_flow) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
     "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
@@ -3597,9 +3605,19 @@ set_template_map_d_field(Field, _DFunAST) ->
 %% value slot that renders at SSR but loses per-item diffing (and a descriptor value crashes
 %% on diff). Reject it at compile time. `Kind` (list | stream) is the source shape, inferred
 %% from the callback arity (1-arg = list, 2-arg = stream/map): the error it raises tailors the
-%% fix advice, since a list has a comprehension fallback and a stream does not.
+%% fix advice, since a list has a comprehension fallback and a stream does not. A stream
+%% body must further be ONE element (see the multi-root clause).
 validate_each_body(Kind, text_dynamic, LastExpr) ->
     parse_error(each_body_error(Kind, LastExpr), anno(LastExpr));
+validate_each_body(stream, static_binary, LastExpr) ->
+    parse_error(each_stream_body_not_element, anno(LastExpr));
+validate_each_body(stream, Classification, LastExpr) when
+    Classification =:= element_list; Classification =:= list_ast
+->
+    %% Keyed ops (OP_REMOVE/OP_MOVE/OP_INSERT/OP_ITEM_PATCH) address an item by the one
+    %% element carrying its `az-key`, so a sibling root (another element, or text) is
+    %% left behind on a delete and out of order on a move.
+    parse_error(each_stream_body_multi_root, anno(LastExpr));
 validate_each_body(Kind, list_ast, LastExpr) ->
     %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
     %% ?html/?native/?terminal map literal) or a ?stateful/?stateless descriptor: those land
