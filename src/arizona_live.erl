@@ -831,11 +831,13 @@ do_navigate_call(NewHandler, NewIB, NewOnMount, From, State) ->
     %% old one.
     OldB1 = maps:without(arizona_eval:restricted_keys(), OldB),
     Merged = maps:merge(OldB1, NewIB),
-    %% The old page is gone, so the state must stop naming it before the new
-    %% one mounts: terminate/2 unmounts whatever the state holds, and a mount
-    %% that raises here would otherwise run every unmount above a second time.
-    %% The mount runs in a continue -- before any other message -- from a state
-    %% holding no page; terminate/2 already treats that as nothing to tear down.
+    %% The old page is unmounted, so the state must stop marking it mounted
+    %% before the new one mounts: terminate/2 unmounts the handler and views of
+    %% a state with a snapshot, and a mount that raises here would otherwise run
+    %% every unmount above a second time. Clearing the snapshot and views is what
+    %% marks it unmounted (handler and bindings still hold the old page, but
+    %% terminate/2 reads them only beside a snapshot). The mount runs in a
+    %% continue -- before any other message -- from that state.
     {noreply, State#state{snapshot = undefined, views = #{}, pending_refresh = #{}},
         {continue, {navigate_mount, From, NewHandler, Merged, NewOnMount}}}.
 
