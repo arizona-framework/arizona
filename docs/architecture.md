@@ -1376,7 +1376,10 @@ only for the redirect it belongs to, never hijacking an unrelated navigation. A 
 which nothing reproduces, is dropped with a logged warning. A handler effect's flash is captured
 from a bare `navigate`/`patch` and from one a `transition` wraps (both run when the frame lands);
 one an `on_key` or a `fetch`'s `on_error` wraps runs later, if ever, so its flash is stripped with a
-warning rather than stashed for whatever navigation comes next. The route adapter is recovered from
+warning rather than stashed for whatever navigation comes next. A `flash` opt that never passes
+through the socket -- an event attribute, a controller response -- has no carrier at all, so
+`arizona_effect`'s encoders refuse it (`flash_outside_live_effect`) instead of shipping it to a
+client that would drop it. The route adapter is recovered from
 `req` on demand. `mount_failed` marks a dropped frame whose failed live call was a mount, so the
 queued crash exit closes 4501.
 

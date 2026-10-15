@@ -12,7 +12,17 @@ the `t:cmd/0` type, and the two encoders.
 `encode/1` serializes to JSON and HTML-escapes `&`, `"`, `<` for embedding in an
 HTML attribute (the web path). `encode_json/1` serializes to raw JSON for clients
 that embed the command as a JSON value (the native path).
+
+These encoders serve commands that reach a client as data -- an event attribute or
+prop, a controller response -- never the effects a live handler returns, which the
+socket frames itself. So a `navigate`/`patch` carrying a `flash` opt is refused here
+with `{flash_outside_live_effect, navigate | patch}`: the socket carries that flash
+in-process to the navigation that follows its effect, and nothing would carry it
+from a client that received it as data -- the message would be lost silently, its
+content shipped to the page.
 """.
+
+-include("arizona_effect.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -25,6 +35,7 @@ that embed the command as a JSON value (the native path).
 -export([encode/1]).
 -export([encode_json/1]).
 -export([json_value/1]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -88,13 +99,67 @@ command as an array rather than a string of one.
 -spec json_value(Cmds) -> list() when
     Cmds :: cmd() | [cmd()].
 json_value({?MODULE, Cmd}) ->
-    Cmd;
+    no_flash(Cmd);
 json_value([{?MODULE, _} | _] = Cmds) ->
-    [C || {?MODULE, C} <:- Cmds].
+    [no_flash(C) || {?MODULE, C} <:- Cmds].
+
+-doc """
+Formats the errors this module raises with an `error_info` annotation. Picked up
+by `erl_error:format_exception/3`.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({flash_outside_live_effect, Op}, _Stacktrace) ->
+    #{general => flash_message(Op)}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% The command as given, once refuse_flash/1 passed it -- see the moduledoc.
+no_flash(Cmd) ->
+    ok = refuse_flash(Cmd),
+    Cmd.
+
+%% Refuse a navigate/patch `flash` opt in a command or in a command it wraps
+%% (`transition`, `on_key`, a `fetch` `on_error`). One head match per command on
+%% the common path.
+refuse_flash([Op, _Path, #{flash := _}]) when Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH ->
+    erlang:error({flash_outside_live_effect, op_name(Op)}, none, [
+        {error_info, #{module => ?MODULE}}
+    ]);
+refuse_flash([?EFFECT_TRANSITION, _Opts, Inner]) ->
+    refuse_flash_inner(Inner);
+refuse_flash([?EFFECT_ON_KEY, _Key, Inner]) ->
+    refuse_flash_inner(Inner);
+refuse_flash([?EFFECT_FETCH, _Url, #{on_error := Inner}]) ->
+    refuse_flash_inner(Inner);
+refuse_flash(_Cmd) ->
+    ok.
+
+%% A wrapper holds one bare command (its head is an op code) or a list of them.
+refuse_flash_inner([Op | _] = Inner) when is_integer(Op) ->
+    refuse_flash(Inner);
+refuse_flash_inner(Inner) ->
+    lists:foreach(fun(Cmd) -> ok = refuse_flash(Cmd) end, Inner).
+
+op_name(?EFFECT_NAVIGATE) -> navigate;
+op_name(?EFFECT_PATCH) -> patch.
+
+flash_message(Op) ->
+    io_lib:format(
+        "a ~s effect's `flash` opt only reaches its target when a live handler "
+        "returns the effect: the socket carries the flash to the navigation that "
+        "follows. In an event attribute or a controller response nothing carries "
+        "it, so it would be lost and its content shipped to the page. From a "
+        "template, push an event whose handler returns the ~s; from a controller, "
+        "set the flash with arizona_req:put_flash/3 through the req/1 -> put_req/2 "
+        "round trip and navigate with #{full => true}, so the browser's next GET "
+        "carries the flash cookie",
+        [Op, Op]
+    ).
 
 %% SWAR (SIMD Within A Register) byte scanner. Matches a 56-bit (7-byte)
 %% word at a time and uses bitwise arithmetic to validate that none of

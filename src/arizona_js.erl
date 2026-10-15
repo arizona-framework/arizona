@@ -270,6 +270,11 @@ Triggers a SPA navigation to `Path` with options.
   server strips it from the effect (the browser never sees it) and carries it
   in-process to the target's `flash` binding, so an in-view Post/Redirect/Get
   (`submit -> flash -> navigate`) shows its message just like an HTTP redirect flash.
+  Only for an effect a **live handler returns**: the socket is the carrier. In an
+  event attribute or a controller response (`arizona_controller:reply_effects/1,2`)
+  it raises `flash_outside_live_effect` -- push an event whose handler returns the
+  navigate, or set the flash from the controller with `arizona_req:put_flash/3` and
+  navigate with `full => true`.
 - `full` -- do a real full-page navigation (`location.assign`) instead of a SPA
   navigation. For a target that is not a live route (a controller/asset path, a
   404); the framework itself emits this to degrade a navigate/patch whose path
