@@ -7910,6 +7910,71 @@ describe('executeJS -- fetch', () => {
         expect(init.body).toBeUndefined();
     });
 
+    // The query belongs before the fragment: appended after `#top` it would be part
+    // of the fragment, which fetch() never sends, and the fields would be lost.
+    it('puts a GET form’s query before the URL fragment', async () => {
+        document.body.innerHTML = '<form method="get"><input name="q" value="hi" /></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+        const form = document.querySelector('form');
+
+        executeJS(form, null, [22, '/search#top', {}]);
+        executeJS(form, null, [22, '/search?page=2#top', {}]);
+        executeJS(form, null, [22, '/search?#top', {}]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(3));
+
+        const targets = globalThis.fetch.mock.calls.map(([target]) => target);
+        expect(targets).toEqual([
+            '/search?q=hi#top',
+            '/search?page=2&q=hi#top',
+            '/search?q=hi#top',
+        ]);
+    });
+
+    // A GET/HEAD carries no request body, so an explicit `body` -- the only payload a
+    // non-form trigger has -- goes in the query string instead of being dropped.
+    it('encodes an explicit body into the query string for GET and HEAD', async () => {
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+        const body = { q: 'a b', tags: ['x', 'y'], n: 2, on: true, skip: null, f: { k: 1 } };
+
+        executeJS(document.body, null, [22, '/search', { method: 'get', body }]);
+        executeJS(document.body, null, [22, '/search?p=1#r', { method: 'head', body: { q: 'z' } }]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+
+        const [[getUrl, getInit], [headUrl, headInit]] = globalThis.fetch.mock.calls;
+        expect(getUrl).toBe('/search?q=a+b&tags=x&tags=y&n=2&on=true&f=%7B%22k%22%3A1%7D');
+        expect(getInit.method).toBe('GET');
+        expect(getInit.body).toBeUndefined();
+        expect(getInit.headers['content-type']).toBeUndefined();
+        expect(headUrl).toBe('/search?p=1&q=z#r');
+        expect(headInit.method).toBe('HEAD');
+        expect(headInit.body).toBeUndefined();
+    });
+
+    it('lets an explicit GET body win over the trigger form, as for a POST', async () => {
+        document.body.innerHTML = '<form method="get"><input name="q" value="form" /></form>';
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.querySelector('form'), null, [22, '/search', { body: { q: 'opt' } }]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        expect(globalThis.fetch.mock.calls[0][0]).toBe('/search?q=opt');
+    });
+
+    it('warns instead of guessing when a GET body is not a map', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        globalThis.fetch = vi.fn(() => Promise.resolve(okResponse([])));
+
+        executeJS(document.body, null, [22, '/search', { method: 'get', body: ['a', 'b'] }]);
+        await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+        expect(globalThis.fetch.mock.calls[0][0]).toBe('/search');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('GET body must be a map'), [
+            'a',
+            'b',
+        ]);
+        warn.mockRestore();
+    });
+
     it('runs on_error on a network failure (rejected fetch)', async () => {
         globalThis.fetch = vi.fn(() => Promise.reject(new Error('offline')));
         const onErr = vi.fn();
