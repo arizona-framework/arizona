@@ -942,10 +942,11 @@ format_attr_error(reserved_attr, Name) ->
 format_attr_error(duplicate_attr, Name) ->
     lists:flatten(
         io_lib:format(
-            "the ~ts attribute is set twice on one element. Both render, the browser "
-            "keeps the first and a diff patches the dynamic one, so the page stops "
-            "matching what the server would render. Write it once; to combine values, "
-            "use one list value, e.g. {class, [~~\"btn \", ?get(kind)]}",
+            "the ~ts attribute is written twice on one element (names compare the way "
+            "the render target reads them). Both copies are emitted, and which one takes "
+            "effect is up to the target and to which of them an update patches, so the "
+            "output stops matching the template. Write it once; to combine values, use "
+            "one list value, e.g. {class, [~~\"btn \", ?get(kind)]}",
             [Name]
         )
     ).
@@ -4848,14 +4849,18 @@ is_directive_attr(Attr) ->
             false
     end.
 
-bare_attr_name({atom, _, Name}) ->
-    {ok, directive_attr_name(Name)};
-bare_attr_name({bin, _, _} = Bin) ->
+bare_attr_name(Attr) ->
+    bare_attr_name(fun directive_attr_name/1, Attr).
+
+%% `AtomName` spells an atom name: the directive normalization, or a backend's `name/1`.
+bare_attr_name(AtomName, {atom, _, Name}) ->
+    {ok, AtomName(Name)};
+bare_attr_name(_AtomName, {bin, _, _} = Bin) ->
     case is_static_binary(Bin) of
         true -> {ok, extract_binary_value(Bin)};
         false -> error
     end;
-bare_attr_name(_) ->
+bare_attr_name(_AtomName, _) ->
     error.
 
 %% The two attribute names the transform emits into the rendered output itself:
@@ -4891,42 +4896,50 @@ reject_reserved_attrs(Attrs, Line) ->
         [Name | _] -> parse_error({reserved_attr, Name}, Line)
     end.
 
-%% Two attributes of one name render both: a browser keeps the first, while the diff
-%% patches whichever one is dynamic, so after an update the DOM no longer matches a
-%% fresh render of the same state. Names are compared as the backend emits and keys
-%% them (`az_click` and `<<"AZ-CLICK">>` are one HTML attribute).
+%% Two attributes of one name are both emitted, and which one takes effect depends on
+%% the target (the HTML parser keeps the first, a JSON object the last) and on which
+%% one an update patches, so the output stops matching the template. Names compare as
+%% the backend emits them (`name/1`, so `az_click` and `<<"az-click">>` meet), under its
+%% `attr_names/0` policy; the error quotes the repeated one as written.
 reject_duplicate_attrs(Backend, Attrs, Line) ->
-    Keys = [
-        Key
-     || Attr <- Attrs,
-        {ok, Name} <- [authored_attr_name(Backend, Attr)],
-        Key <- [Backend:attr_key(Name)],
-        Key =/= repeatable
-    ],
-    case Keys -- lists:usort(Keys) of
-        [] -> ok;
-        [Key | _] -> parse_error({duplicate_attr, Key}, Line)
+    case Backend:attr_names() of
+        repeatable ->
+            ok;
+        Policy ->
+            Names = [
+                Name
+             || Attr <- Attrs, Name <- [attr_name(fun Backend:name/1, Attr)], Name =/= undefined
+            ],
+            reject_repeated_attr(Policy, Names, #{}, Line)
     end.
 
-authored_attr_name(Backend, {tuple, _, [NameAST, _Value]}) ->
-    authored_attr_name(Backend, NameAST);
-authored_attr_name(Backend, {atom, _, Name}) ->
-    {ok, Backend:name(Name)};
-authored_attr_name(_Backend, {bin, _, _} = Bin) ->
-    case is_static_binary(Bin) of
-        true -> {ok, extract_binary_value(Bin)};
-        false -> error
-    end;
-authored_attr_name(_Backend, _Attr) ->
-    error.
+reject_repeated_attr(_Policy, [], _Seen, _Line) ->
+    ok;
+reject_repeated_attr(Policy, [Name | Rest], Seen, Line) ->
+    Key = attr_compare_key(Policy, Name),
+    case Seen of
+        #{Key := true} -> parse_error({duplicate_attr, Name}, Line);
+        #{} -> reject_repeated_attr(Policy, Rest, Seen#{Key => true}, Line)
+    end.
+
+attr_compare_key(case_sensitive, Name) ->
+    Name;
+attr_compare_key(case_insensitive, Name) ->
+    <<<<(ascii_lower(C))>> || <<C>> <= Name>>.
+
+ascii_lower(C) when C >= $A, C =< $Z -> C + ($a - $A);
+ascii_lower(C) -> C.
 
 %% The literal name of an attribute in any of its forms (`name`, `<<"name">>`,
 %% `{name, Value}`), normalized like a directive so `az_local` and `'az-local'`
 %% are one name. `undefined` when the name is not a compile-time literal.
-attr_name({tuple, _, [NameAST | _]}) ->
-    attr_name(NameAST);
 attr_name(Attr) ->
-    case bare_attr_name(Attr) of
+    attr_name(fun directive_attr_name/1, Attr).
+
+attr_name(AtomName, {tuple, _, [NameAST | _]}) ->
+    attr_name(AtomName, NameAST);
+attr_name(AtomName, Attr) ->
+    case bare_attr_name(AtomName, Attr) of
         {ok, Name} -> Name;
         error -> undefined
     end.

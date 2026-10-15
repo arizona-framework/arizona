@@ -210,14 +210,14 @@ wraps the attribute expression in an internal boolean tag for a `value` backend.
 -callback boolean_attrs() -> presence | value.
 
 -doc """
-The key two attributes on one element collide under, asked by the parse transform at
-compile time to reject a duplicate (`duplicate_attr`). `Name` is the wire name (after
-`name/1`). HTML folds ASCII case, as its attribute names are case-insensitive; a backend
-whose attribute names are case-sensitive returns `Name` itself. `repeatable` when
-repeating an attribute is meaningful on this backend's wire (the terminal's styles are
-SGR escapes that compose in order).
+How attribute names compare on this backend's wire, asked by the parse transform at
+compile time to reject an attribute written twice on one element (`duplicate_attr`).
+Names are compared after `name/1`. `case_insensitive` (HTML): ASCII case is folded, as
+the HTML parser folds it (only A-Z). `case_sensitive`: names compare byte for byte (JSON
+object keys). `repeatable`: a repeated attribute is meaningful, so none is rejected (the
+terminal's styles are SGR escapes that compose in order).
 """.
--callback attr_key(Name :: binary()) -> binary() | repeatable.
+-callback attr_names() -> case_insensitive | case_sensitive | repeatable.
 
 -doc """
 Escape a dynamic value's rendered bytes for this backend's zipped document.
