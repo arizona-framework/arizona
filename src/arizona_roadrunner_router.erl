@@ -50,6 +50,7 @@ persistent term so the dev error page can build the SSE connect URL.
 -export([routes/1]).
 -export([routes/2]).
 -export([format_error/2]).
+-export([options_reply/3]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -209,7 +210,24 @@ routes(Routes) ->
     Routes :: [route()],
     BuildOpts :: map().
 routes(Routes, BuildOpts) when is_map(BuildOpts) ->
-    lists:flatmap(fun(R) -> route_to_roadrunner(R, BuildOpts) end, Routes).
+    with_options_allow(lists:flatmap(fun(R) -> route_to_roadrunner(R, BuildOpts) end, Routes)).
+
+-doc """
+The innermost roadrunner middleware of a route whose `OPTIONS` was opened only
+so its CORS transform can answer a preflight (see `with_cors_options/2`). The
+transform short-circuits a preflight, so an `OPTIONS` reaching here is a plain
+one, answered `204` with the path's `Allow` set rather than handed to a
+controller action or live page that never declared the method.
+""".
+-spec options_reply(Req, Next, Allow) -> roadrunner_handler:result() when
+    Req :: roadrunner_req:request(),
+    Next :: roadrunner_middleware:next(),
+    Allow :: binary().
+options_reply(Req, Next, Allow) ->
+    case roadrunner_req:method(Req) of
+        ~"OPTIONS" -> {{204, [{~"allow", Allow}], <<>>}, Req};
+        _ -> Next(Req)
+    end.
 
 -doc """
 Formats route-compilation errors into a human-readable message. Picked up by
@@ -266,14 +284,15 @@ format_error(wildcard_in_method_list, [{_M, _F, _Args, _Info} | _]) ->
 route_to_roadrunner({live, Path, Handler, Opts}, BuildOpts) ->
     %% A live route is GET-only (the page render) plus HEAD; the WebSocket
     %% upgrade rides its own `{ws, ...}` route. A non-GET to a live path gets 405.
-    {Transforms, Steps} = split_middlewares(Opts),
+    {Transforms0, Steps} = split_middlewares(Opts),
+    {Methods, Transforms} = with_cors_options([~"GET", ~"HEAD"], Transforms0),
     [
         with_compress(
             with_transforms(
                 #{
                     path => Path,
                     handler => arizona_roadrunner_http,
-                    methods => [~"GET", ~"HEAD"],
+                    methods => Methods,
                     state => #{arizona => build_live_meta(Handler, Opts, Steps, BuildOpts)}
                 },
                 Transforms
@@ -392,8 +411,9 @@ build_live_meta(Handler, Opts, Steps, BuildOpts) ->
 %% pipeline (CSRF check_origin on by default), restores the app `state`, then
 %% dispatches Handler:Action/1 (default `handle`). `Methods` is roadrunner's
 %% method allowlist (`undefined` = any method).
-controller_route(Methods, Path, Handler, Opts) ->
-    {Transforms, Steps} = split_middlewares(Opts),
+controller_route(Methods0, Path, Handler, Opts) ->
+    {Transforms0, Steps} = split_middlewares(Opts),
+    {Methods, Transforms} = with_cors_options(Methods0, Transforms0),
     [
         compress_first(
             with_transforms(
@@ -514,6 +534,52 @@ transform_to_roadrunner({http_transform, Unknown}) ->
     %% typo arrives here rather than at a constructor -- name the valid set
     %% instead of dying with a bare function_clause at boot.
     error({unknown_http_transform, Unknown}, none, [{error_info, #{module => ?MODULE}}]).
+
+%% roadrunner enforces a route's method allowlist (405) before any per-route
+%% middleware runs, so a CORS transform on a route that does not declare
+%% `OPTIONS` would never see the preflight it exists to answer. Open `OPTIONS`
+%% on such a route and put `options_reply/3` innermost, under the transform, to
+%% answer the plain `OPTIONS` the transform passes through. Its `Allow` value is
+%% filled per path by `with_options_allow/1`. A route that declares `OPTIONS`
+%% itself, or has no allowlist (`'*'`), already reaches the transform, and its
+%% handler owns the plain `OPTIONS`.
+with_cors_options(Methods, Transforms) when is_list(Methods) ->
+    case
+        lists:keymember(roadrunner_cors, 1, Transforms) andalso
+            not lists:member(~"OPTIONS", Methods)
+    of
+        true -> {Methods ++ [~"OPTIONS"], Transforms ++ [options_reply]};
+        false -> {Methods, Transforms}
+    end;
+with_cors_options(undefined, Transforms) ->
+    {undefined, Transforms}.
+
+%% Resolve each `options_reply` placeholder to the `Allow` set of every route
+%% sharing its path, the same union roadrunner's 405 advertises, so a sibling
+%% route's verbs are listed too.
+with_options_allow(Entries) ->
+    Allow = maps:groups_from_list(
+        fun({Path, _Method}) -> Path end,
+        fun({_Path, Method}) -> Method end,
+        [{Path, M} || #{path := Path, methods := Ms} <- Entries, is_list(Ms), M <- Ms]
+    ),
+    [resolve_options_reply(E, Allow) || E <- Entries].
+
+resolve_options_reply(#{path := Path, middlewares := Mws} = Entry, Allow) ->
+    case lists:member(options_reply, Mws) of
+        true ->
+            Reply = {fun ?MODULE:options_reply/3, join_methods(lists:usort(maps:get(Path, Allow)))},
+            Entry#{middlewares => [resolve_placeholder(M, Reply) || M <- Mws]};
+        false ->
+            Entry
+    end;
+resolve_options_reply(Entry, _Allow) ->
+    Entry.
+
+resolve_placeholder(options_reply, Reply) -> Reply;
+resolve_placeholder(Mw, _Reply) -> Mw.
+
+join_methods(Methods) -> iolist_to_binary(lists:join(~", ", Methods)).
 
 with_transforms(Route, []) -> Route;
 with_transforms(Route, Transforms) -> Route#{middlewares => Transforms}.

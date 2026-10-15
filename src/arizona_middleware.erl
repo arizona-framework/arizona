@@ -374,6 +374,14 @@ Distinct from `check_origin/2`, which REJECTS cross-origin requests --
 list this on a route that deliberately serves them (usually beside
 `check_origin => false`). Returns the plain term
 `{http_transform, {cors, Config}}` -- the spelling a sys.config route uses.
+
+The route's method allowlist is enforced before any transform runs, so the
+router adds `OPTIONS` to a cors route that does not declare it: a preflight
+then reaches this transform and gets its `204`, and a plain `OPTIONS` (no
+`Access-Control-Request-Method`) is answered `204` with the path's `Allow`
+set, never reaching the controller action or live page. A route that declares
+`OPTIONS` itself, or allows any method, keeps the plain `OPTIONS` for its own
+handler.
 """.
 -spec cors(Config) -> http_transform() when
     Config :: map().

@@ -31,6 +31,8 @@
     compile_routes_mixed/1,
     compile_routes_http_transforms/1,
     compile_routes_http_transform_errors/1,
+    compile_routes_cors_opens_options/1,
+    compile_routes_cors_keeps_declared_options/1,
     compile_routes_ws/1
 ]).
 
@@ -62,7 +64,9 @@ groups() ->
         compile_routes_mcp,
         compile_routes_mixed,
         compile_routes_http_transforms,
-        compile_routes_http_transform_errors
+        compile_routes_http_transform_errors,
+        compile_routes_cors_opens_options,
+        compile_routes_cors_keeps_declared_options
     ],
     [
         {roadrunner, [sequence], Cases}
@@ -479,7 +483,8 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
                     roadrunner_compress,
                     {roadrunner_cors, #{origins := [~"https://app.example"]}},
                     roadrunner_security_headers,
-                    {roadrunner_security_headers, #{frame_options := ~"DENY"}}
+                    {roadrunner_security_headers, #{frame_options := ~"DENY"}},
+                    {_OptionsReply, ~"GET, HEAD, OPTIONS"}
                 ]
             }
         ],
@@ -536,7 +541,13 @@ compile_routes_http_transforms(Config) when is_list(Config) ->
         }}
     ]),
     ?assertMatch(
-        #{middlewares := [{roadrunner_cors, #{origins := [~"https://app.example"]}}]},
+        #{
+            methods := [~"POST", ~"OPTIONS"],
+            middlewares := [
+                {roadrunner_cors, #{origins := [~"https://app.example"]}},
+                {_OptionsReply, ~"OPTIONS, POST"}
+            ]
+        },
         CorsRoute
     ),
     #{state := #{arizona := #{middlewares := CorsArizonaMws}}} = CorsRoute,
@@ -599,3 +610,67 @@ compile_routes_http_transform_errors(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(AssetMsg), ~"my_mod")),
     #{general := WildcardMsg} = Router:format_error(wildcard_in_method_list, Stack),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(WildcardMsg), ~"'*'")).
+
+compile_routes_cors_opens_options(Config) ->
+    %% roadrunner 405s a method outside a route's allowlist before any per-route
+    %% middleware runs, so a cors route must allow OPTIONS for its transform to
+    %% see a preflight. A sibling sharing the path keeps its own verbs, and the
+    %% 405 Allow set now advertises OPTIONS.
+    Cors = arizona_middleware:cors(#{origins => [~"https://app.example"]}),
+    compile(Config, [
+        {post, <<"/cors-api">>, my_controller, #{middlewares => [Cors]}},
+        {delete, <<"/cors-api">>, my_controller, #{}},
+        {live, <<"/cors-page">>, my_page, #{middlewares => [Cors]}},
+        {post, <<"/plain-api">>, my_controller, #{}}
+    ]),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"OPTIONS", <<"/cors-api">>)),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"DELETE", <<"/cors-api">>)),
+    ?assertEqual(
+        {method_not_allowed, [~"DELETE", ~"OPTIONS", ~"POST"]},
+        match_result(~"PUT", <<"/cors-api">>)
+    ),
+    ?assertMatch({ok, _, _, _, _}, match_result(~"OPTIONS", <<"/cors-page">>)),
+    ?assertEqual(
+        {method_not_allowed, [~"GET", ~"HEAD", ~"OPTIONS"]},
+        match_result(~"POST", <<"/cors-page">>)
+    ),
+    %% No cors, no change.
+    ?assertEqual({method_not_allowed, [~"POST"]}, match_result(~"OPTIONS", <<"/plain-api">>)),
+    %% The plain-OPTIONS reply sits innermost, under the transform (compress
+    %% stays outermost), carrying the whole path's Allow set.
+    Router = ?config(router, Config),
+    [Api, _Delete] = Router:routes([
+        {post, <<"/cors-api">>, my_controller, #{middlewares => [Cors]}},
+        {delete, <<"/cors-api">>, my_controller, #{}}
+    ]),
+    ?assertMatch(
+        #{middlewares := [{roadrunner_cors, _}, {_, ~"DELETE, OPTIONS, POST"}]}, Api
+    ),
+    ?assertMatch(
+        [
+            #{
+                methods := [~"GET", ~"HEAD", ~"OPTIONS"],
+                middlewares := [
+                    roadrunner_compress, {roadrunner_cors, _}, {_, ~"GET, HEAD, OPTIONS"}
+                ]
+            }
+        ],
+        Router:routes([{live, <<"/cors-page">>, my_page, #{middlewares => [Cors]}}])
+    ).
+
+compile_routes_cors_keeps_declared_options(Config) ->
+    %% A route that declares OPTIONS itself, or answers any method, already
+    %% reaches the transform; its handler owns a plain OPTIONS, so nothing is
+    %% added.
+    Router = ?config(router, Config),
+    Cors = arizona_middleware:cors(#{origins => [~"https://app.example"]}),
+    ?assertMatch(
+        [#{methods := [~"POST", ~"OPTIONS"], middlewares := [{roadrunner_cors, _}]}],
+        Router:routes([
+            {match, [post, options], <<"/declared">>, my_controller, #{middlewares => [Cors]}}
+        ])
+    ),
+    ?assertMatch(
+        [#{methods := undefined, middlewares := [{roadrunner_cors, _}]}],
+        Router:routes([{match, '*', <<"/any">>, my_controller, #{middlewares => [Cors]}}])
+    ).
