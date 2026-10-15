@@ -123,15 +123,34 @@ directives rather than events.
 **An `az-submit` form is never submitted natively, connected or not.** Let through, the browser
 submits it with the form's own method -- a GET by default, putting every field (a password
 included) in the URL -- which is what happened before the first open and during reconnect backoff.
-The listener always calls `preventDefault`, then decides by what the commands need
-(`commandsNeedSocket`): while disconnected, a list holding a `push_event` or an SPA
-`navigate`/`patch` is **dropped whole** with a warning and no `az-form-reset` (the worker drops
-pre-open sends, so running the rest would apply half a submission and discard the typed fields),
-while a `fetch` or client-only list runs -- an HTTP login form needs no socket. Queueing for the
-reconnect was rejected: a submit replayed seconds later, against a view the resync may have
-remounted, is not what the user pressed. Apps can style the submit button off the `az-disconnected`
-class. Likewise `az-prevent-default` on a delegated event is honored before the connection check,
-since a declared suppression needs no server.
+That holds for a form with an explicit `method`/`action` too: it no longer falls back to a native
+submission while disconnected. The listener always calls `preventDefault`, then decides by what
+the commands need (`socketNeeds`):
+
+- **An SPA `navigate`/`patch` alone** (top level or under `transition`) degrades to a full load of
+  its URL (`location.assign`, or `location.replace` for a `replace` navigate), exactly what a
+  disconnected `az-navigate` click does.
+- **Anything else needing the socket** -- a `push_event`, a navigation under `on_key` (it runs only
+  on a matching key), or a navigation beside a `fetch` (the load would cancel the request) -- drops
+  the submission **whole**, with no `az-form-reset`: the worker drops pre-open sends, so running
+  the rest would apply half a submission and discard the typed fields. Every drop warns and
+  dispatches a non-cancelable, bubbling `arizona:submit-dropped` `CustomEvent` on the form,
+  `detail: {reason: 'disconnected'}`, so the app can tell the user.
+- **A `fetch` or client-only list** runs: an HTTP login form needs no socket.
+
+Queueing for the reconnect was rejected: a submit replayed seconds later, against a view the resync
+may have remounted, is not what the user pressed. To disable the submit button while down, style it
+off `:not(.az-connected)` rather than `.az-disconnected`: before the first open `<html>` carries
+neither class. Likewise `az-prevent-default` on a delegated event is honored before the connection
+check, since a declared suppression needs no server.
+
+The listener cannot act before `arizona.js` has run (Enter while the deferred module still loads),
+so the server closes that window: the `?html` target renders `method="post"` on a `form` carrying
+`az-submit` and no `method` of its own (`arizona_renderer:implied_attrs/2`). Such a submit is then a
+POST with the fields in the body -- a live route answers `405` -- never a GET with them in the URL.
+The client's `fetch` already treats a method-less form as POST, so nothing else changes; an
+author's `method` (static, dynamic, any casing) is never overridden, and `?native`/`?terminal`
+imply nothing.
 
 **Three cases the compile-time set cannot cover, and how each is handled:**
 

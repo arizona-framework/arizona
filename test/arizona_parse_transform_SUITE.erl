@@ -343,6 +343,7 @@
     void_tag_case_insensitive/1,
     void_tag_case_insensitive_rejects_children/1,
     reserved_attr_case_insensitive/1,
+    az_submit_form_implies_post/1,
     az_view_attr_case_insensitive/1,
     nodiff_directive_case_insensitive/1,
     void_two_element_dynamic_attr/1,
@@ -605,6 +606,7 @@ groups() ->
             void_tag_case_insensitive,
             void_tag_case_insensitive_rejects_children,
             reserved_attr_case_insensitive,
+            az_submit_form_implies_post,
             az_view_attr_case_insensitive,
             nodiff_directive_case_insensitive,
             static_after_dynamic_attr
@@ -3764,6 +3766,83 @@ reserved_attr_case_insensitive(Config) when is_list(Config) ->
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
     ?assertEqual(<<"<p AZ-KEY=\"k\" az-click=\"c\"></p>">>, iolist_to_binary(HTML0)).
+
+%% A submit before arizona.js runs is native, and a method-less form submits as a
+%% GET with every field -- a password included -- in the URL. The html target
+%% gives a method-less az-submit form `method="post"`; an author's method, of any
+%% kind, is left alone.
+az_submit_form_implies_post(Config) when is_list(Config) ->
+    Render = fun(Mod, Form) ->
+        M = compile_module(
+            lists:flatten([
+                "-module(",
+                Mod,
+                "). -export([render/1]). render(Bindings) -> ",
+                "_ = Bindings, arizona_template:html(",
+                Form,
+                "). "
+            ])
+        ),
+        {HTML, _Snap} = arizona_render:render(M:render(#{m => <<"get">>})),
+        iolist_to_binary(HTML)
+    end,
+    Cmd = "arizona_js:push_event(<<\"login\">>)",
+    ?assertEqual(
+        <<"<form az-submit=\"[0,&quot;login&quot;]\" method=\"post\"></form>">>,
+        Render("pt_sub_post", "{form, [{az_submit, " ++ Cmd ++ "}], []}")
+    ),
+    %% Any spelling of the tag and the attribute.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_sub_bin", "{<<\"FORM\">>, [{<<\"az-submit\">>, " ++ Cmd ++ "}], []}"),
+            <<" method=\"post\"">>
+        )
+    ),
+    %% A static `false` method renders nothing, so it is still method-less.
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            Render("pt_sub_false", "{form, [{method, false}, {az_submit, " ++ Cmd ++ "}], []}"),
+            <<" method=\"post\"">>
+        )
+    ),
+    %% The author's method wins, static or dynamic, in any casing.
+    lists:foreach(
+        fun({Mod, Form, Method}) ->
+            HTML = Render(Mod, Form),
+            ?assertEqual(nomatch, binary:match(HTML, <<"post">>), HTML),
+            ?assertMatch({_, _}, binary:match(HTML, Method), HTML)
+        end,
+        [
+            {"pt_sub_get", "{form, [{method, <<\"get\">>}, {az_submit, " ++ Cmd ++ "}], []}",
+                <<"method=\"get\"">>},
+            {"pt_sub_up", "{form, [{'METHOD', <<\"dialog\">>}, {az_submit, " ++ Cmd ++ "}], []}",
+                <<"METHOD=\"dialog\"">>},
+            {"pt_sub_dyn",
+                "{form, [{method, arizona_template:get(m, Bindings)}, {az_submit, " ++ Cmd ++
+                    "}], []}",
+                <<"method=\"get\"">>}
+        ]
+    ),
+    %% Only a form, and only one that is an az-submit form.
+    ?assertEqual(<<"<form></form>">>, Render("pt_sub_none", "{form, [], []}")),
+    ?assertEqual(
+        nomatch,
+        binary:match(
+            Render("pt_sub_div", "{'div', [{az_submit, " ++ Cmd ++ "}], []}"), <<"method">>
+        )
+    ),
+    %% Other targets have no native form submission to guard.
+    ?assertEqual([], arizona_native:implied_attrs(form, [<<"az-submit">>])),
+    ?assertEqual([], arizona_terminal:implied_attrs(form, [<<"az-submit">>])),
+    NativeMod = compile_module(
+        "-module(pt_sub_native). -export([render/1]). render(Bindings) -> "
+        "_ = Bindings, arizona_template:native({form, [{az_submit, "
+        "arizona_js:push_event(<<\"login\">>)}], []}). "
+    ),
+    {Native, _} = arizona_render:render(NativeMod:render(#{})),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(Native), <<"method">>)).
 
 %% az-view is injected on a live root and rejected anywhere else, for the same
 %% reason: the browser reads `AZ-VIEW="x"` as `az-view`.
