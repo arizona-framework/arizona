@@ -2288,21 +2288,32 @@ callback's body propagate untagged.
 `handle_update/3` reacts to new props arriving from an enclosing context: a parent re-rendering an
 embedded child with new `Props`, **or** a `patch` navigation delivering the new route's params to a
 route root (navigation as the root's prop source). If not exported, the framework merges `Props`
-into `Bindings` directly (`call_handle_update/4`).
-
-For an embedded child, "new props" means "the slot holding the `?stateful` re-evaluated": the call
-happens whenever a binding read anywhere in that slot changed, and the props may be term-equal to the
-previous ones -- a read outside them (`case ?get(tab) of _ -> ?stateful(c, #{x => ?get(x)}) end`, an
-event changing only `tab`) or a prop derived from a changed binding whose value did not change
-(`x => ?get(n) div 10`). The framework does not filter equal props out: a view entry keeps the
-child's bindings, which the callback may have transformed, and not the props it was last given, so
-there is nothing to compare against without storing a second copy per view. Keep `handle_update/3`
-idempotent for equal props, and compare against the child's own bindings when a side effect
-(subscribe, timer) must run only on an actual change. A slot none of whose reads changed is
-dep-skipped and calls nothing. `Effects` is the accumulator of effects already
+into `Bindings` directly (`call_handle_update/4`). `Effects` is the accumulator of effects already
 queued for this update cycle; return it extended with this callback's own effects (the default
 returns it verbatim) -- so a patch reaction can set the document title or redirect, threaded without
 any caller-side concatenation. See "SPA navigate / patch route resolution".
+
+For an embedded child, "new props" means "the diff re-evaluated this child's `?stateful`
+descriptor while the view already existed under the same id and handler". That happens when the
+slot holding the descriptor re-evaluates, and the props may then be term-equal to the previous ones:
+a read outside them (`case ?get(tab) of _ -> ?stateful(c, #{x => ?get(x)}) end`, an event changing
+only `tab`) or a prop derived from a changed binding whose value did not (`x => ?get(n) div 10`).
+The framework does not filter equal props out: a view entry keeps the child's bindings, which the
+callback may have transformed, and not the props it was last given, so there is nothing to compare
+against without storing a second copy per view. Keep `handle_update/3` idempotent for equal props,
+and compare against the child's own bindings when a side effect (subscribe, timer) must run only on
+an actual change.
+
+The descriptor is **not** re-evaluated, so `handle_update/3` is not called, when:
+
+- the slot is dep-skipped (none of its reads changed);
+- the child sits in a stream `?each` item the diff did not touch -- an insert evaluates only the
+  inserted and changed items, not the existing ones;
+- the child's own root is az-nodiff, or it sits inside an az-nodiff element: it takes its props at
+  mount only, so changed props never reach it either.
+
+And it is `mount/1`, not `handle_update/3`, that runs on the child's first appearance and when a
+render keeps the id but switches the handler (the old instance is unmounted first).
 
 `unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional,
 a list or stream item leaving the DOM, or navigate) or the live process is shutting down. Use it to
