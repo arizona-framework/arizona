@@ -511,6 +511,8 @@
 -export([az_attrs_keeps_prevent_default_with_a_value/1]).
 -export([az_attrs_skips_injected_az_view/1]).
 -export([az_attrs_records_component_modules/1]).
+-export([improper_template_list_rejected/1]).
+-export([improper_attr_value_is_text/1]).
 
 all() ->
     [
@@ -1035,7 +1037,9 @@ groups() ->
             invalid_element_four,
             invalid_child_empty_tuple,
             invalid_child_tuple_literal,
-            invalid_child_mixed
+            invalid_child_mixed,
+            improper_template_list_rejected,
+            improper_attr_value_is_text
         ]},
         %% Inline cross-target nesting guard (?html in ?native and vice-versa)
         {cross_target, [parallel], [
@@ -9886,6 +9890,17 @@ scope_repeated_stateless_keeps_static_marker_text(Config) when is_list(Config) -
     ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"<span az=\"", Fp1/binary, "-0\">">>)),
     ?assertNotEqual(nomatch, binary:match(HTMLBin, <<"<span az=\"", Fp2/binary, "-0\">">>)).
 
+%% Parse `Source` into forms, untransformed.
+parse_forms(Source) ->
+    {ok, Tokens, _} = erl_scan:string(Source),
+    [
+        begin
+            {ok, F} = erl_parse:parse_form(Toks),
+            F
+        end
+     || Toks <- split_forms(Tokens)
+    ].
+
 %% Like compile_module/1 but compiles with warnings_as_errors, matching the
 %% project's real erl_opts. Needed because unused-variable / match_underscore_var
 %% regressions surface only as warnings, which the plain [return_errors] path drops.
@@ -11345,3 +11360,83 @@ literal_list_script_still_rejected(Config) when is_list(Config) ->
 
 strip_fp(HTML) ->
     re:replace(HTML, <<" az=\"[^\"-]+-">>, <<" az=\"">>, [global, {return, binary}]).
+
+%% ============================================================================
+%% Improper template lists
+%% ============================================================================
+
+%% A template's attrs, children and bodies are laid out one slot per item at
+%% compile time, so a list ending in an expression has no length to lay out. It
+%% is a compile error naming the tail's line, not a crash inside the transform.
+improper_template_list_rejected(Config) when is_list(Config) ->
+    lists:foreach(
+        fun({Name, Template}) ->
+            Source =
+                "-module(" ++ Name ++
+                    ").\n"
+                    "-export([render/1]).\n"
+                    "render(Bindings) ->\n"
+                    "    arizona_template:html(\n" ++ Template ++
+                    "    ).\n",
+            ?assertMatch(
+                {error, [{_File, [{6, arizona_parse_transform, improper_template_list}]}], []},
+                arizona_parse_transform:parse_transform(parse_forms(Source), []),
+                Name
+            )
+        end,
+        [
+            {"pt_improper_attrs",
+                "{'div', [{class, arizona_template:get(c, Bindings)}\n"
+                " | arizona_template:get(tail, Bindings)], [<<\"x\">>]}\n"},
+            {"pt_improper_children",
+                "{'ul', [], [<<\"first\">>\n | arizona_template:get(tail, Bindings)]}\n"},
+            {"pt_improper_body", "[{'p', [], []}\n | arizona_template:get(tail, Bindings)]\n"},
+            {"pt_improper_content_list",
+                "{'p', [], [[{'span', [], []}\n | arizona_template:get(tail, Bindings)]]}\n"}
+        ]
+    ),
+    ?assertMatch(
+        [_ | _], arizona_parse_transform:format_error(improper_template_list)
+    ).
+
+%% An attribute value list is text, so an improper tail is one more part of the
+%% chardata, exactly as a content value list already is -- with a literal ?raw
+%% part too, which stays verbatim while the tail is escaped.
+improper_attr_value_is_text(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_improper_attr_value). "
+        "-export([plain/1, raw/1]). "
+        "plain(Bindings) -> "
+        "    arizona_template:html("
+        "        {'a', [{href, [<<\"/u/\">> | arizona_template:get(id, Bindings)]}], []}"
+        "    ). "
+        "raw(Bindings) -> "
+        "    arizona_template:html("
+        "        {'a', [{href, [<<\"/u?\">>,"
+        "            arizona_template:raw(arizona_template:get(q, Bindings))"
+        "            | arizona_template:get(id, Bindings)]}], []}"
+        "    ). "
+    ),
+    Render = fun(T) -> iolist_to_binary(arizona_render:render_to_iolist(T)) end,
+    ?assertNotEqual(
+        nomatch, binary:match(Render(Mod:plain(#{id => ~"7&"})), ~"href=\"/u/7&amp;\"")
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(Render(Mod:raw(#{q => ~"a&b", id => ~"&"})), ~"href=\"/u?a&b&amp;\"")
+    ),
+    ?assertMatch(
+        {error, [{_File, [{_Line, arizona_parse_transform, local_attr_mixed}]}], []},
+        arizona_parse_transform:parse_transform(
+            parse_forms(
+                "-module(pt_improper_attr_local). "
+                "-export([render/1]). "
+                "render(Bindings) -> "
+                "    arizona_template:html("
+                "        {'a', [{href, [<<\"/u/\">>, arizona_template:local(k, <<\"1\">>)"
+                "            | arizona_template:get(id, Bindings)]}], []}"
+                "    ). "
+            ),
+            []
+        )
+    ).
