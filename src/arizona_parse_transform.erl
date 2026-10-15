@@ -152,7 +152,8 @@ render(Bindings) ->
     %% Raw-text context of the enclosing element while compiling its children
     %% (Backend:raw_text_kind/2). `raw`/`escapable` mean a dynamic content slot
     %% must be emitted markerless and render-once -- HTML comment markers would
-    %% become literal content there (script/style/textarea/title).
+    %% become literal content there (script/style/textarea/title, and the other
+    %% RAWTEXT elements: xmp/iframe/noembed/noframes).
     raw_text_kind = none :: arizona_renderer:raw_text_kind(),
     %% The tag that produced `raw_text_kind`, handed to the backend's `raw_text/4`:
     %% the neutralization a value needs belongs to *that element's* tokenizer state
@@ -853,7 +854,8 @@ format_error(nodiff_call_not_compiled) ->
 format_error(local_unsupported) ->
     "?local is not supported by this render target";
 format_error(dynamic_in_raw_text) ->
-    "a dynamic content slot inside <script>/<style> is spliced verbatim -- the browser "
+    "a dynamic content slot inside <script>/<style> (or another raw-text element: <xmp>, "
+    "<iframe>, <noembed>, <noframes>) is spliced verbatim -- the browser "
     "decodes no character references in raw text, so HTML-escaping cannot apply there and "
     "the value can close the JavaScript string it sits in, or the element itself (XSS). "
     "Mark it with a literal ?raw(...) at the slot to state the value is already safe for "
@@ -865,7 +867,8 @@ format_error(dynamic_in_raw_text) ->
     "static, not a slot, and needs no wrapper";
 format_error(local_in_raw_text) ->
     "a content ?local cannot be used inside a raw-text element "
-    "(script/style/textarea/title) -- raw-text content carries no slot markers "
+    "(script/style/textarea/title/xmp/iframe/noembed/noframes) -- raw-text content "
+    "carries no slot markers "
     "for the client to address, so the value would never update";
 format_error(local_key_reused) ->
     "a ?local key cannot bind both content and an attribute on the same element";
