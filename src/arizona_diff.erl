@@ -1562,9 +1562,8 @@ smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
         #{K := OldD} ->
             {NewD, Views1} =
                 render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0),
+            {InnerOps, Views2} = kept_item_ops(NewD, OldD, Views1),
             NewSnaps = Snaps#{K => NewD},
-            %% Render-once markerless slots: same rule as stream_update_existing.
-            {InnerOps, Views2} = diff_item_dynamics_v(NewD, OldD, Views1),
             case InnerOps of
                 [] ->
                     smart_reset_items(
@@ -1584,12 +1583,24 @@ smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
             smart_reset_items(Az, Rest, Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
     end.
 
+%% An item reused whole has nothing to diff -- the common case for a reorder, whose
+%% items are all reused -- so the walk over its dynamics is skipped.
+kept_item_ops(Same, Same, Views) ->
+    {[], Views};
+%% Render-once markerless slots: same rule as stream_update_existing.
+kept_item_ops(NewD, OldD, Views) ->
+    diff_item_dynamics_v(NewD, OldD, Views).
+
 %% Render a kept item via the per-item skipping path when its old source
 %% is recoverable from `OldItems`, the items the client's DOM was rendered
 %% from. Falls back to a full render when it is not (no baseline on the
 %% snapshot, or a reconcile that must re-render every item).
 render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0) ->
     case OldItems of
+        %% The same term: a reorder or a move leaves the item itself untouched, and
+        %% the match settles that on the pointer before any field is compared.
+        #{K := NewItem} ->
+            {OldD, Views0};
         #{K := OldItem} ->
             Changed = arizona_stream:compute_item_changed(OldItem, NewItem),
             arizona_eval:render_stream_item_skipping(K, NewItem, OldD, Changed, Tmpl, Views0);

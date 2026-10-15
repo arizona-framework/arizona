@@ -168,7 +168,8 @@
     insert_at_then_sort/1,
     sort_append_sort/1,
     drop_reappend_of_evicted_key/1,
-    random_events_keep_client_equal_to_ssr/1
+    random_events_keep_client_equal_to_ssr/1,
+    sort_reuses_every_item/1
 ]).
 
 all() ->
@@ -364,7 +365,8 @@ groups() ->
             insert_at_then_sort,
             sort_append_sort,
             drop_reappend_of_evicted_key,
-            random_events_keep_client_equal_to_ssr
+            random_events_keep_client_equal_to_ssr,
+            sort_reuses_every_item
         ]},
         %% DataTable handler tests
         {datatable, [parallel], [
@@ -4193,6 +4195,20 @@ reset_skips_kept_items_the_client_already_shows(Config) when is_list(Config) ->
     #{d := [{<<"0">>, #{items := #{a := ItemA0}}}]} = Snap0,
     #{d := [{<<"0">>, #{items := #{a := ItemA1}}}]} = Snap1,
     ?assert(erts_debug:same(ItemA0, ItemA1)).
+
+%% A sort drains as a reconcile, but its items are untouched, so each is reused as
+%% the client already shows it -- moves only, no item re-rendered.
+sort_reuses_every_item(Config) when is_list(Config) ->
+    S0 = arizona_stream:new(fun(#{id := Id}) -> Id end, [it(a, ~"l2"), it(b, ~"l1")]),
+    {_, Snap0, Views0} = arizona_render:render(drain_template(S0), #{}),
+    S1 = sort_by_text(clear_pending(S0), asc),
+    {Ops, Snap1, _} = arizona_diff:diff(drain_template(S1), Snap0, Views0, #{items => true}),
+    ?assertMatch([[?OP_MOVE, <<"0">>, ~"b", null]], Ops),
+    #{d := [{<<"0">>, #{items := Items0}}]} = Snap0,
+    #{d := [{<<"0">>, #{items := Items1}}]} = Snap1,
+    ?assert(
+        lists:all(fun(K) -> erts_debug:same(map_get(K, Items0), map_get(K, Items1)) end, [a, b])
+    ).
 
 it(Id, Text) -> #{id => Id, text => Text}.
 
