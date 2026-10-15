@@ -364,7 +364,7 @@ construction already cost more than the copy. The real win in the same code was 
 gate above, which removed the work rather than making it cheaper.
 
 **Fusing the kept-item reuse walk with the inner-ops diff.** The idea: on a reset,
-`eval_or_reuse_per_item/4` already knows which positions it re-evaluated, so the
+`eval_or_reuse_per_item/5` already knows which positions it re-evaluated, so the
 second lockstep walk (`diff_item_dynamics_v/3`) could run over just those pairs.
 Measured before building it: the full 20-pair walk with 19 shared tuples costs
 **78 ns per kept item** and a pairs-only walk 8 ns, so the fusion's ceiling is

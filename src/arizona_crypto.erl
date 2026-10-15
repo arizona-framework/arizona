@@ -51,6 +51,16 @@ re-issue: move the old `secret_key` into `secret_key_previous`, set a fresh
 `secret_key`, then drop the old key once the grace window (your longest cookie TTL)
 has passed. There is no key-version byte in the wire format -- verify/decrypt simply
 try each candidate key in turn.
+
+Every previous key is held to the primary's rules: it must be a non-empty binary, or
+every call -- `sign`/`encrypt` included, so a bad key fails the first response
+rather than every later one carrying a cookie -- raises
+`secret_key_previous_invalid` (a short one warns, once per key). An empty key
+would make the HMAC and AES keys public constants, so a value anyone can forge
+would verify. To express "no previous key" from an environment
+variable, use the list default, `{env, "OLD_SECRET_KEY", []}`: an unset or empty
+variable resolves to `[]`. A binary default such as `[{env, "OLD_SECRET_KEY", ~""}]`
+resolves to `[<<>>]` when the variable is unset, and is refused.
 """.
 
 %% --------------------------------------------------------------------
@@ -199,7 +209,7 @@ bytes (see "Key strength").
 secret() ->
     case arizona_config:get_env(secret_key) of
         {ok, Secret} when is_binary(Secret), Secret =/= <<>> ->
-            ok = warn_weak_secret(Secret),
+            ok = warn_weak_secret(secret_key, Secret),
             Secret;
         _ ->
             erlang:error(secret_key_not_configured, [], [
@@ -225,6 +235,19 @@ format_error(secret_key_not_configured, _ST) ->
         general =>
             "signing requires a secret: set the arizona `secret_key` "
             "application env to a random non-empty binary"
+    };
+format_error({secret_key_previous_invalid, Position}, _ST) ->
+    #{
+        general =>
+            io_lib:format(
+                "the arizona `secret_key_previous` application env must be a list of "
+                "non-empty binaries, but entry ~b is not (0 means the value is not a "
+                "list). An empty key is a public constant, so values signed with it "
+                "are forgeable. For an optional rotation key read from the environment "
+                "use the list default, {env, \"OLD_SECRET_KEY\", []}, which resolves "
+                "to [] when the variable is unset",
+                [Position]
+            )
     }.
 
 %% --------------------------------------------------------------------
@@ -237,35 +260,44 @@ format_error(secret_key_not_configured, _ST) ->
 %% single captured cookie -- and every cookie the node ever issued falls with it.
 %% This warns rather than crashes: a hard minimum would lock out a running app the
 %% moment it upgrades, and the value is loud, actionable, and free either way.
-%% Warned once per distinct secret (the marker holds a hash of it, never the secret
-%% itself), so a rotation to another weak key is not swallowed by the first warning.
-warn_weak_secret(Secret) when byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+%% Warned once per distinct secret and env key (the marker is keyed by a hash of the
+%% secret, never the secret itself), so a rotation to another weak key is not
+%% swallowed by the first warning, a weak primary and a weak previous key do not
+%% evict one shared marker and warn on every verify, and a weak primary rotated into
+%% `secret_key_previous` is reported under its new name.
+warn_weak_secret(_EnvKey, Secret) when byte_size(Secret) >= ?MIN_SECRET_BYTES ->
     ok;
-warn_weak_secret(Secret) ->
-    Digest = crypto:hash(sha256, Secret),
-    case persistent_term:get({?MODULE, weak_secret_warned}, undefined) of
-        Digest ->
+warn_weak_secret(EnvKey, Secret) ->
+    Marker = {?MODULE, weak_secret_warned, EnvKey, crypto:hash(sha256, Secret)},
+    case persistent_term:get(Marker, false) of
+        true ->
             ok;
-        _Other ->
-            persistent_term:put({?MODULE, weak_secret_warned}, Digest),
+        false ->
+            persistent_term:put(Marker, true),
             logger:warning(
-                "arizona `secret_key` is ~b bytes, under the ~b-byte minimum: "
+                "arizona `~ts` is ~b bytes, under the ~b-byte minimum: "
                 "signing and encryption are only as strong as this key, and it is "
                 "used directly (no slow KDF), so a short or guessable value is "
                 "brute-forceable offline from one captured cookie. Set it to ~b "
                 "random bytes, e.g. crypto:strong_rand_bytes(~b).",
-                [byte_size(Secret), ?MIN_SECRET_BYTES, ?MIN_SECRET_BYTES, ?MIN_SECRET_BYTES]
+                [
+                    EnvKey,
+                    byte_size(Secret),
+                    ?MIN_SECRET_BYTES,
+                    ?MIN_SECRET_BYTES,
+                    ?MIN_SECRET_BYTES
+                ]
             )
     end.
 
 sign_envelope(Purpose, Tagged) ->
-    Sig = crypto:mac(hmac, sha256, secret(), mac_message(Purpose, Tagged)),
+    Sig = crypto:mac(hmac, sha256, signing_key(), mac_message(Purpose, Tagged)),
     <<(b64(Tagged))/binary, ".", (b64(Sig))/binary>>.
 
 encrypt_envelope(Purpose, Plaintext) ->
     IV = crypto:strong_rand_bytes(?IV_SIZE),
     {Cipher, Tag} = crypto:crypto_one_time_aead(
-        aes_256_gcm, aead_key(secret()), IV, Plaintext, Purpose, true
+        aes_256_gcm, aead_key(signing_key()), IV, Plaintext, Purpose, true
     ),
     b64(<<IV/binary, Tag/binary, Cipher/binary>>).
 
@@ -316,7 +348,47 @@ aead_key(Key) ->
 %% new `secret_key`: existing values keep verifying under the old key for the grace
 %% window -- no forced re-issue, no wire-format change.
 candidate_keys() ->
-    [secret() | arizona_config:get_env(secret_key_previous, [])].
+    [secret() | previous_keys(arizona_config:get_env(secret_key_previous, []))].
+
+%% The primary, after the same validation the read paths run. Signing never uses a
+%% previous key, but checking them here makes a bad one fail the first response:
+%% otherwise a fresh deploy sets cookies fine and every later request carrying one
+%% crashes in verify/decrypt.
+signing_key() ->
+    [Secret | _Previous] = candidate_keys(),
+    Secret.
+
+%% Each previous key passes the primary's gate. Without it an empty entry -- what
+%% `[{env, "OLD_SECRET_KEY", ~""}]` resolves to while the variable is unset -- is an
+%% HMAC key and, through `aead_key/1`, an AES key that are both public constants:
+%% anyone could forge every value this node verifies, and nothing would say so. It
+%% raises instead of skipping the entry, like a missing primary or a broken env
+%% reference: the config does not say what was meant, and `{env, Var, []}` already
+%% spells "no previous key". Checked per call like the primary; a guard per key is
+%% cheaper than any cache keyed on the resolved list. Position 0 is a value that is
+%% not a list at all; an improper list's bad tail is named by its own position.
+previous_keys(Keys) when is_list(Keys) ->
+    previous_keys(Keys, 1);
+previous_keys(_NotAList) ->
+    invalid_previous_key(0).
+
+previous_keys([], _Position) ->
+    [];
+previous_keys([Key | Rest], Position) when is_binary(Key), Key =/= <<>> ->
+    ok = warn_weak_secret(secret_key_previous, Key),
+    [Key | previous_keys(Rest, Position + 1)];
+previous_keys([_Invalid | _Rest], Position) ->
+    invalid_previous_key(Position);
+previous_keys(_ImproperTail, Position) ->
+    invalid_previous_key(Position).
+
+%% Names the entry's position, never its value: a malformed entry may still be key
+%% material (a charlist secret), which must not reach a crash log or a stack frame.
+-spec invalid_previous_key(non_neg_integer()) -> no_return().
+invalid_previous_key(Position) ->
+    erlang:error({secret_key_previous_invalid, Position}, [Position], [
+        {error_info, #{module => ?MODULE}}
+    ]).
 
 %% The clock is injected so the expiry boundary is deterministically testable.
 %% Candidate keys resolved outside the try -- see `do_decrypt/3`.
@@ -392,5 +464,12 @@ encrypt_ttl_expiry_boundary_test() ->
     ?assertEqual({ok, ~"payload"}, do_decrypt(?EUNIT_PURPOSE, Blob, 1000)),
     ?assertEqual(error, do_decrypt(?EUNIT_PURPOSE, Blob, 1001)),
     application:unset_env(arizona, secret_key).
+
+%% `arizona_config` refuses an improper list before it gets here, so the bad-tail
+%% position is only reachable directly. The bad inputs are ill-typed on purpose.
+-dialyzer({nowarn_function, previous_keys_names_improper_tail_position_test/0}).
+previous_keys_names_improper_tail_position_test() ->
+    ?assertError({secret_key_previous_invalid, 2}, previous_keys([?EUNIT_SECRET | bad])),
+    ?assertError({secret_key_previous_invalid, 0}, previous_keys(bad)).
 
 -endif.

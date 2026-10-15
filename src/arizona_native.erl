@@ -50,6 +50,7 @@ the wire value. On the wire itself a value stays raw
 -export([content_type/0]).
 -export([supports_local/0]).
 -export([supports_nodiff_keep/0]).
+-export([implied_attrs/2]).
 -export([boolean_attrs/0]).
 -export([escape/1]).
 -export([render_attr/2]).
@@ -172,6 +173,9 @@ content_type() -> ~"application/json".
 supports_local() -> false.
 
 supports_nodiff_keep() -> false.
+
+-spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [].
+implied_attrs(_Tag, _Names) -> [].
 
 boolean_attrs() -> value.
 

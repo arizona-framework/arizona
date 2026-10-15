@@ -34,6 +34,7 @@ identical to the previous inlined emission.
 -export([content_type/0]).
 -export([supports_local/0]).
 -export([supports_nodiff_keep/0]).
+-export([implied_attrs/2]).
 -export([boolean_attrs/0]).
 -export([escape/1]).
 -export([raw_text/2]).
@@ -268,6 +269,24 @@ content_type() -> ~"text/html; charset=utf-8".
 supports_local() -> true.
 
 supports_nodiff_keep() -> true.
+
+-spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [{binary(), binary()}].
+%% The client intercepts every `az-submit` submit, but only once arizona.js runs: a
+%% submit before that (Enter while the deferred module still loads) is native, and a
+%% method-less form submits as a GET -- every field, a password included, in the
+%% URL. As a POST the fields stay in the body (a live route answers 405). The
+%% client's `fetch` already treats a method-less form as POST, so nothing else moves.
+implied_attrs(Tag, Names) ->
+    case tag_name(Tag) of
+        ~"form" ->
+            Lower = [string:lowercase(N) || N <- Names],
+            case lists:member(~"az-submit", Lower) andalso not lists:member(~"method", Lower) of
+                true -> [{~"method", ~"post"}];
+                false -> []
+            end;
+        _Other ->
+            []
+    end.
 
 boolean_attrs() -> presence.
 
