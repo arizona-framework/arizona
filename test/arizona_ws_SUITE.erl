@@ -87,6 +87,10 @@
     portless_transport_opts_keeps_proto_opts_port/1,
     transport_opts_port_wins_over_proto_opts/1,
     unsupported_transport_opt_errors/1,
+    failed_start_leaves_no_routes_behind/1,
+    failed_start_keeps_running_listener_routes/1,
+    clashing_start_never_exposes_its_routes/1,
+    recompile_routes_skips_dead_listener/1,
     http_preserves_duplicate_qs_keys/1,
     ws_navigate_preserves_duplicate_qs_keys/1,
     ws_upgrade_preserves_duplicate_qs_keys/1,
@@ -198,6 +202,10 @@ groups() ->
         portless_transport_opts_keeps_proto_opts_port,
         transport_opts_port_wins_over_proto_opts,
         unsupported_transport_opt_errors,
+        failed_start_leaves_no_routes_behind,
+        failed_start_keeps_running_listener_routes,
+        clashing_start_never_exposes_its_routes,
+        recompile_routes_skips_dead_listener,
         http_preserves_duplicate_qs_keys,
         ws_navigate_preserves_duplicate_qs_keys,
         ws_upgrade_preserves_duplicate_qs_keys,
@@ -1889,6 +1897,101 @@ unsupported_transport_opt_errors(Config) when is_list(Config) ->
         persistent_term:get({arizona_roadrunner_routes, Name}, undefined),
         "failed start must not stash routes for the dead listener"
     ).
+
+%% The route stash is written before the listener starts (so its first WS
+%% upgrade resolves). A start that fails late -- here the port is taken by the
+%% suite's own listener -- must take it back out, or the next hot reload calls
+%% `reload_routes` on a listener that never existed.
+failed_start_leaves_no_routes_behind(Config) when is_list(Config) ->
+    Name = arizona_port_taken_test,
+    ReloadUrlBefore = persistent_term:get(arizona_reload_url),
+    ?assertMatch(
+        {error, _},
+        arizona_roadrunner_server:start(Name, #{
+            routes => [
+                {live, ~"/taken", arizona_crashable, #{}},
+                {reload, ~"/taken-reload", #{}}
+            ],
+            transport_opts => [{port, ?config(port, Config)}]
+        })
+    ),
+    ?assertEqual(ReloadUrlBefore, persistent_term:get(arizona_reload_url)),
+    ?assertEqual(undefined, persistent_term:get({arizona_roadrunner_routes, Name}, undefined)),
+    ?assertEqual(undefined, persistent_term:get({arizona_roadrunner_dispatch, Name}, undefined)),
+    ?assertEqual(ok, arizona_roadrunner_server:recompile_routes()).
+
+%% Starting a second listener under a running one's name fails in roadrunner;
+%% the running listener must keep dispatching its own routes, not the rejected
+%% ones the failed start wrote over them.
+failed_start_keeps_running_listener_routes(Config) when is_list(Config) ->
+    StashBefore = persistent_term:get({arizona_roadrunner_routes, ws_test}),
+    DispatchBefore = persistent_term:get({arizona_roadrunner_dispatch, ws_test}),
+    ?assertMatch(
+        {error, {already_started, _}},
+        arizona_roadrunner_server:start(ws_test, #{
+            routes => [{live, ~"/clash", arizona_crashable, #{}}],
+            transport_opts => [{port, arizona_test_port:pick()}]
+        })
+    ),
+    ?assertEqual(StashBefore, persistent_term:get({arizona_roadrunner_routes, ws_test})),
+    ?assertEqual(DispatchBefore, persistent_term:get({arizona_roadrunner_dispatch, ws_test})).
+
+%% Restoring after the clash is not enough: until roadrunner answers, the
+%% running listener's WS upgrades would resolve against the rejected routes.
+%% Holding the supervisor widens that window; the clash must be refused before
+%% the stash is touched, so the running listener's routes never change.
+clashing_start_never_exposes_its_routes(Config) when is_list(Config) ->
+    StashBefore = persistent_term:get({arizona_roadrunner_routes, ws_test}),
+    DispatchBefore = persistent_term:get({arizona_roadrunner_dispatch, ws_test}),
+    ReloadUrlBefore = persistent_term:get(arizona_reload_url),
+    Self = self(),
+    ok = sys:suspend(roadrunner_sup),
+    {Pid, MRef} =
+        try
+            Spawned = spawn_monitor(fun() ->
+                Self !
+                    {clash,
+                        arizona_roadrunner_server:start(ws_test, #{
+                            routes => [
+                                {live, ~"/clash", arizona_crashable, #{}},
+                                {reload, ~"/clash-reload", #{}}
+                            ],
+                            transport_opts => [{port, arizona_test_port:pick()}]
+                        })}
+            end),
+            InWindow =
+                receive
+                    {clash, Result} -> {returned, Result}
+                after 300 -> blocked
+                end,
+            ?assertEqual(StashBefore, persistent_term:get({arizona_roadrunner_routes, ws_test})),
+            ?assertEqual(
+                DispatchBefore, persistent_term:get({arizona_roadrunner_dispatch, ws_test})
+            ),
+            ?assertEqual(ReloadUrlBefore, persistent_term:get(arizona_reload_url)),
+            ?assertMatch({returned, {error, {already_started, _}}}, InWindow),
+            Spawned
+        after
+            ok = sys:resume(roadrunner_sup)
+        end,
+    receive
+        {'DOWN', MRef, process, Pid, _} -> ok
+    after 5000 -> error(clashing_start_never_returned)
+    end.
+
+%% A stash whose listener is gone (stopped without going through stop/1, or
+%% given up on by its supervisor) is skipped: the reload still reaches the
+%% live listener.
+recompile_routes_skips_dead_listener(Config) when is_list(Config) ->
+    Name = arizona_dead_listener_test,
+    {_Routes, BuildOpts} = persistent_term:get({arizona_roadrunner_routes, ws_test}),
+    persistent_term:put({arizona_roadrunner_routes, Name}, {[], BuildOpts}),
+    try
+        sync_listener_check(Config)
+    after
+        true = persistent_term:erase({arizona_roadrunner_routes, Name}),
+        ok = arizona_roadrunner_router:forget_routes(Name)
+    end.
 
 %% Self-signed server TLS opts for the listener boot test. `pkix_test_data/1`
 %% returns in-memory cert/key terms, so there is nothing to write or clean up.

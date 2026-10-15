@@ -105,36 +105,15 @@ routes from `Opts`.
     Name :: atom(),
     Opts :: map().
 start(Name, #{routes := _} = Opts0) ->
-    %% Resolve `{env, ...}` references (port, tls paths, proto_opts, ...) before
-    %% reading any option. `resolve/1` leaves the route tuples untouched, so
-    %% `Routes` is unchanged; it is idempotent, so a caller that already resolved
-    %% loses nothing.
-    #{routes := Routes} = Opts = arizona_config:resolve(Opts0),
-    %% Thread the listener's `error_page` through BuildOpts so it is baked into
-    %% each live route's state (read back by `arizona_http` on a render crash),
-    %% rather than a single global term two listeners would fight over.
-    BuildOpts = #{
-        compress => maps:get(compress, Opts, true),
-        error_page => maps:get(error_page, Opts, {arizona_error_page, render})
-    },
-    Port = port_from_opts(Opts),
-    UserProtoOpts = maps:get(proto_opts, Opts, #{}),
-    ListenerOpts = UserProtoOpts#{
-        port => Port,
-        routes => arizona_roadrunner_router:routes(Routes, BuildOpts)
-    },
-    %% Validate (and inject) TLS before any persistent_term writes so an
-    %% https-without-tls misconfig crashes cleanly instead of leaving a
-    %% half-written dispatch behind.
-    ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
-    %% Store this listener's WS dispatch under its own `{dispatch, Name}` key so
-    %% a second listener does not overwrite it.
-    ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts, Name),
-    %% Stash {Routes, BuildOpts} together so `recompile_routes/0` can
-    %% replay the user's original build-time choices (e.g.
-    %% `compress => false`) on hot reload.
-    persistent_term:put({?ROUTES_KEY, Name}, {Routes, BuildOpts}),
-    roadrunner:start_listener(Name, ListenerOpts1).
+    %% A running listener of the same name owns the route stash its WS upgrades
+    %% read: a clash is refused before anything is built or written, or they
+    %% would resolve against the rejected routes until roadrunner refused it.
+    case whereis(Name) of
+        undefined ->
+            start_new(Name, Opts0);
+        Pid ->
+            {error, {already_started, Pid}}
+    end.
 
 -doc """
 Stops the listener named `Name` and clears its persistent terms.
@@ -160,7 +139,8 @@ Refreshes two tables in lockstep:
 
 Both must move together — otherwise WS navigate sees new routes
 while a fresh HTTP request still 404s against the listener's stale
-table.
+table. A stashed listener that is no longer running is skipped, so it
+cannot stop the others from reloading.
 """.
 -spec recompile_routes() -> ok.
 recompile_routes() ->
@@ -170,7 +150,7 @@ recompile_routes() ->
             ({{?ROUTES_KEY, Name}, {Routes, BuildOpts}}) ->
                 ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts, Name),
                 ListenerRoutes = arizona_roadrunner_router:routes(Routes, BuildOpts),
-                ok = roadrunner_listener:reload_routes(Name, ListenerRoutes);
+                ok = reload_listener_routes(Name, ListenerRoutes);
             (_) ->
                 ok
         end,
@@ -208,6 +188,81 @@ format_error({unsupported_transport_opt, Opt}, _ST) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+start_new(Name, Opts0) ->
+    %% Resolve `{env, ...}` references (port, tls paths, proto_opts, ...) before
+    %% reading any option. `resolve/1` leaves the route tuples untouched, so
+    %% `Routes` is unchanged; it is idempotent, so a caller that already resolved
+    %% loses nothing.
+    #{routes := Routes} = Opts = arizona_config:resolve(Opts0),
+    %% Thread the listener's `error_page` through BuildOpts so it is baked into
+    %% each live route's state (read back by `arizona_http` on a render crash),
+    %% rather than a single global term two listeners would fight over.
+    BuildOpts = #{
+        compress => maps:get(compress, Opts, true),
+        error_page => maps:get(error_page, Opts, {arizona_error_page, render})
+    },
+    Port = port_from_opts(Opts),
+    UserProtoOpts = maps:get(proto_opts, Opts, #{}),
+    %% Build the route table and validate (and inject) TLS before any
+    %% persistent_term write, so a misconfig crashes cleanly instead of leaving
+    %% a half-written dispatch behind.
+    ListenerOpts = maybe_inject_tls(
+        UserProtoOpts#{
+            port => Port,
+            routes => arizona_roadrunner_router:routes(Routes, BuildOpts)
+        },
+        Opts
+    ),
+    start_listener(Name, ListenerOpts, {Routes, BuildOpts}).
+
+%% The routes are written BEFORE the listener starts so its first WS upgrade
+%% already resolves, which is also why a failed start must put back whatever
+%% was there: a stash for a listener that never came up sends
+%% `recompile_routes/0` to a dead process, and its `{reload, ...}` path would
+%% have every page connect to a reload endpoint nothing serves.
+start_listener(Name, ListenerOpts, Stash) ->
+    Previous = persistent_term:get({?ROUTES_KEY, Name}, undefined),
+    PreviousReloadUrl = persistent_term:get(arizona_reload_url, undefined),
+    ok = put_routes(Name, Stash),
+    case roadrunner:start_listener(Name, ListenerOpts) of
+        {ok, _Pid} = Ok ->
+            Ok;
+        {error, _Reason} = Error ->
+            ok = restore_routes(Name, Previous),
+            ok = restore_reload_url(PreviousReloadUrl),
+            Error
+    end.
+
+%% Store this listener's WS dispatch under its own `{dispatch, Name}` key so a
+%% second listener does not overwrite it, and stash {Routes, BuildOpts}
+%% together so `recompile_routes/0` can replay the user's original build-time
+%% choices (e.g. `compress => false`) on hot reload.
+put_routes(Name, {Routes, BuildOpts} = Stash) ->
+    ok = arizona_roadrunner_router:compile_routes(Routes, BuildOpts, Name),
+    persistent_term:put({?ROUTES_KEY, Name}, Stash).
+
+restore_routes(Name, undefined) ->
+    true = persistent_term:erase({?ROUTES_KEY, Name}),
+    arizona_roadrunner_router:forget_routes(Name);
+restore_routes(Name, Previous) ->
+    put_routes(Name, Previous).
+
+restore_reload_url(undefined) ->
+    persistent_term:erase(arizona_reload_url),
+    ok;
+restore_reload_url(Url) ->
+    persistent_term:put(arizona_reload_url, Url).
+
+%% A listener can be gone while its stash survives (stopped behind
+%% `stop/1`'s back, or its supervisor gave up on it); one such listener must
+%% not abort the reload for every listener after it.
+reload_listener_routes(Name, ListenerRoutes) ->
+    try
+        roadrunner_listener:reload_routes(Name, ListenerRoutes)
+    catch
+        exit:{noproc, _} -> ok
+    end.
 
 %% The listen port, by deliberate precedence: `transport_opts`'s `{port, Port}`
 %% (the explicit sugar) wins, then `proto_opts.port`, then the 4040 default -- a
