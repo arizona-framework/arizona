@@ -9,6 +9,8 @@
 -export([handle_returns_the_threaded_raw_request/1]).
 -export([handle_returns_the_threaded_raw_request_on_a_render_crash/1]).
 -export([manual_body_read_keeps_pipelining_intact/1]).
+-export([manual_body_over_the_cap_halts_with_413/1]).
+-export([manual_body_cut_short_halts_with_400/1]).
 -export([transforms_apply_over_the_wire/1]).
 -export([page_carries_its_targets_content_type/1]).
 -export([cors_answers_a_preflight/1]).
@@ -22,6 +24,8 @@ all() ->
         handle_returns_the_threaded_raw_request,
         handle_returns_the_threaded_raw_request_on_a_render_crash,
         manual_body_read_keeps_pipelining_intact,
+        manual_body_over_the_cap_halts_with_413,
+        manual_body_cut_short_halts_with_400,
         transforms_apply_over_the_wire,
         page_carries_its_targets_content_type,
         cors_answers_a_preflight,
@@ -124,6 +128,24 @@ handle_returns_the_threaded_raw_request_on_a_render_crash(Config) when is_list(C
     ).
 
 %% --------------------------------------------------------------------
+%% Manual-mode body read failures
+%% --------------------------------------------------------------------
+
+%% In manual mode the body is read on demand, so the cap roadrunner enforces
+%% up front in auto mode surfaces only when a middleware reads it. Auto mode
+%% answers an oversized body 413; the on-demand read must too, not crash.
+manual_body_over_the_cap_halts_with_413(Config) when is_list(Config) ->
+    Body = ~"0123456789",
+    Req = framed_body_req(Body, Body, byte_size(Body) - 1, arizona_about, #{}),
+    ?assertMatch({{413, _, _}, _}, arizona_roadrunner_http:handle(Req)).
+
+%% The client declared more bytes than it sent and the connection closed: a
+%% malformed request, answered 400 like auto mode answers it.
+manual_body_cut_short_halts_with_400(Config) when is_list(Config) ->
+    Req = framed_body_req(~"0123456789", ~"01234", 1024, arizona_about, #{}),
+    ?assertMatch({{400, _, _}, _}, arizona_roadrunner_http:handle(Req)).
+
+%% --------------------------------------------------------------------
 %% Keep-alive framing
 %% --------------------------------------------------------------------
 
@@ -165,6 +187,11 @@ manual_body_read_keeps_pipelining_intact(Config) ->
 %% A hand-built roadrunner request in manual body mode: the body sits in the
 %% reader's buffer, so the body-reading middleware needs no socket.
 manual_body_req(Body, Handler, Bindings) ->
+    framed_body_req(Body, Body, 1024, Handler, Bindings).
+
+%% `Declared` sizes the content-length framing; `Buffered` is what actually
+%% arrived (the socket then reports closed); `Max` is the body cap.
+framed_body_req(Declared, Buffered, Max, Handler, Bindings) ->
     #{
         method => ~"GET",
         path => ~"/echo_body",
@@ -173,13 +200,13 @@ manual_body_req(Body, Handler, Bindings) ->
         headers => [{~"host", ~"localhost"}],
         bindings => #{},
         body_reader => #{
-            framing => {content_length, byte_size(Body)},
-            buffered => Body,
+            framing => {content_length, byte_size(Declared)},
+            buffered => Buffered,
             bytes_read => 0,
             pending => <<>>,
             done => false,
             recv => fun() -> {error, closed} end,
-            max => 1024,
+            max => Max,
             trailer_limits => {8192, 10240, 100}
         },
         state => #{

@@ -13,6 +13,7 @@
 -export([extract_path_bindings_merges_into_bindings/1]).
 -export([extract_named_keys/1]).
 -export([extract_is_usable_as_middleware/1]).
+-export([extract_body_read_error_halts_with_its_status/1]).
 -export([put_request_exposes_request_binding/1]).
 -export([check_origin_conts_same_origin/1]).
 -export([check_origin_conts_missing_origin/1]).
@@ -40,6 +41,7 @@ groups() ->
             extract_path_bindings_merges_into_bindings,
             extract_named_keys,
             extract_is_usable_as_middleware,
+            extract_body_read_error_halts_with_its_status,
             put_request_exposes_request_binding,
             check_origin_conts_same_origin,
             check_origin_conts_missing_origin,
@@ -128,6 +130,25 @@ extract_named_keys(Config) when is_list(Config) ->
     ?assertEqual([{~"session", ~"abc"}], maps:get(cookies, Bindings)),
     ?assertEqual(~"payload", maps:get(body, Bindings)),
     ?assertEqual(~"Mozilla/5.0", maps:get(user_agent, Bindings)).
+
+%% A body the transport cannot deliver halts the pipeline with the status the
+%% server answers that failure with, carrying the reads made before it, and
+%% runs no later key.
+extract_body_read_error_halts_with_its_status(Config) when is_list(Config) ->
+    Mw = arizona_middleware:extract([params, body, headers]),
+    [
+        ?assertMatch(
+            {halt, #{resp_status := Status, params := [{~"q", ~"1"}]} = HaltReq} when
+                not is_map_key(headers, HaltReq),
+            Mw(
+                arizona_req_test_adapter:new(#{
+                    params => [{~"q", ~"1"}], headers => #{}, body_error => Reason
+                }),
+                #{}
+            )
+        )
+     || {Reason, Status} <- [{too_large, 413}, {timeout, 408}, {invalid, 400}]
+    ].
 
 extract_is_usable_as_middleware(Config) when is_list(Config) ->
     %% The closure extract/1 returns drops straight into a middleware list.

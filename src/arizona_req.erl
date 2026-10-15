@@ -143,6 +143,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export_type([cookies/0]).
 -export_type([headers/0]).
 -export_type([body/0]).
+-export_type([body_error/0]).
 -export_type([redirect_status/0]).
 -export_type([resp_status/0]).
 -export_type([flash/0]).
@@ -202,6 +203,11 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% See `carried_cookies/1`.
 -nominal carried_cookies() :: [{binary(), binary() | clear}].
 
+%% Why a body could not be read, transport-neutral: `too_large` (over the
+%% server's body cap), `timeout` (the client stalled), `invalid` (malformed
+%% framing, or the connection closed mid-body).
+-nominal body_error() :: too_large | timeout | invalid.
+
 %% HTTP redirect status codes (RFC 9110 §15.4). The most common are
 %% 301 (moved permanently), 302 (found), 303 (see other), 307
 %% (temporary redirect), 308 (permanent redirect). The full 3xx range
@@ -249,7 +255,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% Header names lowercase; a field repeated across lines is combined into one
 %% entry, values in the order received (RFC 9110 §5.3), not last-line-wins.
 -callback parse_headers(raw()) -> headers().
--callback read_body(raw()) -> {body(), raw()}.
+-callback read_body(raw()) -> {ok, body(), raw()} | {error, body_error()}.
 
 %% The scheme of the connection the request arrived on -- `https` only when the
 %% transport itself is TLS. A TLS-terminating proxy in front reports `http` here
@@ -412,13 +418,21 @@ user_agent(Req0) ->
 -doc """
 Consumes the request body. Lazy-loaded; the underlying raw request is
 updated because reading a body is mutating in most transports.
+
+Returns `{error, Reason}` when the transport could not deliver the body (see
+`t:body_error/0`) -- a body over the server's cap read on demand, a stalled or
+vanished client. Nothing is cached then, so the caller answers from the
+request it already holds (`arizona_middleware:extract/1`'s `body` key halts
+with `413`, `408` or `400`).
 """.
--spec body(request()) -> {body(), request()}.
+-spec body(request()) -> {ok, body(), request()} | {error, body_error()}.
 body(#{body := Body} = Req) ->
-    {Body, Req};
+    {ok, Body, Req};
 body(#{adapter := Adapter, raw := Raw} = Req) ->
-    {Body, Raw1} = Adapter:read_body(Raw),
-    {Body, Req#{raw => Raw1, body => Body}}.
+    case Adapter:read_body(Raw) of
+        {ok, Body, Raw1} -> {ok, Body, Req#{raw => Raw1, body => Body}};
+        {error, _Reason} = Error -> Error
+    end.
 
 %% Internal use only -- invoked by `arizona_socket:handle_navigate/3`
 %% and `arizona_ws:prepare/3`. Crashes with `undef` if `Adapter` did
