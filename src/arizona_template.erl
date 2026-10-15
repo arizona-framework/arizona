@@ -161,6 +161,9 @@ render(Bindings) ->
     %% Per dynamic: may a changed stream item keep its old render when the deps
     %% miss the changed fields (every item read tracked in its own closure)?
     reuse => [boolean()],
+    %% A 2-arg callback whose body is not exactly one element: legal over a map, refused
+    %% over a stream by each/2.
+    multi_root => true,
     backend => module()
 }.
 
@@ -389,6 +392,11 @@ own `(Fun, Source)` argument order, the transform did not run: say so with
 -spec each(Source, Template) -> each_container() when
     Source :: term(),
     Template :: each_template().
+each(#stream{}, #{t := ?EACH, multi_root := true} = Tmpl) when not is_map_key(diff, Tmpl) ->
+    %% The callback serves maps too, so this pairing cannot be refused at compile time;
+    %% see maybe_multi_root_opt/3 in arizona_parse_transform. A nodiff item is never
+    %% addressed by a keyed op, so it may keep any number of roots.
+    erlang:error(stream_each_multi_root, none, [{error_info, #{module => ?MODULE}}]);
 each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_function(DFun, 2) ->
     #{t => ?EACH, source => Source, template => Tmpl};
 each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
@@ -485,7 +493,14 @@ Formats compile/runtime error reasons emitted by this module.
 format_error(parse_transform_not_applied) ->
     "parse transform not applied -- include arizona_stateful.hrl or arizona_stateless.hrl";
 format_error({bad_template_value, V}) ->
-    lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V])).
+    lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V]));
+format_error(stream_each_multi_root) ->
+    "an ?each over a stream must return ONE element per item, not a list of elements, a "
+    "fragment mixing text and elements, or bare text: a keyed op (insert, remove, move, "
+    "item patch) addresses an item by the single element carrying its az_key, so any other "
+    "root would be left behind on a remove and out of order on a move. Put the parts "
+    "inside one item element, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end. "
+    "The same callback over a map may return several roots".
 
 -doc """
 Formats runtime errors raised with an `error_info` annotation pointing at
@@ -513,6 +528,8 @@ format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
 format_error({bad_template_value, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error(parse_transform_not_applied = Reason, _ST) ->
+    #{general => format_error(Reason)};
+format_error(stream_each_multi_root = Reason, _ST) ->
     #{general => format_error(Reason)}.
 
 -doc """

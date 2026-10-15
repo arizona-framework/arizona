@@ -1037,7 +1037,6 @@ format_error(cross_target_nesting) ->
 format_error(Reason) when
     Reason =:= each_body_not_element;
     Reason =:= each_stream_body_not_element;
-    Reason =:= each_stream_body_multi_root;
     Reason =:= each_stream_body_control_flow;
     Reason =:= each_named_fun_multi_clause;
     Reason =:= each_named_fun_undefined;
@@ -1091,17 +1090,10 @@ format_each_error(each_body_not_element) ->
     "text/value child: {li, [], [case ... of ... end]}";
 format_each_error(each_stream_body_not_element) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
-    "Attrs, Children}) -- a stream/map keys each item for per-item diffing, which a "
-    "single-value body throws away. Unlike a list there is no comprehension fallback (a "
-    "comprehension has no stream/keyed semantics): wrap the value in an element, e.g. "
-    "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
-format_each_error(each_stream_body_multi_root) ->
-    "an ?each callback over a stream or map (a 2-arg fun) must return ONE element, not a "
-    "list of elements or a fragment mixing text and elements: a keyed op (insert, remove, "
-    "move, item patch) addresses an item by the single element carrying its az_key, so "
-    "any sibling root -- another element or a text node -- would be left behind on a "
-    "remove and out of order on a move. Put the parts inside one item element, e.g. "
-    "fun(Item, Key) -> {li, [{az_key, Key}], [{b, [], [Item]}, ~\"sep\"]} end";
+    "Attrs, Children}) or, over a map only, a list of elements -- a stream/map keys each "
+    "item for per-item diffing, which a single-value body throws away. Unlike a list there "
+    "is no comprehension fallback (a comprehension has no stream/keyed semantics): wrap the "
+    "value in an element, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
 format_each_error(each_stream_body_control_flow) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
     "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
@@ -3500,14 +3492,15 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
                 ElemAST, Module, false, Backend, CCtx, Inherited, each_item
             ),
             Opts1 = Opts0#{backend => Backend},
-            Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
+            Opts2 = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
+            Opts = maybe_multi_root_opt(Kind, Classification, Opts2),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
     end.
 
 %% A keyed body written as a one-element list (`[{li, [{az_key, K}], [I]}]`) is a single
 %% root in a list wrapper: unwrapped like a whole-body `?html`, so it compiles to the
-%% same per-item template as the bare element instead of tripping the multi-root check.
+%% same per-item template as the bare element instead of being stamped multi-root.
 unwrap_one_root_list(stream, {cons, _, Elem, {nil, _}} = Body) ->
     case is_element_tuple(Elem) of
         true -> Elem;
@@ -3536,6 +3529,21 @@ maybe_single_root_opt(Backend, _Kind, element_tuple, Opts) ->
         false -> Opts
     end;
 maybe_single_root_opt(_Backend, _Kind, _Classification, Opts) ->
+    Opts.
+
+%% A 2-arg callback serves a map AND a stream, and only the source decides whether a
+%% body that is not exactly one element is legal: a map diffs it positionally or
+%% wholesale like a list, while a stream's keyed ops address an item by the single
+%% element carrying its `az-key`, so any other root would be orphaned on a remove and
+%% out of order on a move. The source is a runtime value, so the body is stamped here
+%% and `arizona_template:each/2` refuses the stream pairing when it meets one.
+maybe_multi_root_opt(stream, Classification, Opts) when
+    Classification =:= element_list;
+    Classification =:= list_ast;
+    Classification =:= static_binary
+->
+    Opts#{multi_root => true};
+maybe_multi_root_opt(_Kind, _Classification, Opts) ->
     Opts.
 
 %% Classify an ?each callback's last expr. A whole-body backend wrapper call
@@ -3617,25 +3625,10 @@ set_template_map_d_field(Field, _DFunAST) ->
 %% value slot that renders at SSR but loses per-item diffing (and a descriptor value crashes
 %% on diff). Reject it at compile time. `Kind` (list | stream) is the source shape, inferred
 %% from the callback arity (1-arg = list, 2-arg = stream/map): the error it raises tailors the
-%% fix advice, since a list has a comprehension fallback and a stream does not. A stream
-%% body must further be ONE element (see the multi-root clause).
+%% fix advice, since a list has a comprehension fallback and a stream does not. Whether a
+%% 2-arg body must be ONE element depends on the runtime source (see maybe_multi_root_opt/3).
 validate_each_body(Kind, text_dynamic, LastExpr) ->
     parse_error(each_body_error(Kind, LastExpr), anno(LastExpr));
-validate_each_body(stream, static_binary, LastExpr) ->
-    parse_error(each_stream_body_not_element, anno(LastExpr));
-validate_each_body(stream, Classification, LastExpr) when
-    Classification =:= element_list; Classification =:= list_ast
-->
-    %% Keyed ops (OP_REMOVE/OP_MOVE/OP_INSERT/OP_ITEM_PATCH) address an item by the one
-    %% element carrying its `az-key`, so a sibling root (another element, or text) is
-    %% left behind on a delete and out of order on a move. A list with no element at
-    %% all (empty, or values only) is the not-an-element mistake instead.
-    Reason =
-        case lists:any(fun is_markup_item/1, ast_list_to_list(LastExpr)) of
-            true -> each_stream_body_multi_root;
-            false -> each_stream_body_not_element
-        end,
-    parse_error(Reason, anno(LastExpr));
 validate_each_body(Kind, list_ast, LastExpr) ->
     %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
     %% ?html/?native/?terminal map literal) or a ?stateful/?stateless descriptor: those land
