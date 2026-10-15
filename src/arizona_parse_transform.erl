@@ -585,7 +585,59 @@ mark_targets(Node, _Ctx, _CCtx) ->
 
 mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
     ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
-    {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- Parts]}.
+    {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- unwrap_child_tail_wrappers(Parts, Ctx)]}.
+
+%% A whole-tail `?html`/`?native`/`?terminal` (matching the enclosing target) in a
+%% conditional child is the bare element in a wrapper: unwrap it here, before the
+%% bottom-up pass compiles it at the root content context, so the branch compiles in
+%% the context of the slot holding it exactly as the bare form does (an SVG `<title>`
+%% stays diffable). Only markup is unwrapped: a wrapped value list renders its binaries
+%% as raw statics, which a bare value tail would escape. A wrapper anywhere else (bound,
+%% passed, or below the tail) keeps starting its own template.
+unwrap_child_tail_wrappers([Tag, Attrs, Children], Ctx) when
+    Ctx =:= html; Ctx =:= native; Ctx =:= terminal
+->
+    Unwrap = fun(Child) ->
+        case is_control_flow_ast(Child) of
+            true ->
+                map_tail_exprs(Child, fun(Leaf) -> unwrap_tail_wrapper(Leaf, Ctx) end, fun(E) ->
+                    E
+                end);
+            false ->
+                Child
+        end
+    end,
+    Children1 =
+        case is_list_ast(Children) of
+            true -> map_cons_items(Unwrap, Children);
+            false -> Unwrap(Children)
+        end,
+    [Tag, Attrs, Children1];
+unwrap_child_tail_wrappers(Parts, _Ctx) ->
+    Parts.
+
+unwrap_tail_wrapper(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, Ctx}}, [Inner]} = Leaf, Ctx
+) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    case classify_body(Inner) of
+        Class when Class =:= element_tuple; Class =:= element_list -> Inner;
+        list_ast ->
+            case list_has_markup_item(Inner) of
+                true -> Inner;
+                false -> Leaf
+            end;
+        _ ->
+            Leaf
+    end;
+unwrap_tail_wrapper(Leaf, _Ctx) ->
+    Leaf.
+
+map_cons_items(F, {cons, L, Head, Tail}) ->
+    {cons, L, F(Head), map_cons_items(F, Tail)};
+map_cons_items(_F, Tail) ->
+    Tail.
 
 %% The backend for a marking context. `none` (no target entered yet) uses the
 %% default target's backend so the two callbacks above always have an answer.

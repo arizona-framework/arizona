@@ -426,6 +426,7 @@
     raw_text_svg_title_factoring/1,
     raw_text_svg_title_local/1,
     raw_text_svg_branch_context/1,
+    raw_text_svg_wrapped_branch_context/1,
     raw_text_foreign_script_style_escaped/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
@@ -807,6 +808,7 @@ groups() ->
             raw_text_svg_title_factoring,
             raw_text_svg_title_local,
             raw_text_svg_branch_context,
+            raw_text_svg_wrapped_branch_context,
             raw_text_foreign_script_style_escaped,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
@@ -2623,6 +2625,34 @@ raw_text_svg_branch_context(Config) when is_list(Config) ->
         Mod:title(B0#{t => ~"B"}), TitleSnap, #{}, #{t => true}
     ),
     ?assertMatch([[_Op, _Az, ~"B"]], TitleOps).
+
+%% A whole-tail `?html(...)` in a branch is the bare element in a wrapper, so it compiles
+%% in the slot's content context too: an SVG `<title>` keeps its markers and diffs, the
+%% same as the bare branch. A non-tail `?html` (bound, passed, or nested deeper) still
+%% starts its own template at the root context.
+raw_text_svg_wrapped_branch_context(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_wrapped). "
+        "-export([bare/1, wrapped/1]). "
+        "bare(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+        "wrapped(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:html({title, [], [arizona_template:get(t, Bindings)]}); "
+        "        false -> ~\"\" end]}). "
+    ),
+    B0 = #{f => true, t => ~"A"},
+    Run = fun(F) ->
+        {H0, Snap, _} = arizona_render:render(Mod:F(B0), #{}),
+        {Ops, _, _} = arizona_diff:diff(Mod:F(B0#{t => ~"B"}), Snap, #{}, #{t => true}),
+        {iolist_to_binary(H0), Ops}
+    end,
+    {WrappedHTML, WrappedOps} = Run(wrapped),
+    ?assertMatch({match, _}, re:run(WrappedHTML, ~"<title[^>]*><!--az:")),
+    ?assertMatch([[_Op, _Az, ~"B"]], WrappedOps),
+    ?assertEqual(Run(bare), {WrappedHTML, WrappedOps}).
 
 %% A content `?local` under a raw-text element is a compile error -- the client
 %% resolves a local slot through its markers, and raw-text content has none. An
