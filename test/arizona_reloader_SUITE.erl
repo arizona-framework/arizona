@@ -940,15 +940,9 @@ install_fake_agent() ->
             false -> error
         end,
     Forms = [
-        {attribute, 1, module, rebar_agent},
-        {attribute, 1, export, [{do, 1}]},
-        {function, 1, do, 1, [
-            {clause, 1, [{atom, 1, compile}], [], [
-                {call, 1, {remote, 1, {atom, 1, persistent_term}, {atom, 1, get}}, [
-                    {atom, 1, arizona_reloader_suite_agent_result}
-                ]}
-            ]}
-        ]}
+        parse_form("-module(rebar_agent)."),
+        parse_form("-export([do/1])."),
+        parse_form("do(compile) -> persistent_term:get(arizona_reloader_suite_agent_result).")
     ],
     {ok, rebar_agent, Bin} = compile:forms(Forms),
     _ = code:purge(rebar_agent),
@@ -966,11 +960,16 @@ remove_fake_agent(Config) ->
     _ = code:purge(rebar_agent),
     case Original of
         {rebar_agent, Bin, File} ->
-            {module, rebar_agent} = code:load_binary(rebar_agent, File, Bin);
+            {module, rebar_agent} = code:load_binary(rebar_agent, File, Bin),
+            ok;
         error ->
             ok
-    end,
-    ok.
+    end.
+
+parse_form(Src) ->
+    {ok, Tokens, _} = erl_scan:string(Src),
+    {ok, Form} = erl_parse:parse_form(Tokens),
+    Form.
 
 set_agent_result(Result) ->
     persistent_term:put(arizona_reloader_suite_agent_result, Result).
