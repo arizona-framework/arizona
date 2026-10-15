@@ -1341,10 +1341,13 @@ No-ops when PID is `undefined` or ops and effects are both empty.
 it can never address an embedded child, so `?send`/`?send_after` are the API.
 
 `send_after/3` additionally registers its ref in the `$arizona_timers` process-dictionary map,
-`#{ViewId => [reference()]}`. A fired ref is pruned when its message is delivered, and each
-`send_after/3` drops the view's dead refs before adding its own -- a timer the app cancels itself
-with `erlang:cancel_timer/1` (a debounce, an idle watchdog) delivers nothing, so without that the
-registry would grow by one ref per re-arm for the page's lifetime. A removed child
+`#{ViewId => {Count, Limit, [reference()]}}`. A fired ref is pruned when its message is delivered.
+A timer the app cancels itself with `erlang:cancel_timer/1` (a debounce, an idle watchdog) delivers
+nothing, so `send_after/3` also drops the view's dead refs, once an arm takes the list to `Limit`
+-- twice the live count the previous prune found, with a small floor. Without that the registry
+would grow by one ref per re-arm for the page's lifetime; pruning on every arm instead would cost
+O(live timers) per arm, quadratic for a view arming many concurrent timers. The doubling keeps the
+list within 2x the live timers at O(1) amortized per arm. A removed child
 view's timers are cancelled synchronously (and its queued view messages flushed) on unmount; and
 `navigate/3,4` cancels them all. A render that keeps a child's id but switches its handler
 (`case ?get(k) of a -> ?stateful(a, #{id => ~"c"}); b -> ?stateful(b, #{id => ~"c"}) end`) is a
