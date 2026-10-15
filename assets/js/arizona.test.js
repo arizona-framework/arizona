@@ -3854,6 +3854,44 @@ describe('saveFormState / restoreFormState with Object.prototype member names', 
 // ---------------------------------------------------------------------------
 
 describe('saveFormState / restoreFormState edge cases', () => {
+    it('keeps the fresh server value of a hidden input', () => {
+        // A hidden input is server-owned (a version stamp, an id): the user
+        // cannot have typed into it, so the resync's value is the true one.
+        document.body.innerHTML =
+            '<form id="f"><input type="hidden" name="ver" value="1"><input name="t" value=""></form>';
+        document.querySelector('[name=t]').value = 'typed';
+        saveFormState();
+        document.body.innerHTML =
+            '<form id="f"><input type="hidden" name="ver" value="2"><input name="t" value=""></form>';
+        restoreFormState();
+        expect(document.querySelector('[name=ver]').value).toBe('2');
+        expect(document.querySelector('[name=t]').value).toBe('typed');
+    });
+
+    it('keeps the fresh server value of readonly fields', () => {
+        document.body.innerHTML =
+            '<form id="f"><input readonly name="a" value="1"><textarea readonly name="b">x</textarea></form>';
+        saveFormState();
+        document.body.innerHTML =
+            '<form id="f"><input readonly name="a" value="2"><textarea readonly name="b">y</textarea></form>';
+        restoreFormState();
+        expect(document.querySelector('[name=a]').value).toBe('2');
+        expect(document.querySelector('[name=b]').value).toBe('y');
+    });
+
+    it('a skipped hidden field still consumes its position in a repeated name', () => {
+        document.body.innerHTML =
+            '<form id="f"><input type="hidden" name="n" value="h1"><input name="n" value=""></form>';
+        document.querySelectorAll('[name=n]')[1].value = 'typed';
+        saveFormState();
+        document.body.innerHTML =
+            '<form id="f"><input type="hidden" name="n" value="h2"><input name="n" value=""></form>';
+        restoreFormState();
+        const [h, t] = document.querySelectorAll('[name=n]');
+        expect(h.value).toBe('h2');
+        expect(t.value).toBe('typed');
+    });
+
     it('saves and restores checkboxes', () => {
         document.body.innerHTML =
             '<form id="f"><input type="checkbox" name="agree" checked></form>';
