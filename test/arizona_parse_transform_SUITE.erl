@@ -411,6 +411,8 @@
 -export([
     raw_text_script_bare_dynamic_rejected/1,
     raw_text_style_bare_dynamic_rejected/1,
+    raw_text_rawtext_elements_bare_dynamic_rejected/1,
+    plaintext_element_rejected/1,
     raw_text_conditional_dynamic_rejected/1,
     raw_text_helper_call_rejected/1,
     raw_text_static_only_still_compiles/1,
@@ -791,6 +793,8 @@ groups() ->
         {raw_text, [parallel], [
             raw_text_script_bare_dynamic_rejected,
             raw_text_style_bare_dynamic_rejected,
+            raw_text_rawtext_elements_bare_dynamic_rejected,
+            plaintext_element_rejected,
             raw_text_conditional_dynamic_rejected,
             raw_text_helper_call_rejected,
             raw_text_static_only_still_compiles,
@@ -2274,6 +2278,41 @@ raw_text_style_bare_dynamic_rejected(Config) when is_list(Config) ->
         "    arizona_template:html({'style', [], [arizona_template:get(css, Bindings)]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
     ).
+
+%% `<xmp>`, `<iframe>`, `<noembed>` and `<noframes>` are RAWTEXT like `<style>`, so an
+%% unmarked value there is spliced verbatim too, and the same opt-out is required.
+%% The tag is matched case-insensitively, as the parser matches it.
+raw_text_rawtext_elements_bare_dynamic_rejected(Config) when is_list(Config) ->
+    [
+        assert_parse_error(
+            "-module(pt_rt_bare_" ++ Tag ++
+                "). "
+                "-export([render/1]). "
+                "render(Bindings) -> "
+                "    arizona_template:html({'" ++ Tag ++
+                "', [], [arizona_template:get(v, Bindings)]}). ",
+            fun(R) -> R =:= dynamic_in_raw_text end
+        )
+     || Tag <- ["xmp", "iframe", "noembed", "noframes", "XMP"]
+    ].
+
+%% `<plaintext>` has no end tag: the parser reads EVERYTHING after its start tag as
+%% text, so the element's own close tag, the rest of the page and the client script
+%% would all render as text. No template can use it correctly.
+plaintext_element_rejected(Config) when is_list(Config) ->
+    [
+        assert_parse_error(
+            "-module(pt_plaintext). "
+            "-export([render/1]). "
+            "render(_Bindings) -> "
+            "    arizona_template:html({" ++ Tag ++ ", [], [<<\"x\">>]}). ",
+            fun
+                ({render_reject, Msg}) -> binary:match(Msg, ~"plaintext") =/= nomatch;
+                (_) -> false
+            end
+        )
+     || Tag <- ["plaintext", "'PLAINTEXT'", "<<\"plaintext\">>"]
+    ].
 
 %% The opt-out must be literal at the slot, mirroring how the transform already
 %% recognizes ?raw everywhere else. A conditional that yields values is not a

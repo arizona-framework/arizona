@@ -65,7 +65,21 @@ name(Atom) ->
 
 -spec element_open(binary()) -> binary().
 element_open(TagName) ->
-    <<"<", TagName/binary>>.
+    %% `<plaintext>` switches the tokenizer to PLAINTEXT, which nothing leaves: the
+    %% element's own close tag, the rest of the page and the client script after it
+    %% would all render as text. No template can use it, so refuse it here, at
+    %% compile time (the parse transform turns this into a located compile error).
+    case string:equal(TagName, ~"plaintext", true) of
+        true ->
+            erlang:error(
+                {arizona_render_reject, <<
+                    "<plaintext> has no end tag: the browser reads everything after it, "
+                    "the rest of the page included, as text. Use <pre> instead"
+                >>}
+            );
+        false ->
+            <<"<", TagName/binary>>
+    end.
 
 -spec az_attr(binary()) -> binary().
 az_attr(Az) ->
@@ -164,7 +178,7 @@ text_slot_close() ->
 %%
 %% Both callers run in the parse transform, at compile time, so the lowercasing
 %% costs nothing at render. (`raw_text/4`'s own tag test is on the render path and
-%% uses a comparison that allocates nothing -- see script_data/1.)
+%% uses a comparison that allocates nothing -- see raw_text_mode/1.)
 tag_name(Tag) when is_binary(Tag) ->
     string:lowercase(Tag);
 tag_name(Tag) ->
@@ -210,8 +224,6 @@ raw_text_kind(Tag, Context) ->
 %% and the value can no longer escape its element.
 raw_text_kind_name(~"script", html) ->
     raw;
-raw_text_kind_name(~"style", html) ->
-    raw;
 %% Escapable-raw-text elements: character references are decoded, so a scalar
 %% slot is HTML-escaped, but comments are still literal -- so still markerless.
 %% Only in HTML: inside `<svg>` a `<title>` is ordinary parsed content whose
@@ -222,8 +234,33 @@ raw_text_kind_name(~"textarea", html) ->
     escapable;
 raw_text_kind_name(~"title", html) ->
     escapable;
+raw_text_kind_name(Name, html) ->
+    case lists:member(Name, rawtext_names()) of
+        true -> raw;
+        false -> none
+    end;
 raw_text_kind_name(_Other, _Context) ->
     none.
+
+%% Every element the HTML tree builder switches into RAWTEXT for (the "generic raw
+%% text element parsing algorithm"), `<script>` aside, which has its own script-data
+%% states. `<xmp>` displays its content as text; the others' content is never
+%% displayed by a browser that supports the element, but it is still RAWTEXT, so a
+%% comment marker or an entity in it would be literal content and a value could
+%% close it.
+%%
+%% Two near-relatives are deliberately absent. `<noscript>` is RAWTEXT only where
+%% scripting is enabled, and there it is never displayed; it is displayed only where
+%% scripting is off, and that parser reads it as ordinary HTML -- markers are
+%% comments, entities decode, and no live view connects to patch it. Classifying it
+%% `raw` would force `?raw` on its values and splice them unescaped into the HTML
+%% that audience parses. Its flip side: `?raw` HTML inside a `<noscript>` is read as
+%% RAWTEXT by a scripting-enabled browser, so sanitizer output carrying
+%% `</noscript>` in an attribute value (`<p title="</noscript><img onerror=...>">`)
+%% closes it there -- never put `?raw` markup in one. `<plaintext>` has no end tag
+%% at all, so element_open/1 refuses it outright.
+rawtext_names() ->
+    [~"style", ~"xmp", ~"iframe", ~"noembed", ~"noframes"].
 
 -spec content_context(arizona_renderer:tag(), arizona_renderer:content_context()) ->
     arizona_renderer:content_context().
@@ -356,7 +393,7 @@ escape_runs(Bin, Acc, _Run) ->
             escape_runs(Rest, <<Acc/binary, Clean/binary>>, 0)
     end.
 
-%% Neutralize a raw-text (script/style) tokenizer breakout. Raw-text content is
+%% Neutralize a raw-text (script, style, ...) tokenizer breakout. Raw-text content is
 %% emitted verbatim -- HTML entity-escaping does not apply (the browser decodes
 %% nothing there) -- so a value spelling one of the sequences the HTML script-data
 %% tokenizer reacts to escapes the element (the classic JSON-in-script XSS).
@@ -397,8 +434,8 @@ escape_runs(Bin, Acc, _Run) ->
 raw_text(Tag, Before, After, Value) ->
     %% Resolve the element's tokenizer state ONCE per slot, then thread the answer
     %% (not the tag) through the byte loop, so the per-character path stays a plain
-    %% boolean test and no atom is built at render time.
-    raw_text_1({script_data(Tag), Before, After}, Value).
+    %% match and no atom is built at render time.
+    raw_text_1({raw_text_mode(Tag), Before, After}, Value).
 
 raw_text_1(Ctx, Value) when is_binary(Value) ->
     neutralize(Ctx, Value);
@@ -409,23 +446,36 @@ raw_text_1(Ctx, Value) when is_atom(Value) ->
     %% identical either way.
     neutralize(Ctx, atom_to_binary(Value));
 raw_text_1(Ctx, Value) ->
-    %% A `?raw` opt-out is the *only* shape a script/style content slot can carry
-    %% (the parse transform rejects an unmarked one), and it opts out of HTML
-    %% *escaping*, not out of the raw-text tokenizer: a trusted JSON blob's own
-    %% string data can still spell a breakout. Unwrap it, neutralize the payload,
-    %% and re-wrap, so the documented opt-out is not a hole around this check.
+    %% A `?raw` opt-out is the *only* shape a raw-text content slot can carry (the
+    %% parse transform rejects an unmarked one), and it opts out of HTML *escaping*,
+    %% not out of the raw-text tokenizer: a trusted JSON blob's own string data can
+    %% still spell a breakout. Unwrap it, neutralize the payload, and re-wrap, so the
+    %% documented opt-out is not a hole around this check.
     case arizona_template:classify_trusted(Value) of
         {raw, Raw} -> arizona_template:raw(raw_text_1(Ctx, Raw));
         _Other -> raw_text_chardata(Ctx, Value)
     end.
 
-%% Does the tokenizer read this element's content in the **script data** states?
-%% Only `<script>` has them; `<style>` is plain RAWTEXT, whose sole exit is its own
-%% close tag. HTML tag names are ASCII case-insensitive, so the comparison is too.
-script_data(Tag) when is_binary(Tag) ->
-    string:equal(Tag, ~"script", true);
-script_data(Tag) ->
-    string:equal(atom_to_binary(Tag), ~"script", true).
+%% How the tokenizer reads this element's content. `<script>` is read in the
+%% **script data** states; every other raw-text element (`<style>`, `<xmp>`,
+%% `<iframe>`, `<noembed>`, `<noframes>`) is plain RAWTEXT, whose sole exit is an end
+%% tag carrying the element's OWN name -- so that name rides along (lowercased:
+%% HTML tag names are ASCII case-insensitive, and the match below is too).
+raw_text_mode(Tag) when is_atom(Tag) ->
+    raw_text_mode(atom_to_binary(Tag));
+raw_text_mode(Tag) ->
+    case string:equal(Tag, ~"script", true) of
+        true -> script;
+        false -> {rawtext, rawtext_name(Tag, rawtext_names())}
+    end.
+
+%% The canonical lowercase name, found by a comparison that allocates nothing. Only
+%% a tag raw_text_kind/2 classified `raw` reaches here, so the list always holds it.
+rawtext_name(Tag, [Name | Names]) ->
+    case string:equal(Tag, Name, true) of
+        true -> Name;
+        false -> rawtext_name(Tag, Names)
+    end.
 
 %% The documented remedy is `?raw(json:encode(Data))`, and `json:encode/1` returns
 %% **iodata** -- so matching only binaries above would wave a breakout through on the
@@ -442,27 +492,27 @@ raw_text_chardata(Ctx, Value) when is_list(Value) ->
 raw_text_chardata(_Ctx, Value) ->
     Value.
 
-neutralize({_ScriptData, _Lead, _After}, <<>>) ->
+neutralize({_Mode, _Lead, _After}, <<>>) ->
     <<>>;
-neutralize({ScriptData, Lead, After}, Bin) ->
-    Out = neutralize_raw_text(ScriptData, Bin, After, <<>>),
-    case lead_break(ScriptData, Lead, Bin, After) of
+neutralize({Mode, Lead, After}, Bin) ->
+    Out = neutralize_raw_text(Mode, Bin, After, <<>>),
+    case lead_break(Mode, Lead, Bin, After) of
         true ->
             %% The first byte continues a sequence begun after `<`, so it is never a
             %% `<` itself and the loop above emitted it unchanged.
             <<C, Rest/binary>> = Out,
-            <<(escape_byte(ScriptData, C))/binary, Rest/binary>>;
+            <<(escape_byte(Mode, C))/binary, Rest/binary>>;
         false ->
             Out
     end.
 
-neutralize_raw_text(_ScriptData, <<>>, _After, Acc) ->
+neutralize_raw_text(_Mode, <<>>, _After, Acc) ->
     Acc;
-neutralize_raw_text(ScriptData, <<"<", R/binary>>, After, Acc) ->
-    Lt = raw_text_breakout(ScriptData, tail_with(R, After)),
-    neutralize_raw_text(ScriptData, R, After, <<Acc/binary, Lt/binary>>);
-neutralize_raw_text(ScriptData, <<C, R/binary>>, After, Acc) ->
-    neutralize_raw_text(ScriptData, R, After, <<Acc/binary, C>>).
+neutralize_raw_text(Mode, <<"<", R/binary>>, After, Acc) ->
+    Lt = raw_text_breakout(Mode, tail_with(R, After)),
+    neutralize_raw_text(Mode, R, After, <<Acc/binary, Lt/binary>>);
+neutralize_raw_text(Mode, <<C, R/binary>>, After, Acc) ->
+    neutralize_raw_text(Mode, R, After, <<Acc/binary, C>>).
 
 %% A `<` near the value's end reads on into the following static. No sequence after
 %% `<` takes more than 8 bytes, so a farther `<` never reaches it, and 8 bytes of
@@ -476,28 +526,34 @@ tail_with(R, _After) ->
 %% value? One that ends inside the static is the template's own text, not this
 %% slot's to break. The text after the `<` is only assembled once a `<` is found,
 %% and from the value's first 8 bytes, not a copy of the whole value.
-lead_break(ScriptData, <<"<", S/binary>>, Bin, After) ->
+lead_break(Mode, <<"<", S/binary>>, Bin, After) ->
     Head = binary_part(Bin, 0, min(8, byte_size(Bin))),
-    case breakout(ScriptData, <<S/binary, Head/binary, After/binary>>) of
+    case breakout(Mode, <<S/binary, Head/binary, After/binary>>) of
         {_Kind, Span} when Span > byte_size(S) -> true;
-        _NoneOrStatic -> lead_break(ScriptData, S, Bin, After)
+        _NoneOrStatic -> lead_break(Mode, S, Bin, After)
     end;
-lead_break(ScriptData, <<_C, S/binary>>, Bin, After) ->
-    lead_break(ScriptData, S, Bin, After);
-lead_break(_ScriptData, <<>>, _Bin, _After) ->
+lead_break(Mode, <<_C, S/binary>>, Bin, After) ->
+    lead_break(Mode, S, Bin, After);
+lead_break(_Mode, <<>>, _Bin, _After) ->
     false.
 
-%% The value's first byte as an escape that decodes back to it: JSON/JavaScript
-%% `\u00XX` in a script, a CSS hex escape in a style (the escape consumes its
-%% terminating space). Every byte that can complete a sequence is ASCII.
-escape_byte(true, C) ->
+%% The value's first byte, escaped so the sequence no longer reads as one. In a
+%% script it is the JSON/JavaScript `\u00XX`, in a style a CSS hex escape (which
+%% consumes its terminating space): both decode back to the byte. The other RAWTEXT
+%% elements decode nothing, so no escape is transparent there; a backslash before
+%% the byte breaks the sequence. `<iframe>`, `<noembed>` and `<noframes>` content is
+%% never displayed, and `<xmp>` shows the backslash -- only in text that would
+%% otherwise have closed it. Every byte that can complete a sequence is ASCII.
+escape_byte(script, C) ->
     <<"\\u00", (binary:encode_hex(<<C>>, lowercase))/binary>>;
-escape_byte(false, C) ->
-    <<"\\", (binary:encode_hex(<<C>>, lowercase))/binary, " ">>.
+escape_byte({rawtext, ~"style"}, C) ->
+    <<"\\", (binary:encode_hex(<<C>>, lowercase))/binary, " ">>;
+escape_byte({rawtext, _Name}, C) ->
+    <<"\\", C>>.
 
 %% What a `<` inside the value becomes, given the text right after it.
-raw_text_breakout(ScriptData, R) ->
-    case breakout(ScriptData, R) of
+raw_text_breakout(Mode, R) ->
+    case breakout(Mode, R) of
         nomatch -> ~"<";
         {close, _Span} -> ~"<\\";
         {escape, _Span} -> ~"\\u003c"
@@ -506,19 +562,21 @@ raw_text_breakout(ScriptData, R) ->
 %% Which sequence, if any, the text after a `<` spells, and how many of its bytes it
 %% takes. Three sequences move the HTML tokenizer out of raw text:
 %%
-%%   `</script` / `</style` -- ends the element, dropping the rest of the value into
-%%       HTML parsing. An end tag only closes a raw-text element when it is the
-%%       *appropriate* one -- its name matches the element being parsed -- so
-%%       strictly only `</script` matters in `<script>` and only `</style` in
+%%   `</script` / `</style` / `</xmp` ... -- ends the element, dropping the rest of
+%%       the value into HTML parsing. An end tag only closes a raw-text element when
+%%       it is the *appropriate* one -- its name matches the element being parsed --
+%%       so strictly only `</script` matters in `<script>` and only `</style` in
 %%       `<style>`; the other is ordinary text there. Both names are neutralized in
-%%       both elements anyway: it is a harmless superset (the rewrite decodes back to
-%%       the original in the string contexts this content lives in), and it keeps the
-%%       close-tag half of the rule tag-independent, so only the script-data half
-%%       below has to consult `ScriptData`. Do NOT narrow it on the belief that the
-%%       cross pair is load-bearing -- it is not; narrowing is safe but buys nothing.
+%%       both of those anyway: it is a harmless superset (the rewrite decodes back to
+%%       the original in the string contexts their content lives in), and it keeps
+%%       that half of the rule independent of the script-data half below. The other
+%%       RAWTEXT elements (`<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`) check only
+%%       their own name: nothing decodes there, so a rewrite is never transparent, and
+%%       `<xmp>` displays its content -- the superset would put a visible backslash in
+%%       text that could not have closed it (end_tag_name/2).
 %%       A backslash after the `<` stops the end-tag match: `<\/script` is transparent
-%%       wherever such content lives (`\/` decodes to `/` in JSON, in a JavaScript
-%%       string, and in CSS).
+%%       wherever script/style content lives (`\/` decodes to `/` in JSON, in a
+%%       JavaScript string, and in CSS); in `<xmp>` it shows.
 %%   `<!--` -- enters script-data-escaped state, where a following `<script`
 %%       reaches script-data-double-escaped and the element's OWN `</script>` no
 %%       longer closes it: the remainder of the document is swallowed, so
@@ -539,35 +597,38 @@ raw_text_breakout(ScriptData, R) ->
 %% documented content of a `raw` raw-text slot, whereas `\u003c` is valid in both
 %% JSON and JavaScript strings and decodes back to `<`.
 %%
-%% They also apply ONLY in `<script>` (`ScriptData`). `<style>` content is RAWTEXT,
+%% They also apply ONLY in `<script>` (`Mode =:= script`). `<style>` content is RAWTEXT,
 %% which has no escaped state at all: rewriting these there would defend nothing
 %% and would corrupt the stylesheet, because that escape is a JS/JSON one which a
 %% CSS parser reads as the identifier bytes `u003c` -- and `<!--`/`-->` are
 %% themselves legitimate CSS tokens (CDO/CDC). Tag names match ASCII
 %% case-insensitively, as the tokenizer does; any other `<` keeps its own byte.
-breakout(_ScriptData, <<$/, R/binary>>) ->
-    case end_tag_name(R) of
+breakout(Mode, <<$/, R/binary>>) ->
+    case end_tag_name(Mode, R) of
         nomatch -> nomatch;
         Len -> {close, 1 + Len}
     end;
-breakout(true, <<"!--", _R/binary>>) ->
+breakout(script, <<"!--", _R/binary>>) ->
     {escape, 3};
-breakout(true, <<"!-">>) ->
+breakout(script, <<"!-">>) ->
     {escape, 2};
-breakout(true, <<"!">>) ->
+breakout(script, <<"!">>) ->
     {escape, 1};
-breakout(true, R) ->
+breakout(script, R) ->
     case tag_name(R, ~"script") of
         nomatch -> nomatch;
         Len -> {escape, Len}
     end;
 %% A bare `<` ending the text: in RAWTEXT only an end tag follows it.
-breakout(false, <<>>) ->
+breakout({rawtext, _Name}, <<>>) ->
     {close, 0};
-breakout(false, _R) ->
+breakout({rawtext, _Name}, _R) ->
     nomatch.
 
-end_tag_name(R) ->
+%% Which end tags close this element, as end_tag_name/2's bytes-taken or `nomatch`.
+end_tag_name({rawtext, Name}, R) when Name =/= ~"style" ->
+    tag_name(R, Name);
+end_tag_name(_ScriptOrStyle, R) ->
     case tag_name(R, ~"script") of
         nomatch -> tag_name(R, ~"style");
         Len -> Len
