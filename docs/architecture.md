@@ -847,13 +847,18 @@ top:
 
 - **Drop events** → `{data_transfer: "dragged-key", drop_index: N}` -- drag data from `dataTransfer`
   and drop position among `[az-key]` siblings
-- **Forms** → `Object.fromEntries(new FormData(form, submitter))` -- all form field values keyed by
+- **Forms** → `new FormData(form, submitter)` as a map -- all form field values keyed by
   `name`; when the form was submitted by a named submit button, that button's `name`/`value` is
   included too (the native `FormData` submitter arg), so a form with two submit buttons reports
   which one fired. A non-submit trigger (a plain `az-click` button) has no submitter, so it never
   drags the enclosing form's fields along -- gathering is a property of submitting the form (the
-  **Other** case below stays `{}`)
-- **Inputs/selects/textareas** → `{value: el.value}` -- current input value
+  **Other** case below stays `{}`). A repeated name is a list. A `<select multiple>` and a checkbox
+  **group** (more than one checkbox sharing a name) are lists by their markup, whatever is selected:
+  `["a"]` for one value and `[]` for none, never a bare string or a missing key, so a handler matches
+  one shape. A lone checkbox stays a single field (its value when checked, absent when not), and a
+  disabled field is left out as the browser leaves it out of a native submit
+- **Inputs/selects/textareas** → `{value: el.value}` -- current input value; a checkbox/radio adds
+  `checked`, and a `<select multiple>` sends `value` as the list of selected values
 - **Other** → `{}` -- empty
 
 This means `az-keydown` or `az-focusout` on an input automatically includes `{value: "typed text"}`,

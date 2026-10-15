@@ -2416,18 +2416,52 @@ function submitter(event) {
 }
 
 /**
+ * The names in `form` that hold a list by their markup: a `<select multiple>`,
+ * and a checkbox name shared by more than one box (a group). Only enabled ones,
+ * since FormData leaves a disabled control out entirely.
+ * @param {HTMLFormElement} form
+ * @returns {Set<string>}
+ */
+function multiValuedNames(form) {
+    /** @type {Set<string>} */
+    const names = new Set();
+    /** @type {Map<string, {boxes: number, enabled: boolean}>} */
+    const groups = new Map();
+    for (const el of form.elements) {
+        const f = /** @type {any} */ (el);
+        if (!f.name) continue;
+        const enabled = !el.matches(':disabled');
+        if (el.tagName === 'SELECT' && f.multiple) {
+            if (enabled) names.add(f.name);
+        } else if (el.tagName === 'INPUT' && f.type === 'checkbox') {
+            const g = groups.get(f.name) || { boxes: 0, enabled: false };
+            g.boxes += 1;
+            g.enabled ||= enabled;
+            groups.set(f.name, g);
+        }
+    }
+    for (const [name, g] of groups) if (g.boxes > 1 && g.enabled) names.add(name);
+    return names;
+}
+
+/**
  * Collect a form's fields, keeping a duplicate name as an array. A checkbox
  * group and a `<select multiple>` each submit one entry per selected value, so
- * the flat `Object.fromEntries` shape silently keeps only the last of them.
+ * the flat `Object.fromEntries` shape silently keeps only the last of them --
+ * and those two are arrays even with one value or none (`[]`), chosen by the
+ * field's markup rather than by how many values happen to be selected, so a
+ * handler sees one shape.
  * @param {FormData} fd
+ * @param {HTMLFormElement} form
  * @returns {Object<string, string|string[]>}
  */
-function formFields(fd) {
+function formFields(fd, form) {
     // Prototype-less: a field name is author data, and on a plain object one named
     // `constructor` or `toString` would read back the inherited method (`in` is
     // true, so the value became `[fn, v]`) and `__proto__` would hit the setter.
     /** @type {Object<string, string|string[]>} */
     const data = Object.create(null);
+    for (const name of multiValuedNames(form)) data[name] = [];
     for (const [k, v] of fd.entries()) {
         if (k in data) {
             const prev = data[k];
@@ -2460,7 +2494,10 @@ function autoPayload(el, event) {
     }
     const tag = el.tagName;
     if (tag === 'FORM')
-        return formFields(new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)));
+        return formFields(
+            new FormData(/** @type {HTMLFormElement} */ (el), submitter(event)),
+            /** @type {HTMLFormElement} */ (el),
+        );
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
         const field = /** @type {any} */ (el);
         // A checkbox/radio reports what it WOULD submit, which is the same string
@@ -3119,7 +3156,10 @@ function saveFormState(suspect = null) {
     // preserve the user's typing there exactly as it does on the main page.
     for (const doc of allDocs()) {
         doc.querySelectorAll('form[id]').forEach((form) => {
-            const data = formFields(new FormData(/** @type {HTMLFormElement} */ (form)));
+            const data = formFields(
+                new FormData(/** @type {HTMLFormElement} */ (form)),
+                /** @type {HTMLFormElement} */ (form),
+            );
             const azChange = form.getAttribute('az-change') || null;
             const replay = !suspect?.has(form.id) && (held.get(form.id)?.replay ?? true);
             _savedForms.set(form.id, { fields: data, azChange, replay });

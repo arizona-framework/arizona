@@ -6174,6 +6174,62 @@ describe('form submit', () => {
         ]);
     });
 
+    it('sends a checkbox group and a select multiple as arrays whatever is selected', async () => {
+        // The shape follows the field, not the count: one checked box of a group,
+        // one selected option, or none at all must not turn into a scalar (or
+        // vanish), or a handler has to accept both shapes.
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[0,"save"]]'>
+                <input type="checkbox" name="tags" value="a" checked />
+                <input type="checkbox" name="tags" value="b" />
+                <input type="checkbox" name="none" value="a" />
+                <input type="checkbox" name="none" value="b" />
+                <select name="langs" multiple>
+                    <option value="erl" selected>erl</option>
+                    <option value="js">js</option>
+                </select>
+                <select name="empty" multiple><option value="x">x</option></select>
+                <input type="checkbox" name="agree" value="yes" checked />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document
+            .getElementById('f')
+            .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+        // A lone checkbox is a single field: it keeps the scalar on/absent shape.
+        expect(mock.getSentMessages()).toContainEqual([
+            'page',
+            'save',
+            { tags: ['a'], none: [], langs: ['erl'], empty: [], agree: 'yes' },
+        ]);
+    });
+
+    it('a disabled multi-valued field is left out, like the browser leaves it', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView(
+            'page',
+            `<form id="f" az-submit='[[0,"save"]]'>
+                <select name="langs" multiple disabled><option value="erl" selected>erl</option></select>
+                <input type="checkbox" name="t" value="a" disabled />
+                <input type="checkbox" name="t" value="b" disabled />
+                <input name="x" value="1" />
+            </form>`,
+        );
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document
+            .getElementById('f')
+            .dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+        expect(mock.getSentMessages()).toContainEqual(['page', 'save', { x: '1' }]);
+    });
+
     it('sends a field named after an Object.prototype member as plain data', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
