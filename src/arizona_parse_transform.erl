@@ -3942,7 +3942,7 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
 ->
     Backend = State0#state.backend,
     NameBin = extract_attr_name(Backend, NameAST),
-    case literal_text(ValueAST) of
+    case fold_literal_text(ValueAST) of
         {ok, ValBin} ->
             %% A literal value (a binary, or a list of literals, folded by
             %% literal_text/1) is DATA by construction: an effect is always a call,
@@ -4335,7 +4335,7 @@ static_child_bytes(Child, #state{backend = Backend, raw_text_kind = RawKind}) ->
         true ->
             {ok, Backend:text_child(extract_binary_value(Child))};
         false when RawKind =:= none ->
-            case literal_list_text(Child) of
+            case fold_literal_list_text(Child) of
                 {ok, Bin} -> {ok, Backend:escape(Bin)};
                 error -> error
             end;
@@ -5310,8 +5310,14 @@ normalize_children(AST) ->
 extract_attr_name(Backend, {atom, _, Name}) -> Backend:name(Name);
 extract_attr_name(_Backend, BinAST) -> extract_binary_value(BinAST).
 
-extract_binary_value({bin, _, Elements} = Bin) ->
+extract_binary_value({bin, _, _} = Bin) ->
     ok = note_folded(Bin),
+    binary_text(Bin).
+
+%% The text a static binary literal folds to, without recording it as folded: a
+%% probe that may still give up (literal_list_text/1) must not silence the
+%% latin1_binary_literal warning for a literal that ends up a runtime value.
+binary_text({bin, _, Elements}) ->
     iolist_to_binary([extract_bin_element(E) || E <- Elements]).
 
 %% Templates treat binary-literal content as UTF-8 text: a code point is encoded
@@ -5364,12 +5370,31 @@ is_foldable_bin_element(_) ->
     false.
 
 %% The text a literal attribute value folds to: a binary literal, or a (possibly
-%% nested) list of literals, which renders at runtime as the chardata it is.
+%% nested) list of literals, which renders at runtime as the chardata it is. A pure
+%% probe; fold_literal_text/1 is the variant for a value actually folded.
 literal_text(AST) ->
     case is_static_binary(AST) of
-        true -> {ok, extract_binary_value(AST)};
+        true -> {ok, binary_text(AST)};
         false -> literal_list_text(AST)
     end.
+
+fold_literal_text(AST) ->
+    note_literal_bins(AST, literal_text(AST)).
+
+fold_literal_list_text(AST) ->
+    note_literal_bins(AST, literal_list_text(AST)).
+
+%% Records the binary literals of a value that folded as a whole, and only then:
+%% a list holding a dynamic, or one probed but left a runtime value (raw text),
+%% keeps its literals warnable.
+note_literal_bins({bin, _, _} = Bin, {ok, _} = Folded) ->
+    ok = note_folded(Bin),
+    Folded;
+note_literal_bins({cons, _, Head, Tail}, {ok, _} = Folded) ->
+    Folded = note_literal_bins(Head, Folded),
+    note_literal_bins(Tail, Folded);
+note_literal_bins(_AST, Result) ->
+    Result.
 
 %% A string literal or a list -- nested to any depth -- of binary literals (folded
 %% as is_static_binary/1 admits them), string literals and character codes, whose
@@ -5399,7 +5424,7 @@ literal_chardata_item({char, _, C}) ->
     C;
 literal_chardata_item({bin, _, _} = Bin) ->
     case is_static_binary(Bin) of
-        true -> extract_binary_value(Bin);
+        true -> binary_text(Bin);
         false -> throw(not_literal)
     end;
 literal_chardata_item(Item) ->

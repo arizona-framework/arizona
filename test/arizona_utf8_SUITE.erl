@@ -11,6 +11,7 @@
 -export([all/0]).
 -export([groups/0]).
 -export([warns_latin1_literal_outside_template_statics/1]).
+-export([warns_latin1_literal_in_unfolded_list/1]).
 -export([no_warning_for_utf8_ascii_or_byte_literals/1]).
 -export([folded_statics_render_utf8_at_ssr_and_in_diff/1]).
 -export([native_ssr_names_non_utf8_at_its_line/1]).
@@ -39,6 +40,7 @@ groups() ->
     [
         {contract, [parallel], [
             warns_latin1_literal_outside_template_statics,
+            warns_latin1_literal_in_unfolded_list,
             no_warning_for_utf8_ascii_or_byte_literals,
             folded_statics_render_utf8_at_ssr_and_in_diff,
             native_ssr_names_non_utf8_at_its_line,
@@ -123,6 +125,31 @@ warns_latin1_literal_outside_template_statics(Config) when is_list(Config) ->
     ],
     {ok, BytesWarnings} = compile_probe(Config, Bytes),
     ?assertEqual(marked_lines(Bytes, ~"%% warn"), warned_lines(BytesWarnings)).
+
+%% A literal list folds only as a whole. Probing one walks its binaries before a
+%% later dynamic (or the raw-text rule) gives up on it, and that probe must not
+%% count them as folded: the list stays a runtime value carrying Latin-1 bytes.
+%% The lines marked `static` fold whole, or (holding a `?raw` block) compile as a
+%% fragment whose binaries are template statics, and stay unwarned.
+warns_latin1_literal_in_unfolded_list(Config) when is_list(Config) ->
+    Lines = [
+        ~"-module(arizona_utf8_list_probe).",
+        ~"-include(\"arizona_stateless.hrl\").",
+        ~"-export([render/1]).",
+        ~"render(Bindings) ->",
+        ~"    ?html({'div', [], [",
+        ~"        {p, [], [[<<\"café \">>, ?get(x)]]}, %% warn",
+        ~"        {p, [], [[?get(x), <<\"café \">>]]}, %% warn",
+        ~"        {p, [], [[<<\"café \">>, ?raw(?get(x))]]}, %% static",
+        ~"        {p, [{title, [<<\"atributo é\">>, ?get(x)]}], []}, %% warn",
+        ~"        {p, [{title, [<<\"atributo é\">>, ?raw(?get(x))]}], []}, %% warn",
+        ~"        {title, [], [[<<\"título é\">>, ~\"x\"]]}, %% warn",
+        ~"        {p, [], [[<<\"lista é \">>, ~\"x\"]]}, %% static",
+        ~"        {p, [{title, [<<\"atributo é \">>, ~\"x\"]}], []} %% static",
+        ~"    ]})."
+    ],
+    {ok, Warnings} = compile_probe(Config, Lines),
+    ?assertEqual(marked_lines(Lines, ~"%% warn"), warned_lines(Warnings)).
 
 no_warning_for_utf8_ascii_or_byte_literals(Config) when is_list(Config) ->
     Lines = [
