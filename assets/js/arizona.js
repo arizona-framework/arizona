@@ -540,6 +540,34 @@ function saveCurrentScroll(navKind) {
 /** @type {{types?: string[], kind: 'replace'|'any'}|null} */
 let _pendingTransition = null;
 
+// The page-swap window of a navigate: from posting the `navigate` frame until its
+// reply lands. The server replaces the root view when it handles the frame, but
+// the old DOM stays on screen until the `OP_REPLACE` arrives, and an event sent
+// from it in between is dispatched by view id alone -- to the NEW root, which
+// often shares the id (`page`) and then either crashes on an event it does not
+// know or runs the old page's intent. The server cannot tell such an event from
+// one sent after the swap (frames carry no page epoch), so the client drops it,
+// exactly as a full page load would. Ends on any `OP_REPLACE` (the reply, or the
+// resync of a reconnect that interrupted it) or a full-page navigate effect (the
+// server kept the old view). A redirect reply is a navigate effect too, which
+// re-arms for its own reply. A patch does not arm: it usually keeps the view, and
+// the client cannot know ahead that the server will degrade it to a replace.
+let _navPending = false;
+// Bumped per armed navigate, so a send scheduled before it (a debounced or
+// throttled push_event) is dropped when it fires after the window has closed.
+let _navEpoch = 0;
+
+/**
+ * Send a view event unless it was raised on a page a navigate is replacing.
+ * Framework frames (navigate, patch, cached_fps, ping) do not come through here.
+ * @param {string} msg encoded `[target, event, payload]` frame
+ * @param {number} [epoch] `_navEpoch` when the event was raised
+ */
+function sendEvent(msg, epoch = _navEpoch) {
+    if (_navPending || epoch !== _navEpoch) return;
+    workerPost(W_SEND, msg);
+}
+
 /**
  * Whether a view transition should run now: the API exists and the user has
  * not asked to reduce motion. Guarded for jsdom, which lacks matchMedia.
@@ -682,6 +710,23 @@ function navigateTo(path, qs, hash, opts) {
         history.pushState(state, '', fullUrl);
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash, patch: kind === 'patch' };
     }
+    sendNav(kind, path, qs);
+}
+
+/**
+ * Post a navigate/patch frame and retarget the reconnect URL. A navigate arms the
+ * page-swap window (`_navPending`) -- only on a live socket: a frame posted while
+ * disconnected is dropped by the worker and gets no reply, and the reconnect's
+ * resync is what puts the new page on screen.
+ * @param {'navigate'|'patch'} kind
+ * @param {string} path
+ * @param {string} qs
+ */
+function sendNav(kind, path, qs) {
+    if (kind === 'navigate' && _connected) {
+        _navPending = true;
+        _navEpoch++;
+    }
     workerPost(W_SEND, JSON.stringify([kind, { path, qs }]));
     workerPost(W_UPDATE_PATH, { path, qs: reconnectUserQs(qs) });
     _currentPath = path;
@@ -779,7 +824,7 @@ function mountHook(el) {
     instance.__name = name;
     /** @param {string} eventName @param {*} payload */
     instance.pushEvent = (eventName, payload) => {
-        workerPost(W_SEND, JSON.stringify([resolveTarget(el), eventName, payload || {}]));
+        sendEvent(JSON.stringify([resolveTarget(el), eventName, payload || {}]));
     };
     _hooks.set(el, instance);
     if (def.mounted) runHookCallback(instance, def.mounted, 'mounted');
@@ -1451,6 +1496,10 @@ function applyOps(ops, resync = false) {
         return found;
     };
     for (const op of ops) {
+        // A root replace closes a navigate's page-swap window (`_navPending`),
+        // resolved or not: the server swapped its view either way. Cleared before
+        // the frame's effects run, so the new page's own push_event goes out.
+        if (op[0] === OP.REPLACE) _navPending = false;
         // Isolate each op: a bad selector or a throwing hook must not abort the
         // rest of the batch, or the DOM desyncs from the already-advanced server
         // snapshot until a reload.
@@ -2552,7 +2601,7 @@ function pushEvent(event, payload) {
  * @param {*} [payload]
  */
 function pushEventTo(view, event, payload) {
-    workerPost(W_SEND, JSON.stringify([view ?? null, event, payload]));
+    sendEvent(JSON.stringify([view ?? null, event, payload]));
 }
 
 /**
@@ -2913,11 +2962,12 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
             const msg = JSON.stringify([resolveTarget(el), evt, payload]);
             if (event) {
+                const epoch = _navEpoch;
                 scheduleSend(el, event, prefix, index, () => {
-                    workerPost(W_SEND, msg);
+                    sendEvent(msg, epoch);
                 });
             } else {
-                workerPost(W_SEND, msg);
+                sendEvent(msg);
             }
             break;
         }
@@ -2991,7 +3041,10 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             if (opts.full) {
                 // Full-page navigation: let the browser load the URL normally.
                 // Used when the target isn't a live route (a controller/asset
-                // path, or a 404) and so can't be SPA-navigated.
+                // path, or a 404) and so can't be SPA-navigated. The server kept
+                // the old view, so a pending navigate window is over: a URL the
+                // browser does not unload for (a download) leaves the page live.
+                _navPending = false;
                 leavePage(cmd[1], opts.replace);
                 break;
             }
@@ -4209,10 +4262,7 @@ function connect(endpoint, params = {}) {
             // Replay the transition stamped onto this entry when the edge was
             // navigated with a transition, so back/forward animate symmetrically.
             _pendingTransition = e.state?._azTransition || null;
-            workerPost(W_SEND, JSON.stringify([navKind, { path, qs }]));
-            workerPost(W_UPDATE_PATH, { path, qs: reconnectUserQs(qs) });
-            _currentPath = path;
-            _currentQs = qs;
+            sendNav(navKind, path, qs);
         },
         { signal },
     );
@@ -4524,6 +4574,7 @@ function connect(endpoint, params = {}) {
         _unloadingToOtherPage = false;
         _pendingTransition = null;
         _itemDrag = false;
+        _navPending = false;
         _connectQs = '';
         _savedForms.clear();
         // Close any floating (PiP) view windows; each window's pagehide handler
