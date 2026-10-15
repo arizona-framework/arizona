@@ -16,6 +16,7 @@
     to_bin_atom/1,
     to_bin_binary/1,
     to_bin_integer/1,
+    to_bin_float/1,
     to_bin_charlist_encodes_utf8/1,
     get_missing_binding_raises_named_reason/1,
     format_error_missing_binding_renders_message/1,
@@ -41,6 +42,7 @@ groups() ->
             to_bin_atom,
             to_bin_binary,
             to_bin_integer,
+            to_bin_float,
             to_bin_charlist_encodes_utf8,
             get_missing_binding_raises_named_reason,
             format_error_missing_binding_renders_message,
@@ -88,6 +90,18 @@ to_bin_binary(Config) when is_list(Config) ->
 
 to_bin_integer(Config) when is_list(Config) ->
     ?assertEqual(<<"42">>, arizona_template:to_bin(42)).
+
+%% Shortest round-trip form, as `json:encode/1` and JS print a number: small values
+%% keep their magnitude instead of rounding to "0.0", large ones print in exponent
+%% form instead of a misleading digit string, and neither raises.
+to_bin_float(Config) when is_list(Config) ->
+    ?assertEqual(~"0.1", arizona_template:to_bin(0.1)),
+    ?assertEqual(~"1.0", arizona_template:to_bin(1.0)),
+    ?assertEqual(~"1.0e-11", arizona_template:to_bin(1.0e-11)),
+    ?assertEqual(~"-1.0e-11", arizona_template:to_bin(-1.0e-11)),
+    ?assertEqual(~"1.0e23", arizona_template:to_bin(1.0e23)),
+    ?assertEqual(~"1.0e300", arizona_template:to_bin(1.0e300)),
+    ?assertEqual(~"0.30000000000000004", arizona_template:to_bin(lists:sum([0.1, 0.2]))).
 
 to_bin_atom(Config) when is_list(Config) ->
     ?assertEqual(<<"true">>, arizona_template:to_bin(true)).

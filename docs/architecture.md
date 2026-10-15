@@ -85,7 +85,8 @@ Pure helpers for binding access, descriptor construction, and template compositi
 - `stateless/3` -- returns `#{callback => fun Handler:Fun/1, props => Props}` descriptor
 - `each/2` -- template composition: 1-arg `fun(Item)` for lists, 2-arg `fun(Item, Key)` for streams,
   2-arg `fun(Key, Value)` for maps. Returns `#{t, source, template}` descriptor
-- `to_bin/1` -- convert value to binary (binary/integer/float/atom/iolist)
+- `to_bin/1` -- convert value to binary (binary/integer/float/atom/iolist); a float prints in its
+  shortest round-trip form (`0.1`, `1.0e-11`, `1.0e300`), as `json:encode/1` does
 
 ## API -- `arizona_render.erl`
 
@@ -2467,9 +2468,8 @@ or a nested template still patches via that `OP_TEXT`.
 
 That fallback re-renders the whole container, so `list_changed/3` decides whether it is warranted
 by whether a slot RENDERS differently (`item_changed/2`), not by term inequality. A value can
-differ as a term yet render the same bytes: `to_bin/1` formats floats to 10 decimals, so error
-accumulated past that (`0.1 + 0.2` against `0.3`, both `"0.3"`) is invisible, as is an integer
-against its binary. Answering on
+differ as a term yet render the same bytes: an integer against its binary (`1` and `~"1"`, both
+`"1"`) is invisible. Answering on
 term inequality tore the container down to rebuild byte-identical markup, losing focus, scroll
 position and every `?local` inside it for nothing.
 
@@ -2486,17 +2486,17 @@ change, from a bare attribute to `name="true"`.
 
 Nothing is rendered to answer it in the common case. `collapses_to_same_bytes/2` runs only once
 the terms already differ, and two same-type scalars are settled by their types alone: `to_bin/1`
-is the identity on binaries and `integer_to_binary`/`atom_to_binary` are injective, so two
-distinct ones cannot print the same. Only the pairs that genuinely can collapse are rendered --
-two floats, or a value against a different type. An escape marker is deliberately not comparable:
-`to_bin/1` unwraps it, so `{arizona_esc, ~"<b>"}` and a bare `~"<b>"` look identical to it, while
-the wholesale re-render escapes the wrapped one and not the bare one -- treating them as equal
-would drop a visible change and in one direction leave unescaped markup on screen. A pair SHARING
-the marker is unwrapped and compared, which is what makes the comparison reach real templates at
-all, since the parse transform marker-wraps every content slot value. A map (nested template, each
-snapshot, child view) or a descriptor tuple is never rendered either: it counts as changed, the
-conservative answer. The snapshot is still advanced to the new values when the re-render is
-suppressed, so nothing drifts.
+is the identity on binaries, and `integer_to_binary`/`atom_to_binary` and the shortest
+round-trip float format are injective, so two distinct ones cannot print the same. Only the pairs
+that genuinely can collapse are rendered -- a value against a different type. An escape marker is
+deliberately not comparable: `to_bin/1` unwraps it, so `{arizona_esc, ~"<b>"}` and a bare
+`~"<b>"` look identical to it, while the wholesale re-render escapes the wrapped one and not the
+bare one -- treating them as equal would drop a visible change and in one direction leave
+unescaped markup on screen. A pair SHARING the marker is unwrapped and compared, which is what
+makes the comparison reach real templates at all, since the parse transform marker-wraps every
+content slot value. A map (nested template, each snapshot, child view) or a descriptor tuple is
+never rendered either: it counts as changed, the conservative answer. The snapshot is still
+advanced to the new values when the re-render is suppressed, so nothing drifts.
 
 **Context -- inside `<svg>` a `<title>` is not raw text.** The classification takes the content
 context (`raw_text_kind/2`, second argument `html | foreign`), threaded through the transform by
