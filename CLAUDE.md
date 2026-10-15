@@ -153,6 +153,7 @@ Any `arizona` app-env value (sys.config) may be declared as an environment-varia
 
 References resolve **anywhere** in the config surface: the scalar keys (`secret_key`, `check_origin`, `csrf_origins`, `session_max_age`, `session_max_bytes`, `session_secure`, `flash_secure`, `session_store_sweep_ms`, ...) go through `arizona_config:get_env/1,2` at their read sites; the nested `server` map (`port`, `scheme`, `tls` cert paths, `proto_opts` tunables) is resolved once in `arizona_roadrunner_server:start/2`. `resolve/1` recurses into maps, lists, and 2-tuples (proplist pairs) only, so route tuples (`{live, Path, Handler, Opts}` -- all >=3-tuples) pass through untouched: an operator-supplied `{env, _, _}` term sitting inside a route's `bindings`/`state` is never rewritten.
 
+**`env` is a reserved tag.** Because 2-tuples are descended into, a reference is recognised by shape alone: anywhere in the resolved config, `{env, String}` and `{env, String, Default}` **are** references. A proplist pair that merely happens to be keyed `env` (`{env, "production"}` among a listener's options) is read as a reference to the variable `production` -- substituted when it is set, `env_not_set` when it is not, whose message names this collision. Never key a plain option `env` in `arizona` config.
 
 ## CSRF / Origin checking
 

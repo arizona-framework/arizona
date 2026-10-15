@@ -22,6 +22,7 @@
 -export([resolve_invalid_atom_crashes/1]).
 -export([invalid_value_error_is_formatted/1]).
 -export([resolve_unsupported_default_crashes_formatted/1]).
+-export([env_keyed_pair_error_names_the_reserved_tag/1]).
 -export([resolve_scalar_passthrough/1]).
 -export([resolve_nested_server_map/1]).
 -export([resolve_tls_paths/1]).
@@ -56,6 +57,7 @@ groups() ->
             resolve_invalid_atom_crashes,
             invalid_value_error_is_formatted,
             resolve_unsupported_default_crashes_formatted,
+            env_keyed_pair_error_names_the_reserved_tag,
             resolve_scalar_passthrough,
             resolve_nested_server_map,
             resolve_tls_paths,
@@ -225,6 +227,19 @@ resolve_unsupported_default_crashes_formatted(Config) when is_list(Config) ->
         end),
         ?assertMatch({_, _}, binary:match(Msg, ~"AZ_CFG_BADDEFAULT")),
         ?assertMatch({_, _}, binary:match(Msg, ~"unsupported type"))
+    end).
+
+%% `env` is a reserved tag: a proplist pair keyed `env` IS a reference, so an
+%% option that only happens to use the key fails as an unset variable. The
+%% message must say so, or the operator is left hunting for a variable named
+%% after their option value.
+env_keyed_pair_error_names_the_reserved_tag(Config) when is_list(Config) ->
+    without_env("production", fun() ->
+        Fun = fun() -> arizona_config:resolve(#{opts => [{env, "production"}, {port, 8080}]}) end,
+        ?assertError({env_not_set, "production"}, Fun()),
+        Msg = formatted_error(Fun),
+        ?assertMatch({_, _}, binary:match(Msg, ~"reserved tag")),
+        ?assertMatch({_, _}, binary:match(Msg, ~"`{env, \"production\"}` was meant"))
     end).
 
 %% --------------------------------------------------------------------
