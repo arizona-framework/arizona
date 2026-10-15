@@ -11,6 +11,7 @@
 -export([manual_body_read_keeps_pipelining_intact/1]).
 -export([manual_body_over_the_cap_halts_with_413/1]).
 -export([manual_body_cut_short_halts_with_400/1]).
+-export([body_read_across_recvs_is_a_binary/1]).
 -export([transforms_apply_over_the_wire/1]).
 -export([page_carries_its_targets_content_type/1]).
 -export([cors_answers_a_preflight/1]).
@@ -26,6 +27,7 @@ all() ->
         manual_body_read_keeps_pipelining_intact,
         manual_body_over_the_cap_halts_with_413,
         manual_body_cut_short_halts_with_400,
+        body_read_across_recvs_is_a_binary,
         transforms_apply_over_the_wire,
         page_carries_its_targets_content_type,
         cors_answers_a_preflight,
@@ -144,6 +146,16 @@ manual_body_over_the_cap_halts_with_413(Config) when is_list(Config) ->
 manual_body_cut_short_halts_with_400(Config) when is_list(Config) ->
     Req = framed_body_req(~"0123456789", ~"01234", 1024, arizona_about, #{}),
     ?assertMatch({{400, _, _}, _}, arizona_roadrunner_http:handle(Req)).
+
+%% Roadrunner hands back a body that arrived in several socket reads as
+%% iodata; `arizona_req:body()` is a binary, so the adapter flattens it.
+body_read_across_recvs_is_a_binary(Config) when is_list(Config) ->
+    #{body_reader := Reader} =
+        Raw0 = framed_body_req(~"0123456789", ~"01234", 1024, arizona_about, #{}),
+    Raw = Raw0#{body_reader := Reader#{recv := fun() -> {ok, ~"56789"} end}},
+    ?assertMatch(
+        {ok, ~"0123456789", _}, arizona_req:body(arizona_roadrunner_req:new(Raw))
+    ).
 
 %% --------------------------------------------------------------------
 %% Keep-alive framing
