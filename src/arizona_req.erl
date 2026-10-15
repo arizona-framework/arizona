@@ -79,6 +79,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([flash_out/1]).
 -export([consume_flash/1]).
 -export([seed_flash/2]).
+-export([seeded_flash_read/1]).
 -export([put_session/3]).
 -export([delete_session/2]).
 -export([clear_session/1]).
@@ -168,6 +169,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
     flash_out => flash(),
     flash_in => flash(),
     flash_consumed => boolean(),
+    %% Set by seed_flash/2; `read` once consume_flash/1 took the carried flash.
+    flash_seed => unread | read,
     session_in => session(),
     session_out => session(),
     session_dirty => boolean(),
@@ -680,6 +683,8 @@ flash_out(_) -> #{}.
 -doc false.
 -spec consume_flash(Request) -> {flash(), Request} when
     Request :: request().
+consume_flash(#{flash_in := Flash, flash_seed := unread} = Req) ->
+    {Flash, Req#{flash_seed => read}};
 consume_flash(#{flash_in := Flash} = Req) ->
     {Flash, Req};
 consume_flash(Req0) ->
@@ -705,7 +710,17 @@ consume_flash(Req0) ->
     Flash :: flash().
 seed_flash(Req, Flash) when is_map(Flash) ->
     Current = maps:get(flash_in, Req, #{}),
-    Req#{flash_in => maps:merge(Current, Flash)}.
+    Req#{flash_in => maps:merge(Current, Flash), flash_seed => unread}.
+
+%% Internal use only -- did a consuming read (`consume_flash/1`, i.e. a
+%% `fetch_flash` step) take the flash `seed_flash/2` carried in? Over HTTP that read
+%% clears the cookie on whatever response follows, so `arizona_socket` treats the
+%% carried flash as spent when the request halts afterwards.
+-doc false.
+-spec seeded_flash_read(Request) -> boolean() when
+    Request :: request().
+seeded_flash_read(#{flash_seed := read}) -> true;
+seeded_flash_read(_) -> false.
 
 -doc """
 Writes `Key => Value` into the session. On the response the session serializes to a

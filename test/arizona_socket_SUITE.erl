@@ -66,6 +66,9 @@
 -export([handler_flash_survives_gate_on_target/1]).
 -export([chained_gate_flash_replays_first_gate/1]).
 -export([handler_flash_dropped_loudly_on_halt_without_redirect/1]).
+-export([flash_replay_chains_only_from_its_own_target/1]).
+-export([gate_flash_replaces_carried_flash/1]).
+-export([flash_consumed_by_gated_route_is_spent/1]).
 -export([crash_after_resync_mount_closes_crash/1]).
 
 all() ->
@@ -126,6 +129,9 @@ all() ->
         handler_flash_survives_gate_on_target,
         chained_gate_flash_replays_first_gate,
         handler_flash_dropped_loudly_on_halt_without_redirect,
+        flash_replay_chains_only_from_its_own_target,
+        gate_flash_replaces_carried_flash,
+        flash_consumed_by_gated_route_is_spent,
         crash_after_resync_mount_closes_crash
     ].
 
@@ -1382,6 +1388,116 @@ chained_gate_flash_replays_first_gate(Config) when is_list(Config) ->
         ?assertMatch([[?EFFECT_NAVIGATE, ~"/login" | _]], effects(HaltFrame)),
         {reply, FullFrame, _} = arizona_socket:handle_in(navigate_frame(~"/login"), Socket2),
         ?assertMatch([[?EFFECT_NAVIGATE, ~"/gate_a", #{~"full" := true}]], effects(FullFrame))
+    after
+        ok = application:unset_env(arizona, secret_key)
+    end.
+
+flash_replay_chains_only_from_its_own_target(Config) when is_list(Config) ->
+    %% /gate_a flashes and redirects to /login, but the user's click on /b beats
+    %% the follow-up frame. /b's gate redirects to /c, which needs a full load.
+    %% The flash belonged to the /login redirect, so /c must not be rerouted
+    %% through /gate_a: the user goes where they asked, and the flash drops.
+    HandlerId = ?FUNCTION_NAME,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => warning, config => #{pid => self()}
+    }),
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        GateA = fun(R, _B) ->
+            {halt, arizona_req:redirect(arizona_req:put_flash(R, error, ~"Sign in."), ~"/login")}
+        end,
+        GateB = fun(R, _B) -> {halt, arizona_req:redirect(R, ~"/c")} end,
+        Req = arizona_req_test_adapter:new(#{
+            routes => #{
+                ~"/gate_a" => {arizona_root_counter, #{middlewares => [GateA]}},
+                ~"/b" => {arizona_root_counter, #{middlewares => [GateB]}},
+                ~"/c" => {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+            }
+        }),
+        {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+        {reply, _, Socket1} = arizona_socket:handle_in(navigate_frame(~"/gate_a"), Socket0),
+        {reply, _, Socket2} = arizona_socket:handle_in(navigate_frame(~"/b"), Socket1),
+        {reply, FullFrame, _} = arizona_socket:handle_in(navigate_frame(~"/c"), Socket2),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/c", #{~"full" := true}]], effects(FullFrame)),
+        receive
+            {arizona_test_log_handler, #{level := warning, msg := {Fmt, Args}}} ->
+                Msg = iolist_to_binary(io_lib:format(Fmt, Args)),
+                ?assertMatch({_, _}, binary:match(Msg, ~"/c"))
+        after 1000 ->
+            error(no_flash_drop_warning)
+        end
+    after
+        ok = application:unset_env(arizona, secret_key),
+        ok = logger:remove_handler(HandlerId)
+    end.
+
+gate_flash_replaces_carried_flash(Config) when is_list(Config) ->
+    %% Over HTTP a gate's put_flash/3 REPLACES the incoming flash: the 3xx sets the
+    %% cookie to what the gate staged. So gate A's message is gone once gate B
+    %% flashes, on the live path and on the replay alike -- and the replay only
+    %% needs to run gate B (`/target`), which reproduces all of it.
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        GateA = fun(R, _B) ->
+            {halt, arizona_req:redirect(arizona_req:put_flash(R, error, ~"first"), ~"/target")}
+        end,
+        GateB = fun(R, _B) ->
+            {halt, arizona_req:redirect(arizona_req:put_flash(R, notice, ~"second"), ~"/login")}
+        end,
+        Routes = #{
+            ~"/gate_a" => {arizona_root_counter, #{middlewares => [GateA]}},
+            ~"/target" => {arizona_root_counter, #{middlewares => [GateB]}}
+        },
+        Login = {arizona_login, #{middlewares => [{arizona_middleware, fetch_flash}]}},
+        Live = arizona_req_test_adapter:new(#{
+            cookies => [], routes => Routes#{~"/login" => Login}
+        }),
+        Full = arizona_req_test_adapter:new(#{
+            routes => Routes#{
+                ~"/login" =>
+                    {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+            }
+        }),
+        Through = fun(Req) ->
+            {reply, _, S0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+            {reply, _, S1} = arizona_socket:handle_in(navigate_frame(~"/gate_a"), S0),
+            {reply, _, S2} = arizona_socket:handle_in(navigate_frame(~"/target"), S1),
+            {reply, Frame, _} = arizona_socket:handle_in(navigate_frame(~"/login"), S2),
+            Frame
+        end,
+        LiveFrame = Through(Live),
+        ?assertMatch([[?OP_REPLACE, _, _]], ops(LiveFrame)),
+        ?assertEqual(nomatch, binary:match(iolist_to_binary(LiveFrame), ~"first")),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/target", #{~"full" := true}]], effects(Through(Full)))
+    after
+        ok = application:unset_env(arizona, secret_key)
+    end.
+
+flash_consumed_by_gated_route_is_spent(Config) when is_list(Config) ->
+    %% A gated route that reads the flash (`fetch_flash`) before its gate halts
+    %% spends it over HTTP: the read clears the cookie on the gate's 3xx. So the
+    %% carried flash is spent too, rather than shown on the redirect's page.
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        Gate = fun(R, _B) -> {halt, arizona_req:redirect(R, ~"/login")} end,
+        Req = arizona_req_test_adapter:new(#{
+            cookies => [],
+            routes => #{
+                ~"/show_flash" =>
+                    {arizona_crashable, #{
+                        middlewares => [{arizona_middleware, fetch_flash}, Gate]
+                    }},
+                ~"/login" =>
+                    {arizona_login, #{middlewares => [{arizona_middleware, fetch_flash}]}}
+            }
+        }),
+        {reply, _, Socket0} = arizona_socket:init(arizona_crashable, #{}, Req, #{}),
+        EventFrame = iolist_to_binary(json:encode([~"crashable", ~"flash_navigate", #{}])),
+        {reply, _, Socket1} = arizona_socket:handle_in(EventFrame, Socket0),
+        {reply, _, Socket2} = arizona_socket:handle_in(navigate_frame(~"/show_flash"), Socket1),
+        {reply, LoginFrame, _} = arizona_socket:handle_in(navigate_frame(~"/login"), Socket2),
+        ?assertMatch([[?OP_REPLACE, _, _]], ops(LoginFrame)),
+        ?assertEqual(nomatch, binary:match(iolist_to_binary(LoginFrame), ~"from_handler"))
     after
         ok = application:unset_env(arizona, secret_key)
     end.

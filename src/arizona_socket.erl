@@ -706,7 +706,7 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
-            halt_navigate(Requested, HaltReq, untake_pending_flash(Socket0, Socket));
+            halt_navigate(Requested, HaltReq, untake_pending_flash(HaltReq, Socket0, Socket));
         {cont, _NewReq1, Bindings1} ->
             %% A live process gone under this call is handled at the entry catch
             %% (crash_close/4): the frame is dropped and its queued exit closes.
@@ -756,7 +756,7 @@ do_patch(RouteOpts, NewReq0, Requested, Socket0) ->
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
-            halt_navigate(Requested, HaltReq, untake_pending_flash(Socket0, Socket));
+            halt_navigate(Requested, HaltReq, untake_pending_flash(HaltReq, Socket0, Socket));
         {cont, _NewReq1, Bindings1} ->
             {ok, Ops, Effects, Observed} = arizona_live:patch(Pid, Bindings1),
             reply_after_pending(flatten_ops(ViewId, Ops), Effects, Observed, Socket)
@@ -786,10 +786,15 @@ halt_navigate(Requested, HaltReq, Socket) ->
 
 %% A halt means the flash taken for this navigate reached no page: the request it
 %% was seeded into was answered by a redirect, not rendered. Over HTTP the signed
-%% flash cookie rides through a gate's 3xx untouched and shows on the page it lands
-%% on, so the carry is put back -- replay source included -- for the follow-up.
-untake_pending_flash(#socket{pending_flash = Flash, flash_replay = Replay}, Socket) ->
-    Socket#socket{pending_flash = Flash, flash_replay = Replay}.
+%% flash cookie rides through a gate's 3xx and shows on the page it lands on, so
+%% the carry is put back -- replay source included -- for the follow-up. Unless a
+%% `fetch_flash` step read it before the gate halted: over HTTP that read clears
+%% the cookie on the 3xx, so the flash is spent here too.
+untake_pending_flash(HaltReq, #socket{pending_flash = Flash, flash_replay = Replay}, Socket) ->
+    case arizona_req:seeded_flash_read(HaltReq) of
+        true -> Socket;
+        false -> Socket#socket{pending_flash = Flash, flash_replay = Replay}
+    end.
 
 %% Stash the halting middleware's flash BESIDE the path that produced it. Unlike
 %% an in-view handler's flash, this one is reproducible: any later request to
@@ -800,28 +805,24 @@ untake_pending_flash(#socket{pending_flash = Flash, flash_replay = Replay}, Sock
 %% outgoing effect is what keeps the two origins distinguishable: everything
 %% reaching `capture_nav_flash/5` is by construction handler-set.
 %%
-%% The halt's flash lands on top of one already pending (a gate on a redirect
-%% target). If that one was itself replayable, the replay keeps its ORIGINAL
-%% path and only moves its target to this redirect: replaying from there runs
-%% the whole chain of gates over HTTP, so both flashes come back, where replaying
-%% from `Requested` would reproduce only this one.
+%% A flash may already be pending (one put back by `untake_pending_flash/3`, for a
+%% gate on a redirect target). A halt that flashes REPLACES it, as over HTTP, where
+%% the 3xx sets the cookie to what the gate staged -- and replaying `Requested`
+%% reproduces exactly that. A halt that does not flash leaves it pending; if it was
+%% replayable AND this navigation is the redirect it was armed for, the replay
+%% keeps its original path and moves its target to this redirect, since only the
+%% whole chain of gates reproduces it over HTTP. A pending flash armed for another
+%% target (a navigation that beat the follow-up frame) is not chained: rerouting
+%% this one through that gate would hijack it.
 stash_halt_flash(Requested, Location, HaltReq, Socket) ->
-    #socket{pending_flash = Pending, flash_replay = Replay0} = Socket,
     Target = strip_fragment(Location),
-    Flash = arizona_req:flash_out(HaltReq),
-    case Replay0 of
-        {_OldTarget, Origin} ->
-            Socket#socket{
-                pending_flash = maps:merge(Pending, Flash),
-                flash_replay = {Target, Origin}
-            };
-        undefined when map_size(Flash) =:= 0 ->
-            Socket;
-        undefined ->
-            Socket#socket{
-                pending_flash = maps:merge(Pending, Flash),
-                flash_replay = {Target, Requested}
-            }
+    case {arizona_req:flash_out(HaltReq), Socket#socket.flash_replay} of
+        {Flash, _Replay} when map_size(Flash) > 0 ->
+            Socket#socket{pending_flash = Flash, flash_replay = {Target, Requested}};
+        {_NoFlash, {Requested, Origin}} ->
+            Socket#socket{flash_replay = {Target, Origin}};
+        {_NoFlash, _Replay} ->
+            Socket
     end.
 
 %% A navigate frame carries path + query only (the client parses the URL and
