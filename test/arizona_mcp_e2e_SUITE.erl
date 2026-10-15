@@ -10,6 +10,7 @@
     post_streaming_progress/1,
     post_progress_without_accept_buffered/1,
     post_streaming_non_object_arguments_invalid_params/1,
+    stateless_subscribe_joins_nothing/1,
     post_fractional_id_invalid_request/1,
     stateless_disconnect_kills_worker/1,
     stateless_conn_kill_kills_worker/1,
@@ -60,6 +61,7 @@ all() ->
         post_streaming_progress,
         post_progress_without_accept_buffered,
         post_streaming_non_object_arguments_invalid_params,
+        stateless_subscribe_joins_nothing,
         post_fractional_id_invalid_request,
         stateless_disconnect_kills_worker,
         stateless_conn_kill_kills_worker,
@@ -247,6 +249,26 @@ post_streaming_non_object_arguments_invalid_params(Config) ->
     Data = post_stream_until(Config, "/mcp", [], Body, ~"must be an object"),
     ?assertNotEqual(nomatch, binary:match(Data, ~"-32602")),
     ?assertEqual(nomatch, binary:match(Data, ~"notifications/progress")).
+
+%% A stateless subscribe has no channel to deliver on. It is accepted but joins
+%% nothing: joining as the request's process would subscribe the connection,
+%% which a keep-alive connection keeps alive past the request.
+stateless_subscribe_joins_nothing(Config) ->
+    Uri = ~"mem://stateless-subscribe",
+    Body = iolist_to_binary(
+        json:encode(#{
+            ~"jsonrpc" => ~"2.0",
+            ~"id" => 13,
+            ~"method" => ~"resources/subscribe",
+            ~"params" => #{~"uri" => Uri}
+        })
+    ),
+    Sock = keep_alive_post(Config, "/mcp", Body),
+    Data = recv_until(Sock, ~"\"result\":{}", 5000),
+    Subscribers = arizona_pubsub:subscribers({mcp_resource, Uri}),
+    ok = gen_tcp:close(Sock),
+    ?assertNotEqual(nomatch, binary:match(Data, ~"200 OK")),
+    ?assertEqual([], Subscribers).
 
 post_fractional_id_invalid_request(Config) ->
     %% A fractional id is not an MCP request id. The client still expects an
@@ -775,6 +797,21 @@ send_channel_get(Config, SessionId, ExtraHeaders) ->
         "\r\n"
     ],
     ok = gen_tcp:send(Sock, Req),
+    Sock.
+
+%% A POST whose socket stays open after the response, as a keep-alive client's
+%% does: the connection process outlives the request.
+keep_alive_post(Config, Path, Body) ->
+    {ok, Sock} = gen_tcp:connect("localhost", ?config(port, Config), [binary, {active, false}]),
+    ok = gen_tcp:send(Sock, [
+        "POST ",
+        Path,
+        " HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n",
+        "Content-Length: ",
+        integer_to_list(byte_size(Body)),
+        "\r\n\r\n",
+        Body
+    ]),
     Sock.
 
 %% Send a POST and read its streamed (SSE) response until `Needle` appears. The
