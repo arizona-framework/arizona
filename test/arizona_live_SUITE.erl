@@ -1880,10 +1880,12 @@ cancelled_timer_ref_pruned(Config) when is_list(Config) ->
     %% the registry grows by one ref per event for the page's lifetime.
     {ok, Pid} = arizona_live:start_link(arizona_idle_watchdog, #{}, undefined, []),
     {ok, _, _} = arizona_live:mount(Pid),
-    [
-        {ok, _, _, _} = arizona_live:handle_event(Pid, ~"watchdog", ~"bump", #{})
-     || _ <- lists:seq(1, 500)
-    ],
+    ok = lists:foreach(
+        fun(_) ->
+            {ok, _, _, _} = arizona_live:handle_event(Pid, ~"watchdog", ~"bump", #{})
+        end,
+        lists:seq(1, 500)
+    ),
     #{bindings := #{ref := LiveRef}} = arizona_live:view_state(Pid),
     {dictionary, Dict} = erlang:process_info(Pid, dictionary),
     #{~"watchdog" := {_, _, Refs}} = proplists:get_value('$arizona_timers', Dict),
