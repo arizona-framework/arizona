@@ -14,7 +14,8 @@ A web-server adapter implements the mandatory parsing callbacks:
 - `parse_params/1` -- parse the query string as a proplist
 - `parse_cookies/1` -- parse the Cookie header as a proplist
 - `parse_headers/1` -- headers as a map
-- `read_body/1` -- consume the request body
+- `read_body/1` -- consume the request body: `{ok, Body, Raw1}`, or
+  `{error, body_error()}` when the read fails
 - `scheme/1` -- the connection scheme (`http` | `https`)
 
 Plus one optional callback for live-capable transports:
@@ -31,11 +32,14 @@ recovers the adapter via `arizona_req:adapter/1` for navigate.
 Fields other than `method` and `path` are populated on first access and
 cached. Accessors return `{Value, Request1}` -- the updated request
 carries the cached value. Callers thread the returned request forward.
+The one exception is `body/1`, whose read can fail: it returns
+`{ok, Body, Request1}` or `{error, body_error()}`.
 
 ```erlang
 Method = arizona_req:method(Req).          %% eager, no thread
 {Bs,     Req1} = arizona_req:bindings(Req).
 {Params, Req2} = arizona_req:params(Req1).
+{ok, Body, Req3} = arizona_req:body(Req2).
 ```
 """.
 

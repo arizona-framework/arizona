@@ -104,9 +104,9 @@ read_body(RoadrunnerReq) ->
     %% oversized/stalled/malformed body itself before any handler runs. The
     %% reasons map the way auto mode answers them (413, 431 for trailer limits,
     %% 408, 400), except that auto mode closes a too-slow client without a
-    %% response while this answers it 408. A body that
-    %% arrived over several socket reads comes back as iodata; flatten it to
-    %% the binary `arizona_req:body()` promises.
+    %% response while this answers it 408. A body that arrived over several
+    %% socket reads comes back as iodata; flatten it to the binary
+    %% `arizona_req:body()` promises.
     case roadrunner_req:read_body(RoadrunnerReq) of
         {ok, Body, RoadrunnerReq1} -> {ok, iolist_to_binary(Body), RoadrunnerReq1};
         {error, content_length_too_large} -> {error, too_large};
