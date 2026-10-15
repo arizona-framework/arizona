@@ -4094,6 +4094,86 @@ describe('saveFormState / restoreFormState edge cases', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Reconnect resync keeps focus and caret
+// ---------------------------------------------------------------------------
+
+describe('reconnect resync keeps the focused field', () => {
+    let mod;
+    let mock;
+    beforeEach(async () => {
+        vi.resetModules();
+        mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+    });
+    afterEach(() => {
+        mock.restore();
+        document.body.innerHTML = '';
+    });
+
+    /** Type into `sel`, drop the socket, and answer the reconnect with `html`. */
+    function resyncWhileTyping(html, sel, value, start, end) {
+        const el = document.querySelector(sel);
+        el.focus();
+        el.value = value;
+        el.setSelectionRange(start, end);
+        mock.simulateClose(1006);
+        mock.simulateOpen(true);
+        mock.simulateMessage([[OP.REPLACE, 'v', html]], null, true);
+        return document.querySelector(sel);
+    }
+
+    it('refocuses an input found by id and restores its caret', () => {
+        const html =
+            '<div id="v" az-view><form id="f"><input id="q" name="q" value=""></form></div>';
+        document.body.innerHTML = html;
+        const q = resyncWhileTyping(html, '#q', 'hello', 2, 4);
+        expect(q.value).toBe('hello');
+        expect(document.activeElement).toBe(q);
+        expect([q.selectionStart, q.selectionEnd]).toEqual([2, 4]);
+    });
+
+    it('refocuses an id-less field by form id + name + position', () => {
+        const html =
+            '<div id="v" az-view><form id="f">' +
+            '<input name="t" value=""><textarea name="t"></textarea></form></div>';
+        document.body.innerHTML = html;
+        const ta = resyncWhileTyping(html, 'textarea', 'body text', 4, 4);
+        expect(ta.value).toBe('body text');
+        expect(document.activeElement).toBe(ta);
+        expect([ta.selectionStart, ta.selectionEnd]).toEqual([4, 4]);
+    });
+
+    it('does not steal focus a resync effect moved elsewhere', () => {
+        const html =
+            '<div id="v" az-view><form id="f"><input id="q" name="q" value="">' +
+            '<button id="b">b</button></form></div>';
+        document.body.innerHTML = html;
+        const q = document.getElementById('q');
+        q.focus();
+        mock.simulateClose(1006);
+        mock.simulateOpen(true);
+        // JS_FOCUS (op 11) on another element, in the resync frame itself.
+        mock.simulateMessage([[OP.REPLACE, 'v', html]], [[11, '#b']], true);
+        expect(document.activeElement).toBe(document.getElementById('b'));
+    });
+
+    it('leaves focus alone when the focused field is gone after the resync', () => {
+        document.body.innerHTML =
+            '<div id="v" az-view><form id="f"><input id="q" name="q" value=""></form></div>';
+        document.getElementById('q').focus();
+        mock.simulateClose(1006);
+        mock.simulateOpen(true);
+        mock.simulateMessage(
+            [[OP.REPLACE, 'v', '<div id="v" az-view><p>gone</p></div>']],
+            null,
+            true,
+        );
+        expect(document.activeElement).toBe(document.body);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // CSS connection classes -- via mock Worker
 // ---------------------------------------------------------------------------
 

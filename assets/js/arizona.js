@@ -3128,6 +3128,85 @@ function saveFormState(suspect = null) {
 }
 
 /**
+ * @typedef {{doc: Document, el: Element, id: string|null, form: string|null,
+ *   name: string|null, nth: number, sel: [number, number, string]|null}} FocusMark
+ */
+
+/**
+ * Record each hosting document's focused element before a resync replaces the
+ * view, by what the fresh markup will carry again: its id, or its form's id
+ * plus its name and position among that form's same-named fields. The caret and
+ * selection ride along -- restoring values moves the caret to the end.
+ * @returns {FocusMark[]}
+ */
+function captureFocus() {
+    /** @type {FocusMark[]} */
+    const marks = [];
+    for (const doc of allDocs()) {
+        const el = doc.activeElement;
+        if (!el || el === doc.body || el === doc.documentElement) continue;
+        const f = /** @type {HTMLInputElement} */ (el);
+        const owner = f.form;
+        const form = owner?.id || null;
+        const name = f.name || null;
+        // Nothing the fresh markup carries again identifies it.
+        if (!el.id && !(form && name)) continue;
+        let nth = 0;
+        if (owner && form && name) {
+            nth = [...owner.elements]
+                .filter((x) => /** @type {any} */ (x).name === name)
+                .indexOf(el);
+        }
+        /** @type {[number, number, string]|null} */
+        let sel = null;
+        try {
+            if (typeof f.selectionStart === 'number') {
+                sel = [
+                    f.selectionStart,
+                    /** @type {number} */ (f.selectionEnd),
+                    f.selectionDirection || 'none',
+                ];
+            }
+        } catch {}
+        marks.push({ doc, el, id: el.id || null, form, name, nth, sel });
+    }
+    return marks;
+}
+
+/**
+ * Put focus (and the caret) back on the element a `captureFocus` mark names, when
+ * the resync replaced it and nothing else took focus in the meantime -- a resync
+ * effect that focused another element wins.
+ * @param {FocusMark[]} marks
+ */
+function restoreFocus(marks) {
+    for (const { doc, el, id, form, name, nth, sel } of marks) {
+        // Kept (an az-nodiff element) or untouched: focus and caret survived.
+        if (el.isConnected) continue;
+        const active = doc.activeElement;
+        if (active && active !== doc.body && active !== doc.documentElement) continue;
+        // Duck-typed, not `instanceof`: a popped-out (PiP) view's elements belong
+        // to another window's constructors.
+        /** @type {any} */
+        let target = id ? doc.getElementById(id) : null;
+        if (!target && form && name) {
+            const f = /** @type {any} */ (doc.getElementById(form));
+            if (f?.elements) {
+                target =
+                    [...f.elements].filter((/** @type {any} */ x) => x.name === name)[nth] || null;
+            }
+        }
+        if (typeof target?.focus !== 'function') continue;
+        target.focus({ preventScroll: true });
+        if (sel) {
+            try {
+                target.setSelectionRange(sel[0], sel[1], /** @type {any} */ (sel[2]));
+            } catch {}
+        }
+    }
+}
+
+/**
  * Restore form state after reconnection. Sets field values on matching forms
  * and replays az-change events to sync server state, once: a replayed form is
  * tracked in `_replayedForms` until the server acknowledges the replay.
@@ -3855,9 +3934,13 @@ function connect(endpoint, params = {}) {
                         // Re-save what was typed while disconnected: the resync's
                         // OP_REPLACE is about to discard it.
                         if (msg[3] && _savedForms.size > 0) saveFormState();
+                        // ...and so is the element being typed into: put focus
+                        // and caret back once the values are restored.
+                        const focus = msg[3] ? captureFocus() : null;
                         if (msg[1]) applyOps(msg[1], !!msg[3]);
                         if (msg[2]) applyEffects(msg[2]);
                         if (msg[3]) restoreFormState();
+                        if (focus) restoreFocus(focus);
                         if (armedScroll?.patch && _pendingScroll === armedScroll) {
                             _pendingScroll = null;
                         }
