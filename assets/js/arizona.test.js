@@ -564,6 +564,87 @@ describe('applyOps -- OP.REM_ATTR', () => {
         expect(el.hasAttribute('value')).toBe(false);
         expect(el.value).toBe('');
     });
+
+    // `value` is also a property of elements that are not form controls, where it
+    // reflects the attribute (coerced) rather than holding user state: writing it
+    // after the removal would put the attribute back, as "0" on <li>/<progress>/
+    // <meter> (which turns an indeterminate bar determinate) and "" on <button>/
+    // <data>. Only a form control's property is synced.
+    it('leaves a non-control value attribute removed', () => {
+        setupView(
+            'v',
+            '<ol><li az="0" value="5">a</li></ol><progress az="1" value="3" max="10"></progress>' +
+                '<meter az="2" value="3"></meter><button az="3" value="b">b</button>' +
+                '<data az="4" value="d">d</data><select><option az="5" value="o">text</option></select>',
+        );
+        applyOps(['0', '1', '2', '3', '4', '5'].map((az) => [OP.REM_ATTR, `v:${az}`, 'value']));
+        for (const az of ['0', '1', '2', '3', '4', '5']) {
+            expect(resolveEl(`v:${az}`).hasAttribute('value')).toBe(false);
+        }
+        expect(/** @type {HTMLProgressElement} */ (resolveEl('v:1')).position).toBe(-1);
+        expect(/** @type {HTMLOptionElement} */ (resolveEl('v:5')).value).toBe('text');
+    });
+});
+
+// An <input> whose value mode is not "value" (hidden, checkbox, radio, the buttons)
+// has a `value` property that reflects the attribute, like a non-control's: clearing
+// it after the removal would write `value=""` back. A text-like input keeps its
+// dirty value apart from the attribute, so only that one is cleared through the
+// property.
+describe('applyOps -- OP.REM_ATTR value on an attribute-reflecting input', () => {
+    it('leaves the value attribute removed', () => {
+        const types = ['hidden', 'checkbox', 'radio', 'submit', 'reset', 'button', 'image'];
+        setupView('v', types.map((t, i) => `<input az="${i}" type="${t}" value="x" />`).join(''));
+        applyOps(types.map((_t, i) => [OP.REM_ATTR, `v:${i}`, 'value']));
+        types.forEach((t, i) => {
+            expect([t, resolveEl(`v:${i}`).hasAttribute('value')]).toEqual([t, false]);
+        });
+    });
+
+    it('still clears a value-mode input the user typed into', () => {
+        setupView('v', '<input az="0" type="email" value="a@b" />');
+        const input = /** @type {HTMLInputElement} */ (resolveEl('v:0'));
+        input.value = 'typed@b';
+        applyOps([[OP.REM_ATTR, 'v:0', 'value']]);
+        expect(input.hasAttribute('value')).toBe(false);
+        expect(input.value).toBe('');
+    });
+
+    it('treats a missing, uppercase or unknown type as text', () => {
+        const inputs = [
+            '<input az="0" value="a" />',
+            '<input az="1" type="TEXT" value="a" />',
+            '<input az="2" type="bogus" value="a" />',
+        ];
+        setupView('v', inputs.join(''));
+        for (const az of ['0', '1', '2']) {
+            /** @type {HTMLInputElement} */ (resolveEl(`v:${az}`)).value = 'typed';
+        }
+        applyOps(['0', '1', '2'].map((az) => [OP.REM_ATTR, `v:${az}`, 'value']));
+        for (const az of ['0', '1', '2']) {
+            const input = /** @type {HTMLInputElement} */ (resolveEl(`v:${az}`));
+            expect([az, input.hasAttribute('value'), input.value]).toEqual([az, false, '']);
+        }
+    });
+
+    it('get reads a checkbox value as its attribute', () => {
+        setupView(
+            'v',
+            `<input az="0" az-local='{"a":{"value":"cv"}}' type="checkbox" value="yes" />`,
+        );
+        expect(get('v', 'cv')).toBe('yes');
+        set('v', 'cv', null);
+        expect(document.querySelector('input').hasAttribute('value')).toBe(false);
+        expect(get('v', 'cv')).toBe(false);
+    });
+});
+
+describe('applyOps -- OP.SET_ATTR value on a non-control', () => {
+    it('sets the attribute verbatim, never coerced through the property', () => {
+        setupView('v', '<ol><li az="0" value="5">a</li></ol>');
+        applyOps([[OP.SET_ATTR, 'v:0', 'value', 'x']]);
+        expect(resolveEl('v:0').getAttribute('value')).toBe('x');
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -3365,6 +3446,99 @@ describe('?local -- set/get attribute', () => {
         expect(input.getAttribute('value')).toBe('typed');
         expect(input.value).toBe('typed');
     });
+
+    // Once the user has toggled a checkbox its checkedness is dirty, so the
+    // attribute no longer drives `.checked`: a removal must write the property too,
+    // exactly as set(true) does through the attribute writer.
+    it('false unchecks a checkbox the user already toggled', () => {
+        setupView('v', `<input az="0" az-local='{"a":{"checked":"c"}}' type="checkbox" checked />`);
+        const cb = document.querySelector('input');
+        cb.click();
+        cb.click();
+        expect(cb.checked).toBe(true);
+        set('v', 'c', false);
+        expect(cb.hasAttribute('checked')).toBe(false);
+        expect(cb.checked).toBe(false);
+        cb.click();
+        set('v', 'c', true);
+        expect(cb.checked).toBe(true);
+    });
+
+    // A multi-select: a single-select always keeps one option selected, so there
+    // the browser itself reselects the first option once the last one is cleared.
+    it('false deselects an option whose selectedness the user changed', () => {
+        setupView(
+            'v',
+            `<select multiple><option az="0" az-local='{"a":{"selected":"s"}}' value="a" selected>a</option>` +
+                '<option value="b">b</option></select>',
+        );
+        const opt = document.querySelector('option');
+        opt.selected = false;
+        opt.selected = true;
+        expect(opt.selected).toBe(true);
+        set('v', 's', false);
+        expect(opt.hasAttribute('selected')).toBe(false);
+        expect(opt.selected).toBe(false);
+    });
+
+    it('null clears a value the user typed', () => {
+        setupView('v', `<input az="0" az-local='{"a":{"value":"field"}}' value="init" />`);
+        const input = document.querySelector('input');
+        input.value = 'typed';
+        set('v', 'field', null);
+        expect(input.hasAttribute('value')).toBe(false);
+        expect(input.value).toBe('');
+    });
+
+    // `get` reports what the user sees: after interaction the form-control
+    // properties, not the attributes, hold the live state.
+    it('get reads the live checked, selected and value properties', () => {
+        setupView(
+            'v',
+            `<input id="cb" az="0" az-local='{"a":{"checked":"c"}}' type="checkbox" checked />` +
+                `<input id="t" az="1" az-local='{"a":{"value":"t"}}' value="init" />` +
+                `<select multiple><option az="2" az-local='{"a":{"selected":"s"}}' value="a" selected>a</option>` +
+                '<option value="b">b</option></select>',
+        );
+        document.getElementById('cb').click();
+        document.getElementById('t').value = 'typed';
+        document.querySelector('option').selected = false;
+        expect(get('v', 'c')).toBe(false);
+        expect(get('v', 't')).toBe('typed');
+        expect(get('v', 's')).toBe(false);
+    });
+
+    // On anything but a form control `value` is an ordinary attribute: get reads
+    // the attribute string, and a null removes it without the property writing it
+    // back ("0" on <li>/<progress>/<meter>, "" on <button>/<data>, the text-less
+    // fallback lost on <option>).
+    it('treats value on a non-control as a plain attribute', () => {
+        setupView(
+            'v',
+            `<ol><li az="0" az-local='{"a":{"value":"li"}}' value="5">a</li></ol>` +
+                `<progress az="1" az-local='{"a":{"value":"pr"}}' value="3" max="10"></progress>` +
+                `<meter az="2" az-local='{"a":{"value":"me"}}' value="3"></meter>` +
+                `<button az="3" az-local='{"a":{"value":"bu"}}' value="b">b</button>` +
+                `<data az="4" az-local='{"a":{"value":"da"}}' value="d">d</data>` +
+                `<select><option az="5" az-local='{"a":{"value":"op"}}' value="o">text</option></select>`,
+        );
+        expect(get('v', 'li')).toBe('5');
+        expect(get('v', 'pr')).toBe('3');
+        for (const [az, key] of [
+            ['0', 'li'],
+            ['1', 'pr'],
+            ['2', 'me'],
+            ['3', 'bu'],
+            ['4', 'da'],
+            ['5', 'op'],
+        ]) {
+            set('v', key, null);
+            expect(document.querySelector(`[az="${az}"]`).hasAttribute('value')).toBe(false);
+        }
+        expect(document.querySelector('progress').position).toBe(-1);
+        expect(document.querySelector('option').value).toBe('text');
+        expect(get('v', 'li')).toBe(false);
+    });
 });
 
 describe('?local -- descriptor cache and early exit', () => {
@@ -3441,6 +3615,18 @@ describe('?local -- interpolated attribute', () => {
         const input = document.querySelector('input');
         expect(input.getAttribute('value')).toBe('$50');
         expect(input.value).toBe('$50');
+    });
+
+    it('null or undefined interpolates as empty, never the text "null"', () => {
+        setupView(
+            'v',
+            `<a az="0" az-local='{"a":{"href":"id"},"ap":{"href":["/u/","/edit"]}}' href="/u/1/edit">e</a>`,
+        );
+        const a = document.querySelector('a');
+        set('v', 'id', null);
+        expect(a.getAttribute('href')).toBe('/u//edit');
+        set('v', 'id', undefined);
+        expect(a.getAttribute('href')).toBe('/u//edit');
     });
 
     it('sets the recomposed value literally -- no markup injection', () => {

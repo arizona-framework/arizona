@@ -1266,9 +1266,7 @@ function applySetAttrOp(el, name, val) {
     // synchronously dispatch the very event the attribute names.
     noteAzAttr(name);
     el.setAttribute(name, val);
-    if (name === 'value' && 'value' in el) el.value = val;
-    else if (name === 'checked' && 'checked' in el) el.checked = true;
-    else if (name === 'selected' && 'selected' in el) el.selected = true;
+    if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? val : true;
     notifyUpdated(el);
 }
 
@@ -1284,10 +1282,55 @@ function applySetAttrOp(el, name, val) {
  */
 function applyRemAttrOp(el, name) {
     el.removeAttribute(name);
-    if (name === 'value' && 'value' in el) el.value = '';
-    else if (name === 'checked' && 'checked' in el) el.checked = false;
-    else if (name === 'selected' && 'selected' in el) el.selected = false;
+    if (syncsProp(el, name)) /** @type {any} */ (el)[name] = name === 'value' ? '' : false;
     notifyUpdated(el);
+}
+
+// The <input> types in the "value" value mode, the only ones whose `value` property
+// holds user state apart from the attribute. The rest reflect it ("default" and
+// "default/on": hidden, checkbox, radio, the buttons) or refuse a write ("filename":
+// file), and an unknown type reads back as `text`.
+const VALUE_MODE_INPUTS = new Set([
+    'text',
+    'search',
+    'url',
+    'tel',
+    'email',
+    'password',
+    'date',
+    'month',
+    'week',
+    'time',
+    'datetime-local',
+    'number',
+    'range',
+    'color',
+]);
+
+/**
+ * Does `name` on `el` have a live property that user interaction detaches from the
+ * attribute (the dirty value/checkedness/selectedness flags)? Only then must a write
+ * set the property too, and a `?local` read report it. Elsewhere `value` merely
+ * reflects the attribute, coerced -- a property write would put a removed attribute
+ * back (`"0"` on `<li>`/`<progress>`/`<meter>`, `""` on `<button>`/`<data>` and on a
+ * hidden/checkbox/radio/button `<input>`, and an `<option>` loses its fallback to its
+ * text) or coerce a set one. Matched by local
+ * name, not `instanceof`: a popped-out (PiP) document's elements come from another
+ * realm.
+ * @param {Element} el
+ * @param {string} name
+ * @returns {boolean}
+ */
+function syncsProp(el, name) {
+    if (el.namespaceURI !== 'http://www.w3.org/1999/xhtml') return false;
+    if (name === 'value') {
+        if (el.localName === 'input')
+            return VALUE_MODE_INPUTS.has(/** @type {HTMLInputElement} */ (el).type);
+        return el.localName === 'textarea' || el.localName === 'select';
+    }
+    if (name === 'checked') return el.localName === 'input';
+    if (name === 'selected') return el.localName === 'option';
+    return false;
 }
 
 /**
@@ -1751,11 +1794,15 @@ function writeLocalValue(el, target, value) {
     }
     const name = target[1];
     if (target.length === 4) {
-        // Interpolated: recompose prefix + value + suffix (always a string attr).
-        applySetAttrOp(el, name, target[2] + String(value) + target[3]);
+        // Interpolated: recompose prefix + value + suffix (always a string attr). An
+        // absent value interpolates as empty, as a content slot renders it.
+        applySetAttrOp(el, name, target[2] + (value == null ? '' : String(value)) + target[3]);
     } else if (value === false || value == null) {
-        el.removeAttribute(name);
-        notifyUpdated(el);
+        // Through the canonical writer, like a set: after user interaction the
+        // dirty value/checkedness flags detach `.checked`/`.selected`/`.value` from
+        // the attribute, so a bare removal would leave the control showing the old
+        // state.
+        applyRemAttrOp(el, name);
     } else if (value === true) {
         applySetAttrOp(el, name, '');
     } else {
@@ -1788,6 +1835,10 @@ function readLocalValue(el, target) {
         const v = el.getAttribute(name) ?? '';
         return v.slice(target[2].length, v.length - target[3].length);
     }
+    // The form-control properties hold what the user sees once they interacted
+    // (the attributes are only the defaults by then) -- the same three
+    // applySetAttrOp/applyRemAttrOp keep in step on a write.
+    if (syncsProp(el, name)) return /** @type {any} */ (el)[name];
     if (!el.hasAttribute(name)) return false;
     const v = el.getAttribute(name);
     return v === '' ? true : v;
