@@ -37,8 +37,10 @@ in list order, which makes an asset path listed ahead of a longer one it prefixe
 swallow that one -- `~"/static"` before `~"/static/arizona"` serves, and 404s, every
 request meant for the latter. Order the longer prefix first.
 
-`{reload, ...}` also stashes the path in the `arizona_reload_url`
-persistent term so the dev error page can build the SSE connect URL.
+Compiling a `{reload, ...}` route (`compile_routes/3`) also stashes its path in
+the `arizona_reload_url` persistent term so the dev error page can build the SSE
+connect URL; `routes/1,2` only expand, so a listener start can build and
+validate its table before writing anything.
 """.
 
 %% --------------------------------------------------------------------
@@ -184,7 +186,7 @@ compile_routes(Routes, BuildOpts, Name) when is_map(BuildOpts), is_atom(Name) ->
         {?DISPATCH_KEY, Name},
         roadrunner_router:compile(routes(Routes, BuildOpts), [])
     ),
-    ok.
+    put_reload_url(Routes).
 
 -doc """
 Erases the listener-scoped dispatch key written by `compile_routes/3`.
@@ -373,7 +375,6 @@ route_to_roadrunner({mcp, Path, Handler, Opts}, _BuildOpts) ->
         }
     ];
 route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
-    persistent_term:put(arizona_reload_url, Path),
     [
         #{
             path => Path,
@@ -381,6 +382,13 @@ route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
             state => #{arizona => Opts}
         }
     ].
+
+%% The last `{reload, ...}` route wins, as it did when the expansion wrote it.
+put_reload_url(Routes) ->
+    case [Path || {reload, Path, _Opts} <- Routes] of
+        [] -> ok;
+        Paths -> persistent_term:put(arizona_reload_url, lists:last(Paths))
+    end.
 
 %% Assets are served by roadrunner's built-in `roadrunner_static`: zero-copy
 %% sendfile plus ETag/`If-None-Match` (304), `Range`, precompressed-sibling

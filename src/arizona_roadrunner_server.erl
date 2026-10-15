@@ -105,34 +105,12 @@ routes from `Opts`.
     Name :: atom(),
     Opts :: map().
 start(Name, #{routes := _} = Opts0) ->
-    %% Resolve `{env, ...}` references (port, tls paths, proto_opts, ...) before
-    %% reading any option. `resolve/1` leaves the route tuples untouched, so
-    %% `Routes` is unchanged; it is idempotent, so a caller that already resolved
-    %% loses nothing.
-    #{routes := Routes} = Opts = arizona_config:resolve(Opts0),
-    %% Thread the listener's `error_page` through BuildOpts so it is baked into
-    %% each live route's state (read back by `arizona_http` on a render crash),
-    %% rather than a single global term two listeners would fight over.
-    BuildOpts = #{
-        compress => maps:get(compress, Opts, true),
-        error_page => maps:get(error_page, Opts, {arizona_error_page, render})
-    },
-    Port = port_from_opts(Opts),
-    UserProtoOpts = maps:get(proto_opts, Opts, #{}),
-    ListenerOpts = UserProtoOpts#{
-        port => Port,
-        routes => arizona_roadrunner_router:routes(Routes, BuildOpts)
-    },
-    %% The stash is shared with a running listener of the same name, whose WS
-    %% upgrades read it: a clash is refused before it is touched, or they would
-    %% resolve against the rejected routes until roadrunner refused the start.
+    %% A running listener of the same name owns the route stash its WS upgrades
+    %% read: a clash is refused before anything is built or written, or they
+    %% would resolve against the rejected routes until roadrunner refused it.
     case whereis(Name) of
         undefined ->
-            %% Validate (and inject) TLS before any persistent_term writes so an
-            %% https-without-tls misconfig crashes cleanly instead of leaving a
-            %% half-written dispatch behind.
-            ListenerOpts1 = maybe_inject_tls(ListenerOpts, Opts),
-            start_listener(Name, ListenerOpts1, {Routes, BuildOpts});
+            start_new(Name, Opts0);
         Pid ->
             {error, {already_started, Pid}}
     end.
@@ -211,18 +189,48 @@ format_error({unsupported_transport_opt, Opt}, _ST) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
+start_new(Name, Opts0) ->
+    %% Resolve `{env, ...}` references (port, tls paths, proto_opts, ...) before
+    %% reading any option. `resolve/1` leaves the route tuples untouched, so
+    %% `Routes` is unchanged; it is idempotent, so a caller that already resolved
+    %% loses nothing.
+    #{routes := Routes} = Opts = arizona_config:resolve(Opts0),
+    %% Thread the listener's `error_page` through BuildOpts so it is baked into
+    %% each live route's state (read back by `arizona_http` on a render crash),
+    %% rather than a single global term two listeners would fight over.
+    BuildOpts = #{
+        compress => maps:get(compress, Opts, true),
+        error_page => maps:get(error_page, Opts, {arizona_error_page, render})
+    },
+    Port = port_from_opts(Opts),
+    UserProtoOpts = maps:get(proto_opts, Opts, #{}),
+    %% Build the route table and validate (and inject) TLS before any
+    %% persistent_term write, so a misconfig crashes cleanly instead of leaving
+    %% a half-written dispatch behind.
+    ListenerOpts = maybe_inject_tls(
+        UserProtoOpts#{
+            port => Port,
+            routes => arizona_roadrunner_router:routes(Routes, BuildOpts)
+        },
+        Opts
+    ),
+    start_listener(Name, ListenerOpts, {Routes, BuildOpts}).
+
 %% The routes are written BEFORE the listener starts so its first WS upgrade
 %% already resolves, which is also why a failed start must put back whatever
 %% was there: a stash for a listener that never came up sends
-%% `recompile_routes/0` to a dead process.
+%% `recompile_routes/0` to a dead process, and its `{reload, ...}` path would
+%% have every page connect to a reload endpoint nothing serves.
 start_listener(Name, ListenerOpts, Stash) ->
     Previous = persistent_term:get({?ROUTES_KEY, Name}, undefined),
+    PreviousReloadUrl = persistent_term:get(arizona_reload_url, undefined),
     ok = put_routes(Name, Stash),
     case roadrunner:start_listener(Name, ListenerOpts) of
         {ok, _Pid} = Ok ->
             Ok;
         {error, _Reason} = Error ->
             ok = restore_routes(Name, Previous),
+            ok = restore_reload_url(PreviousReloadUrl),
             Error
     end.
 
@@ -239,6 +247,12 @@ restore_routes(Name, undefined) ->
     arizona_roadrunner_router:forget_routes(Name);
 restore_routes(Name, Previous) ->
     put_routes(Name, Previous).
+
+restore_reload_url(undefined) ->
+    persistent_term:erase(arizona_reload_url),
+    ok;
+restore_reload_url(Url) ->
+    persistent_term:put(arizona_reload_url, Url).
 
 %% A listener can be gone while its stash survives (stopped behind
 %% `stop/1`'s back, or its supervisor gave up on it); one such listener must

@@ -1904,13 +1904,18 @@ unsupported_transport_opt_errors(Config) when is_list(Config) ->
 %% `reload_routes` on a listener that never existed.
 failed_start_leaves_no_routes_behind(Config) when is_list(Config) ->
     Name = arizona_port_taken_test,
+    ReloadUrlBefore = persistent_term:get(arizona_reload_url),
     ?assertMatch(
         {error, _},
         arizona_roadrunner_server:start(Name, #{
-            routes => [{live, ~"/taken", arizona_crashable, #{}}],
+            routes => [
+                {live, ~"/taken", arizona_crashable, #{}},
+                {reload, ~"/taken-reload", #{}}
+            ],
             transport_opts => [{port, ?config(port, Config)}]
         })
     ),
+    ?assertEqual(ReloadUrlBefore, persistent_term:get(arizona_reload_url)),
     ?assertEqual(undefined, persistent_term:get({arizona_roadrunner_routes, Name}, undefined)),
     ?assertEqual(undefined, persistent_term:get({arizona_roadrunner_dispatch, Name}, undefined)),
     ?assertEqual(ok, arizona_roadrunner_server:recompile_routes()).
@@ -1938,6 +1943,7 @@ failed_start_keeps_running_listener_routes(Config) when is_list(Config) ->
 clashing_start_never_exposes_its_routes(Config) when is_list(Config) ->
     StashBefore = persistent_term:get({arizona_roadrunner_routes, ws_test}),
     DispatchBefore = persistent_term:get({arizona_roadrunner_dispatch, ws_test}),
+    ReloadUrlBefore = persistent_term:get(arizona_reload_url),
     Self = self(),
     ok = sys:suspend(roadrunner_sup),
     {Pid, MRef} =
@@ -1946,7 +1952,10 @@ clashing_start_never_exposes_its_routes(Config) when is_list(Config) ->
                 Self !
                     {clash,
                         arizona_roadrunner_server:start(ws_test, #{
-                            routes => [{live, ~"/clash", arizona_crashable, #{}}],
+                            routes => [
+                                {live, ~"/clash", arizona_crashable, #{}},
+                                {reload, ~"/clash-reload", #{}}
+                            ],
                             transport_opts => [{port, arizona_test_port:pick()}]
                         })}
             end),
@@ -1959,6 +1968,7 @@ clashing_start_never_exposes_its_routes(Config) when is_list(Config) ->
             ?assertEqual(
                 DispatchBefore, persistent_term:get({arizona_roadrunner_dispatch, ws_test})
             ),
+            ?assertEqual(ReloadUrlBefore, persistent_term:get(arizona_reload_url)),
             ?assertMatch({returned, {error, {already_started, _}}}, InWindow),
             Spawned
         after
