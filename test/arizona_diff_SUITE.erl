@@ -7,6 +7,7 @@
     diff_attr_op/1,
     diff_attr_command_op_is_json_array/1,
     diff_slot_invisible_change_emits_no_op/1,
+    diff_float_drift_ships/1,
     diff_attr_invisible_change_emits_no_op/1,
     diff_attr_boolean_vs_string_still_emits/1,
     diff_bool_attr_add/1,
@@ -151,6 +152,7 @@ groups() ->
             diff_attr_op,
             diff_attr_command_op_is_json_array,
             diff_slot_invisible_change_emits_no_op,
+            diff_float_drift_ships,
             diff_attr_invisible_change_emits_no_op,
             diff_attr_boolean_vs_string_still_emits,
             diff_no_change_op,
@@ -305,25 +307,42 @@ diff_text_op(Config) when is_list(Config) ->
     ?assertEqual([{<<"0">>, <<"Alice">>}], maps:get(d, NewSnap)).
 
 %% A slot whose value changed as a TERM has not necessarily changed on screen:
-%% `to_bin/1` formats floats to 10 decimals, so drift past that renders identically.
-%% Writing it again is not free -- see the attribute case below -- so it is skipped.
+%% an integer and its binary render the same bytes. Writing it again is not free
+%% -- see the attribute case below -- so it is skipped.
 diff_slot_invisible_change_emits_no_op(Config) when is_list(Config) ->
-    %% Summed through a call so the compiler cannot fold the drift away.
-    Drift = lists:sum([0.1, 0.2]),
-    ?assertNotEqual(Drift, 0.3),
-    ?assertEqual([], element(1, scalar_diff(0.3, Drift))),
+    ?assertEqual([], element(1, scalar_diff(1, ~"1"))),
+    ?assertEqual([], element(1, scalar_diff(~"1", 1))),
     %% ...while a change that does alter the bytes still ships.
     ?assertEqual(
         [[?OP_TEXT, <<"0">>, <<"0.4">>]],
         element(1, scalar_diff(0.3, 0.4))
+    ),
+    ?assertEqual([[?OP_TEXT, <<"0">>, <<"2">>]], element(1, scalar_diff(1, ~"2"))).
+
+%% Floats print in full (shortest round-trip), so drift is a real change: a
+%% fixed decimal count rounded 0.1 + 0.2 to "0.3" and hid it.
+diff_float_drift_ships(Config) when is_list(Config) ->
+    %% Summed through a call so the compiler cannot fold the drift away.
+    Drift = lists:sum([0.1, 0.2]),
+    ?assertEqual(
+        [[?OP_TEXT, <<"0">>, <<"0.30000000000000004">>]],
+        element(1, scalar_diff(0.3, Drift))
+    ),
+    ?assertMatch(
+        [[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]],
+        each_list_diff([#{name => 0.3}], [#{name => Drift}])
+    ),
+    %% A value too small for a fixed decimal count is not rounded to zero.
+    ?assertEqual(
+        [[?OP_TEXT, <<"0">>, <<"1.0e-11">>]],
+        element(1, scalar_diff(0.0, 1.0e-11))
     ).
 
 %% Same for an attribute, where a redundant write costs more than a text one: it is
 %% a style-recalc trigger, and `applySetAttrOp` also assigns the live property for
 %% `value`, which can move a caret in an input the user is typing in.
 diff_attr_invisible_change_emits_no_op(Config) when is_list(Config) ->
-    Drift = lists:sum([0.1, 0.2]),
-    ?assertEqual([], element(1, attr_diff(0.3, Drift))),
+    ?assertEqual([], element(1, attr_diff(1, ~"1"))),
     ?assertEqual(
         [[?OP_SET_ATTR, <<"0">>, <<"data-v">>, <<"0.4">>]],
         element(1, attr_diff(0.3, 0.4))
@@ -652,15 +671,12 @@ diff_list_shrank_full_update(Config) when is_list(Config) ->
     ?assertEqual([[<<"a">>]], assert_full_update(Ops)).
 
 %% No item changed and same length -> no ops (every boolean false).
-%% `to_bin/1` formats floats to 10 decimals, so 0.1 + 0.2 and 0.3 both render
-%% "0.3". Answering "changed" on term inequality alone would re-render the whole
-%% container, tearing down the DOM to rebuild byte-identical markup and losing
-%% focus, scroll position and every `?local` inside it for nothing.
+%% An integer and its binary both render "1". Answering "changed" on term
+%% inequality alone would re-render the whole container, tearing down the DOM to
+%% rebuild byte-identical markup and losing focus, scroll position and every
+%% `?local` inside it for nothing.
 diff_list_invisible_change_emits_no_ops(Config) when is_list(Config) ->
-    %% Summed through a call so the compiler cannot constant-fold the drift away.
-    Drift = lists:sum([0.1, 0.2]),
-    ?assertNotEqual(Drift, 0.3),
-    ?assertEqual([], each_list_diff([#{name => 0.3}], [#{name => Drift}])).
+    ?assertEqual([], each_list_diff([#{name => 1}], [#{name => ~"1"}])).
 
 %% `to_bin/1` unwraps an escape marker, so an esc-wrapped value and a bare one look
 %% identical to it -- but the wholesale re-render ESCAPES the wrapped one and not the
@@ -675,15 +691,13 @@ diff_list_esc_marker_mismatch_not_suppressed(Config) when is_list(Config) ->
         each_list_diff([#{name => Esc}], [#{name => Bare}])
     ).
 
-%% A pair sharing the marker IS unwrapped and compared, so the float suppression
-%% still applies to what the parse transform actually emits (every content slot
-%% value is marker-wrapped).
+%% A pair sharing the marker IS unwrapped and compared, so the suppression still
+%% applies to what the parse transform actually emits (every content slot value is
+%% marker-wrapped).
 diff_list_esc_wrapped_invisible_change_suppressed(Config) when is_list(Config) ->
-    Drift = lists:sum([0.1, 0.2]),
-    ?assertNotEqual(Drift, 0.3),
     ?assertEqual(
         [],
-        each_list_diff([#{name => {arizona_esc, 0.3}}], [#{name => {arizona_esc, Drift}}])
+        each_list_diff([#{name => {arizona_esc, 1}}], [#{name => {arizona_esc, ~"1"}}])
     ).
 
 %% The suppression must not swallow a change that does alter the bytes.
@@ -691,6 +705,10 @@ diff_list_visible_change_still_full_updates(Config) when is_list(Config) ->
     ?assertMatch(
         [[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]],
         each_list_diff([#{name => 0.3}], [#{name => 0.4}])
+    ),
+    ?assertMatch(
+        [[?OP_TEXT, <<"0">>, #{~"t" := ?EACH}]],
+        each_list_diff([#{name => 1}], [#{name => ~"2"}])
     ).
 
 diff_list_no_change_no_ops(Config) when is_list(Config) ->

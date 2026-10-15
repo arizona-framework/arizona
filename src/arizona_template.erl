@@ -402,7 +402,10 @@ Errors with `{bad_template_value, V}` for unsupported types.
     Value :: term().
 to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
-to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
+%% `short` is the shortest form that reads back as the same float, as
+%% `json:encode/1` prints it. A fixed decimal count rounds small values to zero
+%% and raises `badarg` past ~1e244.
+to_bin(V) when is_float(V) -> float_to_binary(V, [short]);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
 %% Escape markers are unwrapped to their raw bytes here. to_bin never escapes;
 %% escaping happens at the render-output boundary. At SSR that boundary is

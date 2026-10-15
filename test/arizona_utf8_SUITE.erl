@@ -551,7 +551,7 @@ outcome(Fun, V) ->
 %% to_bin/1 as it was before it matched the trusted shapes itself.
 reference_to_bin(V) when is_binary(V) -> V;
 reference_to_bin(V) when is_integer(V) -> integer_to_binary(V);
-reference_to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
+reference_to_bin(V) when is_float(V) -> float_to_binary(V, [short]);
 reference_to_bin(V) when is_atom(V) -> atom_to_binary(V);
 reference_to_bin({arizona_esc, V}) ->
     reference_to_bin(V);
