@@ -627,6 +627,15 @@ keeps using the captured value, which each diff cycle rebuilds from current bind
 change to a guard binding re-renders the slot. A non-tracked local or a pattern-bound
 variable in a guard needs nothing -- there is no binding dependency to record.
 
+The same holds for a tracked read used in a **pattern**: a hoisted variable a pattern tests
+(`Sel = ?get(sel)` then `case I of Sel -> ...`, the "selected row" idiom), a map-pattern
+key (`#{K := V}`), a binary segment size (`<<P:N/binary, _/binary>>`), or a `maybe`
+`Want ?= ...` -- in a `case`/`receive`/`try`/`maybe` clause, a match, a fun head's keys and
+sizes, or a generator's keys and sizes. A pattern cannot hold the call either, so the
+transform touches each such binding ahead of the expression, and a change to it re-renders
+the slot. A hoisted variable is already bound, so in a `case` pattern it is an equality
+test; `{Sel, X} -> [Sel, X]` uses the hoisted `Sel` in the body too.
+
 `?get`/`get_lazy`/`with` are for the **view bindings**, not sub-maps: they call
 `track/1` regardless of which map they read, so reading a nested map records the
 inner key as a spurious top-level dep. The parse transform rejects a tracked read
