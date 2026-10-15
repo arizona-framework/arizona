@@ -65,6 +65,7 @@
     conditional_root_child_branch_change/1,
     descriptor_root_nested_anchor/1,
     ssr_stateful_child_rejects_restricted_id/1,
+    stateful_child_rejects_dropped_id/1,
     render_to_iolist_nodiff_multi/1,
     render_to_iolist_nodiff_static/1,
     render_to_iolist_nodiff/1,
@@ -163,7 +164,8 @@ groups() ->
             stateful_inside_stateless_ssr_matches_live,
             stateless_descriptor_from_conditional_live,
             stateful_descriptor_from_conditional_live,
-            ssr_stateful_child_rejects_restricted_id
+            ssr_stateful_child_rejects_restricted_id,
+            stateful_child_rejects_dropped_id
         ]},
         {ssr, [parallel], [
             ssr_counter,
@@ -1528,6 +1530,20 @@ ssr_stateful_child_rejects_restricted_id(Config) when is_list(Config) ->
     Tmpl = arizona_restricted_id_child:host(),
     %% Both paths enforce it identically, and both locate the raise at the slot
     %% that mounted the child, so the reason is `arizona_loc`-wrapped.
+    ?assertError(
+        {arizona_loc, _, restricted_key_modified},
+        arizona_render:render(Tmpl, #{})
+    ),
+    ?assertError(
+        {arizona_loc, _, restricted_key_modified},
+        iolist_to_binary(arizona_render:render_to_iolist(Tmpl))
+    ).
+
+%% Regression: a `?stateful` child whose `mount/1` drops the framework-owned
+%% `id` (rather than rewriting it) makes the same mistake, and both paths must
+%% name it `restricted_key_modified` instead of crashing on a bare `case_clause`.
+stateful_child_rejects_dropped_id(Config) when is_list(Config) ->
+    Tmpl = arizona_dropped_id_child:host(),
     ?assertError(
         {arizona_loc, _, restricted_key_modified},
         arizona_render:render(Tmpl, #{})
