@@ -53,7 +53,7 @@ the wire value. On the wire itself a value stays raw
 -export([supports_nodiff_keep/0]).
 -export([implied_attrs/2]).
 -export([boolean_attrs/0]).
--export([attr_key/1]).
+-export([attr_names/0]).
 -export([escape/1]).
 -export([render_attr/2]).
 -export([wire_escape/1]).
@@ -183,10 +183,9 @@ implied_attrs(_Tag, _Names) -> [].
 
 boolean_attrs() -> value.
 
-%% Props are JSON object keys: case-sensitive.
--spec attr_key(binary()) -> binary().
-attr_key(Name) ->
-    Name.
+%% Props are JSON object keys.
+-spec attr_names() -> case_sensitive.
+attr_names() -> case_sensitive.
 
 %% A content value in the zipped document is a JSON string.
 -spec escape(binary()) -> binary().

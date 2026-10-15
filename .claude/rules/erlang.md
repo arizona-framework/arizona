@@ -109,11 +109,13 @@ value in the HTML is the compiler's (the az-nodiff element token), so `{'az-nodi
 live root, rejected elsewhere. Everything else `az-*` is the template author's: `az_key`
 keys stream items, `az_click`/`az_submit`/... carry effects, and an app may invent its own.
 
-An attribute written twice on one element is a compile error (`duplicate_attr`): both
-would render, the browser keeps the first, and a diff patches the dynamic one, so the DOM
-stops matching SSR. Names compare as the backend keys them (`attr_key/1`): `?html` after
-`name/1` and ASCII case folding (`az_click` and `<<"AZ-CLICK">>` collide), `?native`
-case-sensitively, and `?terminal` not at all (its SGR styles compose in order). Combine
+An attribute written twice on one element is a compile error (`duplicate_attr`, quoting the
+repeated name as written): both copies would be emitted, and which one takes effect depends
+on the target (HTML keeps the first, a JSON object the last) and on which one an update
+patches. Names compare after the backend's `name/1`, under its `attr_names/0` policy: `?html`
+folds ASCII case only, as the HTML parser does (`az_click` and `<<"AZ-CLICK">>` collide,
+`data-É` and `data-é` do not), `?native` compares case-sensitively, and `?terminal` allows a
+repeat (its SGR styles compose in order). Combine
 values in one list value instead (`{class, [~"btn ", ?get(kind)]}`).
 
 An event attribute may name **any** DOM event -- the suffix becomes the

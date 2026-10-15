@@ -411,6 +411,9 @@
     reserved_attr_case_insensitive/1,
     az_submit_form_implies_post/1,
     duplicate_attr_rejected/1,
+    duplicate_attr_quotes_name_as_written/1,
+    duplicate_attr_folds_ascii_case_only/1,
+    duplicate_attr_message_target_neutral/1,
     az_view_attr_case_insensitive/1,
     nodiff_directive_case_insensitive/1,
     void_two_element_dynamic_attr/1,
@@ -690,6 +693,9 @@ groups() ->
             reserved_attr_case_insensitive,
             az_submit_form_implies_post,
             duplicate_attr_rejected,
+            duplicate_attr_quotes_name_as_written,
+            duplicate_attr_folds_ascii_case_only,
+            duplicate_attr_message_target_neutral,
             az_view_attr_case_insensitive,
             nodiff_directive_case_insensitive,
             static_after_dynamic_attr
@@ -4191,9 +4197,10 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
 
 %% `[{class, ~"a"}, {class, ?get(x)}]` renders `class="a" class="1"`: the browser keeps
 %% the first, the diff patches the dynamic one, and the DOM after an update no longer
-%% matches a fresh render. Names compare as the backend emits and keys them -- HTML
-%% folds case and `_` -> `-`; native props are case-sensitive JSON keys; terminal
-%% styles are SGR escapes that compose, so a repeat there is legal.
+%% matches a fresh render. Names compare as the backend emits them, under its
+%% `attr_names/0` policy -- HTML folds ASCII case and `_` -> `-`; native props are
+%% case-sensitive JSON keys; terminal styles are SGR escapes that compose, so a repeat
+%% there is legal.
 duplicate_attr_rejected(Config) when is_list(Config) ->
     Src = fun(Name, Attrs) ->
         lists:flatten([
@@ -4211,7 +4218,10 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
     ),
     assert_parse_error(Src("pt_dup_bool", "hidden, {hidden, true}"), Dup(~"hidden")),
     assert_parse_error(
-        Src("pt_dup_case", "{class, ~\"a\"}, {<<\"CLASS\">>, ~\"b\"}"), Dup(~"class")
+        Src("pt_dup_case", "{class, ~\"a\"}, {<<\"CLASS\">>, ~\"b\"}"), fun
+            ({duplicate_attr, _}) -> true;
+            (_) -> false
+        end
     ),
     assert_parse_error(
         Src(
@@ -4247,6 +4257,38 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
     ?assertMatch({match, _}, re:run(iolist_to_binary(HTML), ~"class=\"a\" id=\"i\"")),
     ?assert(is_map(Ok:native(#{}))),
     ?assert(is_map(Ok:terminal(#{}))).
+
+%% The error names the repeated attribute as the author wrote it, as reserved_attr
+%% does: a case-folded `viewbox` is a name that appears nowhere in the source.
+duplicate_attr_quotes_name_as_written(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_dup_camel). -export([render/1]). render(_Bindings) -> "
+        "arizona_template:html({svg, [{<<\"viewbox\">>, ~\"0\"}, {viewBox, ~\"1\"}], []}). ",
+        fun(R) -> R =:= {duplicate_attr, ~"viewBox"} end
+    ).
+
+%% The HTML parser lowercases ASCII A-Z in attribute names and nothing else, so
+%% `data-\x{c9}` and `data-\x{e9}` are two attributes to the browser and must compile.
+duplicate_attr_folds_ascii_case_only(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_dup_unicode). -export([render/1]). render(_Bindings) -> "
+        "arizona_template:html({'p', [{<<\"data-\\x{c9}\"/utf8>>, ~\"a\"}, "
+        "{<<\"data-\\x{e9}\"/utf8>>, ~\"b\"}], []}). "
+    ),
+    {HTML, _} = arizona_render:render(Mod:render(#{})),
+    ?assertEqual(
+        <<"<p data-", 16#C3, 16#89, "=\"a\" data-", 16#C3, 16#A9, "=\"b\"></p>">>,
+        iolist_to_binary(HTML)
+    ).
+
+%% The error is raised for every backend that refuses a repeat (`?native` included)
+%% and for two static values as much as a dynamic one, so its text must not describe
+%% one target's resolution.
+duplicate_attr_message_target_neutral(Config) when is_list(Config) ->
+    Msg = arizona_parse_transform:format_error({duplicate_attr, ~"class"}),
+    ?assertNotEqual(nomatch, string:find(Msg, "class")),
+    ?assertEqual(nomatch, string:find(Msg, "browser")),
+    ?assertEqual(nomatch, string:find(Msg, "dynamic one")).
 
 %% az-view is injected on a live root and rejected anywhere else, for the same
 %% reason: the browser reads `AZ-VIEW="x"` as `az-view`.
