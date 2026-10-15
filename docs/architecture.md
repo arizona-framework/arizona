@@ -605,22 +605,25 @@ template/descriptor and raises `bad_template_value`. So `compile_each` rejects a
 `text_dynamic` body (`each_body_not_element` for a 1-arg/list callback,
 `each_stream_body_not_element` for a 2-arg/stream-or-map callback -- the two differ only in fix
 advice, since a list has a comprehension fallback and a stream/map, keyed per item, does not)
-at compile time. A keyed callback must also return exactly **one** element: a list of elements
-or a text+element fragment raises `each_stream_body_multi_root`, since the keyed ops
-(`OP_INSERT`/`OP_REMOVE`/`OP_MOVE`/`OP_ITEM_PATCH`) address an item by the single element
-carrying its `az-key`, and any other root of the item would be left behind on a remove and out
-of order on a move. A one-element list body is taken as its element, and a list holding no
-element at all raises `each_stream_body_not_element`. Over a stream that root must carry
+at compile time. Over a **stream**, a keyed callback must also return exactly **one** element:
+the keyed ops (`OP_INSERT`/`OP_REMOVE`/`OP_MOVE`/`OP_ITEM_PATCH`) address an item by the single
+element carrying its `az-key`, and any other root of the item would be left behind on a remove
+and out of order on a move. The same 2-arg callback may iterate a **map**, which diffs through the
+list machinery (positionally for a single-root item, else a wholesale container `OP_TEXT`) and so
+takes a list of elements, a text+element fragment or bare text. The source is only known at
+runtime, so `compile_each` stamps such a body `multi_root => true` and `arizona_template:each/2`
+raises `stream_each_multi_root` when it is paired with an `arizona_stream` -- on every evaluation,
+so the render and the diff alike -- unless the per-item template is nodiff (never addressed by a
+keyed op). A one-element list body is taken as its element. Over a stream that root must carry
 `az_key` (the client looks items up by `az-key`, so an unkeyed item is unreachable to every keyed
-op); this stays unenforced because one 2-arg callback may also iterate a map, which diffs
-positionally and needs no key. A keyed callback whose body is a *conditional* raises
-`each_stream_body_control_flow` instead, because the fix is different: "wrap the value in an
-element" reads as advice to pick a tag, when the real constraint is that every item shares ONE
-compiled per-item template, so an item's **outer tag is fixed at compile time**. That shared
-template is exactly what makes per-item diffing cheap (statics once, dynamics per item). The
-branches themselves may be entirely different elements -- they go inside one stable item element
-carrying `az_key`, where a conditional child may return bare element tuples. Containers whose
-child tag is fixed anyway (`ul`/`ol`) lose nothing, and a `div` with `display: contents` keeps
+op); this stays unenforced because a map diffs positionally and needs no key. A keyed callback whose
+body is a *conditional* raises `each_stream_body_control_flow` instead, because the fix is
+different: "wrap the value in an element" reads as advice to pick a tag, when the real constraint is
+that every item shares ONE compiled per-item template, so an item's **outer tag is fixed at compile
+time**. That shared template is exactly what makes per-item diffing cheap (statics once, dynamics
+per item). The branches themselves may be entirely different elements -- they go inside one stable
+item element carrying `az_key`, where a conditional child may return bare element tuples. Containers
+whose child tag is fixed anyway (`ul`/`ol`) lose nothing, and a `div` with `display: contents` keeps
 the wrapper out of layout elsewhere.
 
 That wrapper is not legal in every container, and the two where it is not are the two where a

@@ -24,10 +24,12 @@
     each_named_fun_ref_non_element_rejected/1,
     each_named_fun_ref_arity_2_non_element_rejected/1,
     each_stream_control_flow_body_rejected_with_wrapper_advice/1,
-    each_stream_multi_root_body_rejected/1,
-    each_stream_static_body_rejected/1,
-    each_stream_elementless_list_body_rejected/1,
+    each_stream_multi_root_body_refused_at_render/1,
+    each_stream_static_body_refused_at_render/1,
+    each_stream_elementless_list_body_refused_at_render/1,
     each_stream_one_element_list_body_unwrapped/1,
+    each_map_multi_root_body_renders_and_diffs/1,
+    each_stream_multi_root_body_nodiff_renders/1,
     computed_element_tag_rejected_with_idiom/1,
     malformed_element_still_invalid_element/1,
     each_stream_control_flow_wrapper_fix_keys_per_item/1,
@@ -663,10 +665,12 @@ groups() ->
             each_named_fun_ref_non_element_rejected,
             each_named_fun_ref_arity_2_non_element_rejected,
             each_stream_control_flow_body_rejected_with_wrapper_advice,
-            each_stream_multi_root_body_rejected,
-            each_stream_static_body_rejected,
-            each_stream_elementless_list_body_rejected,
+            each_stream_multi_root_body_refused_at_render,
+            each_stream_static_body_refused_at_render,
+            each_stream_elementless_list_body_refused_at_render,
             each_stream_one_element_list_body_unwrapped,
+            each_map_multi_root_body_renders_and_diffs,
+            each_stream_multi_root_body_nodiff_renders,
             computed_element_tag_rejected_with_idiom,
             malformed_element_still_invalid_element,
             each_stream_control_flow_wrapper_fix_keys_per_item,
@@ -6589,84 +6593,125 @@ each_stream_control_flow_body_rejected_with_wrapper_advice(Config) when is_list(
 
 %% A keyed op addresses an item by the one element carrying its az-key, so every other
 %% root of a multi-root item -- a sibling element or a text node -- would be orphaned on
-%% a remove and out of order on a move. Rejected in each form a body reaches the check:
-%% inline, whole-body ?html, and a named 2-arg ref.
-each_stream_multi_root_body_rejected(Config) when is_list(Config) ->
-    IsMultiRoot = fun(R) -> R =:= each_stream_body_multi_root end,
+%% a remove and out of order on a move. The same 2-arg callback may iterate a map, which
+%% takes several roots, so the stream pairing is refused when it is rendered, in each form
+%% a body reaches: inline, whole-body ?html, a named 2-arg ref, and a text+element mix.
+each_stream_multi_root_body_refused_at_render(Config) when is_list(Config) ->
     Each = fun(Name, Fun, Defs) ->
-        "-module(" ++ Name ++ "). -export([render/1]). " ++ Defs ++
-            "render(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each(" ++
-            Fun ++ ", arizona_template:get(items, Bindings))]}). "
+        compile_module(
+            "-module(" ++ Name ++ "). -export([render/1]). " ++ Defs ++
+                "render(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each(" ++
+                Fun ++ ", arizona_template:get(items, Bindings))]}). "
+        )
     end,
-    assert_parse_error(
+    Mods = [
         Each(
             "pt_each_stream_multi_elems",
             "fun(I, K) -> [{li, [{az_key, K}], [I]}, {li, [], [~\"sep\"]}] end",
             ""
         ),
-        IsMultiRoot
-    ),
-    assert_parse_error(
         Each(
             "pt_each_stream_multi_text",
             "fun(I, K) -> [~\"Item: \", {b, [{az_key, K}], [I]}] end",
             ""
         ),
-        IsMultiRoot
-    ),
-    assert_parse_error(
         Each(
             "pt_each_stream_multi_html",
             "fun(I, K) -> arizona_template:html([{li, [{az_key, K}], [I]}, {li, [], []}]) end",
             ""
         ),
-        IsMultiRoot
-    ),
-    assert_parse_error(
         Each(
             "pt_each_stream_multi_named",
             "fun row/2",
             "row(I, K) -> [{li, [{az_key, K}], [I]}, {li, [], [~\"sep\"]}]. "
-        ),
-        IsMultiRoot
-    ),
-    %% The fix the error names compiles: the parts inside one keyed item element.
-    Mod = compile_module(
-        Each(
-            "pt_each_stream_multi_fix",
-            "fun(I, K) -> {li, [{az_key, K}], [{b, [], [I]}, ~\"sep\"]} end",
-            ""
         )
-    ),
+    ],
     S0 = arizona_stream:new(fun(X) -> X end, [~"a", ~"b"]),
-    {HTML, _, _} = arizona_render:render(Mod:render(#{items => S0}), #{}),
+    [assert_stream_each_multi_root(Mod, #{items => S0}) || Mod <- Mods],
+    %% The fix the error names renders: the parts inside one keyed item element.
+    Fix = Each(
+        "pt_each_stream_multi_fix",
+        "fun(I, K) -> {li, [{az_key, K}], [{b, [], [I]}, ~\"sep\"]} end",
+        ""
+    ),
+    {HTML, _, _} = arizona_render:render(Fix:render(#{items => S0}), #{}),
     ?assertMatch(
         {match, _}, re:run(iolist_to_binary(HTML), ~"<li[^>]*az-key=\"a\"[^>]*><b[^>]*>.*sep</li>")
     ).
 
 %% A bare static binary has no element at all for a keyed op to address.
-each_stream_static_body_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
+each_stream_static_body_refused_at_render(Config) when is_list(Config) ->
+    Mod = compile_module(
         "-module(pt_each_stream_static). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'ul', [], [arizona_template:each("
-        "        fun(_I, _K) -> ~\"x\" end, arizona_template:get(items, Bindings))]}). ",
-        fun(R) -> R =:= each_stream_body_not_element end
-    ).
+        "        fun(_I, _K) -> ~\"x\" end, arizona_template:get(items, Bindings))]}). "
+    ),
+    assert_stream_each_multi_root(Mod, #{items => arizona_stream:new(fun(X) -> X end, [~"a"])}).
 
 %% A list body holding no element at all (empty, or values only) has no root a keyed op
-%% could address -- the "not an element" mistake, not the multi-root one.
-each_stream_elementless_list_body_rejected(Config) when is_list(Config) ->
+%% could address either.
+each_stream_elementless_list_body_refused_at_render(Config) when is_list(Config) ->
     Src = fun(Name, Body) ->
-        "-module(" ++ Name ++
-            "). -export([render/1]). render(Bindings) -> "
-            "arizona_template:html({'ul', [], [arizona_template:each(fun(I, K) -> " ++ Body ++
-            " end, arizona_template:get(items, Bindings))]}). "
+        compile_module(
+            "-module(" ++ Name ++
+                "). -export([render/1]). render(Bindings) -> "
+                "arizona_template:html({'ul', [], [arizona_template:each(fun(I, K) -> " ++ Body ++
+                " end, arizona_template:get(items, Bindings))]}). "
+        )
     end,
-    IsNotElement = fun(R) -> R =:= each_stream_body_not_element end,
-    assert_parse_error(Src("pt_each_stream_nil", "_ = {I, K}, []"), IsNotElement),
-    assert_parse_error(Src("pt_each_stream_text", "[I, ~\"-\", K]"), IsNotElement).
+    Bindings = #{items => arizona_stream:new(fun(X) -> X end, [~"a"])},
+    assert_stream_each_multi_root(Src("pt_each_stream_nil", "_ = {I, K}, []"), Bindings),
+    assert_stream_each_multi_root(Src("pt_each_stream_text", "[I, ~\"-\", K]"), Bindings).
+
+assert_stream_each_multi_root(Mod, Bindings) ->
+    ?assertError(
+        {arizona_loc, {Mod, _}, stream_each_multi_root},
+        arizona_render:render(Mod:render(Bindings), #{})
+    ).
+
+%% The 2-arg callback that a stream refuses with several roots is legal over a map, which
+%% diffs it the way a list does: a `dl` of dt/dd pairs renders and re-renders. A map that
+%% turns into a stream on the diff is refused there too, since the check runs on every
+%% evaluation of the pairing, not only the first render.
+each_map_multi_root_body_renders_and_diffs(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_map_dl). -export([render/1]). "
+        "render(Bindings) -> arizona_template:html({dl, [], [arizona_template:each("
+        "fun(V, K) -> [{dt, [], [K]}, {dd, [], [V]}] end, arizona_template:get(m, Bindings))]}). "
+    ),
+    {HTML, Snap, _} = arizona_render:render(Mod:render(#{m => #{~"a" => ~"1"}}), #{}),
+    ?assertMatch(
+        {match, _},
+        re:run(iolist_to_binary(HTML), ~"^<dl[^>]*><!--az:[^>]*><dt[^>]*>.*</dt><dd[^>]*>.*</dd>")
+    ),
+    {Ops, _, _} = arizona_diff:diff(
+        Mod:render(#{m => #{~"a" => ~"2", ~"b" => ~"3"}}), Snap, #{}, #{m => true}
+    ),
+    ?assertMatch([[?OP_TEXT, _, #{~"d" := [_, _]}]], Ops),
+    ?assertError(
+        {arizona_loc, {pt_each_map_dl, _}, stream_each_multi_root},
+        arizona_diff:diff(
+            Mod:render(#{m => arizona_stream:new(fun(X) -> X end, [~"a"])}),
+            Snap,
+            #{},
+            #{m => true}
+        )
+    ).
+
+%% A nodiff item is rendered once and never addressed by a keyed op, so a stream may
+%% iterate a multi-root body under az-nodiff.
+each_stream_multi_root_body_nodiff_renders(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_stream_dl_nodiff). -export([render/1]). "
+        "render(Bindings) -> arizona_template:html({dl, ['az-nodiff'], [arizona_template:each("
+        "fun(V, K) -> [{dt, [], [K]}, {dd, [], [V]}] end, arizona_template:get(m, Bindings))]}). "
+    ),
+    {HTML, _, _} = arizona_render:render(
+        Mod:render(#{m => arizona_stream:new(fun(X) -> X end, [~"a"])}), #{}
+    ),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(HTML), ~"<dt>a</dt><dd>a</dd></dl>$")).
 
 %% A one-element list is a single root, so it is the bare element in a list wrapper and
 %% compiles to the very same per-item template, the way a whole-body ?html does.
