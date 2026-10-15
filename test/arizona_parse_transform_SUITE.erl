@@ -355,7 +355,10 @@
     tracked_get_renamed_param_ok/1,
     tracked_get_with_projection_ok/1,
     tracked_get_with_submap_errors/1,
-    tracked_get_case_aliased_bindings_flagged/1,
+    tracked_get_case_aliased_bindings_ok/1,
+    tracked_get_rebound_bindings_ok/1,
+    tracked_get_maps_get_submap_errors/1,
+    tracked_get_submap_alias_errors/1,
     with_handoff_freezes_without_tracking/1,
     with_handoff_tracks_outer_slot/1,
     with_handoff_hoisted_tracks_outer_slot/1,
@@ -1057,7 +1060,10 @@ groups() ->
             tracked_get_renamed_param_ok,
             tracked_get_with_projection_ok,
             tracked_get_with_submap_errors,
-            tracked_get_case_aliased_bindings_flagged,
+            tracked_get_case_aliased_bindings_ok,
+            tracked_get_rebound_bindings_ok,
+            tracked_get_maps_get_submap_errors,
+            tracked_get_submap_alias_errors,
             with_handoff_freezes_without_tracking,
             with_handoff_tracks_outer_slot,
             with_handoff_hoisted_tracks_outer_slot
@@ -10567,17 +10573,57 @@ tracked_get_with_submap_errors(Config) when is_list(Config) ->
     ).
 
 %% A binding reached through a non-bare-var alias (a `case`, `begin`, `maps:merge`, ...)
-%% is intentionally flagged: alias_closure only proves bindings-likeness through `V = W`
-%% and `V = with(_, W)`, so a `case`-aliased binding is indistinguishable from a sub-map.
-%% This documents the limitation and the escape hatch (alias directly with `B = Bindings`,
-%% per the format_error message). The value still renders correctly via that escape.
-tracked_get_case_aliased_bindings_flagged(Config) when is_list(Config) ->
-    assert_parse_error(
+%% may be the bindings, and the transform cannot see into it, so it is not flagged: only
+%% a value provably read out of a map is. The read stays tracked on its slot.
+tracked_get_case_aliased_bindings_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
         "-module(pt_tg_casealias). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    B = case Bindings of #{} -> Bindings end, "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, B)]}). ",
+        "    arizona_template:html({'p', [], [arizona_template:get(x, B)]}). "
+    ),
+    T = Mod:render(#{x => <<"y">>}),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
+    ?assertEqual(<<"y">>, Fun()),
+    ?assertEqual(#{x => true}, slot_deps(Fun)).
+
+%% A handler threading its bindings through a helper reads the result with the tracked
+%% accessor: the local IS the bindings, just not syntactically an alias of a parameter.
+tracked_get_rebound_bindings_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_rebound). "
+        "-export([handle_event/3]). "
+        "handle_event(<<\"inc\">>, _Params, Bindings0) -> "
+        "    Bindings = bump(Bindings0), "
+        "    {Bindings, #{}, [integer_to_binary(arizona_template:get(count, Bindings))]}. "
+        "bump(B) -> B#{count => maps:get(count, B) + 1}. "
+    ),
+    ?assertEqual(
+        {#{count => 2}, #{}, [<<"2">>]},
+        Mod:handle_event(<<"inc">>, #{}, #{count => 1})
+    ).
+
+%% A value read with maps:get is a nested value, not the bindings: flagged.
+tracked_get_maps_get_submap_errors(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_mapsgetsub). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = maps:get(foo, Bindings), "
+        "    arizona_template:html({'p', [], [arizona_template:get(bar, Foo)]}). ",
+        fun(R) -> R =:= tracked_get_on_non_bindings_map end
+    ).
+
+%% An alias of a value read out of the bindings is flagged too.
+tracked_get_submap_alias_errors(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_subalias). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = arizona_template:get(foo, Bindings), "
+        "    F = Foo, "
+        "    arizona_template:html({'p', [], [arizona_template:get(bar, F)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
 

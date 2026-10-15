@@ -587,10 +587,13 @@ reads. That makes reading a *nested* map a footgun -- `Foo = ?get(foo), ?get(bar
 Foo)` records `bar` (a key of `Foo`) as a top-level slot dep, which both
 over-tracks and frantically misfires. The parse transform rejects it at compile
 time (`tracked_get_on_non_bindings_map`): a tracked read whose map argument is a
-local that is not the bindings parameter -- nor an alias of it (`B = Bindings`),
-nor a `with/2` projection of it -- is an error. Read sub-structures with plain
-`maps:get/2`. Non-variable map arguments (a literal map, a `maps:get` result) are
-never flagged.
+local provably holding a value read out of a map -- bound by a tracked accessor,
+`maps:get/2,3` or `map_get/2`, or aliased from such a local -- is an error. Any
+other local may be the bindings (a parameter, an alias, a `with/2` projection, a
+value threaded through a helper or a `case`), and the transform cannot tell, so it
+is not flagged: a false rejection would block correct code, a missed one only
+over-tracks. Read sub-structures with plain `maps:get/2`. Non-variable map
+arguments (a literal map, a `maps:get` call) are never flagged.
 
 **Nested-template / passed-bindings freeze.** A child template embedded via a raw
 function call (or an explicit nested `?html(...)` returning a template) renders at
