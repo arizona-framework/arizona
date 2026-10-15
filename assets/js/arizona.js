@@ -2604,8 +2604,21 @@ function withQueryAll(sel, fn) {
  * @param {Array<*>} cmds - parsed JSON command(s)
  */
 function executeJS(el, event, cmds) {
+    runCommands(el, event, cmds, '');
+}
+
+/**
+ * `executeJS` with the position of `cmds` in the attribute's command tree: `prefix`
+ * is the index path of the wrapper (transition/on_key) holding them, '' at the
+ * top level. A debounced/throttled push_event keys its timer by that position.
+ * @param {Element} el
+ * @param {Event|null} event
+ * @param {Array<*>} cmds
+ * @param {string} prefix
+ */
+function runCommands(el, event, cmds, prefix) {
     const commands = Array.isArray(cmds[0]) ? cmds : [cmds];
-    for (const cmd of commands) execOne(el, event, cmd);
+    for (let i = 0; i < commands.length; i++) execOne(el, event, commands[i], prefix, i);
 }
 
 /**
@@ -2613,8 +2626,10 @@ function executeJS(el, event, cmds) {
  * @param {Element} el
  * @param {Event|null} event
  * @param {Array<*>} cmd
+ * @param {string} [prefix] index path of the wrapper holding `cmd` (see runCommands)
+ * @param {number} [index] position of `cmd` in its list
  */
-function execOne(el, event, cmd) {
+function execOne(el, event, cmd, prefix = '', index = 0) {
     const op = cmd[0];
     switch (op) {
         case JS_TRANSITION: {
@@ -2634,7 +2649,7 @@ function execOne(el, event, cmd) {
                   : null;
             if (kind) {
                 _pendingTransition = { types: opts.types, kind };
-                executeJS(el, event, inner);
+                runCommands(el, event, inner, `${prefix}${index}.`);
             } else {
                 // The update callback runs inside startViewTransition, OUTSIDE
                 // every caller's containment -- a throwing command would become
@@ -2644,7 +2659,7 @@ function execOne(el, event, cmd) {
                 runTransition(opts, () =>
                     later(() => {
                         try {
-                            executeJS(el, event, inner);
+                            runCommands(el, event, inner, `${prefix}${index}.`);
                         } catch (err) {
                             const detail = err instanceof Error ? err.message : String(err);
                             warnOnce(
@@ -2663,7 +2678,7 @@ function execOne(el, event, cmd) {
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
             const msg = JSON.stringify([resolveTarget(el), evt, payload]);
             if (event) {
-                scheduleSend(el, event, JSON.stringify(cmd), () => {
+                scheduleSend(el, event, prefix, index, () => {
                     workerPost(W_SEND, msg);
                 });
             } else {
@@ -2794,7 +2809,7 @@ function execOne(el, event, cmd) {
                 );
             }
             const onError = (/** @type {object} */ detail) => {
-                if (opts.on_error) executeJS(el, event, opts.on_error);
+                if (opts.on_error) runCommands(el, event, opts.on_error, `${prefix}${index}e.`);
                 document.dispatchEvent(new CustomEvent('arizona:fetch-error', { detail }));
             };
             const later = holdReplay();
@@ -2941,7 +2956,7 @@ function execOne(el, event, cmd) {
                     ? /** @type {any} */ (event).key.toLowerCase()
                     : '';
             if (Array.isArray(f) ? f.includes(lk) : new RegExp(f).test(lk))
-                executeJS(el, event, cmd[2]);
+                runCommands(el, event, cmd[2], `${prefix}${index}.`);
             break;
         }
         case JS_SET_LOCAL: {
@@ -2982,9 +2997,10 @@ function execOne(el, event, cmd) {
 }
 
 /**
- * One deferred send's state. An element holds one per (event type, command), so
- * two push_events in one command list, or `az-input` beside `az-keydown`, each
- * keep their own timer instead of the later one replacing the earlier.
+ * One deferred send's state. An element holds one per (event type, command
+ * position), so two push_events in one command list, or `az-input` beside
+ * `az-keydown`, each keep their own timer instead of the later one replacing the
+ * earlier.
  * @typedef {{
  *   id?: ReturnType<typeof setTimeout>,
  *   pending?: Function|null,
@@ -3024,17 +3040,19 @@ let _connGen = 0;
  * For modes 2 and 3, blur auto-flushes pending sends so data isn't lost
  * when the user tabs away or clicks elsewhere.
  *
- * Timing is per `key` (the event type and the command), not per element: only a
- * repeat of the same command for the same event collapses. A deferred send is
- * dropped when it fires after `disconnect()`, or after the view enclosing `el`
- * left the document (a navigate or resync replaced it): its message names the old
- * view, and a new page mounted under the same id would take it as its own.
+ * Timing is per (event type, command position), not per element: two commands
+ * in one list, or two event types on one element, each keep their own timer,
+ * while a repeat at the same position collapses -- including one whose command
+ * the server re-rendered mid-window (a changed payload), which is why the slot is
+ * the position and not the command's value. A deferred send is dropped when it
+ * fires after `disconnect()`.
  * @param {Element} el
  * @param {Event|KeyboardEvent} event
- * @param {string} key identifies the command among `el`'s commands for `event`
+ * @param {string} prefix index path of the wrapper holding the command
+ * @param {number} index the command's position in its list
  * @param {Function} sendFn
  */
-function scheduleSend(el, event, key, sendFn) {
+function scheduleSend(el, event, prefix, index, sendFn) {
     const debounceAttr = el.getAttribute('az-debounce') || '';
     const debounceMs = parseInt(debounceAttr, 10);
     const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
@@ -3044,16 +3062,15 @@ function scheduleSend(el, event, key, sendFn) {
         return;
     }
     const gen = _connGen;
-    const scope = el.closest('[az-view]') || el;
     const send = () => {
-        if (gen === _connGen && scope.isConnected) sendFn();
+        if (gen === _connGen) sendFn();
     };
     let rec = _timers.get(el);
     if (!rec) {
         rec = { slots: new Map() };
         _timers.set(el, rec);
     }
-    const slotKey = `${event.type} ${key}`;
+    const slotKey = `${event.type} ${prefix}${index}`;
     let t = rec.slots.get(slotKey);
     if (!t) {
         t = {};
