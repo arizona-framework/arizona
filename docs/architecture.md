@@ -413,7 +413,11 @@ of draining (`diff_stream/5`'s `Reconcile`: a single `{reset, #{}}`, which
 re-renders the visible items and patches only those that differ). A stream nested
 inside an item is diffed from a value the walk already evaluated whole, so there
 the drain is checked against that render and the container reconciles against it
-(`stream_relist/7`) when the queue does not account for it (`nested_drain/4`).
+(`stream_relist/7`) when the queue does not account for it (`nested_drain/4`). A
+nested stream whose render holds child views always reconciles that way, without
+draining: the drain renders the items its ops touch a second time, so each
+`?stateful` among them would run `mount/1` twice and the first instance would be
+dropped without `unmount/1`.
 
 **Content-slot conditional branches:** a `case`/`if`/`maybe` in a content slot
 compiles each *element* branch into a nested template, so by this invariant the
@@ -674,7 +678,14 @@ re-render. A plain list bearing per-item `?stateful` children therefore falls ba
 marker `OP_TEXT`, re-rendering every item on any change. When you want self-diffing children, use a
 **stream** `?each`: items are keyed by `az_key`, each `?stateful` item is its own self-diffing
 live view (an entry in the root live process's `views` map, not a process of its own),
-and `merge_stream_child_views/4` carries the child ids incrementally across diffs.
+and `merge_stream_child_views/4` carries the child ids incrementally across diffs. A child
+lives exactly as long as its item is in the DOM: whichever way the item leaves -- `delete/2`,
+`reset/2`, a new stream bound over the slot, a `drop` eviction, or a sort or insert pushing it
+out of a `limit` window -- its child unmounts, and an item that comes back into the window
+mounts a fresh one. A key deleted and re-inserted within one update keeps its child (the new
+render reaches it through `handle_update/3`, not `mount/1`), while the client gets an
+`OP_REMOVE` and a fresh `OP_INSERT`, so state the browser holds inside it (`?local` values,
+hooks) starts over.
 
 **A keyed container reached through a `?stateful` child stays per-item, but by a different
 route.** `diff_stream/4` derives its ops by draining the stream's pending op log, and
@@ -2125,9 +2136,9 @@ queued for this update cycle; return it extended with this callback's own effect
 returns it verbatim) -- so a patch reaction can set the document title or redirect, threaded without
 any caller-side concatenation. See "SPA navigate / patch route resolution".
 
-`unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional
-or navigate) or the live process is shutting down. Use it to release resources (timers, external
-subscriptions). Return value is discarded.
+`unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional,
+a list or stream item leaving the DOM, or navigate) or the live process is shutting down. Use it to
+release resources (timers, external subscriptions). Return value is discarded.
 
 ## Dynamic `eval` return values
 
