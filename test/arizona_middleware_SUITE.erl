@@ -133,20 +133,19 @@ extract_named_keys(Config) when is_list(Config) ->
 
 %% A body the transport cannot deliver halts the pipeline with the status the
 %% server answers that failure with, carrying the reads made before it, and
-%% runs no later key.
+%% runs no later key: the raw request has no headers, so reading them would
+%% crash the stub adapter instead of halting.
 extract_body_read_error_halts_with_its_status(Config) when is_list(Config) ->
     Mw = arizona_middleware:extract([params, body, headers]),
     [
-        ?assertMatch(
-            {halt, #{resp_status := Status, params := [{~"q", ~"1"}]} = HaltReq} when
-                not is_map_key(headers, HaltReq),
-            Mw(
-                arizona_req_test_adapter:new(#{
-                    params => [{~"q", ~"1"}], headers => #{}, body_error => Reason
-                }),
+        begin
+            {halt, HaltReq} = Mw(
+                arizona_req_test_adapter:new(#{params => [{~"q", ~"1"}], body_error => Reason}),
                 #{}
-            )
-        )
+            ),
+            ?assertEqual(Status, arizona_req:resp_status(HaltReq)),
+            ?assertMatch({[{~"q", ~"1"}], _}, arizona_req:params(HaltReq))
+        end
      || {Reason, Status} <- [
             {too_large, 413}, {trailers_too_large, 431}, {timeout, 408}, {invalid, 400}
         ]
