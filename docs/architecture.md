@@ -485,12 +485,14 @@ rewriting each interpolated variable back into its defining expression, so the
 written inline. This is purely compile-time; the runtime/diff path is unchanged
 and idiomatic templates (reads written inside `?html`) are unaffected.
 
-- **`collect_inline/1`** builds a per-clause map of top-level `Var = RHS`
+- **`collect_inline/2`** builds a per-clause map of top-level `Var = RHS`
   matches whose RHS transitively reaches a `get`/`get_lazy`/`track`/`with` call
   (`with` tracks too, so a hoisted `Sub = with(Keys, Bindings)` must inline back
   into the slot bracket or its tracking runs outside any bracket and freezes).
-  Rebound vars are dropped; a derivation with no read (e.g. `Id = make_uuid()`)
-  is left captured, so a pure side effect is never re-run per slot.
+  Rebound vars are dropped, including a match on a name the head or an earlier
+  statement already binds (an equality test, kept as written); a derivation
+  with no read (e.g. `Id = make_uuid()`) is left captured, so a pure side
+  effect is never re-run per slot.
 - **`inline_vars/2`** substitutes those variables wherever they appear in a
   `?html`/`?each` argument -- including inside a `case` scrutinee or an opaque
   call -- recursively and scope-aware (fun parameters and comprehension

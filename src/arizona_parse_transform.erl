@@ -1163,7 +1163,7 @@ transform_form(Form, _Module, _IsLive, _FunDefs) ->
 transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body0),
     Body = normalize_tail_binds(Body0),
-    Inline = prepare_inline(collect_inline(Body), Body),
+    Inline = prepare_inline(collect_inline(Patterns, Body), Body),
     ok = check_markup_vars(Body, Inline),
     Body1 = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Body],
     {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
@@ -1644,7 +1644,7 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
     %% Only the init statements are normalized: the last expr carries the live root
     %% template and is handled by transform_live_render_last/4.
     Init = normalize_tail_binds(Init0),
-    Inline = prepare_inline(collect_inline(Init ++ [Last]), Init ++ [Last]),
+    Inline = prepare_inline(collect_inline(Patterns, Init ++ [Last]), Init ++ [Last]),
     ok = check_markup_vars(Init ++ [Last], Inline),
     TransformedInit = [transform_expr(Expr, Module, Inline, FunDefs) || Expr <- Init],
     TransformedLast = transform_live_render_last(Last, Module, Inline, FunDefs),
@@ -1818,7 +1818,8 @@ is_az_view_attr(Attr) ->
 
 %% Build the inline map for a clause body: top-level `Var = RHS` matches whose RHS
 %% transitively reaches an `arizona_template`/`az` `get`/`get_lazy`/`track`/`with` call.
-%% Variables bound more than once are dropped (ambiguous to inline); a binding-derived
+%% Variables bound more than once -- by the head, a pattern or another match -- are
+%% dropped (scan_top_matches/4); a binding-derived
 %% expression with no read (e.g. `Id = make_uuid()`) is left captured so a pure
 %% side effect is never re-run per slot.
 %% A content-slot list compiles its markup items only where they are written in it;
@@ -1826,7 +1827,7 @@ is_az_view_attr(Attr) ->
 %% `Inline`), but a variable bound to markup that reads nothing stays a variable and
 %% fails at render, so it is refused here, naming the variable.
 check_markup_vars(Body, Inline) ->
-    {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}),
+    {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}, #{}),
     MarkupVars =
         #{
             V => true
@@ -1917,8 +1918,9 @@ check_content_list({cons, _, _, Rest}, Vars) ->
 check_content_list(_Leaf, _Vars) ->
     ok.
 
-collect_inline(Body) ->
-    {Raw, Poisoned} = scan_top_matches(Body, #{}, #{}),
+collect_inline(Patterns, Body) ->
+    Head = #{V => true || V <- pattern_vars(Patterns)},
+    {Raw, Poisoned} = scan_top_matches(Body, Head, #{}, #{}),
     keep_reaching(maps:without(maps:keys(Poisoned), Raw)).
 
 %% Post-process the collected inline map: an RHS containing a template
@@ -2000,15 +2002,27 @@ track_wrap(Expr, []) ->
 track_wrap(Expr, Keys) ->
     {block, 0, [track_call_ast(K) || K <- Keys] ++ [Expr]}.
 
-scan_top_matches([], Raw, Poisoned) ->
+%% `Bound` holds the names bound before the statement at hand -- by the clause
+%% head, or by any earlier statement. A match on one of those is an equality test,
+%% not a definition: inlining it would drop the test (its match is underscored) and
+%% leave the earlier binding unused, so it is poisoned instead.
+scan_top_matches([], _Bound, Raw, Poisoned) ->
     {Raw, Poisoned};
-scan_top_matches([{match, _, {var, _, V}, RHS} | Rest], Raw, Poisoned) ->
-    case Raw of
-        #{V := _} -> scan_top_matches(Rest, Raw, Poisoned#{V => true});
-        #{} -> scan_top_matches(Rest, Raw#{V => RHS}, Poisoned)
-    end;
-scan_top_matches([_ | Rest], Raw, Poisoned) ->
-    scan_top_matches(Rest, Raw, Poisoned).
+scan_top_matches([{match, _, {var, _, V}, _RHS} = Stmt | Rest], Bound, Raw, Poisoned) when
+    is_map_key(V, Bound)
+->
+    scan_top_matches(Rest, stmt_bound(Stmt, Bound), Raw, Poisoned#{V => true});
+scan_top_matches([{match, _, {var, _, V}, RHS} = Stmt | Rest], Bound, Raw, Poisoned) ->
+    scan_top_matches(Rest, stmt_bound(Stmt, Bound), Raw#{V => RHS}, Poisoned);
+scan_top_matches([Stmt | Rest], Bound, Raw, Poisoned) ->
+    scan_top_matches(Rest, stmt_bound(Stmt, Bound), Raw, Poisoned).
+
+%% The names bound once `Stmt` has run, given the names bound before it.
+stmt_bound(Stmt, Bound) ->
+    Env = ordsets:from_list(maps:keys(Bound)),
+    Ann = erl_syntax:get_ann(erl_syntax_lib:annotate_bindings(Stmt, Env)),
+    {bound, Names} = lists:keyfind(bound, 1, Ann),
+    maps:merge(Bound, #{N => true || N <- Names}).
 
 keep_reaching(Candidates) ->
     maps:with(maps:keys(reaching_fixpoint(Candidates, #{})), Candidates).

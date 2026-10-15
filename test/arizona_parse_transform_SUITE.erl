@@ -291,6 +291,9 @@
     slot_tracks_only_reads_in_its_own_closure/1,
     each_param_rename_avoids_shadow_warning/1,
     inline_hoisted_html_unrelated_key_skipped/1,
+    inline_rebind_of_head_var_is_equality/1,
+    inline_rebind_of_pattern_var_is_equality/1,
+    inline_rebind_live_root_is_equality/1,
     helper_zero_arity_inlines/1,
     helper_with_args_renders_and_tracks/1,
     helper_body_read_tracks/1,
@@ -923,7 +926,10 @@ groups() ->
             inline_hoisted_html_each_body_single_root,
             slot_tracks_only_reads_in_its_own_closure,
             each_param_rename_avoids_shadow_warning,
-            inline_hoisted_html_unrelated_key_skipped
+            inline_hoisted_html_unrelated_key_skipped,
+            inline_rebind_of_head_var_is_equality,
+            inline_rebind_of_pattern_var_is_equality,
+            inline_rebind_live_root_is_equality
         ]},
         %% Local element-returning helper calls inlined at the template call site
         {helper, [parallel], [
@@ -9021,6 +9027,55 @@ inline_hoisted_html_unrelated_key_skipped(Config) when is_list(Config) ->
     Changed = compute_changed(B0, B1),
     {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
     ?assertEqual([], Ops).
+
+%% A match on a name the head already binds is an equality test, not a hoisted
+%% read: it is neither inlined nor underscored, so the head binding stays used,
+%% the slot keeps the head value (untracked, like any head-destructured binding)
+%% and a mismatch still raises at render.
+inline_rebind_of_head_var_is_equality(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_rebind_head). "
+        "-export([render/1]). "
+        "render(#{m := N} = Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    arizona_template:html({'p', [], [N]}). "
+    ),
+    assert_rebind_is_equality(Mod, #{m => ~"1", n => ~"1"}, #{m => ~"1", n => ~"2"}).
+
+%% The same for a name an earlier statement binds through a pattern.
+inline_rebind_of_pattern_var_is_equality(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_rebind_pat). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    {ok, N} = {ok, arizona_template:get(m, Bindings)}, "
+        "    N = arizona_template:get(n, Bindings), "
+        "    arizona_template:html({'p', [], [N]}). "
+    ),
+    assert_rebind_is_equality(Mod, #{m => ~"1", n => ~"1"}, #{m => ~"1", n => ~"2"}).
+
+%% And on a live root, whose render clause collects its hoisted reads the same way.
+inline_rebind_live_root_is_equality(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_inline_rebind_live). "
+        "-behaviour(arizona_stateful). "
+        "-export([mount/1, render/1]). "
+        "mount(B) -> {B, #{}}. "
+        "render(#{m := N} = Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    arizona_template:html("
+        "        {'p', [{id, arizona_template:get(id, Bindings)}], [N]}). "
+    ),
+    assert_rebind_is_equality(
+        Mod, #{id => ~"v", m => ~"1", n => ~"1"}, #{id => ~"v", m => ~"1", n => ~"2"}
+    ).
+
+assert_rebind_is_equality(Mod, Equal, Differ) ->
+    T = Mod:render(Equal),
+    [Fun] = [F || {_Az, {esc, F}, _Loc} <- maps:get(d, T)],
+    ?assertEqual(~"1", Fun()),
+    ?assertEqual(#{}, slot_deps(Fun)),
+    ?assertError({badmatch, ~"2"}, Mod:render(Differ)).
 
 %% ============================================================================
 %% Local element-returning helper calls inlined at the template call site

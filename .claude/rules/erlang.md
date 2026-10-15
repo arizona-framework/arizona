@@ -591,7 +591,9 @@ Exceptions that stay un-tracked (slot frozen after SSR): a binding destructured
 in the head (`render(#{foo := Foo})`) or through any non-bare-var pattern
 (`{ok, V} = ?get(...)` -- use `?get(foo)` then plain destructuring), a variable
 bound inside a `case` branch whose clause head binds a variable, and a rebound
-variable.
+variable -- a match on a name the head or an earlier statement already binds
+(`render(#{m := N} = Bindings) -> N = ?get(n), ...`) is an equality test, kept as
+written: the slot keeps the earlier value, and a mismatch raises `badmatch`.
 
 A tracked read used in a **guard** inside a template (`case Status of active when
 Confirming -> ...`, an `if`, a nested fun) is **auto-tracked**, so the slot stays
