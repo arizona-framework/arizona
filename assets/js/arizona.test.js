@@ -5710,9 +5710,13 @@ describe('navigation scroll', () => {
         mock.simulateOpen();
         // jsdom's location.assign is non-configurable (can't spyOn it); stub the
         // whole global for just this call -- the full-nav branch only reads
-        // location.origin (to vet the scheme) and calls location.assign.
+        // location.origin/href (to vet the scheme) and calls location.assign.
         const assign = vi.fn();
-        vi.stubGlobal('location', { assign, origin: window.location.origin });
+        vi.stubGlobal('location', {
+            assign,
+            origin: window.location.origin,
+            href: window.location.href,
+        });
         // arizona_js:navigate(~"/api", #{full => true}) -- the server emits this to
         // degrade a navigate/patch whose path is not a live route.
         mod.applyEffects([[10, '/api', { full: true }]]);
@@ -5730,7 +5734,12 @@ describe('navigation scroll', () => {
         mock.simulateOpen();
         const assign = vi.fn();
         const replace = vi.fn();
-        vi.stubGlobal('location', { assign, replace, origin: window.location.origin });
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin: window.location.origin,
+            href: window.location.href,
+        });
         // The server degrading the client's own navigate frame (no live route, a
         // layout change, a halt replayed over HTTP): the client already pushed the
         // entry, so a second one would make Back revisit the same navigation.
@@ -5751,7 +5760,12 @@ describe('navigation scroll', () => {
         const logged = [];
         const errSpy = vi.spyOn(console, 'error').mockImplementation((...a) => logged.push(a));
         const pushSpy = vi.spyOn(history, 'pushState');
-        vi.stubGlobal('location', { assign, replace, origin: window.location.origin });
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin: window.location.origin,
+            href: window.location.href,
+        });
         // pushState throws a SecurityError on a cross-origin URL, which used to
         // drop the effect and leave the user on the page.
         const idp = 'https://idp.example.com/authorize?x=1';
@@ -5780,7 +5794,12 @@ describe('navigation scroll', () => {
         const warned = [];
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation((...a) => warned.push(a));
         const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-        vi.stubGlobal('location', { assign, replace, origin: window.location.origin });
+        vi.stubGlobal('location', {
+            assign,
+            replace,
+            origin: window.location.origin,
+            href: window.location.href,
+        });
         // Loading one of these runs it in the page: a server echoing a request
         // parameter into a navigate would be script injection. Every route out --
         // the cross-origin guard, `full`, `full` + `replace`, and a patch.
@@ -5796,6 +5815,51 @@ describe('navigation scroll', () => {
         expect(assign).not.toHaveBeenCalled();
         expect(replace).not.toHaveBeenCalled();
         expect(warned.length).toBe(5);
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
+    it('a relative navigate/patch effect asks the server for the page the address bar shows', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<div az="0"></div>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        // pushState resolves a relative URL against the current page, so the frame
+        // must too -- resolving against the origin would render another page.
+        history.replaceState(null, '', '/users/1/');
+        mod.applyEffects([[10, '?page=2']]);
+        expect(location.pathname + location.search).toBe('/users/1/?page=2');
+        history.replaceState(null, '', '/users/1/');
+        mod.applyEffects([[24, 'edit']]);
+        expect(location.pathname).toBe('/users/1/edit');
+        const frames = mock
+            .getSentMessages()
+            .filter((m) => m[0] === 'navigate' || m[0] === 'patch');
+        expect(frames).toEqual([
+            ['navigate', { path: '/users/1/', qs: 'page=2' }],
+            ['patch', { path: '/users/1/edit', qs: '' }],
+        ]);
+    });
+
+    it('a hash-only navigate/patch effect scrolls in place, no server round trip', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        history.replaceState(null, '', '/users/1');
+        setupView('page', '<section id="sec">x</section>');
+        const len0 = history.length;
+        mod.applyEffects([[10, '#sec']]);
+        expect(location.pathname + location.hash).toBe('/users/1#sec');
+        expect(history.length).toBe(len0 + 1);
+        const sivMock = /** @type {any} */ (Element.prototype.scrollIntoView).mock;
+        expect(sivMock.contexts[0]).toBe(document.getElementById('sec'));
+        // `replace` keeps the entry, as for any other replace nav.
+        mod.applyEffects([[24, '#top', { replace: true }]]);
+        expect(location.hash).toBe('#top');
+        expect(history.length).toBe(len0 + 1);
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
             false,
         );

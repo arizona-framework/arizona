@@ -687,7 +687,7 @@ function navigateTo(path, qs, hash, opts) {
  * @param {boolean} [replace]
  */
 function leavePage(url, replace) {
-    const { protocol } = new URL(url, location.origin);
+    const { protocol } = new URL(url, location.href);
     if (protocol !== 'http:' && protocol !== 'https:') {
         console.warn('[arizona] refusing to navigate to a non-http(s) URL:', url);
         return;
@@ -697,12 +697,35 @@ function leavePage(url, replace) {
 }
 
 /**
- * Does `url` (resolved the way a SPA navigation resolves it) leave this origin?
- * @param {string} url
- * @returns {boolean}
+ * Run a `navigate`/`patch` effect. The URL resolves against the CURRENT page,
+ * as `pushState` resolves it, so the frame asks the server for the page the
+ * address bar will show (`?page=2` on `/users/1/` is `/users/1/?page=2`).
+ * Another origin cannot be SPA-navigated (`pushState` refuses it), so it loads
+ * as a page; a new fragment on this page just scrolls, like an in-page
+ * `az-navigate` click, with no server round trip.
+ * @param {string} full
+ * @param {{replace?: boolean, noscroll?: boolean}} opts
+ * @param {'navigate'|'patch'} kind
  */
-function offOrigin(url) {
-    return new URL(url, location.origin).origin !== location.origin;
+function navigateEffect(full, opts, kind) {
+    const u = new URL(full, location.href);
+    if (u.origin !== location.origin) {
+        leavePage(full, opts.replace);
+        return;
+    }
+    const hash = u.hash ? u.hash.slice(1) : '';
+    const qs = u.search ? u.search.slice(1) : '';
+    if (hash && u.pathname === location.pathname && u.search === location.search) {
+        if (opts.replace) {
+            history.replaceState(history.state, '', u.href);
+        } else {
+            saveCurrentScroll();
+            history.pushState(null, '', u.href);
+        }
+        if (!opts.noscroll) applyScroll({ kind: 'push', hash });
+        return;
+    }
+    navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full, kind });
 }
 
 /**
@@ -2768,35 +2791,21 @@ function execOne(el, event, cmd) {
             }
             break;
         case JS_NAVIGATE: {
-            const full = cmd[1];
             const opts = cmd[2] || {};
-            if (opts.full || offOrigin(full)) {
+            if (opts.full) {
                 // Full-page navigation: let the browser load the URL normally.
                 // Used when the target isn't a live route (a controller/asset
-                // path, or a 404) and so can't be SPA-navigated -- nor can
-                // another origin, which pushState refuses.
-                leavePage(full, opts.replace);
+                // path, or a 404) and so can't be SPA-navigated.
+                leavePage(cmd[1], opts.replace);
                 break;
             }
-            const u = new URL(full, location.origin);
-            const hash = u.hash ? u.hash.slice(1) : '';
-            const qs = u.search ? u.search.slice(1) : '';
-            navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full });
+            navigateEffect(cmd[1], opts, 'navigate');
             break;
         }
-        case JS_PATCH: {
+        case JS_PATCH:
             // In-place SPA navigation: keep the view, re-render via handle_update.
-            const full = cmd[1];
-            if (offOrigin(full)) {
-                leavePage(full, cmd[2]?.replace);
-                break;
-            }
-            const u = new URL(full, location.origin);
-            const hash = u.hash ? u.hash.slice(1) : '';
-            const qs = u.search ? u.search.slice(1) : '';
-            navigateTo(u.pathname, qs, hash, { ...(cmd[2] || {}), fullUrl: full, kind: 'patch' });
+            navigateEffect(cmd[1], cmd[2] || {}, 'patch');
             break;
-        }
         case JS_FETCH: {
             // HTTP request via fetch() with no page reload. Unlike push_event (WS,
             // can't set cookies), the response can carry a real Set-Cookie, applied
