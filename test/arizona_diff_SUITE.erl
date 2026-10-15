@@ -65,6 +65,14 @@
     diff_stream_bulk_grow_collapses/1,
     diff_stream_bulk_append_stays_incremental/1,
     diff_stream_child_views_never_collapse/1,
+    diff_stream_child_views_follow_delete/1,
+    diff_stream_child_views_follow_reset/1,
+    diff_stream_child_views_follow_renew/1,
+    diff_stream_child_views_follow_drop_eviction/1,
+    diff_stream_child_views_follow_window/1,
+    diff_stream_child_views_keep_reinserted_key/1,
+    diff_stream_child_views_follow_item_render/1,
+    diff_nested_stream_child_views_follow_items/1,
     diff_stream_among_siblings_child_view_uses_text_op/1,
     diff_text_op/1,
     no_diff_diff3/1,
@@ -92,6 +100,9 @@
     conditional_computed_key_not_tracked/1,
     conditional_two_slot_fine_grained/1,
     conditional_nested_element_recurses/1,
+    conditional_attr_name_swap_replaces_branch/1,
+    conditional_event_attr_name_swap_replaces_branch/1,
+    conditional_native_attr_name_swap_replaces_branch/1,
     wire_get_value_raw/1,
     wire_raw_value_tagged_html/1,
     wire_helper_raw_value_escaped/1,
@@ -204,6 +215,14 @@ groups() ->
             diff_stream_bulk_grow_collapses,
             diff_stream_bulk_append_stays_incremental,
             diff_stream_child_views_never_collapse,
+            diff_stream_child_views_follow_delete,
+            diff_stream_child_views_follow_reset,
+            diff_stream_child_views_follow_renew,
+            diff_stream_child_views_follow_drop_eviction,
+            diff_stream_child_views_follow_window,
+            diff_stream_child_views_keep_reinserted_key,
+            diff_stream_child_views_follow_item_render,
+            diff_nested_stream_child_views_follow_items,
             diff_stream_among_siblings_child_view_uses_text_op,
             diff_only_changed_emits_ops,
             diff_bool_attr_add,
@@ -238,7 +257,10 @@ groups() ->
             conditional_with_macro_branch_tracks,
             conditional_computed_key_not_tracked,
             conditional_two_slot_fine_grained,
-            conditional_nested_element_recurses
+            conditional_nested_element_recurses,
+            conditional_attr_name_swap_replaces_branch,
+            conditional_event_attr_name_swap_replaces_branch,
+            conditional_native_attr_name_swap_replaces_branch
         ]},
         {wire_payload, [parallel], [
             wire_get_value_raw,
@@ -1121,6 +1143,135 @@ diff_stream_child_views_never_collapse(Config) when is_list(Config) ->
     ?assertNotMatch([[?OP_TEXT, _, #{~"t" := ?EACH}]], Ops),
     ?assertMatch([[?OP_INSERT, _Az, _Key, _Pos, _HTML] | _], Ops).
 
+%% The views map a dependency-aware diff returns holds a stream item's child only
+%% while the item is in the client's DOM. `arizona_live` unmounts exactly the views
+%% missing from it, so a child left in the map after its item left -- by any route
+%% other than `delete/2` -- never ran `unmount/1`.
+diff_stream_child_views_follow_delete(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) -> arizona_stream:delete(S, ~"a") end)
+    ).
+
+diff_stream_child_views_follow_reset(Config) when is_list(Config) ->
+    ?assertEqual(
+        [],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) -> arizona_stream:reset(S, []) end)
+    ),
+    ?assertEqual(
+        [~"c-b", ~"c-c"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) ->
+            arizona_stream:reset(S, [#{id => ~"b"}, #{id => ~"c"}])
+        end)
+    ).
+
+diff_stream_child_views_follow_renew(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-c"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(_S) ->
+            arizona_stream:new(fun(#{id := Id}) -> Id end, [#{id => ~"c"}])
+        end)
+    ).
+
+diff_stream_child_views_follow_drop_eviction(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a"], #{limit => 1, on_limit => drop}, fun(S) ->
+            arizona_stream:insert(S, #{id => ~"b"})
+        end)
+    ).
+
+diff_stream_child_views_follow_window(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a"], #{limit => 1}, fun(S) ->
+            arizona_stream:insert(S, #{id => ~"b"}, 0)
+        end)
+    ),
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a", ~"b"], #{limit => 1}, fun(S) ->
+            arizona_stream:sort(S, fun(#{id := A}, #{id := B}) -> A >= B end)
+        end)
+    ).
+
+%% A key deleted and re-inserted in one diff keeps one child, under its own id.
+diff_stream_child_views_keep_reinserted_key(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-a", ~"c-b"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) ->
+            arizona_stream:insert(arizona_stream:delete(S, ~"a"), #{id => ~"a"})
+        end)
+    ).
+
+%% A kept item whose new render no longer holds its child drops that child.
+diff_stream_child_views_follow_item_render(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-b"],
+        stream_child_view_ids([~"a", ~"b"], #{}, fun(S) ->
+            arizona_stream:update(S, ~"a", #{id => ~"a", on => false})
+        end)
+    ).
+
+%% A stream nested in a stream item: its children follow its items too.
+diff_nested_stream_child_views_follow_items(Config) when is_list(Config) ->
+    ?assertEqual(
+        [~"c-g-b"],
+        nested_stream_child_view_ids([~"a", ~"b"], #{}, fun(S) ->
+            arizona_stream:delete(S, ~"a")
+        end)
+    ),
+    ?assertEqual(
+        [],
+        nested_stream_child_view_ids([~"a", ~"b"], #{}, fun(S) -> arizona_stream:reset(S, []) end)
+    ),
+    ?assertEqual(
+        [~"c-g-b"],
+        nested_stream_child_view_ids([~"a"], #{limit => 1, on_limit => drop}, fun(S) ->
+            arizona_stream:insert(S, #{id => ~"b"})
+        end)
+    ),
+    ?assertEqual(
+        [~"c-g-b"],
+        nested_stream_child_view_ids([~"a"], #{limit => 1}, fun(S) ->
+            arizona_stream:insert(S, #{id => ~"b"}, 0)
+        end)
+    ).
+
+%% Mutate the inner stream of `arizona_stream_nested_lifecycle_root`'s one group
+%% and return the view ids the dependency-aware diff keeps, sorted.
+nested_stream_child_view_ids(Keys, Opts, Mutate) ->
+    KeyFun = fun(#{id := Id}) -> Id end,
+    Inner = arizona_stream:new(KeyFun, [#{id => K} || K <- Keys], Opts),
+    G0 = arizona_stream:new(KeyFun, [#{id => ~"g", inner => Inner}]),
+    B = #{id => ~"snl", notify => self()},
+    T0 = arizona_stream_nested_lifecycle_root:render(B#{groups => G0}),
+    {_HTML, Snap0, Views0} = arizona_render:render(T0, #{}),
+    G1 = arizona_stream:update(G0, ~"g", #{id => ~"g", inner => Mutate(Inner)}),
+    T1 = arizona_stream_nested_lifecycle_root:render(B#{groups => G1}),
+    {_Ops, _Snap1, Views1} = arizona_diff:diff(T1, Snap0, Views0, #{groups => true}),
+    ok = flush_child_lifecycle(),
+    lists:sort(maps:keys(Views1)).
+
+%% Mutate the stream of `arizona_stream_lifecycle_root` and return the view ids
+%% the dependency-aware diff keeps, sorted.
+stream_child_view_ids(Keys, Opts, Mutate) ->
+    S0 = arizona_stream:new(fun(#{id := Id}) -> Id end, [#{id => K} || K <- Keys], Opts),
+    B = #{id => ~"slr", notify => self()},
+    T0 = arizona_stream_lifecycle_root:render(B#{items => S0}),
+    {_HTML, Snap0, Views0} = arizona_render:render(T0, #{}),
+    T1 = arizona_stream_lifecycle_root:render(B#{items => Mutate(S0)}),
+    {_Ops, _Snap1, Views1} = arizona_diff:diff(T1, Snap0, Views0, #{items => true}),
+    ok = flush_child_lifecycle(),
+    lists:sort(maps:keys(Views1)).
+
+flush_child_lifecycle() ->
+    receive
+        {child_mounted, _} -> flush_child_lifecycle();
+        {child_unmounted, _} -> flush_child_lifecycle()
+    after 0 -> ok
+    end.
+
 %% Grow or shrink a keyed stream through `reset/2`, the documented bulk path.
 bulk_stream_diff(Mod, From, To) ->
     KeyFun = fun(#{id := Id}) -> integer_to_binary(Id) end,
@@ -1754,6 +1905,33 @@ conditional_nested_element_recurses(Config) when is_list(Config) ->
     B1 = B0#{val => <<"B">>},
     Ops = cond_diff(nested_element, B0, B1, #{val => true}),
     ?assertMatch([[?OP_TEXT, _, <<"B">>]], Ops).
+
+%% Branches that differ only in a dynamic attribute's NAME are different templates:
+%% the switch replaces the branch (one ?OP_TEXT carrying the new element), never an
+%% ?OP_SET_ATTR of the new name that leaves the old attribute in the DOM.
+conditional_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
+    B0 = #{mode => a, v => ~"hi"},
+    Ops = cond_diff(attr_name_swap, B0, B0#{mode => b}, #{mode => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, ~"title")),
+    ?assertNot(cond_payload_has(Ops, ~"class")).
+
+%% The event-attribute form: a stale `az-click` would keep the old command bound.
+conditional_event_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
+    B0 = #{mode => a, cmd => arizona_js:push_event(~"go")},
+    Ops = cond_diff(event_attr_name_swap, B0, B0#{mode => b}, #{mode => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, ~"az-submit")),
+    ?assertNot(cond_payload_has(Ops, ~"az-click")).
+
+%% `?native` bakes the prop name into the statics, so its branches fingerprint
+%% apart on their own; this pins that.
+conditional_native_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
+    B0 = #{mode => a, v => ~"hi"},
+    Ops = cond_diff(native_attr_name_swap, B0, B0#{mode => b}, #{mode => true}),
+    ?assertMatch([[?OP_TEXT, _, _]], Ops),
+    ?assert(cond_payload_has(Ops, ~"weight")),
+    ?assertNot(cond_payload_has(Ops, ~"color")).
 
 %% A scalar `?get` value is sent RAW on the diff wire (a bare binary) -- escaping happens
 %% client-side (a text node shows `<` literally, matching SSR). It is NOT HTML-tagged, so

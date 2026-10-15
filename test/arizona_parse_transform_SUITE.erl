@@ -383,6 +383,7 @@
     local_attr_interp_render/1,
     local_attr_interp_affix/1,
     local_attr_multiple_error/1,
+    local_attr_affix_non_ascii/1,
     local_attr_mixed_error/1,
     local_attr_interp_boolean/1,
     local_attr_interp_numeric/1,
@@ -426,6 +427,9 @@
     raw_text_svg_title_diffable/1,
     raw_text_svg_title_factoring/1,
     raw_text_svg_title_local/1,
+    raw_text_svg_branch_context/1,
+    raw_text_svg_wrapped_branch_context/1,
+    wrapped_branch_reads_tracked/1,
     raw_text_foreign_script_style_escaped/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
@@ -626,6 +630,7 @@ groups() ->
             local_attr_interp_render,
             local_attr_interp_affix,
             local_attr_multiple_error,
+            local_attr_affix_non_ascii,
             local_attr_mixed_error,
             local_attr_interp_boolean,
             local_attr_interp_numeric,
@@ -807,6 +812,9 @@ groups() ->
             raw_text_svg_title_diffable,
             raw_text_svg_title_factoring,
             raw_text_svg_title_local,
+            raw_text_svg_branch_context,
+            raw_text_svg_wrapped_branch_context,
+            wrapped_branch_reads_tracked,
             raw_text_foreign_script_style_escaped,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
@@ -1464,6 +1472,32 @@ local_attr_interp_affix(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(HTML, ~"href=\"/u/1/edit\"")),
     ?assertEqual(
         #{~"a" => #{~"href" => ~"id"}, ~"ap" => #{~"href" => [~"/u/", ~"/edit"]}},
+        decode_local_descriptor(HTML)
+    ).
+
+%% The descriptor is generated as a binary literal and then folded like any authored
+%% attribute value, so a non-ASCII affix must come back as the same UTF-8 text: the client
+%% recomposes the attribute from it on `set`, and a double-encoded `\x{e9}` would turn
+%% `href` into mojibake on the first client write.
+local_attr_affix_non_ascii(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_local_attr_affix_utf8). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html("
+        "        {'a', [{href, [<<\"\\x{e9}/\"/utf8>>, "
+        "            arizona_template:local(<<\"id\">>, <<\"1\">>), <<\"/\\x{fc}\"/utf8>>]}], "
+        "            [<<\"e\">>]}"
+        "    ). "
+    ),
+    {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
+    HTML = iolist_to_binary(HTML0),
+    ?assertNotEqual(nomatch, binary:match(HTML, <<"href=\"\x{e9}/1/\x{fc}\""/utf8>>)),
+    ?assertEqual(
+        #{
+            ~"a" => #{~"href" => ~"id"},
+            ~"ap" => #{~"href" => [<<"\x{e9}/"/utf8>>, <<"/\x{fc}"/utf8>>]}
+        },
         decode_local_descriptor(HTML)
     ).
 
@@ -2595,6 +2629,79 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
     {EachHTML, _} = arizona_render:render(Mod:each(#{rows => [~"A"]})),
     ?assertMatch({_, _}, binary:match(iolist_to_binary(EachHTML), ~"<title az=")).
 
+%% A conditional tail's element compiles into a template of its own, but it renders in
+%% the slot that holds it, so it takes that slot's content context: under `<svg>` a
+%% branch's `<script>` is foreign content (a plain diffable slot, not raw text that
+%% must be a `?raw`) and its `<title>` keeps its markers, exactly as when written
+%% directly in the `<svg>`.
+raw_text_svg_branch_context(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_branch). "
+        "-export([script/1, title/1]). "
+        "script(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {script, [], [arizona_template:get(x, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+        "title(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+    ),
+    {ScriptHTML, _} = arizona_render:render(Mod:script(#{f => true, x => ~"A"})),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(ScriptHTML), ~"<script[^>]*><!--az:")),
+    B0 = #{f => true, t => ~"A"},
+    {TitleHTML, TitleSnap, _} = arizona_render:render(Mod:title(B0), #{}),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(TitleHTML), ~"<title[^>]*><!--az:")),
+    %% The same branch re-rendered patches only the title's own slot.
+    {TitleOps, _, _} = arizona_diff:diff(
+        Mod:title(B0#{t => ~"B"}), TitleSnap, #{}, #{t => true}
+    ),
+    ?assertMatch([[_Op, _Az, ~"B"]], TitleOps).
+
+%% A whole-tail `?html(...)` in a branch is the bare element in a wrapper, so it compiles
+%% in the slot's content context too: an SVG `<title>` keeps its markers and diffs, the
+%% same as the bare branch. A non-tail `?html` (bound, passed, or nested deeper) still
+%% starts its own template at the root context.
+raw_text_svg_wrapped_branch_context(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_rt_svg_wrapped). "
+        "-export([bare/1, wrapped/1]). "
+        "bare(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
+        "        false -> ~\"\" end]}). "
+        "wrapped(Bindings) -> "
+        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:html({title, [], [arizona_template:get(t, Bindings)]}); "
+        "        false -> ~\"\" end]}). "
+    ),
+    B0 = #{f => true, t => ~"A"},
+    Run = fun(F) ->
+        {H0, Snap, _} = arizona_render:render(Mod:F(B0), #{}),
+        {Ops, _, _} = arizona_diff:diff(Mod:F(B0#{t => ~"B"}), Snap, #{}, #{t => true}),
+        {iolist_to_binary(H0), Ops}
+    end,
+    {WrappedHTML, WrappedOps} = Run(wrapped),
+    ?assertMatch({match, _}, re:run(WrappedHTML, ~"<title[^>]*><!--az:")),
+    ?assertMatch([[_Op, _Az, ~"B"]], WrappedOps),
+    ?assertEqual(Run(bare), {WrappedHTML, WrappedOps}).
+
+%% Unwrapping a whole-tail `?html` also gives it the bare branch's read tracking: a
+%% binding read only inside the wrapped branch is a dependency of the slot, so a change to
+%% it alone patches the branch instead of leaving it frozen at its first render.
+wrapped_branch_reads_tracked(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_wrapped_branch_reads). -export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:html({b, [], [arizona_template:get(t, Bindings)]}); "
+        "        false -> ~\"\" end]}). "
+    ),
+    B0 = #{f => true, t => ~"A"},
+    {_, Snap, _} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, _, _} = arizona_diff:diff(Mod:render(B0#{t => ~"B"}), Snap, #{}, #{t => true}),
+    ?assertMatch([[_Op, _Az, ~"B"]], Ops).
+
 %% A content `?local` under a raw-text element is a compile error -- the client
 %% resolves a local slot through its markers, and raw-text content has none. An
 %% SVG `<title>` is not raw text, so it carries markers and a `?local` there is
@@ -3030,7 +3137,10 @@ raw_text_attr_diffs_content_render_once(Config) when is_list(Config) ->
     {OpsSrc, _} = arizona_diff:diff(Mod:render(#{src => <<"/b.js">>, body => <<"A">>}), Snap0),
     ?assertNotEqual([], OpsSrc),
     {OpsBody, _} = arizona_diff:diff(Mod:render(#{src => <<"/a.js">>, body => <<"B">>}), Snap0),
-    ?assertMatch([[_Op, <<"QP3ZUD-0">>, #{~"d" := [~"B"]}]], OpsBody).
+    {match, [ElemAz]} = re:run(
+        HTML, ~"<script az=\"([^\"]+)\"", [{capture, all_but_first, binary}]
+    ),
+    ?assertMatch([[_Op, ElemAz, #{~"d" := [~"B"]}]], OpsBody).
 
 %% Escapable (<title>) and raw (<script>) raw-text elements adjacent under <head>,
 %% followed by a normal element: both kinds restore context, so the trailing
