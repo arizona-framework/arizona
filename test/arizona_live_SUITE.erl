@@ -125,6 +125,7 @@
     stream_grandchild_survives_unrelated_insert/1,
     stream_wrapped_children_unmounted_on_delete/1,
     stream_wrapped_child_unmounted_on_switch_off/1,
+    stream_rerendered_child_drops_grandchild/1,
     on_mount_transforms_bindings/1,
     on_mount_works_on_navigate/1,
     on_mount_empty_is_noop/1,
@@ -266,7 +267,8 @@ groups() ->
             nested_stream_child_unmounted_on_window_push_out,
             stream_grandchild_survives_unrelated_insert,
             stream_wrapped_children_unmounted_on_delete,
-            stream_wrapped_child_unmounted_on_switch_off
+            stream_wrapped_child_unmounted_on_switch_off,
+            stream_rerendered_child_drops_grandchild
         ]},
         {on_mount, [parallel], [
             on_mount_transforms_bindings,
@@ -2044,6 +2046,30 @@ stream_wrapped_child_unmounted_on_switch_off(Config) when is_list(Config) ->
     ?assertEqual(
         [{child_unmounted, ~"cw-a"}],
         lifecycle_event(Pid, ~"swl", ~"switch_off", #{~"id" => ~"a"})
+    ).
+
+%% An item child the drain re-renders keeps its own place, but a grandchild its new
+%% render no longer reaches unmounts.
+%% Both as an item's own dynamic, whose snapshot names only the child, and inside
+%% a wrapper, whose recorded set names the grandchild too.
+stream_rerendered_child_drops_grandchild(Config) when is_list(Config) ->
+    Pid = start_stream_lifecycle(#{}),
+    ?assertEqual(
+        [{child_mounted, ~"c-a-g"}],
+        stream_lifecycle_event(Pid, ~"grand", #{~"id" => ~"a", ~"on" => true})
+    ),
+    ?assertEqual(
+        [{child_unmounted, ~"c-a-g"}],
+        stream_lifecycle_event(Pid, ~"grand", #{~"id" => ~"a", ~"on" => false})
+    ),
+    WPid = start_lifecycle(arizona_stream_wrapped_lifecycle_root, #{}),
+    ?assertEqual(
+        [{child_mounted, ~"cw-a-g"}],
+        lifecycle_event(WPid, ~"swl", ~"grand", #{~"id" => ~"a", ~"on" => true})
+    ),
+    ?assertEqual(
+        [{child_unmounted, ~"cw-a-g"}],
+        lifecycle_event(WPid, ~"swl", ~"grand", #{~"id" => ~"a", ~"on" => false})
     ).
 
 start_stream_lifecycle(Init) ->

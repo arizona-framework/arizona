@@ -9,7 +9,8 @@
 %% not a direct dynamic of the item: one inside an element a conditional returns
 %% (`cw-`), one inside a `?stateless` (`cs-`), one in a content-slot list (`cl-`).
 %% Each is reached through a nested snapshot, so the item's own dynamics name no
-%% view id for it.
+%% view id for it. The item's `grand` field reaches the `cw-` child as a prop, so
+%% an item update can make that child render a grandchild or drop it.
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
@@ -34,7 +35,9 @@ render(Bindings) ->
                                 true ->
                                     {'div', [], [
                                         ?stateful(arizona_stream_lifecycle_child, #{
-                                            id => <<"cw-", Key/binary>>, notify => ?get(notify)
+                                            id => <<"cw-", Key/binary>>,
+                                            notify => ?get(notify),
+                                            grand => arizona_template:get(grand, Item, false)
                                         })
                                     ]};
                                 false ->
@@ -69,6 +72,8 @@ wrapper(Bindings) ->
     az:handle_event_ret().
 handle_event(~"delete", #{~"id" := Id}, #{items := S} = Bindings) ->
     {Bindings#{items => arizona_stream:delete(S, Id)}, #{}, []};
+handle_event(~"grand", #{~"id" := Id, ~"on" := On}, #{items := S} = Bindings) ->
+    {Bindings#{items => arizona_stream:update(S, Id, #{id => Id, grand => On})}, #{}, []};
 handle_event(~"switch_off", #{~"id" := Id}, #{items := S} = Bindings) ->
     {Bindings#{items => arizona_stream:update(S, Id, #{id => Id, on => false})}, #{}, []}.
 

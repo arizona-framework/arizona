@@ -636,31 +636,102 @@ append_ops(Ops, Tail) ->
 %% `drop` eviction, a sort or insert pushing it out of a `limit` window. Its child
 %% then stayed in the views map, so `arizona_live` never unmounted it.
 %%
-%% A child the drain rendered is in `LocalNew` with its fresh subtree. The rest are
-%% carried from `Old0` with their subtrees; seeding the carry with a re-rendered
-%% child would pull back a grandchild its new render dropped.
+%% Worked out as the old stream's live views minus what the drain took away, plus
+%% what it rendered. Taken away is every view an old item reached through a value
+%% that is no longer there as it was: the item left, or the drain re-evaluated that
+%% value. A value the drain kept is the same term, so an unchanged item costs one
+%% comparison and is never walked. A re-evaluated value's views, if it still holds
+%% them, are back in `LocalNew` with their fresh subtrees, so subtracting the old
+%% subtree also drops a grandchild the new render no longer reaches.
 %%
-%% A stream that held no child views settles from the set: anything it holds now
-%% was rendered by this drain, so `LocalNew` is already the answer.
+%% The old views are taken through `live_subtree/2`, not straight from the
+%% recorded set: a grandchild a child rendered on its own event is recorded on no
+%% container, and carrying the set verbatim dropped it.
+%%
+%% `LocalNew` is the whole answer, with nothing carried, when no old value was
+%% kept as it was: a stream that held no child views, an old slot that held a list
+%% rather than a stream, or a drain that took every old value -- what reconciling a
+%% nested stream does, since its items were all evaluated again.
 merge_stream_child_views(Old, #{items := Items}, LocalNew, Old0) ->
     case Old of
-        #{child_views := OldChildViews} when map_size(OldChildViews) > 0 ->
-            Carried =
-                #{
-                    Id => true
-                 || _Key := ItemD <- Items,
-                    {_Az, V, _Deps} <- ItemD,
-                    Id <- value_view_ids(V),
-                    not is_map_key(Id, LocalNew)
-                },
-            maps:merge(live_subtree(Carried, Old0), LocalNew);
+        #{child_views := OldChildViews, items := OldItems} when
+            map_size(OldChildViews) > 0, is_map(OldItems)
+        ->
+            case taken_views(maps:iterator(OldItems), Items, {[], false}) of
+                {_Taken, false} ->
+                    LocalNew;
+                {Taken, true} ->
+                    Carried = live_subtree(OldChildViews, Old0),
+                    maps:merge(
+                        without_stale(stale_views(Taken, LocalNew, Old0), Carried, Old0), LocalNew
+                    )
+            end;
         #{} ->
             LocalNew
     end.
 
-value_view_ids(#{view_id := VId}) -> [VId];
-value_view_ids(#{child_views := ChildIds}) -> maps:keys(ChildIds);
-value_view_ids(_V) -> [].
+without_stale([], Carried, _Old0) ->
+    Carried;
+without_stale(Stale, Carried, Old0) ->
+    maps:without(maps:keys(live_subtree(maps:from_keys(Stale, true), Old0)), Carried).
+
+%% The views old items reached through values the drain did not keep as they were,
+%% and whether it kept any old value as it was.
+taken_views(Iter, Items, {Taken, AnyKept} = Acc) ->
+    case maps:next(Iter) of
+        none ->
+            Acc;
+        {Key, OldD, Iter1} ->
+            case Items of
+                #{Key := OldD} ->
+                    taken_views(Iter1, Items, {Taken, true});
+                #{Key := NewD} ->
+                    taken_views(Iter1, Items, changed_value_views(OldD, NewD, Acc));
+                #{} ->
+                    taken_views(Iter1, Items, {item_views(OldD, Taken), AnyKept})
+            end
+    end.
+
+%% The roots of the subtrees to subtract: a taken view the drain did not render
+%% again, and the old descendants of one it did. A re-rendered view's own entry,
+%% and every descendant its new render still reaches, are in `LocalNew` and win
+%% the merge anyway, so only what lies below it needs naming -- and most such
+%% views are leaves, which name nothing.
+stale_views(Taken, LocalNew, Old0) ->
+    [
+        Id
+     || View <- Taken,
+        Id <-
+            case LocalNew of
+                #{View := _} -> old_descendants(View, Old0);
+                #{} -> [View]
+            end
+    ].
+
+old_descendants(View, Old0) ->
+    case Old0 of
+        #{View := #{snapshot := #{child_views := ChildIds}}} -> maps:keys(ChildIds);
+        #{} -> []
+    end.
+
+%% A kept value counts as keeping something only when it holds a view: an item's
+%% attribute or text slot is kept far more often than not, and counting it would
+%% send every reconcile down the carrying path.
+changed_value_views(
+    [{_Az, V, _Deps} | OldRest], [{_NewAz, V, _NewDeps} | NewRest], {Taken, AnyKept}
+) ->
+    changed_value_views(OldRest, NewRest, {Taken, AnyKept orelse value_views(V, []) =/= []});
+changed_value_views([{_Az, V, _Deps} | OldRest], [_New | NewRest], {Taken, AnyKept}) ->
+    changed_value_views(OldRest, NewRest, {value_views(V, Taken), AnyKept});
+changed_value_views(OldD, _NewD, {Taken, AnyKept}) ->
+    {item_views(OldD, Taken), AnyKept}.
+
+item_views(ItemD, Acc) ->
+    [Id || {_Az, V, _Deps} <:- ItemD, Id <- value_views(V, [])] ++ Acc.
+
+value_views(#{view_id := VId}, Acc) -> [VId | Acc];
+value_views(#{child_views := ChildIds}, Acc) -> maps:keys(ChildIds) ++ Acc;
+value_views(_V, Acc) -> Acc.
 
 -doc """
 Carries a skipped value's child views (and their live subtrees) from the old
