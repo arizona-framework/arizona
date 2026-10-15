@@ -141,7 +141,7 @@ A view transition wraps **any** DOM change in `document.startViewTransition` (no
 
 ## Configuration -- env-var references (`arizona_config`)
 
-Any `arizona` app-env value (sys.config) may be declared as an environment-variable reference instead of a literal, resolved at startup by `arizona_config`. Two forms: `{env, "VAR"}` -- **required**, returns `$VAR` as a binary and crashes (`env_not_set`) if unset; `{env, "VAR", Default}` -- **optional**, coerces `$VAR` to the type of `Default` and falls back to `Default` when unset. Env vars are strings, so coercion is driven by the default's type: integer (`list_to_integer`), float, boolean (`"true"`/`"false"`, case-insensitive), binary, atom (`list_to_existing_atom`), or list (a comma-split into trimmed binaries, the `csrf_origins` shape). The required form has no default and yields a binary (suits `secret_key`).
+Any `arizona` app-env value (sys.config) may be declared as an environment-variable reference instead of a literal, resolved at startup by `arizona_config`. Two forms: `{env, "VAR"}` -- **required**, returns `$VAR` as a binary and crashes (`env_not_set`) if unset; `{env, "VAR", Default}` -- **optional**, coerces `$VAR` to the type of `Default` and falls back to `Default` when unset. Env vars are strings, so coercion is driven by the default's type: integer (`list_to_integer`), float (an integer value like `"2"` reads as `2.0`), boolean (`"true"`/`"false"`, case-insensitive), binary, atom (`list_to_existing_atom`), or list (a comma-split into trimmed binaries, the `csrf_origins` shape). The required form has no default and yields a binary (suits `secret_key`). A default of any other type (a map, a tuple, a list of atoms) has no coercion and raises a formatted `unsupported_default`, set or not.
 
 ```erlang
 {arizona, [
@@ -156,6 +156,7 @@ Any `arizona` app-env value (sys.config) may be declared as an environment-varia
 ```
 
 References resolve **anywhere** in the config surface: the scalar keys (`secret_key`, `check_origin`, `csrf_origins`, `session_max_age`, `session_max_bytes`, `session_secure`, `flash_secure`, `session_store_sweep_ms`, ...) go through `arizona_config:get_env/1,2` at their read sites; the nested `server` map (`port`, `scheme`, `tls` cert paths, `proto_opts` tunables) is resolved once in `arizona_roadrunner_server:start/2`. `resolve/1` recurses into maps, lists, and 2-tuples (proplist pairs) only, so route tuples (`{live, Path, Handler, Opts}` -- all >=3-tuples) pass through untouched: an operator-supplied `{env, _, _}` term sitting inside a route's `bindings`/`state` is never rewritten.
+
 
 ## CSRF / Origin checking
 

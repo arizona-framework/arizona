@@ -6,6 +6,7 @@
 
 -export([resolve_integer/1]).
 -export([resolve_float/1]).
+-export([resolve_float_accepts_integer/1]).
 -export([resolve_boolean/1]).
 -export([resolve_binary/1]).
 -export([resolve_atom/1]).
@@ -20,6 +21,7 @@
 -export([resolve_invalid_boolean_crashes/1]).
 -export([resolve_invalid_atom_crashes/1]).
 -export([invalid_value_error_is_formatted/1]).
+-export([resolve_unsupported_default_crashes_formatted/1]).
 -export([resolve_scalar_passthrough/1]).
 -export([resolve_nested_server_map/1]).
 -export([resolve_tls_paths/1]).
@@ -38,6 +40,7 @@ groups() ->
         {config, [], [
             resolve_integer,
             resolve_float,
+            resolve_float_accepts_integer,
             resolve_boolean,
             resolve_binary,
             resolve_atom,
@@ -52,6 +55,7 @@ groups() ->
             resolve_invalid_boolean_crashes,
             resolve_invalid_atom_crashes,
             invalid_value_error_is_formatted,
+            resolve_unsupported_default_crashes_formatted,
             resolve_scalar_passthrough,
             resolve_nested_server_map,
             resolve_tls_paths,
@@ -75,6 +79,18 @@ resolve_integer(Config) when is_list(Config) ->
 resolve_float(Config) when is_list(Config) ->
     with_env("AZ_CFG_FLOAT", "2.5", fun() ->
         ?assertEqual(2.5, arizona_config:resolve({env, "AZ_CFG_FLOAT", 1.0}))
+    end).
+
+resolve_float_accepts_integer(Config) when is_list(Config) ->
+    %% `list_to_float/1` rejects "2"; for a float default it plainly means 2.0.
+    with_env("AZ_CFG_FLOAT_INT", "2", fun() ->
+        ?assertEqual(2.0, arizona_config:resolve({env, "AZ_CFG_FLOAT_INT", 1.0}))
+    end),
+    with_env("AZ_CFG_FLOAT_INT", "2x", fun() ->
+        ?assertError(
+            {env_invalid_value, "AZ_CFG_FLOAT_INT", "2x", float},
+            arizona_config:resolve({env, "AZ_CFG_FLOAT_INT", 1.0})
+        )
     end).
 
 resolve_boolean(Config) when is_list(Config) ->
@@ -190,6 +206,27 @@ invalid_value_error_is_formatted(Config) when is_list(Config) ->
     ?assertMatch({_, _}, binary:match(Msg, ~"PORT")),
     ?assertMatch({_, _}, binary:match(Msg, ~"not a valid integer")).
 
+%% A default with no coercion is a broken reference whether or not the variable
+%% is set, and says so through `format_error/2` instead of a bare function_clause.
+resolve_unsupported_default_crashes_formatted(Config) when is_list(Config) ->
+    Defaults = [#{a => 1}, {a, b}, [a, b]],
+    without_env("AZ_CFG_BADDEFAULT", fun() ->
+        [
+            ?assertError(
+                {unsupported_default, "AZ_CFG_BADDEFAULT", Default},
+                arizona_config:resolve({env, "AZ_CFG_BADDEFAULT", Default})
+            )
+         || Default <- Defaults
+        ]
+    end),
+    with_env("AZ_CFG_BADDEFAULT", "x", fun() ->
+        Msg = formatted_error(fun() ->
+            arizona_config:resolve({env, "AZ_CFG_BADDEFAULT", #{a => 1}})
+        end),
+        ?assertMatch({_, _}, binary:match(Msg, ~"AZ_CFG_BADDEFAULT")),
+        ?assertMatch({_, _}, binary:match(Msg, ~"unsupported type"))
+    end).
+
 %% --------------------------------------------------------------------
 %% resolve/1 -- structure recursion
 %% --------------------------------------------------------------------
@@ -283,6 +320,16 @@ with_env(Var, Value, Fun) ->
         Fun()
     after
         os:unsetenv(Var)
+    end.
+
+%% The message `erl_error` renders for the error `Fun` raises, through the
+%% raise site's `error_info` annotation.
+formatted_error(Fun) ->
+    try Fun() of
+        Result -> error({no_error, Result})
+    catch
+        error:Reason:Stacktrace ->
+            unicode:characters_to_binary(erl_error:format_exception(error, Reason, Stacktrace))
     end.
 
 without_env(Var, Fun) ->
