@@ -9,6 +9,9 @@
 -export([armed_collector_drains_once/1]).
 -export([observe_attr_ignores_non_az_names/1]).
 -export([layout_command_warns_at_ssr/1]).
+-export([walk_cache_follows_hot_reload/1]).
+-export([walk_asks_for_a_missing_callee_once/1]).
+-export([walk_terminates_on_a_cycle/1]).
 
 all() ->
     [
@@ -18,7 +21,10 @@ all() ->
         observe_is_a_noop_until_armed,
         armed_collector_drains_once,
         observe_attr_ignores_non_az_names,
-        layout_command_warns_at_ssr
+        layout_command_warns_at_ssr,
+        walk_cache_follows_hot_reload,
+        walk_asks_for_a_missing_callee_once,
+        walk_terminates_on_a_cycle
     ].
 
 %% The walk follows both the transform-recorded dependency (arizona_walk_child)
@@ -92,4 +98,89 @@ layout_command_warns_at_ssr(Config) when is_list(Config) ->
         end
     after
         ok = logger:remove_handler(HandlerId)
+    end.
+
+%% The walk caches each module's names and edges keyed by the loaded code's MD5,
+%% so a hot reload must be seen on the very next walk: new code, new MD5, a
+%% re-read. Reloading the first version back proves the stamp is compared, not
+%% just set once. The probe's code carries its names the way a template's
+%% statics carry a folded name, since the MD5 covers code, not attributes.
+walk_cache_follows_hot_reload(Config) when is_list(Config) ->
+    Mod = arizona_event_attrs_reload_probe,
+    ok = load_edges_module(Mod, [~"az-copy"], []),
+    ?assertEqual([~"az-copy"], arizona_event_attrs:all([Mod])),
+    ok = load_edges_module(Mod, [~"az-paste"], []),
+    ?assertEqual([~"az-paste"], arizona_event_attrs:all([Mod])),
+    ok = load_edges_module(Mod, [~"az-copy"], []),
+    ?assertEqual([~"az-copy"], arizona_event_attrs:all([Mod])).
+
+%% A dangling edge (a recorded callee that does not exist) is asked of the code
+%% server once; every later walk answers from the cached absence instead of a
+%% code-server round trip per connect.
+walk_asks_for_a_missing_callee_once(Config) when is_list(Config) ->
+    Root = arizona_event_attrs_missing_root,
+    Missing = arizona_event_attrs_never_compiled,
+    ok = load_edges_module(Root, [~"az-input"], [Missing]),
+    %% A process cannot be its own call tracer, so a collector receives them.
+    Tracer = spawn_link(fun() -> collect_ensure_loaded(Missing, 0) end),
+    1 = erlang:trace_pattern({code, ensure_loaded, 1}, true, []),
+    1 = erlang:trace(self(), true, [call, {tracer, Tracer}]),
+    try
+        ?assertEqual([~"az-input"], arizona_event_attrs:all([Root])),
+        ?assertEqual([~"az-input"], arizona_event_attrs:all([Root])),
+        ?assertEqual([~"az-input"], arizona_event_attrs:all([Root]))
+    after
+        1 = erlang:trace(self(), false, [call]),
+        1 = erlang:trace_pattern({code, ensure_loaded, 1}, false, [])
+    end,
+    Ref = erlang:trace_delivered(self()),
+    receive
+        {trace_delivered, _, Ref} -> ok
+    after 1000 ->
+        ct:fail("trace delivery never confirmed")
+    end,
+    Tracer ! {count, self()},
+    receive
+        {ensure_loaded_count, Count} -> ?assertEqual(1, Count)
+    after 1000 ->
+        ct:fail("the trace collector never answered")
+    end.
+
+%% Two modules naming each other terminate the walk and union both.
+walk_terminates_on_a_cycle(Config) when is_list(Config) ->
+    ok = load_edges_module(arizona_event_attrs_cycle_a, [~"az-focusin"], [
+        arizona_event_attrs_cycle_b
+    ]),
+    ok = load_edges_module(arizona_event_attrs_cycle_b, [~"az-focusout"], [
+        arizona_event_attrs_cycle_a
+    ]),
+    ?assertEqual(
+        [~"az-focusin", ~"az-focusout"],
+        arizona_event_attrs:all([arizona_event_attrs_cycle_a])
+    ).
+
+%% Compiles and (re)loads a module carrying the given attributes, and an
+%% exported `markup/0` holding the names as a literal, the way a template's
+%% statics hold a folded name. Purges an old version first so it can be loaded
+%% any number of times.
+load_edges_module(Mod, Names, Deps) ->
+    Forms = [
+        {attribute, 1, module, Mod},
+        {attribute, 1, export, [{markup, 0}]},
+        {attribute, 1, arizona_az_attrs, Names},
+        {attribute, 1, arizona_az_deps, Deps},
+        {function, 1, markup, 0, [{clause, 1, [], [], [erl_parse:abstract(Names)]}]}
+    ],
+    {ok, Mod, Bin} = compile:forms(Forms, []),
+    true = code:soft_purge(Mod),
+    {module, Mod} = code:load_binary(Mod, "", Bin),
+    ok.
+
+collect_ensure_loaded(Mod, N) ->
+    receive
+        {trace, _, call, {code, ensure_loaded, [Mod]}} -> collect_ensure_loaded(Mod, N + 1);
+        {trace, _, call, {code, ensure_loaded, [_Other]}} -> collect_ensure_loaded(Mod, N);
+        {count, From} -> From ! {ensure_loaded_count, N}
+    after 5000 ->
+        exit(no_count_request)
     end.
