@@ -46,7 +46,8 @@
     mixed_files_only_compile_erl/1,
     deleted_file_skips_compile/1,
     deleted_file_alongside_good_compiles_good/1,
-    load_failure_stashes_error/1
+    load_failure_stashes_error/1,
+    warnings_as_errors_is_a_compile_error/1
 ]).
 
 %% agent group tests (compiling through a running rebar_agent)
@@ -55,7 +56,8 @@
     agent_failure_stashes_changed_file_errors/1,
     agent_failure_unreproduced_is_unattributed/1,
     agent_failure_keeps_other_file_errors/1,
-    agent_failure_skips_deleted_file/1
+    agent_failure_skips_deleted_file/1,
+    agent_failure_reports_warnings_as_errors/1
 ]).
 
 %% blacklist group tests
@@ -124,14 +126,16 @@ groups() ->
             mixed_files_only_compile_erl,
             deleted_file_skips_compile,
             deleted_file_alongside_good_compiles_good,
-            load_failure_stashes_error
+            load_failure_stashes_error,
+            warnings_as_errors_is_a_compile_error
         ]},
         {agent, [], [
             agent_success_clears_every_error,
             agent_failure_stashes_changed_file_errors,
             agent_failure_unreproduced_is_unattributed,
             agent_failure_keeps_other_file_errors,
-            agent_failure_skips_deleted_file
+            agent_failure_skips_deleted_file,
+            agent_failure_reports_warnings_as_errors
         ]},
         {blacklist, [sequence], [
             blacklisted_app_module_not_reloaded,
@@ -486,6 +490,19 @@ load_failure_stashes_error(Config) ->
     ),
     ?assertMatch({match, _}, re:run(Page, ~"arizona_dev_ct_onload compiled but did not load")).
 
+%% A module whose source turns on `warnings_as_errors` fails on a warning alone:
+%% the compiler answers `{error, [], Warnings}`. That is a failed compile -- the
+%% module is not reloaded -- so the warnings are its errors, not an `ok`.
+warnings_as_errors_is_a_compile_error(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_wae.erl"),
+    ok = file:write_file(File, wae_module_src()),
+    ?assertMatch(
+        {error, #{errors := [{File, [{_, erl_lint, {unused_var, 'X'}}]}]}},
+        arizona_reloader:compile([File])
+    ),
+    ?assertMatch(#{errors := [{File, [_]}]}, arizona_reloader:get_error()),
+    ?assertNot(erlang:function_exported(arizona_dev_ct_wae, f, 1)).
+
 %% ============================================================================
 %% agent group tests (arizona_reloader, rebar_agent mode)
 %% ============================================================================
@@ -541,6 +558,17 @@ agent_failure_skips_deleted_file(Config) ->
     ok = set_agent_result({error, failed}),
     ?assertEqual({error, #{errors => []}}, arizona_reloader:compile([Missing])),
     ?assertEqual(#{errors => []}, arizona_reloader:get_error()).
+
+%% The diagnostics recompile sees a warnings-as-errors failure the same way the
+%% manual compile does: the warnings are the errors.
+agent_failure_reports_warnings_as_errors(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_wae.erl"),
+    ok = file:write_file(File, wae_module_src()),
+    ok = set_agent_result({error, failed}),
+    ?assertMatch(
+        {error, #{errors := [{File, [{_, erl_lint, {unused_var, 'X'}}]}]}},
+        arizona_reloader:compile([File])
+    ).
 
 %% ============================================================================
 %% consistency group tests (arizona_reloader_consistency)
@@ -891,6 +919,12 @@ mixed_good_module_src() ->
     "-module(arizona_dev_ct_mixed).\n"
     "-export([check/0]).\n"
     "check() -> ok.\n".
+
+wae_module_src() ->
+    "-module(arizona_dev_ct_wae).\n"
+    "-compile(warnings_as_errors).\n"
+    "-export([f/1]).\n"
+    "f(X) -> ok.\n".
 
 %% --- fake rebar_agent ---
 
