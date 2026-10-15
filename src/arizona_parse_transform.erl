@@ -1359,7 +1359,9 @@ inline_helper_calls(Expr, Module, FunDefs, Target) ->
 %% data. A bare-element body spliced there is the same value the call returned, so it
 %% is inlined anywhere; a `?html`-wrapped body is not (unwrapping it would hand the
 %% consumer the inner element or list instead of the template the call returned), so
-%% off a tail the call is left to run.
+%% off a tail the call is left to run. A comprehension in content builds the list the
+%% slot renders, so its body is `lc_body`: content for rejecting a helper that would
+%% crash at render, data for inlining (the comprehension is not compiled as markup).
 ih({call, L, {atom, _, Name}, Args} = Call, Ctx, Ch, Tail) ->
     ih_call(Call, Name, Args, L, Ctx, Ch, Tail);
 ih(
@@ -1384,6 +1386,10 @@ ih({tuple, L, [Tag, Attrs, Children]} = T, Ctx, Ch, Tail) ->
         false ->
             ih_generic(T, Ctx, Ch, Tail)
     end;
+ih({lc, L, Body, Quals}, Ctx, Ch, true) ->
+    ih_content_lc(L, Body, Quals, Ctx, Ch);
+ih({lc, L, Body, Quals}, Ctx, Ch, lc_body) ->
+    ih_content_lc(L, Body, Quals, Ctx, Ch);
 ih({cons, L, H, T}, Ctx, Ch, true) ->
     %% A list nested inside the list is a single value, not content.
     {H1, Ch1} = ih(H, Ctx, Ch, not is_list_ast(H)),
@@ -1405,6 +1411,11 @@ ih(L, Ctx, Ch, _Tail) when is_list(L) ->
     ih_list(L, Ctx, Ch, false);
 ih(Other, _Ctx, Ch, _Tail) ->
     {Other, Ch}.
+
+ih_content_lc(L, Body, Quals, Ctx, Ch) ->
+    {Body1, Ch1} = ih(Body, Ctx, Ch, lc_body),
+    {Quals1, Ch2} = ih_list(Quals, Ctx, Ch1, false),
+    {{lc, L, Body1, Quals1}, Ch2}.
 
 %% Control flow: a clause body's last expression carries the value, so it
 %% inherits `Tail`; scrutinees, timeouts and `after` bodies never do.
@@ -1534,10 +1545,10 @@ fresh_helper_var(P) ->
 %% Anywhere else (a function argument, a scrutinee) the value is consumed as data, and
 %% an atom-tagged tuple is indistinguishable from an ordinary data function's result.
 helper_plan(Name, Arity, FunDefs, Target, CallLine, Tail) ->
-    case helper_plan_shape(Name, Arity, FunDefs, Target) of
-        {reject, Reason} when Tail -> parse_error(Reason, CallLine);
-        {reject, _Reason} -> skip;
-        Plan -> Plan
+    case {helper_plan_shape(Name, Arity, FunDefs, Target), Tail} of
+        {{reject, _Reason}, false} -> skip;
+        {{reject, Reason}, _Content} -> parse_error(Reason, CallLine);
+        {Plan, _Tail} -> Plan
     end.
 
 %% The non-throwing decision core -- also reused by the position-blind

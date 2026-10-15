@@ -311,6 +311,8 @@
     helper_wrapped_multi_statement_untouched/1,
     helper_multi_clause_data_arg_untouched/1,
     helper_guarded_data_arg_untouched/1,
+    helper_multi_clause_comprehension_error/1,
+    helper_multi_clause_comprehension_arg_untouched/1,
     tracked_get_submap_errors/1,
     tracked_get_submap_az_errors/1,
     tracked_get_lazy_submap_errors/1,
@@ -948,7 +950,9 @@ groups() ->
             helper_multi_clause_scalar_untouched,
             helper_wrapped_multi_statement_untouched,
             helper_multi_clause_data_arg_untouched,
-            helper_guarded_data_arg_untouched
+            helper_guarded_data_arg_untouched,
+            helper_multi_clause_comprehension_error,
+            helper_multi_clause_comprehension_arg_untouched
         ]},
         %% Reject the tracked accessor reading a non-bindings (sub-)map
         {tracked_get, [parallel], [
@@ -9399,6 +9403,37 @@ helper_guarded_data_arg_untouched(Config) when is_list(Config) ->
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{x => 7})),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"7,2")).
+
+%% A comprehension in a content slot renders the list it builds, so an element
+%% helper called as its body is content too: one that cannot be inlined is
+%% rejected, as it would crash at render.
+helper_multi_clause_comprehension_error(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_helper_multi_lc). "
+        "-export([render/1]). "
+        "row(ok) -> {'li', [], [<<\"OK\">>]}; "
+        "row(_) -> {'li', [], [<<\"ERR\">>]}. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'ul', [], "
+        "        [[row(X) || X <- arizona_template:get(xs, Bindings)]]}). ",
+        fun(R) -> R =:= {helper_multi_clause, row, 1} end
+    ).
+
+%% The same comprehension handed to a function is data, so its body is left as a
+%% call.
+helper_multi_clause_comprehension_arg_untouched(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_helper_multi_lc_arg). "
+        "-export([render/1]). "
+        "color(red) -> {rgb, 255, 0, 0}; "
+        "color(_) -> {rgb, 0, 0, 0}. "
+        "count(L) -> integer_to_binary(length([R || {rgb, R, _, _} <- L, R > 0])). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], "
+        "        [count([color(C) || C <- arizona_template:get(cs, Bindings)])]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{cs => [red, blue, red]})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"2")).
 
 %% ============================================================================
 %% Tracked get/get_lazy on a non-bindings map

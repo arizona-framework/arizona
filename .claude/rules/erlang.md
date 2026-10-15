@@ -656,7 +656,8 @@ cannot be cleanly inlined are compile errors when the body is a **bare** element
 into a case inside the element), a guard (`helper_guarded`),
 non-variable/repeated/`_` parameters (`helper_params_not_vars`), statements before
 the element (`helper_body_not_single_expr`), and recursion (`helper_recursive`).
-Only a call whose value **is** content (the positions listed above) is rejected: a
+Only a call whose value **is** content (the positions listed above, plus the body of a
+list comprehension sitting in one, whose results the slot renders) is rejected: a
 function argument or a `case` scrutinee consumes the value as data, and an ordinary
 data function returning an atom-tagged tuple (`color(red) -> {rgb, 255, 0, 0}`)
 looks the same as an element there, so the call is left to run.
