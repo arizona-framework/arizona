@@ -674,6 +674,18 @@ template function, as for `?each` named refs above. An element-**list** body com
 nested-template child whose literal reads are tracked on the slot -- the same
 tracking a literal element-list child gets.
 
+A parameter the body reads in a **pattern or guard** (`mark(Sel, Id) -> {span, [], [case
+Id of Sel -> ... end]}`, `if N > Max`, a map key, a binary size, a `?=`) cannot take the
+argument expression -- a call is not a pattern. The inlined expression that tests it is
+wrapped in a block binding a fresh variable to the argument first (`begin AzArg = <arg>,
+case Id of AzArg -> ... end end`), so the pattern compares against the argument's value,
+never a fresh binder or a caller variable of the same name, and the argument's reads run in
+the slot's bracket and track. A fun head or generator inside the body that rebinds the
+parameter's name shadows it as usual. The one place with nowhere to put that binding is the
+head or guard of an `?each` callback, which must stay a fun literal: reading a parameter
+there is a compile error (`helper_param_in_each_guard`); test it in a `case` inside the item
+element instead.
+
 A whole-body `?html(...)` helper is inlined only where its value **is** content -- the slot
 expression, an item of a children list or of a content-slot list, or a control-flow tail of
 one. Anywhere else (a function argument, a `case` scrutinee, an attribute) the call stays and
@@ -688,7 +700,9 @@ cannot be cleanly inlined are compile errors when the body is a **bare** element
 `bad_template_value`): multi-clause (`helper_multi_clause` -- collapse the clauses
 into a case inside the element), a guard (`helper_guarded`),
 non-variable/repeated/`_` parameters (`helper_params_not_vars`), statements before
-the element (`helper_body_not_single_expr`), and recursion (`helper_recursive`).
+the element (`helper_body_not_single_expr`), and recursion (`helper_recursive`); a
+parameter read in an `?each` callback's head or guard (`helper_param_in_each_guard`, above)
+is rejected whichever form the body takes.
 The same shapes with a whole-body `?html` wrapper are **not** rejected -- they
 already render as a runtime nested template and keep doing so (body reads frozen;
 hand a subset over with `?with` below). Genuinely remote calls (`mod:helper()`),
