@@ -33,6 +33,7 @@
     terminate_kills_streaming_worker/1,
     buffered_dispatch_runs_in_worker/1,
     buffered_dispatch_survives_short_ttl/1,
+    stale_ttl_expiry_spares_active_session/1,
     buffered_cancel_frees_caller/1,
     buffered_worker_crash_frees_caller/1,
     buffered_block_does_not_wedge_session/1,
@@ -91,6 +92,7 @@ all() ->
         terminate_kills_streaming_worker,
         buffered_dispatch_runs_in_worker,
         buffered_dispatch_survives_short_ttl,
+        stale_ttl_expiry_spares_active_session,
         buffered_cancel_frees_caller,
         buffered_worker_crash_frees_caller,
         buffered_block_does_not_wedge_session,
@@ -470,6 +472,26 @@ buffered_dispatch_survives_short_ttl(_Config) ->
         {'DOWN', Ref, process, Pid, normal} -> ok
     after 5000 -> ct:fail(ttl_did_not_rearm)
     end.
+
+%% The idle timer fires while a request already sits in the session's mailbox.
+%% Serving it cancels the timer, but the expiry is already queued behind it; that
+%% stale expiry must not reap the session the request is now holding open.
+stale_ttl_expiry_spares_active_session(_Config) ->
+    {_Id, Pid} = start(50),
+    ok = sys:suspend(Pid),
+    Self = self(),
+    _ = spawn(fun() ->
+        Self ! {result, arizona_mcp_session:dispatch(Pid, ~"tools/call", #{~"name" => ~"sleep"}, 7)}
+    end),
+    %% Let the dispatch reach the mailbox, then the timer fire behind it.
+    timer:sleep(150),
+    ok = sys:resume(Pid),
+    Result =
+        receive
+            {result, R} -> R
+        after 5000 -> ct:fail(no_result)
+        end,
+    ?assertMatch({reply, #{~"result" := #{~"content" := [#{~"text" := ~"slept"}]}}}, Result).
 
 buffered_cancel_frees_caller(_Config) ->
     {_Id, Pid} = start(60000),
