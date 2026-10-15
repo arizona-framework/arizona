@@ -364,7 +364,7 @@ terminal_escape_utf8_table_edges(Config) when is_list(Config) ->
 %% Whatever bytes come in, what goes out is valid UTF-8 holding no C0 control
 %% (bar `\n`/`\t`), no DEL and no C1 control. A fixed seed keeps it reproducible.
 terminal_escape_output_always_valid(Config) when is_list(Config) ->
-    _ = rand:seed(exsss, {16#C1, 16#9B, 16#FFFD}),
+    {_Alg, _AlgState} = rand:seed(exsss, {16#C1, 16#9B, 16#FFFD}),
     Pool = [
         0,
         7,
