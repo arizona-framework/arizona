@@ -67,7 +67,11 @@ Only server-consumed options reach a native client's behaviour:
 - `flash` -- a flash map (`#{binary() => term()}`) for the view navigated to.
   `arizona_socket` strips it from the effect and carries it in-process to the
   target's `flash` binding, exactly as it does for `arizona_js:navigate/2`; the
-  client never sees the key.
+  client never sees the key. Only for an effect a **live handler returns**: the
+  socket is the carrier. As an event prop (`{on_tap, arizona_android:navigate(P,
+  #{flash => F})}`) the command reaches the client as data, with nothing to carry
+  the flash, so rendering it raises `flash_outside_live_effect` -- tap a
+  `push_event` whose handler returns the navigate instead.
 
 The browser-only options of `arizona_js:navigate/2` (`replace`, `full`) have no
 native counterpart -- there is no history stack to replace and no page to load --

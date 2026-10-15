@@ -19,6 +19,7 @@ frame rather than being silently dropped.
 -export([navigate_1_builds_command/1]).
 -export([navigate_2_carries_opts/1]).
 -export([encode_json_preserves_payload/1]).
+-export([navigate_flash_prop_refused/1]).
 
 all() ->
     [{group, builders}].
@@ -30,7 +31,8 @@ groups() ->
             push_event_2_carries_payload,
             navigate_1_builds_command,
             navigate_2_carries_opts,
-            encode_json_preserves_payload
+            encode_json_preserves_payload,
+            navigate_flash_prop_refused
         ]}
     ].
 
@@ -71,3 +73,11 @@ navigate_2_carries_opts(Config) when is_list(Config) ->
 encode_json_preserves_payload(Config) when is_list(Config) ->
     Cmd = arizona_android:push_event(~"save", #{id => ~"42"}),
     ?assertEqual(~"[0,\"save\",{\"id\":\"42\"}]", arizona_effect:encode_json(Cmd)).
+
+%% A `flash` opt is carried by the socket, for an effect a live handler returns.
+%% As an event prop the command reaches the client as data, so the native wire
+%% refuses it instead of shipping a flash nothing would deliver.
+navigate_flash_prop_refused(Config) when is_list(Config) ->
+    Nav = arizona_android:navigate(~"/p", #{flash => #{~"info" => ~"Saved"}}),
+    ?assertError({flash_outside_live_effect, navigate}, arizona_native:wire_attr(~"on_tap", Nav)),
+    ?assertError({flash_outside_live_effect, navigate}, arizona_effect:encode_json(Nav)).
