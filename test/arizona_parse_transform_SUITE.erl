@@ -336,6 +336,15 @@
     guard_untracked_local_ok/1,
     guard_tracked_read_in_scrutinee_ok/1,
     guard_pattern_bound_from_tracked_case_ok/1,
+    pattern_equality_hoisted_tracks/1,
+    pattern_equality_in_each_tracks/1,
+    pattern_map_key_hoisted_tracks/1,
+    pattern_bin_size_hoisted_tracks/1,
+    pattern_maybe_match_hoisted_tracks/1,
+    pattern_equality_and_body_tracks/1,
+    pattern_match_expr_hoisted_tracks/1,
+    pattern_generator_map_key_tracks/1,
+    pattern_fun_head_map_key_tracks/1,
     void_element/1,
     void_in_each_with_children/1,
     void_nested_child_with_children/1,
@@ -978,7 +987,16 @@ groups() ->
             guard_pattern_var_ok,
             guard_untracked_local_ok,
             guard_tracked_read_in_scrutinee_ok,
-            guard_pattern_bound_from_tracked_case_ok
+            guard_pattern_bound_from_tracked_case_ok,
+            pattern_equality_hoisted_tracks,
+            pattern_equality_in_each_tracks,
+            pattern_map_key_hoisted_tracks,
+            pattern_bin_size_hoisted_tracks,
+            pattern_maybe_match_hoisted_tracks,
+            pattern_equality_and_body_tracks,
+            pattern_match_expr_hoisted_tracks,
+            pattern_generator_map_key_tracks,
+            pattern_fun_head_map_key_tracks
         ]},
         %% Tests 68-77c: layout tests
         {layout, [parallel], [
@@ -9791,6 +9809,165 @@ guard_pattern_bound_from_tracked_case_ok(Config) when is_list(Config) ->
     ),
     {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{show => true}), #{}),
     ?assertEqual([#{show => true}], maps:get(deps, Snap)).
+
+%% A hoisted variable read in a PATTERN -- an equality test against its bound value, a
+%% map-pattern key, a binary segment size -- cannot be substituted with its definition
+%% (a call is not a pattern), so the transform touches the definition ahead of the
+%% pattern, exactly as it does for a guard. Changing only that binding re-renders the
+%% slot; without the touch the slot recorded no dependency on it and froze.
+pattern_equality_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_eq). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sel = arizona_template:get(sel, Bindings), "
+        "    arizona_template:html({'div', [], ["
+        "        case arizona_template:get(id, Bindings) of "
+        "            Sel -> <<\"yes\">>; "
+        "            _ -> <<\"no\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(Mod, #{sel => 1, id => 1}, #{sel => 2}, ~"yes", ~"no").
+
+%% The "selected row" idiom: an `?each` item compared against a hoisted selection.
+pattern_equality_in_each_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_each). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sel = arizona_template:get(sel, Bindings), "
+        "    arizona_template:html({ul, [], [arizona_template:each("
+        "        fun(I) -> {li, [], [case I of Sel -> <<\"*\">>; _ -> <<\"-\">> end]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{sel => 1, items => [1, 2]}, #{sel => 2}, ~"*", ~"*"
+    ).
+
+pattern_map_key_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_mapkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    K = arizona_template:get(k, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(m, Bindings) of "
+        "            #{K := V} -> V; "
+        "            _ -> <<\"none\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{k => a, m => #{a => ~"AA", b => ~"BB"}}, #{k => b}, ~"AA", ~"BB"
+    ).
+
+pattern_bin_size_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_binsize). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(s, Bindings) of "
+        "            <<P:N/binary, _/binary>> -> P; "
+        "            _ -> <<\"short\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(Mod, #{n => 1, s => ~"xyz"}, #{n => 2}, ~">x<", ~"xy").
+
+pattern_maybe_match_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_maybe). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Want = arizona_template:get(want, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        maybe "
+        "            Want ?= arizona_template:get(have, Bindings), "
+        "            <<\"match\">> "
+        "        else "
+        "            _ -> <<\"miss\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(Mod, #{want => 1, have => 1}, #{want => 2}, ~"match", ~"miss").
+
+%% A hoisted variable in a `case` pattern is already bound, so the pattern tests it
+%% rather than rebinding it: the clause body's use of the same name is the hoisted
+%% value and is substituted like any other read.
+pattern_equality_and_body_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_body). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sel = arizona_template:get(sel, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        case arizona_template:get(id, Bindings) of "
+        "            {Sel, X} -> [Sel, X]; "
+        "            _ -> <<\"no\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{sel => ~"a", id => {~"a", ~"1"}}, #{sel => ~"b"}, ~"a1", ~"no"
+    ).
+
+%% A match expression's pattern tests a hoisted variable the same way.
+pattern_match_expr_hoisted_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_match). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Sel = arizona_template:get(sel, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        try "
+        "            {Sel, X} = arizona_template:get(id, Bindings), "
+        "            X "
+        "        catch "
+        "            error:{badmatch, _} -> <<\"no\">> "
+        "        end]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{sel => ~"a", id => {~"a", ~"1"}}, #{sel => ~"b"}, ~">1<", ~"no"
+    ).
+
+%% A generator pattern and a fun head bind their own variables, but a map key in them
+%% is still a read of the enclosing scope.
+pattern_generator_map_key_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_genkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    K = arizona_template:get(k, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        [V || #{K := V} <- arizona_template:get(rows, Bindings)]]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{k => a, rows => [#{a => ~"AA", b => ~"BB"}]}, #{k => b}, ~"AA", ~"BB"
+    ).
+
+pattern_fun_head_map_key_tracks(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_pattern_funkey). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    K = arizona_template:get(k, Bindings), "
+        "    arizona_template:html({p, [], ["
+        "        (fun(#{K := V}) -> V; (_) -> <<\"none\">> end)("
+        "            arizona_template:get(row, Bindings))]}). "
+    ),
+    assert_pattern_tracks(
+        Mod, #{k => a, row => #{a => ~"AA", b => ~"BB"}}, #{k => b}, ~"AA", ~"BB"
+    ).
+
+%% Render with B0, then diff with B0 updated by Delta, marking ONLY Delta's keys as
+%% changed (the dep-aware diff): a slot that recorded no dependency on them emits nothing.
+assert_pattern_tracks(Mod, B0, Delta, Shown, New) ->
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
+    ?assertNotEqual(nomatch, binary:match(SSR, Shown), SSR),
+    {_Live, Snap, _Views} = arizona_render:render(Mod:render(B0), #{}),
+    Changed = maps:map(fun(_K, _V) -> true end, Delta),
+    {Ops, _Snap1, _Views1} = arizona_diff:diff(
+        Mod:render(maps:merge(B0, Delta)), Snap, #{}, Changed
+    ),
+    ?assertNotEqual(nomatch, binary:match(term_to_binary(Ops), New), Ops).
 
 %% ============================================================================
 %% az scoping vs. user-authored marker lookalikes

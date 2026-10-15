@@ -126,6 +126,11 @@ render(Bindings) ->
 %% while compiling a module (see extract_binary_value/1 and latin1_warnings/2).
 -define(FOLDED_KEY, arizona_folded_literals).
 
+-define(IS_GENERATOR(Gen),
+    (Gen =:= generate orelse Gen =:= generate_strict orelse Gen =:= b_generate orelse
+        Gen =:= b_generate_strict orelse Gen =:= m_generate orelse Gen =:= m_generate_strict)
+).
+
 %% Module a template-constructor call is re-spelled under when it sits inside an
 %% `az-nodiff` template (see inherit_nodiff/1). The constructors compile
 %% bottom-up, so a nested `?each`/`?html` is a finished map before the enclosing
@@ -2140,7 +2145,8 @@ strip_tail_bind({clause, L, Patterns, Guards, [{match, _, {var, _, _V}, E}]}) ->
 %% Recursively substitute interpolated variables with their inlined defining
 %% expression. Scope-aware: variables shadowed by fun parameters or comprehension
 %% generators are not substituted, and patterns/guards are left untouched so a
-%% substitution can never produce an illegal pattern.
+%% substitution can never produce an illegal pattern. A pattern or guard that reads an
+%% inlined variable instead gets a touch of its definition ahead of it (wrap_touches/4).
 inline_vars(Expr, Inline) when map_size(Inline) =:= 0 ->
     Expr;
 %% A bare top-level fun is an ?each callback (compile_each is the only caller that passes a
@@ -2180,11 +2186,11 @@ iv({'catch', L, E}, Inline) ->
     {'catch', L, iv(E, Inline)};
 iv({Comp, L, T, Qs}, Inline) when Comp =:= lc; Comp =:= bc; Comp =:= mc ->
     {Qs1, Inline1} = iv_quals(Qs, Inline),
-    {Comp, L, iv(T, Inline1), Qs1};
+    wrap_touches({Comp, L, iv(T, Inline1), Qs1}, L, generator_tracked_vars(Qs, Inline), Inline);
 iv({block, L, B}, Inline) ->
     {block, L, iv_body(B, Inline)};
 iv({match, L, P, E}, Inline) ->
-    {match, L, P, iv(E, Inline)};
+    wrap_touches({match, L, P, iv(E, Inline)}, L, collect_tracked_vars(P, Inline), Inline);
 iv({'maybe', L, B}, Inline) ->
     {'maybe', L, iv_body(B, Inline)};
 iv({'maybe', L, B, {'else', L2, Cs}}, Inline) ->
@@ -2204,42 +2210,46 @@ iv_clauses(Cs, Inline) ->
 iv_fun_clauses(Cs, Inline) ->
     [iv_fun_clause(C, Inline) || C <- Cs].
 
-%% Guard-bearing forms build their node and wrap it (wrap_guard_touches/4) so a tracked
-%% binding read in a clause guard is recorded as a slot dependency. Kept as separate
-%% helpers so iv/2 stays a thin dispatcher.
+%% Clause-bearing forms build their node and wrap it (wrap_touches/4) so a tracked
+%% binding read in a clause pattern or guard is recorded as a slot dependency. Kept as
+%% separate helpers so iv/2 stays a thin dispatcher.
 iv_fun(L, Cs, Inline) ->
-    wrap_guard_touches({'fun', L, {clauses, iv_fun_clauses(Cs, Inline)}}, L, Cs, Inline).
+    Node = {'fun', L, {clauses, iv_fun_clauses(Cs, Inline)}},
+    wrap_touches(Node, L, fun_tracked_vars(Cs, Inline), Inline).
 
 iv_named_fun(L, Name, Cs, Inline) ->
     Inline1 = bind([Name], named_fun, L, maps:remove(Name, Inline)),
-    wrap_guard_touches({named_fun, L, Name, iv_fun_clauses(Cs, Inline1)}, L, Cs, Inline1).
+    Node = {named_fun, L, Name, iv_fun_clauses(Cs, Inline1)},
+    wrap_touches(Node, L, fun_tracked_vars(Cs, Inline1), Inline1).
 
 iv_case(L, E, Cs, Inline) ->
-    wrap_guard_touches({'case', L, iv(E, Inline), iv_clauses(Cs, Inline)}, L, Cs, Inline).
+    Node = {'case', L, iv(E, Inline), iv_clauses(Cs, Inline)},
+    wrap_touches(Node, L, clause_tracked_vars(Cs, Inline), Inline).
 
 iv_if(L, Cs, Inline) ->
-    wrap_guard_touches({'if', L, iv_clauses(Cs, Inline)}, L, Cs, Inline).
+    wrap_touches({'if', L, iv_clauses(Cs, Inline)}, L, clause_tracked_vars(Cs, Inline), Inline).
 
 iv_receive(L, Cs, Inline) ->
-    wrap_guard_touches({'receive', L, iv_clauses(Cs, Inline)}, L, Cs, Inline).
+    Node = {'receive', L, iv_clauses(Cs, Inline)},
+    wrap_touches(Node, L, clause_tracked_vars(Cs, Inline), Inline).
 
 iv_receive(L, Cs, AE, AB, Inline) ->
     Node = {'receive', L, iv_clauses(Cs, Inline), iv(AE, Inline), iv_body(AB, Inline)},
-    wrap_guard_touches(Node, L, Cs, Inline).
+    wrap_touches(Node, L, clause_tracked_vars(Cs, Inline), Inline).
 
 iv_try(L, B, OfCs, CatchCs, Aft, Inline) ->
     Node =
         {'try', L, iv_body(B, Inline), iv_clauses(OfCs, Inline), iv_clauses(CatchCs, Inline),
             iv_body(Aft, Inline)},
-    wrap_guard_touches(Node, L, OfCs ++ CatchCs, Inline).
+    wrap_touches(Node, L, clause_tracked_vars(OfCs ++ CatchCs, Inline), Inline).
 
 iv_maybe_else(L, B, L2, Cs, Inline) ->
     Node = {'maybe', L, iv_body(B, Inline), {'else', L2, iv_clauses(Cs, Inline)}},
-    wrap_guard_touches(Node, L, Cs, Inline).
+    wrap_touches(Node, L, clause_tracked_vars(Cs, Inline), Inline).
 
 %% Fun clause: parameters bind and shadow; drop them from the map for the body. Guards
 %% stay untouched (a binding read can't live in a guard); a tracked binding read in a
-%% nested fun's guard is auto-tracked by the enclosing fun node (wrap_guard_touches/4 in
+%% nested fun's guard is auto-tracked by the enclosing fun node (wrap_touches/4 in
 %% iv/2). A top-level ?each callback fun is inlined through here too but not wrapped (see
 %% inline_vars/2: compile_each needs a single-clause fun, whose guards are over the item
 %% param, not outer tracked vars).
@@ -2250,47 +2260,89 @@ iv_fun_clause({clause, L, Params, Guards, Body}, Inline) ->
     {clause, L, Params, Guards, iv_body(Body, Inline1)}.
 
 %% case/receive/try-of/catch clause: patterns match the (already inlined) scrutinee,
-%% so patterns and guards are left untouched. Any name a pattern binds is dropped from
-%% the map for the body as a conservative shadow guard. A tracked binding read in a guard
-%% is handled by the enclosing node via wrap_guard_touches/4, not here.
+%% so patterns and guards are left untouched. An inline-map variable is bound in the
+%% enclosing scope, so in such a pattern it is an equality test, not a new binding: the
+%% clause body's use of it is the same value and stays substituted. A tracked binding
+%% read in a pattern or guard is handled by the enclosing node via wrap_touches/4.
 iv_clause({clause, L, Patterns, Guards, Body}, Inline) ->
-    Inline1 = maps:without(pattern_vars(Patterns), Inline),
-    {clause, L, Patterns, Guards, iv_body(Body, Inline1)}.
+    {clause, L, Patterns, Guards, iv_body(Body, Inline)}.
 
 %% A binding read (`?get`/`get_lazy`/`with`-derived, hence in the inline map) cannot live
-%% in a guard -- Erlang forbids a function call there -- so guards are left as bound
-%% variables. The read then never re-runs inside the slot's dependency bracket, and the
-%% slot would silently freeze on that binding. To keep the slot reactive, wrap the
-%% guard-bearing expression in a block that first reads (for the `track/1` side effect)
-%% each tracked binding its guards reference, recording them as slot dependencies. The
-%% guard keeps using the captured value, which each diff cycle rebuilds from the current
-%% bindings, so a change to a guard binding re-renders the slot. No tracked guard var ->
-%% node returned unchanged.
-wrap_guard_touches(Node, L, Clauses, Inline) ->
-    case guard_tracked_vars(Clauses, Inline) of
-        [] -> Node;
-        Vars -> {block, L, [guard_touch(V, L, Inline) || V <- Vars] ++ [Node]}
-    end.
+%% in a pattern or a guard -- Erlang forbids a function call there -- so both are left as
+%% bound variables. The read then never re-runs inside the slot's dependency bracket, and
+%% the slot would silently freeze on that binding. To keep the slot reactive, wrap the
+%% expression in a block that first reads (for the `track/1` side effect) each tracked
+%% binding its patterns and guards reference, recording them as slot dependencies. The
+%% pattern or guard keeps using the captured value, which each diff cycle rebuilds from
+%% the current bindings, so a change to that binding re-renders the slot. No tracked
+%% var -> node returned unchanged.
+wrap_touches(Node, _L, [], _Inline) ->
+    Node;
+wrap_touches(Node, L, Vars, Inline) ->
+    {block, L, touches(Vars, L, Inline) ++ [Node]}.
 
-%% Read V's inlined definition (its get/get_lazy/with call) for the track side effect,
-%% discarding the value. Reusing the inline expansion handles get/get_lazy/with and
-%% transitively-derived vars uniformly without extracting the binding key.
-guard_touch(V, L, Inline) ->
-    {match, L, {var, L, '_'}, iv({var, L, V}, Inline)}.
+%% Read each var's inlined definition (its get/get_lazy/with call) for the track side
+%% effect, discarding the value. Reusing the inline expansion handles get/get_lazy/with
+%% and transitively-derived vars uniformly without extracting the binding key.
+touches(Vars, L, Inline) ->
+    [{match, L, {var, L, '_'}, iv({var, L, V}, Inline)} || V <- Vars].
 
-%% Union (first-seen order) of inline-map variables referenced in any clause guard,
-%% respecting each clause's own pattern/parameter shadowing.
-guard_tracked_vars(Clauses, Inline) ->
+%% Inline-map variables read by case-like clauses (first-seen order). Every one in a
+%% pattern is a read: it is already bound, so the pattern tests it.
+clause_tracked_vars(Clauses, Inline) ->
+    collect_tracked_vars(
+        [[Patterns, Guards] || {clause, _, Patterns, Guards, _} <:- Clauses], Inline
+    ).
+
+%% Fun clauses bind their parameters, which shadow the enclosing scope for the guard;
+%% only a parameter pattern's map keys and binary sizes read it.
+fun_tracked_vars(Clauses, Inline) ->
     lists:reverse(
         lists:foldl(
-            fun({clause, _, Patterns, Guards, _}, Acc) ->
-                ClauseInline = maps:without(pattern_vars(Patterns), Inline),
-                collect_guard_vars(Guards, ClauseInline, Acc)
+            fun({clause, _, Params, Guards, _}, Acc) ->
+                Acc1 = collect_guard_vars(pattern_reads(Params), Inline, Acc),
+                collect_guard_vars(Guards, maps:without(pattern_vars(Params), Inline), Acc1)
             end,
             [],
             Clauses
         )
     ).
+
+%% Generator patterns bind (shadowing for later qualifiers), but their map keys and
+%% binary sizes read the scope the generator sits in.
+generator_tracked_vars(Qs, Inline) ->
+    {Reads, _} = lists:foldl(
+        fun(Q, {Acc, Inl}) ->
+            Acc1 = collect_guard_vars(generator_reads(Q), Inl, Acc),
+            {Acc1, maps:without(pattern_vars(qual_patterns(Q)), Inl)}
+        end,
+        {[], Inline},
+        Qs
+    ),
+    lists:reverse(Reads).
+
+qual_patterns({zip, _, Gens}) ->
+    [P || {_, _, P, _} <:- Gens];
+qual_patterns({Gen, _, P, _}) when ?IS_GENERATOR(Gen) ->
+    [P];
+qual_patterns(_Filter) ->
+    [].
+
+%% A map generator's `K := V` is two patterns (both bind), not a map pattern whose key
+%% is read.
+generator_reads({zip, _, Gens}) ->
+    lists:append([generator_reads(G) || G <- Gens]);
+generator_reads({Gen, _, {map_field_exact, _, K, V}, _}) when
+    Gen =:= m_generate; Gen =:= m_generate_strict
+->
+    pattern_reads([K, V]);
+generator_reads({Gen, _, P, _}) when ?IS_GENERATOR(Gen) ->
+    pattern_reads(P);
+generator_reads(_Filter) ->
+    [].
+
+collect_tracked_vars(Form, Inline) ->
+    lists:reverse(collect_guard_vars(Form, Inline, [])).
 
 %% Depth-first collect of inline-map variable names in a guard AST (they may be nested in
 %% `andalso`/`is_binary(...)`/comparisons). The `{var, _, _}` clause is matched ahead of
@@ -2307,21 +2359,29 @@ collect_guard_vars([H | T], Inline, Acc) ->
 collect_guard_vars(_Other, _Inline, Acc) ->
     Acc.
 
-%% A body is a sequence; a `Var = RHS` match binds Var (shadowing) for later exprs.
+%% A body is a sequence; a `Var = RHS` match binds Var (shadowing) for later exprs. A
+%% `?=` must stay a direct expression of its `maybe` body, so the touches for the
+%% variables its pattern tests go ahead of it there rather than in a wrapping block.
 iv_body(Exprs, Inline) ->
     {Rev, _} = lists:foldl(
         fun(E, {Acc, Inl}) ->
             Inl1 =
                 case E of
                     {match, _, P, _} -> maps:without(pattern_vars(P), Inl);
+                    {maybe_match, _, P, _} -> maps:without(pattern_vars(P), Inl);
                     _ -> Inl
                 end,
-            {[iv(E, Inl) | Acc], Inl1}
+            {[iv(E, Inl) | lists:reverse(maybe_match_touches(E, Inl)) ++ Acc], Inl1}
         end,
         {[], Inline},
         Exprs
     ),
     lists:reverse(Rev).
+
+maybe_match_touches({maybe_match, L, P, _}, Inline) ->
+    touches(collect_tracked_vars(P, Inline), L, Inline);
+maybe_match_touches(_E, _Inline) ->
+    [].
 
 %% Comprehension qualifiers, left to right: generator patterns bind for subsequent
 %% qualifiers and the template; filters are plain expressions. A zip generator
@@ -3967,7 +4027,7 @@ branch_call(N, L, Leaf) ->
 %% skipped and the branch freezes. (A *value* branch does not freeze: its read fires
 %% eagerly in the slot closure when that branch is taken, and a non-taken value
 %% branch's read is genuinely not a dependency.) Mirror the guard auto-tracking
-%% (wrap_guard_touches/4): prepend a `track/1` for each binding key read in a branch
+%% (wrap_touches/4): prepend a `track/1` for each binding key read in a branch
 %% tail that becomes a nested template, so those keys become deps of the conditional
 %% dynamic itself. `track/1` records the key without reading the binding, so a key
 %% present only in a non-taken (and possibly absent) branch never raises

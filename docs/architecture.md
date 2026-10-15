@@ -495,7 +495,8 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
   `?html`/`?each` argument -- including inside a `case` scrutinee or an opaque
   call -- recursively and scope-aware (fun parameters and comprehension
   generators shadow; patterns and guards are never substituted, so a
-  substitution can never form an illegal pattern or a guard `?get`). A
+  substitution can never form an illegal pattern or a guard `?get` -- a pattern or
+  guard that reads one is tracked by a touch instead, see below). A
   substitution under a fun parameter, named fun or generator that rebinds a
   name the definition reads is a compile error (`hoisted_var_captured`): the
   copy would read the inner binding.
@@ -538,12 +539,22 @@ and the slot would silently freeze on that binding. Instead, the guard-bearing `
 a nested `fun`) wraps itself in a block that first reads each tracked binding its clause
 guards reference -- `begin _ = arizona_template:get(K, Bindings), ..., <expr> end` -- for
 the `track/1` side effect, recording those bindings as slot dependencies
-(`wrap_guard_touches/4`, collecting via `guard_tracked_vars/2` with per-clause shadow
-handling). The guard keeps using the captured value, which each diff cycle rebuilds from
-current bindings, so a change to a guard binding re-renders the slot. Reusing the inline
-expansion as the touch (`iv({var,L,V}, Inline)`) handles `get`/`get_lazy`/`with` and
-transitively-derived vars uniformly. A non-tracked local or a pattern-bound variable in a
-guard needs no touch (no binding dependency). The one fun NOT wrapped is a top-level
+(`wrap_touches/4`, collecting via `clause_tracked_vars/2` / `fun_tracked_vars/2` with
+per-clause shadow handling). The guard keeps using the captured value, which each diff
+cycle rebuilds from current bindings, so a change to a guard binding re-renders the slot.
+Reusing the inline expansion as the touch (`iv({var,L,V}, Inline)`) handles
+`get`/`get_lazy`/`with` and transitively-derived vars uniformly. A non-tracked local or a
+pattern-bound variable in a guard needs no touch (no binding dependency).
+
+**Patterns get the same touch.** A pattern cannot hold the call either, and an inlined
+variable a pattern reads would freeze the slot the same way: an equality test against a
+hoisted variable (`case I of Sel -> ...` -- the variable is already bound, so the clause
+tests it and its body's `Sel` is the same value, substituted as usual), a map-pattern key,
+a binary segment size, or a `maybe` `?=`. Case-like clauses, match expressions, fun
+heads (keys and sizes only -- a fun parameter binds) and comprehension generators (keys and
+sizes only, the generator's own bindings shadowing later qualifiers) all collect them. A
+`?=` must stay a direct expression of its `maybe` body, so its touches are placed ahead of
+it in that body rather than in a wrapping block. The one fun NOT wrapped is a top-level
 `?each` callback (handled in `inline_vars/2`): `compile_each` needs a single-clause fun,
 and its guards are over the item param, not outer tracked vars.
 
