@@ -23,6 +23,13 @@ the slot, so a value can complete a sequence the static began (`'<` then
 -export([lead_name/1]).
 -export([trail/1]).
 -export([style_lead/1]).
+-export([const_lead/1]).
+-export([cond_lead/1]).
+-export([split/1]).
+-export([lead_two/1]).
+-export([three/1]).
+-export([style_const_lead/1]).
+-export([trail_static/1]).
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
@@ -55,3 +62,45 @@ trail(Bindings) ->
 -spec style_lead(az:bindings()) -> az:template().
 style_lead(Bindings) ->
     ?html({style, [], [~"a::after{content:'<", ?raw(?get(v)), ~"'}"]}).
+
+%% The slots below sit next to OTHER slots, whose bytes are unknown at compile time:
+%% a value's end must be judged without knowing what follows it.
+-spec const_lead(az:bindings()) -> az:template().
+const_lead(Bindings) ->
+    ?html({script, [], [?raw(~"var s='<"), ?raw(?get(v)), ~"';"]}).
+
+-spec cond_lead(az:bindings()) -> az:template().
+cond_lead(Bindings) ->
+    ?html(
+        {script, [], [
+            ?raw(
+                case ?get(m) of
+                    a -> ~"var s='<";
+                    _ -> ~"var s='"
+                end
+            ),
+            ?raw(?get(v)),
+            ~"';"
+        ]}
+    ).
+
+-spec split(az:bindings()) -> az:template().
+split(Bindings) ->
+    ?html({script, [], [~"x='", ?raw(?get(a)), ~"i", ?raw(?get(b)), ~"';"]}).
+
+-spec lead_two(az:bindings()) -> az:template().
+lead_two(Bindings) ->
+    ?html({script, [], [~"x='<", ?raw(?get(a)), ?raw(?get(b)), ~"';"]}).
+
+-spec three(az:bindings()) -> az:template().
+three(Bindings) ->
+    ?html({script, [], [~"x='", ?raw(?get(a)), ?raw(?get(b)), ?raw(?get(c)), ~"';"]}).
+
+-spec style_const_lead(az:bindings()) -> az:template().
+style_const_lead(Bindings) ->
+    ?html({style, [], [?raw(~"a{content:'<"), ?raw(?get(v)), ~"'}"]}).
+
+%% A value ending in the start of a sequence the static after it completes.
+-spec trail_static(az:bindings()) -> az:template().
+trail_static(Bindings) ->
+    ?html({script, [], [~"x='", ?raw(?get(v)), ~"--<script>'"]}).

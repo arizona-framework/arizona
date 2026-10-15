@@ -244,10 +244,11 @@ Rewriting the script-data sequences inside a `<style>` would defend nothing and
 corrupt valid CSS, so the backend needs the tag to pick the right policy.
 
 `Before` and `After` are the template's static text immediately before and after
-the slot inside the same element (`<<>>` where another dynamic or the element
-boundary sits instead). The tokenizer reads static text and value as one stream,
-so a breakout can straddle them -- a static ending in `<` followed by a value
-`/script>` -- and only a backend that sees the neighbours can break it.
+the slot inside the same element -- its last and first 8 bytes at most, which is
+all a breakout sequence can reach -- or `<<>>` where another dynamic or the
+element boundary sits instead. The tokenizer reads static text and value as one
+stream, so a breakout can straddle them -- a static ending in `<` followed by a
+value `/script>` -- and only a backend that sees the neighbours can break it.
 """.
 -callback raw_text(Tag :: atom(), Before :: binary(), After :: binary(), Value :: term()) ->
     term().

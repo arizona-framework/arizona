@@ -363,14 +363,23 @@ escape_runs(Bin, Acc, _Run) ->
 %% breakout/2 below defines that set; a value that legitimately needs one of them
 %% inside a raw-text element is a breakout by definition.
 %%
-%% `Before` and `After` are the template's static text right before and right after
-%% the slot in the same element (`<<>>` where a dynamic or the element boundary sits
-%% instead). The tokenizer reads static and value as one stream, so a sequence can
-%% straddle them: `~"var s = '<"` then a value `/script>...` closes the element
-%% though the value holds no `<`. A `<` inside the value is rewritten in place; when
-%% the `<` is the static's, the value's FIRST byte -- the one that completes the
-%% sequence -- is escaped instead (lead_break/3). `After` lets a value ending in a
-%% partial sequence (`x</scr`) be judged against the static that finishes it.
+%% `Before` and `After` are the (at most 8) bytes of template static text right
+%% before and right after the slot in the same element, `<<>>` where a dynamic or the
+%% element boundary sits instead. The tokenizer reads static and value as one stream,
+%% so a sequence can straddle them: `~"var s = '<"` then a value `/script>...` closes
+%% the element though the value holds no `<`. A `<` inside the value is rewritten in
+%% place; when the `<` is the static's, the value's FIRST byte -- the one that
+%% completes the sequence -- is escaped instead (lead_break/4).
+%%
+%% The end of the known text is judged conservatively. `After` lets a value ending in
+%% a partial sequence (`x</scr`) be judged against the static that finishes it; where
+%% `After` runs out, the next bytes are unknown -- another slot's, decided only at
+%% render time, or the element's own end -- so a STRICT PREFIX of a sequence there
+%% (`<`, `</scr`, `<!`, `<!-`, `<scr`) counts as the sequence. That is what makes
+%% each slot safe whatever its neighbours hold: a constant `?raw(~"x='<")` before
+%% an attacker's `/script>`, two slots split by a static (`</scr`, `i`, `pt>`), or
+%% three reaching the double escape (`<!`, `--<scr`, `ipt>`) all have their partial
+%% defused in the slot that holds it.
 %%
 %% The covered shapes are every one `arizona_template:to_bin/1` can turn into
 %% attacker-chosen bytes: a **binary**, an **atom** (`to_bin` renders it with
@@ -381,24 +390,15 @@ escape_runs(Bin, Acc, _Run) ->
 %% spell a sequence below; they pass through untouched, as does a map (a nested
 %% template renders structurally through the escaping path, not as bytes).
 %%
-%% **Known limit -- adjacent dynamic slots.** Only STATIC neighbours are visible to a
-%% slot, so two ADJACENT `?raw` slots whose halves are both attacker-controlled
-%% reassemble a sequence after both have been checked: `~"</scr"` then
-%% `~"ipt>..."` emits a working close tag, because neither half is a breakout by
-%% itself. Treat adjacent `?raw` slots in one raw-text element as a single trust
-%% boundary -- build the value in one slot instead. Two slots cannot reach the
-%% script-data-*escaped* states, since whichever of `<!--` / `<script` lands whole
-%% in a slot is neutralized there; three adjacent slots can (`~"<!"`, `~"--<scr"`,
-%% `~"ipt>"`), so the document-swallowing variant is reachable, just harder. A
-%% neighbouring dynamic's bytes exist only at render time, in another slot, so
-%% closing it needs the element's whole content assembled before the check, which
-%% the render path does not do.
+%% The template's own static text is not checked: it is the author's markup, so
+%% statics that spell a sequence around an EMPTY value (`</scr`, `<<>>`, `ipt>`) are
+%% the author's own close tag, and an empty value has no byte to escape anyway.
 -spec raw_text(atom(), binary(), binary(), term()) -> term().
 raw_text(Tag, Before, After, Value) ->
     %% Resolve the element's tokenizer state ONCE per slot, then thread the answer
     %% (not the tag) through the byte loop, so the per-character path stays a plain
     %% boolean test and no atom is built at render time.
-    raw_text_1({script_data(Tag), lead(Before), trail(After)}, Value).
+    raw_text_1({script_data(Tag), Before, After}, Value).
 
 raw_text_1(Ctx, Value) when is_binary(Value) ->
     neutralize(Ctx, Value);
@@ -427,20 +427,6 @@ script_data(Tag) when is_binary(Tag) ->
 script_data(Tag) ->
     string:equal(atom_to_binary(Tag), ~"script", true).
 
-%% Only the static's last 8 bytes can begin a sequence the value completes: the
-%% longest, `</script`, is 8 bytes and still needs its delimiter from the value.
-lead(Before) when byte_size(Before) > 8 ->
-    binary_part(Before, byte_size(Before), -8);
-lead(Before) ->
-    Before.
-
-%% ...and only the following static's first 8 bytes can finish one the value began
-%% (the value ends in `<` at the latest, and `/script` plus a delimiter is 8 bytes).
-trail(After) when byte_size(After) > 8 ->
-    binary_part(After, 0, 8);
-trail(After) ->
-    After.
-
 %% The documented remedy is `?raw(json:encode(Data))`, and `json:encode/1` returns
 %% **iodata** -- so matching only binaries above would wave a breakout through on the
 %% exact form this module's own error message recommends. Flatten chardata (a
@@ -460,7 +446,7 @@ neutralize({_ScriptData, _Lead, _After}, <<>>) ->
     <<>>;
 neutralize({ScriptData, Lead, After}, Bin) ->
     Out = neutralize_raw_text(ScriptData, Bin, After, <<>>),
-    case lead_break(ScriptData, Lead, <<Bin/binary, After/binary>>) of
+    case lead_break(ScriptData, Lead, Bin, After) of
         true ->
             %% The first byte continues a sequence begun after `<`, so it is never a
             %% `<` itself and the loop above emitted it unchanged.
@@ -479,23 +465,26 @@ neutralize_raw_text(ScriptData, <<C, R/binary>>, After, Acc) ->
     neutralize_raw_text(ScriptData, R, After, <<Acc/binary, C>>).
 
 %% A `<` near the value's end reads on into the following static. No sequence after
-%% `<` takes more than 8 bytes, so a farther `<` never reaches it.
+%% `<` takes more than 8 bytes, so a farther `<` never reaches it, and 8 bytes of
+%% `After` always decide the sequence before they run out.
 tail_with(R, After) when byte_size(R) < 8 ->
     <<R/binary, After/binary>>;
 tail_with(R, _After) ->
     R.
 
 %% Does a `<` among the static's trailing bytes begin a sequence that runs into the
-%% value (`Rest` is the value, then the static after it)? One that ends inside the
-%% static is the template's own text, not this slot's to break.
-lead_break(ScriptData, <<"<", S/binary>>, Rest) ->
-    case breakout(ScriptData, <<S/binary, Rest/binary>>) of
+%% value? One that ends inside the static is the template's own text, not this
+%% slot's to break. The text after the `<` is only assembled once a `<` is found,
+%% and from the value's first 8 bytes, not a copy of the whole value.
+lead_break(ScriptData, <<"<", S/binary>>, Bin, After) ->
+    Head = binary_part(Bin, 0, min(8, byte_size(Bin))),
+    case breakout(ScriptData, <<S/binary, Head/binary, After/binary>>) of
         {_Kind, Span} when Span > byte_size(S) -> true;
-        _NoneOrStatic -> lead_break(ScriptData, S, Rest)
+        _NoneOrStatic -> lead_break(ScriptData, S, Bin, After)
     end;
-lead_break(ScriptData, <<_C, S/binary>>, Rest) ->
-    lead_break(ScriptData, S, Rest);
-lead_break(_ScriptData, <<>>, _Rest) ->
+lead_break(ScriptData, <<_C, S/binary>>, Bin, After) ->
+    lead_break(ScriptData, S, Bin, After);
+lead_break(_ScriptData, <<>>, _Bin, _After) ->
     false.
 
 %% The value's first byte as an escape that decodes back to it: JSON/JavaScript
@@ -540,11 +529,14 @@ raw_text_breakout(ScriptData, R) ->
 %%       spliced verbatim and never passes through here.
 %%
 %% A name counts only where the tokenizer reads one (tag_name/2): `i<scripts.length`
-%% is ordinary JavaScript, not a tag, and is left alone.
+%% is ordinary JavaScript, not a tag, and is left alone. At the end of the known text
+%% a strict prefix of a sequence counts (see the end-of-text rule above): the text
+%% runs out at `<`, `</`, `</scr`, `<!`, `<!-` or `<scr`, and whatever the next slot
+%% holds may finish it.
 %%
-%% The last two replace the `<` with the escape `<` instead of inserting a
+%% The last two replace the `<` with the escape `\u003c` instead of inserting a
 %% backslash: `\!` and `\s` are not valid JSON escapes, and a JSON blob is the
-%% documented content of a `raw` raw-text slot, whereas `<` is valid in both
+%% documented content of a `raw` raw-text slot, whereas `\u003c` is valid in both
 %% JSON and JavaScript strings and decodes back to `<`.
 %%
 %% They also apply ONLY in `<script>` (`ScriptData`). `<style>` content is RAWTEXT,
@@ -560,11 +552,18 @@ breakout(_ScriptData, <<$/, R/binary>>) ->
     end;
 breakout(true, <<"!--", _R/binary>>) ->
     {escape, 3};
+breakout(true, <<"!-">>) ->
+    {escape, 2};
+breakout(true, <<"!">>) ->
+    {escape, 1};
 breakout(true, R) ->
     case tag_name(R, ~"script") of
         nomatch -> nomatch;
         Len -> {escape, Len}
     end;
+%% A bare `<` ending the text: in RAWTEXT only an end tag follows it.
+breakout(false, <<>>) ->
+    {close, 0};
 breakout(false, _R) ->
     nomatch.
 
@@ -576,13 +575,13 @@ end_tag_name(R) ->
 
 %% Does `Bin` start with the tag name `Pattern` as the tokenizer reads one: the name,
 %% then whitespace (CR too -- input preprocessing turns it into LF), `/` or `>`? The
-%% end of the text counts as well, conservatively, since a neighbouring slot or the
-%% element boundary may supply the delimiter. Returns the bytes taken (the name and
-%% its delimiter) or `nomatch`. The pattern is always lowercase letters.
+%% end of the text counts as well, conservatively, wherever it falls -- after the
+%% name (the delimiter may come next) or inside it (so may the rest of the name).
+%% Returns the bytes taken or `nomatch`. The pattern is always lowercase letters.
 tag_name(Bin, Pattern) ->
     tag_name(Bin, Pattern, 0).
 
-tag_name(<<>>, <<>>, N) ->
+tag_name(<<>>, _Pattern, N) ->
     N;
 tag_name(<<D, _/binary>>, <<>>, N) when
     D =:= $\t; D =:= $\n; D =:= $\f; D =:= $\r; D =:= $\s; D =:= $/; D =:= $>
