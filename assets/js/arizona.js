@@ -1185,6 +1185,45 @@ function decodeRawAttr(raw) {
 }
 
 /**
+ * Append an encoded query to a URL, before its fragment: everything after the first
+ * `#` is the fragment, which fetch() never sends, so a query appended there is lost.
+ * Spliced rather than rebuilt through `URL`, which would make a relative URL absolute
+ * and re-serialize a query the caller already encoded.
+ * @param {string} url
+ * @param {string} qs
+ * @returns {string}
+ */
+function appendQuery(url, qs) {
+    const at = url.indexOf('#');
+    const base = at < 0 ? url : url.slice(0, at);
+    const sep = !base.includes('?') ? '?' : /[?&]$/.test(base) ? '' : '&';
+    return base + sep + qs + (at < 0 ? '' : url.slice(at));
+}
+
+/**
+ * A GET/HEAD `fetch` body as query parameters: one per map key, a list repeating
+ * its key, a `null` left out, and a nested map (or a map inside a list) JSON-encoded
+ * since a query has no nesting. Anything but a map has no keys to name parameters
+ * by, so it is refused loudly rather than guessed at.
+ * @param {unknown} body
+ * @returns {URLSearchParams}
+ */
+function bodyQuery(body) {
+    const params = new URLSearchParams();
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        console.warn('[arizona] fetch: a GET body must be a map; it was not sent', body);
+        return params;
+    }
+    for (const [key, value] of Object.entries(body)) {
+        for (const item of Array.isArray(value) ? value : [value]) {
+            if (item == null) continue;
+            params.append(key, typeof item === 'object' ? JSON.stringify(item) : String(item));
+        }
+    }
+    return params;
+}
+
+/**
  * Apply a SET_ATTR op: setAttribute and sync the live DOM property for form
  * controls. Once the user has interacted, the browser's dirty value/checkedness
  * flags make attribute writes stop affecting `.value`/`.checked`/`.selected`,
@@ -2776,13 +2815,18 @@ function execOne(el, event, cmd) {
             let target = url;
             let body;
             if (method === 'GET' || method === 'HEAD') {
-                // No request body for GET/HEAD -- carry a form's fields in the query
-                // string instead (fetch is otherwise POST-oriented: it sets cookies).
-                if (form) {
-                    const fd = /** @type {any} */ (new FormData(form, submitter(event)));
-                    const qs = new URLSearchParams(fd).toString();
-                    if (qs) target += (url.includes('?') ? '&' : '?') + qs;
+                // No request body for GET/HEAD -- carry the payload in the query string
+                // instead (fetch is otherwise POST-oriented: it sets cookies). The same
+                // precedence as a body: an explicit `body` wins over the form's fields.
+                let params = null;
+                if (opts.body !== undefined) params = bodyQuery(opts.body);
+                else if (form) {
+                    params = new URLSearchParams(
+                        /** @type {any} */ (new FormData(form, submitter(event))),
+                    );
                 }
+                const qs = params ? params.toString() : '';
+                if (qs) target = appendQuery(url, qs);
             } else if (opts.body !== undefined) {
                 body = JSON.stringify(opts.body);
                 headers['content-type'] = 'application/json';
