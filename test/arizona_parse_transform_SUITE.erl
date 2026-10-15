@@ -288,6 +288,9 @@
     hoisted_var_captured_message/1,
     hoisted_var_pattern_reads_not_captured/1,
     hoisted_var_internal_binder_not_captured/1,
+    hoisted_var_case_binder_not_captured/1,
+    hoisted_var_case_binder_copies_in_one_slot/1,
+    hoisted_var_bound_before_pattern_captured/1,
     hoisted_var_zip_pattern_binds/1,
     inline_hoisted_html_renders_and_tracks/1,
     inline_hoisted_html_nested_chain/1,
@@ -972,6 +975,9 @@ groups() ->
             hoisted_var_captured_message,
             hoisted_var_pattern_reads_not_captured,
             hoisted_var_internal_binder_not_captured,
+            hoisted_var_case_binder_not_captured,
+            hoisted_var_case_binder_copies_in_one_slot,
+            hoisted_var_bound_before_pattern_captured,
             hoisted_var_zip_pattern_binds,
             inline_hoisted_html_renders_and_tracks,
             inline_hoisted_html_nested_chain,
@@ -9242,6 +9248,66 @@ hoisted_var_internal_binder_not_captured(Config) when is_list(Config) ->
         "        (fun(Y) -> <<Lbl/binary, Y/binary>> end)(<<\"!\">>)]}). "
     ),
     assert_captured_tracks(Mod, #{xs => [~"a", ~"b"]}, #{xs => [~"c"]}, [~"ab!"], [~"c!"]).
+
+%% A name a case pattern binds inside the hoisted definition is its own, not one it
+%% reads: an ?each parameter of the same name neither captures it nor turns the
+%% pattern into an equality test against the item (every item shows the owner).
+hoisted_var_case_binder_not_captured(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_captured_casebind). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Owner = case arizona_template:get(user, Bindings) of "
+        "        #{name := N} -> N; "
+        "        _ -> <<\"anon\">> "
+        "    end, "
+        "    arizona_template:html({ul, [], [arizona_template:each("
+        "        fun(N) -> {li, [], [N, <<\" by \">>, Owner]} end, "
+        "        arizona_template:get(items, Bindings))]}). "
+    ),
+    B0 = #{user => #{name => ~"ada"}, items => [~"x", ~"y"]},
+    SSR = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(B0))),
+    ?assertEqual(nomatch, binary:match(SSR, ~"anon")),
+    ?assertEqual(2, length(binary:matches(SSR, ~"-->ada<"))),
+    ?assertEqual(2, length(binary:matches(SSR, [~"-->x<", ~"-->y<"]))),
+    assert_captured_tracks(Mod, B0, B0#{user => #{name => ~"bob"}}, [], [~"bob"]).
+
+%% Each copy of the definition binds its own names: two copies in one slot closure
+%% would otherwise bind the same name twice (and the statement left in the clause
+%% makes the original name unsafe there).
+hoisted_var_case_binder_copies_in_one_slot(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_captured_casecopies). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Owner = case arizona_template:get(user, Bindings) of "
+        "        #{name := N} -> N; "
+        "        _ -> <<\"anon\">> "
+        "    end, "
+        "    arizona_template:html({p, [], [Owner, <<\" / \">>, [Owner, Owner]]}). "
+    ),
+    B0 = #{user => #{name => ~"ada"}},
+    assert_captured_tracks(
+        Mod, B0, #{user => #{name => ~"bob"}}, [~"-->ada<", ~"-->adaada<"], [~"bobbob"]
+    ).
+
+%% A pattern variable bound BEFORE the definition is a read (the pattern tests it),
+%% so an inner binder of the same name still captures it.
+hoisted_var_bound_before_pattern_captured(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_captured_boundbefore). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    N = arizona_template:get(n, Bindings), "
+        "    Owner = case arizona_template:get(user, Bindings) of "
+        "        #{name := N} -> <<\"me\">>; "
+        "        _ -> <<\"other\">> "
+        "    end, "
+        "    arizona_template:html({ul, [], [arizona_template:each("
+        "        fun(N) -> {li, [], [N, Owner]} end, "
+        "        arizona_template:get(items, Bindings))]}). ",
+        fun(R) -> R =:= {hoisted_var_captured, fun_param, 'N', 'Owner'} end
+    ).
 
 %% A zip generator's patterns bind like any generator's: a hoisted name used as one is
 %% not substituted into it, and its source sees the enclosing scope.
