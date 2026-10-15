@@ -104,6 +104,8 @@
     fired_timer_ref_pruned/1,
     live_reaped_on_transport_disconnect/1,
     child_in_stream_survives_dep_skip/1,
+    child_gated_by_untracked_item_field/1,
+    child_gated_by_untracked_item_field_unmounts/1,
     child_in_stream_removed_on_delete/1,
     multiple_children_in_stream_survive_dep_skip/1,
     child_in_stream_survives_item_update/1,
@@ -250,6 +252,8 @@ groups() ->
             fired_timer_ref_pruned,
             live_reaped_on_transport_disconnect,
             child_in_stream_survives_dep_skip,
+            child_gated_by_untracked_item_field,
+            child_gated_by_untracked_item_field_unmounts,
             child_in_stream_removed_on_delete,
             multiple_children_in_stream_survive_dep_skip,
             child_in_stream_survives_item_update,
@@ -1788,6 +1792,43 @@ child_in_stream_survives_dep_skip(Config) when is_list(Config) ->
     after 1000 ->
         error(timeout)
     end.
+
+%% The item field `on` (read with plain `maps:get/2`) decides whether the item embeds a
+%% stateful child whose props read a binding. Turning it off must replace the child;
+%% turning it on again must mount a fresh one, not resume the old one's state. The
+%% item's other child depends on the key alone and keeps its state.
+child_gated_by_untracked_item_field(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(arizona_stream_child_gate, #{}, self(), []),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, [[?OP_TEXT, _, ~"8"]], _, _} = arizona_live:handle_event(Pid, ~"gate-1", ~"inc", #{}),
+    {ok, [[?OP_TEXT, _, ~"1"]], _, _} = arizona_live:handle_event(Pid, ~"keep-1", ~"inc", #{}),
+    {ok, OffOps, _, _} = gate_set_on(Pid, false),
+    ?assertMatch([[?OP_ITEM_PATCH, _, ~"1", [[?OP_TEXT, _, ~"off"]]]], OffOps),
+    {ok, OnOps, _, _} = gate_set_on(Pid, true),
+    ?assertMatch([[?OP_ITEM_PATCH, _, ~"1", [[?OP_TEXT, _, #{}]]]], OnOps),
+    {ok, IncOps, _, _} = arizona_live:handle_event(Pid, ~"gate-1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"8"]], IncOps),
+    %% The key-only child was never re-rendered, so it kept its state throughout.
+    {ok, KeepOps, _, _} = arizona_live:handle_event(Pid, ~"keep-1", ~"inc", #{}),
+    ?assertMatch([[?OP_TEXT, _, ~"2"]], KeepOps).
+
+%% Turning the field off removes the child view, so a message to it is refused.
+child_gated_by_untracked_item_field_unmounts(Config) when is_list(Config) ->
+    {ok, Pid} = arizona_live:start_link(arizona_stream_child_gate, #{}, self(), []),
+    {ok, _, _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = gate_set_on(Pid, false),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    Pid ! {arizona_view, ~"gate-1", {set_count, 99}},
+    receive
+        {'DOWN', Ref, process, Pid, Reason} ->
+            ?assertMatch({{unknown_view, ~"gate-1", _}, _}, Reason)
+    after 1000 ->
+        error(timeout)
+    end.
+
+gate_set_on(Pid, On) ->
+    arizona_live:handle_event(Pid, ~"scg", ~"set_on", #{~"id" => 1, ~"on" => On}).
 
 child_in_stream_removed_on_delete(Config) when is_list(Config) ->
     %% Delete a stream item -- its stateful child should be pruned from views.

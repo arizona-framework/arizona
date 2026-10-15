@@ -19,6 +19,7 @@
     stateful_mount_eager_read_no_leak/1,
     render_stream_item_persists_deps/1,
     render_stream_item_skipping_reuses_unchanged/1,
+    render_stream_item_skipping_needs_reuse_flag/1,
     render_stream_item_skipping_full_eval_on_empty_deps/1,
     render_stream_item_skipping_short_circuits_on_empty_changed/1,
     child_stream_pending_cleared_on_eval_path/1,
@@ -45,6 +46,7 @@ groups() ->
         {per_item_optimization, [parallel], [
             render_stream_item_persists_deps,
             render_stream_item_skipping_reuses_unchanged,
+            render_stream_item_skipping_needs_reuse_flag,
             render_stream_item_skipping_full_eval_on_empty_deps,
             render_stream_item_skipping_short_circuits_on_empty_changed
         ]},
@@ -408,11 +410,26 @@ render_stream_item_persists_deps(Config) when is_list(Config) ->
         arizona_eval:render_stream_item(1, Item, Tmpl, {#{}, #{}}),
     ?assert(maps:is_key(text, Deps)).
 
-%% A dynamic that explicitly tracks `text` is reused (not re-evaluated)
-%% when only an unrelated key changes.
+%% A dynamic that explicitly tracks `text`, flagged reusable by the template, is
+%% reused (not re-evaluated) when only an unrelated key changes.
 render_stream_item_skipping_reuses_unchanged(Config) when is_list(Config) ->
+    {Calls, OldD, NewD} = skip_unrelated_change(#{reuse => [true]}),
+    %% One call -- the closure was NOT invoked the second time.
+    ?assertEqual(1, Calls),
+    %% New triple is the exact same triple as before (reused as-is).
+    ?assertEqual(OldD, NewD).
+
+%% The same dynamic without the template's `reuse` flag re-evaluates: its deps alone
+%% cannot prove it read no other item field.
+render_stream_item_skipping_needs_reuse_flag(Config) when is_list(Config) ->
+    {Calls, _OldD, _NewD} = skip_unrelated_change(#{}),
+    ?assertEqual(2, Calls).
+
+%% Renders an item reading `text`, then re-renders it after an `other`-only change.
+%% Answers how many times the slot closure ran, and both item snapshots.
+skip_unrelated_change(Extra) ->
     Counter = counters:new(1, []),
-    Tmpl = #{
+    Tmpl = Extra#{
         t => 0,
         s => [<<"<li>">>, <<"</li>">>],
         d => fun(Item, _Key) ->
@@ -430,18 +447,14 @@ render_stream_item_skipping_reuses_unchanged(Config) when is_list(Config) ->
     OldItem = #{text => <<"hello">>, other => 1},
     NewItem = #{text => <<"hello">>, other => 2},
     {OldD, _} = arizona_eval:render_stream_item(1, OldItem, Tmpl, {#{}, #{}}),
-    1 = counters:get(Counter, 1),
     Changed = #{other => true},
     {NewD, _} =
         arizona_eval:render_stream_item_skipping(1, NewItem, OldD, Changed, Tmpl, {#{}, #{}}),
-    %% Counter still 1 -- the closure was NOT invoked the second time.
-    1 = counters:get(Counter, 1),
-    %% New triple is the exact same triple as before (reused as-is).
-    ?assertEqual(OldD, NewD).
+    {counters:get(Counter, 1), OldD, NewD}.
 
 %% A dynamic without explicit ?get tracking (e.g. pattern destructure) has
-%% empty deps -- skipping is unsafe, so re-eval happens on any non-empty
-%% Changed.
+%% empty deps and no `reuse` flag -- skipping is unsafe, so re-eval happens on
+%% any non-empty Changed.
 render_stream_item_skipping_full_eval_on_empty_deps(Config) when is_list(Config) ->
     Tmpl = #{
         t => 0,
