@@ -242,8 +242,15 @@ reads `<script>` content in the script-data states (which `<!--` and `<script`
 move) but `<style>` content as plain RAWTEXT (which only its own close tag ends).
 Rewriting the script-data sequences inside a `<style>` would defend nothing and
 corrupt valid CSS, so the backend needs the tag to pick the right policy.
+
+`Before` and `After` are the template's static text immediately before and after
+the slot inside the same element (`<<>>` where another dynamic or the element
+boundary sits instead). The tokenizer reads static text and value as one stream,
+so a breakout can straddle them -- a static ending in `<` followed by a value
+`/script>` -- and only a backend that sees the neighbours can break it.
 """.
--callback raw_text(Tag :: atom(), Value :: term()) -> term().
+-callback raw_text(Tag :: atom(), Before :: binary(), After :: binary(), Value :: term()) ->
+    term().
 
 -doc """
 Render a dynamic attribute's evaluated value to this backend's output bytes.

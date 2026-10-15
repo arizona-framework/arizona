@@ -149,10 +149,15 @@ render(Bindings) ->
     %% must be emitted markerless and render-once -- HTML comment markers would
     %% become literal content there (script/style/textarea/title).
     raw_text_kind = none :: arizona_renderer:raw_text_kind(),
-    %% The tag that produced `raw_text_kind`, handed to the backend's `raw_text/2`:
+    %% The tag that produced `raw_text_kind`, handed to the backend's `raw_text/4`:
     %% the neutralization a value needs belongs to *that element's* tokenizer state
     %% (`<script>` is script data, `<style>` is RAWTEXT), not to raw text at large.
     raw_text_tag = undefined :: atom(),
+    %% The static text following the child being compiled, up to the next dynamic,
+    %% while inside a `raw` raw-text element (static_run_after/2). With the static
+    %% before it (static_run_before/1) it goes to `raw_text/4`: a breakout can
+    %% straddle a slot and its static neighbour.
+    raw_text_after = <<>> :: binary(),
     %% Content context of the enclosing element while compiling its children
     %% (Backend:content_context/2). `foreign` is inside `<svg>`, where an element
     %% is ordinary parsed content, so a tag HTML treats as escapable raw text
@@ -3233,7 +3238,7 @@ needs_elem_az(Children, Line, #state{nodiff = true}) ->
 %%
 %% Escaping is preserved structurally rather than reimplemented: the children compile
 %% through the ordinary `compile_children/3` walk, so each dynamic keeps its own
-%% policy -- `raw` (script/style) goes verbatim through `Backend:raw_text/2` breakout
+%% policy -- `raw` (script/style) goes verbatim through `Backend:raw_text/4` breakout
 %% neutralization, `escapable` (textarea/title) is HTML-escaped via `esc_spec`.
 %% Nothing here rewrites that path.
 compile_element_children(Children, ElemAz, RawKind, Tag, ChildCtx, Line, State0) ->
@@ -3681,8 +3686,40 @@ compile_children([], _ElemAz, State, _Slot, _Index) ->
     State;
 compile_children([Child | Rest], ElemAz, State0, Slot, Index) ->
     State1 = maybe_children_sep(State0, Index),
-    {State2, NextSlot} = compile_child(Child, ElemAz, State1, Slot),
-    compile_children(Rest, ElemAz, State2, NextSlot, Index + 1).
+    State2 = State1#state{raw_text_after = static_run_after(Rest, State1)},
+    {State3, NextSlot} = compile_child(Child, ElemAz, State2, Slot),
+    compile_children(Rest, ElemAz, State3, NextSlot, Index + 1).
+
+%% The bytes the static children after a raw-text slot emit, up to the next child
+%% that is not static text. Only a `raw` element's slot reads them.
+static_run_after(Rest, #state{raw_text_kind = raw, backend = Backend}) ->
+    iolist_to_binary(static_run(Rest, Backend));
+static_run_after(_Rest, _State) ->
+    <<>>.
+
+static_run([Child | Rest], Backend) ->
+    case is_static_binary(Child) of
+        true ->
+            [
+                Backend:children_sep(),
+                Backend:text_child(extract_binary_value(Child))
+                | static_run(Rest, Backend)
+            ];
+        false ->
+            []
+    end;
+static_run([], _Backend) ->
+    [].
+
+%% The static bytes already buffered right before a slot (newest segment first),
+%% back to the previous dynamic or a framework marker.
+static_run_before(Buf) ->
+    iolist_to_binary(lists:reverse(static_segments(Buf))).
+
+static_segments([Bin | Rest]) when is_binary(Bin) ->
+    [Bin | static_segments(Rest)];
+static_segments(_Rest) ->
+    [].
 
 %% Emit a separator before every child after the first. HTML uses an empty
 %% separator (no-op); native emits a comma between JSON array elements.
@@ -3811,7 +3848,14 @@ is_value_constructor(_Expr) ->
 emit_child_dynamic(
     Child,
     _ElemAz,
-    #state{raw_text_kind = raw, raw_text_tag = Tag, module = Module, backend = Backend} = State0,
+    #state{
+        raw_text_kind = raw,
+        raw_text_tag = Tag,
+        raw_text_after = After,
+        buf = Buf,
+        module = Module,
+        backend = Backend
+    } = State0,
     Slot
 ) ->
     %% script/style: raw text, the browser decodes neither character references
@@ -3821,7 +3865,8 @@ emit_child_dynamic(
     %% Diffing is impossible by construction (no marker to patch), so the slot
     %% renders once -- the diff engine skips its `undefined` az.
     ok = assert_raw_text_opt_out(Child),
-    DynAST = make_raw_text_dynamic_ast(Child, Tag, Module, line(Child), Backend),
+    Neighbours = {static_run_before(Buf), After},
+    DynAST = make_raw_text_dynamic_ast(Child, Tag, Neighbours, Module, line(Child), Backend),
     {flush(State0, DynAST), Slot};
 emit_child_dynamic(
     Child, ElemAz, #state{nodiff = true, module = Module, backend = Backend} = State0, Slot
@@ -4274,16 +4319,17 @@ make_nodiff_dynamic_ast(ExprAST0, Module, ExprLine, Backend) ->
 %% browser does not decode character references inside these, so HTML-escaping a
 %% scalar would corrupt it (`&` -> `&amp;`). `undefined` az makes it non-diffable
 %% -- there is no comment marker to patch.
-make_raw_text_dynamic_ast(ExprAST0, Tag, Module, ExprLine, Backend) ->
+make_raw_text_dynamic_ast(ExprAST0, Tag, {Before, After}, Module, ExprLine, Backend) ->
     ExprAST = expand_block_element_tails(ExprAST0, Module, Backend, false),
     LocAST = loc_ast(Module, ExprLine),
     %% Neutralize a tokenizer breakout (`</script>`, `<!--`) in the value: the
     %% content is emitted verbatim, so the backend that owns raw-text elements
     %% sanitizes it. The tag goes along because the sequences that break out are
-    %% the enclosing element's, not raw text's in general.
+    %% the enclosing element's, not raw text's in general; the neighbouring static
+    %% text because a sequence can begin in it and end in the value, or the reverse.
     GuardedAST =
         {call, 0, {remote, 0, {atom, 0, Backend}, {atom, 0, raw_text}}, [
-            {atom, 0, Tag}, ExprAST
+            {atom, 0, Tag}, ast_binary(Before), ast_binary(After), ExprAST
         ]},
     FunAST = {'fun', 0, {clauses, [{clause, 0, [], [], [GuardedAST]}]}},
     {tuple, 0, [{atom, 0, undefined}, FunAST, LocAST]}.
