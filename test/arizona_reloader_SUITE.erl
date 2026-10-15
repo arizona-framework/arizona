@@ -49,6 +49,15 @@
     load_failure_stashes_error/1
 ]).
 
+%% agent group tests (compiling through a running rebar_agent)
+-export([
+    agent_success_clears_every_error/1,
+    agent_failure_stashes_changed_file_errors/1,
+    agent_failure_unreproduced_is_unattributed/1,
+    agent_failure_keeps_other_file_errors/1,
+    agent_failure_skips_deleted_file/1
+]).
+
 %% blacklist group tests
 -export([
     blacklisted_app_module_not_reloaded/1,
@@ -82,6 +91,7 @@ all() ->
         {group, pubsub},
         {group, integration},
         {group, compile},
+        {group, agent},
         {group, consistency},
         {group, blacklist}
     ].
@@ -115,6 +125,13 @@ groups() ->
             deleted_file_skips_compile,
             deleted_file_alongside_good_compiles_good,
             load_failure_stashes_error
+        ]},
+        {agent, [], [
+            agent_success_clears_every_error,
+            agent_failure_stashes_changed_file_errors,
+            agent_failure_unreproduced_is_unattributed,
+            agent_failure_keeps_other_file_errors,
+            agent_failure_skips_deleted_file
         ]},
         {blacklist, [sequence], [
             blacklisted_app_module_not_reloaded,
@@ -153,6 +170,8 @@ init_per_group(integration, Config) ->
     Config;
 init_per_group(compile, Config) ->
     Config;
+init_per_group(agent, Config) ->
+    install_fake_agent() ++ Config;
 init_per_group(blacklist, Config) ->
     %% The sweep reads the beam-facts cache table that `arizona_sup` owns.
     {ok, _} = application:ensure_all_started(arizona),
@@ -165,6 +184,8 @@ init_per_group(consistency, Config) ->
 
 end_per_group(compile, _Config) ->
     ok;
+end_per_group(agent, Config) ->
+    remove_fake_agent(Config);
 end_per_group(blacklist, _Config) ->
     _ = application:stop(arizona),
     ok;
@@ -464,6 +485,62 @@ load_failure_stashes_error(Config) ->
         arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => ErrorInfo}))
     ),
     ?assertMatch({match, _}, re:run(Page, ~"arizona_dev_ct_onload compiled but did not load")).
+
+%% ============================================================================
+%% agent group tests (arizona_reloader, rebar_agent mode)
+%% ============================================================================
+
+%% rebar_agent compiles the whole project, so a clean compile clears every
+%% stashed error, including one for a file outside the wave.
+agent_success_clears_every_error(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Bad = filename:join(Dir, "arizona_dev_ct_bad.erl"),
+    ok = file:write_file(Bad, bad_module_src()),
+    ok = set_agent_result({error, failed}),
+    {error, #{errors := [_ | _]}} = arizona_reloader:compile([Bad]),
+    ok = set_agent_result(ok),
+    ?assertEqual(ok, arizona_reloader:compile([filename:join(Dir, "other.erl")])),
+    ?assertEqual(undefined, arizona_reloader:get_error()).
+
+agent_failure_stashes_changed_file_errors(Config) ->
+    Bad = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_bad.erl"),
+    ok = file:write_file(Bad, bad_module_src()),
+    ok = set_agent_result({error, failed}),
+    {error, #{errors := Errors}} = arizona_reloader:compile([Bad]),
+    ?assertMatch([{Bad, _} | _], Errors),
+    ?assertEqual(#{errors => Errors}, arizona_reloader:get_error()).
+
+%% The project failed but no changed file reproduces it (a dependency, a file
+%% outside the wave): the stash says so with an empty list, which the error page
+%% explains, rather than reading as no error at all.
+agent_failure_unreproduced_is_unattributed(Config) ->
+    Good = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_alive.erl"),
+    ok = file:write_file(Good, alive_module_src()),
+    ok = set_agent_result({error, failed}),
+    ?assertEqual({error, #{errors => []}}, arizona_reloader:compile([Good])),
+    ?assertEqual(#{errors => []}, arizona_reloader:get_error()).
+
+%% A failing project wave that reproduces nothing keeps the file already known
+%% to be broken on show, instead of the unattributed explanation.
+agent_failure_keeps_other_file_errors(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Bad = filename:join(Dir, "arizona_dev_ct_bad.erl"),
+    Good = filename:join(Dir, "arizona_dev_ct_alive.erl"),
+    ok = file:write_file(Bad, bad_module_src()),
+    ok = file:write_file(Good, alive_module_src()),
+    ok = set_agent_result({error, failed}),
+    {error, #{errors := BadErrors}} = arizona_reloader:compile([Bad]),
+    ?assertEqual({error, #{errors => []}}, arizona_reloader:compile([Good])),
+    ?assertEqual(#{errors => BadErrors}, arizona_reloader:get_error()).
+
+%% A deletion is not a compile error in this mode either: recompiling the
+%% vanished path for diagnostics would stash an `{epp, enoent}` that outlives the
+%% wave and hides the unattributed explanation.
+agent_failure_skips_deleted_file(Config) ->
+    Missing = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_gone.erl"),
+    ok = set_agent_result({error, failed}),
+    ?assertEqual({error, #{errors => []}}, arizona_reloader:compile([Missing])),
+    ?assertEqual(#{errors => []}, arizona_reloader:get_error()).
 
 %% ============================================================================
 %% consistency group tests (arizona_reloader_consistency)
@@ -814,6 +891,55 @@ mixed_good_module_src() ->
     "-module(arizona_dev_ct_mixed).\n"
     "-export([check/0]).\n"
     "check() -> ok.\n".
+
+%% --- fake rebar_agent ---
+
+%% The reloader compiles through `rebar_agent` when a process is registered under
+%% that name, calling `rebar_agent:do(compile)`. Stand one in: a stub module
+%% answering whatever `set_agent_result/1` stored, and a registered idle process.
+%% `rebar3 ct` runs in rebar3's own node, whose real `rebar_agent` module may be
+%% loaded, so its object code is kept to restore afterwards.
+install_fake_agent() ->
+    Original =
+        case code:is_loaded(rebar_agent) of
+            {file, _} -> code:get_object_code(rebar_agent);
+            false -> error
+        end,
+    Forms = [
+        {attribute, 1, module, rebar_agent},
+        {attribute, 1, export, [{do, 1}]},
+        {function, 1, do, 1, [
+            {clause, 1, [{atom, 1, compile}], [], [
+                {call, 1, {remote, 1, {atom, 1, persistent_term}, {atom, 1, get}}, [
+                    {atom, 1, arizona_reloader_suite_agent_result}
+                ]}
+            ]}
+        ]}
+    ],
+    {ok, rebar_agent, Bin} = compile:forms(Forms),
+    _ = code:purge(rebar_agent),
+    {module, rebar_agent} = code:load_binary(rebar_agent, "rebar_agent.erl", Bin),
+    Agent = spawn(fun() -> timer:sleep(infinity) end),
+    true = register(rebar_agent, Agent),
+    [{fake_agent, {Agent, Original}}].
+
+remove_fake_agent(Config) ->
+    {Agent, Original} = proplists:get_value(fake_agent, Config),
+    true = exit(Agent, kill),
+    _ = persistent_term:erase(arizona_reloader_suite_agent_result),
+    _ = code:purge(rebar_agent),
+    true = code:delete(rebar_agent),
+    _ = code:purge(rebar_agent),
+    case Original of
+        {rebar_agent, Bin, File} ->
+            {module, rebar_agent} = code:load_binary(rebar_agent, File, Bin);
+        error ->
+            ok
+    end,
+    ok.
+
+set_agent_result(Result) ->
+    persistent_term:put(arizona_reloader_suite_agent_result, Result).
 
 alive_module_src() ->
     "-module(arizona_dev_ct_alive).\n"

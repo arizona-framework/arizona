@@ -375,13 +375,9 @@ rebar3_compile(ErlFiles) ->
     end.
 
 %% Direct compile:file fallback when rebar3 is not available, returning the
-%% errors of each file that failed. The watcher treats a delete as a relevant
-%% event, so a wave can carry paths that no longer exist; compiling one would
-%% stash a spurious {epp, enoent} error on the dev error page. A deletion is not
-%% a compile error, so vanished paths are skipped (and, being in the wave, have
-%% their stashed errors dropped).
+%% errors of each file that failed.
 manual_compile(Files) ->
-    #{F => Es || F <- Files, filelib:is_regular(F), Es <- [compile_one(F)], Es =/= []}.
+    wave_errors(Files, fun compile_one/1).
 
 compile_one(File) ->
     case compile_file(File) of
@@ -391,7 +387,21 @@ compile_one(File) ->
 
 %% Re-compile changed files with return_errors to get structured error info.
 collect_errors(Files) ->
-    #{F => Es || F <- Files, {error, Es} <- [compile_file(F)]}.
+    wave_errors(Files, fun file_errors/1).
+
+file_errors(File) ->
+    case compile_file(File) of
+        {ok, _Mod, _Binary} -> [];
+        {error, FileErrors} -> FileErrors
+    end.
+
+%% The errors of each wave file that has any, in either mode. The watcher treats
+%% a delete as a relevant event, so a wave can carry paths that no longer exist;
+%% compiling one would stash a spurious {epp, enoent} error on the dev error page.
+%% A deletion is not a compile error, so vanished paths are skipped (and, being in
+%% the wave, have their stashed errors dropped).
+wave_errors(Files, FileErrors) ->
+    #{F => Es || F <- Files, filelib:is_regular(F), Es <- [FileErrors(F)], Es =/= []}.
 
 %% `return_warnings` pins the success shape to the 4-tuple whatever the
 %% recovered options hold; nothing here reports warnings either way. The module
