@@ -2547,10 +2547,12 @@ Reference forms:
 - `{env, "VAR", Default}` -- **optional**. Coerces `$VAR` to the type of `Default`, or returns
   `Default` when unset.
 
-Coercion is by the default's Erlang type (env vars are always strings): integer, float, boolean
-(`"true"`/`"false"`, case-insensitive), binary, atom (`list_to_existing_atom/1`), or list (a
-comma-split into trimmed binaries -- the `csrf_origins` / `secret_key_previous` shape). The
-required form yields a binary.
+Coercion is by the default's Erlang type (env vars are always strings): integer, float (an
+integer value like `"2"` reads as `2.0`), boolean (`"true"`/`"false"`, case-insensitive), binary,
+atom (`list_to_existing_atom/1`), or list (a comma-split into trimmed binaries -- the
+`csrf_origins` / `secret_key_previous` shape). The required form yields a binary. A default of
+any other type (a map, a tuple, a list of atoms) has no coercion and raises `unsupported_default`
+(with a `format_error/2` message) whether or not the variable is set.
 
 `resolve/1` recurses into **maps, lists, and 2-tuples only**:
 
