@@ -3,7 +3,8 @@
 
 %% Reconnect signal -- true while the current page is the one a reconnection (the
 %% client re-opened the WebSocket) mounted, false on the first connect, during SSR,
-%% and on a page reached by navigate after the reconnect (a patch keeps it).
+%% and on a page reached by navigate after the reconnect (a same-handler patch
+%% keeps it; a cross-handler patch is a navigate).
 %% Gate one-shot OS commands with `?connected andalso not ?reconnected`.
 -define(reconnected, arizona_live:reconnected()).
 
