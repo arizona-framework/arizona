@@ -610,6 +610,7 @@ handle_call(
 handle_call(render_current, _From, #state{handler = H, bindings = B, views = V} = State) ->
     Tmpl = arizona_stateful:call_render(H, B),
     {HTML, _Snap, _Views1} = arizona_render:render(Tmpl, V),
+    _ = erlang:erase('$arizona_swapped_out'),
     {reply, {ok, iolist_to_binary(HTML), arizona_event_attrs:drain()}, State};
 handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings = B0} = State) ->
     ok = push_barrier(From, State),
@@ -817,8 +818,8 @@ swap_out_view(ViewId, Handler, Bindings) ->
     ok.
 
 %% The views a crash mid-diff left listed in the state but already unmounted by
-%% swap_out_view/3. Empty outside a failed diff: every diff erases the record as
-%% soon as it returns.
+%% swap_out_view/3. Empty outside a failed pass: every render or diff that can
+%% evaluate child views erases the record as soon as it returns.
 still_mounted_views(Views) ->
     case erlang:erase('$arizona_swapped_out') of
         undefined ->
@@ -897,6 +898,7 @@ do_mount(H, B0, V0, OnMount) ->
     ViewId = maps:get(id, B2),
     Tmpl = arizona_stateful:call_render(H, B2),
     Rendered = arizona_render:render_snapshot(Tmpl, V0),
+    _ = erlang:erase('$arizona_swapped_out'),
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
     B4 = maps:merge(B3, Resets),
     {ViewId, Rendered, B4}.
