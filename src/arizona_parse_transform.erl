@@ -201,7 +201,7 @@ parse_transform(Forms, _Options) ->
          || Form <- Forms
         ],
         WithSuppressions = inject_each_callback_suppressions(Transformed, Forms, FunDefs, Module),
-        WithEvents = inject_az_attrs(WithSuppressions, collect_component_mods(Forms)),
+        WithEvents = inject_az_attrs(WithSuppressions, collect_dep_mods(Module, Forms)),
         Reverted = erl_syntax:revert_forms(WithEvents),
         ok = assert_no_nodiff_call(Reverted),
         with_warnings(Reverted, latin1_warnings(Forms, erase(?FOLDED_KEY)))
@@ -413,7 +413,9 @@ inject_az_attrs(Forms, Deps) ->
             Before ++ [ModAttr | Attrs] ++ After
     end.
 
-%% The component modules this module renders, as literal atoms.
+%% The modules this module can take markup from, as literal atoms: the component
+%% modules its templates name, and every module it calls, imports, or takes a
+%% `fun Mod:F/A` of by a literal name.
 %%
 %% `?stateful(Mod, _)` and `?stateless(Mod, Fun, _)` pass the module as DATA to
 %% `arizona_template`, never as a call, so it does not survive into the compiled
@@ -421,28 +423,47 @@ inject_az_attrs(Forms, Deps) ->
 %% `[arizona_template, erlang]`. Compile time is the only moment the graph is
 %% visible, which is why it is recorded here rather than recovered later.
 %%
-%% A module reached only through a variable (`?stateful(Mod, _)` with `Mod` bound at
-%% runtime) is not resolvable and is not recorded.
-collect_component_mods(Forms) ->
-    lists:usort(lists:flatten([component_mods(Form) || Form <- Forms])).
+%% A remote helper's template (`other_mod:button()`) carries that module's FOLDED
+%% names in its statics, which no render ever re-proves, so only the walk can
+%% deliver them. Which calls return markup is not decidable here (a mount may store
+%% the template in bindings for a later `?get`), so every literal callee is
+%% recorded; the walk dead-ends on a module carrying no attributes, so a
+%% non-template callee costs it one `module_info/1` read.
+%%
+%% A module reached only through a variable (`?stateful(Mod, _)` or `Mod:f()` with
+%% `Mod` bound at runtime) is not resolvable and is not recorded.
+collect_dep_mods(Module, Forms) ->
+    lists:usort([
+        Mod
+     || Mod <- lists:flatten([dep_mods(Form) || Form <- Forms]),
+        Mod =/= Module,
+        Mod =/= arizona_template,
+        Mod =/= az
+    ]).
 
-component_mods({call, _, {remote, _, {atom, _, Mod}, {atom, _, Fun}}, Args}) when
+dep_mods({call, _, {remote, _, {atom, _, Mod}, {atom, _, Fun}}, Args}) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
-    component_mod_args(Fun, Args) ++ [component_mods(A) || A <- Args];
-component_mods(Tuple) when is_tuple(Tuple) ->
-    [component_mods(E) || E <- tuple_to_list(Tuple)];
-component_mods(List) when is_list(List) ->
-    [component_mods(E) || E <- List];
-component_mods(_Other) ->
+    component_mod_args(Fun, Args) ++ [dep_mods(A) || A <- Args];
+dep_mods({call, _, {remote, _, {atom, _, Mod}, _Fun}, Args}) ->
+    [Mod | [dep_mods(A) || A <- Args]];
+dep_mods({'fun', _, {function, {atom, _, Mod}, _Fun, _Arity}}) ->
+    [Mod];
+dep_mods({attribute, _, import, {Mod, _Funs}}) ->
+    [Mod];
+dep_mods(Tuple) when is_tuple(Tuple) ->
+    [dep_mods(E) || E <- tuple_to_list(Tuple)];
+dep_mods(List) when is_list(List) ->
+    [dep_mods(E) || E <- List];
+dep_mods(_Other) ->
     [].
 
 %% `stateful(Mod, Props)` and `stateless(Mod, Fun, Props)` name the module first;
-%% `stateless(fun Mod:Fun/1, Props)` names it inside the fun reference. Every other
-%% shape resolves within this module, or not at all.
+%% `stateless(fun Mod:Fun/1, Props)` names it inside the fun reference, which the
+%% recursion into the arguments records. Every other shape resolves within this
+%% module, or not at all.
 component_mod_args(stateful, [{atom, _, Mod} | _]) -> [Mod];
 component_mod_args(stateless, [{atom, _, Mod}, {atom, _, _Fun} | _]) -> [Mod];
-component_mod_args(stateless, [{'fun', _, {function, {atom, _, Mod}, _, _}} | _]) -> [Mod];
 component_mod_args(_Fun, _Args) -> [].
 
 %% Does the expression contain a command-builder call? The builders are the only
