@@ -10666,7 +10666,19 @@ tracked_get_map_pattern_key_param_ok(Config) when is_list(Config) ->
     T = Mod:render(#{x => <<"y">>}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     ?assertEqual(<<"y">>, Fun()),
-    ?assertEqual(#{x => true}, slot_deps(Fun)).
+    ?assertEqual(#{x => true}, slot_deps(Fun)),
+    ParamMod = compile_module(
+        "-module(pt_tg_mappat_param_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    (fun(B) -> "
+        "        arizona_template:html({'p', [], [arizona_template:get(x, B)]}) "
+        "    end)(Bindings). "
+    ),
+    ParamT = ParamMod:render(#{x => <<"z">>}),
+    [{_ParamAz, {esc, ParamFun}, _ParamLoc}] = maps:get(d, ParamT),
+    ?assertEqual(<<"z">>, ParamFun()),
+    ?assertEqual(#{x => true}, slot_deps(ParamFun)).
 
 %% Finding A, baseline: a child template handed off via a raw function call freezes.
 %% The outer slot is `fun() -> inner(Bindings) end`; building `inner` fires no tracked
