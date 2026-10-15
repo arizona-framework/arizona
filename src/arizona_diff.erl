@@ -693,20 +693,19 @@ taken_views(Iter, Items, {Taken, AnyKept} = Acc) ->
     end.
 
 %% The roots of the subtrees to subtract: a taken view the drain did not render
-%% again, and the old descendants of one it did. A re-rendered view's own entry,
-%% and every descendant its new render still reaches, are in `LocalNew` and win
-%% the merge anyway, so only what lies below it needs naming -- and most such
+%% again, and the old descendants of every view it did. A re-rendered view's own
+%% entry, and every descendant its new render still reaches, are in `LocalNew` and
+%% win the merge anyway, so only what lies below it needs naming -- and most such
 %% views are leaves, which name nothing.
+%%
+%% Every view the drain rendered, not only the taken ones: a value can be kept
+%% (equal to the stored one) while the view in it was re-rendered. A child that
+%% rendered a grandchild on its own event leaves the stream's stored copy of it
+%% behind, and a later update that drops the grandchild renders a value equal to
+%% that stale copy, so nothing is taken while the grandchild is gone.
 stale_views(Taken, LocalNew, Old0) ->
-    [
-        Id
-     || View <- Taken,
-        Id <-
-            case LocalNew of
-                #{View := _} -> old_descendants(View, Old0);
-                #{} -> [View]
-            end
-    ].
+    [View || View <- Taken, not is_map_key(View, LocalNew)] ++
+        [Id || View := _ <- LocalNew, Id <- old_descendants(View, Old0)].
 
 old_descendants(View, Old0) ->
     case Old0 of

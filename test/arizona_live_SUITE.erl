@@ -126,6 +126,7 @@
     stream_wrapped_children_unmounted_on_delete/1,
     stream_wrapped_child_unmounted_on_switch_off/1,
     stream_rerendered_child_drops_grandchild/1,
+    stream_own_event_grandchild_dropped_by_prop/1,
     on_mount_transforms_bindings/1,
     on_mount_works_on_navigate/1,
     on_mount_empty_is_noop/1,
@@ -268,7 +269,8 @@ groups() ->
             stream_grandchild_survives_unrelated_insert,
             stream_wrapped_children_unmounted_on_delete,
             stream_wrapped_child_unmounted_on_switch_off,
-            stream_rerendered_child_drops_grandchild
+            stream_rerendered_child_drops_grandchild,
+            stream_own_event_grandchild_dropped_by_prop
         ]},
         {on_mount, [parallel], [
             on_mount_transforms_bindings,
@@ -2078,8 +2080,37 @@ start_stream_lifecycle(Init) ->
 start_nested_lifecycle(Init) ->
     start_lifecycle(arizona_stream_nested_lifecycle_root, Init).
 
+%% A grandchild an item child mounted on its own event, then dropped on a parent
+%% prop update, unmounts at that update -- and deleting the item later unmounts
+%% only the child. Without a transport the root snapshot keeps the child's copy
+%% from before the event (`mark_pending_refresh/3`), so the re-rendered child is
+%% EQUAL to the stored one; with the test pid as transport the copy is settled
+%% first. Both must agree on the lifecycle.
+stream_own_event_grandchild_dropped_by_prop(Config) when is_list(Config) ->
+    [
+        begin
+            Pid = start_lifecycle(arizona_stream_lifecycle_root, #{}, Transport),
+            ?assertEqual(
+                [{child_mounted, ~"c-a-g"}],
+                lifecycle_event(Pid, ~"c-a", ~"grand_on", #{})
+            ),
+            ?assertEqual(
+                [{child_unmounted, ~"c-a-g"}],
+                stream_lifecycle_event(Pid, ~"grand", #{~"id" => ~"a", ~"on" => false})
+            ),
+            ?assertEqual(
+                [{child_unmounted, ~"c-a"}],
+                stream_lifecycle_event(Pid, ~"delete", #{~"id" => ~"a"})
+            )
+        end
+     || Transport <- [undefined, self()]
+    ].
+
 start_lifecycle(Handler, Init) ->
-    {ok, Pid} = arizona_live:start_link(Handler, Init#{notify => self()}, undefined, []),
+    start_lifecycle(Handler, Init, undefined).
+
+start_lifecycle(Handler, Init, Transport) ->
+    {ok, Pid} = arizona_live:start_link(Handler, Init#{notify => self()}, Transport, []),
     {ok, _, _} = arizona_live:mount(Pid),
     [_ | _] = lifecycle_messages(),
     Pid.
