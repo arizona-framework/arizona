@@ -83,7 +83,7 @@ clears only on a 2xx. For an error leg that keeps the typed fields, use `reply_e
 with a non-2xx status (the effects still apply).
 """.
 -spec reply_effects(Effects) -> roadrunner_resp:buffered_response() when
-    Effects :: [arizona_effect:cmd()].
+    Effects :: arizona_effect:cmds().
 reply_effects(Effects) ->
     reply_effects(200, Effects).
 
@@ -109,9 +109,9 @@ handle(Req) ->
 """.
 -spec reply_effects(Status, Effects) -> roadrunner_resp:buffered_response() when
     Status :: roadrunner_http:status(),
-    Effects :: [arizona_effect:cmd()].
+    Effects :: arizona_effect:cmds().
 reply_effects(Status, Effects) ->
-    roadrunner_resp:json(Status, #{~"e" => [arizona_effect:json_value(Cmd) || Cmd <- Effects]}).
+    roadrunner_resp:json(Status, #{~"e" => arizona_effect:json_value(Effects)}).
 
 -doc """
 Builds a response that sends the client to `Location` via a SPA navigation. Sugar for
