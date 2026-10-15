@@ -206,7 +206,7 @@ receives additional validation and `az-view` injection.
 -spec parse_transform(Forms, Options) -> Forms | {error, Errors, []} when
     Forms :: [erl_parse:abstract_form()],
     Options :: [compile:option()],
-    Errors :: [{file:filename(), [{erl_anno:line(), module(), term()}]}].
+    Errors :: [{file:filename(), [{erl_anno:location(), module(), term()}]}].
 parse_transform(Forms, _Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
@@ -222,23 +222,51 @@ parse_transform(Forms, _Options) ->
     _ = put(?PARAM_SEQ_KEY, 0),
     _ = put(?HOIST_SITE_KEY, 0),
     try
-        Transformed = [
-            transform_form(mark_targets(Form, none), Module, IsLive, FunDefs)
-         || Form <- Forms
-        ],
+        Transformed = map_forms_in_file(
+            fun(Form) -> transform_form(mark_targets(Form, none), Module, IsLive, FunDefs) end,
+            File,
+            Forms
+        ),
         WithSuppressions = inject_each_callback_suppressions(Transformed, Forms, FunDefs, Module),
         WithEvents = inject_az_attrs(WithSuppressions, collect_component_mods(Forms)),
-        Reverted = erl_syntax:revert_forms(WithEvents),
-        ok = assert_no_nodiff_call(Reverted),
+        Reverted = map_forms_in_file(
+            fun(Form) ->
+                ok = assert_no_nodiff_call(Form),
+                Form
+            end,
+            File,
+            erl_syntax:revert_forms(WithEvents)
+        ),
         with_warnings(Reverted, latin1_warnings(Forms, erase(?FOLDED_KEY)))
     catch
-        throw:{arizona_parse_error, Line, Reason} ->
+        throw:{arizona_parse_error, ErrorFile, Anno, Reason} ->
             _ = erase(?FOLDED_KEY),
-            {error, [{File, [{Line, ?MODULE, Reason}]}], []}
+            {error, [{ErrorFile, [{erl_anno:location(Anno), ?MODULE, Reason}]}], []}
     after
         _ = erase(?PARAM_SEQ_KEY),
         _ = erase(?HOIST_SITE_KEY)
     end.
+
+%% Apply Fun to each form, attributing a parse error it raises to the file the form
+%% came from: epp marks every include boundary with a `-file` attribute, so a template
+%% in an included header reports the header (and its own line numbers), not the module.
+map_forms_in_file(Fun, File0, Forms) ->
+    {Mapped, _File} = lists:mapfoldl(
+        fun
+            ({attribute, _, file, {File, _}} = Form, _Current) ->
+                {Form, File};
+            (Form, File) ->
+                try
+                    {Fun(Form), File}
+                catch
+                    throw:{arizona_parse_error, Anno, Reason} ->
+                        throw({arizona_parse_error, File, Anno, Reason})
+                end
+        end,
+        File0,
+        Forms
+    ),
+    Mapped.
 
 with_warnings(Forms, []) ->
     Forms;
@@ -1136,8 +1164,8 @@ format_helper_error(helper_param_in_each_guard, Name, Arity) ->
 %% --------------------------------------------------------------------
 
 -spec parse_error(term(), term()) -> no_return().
-parse_error(Reason, Line) ->
-    throw({arizona_parse_error, Line, Reason}).
+parse_error(Reason, Anno) ->
+    throw({arizona_parse_error, Anno, Reason}).
 
 %% `arizona_template:get`/`get_lazy`/`with` (and the `az:` aliases) call `track/1`
 %% regardless of which map they read, so reading a sub-map records the inner key
@@ -1240,6 +1268,13 @@ flag_tracked_get(_Node, _Scope) ->
 line(Node) when is_tuple(Node), tuple_size(Node) >= 2 ->
     erl_anno:line(element(2, Node));
 line(_) ->
+    0.
+
+%% The `{Line, Column}` location (or the line, when scanned without columns) a
+%% compile error reports.
+loc(Node) when is_tuple(Node), tuple_size(Node) >= 2 ->
+    erl_anno:location(element(2, Node));
+loc(_) ->
     0.
 
 extract_file([{attribute, _, file, {File, _}} | _]) -> File;
@@ -3444,7 +3479,7 @@ set_template_map_d_field(Field, _DFunAST) ->
 %% from the callback arity (1-arg = list, 2-arg = stream/map): the error it raises tailors the
 %% fix advice, since a list has a comprehension fallback and a stream does not.
 validate_each_body(Kind, text_dynamic, LastExpr) ->
-    parse_error(each_body_error(Kind, LastExpr), line(LastExpr));
+    parse_error(each_body_error(Kind, LastExpr), loc(LastExpr));
 validate_each_body(Kind, list_ast, LastExpr) ->
     %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
     %% ?html/?native/?terminal map literal) or a ?stateful/?stateless descriptor: those land
@@ -3468,7 +3503,7 @@ each_body_error(stream, LastExpr) ->
 
 walk_each_list_items(Kind, {cons, _, Item, Tail}) ->
     case is_fragile_each_item(Item) of
-        true -> parse_error(each_body_error(Kind, Item), line(Item));
+        true -> parse_error(each_body_error(Kind, Item), loc(Item));
         false -> walk_each_list_items(Kind, Tail)
     end;
 walk_each_list_items(_Kind, _Nil) ->
@@ -3563,7 +3598,7 @@ compile_classified_body(text_dynamic, ExprAST, Module, _LiveRender, Backend, CCt
 %% Reject at compile time.
 reject_orphaned_local(ExprAST) ->
     case is_local_marker(ExprAST) of
-        true -> parse_error(local_orphaned, line(ExprAST));
+        true -> parse_error(local_orphaned, loc(ExprAST));
         false -> ok
     end.
 
@@ -3807,11 +3842,11 @@ extract_element({tuple, _, [{atom, _, Tag}, AttrsAST]} = Node) ->
 %% Shaped like an element but with a tag that is neither a literal atom nor a
 %% literal binary.
 extract_element({tuple, _, [TagAST, _Attrs]} = Node) ->
-    parse_error(element_tag_reason(TagAST), line(Node));
+    parse_error(element_tag_reason(TagAST), loc(Node));
 extract_element({tuple, _, [TagAST, _Attrs, _Children]} = Node) ->
-    parse_error(element_tag_reason(TagAST), line(Node));
+    parse_error(element_tag_reason(TagAST), loc(Node));
 extract_element(Node) ->
-    parse_error(invalid_element, line(Node)).
+    parse_error(invalid_element, loc(Node)).
 
 %% A tag written as a literal of a type that is not a name (a string, a number) is a
 %% malformed element form, and the form error says exactly what the accepted shapes
@@ -3824,7 +3859,7 @@ extract_element_parts(Tag, AttrsAST, ChildrenAST, Node) ->
         true ->
             {Tag, ast_list_to_list(AttrsAST), normalize_children(ChildrenAST), line(Node)};
         false ->
-            parse_error(invalid_element, line(Node))
+            parse_error(invalid_element, loc(Node))
     end.
 
 element_tag_reason(TagAST) ->
@@ -4446,7 +4481,7 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
     case is_invalid_static_child(Child) of
         true ->
             ValueStr = erl_pp:expr(Child),
-            parse_error({invalid_child, ValueStr}, line(Child));
+            parse_error({invalid_child, ValueStr}, loc(Child));
         false ->
             ok = reject_markup_in_raw_text(Child, State0#state.raw_text_kind),
             emit_child_dynamic(Child, ElemAz, State0, Slot)
@@ -4461,7 +4496,7 @@ reject_markup_in_raw_text(Child, escapable) ->
         Child,
         fun(Leaf) ->
             case is_markup_leaf(Leaf) of
-                true -> parse_error(markup_in_raw_text, line(Leaf));
+                true -> parse_error(markup_in_raw_text, loc(Leaf));
                 false -> Leaf
             end
         end,
@@ -4588,7 +4623,7 @@ emit_marked_child(Child, ElemAz, #state{module = Module, backend = Backend} = St
 assert_raw_text_opt_out(Child) ->
     case is_raw_call(Child) of
         true -> ok;
-        false -> parse_error(dynamic_in_raw_text, line(Child))
+        false -> parse_error(dynamic_in_raw_text, loc(Child))
     end.
 
 is_raw_call({call, _, {remote, _, {atom, _, Mod}, {atom, _, raw}}, [_Value]}) ->

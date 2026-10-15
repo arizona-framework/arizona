@@ -117,6 +117,9 @@
     invalid_attribute/1,
     invalid_child_empty_tuple/1,
     invalid_child_mixed/1,
+    error_names_included_file/1,
+    error_after_include_names_main_file/1,
+    error_keeps_column/1,
     invalid_child_tuple_literal/1,
     invalid_each_fun_arity/1,
     invalid_each_multi_clause/1,
@@ -1129,7 +1132,10 @@ groups() ->
             invalid_child_tuple_literal,
             invalid_child_mixed,
             improper_template_list_rejected,
-            improper_attr_value_is_text
+            improper_attr_value_is_text,
+            error_names_included_file,
+            error_after_include_names_main_file,
+            error_keeps_column
         ]},
         %% Inline cross-target nesting guard (?html in ?native and vice-versa)
         {cross_target, [parallel], [
@@ -7613,6 +7619,66 @@ invalid_element_single(Config) when is_list(Config) ->
     ).
 
 %% Test 104: Wrong arity element tuple (4-element).
+%% An error inside an included file names that file, not the module's: the
+%% `-file` attribute epp emits at the include boundary is honored.
+error_names_included_file(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{"pt_inc.hrl", [{8, arizona_parse_transform, {reserved_attr, <<"az">>}}]}], []},
+        transform_source(
+            "-file(\"pt_main.erl\", 1).\n"
+            "-module(pt_file_inc).\n"
+            "-export([render/1, inc/1]).\n"
+            "render(Bindings) ->\n"
+            "    arizona_template:html({p, [], [arizona_template:get(x, Bindings)]}).\n"
+            "-file(\"pt_inc.hrl\", 1).\n"
+            "inc(_Bindings) ->\n"
+            "    arizona_template:html({p, [], [{span, [{az, <<\"bad\">>}], []}]}).\n"
+            "-file(\"pt_main.erl\", 6).\n",
+            1
+        )
+    ).
+
+%% Once the include ends, an error names the module's file again.
+error_after_include_names_main_file(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{"pt_main.erl", [{9, arizona_parse_transform, invalid_element}]}], []},
+        transform_source(
+            "-file(\"pt_main.erl\", 1).\n"
+            "-module(pt_file_after).\n"
+            "-export([render/1, inc/1]).\n"
+            "-file(\"pt_inc.hrl\", 1).\n"
+            "inc(Bindings) -> arizona_template:get(x, Bindings).\n"
+            "-file(\"pt_main.erl\", 4).\n"
+            "render(_Bindings) ->\n"
+            "    ok,\n"
+            "    arizona_template:html({'div', [], [], extra}).\n",
+            1
+        )
+    ).
+
+%% A source scanned with columns reports the error's column too.
+error_keeps_column(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{_, [{{3, 49}, arizona_parse_transform, invalid_element}]}], []},
+        transform_source(
+            "-module(pt_err_column).\n"
+            "-export([render/1]).\n"
+            "render(_B) -> ok, ok, ok, arizona_template:html({'div', [], [], extra}).\n",
+            {1, 1}
+        )
+    ).
+
+transform_source(Source, StartLoc) ->
+    {ok, Tokens, _} = erl_scan:string(Source, StartLoc),
+    Forms = [
+        begin
+            {ok, F} = erl_parse:parse_form(Toks),
+            F
+        end
+     || Toks <- split_forms(Tokens)
+    ],
+    arizona_parse_transform:parse_transform(Forms, []).
+
 invalid_element_four(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_invalid_elem_four). "
