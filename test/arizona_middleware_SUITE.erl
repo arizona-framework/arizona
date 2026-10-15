@@ -147,7 +147,9 @@ extract_body_read_error_halts_with_its_status(Config) when is_list(Config) ->
                 #{}
             )
         )
-     || {Reason, Status} <- [{too_large, 413}, {timeout, 408}, {invalid, 400}]
+     || {Reason, Status} <- [
+            {too_large, 413}, {trailers_too_large, 431}, {timeout, 408}, {invalid, 400}
+        ]
     ].
 
 extract_is_usable_as_middleware(Config) when is_list(Config) ->

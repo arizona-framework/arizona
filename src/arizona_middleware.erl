@@ -235,8 +235,11 @@ Each key targets a binding:
 `body` is the one key that can fail: when the transport cannot deliver the body
 (only possible when the server reads it on demand, e.g. roadrunner's
 `body_buffering => manual`), the step halts with `413` (over the body cap),
-`408` (the client stalled) or `400` (malformed, or the connection dropped) --
-the statuses the server answers with when it buffers the body itself.
+`431` (a chunked body's trailers over the request-header limits), `408` (the
+client stalled or sent too slowly) or `400` (malformed, or the connection
+dropped). These match what the server answers when it buffers the body itself,
+except that a server may drop a too-slow client without any response where
+this step still answers it `408`.
 
 ```erlang
 #{middlewares => [arizona_middleware:extract([path_bindings, params])]}
@@ -464,5 +467,6 @@ extract_keys([method | Keys], Req, Bindings) ->
     extract_keys(Keys, Req, Bindings#{method => arizona_req:method(Req)}).
 
 body_error_status(too_large) -> 413;
+body_error_status(trailers_too_large) -> 431;
 body_error_status(timeout) -> 408;
 body_error_status(invalid) -> 400.
