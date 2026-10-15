@@ -427,6 +427,7 @@
     raw_text_svg_title_local/1,
     raw_text_svg_branch_context/1,
     raw_text_svg_wrapped_branch_context/1,
+    wrapped_branch_reads_tracked/1,
     raw_text_foreign_script_style_escaped/1,
     raw_text_script_markerless/1,
     raw_text_script_not_escaped/1,
@@ -809,6 +810,7 @@ groups() ->
             raw_text_svg_title_local,
             raw_text_svg_branch_context,
             raw_text_svg_wrapped_branch_context,
+            wrapped_branch_reads_tracked,
             raw_text_foreign_script_style_escaped,
             raw_text_script_markerless,
             raw_text_script_not_escaped,
@@ -2653,6 +2655,22 @@ raw_text_svg_wrapped_branch_context(Config) when is_list(Config) ->
     ?assertMatch({match, _}, re:run(WrappedHTML, ~"<title[^>]*><!--az:")),
     ?assertMatch([[_Op, _Az, ~"B"]], WrappedOps),
     ?assertEqual(Run(bare), {WrappedHTML, WrappedOps}).
+
+%% Unwrapping a whole-tail `?html` also gives it the bare branch's read tracking: a
+%% binding read only inside the wrapped branch is a dependency of the slot, so a change to
+%% it alone patches the branch instead of leaving it frozen at its first render.
+wrapped_branch_reads_tracked(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_wrapped_branch_reads). -export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:html({b, [], [arizona_template:get(t, Bindings)]}); "
+        "        false -> ~\"\" end]}). "
+    ),
+    B0 = #{f => true, t => ~"A"},
+    {_, Snap, _} = arizona_render:render(Mod:render(B0), #{}),
+    {Ops, _, _} = arizona_diff:diff(Mod:render(B0#{t => ~"B"}), Snap, #{}, #{t => true}),
+    ?assertMatch([[_Op, _Az, ~"B"]], Ops).
 
 %% A content `?local` under a raw-text element is a compile error -- the client
 %% resolves a local slot through its markers, and raw-text content has none. An
