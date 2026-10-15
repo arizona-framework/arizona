@@ -2562,20 +2562,29 @@ function commandsIncludeFetch(cmds) {
 }
 
 /**
- * True when a parsed command (single or list) is/contains one that only works over
- * the WebSocket: `push_event`, and an SPA `navigate`/`patch` (a `full` navigate is a
- * plain page load and needs none). Wrappers are searched like `commandsIncludeFetch`.
+ * What a parsed command (single or list) needs the WebSocket for, so a submit made
+ * while it is down can be settled up front: `event` (a `push_event`), `fetch`, and
+ * `nav`, the first SPA `navigate`/`patch` that runs unconditionally (a `full`
+ * navigate is a plain page load and needs no socket). A navigation under `on_key`
+ * runs only on a matching key, so it counts as `event`: it cannot be degraded to a
+ * page load that may never have been asked for.
  * @param {Array<*>} cmds
- * @returns {boolean}
+ * @param {{event?: boolean, fetch?: boolean, nav?: Array<*>}} acc
+ * @param {boolean} conditional
+ * @returns {{event?: boolean, fetch?: boolean, nav?: Array<*>}}
  */
-function commandsNeedSocket(cmds) {
+function socketNeeds(cmds, acc, conditional) {
     const list = Array.isArray(cmds[0]) ? cmds : [cmds];
-    return list.some((c) => {
-        if (c[0] === JS_PUSH_EVENT || c[0] === JS_PATCH) return true;
-        if (c[0] === JS_NAVIGATE) return !c[2]?.full;
-        if (c[0] === JS_TRANSITION || c[0] === JS_ON_KEY) return commandsNeedSocket(c[2]);
-        return false;
-    });
+    for (const c of list) {
+        if (c[0] === JS_PUSH_EVENT) acc.event = true;
+        else if (c[0] === JS_FETCH) acc.fetch = true;
+        else if (c[0] === JS_PATCH || (c[0] === JS_NAVIGATE && !c[2]?.full)) {
+            if (conditional) acc.event = true;
+            else acc.nav ??= c;
+        } else if (c[0] === JS_TRANSITION) socketNeeds(c[2], acc, conditional);
+        else if (c[0] === JS_ON_KEY) socketNeeds(c[2], acc, true);
+    }
+    return acc;
 }
 
 /**
@@ -3582,15 +3591,31 @@ function bindDocumentEvents(target, signal, abort) {
             let cmds = null;
             try {
                 cmds = raw ? JSON.parse(raw) : null;
-                // A command that needs the socket cannot run while it is down (the
-                // worker drops pre-open sends), so the submission is dropped whole
-                // rather than run in part, and the typed fields are kept: no reset.
-                // A `fetch` needs no socket and runs, so an HTTP login form works
-                // before the first open.
-                if (cmds && !_connected && commandsNeedSocket(cmds)) {
-                    warnOnce(
+                // While the socket is down (the worker drops pre-open sends):
+                // - an SPA navigation alone degrades to a full load of its URL, as a
+                //   disconnected az-navigate click does;
+                // - anything else needing the socket drops the submission whole rather
+                //   than run it in part, keeping the typed fields (no reset), with a
+                //   warning and `arizona:submit-dropped` on the form for app feedback.
+                //   A navigation beside a fetch drops too: the load would cancel it.
+                // - a `fetch` needs no socket and runs, so an HTTP login form works
+                //   before the first open.
+                const needs = cmds && !_connected ? socketNeeds(cmds, {}, false) : {};
+                if (needs.nav && !needs.event && !needs.fetch) {
+                    const url = needs.nav[1];
+                    if (needs.nav[2]?.replace) location.replace(url);
+                    else location.assign(url);
+                    return;
+                }
+                if (needs.event || needs.nav) {
+                    console.warn(
                         '[arizona] az-submit dropped: its command needs the WebSocket, which is not connected',
-                        'az-submit-disconnected',
+                    );
+                    form.dispatchEvent(
+                        new CustomEvent('arizona:submit-dropped', {
+                            bubbles: true,
+                            detail: { reason: 'disconnected' },
+                        }),
                     );
                     return;
                 }
