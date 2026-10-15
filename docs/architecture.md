@@ -85,8 +85,10 @@ Pure helpers for binding access, descriptor construction, and template compositi
 - `stateless/3` -- returns `#{callback => fun Handler:Fun/1, props => Props}` descriptor
 - `each/2` -- template composition: 1-arg `fun(Item)` for lists, 2-arg `fun(Item, Key)` for streams,
   2-arg `fun(Key, Value)` for maps. Returns `#{t, source, template}` descriptor
-- `to_bin/1` -- convert value to binary (binary/integer/float/atom/iolist); a float prints in its
-  shortest round-trip form (`0.1`, `1.0e-11`, `1.0e300`), as `json:encode/1` does
+- `to_bin/1` -- convert value to binary (binary/integer/float/atom/iolist). A float prints the
+  shortest digits that read back as the same float: positional when `1.0e-7 =< |x| < 1.0e21`
+  (the range JS prints positionally; `1500.0`, `0.00001`), exponent form outside it (`1.0e21`,
+  `1.0e-8`). An integral value keeps the Erlang `.0` (`1000.0`), and `-0.0` stays `-0.0`
 
 ## API -- `arizona_render.erl`
 

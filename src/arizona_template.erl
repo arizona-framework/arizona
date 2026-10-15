@@ -402,10 +402,7 @@ Errors with `{bad_template_value, V}` for unsupported types.
     Value :: term().
 to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
-%% `short` is the shortest form that reads back as the same float, as
-%% `json:encode/1` prints it. A fixed decimal count rounds small values to zero
-%% and raises `badarg` past ~1e244.
-to_bin(V) when is_float(V) -> float_to_binary(V, [short]);
+to_bin(V) when is_float(V) -> float_to_bin(V);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
 %% Escape markers are unwrapped to their raw bytes here. to_bin never escapes;
 %% escaping happens at the render-output boundary. At SSR that boundary is
@@ -969,3 +966,38 @@ take_visible([], Limit, Back) ->
         Drop when Drop > 0 -> lists:reverse(lists:nthtail(Drop, Back));
         _ -> lists:reverse(Back)
     end.
+
+%% The shortest digits that read back as the same float (`short`), printed
+%% positionally where JS prints a number positionally (1.0e-7 =< |x| < 1.0e21)
+%% and in exponent form outside it. `short` alone picks whichever text is
+%% shorter, so a total of 1500.0 would read "1.5e3". A fixed decimal count is no
+%% fix: it rounds small values to "0.0" and raises `badarg` past ~1e244. The
+%% match is the only cost when `short` is already positional.
+float_to_bin(V) ->
+    Bin = float_to_binary(V, [short]),
+    case binary:match(Bin, ~"e") of
+        {Pos, 1} when abs(V) >= 1.0e-7, abs(V) < 1.0e21 ->
+            <<Mantissa:Pos/binary, $e, Exp/binary>> = Bin,
+            positional(Mantissa, binary_to_integer(Exp));
+        _ ->
+            Bin
+    end.
+
+%% `short`'s exponent form has one integer digit, and a fractional part of
+%% "0" only when it is that digit alone.
+positional(<<$-, Mantissa/binary>>, Exp) ->
+    <<$-, (positional(Mantissa, Exp))/binary>>;
+positional(<<Int, $., $0>>, Exp) ->
+    shift_point(<<Int>>, Exp + 1);
+positional(<<Int, $., Frac/binary>>, Exp) ->
+    shift_point(<<Int, Frac/binary>>, Exp + 1).
+
+%% The point goes after the first `IntLen` digits, padding with zeros on
+%% whichever side runs out; an integral value keeps the `.0` suffix.
+shift_point(Digits, IntLen) when IntLen =< 0 ->
+    <<"0.", (binary:copy(~"0", -IntLen))/binary, Digits/binary>>;
+shift_point(Digits, IntLen) when IntLen >= byte_size(Digits) ->
+    <<Digits/binary, (binary:copy(~"0", IntLen - byte_size(Digits)))/binary, ".0">>;
+shift_point(Digits, IntLen) ->
+    <<Int:IntLen/binary, Frac/binary>> = Digits,
+    <<Int/binary, $., Frac/binary>>.
