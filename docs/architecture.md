@@ -1086,7 +1086,7 @@ That guard sits at one call site, so the other two ways into `diff_stream/4` -- 
 (`diff_each/9`, which `diff/4` uses, i.e. production) and the stream-inside-a-stream-item walk
 (`diff_item_dynamics_v/3`) -- reached the drain straight and dropped the change: on identical
 input `diff/3` emitted the removals and `diff/4` emitted nothing. `diff_stream/4` now reconciles
-an empty drain itself (`drainable_ops/1` substitutes a `{reset, #{}}`), so every entry point
+an empty drain itself (`drainable_ops/3` substitutes a `{reset, #{}}`), so every entry point
 agrees. The two mechanisms are complementary rather than redundant: `stream_relist/7` diffs
 against the state the enclosing walk already evaluated, which `diff_each/9` does not have.
 
@@ -1104,6 +1104,20 @@ therefore open the queue with a **genesis reset** (`reset`) -- the op that alrea
 "reconcile the client to my current state" -- which makes the log truthful for any consumer.
 It costs the incremental path nothing: a resume that finds its mark skips past it, and replaying
 it in a re-drain is idempotent.
+
+**A log that reorders drains as one reconcile.** The drain replays ops one at a time against
+what the client holds, and the one thing it cannot follow op by op is order: a `reorder`
+(`sort/2`) or `move/3` says "the source is now in this order", and the only order the drain can
+see is the final one, not the one the client has reached by that point. A positional op after it
+was placed against an order the client did not hold yet, and a second sort then found the client
+"already" in the final order and moved nothing. So a drained log holding a `reorder`, a `move`,
+a `reset`, or -- on a limited stream, where hidden keys count toward a source index but are not
+on the page -- a positional insert is replaced by one reset (`drainable_ops/3`): remove what
+left, patch what stayed, move the stayers into order, then insert each arrival at its final
+index. A log of appends, deletes and updates (and positional inserts on an unlimited stream,
+whose client holds the whole source in order at every step) keeps the op-by-op drain. The
+invariant, checked by a randomized model test in `arizona_stream_SUITE`: after a frame's ops the
+client shows exactly an SSR of the stream's final state.
 
 **A reset measures kept items against the snapshot, not against the pre-reset source.** The
 `reset` op carries no items. The drain re-renders a kept item only where its fields differ from

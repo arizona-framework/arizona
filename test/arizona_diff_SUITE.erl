@@ -2119,7 +2119,7 @@ diff_stream_unchanged_snapshot_pair_no_ops(Config) when is_list(Config) ->
         s => Statics, d => [{OtherAz, maps:remove(source, OtherEach)}], deps => OtherDepsList
     },
     ?assertMatch(
-        [[?OP_INSERT, _, <<"b">>, -1, _]], element(1, arizona_diff:diff(Tmpl, StaleSnap, #{}))
+        [[?OP_INSERT, _, <<"b">>, 1, _]], element(1, arizona_diff:diff(Tmpl, StaleSnap, #{}))
     ).
 
 %% A stream `?each` sitting inside a NESTED template -- what a `?stateless` child
@@ -2151,7 +2151,7 @@ diff_stream_nested_in_template_is_incremental(Config) when is_list(Config) ->
     %% Append one item and diff: one insert, not a container re-render.
     Grown = stream_each_tmpl(ItemTmpl, Items ++ [#{id => <<"c">>, text => <<"C">>}]),
     {Ops, _, _} = arizona_diff:diff(Nest(Grown), Snap, #{}),
-    ?assertMatch([[?OP_INSERT, _, <<"c">>, -1, _]], Ops).
+    ?assertMatch([[?OP_INSERT, _, <<"c">>, 2, _]], Ops).
 
 %% The nested-template stream route derives its ops purely by draining the
 %% stream's pending log. A container reached through a `?stateful` child has an
@@ -2466,7 +2466,7 @@ each_stream_insert_with_callback_change(Config) when is_list(Config) ->
         [
             [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"y">>]]],
             [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]],
-            [?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<"c">>, <<"y">>]}]
+            [?OP_INSERT, _, <<"3">>, 2, #{<<"d">> := [<<"c">>, <<"y">>]}]
         ],
         Ops
     ).

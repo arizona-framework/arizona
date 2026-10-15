@@ -160,7 +160,15 @@
     drop_eviction_queues_a_delete/1,
     update_then_reset_ships_the_update/1,
     reset_update_reset_ships_the_update/1,
-    reset_skips_kept_items_the_client_already_shows/1
+    reset_skips_kept_items_the_client_already_shows/1,
+    sort_insert_at_sort/1,
+    move_then_sort/1,
+    sort_out_of_window_then_insert_at/1,
+    reset_then_moves/1,
+    insert_at_then_sort/1,
+    sort_append_sort/1,
+    drop_reappend_of_evicted_key/1,
+    random_events_keep_client_equal_to_ssr/1
 ]).
 
 all() ->
@@ -348,7 +356,15 @@ groups() ->
             drop_eviction_queues_a_delete,
             update_then_reset_ships_the_update,
             reset_update_reset_ships_the_update,
-            reset_skips_kept_items_the_client_already_shows
+            reset_skips_kept_items_the_client_already_shows,
+            sort_insert_at_sort,
+            move_then_sort,
+            sort_out_of_window_then_insert_at,
+            reset_then_moves,
+            insert_at_then_sort,
+            sort_append_sort,
+            drop_reappend_of_evicted_key,
+            random_events_keep_client_equal_to_ssr
         ]},
         %% DataTable handler tests
         {datatable, [parallel], [
@@ -671,7 +687,7 @@ stream_reset_overlap_same_content(Config) when is_list(Config) ->
     ?assertMatch([[?OP_REMOVE, _, <<"1">>]], RemOps),
     ?assertEqual(0, length(PatchOps)),
     ?assertEqual(1, length(InsOps)),
-    ?assertMatch([[?OP_INSERT, _, <<"4">>, -1, _]], InsOps).
+    ?assertMatch([[?OP_INSERT, _, <<"4">>, 2, _]], InsOps).
 
 stream_reset_overlap_changed_content(Config) when is_list(Config) ->
     %% Old=[1,2], New=[2(modified),3] -- key 2 overlaps but content changed
@@ -700,7 +716,7 @@ stream_reset_overlap_changed_content(Config) when is_list(Config) ->
     ?assertEqual(1, length(PatchOps)),
     ?assertMatch([[?OP_ITEM_PATCH, _, <<"2">>, _]], PatchOps),
     ?assertEqual(1, length(InsOps)),
-    ?assertMatch([[?OP_INSERT, _, <<"3">>, -1, _]], InsOps).
+    ?assertMatch([[?OP_INSERT, _, <<"3">>, 1, _]], InsOps).
 
 stream_reset_full_overlap(Config) when is_list(Config) ->
     %% Old=[1,2], New=[1,2] same items -- expect 0 ops
@@ -1186,7 +1202,7 @@ stream_live_reset_with_items(Config) when is_list(Config) ->
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     ?assertEqual(2, length(RemOps)),
     ?assertEqual(1, length(InsOps)),
-    ?assertMatch([[?OP_INSERT, _, <<"3">>, -1, _]], InsOps).
+    ?assertMatch([[?OP_INSERT, _, <<"3">>, 0, _]], InsOps).
 
 page_title_change_skips_stream(Config) when is_list(Config) ->
     %% title_change produces only OP_TEXT for title, zero stream ops
@@ -1938,15 +1954,8 @@ stream_limit_drop_sort_after_append(Config) when is_list(Config) ->
         arizona_stream:to_list(Stream)
     ),
     ?assertEqual([3, 2], Order),
-    %% DOM [1,2]: remove evicted 1, append 3, move it to the front.
-    ?assertMatch(
-        [
-            [?OP_REMOVE, <<"0">>, <<"1">>],
-            [?OP_INSERT, <<"0">>, <<"3">>, -1, _],
-            [?OP_MOVE, <<"0">>, <<"3">>, null]
-        ],
-        Ops
-    ).
+    %% DOM [1,2]: remove evicted 1, insert 3 at the front.
+    ?assertMatch([[?OP_REMOVE, <<"0">>, <<"1">>], [?OP_INSERT, <<"0">>, <<"3">>, 0, _]], Ops).
 
 stream_move_op(Config) when is_list(Config) ->
     %% stream_move generates OP_REMOVE + OP_INSERT pair
@@ -2298,8 +2307,8 @@ stream_move_to_same_position(Config) when is_list(Config) ->
     Tmpl1 = arizona_todo:render(B2),
     Changed = arizona_live_compute_changed(B1, B2),
     {Ops, _, _} = arizona_diff:diff(Tmpl1, Snap0, V0, Changed),
-    %% Move generates OP_MOVE with after_key <<"1">> (item 1 precedes 2 in [1,2])
-    ?assertMatch([[?OP_MOVE, _, <<"2">>, <<"1">>]], Ops).
+    %% The order the client holds is already the final one, so nothing ships.
+    ?assertEqual([], Ops).
 
 %% --- stream_empty_stream_operations ----------------------------------------
 stream_empty_stream_operations(Config) when is_list(Config) ->
@@ -3112,7 +3121,7 @@ nested_stream_redrain_reset_falls_back_to_full_drain(Config) when is_list(Config
     ),
     [[?OP_ITEM_PATCH, _, ~"1", InnerOps2]] = Ops2,
     ?assertEqual([~"a", ~"b"], [K || [?OP_REMOVE, _, K] <- InnerOps2]),
-    ?assertMatch([[?OP_INSERT, _, ~"c", -1, _]], [Op || [?OP_INSERT | _] = Op <- InnerOps2]).
+    ?assertMatch([[?OP_INSERT, _, ~"c", 0, _]], [Op || [?OP_INSERT | _] = Op <- InnerOps2]).
 
 %% Two DIVERGENT successors of one stream are neither a prefix nor a suffix of
 %% each other, so a mark taken while draining one must never certify the other's
@@ -3591,8 +3600,8 @@ datatable_live_delete_all_then_reset(Config) when is_list(Config) ->
 
 %% Regression (e2e "after delete, reset restores original 5"): deleting a middle
 %% row then resetting must restore the original order, not leave the re-added row
-%% appended at the end. The reset re-inserts the deleted key AND emits a MOVE to
-%% put it back in place; positioning the re-added row is the load-bearing part.
+%% appended at the end. The reset re-inserts the deleted key at its index, so no
+%% MOVE is needed; positioning the re-added row is the load-bearing part.
 datatable_live_delete_middle_then_reset(Config) when is_list(Config) ->
     {ok, Pid} = arizona_live:start_link(
         arizona_datatable, #{}, undefined, []
@@ -3604,14 +3613,8 @@ datatable_live_delete_middle_then_reset(Config) when is_list(Config) ->
     ),
     %% Reset: restores all 5 in original order.
     {ok, Ops, [], _} = arizona_live:handle_event(Pid, <<"page">>, <<"reset_data">>, #{}),
-    HasInsert3 = lists:any(fun(Op) -> match_key(?OP_INSERT, <<"3">>, Op) end, Ops),
-    HasMove3 = lists:any(fun(Op) -> match_key(?OP_MOVE, <<"3">>, Op) end, Ops),
-    ?assert(HasInsert3),
-    ?assert(HasMove3).
-
-%% True when `Op` is `[Code, _Az, Key | _]` -- a stream op targeting `Key`.
-match_key(Code, Key, [Code, _Az, Key | _]) -> true;
-match_key(_Code, _Key, _Op) -> false.
+    ?assertMatch([[?OP_INSERT, _, <<"3">>, 2, _]], [Op || [?OP_INSERT | _] = Op <- Ops]),
+    ?assertEqual([], [Op || [?OP_MOVE | _] = Op <- Ops]).
 
 %% --- datatable_navigate_from_page_then_add_row_no_crash -------------------
 %% End-to-end check that the example handlers' explicit-bindings mounts
@@ -4295,3 +4298,157 @@ patched_text([?OP_TEXT, <<"0">>, _], Text0) -> Text0.
 item_text(ItemD) ->
     {<<"1">>, Text, _Deps} = lists:keyfind(<<"1">>, 1, ItemD),
     Text.
+
+%% A reorder, a positional insert and a second reorder in one event: the drain handed
+%% the ops after the first sort the FINAL order as the client's, so the second sort
+%% found nothing to move.
+sort_insert_at_sort(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"y", ~"l1"}, {~"x", ~"l2"}, {~"z", ~"l3"}],
+        client_after_events([it(x, ~"l2"), it(y, ~"l1")], #{}, [
+            fun(S0) ->
+                S1 = sort_by_text(S0, asc),
+                S2 = arizona_stream:insert(S1, it(z, ~"l3"), 0),
+                sort_by_text(S2, asc)
+            end
+        ])
+    ).
+
+%% A move leaves the client order behind the source's, so a later sort back to the
+%% original order was read as a no-op.
+move_then_sort(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"a", ~"l1"}, {~"b", ~"l2"}, {~"c", ~"l3"}],
+        client_after_events([it(a, ~"l1"), it(b, ~"l2"), it(c, ~"l3")], #{}, [
+            fun(S0) -> sort_by_text(arizona_stream:move(S0, a, 2), asc) end
+        ])
+    ).
+
+%% A sort pushes a key out of the window; the positional insert after it counted that
+%% key, which the client still held until the end-of-drain prune.
+sort_out_of_window_then_insert_at(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"a", ~"l1"}, {~"c", ~"l2"}],
+        client_after_events([it(d, ~"l3"), it(a, ~"l1")], #{limit => 2}, [
+            fun(S0) -> arizona_stream:insert(sort_by_text(S0, asc), it(c, ~"l2"), 1) end
+        ])
+    ).
+
+%% `reset/2` jumped the client to the final order, then the drain replayed moves queued
+%% against the intermediate ones.
+reset_then_moves(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"c", ~"l1"}, {~"a", ~"l1"}, {~"b", ~"l1"}],
+        client_after_events([it(a, ~"l1"), it(b, ~"l1"), it(c, ~"l1")], #{}, [
+            fun(S0) ->
+                S1 = arizona_stream:reset(S0, [it(a, ~"l1"), it(b, ~"l1"), it(c, ~"l1")]),
+                S2 = arizona_stream:move(S1, b, 2),
+                arizona_stream:move(S2, c, 0)
+            end
+        ])
+    ).
+
+%% A positional insert before a sort that should carry it elsewhere.
+insert_at_then_sort(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"a", ~"l1"}, {~"b", ~"l1"}, {~"c", ~"l2"}, {~"d", ~"l2"}, {~"e", ~"l3"}],
+        client_after_events(
+            [it(a, ~"l1"), it(b, ~"l1"), it(c, ~"l2"), it(d, ~"l2")],
+            #{},
+            [fun(S0) -> sort_by_text(arizona_stream:insert(S0, it(e, ~"l3"), 0), asc) end]
+        )
+    ).
+
+%% No positional op at all: two sorts around an append. The append-only shortcut in
+%% the reorder diff compared against an order the client no longer had.
+sort_append_sort(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"d", ~"l4"}, {~"c", ~"l3"}, {~"b", ~"l2"}, {~"a", ~"l1"}],
+        client_after_events([it(c, ~"l3"), it(a, ~"l1"), it(b, ~"l2")], #{}, [
+            fun(S0) ->
+                S1 = arizona_stream:insert(sort_by_text(S0, asc), it(d, ~"l4")),
+                sort_by_text(S1, desc)
+            end
+        ])
+    ).
+
+%% A drop eviction that re-appends a key the event had evicted earlier.
+drop_reappend_of_evicted_key(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{~"c", ~"l1"}, {~"d", ~"l1"}, {~"a", ~"l2"}],
+        client_after_events(
+            [it(a, ~"l1"), it(b, ~"l1"), it(c, ~"l1")],
+            #{limit => 3, on_limit => drop},
+            [
+                fun(S0) ->
+                    S1 = arizona_stream:insert(S0, it(d, ~"l1")),
+                    arizona_stream:insert(S1, it(a, ~"l2"))
+                end
+            ]
+        )
+    ).
+
+%% Any sequence of events, any mix of mutations per event, any limit mode: after
+%% each event's ops the client shows exactly an SSR of the stream. Fixed seed, so a
+%% failure is reproducible; `client_after_events/3` names the event and its ops.
+random_events_keep_client_equal_to_ssr(Config) when is_list(Config) ->
+    _ = rand:seed(exsss, {16#a2, 16#1f, 16#5e}),
+    lists:foreach(fun(_) -> random_sequence() end, lists:seq(1, 600)).
+
+random_sequence() ->
+    Opts = pick([
+        #{},
+        #{limit => 2},
+        #{limit => 3},
+        #{limit => 3, on_limit => drop},
+        #{limit => 1, on_limit => drop}
+    ]),
+    Events = [random_event(rand:uniform(4)) || _ <- lists:seq(1, 8)],
+    try
+        client_after_events(random_items(), Opts, Events)
+    catch
+        Class:Reason:ST -> ct:fail({Class, Reason, Opts, hd(ST)})
+    end.
+
+random_event(NMutations) ->
+    Muts = [random_mutation() || _ <- lists:seq(1, NMutations)],
+    fun(S) -> lists:foldl(fun(Mut, Acc) -> Mut(Acc) end, S, Muts) end.
+
+random_mutation() ->
+    Key = pick(random_keys()),
+    Item = it(Key, pick([~"l1", ~"l2", ~"l3"])),
+    Pos = rand:uniform(6) - 1,
+    case rand:uniform(10) of
+        1 -> fun(S) -> insert_fresh(S, Item, append) end;
+        2 -> fun(S) -> insert_fresh(S, Item, Pos) end;
+        3 -> fun(S) -> arizona_stream:update(S, Key, Item) end;
+        4 -> fun(S) -> arizona_stream:update(S, Key, Item) end;
+        5 -> fun(S) -> arizona_stream:delete(S, Key) end;
+        6 -> fun(S) -> arizona_stream:move(S, Key, Pos) end;
+        7 -> fun(S) -> sort_by_text(S, pick([asc, desc])) end;
+        8 -> fun(S) -> arizona_stream:reset(S, random_items()) end;
+        9 -> fun arizona_stream:reset/1;
+        10 -> fun(S) -> renew(S, random_items()) end
+    end.
+
+%% A fresh stream bound over the slot, rather than the one there mutated.
+renew(#stream{limit = Limit, on_limit = OnLimit}, Items) ->
+    arizona_stream:new(fun(#{id := Id}) -> Id end, Items, #{limit => Limit, on_limit => OnLimit}).
+
+insert_fresh(S, #{id := Key} = Item, Where) ->
+    case arizona_stream:get(S, Key, undefined) of
+        undefined when Where =:= append -> arizona_stream:insert(S, Item);
+        undefined -> arizona_stream:insert(S, Item, Where);
+        _ -> S
+    end.
+
+random_keys() -> [a, b, c, d, e, f].
+
+random_items() ->
+    Keys = [K || {_, K} <- lists:sort([{rand:uniform(), K} || K <- random_keys()])],
+    [it(K, pick([~"l1", ~"l2", ~"l3"])) || K <- Keys, rand:uniform(2) =:= 1].
+
+pick(List) -> lists:nth(rand:uniform(length(List)), List).
+
+sort_by_text(S, asc) -> arizona_stream:sort(S, fun(#{text := A}, #{text := B}) -> A =< B end);
+sort_by_text(S, desc) -> arizona_stream:sort(S, fun(#{text := A}, #{text := B}) -> A >= B end).
