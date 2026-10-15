@@ -2494,7 +2494,10 @@ search-and-replace blindly:
   list of segments, with the markers it emits held as tagged `{az_attr, Id}` / `{az_slot, Id}`
   entries rather than bytes; scoping rebuilds exactly those through the backend's `az_attr/1` /
   `text_slot_open/1` with the fingerprint prepended, and copies literal segments through untouched.
-  The fingerprint is still taken over the *unscoped* bytes, so it is unchanged by this.
+  The fingerprint is taken over the *unscoped* segments, so it is unchanged by this. Each dynamic
+  attribute also leaves a `{dyn_attr, Name, Bytes}` segment carrying its name: HTML renders the name
+  inside the dynamic, so without it two templates differing only in a dynamic attribute's name
+  would share a fingerprint and the diff would patch one into the other, leaving the old attribute.
 - **Runtime** (the `scope_static/3` renderer callback) has only bytes, so it anchors on the
   template's own fingerprint: every framework `az` in a compiled static is `<Fp>-<id>`, so the
   backend matches `az="<Fp>` / `<!--az:<Fp>` (HTML) or `"az":"<Fp>` (native), never the bare marker

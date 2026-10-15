@@ -3028,7 +3028,10 @@ raw_text_attr_diffs_content_render_once(Config) when is_list(Config) ->
     {OpsSrc, _} = arizona_diff:diff(Mod:render(#{src => <<"/b.js">>, body => <<"A">>}), Snap0),
     ?assertNotEqual([], OpsSrc),
     {OpsBody, _} = arizona_diff:diff(Mod:render(#{src => <<"/a.js">>, body => <<"B">>}), Snap0),
-    ?assertMatch([[_Op, <<"QP3ZUD-0">>, #{~"d" := [~"B"]}]], OpsBody).
+    {match, [ElemAz]} = re:run(
+        HTML, ~"<script az=\"([^\"]+)\"", [{capture, all_but_first, binary}]
+    ),
+    ?assertMatch([[_Op, ElemAz, #{~"d" := [~"B"]}]], OpsBody).
 
 %% Escapable (<title>) and raw (<script>) raw-text elements adjacent under <head>,
 %% followed by a normal element: both kinds restore context, so the trailing
