@@ -2574,25 +2574,24 @@ reaching_fixpoint(Candidates, Acc) ->
 %% True when an AST subtree contains a get/get_lazy/track/with call, or references a
 %% variable already known to reach one. `with` counts: like `get`, it calls `track/1`,
 %% so a hoisted `Sub = with(Keys, Bindings)` must be inlined back into the slot bracket
-%% or its tracking runs outside any bracket (a no-op) and the slot freezes.
-rhs_reaches({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}, _Reaching) when
+%% or its tracking runs outside any bracket (a no-op) and the slot freezes. Only a FREE
+%% reference counts: a comprehension generator or a fun head binding the same name
+%% reads its own variable, not the hoisted one.
+rhs_reaches(RHS, Reaching) ->
+    has_tracked_read(RHS) orelse
+        lists:any(fun(V) -> is_map_key(V, Reaching) end, maps:keys(free_vars(RHS, #{}, #{}))).
+
+has_tracked_read({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
         (F =:= get orelse F =:= get_lazy orelse F =:= track orelse F =:= with)
 ->
     true;
-rhs_reaches({var, _, V}, Reaching) ->
-    is_map_key(V, Reaching);
-rhs_reaches(T, Reaching) when is_tuple(T) ->
-    rhs_reaches_any(tuple_to_list(T), Reaching);
-rhs_reaches(L, Reaching) when is_list(L) ->
-    rhs_reaches_any(L, Reaching);
-rhs_reaches(_, _Reaching) ->
+has_tracked_read(T) when is_tuple(T) ->
+    has_tracked_read(tuple_to_list(T));
+has_tracked_read([H | T]) ->
+    has_tracked_read(H) orelse has_tracked_read(T);
+has_tracked_read(_) ->
     false.
-
-rhs_reaches_any([], _Reaching) ->
-    false;
-rhs_reaches_any([H | T], Reaching) ->
-    rhs_reaches(H, Reaching) orelse rhs_reaches_any(T, Reaching).
 
 %% Lift a statement-form `case` that binds one variable as the whole body of every
 %% branch --
@@ -3077,27 +3076,15 @@ suppress_unused_inline_matches(Body, Inline) ->
 %% Rename the now-unused match LHS to the anonymous `_`: it never collides with a
 %% pre-existing `_Foo` binding (which would otherwise trip erl_lint's
 %% match_underscore_var) and never warns.
+%% A use is a FREE reference anywhere else in the body: a generator or fun head that
+%% rebinds the name is its own variable.
 maybe_underscore_match({match, L, {var, VL, V}, RHS} = M, Inline, Body) ->
-    case is_map_key(V, Inline) andalso count_var(V, Body) =:= 1 of
+    case is_map_key(V, Inline) andalso not is_map_key(V, free_vars(Body -- [M], #{}, #{})) of
         true -> {match, L, {var, VL, '_'}, RHS};
         false -> M
     end;
 maybe_underscore_match(E, _Inline, _Body) ->
     E.
-
-count_var(V, AST) ->
-    count_var(V, AST, 0).
-
-count_var(V, {var, _, V}, N) ->
-    N + 1;
-count_var(_V, {var, _, _}, N) ->
-    N;
-count_var(V, T, N) when is_tuple(T) ->
-    count_var(V, tuple_to_list(T), N);
-count_var(V, [H | T], N) ->
-    count_var(V, T, count_var(V, H, N));
-count_var(_V, _Other, N) ->
-    N.
 
 compile_template(Arg, Line, Module, LiveRender, Backend) ->
     compile_template(Arg, Line, Module, LiveRender, Backend, false).
