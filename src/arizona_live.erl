@@ -172,7 +172,9 @@ fingerprints already shipped in the initial HTML.
 %% templates -- well under this cap. Overflowing merely disables static dedup for
 %% the extra fingerprints (their statics re-ship), never a crash.
 -define(MAX_SENT_FPS, 10000).
-%% Floor for a view's timer-registry prune threshold (see add_timer_ref/2).
+%% A view arming up to this many timers never prunes: below it every prune
+%% would walk live refs and drop nothing. The price is at most this many dead
+%% refs kept for a re-armed debounce (see add_timer_ref/2).
 -define(TIMER_PRUNE_FLOOR, 8).
 
 %% --------------------------------------------------------------------
