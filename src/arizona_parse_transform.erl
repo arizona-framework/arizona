@@ -993,7 +993,9 @@ format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
         )
     );
 format_error(Reason) when
-    Reason =:= tracked_get_on_non_bindings_map; Reason =:= latin1_binary_literal
+    Reason =:= tracked_get_on_non_bindings_map;
+    Reason =:= latin1_binary_literal;
+    Reason =:= improper_template_list
 ->
     format_source_error(Reason).
 
@@ -1003,6 +1005,12 @@ format_source_error(latin1_binary_literal) ->
     "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>. "
     "For intended bytes, spell them so they do not warn: integer segments "
     "(<<16#89, \"PNG\">>) or a sized string (<<\"\\351\":8>>)";
+format_source_error(improper_template_list) ->
+    "a template's attribute, child and body lists must be proper list literals: "
+    "their items are laid out one slot each at compile time, so a list ending in "
+    "an expression ([A, B | Rest]) has no length to lay out. Write every item in "
+    "the list; render a runtime list of children with ?each, as one item of it: "
+    "{'ul', [], [{'li', [], [~\"first\"]}, ?each(fun(I) -> {'li', [], [I]} end, Rest)]}";
 format_source_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
     "the view bindings, so their map argument must be the bindings -- a parameter or a "
@@ -4047,14 +4055,17 @@ compile_dynamic_attr_value(Backend, NameBin, ValueAST0, ElemAz, State0) ->
 %% tuple inside it is not text and the value cannot render. Only a literal `?raw`
 %% counts, the rule the opt-out follows everywhere else.
 raw_interp_attr_ast(Backend, ValueAST) ->
-    case
-        is_list_ast(ValueAST) andalso
-            lists:any(fun is_raw_call/1, ast_list_to_list(ValueAST))
-    of
+    Parts =
+        case is_list_ast(ValueAST) of
+            true -> attr_value_parts(ValueAST);
+            false -> []
+        end,
+    case lists:any(fun is_raw_call/1, Parts) of
         true ->
             L = line(ValueAST),
+            PartsAST = lists:foldr(fun(P, Acc) -> {cons, L, P, Acc} end, {nil, L}, Parts),
             {call, L, {remote, L, {atom, L, arizona_template}, {atom, L, raw_attr}}, [
-                {atom, L, Backend}, ValueAST
+                {atom, L, Backend}, PartsAST
             ]};
         false ->
             ValueAST
@@ -4146,7 +4157,7 @@ attr_local_spec(ValueAST, Line) ->
                 false ->
                     none;
                 true ->
-                    Elems = ast_list_to_list(ValueAST),
+                    Elems = attr_value_parts(ValueAST),
                     case [E || E <- Elems, is_local_marker(E)] of
                         [] -> none;
                         [_] -> attr_interp_spec(Elems, Line);
@@ -5298,8 +5309,18 @@ ast_list([]) ->
 ast_list([H | T]) ->
     {cons, 0, H, ast_list(T)}.
 
+%% A template list (children, attrs, a body) is laid out at compile time, one slot
+%% per item, so its length must be known: a variable or other non-list tail has no
+%% items to lay out.
 ast_list_to_list({nil, _}) -> [];
-ast_list_to_list({cons, _, Head, Tail}) -> [Head | ast_list_to_list(Tail)].
+ast_list_to_list({cons, _, Head, Tail}) -> [Head | ast_list_to_list(Tail)];
+ast_list_to_list(Tail) -> parse_error(improper_template_list, line(Tail)).
+
+%% An attribute value list is text, where an improper tail is one more part of the
+%% chardata (`[~"/u/" | Id]` means `[~"/u/", Id]`), so it is kept as a part instead.
+attr_value_parts({nil, _}) -> [];
+attr_value_parts({cons, _, Head, Tail}) -> [Head | attr_value_parts(Tail)];
+attr_value_parts(Tail) -> [Tail].
 
 normalize_children(AST) ->
     case is_list_ast(AST) of
