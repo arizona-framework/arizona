@@ -145,6 +145,11 @@ render(Bindings) ->
         Gen =:= b_generate_strict orelse Gen =:= m_generate orelse Gen =:= m_generate_strict)
 ).
 
+%% Process-dictionary counter numbering each substituted copy of a hoisted
+%% definition (see hoist_site_copy/1). Reset per module, so the minted names --
+%% which reach the abstract-code chunk -- are identical across compiles.
+-define(HOIST_SITE_KEY, arizona_hoist_site).
+
 %% Module a template-constructor call is re-spelled under when it sits inside an
 %% `az-nodiff` template (see inherit_nodiff/1). The constructors compile
 %% bottom-up, so a nested `?each`/`?html` is a finished map before the enclosing
@@ -215,6 +220,7 @@ parse_transform(Forms, _Options) ->
     _ = erase(?FOLDED_KEY),
     undefined = put(?FOLDED_KEY, #{}),
     _ = put(?PARAM_SEQ_KEY, 0),
+    _ = put(?HOIST_SITE_KEY, 0),
     try
         Transformed = [
             transform_form(mark_targets(Form, none), Module, IsLive, FunDefs)
@@ -230,7 +236,8 @@ parse_transform(Forms, _Options) ->
             _ = erase(?FOLDED_KEY),
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     after
-        _ = erase(?PARAM_SEQ_KEY)
+        _ = erase(?PARAM_SEQ_KEY),
+        _ = erase(?HOIST_SITE_KEY)
     end.
 
 with_warnings(Forms, []) ->
@@ -1258,7 +1265,7 @@ transform_form(Form, _Module, _IsLive, _FunDefs) ->
 transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body0),
     Body = normalize_tail_binds(Body0),
-    Inline = prepare_inline(collect_inline(Body), Body),
+    Inline = prepare_inline(rename_hoisted_binders(Patterns, Body, collect_inline(Body)), Body),
     ok = check_markup_vars(Body, Inline),
     {Init, [Last]} = lists:split(length(Body) - 1, Body),
     Transform = fun(Expr, Inl) -> transform_expr(Expr, Module, Inl, FunDefs) end,
@@ -2063,7 +2070,10 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
     %% Only the init statements are normalized: the last expr carries the live root
     %% template and is handled by transform_scoped_tail/4.
     Init = normalize_tail_binds(Init0),
-    Inline = prepare_inline(collect_inline(Init ++ [Last]), Init ++ [Last]),
+    Inline = prepare_inline(
+        rename_hoisted_binders(Patterns, Init ++ [Last], collect_inline(Init ++ [Last])),
+        Init ++ [Last]
+    ),
     ok = check_markup_vars(Init ++ [Last], Inline),
     Transform = fun(Expr, Inl) -> transform_expr(Expr, Module, Inl, FunDefs) end,
     TransformedInit = [Transform(Expr, Inline) || Expr <- Init],
@@ -2550,6 +2560,83 @@ scan_top_matches([{match, _, {var, _, V}, RHS} | Rest], Raw, Poisoned) ->
 scan_top_matches([_ | Rest], Raw, Poisoned) ->
     scan_top_matches(Rest, Raw, Poisoned).
 
+%% A hoisted definition can bind names of its own -- `Owner = case ?get(user) of
+%% #{name := N} -> N; _ -> ~"anon" end` binds `N`. Its copy is substituted into a slot
+%% closure, where that binder would meet whatever the use site has in scope: a fun
+%% parameter `N` turns the pattern into an equality test against it, and the original
+%% statement left in the clause makes `N` unsafe there. So a name the definition binds
+%% is renamed in the stored copy (hoist_site_copy/1 then makes it unique per use).
+%% A name is the definition's own when it appears nowhere before it -- not in the
+%% clause head, not in an earlier statement. That over-approximates the enclosing
+%% scope, so the only error is to keep a name that could have been renamed: a pattern
+%% variable already bound there tests that binding, and keeps reading it.
+rename_hoisted_binders(_Patterns, _Body, Raw) when map_size(Raw) =:= 0 ->
+    Raw;
+rename_hoisted_binders(Patterns, Body, Raw) ->
+    {Raw1, _Seen} = lists:foldl(
+        fun(Stmt, {Acc, Seen}) ->
+            Acc1 =
+                case Stmt of
+                    {match, _, {var, _, V}, RHS} -> rename_hoisted_rhs(V, RHS, Seen, Acc);
+                    _ -> Acc
+                end,
+            {Acc1, var_names(Stmt, Seen)}
+        end,
+        {Raw, var_names(Patterns, #{})},
+        Body
+    ),
+    Raw1.
+
+%% Only the statement whose RHS was hoisted (the first match of `V`) is renamed.
+rename_hoisted_rhs(V, RHS, Seen, Raw) ->
+    case Raw of
+        #{V := RHS} -> Raw#{V => rename_own_binders(V, RHS, Seen)};
+        #{} -> Raw
+    end.
+
+rename_own_binders(Hoisted, RHS, Seen) ->
+    Own = [V || V := _ <- var_names(RHS, #{}), not is_map_key(V, Seen)],
+    Renames = [{V, hoisted_binder_var(Hoisted, V)} || V <- lists:sort(Own)],
+    lists:foldl(fun rename_var/2, RHS, Renames).
+
+var_names(Term, Acc) ->
+    maps:merge(Acc, #{V => true || V <- collect_var_names(Term)}).
+
+hoisted_binder_var(Hoisted, Var) ->
+    with_unused_prefix(Var, "AzHoist@" ++ atom_to_list(Hoisted) ++ "@" ++ atom_to_list(Var)).
+
+%% Every copy gets its own names: two copies in one closure (`<<Owner/binary,
+%% Owner/binary>>`) would otherwise bind the same name twice, the second binding a
+%% match against the first. Renaming binder and references together keeps the copy
+%% alpha-equivalent.
+hoist_site_copy(RHS) ->
+    case [V || V <- lists:usort(collect_var_names(RHS)), is_hoisted_binder(V)] of
+        [] ->
+            RHS;
+        Own ->
+            Prev = get(?HOIST_SITE_KEY),
+            Site = Prev + 1,
+            Prev = put(?HOIST_SITE_KEY, Site),
+            Suffix = "@" ++ integer_to_list(Site),
+            Renames = [{V, list_to_atom(atom_to_list(V) ++ Suffix)} || V <- Own],
+            lists:foldl(fun rename_var/2, RHS, Renames)
+    end.
+
+is_hoisted_binder(V) ->
+    case atom_to_list(V) of
+        "AzHoist@" ++ _ -> true;
+        "_AzHoist@" ++ _ -> true;
+        _ -> false
+    end.
+
+%% Keep a `_` prefix, or the rename turns a deliberately-unused variable into an
+%% unused_var warning.
+with_unused_prefix(Var, Base) ->
+    case atom_to_list(Var) of
+        [$_ | _] -> list_to_atom([$_ | Base]);
+        _ -> list_to_atom(Base)
+    end.
+
 keep_reaching(Candidates) ->
     maps:with(maps:keys(reaching_fixpoint(Candidates, #{})), Candidates).
 
@@ -2698,7 +2785,7 @@ iv({var, _, V} = Var, Inline) ->
     case Inline of
         #{V := RHS} ->
             ok = check_capture(V, RHS, Inline),
-            iv(RHS, Inline);
+            iv(hoist_site_copy(RHS), Inline);
         #{} ->
             Var
     end;
