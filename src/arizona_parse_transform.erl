@@ -2119,8 +2119,8 @@ transform_scoped_tail(Expr, Inline, Bound, {Leaf, NonTail} = Fns) ->
             OfCs = scoped_tail_clauses(OfCs0, BodyInline, BodyBound, Fns),
             CatchCs = scoped_tail_clauses(CatchCs0, Inline, BodyBound, Fns),
             After = [NonTail(E, Inline) || E <- After0],
-            Try = {'try', L, Body, OfCs, CatchCs, After},
-            {'try', L, [maybe_underscore_match(S, Local, Try) || S <- Body], OfCs, CatchCs, After};
+            Uses = Body ++ [OfCs, CatchCs, After],
+            {'try', L, [maybe_underscore_match(S, Local, Uses) || S <- Body], OfCs, CatchCs, After};
         {'maybe', L, Body} ->
             {'maybe', L, scoped_tail_body(Body, Inline, Bound, Fns)};
         {'maybe', L, Body, {'else', L2, Cs}} ->
