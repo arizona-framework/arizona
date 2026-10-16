@@ -220,8 +220,7 @@ parse_transform(Forms, _Options) ->
     _ = erase(?FOLDED_KEY),
     undefined = put(?FOLDED_KEY, #{}),
     _ = put(?PARAM_SEQ_KEY, 0),
-    _ = erase(?HOIST_SITE_KEY),
-    undefined = put(?HOIST_SITE_KEY, 0),
+    _ = put(?HOIST_SITE_KEY, 0),
     try
         Transformed = [
             transform_form(mark_targets(Form, none), Module, IsLive, FunDefs)
@@ -231,15 +230,14 @@ parse_transform(Forms, _Options) ->
         WithEvents = inject_az_attrs(WithSuppressions, collect_component_mods(Forms)),
         Reverted = erl_syntax:revert_forms(WithEvents),
         ok = assert_no_nodiff_call(Reverted),
-        _ = erase(?HOIST_SITE_KEY),
         with_warnings(Reverted, latin1_warnings(Forms, erase(?FOLDED_KEY)))
     catch
         throw:{arizona_parse_error, Line, Reason} ->
-            _ = erase(?HOIST_SITE_KEY),
             _ = erase(?FOLDED_KEY),
             {error, [{File, [{Line, ?MODULE, Reason}]}], []}
     after
-        _ = erase(?PARAM_SEQ_KEY)
+        _ = erase(?PARAM_SEQ_KEY),
+        _ = erase(?HOIST_SITE_KEY)
     end.
 
 with_warnings(Forms, []) ->
