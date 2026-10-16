@@ -8,7 +8,7 @@ change to it must reach the items. Each function is a distinct scenario driven b
 -export([list/1]).
 -export([stream/1]).
 -export([stream_mixed/1]).
--export([stream_head_sub/1]).
+-export([stream_sub_map/1]).
 -export([map/1]).
 -export([attr/1]).
 -export([branch/1]).
@@ -41,19 +41,25 @@ stream_mixed(Bindings) ->
         {ul, [], [?each(fun(I, _K) -> {li, [], [[maps:get(n, I), ?get(suffix)]]} end, ?get(s))]}
     ).
 
-%% A tracked read whose map is a sub-map destructured in the head, not the item:
-%% its deps name `v`, but the change arrives as the item field `sub`.
-stream_head_sub(Bindings) ->
+%% A tracked read whose map is a sub-map of the item, not the item: its deps name
+%% `v`, but the change arrives as the item field `sub`. The sub-map comes back from a
+%% helper, which the transform cannot prove is not the bindings, so it compiles (a
+%% head pattern or a `maps:get` bound to a local is rejected as
+%% tracked_get_on_non_bindings_map).
+stream_sub_map(Bindings) ->
     ?html(
         {ul, [], [
             ?each(
-                fun(#{sub := Sub}, K) ->
+                fun(Item, K) ->
+                    Sub = sub_map(Item),
                     {li, [{az_key, K}], [arizona_template:get(v, Sub)]}
                 end,
                 ?get(ss)
             )
         ]}
     ).
+
+sub_map(#{sub := Sub}) -> Sub.
 
 map(Bindings) ->
     ?html({ul, [], [?each(fun(V, K) -> {li, [], [K, V, ?get(suffix)]} end, ?get(m))]}).

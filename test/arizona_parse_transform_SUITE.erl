@@ -8016,25 +8016,27 @@ each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
 %% A tracked read vouches for an item read only when its map IS the item (the bare
 %% parameter, or the variable side of a `Pat = Var` head) or the view bindings. A
 %% sub-map bound in the head or the body records the sub-map's keys, not the item
-%% field that holds it, so those dynamics are not reusable.
+%% field that holds it, so those dynamics are not reusable. The heads use a tuple
+%% pattern: a map pattern's value is rejected outright as
+%% tracked_get_on_non_bindings_map.
 each_stream_reuse_map_must_be_item(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_reuse_item_map). "
         "-export([sub/1, sub_alias/1, sub_bindings/1, sub_with/1, alias/1, whole/1]). "
         "sub(Bindings) -> "
-        "    az:each(fun(#{sub := Sub}, K) -> "
+        "    az:each(fun({_, Sub}, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub)]} "
         "    end, az:get(stream, Bindings)). "
         "sub_alias(Bindings) -> "
-        "    az:each(fun(#{sub := Sub} = I, K) -> "
+        "    az:each(fun({_, Sub} = I, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub), az:get(n, I)]} "
         "    end, az:get(stream, Bindings)). "
         "sub_bindings(Bindings) -> "
-        "    az:each(fun(#{sub := Bindings}, K) -> "
+        "    az:each(fun({_, Bindings}, K) -> "
         "        {'li', [{'az-key', K}], [az:get(v, Bindings)]} "
         "    end, az:get(stream, Bindings)). "
         "sub_with(Bindings) -> "
-        "    az:each(fun(#{sub := Sub}, K) -> "
+        "    az:each(fun({_, Sub}, K) -> "
         "        {'li', [{'az-key', K}], [maps:get(v, arizona_template:with([v], Sub))]} "
         "    end, az:get(stream, Bindings)). "
         "alias(Bindings) -> "
