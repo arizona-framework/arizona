@@ -102,6 +102,7 @@
     unmount_on_terminate/1,
     unmount_children_on_navigate/1,
     unmount_children_on_terminate/1,
+    unmount_once_when_navigate_mount_crashes/1,
     removed_child_timer_cancelled/1,
     swapped_child_timer_cancelled/1,
     swapped_child_unmounted_once_when_new_mount_crashes/1,
@@ -254,6 +255,7 @@ groups() ->
             unmount_on_terminate,
             unmount_children_on_navigate,
             unmount_children_on_terminate,
+            unmount_once_when_navigate_mount_crashes,
             removed_child_timer_cancelled,
             swapped_child_timer_cancelled,
             swapped_child_unmounted_once_when_new_mount_crashes,
@@ -1745,6 +1747,37 @@ unmount_children_on_terminate(Config) when is_list(Config) ->
     receive
         Msg2 -> ?assertEqual({root_unmounted, ~"uparent"}, Msg2)
     after 1000 -> error(timeout_root_unmount)
+    end.
+
+unmount_once_when_navigate_mount_crashes(Config) when is_list(Config) ->
+    %% Navigate unmounts the old page, then mounts the new one. When that mount
+    %% raises, the process exits, and terminate/2 unmounts whatever page the
+    %% state still names -- so the old page must no longer be named by then, or
+    %% every unmount/1 runs twice (releasing a resource twice, unsubscribing a
+    %% topic another view resubscribed).
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    ?assertExit(
+        {{crash_on_mount, _}, {gen_server, call, _}},
+        arizona_live:navigate(Pid, arizona_crashable, #{crash_on_mount => true})
+    ),
+    receive
+        {'DOWN', Ref, process, Pid, {crash_on_mount, _}} -> ok
+    after 1000 -> error(timeout_live_exit)
+    end,
+    ?assertEqual(
+        [{child_unmounted, ~"uchild"}, {root_unmounted, ~"uparent"}],
+        collect_unmounts(200)
+    ).
+
+collect_unmounts(Timeout) ->
+    receive
+        Msg -> [Msg | collect_unmounts(Timeout)]
+    after Timeout -> []
     end.
 
 removed_child_timer_cancelled(Config) when is_list(Config) ->

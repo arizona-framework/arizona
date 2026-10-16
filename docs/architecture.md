@@ -1900,7 +1900,10 @@ Discarding the page is a removal, so it unmounts exactly like a diff removal doe
 `terminate/2` uses the same order for any exit reason -- every child's `unmount/1` runs while the
 root is still mounted, and no handler has to propagate unmount by hand. Note the guarantee is
 against the root: `views` is flat and walked with `maps:foreach`, so nested views unmount in key
-order, not parent-before-child. Then the new handler is mounted and gen_server state is reset.
+order, not parent-before-child. Then the new handler is mounted and gen_server state is reset. The
+mount runs in a `handle_continue/2` from a state whose snapshot and views are cleared, which is
+what `terminate/2` reads as "nothing mounted", so a new mount that raises exits the process without
+unmounting the old page a second time.
 Returns `{ok, NewViewId, PageHTML, Observed}`. The WS handler sends one frame: the old page's pushes
 queued ahead of the live process's barrier, their ops first, then `[OP_REPLACE, OldViewId,
 PageHTML]` (their effects are dropped with a log line, see `handle_info/2` above). Browser

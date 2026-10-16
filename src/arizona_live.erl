@@ -93,6 +93,7 @@ fingerprints already shipped in the initial HTML.
 -export([init/1]).
 -export([handle_call/3]).
 -export([handle_cast/2]).
+-export([handle_continue/2]).
 -export([handle_info/2]).
 -export([terminate/2]).
 
@@ -652,7 +653,7 @@ handle_call({event, ViewId, Event, Payload}, From, #state{views = V0, bindings =
     end;
 handle_call({navigate, NewHandler, NewIB, NewOnMount}, From, State) ->
     ok = push_barrier(From, State),
-    do_navigate_call(NewHandler, NewIB, NewOnMount, State);
+    do_navigate_call(NewHandler, NewIB, NewOnMount, From, State);
 handle_call({patch, Params}, From, #state{handler = H, bindings = B0} = State) ->
     ok = push_barrier(From, State),
     %% In-place navigation: the root view stays mounted. Deliver Params to its
@@ -675,6 +676,22 @@ handle_call(view_state, _From, #state{handler = H, bindings = B, views = V} = St
          || ViewId := #{handler := ChildH, bindings := ChildB} <- V
         },
     {reply, #{handler => H, bindings => B, views => Views}, State}.
+
+handle_continue({navigate_mount, From, NewHandler, Merged, NewOnMount}, State) ->
+    #state{transport_pid = TPid, sent_fps = Fps0, push_barrier = Barrier} = State,
+    {NewViewId, {Snap, V1}, B2} = do_mount(NewHandler, Merged, #{}, NewOnMount),
+    {PageContent1, Fps1, _Changed} = dedup_fp_val(page_content(Snap), Fps0),
+    ok = gen_server:reply(From, {ok, NewViewId, PageContent1, arizona_event_attrs:drain()}),
+    {noreply, #state{
+        handler = NewHandler,
+        bindings = B2,
+        snapshot = Snap,
+        views = V1,
+        on_mount = NewOnMount,
+        transport_pid = TPid,
+        sent_fps = Fps1,
+        push_barrier = Barrier
+    }}.
 
 handle_cast({seed_fps, FpList}, #state{sent_fps = Fps0} = State) ->
     {noreply, State#state{sent_fps = merge_seed_fps(Fps0, FpList)}};
@@ -761,6 +778,10 @@ terminate(_Reason, _State) ->
     %% resync (`fps_follow`), where the view stays unmounted until the client's
     %% `cached_fps` frame or the socket's backstop timer, so a transport that
     %% goes away in it (a deploy-drain reconnect storm) lands right here.
+    %%
+    %% A navigate whose new mount raises lands here too: it has already
+    %% unmounted the old page and cleared the snapshot, so that page's unmount
+    %% callbacks run once, not again on the way out.
     ok.
 
 -doc """
@@ -845,15 +866,8 @@ page_content(#{f := _} = Snap) ->
 page_content(Snap) ->
     iolist_to_binary(arizona_render:snapshot_html(Snap)).
 
-do_navigate_call(NewHandler, NewIB, NewOnMount, State) ->
-    #state{
-        handler = OldH,
-        bindings = OldB,
-        views = OldV,
-        transport_pid = TPid,
-        sent_fps = Fps0,
-        push_barrier = Barrier
-    } = State,
+do_navigate_call(NewHandler, NewIB, NewOnMount, From, State) ->
+    #state{handler = OldH, bindings = OldB, views = OldV} = State,
     ok = cancel_pending_timers(),
     %% The outgoing page's children are discarded wholesale (the views map is
     %% wiped by do_mount below), which is a removal -- so unmount them exactly
@@ -877,18 +891,15 @@ do_navigate_call(NewHandler, NewIB, NewOnMount, State) ->
     %% old one.
     OldB1 = maps:without(arizona_eval:restricted_keys(), OldB),
     Merged = maps:merge(OldB1, NewIB),
-    {NewViewId, {Snap, V1}, B2} = do_mount(NewHandler, Merged, #{}, NewOnMount),
-    {PageContent1, Fps1, _Changed} = dedup_fp_val(page_content(Snap), Fps0),
-    {reply, {ok, NewViewId, PageContent1, arizona_event_attrs:drain()}, #state{
-        handler = NewHandler,
-        bindings = B2,
-        snapshot = Snap,
-        views = V1,
-        on_mount = NewOnMount,
-        transport_pid = TPid,
-        sent_fps = Fps1,
-        push_barrier = Barrier
-    }}.
+    %% The old page is unmounted, so the state must stop marking it mounted
+    %% before the new one mounts: terminate/2 unmounts the handler and views of
+    %% a state with a snapshot, and a mount that raises here would otherwise run
+    %% every unmount above a second time. Clearing the snapshot and views is what
+    %% marks it unmounted (handler and bindings still hold the old page, but
+    %% terminate/2 reads them only beside a snapshot). The mount runs in a
+    %% continue -- before any other message -- from that state.
+    {noreply, State#state{snapshot = undefined, views = #{}, pending_refresh = #{}},
+        {continue, {navigate_mount, From, NewHandler, Merged, NewOnMount}}}.
 
 %% Every mount renders the snapshot only: the frame it answers carries the
 %% fingerprint payload, the document snapshot_html/1 rebuilds for a root with no
