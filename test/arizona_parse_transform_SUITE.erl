@@ -355,7 +355,12 @@
     tracked_get_renamed_param_ok/1,
     tracked_get_with_projection_ok/1,
     tracked_get_with_submap_errors/1,
-    tracked_get_case_aliased_bindings_flagged/1,
+    tracked_get_case_aliased_bindings_ok/1,
+    tracked_get_rebound_bindings_ok/1,
+    tracked_get_maps_get_submap_errors/1,
+    tracked_get_submap_alias_errors/1,
+    tracked_get_map_pattern_value_errors/1,
+    tracked_get_map_pattern_key_param_ok/1,
     with_handoff_freezes_without_tracking/1,
     with_handoff_tracks_outer_slot/1,
     with_handoff_hoisted_tracks_outer_slot/1,
@@ -1057,7 +1062,12 @@ groups() ->
             tracked_get_renamed_param_ok,
             tracked_get_with_projection_ok,
             tracked_get_with_submap_errors,
-            tracked_get_case_aliased_bindings_flagged,
+            tracked_get_case_aliased_bindings_ok,
+            tracked_get_rebound_bindings_ok,
+            tracked_get_maps_get_submap_errors,
+            tracked_get_submap_alias_errors,
+            tracked_get_map_pattern_value_errors,
+            tracked_get_map_pattern_key_param_ok,
             with_handoff_freezes_without_tracking,
             with_handoff_tracks_outer_slot,
             with_handoff_hoisted_tracks_outer_slot
@@ -8006,25 +8016,27 @@ each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
 %% A tracked read vouches for an item read only when its map IS the item (the bare
 %% parameter, or the variable side of a `Pat = Var` head) or the view bindings. A
 %% sub-map bound in the head or the body records the sub-map's keys, not the item
-%% field that holds it, so those dynamics are not reusable.
+%% field that holds it, so those dynamics are not reusable. The heads use a tuple
+%% pattern: a map pattern's value is rejected outright as
+%% tracked_get_on_non_bindings_map.
 each_stream_reuse_map_must_be_item(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_reuse_item_map). "
         "-export([sub/1, sub_alias/1, sub_bindings/1, sub_with/1, alias/1, whole/1]). "
         "sub(Bindings) -> "
-        "    az:each(fun(#{sub := Sub}, K) -> "
+        "    az:each(fun({_, Sub}, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub)]} "
         "    end, az:get(stream, Bindings)). "
         "sub_alias(Bindings) -> "
-        "    az:each(fun(#{sub := Sub} = I, K) -> "
+        "    az:each(fun({_, Sub} = I, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub), az:get(n, I)]} "
         "    end, az:get(stream, Bindings)). "
         "sub_bindings(Bindings) -> "
-        "    az:each(fun(#{sub := Bindings}, K) -> "
+        "    az:each(fun({_, Bindings}, K) -> "
         "        {'li', [{'az-key', K}], [az:get(v, Bindings)]} "
         "    end, az:get(stream, Bindings)). "
         "sub_with(Bindings) -> "
-        "    az:each(fun(#{sub := Sub}, K) -> "
+        "    az:each(fun({_, Sub}, K) -> "
         "        {'li', [{'az-key', K}], [maps:get(v, arizona_template:with([v], Sub))]} "
         "    end, az:get(stream, Bindings)). "
         "alias(Bindings) -> "
@@ -10567,19 +10579,108 @@ tracked_get_with_submap_errors(Config) when is_list(Config) ->
     ).
 
 %% A binding reached through a non-bare-var alias (a `case`, `begin`, `maps:merge`, ...)
-%% is intentionally flagged: alias_closure only proves bindings-likeness through `V = W`
-%% and `V = with(_, W)`, so a `case`-aliased binding is indistinguishable from a sub-map.
-%% This documents the limitation and the escape hatch (alias directly with `B = Bindings`,
-%% per the format_error message). The value still renders correctly via that escape.
-tracked_get_case_aliased_bindings_flagged(Config) when is_list(Config) ->
-    assert_parse_error(
+%% may be the bindings, and the transform cannot see into it, so it is not flagged: only
+%% a value provably read out of a map is. The read stays tracked on its slot.
+tracked_get_case_aliased_bindings_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
         "-module(pt_tg_casealias). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    B = case Bindings of #{} -> Bindings end, "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, B)]}). ",
+        "    arizona_template:html({'p', [], [arizona_template:get(x, B)]}). "
+    ),
+    T = Mod:render(#{x => <<"y">>}),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
+    ?assertEqual(<<"y">>, Fun()),
+    ?assertEqual(#{x => true}, slot_deps(Fun)).
+
+%% A handler threading its bindings through a helper reads the result with the tracked
+%% accessor: the local IS the bindings, just not syntactically an alias of a parameter.
+tracked_get_rebound_bindings_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_rebound). "
+        "-export([handle_event/3]). "
+        "handle_event(<<\"inc\">>, _Params, Bindings0) -> "
+        "    Bindings = bump(Bindings0), "
+        "    {Bindings, #{}, [integer_to_binary(arizona_template:get(count, Bindings))]}. "
+        "bump(B) -> B#{count => maps:get(count, B) + 1}. "
+    ),
+    ?assertEqual(
+        {#{count => 2}, #{}, [<<"2">>]},
+        Mod:handle_event(<<"inc">>, #{}, #{count => 1})
+    ).
+
+%% A value read with maps:get is a nested value, not the bindings: flagged.
+tracked_get_maps_get_submap_errors(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_mapsgetsub). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = maps:get(foo, Bindings), "
+        "    arizona_template:html({'p', [], [arizona_template:get(bar, Foo)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
+
+%% An alias of a value read out of the bindings is flagged too.
+tracked_get_submap_alias_errors(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_tg_subalias). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    Foo = arizona_template:get(foo, Bindings), "
+        "    F = Foo, "
+        "    arizona_template:html({'p', [], [arizona_template:get(bar, F)]}). ",
+        fun(R) -> R =:= tracked_get_on_non_bindings_map end
+    ).
+
+%% A variable a map pattern binds to a value is a nested value, not the bindings,
+%% wherever the pattern sits: a match, the function head, a case clause, a fun head.
+tracked_get_map_pattern_value_errors(Config) when is_list(Config) ->
+    Read = "arizona_template:html({'p', [], [arizona_template:get(x, U)]})",
+    Cases = [
+        {"match", "render(Bindings) -> #{user := U} = Bindings, " ++ Read ++ ". "},
+        {"head", "render(#{user := U}) -> " ++ Read ++ ". "},
+        {"headalias", "render(#{user := U} = _Bindings) -> " ++ Read ++ ". "},
+        {"case",
+            "render(Bindings) -> case Bindings of #{user := U} -> " ++ Read ++
+                "; _ -> ok end. "},
+        {"fun", "render(Bindings) -> (fun(#{user := U}) -> " ++ Read ++ " end)(Bindings). "},
+        {"nested", "render(#{user := #{profile := U}}) -> " ++ Read ++ ". "}
+    ],
+    [
+        assert_parse_error(
+            "-module(pt_tg_mappat_" ++ Name ++ "). -export([render/1]). " ++ Body,
+            fun(R) -> R =:= tracked_get_on_non_bindings_map end
+        )
+     || {Name, Body} <- Cases
+    ],
+    ok.
+
+%% The whole map a pattern matches is still the bindings: a head alias of the
+%% bindings and a bare fun parameter read with the tracked accessor pass.
+tracked_get_map_pattern_key_param_ok(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_tg_mappat_ok). "
+        "-export([render/1]). "
+        "render(#{x := _} = Bindings) -> "
+        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+    ),
+    T = Mod:render(#{x => <<"y">>}),
+    [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
+    ?assertEqual(<<"y">>, Fun()),
+    ?assertEqual(#{x => true}, slot_deps(Fun)),
+    ParamMod = compile_module(
+        "-module(pt_tg_mappat_param_ok). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    (fun(B) -> "
+        "        arizona_template:html({'p', [], [arizona_template:get(x, B)]}) "
+        "    end)(Bindings). "
+    ),
+    ParamT = ParamMod:render(#{x => <<"z">>}),
+    [{_ParamAz, {esc, ParamFun}, _ParamLoc}] = maps:get(d, ParamT),
+    ?assertEqual(<<"z">>, ParamFun()),
+    ?assertEqual(#{x => true}, slot_deps(ParamFun)).
 
 %% Finding A, baseline: a child template handed off via a raw function call freezes.
 %% The outer slot is `fun() -> inner(Bindings) end`; building `inner` fires no tracked

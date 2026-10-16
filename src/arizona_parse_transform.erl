@@ -1072,11 +1072,10 @@ format_source_error(improper_template_list) ->
     "{'ul', [], [{'li', [], [~\"first\"]}, ?each(fun(I) -> {'li', [], [I]} end, Rest)]}";
 format_source_error(tracked_get_on_non_bindings_map) ->
     "arizona_template:get/get_lazy/with (and the az: aliases) track every read against "
-    "the view bindings, so their map argument must be the bindings -- a parameter or a "
-    "direct alias (`B = Bindings`). This local is not provably the bindings. If it is a "
-    "nested map, read it with maps:get/2 (`User = arizona_template:get(user, Bindings), "
-    "Name = maps:get(name, User)`); if it is a bindings value reached through a "
-    "case/merge the transform cannot see into, alias it directly with `B = Bindings` first".
+    "the view bindings, so their map argument must be the bindings. This local holds a "
+    "value read out of a map, so its keys would be recorded as spurious top-level "
+    "dependencies; read it with maps:get/2 (`User = arizona_template:get(user, Bindings), "
+    "Name = maps:get(name, User)`)".
 
 binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
@@ -1194,13 +1193,17 @@ parse_error(Reason, Anno) ->
 %% `arizona_template:get`/`get_lazy`/`with` (and the `az:` aliases) call `track/1`
 %% regardless of which map they read, so reading a sub-map records the inner key
 %% as a top-level slot dependency. Reject a tracked read whose map argument is a
-%% variable that is not in scope as a bindings-like value: a clause/fun parameter
-%% (so `?each` item/key vars pass) or an alias of one (including a var bound by a
-%% `with/2` projection). A non-variable map argument (a literal map, a `maps:get`
-%% call, any expression) is never flagged.
+%% variable PROVABLY holding a value read out of a map: bound by `V = Read` where Read
+%% is a tracked accessor or `maps:get/2,3` / `map_get/2`, bound to a value by a map
+%% pattern (`#{user := U}` in a match, a function or fun head, a case clause), or
+%% aliased from such a variable. Anything else may be the bindings -- a parameter, a value threaded
+%% through a helper (`Bindings = bump(Bindings0)`), a `case` or `maps:merge` -- and
+%% the transform cannot tell, so it is left alone: a false rejection blocks correct
+%% code, a missed one only over-tracks. A non-variable map argument is never flagged.
 check_tracked_get_targets(Patterns, Body) ->
     Params = collect_fun_param_vars(Body, collect_pattern_vars(Patterns, #{})),
-    walk_tracked_gets(Body, alias_closure(Body, Params)).
+    PatternValues = map_pattern_values({clause, 0, Patterns, [], Body}, #{}),
+    walk_tracked_gets(Body, map_value_vars(Body, Params, PatternValues)).
 
 %% Every fun/named_fun parameter anywhere in Body. Flat across nesting depth:
 %% over-inclusion only drops a flag (false negative), never adds one.
@@ -1224,20 +1227,63 @@ collect_clause_param_vars(Clauses, Acc) ->
         Clauses
     ).
 
-%% Grow the scope with every `V = W` (var = var) where W is already in scope, plus
-%% every `V = arizona_template:with(_, W)` / `az:with(_, W)` (a tracked projection of W
-%% is bindings-like), to a fixpoint (handles `B = Bindings, C = B`).
-alias_closure(Body, Scope) ->
+%% The variables bound to a value read out of a map (`V = Read`, or a map pattern's
+%% value), grown through `V = W` aliases to a fixpoint (`Foo = ?get(foo), F = Foo`).
+%% A name that is also a parameter somewhere in the clause -- other than one a map
+%% pattern binds to a value -- is dropped: the scan is flat across nesting depth, and
+%% a dropped name only loses a flag, never adds one.
+map_value_vars(Body, Params, PatternValues) ->
     Matches = collect_matches(Body, []),
+    Reads = #{V => true || {match, _, {var, _, V}, Expr} <- Matches, is_map_value_read(Expr)},
     VarAliases = [{V, W} || {match, _, {var, _, V}, {var, _, W}} <- Matches],
-    WithAliases = [
-        {V, W}
-     || {match, _, {var, _, V},
-            {call, _, {remote, _, {atom, _, Mod}, {atom, _, with}}, [_Keys, {var, _, W} | _]}} <-
-            Matches,
-        Mod =:= arizona_template orelse Mod =:= az
-    ],
-    alias_fixpoint(VarAliases ++ WithAliases, Scope).
+    Exempt = maps:without(maps:keys(PatternValues), Params),
+    Values = alias_fixpoint(VarAliases, maps:merge(Reads, PatternValues)),
+    maps:without(maps:keys(Exempt), Values).
+
+%% Every variable a map pattern binds to a value, in any pattern position: clause
+%% heads (function, fun, case, receive, try), match left-hand sides and generators.
+%% Only patterns are walked -- `M#{k := V}` in an expression is an update, not a binder.
+map_pattern_values({clause, _, Patterns, _Guards, Body}, Acc) ->
+    map_pattern_values(Body, pattern_map_values(Patterns, Acc));
+map_pattern_values({match, _, Pattern, Expr}, Acc) ->
+    map_pattern_values(Expr, pattern_map_values(Pattern, Acc));
+map_pattern_values({Gen, _, Pattern, Expr}, Acc) when
+    Gen =:= generate;
+    Gen =:= generate_strict;
+    Gen =:= b_generate;
+    Gen =:= b_generate_strict;
+    Gen =:= m_generate;
+    Gen =:= m_generate_strict
+->
+    map_pattern_values(Expr, pattern_map_values(Pattern, Acc));
+map_pattern_values(T, Acc) when is_tuple(T) ->
+    map_pattern_values(tuple_to_list(T), Acc);
+map_pattern_values([H | T], Acc) ->
+    map_pattern_values(T, map_pattern_values(H, Acc));
+map_pattern_values(_Leaf, Acc) ->
+    Acc.
+
+pattern_map_values({map_field_exact, _, _Key, Value}, Acc) ->
+    collect_pattern_vars(Value, Acc);
+pattern_map_values(T, Acc) when is_tuple(T) ->
+    pattern_map_values(tuple_to_list(T), Acc);
+pattern_map_values([H | T], Acc) ->
+    pattern_map_values(T, pattern_map_values(H, Acc));
+pattern_map_values(_Leaf, Acc) ->
+    Acc.
+
+is_map_value_read({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, [_Key, _Map | _]}) when
+    Mod =:= arizona_template; Mod =:= az
+->
+    F =:= get orelse F =:= get_lazy;
+is_map_value_read({call, _, {remote, _, {atom, _, maps}, {atom, _, get}}, [_Key, _Map | _]}) ->
+    true;
+is_map_value_read({call, _, {remote, _, {atom, _, erlang}, {atom, _, map_get}}, [_, _]}) ->
+    true;
+is_map_value_read({call, _, {atom, _, map_get}, [_, _]}) ->
+    true;
+is_map_value_read(_Expr) ->
+    false.
 
 alias_fixpoint(Aliases, Scope) ->
     Scope1 = lists:foldl(
@@ -1253,10 +1299,6 @@ alias_fixpoint(Aliases, Scope) ->
         false -> alias_fixpoint(Aliases, Scope1)
     end.
 
-%% Flat across nesting depth and scope-unaware: a `with`/var alias bound inside an inner
-%% fun/case registers its name as bindings-like globally. Like the param collection above,
-%% the only consequence is a dropped flag (a benign over-track if an outer same-named
-%% sub-map read is masked), never a wrong rejection.
 collect_matches(T, Acc) when is_tuple(T) ->
     Acc1 =
         case T of
@@ -1269,24 +1311,24 @@ collect_matches([H | T], Acc) ->
 collect_matches(_, Acc) ->
     Acc.
 
-walk_tracked_gets(AST, Scope) when is_tuple(AST) ->
-    flag_tracked_get(AST, Scope),
-    walk_tracked_gets(tuple_to_list(AST), Scope);
-walk_tracked_gets([H | T], Scope) ->
-    walk_tracked_gets(H, Scope),
-    walk_tracked_gets(T, Scope);
-walk_tracked_gets(_, _Scope) ->
+walk_tracked_gets(AST, MapValues) when is_tuple(AST) ->
+    flag_tracked_get(AST, MapValues),
+    walk_tracked_gets(tuple_to_list(AST), MapValues);
+walk_tracked_gets([H | T], MapValues) ->
+    walk_tracked_gets(H, MapValues),
+    walk_tracked_gets(T, MapValues);
+walk_tracked_gets(_, _MapValues) ->
     ok.
 
 flag_tracked_get(
-    {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, [_Key, {var, _, V} | _]}, Scope
+    {call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, [_Key, {var, _, V} | _]}, MapValues
 ) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
         (F =:= get orelse F =:= get_lazy orelse F =:= with) andalso
-        not is_map_key(V, Scope)
+        is_map_key(V, MapValues)
 ->
     parse_error(tracked_get_on_non_bindings_map, L);
-flag_tracked_get(_Node, _Scope) ->
+flag_tracked_get(_Node, _MapValues) ->
     ok.
 
 line(Node) when is_tuple(Node), tuple_size(Node) >= 2 ->
@@ -5236,8 +5278,8 @@ build_template_ast(Line, Statics, DynASTs, Fingerprint, Opts) ->
 %% The per-item fun is inlined into the CALLER, so it binds the callback's own
 %% parameter names in the caller's scope. A callback that reads the item with
 %% `?get` must name that parameter `Bindings` -- `?get` expands to the literal
-%% identifier and a tracked read in a scope without it is rejected outright
-%% (tracked_get_on_non_bindings_map) -- so it shadows the caller's `Bindings` and
+%% identifier and a tracked read in a scope without it does not compile (an
+%% unbound variable) -- so it shadows the caller's `Bindings` and
 %% the compiler warns. Worse, the inlined clause carries the CALLEE's annotation,
 %% so the warning names the callback's head rather than the caller where the fun
 %% is actually built, sending anyone who investigates to an innocent function.
