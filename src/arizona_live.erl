@@ -37,8 +37,10 @@ diff pipeline.
   read by `capabilities/0` / `capability/1`. A UI/effect hint only.
 - `$arizona_reconnected` -- `true` when this connection is a reconnection (vs the
   first connect); set while a transport is attached and read by `reconnected/0`.
-- `$arizona_timers` -- `#{ViewId => [Ref]}` from `send_after/3`. A fired
-  ref is pruned when its message is delivered; a removed child view's
+- `$arizona_timers` -- `#{ViewId => {Count, Limit, [Ref]}}` from
+  `send_after/3`. A fired ref is pruned when its message is delivered, and a
+  view's dead refs (fired or cancelled by the app) when an arm takes its list
+  past `Limit` (twice the live count at the last prune); a removed child view's
   timers are cancelled synchronously (and its queued view messages
   flushed) on unmount -- including a child whose id a render keeps but
   whose handler it swaps; `navigate/3,4` cancels them all so stale timers
@@ -170,6 +172,10 @@ fingerprints already shipped in the initial HTML.
 %% templates -- well under this cap. Overflowing merely disables static dedup for
 %% the extra fingerprints (their statics re-ship), never a crash.
 -define(MAX_SENT_FPS, 10000).
+%% A view arming up to this many timers never prunes: below it every prune
+%% would walk live refs and drop nothing. The price is at most this many dead
+%% refs kept for a re-armed debounce (see add_timer_ref/2).
+-define(TIMER_PRUNE_FLOOR, 8).
 
 %% --------------------------------------------------------------------
 %% Records
@@ -268,7 +274,11 @@ Like `send/2` but delivers after `Time` milliseconds. Returns the timer
 ref, which is also tracked in the process dictionary (keyed by `ViewId`)
 so a removed child view's pending timers can be cancelled on unmount and
 `navigate/3,4` can cancel them all on page change. A fired ref is pruned
-from the tracked set when its message is delivered.
+from the tracked set when its message is delivered. A ref the caller
+cancelled itself with `erlang:cancel_timer/1` delivers nothing, so arming
+also prunes `ViewId`'s dead refs, once its set has grown to twice the live
+count found by the previous prune: the set stays within a constant factor of
+the view's live timers, and each arm costs O(1) amortized.
 """.
 -spec send_after(ViewId, Time, Msg) -> reference() when
     ViewId :: binary(),
@@ -281,8 +291,12 @@ send_after(ViewId, Time, Msg) ->
             undefined -> #{};
             T -> T
         end,
-    ViewRefs = maps:get(ViewId, Timers, []),
-    _ = erlang:put('$arizona_timers', Timers#{ViewId => [Ref | ViewRefs]}),
+    Entry =
+        case Timers of
+            #{ViewId := E} -> E;
+            #{} -> timer_entry([])
+        end,
+    _ = erlang:put('$arizona_timers', Timers#{ViewId => add_timer_ref(Ref, Entry)}),
     Ref.
 
 -doc """
@@ -1316,7 +1330,7 @@ cancel_view_timers(ViewId) ->
     case erlang:get('$arizona_timers') of
         undefined ->
             ok;
-        #{ViewId := Refs} = Timers ->
+        #{ViewId := {_Count, _Limit, Refs}} = Timers ->
             ok = cancel_timer_refs(Refs),
             _ = erlang:put('$arizona_timers', maps:remove(ViewId, Timers)),
             ok;
@@ -1332,7 +1346,9 @@ cancel_pending_timers() ->
         undefined ->
             ok;
         Timers ->
-            maps:foreach(fun(_ViewId, Refs) -> cancel_timer_refs(Refs) end, Timers)
+            maps:foreach(
+                fun(_ViewId, {_Count, _Limit, Refs}) -> cancel_timer_refs(Refs) end, Timers
+            )
     end,
     flush_view_messages().
 
@@ -1343,15 +1359,34 @@ prune_fired_timers(ViewId) ->
     case erlang:get('$arizona_timers') of
         undefined ->
             ok;
-        #{ViewId := Refs} = Timers ->
-            case [Ref || Ref <- Refs, is_integer(erlang:read_timer(Ref))] of
+        #{ViewId := {_Count, _Limit, Refs}} = Timers ->
+            case live_timer_refs(Refs) of
                 [] -> _ = erlang:put('$arizona_timers', maps:remove(ViewId, Timers));
-                Live -> _ = erlang:put('$arizona_timers', Timers#{ViewId => Live})
+                Live -> _ = erlang:put('$arizona_timers', Timers#{ViewId => timer_entry(Live)})
             end,
             ok;
         #{} ->
             ok
     end.
+
+live_timer_refs(Refs) ->
+    [Ref || Ref <- Refs, is_integer(erlang:read_timer(Ref))].
+
+%% A ref the app cancelled itself (`erlang:cancel_timer/1`: a debounce, an idle
+%% watchdog) delivers no message, so the prune on delivery never sees it. Arming
+%% therefore prunes too, but only once the list has reached `Limit`, twice the
+%% live count the previous prune found: a prune walks O(Limit) refs and the next
+%% one is at least Limit/2 arms away, so an arm is O(1) amortized however many
+%% timers the view holds, while the list stays within 2x its live timers (plus
+%% a small floor).
+add_timer_ref(Ref, {Count, Limit, Refs}) when Count < Limit ->
+    {Count + 1, Limit, [Ref | Refs]};
+add_timer_ref(Ref, {_Count, _Limit, Refs}) ->
+    timer_entry([Ref | live_timer_refs(Refs)]).
+
+timer_entry(Refs) ->
+    Count = length(Refs),
+    {Count, max(2 * Count, ?TIMER_PRUNE_FLOOR), Refs}.
 
 flush_view_messages() ->
     receive

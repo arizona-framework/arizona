@@ -107,6 +107,8 @@
     swapped_child_timer_cancelled/1,
     swapped_child_unmounted_once_when_new_mount_crashes/1,
     fired_timer_ref_pruned/1,
+    cancelled_timer_ref_pruned/1,
+    concurrent_timer_arms_amortized/1,
     live_reaped_on_transport_disconnect/1,
     child_in_stream_survives_dep_skip/1,
     child_gated_by_untracked_item_field/1,
@@ -162,7 +164,8 @@ groups() ->
         %% Not parallel: installs a global log handler, so a concurrent test
         %% logging a warning would race into this one's mailbox.
         {diagnostics, [], [
-            live_unknown_view_id_warns
+            live_unknown_view_id_warns,
+            concurrent_timer_arms_amortized
         ]},
         {gen_server, [parallel], [
             stateful_child_independent_state,
@@ -260,6 +263,7 @@ groups() ->
             swapped_child_timer_cancelled,
             swapped_child_unmounted_once_when_new_mount_crashes,
             fired_timer_ref_pruned,
+            cancelled_timer_ref_pruned,
             live_reaped_on_transport_disconnect,
             child_in_stream_survives_dep_skip,
             child_gated_by_untracked_item_field,
@@ -1868,6 +1872,51 @@ fired_timer_ref_pruned(Config) when is_list(Config) ->
     %% Tracked timers are keyed by view id; every fired ref has been pruned on
     %% delivery, so after the last fire nothing is tracked at all.
     ?assertEqual(#{}, proplists:get_value('$arizona_timers', Dict, #{})).
+
+cancelled_timer_ref_pruned(Config) when is_list(Config) ->
+    %% A timer the app cancels itself (an idle watchdog re-armed on every
+    %% event) never delivers a message, so the prune-on-delivery never sees its
+    %% ref. Arming must prune it (amortized, so a few dead refs may linger), or
+    %% the registry grows by one ref per event for the page's lifetime.
+    {ok, Pid} = arizona_live:start_link(arizona_idle_watchdog, #{}, undefined, []),
+    {ok, _, _} = arizona_live:mount(Pid),
+    ok = lists:foreach(
+        fun(_) ->
+            {ok, _, _, _} = arizona_live:handle_event(Pid, ~"watchdog", ~"bump", #{})
+        end,
+        lists:seq(1, 500)
+    ),
+    #{bindings := #{ref := LiveRef}} = arizona_live:view_state(Pid),
+    {dictionary, Dict} = erlang:process_info(Pid, dictionary),
+    #{~"watchdog" := {_, _, Refs}} = proplists:get_value('$arizona_timers', Dict),
+    ?assert(lists:member(LiveRef, Refs)),
+    ?assertMatch(N when N =< 8, length(Refs)).
+
+concurrent_timer_arms_amortized(Config) when is_list(Config) ->
+    %% Pruning dead refs on arm must not cost O(live timers) per arm: a view
+    %% holding many concurrent timers would make arming them quadratic. Count
+    %% the liveness probes (`erlang:read_timer/1`) arming N timers does -- a
+    %% deterministic proxy for the work, unlike wall time. In the diagnostics
+    %% group because the call-count pattern is node-global.
+    N = 2000,
+    Self = self(),
+    Pid = spawn_link(fun() ->
+        receive
+            go -> ok
+        end,
+        [arizona_live:send_after(~"view", 600000, tick) || _ <- lists:seq(1, N)],
+        Self ! {armed, self()}
+    end),
+    1 = erlang:trace(Pid, true, [call]),
+    1 = erlang:trace_pattern({erlang, read_timer, 1}, true, [call_count]),
+    Pid ! go,
+    receive
+        {armed, Pid} -> ok
+    after 10000 -> error(timeout_arming)
+    end,
+    {call_count, Probes} = erlang:trace_info({erlang, read_timer, 1}, call_count),
+    1 = erlang:trace_pattern({erlang, read_timer, 1}, false, [call_count]),
+    ?assertMatch(P when P =< 4 * N, Probes).
 
 live_reaped_on_transport_disconnect(Config) when is_list(Config) ->
     %% The live process is start_linked to its transport (the WS session
