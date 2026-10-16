@@ -1323,6 +1323,34 @@ transform_form(Form, _Module, _IsLive, _FunDefs) ->
 
 transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     check_tracked_get_targets(Patterns, Body0),
+    case has_template_ctor(Body0) of
+        true ->
+            transform_template_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs);
+        false ->
+            %% Nothing here is a template a hoisted read could be inlined into, so
+            %% the body keeps its own shape (and its own lint warnings).
+            {clause, L, Patterns, Guards, [
+                transform_expr(Expr, Module, #{}, FunDefs)
+             || Expr <- Body0
+            ]}
+    end.
+
+%% Does the body construct a template a hoisted variable can be spliced into? The
+%% splice happens only while compiling one (transform_node/4), and the pre-pass
+%% has already spelled an inherited constructor with ?NODIFF_MOD.
+has_template_ctor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) when
+    (Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD) andalso
+        (F =:= html orelse F =:= native orelse F =:= terminal orelse F =:= each)
+->
+    true;
+has_template_ctor(T) when is_tuple(T) ->
+    has_template_ctor(tuple_to_list(T));
+has_template_ctor([H | T]) ->
+    has_template_ctor(H) orelse has_template_ctor(T);
+has_template_ctor(_Other) ->
+    false.
+
+transform_template_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
     Body = normalize_tail_binds(Body0),
     Inline = prepare_inline(rename_hoisted_binders(Patterns, Body, collect_inline(Body)), Body),
     ok = check_markup_vars(Body, Inline),
@@ -1335,7 +1363,8 @@ transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
                     Last, Inline, clause_bound(Patterns, Init), {Transform, Transform}
                 )
             ],
-    {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
+    {clause, L, Patterns, Guards,
+        suppress_unused_inline_matches(Body1, without_source_unused(Inline, Body, []))}.
 
 transform_expr(Expr, Module, Inline, FunDefs) ->
     erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module, Inline, FunDefs) end, Expr).
@@ -2149,7 +2178,8 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
         {fun(Leaf, Inl) -> transform_live_render_leaf(Leaf, Module, Inl, FunDefs) end, Transform}
     ),
     Body1 = TransformedInit ++ [TransformedLast],
-    {clause, L, Patterns, Guards, suppress_unused_inline_matches(Body1, Inline)}.
+    {clause, L, Patterns, Guards,
+        suppress_unused_inline_matches(Body1, without_source_unused(Inline, Init ++ [Last], []))}.
 
 %% The value of a render clause is the value of its last expression, so a template
 %% there may sit at any tail of a control-flow expression, after statements that
@@ -2187,7 +2217,9 @@ transform_scoped_tail(Expr, Inline, Bound, {Leaf, NonTail} = Fns) ->
             %% The try body's definitions stay in scope in its `of` clauses, so they
             %% inline there too, and whether one is left unused is counted over the
             %% whole `try`.
-            {Body, BodyInline, BodyBound, Local} = scoped_body(Body0, Inline, Bound, Fns),
+            {Body, BodyInline, BodyBound, Local} = scoped_body(
+                Body0, Inline, Bound, Fns, [OfCs0, CatchCs0, After0]
+            ),
             OfCs = scoped_tail_clauses(OfCs0, BodyInline, BodyBound, Fns),
             CatchCs = scoped_tail_clauses(CatchCs0, Inline, BodyBound, Fns),
             After = [NonTail(E, Inline) || E <- After0],
@@ -2210,20 +2242,26 @@ scoped_tail_clauses(Clauses, Inline, Bound, Fns) ->
     ].
 
 scoped_tail_body(Body0, Inline, Bound, Fns) ->
-    {Body, _Inline, _Bound, Local} = scoped_body(Body0, Inline, Bound, Fns),
+    {Body, _Inline, _Bound, Local} = scoped_body(Body0, Inline, Bound, Fns, []),
     suppress_unused_inline_matches(Body, Local).
 
 %% Transform one body: its init statements with its inline map, its last
 %% expression as a tail. Returns the map in scope at its end, the names bound by
-%% then, and the reads it hoisted itself (the matches it may leave unused).
-scoped_body(Body0, Outer, Bound0, {_Leaf, NonTail} = Fns) ->
+%% then, and the reads it hoisted itself that the source used (the matches it may
+%% leave unused); `Others` is the rest of the source the body's names reach.
+scoped_body(Body0, Outer, Bound0, {_Leaf, NonTail} = Fns, Others) ->
     {Init0, [Last]} = lists:split(length(Body0) - 1, Body0),
     Init = normalize_tail_binds(Init0),
     Body = Init ++ [Last],
     {Local, Inline} = body_inline(Body, Outer, Bound0),
     ok = check_markup_vars(Body, Inline),
     Last1 = transform_scoped_tail(Last, Inline, body_bound(Init, Bound0), Fns),
-    {[NonTail(E, Inline) || E <- Init] ++ [Last1], Inline, body_bound(Body, Bound0), Local}.
+    {
+        [NonTail(E, Inline) || E <- Init] ++ [Last1],
+        Inline,
+        body_bound(Body, Bound0),
+        without_source_unused(Local, Body, Others)
+    }.
 
 %% A body's own hoisted reads (collect_inline/1 for a nested body: a read may
 %% reach through a name the enclosing map already inlines), and the enclosing map
@@ -3221,6 +3259,19 @@ suppress_unused_inline_matches(Body, Inline) when map_size(Inline) =:= 0 ->
     Body;
 suppress_unused_inline_matches(Body, Inline) ->
     [maybe_underscore_match(E, Inline, Body) || E <- Body].
+
+%% A hoisted name the source never used is the author's unused variable, not one the
+%% template splice left behind, so it is dropped from the map and keeps erl_lint's
+%% warning. `Others` is the rest of the source the body's names reach.
+without_source_unused(Inline, Body, Others) ->
+    maps:without(
+        [
+            V
+         || {match, _, {var, _, V}, _} = M <- Body,
+            not is_map_key(V, free_vars([Body -- [M] | Others], #{}, #{}))
+        ],
+        Inline
+    ).
 
 %% Rename the now-unused match LHS to the anonymous `_`: it never collides with a
 %% pre-existing `_Foo` binding (which would otherwise trip erl_lint's

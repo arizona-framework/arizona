@@ -563,6 +563,10 @@
 -export([az_attrs_keeps_prevent_default_with_a_value/1]).
 -export([az_attrs_skips_injected_az_view/1]).
 -export([az_attrs_records_component_modules/1]).
+-export([unused_hoisted_var_keeps_warning/1]).
+-export([unused_branch_var_keeps_warning/1]).
+-export([unused_try_var_keeps_warning/1]).
+-export([template_free_clause_untouched/1]).
 -export([improper_template_list_rejected/1]).
 -export([improper_attr_value_is_text/1]).
 
@@ -995,6 +999,10 @@ groups() ->
             slot_tracks_only_reads_in_its_own_closure,
             each_param_rename_avoids_shadow_warning,
             inline_hoisted_html_unrelated_key_skipped,
+            unused_hoisted_var_keeps_warning,
+            unused_branch_var_keeps_warning,
+            unused_try_var_keeps_warning,
+            template_free_clause_untouched,
             inline_branch_local_hoist_tracks,
             inline_branch_local_hoist_live_root,
             inline_branch_local_hoist_live_root_id,
@@ -11128,6 +11136,15 @@ parse_forms(Source) ->
      || Toks <- split_forms(Tokens)
     ].
 
+%% The warnings erl_lint reports for `Source` after the transform.
+compile_warnings(Source) ->
+    TransformedForms = arizona_parse_transform:parse_transform(parse_forms(Source), []),
+    {ok, _Mod, _Bin, Warnings} = compile:forms(TransformedForms, [binary, return]),
+    [W || {_File, Ws} <- Warnings, {_Loc, erl_lint, W} <- Ws].
+
+unused_var_warnings(Source) ->
+    lists:sort([W || {unused_var, _} = W <- compile_warnings(Source)]).
+
 %% Like compile_module/1 but compiles with warnings_as_errors, matching the
 %% project's real erl_opts. Needed because unused-variable / match_underscore_var
 %% regressions surface only as warnings, which the plain [return_errors] path drops.
@@ -12674,3 +12691,84 @@ improper_attr_value_is_text(Config) when is_list(Config) ->
             []
         )
     ).
+
+%% ============================================================================
+%% Lint warnings and template-free clauses survive the transform
+%% ============================================================================
+
+%% A hoisted read the template splices away leaves its binding unused, which the
+%% transform silences. A variable the author never used at all was not spliced, so
+%% it keeps erl_lint's warning, beside a template or not.
+unused_hoisted_var_keeps_warning(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{unused_var, 'Dropped'}, {unused_var, 'Unused'}],
+        unused_var_warnings(
+            "-module(pt_unused_hoisted). "
+            "-export([plain/1, render/1]). "
+            "plain(Bindings) -> "
+            "    Unused = arizona_template:get(a, Bindings), "
+            "    ok. "
+            "render(Bindings) -> "
+            "    Dropped = arizona_template:get(a, Bindings), "
+            "    Used = arizona_template:get(b, Bindings), "
+            "    arizona_template:html({'p', [], [Used]}). "
+        )
+    ).
+
+%% The same holds for a branch-local body of the render result.
+unused_branch_var_keeps_warning(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{unused_var, 'Dropped'}],
+        unused_var_warnings(
+            "-module(pt_unused_branch). "
+            "-export([render/1]). "
+            "render(Bindings) -> "
+            "    case arizona_template:get(mode, Bindings) of "
+            "        a -> "
+            "            Dropped = arizona_template:get(x, Bindings), "
+            "            Used = arizona_template:get(n, Bindings), "
+            "            arizona_template:html({'p', [], [Used]}); "
+            "        _ -> arizona_template:html({'p', [], [<<\"x\">>]}) "
+            "    end. "
+        )
+    ).
+
+%% And for a try body, whose names an `of` clause also reaches: a name the `of`
+%% clause's template used is spliced away silently, one nothing used warns.
+unused_try_var_keeps_warning(Config) when is_list(Config) ->
+    ?assertEqual(
+        [{unused_var, 'Dropped'}],
+        unused_var_warnings(
+            "-module(pt_unused_try). "
+            "-export([render/1]). "
+            "render(Bindings) -> "
+            "    try "
+            "        Dropped = arizona_template:get(x, Bindings), "
+            "        Used = arizona_template:get(n, Bindings), "
+            "        arizona_template:get(mode, Bindings) "
+            "    of "
+            "        a -> arizona_template:html({'p', [], [Used]}); "
+            "        _ -> arizona_template:html({'p', [], [<<\"x\">>]}) "
+            "    catch "
+            "        _:_ -> ok "
+            "    end. "
+        )
+    ).
+
+%% A clause with no template has nothing a hoisted read could be inlined into, so
+%% the transform leaves it exactly as written -- the statement-form `case` is not
+%% lifted into a match.
+template_free_clause_untouched(Config) when is_list(Config) ->
+    Source =
+        "-module(pt_template_free_clause). "
+        "-export([pick/1]). "
+        "pick(Bindings) -> "
+        "    case arizona_template:get(flag, Bindings) of "
+        "        true -> V = arizona_template:get(a, Bindings); "
+        "        false -> V = arizona_template:get(b, Bindings) "
+        "    end, "
+        "    V. ",
+    Forms = parse_forms(Source),
+    Transformed = arizona_parse_transform:parse_transform(Forms, []),
+    [Fun] = [F || {function, _, pick, 1, _} = F <- Forms],
+    ?assertEqual([Fun], [F || {function, _, pick, 1, _} = F <- Transformed]).
