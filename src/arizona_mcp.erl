@@ -127,7 +127,8 @@ change with `resource_updated/1`, which fans `notifications/resources/updated`
 out to every subscribed session. It is built on the same pubsub path as
 `broadcast/3`: subscribe joins a per-uri channel, `resource_updated/1`
 broadcasts to it, and `resources/unsubscribe` (or session exit) leaves. Like
-the other pushes it needs a session with an attached SSE channel.
+the other pushes it needs a session with an attached SSE channel; a stateless
+route accepts the subscription but has nowhere to deliver, so it joins nothing.
 
 The optional `resource_templates/1` callback advertises URI templates
 (`mem://user/{id}`) through `resources/templates/list`. Omit it for a server
