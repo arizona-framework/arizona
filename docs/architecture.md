@@ -2701,10 +2701,12 @@ Reference forms:
 - `{env, "VAR", Default}` -- **optional**. Coerces `$VAR` to the type of `Default`, or returns
   `Default` when unset.
 
-Coercion is by the default's Erlang type (env vars are always strings): integer, float, boolean
-(`"true"`/`"false"`, case-insensitive), binary, atom (`list_to_existing_atom/1`), or list (a
-comma-split into trimmed binaries -- the `csrf_origins` / `secret_key_previous` shape). The
-required form yields a binary.
+Coercion is by the default's Erlang type (env vars are always strings): integer, float (an
+integer value like `"2"` reads as `2.0`), boolean (`"true"`/`"false"`, case-insensitive), binary,
+atom (`list_to_existing_atom/1`), or list (a comma-split into trimmed binaries -- the
+`csrf_origins` / `secret_key_previous` shape). The required form yields a binary. A default of
+any other type (a map, a tuple, a list of atoms) has no coercion and raises `unsupported_default`
+(with a `format_error/2` message) whether or not the variable is set.
 
 `resolve/1` recurses into **maps, lists, and 2-tuples only**:
 
@@ -2722,6 +2724,12 @@ the safety property: route tuples (`{live, Path, Handler, Opts}` and friends -- 
 fall to the `Other` clause and pass through untouched, so an operator-supplied literal `{env, _,
 _}` sitting inside a route's `bindings`/`state` is never rewritten. Resolution is idempotent, so
 resolving in `start/2` is safe even if a caller already resolved.
+
+The flip side is that `env` is a **reserved tag**: a reference is recognised by shape alone, so a
+proplist pair that merely happens to be keyed `env` (`{env, "production"}` among a listener's
+options) is read as a reference to the variable `production` -- substituted when it is set, and
+raising `env_not_set` when it is not. That message says `{env, _}` is the reference form, so a
+hijacked pair is diagnosable; the fix is to key the option something else.
 
 ## MCP server
 
