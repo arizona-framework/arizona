@@ -19,8 +19,10 @@ recompile and broadcasts a reload message:
 2. Otherwise falls back to `compile:file/2` with options recovered from
    the existing module's `module_info(compile)`.
 3. On compile error, structured errors from the changed files are
-   stashed in a persistent term so the dev error page can render them
-   on the next request. Subsequent successful compiles clear the error.
+   stashed in a persistent term, per file, so the dev error page can
+   render them on the next request. A file's errors stay until a wave
+   that carries it compiles it (or drops it as deleted); a clean
+   `rebar_agent` compile builds the whole project, so it clears them all.
 
 After the compile, a sweep reloads any module whose loaded code no longer
 matches its beam on disk. Apps listed in rebar3's `app_reload_blacklist` shell
@@ -52,12 +54,15 @@ recompile would otherwise log a supervisor report.
 -export([compile/1]).
 -export([get_error/0]).
 -export([clear_error/0]).
+-export([format_error/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
--ignore_xref([broadcast/0, reload_erl/1, reload_css/0, reload_css/1, compile/1, clear_error/0]).
+-ignore_xref([
+    broadcast/0, reload_erl/1, reload_css/0, reload_css/1, compile/1, clear_error/0, format_error/1
+]).
 -ignore_xref({rebar_agent, do, 1}).
 -ignore_xref({rebar_state, get, 3}).
 
@@ -169,27 +174,17 @@ Compiles a list of source files. Filters to `.erl` files, then either
 delegates to `rebar_agent` (when running under `rebar3 shell`) or
 falls back to a direct `compile:file/2` per file.
 
-Returns `ok` on success or `{error, #{errors := [...]}}` on failure.
-The error is also stashed in a persistent term so the dev error page
-can read it via `get_error/0`.
+Returns `ok` when this wave compiled, or `{error, #{errors := [...]}}` with
+this wave's errors. The stash `get_error/0` reads is kept per file, so it can
+still hold another file's errors after an `ok`: a broken file stays reported
+until a wave compiles it, not until any unrelated file compiles.
 """.
 -spec compile(Files) -> ok | {error, map()} when
     Files :: [file:filename()].
 compile(Files) ->
-    ErlFiles = [F || F <- Files, filename:extension(F) =:= ".erl"],
-    case ErlFiles of
-        [] ->
-            clear_error(),
-            ok;
-        _ ->
-            case compile_and_load(ErlFiles) of
-                ok ->
-                    clear_error(),
-                    ok;
-                {error, ErrorInfo} ->
-                    set_error(ErrorInfo),
-                    {error, ErrorInfo}
-            end
+    case [F || F <- Files, filename:extension(F) =:= ".erl"] of
+        [] -> ok;
+        ErlFiles -> compile_and_load(ErlFiles)
     end.
 
 -doc """
@@ -207,27 +202,70 @@ reload_css() ->
     end.
 
 -doc """
-Returns the last stashed compile error, or `undefined` if the most
-recent compile succeeded.
+Returns the stashed compile errors of every file still failing, or
+`undefined` when none is.
 """.
 -spec get_error() -> undefined | map().
 get_error() ->
-    persistent_term:get(?COMPILE_ERROR_KEY, undefined).
+    case persistent_term:get(?COMPILE_ERROR_KEY, undefined) of
+        undefined -> undefined;
+        ByFile -> #{errors => flatten_errors(ByFile)}
+    end.
 
 -doc """
-Clears the stashed compile error. Called after a successful compile.
+Clears every stashed compile error. Called after a clean whole-project compile.
 """.
 -spec clear_error() -> ok.
 clear_error() ->
     persistent_term:put(?COMPILE_ERROR_KEY, undefined),
     ok.
 
+-doc """
+Formats a diagnostic this module adds to the stashed compile errors, the way
+`erl_lint:format_error/1` formats its own: the dev error page calls it through
+the `{Location, Module, Reason}` triple.
+""".
+-spec format_error(Reason) -> string() when
+    Reason :: {load_failed, module(), term()}.
+format_error({load_failed, Mod, on_load_failure}) ->
+    io_lib:format("module ~ts compiled but did not load: its -on_load function failed", [Mod]);
+format_error({load_failed, Mod, Reason}) ->
+    io_lib:format("module ~ts compiled but did not load: ~tp", [Mod, Reason]).
+
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-set_error(Error) ->
-    persistent_term:put(?COMPILE_ERROR_KEY, Error).
+%% Replaces the stashed errors of the wave's files with what this wave found,
+%% keeping every other file's. `ProjectFailed` is a `rebar_agent` failure: the
+%% project is broken even when no file reproduces it, and the error page must say
+%% so (an empty error list, which it explains) rather than show no error at all.
+stash_wave(Wave, WaveErrors, ProjectFailed) ->
+    Kept = maps:without([unattributed | Wave], stashed_errors()),
+    Stash0 = maps:merge(Kept, WaveErrors),
+    Stash =
+        case ProjectFailed andalso map_size(Stash0) =:= 0 of
+            true -> #{unattributed => []};
+            false -> Stash0
+        end,
+    ok =
+        case map_size(Stash) of
+            0 -> clear_error();
+            _ -> persistent_term:put(?COMPILE_ERROR_KEY, Stash)
+        end,
+    case ProjectFailed orelse map_size(WaveErrors) > 0 of
+        true -> {error, #{errors => flatten_errors(WaveErrors)}};
+        false -> ok
+    end.
+
+stashed_errors() ->
+    case persistent_term:get(?COMPILE_ERROR_KEY, undefined) of
+        undefined -> #{};
+        ByFile -> ByFile
+    end.
+
+flatten_errors(ByFile) ->
+    [E || _ := Es <- maps:iterator(ByFile, ordered), E <- Es].
 
 %% Recompile the project through rebar_agent when running under `rebar3 shell`
 %% (it hot-reloads what it rebuilds). Absent the agent there is nothing to
@@ -321,7 +359,7 @@ blacklisted(Mod, Blacklist) ->
 compile_and_load(ErlFiles) ->
     case erlang:whereis(rebar_agent) of
         undefined ->
-            manual_compile(ErlFiles);
+            stash_wave(ErlFiles, manual_compile(ErlFiles), false);
         _ ->
             rebar3_compile(ErlFiles)
     end.
@@ -331,67 +369,73 @@ compile_and_load(ErlFiles) ->
 rebar3_compile(ErlFiles) ->
     case erlang:apply(rebar_agent, do, [compile]) of
         ok ->
-            ok;
+            clear_error();
         {error, _} ->
-            collect_errors(ErlFiles)
+            stash_wave(ErlFiles, collect_errors(ErlFiles), true)
     end.
 
-%% Direct compile:file fallback when rebar3 is not available. The watcher treats
-%% a delete as a relevant event, so a wave can carry paths that no longer exist;
-%% compiling one would stash a spurious {epp, enoent} error on the dev error page
-%% until an unrelated successful wave clears it. A deletion is not a compile
-%% error, so vanished paths are skipped.
+%% Direct compile:file fallback when rebar3 is not available, returning the
+%% errors of each file that failed.
 manual_compile(Files) ->
-    manual_compile([F || F <- Files, filelib:is_regular(F)], []).
+    wave_errors(Files, fun compile_one/1).
 
-manual_compile([], []) ->
-    ok;
-manual_compile([], Errors) ->
-    {error, #{errors => lists:reverse(Errors)}};
-manual_compile([File | Rest], Errors) ->
-    %% Only used to look up prior compile opts before the module name is known;
-    %% the reloaded module is whatever the compiler reports, not the basename (a
-    %% file whose `-module` differs from its filename otherwise `case_clause`es).
-    Mod = list_to_atom(filename:basename(File, ".erl")),
-    Opts = get_compile_opts(Mod),
-    case compile:file(File, [binary, return_errors | Opts]) of
-        {ok, ActualMod, Binary} ->
-            reload_module(ActualMod, File, Binary),
-            manual_compile(Rest, Errors);
-        {ok, ActualMod, Binary, _Warnings} ->
-            reload_module(ActualMod, File, Binary),
-            manual_compile(Rest, Errors);
-        {error, FileErrors, _Warnings} ->
-            manual_compile(Rest, FileErrors ++ Errors)
+compile_one(File) ->
+    case compile_file(File) of
+        {ok, Mod, Binary} -> load_errors(File, reload_module(Mod, File, Binary));
+        {error, FileErrors} -> FileErrors
     end.
 
 %% Re-compile changed files with return_errors to get structured error info.
 collect_errors(Files) ->
-    Errors = lists:foldl(
-        fun(File, Acc) ->
-            Mod = list_to_atom(filename:basename(File, ".erl")),
-            Opts = get_compile_opts(Mod),
-            case compile:file(File, [binary, return_errors | Opts]) of
-                {ok, _, _} -> Acc;
-                {ok, _, _, _} -> Acc;
-                {error, FileErrors, _} -> FileErrors ++ Acc
-            end
-        end,
-        [],
-        Files
-    ),
-    case Errors of
-        [] ->
-            %% Error was in a dep or file not in the changed list.
-            {error, #{errors => []}};
-        _ ->
-            {error, #{errors => lists:reverse(Errors)}}
+    wave_errors(Files, fun file_errors/1).
+
+file_errors(File) ->
+    case compile_file(File) of
+        {ok, _Mod, _Binary} -> [];
+        {error, FileErrors} -> FileErrors
     end.
 
+%% The errors of each wave file that has any, in either mode. The watcher treats
+%% a delete as a relevant event, so a wave can carry paths that no longer exist;
+%% compiling one would stash a spurious {epp, enoent} error on the dev error page.
+%% A deletion is not a compile error, so vanished paths are skipped (and, being in
+%% the wave, have their stashed errors dropped).
+wave_errors(Files, FileErrors) ->
+    #{F => Es || F <- Files, filelib:is_regular(F), Es <- [FileErrors(F)], Es =/= []}.
+
+%% `return_warnings` pins the success shape to the 4-tuple whatever the
+%% recovered options hold; nothing here reports warnings either way. The module
+%% is whatever the compiler reports, not the basename (a file whose `-module`
+%% differs from its filename otherwise `case_clause`es). A module whose source
+%% sets `warnings_as_errors` fails on warnings alone, reported as `{error, [],
+%% Warnings}`: it is not reloaded, so those warnings are its errors.
+compile_file(File) ->
+    case compile:file(File, [binary, return_errors, return_warnings | compile_opts(File)]) of
+        {ok, Mod, Binary, _Warnings} -> {ok, Mod, Binary};
+        {error, [], Warnings} -> {error, Warnings};
+        {error, FileErrors, _Warnings} -> {error, FileErrors}
+    end.
+
+%% A module that compiles can still fail to load (`-on_load` not returning
+%% `ok`). That is reported like a compile error rather than raised: the watcher
+%% runs this in its own callback, so a raise would crash it and skip the rest of
+%% the wave along with the route recompile.
 reload_module(Mod, File, Binary) ->
     code:purge(Mod),
-    {module, Mod} = code:load_binary(Mod, File, Binary),
-    ok.
+    case code:load_binary(Mod, File, Binary) of
+        {module, Mod} -> ok;
+        {error, Reason} -> {error, {load_failed, Mod, Reason}}
+    end.
+
+load_errors(_File, ok) ->
+    [];
+load_errors(File, {error, Reason}) ->
+    [{File, [{none, ?MODULE, Reason}]}].
+
+%% The basename is only a guess at the module, used to look up the options it
+%% was last compiled with before the compiler reports the real name.
+compile_opts(File) ->
+    get_compile_opts(list_to_atom(filename:basename(File, ".erl"))).
 
 get_compile_opts(Mod) ->
     try
