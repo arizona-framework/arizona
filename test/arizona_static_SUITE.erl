@@ -1,5 +1,7 @@
 -module(arizona_static_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+%% Feeds generate/2 a spec whose Opts violates opts() on purpose.
+-dialyzer({nowarn_function, collects_non_map_spec_opts/1}).
 
 -export([all/0]).
 -export([groups/0]).
@@ -16,6 +18,7 @@
 -export([failure_carries_render_location/1]).
 -export([failed_entries_cover_every_spec_shape/1]).
 -export([collects_write_errors/1]).
+-export([collects_non_map_spec_opts/1]).
 
 all() ->
     [{group, generate}].
@@ -34,7 +37,8 @@ groups() ->
             collects_failures,
             failure_carries_render_location,
             failed_entries_cover_every_spec_shape,
-            collects_write_errors
+            collects_write_errors,
+            collects_non_map_spec_opts
         ]}
     ].
 
@@ -180,6 +184,22 @@ collects_write_errors(Config) when is_list(Config) ->
     ?assert(filelib:is_regular(Good)),
     ?assertEqual({arizona_static_page, ~"collide/page.html"}, BadSpec),
     ?assertNot(filelib:is_regular(filename:join(Dir, "collide/page.html"))).
+
+collects_non_map_spec_opts(Config) when is_list(Config) ->
+    Dir = subdir(Config, "non_map_opts"),
+    %% A 3-tuple spec is well-formed, so a non-map Opts in it is a per-page
+    %% failure like any other: collected, with the specs around it still written
+    %% and returned rather than lost to a batch-wide crash.
+    {[First, Last], [{BadSpec, Failure}]} = arizona_static:generate(Dir, [
+        {arizona_static_page, ~"first.html"},
+        {arizona_static_page, ~"bad.html", not_a_map},
+        {arizona_static_page, ~"last.html"}
+    ]),
+    ?assert(filelib:is_regular(First)),
+    ?assert(filelib:is_regular(Last)),
+    ?assertEqual({arizona_static_page, ~"bad.html", not_a_map}, BadSpec),
+    ?assertMatch({error, {badmap, not_a_map}, [_ | _]}, Failure),
+    ?assertNot(filelib:is_regular(filename:join(Dir, "bad.html"))).
 
 %% --------------------------------------------------------------------
 %% Helpers

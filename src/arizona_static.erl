@@ -30,11 +30,11 @@ ignored, so a route's opts map can be pasted in. A spec's own options override
 
 ## Failures
 
-A spec that fails -- a `mount`/`render` crash, or a write error (a
-`filelib:ensure_dir`/`file:write_file` `{error, _}`) -- is collected in `Failed`
-rather than stopping the batch; the caller decides what is fatal. A
-structurally-malformed spec (not a 2- or 3-tuple) still crashes -- that's a
-caller bug, not a per-page failure.
+A spec that fails -- a `mount`/`render` crash, a non-map `Opts` in a 3-tuple
+spec, or a write error (a `filelib:ensure_dir`/`file:write_file` `{error, _}`) --
+is collected in `Failed` rather than stopping the batch; the caller decides what
+is fatal. A structurally-malformed spec (not a 2- or 3-tuple) still crashes --
+that's a caller bug, not a per-page failure.
 
 A crash is collected as the whole exception, `{Class, Reason, Stacktrace}` (see
 `t:failure/0`), so one bad page in a 200-page build still says *where* it broke
@@ -145,8 +145,10 @@ rather than stopping the batch; the caller decides what is fatal.
 
 A spec is `{Handler, Outfile}` or `{Handler, Outfile, Opts}`, where `Outfile`
 is joined onto `OutDir` (an absolute `Outfile` bypasses `OutDir`, per standard
-`filename:join` behavior) and parent directories are created as needed. A spec's
-own `Opts` override `DefaultOpts` key-wise.
+`filename:join` behavior, and `..` segments are honoured too, so `~"../x.html"`
+lands beside `OutDir`; `Outfile` is the caller's own path, not untrusted input)
+and parent directories are created as needed. A spec's own `Opts` override
+`DefaultOpts` key-wise.
 """.
 -spec generate(OutDir, Specs, DefaultOpts) -> {Written, Failed} when
     OutDir :: file:filename_all(),
@@ -172,19 +174,21 @@ generate_loop([Spec | T], OutDir, DefaultOpts, Written, Failed) ->
     end.
 
 generate_spec(OutDir, DefaultOpts, {Handler, Outfile}) ->
-    safe_generate(Handler, OutDir, Outfile, DefaultOpts);
+    safe_generate(Handler, OutDir, Outfile, DefaultOpts, #{});
 generate_spec(OutDir, DefaultOpts, {Handler, Outfile, Opts}) ->
-    safe_generate(Handler, OutDir, Outfile, maps:merge(DefaultOpts, Opts)).
+    safe_generate(Handler, OutDir, Outfile, DefaultOpts, Opts).
 
 %% A raised failure is collected WHOLE -- class, reason, and stacktrace -- so one
 %% bad page in a large batch still says what failed and where (including the
 %% `{arizona_loc, {Module, Line}, _}` wrapper `arizona_render` attaches). The
 %% batch does not stop either way; the 3-tuple also tells a raise apart from a
-%% write error's `{error, Reason}`, which the bare-reason shape could not.
-safe_generate(Handler, OutDir, Outfile, Opts) ->
+%% write error's `{error, Reason}`, which the bare-reason shape could not. The
+%% opts merge runs inside the `try` too: a non-map `Opts` is one bad page, and
+%% raised outside it would abort the batch and lose the paths already written.
+safe_generate(Handler, OutDir, Outfile, DefaultOpts, SpecOpts) ->
     try
         Filename = filename:join(OutDir, Outfile),
-        case generate_one(Handler, Filename, Opts) of
+        case generate_one(Handler, Filename, maps:merge(DefaultOpts, SpecOpts)) of
             ok ->
                 {ok, Filename};
             {error, _Reason} = Error ->
