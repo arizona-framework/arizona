@@ -405,7 +405,7 @@ Errors with `{bad_template_value, V}` for unsupported types.
     Value :: term().
 to_bin(V) when is_binary(V) -> V;
 to_bin(V) when is_integer(V) -> integer_to_binary(V);
-to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
+to_bin(V) when is_float(V) -> float_to_bin(V);
 to_bin(V) when is_atom(V) -> atom_to_binary(V);
 %% Escape markers are unwrapped to their raw bytes here. to_bin never escapes;
 %% escaping happens at the render-output boundary. At SSR that boundary is
@@ -969,3 +969,46 @@ take_visible([], Limit, Back) ->
         Drop when Drop > 0 -> lists:reverse(lists:nthtail(Drop, Back));
         _ -> lists:reverse(Back)
     end.
+
+%% The shortest digits that read back as the same float (`short`), printed
+%% positionally where JS prints a number positionally (1.0e-7 =< |x| < 1.0e21)
+%% and in exponent form outside it. `short` alone picks whichever text is
+%% shorter, so a total of 1500.0 would read "1.5e3". A fixed decimal count is no
+%% fix: it rounds small values to "0.0" and raises `badarg` past ~1e244.
+%% In range the exponent is -7..20, so its `e` can only be the second or third
+%% byte from the end: two fixed-offset probes find it, no scan.
+float_to_bin(V) when V >= 1.0e-7, V < 1.0e21; V =< -1.0e-7, V > -1.0e21 ->
+    Bin = float_to_binary(V, [short]),
+    Skip = byte_size(Bin) - 3,
+    case Bin of
+        <<_:Skip/binary, _, $e, _>> -> positional(Bin, Skip + 1);
+        <<_:Skip/binary, $e, _, _>> -> positional(Bin, Skip);
+        _ -> Bin
+    end;
+float_to_bin(V) ->
+    float_to_binary(V, [short]).
+
+positional(Bin, EPos) ->
+    <<Mantissa:EPos/binary, $e, Exp/binary>> = Bin,
+    shift_point(Mantissa, binary_to_integer(Exp)).
+
+%% `short`'s exponent form has one integer digit, and a fractional part of
+%% "0" only when it is that digit alone. Each binary built below starts with a
+%% literal or an integer segment: one led by an unsized binary segment is built
+%% appendable, several times the cost of a plain one.
+shift_point(<<$-, Mantissa/binary>>, Exp) ->
+    <<$-, (shift_point(Mantissa, Exp))/binary>>;
+shift_point(<<Int, $., $0>>, Exp) ->
+    shift_point(Int, <<>>, Exp);
+shift_point(<<Int, $., Frac/binary>>, Exp) ->
+    shift_point(Int, Frac, Exp).
+
+%% The point moves `Exp` places right of the digit `Int`, padding with zeros on
+%% whichever side runs out; an integral value keeps the `.0` suffix.
+shift_point(Int, Frac, Exp) when Exp < 0 ->
+    <<"0.", (binary:copy(~"0", -Exp - 1))/binary, Int, Frac/binary>>;
+shift_point(Int, Frac, Exp) when Exp >= byte_size(Frac) ->
+    <<Int, Frac/binary, (binary:copy(~"0", Exp - byte_size(Frac)))/binary, ".0">>;
+shift_point(Int, Frac, Exp) ->
+    <<Head:Exp/binary, Tail/binary>> = Frac,
+    <<Int, Head:Exp/binary, $., Tail/binary>>.

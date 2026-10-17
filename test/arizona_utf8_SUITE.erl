@@ -575,10 +575,12 @@ outcome(Fun, V) ->
         error:Reason -> {error, Reason}
     end.
 
-%% to_bin/1 as it was before it matched the trusted shapes itself.
+%% to_bin/1 as it was before it matched the trusted shapes itself. A float is
+%% formatted by the real to_bin/1: this reference pins the shape matching, and
+%% the float format has its own tests.
 reference_to_bin(V) when is_binary(V) -> V;
 reference_to_bin(V) when is_integer(V) -> integer_to_binary(V);
-reference_to_bin(V) when is_float(V) -> float_to_binary(V, [{decimals, 10}, compact]);
+reference_to_bin(V) when is_float(V) -> arizona_template:to_bin(V);
 reference_to_bin(V) when is_atom(V) -> atom_to_binary(V);
 reference_to_bin({arizona_esc, V}) ->
     reference_to_bin(V);

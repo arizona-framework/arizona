@@ -16,6 +16,8 @@
     to_bin_atom/1,
     to_bin_binary/1,
     to_bin_integer/1,
+    to_bin_float/1,
+    to_bin_float_round_trips/1,
     to_bin_charlist_encodes_utf8/1,
     get_missing_binding_raises_named_reason/1,
     format_error_missing_binding_renders_message/1,
@@ -41,6 +43,8 @@ groups() ->
             to_bin_atom,
             to_bin_binary,
             to_bin_integer,
+            to_bin_float,
+            to_bin_float_round_trips,
             to_bin_charlist_encodes_utf8,
             get_missing_binding_raises_named_reason,
             format_error_missing_binding_renders_message,
@@ -88,6 +92,72 @@ to_bin_binary(Config) when is_list(Config) ->
 
 to_bin_integer(Config) when is_list(Config) ->
     ?assertEqual(<<"42">>, arizona_template:to_bin(42)).
+
+%% The shortest digits that read back as the same float, positional across the
+%% range JS prints positionally (1.0e-7 =< |x| < 1.0e21) and exponent form outside
+%% it. That matches JS's notation range, not its text: an integral value keeps the
+%% Erlang `.0` (`1000.0`, where JS prints `1000`), and the exponent is `1.0e21`,
+%% not `1e+21`. Small values keep their magnitude instead of rounding to "0.0",
+%% and a huge one prints instead of raising.
+to_bin_float(Config) when is_list(Config) ->
+    Cases = [
+        {0.1, ~"0.1"},
+        {1.0, ~"1.0"},
+        {0.0, ~"0.0"},
+        {-0.0, ~"-0.0"},
+        {1000.0, ~"1000.0"},
+        {1500.0, ~"1500.0"},
+        {-1500.0, ~"-1500.0"},
+        {12000.0, ~"12000.0"},
+        {123.456, ~"123.456"},
+        {1.0e20, ~"100000000000000000000.0"},
+        {1.0e21, ~"1.0e21"},
+        {1.0e23, ~"1.0e23"},
+        {1.0e300, ~"1.0e300"},
+        {1.0e-5, ~"0.00001"},
+        {1.5e-7, ~"0.00000015"},
+        {1.0e-7, ~"0.0000001"},
+        {1.0e-8, ~"1.0e-8"},
+        {1.0e-11, ~"1.0e-11"},
+        {-1.0e-11, ~"-1.0e-11"},
+        {lists:sum([0.1, 0.2]), ~"0.30000000000000004"}
+    ],
+    ?assertEqual([], [{F, Got, Want} || {F, Want} <:- Cases, Got <- [to_bin_f(F)], Got =/= Want]).
+
+%% Every float reads back as itself, and carries an exponent exactly when it is
+%% outside the positional range. Random bit patterns cover every exponent; the
+%% seed is fixed so a failure reproduces.
+to_bin_float_round_trips(Config) when is_list(Config) ->
+    State = rand:seed_s(exsss, {17, 29, 43}),
+    {Words, State1} = uniforms(5000, 1 bsl 64, State),
+    {Exps, State2} = uniforms(2000, 30, State1),
+    {Fracs, _State3} = uniforms(2000, 1 bsl 52, State2),
+    Floats = [F || <<F/float>> <- [<<(W - 1):64>> || W <- Words]],
+    Small = [M / (1 bsl 52) * math:pow(10, E - 10) || {M, E} <:- lists:zip(Fracs, Exps)],
+    Bad = [
+        {F, Bin}
+     || F <- Floats ++ Small ++ [-F || F <- Small],
+        Bin <- [to_bin_f(F)],
+        not (binary_to_float(Bin) =:= F andalso has_exponent(Bin) =:= out_of_range(F))
+    ],
+    ?assertEqual([], Bad).
+
+uniforms(0, _N, State) ->
+    {[], State};
+uniforms(Count, N, State0) ->
+    {X, State1} = rand:uniform_s(N, State0),
+    {Rest, State} = uniforms(Count - 1, N, State1),
+    {[X | Rest], State}.
+
+to_bin_f(F) ->
+    arizona_template:to_bin(F).
+
+has_exponent(Bin) ->
+    binary:match(Bin, ~"e") =/= nomatch.
+
+out_of_range(F) ->
+    %% `> 0` rather than an equality test, so 0.0 and -0.0 both count as zero.
+    abs(F) > 0 andalso (abs(F) < 1.0e-7 orelse abs(F) >= 1.0e21).
 
 to_bin_atom(Config) when is_list(Config) ->
     ?assertEqual(<<"true">>, arizona_template:to_bin(true)).
