@@ -5,7 +5,8 @@ every `arizona_live:start_link` call site in the live/stream suites.
 
 Backing `raw` value is a map carrying pre-computed values; each
 `arizona_req` callback is a simple map lookup. `read_body/1` also marks
-the raw map so tests can assert the updated raw is threaded through.
+the raw map so tests can assert the updated raw is threaded through, and
+fails with the raw value's `body_error` when it carries one.
 
 `resolve_route/3` looks up a `routes` map on the raw value
 (`#{Path => {Handler, RouteOpts}}`); useful for exercising the optional
@@ -38,7 +39,8 @@ parse_cookies(#{cookies := Cookies}) -> Cookies.
 
 parse_headers(#{headers := Headers}) -> Headers.
 
-read_body(#{body := Body} = Raw) -> {Body, Raw#{body_read => true}}.
+read_body(#{body_error := Reason}) -> {error, Reason};
+read_body(#{body := Body} = Raw) -> {ok, Body, Raw#{body_read => true}}.
 
 %% Most raw values in the suites are plain-HTTP fixtures that never state a
 %% scheme; a case exercising the TLS branch sets `scheme => https` explicitly.
