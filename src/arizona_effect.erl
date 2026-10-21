@@ -35,6 +35,7 @@ content shipped to the page.
 -export([encode/1]).
 -export([encode_json/1]).
 -export([json_value/1]).
+-export([bare/1]).
 -export([format_error/2]).
 -export([wrapped/1]).
 
@@ -107,10 +108,24 @@ other item fails with `function_clause`.
 """.
 -spec json_value(Cmds) -> list() when
     Cmds :: cmd() | cmds().
-json_value({?MODULE, Cmd}) ->
-    no_flash(Cmd);
+json_value({?MODULE, _} = Cmd) ->
+    no_flash(bare(Cmd));
 json_value(Cmds) when is_list(Cmds) ->
-    [no_flash(C) || C <- lists:reverse(flatten(Cmds, []))].
+    [no_flash(C) || C <- bare(Cmds)].
+
+-doc """
+`json_value/1` without the `flash` refusal: the bare command (or the flattened
+list of them) for a builder that wraps commands -- `transition`, `on_key`, a
+`fetch`'s `on_error` -- whose result may still be a live handler's effect, where
+the socket carries a navigate's flash. The refusal runs when the wrapper itself
+is encoded as data, and sees inside it (wrapped/1).
+""".
+-spec bare(Cmds) -> list() when
+    Cmds :: cmd() | cmds().
+bare({?MODULE, Cmd}) ->
+    Cmd;
+bare(Cmds) when is_list(Cmds) ->
+    lists:reverse(flatten(Cmds, [])).
 
 -doc """
 Formats the errors this module raises with an `error_info` annotation. Picked up

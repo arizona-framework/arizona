@@ -604,7 +604,7 @@ encode_key(Pattern) when is_binary(Pattern) -> Pattern.
 %% spliced, `[]` items dropped) -- including [] (dynamic construction via a
 %% comprehension can legitimately yield no commands; the client runs an empty
 %% list as a no-op). Shared by on_key/2, transition/2, and unwrap_on_error/1.
-unwrap_cmds(Cmds) -> arizona_effect:json_value(Cmds).
+unwrap_cmds(Cmds) -> arizona_effect:bare(Cmds).
 
 %% fetch/2's on_error carries cmd tuple(s) inside the Opts map; arizona_effect:encode/1
 %% does not recurse into map values, so unwrap them here before embedding Opts.
