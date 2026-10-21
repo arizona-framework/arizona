@@ -88,6 +88,8 @@
     transport_opts_port_wins_over_proto_opts/1,
     unsupported_transport_opt_errors/1,
     failed_start_leaves_no_routes_behind/1,
+    drain_closes_live_sockets_going_away/1,
+    prep_stop_drains_the_app_listener/1,
     failed_start_keeps_running_listener_routes/1,
     clashing_start_never_exposes_its_routes/1,
     recompile_routes_skips_dead_listener/1,
@@ -203,6 +205,8 @@ groups() ->
         transport_opts_port_wins_over_proto_opts,
         unsupported_transport_opt_errors,
         failed_start_leaves_no_routes_behind,
+        drain_closes_live_sockets_going_away,
+        prep_stop_drains_the_app_listener,
         failed_start_keeps_running_listener_routes,
         clashing_start_never_exposes_its_routes,
         recompile_routes_skips_dead_listener,
@@ -1919,6 +1923,70 @@ failed_start_leaves_no_routes_behind(Config) when is_list(Config) ->
     ?assertEqual(undefined, persistent_term:get({arizona_roadrunner_routes, Name}, undefined)),
     ?assertEqual(undefined, persistent_term:get({arizona_roadrunner_dispatch, Name}, undefined)),
     ?assertEqual(ok, arizona_roadrunner_server:recompile_routes()).
+
+%% A drained listener's live sessions close 1001 ("going away"), which clients
+%% reconnect from -- a plain stop closes 1000, which they take as the end of the
+%% session. The listener is gone afterwards, with nothing left stashed for it.
+drain_closes_live_sockets_going_away(Config) when is_list(Config) ->
+    Name = arizona_drain_test,
+    Port = arizona_test_port:pick(),
+    {ok, _} = arizona_roadrunner_server:start(Name, drain_test_opts(Port)),
+    {ok, Sock} = ws_connect([{port, Port}], <<"/drain">>),
+    ?assertEqual(
+        ok,
+        drain_while_reading_close(Sock, fun() ->
+            arizona_roadrunner_server:drain(Name, 5000)
+        end)
+    ),
+    ?assertEqual(undefined, whereis(Name)),
+    ?assertEqual(undefined, persistent_term:get({arizona_roadrunner_routes, Name}, undefined)),
+    ?assertEqual({error, not_found}, arizona_roadrunner_server:drain(Name, 5000)).
+
+%% The application's own stop path: prep_stop/1 drains the `arizona_http` listener
+%% rather than stopping it, so a deploy or restart reconnects every client.
+prep_stop_drains_the_app_listener(Config) when is_list(Config) ->
+    undefined = whereis(arizona_http),
+    undefined = application:get_env(arizona, server),
+    Port = arizona_test_port:pick(),
+    Opts = (drain_test_opts(Port))#{drain_timeout => 5000},
+    ok = application:set_env(arizona, server, Opts),
+    try
+        {ok, _} = arizona_roadrunner_server:start(arizona_http, Opts),
+        {ok, Sock} = ws_connect([{port, Port}], <<"/drain">>),
+        ?assertEqual(
+            state,
+            drain_while_reading_close(Sock, fun() ->
+                arizona_app:prep_stop(state)
+            end)
+        ),
+        ?assertEqual(undefined, whereis(arizona_http))
+    after
+        ok = application:unset_env(arizona, server)
+    end.
+
+drain_test_opts(Port) ->
+    #{
+        transport_opts => [{port, Port}],
+        routes => [{live, ~"/drain", arizona_crashable, #{}}, {ws, ~"/ws", #{}}]
+    }.
+
+%% Run `Drain` in its own process: it returns only once the sessions are gone, so
+%% the socket's close frame has to be read (and the socket closed) meanwhile.
+drain_while_reading_close(Sock, Drain) ->
+    Self = self(),
+    {Pid, MRef} = spawn_monitor(fun() -> Self ! {drained, self(), Drain()} end),
+    ?assertMatch({close, 1001, _}, ws_recv(Sock)),
+    ok = gen_tcp:close(Sock),
+    receive
+        {drained, Pid, Result} ->
+            receive
+                {'DOWN', MRef, process, Pid, normal} -> Result
+            after 5000 -> error(drain_process_never_exited)
+            end;
+        {'DOWN', MRef, process, Pid, Reason} ->
+            error({drain_crashed, Reason})
+    after 10000 -> error(drain_never_returned)
+    end.
 
 %% Starting a second listener under a running one's name fails in roadrunner;
 %% the running listener must keep dispatching its own routes, not the rejected
