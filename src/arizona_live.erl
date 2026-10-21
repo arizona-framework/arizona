@@ -788,15 +788,19 @@ terminate(_Reason, #state{snapshot = Snap, handler = H, bindings = B, views = V}
     %% Unmount every child view, then the root -- the same children-first
     %% removal semantics as navigate, for any exit reason terminate sees.
     %% A pass that raised may have unmounted some of them already (a swapped-out
-    %% instance, or the removals before a raising unmount/1), though the state
-    %% still lists them, and mounted others it does not list yet. One raising
-    %% unmount/1 neither stops the rest nor the root's: each runs, and the first
-    %% error is raised after the last.
+    %% instance, the removals before a raising unmount/1, or the root itself on
+    %% navigate), though the state still lists them, and mounted others it does
+    %% not list yet. One raising unmount/1 neither stops the rest nor the root's:
+    %% each runs, and the first error is raised after the last.
     Unmounted = take_unmounted(),
     Children = unmount_each(still_mounted_views(V, Unmounted)),
     Mounted = unmount_failed_pass_mounts(),
-    Root = attempt(fun() -> arizona_stateful:call_unmount(H, B) end),
-    raise_first(Children ++ Mounted ++ [Root]);
+    Root =
+        case Unmounted of
+            #{root := {H, B}} -> [];
+            #{} -> [attempt(fun() -> arizona_stateful:call_unmount(H, B) end)]
+        end,
+    raise_first(Children ++ Mounted ++ Root);
 terminate(_Reason, _State) ->
     %% Never mounted: `mount/1` has not run, so `bindings` are still the raw
     %% route bindings the handler never produced (route static config plus
@@ -889,8 +893,10 @@ note_mounted_view(ViewId, Handler, Bindings) ->
             ok
     end.
 
-note_unmounted(ViewId, Handler, Bindings) ->
-    _ = erlang:put('$arizona_unmounted', (take_unmounted())#{ViewId => {Handler, Bindings}}),
+%% Unmounted ids are binaries, so the old root's entry (navigate) takes the atom
+%% `root` without colliding with any of them.
+note_unmounted(Key, Handler, Bindings) ->
+    _ = erlang:put('$arizona_unmounted', (take_unmounted())#{Key => {Handler, Bindings}}),
     ok.
 
 take_unmounted() ->
@@ -949,7 +955,12 @@ do_navigate_call(NewHandler, NewIB, NewOnMount, From, State) ->
     %% wiped by do_mount below), which is a removal -- so unmount them exactly
     %% like a diff removal would: children first, then the root, mirroring
     %% removal semantics.
+    %%
+    %% The state names the old root until the mount continue below, so note it
+    %% as unmounted too: its unmount/1, if it raises, must not run again in
+    %% terminate/2.
     ok = unmount_removed_views(OldV),
+    ok = note_unmounted(root, OldH, OldB),
     ok = arizona_stateful:call_unmount(OldH, OldB),
     ok = end_pass(),
     %% Carry the previous root handler's final bindings forward as the floor;

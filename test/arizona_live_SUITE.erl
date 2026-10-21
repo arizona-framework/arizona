@@ -115,6 +115,7 @@
     raising_removal_unmounts_each_once/1,
     raising_unmount_on_exit_unmounts_rest/1,
     raising_removal_unmounts_fresh_child/1,
+    raising_root_unmount_on_navigate_runs_once/1,
     child_mounted_by_crashed_diff_unmounted/1,
     child_mounted_by_crashed_mount_unmounted/1,
     fired_timer_ref_pruned/1,
@@ -282,6 +283,7 @@ groups() ->
             raising_removal_unmounts_each_once,
             raising_unmount_on_exit_unmounts_rest,
             raising_removal_unmounts_fresh_child,
+            raising_root_unmount_on_navigate_runs_once,
             child_mounted_by_crashed_diff_unmounted,
             child_mounted_by_crashed_mount_unmounted,
             fired_timer_ref_pruned,
@@ -2114,6 +2116,27 @@ raising_removal_unmounts_fresh_child(Config) when is_list(Config) ->
             {unmounted, ~"raising"},
             {unmounted, ~"unmount_raise_parent"}
         ],
+        lists:sort(collect_messages(200))
+    ).
+
+raising_root_unmount_on_navigate_runs_once(Config) when is_list(Config) ->
+    %% Navigate unmounts the old page's children, then its root, whose
+    %% unmount/1 raises. The state still names that page, so terminate/2 must
+    %% unmount none of it a second time.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_raise_parent,
+        #{notify => self(), raise_child => false, raise_root => true},
+        undefined,
+        []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    ?assertExit(
+        {{root_unmount_boom, _}, {gen_server, call, _}},
+        arizona_live:navigate(Pid, arizona_crashable, #{})
+    ),
+    ?assertEqual(
+        [{unmounted, ~"plain"}, {unmounted, ~"raising"}, {unmounted, ~"unmount_raise_parent"}],
         lists:sort(collect_messages(200))
     ).
 
