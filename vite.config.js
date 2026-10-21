@@ -71,6 +71,9 @@ export default defineConfig(({ mode }) => ({
     ],
     build: {
         rollupOptions: {
+            // Every warning is fatal, but this one only reports how long plugin
+            // callbacks ran, which a slow CI runner trips on unchanged input.
+            checks: { bundlerTimings: false },
             onwarn(warning) {
                 throw new Error(warning.message);
             },
