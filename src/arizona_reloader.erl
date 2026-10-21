@@ -430,7 +430,8 @@ reload_module(Mod, File, Binary) ->
             %% The walk cache is stamped with the code MD5, which an edit to only a
             %% hand-written az attribute leaves unchanged.
             arizona_event_attrs:forget(Mod);
-        {error, Reason} -> {error, {load_failed, Mod, Reason}}
+        {error, Reason} ->
+            {error, {load_failed, Mod, Reason}}
     end.
 
 load_errors(_File, ok) ->
