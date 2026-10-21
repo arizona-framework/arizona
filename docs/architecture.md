@@ -2605,6 +2605,23 @@ inline module script's `<!--` is even a `SyntaxError`). A dynamic content slot i
 element is therefore **markerless**: it renders at SSR with `Az = undefined`, and the diff engine
 skips any `undefined`-`Az` dynamic (`diff_dynamics/3` and `diff_dynamics_v/5`).
 
+The full set follows the HTML tree builder, not just the four common tags: `<xmp>`, `<iframe>`,
+`<noembed>` and `<noframes>` are RAWTEXT exactly like `<style>` (the list lives in
+`arizona_html`), so they classify `raw` too and their slots need the same `?raw` opt-out. A value
+there cannot close the element: the neutralizer checks only each element's own end tag there
+(`</xmp` becomes `<\/xmp`; `</script` and `</style` are plain text in an `<xmp>` and are left
+alone). Nothing decodes in RAWTEXT, so no rewrite is invisible: the backslash shows in an `<xmp>`,
+which displays its content, but only in text that would otherwise have closed it, and
+`<iframe>`/`<noembed>`/`<noframes>` content is never displayed. Two relatives are deliberately left
+out. `<noscript>` is RAWTEXT only where scripting is enabled, and there it is never displayed; it is
+displayed only where scripting is off, where it parses as ordinary HTML and no live view ever
+connects, so it stays an ordinary element whose values are escaped for that audience. **Do not put
+sanitized `?raw` HTML inside a `<noscript>`:** a scripting-enabled browser reads its content as
+RAWTEXT, so markup a sanitizer passes as harmless (`<p title="</noscript><img src=x onerror=...>">`)
+closes the element there and runs. `<plaintext>` has no end tag at all -- everything after it, the
+rest of the page and the client script included, would read as text -- so the HTML backend refuses
+it at compile time.
+
 **The address goes on the element instead.** Markers cannot live *inside* a raw-text element, but
 an attribute *on* it is fine, so `compile_element/5` gives such an element its own `az` and
 `compile_element_children/7` folds its whole content -- statics and dynamics both -- into one
@@ -2626,7 +2643,8 @@ another. That is a browser rule, not a framework choice. The update is still rig
 sanctioned use -- a `?raw(json:encode(Data))` data island, whose consumer reads `textContent` later
 -- so the fold applies by default and the fold guard honours `az-nodiff`, which keeps an executable
 script markerless and render-once exactly as before. The backend classifies the tag via the
-`arizona_renderer` `raw_text_kind/2` callback: `raw` (`script`/`style`) renders the value
+`arizona_renderer` `raw_text_kind/2` callback: `raw` (`script`, `style` and the other RAWTEXT
+elements) renders the value
 **verbatim** (the browser decodes no character references there, so HTML-escaping would corrupt it
 -- this is what makes a `?raw` JSON-LD blob or a computed inline boot-script URL correct);
 `escapable` (`textarea`/`title`) HTML-escapes a scalar (references *are* decoded there) but is still
