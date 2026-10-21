@@ -451,6 +451,9 @@ function findViewRoot(viewId) {
 //        is a deliberate non-goal for this release; adding it later
 //        should use a state-ID-keyed Map + sessionStorage, not
 //        replaceState-on-scroll.
+//   full-document load of an existing entry (reload, Back without bfcache)
+//     -> 'manual' disables the browser's restore here too, so `pagehide`
+//        stamps the scroll onto the entry it leaves and `connect` restores it.
 
 /**
  * Pending scroll intent set when az-navigate/az-patch/popstate is handled. A
@@ -461,6 +464,17 @@ function findViewRoot(viewId) {
  * @type {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null, patch?: boolean}|null}
  */
 let _pendingScroll = null;
+
+/**
+ * Set right before an unload the framework starts while the current history
+ * entry already names a page the DOM is not showing: a `leavePage` replace (a
+ * navigate the server degraded to a full load, its entry pushed before asking)
+ * and a popstate served by `location.reload()` (the browser already moved to the
+ * destination entry). A full load that is not a replace leaves this page's
+ * entry in place, so its scroll is stamped for Back to restore. The scroll on screen belongs to the previous page, so the unload
+ * stamp must not write it onto that entry. Cleared by `pagehide`.
+ */
+let _unloadingToOtherPage = false;
 
 /**
  * Apply a scroll intent. pop+saved restores prior position; otherwise scroll
@@ -692,6 +706,9 @@ function leavePage(url, replace) {
         console.warn('[arizona] refusing to navigate to a non-http(s) URL:', url);
         return;
     }
+    // A replace finishes a navigation whose entry already names `url`, so the
+    // scroll on screen is not that entry's to keep (see _unloadingToOtherPage).
+    _unloadingToOtherPage = Boolean(replace);
     if (replace) location.replace(url);
     else location.assign(url);
 }
@@ -3993,10 +4010,17 @@ function connect(endpoint, params = {}) {
     _currentPath = location.pathname;
     _currentQs = location.search ? location.search.slice(1) : '';
 
-    // On initial load with a URL hash, honor it -- with scrollRestoration set
-    // to 'manual', the browser may have skipped or raced its native anchor
-    // jump, so we take care of it ourselves.
-    if (location.hash) {
+    // 'manual' also switches off the browser's own restore for a full-document
+    // load of an existing entry (a reload, a Back with no bfcache), so restore
+    // the position `pagehide` stamped onto this entry. A new entry carries no
+    // stamp and falls through to the hash (or stays at the top).
+    const savedScroll = history.state?._azScroll;
+    if (savedScroll) {
+        requestAnimationFrame(() => applyScroll({ kind: 'pop', hash: '', saved: savedScroll }));
+    } else if (location.hash) {
+        // On initial load with a URL hash, honor it -- with scrollRestoration
+        // set to 'manual', the browser may have skipped or raced its native
+        // anchor jump, so we take care of it ourselves.
         const hash = location.hash.slice(1);
         requestAnimationFrame(() => applyScroll({ kind: 'push', hash }));
     }
@@ -4089,6 +4113,7 @@ function connect(endpoint, params = {}) {
             // shows, like a disconnected az-navigate click falls through to the
             // browser.
             if (!_connected) {
+                _unloadingToOtherPage = true;
                 location.reload();
                 return;
             }
@@ -4324,6 +4349,28 @@ function connect(endpoint, params = {}) {
         };
     }
 
+    // Stamp the scroll onto the entry being left, so a full-document return to
+    // it (reload, Back without bfcache) can restore it at connect -- 'manual'
+    // scrollRestoration stops the browser doing it. One write per unload, not
+    // per scroll. Both events: Chromium snapshots a reloading entry's state
+    // before `pagehide` runs, so only a `beforeunload` write survives a reload,
+    // while `pagehide` is the one that fires on every unload (iOS Safari skips
+    // `beforeunload`). Neither listener kept a page out of Chromium's bfcache
+    // (checked with its own eligibility report); other engines unverified. A
+    // throw (Safari's history-write rate limit) only loses the restore, so it
+    // is swallowed rather than allowed to abort the `pagehide` teardown.
+    const stampUnloadScroll = () => {
+        if (_unloadingToOtherPage) return;
+        try {
+            const st = history.state || {};
+            history.replaceState(
+                { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } },
+                '',
+            );
+        } catch {}
+    };
+    window.addEventListener('beforeunload', stampUnloadScroll, { signal });
+
     // Back/forward cache: a live WebSocket makes the page ineligible for the
     // bfcache, so tear the worker (and its socket) down when the page is hidden,
     // then re-establish it if the page is later restored from the cache. The
@@ -4333,6 +4380,8 @@ function connect(endpoint, params = {}) {
     window.addEventListener(
         'pagehide',
         () => {
+            stampUnloadScroll();
+            _unloadingToOtherPage = false;
             if (_worker) {
                 // Preserve typed form fields first: the pageshow reconnect asks
                 // the server for a full resync, whose OP_REPLACE rebuilds the
@@ -4383,6 +4432,7 @@ function connect(endpoint, params = {}) {
         _replay = null;
         cancelMountReload();
         _pendingScroll = null;
+        _unloadingToOtherPage = false;
         _pendingTransition = null;
         _itemDrag = false;
         _connectQs = '';
