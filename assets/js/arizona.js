@@ -605,7 +605,7 @@ let _navEpoch = 0;
  */
 function sendEvent(name, msg, epoch = _navEpoch) {
     if (_navInFlight > 0 || _navAwaitResync || epoch !== _navEpoch) {
-        console.warn(`[arizona] dropped event "${name}" from a replaced or disconnected page`);
+        console.warn(`[arizona] dropped stale event "${name}"`);
         return;
     }
     workerPost(W_SEND, msg);
@@ -824,7 +824,7 @@ function sendNav(kind, path, qs) {
 function leavePage(url, replace) {
     const { protocol } = new URL(url, location.href);
     if (protocol !== 'http:' && protocol !== 'https:') {
-        console.warn('[arizona] refusing to navigate to a non-http(s) URL:', url);
+        console.warn('[arizona] refused non-http(s) URL:', url);
         return;
     }
     // A replace finishes a navigation whose entry already names `url`, so the
@@ -1429,7 +1429,7 @@ function appendQuery(url, qs) {
 function bodyQuery(body) {
     const params = new URLSearchParams();
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-        console.warn('[arizona] fetch: a GET body must be a map; it was not sent', body);
+        console.warn('[arizona] GET fetch body is not a map, not sent:', body);
         return params;
     }
     for (const [key, value] of Object.entries(body)) {
@@ -4104,9 +4104,7 @@ function bindDocumentEvents(target, signal, abort) {
                     return;
                 }
                 if (!_connected && (needs.event || needs.nav)) {
-                    console.warn(
-                        '[arizona] az-submit dropped: its command needs the WebSocket, which is not connected',
-                    );
+                    console.warn('[arizona] az-submit dropped: disconnected');
                     form.dispatchEvent(
                         new CustomEvent('arizona:submit-dropped', {
                             bubbles: true,

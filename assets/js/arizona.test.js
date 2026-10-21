@@ -7149,7 +7149,7 @@ describe('form submit', () => {
                 .getElementById('f')
                 .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
             expect(warn).toHaveBeenCalledWith(
-                '[arizona] refusing to navigate to a non-http(s) URL:',
+                '[arizona] refused non-http(s) URL:',
                 'javascript:alert(1)',
             );
         } finally {
@@ -8121,7 +8121,7 @@ describe('executeJS -- fetch', () => {
         await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
 
         expect(globalThis.fetch.mock.calls[0][0]).toBe('/search');
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('GET body must be a map'), [
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('GET fetch body is not a map'), [
             'a',
             'b',
         ]);
