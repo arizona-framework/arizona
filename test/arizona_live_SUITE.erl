@@ -65,6 +65,7 @@
     route_bindings_can_set_id_when_handler_accepts_it/1,
     live_navigate_then_event/1,
     live_navigate_carries_root_bindings/1,
+    reconnected_kept_by_patch_cleared_by_navigate/1,
     live_page_child_mount/1,
     live_parent_change_child_stable/1,
     live_conditional_child_toggle_patches_slot/1,
@@ -235,6 +236,7 @@ groups() ->
             live_navigate_resets_views,
             live_navigate_round_trip,
             live_navigate_carries_root_bindings,
+            reconnected_kept_by_patch_cleared_by_navigate,
             live_patch_default_merge,
             live_patch_handle_update_effect,
             live_patch_no_change_no_ops
@@ -1288,6 +1290,29 @@ live_navigate(Config) when is_list(Config) ->
     ?assertEqual(<<"about-page">>, NewViewId),
     ?assertMatch(#{<<"f">> := _, <<"s">> := _, <<"d">> := _}, PageContent),
     ?assert(lists:member(<<"About">>, maps:get(<<"d">>, PageContent))).
+
+reconnected_kept_by_patch_cleared_by_navigate(Config) when is_list(Config) ->
+    %% `?reconnected` gates first-connect one-shots (`?connected andalso not
+    %% ?reconnected`). It belongs to the page a reconnect mounted: a patch keeps
+    %% that view mounted, so it still reads true; a navigate mounts a page this
+    %% connection has never shown, so from its mount on it reads false, or that
+    %% page's one-shots would never fire.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_reconnect_probe, #{}, self(), [], #{reconnect => true}
+    ),
+    {ok, ~"reconnect_probe", _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:patch(Pid, #{}),
+    ?assertMatch(
+        #{bindings := #{at_mount := true, at_patch := true}},
+        arizona_live:view_state(Pid)
+    ),
+    {ok, ~"next_page", _, _} =
+        arizona_live:navigate(Pid, arizona_reconnect_probe, #{id => ~"next_page"}),
+    {ok, _, _, _} = arizona_live:patch(Pid, #{}),
+    ?assertMatch(
+        #{bindings := #{at_mount := false, at_patch := false}},
+        arizona_live:view_state(Pid)
+    ).
 
 live_patch_default_merge(Config) when is_list(Config) ->
     %% A view without handle_update/3: patch merges the params and re-renders

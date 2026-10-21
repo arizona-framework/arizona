@@ -130,7 +130,11 @@ result-bearing capabilities below.
 fresh (so `?connected` is `true` again) while the OS window keeps its real state.
 The view distinguishes the two with `?reconnected`, which mirrors `?connected`: it
 is `false` during SSR **and** on the first connect, and `true` only on a
-reconnection's mount.
+reconnection's mount. It belongs to the page, not the socket: a page reached by
+`navigate` after a reconnect mounts for the first time on that connection, so it
+reads `false` and its one-shots fire, while a same-handler `patch` keeps the
+mounted view and its value (a `patch` to another handler degrades to a navigate,
+so it reads `false` too). The flag is per live process, one per connection.
 
 - **Declarative/idempotent** capabilities (`set_title`, `fullscreen`,
   `screen_capture_protection`) re-assert from server state on **every** connect --
