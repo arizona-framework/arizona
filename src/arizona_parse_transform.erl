@@ -6304,6 +6304,11 @@ reject_repeated_attr(Policy, [Name | Rest], Seen, Line) ->
 attr_compare_key(case_sensitive, Name) ->
     Name;
 attr_compare_key(case_insensitive, Name) ->
+    ascii_lowercase(Name).
+
+%% ASCII only, as the browser folds names: `string:lowercase/1` also maps a
+%% non-ASCII letter such as the Kelvin sign (U+212A) to `k`.
+ascii_lowercase(Name) ->
     <<<<(ascii_lower(C))>> || <<C>> <= Name>>.
 
 ascii_lower(C) when C >= $A, C =< $Z -> C + ($a - $A);
@@ -6346,7 +6351,7 @@ directive_attr_name(Name) ->
 %% comparison; `attr_name/1` still returns it as authored, so an error message
 %% quotes what the author actually typed.
 framework_attr_name(Name) ->
-    string:lowercase(Name).
+    ascii_lowercase(Name).
 
 extract_directives(Attrs) ->
     extract_directives(Attrs, #{}).
