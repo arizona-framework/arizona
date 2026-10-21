@@ -5900,7 +5900,7 @@ ast_list([H | T]) ->
 %% items to lay out.
 ast_list_to_list({nil, _}) -> [];
 ast_list_to_list({cons, _, Head, Tail}) -> [Head | ast_list_to_list(Tail)];
-ast_list_to_list(Tail) -> parse_error(improper_template_list, line(Tail)).
+ast_list_to_list(Tail) -> parse_error(improper_template_list, anno(Tail)).
 
 %% An attribute value list is text, where an improper tail is one more part of the
 %% chardata (`[~"/u/" | Id]` means `[~"/u/", Id]`), so it is kept as a part instead.
