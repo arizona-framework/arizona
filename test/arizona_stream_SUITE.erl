@@ -136,8 +136,8 @@
     stream_ssr/1,
     stream_to_list_empty/1,
     stream_to_list_preserves_order/1,
-    update_pending_op_carries_changed/1,
-    update_on_missing_key_yields_empty_changed/1,
+    update_pending_op_carries_item/1,
+    update_on_missing_key_appends/1,
     reset_rebuilds_the_queue_to_one_reset/1,
     stream_to_list/1,
     stream_update_no_change/1,
@@ -291,8 +291,8 @@ groups() ->
             stream_move_op,
             stream_limit_ssr,
             stream_limit_reset,
-            update_pending_op_carries_changed,
-            update_on_missing_key_yields_empty_changed,
+            update_pending_op_carries_item,
+            update_on_missing_key_appends,
             reset_rebuilds_the_queue_to_one_reset
         ]},
         %% Edge case tests
@@ -2137,24 +2137,28 @@ stream_limit_reset(Config) when is_list(Config) ->
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     ?assertEqual(2, length(InsOps)).
 
-%% --- update/3 captures Changed in pending op --------------------------------
-update_pending_op_carries_changed(Config) when is_list(Config) ->
+%% --- update/3 queues the new item -------------------------------------------
+%% The op names no changed fields: the differ measures the final item against the
+%% one the client was rendered from, which covers every update of the key at once.
+update_pending_op_carries_item(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun, [#{id => 1, text => <<"old">>, other => v}]),
     S1 = arizona_stream:update(S0, 1, #{id => 1, text => <<"new">>, other => v}),
     %% First op is new/2's genesis reset; the second is our update.
-    [reset, {update, 1, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
-    ?assert(maps:is_key(text, Changed)),
-    ?assertNot(maps:is_key(other, Changed)),
-    ?assertNot(maps:is_key(id, Changed)).
+    ?assertEqual(
+        [reset, {update, 1, #{id => 1, text => <<"new">>, other => v}}],
+        arizona_stream:pending_ops(S1)
+    ).
 
-%% --- update/3 on a missing key emits empty Changed --------------------------
-update_on_missing_key_yields_empty_changed(Config) when is_list(Config) ->
+%% --- update/3 on a missing key appends it -------------------------------------
+update_on_missing_key_appends(Config) when is_list(Config) ->
     KeyFun = fun(#{id := Id}) -> Id end,
     S0 = arizona_stream:new(KeyFun),
     S1 = arizona_stream:update(S0, 999, #{id => 999, text => <<"new">>}),
-    [reset, {update, 999, _NewItem, Changed}] = arizona_stream:pending_ops(S1),
-    ?assertEqual(#{}, Changed).
+    ?assertEqual(
+        [reset, {update, 999, #{id => 999, text => <<"new">>}}], arizona_stream:pending_ops(S1)
+    ),
+    ?assertEqual([#{id => 999, text => <<"new">>}], arizona_stream:to_list(S1)).
 
 %% --- reset/1,2 rebuild the queue to a lone reset op ---------------------------
 %% The op carries no items: the differ measures kept items against its snapshot.
