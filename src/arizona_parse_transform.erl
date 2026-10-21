@@ -1499,7 +1499,9 @@ transform_template_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs)
                 )
             ],
     {clause, L, Patterns, Guards,
-        suppress_unused_inline_matches(Body1, without_source_unused(Inline, Body, []))}.
+        suppress_unused_inline_matches(
+            Body1, without_prebound(without_source_unused(Inline, Body, []), Patterns, Body)
+        )}.
 
 transform_expr(Expr, Module, Inline, FunDefs) ->
     erl_syntax_lib:map(fun(Node) -> transform_node(Node, Module, Inline, FunDefs) end, Expr).
@@ -2351,7 +2353,12 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
     ),
     Body1 = TransformedInit ++ [TransformedLast],
     {clause, L, Patterns, Guards,
-        suppress_unused_inline_matches(Body1, without_source_unused(Inline, Init ++ [Last], []))}.
+        suppress_unused_inline_matches(
+            Body1,
+            without_prebound(
+                without_source_unused(Inline, Init ++ [Last], []), Patterns, Init ++ [Last]
+            )
+        )}.
 
 %% The value of a render clause is the value of its last expression, so a template
 %% there may sit at any tail of a control-flow expression, after statements that
@@ -2368,9 +2375,9 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
 %% inline map: the enclosing map plus the body's own hoisted reads. `Leaf` compiles
 %% each tail leaf and `NonTail` every other sub-expression, both given the map in
 %% scope there. `Bound` holds every name bound outside the body being entered: a
-%% match on one of those is an equality test, not a definition, so it is never
-%% collected (and never underscored, which would drop the test and leave the outer
-%% binding unused).
+%% match on one of those is an equality test, so it is inlined (the slot stays
+%% tracked) but never underscored, which would drop the test and leave the outer
+%% binding unused (without_prebound/4).
 transform_scoped_tail(Expr, Inline, Bound, {Leaf, NonTail} = Fns) ->
     case erl_syntax:revert(Expr) of
         {'case', L, Scrutinee, Cs} ->
@@ -2432,7 +2439,7 @@ scoped_body(Body0, Outer, Bound0, {_Leaf, NonTail} = Fns, Others) ->
         [NonTail(E, Inline) || E <- Init] ++ [Last1],
         Inline,
         body_bound(Body, Bound0),
-        without_source_unused(Local, Body, Others)
+        without_prebound(without_source_unused(Local, Body, Others), Body, Bound0, [])
     }.
 
 %% A body's own hoisted reads (collect_inline/1 for a nested body: a read may
@@ -2454,8 +2461,6 @@ scan_scoped_matches([Stmt | Rest], Bound, Raw0, Poisoned0) ->
         case Stmt of
             {match, _, {var, _, '_'}, _RHS} ->
                 {Raw0, Poisoned0};
-            {match, _, {var, _, V}, _RHS} when is_map_key(V, Bound) ->
-                {Raw0, Poisoned0#{V => true}};
             {match, _, {var, _, V}, RHS} ->
                 {Raw0#{V => RHS}, Poisoned0};
             _ ->
@@ -3508,6 +3513,20 @@ collect_pattern_vars([H | T], Acc) ->
     collect_pattern_vars(T, collect_pattern_vars(H, Acc));
 collect_pattern_vars(_, Acc) ->
     Acc.
+
+%% A match on a name the head or an earlier statement binds is an equality test:
+%% it is inlined (the slot stays tracked) but never underscored.
+without_prebound(Inline, Patterns, Body) ->
+    without_prebound(Inline, Body, bind_names(pattern_vars(Patterns), #{}), []).
+
+without_prebound(Inline, [], _Bound, Drop) ->
+    maps:without(Drop, Inline);
+without_prebound(Inline, [{match, _, {var, _, V}, _} = Stmt | Rest], Bound, Drop) when
+    is_map_key(V, Bound)
+->
+    without_prebound(Inline, Rest, stmt_bound(Stmt, Bound), [V | Drop]);
+without_prebound(Inline, [Stmt | Rest], Bound, Drop) ->
+    without_prebound(Inline, Rest, stmt_bound(Stmt, Bound), Drop).
 
 %% After inlining, a variable used only inside the template no longer appears outside
 %% its own binding. Underscore-prefix such matches so `warnings_as_errors` (unused

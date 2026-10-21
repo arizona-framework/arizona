@@ -515,8 +515,11 @@ and idiomatic templates (reads written inside `?html`) are unaffected.
   clause's last expression (the `case`/`if`/`begin`/`try`/`maybe`/`receive`
   tails the live root accepts), so a read hoisted inside a branch
   (`a -> N = ?get(n), ?html({p, [], [N]})`) inlines into that branch's templates,
-  on top of the enclosing map. A match on a name already bound outside the body
-  is an equality test, not a definition, and is not collected.
+  on top of the enclosing map. A match on a name already bound -- by the clause
+  head, an earlier statement or outside the body -- is an equality test: the match
+  stays as written, so the test still runs and the earlier binding stays used, and
+  its read is still inlined, so the slot stays tracked. The render function re-runs
+  on every diff, so the test runs on every render.
 - **`inline_vars/2`** substitutes those variables wherever they appear in a
   `?html`/`?each` argument -- including inside a `case` scrutinee or an opaque
   call -- recursively and scope-aware (fun parameters and comprehension

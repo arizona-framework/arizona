@@ -319,6 +319,7 @@
     inline_branch_local_hoist_tail_forms/1,
     inline_branch_local_hoist_outer_chain/1,
     inline_branch_local_hoist_scoping/1,
+    bound_match_stays_tested_and_tracked/1,
     helper_zero_arity_inlines/1,
     helper_with_args_renders_and_tracks/1,
     helper_body_read_tracks/1,
@@ -1051,7 +1052,8 @@ groups() ->
             inline_branch_local_hoist_live_root_id,
             inline_branch_local_hoist_tail_forms,
             inline_branch_local_hoist_outer_chain,
-            inline_branch_local_hoist_scoping
+            inline_branch_local_hoist_scoping,
+            bound_match_stays_tested_and_tracked
         ]},
         %% Local element-returning helper calls inlined at the template call site
         {helper, [parallel], [
@@ -10182,8 +10184,8 @@ inline_branch_local_hoist_outer_chain(Config) when is_list(Config) ->
 
 %% A clause pattern's own variables stay captured (like a head-destructured
 %% binding), but a branch-local read built from one still tracks its read. A
-%% branch match on a name bound outside the branch is an equality test, not a
-%% definition: it is left alone, so the outer binding stays used.
+%% branch match on a name bound outside the branch is an equality test: the match
+%% stays (so the outer binding stays used) and the read is still inlined.
 inline_branch_local_hoist_scoping(Config) when is_list(Config) ->
     Mod = compile_module_strict(
         "-module(pt_inline_branchlocal_pat). "
@@ -10213,7 +10215,49 @@ inline_branch_local_hoist_scoping(Config) when is_list(Config) ->
     T2 = Mod2:render(#{mode => a, n => ~"1"}),
     [{_Az2, {esc, Fun2}, _Loc2}] = maps:get(d, T2),
     ?assertEqual(~"1", Fun2()),
-    ?assertEqual(#{}, slot_deps(Fun2)).
+    ?assertEqual(#{n => true}, slot_deps(Fun2)).
+
+%% A match on a name the head, an earlier statement or an enclosing scope already
+%% bound is an Erlang equality test. It stays a test -- the match is kept, so a
+%% mismatch is still a badmatch and the earlier binding is still used, which
+%% warnings_as_errors needs -- and its read is still inlined into the slot, which
+%% stays tracked. The render function re-runs on every diff, so the test runs on
+%% every render too.
+bound_match_stays_tested_and_tracked(Config) when is_list(Config) ->
+    Template = "arizona_template:html({'p', [], [N]})",
+    Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
+    Shapes = [
+        {"head", "render(#{n := N} = Bindings) -> N = " ++ Get("n") ++ ", " ++ Template},
+        {"head_used",
+            "render(#{n := N} = Bindings) -> N = " ++ Get("n") ++ ", put(seen, N), " ++ Template},
+        {"statement",
+            "render(Bindings) -> {ok, N} = {ok, " ++ Get("n") ++ "}, N = " ++ Get("n") ++ ", " ++
+                Template},
+        {"branch",
+            "render(#{n := N} = Bindings) -> case " ++ Get("m") ++ " of _ -> N = " ++ Get("n") ++
+                ", " ++ Template ++ " end"}
+    ],
+    Frozen = [
+        Name
+     || {Name, Body} <- Shapes,
+        [] =:=
+            branch_hoist_ops(
+                compile_module_strict(
+                    "-module(pt_bound_match_" ++ Name ++ "). -export([render/1]). " ++ Body ++ ". "
+                ),
+                #{n => ~"1", m => x},
+                #{n => ~"2", m => x}
+            )
+    ],
+    ?assertEqual([], Frozen),
+    %% The test is still a test: a value that differs from the earlier binding fails.
+    Mismatch = compile_module_strict(
+        "-module(pt_bound_match_mismatch). -export([render/1]). "
+        "render(#{n := N} = Bindings) -> "
+        "    N = string:uppercase(" ++ Get("n") ++ "), " ++ Template ++ ". "
+    ),
+    ?assertError({badmatch, _}, Mismatch:render(#{n => ~"a"})),
+    ?assertMatch(#{d := [_]}, Mismatch:render(#{n => ~"A"})).
 
 branch_hoist_ops(Mod, B0, B1) ->
     {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
