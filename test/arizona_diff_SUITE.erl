@@ -136,7 +136,7 @@
     each_stream_update_with_callback_change/1,
     each_stream_update_untracked_field/1,
     each_stream_reset_untracked_field/1,
-    each_stream_update_head_sub_map/1,
+    each_stream_update_sub_map/1,
     each_nested_stream_untracked_inner_insert/1,
     each_stream_callback_change_settles/1,
     each_nested_list_in_list_tracks/1,
@@ -304,7 +304,7 @@ groups() ->
             each_stream_update_with_callback_change,
             each_stream_update_untracked_field,
             each_stream_reset_untracked_field,
-            each_stream_update_head_sub_map,
+            each_stream_update_sub_map,
             each_nested_stream_untracked_inner_insert,
             each_stream_callback_change_settles,
             each_nested_list_in_list_tracks,
@@ -2692,14 +2692,14 @@ each_stream_reset_untracked_field(Config) when is_list(Config) ->
         )
     ).
 
-%% A tracked read on a sub-map bound in the callback head records the sub-map's key
-%% (`v`), while the item changes in the field holding it (`sub`): the read must not
-%% count as an item read the deps can vouch for.
-each_stream_update_head_sub_map(Config) when is_list(Config) ->
+%% A tracked read on a sub-map of the item records the sub-map's key (`v`), while
+%% the item changes in the field holding it (`sub`): the read must not count as an
+%% item read the deps can vouch for.
+each_stream_update_sub_map(Config) when is_list(Config) ->
     ?assertMatch(
         [[?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"b">>]]]],
         each_stream_op_diff(
-            stream_head_sub,
+            stream_sub_map,
             ss,
             fun(S) -> arizona_stream:update(S, 1, #{id => 1, sub => #{v => <<"b">>}}) end
         )
