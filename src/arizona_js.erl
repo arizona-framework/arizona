@@ -379,7 +379,7 @@ controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
         body => term(),
         headers => #{binary() => binary()},
         credentials => same_origin | include | omit,
-        on_error => arizona_effect:cmd() | [arizona_effect:cmd()],
+        on_error => arizona_effect:cmd() | arizona_effect:cmds(),
         keep_alive => boolean()
     }.
 fetch(Url, Opts) -> {arizona_effect, [?EFFECT_FETCH, Url, unwrap_on_error(Opts)]}.
@@ -508,7 +508,7 @@ Matching is **case-insensitive**: the client lowercases the browser's
 """.
 -spec on_key(Key, Cmd) -> arizona_effect:cmd() when
     Key :: atom() | [atom()] | binary(),
-    Cmd :: arizona_effect:cmd() | [arizona_effect:cmd()].
+    Cmd :: arizona_effect:cmd() | arizona_effect:cmds().
 on_key(Key, Cmds) ->
     {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), unwrap_cmds(Cmds)]}.
 
@@ -576,7 +576,7 @@ transition is not tied to navigation -- it wraps any DOM change. Equivalent to
 `transition/2` with no options.
 """.
 -spec transition(Cmd) -> arizona_effect:cmd() when
-    Cmd :: arizona_effect:cmd() | [arizona_effect:cmd()].
+    Cmd :: arizona_effect:cmd() | arizona_effect:cmds().
 transition(Cmd) -> transition(Cmd, #{}).
 
 -doc """
@@ -585,7 +585,7 @@ names activated for the transition (matched by `:active-view-transition-type(...
 CSS), letting one stylesheet pick a different animation per call.
 """.
 -spec transition(Cmd, Opts) -> arizona_effect:cmd() when
-    Cmd :: arizona_effect:cmd() | [arizona_effect:cmd()],
+    Cmd :: arizona_effect:cmd() | arizona_effect:cmds(),
     Opts :: #{types => [binary()]}.
 transition(Cmds, Opts) ->
     {arizona_effect, [?EFFECT_TRANSITION, Opts, unwrap_cmds(Cmds)]}.
@@ -600,11 +600,11 @@ encode_key(Pattern) when is_binary(Pattern) -> Pattern.
 
 %% Unwrap nested cmd tuple(s) to bare op-array(s) so the result is JSON-encodable.
 %% A single `{arizona_effect, Inner}` yields its bare `Inner`; a list of cmd tuples
-%% yields a list of bare op-arrays -- including [] (dynamic construction via a
+%% yields a list of bare op-arrays, flattened like any command list (nested lists
+%% spliced, `[]` items dropped) -- including [] (dynamic construction via a
 %% comprehension can legitimately yield no commands; the client runs an empty
 %% list as a no-op). Shared by on_key/2, transition/2, and unwrap_on_error/1.
-unwrap_cmds({arizona_effect, Inner}) -> Inner;
-unwrap_cmds(Cmds) when is_list(Cmds) -> [C || {arizona_effect, C} <:- Cmds].
+unwrap_cmds(Cmds) -> arizona_effect:bare(Cmds).
 
 %% fetch/2's on_error carries cmd tuple(s) inside the Opts map; arizona_effect:encode/1
 %% does not recurse into map values, so unwrap them here before embedding Opts.
