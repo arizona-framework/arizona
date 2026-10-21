@@ -79,6 +79,7 @@
 -export([navigate_reads_carried_store_id_live/1]).
 -export([navigate_does_not_replay_flash_consumed_at_upgrade/1]).
 -export([navigate_does_not_take_flash_set_at_upgrade/1]).
+-export([remote_helper_names_ride_the_connect_frame/1]).
 
 all() ->
     [
@@ -150,7 +151,8 @@ all() ->
         handler_flash_dropped_loudly_on_halt_without_redirect,
         flash_replay_chains_only_from_its_own_target,
         gate_flash_replaces_carried_flash,
-        flash_consumed_by_gated_route_is_spent
+        flash_consumed_by_gated_route_is_spent,
+        remote_helper_names_ride_the_connect_frame
     ].
 
 %% A `?stateful` inside a stream item re-renders when the item updates, so the item's
@@ -1832,6 +1834,15 @@ with_store(Fun) ->
         ok = gen_server:stop(Store),
         ok = application:unset_env(arizona, session_store)
     end.
+
+%% A template returned by a remote helper module carries the helper's FOLDED
+%% `az-dblclick` in its statics, so no render re-proves it: only the compile-time
+%% walk can put it on the connect frame, and only if the page's call to the
+%% helper is a recorded edge.
+remote_helper_names_ride_the_connect_frame(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, Frame, _} = arizona_socket:init(arizona_remote_helper_page, #{}, Req, #{}),
+    ?assertMatch(#{~"a" := [~"az-dblclick"]}, decode(Frame)).
 
 navigate_frame(Path) ->
     iolist_to_binary(json:encode([~"navigate", #{~"path" => Path, ~"qs" => <<>>}])).

@@ -304,8 +304,11 @@ reload_from_disk(Mod) ->
         Path when is_list(Path) ->
             code:purge(Mod),
             case code:load_abs(filename:rootname(Path)) of
-                {module, Mod} -> true;
-                {error, _Reason} -> false
+                {module, Mod} ->
+                    ok = arizona_event_attrs:forget(Mod),
+                    true;
+                {error, _Reason} ->
+                    false
             end;
         _NonPath ->
             false
@@ -423,8 +426,12 @@ compile_file(File) ->
 reload_module(Mod, File, Binary) ->
     code:purge(Mod),
     case code:load_binary(Mod, File, Binary) of
-        {module, Mod} -> ok;
-        {error, Reason} -> {error, {load_failed, Mod, Reason}}
+        {module, Mod} ->
+            %% The walk cache is stamped with the code MD5, which an edit to only a
+            %% hand-written az attribute leaves unchanged.
+            arizona_event_attrs:forget(Mod);
+        {error, Reason} ->
+            {error, {load_failed, Mod, Reason}}
     end.
 
 load_errors(_File, ok) ->
