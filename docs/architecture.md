@@ -1438,6 +1438,13 @@ matters because the JS worker treats **any non-1000 code as reconnectable**:
 | anything else, after the view mounted (a crash) | `?CLOSE_CRASH` (4500) | **Reconnects** with no page reload: the worker's backoff reconnect remounts the view in place and the main thread restores typed form fields. A crash within 10 s of the view's last mount (the main thread tells the worker: a first connect's frame, a reconnect's resync, a navigate's `OP_REPLACE`) does not reset the backoff, so a view that crashes right after every remount keeps backing off; the native clients apply the same rule from their `OP_REPLACE`. Crash remount is deliberately not attempted server-side |
 | any failure to mount the view | `?CLOSE_MOUNT_FAILED` (4501) | **Reconnects**, and reloads the page after a random 5-10 s delay (the page may be stale, e.g. after a deploy); a reconnect that mounts first cancels the reload. Consecutive reloads of one path are counted per tab, in one `sessionStorage` key holding `{path, count}` (a reload of another path starts over), so a failing path, which may carry a secret, never outlives the tab; only a successful mount removes it (`pagehide` and `disconnect()` just cancel the pending reload); from the 10th on the delay is 30 s, logged once per page load, and retrying never stops. Form fields saved on the close are lost by the reload, unless a reconnect mounts first and restores them. Never resets the backoff |
 
+An application stop takes the drain path: `arizona_app:prep_stop/1` drains the `arizona_http`
+listener (`arizona_roadrunner_server:drain/2`) instead of stopping it, so a restart or deploy
+closes every live socket 1001 and its clients reconnect -- to the new node once it is up. The
+listen socket closes first, each view gets `handle_drain/2`, and the stop waits up to the
+`server` config's `drain_timeout` (milliseconds, default 5000) for the sessions before killing
+what is left.
+
 The mount sites that close 4501 on any raise: the connect's mount in `init/4` (a first connect,
 and an unflagged reconnect's mount + render), the deferred reconnect resync (`flush_resync/1`,
 whichever leg settles it), and a navigate (including a `patch` that degrades to one) -- a crash

@@ -77,6 +77,7 @@ when `protocols` is omitted is `[http1]` (HTTP/1.1 only).
 
 -export([start/2]).
 -export([stop/1]).
+-export([drain/2]).
 -export([recompile_routes/0]).
 -export([format_error/2]).
 
@@ -125,6 +126,29 @@ stop(Name) ->
     persistent_term:erase({?ROUTES_KEY, Name}),
     ok = arizona_roadrunner_router:forget_routes(Name),
     roadrunner:stop_listener(Name).
+
+-doc """
+Drains the listener named `Name`, then stops it like `stop/1`. The listen socket
+closes, every connection and WebSocket session is told to wind down -- a live view
+runs `handle_drain/2` and closes `1001`, which clients reconnect from -- and the
+call waits up to `Timeout` milliseconds for them before the listener exits;
+sessions still open then are killed. Returns `{error, not_found}` if `Name` is not
+a running listener.
+""".
+-spec drain(Name, Timeout) -> ok | {error, not_found} when
+    Name :: atom(),
+    Timeout :: non_neg_integer().
+drain(Name, Timeout) ->
+    case whereis(Name) of
+        undefined ->
+            {error, not_found};
+        _Pid ->
+            case roadrunner_listener:drain(Name, Timeout) of
+                {ok, drained} -> ok;
+                {timeout, _Remaining} -> ok
+            end,
+            stop(Name)
+    end.
 
 -doc """
 Recompiles every Arizona-managed dispatch by walking persistent
