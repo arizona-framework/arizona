@@ -35,7 +35,11 @@ struct ContentView: View {
         if let i = args.firstIndex(of: "-az-path"), i + 1 < args.count {
             path = args[i + 1]
         }
-        _client = StateObject(wrappedValue: ArizonaClient(baseUrl: serverBaseURL, path: path))
+        let raw = AzClient(
+            baseUrl: serverBaseURL,
+            path: path,
+            makeTransport: { LoggingTransport(URLSessionWebSocketTransport(url: $0)) })
+        _client = StateObject(wrappedValue: ArizonaClient(raw))
         showDebugToolbar = args.contains("-uitest")
     }
 
@@ -97,5 +101,50 @@ private struct DebugToolbar: View {
                 .accessibilityIdentifier("dbg-drop")
         }
         .font(.caption)
+    }
+}
+
+/// Logs every frame in both directions, so the console of a failed UI test says
+/// whether a tap's event left the app and whether the server's reply came back --
+/// a tap that changed nothing is otherwise silent on both counts.
+///
+/// The callbacks capture `self` strongly on purpose: AzClient releases its
+/// transport on the first close, and a weak wrapper would then swallow a socket's
+/// later reports, hiding the duplicate-close handling the reconnect e2e covers.
+private final class LoggingTransport: WebSocketTransport {
+    var onOpen: (() -> Void)?
+    var onText: ((String) -> Void)?
+    var onClose: ((Int) -> Void)?
+
+    private let inner: WebSocketTransport
+
+    init(_ inner: WebSocketTransport) {
+        self.inner = inner
+        inner.onOpen = {
+            NSLog("%@", "[arizona-sample] open")
+            self.onOpen?()
+        }
+        inner.onText = { text in
+            NSLog("%@", "[arizona-sample] <- \(text)")
+            self.onText?(text)
+        }
+        inner.onClose = { code in
+            NSLog("%@", "[arizona-sample] close \(code)")
+            self.onClose?(code)
+        }
+    }
+
+    func connect() { inner.connect() }
+
+    func send(_ text: String) {
+        NSLog("%@", "[arizona-sample] -> \(text)")
+        inner.send(text)
+    }
+
+    func close(code: Int) { inner.close(code: code) }
+
+    func cancel() {
+        NSLog("%@", "[arizona-sample] cancel")
+        inner.cancel()
     }
 }
