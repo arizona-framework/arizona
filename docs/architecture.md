@@ -1137,6 +1137,14 @@ in `src/arizona.hrl`. All rendering/diffing of streams stays in
   `none` when the queue is empty
 - `undrained_ops/2` -- the ops a drain holding that mark has not consumed yet
 
+### Keys must be unique once rendered
+
+An item is addressed on the wire and in the DOM by its key's **text**
+(`arizona_template:to_bin/1`): the key field of `OP_INSERT`/`OP_REMOVE`/`OP_MOVE`/`OP_ITEM_PATCH`
+and the item's `az-key`. So keys that are distinct terms but render alike -- `1` and `~"1"`, `a`
+and `~"a"` -- are two items to the stream and one address to the client, and an op meant for one
+patches the other. Give a stream keys of one type.
+
 ### Drain marks
 
 Each queued op carries a globally unique, monotonic stamp (`{Seq, Op}` inside `pending`). A drain
