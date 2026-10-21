@@ -503,19 +503,36 @@ function applyScroll(p) {
  * (keeping the view) rather than the default navigate -- important when the
  * entry was a full page load, which carries no tag of its own. The server still
  * corrects the verb (a cross-handler patch falls back to navigate), so the tag
- * is only a hint. A pending view transition is stamped (`_azTransition`) in the
- * SAME write, so back/forward across the edge replays it -- one replaceState per
- * outgoing entry, not one per concern (Safari rate-limits history writes to
- * ~100/30s, then throws SecurityError).
+ * is only a hint. The same write records the edge being created towards the
+ * next entry (`_azTransitionNext`: the pending view transition, or none -- a
+ * plain navigation overwrites an older transitioned edge from this entry) and
+ * the entry's position (`_azIdx`), which popstate needs to tell which edge a
+ * traversal crossed -- one replaceState per outgoing entry, not one per concern
+ * (Safari rate-limits history writes to ~100/30s, then throws SecurityError).
  * @param {string} [navKind]
  */
 function saveCurrentScroll(navKind) {
-    const st = history.state || {};
-    const next = { ...st, _azScroll: { x: window.scrollX, y: window.scrollY } };
+    const { _azTransitionNext: _, ...st } = history.state || {};
+    const next = {
+        ...st,
+        _azScroll: { x: window.scrollX, y: window.scrollY },
+        _azIdx: _historyIdx,
+    };
     if (navKind === 'patch') next._azNav = 'patch';
-    if (_pendingTransition) next._azTransition = _pendingTransition;
+    if (_pendingTransition) next._azTransitionNext = _pendingTransition;
     history.replaceState(next, '', location.href);
 }
+
+/**
+ * Position of the current history entry among this document's SPA entries,
+ * stamped on each as `_azIdx`. A view transition belongs to an EDGE between two
+ * entries, and each entry has two (one per direction), so popstate compares the
+ * destination's index with this one to know which edge it crossed: Back replays
+ * the destination's `_azTransitionNext`, Forward its `_azTransitionPrev`. An
+ * entry the hash fast path pushes carries no index and never animates (a hash
+ * jump has no transition).
+ */
+let _historyIdx = 0;
 
 // --------------------------------------------------------------------------
 // View transitions
@@ -716,25 +733,37 @@ function reconnectUserQs(qs) {
  *              (`_azNav`) so popstate replays the same mode on back/forward.
  *
  * Reads `_pendingTransition` (set by the caller from the az-transition attribute
- * or a transition command): when set, it is stamped onto both the outgoing and
- * the new history entry so popstate can replay the transition across this edge.
+ * or a transition command): on a push it is stamped onto both ends of the new
+ * edge -- the outgoing entry's `_azTransitionNext`, the new entry's
+ * `_azTransitionPrev` -- so popstate replays it only when traversing this edge.
+ * A replace creates no edge: it keeps the replaced entry's stamps.
  */
 function navigateTo(path, qs, hash, opts) {
     const kind = opts.kind === 'patch' ? 'patch' : 'navigate';
     const pathAndQs = qs ? `${path}?${qs}` : path;
     const fullUrl = opts.fullUrl || (hash ? `${pathAndQs}#${hash}` : pathAndQs);
-    /** @type {{_azTransition?: typeof _pendingTransition, _azNav?: string}} */
+    /** @type {{_azTransitionPrev?: typeof _pendingTransition, _azTransitionNext?: typeof _pendingTransition, _azNav?: string, _azIdx?: number}} */
     const navState = {};
-    if (_pendingTransition) navState._azTransition = _pendingTransition;
     if (kind === 'patch') navState._azNav = 'patch';
-    const state = Object.keys(navState).length ? navState : null;
     if (opts.replace) {
-        history.replaceState(state, '', fullUrl);
+        // Same position, a different page: the edges into and out of this
+        // position are unchanged, so the replaced entry's stamps carry over
+        // (Forward into the new page crosses the same edge Back out of it
+        // does) and a pending transition stamps nothing -- it animates this
+        // swap, not an edge.
+        const cur = history.state || {};
+        navState._azIdx = _historyIdx;
+        if (cur._azTransitionPrev) navState._azTransitionPrev = cur._azTransitionPrev;
+        if (cur._azTransitionNext) navState._azTransitionNext = cur._azTransitionNext;
+        history.replaceState(navState, '', fullUrl);
     } else {
-        // One replaceState: saveCurrentScroll stamps scroll, patch tag, AND any
-        // pending transition onto the outgoing entry together.
+        // One replaceState: saveCurrentScroll stamps scroll, patch tag, index
+        // AND the outgoing end of this edge onto the outgoing entry together.
         saveCurrentScroll(kind);
-        history.pushState(state, '', fullUrl);
+        _historyIdx += 1;
+        navState._azIdx = _historyIdx;
+        if (_pendingTransition) navState._azTransitionPrev = _pendingTransition;
+        history.pushState(navState, '', fullUrl);
         if (!opts.noscroll) _pendingScroll = { kind: 'push', hash, patch: kind === 'patch' };
     }
     sendNav(kind, path, qs);
@@ -4188,6 +4217,8 @@ function connect(endpoint, params = {}) {
     // cross-page navigation.
     _currentPath = location.pathname;
     _currentQs = location.search ? location.search.slice(1) : '';
+    // Resume the entry index a reload or a full-document return lands on.
+    _historyIdx = typeof history.state?._azIdx === 'number' ? history.state._azIdx : 0;
 
     // 'manual' also switches off the browser's own restore for a full-document
     // load of an existing entry (a reload, a Back with no bfcache), so restore
@@ -4275,6 +4306,22 @@ function connect(endpoint, params = {}) {
             const qs = location.search ? location.search.slice(1) : '';
             const hash = location.hash ? location.hash.slice(1) : '';
             const saved = e.state?._azScroll || null;
+            // Which edge this traversal crossed: going back, the one from the
+            // destination to its next entry; going forward, the one into it from
+            // its previous entry. An entry with no index has no SPA edge, and a
+            // multi-step jump (`history.go(+-2)`) crossed several, so it is not
+            // animated at all rather than by whichever edge sits next to the
+            // destination (which would differ between the two directions).
+            const idx = e.state?._azIdx;
+            const hasIdx = typeof idx === 'number';
+            const transition = !hasIdx
+                ? null
+                : idx === _historyIdx - 1
+                  ? e.state._azTransitionNext
+                  : idx === _historyIdx + 1
+                    ? e.state._azTransitionPrev
+                    : null;
+            if (hasIdx) _historyIdx = idx;
             // Fragment-only change (path + query unchanged): a same-page hash
             // jump fires popstate in some browsers, but it needs no server
             // round-trip -- just scroll. Mirrors the click handler's same-page
@@ -4300,9 +4347,9 @@ function connect(endpoint, params = {}) {
             // so back/forward over a patch re-patches rather than replacing.
             const navKind = e.state?._azNav === 'patch' ? 'patch' : 'navigate';
             _pendingScroll = { kind: 'pop', hash, saved, patch: navKind === 'patch' };
-            // Replay the transition stamped onto this entry when the edge was
-            // navigated with a transition, so back/forward animate symmetrically.
-            _pendingTransition = e.state?._azTransition || null;
+            // Replay the transition of the edge just crossed, in either
+            // direction; an edge navigated without one stays instant.
+            _pendingTransition = transition || null;
             sendNav(navKind, path, qs);
         },
         { signal },
