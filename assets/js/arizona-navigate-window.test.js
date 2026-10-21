@@ -228,7 +228,6 @@ describe('navigate page-swap window', () => {
         click();
         expect(events()).toEqual([]);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('"bump"'));
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('navigate'));
         // The payload never reaches the log (it may carry form fields).
         warn.mockClear();
         mod.pushEvent('secretive', { password: 'hunter2' });

@@ -6669,8 +6669,13 @@ describe('scheduleSend -- debounce / throttle', () => {
         mock.restore();
         mock = setupMockWorker(mod);
         mock.simulateOpen();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.advanceTimersByTime(400);
         expect(mock.getSentMessages()).toEqual([]);
+        expect(warn).toHaveBeenCalledOnce();
+        expect(warn.mock.calls[0][0]).toContain('"save"');
+        expect(warn.mock.calls[0][0]).not.toContain('navigate');
+        warn.mockRestore();
     });
 
     // The slot is the command's POSITION, not its value: a command the server

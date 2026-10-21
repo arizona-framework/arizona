@@ -588,12 +588,13 @@ let _pendingTransition = null;
 // will degrade it.
 let _navInFlight = 0;
 let _navAwaitResync = false;
-// Bumped per armed navigate, so a send scheduled before it (a debounced or
-// throttled push_event) is dropped when it fires after the window has closed.
+// Bumped per armed navigate and by `disconnect()`, so a send scheduled before
+// either (a debounced or throttled push_event) is dropped when it fires later.
 let _navEpoch = 0;
 
 /**
- * Send a view event unless it was raised on a page a navigate is replacing.
+ * Send a view event unless it was raised on a page a navigate is replacing, or
+ * on a connection since torn down.
  * Framework frames (navigate, patch, cached_fps, ping) do not come through here.
  * A drop is reported, like the worker's socket-down drop: silence would read as
  * a handler that never fired. By event name only -- the payload may carry the
@@ -604,9 +605,7 @@ let _navEpoch = 0;
  */
 function sendEvent(name, msg, epoch = _navEpoch) {
     if (_navInFlight > 0 || _navAwaitResync || epoch !== _navEpoch) {
-        console.warn(
-            `[arizona] dropped event "${name}": a navigate is replacing the page it came from`,
-        );
+        console.warn(`[arizona] dropped event "${name}" from a replaced or disconnected page`);
         return;
     }
     workerPost(W_SEND, msg);
@@ -3399,16 +3398,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
 const _timers = new WeakMap();
 
 /**
- * Bumped by every `disconnect()`. A deferred send captures it, so a timer that
- * outlives its connection -- `disconnect()` cannot reach the timers, a WeakMap is
- * not iterable -- never sends an old view's event over the next connection.
- */
-let _connGen = 0;
-
-/**
  * Three send modes controlled by az-debounce and az-throttle attributes:
  *
- * 1. Immediate -- no attributes: sendFn fires right away.
+ * 1. Immediate -- no attributes: send fires right away.
  *
  * 2. Numeric debounce/throttle -- az-debounce="300" or az-throttle="300":
  *    debounce resets the timer on every event; throttle sends immediately
@@ -3416,7 +3408,7 @@ let _connGen = 0;
  *    For keydown throttle, a different key resets the interval so each
  *    distinct key gets through promptly.
  *
- * 3. Event-name debounce -- az-debounce="blur": stores the latest sendFn
+ * 3. Event-name debounce -- az-debounce="blur": stores the latest send
  *    but only flushes when the named DOM event fires on the element.
  *    Useful for sending input values only when the field loses focus.
  *
@@ -3428,26 +3420,23 @@ let _connGen = 0;
  * while a repeat at the same position collapses -- including one whose command
  * the server re-rendered mid-window (a changed payload), which is why the slot is
  * the position and not the command's value. A deferred send is dropped when it
- * fires after `disconnect()`.
+ * fires after a navigate or `disconnect()`: `send` carries the `_navEpoch` of
+ * the event, which both bump.
  * @param {Element} el
  * @param {Event|KeyboardEvent} event
  * @param {string} prefix index path of the wrapper holding the command
  * @param {number} index the command's position in its list
- * @param {Function} sendFn
+ * @param {Function} send
  */
-function scheduleSend(el, event, prefix, index, sendFn) {
+function scheduleSend(el, event, prefix, index, send) {
     const debounceAttr = el.getAttribute('az-debounce') || '';
     const debounceMs = parseInt(debounceAttr, 10);
     const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
     const throttleMs = parseInt(el.getAttribute('az-throttle') || '', 10);
     if (!debounceMs && !throttleMs && !debounceEvent) {
-        sendFn();
+        send();
         return;
     }
-    const gen = _connGen;
-    const send = () => {
-        if (gen === _connGen) sendFn();
-    };
     let rec = _timers.get(el);
     if (!rec) {
         rec = { slots: new Map() };
@@ -4721,10 +4710,10 @@ function connect(endpoint, params = {}) {
         // `document.body.innerHTML = ''`).
         for (const el of [..._hooks.keys()]) destroyHook(el);
         // Debounce/throttle timers live in a WeakMap keyed by element and aren't
-        // iterable, so they are left to expire: each captured the generation
-        // this bump retires and drops its send, which would otherwise reach the
-        // NEXT connection's worker carrying this one's view id.
-        _connGen++;
+        // iterable, so they are left to expire: each captured the epoch this
+        // bump retires and drops its send, which would otherwise reach the NEXT
+        // connection's worker carrying this one's view id.
+        _navEpoch++;
         document.documentElement.classList.remove('az-connected');
         document.documentElement.classList.remove('az-disconnected');
         if ('scrollRestoration' in history) {
