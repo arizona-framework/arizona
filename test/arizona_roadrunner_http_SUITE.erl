@@ -20,6 +20,7 @@
 -export([cors_route_keeps_its_verbs_and_405/1]).
 -export([cors_plain_options_allow_follows_pattern_overlaps/1]).
 -export([cors_beside_default_origin_check/1]).
+-export([asset_route_answers_get_and_head_only/1]).
 
 all() ->
     [
@@ -36,7 +37,8 @@ all() ->
         cors_route_answers_a_plain_options,
         cors_route_keeps_its_verbs_and_405,
         cors_plain_options_allow_follows_pattern_overlaps,
-        cors_beside_default_origin_check
+        cors_beside_default_origin_check,
+        asset_route_answers_get_and_head_only
     ].
 
 init_per_suite(Config) ->
@@ -44,7 +46,14 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(roadrunner),
     Listener = arizona_roadrunner_http_test,
     Port = arizona_test_port:pick(),
+    AssetDir = filename:join(?config(priv_dir, Config), "assets"),
+    ok = filelib:ensure_path(AssetDir),
+    ok = file:write_file(filename:join(AssetDir, "app.txt"), ~"asset-bytes"),
     Routes = [
+        {asset, ~"/files", {dir, AssetDir}},
+        {asset, ~"/cors_files", {dir, AssetDir}, #{
+            middlewares => [arizona_middleware:cors(#{origins => [~"https://other.example"]})]
+        }},
         {live, ~"/echo_body", arizona_about, #{
             middlewares => [arizona_middleware:extract([body])]
         }},
@@ -428,6 +437,39 @@ cors_beside_default_origin_check(Config) when is_list(Config) ->
 
 cors_transform() ->
     arizona_middleware:cors(#{origins => [~"https://other.example"], methods => [~"POST"]}).
+
+%% An asset route serves files: GET and HEAD. roadrunner_static ignores the
+%% method, so without an allowlist any other verb would be served the file
+%% too; the router gates it to a 405 with the Allow set.
+asset_route_answers_get_and_head_only(Config) when is_list(Config) ->
+    Port = ?config(port, Config),
+    ?assertMatch({200, _, ~"asset-bytes"}, raw_get(Port, ~"/files/app.txt", [])),
+    ?assertMatch({200, _, <<>>}, raw_request(Port, ~"HEAD", ~"/files/app.txt", [])),
+    Len0 = [{~"content-length", ~"0"}],
+    [
+        ?assertMatch(
+            {405, #{~"allow" := ~"GET, HEAD"}, _},
+            raw_request(Port, Method, ~"/files/app.txt", Len0)
+        )
+     || Method <- [~"POST", ~"DELETE", ~"OPTIONS"]
+    ],
+    %% A cors asset route still lets the preflight through to the transform.
+    ?assertMatch(
+        {204, #{~"access-control-allow-origin" := ~"https://other.example"}, <<>>},
+        raw_request(Port, ~"OPTIONS", ~"/cors_files/app.txt", [
+            {~"origin", ~"https://other.example"},
+            {~"access-control-request-method", ~"GET"}
+        ])
+    ),
+    %% A plain OPTIONS there is answered with the Allow set, not the file.
+    ?assertMatch(
+        {204, #{~"allow" := ~"GET, HEAD, OPTIONS"}, <<>>},
+        raw_request(Port, ~"OPTIONS", ~"/cors_files/app.txt", [])
+    ),
+    ?assertMatch(
+        {405, #{~"allow" := ~"GET, HEAD, OPTIONS"}, _},
+        raw_request(Port, ~"POST", ~"/cors_files/app.txt", Len0)
+    ).
 
 raw_get(Port, Path, ExtraHeaders) ->
     raw_request(Port, ~"GET", Path, ExtraHeaders).
