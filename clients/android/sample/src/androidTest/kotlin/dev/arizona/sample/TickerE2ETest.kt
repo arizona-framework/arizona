@@ -1,5 +1,8 @@
 package dev.arizona.sample
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -19,8 +22,24 @@ class TickerE2ETest {
     fun countRisesFromServerPush() {
         rule.waitForText("Ticker")
         rule.onNodeWithText("Ticker").performClick()
-        // No tap: the server's timer drives the increments.
-        rule.waitForText("Tick: 1")
-        rule.waitForText("Tick: 2")
+        // No tap: the server's timer drives the increments. Waiting for an exact
+        // "Tick: N" can step over the one second that label is on screen, so
+        // read whatever count is showing, then wait for a larger one.
+        var first = -1
+        rule.waitUntil(10_000) {
+            first = tickCount() ?: -1
+            first >= 0
+        }
+        rule.waitUntil(10_000) { (tickCount() ?: -1) > first }
     }
+
+    private fun tickCount(): Int? =
+        rule.onAllNodes(hasText("Tick: ", substring = true))
+            .fetchSemanticsNodes()
+            .firstNotNullOfOrNull { node ->
+                node.config.getOrNull(SemanticsProperties.Text)
+                    ?.joinToString("") { it.text }
+                    ?.removePrefix("Tick: ")
+                    ?.toIntOrNull()
+            }
 }
