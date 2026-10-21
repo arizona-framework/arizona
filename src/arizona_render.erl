@@ -250,6 +250,7 @@ route-level concept and is intentionally not honored here.
 render_to_iolist(Handler, Opts) ->
     Bindings0 = maps:get(bindings, Opts, #{}),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
+    ok = arizona_eval:check_restricted_keys(Bindings, Bindings0, Handler),
     {_Backend, Page} = finish_page(
         arizona_stateful:call_render(Handler, Bindings), Bindings, Opts
     ),
@@ -300,6 +301,9 @@ render_view(Handler, Opts, TmplFun) ->
         maps:get(bindings, Opts, #{})
     ),
     {Bindings, _Resets} = arizona_stateful:call_mount(Handler, Bindings0),
+    %% The WebSocket mount (arizona_live:do_mount/4) checks the same pair, so a
+    %% root that rewrites a restricted key fails here instead of SSRing cleanly.
+    ok = arizona_eval:check_restricted_keys(Bindings, Bindings0, Handler),
     PageTmpl = page_template(TmplFun, arizona_stateful:call_render(Handler, Bindings)),
     {Backend, Page} = finish_page(PageTmpl, Bindings, Opts),
     {content_type(Backend), Page}.
