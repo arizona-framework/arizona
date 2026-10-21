@@ -11,6 +11,7 @@
 -export([all/0, groups/0]).
 -export([
     to_bin_rejects_non_chardata_list/1,
+    render_float_any_magnitude/1,
     diff4_nodiff_shortcircuit/1,
     diff_nodiff_shortcircuit/1,
     error_page_arizona_loc/1,
@@ -157,6 +158,7 @@ groups() ->
         {render, [parallel], [
             render_text,
             render_attr,
+            render_float_any_magnitude,
             static_attr_escaped,
             nav_flash_in_attribute_refused,
             escape_clean_value_not_rebuilt,
@@ -331,6 +333,26 @@ render_text(Config) when is_list(Config) ->
         #{s => [<<"<p az=\"0\">">>, <<"</p>">>], d => [{<<"0">>, <<"hello">>}], f => <<"test">>},
         Snap
     ).
+
+%% A float renders at any magnitude in its shortest round-trip form. A fixed
+%% decimal count raised `badarg` once the integer part grew long (~1e244), killing
+%% the whole render, and rounded small values away to "0.0".
+render_float_any_magnitude(Config) when is_list(Config) ->
+    T = #{
+        s => [<<"<p az=\"0\">">>, <<"</p><i az=\"1\"">>, <<"></i>">>],
+        d => [
+            {<<"0">>, fun() -> 1.0e300 end},
+            {<<"1">>, {attr, <<"data-v">>, fun() -> -1.0e-11 end}}
+        ],
+        f => <<"test">>,
+        backend => arizona_html
+    },
+    {HTML, _Snap} = arizona_render:render(T),
+    ?assertEqual(
+        <<"<p az=\"0\">1.0e300</p><i az=\"1\" data-v=\"-1.0e-11\"></i>">>,
+        iolist_to_binary(HTML)
+    ),
+    ?assertEqual(~"1.0e300", arizona_native:wire_attr(~"label", 1.0e300)).
 
 render_attr(Config) when is_list(Config) ->
     T = #{

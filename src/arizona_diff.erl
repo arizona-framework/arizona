@@ -1498,9 +1498,7 @@ list_changed(_NewTail, _OldTail, Views) ->
 %% whole container, so answering on term inequality alone tears the container down
 %% and rebuilds byte-identical markup, losing focus, scroll position and every
 %% `?local` inside it for nothing. A value can differ as a term yet render the
-%% same: `to_bin/1` formats floats to 10 decimals, so accumulated error past that
-%% (0.1 + 0.2 against 0.3) renders "0.3" either way, and an integer against its
-%% binary is the same bytes too.
+%% same: an integer against its binary (`1` and `~"1"`) is the same bytes.
 %%
 %% The byte comparison only runs once the terms already differ, so it costs
 %% nothing on the common path, and only for values `to_bin/1` renders without
@@ -1523,10 +1521,10 @@ item_changed(_NewTail, _OldTail) ->
 %% never see equal inputs (hence the name -- "collapses", not "renders same").
 %%
 %% Same-type scalars collapse for nothing: `to_bin/1` is the identity on binaries,
-%% and `integer_to_binary`/`atom_to_binary` are injective, so two distinct ones
-%% cannot print the same. That covers nearly every slot without rendering either
-%% side, leaving the render for the pairs that genuinely can collapse -- two floats
-%% (the 10-decimal format), or a value against a different type.
+%% and `integer_to_binary`/`atom_to_binary` and the shortest round-trip float format
+%% are injective, so two distinct ones cannot print the same. That covers nearly
+%% every slot without rendering either side, leaving the render for the pairs that
+%% genuinely can collapse -- a value against a different type.
 %% Same marker both sides: unwrap and compare the payloads. The parse transform
 %% wraps every content slot value, so without this a real template never reaches the
 %% type fast paths below at all -- only hand-built templates do.
@@ -1546,6 +1544,8 @@ collapses_to_same_bytes({attr, _N1, _V1}, {attr, _N2, _V2}) ->
 collapses_to_same_bytes(New, Old) when is_binary(New), is_binary(Old) ->
     false;
 collapses_to_same_bytes(New, Old) when is_integer(New), is_integer(Old) ->
+    false;
+collapses_to_same_bytes(New, Old) when is_float(New), is_float(Old) ->
     false;
 collapses_to_same_bytes(New, Old) when is_atom(New), is_atom(Old) ->
     false;
