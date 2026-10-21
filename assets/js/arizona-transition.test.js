@@ -157,6 +157,21 @@ describe('view transitions -- navigation', () => {
         expect(document.querySelector('#page h1').textContent).toBe('Detail');
     });
 
+    it('a transition around a hash-only navigate does not wait for a later page swap', () => {
+        const fn = document.startViewTransition;
+        Element.prototype.scrollIntoView = vi.fn();
+        document.body.innerHTML =
+            '<div id="page" az-view><h1 az="0">a</h1><section id="sec">s</section></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_NAVIGATE, '#sec']]);
+        delete Element.prototype.scrollIntoView;
+        expect(location.hash).toBe('#sec');
+        // No frame was sent, so the jump itself is what animates, in place.
+        expect(_mock.posted.some((d) => d[0] === 1)).toBe(false);
+        expect(fn).toHaveBeenCalledOnce();
+        _mock.simulateMessage([replaceOp('Other')]);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
     it('ignores a stray text/attr tick before the page swap', () => {
         const fn = document.startViewTransition;
         document.body.innerHTML = '<div id="page" az-view><h1 az="0">a</h1></div>';
@@ -257,6 +272,37 @@ describe('view transitions -- az-transition attribute', () => {
             .getElementById('lnk')
             .dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
         _mock.simulateMessage([replaceOp('Detail')]);
+        expect(fn).not.toHaveBeenCalled();
+    });
+
+    it('animates a hash-less link to the current URL, which reaches the server', () => {
+        const fn = document.startViewTransition;
+        history.replaceState(null, '', '/x');
+        document.body.innerHTML =
+            '<div id="page" az-view><a id="lnk" href="/x" az-navigate az-transition>go</a></div>';
+        document
+            .getElementById('lnk')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        expect(_mock.posted.some((d) => d[0] === 1 && JSON.parse(d[1])[0] === 'navigate')).toBe(
+            true,
+        );
+        _mock.simulateMessage([replaceOp('Again')]);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
+    it('a hash-only link leaves no transition for a later page swap', () => {
+        const fn = document.startViewTransition;
+        Element.prototype.scrollIntoView = vi.fn();
+        document.body.innerHTML =
+            '<div id="page" az-view><a id="lnk" href="#sec" az-navigate az-transition>go</a>' +
+            '<section id="sec">s</section></div>';
+        document
+            .getElementById('lnk')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        delete Element.prototype.scrollIntoView;
+        expect(location.hash).toBe('#sec');
+        // An unrelated page swap (a server-driven navigate) must not inherit it.
+        _mock.simulateMessage([replaceOp('Other')]);
         expect(fn).not.toHaveBeenCalled();
     });
 

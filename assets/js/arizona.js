@@ -836,25 +836,46 @@ function leavePage(url, replace) {
 }
 
 /**
- * Run a `navigate`/`patch` effect. The URL resolves against the CURRENT page,
- * as `pushState` resolves it, so the frame asks the server for the page the
- * address bar will show (`?page=2` on `/users/1/` is `/users/1/?page=2`).
- * Another origin cannot be SPA-navigated (`pushState` refuses it), so it loads
- * as a page; a new fragment on this page just scrolls, like an in-page
- * `az-navigate` click, with no server round trip.
+ * Where a `navigate`/`patch` to `u` goes: `'leave'` (another origin, which
+ * `pushState` refuses, so it loads as a page), `'hash'` (a new fragment on this
+ * page, which only scrolls) or `'server'` (an SPA frame).
+ * @param {URL} u
+ * @returns {'leave'|'hash'|'server'}
+ */
+function navRoute(u) {
+    if (u.origin !== location.origin) return 'leave';
+    // A bare `#` is a fragment too (an empty one, `hash` reads ''), as for the browser.
+    const fragment = u.hash !== '' || u.href.endsWith('#');
+    if (fragment && u.pathname === location.pathname && u.search === location.search) {
+        return 'hash';
+    }
+    return 'server';
+}
+
+/**
+ * Run a `navigate`/`patch`, from an effect or an `az-navigate`/`az-patch` click.
+ * The URL resolves against the CURRENT page, as `pushState` resolves it, so the
+ * frame asks the server for the page the address bar will show (`?page=2` on
+ * `/users/1/` is `/users/1/?page=2`). A link to this very URL is a real
+ * navigation too; only a new fragment on this page scrolls in place.
+ *
+ * `transition` (when given) becomes `_pendingTransition` only if a frame is
+ * sent: a hash jump or a page load has no server reply to wrap, so an intent set
+ * there would animate the next unrelated batch.
  * @param {string} full
  * @param {{replace?: boolean, noscroll?: boolean}} opts
  * @param {'navigate'|'patch'} kind
+ * @param {typeof _pendingTransition} [transition]
  */
-function navigateEffect(full, opts, kind) {
+function navigateEffect(full, opts, kind, transition) {
     const u = new URL(full, location.href);
-    if (u.origin !== location.origin) {
+    const route = navRoute(u);
+    if (route === 'leave') {
         leavePage(full, opts.replace);
         return;
     }
     const hash = u.hash ? u.hash.slice(1) : '';
-    const qs = u.search ? u.search.slice(1) : '';
-    if (hash && u.pathname === location.pathname && u.search === location.search) {
+    if (route === 'hash') {
         if (opts.replace) {
             history.replaceState(history.state, '', u.href);
         } else {
@@ -864,6 +885,8 @@ function navigateEffect(full, opts, kind) {
         if (!opts.noscroll) applyScroll({ kind: 'push', hash });
         return;
     }
+    if (transition !== undefined) _pendingTransition = transition;
+    const qs = u.search ? u.search.slice(1) : '';
     navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full, kind });
 }
 
@@ -2999,9 +3022,15 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const innerCmds = /** @type {Array<Array<*>>} */ (
                 Array.isArray(inner[0]) ? inner : [inner]
             );
-            const kind = innerCmds.some((c) => c[0] === JS_NAVIGATE)
+            // A navigate/patch that sends no frame (a hash jump, a page load)
+            // has no reply to wait for; a hash jump then wraps in place.
+            const toServer = (/** @type {Array<*>} */ c) =>
+                !c[2]?.full && navRoute(new URL(c[1], location.href)) === 'server';
+            const kind = innerCmds.some((c) => c[0] === JS_NAVIGATE && toServer(c))
                 ? 'replace'
-                : innerCmds.some((c) => c[0] === JS_PUSH_EVENT || c[0] === JS_PATCH)
+                : innerCmds.some(
+                        (c) => c[0] === JS_PUSH_EVENT || (c[0] === JS_PATCH && toServer(c)),
+                    )
                   ? 'any'
                   : null;
             if (kind) {
@@ -4263,35 +4292,20 @@ function connect(endpoint, params = {}) {
             // its pathname is not ours to request): the browser follows the link.
             if (el.origin !== location.origin) return;
             const isPatch = el.hasAttribute('az-patch');
-            // Anchors implement the URL interface -- use browser-parsed parts.
-            const path = el.pathname;
-            const qs = el.search ? el.search.slice(1) : '';
-            const hash = el.hash ? el.hash.slice(1) : '';
-            const noscroll = el.hasAttribute('az-noscroll');
 
             e.preventDefault();
-
-            // Same-page hash nav: update URL + scroll, no server round-trip.
-            // Save the outgoing scroll first (scrollRestoration is 'manual'),
-            // matching the push branch of navigateTo -- otherwise Back after an
-            // in-page anchor click lands at the top.
-            if (path === location.pathname && qs === location.search.slice(1)) {
-                saveCurrentScroll();
-                history.pushState(null, '', href);
-                if (!noscroll) applyScroll({ kind: 'push', hash });
-                return;
-            }
 
             // az-transition opts this navigation into a view transition. A patch
             // produces a diff (no OP_REPLACE), so its intent is consumed by the
             // first response batch ('any'); a navigate waits for the OP_REPLACE.
             const t = parseTransitionAttr(el);
-            _pendingTransition = t ? { types: t.types, kind: isPatch ? 'any' : 'replace' } : null;
-            navigateTo(path, qs, hash, {
-                noscroll,
-                fullUrl: href,
-                kind: isPatch ? 'patch' : 'navigate',
-            });
+            // `el.href` is resolved against the document base, as the browser would.
+            navigateEffect(
+                el.href,
+                { noscroll: el.hasAttribute('az-noscroll') },
+                isPatch ? 'patch' : 'navigate',
+                t ? { types: t.types, kind: isPatch ? 'any' : 'replace' } : null,
+            );
         },
         { signal },
     );
