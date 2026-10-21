@@ -1090,10 +1090,11 @@ format_each_error(each_body_not_element) ->
     "text/value child: {li, [], [case ... of ... end]}";
 format_each_error(each_stream_body_not_element) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element ({Tag, "
-    "Attrs, Children}) or a list of elements -- a stream/map keys each item for per-item "
-    "diffing, which a single-value body throws away. Unlike a list there is no comprehension "
-    "fallback (a comprehension has no stream/keyed semantics): wrap the value in an element, "
-    "e.g. fun(Item, Key) -> {li, [], [Item]} end";
+    "Attrs, Children}); a map source may also take a list of elements or a static/mixed "
+    "fragment -- a stream/map keys each item for per-item diffing, which a single-value "
+    "body throws away. Unlike a list there is no comprehension fallback (a comprehension "
+    "has no stream/keyed semantics): wrap the value in an element, e.g. "
+    "fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end";
 format_each_error(each_stream_body_control_flow) ->
     "an ?each callback over a stream or map (a 2-arg fun) must return an element, and a "
     "control-flow body (case, if, begin, try, receive) is not one: every item shares one "
@@ -3480,7 +3481,8 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
     case each_body_unwrap(LastExpr, Backend) of
         {compiled, Map} ->
             build_each_from_compiled(Line, SourceAST, Vars, Guards, Prefix, Map);
-        {element, ElemAST} ->
+        {element, ElemAST0} ->
+            ElemAST = unwrap_one_root_list(Kind, ElemAST0),
             Classification = classify_body(ElemAST),
             ok = validate_each_body(Kind, Classification, ElemAST),
             %% The per-item template compiles in the content context its `?each`
@@ -3491,10 +3493,22 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
                 ElemAST, Module, false, Backend, CCtx, Inherited, each_item
             ),
             Opts1 = Opts0#{backend => Backend},
-            Opts = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
+            Opts2 = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
+            Opts = maybe_multi_root_opt(Kind, Classification, Opts2),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
     end.
+
+%% A keyed body written as a one-element list (`[{li, [{az_key, K}], [I]}]`) is a single
+%% root in a list wrapper: unwrapped like a whole-body `?html`, so it compiles to the
+%% same per-item template as the bare element instead of being stamped multi-root.
+unwrap_one_root_list(stream, {cons, _, Elem, {nil, _}} = Body) ->
+    case is_element_tuple(Elem) of
+        true -> Elem;
+        false -> Body
+    end;
+unwrap_one_root_list(_Kind, Body) ->
+    Body.
 
 %% A single-root list item (one top-level element per item, the `element_tuple`
 %% classification) lets the diff address items by DOM-order position between the
@@ -3516,6 +3530,21 @@ maybe_single_root_opt(Backend, _Kind, element_tuple, Opts) ->
         false -> Opts
     end;
 maybe_single_root_opt(_Backend, _Kind, _Classification, Opts) ->
+    Opts.
+
+%% A 2-arg callback serves a map AND a stream, and only the source decides whether a
+%% body that is not exactly one element is legal: a map diffs it positionally or
+%% wholesale like a list, while a stream's keyed ops address an item by the single
+%% element carrying its `az-key`, so any other root would be orphaned on a remove and
+%% out of order on a move. The source is a runtime value, so the body is stamped here
+%% and `arizona_template:each/2` refuses the stream pairing when it meets one.
+maybe_multi_root_opt(stream, Classification, Opts) when
+    Classification =:= element_list;
+    Classification =:= list_ast;
+    Classification =:= static_binary
+->
+    Opts#{multi_root => true};
+maybe_multi_root_opt(_Kind, _Classification, Opts) ->
     Opts.
 
 %% Classify an ?each callback's last expr. A whole-body backend wrapper call
@@ -3597,7 +3626,8 @@ set_template_map_d_field(Field, _DFunAST) ->
 %% value slot that renders at SSR but loses per-item diffing (and a descriptor value crashes
 %% on diff). Reject it at compile time. `Kind` (list | stream) is the source shape, inferred
 %% from the callback arity (1-arg = list, 2-arg = stream/map): the error it raises tailors the
-%% fix advice, since a list has a comprehension fallback and a stream does not.
+%% fix advice, since a list has a comprehension fallback and a stream does not. Whether a
+%% 2-arg body must be ONE element depends on the runtime source (see maybe_multi_root_opt/3).
 validate_each_body(Kind, text_dynamic, LastExpr) ->
     parse_error(each_body_error(Kind, LastExpr), anno(LastExpr));
 validate_each_body(Kind, list_ast, LastExpr) ->
