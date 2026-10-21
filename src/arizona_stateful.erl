@@ -380,6 +380,10 @@ need to talk to the client (release ETS tables, unsubscribe pubsub
 topics, close ports, etc.). Messages sent from here race the WS
 close frame; for drain-time client coordination use `handle_drain/2`
 instead.
+
+Runs once per instance. An `unmount/1` that raises does not stop the
+other views' unmounts (a sibling removed in the same diff, or the root
+on the way out); the first error is raised once they have all run.
 """.
 -callback unmount(bindings()) -> unmount_ret().
 

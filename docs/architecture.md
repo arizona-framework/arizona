@@ -1460,14 +1460,15 @@ the render/diff, which runs in the same process -- the "Set by" column is author
 | `$arizona_reconnected` | set `true` when this connection is a reconnection; erased by `navigate/3,4` (the new page's mount is its first), kept by `patch/2` (same handler only; a cross-handler patch is a navigate) | `reconnected/0` (the `?reconnected` macro) -- gate one-shot commands with `?connected andalso not ?reconnected` |
 | `$arizona_capabilities` | the `_az_caps` map the client advertised at connect | `capabilities/0` / `capability/1` (`?capabilities` / `?capability`). A UI/effect hint, **never** authorization |
 | `$arizona_timers` | `send_after/3` | unmount and `navigate/3,4`, to cancel |
-| `$arizona_swapped_out` | `swap_out_view/3`, when a render keeps a child's id but switches its handler; erased as soon as the render or diff that set it returns (root and child diffs, `do_mount/4`, `render_current`) | `terminate/2`, so a diff that raised after the swap does not unmount the swapped-out instance a second time |
+| `$arizona_unmounted` | `unmount_view/3`, for every child view a pass unmounts while the state still lists it (a swapped-out handler, a diff removal, the outgoing page on navigate); erased once the pass has unmounted the last of them (root and child diffs, `do_mount/4`, `navigate/3,4`) | `terminate/2`, so a pass that raised after unmounting a view (its own `unmount/1` included) does not unmount it a second time |
 | `$arizona_deps` | the per-dynamic eval bracket | `arizona_eval`, `arizona_template:track/1` -- the dependency capture set |
 | `$arizona_update_effects` | `arizona_eval:set_update_effects/1`, seeded with the originating callback's effects before a diff | `current_update_effects/0` while child `handle_update/3`s fold onto it; `drain_update_effects/0` erases and returns the final list. Threading it here is what lets a child's effects join the root's with no concatenation at the call site |
 | `{'$arizona_scoped_statics', Prefix, Fp}` | `scoped_statics/4` in `arizona_template` | itself -- a memo for the per-slot static prefixing (`scope_static/3` on the render backend, per element), keyed by scope prefix + template fingerprint |
 
-Only `$arizona_deps`, `$arizona_update_effects` and `$arizona_timers` are ever erased; the rest
-are set once and left. What makes the scoped-statics memo different is that it is the one entry
-that **grows unboundedly** rather than holding a fixed-size value. That is deliberate and safe --
+Only `$arizona_deps`, `$arizona_update_effects`, `$arizona_timers` and `$arizona_unmounted` are
+ever erased; the rest are set once and left. What makes the scoped-statics memo different is that
+it is the one entry that **grows unboundedly** rather than holding a fixed-size value. That is
+deliberate and safe --
 prefixing a static list is pure and deterministic in `(Prefix, statics)`, so a stale entry cannot be
 wrong, and the payoff is that a re-render or diff of the same slot (and every level of a deep
 stateless nest, whose inner statics would otherwise be re-walked once per ancestor) reuses the
@@ -2060,6 +2061,9 @@ templates are recursively rendered/diffed with their own snapshots. The views ma
 `{OldViews, NewViews}` tuple during eval -- `OldViews` is read-only for child lookup, `NewViews`
 accumulates only children rendered this cycle. Children removed from the template (conditional
 rendering) are pruned from the views map and their `unmount/1` callback is called if exported.
+Every instance's `unmount/1` runs **exactly once**, on removal or on the way out: one that raises
+stops neither its siblings' nor the root's (each still runs, and the first error is re-raised after
+the last), and `terminate/2` skips a view the failed pass already unmounted.
 
 **Slots:** Slots are implemented via stateless children and bindings. A layout places the page it
 wraps with the **`?inner_content`** macro; the binding key is fixed (`apply_layouts/4` injects

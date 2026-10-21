@@ -1,0 +1,43 @@
+-module(arizona_unmount_raise_parent).
+-include("arizona_stateful.hrl").
+-export([mount/1]).
+-export([render/1]).
+-export([handle_event/3]).
+-export([unmount/1]).
+
+%% Root view rendering two children, the second of which raises from unmount/1.
+%% `hide` removes both in one diff. The root reports its own unmount.
+
+-spec mount(az:bindings()) -> az:mount_ret().
+mount(Bindings) ->
+    {#{id => ~"unmount_raise_parent", show => true, notify => maps:get(notify, Bindings)}, #{}}.
+
+-spec render(az:bindings()) -> az:template().
+render(Bindings) ->
+    ?html(
+        {main, [{id, ?get(id)}], [
+            case ?get(show) of
+                true ->
+                    {'div', [], [
+                        ?stateful(arizona_unmount_raise_child, #{
+                            id => ~"plain", notify => ?get(notify)
+                        }),
+                        ?stateful(arizona_unmount_raise_child, #{
+                            id => ~"raising", notify => ?get(notify), raise => true
+                        })
+                    ]};
+                false ->
+                    <<>>
+            end
+        ]}
+    ).
+
+-spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
+    az:handle_event_ret().
+handle_event(~"hide", _Payload, Bindings) ->
+    {Bindings#{show => false}, #{}, []}.
+
+-spec unmount(az:bindings()) -> ok.
+unmount(#{id := Id, notify := Notify}) ->
+    Notify ! {unmounted, Id},
+    ok.
