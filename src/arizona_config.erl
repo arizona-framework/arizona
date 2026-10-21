@@ -35,7 +35,7 @@ binary):
 | `Default` type | Coercion |
 |----------------|----------|
 | integer        | `list_to_integer/1` |
-| float          | `list_to_float/1` |
+| float          | `list_to_float/1`; an integer value (`"2"`) is accepted as `2.0` |
 | boolean        | `"true"`/`"false"` (case-insensitive) |
 | binary         | `list_to_binary/1` |
 | atom (non-boolean) | `list_to_existing_atom/1` |
@@ -48,6 +48,10 @@ falls back to `Default`, the required form raises `env_not_set`. A non-empty val
 that fails to coerce (`PORT=abc` for an integer default) raises `env_invalid_value`,
 rendered by `format_error/2` into an actionable boot message.
 
+A `Default` of any other type (a map, a tuple, a list of atoms, ...) has no
+coercion and raises `unsupported_default`, whether or not the variable is set:
+the reference is wrong either way.
+
 ## Resolution scope
 
 `resolve/1` recurses into maps, lists, and 2-tuples (proplist pairs like
@@ -55,6 +59,17 @@ rendered by `format_error/2` into an actionable boot message.
 descend into tuples of three or more elements: route tuples (`{live, Path,
 Handler, Opts}` and friends) pass through untouched, so an operator-supplied
 `{env, _, _}` term sitting inside a route's `bindings`/`state` is never rewritten.
+
+## `env` is a reserved tag
+
+Because 2-tuples are descended into, the reference forms are recognised by
+shape alone: anywhere in the resolved config, `{env, String}` and
+`{env, String, Default}` **are** env-var references. A proplist pair that merely
+happens to be keyed `env` (`{env, "production"}` among a listener's options) is
+read as a reference to the variable `production` -- substituted when that
+variable is set, and raising `env_not_set` when it is not (the message names
+this collision). Do not use `env` as a key for a string value in the `arizona`
+config; spell such an option under another key.
 """.
 
 %% --------------------------------------------------------------------
@@ -115,7 +130,7 @@ through maps, lists, and 2-tuples. Non-reference values are returned unchanged.
 resolve({env, Var}) when is_list(Var) ->
     resolve_env(Var, required);
 resolve({env, Var, Default}) when is_list(Var) ->
-    resolve_env(Var, {default, Default});
+    resolve_env(Var, {default, Default, default_type(Var, Default)});
 resolve(Map) when is_map(Map) ->
     #{K => resolve(V) || K := V <- Map};
 resolve(List) when is_list(List) ->
@@ -142,8 +157,21 @@ format_error({env_not_set, Var}, _ST) ->
         general =>
             io_lib:format(
                 "required environment variable ~ts is not set; either export it or "
-                "declare a default with `{env, ~tp, Default}`",
-                [Var, Var]
+                "declare a default with `{env, ~tp, Default}`. `env` is a reserved tag "
+                "in arizona config: any `{env, String}` term, including a proplist pair "
+                "keyed `env`, is read as an environment-variable reference -- if `{env, ~tp}` "
+                "was meant as a plain option value, put it under another key",
+                [Var, Var, Var]
+            )
+    };
+format_error({unsupported_default, Var, Default}, _ST) ->
+    #{
+        general =>
+            io_lib:format(
+                "`{env, ~tp, Default}` has a default of an unsupported type: ~tp; the "
+                "default's type picks how the variable is coerced, so it must be an "
+                "integer, float, boolean, atom, binary, string, or a list of binaries",
+                [Var, Default]
             )
     };
 format_error({env_invalid_value, Var, Value, Type}, _ST) ->
@@ -172,7 +200,7 @@ resolve_env(Var, Spec) ->
 
 unset(Var, required) ->
     erlang:error({env_not_set, Var}, [Var], [{error_info, #{module => ?MODULE}}]);
-unset(_Var, {default, Default}) ->
+unset(_Var, {default, Default, _Type}) ->
     Default.
 
 %% The required form carries no default, so the raw string is the value (binary).
@@ -181,8 +209,7 @@ coerce(_Var, Value, required) ->
 %% Coerce to the type of the default. A malformed value (e.g. `PORT=abc` for an
 %% integer default) raises a `format_error`-rendered `env_invalid_value` at boot
 %% rather than a cryptic `badarg` from deep in the conversion.
-coerce(Var, Value, {default, Default}) ->
-    Type = default_type(Default),
+coerce(Var, Value, {default, _Default, Type}) ->
     try
         convert(Type, Value)
     catch
@@ -194,20 +221,26 @@ coerce(Var, Value, {default, Default}) ->
 %% tls cert path) keeps the raw string; an empty list or a list of binaries (e.g.
 %% `csrf_origins`, `secret_key_previous`) comma-splits into trimmed binaries. `[]` is
 %% ambiguous (an empty list and an empty string are the same term) and resolves to
-%% the list case, the documented empty default.
-default_type(Default) when is_integer(Default) -> integer;
-default_type(Default) when is_float(Default) -> float;
-default_type(Default) when is_boolean(Default) -> boolean;
-default_type(Default) when is_binary(Default) -> binary;
-default_type(Default) when is_atom(Default) -> atom;
-default_type([]) -> binary_list;
-default_type([H | _]) when is_binary(H) -> binary_list;
-default_type([H | _]) when is_integer(H) -> string.
+%% the list case, the documented empty default. Any other default has no
+%% coercion, and is rejected even when the variable is unset.
+default_type(_Var, Default) when is_integer(Default) -> integer;
+default_type(_Var, Default) when is_float(Default) -> float;
+default_type(_Var, Default) when is_boolean(Default) -> boolean;
+default_type(_Var, Default) when is_binary(Default) -> binary;
+default_type(_Var, Default) when is_atom(Default) -> atom;
+default_type(_Var, []) ->
+    binary_list;
+default_type(_Var, [H | _]) when is_binary(H) -> binary_list;
+default_type(_Var, [H | _]) when is_integer(H) -> string;
+default_type(Var, Default) ->
+    erlang:error(
+        {unsupported_default, Var, Default}, [Var], [{error_info, #{module => ?MODULE}}]
+    ).
 
 %% Only integer/float/boolean/atom can fail to convert (and are re-raised as
 %% `env_invalid_value`); binary/binary_list/string always succeed.
 convert(integer, Value) -> list_to_integer(Value);
-convert(float, Value) -> list_to_float(Value);
+convert(float, Value) -> to_float(Value);
 convert(boolean, Value) -> to_boolean(Value);
 convert(binary, Value) -> list_to_binary(Value);
 convert(atom, Value) -> list_to_existing_atom(Value);
@@ -230,6 +263,15 @@ type_label(string) -> "string".
 comma_split(Value) ->
     Parts = [string:trim(S) || S <- string:split(Value, ",", all)],
     [list_to_binary(P) || P <- Parts, P =/= ""].
+
+%% `list_to_float/1` demands a fraction, but `WEIGHT=2` for a `1.0` default
+%% plainly means 2.0.
+to_float(Value) ->
+    try
+        list_to_float(Value)
+    catch
+        error:badarg -> float(list_to_integer(Value))
+    end.
 
 to_boolean(Value) ->
     case string:lowercase(Value) of
