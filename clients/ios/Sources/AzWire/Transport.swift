@@ -42,7 +42,12 @@ public final class URLSessionWebSocketTransport: NSObject, WebSocketTransport {
     }
 
     public func send(_ text: String) {
-        task?.send(.string(text)) { _ in }
+        guard let task else { return azWarn("send on a closed socket dropped: \(text)") }
+        // The completion is the only place a failed send surfaces; without it a
+        // frame lost here is indistinguishable from one the server ignored.
+        task.send(.string(text)) { error in
+            if let error { azWarn("send failed: \(error); frame: \(text)") }
+        }
     }
 
     public func close(code: Int) {

@@ -28,9 +28,15 @@ final class ListE2ETest: XCTestCase {
         tapButton(app, "dbg-remove")
         waitForNoText(app, "Two")
 
-        // OP_MOVE -- numeric pos, move {id: 1} to index 2 (item stays present).
+        // OP_MOVE -- numeric pos, move {id: 1} to index 2: [One, Three, Nine]
+        // becomes [Three, Nine, One]. "One" never leaves, so its presence proves
+        // nothing; wait for the order to change (it is laid out below "Nine").
         tapButton(app, "dbg-move")
-        waitForText(app, "One")
+        let one = app.firstElement(label: "One")
+        let nine = app.firstElement(label: "Nine")
+        waitUntil("'One' to move below 'Nine'") {
+            one.exists && nine.exists && one.frame.minY > nine.frame.minY
+        }
 
         // OP_ITEM_PATCH -- update item 9's text in place.
         tapButton(app, "dbg-update")

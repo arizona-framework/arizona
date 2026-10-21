@@ -42,6 +42,23 @@ extension XCTestCase {
             "expected '\(text)' to disappear", file: file, line: line)
     }
 
+    /// Wait until `condition` holds, re-evaluating it as XCUITest polls -- for an
+    /// assertion no single element's attributes can express (a relation between
+    /// two elements, or a value that must grow rather than equal a literal).
+    func waitUntil(
+        _ description: String,
+        timeout: TimeInterval = 20,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: @escaping () -> Bool
+    ) {
+        let met = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in condition() }, object: nil)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [met], timeout: timeout), .completed,
+            "expected \(description)", file: file, line: line)
+    }
+
     /// Wait for a button (by title or accessibility id) and tap it.
     func tapButton(
         _ app: XCUIApplication,
