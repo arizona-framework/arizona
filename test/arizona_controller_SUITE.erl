@@ -12,6 +12,10 @@
 -export([reply_redirect_reads_location_as_a_browser_does/1]).
 -export([reply_redirect_refuses_unsafe_scheme/1]).
 -export([set_cookie_layers_onto_reply/1]).
+-export([reply_effects_refuses_navigate_flash/1]).
+-export([put_flash_with_full_navigate_reaches_target/1]).
+-export([init_per_suite/1]).
+-export([end_per_suite/1]).
 
 all() ->
     [{group, reply}].
@@ -26,9 +30,18 @@ groups() ->
             reply_redirect_off_origin_loads_full_page,
             reply_redirect_reads_location_as_a_browser_does,
             reply_redirect_refuses_unsafe_scheme,
-            set_cookie_layers_onto_reply
+            set_cookie_layers_onto_reply,
+            reply_effects_refuses_navigate_flash,
+            put_flash_with_full_navigate_reaches_target
         ]}
     ].
+
+init_per_suite(Config) ->
+    ok = application:set_env(arizona, secret_key, ~"test-secret-key-0123456789abcdef"),
+    Config.
+
+end_per_suite(_Config) ->
+    ok = application:unset_env(arizona, secret_key).
 
 %% --------------------------------------------------------------------
 %% reply_effects/1
@@ -151,3 +164,51 @@ set_cookie_layers_onto_reply(Config) when is_list(Config) ->
     Cookie = proplists:get_value(~"set-cookie", Headers),
     ?assertNotEqual(undefined, Cookie),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"sid=new")).
+
+%% --------------------------------------------------------------------
+%% A navigate/patch flash has no carrier in a fetch response
+%% --------------------------------------------------------------------
+
+%% The `flash` opt is carried in-process by the WebSocket, for an effect a live
+%% handler returns. A fetch response reaches the browser instead, which would
+%% navigate without it -- the message silently lost, its content shipped in the
+%% body. Refused, wherever the navigate sits.
+reply_effects_refuses_navigate_flash(Config) when is_list(Config) ->
+    Flash = #{~"info" => ~"Saved"},
+    Nav = arizona_js:navigate(~"/done", #{flash => Flash}),
+    Refused = [
+        [Nav],
+        [arizona_js:set_title(~"t"), arizona_js:patch(~"/done", #{flash => Flash})],
+        [arizona_js:transition(Nav)],
+        [arizona_js:on_key(enter, [Nav])],
+        [arizona_js:fetch(~"/f", #{on_error => Nav})]
+    ],
+    [
+        ?assertError({flash_outside_live_effect, _}, arizona_controller:reply_effects(Effects))
+     || Effects <- Refused
+    ],
+    ?assertError(
+        {flash_outside_live_effect, navigate}, arizona_controller:reply_effects(422, [Nav])
+    ),
+    ?assertMatch(
+        {200, _, _}, arizona_controller:reply_effects([arizona_js:navigate(~"/done", #{})])
+    ).
+
+%% What carries a flash out of a controller: `put_flash/3` through the request
+%% round trip sets the signed cookie on this response, and a FULL navigation makes
+%% the browser's next GET carry it. (A SPA navigate would not: the socket's request
+%% predates the cookie.)
+put_flash_with_full_navigate_reaches_target(Config) when is_list(Config) ->
+    ArzReq = arizona_req:put_flash(arizona_req_test_adapter:new(#{}), info, ~"Saved"),
+    Resp = arizona_roadrunner_resp:flush(
+        ArzReq,
+        arizona_controller:reply_effects([arizona_js:navigate(~"/done", #{full => true})])
+    ),
+    {200, Headers, Body} = Resp,
+    ?assertEqual(
+        #{~"e" => [[10, ~"/done", #{~"full" => true}]]}, json:decode(iolist_to_binary(Body))
+    ),
+    [Cookie] = [V || {~"set-cookie", V} <- Headers],
+    <<"az_flash=", Rest/binary>> = Cookie,
+    [Value | _] = binary:split(Rest, ~";"),
+    ?assertEqual(#{~"info" => ~"Saved"}, arizona_flash:decode(Value)).
