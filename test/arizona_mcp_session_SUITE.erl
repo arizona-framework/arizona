@@ -33,6 +33,7 @@
     terminate_kills_streaming_worker/1,
     buffered_dispatch_runs_in_worker/1,
     buffered_dispatch_survives_short_ttl/1,
+    stale_ttl_expiry_spares_active_session/1,
     buffered_cancel_frees_caller/1,
     buffered_worker_crash_frees_caller/1,
     buffered_block_does_not_wedge_session/1,
@@ -91,6 +92,7 @@ all() ->
         terminate_kills_streaming_worker,
         buffered_dispatch_runs_in_worker,
         buffered_dispatch_survives_short_ttl,
+        stale_ttl_expiry_spares_active_session,
         buffered_cancel_frees_caller,
         buffered_worker_crash_frees_caller,
         buffered_block_does_not_wedge_session,
@@ -470,6 +472,49 @@ buffered_dispatch_survives_short_ttl(_Config) ->
         {'DOWN', Ref, process, Pid, normal} -> ok
     after 5000 -> ct:fail(ttl_did_not_rearm)
     end.
+
+%% The idle timer fires while a request already sits in the session's mailbox.
+%% Serving it cancels the timer, but the expiry is already queued behind it; that
+%% stale expiry must not reap the session the request is now holding open.
+stale_ttl_expiry_spares_active_session(_Config) ->
+    {_Id, Pid} = start(500),
+    ok = sys:suspend(Pid),
+    Self = self(),
+    Caller = spawn(fun() ->
+        Result = arizona_mcp_session:dispatch(Pid, ~"tools/call", #{~"name" => ~"sleep"}, 7),
+        Self ! {result, self(), Result}
+    end),
+    %% Resume only once the mailbox holds the request with the expiry behind it,
+    %% the order a refresh_ttl/1 cancel cannot flush; waiting on that rather than
+    %% on a sleep keeps the race the test is about from depending on timing.
+    ?assertEqual([dispatch, expiry], await_mailbox(Pid, [dispatch, expiry], 5000)),
+    ok = sys:resume(Pid),
+    receive
+        {result, Caller, Result} ->
+            ?assertMatch(
+                {reply, #{~"result" := #{~"content" := [#{~"text" := ~"slept"}]}}}, Result
+            )
+    after 5000 -> ct:fail(no_result)
+    end.
+
+%% Poll `Pid`'s mailbox until it holds the `Kinds` of message (in any order),
+%% then return them in mailbox order.
+await_mailbox(Pid, Kinds, Timeout) when Timeout =< 0 ->
+    ct:fail({mailbox_never_held, Kinds, erlang:process_info(Pid, messages)});
+await_mailbox(Pid, Kinds, Timeout) ->
+    {messages, Msgs} = erlang:process_info(Pid, messages),
+    Seen = [Kind || Msg <- Msgs, Kind <- [message_kind(Msg)], lists:member(Kind, Kinds)],
+    case lists:sort(Seen) =:= lists:sort(Kinds) of
+        true ->
+            Seen;
+        false ->
+            timer:sleep(10),
+            await_mailbox(Pid, Kinds, Timeout - 10)
+    end.
+
+message_kind({'$gen_call', _From, {dispatch, _Method, _Params, _Id}}) -> dispatch;
+message_kind({timeout, _Ref, session_ttl_expired}) -> expiry;
+message_kind(_Other) -> other.
 
 buffered_cancel_frees_caller(_Config) ->
     {_Id, Pid} = start(60000),

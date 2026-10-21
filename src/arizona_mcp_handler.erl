@@ -54,13 +54,14 @@ protocol contract holds even when a tool raises.
 %% negotiated at initialize, the list page size, and the minimum log severity
 %% the client set (via `logging/setLevel`). `arizona_mcp_session` holds one
 %% across a stateful connection; `dispatch/3` builds an ephemeral one per
-%% request.
+%% request, marked `stateless`.
 -type session() :: #{
     mod := module(),
     state := arizona_mcp:state(),
     caps := arizona_mcp:capabilities(),
     page_size := pos_integer(),
-    log_min_severity := 0..7
+    log_min_severity := 0..7,
+    stateless => true
 }.
 
 %% An optional per-route auth hook, run after the Origin check and before any
@@ -329,7 +330,7 @@ dispatch(Mod, #{method := Method, params := Params, id := Id}, Ctx) ->
             %% Nothing outlives the request, so the threaded-back session is
             %% discarded -- the next request rebuilds from `init/1`.
             {_ServerInfo, Session} = open_session(Mod, #{}, PageSize),
-            {Outcome, _Session1} = handle_method(Method, Params, Id, Session),
+            {Outcome, _Session1} = handle_method(Method, Params, Id, Session#{stateless => true}),
             Outcome
     end.
 
@@ -409,17 +410,17 @@ accepts_sse(Req) ->
     end.
 
 %% Recognise a well-formed token-bearing `tools/call`. A missing/non-binary
-%% name or absent token falls through to the buffered path (which produces the
-%% matching error); declared-ness is checked later, where the handler module is
-%% in hand.
+%% name, non-object arguments or absent token falls through to the buffered path
+%% (which produces the matching error); declared-ness is checked later, where the
+%% handler module is in hand.
 streaming_progress(#{method := ~"tools/call", id := Id, params := Params}) when
     Id =/= undefined
 ->
-    case Params of
-        #{~"name" := Name, ~"_meta" := #{~"progressToken" := Token}} when is_binary(Name) ->
-            {stream, #{
-                name => Name, args => maps:get(~"arguments", Params, #{}), token => Token, id => Id
-            }};
+    case {Params, call_arguments(Params)} of
+        {#{~"name" := Name, ~"_meta" := #{~"progressToken" := Token}}, {ok, Args}} when
+            is_binary(Name)
+        ->
+            {stream, #{name => Name, args => Args, token => Token, id => Id}};
         _ ->
             none
     end;
@@ -953,10 +954,30 @@ call_tool(Params, Id, #{mod := Mod, state := State} = Session) ->
         fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing tool name") end,
         fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown tool: ", Name/binary>>) end,
         fun(Name) ->
-            Args = maps:get(~"arguments", Params, #{}),
-            tool_reply(Mod:handle_tool(Name, Args, inert_ctx(), State), Id, Session)
+            case call_arguments(Params) of
+                {ok, Args} ->
+                    tool_reply(Mod:handle_tool(Name, Args, inert_ctx(), State), Id, Session);
+                error ->
+                    {{error, invalid_arguments(Id)}, Session}
+            end
         end
     ).
+
+%% `arguments` is an optional JSON object; `handle_tool/4` and `get_prompt/3`
+%% are promised a map, so any other value is the client's error (-32602) rather
+%% than a crash inside the callback (an opaque -32603). A null is absent, as a
+%% null `id` is (`arizona_jsonrpc`).
+call_arguments(#{~"arguments" := Args}) when is_map(Args) ->
+    {ok, Args};
+call_arguments(#{~"arguments" := null}) ->
+    {ok, #{}};
+call_arguments(#{~"arguments" := _NotAnObject}) ->
+    error;
+call_arguments(#{}) ->
+    {ok, #{}}.
+
+invalid_arguments(Id) ->
+    arizona_jsonrpc:error(Id, -32602, ~"Invalid params: arguments must be an object").
 
 %% The progress context for a buffered (non-streaming) `tools/call`: inert, so
 %% `arizona_mcp:progress/2,3` is a no-op. Streaming calls build a live context
@@ -984,16 +1005,26 @@ resource_templates(Mod, State) ->
     end.
 
 %% `resources/subscribe` / `unsubscribe` join/leave the per-uri pubsub channel as
-%% the calling process. In session mode that is the session process, so the
+%% the calling process -- the session process in session mode, so the
 %% subscription persists and `arizona_mcp:resource_updated/1` broadcasts reach it
-%% (forwarded as `notifications/resources/updated`); in stateless mode the request
-%% process dies after the reply -- a harmless no-op, since stateless has no SSE
-%% channel to deliver on. Both answer the MCP empty result.
+%% (forwarded as `notifications/resources/updated`). Stateless mode has no SSE
+%% channel to deliver on, so it accepts the subscription and joins nothing, as a
+%% push to a session without a channel is dropped. Joining there would subscribe
+%% the connection process, which a keep-alive connection keeps alive for every
+%% later request: a membership no request ever leaves, collecting updates in a
+%% mailbox nothing reads. Both answer the MCP empty result.
+subscribe_resource(Params, Id, #{stateless := true} = Session) ->
+    resource_subscription(Params, Id, Session, fun no_subscription/1);
 subscribe_resource(Params, Id, Session) ->
     resource_subscription(Params, Id, Session, fun join_resource/1).
 
+unsubscribe_resource(Params, Id, #{stateless := true} = Session) ->
+    resource_subscription(Params, Id, Session, fun no_subscription/1);
 unsubscribe_resource(Params, Id, Session) ->
     resource_subscription(Params, Id, Session, fun leave_resource/1).
+
+no_subscription(_Channel) ->
+    ok.
 
 resource_subscription(#{~"uri" := Uri}, Id, Session, Fun) when is_binary(Uri) ->
     ok = Fun({mcp_resource, Uri}),
@@ -1022,8 +1053,10 @@ get_prompt(Params, Id, #{mod := Mod, state := State} = Session) ->
         fun() -> arizona_jsonrpc:error(Id, -32602, ~"Invalid params: missing prompt name") end,
         fun(Name) -> arizona_jsonrpc:error(Id, -32602, <<"Unknown prompt: ", Name/binary>>) end,
         fun(Name) ->
-            Args = maps:get(~"arguments", Params, #{}),
-            prompt_messages(Mod:get_prompt(Name, Args, State), Id, Session)
+            case call_arguments(Params) of
+                {ok, Args} -> prompt_messages(Mod:get_prompt(Name, Args, State), Id, Session);
+                error -> {{error, invalid_arguments(Id)}, Session}
+            end
         end
     ).
 
