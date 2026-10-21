@@ -83,6 +83,7 @@ never sanitized.
 -export([supports_nodiff_keep/0]).
 -export([implied_attrs/2]).
 -export([boolean_attrs/0]).
+-export([attr_names/0]).
 -export([escape/1]).
 -export([render_attr/2]).
 -export([wire_escape/1]).
@@ -286,6 +287,11 @@ supports_nodiff_keep() -> false.
 implied_attrs(_Tag, _Names) -> [].
 
 boolean_attrs() -> presence.
+
+%% Styles are SGR escapes emitted in order, so a repeated one (two `sgr` escapes) is
+%% meaningful rather than a collision.
+-spec attr_names() -> repeatable.
+attr_names() -> repeatable.
 
 -doc """
 Sanitize a dynamic value's bytes for terminal output. Strips the C0 control bytes

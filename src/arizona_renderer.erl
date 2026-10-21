@@ -230,6 +230,16 @@ wraps the attribute expression in an internal boolean tag for a `value` backend.
 -callback boolean_attrs() -> presence | value.
 
 -doc """
+How attribute names compare on this backend's wire, asked by the parse transform at
+compile time to reject an attribute written twice on one element (`duplicate_attr`).
+Names are compared after `name/1`. `case_insensitive` (HTML): ASCII case is folded, as
+the HTML parser folds it (only A-Z). `case_sensitive`: names compare byte for byte (JSON
+object keys). `repeatable`: a repeated attribute is meaningful, so none is rejected (the
+terminal's styles are SGR escapes that compose in order).
+""".
+-callback attr_names() -> case_insensitive | case_sensitive | repeatable.
+
+-doc """
 Escape a dynamic value's rendered bytes for this backend's zipped document.
 Called at the render boundary on interpolated scalar values
 (`arizona_template:escape_value/2`). HTML entity-escapes (`<`, `&`, ...); the
