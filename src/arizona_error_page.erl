@@ -366,6 +366,10 @@ format_reason(Class, Reason, Stacktrace) ->
 format_file_errors(File, Errors) ->
     [File, ":\n", lists:join("\n", [format_one_error(E) || E <- Errors])].
 
+%% The compiler reports `none` for a diagnostic tied to no line -- an undefined
+%% or crashing parse transform -- which `erl_anno:line/1` rejects.
+format_one_error({none, Mod, Reason}) ->
+    io_lib:format("  ~ts", [Mod:format_error(Reason)]);
 format_one_error({Location, Mod, Reason}) ->
     Line = erl_anno:line(Location),
     Msg = Mod:format_error(Reason),

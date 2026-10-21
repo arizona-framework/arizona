@@ -40,10 +40,24 @@
     compile_module_name_differs_from_basename/1,
     compile_error_stores_error/1,
     compile_error_cleared_on_success/1,
+    compile_error_kept_across_unrelated_wave/1,
+    compile_error_dropped_when_file_deleted/1,
     non_erl_files_skip_compile/1,
     mixed_files_only_compile_erl/1,
     deleted_file_skips_compile/1,
-    deleted_file_alongside_good_compiles_good/1
+    deleted_file_alongside_good_compiles_good/1,
+    load_failure_stashes_error/1,
+    warnings_as_errors_is_a_compile_error/1
+]).
+
+%% agent group tests (compiling through a running rebar_agent)
+-export([
+    agent_success_clears_every_error/1,
+    agent_failure_stashes_changed_file_errors/1,
+    agent_failure_unreproduced_is_unattributed/1,
+    agent_failure_keeps_other_file_errors/1,
+    agent_failure_skips_deleted_file/1,
+    agent_failure_reports_warnings_as_errors/1
 ]).
 
 %% blacklist group tests
@@ -79,6 +93,7 @@ all() ->
         {group, pubsub},
         {group, integration},
         {group, compile},
+        {group, agent},
         {group, consistency},
         {group, blacklist}
     ].
@@ -105,10 +120,22 @@ groups() ->
             compile_module_name_differs_from_basename,
             compile_error_stores_error,
             compile_error_cleared_on_success,
+            compile_error_kept_across_unrelated_wave,
+            compile_error_dropped_when_file_deleted,
             non_erl_files_skip_compile,
             mixed_files_only_compile_erl,
             deleted_file_skips_compile,
-            deleted_file_alongside_good_compiles_good
+            deleted_file_alongside_good_compiles_good,
+            load_failure_stashes_error,
+            warnings_as_errors_is_a_compile_error
+        ]},
+        {agent, [], [
+            agent_success_clears_every_error,
+            agent_failure_stashes_changed_file_errors,
+            agent_failure_unreproduced_is_unattributed,
+            agent_failure_keeps_other_file_errors,
+            agent_failure_skips_deleted_file,
+            agent_failure_reports_warnings_as_errors
         ]},
         {blacklist, [sequence], [
             blacklisted_app_module_not_reloaded,
@@ -147,6 +174,8 @@ init_per_group(integration, Config) ->
     Config;
 init_per_group(compile, Config) ->
     Config;
+init_per_group(agent, Config) ->
+    install_fake_agent() ++ Config;
 init_per_group(blacklist, Config) ->
     %% The sweep reads the beam-facts cache table that `arizona_sup` owns.
     {ok, _} = application:ensure_all_started(arizona),
@@ -159,6 +188,8 @@ init_per_group(consistency, Config) ->
 
 end_per_group(compile, _Config) ->
     ok;
+end_per_group(agent, Config) ->
+    remove_fake_agent(Config);
 end_per_group(blacklist, _Config) ->
     _ = application:stop(arizona),
     ok;
@@ -317,11 +348,12 @@ watch_delegates_to_watcher(Config) ->
 get_error_default_undefined(Config) when is_list(Config) ->
     ?assertEqual(undefined, arizona_reloader:get_error()).
 
-clear_error_resets(Config) when is_list(Config) ->
-    %% Simulate a stored error, then clear it.
-    persistent_term:put(arizona_compile_error, #{errors => []}),
-    ?assertMatch(#{errors := []}, arizona_reloader:get_error()),
-    arizona_reloader:clear_error(),
+clear_error_resets(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_bad.erl"),
+    ok = file:write_file(File, bad_module_src()),
+    {error, _} = arizona_reloader:compile([File]),
+    ?assertMatch(#{errors := [_ | _]}, arizona_reloader:get_error()),
+    ok = arizona_reloader:clear_error(),
     ?assertEqual(undefined, arizona_reloader:get_error()).
 
 compile_success_reloads_module(Config) ->
@@ -355,17 +387,40 @@ compile_error_stores_error(Config) ->
     ?assertMatch({error, #{errors := [_ | _]}}, arizona_reloader:compile([File])),
     ?assertMatch(#{errors := [_ | _]}, arizona_reloader:get_error()).
 
+%% Fixing the broken file clears its error.
 compile_error_cleared_on_success(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_good2.erl"),
+    ok = file:write_file(File, bad_module_src2()),
+    ?assertMatch({error, _}, arizona_reloader:compile([File])),
+    ?assertMatch(#{errors := [{File, _} | _]}, arizona_reloader:get_error()),
+    ok = file:write_file(File, good_module_src2()),
+    ?assertEqual(ok, arizona_reloader:compile([File])),
+    ?assertEqual(undefined, arizona_reloader:get_error()).
+
+%% Saving an unrelated file that compiles must not hide a file still broken:
+%% errors are kept per file and only a wave carrying the file clears them.
+compile_error_kept_across_unrelated_wave(Config) ->
     Dir = proplists:get_value(tmp_dir, Config),
     BadFile = filename:join(Dir, "arizona_dev_ct_bad2.erl"),
     GoodFile = filename:join(Dir, "arizona_dev_ct_good2.erl"),
     ok = file:write_file(BadFile, bad_module_src2()),
-    %% First: compile error.
-    ?assertMatch({error, _}, arizona_reloader:compile([BadFile])),
-    ?assertMatch(#{errors := _}, arizona_reloader:get_error()),
-    %% Second: successful compile clears error.
     ok = file:write_file(GoodFile, good_module_src2()),
+    {error, #{errors := BadErrors}} = arizona_reloader:compile([BadFile]),
     ?assertEqual(ok, arizona_reloader:compile([GoodFile])),
+    ?assertEqual(#{errors => BadErrors}, arizona_reloader:get_error()),
+    %% A second broken file joins the first rather than replacing it.
+    ok = file:write_file(GoodFile, bad_module_src2()),
+    {error, #{errors := GoodErrors}} = arizona_reloader:compile([GoodFile]),
+    #{errors := Both} = arizona_reloader:get_error(),
+    ?assertEqual(lists:sort(BadErrors ++ GoodErrors), lists:sort(Both)).
+
+%% A broken file deleted in a later wave is no longer an error.
+compile_error_dropped_when_file_deleted(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_bad2.erl"),
+    ok = file:write_file(File, bad_module_src2()),
+    {error, _} = arizona_reloader:compile([File]),
+    ok = file:delete(File),
+    ?assertEqual(ok, arizona_reloader:compile([File])),
     ?assertEqual(undefined, arizona_reloader:get_error()).
 
 non_erl_files_skip_compile(Config) when is_list(Config) ->
@@ -402,6 +457,118 @@ deleted_file_alongside_good_compiles_good(Config) ->
     ?assertEqual(ok, arizona_reloader:compile([Missing, Good])),
     ?assertEqual(undefined, arizona_reloader:get_error()),
     ?assertEqual(ok, erlang:apply(arizona_dev_ct_alive, check, [])).
+
+%% A module that compiles but fails to load (`-on_load` not returning `ok`) is
+%% reported like a compile error -- stashed for the error page, which renders
+%% it -- instead of raising out of the watcher callback, and the rest of the
+%% wave still loads.
+load_failure_stashes_error(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    OnLoad = filename:join(Dir, "arizona_dev_ct_onload.erl"),
+    Good = filename:join(Dir, "arizona_dev_ct_after_onload.erl"),
+    ok = file:write_file(
+        OnLoad,
+        "-module(arizona_dev_ct_onload).\n-on_load(init/0).\n-export([init/0]).\ninit() -> error.\n"
+    ),
+    ok = file:write_file(
+        Good, "-module(arizona_dev_ct_after_onload).\n-export([check/0]).\ncheck() -> ok.\n"
+    ),
+    Reason = {load_failed, arizona_dev_ct_onload, on_load_failure},
+    ?assertEqual(
+        {error, #{errors => [{OnLoad, [{none, arizona_reloader, Reason}]}]}},
+        arizona_reloader:compile([OnLoad, Good])
+    ),
+    ?assertEqual(ok, erlang:apply(arizona_dev_ct_after_onload, check, [])),
+    ?assertMatch(#{errors := [{OnLoad, _}]}, arizona_reloader:get_error()),
+    ErrorInfo = #{
+        class => error,
+        reason => {compile_error, [{OnLoad, [{none, arizona_reloader, Reason}]}]},
+        stacktrace => []
+    },
+    Page = iolist_to_binary(
+        arizona_render:render_to_iolist(arizona_error_page:render(#{error_info => ErrorInfo}))
+    ),
+    ?assertMatch({match, _}, re:run(Page, ~"arizona_dev_ct_onload compiled but did not load")).
+
+%% A module whose source turns on `warnings_as_errors` fails on a warning alone:
+%% the compiler answers `{error, [], Warnings}`. That is a failed compile -- the
+%% module is not reloaded -- so the warnings are its errors, not an `ok`.
+warnings_as_errors_is_a_compile_error(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_wae.erl"),
+    ok = file:write_file(File, wae_module_src()),
+    ?assertMatch(
+        {error, #{errors := [{File, [{_, erl_lint, {unused_var, 'X'}}]}]}},
+        arizona_reloader:compile([File])
+    ),
+    ?assertMatch(#{errors := [{File, [_]}]}, arizona_reloader:get_error()),
+    ?assertNot(erlang:function_exported(arizona_dev_ct_wae, f, 1)).
+
+%% ============================================================================
+%% agent group tests (arizona_reloader, rebar_agent mode)
+%% ============================================================================
+
+%% rebar_agent compiles the whole project, so a clean compile clears every
+%% stashed error, including one for a file outside the wave.
+agent_success_clears_every_error(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Bad = filename:join(Dir, "arizona_dev_ct_bad.erl"),
+    ok = file:write_file(Bad, bad_module_src()),
+    ok = set_agent_result({error, failed}),
+    {error, #{errors := [_ | _]}} = arizona_reloader:compile([Bad]),
+    ok = set_agent_result(ok),
+    ?assertEqual(ok, arizona_reloader:compile([filename:join(Dir, "other.erl")])),
+    ?assertEqual(undefined, arizona_reloader:get_error()).
+
+agent_failure_stashes_changed_file_errors(Config) ->
+    Bad = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_bad.erl"),
+    ok = file:write_file(Bad, bad_module_src()),
+    ok = set_agent_result({error, failed}),
+    {error, #{errors := Errors}} = arizona_reloader:compile([Bad]),
+    ?assertMatch([{Bad, _} | _], Errors),
+    ?assertEqual(#{errors => Errors}, arizona_reloader:get_error()).
+
+%% The project failed but no changed file reproduces it (a dependency, a file
+%% outside the wave): the stash says so with an empty list, which the error page
+%% explains, rather than reading as no error at all.
+agent_failure_unreproduced_is_unattributed(Config) ->
+    Good = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_alive.erl"),
+    ok = file:write_file(Good, alive_module_src()),
+    ok = set_agent_result({error, failed}),
+    ?assertEqual({error, #{errors => []}}, arizona_reloader:compile([Good])),
+    ?assertEqual(#{errors => []}, arizona_reloader:get_error()).
+
+%% A failing project wave that reproduces nothing keeps the file already known
+%% to be broken on show, instead of the unattributed explanation.
+agent_failure_keeps_other_file_errors(Config) ->
+    Dir = proplists:get_value(tmp_dir, Config),
+    Bad = filename:join(Dir, "arizona_dev_ct_bad.erl"),
+    Good = filename:join(Dir, "arizona_dev_ct_alive.erl"),
+    ok = file:write_file(Bad, bad_module_src()),
+    ok = file:write_file(Good, alive_module_src()),
+    ok = set_agent_result({error, failed}),
+    {error, #{errors := BadErrors}} = arizona_reloader:compile([Bad]),
+    ?assertEqual({error, #{errors => []}}, arizona_reloader:compile([Good])),
+    ?assertEqual(#{errors => BadErrors}, arizona_reloader:get_error()).
+
+%% A deletion is not a compile error in this mode either: recompiling the
+%% vanished path for diagnostics would stash an `{epp, enoent}` that outlives the
+%% wave and hides the unattributed explanation.
+agent_failure_skips_deleted_file(Config) ->
+    Missing = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_gone.erl"),
+    ok = set_agent_result({error, failed}),
+    ?assertEqual({error, #{errors => []}}, arizona_reloader:compile([Missing])),
+    ?assertEqual(#{errors => []}, arizona_reloader:get_error()).
+
+%% The diagnostics recompile sees a warnings-as-errors failure the same way the
+%% manual compile does: the warnings are the errors.
+agent_failure_reports_warnings_as_errors(Config) ->
+    File = filename:join(proplists:get_value(tmp_dir, Config), "arizona_dev_ct_wae.erl"),
+    ok = file:write_file(File, wae_module_src()),
+    ok = set_agent_result({error, failed}),
+    ?assertMatch(
+        {error, #{errors := [{File, [{_, erl_lint, {unused_var, 'X'}}]}]}},
+        arizona_reloader:compile([File])
+    ).
 
 %% ============================================================================
 %% consistency group tests (arizona_reloader_consistency)
@@ -752,6 +919,60 @@ mixed_good_module_src() ->
     "-module(arizona_dev_ct_mixed).\n"
     "-export([check/0]).\n"
     "check() -> ok.\n".
+
+wae_module_src() ->
+    "-module(arizona_dev_ct_wae).\n"
+    "-compile(warnings_as_errors).\n"
+    "-export([f/1]).\n"
+    "f(X) -> ok.\n".
+
+%% --- fake rebar_agent ---
+
+%% The reloader compiles through `rebar_agent` when a process is registered under
+%% that name, calling `rebar_agent:do(compile)`. Stand one in: a stub module
+%% answering whatever `set_agent_result/1` stored, and a registered idle process.
+%% `rebar3 ct` runs in rebar3's own node, whose real `rebar_agent` module may be
+%% loaded, so its object code is kept to restore afterwards.
+install_fake_agent() ->
+    Original =
+        case code:is_loaded(rebar_agent) of
+            {file, _} -> code:get_object_code(rebar_agent);
+            false -> error
+        end,
+    Forms = [
+        parse_form("-module(rebar_agent)."),
+        parse_form("-export([do/1])."),
+        parse_form("do(compile) -> persistent_term:get(arizona_reloader_suite_agent_result).")
+    ],
+    {ok, rebar_agent, Bin} = compile:forms(Forms),
+    _ = code:purge(rebar_agent),
+    {module, rebar_agent} = code:load_binary(rebar_agent, "rebar_agent.erl", Bin),
+    Agent = spawn(fun() -> timer:sleep(infinity) end),
+    true = register(rebar_agent, Agent),
+    [{fake_agent, {Agent, Original}}].
+
+remove_fake_agent(Config) ->
+    {Agent, Original} = proplists:get_value(fake_agent, Config),
+    true = exit(Agent, kill),
+    _ = persistent_term:erase(arizona_reloader_suite_agent_result),
+    _ = code:purge(rebar_agent),
+    true = code:delete(rebar_agent),
+    _ = code:purge(rebar_agent),
+    case Original of
+        {rebar_agent, Bin, File} ->
+            {module, rebar_agent} = code:load_binary(rebar_agent, File, Bin),
+            ok;
+        error ->
+            ok
+    end.
+
+parse_form(Src) ->
+    {ok, Tokens, _} = erl_scan:string(Src),
+    {ok, Form} = erl_parse:parse_form(Tokens),
+    Form.
+
+set_agent_result(Result) ->
+    persistent_term:put(arizona_reloader_suite_agent_result, Result).
 
 alive_module_src() ->
     "-module(arizona_dev_ct_alive).\n"
