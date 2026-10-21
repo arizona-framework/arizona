@@ -588,12 +588,13 @@ let _pendingTransition = null;
 // will degrade it.
 let _navInFlight = 0;
 let _navAwaitResync = false;
-// Bumped per armed navigate, so a send scheduled before it (a debounced or
-// throttled push_event) is dropped when it fires after the window has closed.
+// Bumped per armed navigate and by `disconnect()`, so a send scheduled before
+// either (a debounced or throttled push_event) is dropped when it fires later.
 let _navEpoch = 0;
 
 /**
- * Send a view event unless it was raised on a page a navigate is replacing.
+ * Send a view event unless it was raised on a page a navigate is replacing, or
+ * on a connection since torn down.
  * Framework frames (navigate, patch, cached_fps, ping) do not come through here.
  * A drop is reported, like the worker's socket-down drop: silence would read as
  * a handler that never fired. By event name only -- the payload may carry the
@@ -604,9 +605,7 @@ let _navEpoch = 0;
  */
 function sendEvent(name, msg, epoch = _navEpoch) {
     if (_navInFlight > 0 || _navAwaitResync || epoch !== _navEpoch) {
-        console.warn(
-            `[arizona] dropped event "${name}": a navigate is replacing the page it came from`,
-        );
+        console.warn(`[arizona] dropped stale event "${name}"`);
         return;
     }
     workerPost(W_SEND, msg);
@@ -825,7 +824,7 @@ function sendNav(kind, path, qs) {
 function leavePage(url, replace) {
     const { protocol } = new URL(url, location.href);
     if (protocol !== 'http:' && protocol !== 'https:') {
-        console.warn('[arizona] refusing to navigate to a non-http(s) URL:', url);
+        console.warn('[arizona] refused non-http(s) URL:', url);
         return;
     }
     // A replace finishes a navigation whose entry already names `url`, so the
@@ -836,25 +835,46 @@ function leavePage(url, replace) {
 }
 
 /**
- * Run a `navigate`/`patch` effect. The URL resolves against the CURRENT page,
- * as `pushState` resolves it, so the frame asks the server for the page the
- * address bar will show (`?page=2` on `/users/1/` is `/users/1/?page=2`).
- * Another origin cannot be SPA-navigated (`pushState` refuses it), so it loads
- * as a page; a new fragment on this page just scrolls, like an in-page
- * `az-navigate` click, with no server round trip.
+ * Where a `navigate`/`patch` to `u` goes: `'leave'` (another origin, which
+ * `pushState` refuses, so it loads as a page), `'hash'` (a new fragment on this
+ * page, which only scrolls) or `'server'` (an SPA frame).
+ * @param {URL} u
+ * @returns {'leave'|'hash'|'server'}
+ */
+function navRoute(u) {
+    if (u.origin !== location.origin) return 'leave';
+    // A bare `#` is a fragment too (an empty one, `hash` reads ''), as for the browser.
+    const fragment = u.hash !== '' || u.href.endsWith('#');
+    if (fragment && u.pathname === location.pathname && u.search === location.search) {
+        return 'hash';
+    }
+    return 'server';
+}
+
+/**
+ * Run a `navigate`/`patch`, from an effect or an `az-navigate`/`az-patch` click.
+ * The URL resolves against the CURRENT page, as `pushState` resolves it, so the
+ * frame asks the server for the page the address bar will show (`?page=2` on
+ * `/users/1/` is `/users/1/?page=2`). A link to this very URL is a real
+ * navigation too; only a new fragment on this page scrolls in place.
+ *
+ * `transition` (when given) becomes `_pendingTransition` only if a frame is
+ * sent: a hash jump or a page load has no server reply to wrap, so an intent set
+ * there would animate the next unrelated batch.
  * @param {string} full
  * @param {{replace?: boolean, noscroll?: boolean}} opts
  * @param {'navigate'|'patch'} kind
+ * @param {typeof _pendingTransition} [transition]
  */
-function navigateEffect(full, opts, kind) {
+function navigateEffect(full, opts, kind, transition) {
     const u = new URL(full, location.href);
-    if (u.origin !== location.origin) {
+    const route = navRoute(u);
+    if (route === 'leave') {
         leavePage(full, opts.replace);
         return;
     }
     const hash = u.hash ? u.hash.slice(1) : '';
-    const qs = u.search ? u.search.slice(1) : '';
-    if (hash && u.pathname === location.pathname && u.search === location.search) {
+    if (route === 'hash') {
         if (opts.replace) {
             history.replaceState(history.state, '', u.href);
         } else {
@@ -864,6 +884,8 @@ function navigateEffect(full, opts, kind) {
         if (!opts.noscroll) applyScroll({ kind: 'push', hash });
         return;
     }
+    if (transition !== undefined) _pendingTransition = transition;
+    const qs = u.search ? u.search.slice(1) : '';
     navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full, kind });
 }
 
@@ -1407,7 +1429,7 @@ function appendQuery(url, qs) {
 function bodyQuery(body) {
     const params = new URLSearchParams();
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-        console.warn('[arizona] fetch: a GET body must be a map; it was not sent', body);
+        console.warn('[arizona] GET fetch body is not a map, not sent:', body);
         return params;
     }
     for (const [key, value] of Object.entries(body)) {
@@ -2999,9 +3021,15 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const innerCmds = /** @type {Array<Array<*>>} */ (
                 Array.isArray(inner[0]) ? inner : [inner]
             );
-            const kind = innerCmds.some((c) => c[0] === JS_NAVIGATE)
+            // A navigate/patch that sends no frame (a hash jump, a page load)
+            // has no reply to wait for; a hash jump then wraps in place.
+            const toServer = (/** @type {Array<*>} */ c) =>
+                !c[2]?.full && navRoute(new URL(c[1], location.href)) === 'server';
+            const kind = innerCmds.some((c) => c[0] === JS_NAVIGATE && toServer(c))
                 ? 'replace'
-                : innerCmds.some((c) => c[0] === JS_PUSH_EVENT || c[0] === JS_PATCH)
+                : innerCmds.some(
+                        (c) => c[0] === JS_PUSH_EVENT || (c[0] === JS_PATCH && toServer(c)),
+                    )
                   ? 'any'
                   : null;
             if (kind) {
@@ -3370,16 +3398,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
 const _timers = new WeakMap();
 
 /**
- * Bumped by every `disconnect()`. A deferred send captures it, so a timer that
- * outlives its connection -- `disconnect()` cannot reach the timers, a WeakMap is
- * not iterable -- never sends an old view's event over the next connection.
- */
-let _connGen = 0;
-
-/**
  * Three send modes controlled by az-debounce and az-throttle attributes:
  *
- * 1. Immediate -- no attributes: sendFn fires right away.
+ * 1. Immediate -- no attributes: send fires right away.
  *
  * 2. Numeric debounce/throttle -- az-debounce="300" or az-throttle="300":
  *    debounce resets the timer on every event; throttle sends immediately
@@ -3387,7 +3408,7 @@ let _connGen = 0;
  *    For keydown throttle, a different key resets the interval so each
  *    distinct key gets through promptly.
  *
- * 3. Event-name debounce -- az-debounce="blur": stores the latest sendFn
+ * 3. Event-name debounce -- az-debounce="blur": stores the latest send
  *    but only flushes when the named DOM event fires on the element.
  *    Useful for sending input values only when the field loses focus.
  *
@@ -3399,26 +3420,23 @@ let _connGen = 0;
  * while a repeat at the same position collapses -- including one whose command
  * the server re-rendered mid-window (a changed payload), which is why the slot is
  * the position and not the command's value. A deferred send is dropped when it
- * fires after `disconnect()`.
+ * fires after a navigate or `disconnect()`: `send` carries the `_navEpoch` of
+ * the event, which both bump.
  * @param {Element} el
  * @param {Event|KeyboardEvent} event
  * @param {string} prefix index path of the wrapper holding the command
  * @param {number} index the command's position in its list
- * @param {Function} sendFn
+ * @param {Function} send
  */
-function scheduleSend(el, event, prefix, index, sendFn) {
+function scheduleSend(el, event, prefix, index, send) {
     const debounceAttr = el.getAttribute('az-debounce') || '';
     const debounceMs = parseInt(debounceAttr, 10);
     const debounceEvent = Number.isNaN(debounceMs) && debounceAttr !== '' ? debounceAttr : '';
     const throttleMs = parseInt(el.getAttribute('az-throttle') || '', 10);
     if (!debounceMs && !throttleMs && !debounceEvent) {
-        sendFn();
+        send();
         return;
     }
-    const gen = _connGen;
-    const send = () => {
-        if (gen === _connGen) sendFn();
-    };
     let rec = _timers.get(el);
     if (!rec) {
         rec = { slots: new Map() };
@@ -4086,9 +4104,7 @@ function bindDocumentEvents(target, signal, abort) {
                     return;
                 }
                 if (!_connected && (needs.event || needs.nav)) {
-                    console.warn(
-                        '[arizona] az-submit dropped: its command needs the WebSocket, which is not connected',
-                    );
+                    console.warn('[arizona] az-submit dropped: disconnected');
                     form.dispatchEvent(
                         new CustomEvent('arizona:submit-dropped', {
                             bubbles: true,
@@ -4263,35 +4279,20 @@ function connect(endpoint, params = {}) {
             // its pathname is not ours to request): the browser follows the link.
             if (el.origin !== location.origin) return;
             const isPatch = el.hasAttribute('az-patch');
-            // Anchors implement the URL interface -- use browser-parsed parts.
-            const path = el.pathname;
-            const qs = el.search ? el.search.slice(1) : '';
-            const hash = el.hash ? el.hash.slice(1) : '';
-            const noscroll = el.hasAttribute('az-noscroll');
 
             e.preventDefault();
-
-            // Same-page hash nav: update URL + scroll, no server round-trip.
-            // Save the outgoing scroll first (scrollRestoration is 'manual'),
-            // matching the push branch of navigateTo -- otherwise Back after an
-            // in-page anchor click lands at the top.
-            if (path === location.pathname && qs === location.search.slice(1)) {
-                saveCurrentScroll();
-                history.pushState(null, '', href);
-                if (!noscroll) applyScroll({ kind: 'push', hash });
-                return;
-            }
 
             // az-transition opts this navigation into a view transition. A patch
             // produces a diff (no OP_REPLACE), so its intent is consumed by the
             // first response batch ('any'); a navigate waits for the OP_REPLACE.
             const t = parseTransitionAttr(el);
-            _pendingTransition = t ? { types: t.types, kind: isPatch ? 'any' : 'replace' } : null;
-            navigateTo(path, qs, hash, {
-                noscroll,
-                fullUrl: href,
-                kind: isPatch ? 'patch' : 'navigate',
-            });
+            // `el.href` is resolved against the document base, as the browser would.
+            navigateEffect(
+                el.href,
+                { noscroll: el.hasAttribute('az-noscroll') },
+                isPatch ? 'patch' : 'navigate',
+                t ? { types: t.types, kind: isPatch ? 'any' : 'replace' } : null,
+            );
         },
         { signal },
     );
@@ -4707,10 +4708,10 @@ function connect(endpoint, params = {}) {
         // `document.body.innerHTML = ''`).
         for (const el of [..._hooks.keys()]) destroyHook(el);
         // Debounce/throttle timers live in a WeakMap keyed by element and aren't
-        // iterable, so they are left to expire: each captured the generation
-        // this bump retires and drops its send, which would otherwise reach the
-        // NEXT connection's worker carrying this one's view id.
-        _connGen++;
+        // iterable, so they are left to expire: each captured the epoch this
+        // bump retires and drops its send, which would otherwise reach the NEXT
+        // connection's worker carrying this one's view id.
+        _navEpoch++;
         document.documentElement.classList.remove('az-connected');
         document.documentElement.classList.remove('az-disconnected');
         if ('scrollRestoration' in history) {

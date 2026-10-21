@@ -6362,6 +6362,52 @@ describe('navigation scroll', () => {
         expect(scrollSpy).toHaveBeenCalledWith(0, 70);
     });
 
+    it('a hash-less link to the current URL is a real navigate/patch, like the effect', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        history.replaceState(null, '', '/same?tab=1');
+        setupView('page', '<div az="0"></div>');
+        const len0 = history.length;
+
+        const { event } = clickLink('/same?tab=1');
+        expect(event.defaultPrevented).toBe(true);
+        clickPatchLink('/same?tab=1');
+        mod.applyEffects([[10, '/same?tab=1']]);
+
+        const frames = mock
+            .getSentMessages()
+            .filter((m) => m[0] === 'navigate' || m[0] === 'patch');
+        expect(frames).toEqual([
+            ['navigate', { path: '/same', qs: 'tab=1' }],
+            ['patch', { path: '/same', qs: 'tab=1' }],
+            ['navigate', { path: '/same', qs: 'tab=1' }],
+        ]);
+        // Each pushes one entry, the click exactly as the effect does.
+        expect(history.length).toBe(len0 + 3);
+        expect(location.pathname + location.search + location.hash).toBe('/same?tab=1');
+    });
+
+    it('a bare # link scrolls to the top in place, no server round trip', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+        history.replaceState(null, '', '/same');
+        setupView('page', '<div az="0"></div>');
+
+        clickLink('#');
+        mod.applyEffects([[10, '#']]);
+
+        expect(location.pathname + location.search).toBe('/same');
+        expect(scrollSpy).toHaveBeenCalledTimes(2);
+        expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+        expect(mock.getSentMessages().some((m) => m[0] === 'navigate' || m[0] === 'patch')).toBe(
+            false,
+        );
+    });
+
     it('same-path hash nav saves outgoing scroll so Back can restore it', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
@@ -6623,8 +6669,13 @@ describe('scheduleSend -- debounce / throttle', () => {
         mock.restore();
         mock = setupMockWorker(mod);
         mock.simulateOpen();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.advanceTimersByTime(400);
         expect(mock.getSentMessages()).toEqual([]);
+        expect(warn).toHaveBeenCalledOnce();
+        expect(warn.mock.calls[0][0]).toContain('"save"');
+        expect(warn.mock.calls[0][0]).not.toContain('navigate');
+        warn.mockRestore();
     });
 
     // The slot is the command's POSITION, not its value: a command the server
@@ -7098,7 +7149,7 @@ describe('form submit', () => {
                 .getElementById('f')
                 .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
             expect(warn).toHaveBeenCalledWith(
-                '[arizona] refusing to navigate to a non-http(s) URL:',
+                '[arizona] refused non-http(s) URL:',
                 'javascript:alert(1)',
             );
         } finally {
@@ -8070,7 +8121,7 @@ describe('executeJS -- fetch', () => {
         await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
 
         expect(globalThis.fetch.mock.calls[0][0]).toBe('/search');
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('GET body must be a map'), [
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('GET fetch body is not a map'), [
             'a',
             'b',
         ]);
