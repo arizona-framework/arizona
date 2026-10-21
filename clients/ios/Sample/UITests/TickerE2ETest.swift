@@ -13,8 +13,22 @@ final class TickerE2ETest: XCTestCase {
 
     func testCountRisesFromServerPush() {
         tapButton(app, "Ticker")
-        // No tap: the server's timer drives the increments.
-        waitForText(app, "Tick: 1")
-        waitForText(app, "Tick: 2")
+        // No tap: the server's timer drives the increments. It ticks every
+        // second and XCUITest polls about as often, so waiting for an exact
+        // "Tick: N" can step over the one window that label is on screen. Read
+        // whatever count is showing, then wait for a larger one.
+        let tick = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Tick: ")).firstMatch
+        XCTAssertTrue(tick.waitForExistence(timeout: 20), "expected a 'Tick: N' label")
+        guard let first = count(tick.label) else {
+            return XCTFail("unparseable tick label '\(tick.label)'")
+        }
+        waitUntil("the tick count to rise past \(first)") {
+            tick.exists && (self.count(tick.label) ?? -1) > first
+        }
+    }
+
+    private func count(_ label: String) -> Int? {
+        Int(label.dropFirst("Tick: ".count))
     }
 }
