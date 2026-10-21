@@ -843,7 +843,10 @@ there is nothing free to accumulate and the wholesale side is estimated from the
 items' average size against the new visible count. And a stream carrying **child views
 is never collapsed**: the incremental path keeps their bookkeeping
 (`merge_stream_child_views/4`) while the container re-render has none, so collapsing
-would re-mount every child and reset its state.
+would re-mount every child and reset its state. That holds for the children the drain
+itself rendered too, even when the old items held none: the re-render would evaluate
+those items a second time and mount each child again, leaving the drain's instance
+never unmounted.
 
 That mostly retires the fallback for insertions -- one op is never worth re-rendering a
 container for. What still reaches it is a long run of removes, which no amount of

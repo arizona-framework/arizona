@@ -152,6 +152,7 @@
     stream_item_child_mounted_once_on_insert_move_update/1,
     nested_stream_child_mounted_once_on_outer_update_twice/1,
     stream_item_patched_once_on_updates_of_two_fields/1,
+    stream_children_rendered_by_drain_mount_once/1,
     on_mount_transforms_bindings/1,
     on_mount_works_on_navigate/1,
     on_mount_empty_is_noop/1,
@@ -320,7 +321,8 @@ groups() ->
             stream_item_child_updated_once_on_update_delete_reinsert,
             stream_item_child_mounted_once_on_insert_move_update,
             nested_stream_child_mounted_once_on_outer_update_twice,
-            stream_item_patched_once_on_updates_of_two_fields
+            stream_item_patched_once_on_updates_of_two_fields,
+            stream_children_rendered_by_drain_mount_once
         ]},
         {on_mount, [parallel], [
             on_mount_transforms_bindings,
@@ -2622,8 +2624,8 @@ stream_item_child_mounted_once_on_insert_move_update(Config) when is_list(Config
         once_stop(Pid)
     ).
 
-% Two updates of one key that change different fields ship one patch carrying
-% both: the re-render skips only what neither update reached.
+%% Two updates of one key that change different fields ship one patch carrying
+%% both: the re-render skips only what neither update reached.
 stream_item_patched_once_on_updates_of_two_fields(Config) when is_list(Config) ->
     {Pid, Ops} = once_event(#{}, ~"update_two_fields", #{~"id" => ~"a"}),
     ?assertMatch([[?OP_ITEM_PATCH, _, ~"a", [_, _]]], Ops),
@@ -2635,7 +2637,29 @@ stream_item_patched_once_on_updates_of_two_fields(Config) when is_list(Config) -
         once_stop(Pid)
     ).
 
-% The outer item of a nested stream updated twice in one event renders once, so
+%% A drain whose ops outweigh a re-render of the whole stream ships the re-render
+%% instead -- but not after the drain has rendered child views: rendering every
+%% item again mounted each new child a second time, and the first instances were
+%% never unmounted. The old items here hold no child, so only the new ones do.
+stream_children_rendered_by_drain_mount_once(Config) when is_list(Config) ->
+    Old = [integer_to_binary(K) || K <- lists:seq(1, 20)],
+    New = [integer_to_binary(K) || K <- lists:seq(21, 40)],
+    {ok, Pid} = arizona_live:start_link(
+        arizona_stream_lifecycle_root, #{notify => self(), keys => Old, on => false}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    [] = lifecycle_messages(),
+    ?assertEqual(
+        lists:sort([{child_mounted, <<"c-", K/binary>>} || K <- New]),
+        stream_lifecycle_event(Pid, ~"replace", #{~"del" => Old, ~"ins" => New})
+    ),
+    ok = arizona_live:stop(Pid),
+    ?assertEqual(
+        lists:sort([{child_unmounted, <<"c-", K/binary>>} || K <- New]),
+        lists:sort(lifecycle_messages())
+    ).
+
+%% The outer item of a nested stream updated twice in one event renders once, so
 %% the child of an inner item it gained mounts once.
 nested_stream_child_mounted_once_on_outer_update_twice(Config) when is_list(Config) ->
     Pid = start_nested_lifecycle(#{}),

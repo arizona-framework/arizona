@@ -5,7 +5,8 @@
 -export([handle_event/3]).
 
 %% A stream whose items each embed `arizona_stream_lifecycle_child` while their
-%% `on` field is true (the default); the item's `grand` field reaches the child as
+%% `on` field is true (the default, or the `on` mount binding for the initial
+%% items); the item's `grand` field reaches the child as
 %% a prop. Each event takes items, or an item's child, out of (or back into) the
 %% visible window through a different stream API, so a suite can assert the item
 %% children follow.
@@ -14,11 +15,12 @@
 mount(Bindings) ->
     Keys = maps:get(keys, Bindings, [~"a", ~"b"]),
     Opts = maps:get(opts, Bindings, #{}),
+    On = maps:get(on, Bindings, true),
     {
         #{
             id => ~"slr",
             notify => maps:get(notify, Bindings),
-            items => arizona_stream:new(fun key/1, [#{id => K} || K <- Keys], Opts)
+            items => arizona_stream:new(fun key/1, [#{id => K, on => On} || K <- Keys], Opts)
         },
         #{}
     }.
@@ -69,6 +71,10 @@ handle_event(~"update_delete", #{~"id" := Id}, #{items := S} = Bindings) ->
 handle_event(~"reinsert", #{~"id" := Id}, #{items := S} = Bindings) ->
     S1 = arizona_stream:insert(arizona_stream:delete(S, Id), #{id => Id}),
     {Bindings#{items => S1}, #{}, []};
+handle_event(~"replace", #{~"del" := Del, ~"ins" := Ins}, #{items := S0} = Bindings) ->
+    S1 = lists:foldl(fun(Id, S) -> arizona_stream:delete(S, Id) end, S0, Del),
+    S2 = lists:foldl(fun(Id, S) -> arizona_stream:insert(S, #{id => Id}) end, S1, Ins),
+    {Bindings#{items => S2}, #{}, []};
 handle_event(~"reset", #{~"ids" := Ids}, #{items := S} = Bindings) ->
     {Bindings#{items => arizona_stream:reset(S, [#{id => K} || K <- Ids])}, #{}, []};
 handle_event(~"renew", #{~"ids" := Ids}, Bindings) ->

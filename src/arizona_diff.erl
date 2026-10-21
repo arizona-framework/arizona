@@ -895,7 +895,10 @@ diff_stream(
                 OldOrder,
                 Views0
             ),
-            case stream_outgrows_re_render(StreamOps, Tmpl, OldSnap, Source) of
+            case
+                drain_rendered_no_view(Views0, Views1) andalso
+                    stream_outgrows_re_render(StreamOps, Tmpl, OldSnap, Source)
+            of
                 false -> {StreamOps, NewSnap, Views1};
                 true -> stream_full_render(Az, Source, Tmpl, Views0)
             end;
@@ -927,6 +930,13 @@ stream_full_render(Az, Source, Tmpl, Views0) ->
     },
     HTML = arizona_render:zip_stream_fp(Tmpl, ItemSnaps, VKeys),
     {[[?OP_TEXT, Az, HTML]], NewSnap, Views1}.
+
+%% A drain that rendered a child view keeps its ops: the full render evaluates every
+%% item again, so each `?stateful` the drain rendered would run `mount/1` (or
+%% `handle_update/3`) a second time, and the instance the drain made would never be
+%% unmounted. The drain only adds to the accumulator, so a grown one is the sign.
+drain_rendered_no_view({_, Local0}, {_, Local1}) ->
+    map_size(Local1) =:= map_size(Local0).
 
 %% The same question `outgrows_re_render/3` asks for a list, with two differences.
 %%
