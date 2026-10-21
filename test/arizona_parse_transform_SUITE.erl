@@ -352,6 +352,10 @@
     helper_guarded_data_arg_untouched/1,
     helper_multi_clause_comprehension_error/1,
     helper_multi_clause_comprehension_arg_untouched/1,
+    element_in_comprehension_rejected/1,
+    element_in_comprehension_names_line/1,
+    value_comprehension_renders/1,
+    element_comprehension_arg_untouched/1,
     impure_hoisted_rhs_rejected/1,
     impure_hoisted_rhs_location/1,
     impure_helper_arg_multi_use_rejected/1,
@@ -1088,7 +1092,11 @@ groups() ->
             helper_multi_clause_data_arg_untouched,
             helper_guarded_data_arg_untouched,
             helper_multi_clause_comprehension_error,
-            helper_multi_clause_comprehension_arg_untouched
+            helper_multi_clause_comprehension_arg_untouched,
+            element_in_comprehension_rejected,
+            element_in_comprehension_names_line,
+            value_comprehension_renders,
+            element_comprehension_arg_untouched
         ]},
         %% Reject an always-impure call in code the transform evaluates lazily
         {impure_expr, [parallel], [
@@ -10808,9 +10816,10 @@ helper_guarded_data_arg_untouched(Config) when is_list(Config) ->
     {HTML, _Snap} = arizona_render:render(Mod:render(#{x => 7})),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"7,2")).
 
-%% A comprehension in a content slot renders the list it builds, so an element
-%% helper called as its body is content too: one that cannot be inlined is
-%% rejected, as it would crash at render.
+%% A comprehension in a content slot renders the list it builds as one value, so an
+%% element helper as its body would crash at render. A multi-clause one is reported
+%% as the comprehension, not the clauses: collapsing them would still leave an
+%% element per item.
 helper_multi_clause_comprehension_error(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_helper_multi_lc). "
@@ -10820,7 +10829,7 @@ helper_multi_clause_comprehension_error(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:html({'ul', [], "
         "        [[row(X) || X <- arizona_template:get(xs, Bindings)]]}). ",
-        fun(R) -> R =:= {helper_multi_clause, row, 1} end
+        fun(R) -> R =:= element_in_comprehension end
     ).
 
 %% The same comprehension handed to a function is data, so its body is left as a
@@ -10838,6 +10847,106 @@ helper_multi_clause_comprehension_arg_untouched(Config) when is_list(Config) ->
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{cs => [red, blue, red]})),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"2")).
+
+%% A comprehension in a content slot builds a runtime list, rendered as one value,
+%% so an element-shaped body compiled clean and crashed at render with
+%% bad_template_value. Every element shape is a compile error pointing to ?each.
+element_in_comprehension_rejected(Config) when is_list(Config) ->
+    Xs = "arizona_template:get(xs, Bindings)",
+    lists:foreach(
+        fun({Name, Content}) ->
+            assert_parse_error(
+                "-module(" ++ Name ++
+                    "). "
+                    "-export([render/1]). "
+                    "row(X) -> {'li', [], [X]}. "
+                    "html_row(X) -> arizona_template:html({'li', [], [X]}). "
+                    "render(Bindings) -> "
+                    "    arizona_template:html({'ul', [], [" ++ Content ++ "]}). ",
+                fun(R) -> R =:= element_in_comprehension end
+            )
+        end,
+        [
+            {"pt_lc_helper", "[row(X) || X <- " ++ Xs ++ "]"},
+            {"pt_lc_module_helper", "[pt_lc_module_helper:row(X) || X <- " ++ Xs ++ "]"},
+            {"pt_lc_wrapped_helper", "[html_row(X) || X <- " ++ Xs ++ "]"},
+            {"pt_lc_literal", "[{'li', [], [X]} || X <- " ++ Xs ++ "]"},
+            {"pt_lc_void", "[{'br', []} || _ <- " ++ Xs ++ "]"},
+            {"pt_lc_list", "[[row(X)] || X <- " ++ Xs ++ "]"},
+            {"pt_lc_mixed_list", "[[<<\"-\">>, {'li', [], [X]}] || X <- " ++ Xs ++ "]"},
+            {"pt_lc_html", "[arizona_template:html({'li', [], [X]}) || X <- " ++ Xs ++ "]"},
+            {"pt_lc_az_html", "[az:html({'li', [], [X]}) || X <- " ++ Xs ++ "]"},
+            {"pt_lc_block", "[begin row(X) end || X <- " ++ Xs ++ "]"},
+            {"pt_lc_case",
+                "[case X of <<>> -> <<>>; _ -> {'li', [], [X]} end || X <- " ++ Xs ++ "]"},
+            {"pt_lc_nested", "[[row(X) || X <- L] || L <- [" ++ Xs ++ "]]"},
+            {"pt_lc_in_content_list", "[<<\"a\">>, [row(X) || X <- " ++ Xs ++ "]]"},
+            {"pt_lc_in_case_tail",
+                "case arizona_template:get(f, Bindings) of true -> [row(X) || X <- " ++ Xs ++
+                    "]; false -> <<>> end"}
+        ]
+    ),
+    %% A hoisted comprehension is spliced back into its slot, so it is the same case.
+    assert_parse_error(
+        "-module(pt_lc_hoisted). "
+        "-export([render/1]). "
+        "row(X) -> {'li', [], [X]}. "
+        "render(Bindings) -> "
+        "    L = [row(X) || X <- arizona_template:get(xs, Bindings)], "
+        "    arizona_template:html({'ul', [], [L]}). ",
+        fun(R) -> R =:= element_in_comprehension end
+    ),
+    ?assertMatch([_ | _], arizona_parse_transform:format_error(element_in_comprehension)).
+
+element_in_comprehension_names_line(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{_File, [{5, arizona_parse_transform, element_in_comprehension}]}], []},
+        arizona_parse_transform:parse_transform(
+            parse_forms(
+                "-module(pt_lc_line).\n"
+                "-export([render/1]).\n"
+                "render(Bindings) ->\n"
+                "    arizona_template:html({'ul', [], [\n"
+                "        [{'li', [], [X]} || X <- arizona_template:get(xs, Bindings)]\n"
+                "    ]}).\n"
+            ),
+            []
+        )
+    ).
+
+%% A comprehension of plain values (directly or through a scalar helper) is one
+%% value list and renders as before.
+value_comprehension_renders(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_lc_values). "
+        "-export([render/1]). "
+        "label(X) -> <<\"#\", X/binary>>. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], ["
+        "        [label(X) || X <- arizona_template:get(xs, Bindings)], "
+        "        [[X, <<\" \">>] || X <- arizona_template:get(xs, Bindings)]"
+        "    ]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{xs => [~"a", ~"b"]})),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"#a#b")),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"a b ")).
+
+%% A comprehension handed to a function, and a lists:map/2 call, are data the
+%% function consumes, so they are left as written.
+element_comprehension_arg_untouched(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_lc_elem_arg). "
+        "-export([render/1]). "
+        "row(X) -> {'li', [], [X]}. "
+        "count(L) -> <<\"n=\", (integer_to_binary(length(L)))/binary>>. "
+        "render(Bindings) -> "
+        "    arizona_template:html({'p', [], ["
+        "        count([row(X) || X <- arizona_template:get(xs, Bindings)]), "
+        "        count(lists:map(fun(X) -> row(X) end, arizona_template:get(xs, Bindings)))"
+        "    ]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{xs => [~"a", ~"b", ~"c"]})),
+    ?assertMatch([_, _], binary:matches(iolist_to_binary(HTML), ~"n=3")).
 
 %% ============================================================================
 %% Tracked get/get_lazy on a non-bindings map
