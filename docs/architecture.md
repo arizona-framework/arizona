@@ -2293,6 +2293,28 @@ queued for this update cycle; return it extended with this callback's own effect
 returns it verbatim) -- so a patch reaction can set the document title or redirect, threaded without
 any caller-side concatenation. See "SPA navigate / patch route resolution".
 
+For an embedded child, "new props" means "the diff re-evaluated this child's `?stateful`
+descriptor while the view already existed under the same id and handler". That happens when the
+slot holding the descriptor re-evaluates, and the props may then be term-equal to the previous ones:
+a read outside them (`case ?get(tab) of _ -> ?stateful(c, #{x => ?get(x)}) end`, an event changing
+only `tab`) or a prop derived from a changed binding whose value did not (`x => ?get(n) div 10`).
+The framework does not filter equal props out: a view entry keeps the child's bindings, which the
+callback may have transformed, and not the props it was last given, so there is nothing to compare
+against without storing a second copy per view. Keep `handle_update/3` idempotent for equal props,
+and compare against the child's own bindings when a side effect (subscribe, timer) must run only on
+an actual change.
+
+The descriptor is **not** re-evaluated, so `handle_update/3` is not called, when:
+
+- the slot is dep-skipped (none of its reads changed);
+- the child sits in a stream `?each` item the diff did not touch -- an insert evaluates only the
+  inserted and changed items, not the existing ones;
+- the child's own root is az-nodiff, or it sits inside an az-nodiff element: it takes its props at
+  mount only, so changed props never reach it either.
+
+And it is `mount/1`, not `handle_update/3`, that runs on the child's first appearance and when a
+render keeps the id but switches the handler (the old instance is unmounted first).
+
 `unmount/1` runs when an instance is removed -- either the parent stopped rendering it (conditional,
 a list or stream item leaving the DOM, or navigate) or the live process is shutting down. Use it to
 release resources (timers, external subscriptions). Return value is discarded.
