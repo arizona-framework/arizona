@@ -222,6 +222,16 @@ live view root is already refused at compile time.
 -callback single_root_document() -> boolean().
 
 -doc """
+Whether this backend's client applies a stream's keyed item ops (remove, move, item
+patch), finding each item by the `az-key` on its root. When `true`, the parse
+transform stamps `keyless => true` on a 2-arg `?each` item whose root element has no
+`az_key`, and `arizona_template:each/2` refuses that template over a stream
+(`stream_each_keyless`). `false` for a backend that redraws whole frames and so never
+addresses an item.
+""".
+-callback keyed_item_ops() -> boolean().
+
+-doc """
 What a dynamic boolean attribute means on this backend's wire. `presence` (HTML): `true`
 renders the bare attribute and `false` removes it. `value`: a boolean is a typed prop
 value, sent as JSON `true`/`false` and present in both states, the same shape a static

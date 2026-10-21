@@ -167,6 +167,9 @@ render(Bindings) ->
     %% A 2-arg callback whose body is not exactly one element: legal over a map, refused
     %% over a stream by each/2.
     multi_root => true,
+    %% A 2-arg callback whose one root element has no `az_key`: legal over a map,
+    %% refused over a stream by each/2.
+    keyless => true,
     backend => module()
 }.
 
@@ -400,6 +403,10 @@ each(#stream{}, #{t := ?EACH, multi_root := true} = Tmpl) when not is_map_key(di
     %% see maybe_multi_root_opt/3 in arizona_parse_transform. A nodiff item is never
     %% addressed by a keyed op, so it may keep any number of roots.
     erlang:error(stream_each_multi_root, none, [{error_info, #{module => ?MODULE}}]);
+each(#stream{}, #{t := ?EACH, keyless := true} = Tmpl) when not is_map_key(diff, Tmpl) ->
+    %% Same pairing, same reason it is decided here; see maybe_keyless_opt/5 in
+    %% arizona_parse_transform.
+    erlang:error(stream_each_keyless, none, [{error_info, #{module => ?MODULE}}]);
 each(Source, #{t := ?EACH, d := DFun} = Tmpl) when is_function(DFun, 1); is_function(DFun, 2) ->
     #{t => ?EACH, source => Source, template => Tmpl};
 each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
@@ -512,7 +519,13 @@ format_error(stream_each_multi_root) ->
     "item patch) addresses an item by the single element carrying its az_key, so any other "
     "root would be left behind on a remove and out of order on a move. Put the parts "
     "inside one item element, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end. "
-    "The same callback over a map may return several roots".
+    "The same callback over a map may return several roots";
+format_error(stream_each_keyless) ->
+    "an ?each over a stream must put az_key on each item's root element: a keyed op "
+    "(remove, move, item patch) finds the item by it, so without one every such op is "
+    "skipped and the page drifts from the stream. Key the root with the callback's "
+    "second argument, e.g. fun(Item, Key) -> {li, [{az_key, Key}], [Item]} end. "
+    "The same callback over a map needs no key".
 
 -doc """
 Formats runtime errors raised with an `error_info` annotation pointing at
@@ -542,6 +555,8 @@ format_error({bad_template_value, _V} = Reason, _ST) ->
 format_error(parse_transform_not_applied = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error(stream_each_multi_root = Reason, _ST) ->
+    #{general => format_error(Reason)};
+format_error(stream_each_keyless = Reason, _ST) ->
     #{general => format_error(Reason)}.
 
 -doc """

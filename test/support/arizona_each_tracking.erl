@@ -32,13 +32,17 @@ list(Bindings) ->
 
 stream(Bindings) ->
     ?html(
-        {ul, [], [?each(fun(I, _K) -> {li, [], [maps:get(n, I), ?get(suffix)]} end, ?get(s))]}
+        {ul, [], [
+            ?each(fun(I, K) -> {li, [{az_key, K}], [maps:get(n, I), ?get(suffix)]} end, ?get(s))
+        ]}
     ).
 
 %% One slot reads both an item field (plain `maps:get/2`, untracked) and a binding.
 stream_mixed(Bindings) ->
     ?html(
-        {ul, [], [?each(fun(I, _K) -> {li, [], [[maps:get(n, I), ?get(suffix)]]} end, ?get(s))]}
+        {ul, [], [
+            ?each(fun(I, K) -> {li, [{az_key, K}], [[maps:get(n, I), ?get(suffix)]]} end, ?get(s))
+        ]}
     ).
 
 %% A tracked read whose map is a sub-map of the item, not the item: its deps name
@@ -164,7 +168,9 @@ nested_stream_in_list(Bindings) ->
             ?each(
                 fun(S) ->
                     {li, [], [
-                        ?each(fun(I, _K) -> {b, [], [maps:get(n, I), ?get(suffix)]} end, S)
+                        ?each(
+                            fun(I, K) -> {b, [{az_key, K}], [maps:get(n, I), ?get(suffix)]} end, S
+                        )
                     ]}
                 end,
                 ?get(groups)
@@ -176,8 +182,10 @@ nested_list_in_stream(Bindings) ->
     ?html(
         {ul, [], [
             ?each(
-                fun(I, _K) ->
-                    {li, [], [?each(fun(J) -> {b, [], [J, ?get(suffix)]} end, [maps:get(n, I)])]}
+                fun(I, K) ->
+                    {li, [{az_key, K}], [
+                        ?each(fun(J) -> {b, [], [J, ?get(suffix)]} end, [maps:get(n, I)])
+                    ]}
                 end,
                 ?get(s)
             )
@@ -188,10 +196,10 @@ nested_stream_in_stream(Bindings) ->
     ?html(
         {ul, [], [
             ?each(
-                fun(G, _K) ->
-                    {li, [], [
+                fun(G, K) ->
+                    {li, [{az_key, K}], [
                         ?each(
-                            fun(I, _K2) -> {b, [], [maps:get(n, I), ?get(suffix)]} end,
+                            fun(I, K2) -> {b, [{az_key, K2}], [maps:get(n, I), ?get(suffix)]} end,
                             maps:get(inner, G)
                         )
                     ]}

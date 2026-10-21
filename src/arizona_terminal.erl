@@ -81,6 +81,7 @@ never sanitized.
 -export([supports_local/0]).
 -export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
+-export([keyed_item_ops/0]).
 -export([implied_attrs/2]).
 -export([boolean_attrs/0]).
 -export([attr_names/0]).
@@ -282,6 +283,8 @@ supports_local() -> false.
 single_root_document() -> false.
 
 supports_nodiff_keep() -> false.
+
+keyed_item_ops() -> false.
 
 -spec implied_attrs(arizona_renderer:tag(), [binary()]) -> [].
 implied_attrs(_Tag, _Names) -> [].

@@ -30,6 +30,10 @@
     each_stream_one_element_list_body_unwrapped/1,
     each_map_multi_root_body_renders_and_diffs/1,
     each_stream_multi_root_body_nodiff_renders/1,
+    each_stream_keyless_body_refused_at_render/1,
+    each_map_keyless_body_renders_and_diffs/1,
+    each_stream_keyless_body_nodiff_renders/1,
+    each_terminal_stream_keyless_body_renders/1,
     computed_element_tag_rejected_with_idiom/1,
     malformed_element_still_invalid_element/1,
     each_stream_control_flow_wrapper_fix_keys_per_item/1,
@@ -761,6 +765,10 @@ groups() ->
             each_stream_one_element_list_body_unwrapped,
             each_map_multi_root_body_renders_and_diffs,
             each_stream_multi_root_body_nodiff_renders,
+            each_stream_keyless_body_refused_at_render,
+            each_map_keyless_body_renders_and_diffs,
+            each_stream_keyless_body_nodiff_renders,
+            each_terminal_stream_keyless_body_renders,
             computed_element_tag_rejected_with_idiom,
             malformed_element_still_invalid_element,
             each_stream_control_flow_wrapper_fix_keys_per_item,
@@ -7267,6 +7275,117 @@ each_stream_multi_root_body_nodiff_renders(Config) when is_list(Config) ->
     ),
     ?assertMatch({match, _}, re:run(iolist_to_binary(HTML), ~"<dt>a</dt><dd>a</dd></dl>$")).
 
+%% The client finds a stream item by the `az-key` on its root, so an item element
+%% without one is invisible to every keyed op: a remove leaves it on the page, a move
+%% leaves it in place, an item patch never lands -- and nothing reports it. Refused when
+%% the stream pairing is rendered, in each form a single-element body reaches: inline,
+%% whole-body ?html, a one-element list, a named 2-arg ref, and on the native target,
+%% whose clients find items the same way.
+each_stream_keyless_body_refused_at_render(Config) when is_list(Config) ->
+    Each = fun(Name, Fun, Defs) ->
+        compile_module(
+            "-module(" ++ Name ++ "). -export([render/1]). " ++ Defs ++
+                "render(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each(" ++
+                Fun ++ ", arizona_template:get(items, Bindings))]}). "
+        )
+    end,
+    Native = compile_module(
+        "-module(pt_each_stream_keyless_native). -export([render/1]). "
+        "render(Bindings) -> arizona_template:native({'Column', [], [arizona_template:each("
+        "fun(I, _K) -> {'Text', [], [I]} end, arizona_template:get(items, Bindings))]}). "
+    ),
+    Mods = [
+        Each("pt_each_stream_keyless", "fun(I, _K) -> {li, [{class, ~\"row\"}], [I]} end", ""),
+        Each(
+            "pt_each_stream_keyless_html",
+            "fun(I, _K) -> arizona_template:html({li, [], [I]}) end",
+            ""
+        ),
+        Each("pt_each_stream_keyless_listed", "fun(I, _K) -> [{li, [], [I]}] end", ""),
+        Each("pt_each_stream_keyless_named", "fun row/2", "row(I, _K) -> {li, [], [I]}. "),
+        Native
+    ],
+    S0 = arizona_stream:new(fun(X) -> X end, [~"a", ~"b"]),
+    [assert_stream_each_keyless(Mod, #{items => S0}) || Mod <- Mods],
+    %% The fix the error names renders, and its keyed ops reach the item.
+    Fix = Each("pt_each_stream_keyless_fix", "fun(I, K) -> {li, [{az_key, K}], [I]} end", ""),
+    {HTML, Snap, _} = arizona_render:render(Fix:render(#{items => S0}), #{}),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(HTML), ~"<li[^>]*az-key=\"a\"")),
+    #{items := S1} = arizona_stream:clear_stream_pending(#{items => S0}, [items]),
+    S2 = arizona_stream:delete(S1, ~"a"),
+    {Ops, _, _} = arizona_diff:diff(Fix:render(#{items => S2}), Snap, #{}, #{items => true}),
+    ?assertMatch([[?OP_REMOVE, _, ~"a"]], Ops),
+    ?assertMatch(
+        #{general := Msg} when is_list(Msg),
+        arizona_template:format_error(stream_each_keyless, [])
+    ),
+    ?assertNotEqual(
+        nomatch, string:find(arizona_template:format_error(stream_each_keyless), "{az_key, Key}")
+    ).
+
+assert_stream_each_keyless(Mod, Bindings) ->
+    ?assertError(
+        {arizona_loc, {Mod, _}, stream_each_keyless},
+        arizona_render:render(Mod:render(Bindings), #{})
+    ).
+
+%% The same unkeyed callback is legal over a map, which diffs it by position. A map that
+%% turns into a stream on the diff is refused there, since the check runs on every
+%% evaluation of the pairing.
+each_map_keyless_body_renders_and_diffs(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_map_keyless). -export([render/1]). "
+        "render(Bindings) -> arizona_template:html({ul, [], [arizona_template:each("
+        "fun(A, B) -> {li, [], [A, B]} end, arizona_template:get(m, Bindings))]}). "
+    ),
+    {HTML, Snap, _} = arizona_render:render(Mod:render(#{m => #{~"a" => ~"1"}}), #{}),
+    ?assertMatch({match, _}, re:run(iolist_to_binary(HTML), ~"<li[^>]*>.*a.*1.*</li>")),
+    {Ops, _, _} = arizona_diff:diff(Mod:render(#{m => #{~"a" => ~"2"}}), Snap, #{}, #{m => true}),
+    ?assertMatch([[?OP_LIST_PATCH, _, [[?OP_ITEM_PATCH, 0, [[?OP_TEXT, _, ~"2"]]]]]], Ops),
+    ?assertError(
+        {arizona_loc, {pt_each_map_keyless, _}, stream_each_keyless},
+        arizona_diff:diff(
+            Mod:render(#{m => arizona_stream:new(fun(X) -> X end, [~"a"])}),
+            Snap,
+            #{},
+            #{m => true}
+        )
+    ).
+
+%% A nodiff item is rendered once and never addressed by a keyed op, so it needs no key:
+%% inherited from an az-nodiff container, or the item root's own directive.
+each_stream_keyless_body_nodiff_renders(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_stream_keyless_nodiff). -export([inherited/1, own/1]). "
+        "inherited(Bindings) -> arizona_template:html({ul, ['az-nodiff'], [arizona_template:each("
+        "fun(V, _K) -> {li, [], [V]} end, arizona_template:get(s, Bindings))]}). "
+        "own(Bindings) -> arizona_template:html({ul, [], [arizona_template:each("
+        "fun(V, _K) -> {li, ['az-nodiff'], [V]} end, arizona_template:get(s, Bindings))]}). "
+    ),
+    S = arizona_stream:new(fun(X) -> X end, [~"a"]),
+    [
+        ?assertMatch(
+            {match, _},
+            re:run(
+                iolist_to_binary(element(1, arizona_render:render(Mod:F(#{s => S}), #{}))),
+                ~">a</li>"
+            )
+        )
+     || F <- [inherited, own]
+    ].
+
+%% A `?terminal` view redraws whole frames, so it never addresses a stream item, and an
+%% `az_key` is not even expressible there (the backend refuses dynamic attributes).
+each_terminal_stream_keyless_body_renders(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_term_stream_keyless). -export([render/1]). "
+        "render(Bindings) -> arizona_template:terminal({col, [], [arizona_template:each("
+        "fun(I, _K) -> {line, [], [I]} end, arizona_template:get(s, Bindings))]}). "
+    ),
+    S = arizona_stream:new(fun(X) -> X end, [~"a"]),
+    {Output, _, _} = arizona_render:render(Mod:render(#{s => S}), #{}),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Output), ~"a\e[0m\n")).
+
 %% A one-element list is a single root, so it is the bare element in a list wrapper and
 %% compiles to the very same per-item template, the way a whole-body ?html does.
 each_stream_one_element_list_body_unwrapped(Config) when is_list(Config) ->
@@ -8357,7 +8476,9 @@ each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
         "        {'li', [], [N]} "
         "    end, az:get(stream, Bindings)). "
     ),
-    ?assertNot(is_map_key(reuse, stream_each_template(Mod))).
+    %% A keyed root's `az_key` dynamic always qualifies, so the body is unkeyed and
+    %% the template is read over a map source, which a stream would refuse.
+    ?assertNot(is_map_key(reuse, maps:get(template, Mod:render(#{stream => #{}})))).
 
 %% A tracked read vouches for an item read only when its map IS the item (the bare
 %% parameter, or the variable side of a `Pat = Var` head) or the view bindings. A

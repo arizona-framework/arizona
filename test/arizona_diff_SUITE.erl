@@ -2679,7 +2679,9 @@ each_stream_op_alone_stays_incremental(Config) when is_list(Config) ->
     {Ops, _Snap, _B1} = each_stream_cycle(
         fun(S) -> arizona_stream:insert(S, #{id => 3, n => <<"c">>}) end, <<"x">>
     ),
-    ?assertMatch([[?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<"c">>, <<"x">>]}]], Ops).
+    ?assertMatch(
+        [[?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<" az-key=\"3\"">>, <<"c">>, <<"x">>]}]], Ops
+    ).
 
 %% A stream drains only its queued ops, so a cycle that changes a callback binding
 %% AND queues an op patched just that op: every other item kept the old value, and
@@ -2693,7 +2695,7 @@ each_stream_insert_with_callback_change(Config) when is_list(Config) ->
         [
             [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"y">>]]],
             [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]],
-            [?OP_INSERT, _, <<"3">>, 2, #{<<"d">> := [<<"c">>, <<"y">>]}]
+            [?OP_INSERT, _, <<"3">>, 2, #{<<"d">> := [<<" az-key=\"3\"">>, <<"c">>, <<"y">>]}]
         ],
         Ops
     ).
@@ -2761,7 +2763,15 @@ each_nested_stream_untracked_inner_insert(Config) when is_list(Config) ->
                 ?OP_ITEM_PATCH,
                 _,
                 <<"1">>,
-                [[?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<"c">>, <<"x">>]}]]
+                [
+                    [
+                        ?OP_INSERT,
+                        _,
+                        <<"3">>,
+                        -1,
+                        #{<<"d">> := [<<" az-key=\"3\"">>, <<"c">>, <<"x">>]}
+                    ]
+                ]
             ]
         ],
         each_diff(nested_stream_in_stream, B0, B0#{gs => GS1}, #{gs => true})
@@ -2776,7 +2786,7 @@ each_stream_callback_change_settles(Config) when is_list(Config) ->
     B2 = arizona_stream:clear_stream_pending(B1, [s]),
     {_HTML, Fresh, _V} = arizona_render:render(arizona_each_tracking:stream(B2), #{}),
     Values = stream_item_values(Snap1),
-    ?assertMatch(#{1 := [_, {arizona_esc, <<"y">>}]}, Values),
+    ?assertMatch(#{1 := [{attr, <<"az-key">>, 1}, _, {arizona_esc, <<"y">>}]}, Values),
     ?assertEqual(stream_item_values(Fresh), Values).
 
 %% An inner each's item reads reach the outer each through the outer item.
@@ -2853,7 +2863,13 @@ each_nested_stream_op_with_callback_change(Config) when is_list(Config) ->
                 [
                     [?OP_ITEM_PATCH, _, <<"1">>, [[?OP_TEXT, _, <<"y">>]]],
                     [?OP_ITEM_PATCH, _, <<"2">>, [[?OP_TEXT, _, <<"y">>]]],
-                    [?OP_INSERT, _, <<"3">>, -1, #{<<"d">> := [<<"c">>, <<"y">>]}]
+                    [
+                        ?OP_INSERT,
+                        _,
+                        <<"3">>,
+                        -1,
+                        #{<<"d">> := [<<" az-key=\"3\"">>, <<"c">>, <<"y">>]}
+                    ]
                 ]
             ]
         ],
