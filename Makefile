@@ -267,6 +267,10 @@ doc-erl:
 	@# Same O_TRUNC hazard as check-hank -- and worse here, because `doc` is the
 	@# LAST stage of `ci`, so a redirected full-CI log kept only these few lines
 	@# and read like the pipeline had short-circuited. Capture instead of tee.
+	@# Compile first, outside the capture: on a fresh _build `rebar3 doc` would
+	@# build the deps inside it, and a dep's own compiler warnings (which our
+	@# warnings_as_errors does not cover) would fail the doc check.
+	rebar3 compile
 	@set -o pipefail; out=$$(rebar3 doc 2>&1); printf '%s\n' "$$out"; \
 		printf '%s\n' "$$out" | (! grep -q "warning")
 
