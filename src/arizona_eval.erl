@@ -16,7 +16,8 @@ Each `eval_one_v` clause opens a dependency scope around its closure call
 (`open_deps/0` .. `close_deps/1`), so any `arizona_template:get/2,3` calls
 inside the closure populate that scope's map. The captured map becomes the
 dynamic's `Deps` and is later compared against the `Changed` set in
-`arizona_diff:diff/4`.
+`arizona_diff:diff/4`. A closure that raises closes its scope on the way out
+the same way, so a render or diff run inside a `try` leaves no scope open.
 
 Scopes nest: a scope opened while another is open hands its reads to the
 enclosing one when it closes. That is how an `?each` item's reads reach the
@@ -164,16 +165,21 @@ az-nodiff element per change. Anything else is evaluated from the value already 
         {same, map()}
         | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
 eval_unless_same_nodiff({Az, Spec, Loc}, Old, Views0) ->
+    Outer = open_deps(),
     try
-        unless_same_nodiff(Az, Spec, Old, Views0)
+        unless_same_nodiff(Az, Spec, Old, Outer, Views0)
     catch
-        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc, Outer)
     end;
 eval_unless_same_nodiff({Az, Spec}, Old, Views0) ->
-    unless_same_nodiff(Az, Spec, Old, Views0).
-
-unless_same_nodiff(Az, Spec, Old, Views0) ->
     Outer = open_deps(),
+    try
+        unless_same_nodiff(Az, Spec, Old, Outer, Views0)
+    catch
+        Class:Reason:ST -> abort_deps(Class, Reason, ST, Outer)
+    end.
+
+unless_same_nodiff(Az, Spec, Old, Outer, Views0) ->
     {Esc, Raw} = peek_spec(Spec),
     Val = peek_nodiff(Raw),
     case arizona_template:same_nodiff(Az, Val, Old) of
@@ -224,16 +230,21 @@ evaluated from the value already produced, answered
         {each, arizona_template:az(), map(), map()}
         | {changed, arizona_template:az(), term(), map(), {map(), map()}}.
 eval_each_def({Az, Spec, Loc}, Views0) ->
+    Outer = open_deps(),
     try
-        each_def(Az, Spec, Views0)
+        each_def(Az, Spec, Outer, Views0)
     catch
-        Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+        Class:Reason:ST -> relocate(Class, Reason, ST, Loc, Outer)
     end;
 eval_each_def({Az, Spec}, Views0) ->
-    each_def(Az, Spec, Views0).
-
-each_def(Az, Spec, Views0) ->
     Outer = open_deps(),
+    try
+        each_def(Az, Spec, Outer, Views0)
+    catch
+        Class:Reason:ST -> abort_deps(Class, Reason, ST, Outer)
+    end.
+
+each_def(Az, Spec, Outer, Views0) ->
     case peek_spec(Spec) of
         {_Esc, #{t := ?EACH, source := _, template := _} = Each} ->
             {each, Az, Each, close_deps(Outer)};
@@ -261,8 +272,11 @@ eval_items(#{diff := false}, Fun) ->
     {with_saved_deps(Fun), #{}};
 eval_items(_Tmpl, Fun) ->
     Outer = open_deps(),
-    Result = Fun(),
-    {Result, close_deps(Outer)}.
+    try Fun() of
+        Result -> {Result, close_deps(Outer)}
+    catch
+        Class:Reason:ST -> abort_deps(Class, Reason, ST, Outer)
+    end.
 
 -doc """
 Evaluates a list of stream item keys against the items map and template,
@@ -630,7 +644,7 @@ eval_one_v({Az, {attr, Name, Fun}, Loc}, Views) when is_function(Fun, 0) ->
         try
             attr_val(Name, eval_val(Fun()))
         catch
-            Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+            Class:Reason:ST -> relocate(Class, Reason, ST, Loc, Outer)
         end,
     Deps = close_deps(Outer),
     {{Az, {attr, Name, Val}, Deps}, Views};
@@ -640,25 +654,63 @@ eval_one_v({Az, Spec, Loc}, Views0) ->
         try
             eval_val_v(Spec, Views0)
         catch
-            Class:Reason:ST -> relocate(Class, Reason, ST, Loc)
+            Class:Reason:ST -> relocate(Class, Reason, ST, Loc, Outer)
         end,
     Deps = close_deps(Outer),
     {{Az, arizona_template:scope_slot(Az, Val), Deps}, Views1};
 eval_one_v({Az, {attr, Name, Fun}}, Views) when is_function(Fun, 0) ->
     Outer = open_deps(),
-    Val = attr_val(Name, eval_val(Fun())),
+    Val =
+        try
+            attr_val(Name, eval_val(Fun()))
+        catch
+            Class:Reason:ST -> abort_deps(Class, Reason, ST, Outer)
+        end,
     Deps = close_deps(Outer),
     {{Az, {attr, Name, Val}, Deps}, Views};
 eval_one_v({Az, Spec}, Views0) ->
     Outer = open_deps(),
-    {Val, Views1} = eval_val_v(Spec, Views0),
+    {Val, Views1} =
+        try
+            eval_val_v(Spec, Views0)
+        catch
+            Class:Reason:ST -> abort_deps(Class, Reason, ST, Outer)
+        end,
     Deps = close_deps(Outer),
     {{Az, arizona_template:scope_slot(Az, Val), Deps}, Views1}.
 
 %% Opens a dependency scope for `arizona_template:track/1` to fill, answering the
 %% enclosing one (`undefined` when none is open) for close_deps/1 to restore.
+%% Every opener closes its scope on an exception too (abort_deps/4). The live
+%% process dies on a render crash, but code that runs a live render or a diff
+%% inside a `try` and carries on would otherwise keep a scope open that every
+%% later read outside a slot records into, and a slot closure catching a nested
+%% render crash would lose what that render read.
 open_deps() ->
     erlang:put('$arizona_deps', #{}).
+
+%% Closes the scope of a failed evaluation as close_deps/1 would -- its reads
+%% still reach the enclosing scope, so a slot that catches the crash depends on
+%% the binding whose absence caused it -- and re-raises.
+-spec abort_deps(Class, Reason, Stacktrace, Outer) -> no_return() when
+    Class :: error | exit | throw,
+    Reason :: term(),
+    Stacktrace :: erlang:stacktrace(),
+    Outer :: map() | undefined.
+abort_deps(Class, Reason, ST, Outer) ->
+    _FailedDeps = close_deps(Outer),
+    erlang:raise(Class, Reason, ST).
+
+%% relocate/4 for a dynamic that opened a dependency scope.
+-spec relocate(Class, Reason, Stacktrace, Loc, Outer) -> no_return() when
+    Class :: error | exit | throw,
+    Reason :: term(),
+    Stacktrace :: erlang:stacktrace(),
+    Loc :: {module(), pos_integer()},
+    Outer :: map() | undefined.
+relocate(Class, Reason, ST, Loc, Outer) ->
+    _FailedDeps = close_deps(Outer),
+    relocate(Class, Reason, ST, Loc).
 
 %% Closes the scope open_deps/0 opened and answers its reads, handing them to the
 %% enclosing scope as well. Only an each's items evaluate inside another dynamic's
@@ -706,15 +758,22 @@ eval_val_v(Val, Views) ->
     {Val, Views}.
 
 %% Run Fun with the enclosing dependency scope suspended: nothing Fun reads
-%% reaches it, and it is restored when Fun returns.
+%% reaches it, and it is restored when Fun returns or raises -- the frame that
+%% opened it then closes it with its reads intact (abort_deps/4).
 with_saved_deps(Fun) ->
     case erlang:erase('$arizona_deps') of
         undefined ->
             Fun();
         SavedDeps ->
-            Result = Fun(),
-            erlang:put('$arizona_deps', SavedDeps),
-            Result
+            try Fun() of
+                Result ->
+                    _Suspended = erlang:put('$arizona_deps', SavedDeps),
+                    Result
+            catch
+                Class:Reason:ST ->
+                    _Failed = erlang:put('$arizona_deps', SavedDeps),
+                    erlang:raise(Class, Reason, ST)
+            end
     end.
 
 %% A child view whose own root is az-nodiff, or that sits inside an az-nodiff
