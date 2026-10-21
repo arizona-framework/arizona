@@ -1461,20 +1461,20 @@ the render/diff, which runs in the same process -- the "Set by" column is author
 | `$arizona_capabilities` | the `_az_caps` map the client advertised at connect | `capabilities/0` / `capability/1` (`?capabilities` / `?capability`). A UI/effect hint, **never** authorization |
 | `$arizona_timers` | `send_after/3` | unmount and `navigate/3,4`, to cancel |
 | `$arizona_unmounted` | `unmount_view/3`, for every child view a pass unmounts while the state still lists it (a swapped-out handler, a diff removal, the outgoing page on navigate); erased once the pass has unmounted the last of them (root and child diffs, `do_mount/4`, `navigate/3,4`) | `terminate/2`, so a pass that raised after unmounting a view (its own `unmount/1` included) does not unmount it a second time |
+| `$arizona_mounted` | `note_mounted_view/3`, from `arizona_eval` after each child `mount/1` of a pass the live process began (root and child diffs, `do_mount/4`); erased with `$arizona_unmounted` | `terminate/2`, which unmounts the children a pass that raised had mounted, since no state it can see lists them |
 | `$arizona_deps` | the per-dynamic eval bracket | `arizona_eval`, `arizona_template:track/1` -- the dependency capture set |
 | `$arizona_update_effects` | `arizona_eval:set_update_effects/1`, seeded with the originating callback's effects before a diff | `current_update_effects/0` while child `handle_update/3`s fold onto it; `drain_update_effects/0` erases and returns the final list. Threading it here is what lets a child's effects join the root's with no concatenation at the call site |
 | `{'$arizona_scoped_statics', Prefix, Fp}` | `scoped_statics/4` in `arizona_template` | itself -- a memo for the per-slot static prefixing (`scope_static/3` on the render backend, per element), keyed by scope prefix + template fingerprint |
 
-Only `$arizona_deps`, `$arizona_update_effects`, `$arizona_timers` and `$arizona_unmounted` are
-ever erased; the rest are set once and left. What makes the scoped-statics memo different is that
-it is the one entry that **grows unboundedly** rather than holding a fixed-size value. That is
-deliberate and safe --
-prefixing a static list is pure and deterministic in `(Prefix, statics)`, so a stale entry cannot be
-wrong, and the payoff is that a re-render or diff of the same slot (and every level of a deep
-stateless nest, whose inner statics would otherwise be re-walked once per ancestor) reuses the
-cached result. It is bounded by the number of distinct `(slot prefix, fingerprint)` pairs the
-process ever renders, and dies with the process; note it when reasoning about a long-lived live
-process's memory, and do not expect a navigate to clear it.
+Only `$arizona_deps`, `$arizona_update_effects`, `$arizona_timers`, `$arizona_unmounted` and
+`$arizona_mounted` are ever erased; the rest are set once and left. What makes the scoped-statics
+memo different is that it is the one entry that **grows unboundedly** rather than holding a
+fixed-size value. That is deliberate and safe -- prefixing a static list is pure and deterministic
+in `(Prefix, statics)`, so a stale entry cannot be wrong, and the payoff is that a re-render or diff
+of the same slot (and every level of a deep stateless nest, whose inner statics would otherwise be
+re-walked once per ancestor) reuses the cached result. It is bounded by the number of distinct
+`(slot prefix, fingerprint)` pairs the process ever renders, and dies with the process; note it when
+reasoning about a long-lived live process's memory, and do not expect a navigate to clear it.
 
 ## API -- `arizona_socket.erl`
 
@@ -2063,7 +2063,8 @@ accumulates only children rendered this cycle. Children removed from the templat
 rendering) are pruned from the views map and their `unmount/1` callback is called if exported.
 Every instance's `unmount/1` runs **exactly once**, on removal or on the way out: one that raises
 stops neither its siblings' nor the root's (each still runs, and the first error is re-raised after
-the last), and `terminate/2` skips a view the failed pass already unmounted.
+the last), `terminate/2` skips a view the failed pass already unmounted, and it unmounts a child
+the failed pass had mounted before raising.
 
 **Slots:** Slots are implemented via stateless children and bindings. A layout places the page it
 wraps with the **`?inner_content`** macro; the binding key is fixed (`apply_layouts/4` injects

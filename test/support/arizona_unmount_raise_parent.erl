@@ -6,18 +6,26 @@
 -export([unmount/1]).
 
 %% Root view rendering two children, the second of which raises from unmount/1.
-%% `hide` removes both in one diff. The root reports its own unmount.
+%% `hide` removes both in one diff; `replace` removes both and mounts a third in
+%% the same diff. The root reports its own unmount.
 
 -spec mount(az:bindings()) -> az:mount_ret().
 mount(Bindings) ->
-    {#{id => ~"unmount_raise_parent", show => true, notify => maps:get(notify, Bindings)}, #{}}.
+    {
+        #{
+            id => ~"unmount_raise_parent",
+            show => pair,
+            notify => maps:get(notify, Bindings)
+        },
+        #{}
+    }.
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
     ?html(
         {main, [{id, ?get(id)}], [
             case ?get(show) of
-                true ->
+                pair ->
                     {'div', [], [
                         ?stateful(arizona_unmount_raise_child, #{
                             id => ~"plain", notify => ?get(notify)
@@ -26,7 +34,13 @@ render(Bindings) ->
                             id => ~"raising", notify => ?get(notify), raise => true
                         })
                     ]};
-                false ->
+                fresh ->
+                    {'div', [], [
+                        ?stateful(arizona_unmount_raise_child, #{
+                            id => ~"fresh", notify => ?get(notify)
+                        })
+                    ]};
+                none ->
                     <<>>
             end
         ]}
@@ -35,7 +49,9 @@ render(Bindings) ->
 -spec handle_event(az:event_name(), az:event_payload(), az:bindings()) ->
     az:handle_event_ret().
 handle_event(~"hide", _Payload, Bindings) ->
-    {Bindings#{show => false}, #{}, []}.
+    {Bindings#{show => none}, #{}, []};
+handle_event(~"replace", _Payload, Bindings) ->
+    {Bindings#{show => fresh}, #{}, []}.
 
 -spec unmount(az:bindings()) -> ok.
 unmount(#{id := Id, notify := Notify}) ->

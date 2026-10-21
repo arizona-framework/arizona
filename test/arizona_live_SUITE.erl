@@ -114,6 +114,9 @@
     swapped_child_unmounted_once_when_new_mount_crashes/1,
     raising_removal_unmounts_each_once/1,
     raising_unmount_on_exit_unmounts_rest/1,
+    raising_removal_unmounts_fresh_child/1,
+    child_mounted_by_crashed_diff_unmounted/1,
+    child_mounted_by_crashed_mount_unmounted/1,
     fired_timer_ref_pruned/1,
     cancelled_timer_ref_pruned/1,
     concurrent_timer_arms_amortized/1,
@@ -278,6 +281,9 @@ groups() ->
             swapped_child_unmounted_once_when_new_mount_crashes,
             raising_removal_unmounts_each_once,
             raising_unmount_on_exit_unmounts_rest,
+            raising_removal_unmounts_fresh_child,
+            child_mounted_by_crashed_diff_unmounted,
+            child_mounted_by_crashed_mount_unmounted,
             fired_timer_ref_pruned,
             cancelled_timer_ref_pruned,
             live_reaped_on_transport_disconnect,
@@ -2010,6 +2016,45 @@ swapped_child_unmounted_once_when_new_mount_crashes(Config) when is_list(Config)
     end,
     ?assertEqual([{unmounted, arizona_swap_a}], collect_messages(200)).
 
+child_mounted_by_crashed_diff_unmounted(Config) when is_list(Config) ->
+    %% The diff mounts the first child, then the second child's mount/1 raises.
+    %% The process exits from the state it had before the event, which does not
+    %% list the first child yet, but its mount/1 ran: terminate/2 must unmount
+    %% it.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_mount_crash_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    ?assertExit(
+        {{{arizona_loc, _, crash_on_mount}, _}, {gen_server, call, _}},
+        arizona_live:handle_event(Pid, ~"mount_crash_parent", ~"show", #{})
+    ),
+    receive
+        {'DOWN', Ref, process, Pid, {{arizona_loc, _, crash_on_mount}, _}} -> ok
+    after 1000 -> error(timeout_live_exit)
+    end,
+    ?assertEqual([{unmounted, arizona_swap_a}], collect_messages(200)).
+
+child_mounted_by_crashed_mount_unmounted(Config) when is_list(Config) ->
+    %% Same pair, failing the view's own mount: the state never got a snapshot,
+    %% so terminate/2 skips the root, but the child that mounted is unmounted.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_mount_crash_parent, #{notify => self(), show => true}, undefined, []
+    ),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    ?assertExit(
+        {{{arizona_loc, _, crash_on_mount}, _}, {gen_server, call, _}},
+        arizona_live:mount(Pid)
+    ),
+    receive
+        {'DOWN', Ref, process, Pid, {{arizona_loc, _, crash_on_mount}, _}} -> ok
+    after 1000 -> error(timeout_live_exit)
+    end,
+    ?assertEqual([{unmounted, arizona_swap_a}], collect_messages(200)).
+
 raising_removal_unmounts_each_once(Config) when is_list(Config) ->
     %% One diff removes two children and the second one's unmount/1 raises. The
     %% first still unmounts, the process exits from the state it had before the
@@ -2045,6 +2090,30 @@ raising_unmount_on_exit_unmounts_rest(Config) when is_list(Config) ->
     ?assertExit({unmount_boom, _}, arizona_live:stop(Pid)),
     ?assertEqual(
         [{unmounted, ~"plain"}, {unmounted, ~"raising"}, {unmounted, ~"unmount_raise_parent"}],
+        lists:sort(collect_messages(200))
+    ).
+
+raising_removal_unmounts_fresh_child(Config) when is_list(Config) ->
+    %% One diff mounts a new child and removes two, the second of which raises
+    %% from unmount/1. The process exits from the state it had before the event,
+    %% which lists the removed pair but not the new child: every instance must
+    %% still unmount exactly once, the root included.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_raise_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    ?assertExit(
+        {{unmount_boom, _}, {gen_server, call, _}},
+        arizona_live:handle_event(Pid, ~"unmount_raise_parent", ~"replace", #{})
+    ),
+    ?assertEqual(
+        [
+            {unmounted, ~"fresh"},
+            {unmounted, ~"plain"},
+            {unmounted, ~"raising"},
+            {unmounted, ~"unmount_raise_parent"}
+        ],
         lists:sort(collect_messages(200))
     ).
 
