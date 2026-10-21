@@ -40,10 +40,17 @@ private let sysPong = "1"
 private let heartbeatMs = 30_000
 
 /// Diagnostics sink. AzWire has no logging dependency (it must build on any
-/// platform), so a skipped op is reported on stdout -- the counterpart of
-/// Android's `Log.w` and the reference client's `console.warn`.
+/// platform), so a skipped op or a lost frame is reported on stderr -- the
+/// counterpart of Android's `Log.w` and the reference client's `console.warn`.
+/// Stderr, not `print`: stdout is block-buffered when it is not a terminal, so
+/// the lines of an app killed at the end of a UI test would never be written.
+/// A variable so the logic tests can observe what was reported.
+var azWarnSink: (String) -> Void = { message in
+    FileHandle.standardError.write(Data("[arizona] \(message)\n".utf8))
+}
+
 func azWarn(_ message: String) {
-    print("[arizona] \(message)")
+    azWarnSink(message)
 }
 
 /// Connects to an Arizona server's WebSocket and renders its `?native` view.
@@ -238,8 +245,16 @@ public final class AzClient {
     /// Send an event frame `[ViewId, Event, Payload]`. ViewId defaults to the
     /// root view; a tap routes to the tapped node's enclosing view.
     public func pushEvent(_ event: String, payload: JSONValue = .object([:]), target: String? = nil) {
-        guard let vid = target ?? viewId else { return }
-        transport?.send(JSONValue.array([.string(vid), .string(event), payload]).serialized)
+        guard let vid = target ?? viewId else {
+            azWarn("event \"\(event)\" dropped: no view mounted yet")
+            return
+        }
+        send(JSONValue.array([.string(vid), .string(event), payload]).serialized)
+    }
+
+    private func send(_ frame: String) {
+        guard let transport else { return azWarn("frame dropped: no socket: \(frame)") }
+        transport.send(frame)
     }
 
     /// SPA navigate: transition to a new view on the same socket (the server's
@@ -248,7 +263,7 @@ public final class AzClient {
         let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
         let p = parts[0]
         let qs = parts.count > 1 ? parts[1] : ""
-        transport?.send(JSONValue.array([.string("navigate"), .object(["path": .string(p), "qs": .string(qs)])]).serialized)
+        send(JSONValue.array([.string("navigate"), .object(["path": .string(p), "qs": .string(qs)])]).serialized)
         // Keep the reconnect URL in sync with the navigated route, so a drop
         // re-mounts here, not the launch path. Reconnect is a fresh mount, so only
         // _az_path (the route) matters.
