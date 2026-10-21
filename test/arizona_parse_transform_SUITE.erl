@@ -2528,7 +2528,7 @@ raw_text_in_nodiff_bare_dynamic_rejected(Config) when is_list(Config) ->
         fun(R) -> R =:= dynamic_in_raw_text end
     ).
 
-%% ...and the marked value in an az-nodiff element must still reach raw_text/2.
+%% ...and the marked value in an az-nodiff element must still reach raw_text/4.
 %% Skipping the raw-text clause sent it through the nodiff path, which neutralizes
 %% nothing, so a ?raw close tag broke straight out of the element.
 raw_text_in_nodiff_raw_neutralized(Config) when is_list(Config) ->

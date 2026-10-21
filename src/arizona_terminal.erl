@@ -73,7 +73,7 @@ never sanitized.
 -export([is_void/1]).
 -export([raw_text_kind/2]).
 -export([content_context/2]).
--export([raw_text/2]).
+-export([raw_text/4]).
 -export([scope_static/3]).
 -export([supports_list_patch/0]).
 -export([target/0]).
@@ -390,8 +390,8 @@ swap_unsafe(<<_, R/binary>>) ->
 
 %% Terminal output has no raw-text elements (raw_text_kind/2 is always `none`), so
 %% no dynamic is ever wrapped in this callback. Required by the behaviour; identity.
--spec raw_text(atom(), term()) -> term().
-raw_text(_Tag, Value) -> Value.
+-spec raw_text(atom(), binary(), binary(), term()) -> term().
+raw_text(_Tag, _Before, _After, Value) -> Value.
 
 %% Unreachable: attr_dyn_name/1 rejects dynamic attributes at compile time, so a
 %% ?terminal template never produces a dynamic-attr dynamic to render. Kept to
