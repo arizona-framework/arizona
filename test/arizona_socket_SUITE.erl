@@ -81,6 +81,8 @@
 -export([navigate_sees_session_rotated_at_upgrade_in_store_mode/1]).
 -export([navigate_reads_carried_store_id_live/1]).
 -export([navigate_does_not_replay_flash_consumed_at_upgrade/1]).
+-export([navigate_does_not_replay_flash_consumed_by_navigate/1]).
+-export([navigate_does_not_replay_flash_consumed_by_halted_navigate/1]).
 -export([navigate_does_not_take_flash_set_at_upgrade/1]).
 -export([remote_helper_names_ride_the_connect_frame/1]).
 
@@ -151,6 +153,8 @@ all() ->
         navigate_sees_session_rotated_at_upgrade_in_store_mode,
         navigate_reads_carried_store_id_live,
         navigate_does_not_replay_flash_consumed_at_upgrade,
+        navigate_does_not_replay_flash_consumed_by_navigate,
+        navigate_does_not_replay_flash_consumed_by_halted_navigate,
         navigate_does_not_take_flash_set_at_upgrade,
         handler_flash_survives_gate_on_target,
         chained_gate_flash_replays_first_gate,
@@ -1815,6 +1819,42 @@ navigate_does_not_replay_flash_consumed_at_upgrade(Config) when is_list(Config) 
         ?assertEqual(#{}, seen_flash())
     end).
 
+%% The same carry for a flash the upgrade left alone (its route runs no
+%% `fetch_flash`) and a later navigate consumed: shown once, on the first
+%% `fetch_flash` route reached, and never again for the life of the socket --
+%% through a navigate elsewhere, a same-handler patch, or another navigate.
+navigate_does_not_replay_flash_consumed_by_navigate(Config) when is_list(Config) ->
+    with_secret(fun() ->
+        Flash = {arizona_flash:cookie_name(), arizona_flash:encode(#{~"notice" => ~"hi"})},
+        {H, B, ArzReq} = upgrade(#{cookies => [Flash]}, []),
+        {reply, _, Socket0} = arizona_socket:init(H, B, ArzReq, #{}),
+        {reply, _, Socket1} = arizona_socket:handle_in(navigate_frame(~"/notice"), Socket0),
+        ?assertEqual(#{~"notice" => ~"hi"}, seen_flash()),
+        {reply, _, Socket2} = arizona_socket:handle_in(navigate_frame(~"/"), Socket1),
+        {reply, _, Socket3} = arizona_socket:handle_in(navigate_frame(~"/notice"), Socket2),
+        ?assertEqual(#{}, seen_flash()),
+        {_, Socket4} = patch_result(arizona_socket:handle_in(patch_frame(~"/notice"), Socket3)),
+        ?assertEqual(#{}, seen_flash()),
+        {reply, _, _} = arizona_socket:handle_in(navigate_frame(~"/notice"), Socket4),
+        ?assertEqual(#{}, seen_flash())
+    end).
+
+%% A gate that reads the flash and then halts spends it too: over HTTP the 3xx
+%% clears the cookie, so the page the redirect lands on shows nothing.
+navigate_does_not_replay_flash_consumed_by_halted_navigate(Config) when is_list(Config) ->
+    with_secret(fun() ->
+        Flash = {arizona_flash:cookie_name(), arizona_flash:encode(#{~"notice" => ~"hi"})},
+        {H, B, ArzReq} = upgrade(#{cookies => [Flash]}, []),
+        {reply, _, Socket0} = arizona_socket:init(H, B, ArzReq, #{}),
+        {reply, GateFrame, Socket1} = arizona_socket:handle_in(navigate_frame(~"/gate"), Socket0),
+        ?assertMatch([[?EFFECT_NAVIGATE, ~"/notice" | _]], effects(GateFrame)),
+        {reply, _, _} = arizona_socket:handle_in(navigate_frame(~"/notice"), Socket1),
+        ?assertEqual(#{}, seen_flash())
+    end).
+
+patch_result({ok, Socket}) -> {[], Socket};
+patch_result({reply, Frame, Socket}) -> {Frame, Socket}.
+
 %% A flash the upgrade SET (a middleware that flashes and continues) rides the 101
 %% for the browser's next HTTP request. A navigate on this socket must not take it
 %% too -- nothing over the socket can clear the browser's cookie, so it would show
@@ -1830,9 +1870,10 @@ navigate_does_not_take_flash_set_at_upgrade(Config) when is_list(Config) ->
     end).
 
 %% Prepare a WebSocket upgrade to `/` running `Middlewares`, beside an `/account`
-%% route gated on a `user` session key and a `/notice` route reporting its flash.
-%% Both report what they read (the gate also the session cookies its request would
-%% emit) to the test process -- the socket runs in it.
+%% route gated on a `user` session key, a `/notice` route reporting its flash, and a
+%% `/gate` that reads the flash and redirects to `/notice`.
+%% `/account` and `/notice` report what they read (`/account` also the session
+%% cookies its request would emit) to the test process -- the socket runs in it.
 upgrade(Raw, Middlewares) ->
     Self = self(),
     RequireUser = fun(R0, B) ->
@@ -1848,12 +1889,17 @@ upgrade(Raw, Middlewares) ->
         Self ! {flash, arizona_req:flash(R)},
         {cont, R, B}
     end,
+    ToNotice = fun(R, _B) -> {halt, arizona_req:redirect(R, ~"/notice")} end,
     Routes = #{
         ~"/" => {arizona_root_counter, #{middlewares => Middlewares}},
         ~"/account" => {arizona_root_counter, #{middlewares => [RequireUser]}},
         ~"/notice" =>
             {arizona_root_counter, #{
                 middlewares => [{arizona_middleware, fetch_flash}, ReportFlash]
+            }},
+        ~"/gate" =>
+            {arizona_root_counter, #{
+                middlewares => [{arizona_middleware, fetch_flash}, ToNotice]
             }}
     },
     {cont, #{handler := H, bindings := B, req := ArzReq}} =
