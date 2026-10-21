@@ -64,6 +64,10 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
+    %% fs's default env starts an extra recursive watcher on the whole cwd
+    %% (node_modules, _build), which can exhaust the inotify watch limit and
+    %% fail the suite with enospc. The tests only use their own named watchers.
+    ok = application:set_env(fs, backwards_compatible, false, [{persistent, true}]),
     {ok, _} = application:ensure_all_started(fs),
     _ = ensure_pg_started(),
     Config.
