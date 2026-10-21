@@ -129,6 +129,7 @@
     error_in_included_helper_names_its_file/1,
     error_in_included_each_fun_names_its_file/1,
     element_error_keeps_file_and_column/1,
+    improper_list_error_keeps_file_and_column/1,
     invalid_child_tuple_literal/1,
     invalid_each_fun_arity/1,
     invalid_each_multi_clause/1,
@@ -1214,7 +1215,8 @@ groups() ->
             error_keeps_column,
             error_in_included_helper_names_its_file,
             error_in_included_each_fun_names_its_file,
-            element_error_keeps_file_and_column
+            element_error_keeps_file_and_column,
+            improper_list_error_keeps_file_and_column
         ]},
         %% Inline cross-target nesting guard (?html in ?native and vice-versa)
         {cross_target, [parallel], [
@@ -8090,6 +8092,37 @@ element_error_keeps_file_and_column(Config) when is_list(Config) ->
             "    arizona_template:html({'div', [], [b(), arizona_template:get(y, Bindings)]}).\n"
             "-file(\"pt_inc.hrl\", 1).\n"
             "b() -> {br, [], [<<\"x\">>]}.\n"
+            "-file(\"pt_main.erl\", 6).\n",
+            {1, 1}
+        )
+    ).
+
+%% An improper template list names its tail's column, and the included file
+%% when the list sits in a helper inlined from a header.
+improper_list_error_keeps_file_and_column(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{"pt_main.erl", [{{5, 49}, arizona_parse_transform, improper_template_list}]}],
+            []},
+        transform_source(
+            "-file(\"pt_main.erl\", 1).\n"
+            "-module(pt_improper_main).\n"
+            "-export([render/1]).\n"
+            "render(Bindings) ->\n"
+            "    arizona_template:html({'ul', [], [<<\"x\">> | tail(Bindings)]}).\n",
+            {1, 1}
+        )
+    ),
+    ?assertMatch(
+        {error, [{"pt_inc.hrl", [{{7, 28}, arizona_parse_transform, improper_template_list}]}], []},
+        transform_source(
+            "-file(\"pt_main.erl\", 1).\n"
+            "-module(pt_improper_inc).\n"
+            "-export([render/1]).\n"
+            "render(Bindings) ->\n"
+            "    arizona_template:html({'div', [], [b(), arizona_template:get(y, Bindings)]}).\n"
+            "-file(\"pt_inc.hrl\", 1).\n"
+            "b() -> {ul, [], [<<\"x\">> | tail()]}.\n"
+            "tail() -> [].\n"
             "-file(\"pt_main.erl\", 6).\n",
             {1, 1}
         )
