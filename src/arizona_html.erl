@@ -33,6 +33,7 @@ identical to the previous inlined emission.
 -export([target/0]).
 -export([content_type/0]).
 -export([supports_local/0]).
+-export([single_root_document/0]).
 -export([supports_nodiff_keep/0]).
 -export([implied_attrs/2]).
 -export([boolean_attrs/0]).
@@ -267,6 +268,8 @@ target() -> html.
 content_type() -> ~"text/html; charset=utf-8".
 
 supports_local() -> true.
+
+single_root_document() -> false.
 
 supports_nodiff_keep() -> true.
 
