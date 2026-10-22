@@ -168,9 +168,15 @@ jobs:
           # `bootstatus -b` boots if needed and blocks until the boot completes.
           xcrun simctl bootstatus "$UDID" -b
           cd clients/ios/Sample
+          # A failed case runs once more: the Simulator's accessibility layer can
+          # stop answering XCUITest ("Timed out while evaluating UI query",
+          # kAXErrorIPCTimeout) with the app itself healthy. The xcresult keeps
+          # every attempt, so a case that only passes on its retry is still visible.
           xcodebuild test \
             -scheme Sample \
             -destination "id=$UDID" \
+            -retry-tests-on-failure \
+            -test-iterations 2 \
             -resultBundlePath /tmp/ios-e2e.xcresult
 
       # A Simulator failure is undiagnosable once the runner is gone: the
