@@ -664,9 +664,8 @@ merge_stream_child_views(Old, #{items := Items}, LocalNew, Old0) ->
                     Carried = live_subtree(OldChildViews, Old0),
                     Kept = without_stale(stale_views(Taken, LocalNew, Old0), Carried, Old0),
                     %% The views the drain rendered claimed their ids as they
-                    %% rendered; the ones it kept claim theirs here.
-                    ok = arizona_eval:claim_view_ids(Kept, LocalNew),
-                    maps:merge(Kept, LocalNew)
+                    %% rendered, so only the ones it kept besides them are carried.
+                    carry_views(maps:without(maps:keys(LocalNew), Kept), LocalNew)
             end;
         #{} ->
             LocalNew
@@ -757,19 +756,20 @@ keeps without calling `handle_update/3`.
 %% releasing pubsub subscriptions and resources) while its DOM was still on the
 %% page, after which every event addressed to it was silently swallowed.
 carry_skipped_view(#{view_id := VId}, {Old, New}) ->
-    carry_subtree(live_subtree(#{VId => true}, Old), Old, New);
+    {Old, carry_views(live_subtree(#{VId => true}, Old), New)};
 carry_skipped_view(#{child_views := ChildIds}, Views) when map_size(ChildIds) =:= 0 ->
     Views;
 carry_skipped_view(#{child_views := ChildIds}, {Old, New}) ->
-    carry_subtree(live_subtree(ChildIds, Old), Old, New);
+    {Old, carry_views(live_subtree(ChildIds, Old), New)};
 carry_skipped_view(_Old, Views) ->
     Views.
 
-%% A kept subtree still occupies its ids in this pass, so it claims them for the
-%% duplicate check (`arizona_eval:claim_view_ids/1`).
-carry_subtree(Subtree, Old, New) ->
-    ok = arizona_eval:claim_view_ids(Subtree),
-    {Old, maps:merge(New, Subtree)}.
+%% A kept view still occupies its id in this pass, so it claims it for the
+%% duplicate check (`arizona_eval:claim_view_ids/1`) as it joins the views the pass
+%% rendered.
+carry_views(Kept, New) ->
+    ok = arizona_eval:claim_view_ids(Kept),
+    maps:merge(New, Kept).
 
 %% The live entries of `Old` making up the subtrees rooted at `Ids`, following
 %% each entry's own recorded descendants transitively. Every view's snapshot in

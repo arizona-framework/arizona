@@ -75,7 +75,6 @@ bindings like `id`. Violations raise
 -export([drain_update_effects/0]).
 -export([relocate/4]).
 -export([claim_view_ids/1]).
--export([claim_view_ids/2]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -548,20 +547,6 @@ claim_view_ids(Views) ->
                     #{Id := #{handler := First}} = Claimed,
                     duplicate_view_id(Id, First, Second)
             end
-    end.
-
--doc """
-`claim_view_ids/1` for the views of `Views` that `Except` does not name: the
-children a stream drain kept, beside the ones it rendered (and so claimed as it
-rendered them).
-""".
--spec claim_view_ids(Views, Except) -> ok when
-    Views :: #{binary() => #{handler := module(), _ => _}},
-    Except :: #{binary() => _}.
-claim_view_ids(Views, Except) ->
-    case erlang:get('$arizona_view_ids') of
-        undefined -> ok;
-        _Armed -> claim_view_ids(maps:without(maps:keys(Except), Views))
     end.
 
 claim_view_id(Id, H) ->
