@@ -733,7 +733,11 @@ same constraint seen from the tag rather than from the callback body.
 (`[?html(...)]`, `[?stateless(...)]`) -- the item lands in the same fragile value slot --
 while keeping a list of elements or a static/dynamic-text fragment.
 Map plain values with a list comprehension / `lists:map` (no per-item diffing); put a
-conditional inside an element child (`{li, [], [case ... end]}`).
+conditional inside an element child (`{li, [], [case ... end]}`). The reverse is a compile
+error too: a comprehension in a content slot builds its list at render, as one value, so an
+element-shaped body (`[row(X) || X <- Xs]`, `[{li, [], [X]} || ...]`, `[?html(...) || ...]`)
+is `element_in_comprehension` (`is_lc_element_body/2`, checked where the helper-inlining walk
+reaches the comprehension). A comprehension handed to a function stays data and is untouched.
 
 The callback may be an inline fun **or a local single-clause function reference** (`fun row/1`,
 or `fun row/2` for a stream/map). `compile_each` looks the function up in the module's forms

@@ -1071,7 +1071,8 @@ format_error(Reason) when
     Reason =:= each_stream_body_control_flow;
     Reason =:= each_named_fun_multi_clause;
     Reason =:= each_named_fun_undefined;
-    Reason =:= each_remote_fun_ref
+    Reason =:= each_remote_fun_ref;
+    Reason =:= element_in_comprehension
 ->
     format_each_error(Reason);
 format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
@@ -1136,6 +1137,12 @@ binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
 binder_kind(generator) -> "generator pattern variable".
 
+format_each_error(element_in_comprehension) ->
+    "a comprehension in a content slot builds its list at render time, so the slot "
+    "holds one plain value and an element (or template) per item fails at render. "
+    "Render a runtime list of elements with ?each, which compiles the item once and "
+    "diffs it per item: ?each(fun(X) -> {'li', [], [X]} end, ?get(items)). A "
+    "comprehension of plain values is fine";
 format_each_error(each_body_not_element) ->
     "an ?each callback over a list must return an element ({Tag, Attrs, Children}) or a "
     "list of elements -- ?each builds a per-item template for fine-grained diffing, so a "
@@ -1747,10 +1754,89 @@ ih(L, Ctx, Ch, _Tail) when is_list(L) ->
 ih(Other, _Ctx, Ch, _Tail) ->
     {Other, Ch}.
 
-ih_content_lc(L, Body, Quals, Ctx, Ch) ->
+ih_content_lc(L, Body, Quals, {Module, FunDefs, Target, _Stack} = Ctx, Ch) ->
+    case is_lc_element_body(Body, {Module, FunDefs, Target}) of
+        true -> parse_error(element_in_comprehension, anno(Body));
+        false -> ok
+    end,
     {Body1, Ch1} = ih(Body, Ctx, Ch, lc_body),
     {Quals1, Ch2} = ih_list(Quals, Ctx, Ch1, false),
     {{lc, L, Body1, Quals1}, Ch2}.
+
+%% A comprehension in content builds a runtime list, which the slot renders as one
+%% value: an element per item is a template the list cannot hold, so it would fail
+%% at render (bad_template_value). The body is element-shaped when it is an element,
+%% a compiled or uncompiled ?html/?native/?terminal, a local helper with an element
+%% clause, or a list, nested comprehension or control-flow tail of those. A plain
+%% value body renders fine and is left alone.
+is_lc_element_body({tuple, _, [_, Attrs]}, _Ctx) ->
+    is_list_ast(Attrs);
+is_lc_element_body({tuple, _, [_, Attrs, _Children]}, _Ctx) ->
+    is_list_ast(Attrs);
+is_lc_element_body({map, _, Fields}, _Ctx) ->
+    is_compiled_template_map(Fields);
+is_lc_element_body({cons, _, Head, Tail}, Ctx) ->
+    is_lc_element_body(Head, Ctx) orelse is_lc_element_body(Tail, Ctx);
+is_lc_element_body({lc, _, Body, _Quals}, Ctx) ->
+    is_lc_element_body(Body, Ctx);
+is_lc_element_body({block, _, [_ | _] = Exprs}, Ctx) ->
+    is_lc_element_body(lists:last(Exprs), Ctx);
+is_lc_element_body({call, _, {atom, _, Name}, Args}, Ctx) ->
+    is_element_helper(Name, length(Args), Ctx);
+is_lc_element_body(
+    {call, _, {remote, _, {atom, _, Mod}, {atom, _, Fun}}, Args}, {Module, _, _} = Ctx
+) ->
+    case Mod of
+        Module ->
+            is_element_helper(Fun, length(Args), Ctx);
+        _Other ->
+            is_template_ctor_call(Mod, Fun, Args)
+    end;
+is_lc_element_body(Flow, Ctx) when
+    element(1, Flow) =:= 'case';
+    element(1, Flow) =:= 'if';
+    element(1, Flow) =:= 'receive';
+    element(1, Flow) =:= 'try';
+    element(1, Flow) =:= 'maybe'
+->
+    try
+        _ = map_tail_exprs(
+            Flow,
+            fun(Leaf) ->
+                case is_lc_element_body(Leaf, Ctx) of
+                    true -> throw(element_tail);
+                    false -> Leaf
+                end
+            end,
+            fun(NonTail) -> NonTail end
+        ),
+        false
+    catch
+        throw:element_tail -> true
+    end;
+is_lc_element_body(_Value, _Ctx) ->
+    false.
+
+is_template_ctor_call(Mod, Fun, [_Arg]) ->
+    lists:member(Mod, [arizona_template, az, ?NODIFF_MOD]) andalso
+        lists:member(Fun, [html, native, terminal]);
+is_template_ctor_call(_Mod, _Fun, _Args) ->
+    false.
+
+%% Any clause counts: a multi-clause helper is reported as the comprehension it sits
+%% in, since collapsing its clauses would still leave an element per item.
+is_element_helper(Name, Arity, {_Module, FunDefs, Target}) ->
+    case FunDefs of
+        #{{Name, Arity} := Clauses} ->
+            lists:any(
+                fun({clause, _, _Params, _Guards, Body}) ->
+                    helper_body_shape(lists:last(Body), Target) =/= none
+                end,
+                Clauses
+            );
+        #{} ->
+            false
+    end.
 
 %% Control flow: a clause body's last expression carries the value, so it
 %% inherits `Tail`; scrutinees, timeouts and `after` bodies never do.

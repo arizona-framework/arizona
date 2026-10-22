@@ -381,7 +381,10 @@ site). Read the line, not the name -- the compiler derives a fun's name from the
 written in, so this is not relabelable.
 
 - Plain values: use a list comprehension or `lists:map/2` (no per-item diffing, fine for
-  small or static lists).
+  small or static lists). A content-slot comprehension builds its list at render, as one
+  value, so it cannot hold markup: one whose body is an element (a literal, an element
+  helper, a `?html`/`?native`/`?terminal`, or a list, nested comprehension or conditional
+  tail of those) is a compile error (`element_in_comprehension`). Use `?each`.
 - A conditional: put it **inside** an element as a text/value child. Only the `?each`
   **body** must be a direct element -- a conditional sitting in a content slot may itself
   return a bare element tuple (see "Bare element tuples in conditional tails" below).
@@ -419,7 +422,9 @@ any children list.
 
 The list must be **literal at the template site**: a list the template cannot see -- a
 comprehension of templates, a list bound at runtime, a list nested inside the list -- is still a
-single value and fails at render on a template or component in it. A **variable** item bound to
+single value and fails at render on a template or component in it. A comprehension whose body
+is element-shaped is caught at compile time (`element_in_comprehension`, see "`?each` body must
+return an element"); write it as an `?each`. A **variable** item bound to
 markup that reads no binding (`Hdr = ?html({h1, [], [~"T"]})`, then `[[Hdr, ?each(...)]]`) is a
 compile error (`markup_var_in_content_list`) naming the variable: write the markup in the list
 itself. A hoisted template that reads a binding is substituted back into the slot, so it is
@@ -773,11 +778,12 @@ non-variable/repeated/`_` parameters (`helper_params_not_vars`), statements befo
 the element (`helper_body_not_single_expr`), and recursion (`helper_recursive`); a
 parameter read in an `?each` callback's head or guard (`helper_param_in_each_guard`, above)
 is rejected whichever form the body takes.
-Only a call whose value **is** content (the positions listed above, plus the body of a
-list comprehension sitting in one, whose results the slot renders) is rejected: a
+Only a call whose value **is** content (the positions listed above) is rejected: a
 function argument or a `case` scrutinee consumes the value as data, and an ordinary
 data function returning an atom-tagged tuple (`color(red) -> {rgb, 255, 0, 0}`)
-looks the same as an element there, so the call is left to run.
+looks the same as an element there, so the call is left to run. An element helper as
+the body of a list comprehension in a content slot is `element_in_comprehension` instead,
+clean or not (collapsing a multi-clause one would still leave an element per item).
 The same shapes with a whole-body `?html` wrapper are **not** rejected -- they
 already render as a runtime nested template and keep doing so (body reads frozen;
 hand a subset over with `?with` below). Genuinely remote calls (`mod:helper()`),
