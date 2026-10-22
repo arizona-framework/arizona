@@ -79,6 +79,11 @@
     static_asset_brotli_served/1,
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
+    reload_closes_native_socket_once/1,
+    reload_closes_html_socket/1,
+    reload_css_keeps_socket/1,
+    reload_ignored_without_reloader/1,
+    reload_remounts_view_holding_reloaded_fun/1,
     recompile_routes_runs/1,
     recompile_routes_syncs_listener/1,
     https_without_tls_errors/1,
@@ -196,6 +201,11 @@ groups() ->
         static_asset_brotli_served,
         static_asset_missing_returns_404,
         reload_endpoint_streams_event,
+        reload_closes_native_socket_once,
+        reload_closes_html_socket,
+        reload_css_keeps_socket,
+        reload_ignored_without_reloader,
+        reload_remounts_view_holding_reloaded_fun,
         recompile_routes_runs,
         recompile_routes_syncs_listener,
         https_without_tls_errors,
@@ -539,6 +549,8 @@ init_per_group(roadrunner, Config) ->
                 end
             ]
         }},
+        %% Native view holding a fun made by a module the reload tests reload.
+        {live, <<"/reload_fun">>, arizona_reload_fun_view, #{}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/assets">>, {priv_dir, arizona, "static/assets/js"}},
         {reload, <<"/reload">>, #{}}
@@ -2137,6 +2149,112 @@ recv_until(Sock, Needle, Timeout, Acc) ->
             end;
         {error, timeout} ->
             Acc
+    end.
+
+%% In dev mode a live socket closes 1001 on a reload broadcast, so its client
+%% reconnects and remounts on fresh code -- a `?native` client has no page reload
+%% to do it. The session exits on the first close, so a burst closes it once.
+reload_closes_native_socket_once(Config) ->
+    with_reloader(fun() ->
+        {ok, Sock} = ws_connect(Config, <<"/reload_fun">>, [{reconnect, true}]),
+        {text, _Replace} = ws_recv(Sock),
+        ok = arizona_reloader:broadcast(),
+        ok = arizona_reloader:broadcast(),
+        ok = arizona_reloader:broadcast(),
+        ?assertMatch({close, 1001, _}, ws_recv(Sock)),
+        ?assertEqual({error, closed}, ws_recv(Sock)),
+        ok = gen_tcp:close(Sock)
+    end).
+
+%% A browser page closes too: its SSE reload script is the app's to wire, and a
+%% page without it would otherwise keep the stale view.
+reload_closes_html_socket(Config) ->
+    with_reloader(fun() ->
+        {ok, Sock} = ws_connect(Config, <<"/">>),
+        ok = arizona_reloader:broadcast(),
+        ?assertMatch({close, 1001, _}, ws_recv(Sock)),
+        ok = gen_tcp:close(Sock)
+    end).
+
+%% A CSS reload swaps stylesheets in the browser; no code changed, so the socket
+%% stays up.
+reload_css_keeps_socket(Config) ->
+    with_reloader(fun() ->
+        {ok, Sock} = ws_connect(Config, <<"/">>),
+        ok = arizona_reloader:reload_css(),
+        ok = ws_send(Sock, <<"0">>),
+        ?assertEqual({text, <<"1">>}, ws_recv(Sock)),
+        ws_close(Sock)
+    end).
+
+%% Without the dev reloader (production) the socket never joins the topic, so a
+%% broadcast reaches nothing.
+reload_ignored_without_reloader(Config) ->
+    undefined = application:get_env(arizona, reloader),
+    Before = arizona_pubsub:subscribers(arizona_reloader),
+    {ok, Sock} = ws_connect(Config, <<"/">>),
+    ?assertEqual(Before, arizona_pubsub:subscribers(arizona_reloader)),
+    ok = arizona_reloader:broadcast(),
+    ok = ws_send(Sock, <<"0">>),
+    ?assertEqual({text, <<"1">>}, ws_recv(Sock)),
+    ws_close(Sock).
+
+%% The failure the close exists for: a fun in the view's bindings is made by a
+%% module the reloader then loads twice, which purges the code the fun points
+%% into. Left alone, the view's next event raises `{badfun, _}` and the socket
+%% closes 4500; with the reload close the client remounts first and the fresh
+%% view's fun works.
+reload_remounts_view_holding_reloaded_fun(Config) ->
+    with_reloader(fun() ->
+        {ok, Sock} = ws_connect(Config, <<"/reload_fun">>, [{reconnect, true}]),
+        {text, _Replace} = ws_recv(Sock),
+        Stale = arizona_reload_fun_source:make(),
+        try
+            ok = ws_send_json(Sock, [~"reload_fun", ~"inc", #{}]),
+            ?assertMatch({text, _}, ws_recv(Sock)),
+            ok = reload_module(arizona_reload_fun_source, 2),
+            ok = arizona_reloader:broadcast(),
+            ok = reload_module(arizona_reload_fun_source, 3),
+            ok = arizona_reloader:broadcast(),
+            ?assertError({badfun, _}, Stale(1)),
+            ?assertMatch({close, 1001, _}, ws_recv(Sock)),
+            ok = gen_tcp:close(Sock),
+            {ok, Sock1} = ws_connect(Config, <<"/reload_fun">>, [{reconnect, true}]),
+            {text, _Replace1} = ws_recv(Sock1),
+            ok = ws_send_json(Sock1, [~"reload_fun", ~"inc", #{}]),
+            {text, Reply} = ws_recv(Sock1),
+            ?assertMatch(#{~"o" := [_ | _]}, json:decode(Reply)),
+            ws_close(Sock1)
+        after
+            ok = purge(arizona_reload_fun_source),
+            {module, arizona_reload_fun_source} = code:load_file(arizona_reload_fun_source)
+        end
+    end).
+
+%% Recompile `Mod` with a different `STEP` and load it the way the reloader does
+%% (`code:purge/1` then `code:load_binary/3`).
+reload_module(Mod, Step) ->
+    Src = proplists:get_value(source, Mod:module_info(compile)),
+    {ok, Mod, Bin} = compile:file(Src, [binary, {d, 'STEP', Step}]),
+    ok = purge(Mod),
+    {module, Mod} = code:load_binary(Mod, Src, Bin),
+    ok.
+
+%% `code:purge/1` says whether there was old code to purge; either is fine here.
+purge(Mod) ->
+    case code:purge(Mod) of
+        true -> ok;
+        false -> ok
+    end.
+
+%% The dev reloader as `arizona_sup` reads it: enabled, with a rules list (empty,
+%% so no watcher is involved).
+with_reloader(Fun) ->
+    ok = application:set_env(arizona, reloader, #{enabled => true, rules => []}),
+    try
+        Fun()
+    after
+        ok = application:unset_env(arizona, reloader)
     end.
 
 http_reads_cookies_headers_body(Config) ->

@@ -12,6 +12,8 @@
 -export([serve_exits_on_linked_death/1]).
 -export([serve_tolerates_dead_view/1]).
 -export([serve_forwards_wide_codepoint_list/1]).
+-export([serve_remounts_on_reload/1]).
+-export([serve_ignores_reload_without_reloader/1]).
 
 %% arizona_terminal_tty is a thin local-TTY transport over arizona_terminal_session:
 %% start/3 enters raw mode (needs a real controlling TTY) and serve/2 runs the event
@@ -33,7 +35,9 @@ all() ->
         serve_quits_on_push_quit_effect,
         serve_exits_on_linked_death,
         serve_tolerates_dead_view,
-        serve_forwards_wide_codepoint_list
+        serve_forwards_wide_codepoint_list,
+        serve_remounts_on_reload,
+        serve_ignores_reload_without_reloader
     ].
 
 init_per_suite(Config) ->
@@ -182,6 +186,49 @@ serve_forwards_wide_codepoint_list(Config) when is_list(Config) ->
     ?assert(down_within(RMon, Reader)).
 
 %% --------------------------------------------------------------------
+%% Dev reload -- the session remounts the view in place.
+%% --------------------------------------------------------------------
+
+%% A terminal client has no reconnect, so in dev mode a reload remounts the view on
+%% fresh code inside the same session: the old view stops (its state resets, as a
+%% browser page's does), the new one paints, and the loop keeps serving keys -- the
+%% stopped view's 'EXIT' must not end it. A burst of broadcasts remounts once, so from
+%% the first key's frame on the frames are exactly: that key, one remount, the next key
+%% (a push the old view raced in before the first key is not part of the burst).
+serve_remounts_on_reload(Config) when is_list(Config) ->
+    with_reloader(fun() ->
+        #{session := Session, view := ViewPid, reader := Reader, vmon := VMon} = capture_fixture(),
+        ?assert(lists:member(self(), arizona_pubsub:subscribers(arizona_reloader))),
+        _Initial = next_out(),
+        self() ! {term_input, ~"j"},
+        self() ! {arizona_reloader, reload},
+        self() ! {arizona_reloader, reload},
+        self() ! {arizona_reloader, reload},
+        self() ! {term_input, ~"j"},
+        self() ! {term_input, eof},
+        ok = arizona_terminal_tty:serve(Session, Reader),
+        [Moved, Remounted, MovedAgain] = from_frame(~"> Options", collect_frames()),
+        ?assert(contains(Moved, ~"> Options")),
+        ?assert(contains(Remounted, ~"> New Game")),
+        ?assert(contains(MovedAgain, ~"> Options")),
+        ?assert(down_within(VMon, ViewPid)),
+        ?assertNot(lists:member(self(), arizona_pubsub:subscribers(arizona_reloader)))
+    end).
+
+%% Without the dev reloader (production) the session never joins the topic, and a
+%% stray reload message changes nothing: the view keeps its state.
+serve_ignores_reload_without_reloader(Config) when is_list(Config) ->
+    undefined = application:get_env(arizona, reloader),
+    #{session := Session, reader := Reader} = capture_fixture(),
+    ?assertNot(lists:member(self(), arizona_pubsub:subscribers(arizona_reloader))),
+    _Initial = next_out(),
+    self() ! {term_input, ~"j"},
+    self() ! {arizona_reloader, reload},
+    self() ! {term_input, eof},
+    ok = arizona_terminal_tty:serve(Session, Reader),
+    ?assert(contains(lists:last(collect_frames()), ~"> Options")).
+
+%% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
 
@@ -200,6 +247,37 @@ serve_fixture() ->
         vmon => monitor(process, ViewPid),
         rmon => monitor(process, Reader)
     }.
+
+%% A demo session whose Out sends each frame to the test process, plus a stand-in reader.
+capture_fixture() ->
+    Self = self(),
+    Out = fun(Io) ->
+        Self ! {out, iolist_to_binary(Io)},
+        ok
+    end,
+    {ok, Session} = arizona_terminal_session:start(
+        arizona_term_demo, #{}, arizona_term_demo_driver, [], Out
+    ),
+    ViewPid = arizona_terminal_session:pid(Session),
+    #{
+        session => Session,
+        view => ViewPid,
+        reader => spawn(fun() -> timer:sleep(infinity) end),
+        vmon => monitor(process, ViewPid)
+    }.
+
+%% The frames from the first one containing `Sub` on.
+from_frame(Sub, Frames) ->
+    lists:dropwhile(fun(Frame) -> not contains(Frame, Sub) end, Frames).
+
+%% The dev reloader as `arizona_sup` reads it: enabled, with a rules list.
+with_reloader(Fun) ->
+    ok = application:set_env(arizona, reloader, #{enabled => true, rules => []}),
+    try
+        Fun()
+    after
+        ok = application:unset_env(arizona, reloader)
+    end.
 
 %% Wait for a monitored process to go DOWN.
 down_within(Mon, Pid) ->
