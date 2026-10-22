@@ -96,6 +96,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([session_error/1]).
 -export([carried_cookies/1]).
 -export([seed_cookies/2]).
+-export([consumed_cookies/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -846,6 +847,21 @@ carried_flash_cookie(Req) ->
         none -> [];
         {Name, _Value, _Opts} -> [{Name, clear}]
     end.
+
+%% Internal use only -- carry plumbing for `arizona_socket`. The flash cookie a
+%% navigate/patch request consumed (a `fetch_flash` step read it from the rebuilt
+%% `Cookie` header), as a `clear` entry to fold into the socket's carried cookies.
+%% Over HTTP that read clears the cookie on the response, so the browser no longer
+%% holds it; the socket's later navigates must not find it in the upgrade's raw
+%% header again. Unlike `carried_cookies/1` it ignores a flash this request set and
+%% the session: a navigate has no `Set-Cookie` leg, so neither reaches the browser.
+-doc false.
+-spec consumed_cookies(Request) -> carried_cookies() when
+    Request :: request().
+consumed_cookies(#{flash_consumed := true}) ->
+    [{arizona_flash:cookie_name(), clear}];
+consumed_cookies(_Req) ->
+    [].
 
 %% Internal use only -- applies a `carried_cookies/1` result to a request rebuilt
 %% from the upgrade's raw value, as the browser's jar would: each carried cookie is

@@ -165,9 +165,10 @@ the client reloads it after a jittered delay.
     %% replayed onto each one (`resolve_route/3`) -- otherwise a session a route
     %% middleware wrote at the upgrade (a login, a store-mode rotation that deleted
     %% the old id) is invisible to the next navigate's middlewares, and a flash the
-    %% upgrade already showed shows again. Taken once, at connect: the socket sees
-    %% no later cookie change (a controller fetch that rewrites the cookie reaches
-    %% the browser, not this socket).
+    %% upgrade already showed shows again. Taken at connect, plus a flash a later
+    %% navigate/patch consumed (`carry_consumed/2`); the socket sees no other
+    %% cookie change (a controller fetch that rewrites the cookie reaches the
+    %% browser, not this socket).
     carried_cookies = [] :: arizona_req:carried_cookies()
 }).
 
@@ -725,9 +726,29 @@ do_navigate(H, RouteOpts, NewReq0, Requested, Socket0) ->
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
-            halt_navigate(Requested, HaltReq, untake_pending_flash(HaltReq, Socket0, Socket));
-        {cont, _NewReq1, Bindings1} ->
-            replace_view(H, Bindings1, maps:get(on_mount, RouteOpts, []), Socket)
+            halt_navigate(
+                Requested,
+                HaltReq,
+                carry_consumed(HaltReq, untake_pending_flash(HaltReq, Socket0, Socket))
+            );
+        {cont, NewReq1, Bindings1} ->
+            replace_view(
+                H, Bindings1, maps:get(on_mount, RouteOpts, []), carry_consumed(NewReq1, Socket)
+            )
+    end.
+
+%% A flash cookie this navigate/patch's middlewares consumed is spent: over HTTP the
+%% response would clear it, so the browser's next request no longer carries it. The
+%% socket's next request is rebuilt from the upgrade's raw `Cookie` header, which
+%% still does, so fold the clear into the carried cookies -- otherwise every later
+%% `fetch_flash` route shows it again, for the life of the socket.
+carry_consumed(Req, #socket{carried_cookies = Carried} = Socket) ->
+    case arizona_req:consumed_cookies(Req) of
+        [] ->
+            Socket;
+        Consumed ->
+            Kept = [C || {Name, _} = C <:- Carried, not lists:keymember(Name, 1, Consumed)],
+            Socket#socket{carried_cookies = Consumed ++ Kept}
     end.
 
 %% A navigate once the route's middlewares have produced the new page's bindings:
@@ -786,13 +807,19 @@ do_patch(H, RouteOpts, NewReq0, Requested, Socket0) ->
     Middlewares = maps:get(middlewares, RouteOpts, []),
     case arizona_middleware:apply_middlewares(Middlewares, NewReq, IB) of
         {halt, HaltReq} ->
-            halt_navigate(Requested, HaltReq, untake_pending_flash(HaltReq, Socket0, Socket));
-        {cont, _NewReq1, #{id := ViewId} = Bindings1} ->
-            patch_view(Pid, ViewId, Bindings1, Socket);
-        {cont, _NewReq1, #{id := _OtherId} = Bindings1} ->
-            replace_view(H, Bindings1, maps:get(on_mount, RouteOpts, []), Socket);
-        {cont, _NewReq1, Bindings1} ->
-            patch_view(Pid, ViewId, Bindings1, Socket)
+            halt_navigate(
+                Requested,
+                HaltReq,
+                carry_consumed(HaltReq, untake_pending_flash(HaltReq, Socket0, Socket))
+            );
+        {cont, NewReq1, #{id := ViewId} = Bindings1} ->
+            patch_view(Pid, ViewId, Bindings1, carry_consumed(NewReq1, Socket));
+        {cont, NewReq1, #{id := _OtherId} = Bindings1} ->
+            replace_view(
+                H, Bindings1, maps:get(on_mount, RouteOpts, []), carry_consumed(NewReq1, Socket)
+            );
+        {cont, NewReq1, Bindings1} ->
+            patch_view(Pid, ViewId, Bindings1, carry_consumed(NewReq1, Socket))
     end.
 
 patch_view(Pid, ViewId, Bindings1, Socket) ->
