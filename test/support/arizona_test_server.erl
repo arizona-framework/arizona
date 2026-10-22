@@ -33,6 +33,10 @@ routes() ->
             bindings => #{title => <<"DataTable">>},
             layouts => Layouts
         }},
+        {live, <<"/stream-positions">>, arizona_stream_positions_page, #{
+            bindings => #{title => <<"StreamPositions">>},
+            layouts => Layouts
+        }},
         {live, <<"/stream-siblings">>, arizona_stream_siblings_page, #{
             bindings => #{title => <<"StreamSiblings">>},
             layouts => Layouts

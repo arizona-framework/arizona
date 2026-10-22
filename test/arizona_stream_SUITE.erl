@@ -137,6 +137,7 @@
     stream_to_list_empty/1,
     stream_to_list_preserves_order/1,
     update_pending_op_carries_item/1,
+    positional_ops_past_transient_key_reach_final_order/1,
     update_on_missing_key_appends/1,
     reset_rebuilds_the_queue_to_one_reset/1,
     stream_to_list/1,
@@ -292,6 +293,7 @@ groups() ->
             stream_limit_ssr,
             stream_limit_reset,
             update_pending_op_carries_item,
+            positional_ops_past_transient_key_reach_final_order,
             update_on_missing_key_appends,
             reset_rebuilds_the_queue_to_one_reset
         ]},
@@ -2136,6 +2138,77 @@ stream_limit_reset(Config) when is_list(Config) ->
     %% OP_INSERT: reset inserts visible_items (limit=2), so only 2 inserts
     InsOps = [Op || [?OP_INSERT | _] = Op <- Ops],
     ?assertEqual(2, length(InsOps)).
+
+%% --- positional ops queued past a key the event inserts and deletes -----------
+%% The drain skips the insert of a key gone by the end of the event, so a positional
+%% insert or a move queued while that key was in the source was placed against an
+%% order the client never held: the client placed it one slot off, or appended a
+%% move whose anchor was that key. Such a log drains as one reconcile instead. Each
+%% case of `arizona_stream_positions_page` (the e2e fixture, so the browser test runs
+%% the same ops through the real client) runs its steps in one event; the stream ops
+%% must be these, and applied in order to the starting keys they give the server's
+%% final order. The later cases are shapes the op-by-op drain already placed right.
+positional_ops_past_transient_key_reach_final_order(Config) when is_list(Config) ->
+    Expected = [
+        {[{insert, ~"m", 0}], [~"m", ~"a"]},
+        {[{insert, ~"m", 1}], [~"a", ~"m", ~"b"]},
+        {[{insert, ~"m", 2}], [~"a", ~"b", ~"m", ~"c"]},
+        {[{move, ~"b", null}], [~"b", ~"a"]},
+        {[{move, ~"b", null}, {insert, ~"m", 2}], [~"b", ~"a", ~"m"]},
+        {[{insert, ~"m", 1}], [~"a", ~"m"]},
+        {[{insert, ~"m", 1}], [~"a", ~"m"]},
+        {[{insert, ~"m", 2}], [~"a", ~"b", ~"m"]},
+        {
+            [{insert, ~"n", 0}, {insert, ~"m", 1}, {remove, ~"n"}, {insert, ~"n", 0}],
+            [~"n", ~"m", ~"a", ~"b"]
+        },
+        {[{insert, ~"m", 1}], [~"a", ~"m", ~"b"]},
+        {[{remove, ~"a"}, {insert, ~"m", 1}], [~"b", ~"m"]},
+        {[{insert, ~"m", 1}, {move, ~"a", ~"b"}], [~"m", ~"b", ~"a"]}
+    ],
+    {ok, Pid} = arizona_live:start_link(arizona_stream_positions_page, #{}, undefined, []),
+    {ok, _, _} = arizona_live:mount(Pid),
+    Cases = lists:zip3(
+        lists:seq(1, length(Expected)), arizona_stream_positions_page:cases(), Expected
+    ),
+    [
+        begin
+            {ok, _, _, _} = arizona_live:handle_event(
+                Pid, ~"positions", ~"start", #{~"case" => N}
+            ),
+            {ok, Ops, _, _} = arizona_live:handle_event(
+                Pid, ~"positions", ~"run", #{~"case" => N}
+            ),
+            #{bindings := #{items := S}} = arizona_live:view_state(Pid),
+            StreamOps = [short_stream_op(Op) || [Code | _] = Op <- Ops, Code =/= ?OP_TEXT],
+            Final = [Id || #{id := Id} <- arizona_stream:to_list(S)],
+            ?assertEqual({N, ExpOps, ExpFinal}, {N, StreamOps, Final}),
+            ?assertEqual({N, Final}, {N, apply_stream_ops(StreamOps, Start)})
+        end
+     || {N, {Start, _Steps}, {ExpOps, ExpFinal}} <- Cases
+    ],
+    ok = arizona_live:stop(Pid).
+
+short_stream_op([?OP_INSERT, _Az, Key, Pos, _Payload]) -> {insert, Key, Pos};
+short_stream_op([?OP_REMOVE, _Az, Key]) -> {remove, Key};
+short_stream_op([?OP_MOVE, _Az, Key, After]) -> {move, Key, After}.
+
+%% The order the ops give a client holding `Keys`: an insert goes before the keyed
+%% child at `Pos` (or last), a move after its anchor (first for `null`).
+apply_stream_ops([], Keys) ->
+    Keys;
+apply_stream_ops([{insert, Key, Pos} | Rest], Keys) when Pos >= 0, Pos < length(Keys) ->
+    {Before, After} = lists:split(Pos, Keys),
+    apply_stream_ops(Rest, Before ++ [Key | After]);
+apply_stream_ops([{insert, Key, _Pos} | Rest], Keys) ->
+    apply_stream_ops(Rest, Keys ++ [Key]);
+apply_stream_ops([{remove, Key} | Rest], Keys) ->
+    apply_stream_ops(Rest, Keys -- [Key]);
+apply_stream_ops([{move, Key, null} | Rest], Keys) ->
+    apply_stream_ops(Rest, [Key | Keys -- [Key]]);
+apply_stream_ops([{move, Key, Anchor} | Rest], Keys) ->
+    {Before, [Anchor | After]} = lists:splitwith(fun(K) -> K =/= Anchor end, Keys -- [Key]),
+    apply_stream_ops(Rest, Before ++ [Anchor, Key | After]).
 
 %% --- update/3 queues the new item -------------------------------------------
 %% The op names no changed fields: the differ measures the final item against the

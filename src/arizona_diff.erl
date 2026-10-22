@@ -1029,8 +1029,8 @@ sum_item_value_bytes([ItemD | Rest], Acc) ->
 %% equal and emit no op.
 drainable_ops([], _Source, _OldSnap) ->
     [{reset, #{}}];
-drainable_ops(Ops, #stream{limit = Limit}, OldSnap) ->
-    case reorders(Ops, Limit) of
+drainable_ops(Ops, #stream{limit = Limit, items = Items}, OldSnap) ->
+    case reorders(Ops, Limit) orelse places_past_transient(Ops, Limit, Items, OldSnap) of
         true -> reconcile_ops(Ops, OldSnap);
         false -> Ops
     end.
@@ -1089,6 +1089,48 @@ reorders([{move, _, _} | _], Limit) when Limit =/= infinity -> true;
 reorders([{insert, _, _, -1} | Rest], Limit) -> reorders(Rest, Limit);
 reorders([{insert, _, _, _Pos} | _], Limit) when Limit =/= infinity -> true;
 reorders([_ | Rest], Limit) -> reorders(Rest, Limit).
+
+%% A key inserted and deleted again in one event never reaches the client: the drain
+%% skips its insert (`visible_set/1`). But a positional insert or a move queued while
+%% that key was in the source was placed against an order that counted it -- an index
+%% one past where the client's order puts it, or the key itself as the move's anchor --
+%% so replaying those op by op lands them in the wrong place. Such a log drains as the
+%% one reconcile too, which places every arrival at its final index. Only a positional
+%% op queued while a transient key is live qualifies: an append, or one queued after
+%% the delete, counts no key the client lacks. A limited stream already reconciles any
+%% positional op (`reorders/2`). An update counts as an arrival only when the client
+%% does not hold its key: the upsert of a missing key.
+places_past_transient(Ops, infinity, Items, #{items := Held}) ->
+    past_transient(Ops, {Items, Held}, #{});
+places_past_transient(_Ops, _Limit, _Items, _OldSnap) ->
+    false.
+
+past_transient([], _Keys, _Live) ->
+    false;
+past_transient([{insert, _Key, _Item, Pos} | _], _Keys, Live) when
+    Pos =/= -1, map_size(Live) > 0
+->
+    true;
+past_transient([{move, _Key, _AfterKey} | _], _Keys, Live) when map_size(Live) > 0 ->
+    true;
+past_transient([{insert, Key, _Item, _Pos} | Rest], {Items, _Held} = Keys, Live) ->
+    past_transient(Rest, Keys, arrival(Key, Items, Live));
+past_transient([{update, Key, _Item} | Rest], {_Items, Held} = Keys, Live) when
+    is_map_key(Key, Held)
+->
+    past_transient(Rest, Keys, Live);
+past_transient([{update, Key, _Item} | Rest], {Items, _Held} = Keys, Live) ->
+    past_transient(Rest, Keys, arrival(Key, Items, Live));
+past_transient([{delete, Key} | Rest], Keys, Live) ->
+    past_transient(Rest, Keys, maps:remove(Key, Live));
+past_transient([_Op | Rest], Keys, Live) ->
+    past_transient(Rest, Keys, Live).
+
+arrival(Key, Items, Live) ->
+    case Items of
+        #{Key := _} -> Live;
+        #{} -> Live#{Key => true}
+    end.
 
 %% The drain's `{reset, Baseline}` skips re-rendering what a kept item did not change,
 %% measured from `Baseline` -- so `Baseline` must be the items the client's DOM was
