@@ -183,9 +183,18 @@ text_slot_close() ->
 %% costs nothing at render. (`raw_text/4`'s own tag test is on the render path and
 %% uses a comparison that allocates nothing -- see raw_text_mode/1.)
 tag_name(Tag) when is_binary(Tag) ->
-    string:lowercase(Tag);
+    ascii_lowercase(Tag);
 tag_name(Tag) ->
-    string:lowercase(atom_to_binary(Tag)).
+    ascii_lowercase(atom_to_binary(Tag)).
+
+%% ASCII only, as the browser folds names: `string:lowercase/1` maps the Kelvin
+%% sign (U+212A) to `k`, which classified `lin\x{212A}` as the void `link` while
+%% the browser sees an unknown element.
+ascii_lowercase(Name) ->
+    <<<<(ascii_lower(C))>> || <<C>> <= Name>>.
+
+ascii_lower(C) when C >= $A, C =< $Z -> C + ($a - $A);
+ascii_lower(C) -> C.
 
 -spec is_void(arizona_renderer:tag()) -> boolean().
 is_void(Tag) ->
@@ -320,7 +329,7 @@ supports_nodiff_keep() -> true.
 implied_attrs(Tag, Names) ->
     case tag_name(Tag) of
         ~"form" ->
-            Lower = [string:lowercase(N) || N <- Names],
+            Lower = [ascii_lowercase(N) || N <- Names],
             case lists:member(~"az-submit", Lower) andalso not lists:member(~"method", Lower) of
                 true -> [{~"method", ~"post"}];
                 false -> []

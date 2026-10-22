@@ -414,6 +414,8 @@
     void_no_attrs/1,
     void_tag_case_insensitive/1,
     void_tag_case_insensitive_rejects_children/1,
+    void_tag_folds_ascii_case_only/1,
+    az_key_folds_ascii_case_only/1,
     reserved_attr_case_insensitive/1,
     az_submit_form_implies_post/1,
     duplicate_attr_rejected/1,
@@ -697,6 +699,8 @@ groups() ->
             no_change_diff,
             void_no_attrs,
             void_tag_case_insensitive,
+            void_tag_folds_ascii_case_only,
+            az_key_folds_ascii_case_only,
             void_tag_case_insensitive_rejects_children,
             reserved_attr_case_insensitive,
             az_submit_form_implies_post,
@@ -4084,6 +4088,53 @@ void_no_attrs(Config) when is_list(Config) ->
 %% preserved in the output (name/1 never rewrites it, which is what keeps a
 %% case-sensitive SVG attribute like viewBox intact); only the classification is
 %% case-insensitive.
+%% Browsers fold ASCII case only, so a non-ASCII letter whose Unicode lowercase is
+%% ASCII (the Kelvin sign U+212A lowercases to `k`) does not make a tag void: the
+%% browser sees an unknown element and would nest the following siblings in it.
+void_tag_folds_ascii_case_only(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_void_kelvin). "
+        "-export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:html({'div', [], ["
+        "        {<<\"lin\\x{212A}\"/utf8>>, []}, "
+        "        {<<\"LINK\">>, []}"
+        "    ]}). "
+    ),
+    {HTML, _Snap} = arizona_render:render(Mod:render(#{})),
+    ?assertEqual(
+        <<"<div><lin", 16#E2, 16#84, 16#AA, "></lin", 16#E2, 16#84, 16#AA, "><LINK /></div>">>,
+        iolist_to_binary(HTML)
+    ),
+    ?assertNot(arizona_html:is_void(<<"lin\x{212A}"/utf8>>)),
+    ?assert(arizona_html:is_void(~"LINK")),
+    ?assert(arizona_html:is_void('Link')).
+
+%% Only an ASCII-case-folded `az-key` keys an az-nodiff element: `az-\x{212A}ey`
+%% (Kelvin sign) is an ordinary attribute to the browser, so it must not become
+%% the element's identity, while `AZ-KEY` still does.
+az_key_folds_ascii_case_only(Config) when is_list(Config) ->
+    Token = fun(Mod, X) ->
+        {HTML, _Snap} = arizona_render:render(Mod:render(#{x => X})),
+        [_, Rest] = binary:split(iolist_to_binary(HTML), ~"az-nodiff=\""),
+        [Tok | _] = binary:split(Rest, ~"\""),
+        Tok
+    end,
+    Compile = fun(Name, Attr) ->
+        compile_module(
+            "-module(" ++ Name ++
+                "). -export([render/1]). render(Bindings) -> "
+                "arizona_template:html({'div', [], [case arizona_template:get(x, Bindings) of "
+                "_ -> {'div', [az_nodiff, {" ++ Attr ++
+                ", arizona_template:get(x, Bindings)}], "
+                "[<<\"w\">>]} end]}). "
+        )
+    end,
+    Kelvin = Compile("pt_key_kelvin", "<<\"az-\\x{212A}ey\"/utf8>>"),
+    ?assertEqual(Token(Kelvin, 1), Token(Kelvin, 2)),
+    Upper = Compile("pt_key_upper", "'AZ-KEY'"),
+    ?assertNotEqual(Token(Upper, 1), Token(Upper, 2)).
+
 void_tag_case_insensitive(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_void_case). "
