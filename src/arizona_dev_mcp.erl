@@ -236,32 +236,32 @@ eval_tools() ->
 %% skipped by the log ring, and `get_logs` shows the app's behaviour rather than
 %% the agent's own. Marking here rather than per-clause is what makes that
 %% unmissable when a tool is added.
-handle_tool(Tool, Args, Ctx, State) ->
+handle_tool(Tool, Args, _Ctx, State) ->
     ok = arizona_dev_log:mark_self(),
-    dispatch_tool(Tool, Args, Ctx, State).
+    dispatch_tool(Tool, Args, State).
 
-dispatch_tool(~"list_routes", _Args, _Ctx, State) ->
+dispatch_tool(~"list_routes", _Args, State) ->
     {reply, list_routes(), State};
-dispatch_tool(~"describe_component", Args, _Ctx, State) ->
+dispatch_tool(~"describe_component", Args, State) ->
     outcome(with_module(Args, fun describe_component/1), State);
-dispatch_tool(~"get_docs", Args, _Ctx, State) ->
+dispatch_tool(~"get_docs", Args, State) ->
     outcome(with_module_function(Args, fun get_docs/2), State);
-dispatch_tool(~"get_source_location", Args, _Ctx, State) ->
+dispatch_tool(~"get_source_location", Args, State) ->
     outcome(with_module_function(Args, fun get_source_location/2), State);
-dispatch_tool(~"reloader_status", _Args, _Ctx, State) ->
+dispatch_tool(~"reloader_status", _Args, State) ->
     {reply, reloader_status(), State};
-dispatch_tool(~"reload", _Args, _Ctx, State) ->
+dispatch_tool(~"reload", _Args, State) ->
     outcome(reload(), State);
-dispatch_tool(~"app_info", _Args, _Ctx, State) ->
+dispatch_tool(~"app_info", _Args, State) ->
     {reply, app_info(), State};
-dispatch_tool(~"render_component", Args, _Ctx, State) ->
+dispatch_tool(~"render_component", Args, State) ->
     case arg(~"bindings", object, #{}, Args) of
         {ok, Bindings} ->
             outcome(with_module(Args, fun(Mod) -> render_component(Mod, Bindings) end), State);
         {error, Message} ->
             {error, Message, State}
     end;
-dispatch_tool(~"eval", Args, _Ctx, #{bindings := Bindings} = State) ->
+dispatch_tool(~"eval", Args, #{bindings := Bindings} = State) ->
     maybe
         {ok, Code} ?= arg(~"code", string, required, Args),
         {ok, Value, NewBindings} ?= eval_code(Code, Bindings),
@@ -269,9 +269,9 @@ dispatch_tool(~"eval", Args, _Ctx, #{bindings := Bindings} = State) ->
     else
         {error, Message} -> {error, Message, State}
     end;
-dispatch_tool(~"get_logs", Args, _Ctx, State) ->
+dispatch_tool(~"get_logs", Args, State) ->
     outcome(get_logs(Args), State);
-dispatch_tool(~"view_state", Args, _Ctx, State) ->
+dispatch_tool(~"view_state", Args, State) ->
     outcome(view_state(Args), State).
 
 %% --------------------------------------------------------------------

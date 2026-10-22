@@ -250,7 +250,7 @@ diff_dynamics(
             %% BEFORE their siblings, so they have no tail to hand it.
             {append_ops(StreamOps, RestOps), {Old0, maps:merge(New0, LocalNew1)}};
         _NotExplained ->
-            stream_relist(Az, Src, Tmpl, New, Old, RestOps, Views1)
+            stream_relist(Az, Tmpl, New, Old, RestOps, Views1)
     end;
 diff_dynamics([{Az, New} | NR], [{Az, Old} | OR], Tail, Views0) ->
     {RestOps, Views1} = diff_dynamics(NR, OR, Tail, Views0),
@@ -320,7 +320,6 @@ drain_matches_render(#{}, #{}) ->
 %% snapshot is not stream-shaped, where there is no order to reconcile against.
 stream_relist(
     Az,
-    _Src,
     Tmpl,
     #{items := NewItems, order := NewOrder},
     #{items := OldItems, order := OldOrder},
@@ -338,10 +337,10 @@ stream_relist(
     MoveOps = compute_reorder_ops(Az, OldOrder, NewOrder, Kept, NewItems, Tail),
     {ItemOps, Views1} = relist_items(Az, NewOrder, NewItems, OldItems, Tmpl, Views, MoveOps),
     {dropped_key_ops(Az, OldOrder, NewSet, ItemOps), Views1};
-stream_relist(Az, _Src, _Tmpl, New, Old, Tail, Views) ->
+stream_relist(Az, _Tmpl, New, Old, Tail, Views) ->
     make_ops(Az, New, Old, Tail, Views).
 
-%% Per-key walk for `stream_relist/7`: a key the client already holds is patched
+%% Per-key walk for `stream_relist/6`: a key the client already holds is patched
 %% only where its dynamics differ, one it lacks is inserted at the tail. Patches as
 %% `smart_reset_items/8` does, minus the re-render -- the item dynamics are taken
 %% from the already-evaluated `New` -- and each op conses onto `Tail`, the ops that
@@ -414,7 +413,7 @@ pruned_key_ops(Az, Iter, Kept, Tail) ->
 %% changed in place leaves the order identical, so treating an unchanged order as
 %% "no ops needed" drops that change and the client never self-heals. Only a
 %% non-empty log is evidence the drain can account for the difference; an empty
-%% one goes to `stream_relist/7`, which reconciles against the old snapshot and
+%% one goes to `stream_relist/6`, which reconciles against the old snapshot and
 %% emits an `?OP_ITEM_PATCH` for exactly the items whose dynamics differ.
 stream_drainable(#stream{} = Src, Old) ->
     case arizona_stream:undrained_ops(Src, maps:get(drained, Old, none)) of
@@ -1020,7 +1019,7 @@ sum_item_value_bytes([ItemD | Rest], Acc) ->
 %% means either "nothing happened" or "the log was wiped and anything may have
 %% happened". Draining nothing silently answers "no change" to both. `diff_dynamics/4`
 %% guards against that by asking `stream_drainable/2` first and reconciling through
-%% `stream_relist/7`, but the dep-aware walk (`diff_each/9`) and the
+%% `stream_relist/6`, but the dep-aware walk (`diff_each/9`) and the
 %% stream-inside-a-stream-item walk (`diff_item_dynamics_v/3`) call here straight, so
 %% on those paths a wiped log dropped the change: replacing a populated stream binding
 %% with a cleared one emitted ZERO ops where `diff/3` emitted the removals. Reconcile
@@ -2009,7 +2008,7 @@ lis_backtrack(Idx, Parent) ->
 %% their old positions anchor the stable subsequence). `Present` is what the
 %% client DOM holds when the emitted moves apply: for a reset the same as `Kept`
 %% (arrivals are inserted at their index only after the moves); for
-%% `stream_relist/7` it also includes the keys `relist_items/7` inserted at the
+%% `stream_relist/6` it also includes the keys `relist_items/7` inserted at the
 %% tail (-1) ahead of these moves on the wire.
 %% The moves cons onto `Tail` -- the ops that follow them on the wire -- so a
 %% reorder never materialises its own list to append.
@@ -2294,7 +2293,7 @@ diff_item_dynamics_v([{undefined, _New, _} | NR], [{undefined, _Old, _} | OR], V
     diff_item_dynamics_v(NR, OR, Views0);
 diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
     case {New, Old} of
-        {#{t := ?EACH, source := #stream{} = Src, template := Tmpl}, #{t := ?EACH}} ->
+        {#{t := ?EACH, source := #stream{}, template := Tmpl}, #{t := ?EACH}} ->
             %% Only a STREAM each snapshot carries `source` (build_each_snap /
             %% diff_stream's first-render clause): list- and map-source eaches
             %% evaluate to snapshots without it, so they fall to the make_ops
@@ -2308,7 +2307,7 @@ diff_item_dynamics_v([{Az, New, _} | NR], [{Az, Old, _} | OR], Views0) ->
                     {append_ops(EachOps, RestOps), Views2};
                 stale ->
                     {RestOps, Views1} = diff_item_dynamics_v(NR, OR, Views0),
-                    stream_relist(Az, Src, Tmpl, New, Old, RestOps, Views1)
+                    stream_relist(Az, Tmpl, New, Old, RestOps, Views1)
             end;
         _ ->
             {RestOps, Views1} = diff_item_dynamics_v(NR, OR, Views0),

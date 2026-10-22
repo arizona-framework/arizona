@@ -3857,7 +3857,7 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
                 ElemAST, Module, false, Backend, CCtx, Inherited, each_item
             ),
             Opts1 = Opts0#{backend => Backend},
-            Opts2 = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
+            Opts2 = maybe_single_root_opt(Backend, Classification, Opts1),
             Opts3 = maybe_multi_root_opt(Kind, Classification, Opts2),
             Opts = maybe_keyless_opt(Backend, Kind, Classification, ElemAST, Opts3),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
@@ -3889,12 +3889,12 @@ unwrap_one_root_list(_Kind, Body) ->
 %% it too: that one template serves both a stream and a map, and a MAP source needs
 %% it to patch positionally. A stream never reads it -- it keys items by `az-key`
 %% and diffs through `diff_stream/4`, which has no positional walk to gate.
-maybe_single_root_opt(Backend, _Kind, element_tuple, Opts) ->
+maybe_single_root_opt(Backend, element_tuple, Opts) ->
     case Backend:supports_list_patch() of
         true -> Opts#{single_root => true};
         false -> Opts
     end;
-maybe_single_root_opt(_Backend, _Kind, _Classification, Opts) ->
+maybe_single_root_opt(_Backend, _Classification, Opts) ->
     Opts.
 
 %% A 2-arg callback serves a map AND a stream, and only the source decides whether a
