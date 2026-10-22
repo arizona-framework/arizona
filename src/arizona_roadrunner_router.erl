@@ -42,8 +42,11 @@ request meant for the latter. Order the longer prefix first.
 
 Compiling a `{reload, ...}` route (`compile_routes/3`) also stashes its path in
 the `arizona_reload_url` persistent term so the dev error page can build the SSE
-connect URL; `routes/1,2` only expand, so a listener start can build and
-validate its table before writing anything.
+connect URL, and compiling an `arizona_dev_mcp` route sets the
+`arizona_dev_mcp_route` persistent term, which `arizona_reloader:enabled/0` reads
+(its `reload` tool swaps code even with no `reloader` env); `routes/1,2` only
+expand, so a listener start can build and validate its table before writing
+anything.
 """.
 
 %% --------------------------------------------------------------------
@@ -189,6 +192,7 @@ compile_routes(Routes, BuildOpts, Name) when is_map(BuildOpts), is_atom(Name) ->
         {?DISPATCH_KEY, Name},
         roadrunner_router:compile(routes(Routes, BuildOpts), [])
     ),
+    ok = put_dev_mcp_route(Routes),
     put_reload_url(Routes).
 
 -doc """
@@ -385,6 +389,15 @@ route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
             state => #{arizona => Opts}
         }
     ].
+
+%% Set at mount, not at the first MCP session (`arizona_dev_mcp:init/1`): a live
+%% view connected before the agent's session must already have joined the
+%% reloader topic when that session's `reload` swaps its code.
+put_dev_mcp_route(Routes) ->
+    case [Path || {mcp, Path, arizona_dev_mcp, _Opts} <- Routes] of
+        [] -> ok;
+        [_ | _] -> persistent_term:put(arizona_dev_mcp_route, true)
+    end.
 
 %% The last `{reload, ...}` route wins, as it did when the expansion wrote it.
 put_reload_url(Routes) ->

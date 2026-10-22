@@ -38,7 +38,7 @@ recompile would otherwise log a supervisor report.
 
 - `join/1` -- subscribe a pid to the reloader topic (idempotent)
 - `leave/1` -- unsubscribe a pid from it (idempotent)
-- `enabled/0` -- is the dev reloader configured (`reloader` app env)?
+- `enabled/0` -- can this node broadcast a code reload (`reloader` env or dev MCP)?
 - `broadcast/0` -- emit a reload message manually
 - `reload_erl/1` -- compile + reload + broadcast (called by the watcher)
 - `sync/0` -- force a compile+reload sync now (called by the dev MCP `reload` tool)
@@ -129,19 +129,18 @@ leave(Pid) ->
     end.
 
 -doc """
-Whether the dev reloader is enabled: the `reloader` app env holds
-`enabled => true` and a `rules` list, the condition under which
-`arizona_sup` starts its watchers.
+Whether this node can broadcast a code reload: the `reloader` app env holds
+`enabled => true` and a `rules` list (the condition under which `arizona_sup`
+starts its watchers), or an `arizona_dev_mcp` route is mounted, whose `reload`
+tool runs `sync/0` with or without the watchers.
 
 A live view's transport joins the reload topic only when this holds, so a
-production node pays one app-env read per connection and nothing else.
+production node pays one persistent-term read and one app-env read per
+connection, and nothing else.
 """.
 -spec enabled() -> boolean().
 enabled() ->
-    case arizona_config:get_env(reloader, #{}) of
-        #{enabled := true, rules := Rules} when is_list(Rules) -> true;
-        _ -> false
-    end.
+    persistent_term:get(arizona_dev_mcp_route, false) orelse reloader_env_enabled().
 
 -doc """
 Broadcasts an `{arizona_reloader, reload}` message on the reloader
@@ -275,6 +274,12 @@ format_error({load_failed, Mod, Reason}) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+reloader_env_enabled() ->
+    case arizona_config:get_env(reloader, #{}) of
+        #{enabled := true, rules := Rules} when is_list(Rules) -> true;
+        _ -> false
+    end.
 
 %% Replaces the stashed errors of the wave's files with what this wave found,
 %% keeping every other file's. `ProjectFailed` is a `rebar_agent` failure: the

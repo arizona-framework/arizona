@@ -248,6 +248,7 @@ start_new(Name, Opts0) ->
 start_listener(Name, ListenerOpts, Stash) ->
     Previous = persistent_term:get({?ROUTES_KEY, Name}, undefined),
     PreviousReloadUrl = persistent_term:get(arizona_reload_url, undefined),
+    PreviousDevMcp = persistent_term:get(arizona_dev_mcp_route, undefined),
     ok = put_routes(Name, Stash),
     case roadrunner:start_listener(Name, ListenerOpts) of
         {ok, _Pid} = Ok ->
@@ -255,6 +256,7 @@ start_listener(Name, ListenerOpts, Stash) ->
         {error, _Reason} = Error ->
             ok = restore_routes(Name, Previous),
             ok = restore_reload_url(PreviousReloadUrl),
+            ok = restore_dev_mcp_route(PreviousDevMcp),
             Error
     end.
 
@@ -277,6 +279,12 @@ restore_reload_url(undefined) ->
     ok;
 restore_reload_url(Url) ->
     persistent_term:put(arizona_reload_url, Url).
+
+restore_dev_mcp_route(undefined) ->
+    persistent_term:erase(arizona_dev_mcp_route),
+    ok;
+restore_dev_mcp_route(Mounted) ->
+    persistent_term:put(arizona_dev_mcp_route, Mounted).
 
 %% A listener can be gone while its stash survives (stopped behind
 %% `stop/1`'s back, or its supervisor gave up on it); one such listener must

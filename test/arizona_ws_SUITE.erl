@@ -83,6 +83,7 @@
     reload_closes_html_socket/1,
     reload_css_keeps_socket/1,
     reload_ignored_without_reloader/1,
+    reload_closes_socket_with_only_dev_mcp/1,
     reload_remounts_view_holding_reloaded_fun/1,
     recompile_routes_runs/1,
     recompile_routes_syncs_listener/1,
@@ -205,6 +206,7 @@ groups() ->
         reload_closes_html_socket,
         reload_css_keeps_socket,
         reload_ignored_without_reloader,
+        reload_closes_socket_with_only_dev_mcp,
         reload_remounts_view_holding_reloaded_fun,
         recompile_routes_runs,
         recompile_routes_syncs_listener,
@@ -2191,6 +2193,8 @@ reload_css_keeps_socket(Config) ->
 %% broadcast reaches nothing.
 reload_ignored_without_reloader(Config) ->
     undefined = application:get_env(arizona, reloader),
+    undefined = persistent_term:get(arizona_dev_mcp_route, undefined),
+    ?assertNot(arizona_reloader:enabled()),
     Before = arizona_pubsub:subscribers(arizona_reloader),
     {ok, Sock} = ws_connect(Config, <<"/">>),
     ?assertEqual(Before, arizona_pubsub:subscribers(arizona_reloader)),
@@ -2198,6 +2202,33 @@ reload_ignored_without_reloader(Config) ->
     ok = ws_send(Sock, <<"0">>),
     ?assertEqual({text, <<"1">>}, ws_recv(Sock)),
     ws_close(Sock).
+
+%% The dev MCP's `reload` tool swaps code with no `reloader` env (`sync/0`), so a
+%% node that mounts its route counts as reloadable: a socket opened there joins the
+%% topic and closes 1001 on the broadcast.
+reload_closes_socket_with_only_dev_mcp(Config) when is_list(Config) ->
+    undefined = application:get_env(arizona, reloader),
+    Name = arizona_reload_mcp_test,
+    Port = arizona_test_port:pick(),
+    {ok, _} = arizona_roadrunner_server:start(Name, #{
+        transport_opts => [{port, Port}],
+        routes => [
+            {live, ~"/reload_fun", arizona_reload_fun_view, #{}},
+            {ws, ~"/ws", #{}},
+            arizona_dev_mcp:route(~"/mcp")
+        ]
+    }),
+    try
+        ?assert(arizona_reloader:enabled()),
+        {ok, Sock} = ws_connect([{port, Port}], <<"/reload_fun">>, [{reconnect, true}]),
+        {text, _Replace} = ws_recv(Sock),
+        ok = arizona_reloader:broadcast(),
+        ?assertMatch({close, 1001, _}, ws_recv(Sock)),
+        ok = gen_tcp:close(Sock)
+    after
+        ok = arizona_roadrunner_server:stop(Name),
+        true = persistent_term:erase(arizona_dev_mcp_route)
+    end.
 
 %% The failure the close exists for: a fun in the view's bindings is made by a
 %% module the reloader then loads twice, which purges the code the fun points
