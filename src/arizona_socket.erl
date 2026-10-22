@@ -42,6 +42,11 @@ The live process is linked. Exits map to WebSocket close codes:
   among them a frame that cannot be encoded) -- crash close `4500`: the
   view crashed after it mounted. Client remounts it in place by reconnecting.
 
+In dev mode (`arizona_reloader:enabled/0`) the socket also joins the reloader
+topic and closes `1001` on `{arizona_reloader, reload}`, whatever the client:
+funs held in the view's state (a stream's key fun, a fun prop) point into code
+a second reload purges, so the client reconnects and remounts on fresh code.
+
 A failure to mount the view closes `4501` instead, whatever the exit: the
 connect's mount (`init/4`), a reconnect's deferred resync mount, and a
 navigate -- each up to the frame that delivers the view.
@@ -243,6 +248,8 @@ init(Handler, Bindings, Req, Opts) ->
         layouts = Layouts,
         carried_cookies = arizona_req:carried_cookies(Req)
     },
+    %% Joined before the mount, so a reload landing during it still closes.
+    ok = join_reloader(arizona_reloader:enabled()),
     safe_init(Handler, Socket, fun() ->
         %% `push_barrier` opts this transport into the ordering marker the
         %% event/patch/navigate drain below relies on -- see drain_pending_pushes/1.
@@ -418,6 +425,11 @@ do_handle_info({'EXIT', Pid, {shutdown, drain}}, #socket{pid = Pid} = Socket) ->
     %% code as reconnectable; main thread preserves form state). Matches
     %% RFC 6455 §7.4 semantics for "server going away".
     {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
+do_handle_info({arizona_reloader, reload}, Socket) ->
+    %% Dev reload: a fun in the view's state outlives its module's next reload
+    %% as a `{badfun, _}`, so remount on fresh code. The session exits on the
+    %% close, so a burst of broadcasts closes once.
+    {close, ?CLOSE_GOING_AWAY, <<>>, Socket};
 do_handle_info({'EXIT', Pid, normal}, #socket{pid = Pid} = Socket) ->
     {close, 1000, <<>>, Socket};
 do_handle_info({'EXIT', Pid, shutdown}, #socket{pid = Pid} = Socket) ->
@@ -443,6 +455,11 @@ do_handle_info(_Info, Socket) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% The transport process joins, not the live process: membership is per pid, and
+%% an app's own `?subscribe` belongs to the live one.
+join_reloader(true) -> arizona_reloader:join(self());
+join_reloader(false) -> ok.
 
 safe_init(Handler, Socket, Fun) ->
     process_flag(trap_exit, true),

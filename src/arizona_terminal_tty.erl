@@ -142,6 +142,11 @@ loop(Session) ->
                 quit -> ok;
                 {cont, Session1} -> loop(Session1)
             end;
+        {arizona_reloader, reload} ->
+            case arizona_terminal_session:handle_reload(Session) of
+                quit -> ok;
+                {cont, Session1} -> loop(Session1)
+            end;
         {'EXIT', _From, _Reason} ->
             ok;
         _Other ->

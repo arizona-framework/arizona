@@ -2,9 +2,12 @@
 -moduledoc """
 Dev-mode hot reloader for `.erl` and CSS files.
 
-Subscribers (typically connected WebSocket clients) `join/1` the
-reloader's pubsub topic and receive `{arizona_reloader, reload}` (or
-`reload_css`) messages whenever files change. The watcher process
+Subscribers `join/1` the reloader's pubsub topic and receive
+`{arizona_reloader, reload}` (or `reload_css`) messages whenever files
+change: the browser's SSE reload endpoint, and -- while the reloader is
+`enabled/0` -- every live view's transport, which remounts the view on
+fresh code (a WebSocket closes `1001` so its client reconnects; a
+`?terminal` session remounts in place). The watcher process
 (`arizona_watcher`) calls `reload_erl/1` or `reload_css/1` after a
 debounced burst of file events.
 
@@ -34,6 +37,8 @@ recompile would otherwise log a supervisor report.
 ## Public reload API
 
 - `join/1` -- subscribe a pid to the reloader topic (idempotent)
+- `leave/1` -- unsubscribe a pid from it (idempotent)
+- `enabled/0` -- can this node broadcast a code reload (`reloader` env or dev MCP)?
 - `broadcast/0` -- emit a reload message manually
 - `reload_erl/1` -- compile + reload + broadcast (called by the watcher)
 - `sync/0` -- force a compile+reload sync now (called by the dev MCP `reload` tool)
@@ -46,6 +51,8 @@ recompile would otherwise log a supervisor report.
 %% --------------------------------------------------------------------
 
 -export([join/1]).
+-export([leave/1]).
+-export([enabled/0]).
 -export([broadcast/0]).
 -export([reload_erl/1]).
 -export([sync/0]).
@@ -104,9 +111,41 @@ join(Pid) ->
     end.
 
 -doc """
+Unsubscribes `Pid` from the reloader pubsub topic. Idempotent: leaving
+when not subscribed returns `ok`. No-ops, like `join/1`, if
+`arizona_pubsub` is not running.
+""".
+-spec leave(Pid) -> ok when
+    Pid :: pid().
+leave(Pid) ->
+    case erlang:whereis(arizona_pubsub) of
+        undefined ->
+            ok;
+        _ ->
+            case arizona_pubsub:unsubscribe(?MODULE, Pid) of
+                ok -> ok;
+                {error, not_joined} -> ok
+            end
+    end.
+
+-doc """
+Whether this node can broadcast a code reload: the `reloader` app env holds
+`enabled => true` and a `rules` list (the condition under which `arizona_sup`
+starts its watchers), or an `arizona_dev_mcp` route is mounted, whose `reload`
+tool runs `sync/0` with or without the watchers.
+
+A live view's transport joins the reload topic only when this holds, so a
+production node pays one persistent-term read and one app-env read per
+connection, and nothing else.
+""".
+-spec enabled() -> boolean().
+enabled() ->
+    persistent_term:get(arizona_dev_mcp_route, false) orelse reloader_env_enabled().
+
+-doc """
 Broadcasts an `{arizona_reloader, reload}` message on the reloader
-topic. Subscribed live processes typically reply by triggering a
-client reload.
+topic. The SSE endpoint relays it to the browser, which reloads the page;
+a subscribed live view transport remounts its view.
 """.
 -spec broadcast() -> ok.
 broadcast() ->
@@ -235,6 +274,12 @@ format_error({load_failed, Mod, Reason}) ->
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+reloader_env_enabled() ->
+    case arizona_config:get_env(reloader, #{}) of
+        #{enabled := true, rules := Rules} when is_list(Rules) -> true;
+        _ -> false
+    end.
 
 %% Replaces the stashed errors of the wave's files with what this wave found,
 %% keeping every other file's. `ProjectFailed` is a `rebar_agent` failure: the

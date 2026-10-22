@@ -149,7 +149,8 @@ and channel), the live process's `{arizona_push, _, _, Effects, _}` updates (tim
 pubsub) which the session turns into a repaint or a stop, and the linked live
 view's `{'EXIT', _, _}` (ssh channels trap exits, so a crash surfaces as a message
 rather than killing the channel) which restores the client's terminal and stops
-the channel. Any other message is ignored, mirroring the local driver's selective
+the channel, and a dev reload (`{arizona_reloader, reload}`), which remounts the view
+on fresh code. Any other message is ignored, mirroring the local driver's selective
 receive.
 """.
 -spec handle_msg(term(), state()) -> {ok, state()} | {stop, ssh:channel_id(), state()}.
@@ -160,6 +161,12 @@ handle_msg(
     #state{session = Session, channel = ChannelId} = State
 ) ->
     apply_session_result(arizona_terminal_session:handle_push(Session, Effects), ChannelId, State);
+handle_msg(
+    {arizona_reloader, reload}, #state{session = Session, channel = ChannelId} = State
+) when Session =/= undefined ->
+    %% Remount with the current geometry, not the one the view first mounted with.
+    Result = arizona_terminal_session:handle_reload(Session, mount_bindings(State)),
+    apply_session_result(Result, ChannelId, State);
 handle_msg(
     {'EXIT', _Pid, _Reason}, #state{session = Session, channel = ChannelId} = State
 ) when Session =/= undefined ->
@@ -268,12 +275,12 @@ apply_session_result({cont, Session}, _ChannelId, State) ->
 
 %% Mount the live view with the channel as its transport. The output function
 %% writes frames to the SSH channel; the driver owns cursor/screen setup+teardown.
-start_session(
-    Conn, ChannelId, #state{handler = Handler, driver = Driver, rows = Rows, cols = Cols}
-) ->
+start_session(Conn, ChannelId, #state{handler = Handler, driver = Driver} = State) ->
     Out = fun(Iodata) -> send(Conn, ChannelId, Iodata) end,
-    Bindings = #{term_rows => Rows, term_cols => Cols},
-    arizona_terminal_session:start(Handler, Bindings, Driver, [], Out).
+    arizona_terminal_session:start(Handler, mount_bindings(State), Driver, [], Out).
+
+mount_bindings(#state{rows = Rows, cols = Cols}) ->
+    #{term_rows => Rows, term_cols => Cols}.
 
 %% Stop the live view, tolerating one already gone (the {'EXIT', _, _} teardown
 %% path is where the live process is what died); arizona_live:stop would otherwise

@@ -17,6 +17,7 @@
 -export([window_change_before_shell_sizes_view/1]).
 -export([second_shell_refused/1]).
 -export([exec_replies_failure/1]).
+-export([reload_remounts_in_place/1]).
 
 %% End-to-end: arizona_terminal_ssh serves the ?terminal demo view over a real SSH daemon,
 %% driven by the OTP ssh client. A throwaway host key + accept-all password auth
@@ -39,7 +40,8 @@ all() ->
         data_before_shell_keeps_channel,
         window_change_before_shell_sizes_view,
         second_shell_refused,
-        exec_replies_failure
+        exec_replies_failure,
+        reload_remounts_in_place
     ].
 
 init_per_suite(Config) ->
@@ -218,6 +220,33 @@ exec_replies_failure(Config) when is_list(Config) ->
     {Conn, Ch} = connect_pty(?config(port, Config)),
     ?assertEqual(failure, ssh_connection:exec(Conn, Ch, "ls", 3000)),
     ok = ssh:close(Conn).
+
+%% In dev mode a reload remounts the channel's view on fresh code without closing
+%% the channel -- an SSH client does not reconnect. The fresh view starts over (the
+%% selection is back on the first item) but mounts with the channel's current
+%% geometry, not the one the old view was first mounted with.
+reload_remounts_in_place(Config) when is_list(Config) ->
+    ok = application:set_env(arizona, reloader, #{enabled => true, rules => []}),
+    try
+        Before = arizona_pubsub:subscribers(demo),
+        {Conn, Ch} = connect(?config(port, Config)),
+        _ = recv_until(Conn, ~"> New Game", 3000),
+        OldPid = wait_new_subscriber(Before),
+        ok = ssh_connection:window_change(Conn, Ch, 100, 40),
+        _ = recv_until(Conn, ~"Terminal: 100x40", 3000),
+        ok = ssh_connection:send(Conn, Ch, ~"j"),
+        _ = recv_until(Conn, ~"> Options", 3000),
+        ok = arizona_reloader:broadcast(),
+        Remounted = recv_until(Conn, ~"> New Game", 3000),
+        ?assert(contains(Remounted, ~"Terminal: 100x40")),
+        ok = wait_until(fun() -> not is_process_alive(OldPid) end),
+        ?assertMatch([_], arizona_pubsub:subscribers(demo) -- Before),
+        ok = ssh_connection:send(Conn, Ch, ~"j"),
+        _ = recv_until(Conn, ~"> Options", 3000),
+        ok = ssh:close(Conn)
+    after
+        ok = application:unset_env(arizona, reloader)
+    end.
 
 %% --------------------------------------------------------------------
 %% Helpers

@@ -240,8 +240,13 @@ child view's current copy refreshed in), not from a fresh render of the template
 repaint runs no `mount/1` or `handle_update/3` and shows exactly the state the process
 holds. It follows that a terminal sees what a web client sees: `az-nodiff` content
 renders once, and a slot whose reads are not tracked freezes after its first render.
-After a hot reload, edited template text appears once a slot depending on it changes --
-the terminal does not repaint on reload.
+When the node can reload code (`arizona_reloader:enabled/0`) a hot reload remounts the view
+in place (`arizona_terminal_session:handle_reload/1,2`): the session joins the reloader
+topic at start, and on `{arizona_reloader, reload}` stops the live process, mounts a fresh one from
+the connection's bindings (an SSH channel's current geometry) and repaints, so the view's
+state resets as a browser page's does. A terminal client does not reconnect, so this is the
+terminal's counterpart of the WebSocket close described under "Exit reason to close code".
+Otherwise, edited template text appears once a slot depending on it changes.
 
 Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
@@ -1556,6 +1561,30 @@ closes every live socket 1001 and its clients reconnect -- to the new node once 
 listen socket closes first, each view gets `handle_drain/2`, and the stop waits up to the
 `server` config's `drain_timeout` (milliseconds, default 5000) for the sessions before killing
 what is left.
+
+A dev reload closes the same way. While the node can broadcast a code reload
+(`arizona_reloader:enabled/0`: the `reloader` app env holds `enabled => true` and a `rules`
+list, or an `arizona_dev_mcp` route is mounted, whose `reload` tool swaps code without the
+watchers -- the router marks that at route compile, not at the first MCP session, so a view
+connected before the agent is covered too), each WebSocket session process joins the
+`arizona_reloader` topic at connect and closes 1001 on `{arizona_reloader, reload}`, so its
+client reconnects and remounts on fresh code.
+Without it a live view outlives every reload, and a fun held in its state (a stream's key
+fun, a fun prop, a closure the app stored) points into code the module's second reload
+purges: the next callback that calls it raises `{badfun, _}` and the socket closes 4500.
+The transport process joins rather than the live process, so the membership never meets an
+app's own `?subscribe`, and the session exits on the first close, so a burst of broadcasts
+closes it once. A `reload_css` broadcast changes no code and closes nothing.
+
+Browser pages close too. A page whose layout runs the SSE reload script
+(`arizona-reloader.js`, connected to a `{reload, ...}` route) reloads 50 ms after the
+event, well before the worker's first reconnect (`backoff(0)`, about 1 s), so the close only
+costs that page a brief `az-disconnected` (a reload slower than that lets the worker reconnect
+first, one extra mount on fresh code that the reload then discards); a page without the
+script, which the socket cannot tell apart from a native client, reconnects and remounts
+instead of keeping the stale view.
+A production node (neither a `reloader` env nor a dev MCP route) reads one persistent term
+and the app env once per connection and joins nothing.
 
 The mount sites that close 4501 on any raise: the connect's mount in `init/4` (a first connect,
 and an unflagged reconnect's mount + render), the deferred reconnect resync (`flush_resync/1`,

@@ -176,6 +176,10 @@ routes() ->
             layouts => Layouts
         }},
         {get, <<"/_test/drain">>, arizona_drain_admin, #{}},
+        %% Dev-reload fixture: a native view holding a fun made by a module the
+        %% admin endpoint reloads (e2e/native/reload.spec.js).
+        {live, <<"/native/reload-fun">>, arizona_reload_fun_view, #{}},
+        {get, <<"/_test/reload">>, arizona_reload_admin, #{}},
         %% arizona_js:fetch e2e -- a form posts to the controller (sets an HttpOnly
         %% cookie, broadcasts to the live view via pubsub, returns an effect); no reload.
         {live, <<"/fetch-account">>, arizona_fetch_account, #{
