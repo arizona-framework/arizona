@@ -1003,7 +1003,10 @@ do_mount(H, B0, V0, OnMount) ->
     ViewId = maps:get(id, B2),
     Tmpl = arizona_stateful:call_render(H, B2),
     ok = begin_pass(),
+    %% Duplicate view-id check (`arizona_eval:claim_view_ids/1`), armed for the pass.
+    _Previous = erlang:put('$arizona_view_ids', {B2, H, none, #{}}),
     Rendered = arizona_render:render_snapshot(Tmpl, V0),
+    _Claims = erlang:erase('$arizona_view_ids'),
     ok = end_pass(),
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
     B4 = maps:merge(B3, Resets),
@@ -1106,7 +1109,9 @@ process_root_change(
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
     ok = begin_pass(),
+    _Previous = erlang:put('$arizona_view_ids', {B1, H, none, #{}}),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap, V0, Changed),
+    _Claims = erlang:erase('$arizona_view_ids'),
     Effects1 = arizona_eval:drain_update_effects(),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
@@ -1130,16 +1135,25 @@ process_root_change(
 %% and folds its effects onto the accumulator; the drained result is the full
 %% list the caller ships (reply or push).
 process_child_change(
-    Callback, H, B1, Resets, Effects0, ViewId, #{bindings := B0, snapshot := Snap0} = View, #state{
-        views = V0, sent_fps = Fps0
-    }
+    Callback,
+    H,
+    B1,
+    Resets,
+    Effects0,
+    ViewId,
+    #{bindings := B0, snapshot := Snap0} = View,
+    #state{handler = RootH, bindings = RootB, views = V0, sent_fps = Fps0}
 ) ->
     ok = arizona_eval:check_restricted_keys(B1, B0, H, Callback),
     Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
     ok = begin_pass(),
+    %% The diff renders this child's subtree only, so every other view on the
+    %% page -- and the root -- keeps its id against what the subtree renders.
+    _Previous = erlang:put('$arizona_view_ids', {RootB, RootH, {V0, Snap0}, #{}}),
     {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
+    _Claims = erlang:erase('$arizona_view_ids'),
     Effects1 = arizona_eval:drain_update_effects(),
     {Ops1, Fps1} = dedup_fps_if_noted(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),

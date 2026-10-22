@@ -81,6 +81,13 @@
     seed_fps_unknown_fp_still_sends/1,
     seed_fps_caps_growth/1,
     live_unknown_view_id_noop/1,
+    duplicate_view_id_raises_at_mount/1,
+    duplicate_view_id_raises_on_diff/1,
+    duplicate_view_id_with_root_raises/1,
+    duplicate_view_id_with_kept_stream_item_raises/1,
+    duplicate_view_id_from_child_event_raises/1,
+    distinct_view_ids_do_not_raise/1,
+    duplicate_view_id_error_names_id_and_handlers/1,
     live_connected_bad_value_mounts/1,
     live_mount_crash_location/1,
     live_diff_crash_location/1,
@@ -215,6 +222,13 @@ groups() ->
             live_counter2_child_event,
             live_inc_then_dec,
             live_unknown_view_id_noop,
+            duplicate_view_id_raises_at_mount,
+            duplicate_view_id_raises_on_diff,
+            duplicate_view_id_with_root_raises,
+            duplicate_view_id_with_kept_stream_item_raises,
+            duplicate_view_id_from_child_event_raises,
+            distinct_view_ids_do_not_raise,
+            duplicate_view_id_error_names_id_and_handlers,
             live_connected_bad_value_mounts,
             live_mount_crash_location,
             live_diff_crash_location,
@@ -669,6 +683,113 @@ live_unknown_view_id_noop(Config) when is_list(Config) ->
 %% does not check a value's renderability: SSR rendered the same template moments
 %% before, and the one value it could not have met -- produced only once
 %% connected -- is refused by the first render that ships it, here the full frame.
+%% A live process keys its child views by id, so two views sharing one id in a
+%% render collapse into one entry: one instance is never unmounted, the other's
+%% slot is updated from its state, and every event reaches only one. The render
+%% refuses it, naming the id and both handlers.
+duplicate_view_id_raises_at_mount(Config) when is_list(Config) ->
+    Pid = start_dup_parent(#{dup => true}),
+    ?assertEqual(
+        {duplicate_view_id, ~"toast", arizona_toast, arizona_toast},
+        dup_reason(fun() -> arizona_live:mount(Pid) end)
+    ).
+
+%% The first instance's slot is dep-skipped, so it is kept rather than evaluated:
+%% keeping it claims its id all the same.
+duplicate_view_id_raises_on_diff(Config) when is_list(Config) ->
+    Pid = start_dup_parent(#{}),
+    {ok, ~"dup_parent", _} = arizona_live:mount(Pid),
+    ?assertEqual(
+        {duplicate_view_id, ~"toast", arizona_toast, arizona_toast},
+        dup_reason(fun() -> arizona_live:handle_event(Pid, ~"dup_parent", ~"dup", #{}) end)
+    ).
+
+%% The root view's id is an event target too.
+duplicate_view_id_with_root_raises(Config) when is_list(Config) ->
+    ?assertEqual(
+        {duplicate_view_id, ~"dup_parent", arizona_dup_id_parent, arizona_toast},
+        dup_reason(fun() -> arizona_live:mount(start_dup_parent(#{root_clash => true})) end)
+    ),
+    Pid = start_dup_parent(#{}),
+    {ok, ~"dup_parent", _} = arizona_live:mount(Pid),
+    ?assertEqual(
+        {duplicate_view_id, ~"dup_parent", arizona_dup_id_parent, arizona_toast},
+        dup_reason(fun() -> arizona_live:handle_event(Pid, ~"dup_parent", ~"root_clash", #{}) end)
+    ).
+
+%% A stream drain keeps the children of the items it does not touch without
+%% evaluating them; those still hold their ids.
+duplicate_view_id_with_kept_stream_item_raises(Config) when is_list(Config) ->
+    Pid = start_dup_parent(#{}),
+    {ok, ~"dup_parent", _} = arizona_live:mount(Pid),
+    ?assertEqual(
+        {duplicate_view_id, ~"t-a", arizona_toast, arizona_toast},
+        dup_reason(fun() ->
+            arizona_live:handle_event(
+                Pid, ~"dup_parent", ~"insert_extra", #{~"key" => ~"b", ~"extra" => ~"t-a"}
+            )
+        end)
+    ).
+
+%% A child's own event renders its subtree only, so the views elsewhere on the
+%% page are not in that pass -- a grandchild under one of their ids is refused.
+duplicate_view_id_from_child_event_raises(Config) when is_list(Config) ->
+    Pid = start_dup_parent(#{extra => ~"lc-g"}),
+    {ok, ~"dup_parent", _} = arizona_live:mount(Pid),
+    ?assertEqual(
+        {duplicate_view_id, ~"lc-g", arizona_toast, arizona_stream_lifecycle_child},
+        dup_reason(fun() -> arizona_live:handle_event(Pid, ~"lc", ~"grand_on", #{}) end)
+    ).
+
+%% The same changes under ids nothing else holds go through, and so do the passes
+%% that keep a view: a stream item kept by a drain, a grandchild re-rendered by a
+%% later event of its parent.
+distinct_view_ids_do_not_raise(Config) when is_list(Config) ->
+    Pid = start_dup_parent(#{}),
+    {ok, ~"dup_parent", _} = arizona_live:mount(Pid),
+    {ok, _, _, _} = arizona_live:handle_event(
+        Pid, ~"dup_parent", ~"insert_extra", #{~"key" => ~"b", ~"extra" => ~"other"}
+    ),
+    {ok, _, _, _} = arizona_live:handle_event(
+        Pid, ~"dup_parent", ~"insert_extra", #{~"key" => ~"c", ~"extra" => ~"other"}
+    ),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ~"lc", ~"grand_on", #{}),
+    {ok, _, _, _} = arizona_live:handle_event(Pid, ~"lc", ~"grand_on", #{}),
+    ?assertMatch(
+        #{~"toast" := _, ~"other" := _, ~"lc" := _, ~"lc-g" := _, ~"t-a" := _, ~"t-b" := _},
+        maps:get(views, arizona_live:view_state(Pid))
+    ),
+    ok = arizona_live:stop(Pid).
+
+duplicate_view_id_error_names_id_and_handlers(Config) when is_list(Config) ->
+    #{general := Msg} = arizona_eval:format_error(
+        {duplicate_view_id, ~"toast", arizona_toast, arizona_dup_id_parent}, []
+    ),
+    Text = iolist_to_binary(Msg),
+    ?assertMatch({_, _}, binary:match(Text, ~"<<\"toast\">>")),
+    ?assertMatch({_, _}, binary:match(Text, ~"arizona_toast and arizona_dup_id_parent")).
+
+start_dup_parent(Init) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_dup_id_parent, Init#{notify => self()}, undefined, []
+    ),
+    unlink(Pid),
+    Pid.
+
+%% The duplicate error a call to the live process exits with, its template
+%% location (if any) peeled off.
+dup_reason(Call) ->
+    try Call() of
+        Result -> error({no_exit, Result})
+    catch
+        exit:{Reason, {gen_server, call, _}} -> strip_loc(Reason)
+    end.
+
+strip_loc({{arizona_loc, _, Reason}, ST}) when is_list(ST) -> strip_loc(Reason);
+strip_loc({Reason, ST}) when is_list(ST) -> strip_loc(Reason);
+strip_loc({arizona_loc, _, Reason}) -> strip_loc(Reason);
+strip_loc(Reason) -> Reason.
+
 live_connected_bad_value_mounts(Config) when is_list(Config) ->
     process_flag(trap_exit, true),
     {ok, Pid} = arizona_live:start_link(arizona_connected_bad_value, #{}, self(), []),
