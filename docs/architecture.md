@@ -851,7 +851,10 @@ there is nothing free to accumulate and the wholesale side is estimated from the
 items' average size against the new visible count. And a stream carrying **child views
 is never collapsed**: the incremental path keeps their bookkeeping
 (`merge_stream_child_views/4`) while the container re-render has none, so collapsing
-would re-mount every child and reset its state.
+would re-mount every child and reset its state. That holds for the children the drain
+itself rendered too, even when the old items held none: the re-render would evaluate
+those items a second time and mount each child again, leaving the drain's instance
+never unmounted.
 
 That mostly retires the fallback for insertions -- one op is never worth re-rendering a
 container for. What still reaches it is a long run of removes, which no amount of
@@ -1275,6 +1278,20 @@ the item the client's DOM was rendered from, which is the `source` the stream's 
 `reset/1,2` is not that item whenever the same event touched it first: `reset/2` rebuilds the
 queue, so an earlier `update/3` is gone by the drain, and measuring from the updated item found
 nothing to ship.
+
+**Each key renders once per drain, from its final item.** One event can queue several ops for a
+key -- an insert then an update, two updates, an insert, a delete and an insert again -- and
+rendering the item once per op ran every `?stateful` child in it once per op as well, each time
+against the views from before the diff: a second render mounted a second instance (the first was
+never unmounted) or ran `handle_update/3` again from the pre-event state. So the op-by-op drain
+renders an item from the stream's final source (which is already the post-op state) the first
+time an op needs it, and a later op for that key reuses that render: an update of a key the drain
+already rendered has nothing left to patch, and a re-insert ships the same render again. The client
+still receives every op the log implies, in log order, so positional ops placed against the
+intermediate order keep their meaning. An update re-renders against the item the client's DOM was
+rendered from (the snapshot's `source`, as for a reset), so the skipped dynamics are those that
+every update of the key in the event left alone; the queued `{update, Key, Item}` op therefore
+carries no changed-field set of its own.
 
 The queue of an unclearable nested stream still grows, one retained op term per mutation. Keep a
 stream that mutates over a long-lived session as a top-level binding.

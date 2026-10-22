@@ -61,6 +61,9 @@ handle_event(~"insert", #{~"id" := Id}, Bindings) ->
 handle_event(~"insert_at", #{~"id" := Id, ~"pos" := Pos}, Bindings) ->
     Insert = fun(S) -> arizona_stream:insert(S, #{id => Id}, Pos) end,
     {update_inner(Insert, Bindings), #{}, []};
+handle_event(~"insert_two", #{~"ids" := [First, Second]}, Bindings) ->
+    Insert = fun(Id) -> fun(S) -> arizona_stream:insert(S, #{id => Id}) end end,
+    {update_inner(Insert(Second), update_inner(Insert(First), Bindings)), #{}, []};
 handle_event(~"reset", #{~"ids" := Ids}, Bindings) ->
     Reset = fun(S) -> arizona_stream:reset(S, [#{id => K} || K <- Ids]) end,
     {update_inner(Reset, Bindings), #{}, []}.

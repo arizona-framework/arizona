@@ -150,6 +150,15 @@
     stream_own_event_grandchild_dropped_by_prop/1,
     stream_child_not_mounted_for_transient_key/1,
     stream_child_unmounted_on_update_then_delete/1,
+    stream_item_child_mounted_once_on_insert_update/1,
+    stream_item_child_updated_once_on_update_twice/1,
+    stream_item_child_mounted_once_on_insert_delete_reinsert/1,
+    stream_item_child_mounted_once_on_limited_insert_delete_upsert/1,
+    stream_item_child_updated_once_on_update_delete_reinsert/1,
+    stream_item_child_mounted_once_on_insert_move_update/1,
+    nested_stream_child_mounted_once_on_outer_update_twice/1,
+    stream_item_patched_once_on_updates_of_two_fields/1,
+    stream_children_rendered_by_drain_mount_once/1,
     on_mount_transforms_bindings/1,
     on_mount_works_on_navigate/1,
     on_mount_empty_is_noop/1,
@@ -316,7 +325,16 @@ groups() ->
             stream_rerendered_child_drops_grandchild,
             stream_own_event_grandchild_dropped_by_prop,
             stream_child_not_mounted_for_transient_key,
-            stream_child_unmounted_on_update_then_delete
+            stream_child_unmounted_on_update_then_delete,
+            stream_item_child_mounted_once_on_insert_update,
+            stream_item_child_updated_once_on_update_twice,
+            stream_item_child_mounted_once_on_insert_delete_reinsert,
+            stream_item_child_mounted_once_on_limited_insert_delete_upsert,
+            stream_item_child_updated_once_on_update_delete_reinsert,
+            stream_item_child_mounted_once_on_insert_move_update,
+            nested_stream_child_mounted_once_on_outer_update_twice,
+            stream_item_patched_once_on_updates_of_two_fields,
+            stream_children_rendered_by_drain_mount_once
         ]},
         {on_mount, [parallel], [
             on_mount_transforms_bindings,
@@ -2657,6 +2675,159 @@ stream_child_unmounted_on_update_then_delete(Config) when is_list(Config) ->
         [{child_unmounted, ~"c-b"}],
         stream_lifecycle_event(Pid, ~"reset", #{~"ids" => []})
     ).
+
+%% One event that touches a stream key more than once renders that item once per
+%% diff, from its final state: its `?stateful` child runs one lifecycle callback,
+%% and stopping the process unmounts every child that mounted (an instance a
+%% second render replaced would never be unmounted). The ops are the coalesced
+%% ones: one insert of the final item, one patch.
+stream_item_child_mounted_once_on_insert_update(Config) when is_list(Config) ->
+    {Pid, Ops} = once_event(#{}, ~"insert_update", #{~"id" => ~"n"}),
+    ?assertMatch([[?OP_INSERT, _, ~"n", -1, #{~"d" := [_, ~"", #{~"d" := [_, ~"2"]}]}]], Ops),
+    ?assertEqual([{child_mounted, ~"c-n", 2}], once_messages()),
+    ?assertEqual(
+        lists:sort([{child_unmounted, K, V} || {K, V} <- [{~"c-a", 0}, {~"c-b", 0}, {~"c-n", 2}]]),
+        once_stop(Pid)
+    ).
+
+stream_item_child_updated_once_on_update_twice(Config) when is_list(Config) ->
+    {Pid, Ops} = once_event(#{}, ~"update_twice", #{~"id" => ~"a"}),
+    ?assertMatch([[?OP_ITEM_PATCH, _, ~"a", _]], Ops),
+    ?assertEqual([{child_updated, ~"c-a", 0, 2}], once_messages()),
+    ?assertEqual(
+        lists:sort([{child_unmounted, ~"c-a", 2}, {child_unmounted, ~"c-b", 0}]),
+        once_stop(Pid)
+    ).
+
+%% The client still sees the key arrive, leave and arrive again (the positional
+%% ops between them name indices that count it), but the second arrival reuses
+%% the first render.
+stream_item_child_mounted_once_on_insert_delete_reinsert(Config) when is_list(Config) ->
+    {Pid, Ops} = once_event(#{}, ~"insert_delete_reinsert", #{~"id" => ~"n"}),
+    ?assertMatch(
+        [
+            [?OP_INSERT, _, ~"n", -1, #{~"d" := [_, ~"", #{~"d" := [_, ~"2"]}]}],
+            [?OP_REMOVE, _, ~"n"],
+            [?OP_INSERT, _, ~"n", -1, #{~"d" := [_, ~"", #{~"d" := [_, ~"2"]}]}]
+        ],
+        Ops
+    ),
+    ?assertEqual([{child_mounted, ~"c-n", 2}], once_messages()),
+    ?assertEqual(
+        lists:sort([{child_unmounted, K, V} || {K, V} <- [{~"c-a", 0}, {~"c-b", 0}, {~"c-n", 2}]]),
+        once_stop(Pid)
+    ).
+
+%% A limited stream leaves a missing key's upsert to the end-of-drain back-fill,
+%% which must reuse the render the earlier insert made.
+stream_item_child_mounted_once_on_limited_insert_delete_upsert(Config) when is_list(Config) ->
+    {Pid, Ops} = once_event(#{opts => #{limit => 5}}, ~"insert_delete_upsert", #{~"id" => ~"n"}),
+    ?assertMatch(
+        [
+            [?OP_INSERT, _, ~"n", -1, #{~"d" := [_, ~"", #{~"d" := [_, ~"2"]}]}],
+            [?OP_REMOVE, _, ~"n"],
+            [?OP_INSERT, _, ~"n", 2, #{~"d" := [_, ~"", #{~"d" := [_, ~"2"]}]}]
+        ],
+        Ops
+    ),
+    ?assertEqual([{child_mounted, ~"c-n", 2}], once_messages()),
+    ?assertEqual(
+        lists:sort([{child_unmounted, K, V} || {K, V} <- [{~"c-a", 0}, {~"c-b", 0}, {~"c-n", 2}]]),
+        once_stop(Pid)
+    ).
+
+%% An existing key patched, removed and inserted again keeps its child: one
+%% `handle_update/3`, from the state the client was rendered with to the final one.
+stream_item_child_updated_once_on_update_delete_reinsert(Config) when is_list(Config) ->
+    {Pid, Ops} = once_event(#{}, ~"update_delete_reinsert", #{~"id" => ~"a"}),
+    ?assertMatch(
+        [[?OP_ITEM_PATCH, _, ~"a", _], [?OP_REMOVE, _, ~"a"], [?OP_INSERT, _, ~"a", -1, _]], Ops
+    ),
+    ?assertEqual([{child_updated, ~"c-a", 0, 2}], once_messages()),
+    ?assertEqual(
+        lists:sort([{child_unmounted, ~"c-a", 2}, {child_unmounted, ~"c-b", 0}]),
+        once_stop(Pid)
+    ).
+
+stream_item_child_mounted_once_on_insert_move_update(Config) when is_list(Config) ->
+    {Pid, Ops} = once_event(#{}, ~"insert_move_update", #{~"id" => ~"n"}),
+    ?assertMatch([[?OP_INSERT, _, ~"n", -1, _], [?OP_MOVE, _, ~"n", null]], Ops),
+    ?assertEqual([{child_mounted, ~"c-n", 2}], once_messages()),
+    ?assertEqual(
+        lists:sort([{child_unmounted, K, V} || {K, V} <- [{~"c-a", 0}, {~"c-b", 0}, {~"c-n", 2}]]),
+        once_stop(Pid)
+    ).
+
+%% Two updates of one key that change different fields ship one patch carrying
+%% both: the re-render skips only what neither update reached.
+stream_item_patched_once_on_updates_of_two_fields(Config) when is_list(Config) ->
+    {Pid, Ops} = once_event(#{}, ~"update_two_fields", #{~"id" => ~"a"}),
+    ?assertMatch([[?OP_ITEM_PATCH, _, ~"a", [_, _]]], Ops),
+    [[_, _, _, Inner]] = Ops,
+    ?assertMatch([[?OP_TEXT, _, ~"x"], [~"c-a", [[?OP_TEXT, _, ~"1"]]]], Inner),
+    ?assertEqual([{child_updated, ~"c-a", 0, 1}], once_messages()),
+    ?assertEqual(
+        lists:sort([{child_unmounted, ~"c-a", 1}, {child_unmounted, ~"c-b", 0}]),
+        once_stop(Pid)
+    ).
+
+%% A drain whose ops outweigh a re-render of the whole stream ships the re-render
+%% instead -- but not after the drain has rendered child views: rendering every
+%% item again mounted each new child a second time, and the first instances were
+%% never unmounted. The old items here hold no child, so only the new ones do.
+stream_children_rendered_by_drain_mount_once(Config) when is_list(Config) ->
+    Old = [integer_to_binary(K) || K <- lists:seq(1, 20)],
+    New = [integer_to_binary(K) || K <- lists:seq(21, 40)],
+    {ok, Pid} = arizona_live:start_link(
+        arizona_stream_lifecycle_root, #{notify => self(), keys => Old, on => false}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    [] = lifecycle_messages(),
+    ?assertEqual(
+        lists:sort([{child_mounted, <<"c-", K/binary>>} || K <- New]),
+        stream_lifecycle_event(Pid, ~"replace", #{~"del" => Old, ~"ins" => New})
+    ),
+    ok = arizona_live:stop(Pid),
+    ?assertEqual(
+        lists:sort([{child_unmounted, <<"c-", K/binary>>} || K <- New]),
+        lists:sort(lifecycle_messages())
+    ).
+
+%% The outer item of a nested stream updated twice in one event renders once, so
+%% the child of an inner item it gained mounts once.
+nested_stream_child_mounted_once_on_outer_update_twice(Config) when is_list(Config) ->
+    Pid = start_nested_lifecycle(#{}),
+    ?assertEqual(
+        [{child_mounted, ~"c-g-c"}, {child_mounted, ~"c-g-d"}],
+        nested_lifecycle_event(Pid, ~"insert_two", #{~"ids" => [~"c", ~"d"]})
+    ),
+    ok = arizona_live:stop(Pid),
+    ?assertEqual(
+        [{child_unmounted, K} || K <- [~"c-g-a", ~"c-g-b", ~"c-g-c", ~"c-g-d"]],
+        lists:sort(lifecycle_messages())
+    ).
+
+once_event(Init, Event, Payload) ->
+    {ok, Pid} = arizona_live:start_link(
+        arizona_stream_once_root, Init#{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    [_ | _] = once_messages(),
+    {ok, Ops, _Effects, _} = arizona_live:handle_event(Pid, ~"sor", Event, Payload),
+    {Pid, Ops}.
+
+%% Stops the live process and returns the unmounts it ran, sorted.
+once_stop(Pid) ->
+    ok = arizona_live:stop(Pid),
+    lists:sort(once_messages()).
+
+once_messages() ->
+    receive
+        {child_mounted, _, _} = Msg -> [Msg | once_messages()];
+        {child_updated, _, _, _} = Msg -> [Msg | once_messages()];
+        {child_unmounted, _, _} = Msg -> [Msg | once_messages()]
+    after 0 -> []
+    end.
 
 start_lifecycle(Handler, Init) ->
     start_lifecycle(Handler, Init, undefined).

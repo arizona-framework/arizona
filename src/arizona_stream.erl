@@ -58,7 +58,7 @@ reorder everything with one `sort/2`, instead of K positional calls.
 ```
 {insert, Key, Item, Pos}
 {delete, Key}
-{update, Key, NewItem, Changed}  %% Changed :: #{key() => true}, captured at update/3 time
+{update, Key, NewItem}
 {move, Key, AfterKey}    %% AfterKey is `null` for first position
 reorder                  %% from sort/2 when order changes
 reset                    %% reset/1,2 and the genesis of new/1,2,3: reconcile to now
@@ -393,20 +393,19 @@ exactly like `insert/2`.
     Stream1 :: stream().
 update(#stream{items = Items, pending = Pending} = S0, Key, NewItem) ->
     case Items of
-        #{Key := OldItem} ->
-            Changed = compute_item_changed(OldItem, NewItem),
+        #{Key := _OldItem} ->
             S0#stream{
                 items = Items#{Key => NewItem},
-                pending = queue_op({update, Key, NewItem, Changed}, Pending)
+                pending = queue_op({update, Key, NewItem}, Pending)
             };
         #{} ->
-            append_key(S0, Key, NewItem, {update, Key, NewItem, #{}})
+            append_key(S0, Key, NewItem, {update, Key, NewItem})
     end.
 
 -doc """
 Set of keys that differ between two item maps -- added, removed, or value
-changed. Used by `update/3` and the differ's reset path to drive per-item
-dynamic skipping. Items in Arizona are maps; non-map inputs crash here.
+changed. Used by the differ to drive per-item dynamic skipping. Items in
+Arizona are maps; non-map inputs crash here.
 """.
 -spec compute_item_changed(OldItem, NewItem) -> Changed when
     OldItem :: map(),
