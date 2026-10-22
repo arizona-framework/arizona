@@ -1266,7 +1266,11 @@ A `move` and a positional insert are different: each is placed by where it sits 
 when it is queued (`move/3` records the key it lands after, `insert/3` an index), so on an
 unlimited stream, whose client holds the whole source in order at every step, they replay op
 by op exactly. On a limited stream hidden keys count toward that placement but are not on the
-page, so there they take the reset too. A log of appends, deletes and updates keeps the
+page, so there they take the reset too. An unlimited stream takes it for the same reason
+when a positional insert or a move was queued while a key the event inserts and deletes again
+was in the source: the drain never sends that key, so an index that counted it lands one slot
+off and a move anchored on it lands at the tail. An append, or a positional op queued after
+the delete, counts no such key and stays op by op. A log of appends, deletes and updates keeps the
 op-by-op drain, and a `move/3` to the position a key already holds queues nothing. The
 invariant, checked by a randomized model test in `arizona_stream_SUITE`: after a frame's ops the
 client shows exactly an SSR of the stream's final state.
