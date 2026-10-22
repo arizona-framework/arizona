@@ -21,8 +21,8 @@ mount(Props) ->
 render(Bindings) ->
     ?html({span, [{id, ?get(id)}], [?get(v)]}).
 
--spec handle_update(az:bindings(), az:bindings(), [arizona_effect:effect()]) ->
-    {az:bindings(), az:bindings(), [arizona_effect:effect()]}.
+-spec handle_update(az:bindings(), az:bindings(), [arizona_effect:cmd()]) ->
+    {az:bindings(), az:bindings(), [arizona_effect:cmd()]}.
 handle_update(#{v := New}, #{id := Id, notify := Notify, v := Old}, Effects) ->
     Notify ! {child_updated, Id, Old, New},
     {#{id => Id, notify => Notify, v => New}, #{}, Effects}.
