@@ -79,8 +79,10 @@ check-hank:
 	@# (`make ci > build.log 2>&1`), tee opens it with O_TRUNC and wipes every
 	@# line logged before this point, leaving a NUL-filled hole. Capture instead,
 	@# so the output is both shown and grepped without touching the log's fd.
-	@set -o pipefail; out=$$(rebar3 hank 2>&1); printf '%s\n' "$$out"; \
-		printf '%s\n' "$$out" | (! grep -q "no longer needed")
+	@# Fails on any finding (rebar3 hank exits non-zero) and on a stale ignore,
+	@# which hank only warns about.
+	@out=$$(rebar3 hank 2>&1); status=$$?; printf '%s\n' "$$out"; \
+		[ $$status -eq 0 ] && ! printf '%s\n' "$$out" | grep -q "no longer needed"
 
 check-xref:
 	rebar3 xref
