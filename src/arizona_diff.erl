@@ -1907,20 +1907,17 @@ window_unchanged([], [], SnapItems, N) ->
 window_unchanged(_VKeys, _OldOrder, _SnapItems, _N) ->
     false.
 
-snap_add_missing(Az, VKeys, Snaps, SV, Tmpl, Views0) ->
-    {Ops, Arrivals, Views1} = snap_add_missing(Az, VKeys, 0, Snaps, SV, Tmpl, Views0),
-    {Ops, maps:merge(Snaps, maps:from_list(Arrivals)), Views1}.
+snap_add_missing(Az, VKeys, Snaps, SV, Tmpl, Views) ->
+    snap_add_missing(Az, VKeys, 0, Snaps, SV, Tmpl, Views).
 
 %% Insert each visible key missing from the DOM at its position in the visible
 %% window. Processed left-to-right, so by the time a missing key at index Idx is
 %% reached the DOM already holds VKeys[0..Idx-1] (surviving items settled by the
 %% preceding moves, earlier back-fills just inserted) -- so inserting at Idx lands
 %% it correctly. Appending at -1 only happened to be right when the new item was
-%% last in the window (a delete); a sort can place it anywhere. An arrival comes
-%% back as a pair, the map built once: `VKeys` holds each key once, so asking the
-%% snapshots the walk started from is asking the ones it would have built.
-snap_add_missing(_Az, [], _Idx, _Snaps, _SV, _Tmpl, Views) ->
-    {[], [], Views};
+%% last in the window (a delete); a sort can place it anywhere.
+snap_add_missing(_Az, [], _Idx, Snaps, _SV, _Tmpl, Views) ->
+    {[], Snaps, Views};
 snap_add_missing(Az, [K | Rest], Idx, Snaps, SV, Tmpl, Views0) ->
     case Snaps of
         #{K := _} ->
@@ -1929,9 +1926,10 @@ snap_add_missing(Az, [K | Rest], Idx, Snaps, SV, Tmpl, Views0) ->
             {ItemD, SV1, Views1} = render_final(K, SV, Tmpl, Views0),
             HTML = arizona_render:zip_item(Tmpl, ItemD),
             InsOp = [?OP_INSERT, Az, arizona_template:to_bin(K), Idx, HTML],
-            {RestOps, Arrivals, Views2} =
-                snap_add_missing(Az, Rest, Idx + 1, Snaps, SV1, Tmpl, Views1),
-            {[InsOp | RestOps], [{K, ItemD} | Arrivals], Views2}
+            NewSnaps = Snaps#{K => ItemD},
+            {RestOps, FinalSnaps, Views2} =
+                snap_add_missing(Az, Rest, Idx + 1, NewSnaps, SV1, Tmpl, Views1),
+            {[InsOp | RestOps], FinalSnaps, Views2}
     end.
 
 %% Longest Increasing Subsequence -- minimal moves for stream reorder.
