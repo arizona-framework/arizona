@@ -28,7 +28,7 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make check` | All checks incl. dialyzer (`check-erl` `check-js` `check-md` `check-yaml` `check-actions`) |
 | `make check-fast` | Fast checks -- no dialyzer (`check-fmt` `check-js` `check-md`) |
 | `make check-dirty` | Fail if the build left tracked files modified (used by `ci`) |
-| `make check-hank` | Dead-code check (`rebar3 hank`); fails on "no longer needed" |
+| `make check-hank` | Dead-code check (`rebar3 hank`); fails on any finding or a "no longer needed" ignore |
 | `make check-xref` | Cross-reference check (`rebar3 xref`) |
 | `make test` | All tests -- no coverage (`test-erl` `test-js` `test-e2e`) |
 | `make test-erl` | Common Test + EUnit |
