@@ -7315,13 +7315,8 @@ each_stream_keyless_body_refused_at_render(Config) when is_list(Config) ->
     S2 = arizona_stream:delete(S1, ~"a"),
     {Ops, _, _} = arizona_diff:diff(Fix:render(#{items => S2}), Snap, #{}, #{items => true}),
     ?assertMatch([[?OP_REMOVE, _, ~"a"]], Ops),
-    ?assertMatch(
-        #{general := Msg} when is_list(Msg),
-        arizona_template:format_error(stream_each_keyless, [])
-    ),
-    ?assertNotEqual(
-        nomatch, string:find(arizona_template:format_error(stream_each_keyless), "{az_key, Key}")
-    ).
+    #{general := Msg} = arizona_template:format_error(stream_each_keyless, []),
+    ?assertNotEqual(nomatch, string:find(Msg, "{az_key, Key}")).
 
 assert_stream_each_keyless(Mod, Bindings) ->
     ?assertError(
