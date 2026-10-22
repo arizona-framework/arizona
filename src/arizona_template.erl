@@ -869,7 +869,7 @@ read off the DOM by the client, which is where those addresses already are.
     Branch :: pos_integer() | undefined,
     Key :: term().
 nodiff_token(F, Branch, Key) ->
-    <<F/binary, (nodiff_branch_part(Branch))/binary, (nodiff_key_part(Key))/binary>>.
+    <<F:(byte_size(F))/binary, (nodiff_branch_part(Branch))/binary, (nodiff_key_part(Key))/binary>>.
 
 nodiff_branch_part(undefined) -> <<>>;
 nodiff_branch_part(Branch) -> <<".b", (integer_to_binary(Branch))/binary>>.
@@ -959,14 +959,19 @@ scoped_statics(Backend, Prefix, #{f := F}, S) ->
 scoped_statics(_Backend, _Prefix, #{}, S) ->
     S.
 
-scope_fp(Prefix, #{f := F} = Snap) -> Snap#{f => <<Prefix/binary, "-", F/binary>>};
-scope_fp(_Prefix, Snap) -> Snap.
+%% The leading segment is sized: a binary led by an unsized one is built
+%% appendable (a 256-byte refc binary, several times the cost), and these are
+%% stored in every scoped snapshot.
+scope_fp(Prefix, #{f := F} = Snap) ->
+    Snap#{f => <<Prefix:(byte_size(Prefix))/binary, "-", F/binary>>};
+scope_fp(_Prefix, Snap) ->
+    Snap.
 
 scope_dyn(Prefix, {Az, Val}) ->
     {scope_az(Prefix, Az), scope_val(Prefix, Val)}.
 
 scope_az(_Prefix, undefined) -> undefined;
-scope_az(Prefix, Az) -> <<Prefix/binary, "-", Az/binary>>.
+scope_az(Prefix, Az) -> <<Prefix:(byte_size(Prefix))/binary, "-", Az/binary>>.
 
 %% Recurse only into an inline nested template (a conditional branch): its inner
 %% `az` ids are globally addressed, so they must carry the slot prefix. An
