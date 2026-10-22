@@ -60,8 +60,13 @@ final class SendTests: XCTestCase {
 
         c.navigate("/native/menu")
 
+        // The frame's object keys come out in no fixed order, so compare it decoded.
+        let prefix = "frame dropped: no socket: "
+        XCTAssertEqual(warnings.count, 1)
+        XCTAssertEqual(warnings.first?.hasPrefix(prefix), true)
         XCTAssertEqual(
-            warnings, [#"frame dropped: no socket: ["navigate",{"path":"/native/menu","qs":""}]"#])
+            warnings.first.map { JSONValue.parse(String($0.dropFirst(prefix.count))) },
+            JSONValue.parse(#"["navigate",{"path":"/native/menu","qs":""}]"#))
     }
 
     func testEventOnAMountedViewIsSentWithoutAReport() {
