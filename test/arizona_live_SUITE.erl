@@ -112,6 +112,12 @@
     removed_child_timer_cancelled/1,
     swapped_child_timer_cancelled/1,
     swapped_child_unmounted_once_when_new_mount_crashes/1,
+    raising_removal_unmounts_each_once/1,
+    raising_unmount_on_exit_unmounts_rest/1,
+    raising_removal_unmounts_fresh_child/1,
+    raising_root_unmount_on_navigate_runs_once/1,
+    child_mounted_by_crashed_diff_unmounted/1,
+    child_mounted_by_crashed_mount_unmounted/1,
     fired_timer_ref_pruned/1,
     cancelled_timer_ref_pruned/1,
     concurrent_timer_arms_amortized/1,
@@ -274,6 +280,12 @@ groups() ->
             removed_child_timer_cancelled,
             swapped_child_timer_cancelled,
             swapped_child_unmounted_once_when_new_mount_crashes,
+            raising_removal_unmounts_each_once,
+            raising_unmount_on_exit_unmounts_rest,
+            raising_removal_unmounts_fresh_child,
+            raising_root_unmount_on_navigate_runs_once,
+            child_mounted_by_crashed_diff_unmounted,
+            child_mounted_by_crashed_mount_unmounted,
             fired_timer_ref_pruned,
             cancelled_timer_ref_pruned,
             live_reaped_on_transport_disconnect,
@@ -2005,6 +2017,128 @@ swapped_child_unmounted_once_when_new_mount_crashes(Config) when is_list(Config)
     after 1000 -> error(timeout_live_exit)
     end,
     ?assertEqual([{unmounted, arizona_swap_a}], collect_messages(200)).
+
+child_mounted_by_crashed_diff_unmounted(Config) when is_list(Config) ->
+    %% The diff mounts the first child, then the second child's mount/1 raises.
+    %% The process exits from the state it had before the event, which does not
+    %% list the first child yet, but its mount/1 ran: terminate/2 must unmount
+    %% it.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_mount_crash_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    ?assertExit(
+        {{{arizona_loc, _, crash_on_mount}, _}, {gen_server, call, _}},
+        arizona_live:handle_event(Pid, ~"mount_crash_parent", ~"show", #{})
+    ),
+    receive
+        {'DOWN', Ref, process, Pid, {{arizona_loc, _, crash_on_mount}, _}} -> ok
+    after 1000 -> error(timeout_live_exit)
+    end,
+    ?assertEqual([{unmounted, arizona_swap_a}], collect_messages(200)).
+
+child_mounted_by_crashed_mount_unmounted(Config) when is_list(Config) ->
+    %% Same pair, failing the view's own mount: the state never got a snapshot,
+    %% so terminate/2 skips the root, but the child that mounted is unmounted.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_mount_crash_parent, #{notify => self(), show => true}, undefined, []
+    ),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    ?assertExit(
+        {{{arizona_loc, _, crash_on_mount}, _}, {gen_server, call, _}},
+        arizona_live:mount(Pid)
+    ),
+    receive
+        {'DOWN', Ref, process, Pid, {{arizona_loc, _, crash_on_mount}, _}} -> ok
+    after 1000 -> error(timeout_live_exit)
+    end,
+    ?assertEqual([{unmounted, arizona_swap_a}], collect_messages(200)).
+
+raising_removal_unmounts_each_once(Config) when is_list(Config) ->
+    %% One diff removes two children and the second one's unmount/1 raises. The
+    %% first still unmounts, the process exits from the state it had before the
+    %% event, which lists both, and terminate/2 must unmount neither again, but
+    %% still run the root's.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_raise_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    Ref = monitor(process, Pid),
+    ?assertExit(
+        {{unmount_boom, _}, {gen_server, call, _}},
+        arizona_live:handle_event(Pid, ~"unmount_raise_parent", ~"hide", #{})
+    ),
+    receive
+        {'DOWN', Ref, process, Pid, {unmount_boom, _}} -> ok
+    after 1000 -> error(timeout_live_exit)
+    end,
+    ?assertEqual(
+        [{unmounted, ~"plain"}, {unmounted, ~"raising"}, {unmounted, ~"unmount_raise_parent"}],
+        lists:sort(collect_messages(200))
+    ).
+
+raising_unmount_on_exit_unmounts_rest(Config) when is_list(Config) ->
+    %% On the way out a child's raising unmount/1 must not skip its siblings'
+    %% or the root's.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_raise_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    ?assertExit({unmount_boom, _}, arizona_live:stop(Pid)),
+    ?assertEqual(
+        [{unmounted, ~"plain"}, {unmounted, ~"raising"}, {unmounted, ~"unmount_raise_parent"}],
+        lists:sort(collect_messages(200))
+    ).
+
+raising_removal_unmounts_fresh_child(Config) when is_list(Config) ->
+    %% One diff mounts a new child and removes two, the second of which raises
+    %% from unmount/1. The process exits from the state it had before the event,
+    %% which lists the removed pair but not the new child: every instance must
+    %% still unmount exactly once, the root included.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_raise_parent, #{notify => self()}, undefined, []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    ?assertExit(
+        {{unmount_boom, _}, {gen_server, call, _}},
+        arizona_live:handle_event(Pid, ~"unmount_raise_parent", ~"replace", #{})
+    ),
+    ?assertEqual(
+        [
+            {unmounted, ~"fresh"},
+            {unmounted, ~"plain"},
+            {unmounted, ~"raising"},
+            {unmounted, ~"unmount_raise_parent"}
+        ],
+        lists:sort(collect_messages(200))
+    ).
+
+raising_root_unmount_on_navigate_runs_once(Config) when is_list(Config) ->
+    %% Navigate unmounts the old page's children, then its root, whose
+    %% unmount/1 raises. The state still names that page, so terminate/2 must
+    %% unmount none of it a second time.
+    {ok, Pid} = arizona_live:start_link(
+        arizona_unmount_raise_parent,
+        #{notify => self(), raise_child => false, raise_root => true},
+        undefined,
+        []
+    ),
+    {ok, _, _} = arizona_live:mount(Pid),
+    unlink(Pid),
+    ?assertExit(
+        {{root_unmount_boom, _}, {gen_server, call, _}},
+        arizona_live:navigate(Pid, arizona_crashable, #{})
+    ),
+    ?assertEqual(
+        [{unmounted, ~"plain"}, {unmounted, ~"raising"}, {unmounted, ~"unmount_raise_parent"}],
+        lists:sort(collect_messages(200))
+    ).
 
 collect_messages(Timeout) ->
     receive

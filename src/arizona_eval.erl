@@ -859,15 +859,16 @@ mount_or_update_stateful(H, Props, Id, Old, Effects0) ->
             %% queued messages carry the id, not the handler, so they must die
             %% here too or they reach the new handler's handle_info/2.
             ok = arizona_live:swap_out_view(Id, OldH, OldB),
-            {B1, Resets} = fresh_mount_stateful(H, Props),
+            {B1, Resets} = fresh_mount_stateful(H, Props, Id),
             {B1, Resets, Effects0};
         #{} ->
-            {B1, Resets} = fresh_mount_stateful(H, Props),
+            {B1, Resets} = fresh_mount_stateful(H, Props, Id),
             {B1, Resets, Effects0}
     end.
 
-fresh_mount_stateful(H, Props) ->
+fresh_mount_stateful(H, Props, Id) ->
     {B1, Resets} = arizona_stateful:call_mount(H, Props),
+    ok = arizona_live:note_mounted_view(Id, H, B1),
     ok = check_restricted_keys(B1, Props, H),
     {B1, Resets}.
 

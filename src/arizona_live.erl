@@ -89,6 +89,7 @@ fingerprints already shipped in the initial HTML.
 -export([apply_on_mount/2]).
 -export([format_error/2]).
 -export([swap_out_view/3]).
+-export([note_mounted_view/3]).
 -export([view_state/1]).
 
 %% --------------------------------------------------------------------
@@ -786,10 +787,20 @@ terminate(_Reason, #state{snapshot = Snap, handler = H, bindings = B, views = V}
 ->
     %% Unmount every child view, then the root -- the same children-first
     %% removal semantics as navigate, for any exit reason terminate sees.
-    %% A diff that raised after swapping a child's handler has unmounted the
-    %% swapped-out instance already, though the state still lists it.
-    ok = unmount_removed_views(still_mounted_views(V)),
-    ok = arizona_stateful:call_unmount(H, B);
+    %% A pass that raised may have unmounted some of them already (a swapped-out
+    %% instance, the removals before a raising unmount/1, or the root itself on
+    %% navigate), though the state still lists them, and mounted others it does
+    %% not list yet. One raising unmount/1 neither stops the rest nor the root's:
+    %% each runs, and the first error is raised after the last.
+    Unmounted = take_unmounted(),
+    Children = unmount_each(still_mounted_views(V, Unmounted)),
+    Mounted = unmount_failed_pass_mounts(),
+    Root =
+        case Unmounted of
+            #{root := {H, B}} -> [];
+            #{} -> [attempt(fun() -> arizona_stateful:call_unmount(H, B) end)]
+        end,
+    raise_first(Children ++ Mounted ++ Root);
 terminate(_Reason, _State) ->
     %% Never mounted: `mount/1` has not run, so `bindings` are still the raw
     %% route bindings the handler never produced (route static config plus
@@ -806,7 +817,10 @@ terminate(_Reason, _State) ->
     %% A navigate whose new mount raises lands here too: it has already
     %% unmounted the old page and cleared the snapshot, so that page's unmount
     %% callbacks run once, not again on the way out.
-    ok.
+    %%
+    %% Children are another matter: a mount that raised partway through its
+    %% render may already have mounted some, and those did run `mount/1`.
+    raise_first(unmount_failed_pass_mounts()).
 
 -doc """
 Formats `arizona_live` runtime errors raised with an `error_info`
@@ -834,49 +848,93 @@ format_error({unknown_view, ViewId, Msg}, [{_M, _F, [_, _B, V0], _Info} | _]) ->
 %% module reconciles after a diff, `swap_out_view/3` calls it when a render keeps
 %% an id but swaps its handler -- before the new handler mounts, since the new
 %% instance's own timers are registered under the same id.
+%%
+%% The state still lists the instance until the pass that removed it returns, so
+%% if the pass raises, terminate/2 runs on a state naming it. Note it as unmounted
+%% first -- an unmount/1 that raises has run too -- so terminate/2 skips it.
 -spec unmount_view(ViewId, Handler, Bindings) -> ok when
     ViewId :: binary(),
     Handler :: module(),
     Bindings :: map().
 unmount_view(ViewId, Handler, Bindings) ->
+    ok = note_unmounted(ViewId, Handler, Bindings),
     ok = cancel_view_timers(ViewId),
     ok = flush_view_messages(ViewId),
     arizona_stateful:call_unmount(Handler, Bindings).
 
 %% Internal: `unmount_view/3` for the instance a render replaces by keeping its id
-%% and switching its handler, called by `arizona_eval` mid-diff. The diff has not
-%% returned yet, so the gen_server state still lists this instance; if the rest
-%% of the diff raises (the new handler's mount/1, say), terminate/2 runs on that
-%% state. Remember the instance until the diff returns, so terminate/2 does not
-%% unmount it a second time.
+%% and switching its handler, called by `arizona_eval` mid-diff, before the new
+%% handler's mount/1 (which may raise).
 -doc false.
 -spec swap_out_view(ViewId, Handler, Bindings) -> ok when
     ViewId :: binary(),
     Handler :: module(),
     Bindings :: map().
 swap_out_view(ViewId, Handler, Bindings) ->
-    ok = unmount_view(ViewId, Handler, Bindings),
-    SwappedOut =
-        case erlang:get('$arizona_swapped_out') of
-            undefined -> #{};
-            S -> S
-        end,
-    _ = erlang:put('$arizona_swapped_out', SwappedOut#{ViewId => {Handler, Bindings}}),
+    unmount_view(ViewId, Handler, Bindings).
+
+%% Internal: called by `arizona_eval` right after a child's `mount/1` returns,
+%% while a render or diff is still evaluating. The new instance reaches the
+%% gen_server state only when the pass returns, so if the rest of the pass raises
+%% (a sibling's mount/1, or a removed view's unmount/1), terminate/2 never sees
+%% it. Remember it so terminate/2 can unmount it. A no-op outside a pass this
+%% module began, so a render or diff run outside a live process records nothing.
+-doc false.
+-spec note_mounted_view(ViewId, Handler, Bindings) -> ok when
+    ViewId :: binary(),
+    Handler :: module(),
+    Bindings :: map().
+note_mounted_view(ViewId, Handler, Bindings) ->
+    case erlang:get('$arizona_mounted') of
+        undefined ->
+            ok;
+        Mounted ->
+            _ = erlang:put('$arizona_mounted', [{ViewId, Handler, Bindings} | Mounted]),
+            ok
+    end.
+
+%% Unmounted ids are binaries, so the old root's entry (navigate) takes the atom
+%% `root` without colliding with any of them.
+note_unmounted(Key, Handler, Bindings) ->
+    _ = erlang:put('$arizona_unmounted', (take_unmounted())#{Key => {Handler, Bindings}}),
     ok.
 
-%% The views a crash mid-diff left listed in the state but already unmounted by
-%% swap_out_view/3. Empty outside a failed pass: every render or diff that can
-%% evaluate child views erases the record as soon as it returns.
-still_mounted_views(Views) ->
-    case erlang:erase('$arizona_swapped_out') of
+take_unmounted() ->
+    case erlang:erase('$arizona_unmounted') of
+        undefined -> #{};
+        Unmounted -> Unmounted
+    end.
+
+%% The views a crash mid-pass left listed in the state but already unmounted.
+%% Empty outside a failed pass: every pass that can unmount views erases the
+%% record once it has unmounted the last of them.
+still_mounted_views(Views, Unmounted) ->
+    #{
+        Id => View
+     || Id := #{handler := H, bindings := B} = View <- Views,
+        not is_map_key(Id, Unmounted) orelse map_get(Id, Unmounted) =/= {H, B}
+    }.
+
+begin_pass() ->
+    _ = erlang:put('$arizona_mounted', []),
+    ok.
+
+%% A pass that has returned and unmounted its removals has put every instance it
+%% mounted into the views it hands back, and every one it unmounted is gone from
+%% them, so neither record is needed any more.
+end_pass() ->
+    _ = erlang:erase('$arizona_mounted'),
+    _ = erlang:erase('$arizona_unmounted'),
+    ok.
+
+%% The children a pass that raised had mounted: in no state terminate/2 can see,
+%% so unmounted here or never.
+unmount_failed_pass_mounts() ->
+    case erlang:erase('$arizona_mounted') of
         undefined ->
-            Views;
-        SwappedOut ->
-            #{
-                Id => View
-             || Id := #{handler := H, bindings := B} = View <- Views,
-                not is_map_key(Id, SwappedOut) orelse map_get(Id, SwappedOut) =/= {H, B}
-            }
+            [];
+        Mounted ->
+            [attempt(fun() -> unmount_view(Id, H, B) end) || {Id, H, B} <:- lists:reverse(Mounted)]
     end.
 
 %% --------------------------------------------------------------------
@@ -897,8 +955,14 @@ do_navigate_call(NewHandler, NewIB, NewOnMount, From, State) ->
     %% wiped by do_mount below), which is a removal -- so unmount them exactly
     %% like a diff removal would: children first, then the root, mirroring
     %% removal semantics.
+    %%
+    %% The state names the old root until the mount continue below, so note it
+    %% as unmounted too: its unmount/1, if it raises, must not run again in
+    %% terminate/2.
     ok = unmount_removed_views(OldV),
+    ok = note_unmounted(root, OldH, OldB),
     ok = arizona_stateful:call_unmount(OldH, OldB),
+    ok = end_pass(),
     %% Carry the previous root handler's final bindings forward as the floor;
     %% NewIB (route static config + middleware enrichments) overrides on
     %% overlap. The new handler's `mount/1` receives `OldB ⊕ NewIB`, picks
@@ -938,8 +1002,9 @@ do_mount(H, B0, V0, OnMount) ->
     ok = arizona_eval:check_restricted_keys(B2, B1, H),
     ViewId = maps:get(id, B2),
     Tmpl = arizona_stateful:call_render(H, B2),
+    ok = begin_pass(),
     Rendered = arizona_render:render_snapshot(Tmpl, V0),
-    _ = erlang:erase('$arizona_swapped_out'),
+    ok = end_pass(),
     B3 = arizona_stream:clear_stream_pending(B2, arizona_stream:stream_keys(B2)),
     B4 = maps:merge(B3, Resets),
     {ViewId, Rendered, B4}.
@@ -1040,11 +1105,12 @@ process_root_change(
     Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
+    ok = begin_pass(),
     {Ops, Snap1, V1} = arizona_diff:diff(Tmpl, Snap, V0, Changed),
-    _ = erlang:erase('$arizona_swapped_out'),
     Effects1 = arizona_eval:drain_update_effects(),
     RemovedViews = #{K => V || K := V <- V0, not is_map_key(K, V1)},
     ok = unmount_removed_views(RemovedViews),
+    ok = end_pass(),
     {Ops1, Fps1} = dedup_fps_if_noted(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
     {Ops1, Snap1, V1, B3, Fps1, State#state{pending_refresh = #{}}, Effects1}.
@@ -1072,8 +1138,8 @@ process_child_change(
     Tmpl = arizona_stateful:call_render(H, B1),
     Changed = compute_changed(B0, B1),
     ok = arizona_eval:set_update_effects(Effects0),
+    ok = begin_pass(),
     {Ops, Snap1, NewViews} = arizona_diff:diff(Tmpl, Snap0, V0, Changed),
-    _ = erlang:erase('$arizona_swapped_out'),
     Effects1 = arizona_eval:drain_update_effects(),
     {Ops1, Fps1} = dedup_fps_if_noted(Ops, Fps0),
     B3 = clear_streams_and_apply_resets(B1, Resets),
@@ -1081,6 +1147,7 @@ process_child_change(
     OldDescendants = maps:get(child_views, Snap0, #{}),
     Removed = [K || K := _ <- OldDescendants, not is_map_key(K, NewViews)],
     ok = unmount_removed_views(maps:with(Removed, V0)),
+    ok = end_pass(),
     Snap2 = Snap1#{child_views => NewDescendants},
     V1 = maps:merge(maps:without(Removed, V0), NewViews),
     V2 = V1#{ViewId => View#{bindings => B3, snapshot => Snap2}},
@@ -1338,11 +1405,28 @@ clear_streams_and_apply_resets(B1, Resets) ->
 %% timers synchronously and flush any of its already-queued view messages BEFORE
 %% unmounting, so a late `close`-style tick can never route to the pruned view
 %% and crash the session with unknown_view.
+%%
+%% Every view unmounts once whatever its siblings' unmount/1 does: one that raises
+%% does not stop the rest, and the first error is raised after the last.
 unmount_removed_views(RemovedViews) ->
-    maps:foreach(
-        fun(Id, #{handler := H, bindings := B}) -> ok = unmount_view(Id, H, B) end,
-        RemovedViews
-    ).
+    raise_first(unmount_each(RemovedViews)).
+
+unmount_each(Views) ->
+    [
+        attempt(fun() -> unmount_view(Id, H, B) end)
+     || Id := #{handler := H, bindings := B} <:- Views
+    ].
+
+attempt(Fun) ->
+    try Fun() of
+        ok -> ok
+    catch
+        Class:Reason:Stacktrace -> {raised, Class, Reason, Stacktrace}
+    end.
+
+raise_first([]) -> ok;
+raise_first([ok | Rest]) -> raise_first(Rest);
+raise_first([{raised, Class, Reason, Stacktrace} | _]) -> erlang:raise(Class, Reason, Stacktrace).
 
 %% Synchronous cancel: after this returns, each timer's message either was
 %% already delivered (and is flushed right after) or never will be. An async
