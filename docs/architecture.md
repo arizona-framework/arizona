@@ -2091,6 +2091,18 @@ stops neither its siblings' nor the root's (each still runs, and the first error
 the last), `terminate/2` skips a view (or a navigate's outgoing root) the failed pass already
 unmounted, and it unmounts a child the failed pass had mounted before raising.
 
+The views map is keyed by id, and events, timers and messages are routed by it, so a child's id
+must be unique among the views on the page -- the root view's own id included. A live render or
+diff (armed by `arizona_live` around each; see `arizona_eval:claim_view_ids/1`) refuses a second claim
+of an id in one pass with `{duplicate_view_id, Id, FirstHandler, SecondHandler}`: every `?stateful`
+it evaluates claims its id, and every view it keeps without evaluating -- a dep-skipped slot's
+subtree, the children of the stream items a drain does not touch -- claims its id as it is kept. A
+child's own event renders only that child's subtree, so there the views mounted elsewhere on the
+page count as claimed too. Without the check the two instances collapsed into one entry: one was
+never unmounted, the other's slot was updated from its state, and every event reached only one.
+Re-rendering the same view in a later pass, keeping it, or swapping its handler under the same id
+are one claim each. SSR keeps no views map and does not check.
+
 **Slots:** Slots are implemented via stateless children and bindings. A layout places the page it
 wraps with the **`?inner_content`** macro; the binding key is fixed (`apply_layouts/4` injects
 `inner_content` into the layout's bindings), not configurable. Stateless components receive props

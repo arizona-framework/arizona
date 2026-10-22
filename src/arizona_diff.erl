@@ -662,9 +662,11 @@ merge_stream_child_views(Old, #{items := Items}, LocalNew, Old0) ->
                     LocalNew;
                 {Taken, true} ->
                     Carried = live_subtree(OldChildViews, Old0),
-                    maps:merge(
-                        without_stale(stale_views(Taken, LocalNew, Old0), Carried, Old0), LocalNew
-                    )
+                    Kept = without_stale(stale_views(Taken, LocalNew, Old0), Carried, Old0),
+                    %% The views the drain rendered claimed their ids as they
+                    %% rendered; the ones it kept claim theirs here.
+                    ok = arizona_eval:claim_view_ids(Kept, LocalNew),
+                    maps:merge(Kept, LocalNew)
             end;
         #{} ->
             LocalNew
@@ -755,11 +757,19 @@ keeps without calling `handle_update/3`.
 %% releasing pubsub subscriptions and resources) while its DOM was still on the
 %% page, after which every event addressed to it was silently swallowed.
 carry_skipped_view(#{view_id := VId}, {Old, New}) ->
-    {Old, maps:merge(New, live_subtree(#{VId => true}, Old))};
+    carry_subtree(live_subtree(#{VId => true}, Old), Old, New);
+carry_skipped_view(#{child_views := ChildIds}, Views) when map_size(ChildIds) =:= 0 ->
+    Views;
 carry_skipped_view(#{child_views := ChildIds}, {Old, New}) ->
-    {Old, maps:merge(New, live_subtree(ChildIds, Old))};
+    carry_subtree(live_subtree(ChildIds, Old), Old, New);
 carry_skipped_view(_Old, Views) ->
     Views.
+
+%% A kept subtree still occupies its ids in this pass, so it claims them for the
+%% duplicate check (`arizona_eval:claim_view_ids/1`).
+carry_subtree(Subtree, Old, New) ->
+    ok = arizona_eval:claim_view_ids(Subtree),
+    {Old, maps:merge(New, Subtree)}.
 
 %% The live entries of `Old` making up the subtrees rooted at `Ids`, following
 %% each entry's own recorded descendants transitively. Every view's snapshot in

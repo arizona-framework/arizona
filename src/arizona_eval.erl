@@ -74,6 +74,8 @@ bindings like `id`. Violations raise
 -export([set_update_effects/1]).
 -export([drain_update_effects/0]).
 -export([relocate/4]).
+-export([claim_view_ids/1]).
+-export([claim_view_ids/2]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -503,6 +505,98 @@ relocate(Class, {arizona_loc, _, _} = Reason, ST, _Loc) ->
 relocate(Class, Reason, ST, Loc) ->
     erlang:raise(Class, {arizona_loc, Loc, Reason}, ST).
 
+-doc """
+Claims the ids of the child views a pass keeps without evaluating them (a
+dep-skipped slot's subtree), for the duplicate view-id check.
+
+A live process keys its views by id and routes events, timers and messages by
+it, so two views under one id collapse into one entry: one instance is never
+unmounted, the other's slot is updated from its state, and everything addressed
+to either reaches only one. `arizona_live` therefore arms the check around every
+render or diff it runs, by storing
+`{RootBindings, RootHandler, Outside, #{}}` under `'$arizona_view_ids'` and
+erasing it after: every child view the pass evaluates (`eval_stateful`) or keeps
+(this function) claims its id, and a second claim of one id, or a claim of the
+root's own id, raises `{duplicate_view_id, Id, FirstHandler, SecondHandler}`.
+`Outside` is `none` for a pass that renders the whole tree, or
+`{Views, ChildSnapshot}` for one that renders a single child's subtree: every
+view of `Views` outside that snapshot's `child_views` is mounted elsewhere on the
+page and keeps its id. Arming is one process-dictionary write and everything else
+is paid per claim, so a pass that evaluates and keeps no child view costs nothing
+more. Unarmed (SSR, static generation) nothing is checked: there is no views map
+to corrupt.
+""".
+-spec claim_view_ids(Views) -> ok when
+    Views :: #{binary() => #{handler := module(), _ => _}}.
+claim_view_ids(Views) ->
+    case erlang:get('$arizona_view_ids') of
+        undefined ->
+            ok;
+        {#{id := RootId}, RootH, _Outside, _Claimed} when is_map_key(RootId, Views) ->
+            #{RootId := #{handler := Second}} = Views,
+            duplicate_view_id(RootId, RootH, Second);
+        {RootB, RootH, Outside, Claimed} ->
+            Merged = maps:merge(Claimed, Views),
+            case map_size(Merged) =:= map_size(Claimed) + map_size(Views) of
+                true ->
+                    ok = check_outside(Views, Outside),
+                    _Previous = erlang:put('$arizona_view_ids', {RootB, RootH, Outside, Merged}),
+                    ok;
+                false ->
+                    [{Id, #{handler := Second}} | _] =
+                        [{Id, V} || Id := V <- Views, is_map_key(Id, Claimed)],
+                    #{Id := #{handler := First}} = Claimed,
+                    duplicate_view_id(Id, First, Second)
+            end
+    end.
+
+-doc """
+`claim_view_ids/1` for the views of `Views` that `Except` does not name: the
+children a stream drain kept, beside the ones it rendered (and so claimed as it
+rendered them).
+""".
+-spec claim_view_ids(Views, Except) -> ok when
+    Views :: #{binary() => #{handler := module(), _ => _}},
+    Except :: #{binary() => _}.
+claim_view_ids(Views, Except) ->
+    case erlang:get('$arizona_view_ids') of
+        undefined -> ok;
+        _Armed -> claim_view_ids(maps:without(maps:keys(Except), Views))
+    end.
+
+claim_view_id(Id, H) ->
+    case erlang:get('$arizona_view_ids') of
+        undefined ->
+            ok;
+        {#{id := Id}, RootH, _Outside, _Claimed} ->
+            duplicate_view_id(Id, RootH, H);
+        {_RootB, _RootH, _Outside, #{Id := #{handler := First}}} ->
+            duplicate_view_id(Id, First, H);
+        {RootB, RootH, Outside, Claimed} ->
+            ok = check_outside(#{Id => #{handler => H}}, Outside),
+            _Previous = erlang:put(
+                '$arizona_view_ids', {RootB, RootH, Outside, Claimed#{Id => #{handler => H}}}
+            ),
+            ok
+    end.
+
+check_outside(_Views, none) ->
+    ok;
+check_outside(Views, {Mounted, ChildSnap}) ->
+    Scope = maps:get(child_views, ChildSnap, #{}),
+    case [{Id, V} || Id := V <- Views, is_map_key(Id, Mounted), not is_map_key(Id, Scope)] of
+        [] ->
+            ok;
+        [{Id, #{handler := Second}} | _] ->
+            #{Id := #{handler := First}} = Mounted,
+            duplicate_view_id(Id, First, Second)
+    end.
+
+duplicate_view_id(Id, First, Second) ->
+    erlang:error({duplicate_view_id, Id, First, Second}, [Id, First, Second], [
+        {error_info, #{module => ?MODULE}}
+    ]).
+
 check_restricted_key(Key, Bindings, Props, Handler, Callback) ->
     case Props of
         #{Key := Expected} ->
@@ -520,13 +614,24 @@ check_restricted_key(Key, Bindings, Props, Handler, Callback) ->
     end.
 
 -doc """
-Formats `restricted_key_modified` errors into a human-readable message
-naming the offending handler, callback and key.
+Formats `restricted_key_modified` errors into a human-readable message naming
+the offending handler, callback and key, and `duplicate_view_id` errors naming
+the id and the two handlers that claimed it.
 """.
 -spec format_error(Reason, StackTrace) -> ErrorInfo when
     Reason :: term(),
     StackTrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
+format_error({duplicate_view_id, Id, First, Second}, _StackTrace) ->
+    #{
+        general => io_lib:format(
+            "view id ~0tp is used by two views in one render (~s and ~s). A live "
+            "process keys its views by id, so every ?stateful needs an id no other "
+            "view on the page uses, the root view's included -- for a list, derive "
+            "it from the item key (e.g. <<\"row-\", Key/binary>>).",
+            [Id, First, Second]
+        )
+    };
 format_error(restricted_key_modified, [{_M, _F, [Key, Handler, default_patch_merge], _Info} | _]) ->
     #{
         general => io_lib:format(
@@ -796,6 +901,7 @@ eval_stateful(H, Props, {Old, _New} = Views) ->
     end.
 
 eval_stateful_lifecycle(H, Props, Id, {Old, New}) ->
+    ok = claim_view_id(Id, H),
     %% Bracket the whole lifecycle. mount/1 and handle_update/3 callbacks
     %% are user code; their ?get calls would otherwise land in the outer
     %% dynamic's tracked deps.
