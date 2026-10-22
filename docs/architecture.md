@@ -704,7 +704,11 @@ raises `stream_each_multi_root` when it is paired with an `arizona_stream` -- on
 so the render and the diff alike -- unless the per-item template is nodiff (never addressed by a
 keyed op). A one-element list body is taken as its element. Over a stream that root must carry
 `az_key` (the client looks items up by `az-key`, so an unkeyed item is unreachable to every keyed
-op); this stays unenforced because a map diffs positionally and needs no key. A keyed callback whose
+op and the DOM drifts from the stream). A map diffs positionally and needs no key, so this is the
+same runtime pairing check: `compile_each` stamps a single-element body whose root has no literal
+`az_key` with `keyless => true`, and `arizona_template:each/2` raises `stream_each_keyless` over a
+stream, again unless the item is nodiff, and only on a backend whose client applies keyed item ops
+(the `keyed_item_ops/0` renderer callback; `?terminal` redraws whole frames). A keyed callback whose
 body is a *conditional* raises `each_stream_body_control_flow` instead, because the fix is
 different: "wrap the value in an element" reads as advice to pick a tag, when the real constraint is
 that every item shares ONE compiled per-item template, so an item's **outer tag is fixed at compile

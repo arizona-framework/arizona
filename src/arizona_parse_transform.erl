@@ -3858,7 +3858,8 @@ compile_each_clause(Kind, Vars, Guards, Body, SourceAST, Line, Module, Backend, 
             ),
             Opts1 = Opts0#{backend => Backend},
             Opts2 = maybe_single_root_opt(Backend, Kind, Classification, Opts1),
-            Opts = maybe_multi_root_opt(Kind, Classification, Opts2),
+            Opts3 = maybe_multi_root_opt(Kind, Classification, Opts2),
+            Opts = maybe_keyless_opt(Backend, Kind, Classification, ElemAST, Opts3),
             {S1, D1} = scope_az(Backend, Fingerprint, Statics, DynASTs),
             build_each_ast(Line, SourceAST, Vars, Guards, Prefix, S1, D1, Fingerprint, Opts)
     end.
@@ -3909,6 +3910,25 @@ maybe_multi_root_opt(stream, Classification, Opts) when
 ->
     Opts#{multi_root => true};
 maybe_multi_root_opt(_Kind, _Classification, Opts) ->
+    Opts.
+
+%% The other half of the same pairing: a single-element 2-arg body is legal over a
+%% stream only when that element carries the `az_key` the client finds the item by.
+%% Without it every keyed op (remove, move, item patch) finds no item and is
+%% skipped, so the DOM drifts from the server's order with no error anywhere. A map
+%% diffs by position and needs no key, so the body is stamped here and
+%% `arizona_template:each/2` refuses the stream pairing. A nodiff item is never
+%% addressed by a keyed op, and a backend that redraws whole frames has none to
+%% address (`keyed_item_ops/0`).
+maybe_keyless_opt(Backend, stream, element_tuple, ElemAST, Opts) when
+    not is_map_key(diff, Opts)
+->
+    {_Tag, Attrs, _Children, _Line} = extract_element(ElemAST),
+    case Backend:keyed_item_ops() andalso not has_az_key(Attrs) of
+        true -> Opts#{keyless => true};
+        false -> Opts
+    end;
+maybe_keyless_opt(_Backend, _Kind, _Classification, _ElemAST, Opts) ->
     Opts.
 
 %% Classify an ?each callback's last expr. A whole-body backend wrapper call

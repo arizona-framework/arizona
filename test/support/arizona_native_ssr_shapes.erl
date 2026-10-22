@@ -90,7 +90,9 @@ empty_each(Bindings) ->
     ).
 
 stream_each(Bindings) ->
-    ?native({'Column', [], [?each(fun(I, _Key) -> {'Text', [], [I]} end, ?get(stream))]}).
+    ?native(
+        {'Column', [], [?each(fun(I, Key) -> {'Text', [{az_key, Key}], [I]} end, ?get(stream))]}
+    ).
 
 map_each(Bindings) ->
     ?native({'Column', [], [?each(fun(K, V) -> {'Text', [{key, K}], [V]} end, ?get(map))]}).
