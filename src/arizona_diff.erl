@@ -2040,8 +2040,13 @@ compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present, Tail) ->
             end
     end.
 
+%% Pairs, then one map. A comprehension over `lists:enumerate/1` measured slower
+%% than this at every size, and putting one key at a time rebuilt the map per key.
 pos_map(Keys) ->
-    #{K => I || {I, K} <:- lists:enumerate(Keys)}.
+    maps:from_list(pos_pairs(Keys, 1)).
+
+pos_pairs([], _I) -> [];
+pos_pairs([K | Rest], I) -> [{K, I} | pos_pairs(Rest, I + 1)].
 
 %% Walk NewOrder left-to-right: LIS keys stay put, other PRESENT keys move to
 %% sit after the last present key placed (`Prev`). A key absent from `Present`
