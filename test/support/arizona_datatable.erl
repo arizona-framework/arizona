@@ -15,7 +15,7 @@ mount(Init) ->
     Bindings = #{
         id => ~"page",
         title => maps:get(title, Init, ~"DataTable"),
-        rows => Rows,
+        rows => maps:get(rows, Init, Rows),
         next_id => 6,
         sort_col => id,
         sort_dir => asc,
