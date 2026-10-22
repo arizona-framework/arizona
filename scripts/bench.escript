@@ -35,6 +35,7 @@ main(Args) ->
         {<<"render_view_page">>, fun bench_render_view_page/1},
         {<<"render_each_100">>, fun bench_render_each_100/1},
         {<<"render_view_many_dyn_50">>, fun bench_render_view_many_dyn_50/1},
+        {<<"render_commands_100">>, fun bench_render_commands_100/1},
         {<<"mount_only">>, fun bench_mount_only/1},
         {<<"diff_no_change">>, fun bench_diff_no_change/1},
         {<<"diff_simple_event">>, fun bench_diff_simple_event/1},
@@ -124,6 +125,21 @@ bench_render_each_100(Runs) ->
     arizona_bench_lib:run_view_render_workload(
         arizona_about,
         #{bindings => #{tags => Tags}},
+        Runs
+    ).
+
+bench_render_commands_100(Runs) ->
+    %% Renders a 100-row `?each` table whose rows each carry two command
+    %% attributes built from the row (a `push_event` with a payload, and a
+    %% two-command list), so every row encodes them at render time through
+    %% `arizona_effect:encode/1`.
+    Rows = [
+        #{id => I, name => iolist_to_binary(io_lib:format("row ~b", [I]))}
+     || I <- lists:seq(1, 100)
+    ],
+    arizona_bench_lib:run_view_render_workload(
+        arizona_bench_commands,
+        #{bindings => #{rows => Rows}},
         Runs
     ).
 

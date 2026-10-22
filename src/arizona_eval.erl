@@ -290,8 +290,11 @@ threading view state. Returns a `#{Key => ItemD}` map and updated views.
     Views :: {map(), map()},
     ItemSnaps :: #{term() => [{arizona_template:az(), term(), map()}]},
     Views1 :: {map(), map()}.
-eval_stream_items(Keys, ItemsMap, Tmpl, Views) ->
-    eval_stream_items(Keys, ItemsMap, Tmpl, Views, #{}).
+eval_stream_items(Keys, ItemsMap, Tmpl, Views0) ->
+    %% Pairs, then one map: putting each item into the map as it renders rebuilds
+    %% it per key.
+    {Pairs, Views1} = eval_stream_items(Keys, ItemsMap, Tmpl, Views0, []),
+    {maps:from_list(Pairs), Views1}.
 
 -doc """
 Renders a single stream item by evaluating its dynamics with view tracking.
@@ -370,7 +373,7 @@ eval_or_reuse_per_item(
     Template :: map(),
     ItemSnaps :: #{term() => [{arizona_template:az(), term(), map()}]}.
 render_stream_items_simple(Keys, ItemsMap, Tmpl) ->
-    render_stream_items_simple(Keys, ItemsMap, Tmpl, #{}).
+    #{K => render_stream_item_simple(K, maps:get(K, ItemsMap), Tmpl) || K <- Keys}.
 
 -doc """
 Renders list items with view tracking. Returns `{[ItemD], Views1}`.
@@ -1064,14 +1067,7 @@ eval_stream_items([], _ItemsMap, _Tmpl, Views, Acc) ->
 eval_stream_items([K | Rest], ItemsMap, Tmpl, Views0, Acc) ->
     Item = maps:get(K, ItemsMap),
     {D, Views1} = render_stream_item(K, Item, Tmpl, Views0),
-    eval_stream_items(Rest, ItemsMap, Tmpl, Views1, Acc#{K => D}).
-
-render_stream_items_simple([], _ItemsMap, _Tmpl, Acc) ->
-    Acc;
-render_stream_items_simple([K | Rest], ItemsMap, Tmpl, Acc) ->
-    Item = maps:get(K, ItemsMap),
-    D = render_stream_item_simple(K, Item, Tmpl),
-    render_stream_items_simple(Rest, ItemsMap, Tmpl, Acc#{K => D}).
+    eval_stream_items(Rest, ItemsMap, Tmpl, Views1, [{K, D} | Acc]).
 
 render_stream_item_simple(Key, Item, #{d := DFun}) ->
     [eval_one_triple(D) || D <- DFun(Item, Key)].

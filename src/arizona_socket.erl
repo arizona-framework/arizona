@@ -698,7 +698,7 @@ flash_replay(_Url, _Socket) ->
     error.
 
 url(Path, <<>>) -> Path;
-url(Path, Qs) -> <<Path/binary, "?", Qs/binary>>.
+url(Path, Qs) -> <<Path:(byte_size(Path))/binary, "?", Qs/binary>>.
 
 %% A flash stashed for a WS-carried navigate can only reach a LIVE destination
 %% (do_navigate/do_patch inject it into the resolved request); a full-page
@@ -1306,7 +1306,8 @@ encode_op({ViewId, [OpCode, Target | Args]}, Cache) when
             {ViewId, Target, Hit} ->
                 {Hit, Cache};
             _ ->
-                Enc = json:encode_binary(<<ViewId/binary, $:, Target/binary>>),
+                %% Sized lead segment: an unsized one builds an appendable binary.
+                Enc = json:encode_binary(<<ViewId:(byte_size(ViewId))/binary, $:, Target/binary>>),
                 {Enc, {ViewId, Target, Enc}}
         end,
     {[$[, op_code_iodata(OpCode), $,, TargetJson, encode_op_args(Args), $]], Cache1};

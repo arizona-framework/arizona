@@ -74,7 +74,18 @@ with `&`, `"`, and `<` escaped to their HTML entity equivalents.
 -spec encode(Cmds) -> binary() when
     Cmds :: cmd() | cmds().
 encode(Cmds) ->
-    escape_attr(encode_json(Cmds)).
+    %% The escaping happens per string, inside the encode, rather than over the
+    %% finished JSON: a string is the only place `&`, `"` or `<` can occur, and a
+    %% string's own delimiters are its `"`s. Escaping the whole document instead
+    %% met a `"` in nearly every word -- command JSON is mostly delimiters -- and
+    %% sliced and flattened it a second time; per string, a clean one scans fast and
+    %% splices. Same bytes as escaping `encode_json/1`'s output, which a test holds.
+    Json = json_value(Cmds),
+    try
+        iolist_to_binary(json:encode(Json, fun attr_encode/2))
+    catch
+        error:Reason:Stacktrace -> arizona_utf8:refuse(Json, Reason, Stacktrace)
+    end.
 
 -doc """
 Serializes a command (or list of commands) to raw JSON, without the HTML
@@ -243,6 +254,35 @@ flash_message(Op) ->
         ?swar_no_zero_byte((W) bxor ?SWAR_QUOT7) andalso
         ?swar_no_zero_byte((W) bxor ?SWAR_LT7)
 ).
+
+%% `json:encode/2`'s encoder for `encode/1`: a string comes out attribute-escaped,
+%% delimiters included, and so does a map key, which `json` would otherwise quote
+%% itself for an integer or float key. Everything else is the default encoding,
+%% which hands nested values and the string of an atom back to this function.
+attr_encode(Bin, _Encode) when is_binary(Bin) ->
+    attr_string(Bin);
+attr_encode(Map, Encode) when is_map(Map) ->
+    %% `json:encode_map/2`'s walk, so the members come out in the same order.
+    attr_object([[$,, attr_key(Key, Encode), $: | Encode(Value, Encode)] || Key := Value <- Map]);
+attr_encode(Value, Encode) ->
+    json:encode_value(Value, Encode).
+
+attr_key(Key, Encode) when is_binary(Key) -> Encode(Key, Encode);
+attr_key(Key, Encode) when is_atom(Key) -> Encode(atom_to_binary(Key, utf8), Encode);
+attr_key(Key, _Encode) when is_integer(Key) -> [~"&quot;", integer_to_binary(Key), ~"&quot;"];
+attr_key(Key, _Encode) when is_float(Key) -> [~"&quot;", float_to_binary(Key, [short]), ~"&quot;"].
+
+attr_object([]) -> ~"{}";
+attr_object([[_Comma | Member] | Rest]) -> [${, Member, Rest, $}].
+
+%% `json` hands an unescaped string back whole between its quotes, so a string
+%% with nothing to JSON-escape -- holding no `"` either -- only needs its `&` and
+%% `<` escaped, which for the usual one is none.
+attr_string(Bin) ->
+    case json:encode_binary(Bin) of
+        [$", Bin, $"] -> [~"&quot;", escape_attr(Bin), ~"&quot;"];
+        Json -> escape_attr(iolist_to_binary(Json))
+    end.
 
 escape_attr(Bin) ->
     escape_attr(Bin, [], Bin, 0, 0).

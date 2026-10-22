@@ -1348,7 +1348,7 @@ stream_reset(
     VKeys = arizona_template:visible_keys(Order, Limit),
     Kept = maps:with(VKeys, SnapAcc),
     {PatchOps, KeptSnaps, Views1} =
-        smart_reset_items(Az, VKeys, Kept, OldItems, ItemsMap, Tmpl, Views0, #{}),
+        smart_reset_items(Az, VKeys, Kept, OldItems, ItemsMap, Tmpl, Views0, Kept),
     {InsOps, FinalSnaps, Views2} = snap_add_missing(Az, VKeys, KeptSnaps, SV, Tmpl, Views1),
     %% This append is structural: the patches need the walk's views before the
     %% inserts can render, so their ops exist only once that walk has run. The
@@ -1769,6 +1769,10 @@ item_value_bytes([], Acc) ->
 item_value_bytes([{_Az, V, _Deps} | Rest], Acc) ->
     item_value_bytes(Rest, Acc + wire_bytes(V)).
 
+%% `Snaps` starts as `Kept` -- the same keys, since `VKeys` holds each once -- and
+%% each kept key's entry is updated in place, so an item reused whole (`NewD` is
+%% `OldD`) rebuilds no map, where putting every key into an empty one rebuilt it
+%% per key.
 smart_reset_items(_Az, [], _Kept, _OldItems, _ItemsMap, _Tmpl, Views, Snaps) ->
     {[], Snaps, Views};
 smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps) ->
@@ -1778,7 +1782,7 @@ smart_reset_items(Az, [K | Rest], Kept, OldItems, ItemsMap, Tmpl, Views0, Snaps)
             {NewD, Views1} =
                 render_kept_with_skipping(K, NewItem, OldD, OldItems, Tmpl, Views0),
             {InnerOps, Views2} = kept_item_ops(NewD, OldD, Views1),
-            NewSnaps = Snaps#{K => NewD},
+            NewSnaps = Snaps#{K := NewD},
             case InnerOps of
                 [] ->
                     smart_reset_items(
@@ -1936,7 +1940,7 @@ lis_indices(NewOrder, OldPosMap) ->
             #{};
         _ ->
             #{(Len - 1) := {_, LastIdx}} = Tails,
-            lis_backtrack(LastIdx, Parent, #{})
+            #{Idx => true || Idx <- lis_backtrack(LastIdx, Parent)}
     end.
 
 lis_scan([], _PosMap, _I, Len, Tails, Parent) ->
@@ -1991,15 +1995,15 @@ lis_bsearch(Tails, V, Lo, Hi) ->
         false -> lis_bsearch(Tails, V, Lo, Mid)
     end.
 
-lis_backtrack(undefined, _Parent, Acc) ->
-    Acc;
-lis_backtrack(Idx, Parent, Acc) ->
+lis_backtrack(undefined, _Parent) ->
+    [];
+lis_backtrack(Idx, Parent) ->
     Next =
         case Parent of
             #{Idx := V} -> V;
             #{} -> undefined
         end,
-    lis_backtrack(Next, Parent, Acc#{Idx => true}).
+    [Idx | lis_backtrack(Next, Parent)].
 
 %% `Kept` is the LIS base (keys the client held BEFORE this reconciliation --
 %% their old positions anchor the stable subsequence). `Present` is what the
@@ -2028,14 +2032,19 @@ compute_reorder_ops(Az, OldOrder, NewOrder, Kept, Present, Tail) ->
                 [] ->
                     Tail;
                 _ ->
-                    OldPosMap = pos_map(KeptOld, 1),
+                    OldPosMap = pos_map(KeptOld),
                     LISSet = lis_indices(NewOrder, OldPosMap),
                     emit_move_ops(Az, LISSet, NewOrder, 1, null, Present, Tail)
             end
     end.
 
-pos_map([], _I) -> #{};
-pos_map([K | Rest], I) -> (pos_map(Rest, I + 1))#{K => I}.
+%% Pairs, then one map. A comprehension over `lists:enumerate/1` measured slower
+%% than this at every size, and putting one key at a time rebuilt the map per key.
+pos_map(Keys) ->
+    maps:from_list(pos_pairs(Keys, 1)).
+
+pos_pairs([], _I) -> [];
+pos_pairs([K | Rest], I) -> [{K, I} | pos_pairs(Rest, I + 1)].
 
 %% Walk NewOrder left-to-right: LIS keys stay put, other PRESENT keys move to
 %% sit after the last present key placed (`Prev`). A key absent from `Present`

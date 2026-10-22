@@ -220,6 +220,9 @@ them is the same: **work computed eagerly whose result the common path never rea
 | Skip the document on a fingerprinted mount (`render_snapshot/2`) | reconnect/navigate render+payload red/op -22% to -42% on every fixture; wall -20% to -57% on the larger ones (`arizona_datatable` -38 to -57%, `arizona_bench_many_dyn` -26 to -28%, `arizona_bench_nested_each` -20 to -25%), the small ones under the floor |
 | Skip the document on a first connect too (observe commands in `arizona_eval`) | connect render red/op -22% to -69% against main's `render/2` (`arizona_datatable` 1919 -> 595, `arizona_opaque_nested` -49%, `arizona_bench_nested_each` -35%, `arizona_bench_many_dyn` -33%, `arizona_page` -28%); costs +2% on a reconnect and up to +5% on a full-dep diff, both under the floor |
 | Fold an all-literal list (attribute value or content) into statics at compile time | a 20-item list with three literal-list attributes per item: 61 dynamics -> 1, live render 18.5 -> 0.21 us (2719 -> 60 red), diff 1.9 -> 0.14 us; no `bench-ab` workload uses the shape (six render/diff labels: red/op +0.00%, wall within noise) |
+| Escape each string of a command attribute as it is encoded | `render_commands_100` -32% wall (207 -> 141 us), red/op -6%; per command -26% to -51% (a `push_event` with a 2-key payload 904 -> 526 ns), byte-identical |
+| Size the leading segment of one-shot scoped binaries; scan an `az` for a colon instead of `binary:replace/4` | a scoped `az` 74 -> 18 ns, and a 3-byte heap binary where each snapshot held a 256-byte appendable one; the colon check 132-268 -> 12-14 ns; red/op 0 on every label (BIF and binary construction count no reductions), wall under the floor |
+| Build stream snapshot and position maps in one pass | the map builds alone 2-5x at 20-1000 keys; a 1000-item live stream mount -3% (9.0 -> 8.75 ms, two paired runs), under the floor; `stream_reorder_100` and `stream_reset_with_overlap_100` within noise |
 
 (The whole 2026-08 arc that added the four rows from "Encode the ops frame" to
 "Fuse `render/2`'s triple unzip" -- PRs #759-#762 -- closed with
@@ -232,6 +235,10 @@ estimate work to add up. Everything else sits under the floor, the e2e paths at
 changes live inside the 14.1%/9.8% slice. Reading either number off an earlier
 partial pairing understates them; only the full-arc pairing shows the encoder
 and the walk changes compounding on the ops-heavy labels.)
+
+`stream_reorder_100` was a 5-row stream when that was measured: `arizona_datatable`'s
+`mount/1` ignored the 100 rows the workload passed, the same trap as `render_each_100`
+above. It now reorders 100 rows, at ~38 us.
 
 A **fingerprinted mount** (`mount_and_render`, navigate) ships the fingerprint payload,
 never the document, yet `do_mount` built both: `render/2` zipped and escaped every value
@@ -351,6 +358,24 @@ binary's `byte_size`, O(1), never an `iolist_size`. Per value, against the old s
 
 The last row is the one cost: a few ns of failed chunk attempts on a very short value
 that starts with a metacharacter. The 201-row table renders in 105 us instead of 193.
+
+The **command attribute encoder** had the same shape of cost as the old ops encoder,
+on the render side. `encode/1` serialized the command, flattened it to a binary, then
+scanned the whole JSON for `&`, `"` and `<` -- and command JSON is mostly string
+delimiters, so the 7-byte SWAR word failed on nearly every step and the scan built an
+iolist of slices, one per quote, flattened a second time. A string is the only place
+those bytes can occur, so the escaping now happens per string, inside `json:encode/2`'s
+encoder: a clean string is spliced between two `&quot;` with nothing to rescan, and only
+a string that needs escaping takes the old scan. Map keys need their own clause, since
+`json` quotes an integer or float key itself. Rewriting the whole-document scan was
+measured first and did not help -- an append accumulator, a byte-guard scan with an
+append tail, `binary:matches/2` with a compiled pattern and a byte-guard iolist were
+all within -25% to +20% of the SWAR scan, input by input, with no consistent winner:
+the cost was the number of quotes, not the scanning. A differential test holds the
+bytes to escaping `encode_json/1`'s output over 2000 random commands. No workload
+rendered a command built at runtime (one that reads nothing folds into the statics at
+compile time), so `render_commands_100` was added for it: two command attributes per
+row, 100 rows.
 
 ## What did not work
 
@@ -507,10 +532,31 @@ each fixture's own render: a BIF per binary leaf of the iolist +46% / +42% / +90
 mode. On the WebSocket the boundary check is free (`json:encode` already validates);
 only the name was missing.
 
+**A map comprehension over `lists:enumerate/1` for a position map.** Measured
+against the per-key puts it was meant to replace and against a hand-written pair list
+fed to `maps:from_list/1`: 1.4x the pair list's time at 5 keys, 1.7x at 20, 1.2x at
+100 and 1000, and ~1.8x its reductions throughout. The pair list won at every size.
+The reductions column is not the arbiter between these shapes: a map put is a BIF and
+counts as almost nothing, so trading puts for a list walk raises red/op while it cuts
+time. With the comprehension `stream_reorder_100` read +2.9% red/op; with the pair
+list +0.6%, against a build that is 45% faster than the puts at 100 keys.
+
 **Stepping a map's own iterator instead of `maps:values/1`.** Tried inside the
 re-render estimate. `maps:values/1` is one pass in C and won at 10 entries, tied at
 1000; the comprehension plus `lists:sum/1` it replaced was the slowest of the three
 (~30% worse at 100). Summing a `maps:values/1` walk directly is the shape that won.
+
+**A specialized walk for the fingerprint payload maps in the ops encoder.** The payload
+maps a navigate's `OP_REPLACE` and a stream insert carry still go through
+`json:encode_value(V, fun op_encoder/2)` in `arizona_socket:encode_op_value/1`. Giving
+them their own walk was byte-identical and cheaper on the encode alone: about -5% wall
+and -15% reductions on an about-page navigate (2668 -> 2263), -4% / -7% on a datatable
+navigate, under 1% on a 14 KB burst of 100 inserts. But the encode is about 7 us of a
+31-55 us navigate `handle_in`, so end to end it is about 1%. It does not pay because
+generic dispatch costs about 2 ns per value, while escaping and flattening a tiny binary
+costs 25-32 ns, mostly inside OTP's `json` and iolist flattening. The earlier ops-encoder
+win removed work repeated per op (a scoped target rebuilt and escaped for every op of one
+drain); a payload map has no such repetition to remove. Not built.
 
 ## The client
 

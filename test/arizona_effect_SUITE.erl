@@ -1,5 +1,6 @@
 -module(arizona_effect_SUITE).
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("arizona/include/arizona_effect.hrl").
 
 -export([all/0]).
 -export([groups/0]).
@@ -7,6 +8,8 @@
 -export([encode_flattens_nested_lists/1]).
 -export([encode_drops_empty_lists/1]).
 -export([encode_rejects_non_command_item/1]).
+-export([encode_matches_escaped_json/1]).
+-export([encode_refuses_non_utf8_like_json/1]).
 
 all() ->
     [{group, encode}].
@@ -16,7 +19,9 @@ groups() ->
         {encode, [parallel], [
             encode_flattens_nested_lists,
             encode_drops_empty_lists,
-            encode_rejects_non_command_item
+            encode_rejects_non_command_item,
+            encode_matches_escaped_json,
+            encode_refuses_non_utf8_like_json
         ]}
     ].
 
@@ -62,3 +67,105 @@ encode_rejects_non_command_item(Config) when is_list(Config) ->
     A = arizona_js:push_event(~"a"),
     ?assertError(function_clause, arizona_effect:json_value([A, ~"text"])),
     ?assertError(function_clause, arizona_effect:json_value([A, [ok]])).
+
+%% `encode/1` escapes each string as it encodes it; the bytes must be exactly
+%% those of escaping `encode_json/1`'s finished JSON, for every shape a command
+%% argument takes: strings with and without JSON or attribute escapes, UTF-8, map
+%% keys of every type json accepts, scalars, atoms and nesting.
+encode_matches_escaped_json(Config) when is_list(Config) ->
+    _ = rand:seed(exsss, {7, 11, 13}),
+    Builders = [
+        arizona_js:push_event(~"inc"),
+        arizona_js:push_event(~"select", #{id => 42, name => ~"row-42"}),
+        [arizona_js:push_event(~"del", #{id => 7}), arizona_js:toggle(~"#modal")],
+        arizona_js:fetch(~"/account", #{method => post}),
+        arizona_js:on_key(enter, arizona_js:push_event(~"x")),
+        arizona_js:set_title(~"Tom & \"Jerry\" <3")
+    ],
+    %% Op codes of commands that wrap none (a wrapper validates what it holds).
+    Ops = [
+        ?EFFECT_PUSH_EVENT, ?EFFECT_SET_ATTR, ?EFFECT_DISPATCH_EVENT, ?EFFECT_SET_LOCAL, ?EFFECT_OS
+    ],
+    Random = [
+        {arizona_effect, [lists:nth(rand:uniform(length(Ops)), Ops) | gen_list(3)]}
+     || _ <- lists:seq(1, 2000)
+    ],
+    [
+        ?assertEqual(escape_attr_ref(arizona_effect:encode_json(C)), arizona_effect:encode(C))
+     || C <- Builders ++ Random
+    ].
+
+%% A string that is not UTF-8 fails the same way through both encoders.
+encode_refuses_non_utf8_like_json(Config) when is_list(Config) ->
+    Cmd = {arizona_effect, [0, ~"ok", #{k => <<"a", 16#FF, "b">>}]},
+    {error, Reason} =
+        try
+            arizona_effect:encode_json(Cmd)
+        catch
+            error:R1 -> {error, R1}
+        end,
+    ?assertMatch({non_utf8_render, 16#FF, _}, Reason),
+    ?assertError(Reason, arizona_effect:encode(Cmd)).
+
+%% --------------------------------------------------------------------
+%% Helpers
+%% --------------------------------------------------------------------
+
+escape_attr_ref(Json) ->
+    <<<<(escape_attr_byte(C))/binary>> || <<C>> <= Json>>.
+
+escape_attr_byte($&) -> ~"&amp;";
+escape_attr_byte($") -> ~"&quot;";
+escape_attr_byte($<) -> ~"&lt;";
+escape_attr_byte(C) -> <<C>>.
+
+gen_list(Depth) ->
+    [gen_value(Depth) || _ <- lists:seq(1, rand:uniform(4) - 1)].
+
+gen_value(0) ->
+    gen_scalar();
+gen_value(Depth) ->
+    case rand:uniform(6) of
+        1 -> gen_list(Depth - 1);
+        2 -> maps:from_list([{gen_key(), gen_value(Depth - 1)} || _ <- gen_list(0)]);
+        _ -> gen_scalar()
+    end.
+
+gen_scalar() ->
+    case rand:uniform(8) of
+        1 -> rand:uniform(100000) - 500;
+        2 -> rand:uniform() * 1000 - 10;
+        3 -> lists:nth(rand:uniform(5), [true, false, null, some_atom, 'a&b<"c']);
+        _ -> gen_string()
+    end.
+
+gen_key() ->
+    case rand:uniform(4) of
+        1 -> list_to_atom("k" ++ integer_to_list(rand:uniform(20)));
+        2 -> rand:uniform(50);
+        3 -> rand:uniform() * 10;
+        4 -> gen_string()
+    end.
+
+gen_string() ->
+    Pieces = [
+        ~"a",
+        ~"row",
+        ~"&",
+        ~"\"",
+        ~"<",
+        ~">",
+        ~"\\",
+        ~"\n",
+        ~"\t",
+        ~"'",
+        ~" ",
+        ~"é",
+        ~"€",
+        ~"#modal",
+        <<1>>
+    ],
+    iolist_to_binary([
+        lists:nth(rand:uniform(length(Pieces)), Pieces)
+     || _ <- lists:seq(1, rand:uniform(12) - 1)
+    ]).

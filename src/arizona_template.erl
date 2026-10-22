@@ -811,8 +811,19 @@ scopable(#{az_local := _}) -> false;
 scopable(#{s := _, d := _}) -> true;
 scopable(_Val) -> false.
 
+%% A scan, not `binary:replace/4`: that wrapper compiles the pattern and copies
+%% the `az` even when there is no colon (~130-270 ns against ~12), and this runs
+%% for every nested snapshot a slot is scoped into. A colon-free `az` -- the usual
+%% one -- comes back as is.
 colon_free(Az) ->
-    binary:replace(Az, ~":", ~"-", [global]).
+    colon_free(Az, Az).
+
+colon_free(<<$:, _/binary>>, Az) -> <<<<(colon_to_dash(C))>> || <<C>> <= Az>>;
+colon_free(<<_, Rest/binary>>, Az) -> colon_free(Rest, Az);
+colon_free(<<>>, Az) -> Az.
+
+colon_to_dash($:) -> $-;
+colon_to_dash(C) -> C.
 
 %% Whether `OldF` is `F` as scope_slot/2 scoped it into the slot `Az`. The prefix
 %% is that slot's own (`colon_free(Az)` plus `-`, the size of `Az` plus one), so a
@@ -869,7 +880,7 @@ read off the DOM by the client, which is where those addresses already are.
     Branch :: pos_integer() | undefined,
     Key :: term().
 nodiff_token(F, Branch, Key) ->
-    <<F/binary, (nodiff_branch_part(Branch))/binary, (nodiff_key_part(Key))/binary>>.
+    <<F:(byte_size(F))/binary, (nodiff_branch_part(Branch))/binary, (nodiff_key_part(Key))/binary>>.
 
 nodiff_branch_part(undefined) -> <<>>;
 nodiff_branch_part(Branch) -> <<".b", (integer_to_binary(Branch))/binary>>.
@@ -959,14 +970,19 @@ scoped_statics(Backend, Prefix, #{f := F}, S) ->
 scoped_statics(_Backend, _Prefix, #{}, S) ->
     S.
 
-scope_fp(Prefix, #{f := F} = Snap) -> Snap#{f => <<Prefix/binary, "-", F/binary>>};
-scope_fp(_Prefix, Snap) -> Snap.
+%% The leading segment is sized: a binary led by an unsized one is built
+%% appendable (a 256-byte refc binary, several times the cost), and these are
+%% stored in every scoped snapshot.
+scope_fp(Prefix, #{f := F} = Snap) ->
+    Snap#{f => <<Prefix:(byte_size(Prefix))/binary, "-", F/binary>>};
+scope_fp(_Prefix, Snap) ->
+    Snap.
 
 scope_dyn(Prefix, {Az, Val}) ->
     {scope_az(Prefix, Az), scope_val(Prefix, Val)}.
 
 scope_az(_Prefix, undefined) -> undefined;
-scope_az(Prefix, Az) -> <<Prefix/binary, "-", Az/binary>>.
+scope_az(Prefix, Az) -> <<Prefix:(byte_size(Prefix))/binary, "-", Az/binary>>.
 
 %% Recurse only into an inline nested template (a conditional branch): its inner
 %% `az` ids are globally addressed, so they must carry the slot prefix. An
