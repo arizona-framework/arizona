@@ -21,7 +21,7 @@
 
 /**
  * Op codes -- each op is a flat array: [opcode, "viewId:az", ...args].
- * Codes match the server-side OP_* constants in arizona.hrl, 3 included: it is
+ * Codes match the server-side OP_* constants in include/arizona_wire.hrl, 3 included: it is
  * unassigned there too (the removed innerHTML op), so nothing emits it and no
  * handler here claims it. Reusing it for a new op means changing both sides
  * together.

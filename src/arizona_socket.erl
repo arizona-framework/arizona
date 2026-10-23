@@ -54,7 +54,7 @@ The page itself may be stale (a deploy changed the route or the assets), so
 the client reloads it after a jittered delay.
 """.
 
--include("arizona.hrl").
+-include("arizona_wire.hrl").
 -include("arizona_effect.hrl").
 
 -ifdef(TEST).

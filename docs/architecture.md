@@ -4,7 +4,8 @@
 
 | Module                                    | Purpose                                                                                                                                                                                   |
 | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/arizona.hrl`                         | Shared header -- op codes, `?EACH` constant, `#stream{}` record                                                                                                                           |
+| `include/arizona_wire.hrl`                | Public wire header -- diff op codes (`OP_TEXT` ... `OP_LIST_PATCH`), mirrored by every client                                                                                             |
+| `src/arizona.hrl`                         | Private header -- `?EACH` constant, `#stream{}` record                                                                                                                                    |
 | `src/arizona_template.erl`                | Pure helpers -- binding access (`get/2,3`), dep tracking (`track/1`), descriptor constructors (`stateful/2`, `stateless/2,3`), `each/2`, `to_bin/1`, snapshot utilities                   |
 | `src/arizona_eval.erl`                    | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                                             |
 | `src/arizona_render.erl`                  | Render orchestration (target-aware) -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/2`), `zip/2`, `fingerprint_payload/1`                                            |
@@ -2543,6 +2544,12 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 -- its fun is never called.
 
 ## Op codes
+
+Defined in the public header `include/arizona_wire.hrl`. Every client mirrors them by hand
+(`assets/js/arizona.js`, its worker, `e2e/utils/native_client.js`, the Android `Wire.kt`, the iOS
+`Wire.swift`), and `arizona_wire_SUITE` checks each copy against the header. The web client must
+declare the whole set; a native client must declare every op its backend can emit (all but
+`OP_LIST_PATCH`, which `arizona_native:supports_list_patch/0` opts out of).
 
 | Code | Name             | Args                       | Description                                            |
 | ---- | ---------------- | -------------------------- | ------------------------------------------------------ |

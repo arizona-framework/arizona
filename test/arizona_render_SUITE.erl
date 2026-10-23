@@ -1,6 +1,6 @@
 -module(arizona_render_SUITE).
 -include_lib("stdlib/include/assert.hrl").
--include("arizona.hrl").
+-include("arizona_wire.hrl").
 -dialyzer({nowarn_function, fingerprint_absent_when_no_f/1}).
 %% These two feed `zip_list_fp/2` / `zip_stream_fp/3` a template that violates
 %% `each_template()` on purpose -- that the call now has no success typing IS the

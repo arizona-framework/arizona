@@ -1,6 +1,6 @@
 -module(arizona_parse_transform_SUITE).
 -include_lib("stdlib/include/assert.hrl").
--include("arizona.hrl").
+-include("arizona_wire.hrl").
 -dialyzer({nowarn_function, to_bin_crash/1}).
 
 -export([all/0, groups/0]).
