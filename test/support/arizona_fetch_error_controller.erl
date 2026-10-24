@@ -6,12 +6,10 @@ fetch's `on_error` commands and dispatches `arizona:fetch-error`. Drives
 `e2e/parallel/arizona_fetch_error.spec.js`.
 """.
 
--behaviour(roadrunner_handler).
-
 -export([handle/1]).
 
--spec handle(Req) -> {Response, Req} when
-    Req :: roadrunner_req:request(),
-    Response :: roadrunner_handler:response().
+-spec handle(Req) -> {Reply, Req} when
+    Req :: arizona_req:request(),
+    Reply :: arizona_controller:reply().
 handle(Req) ->
-    {roadrunner_resp:internal_error(), Req}.
+    {{500, [], <<>>}, Req}.

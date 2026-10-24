@@ -23,11 +23,19 @@ listener down: live views run `handle_drain/2` and their sockets close `1001`.
 -export([start/4]).
 -export([stop/2]).
 -export([drain/3]).
+-export([supports_reply/2]).
 
 -callback start(Name :: atom(), Routes :: list(), Opts :: map()) ->
     {ok, Port :: inet:port_number()} | {error, term()}.
 -callback stop(Name :: atom()) -> ok | {error, not_found}.
 -callback drain(Name :: atom(), TimeoutMs :: non_neg_integer()) -> ok | {error, not_found}.
+
+%% Whether the adapter can send a non-buffered controller reply kind. The suite
+%% skips the cases of a kind the adapter does not support; omitted, every kind
+%% is expected.
+-callback supports_reply(Kind :: stream | sendfile | loop) -> boolean().
+
+-optional_callbacks([supports_reply/1]).
 
 -spec start(Driver, Name, Routes, Opts) -> {ok, inet:port_number()} | {error, term()} when
     Driver :: module(),
@@ -49,3 +57,12 @@ stop(Driver, Name) ->
     TimeoutMs :: non_neg_integer().
 drain(Driver, Name, TimeoutMs) ->
     Driver:drain(Name, TimeoutMs).
+
+-spec supports_reply(Driver, Kind) -> boolean() when
+    Driver :: module(),
+    Kind :: stream | sendfile | loop.
+supports_reply(Driver, Kind) ->
+    case erlang:function_exported(Driver, supports_reply, 1) of
+        true -> Driver:supports_reply(Kind);
+        false -> true
+    end.

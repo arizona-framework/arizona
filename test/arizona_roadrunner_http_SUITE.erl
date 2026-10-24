@@ -22,6 +22,7 @@
 -export([cors_beside_default_origin_check/1]).
 -export([asset_route_answers_get_and_head_only/1]).
 -export([stopped_dev_listener_leaves_no_dev_error_page/1]).
+-export([loop_disconnect_reaches_the_controller_as_arizona_disconnect/1]).
 
 all() ->
     [
@@ -40,7 +41,8 @@ all() ->
         cors_plain_options_allow_follows_pattern_overlaps,
         cors_beside_default_origin_check,
         asset_route_answers_get_and_head_only,
-        stopped_dev_listener_leaves_no_dev_error_page
+        stopped_dev_listener_leaves_no_dev_error_page,
+        loop_disconnect_reaches_the_controller_as_arizona_disconnect
     ].
 
 init_per_suite(Config) ->
@@ -495,6 +497,20 @@ stopped_dev_listener_leaves_no_dev_error_page(Config) when is_list(Config) ->
     {Status, _Headers, Body} = raw_get(?config(port, Config), ~"/crash_page", []),
     ?assertEqual(500, Status),
     ?assertEqual(nomatch, binary:match(Body, ~"crash_on_mount")).
+
+%% A controller only ever sees the server-neutral disconnect, so it ends a loop
+%% the same way on every adapter.
+loop_disconnect_reaches_the_controller_as_arizona_disconnect(Config) when is_list(Config) ->
+    Push = fun(_Data) -> ok end,
+    State = {arizona_loop_controller, #{notify => self()}},
+    ?assertEqual(
+        {ok, State},
+        arizona_roadrunner_controller:handle_info({roadrunner_disconnect, closed}, Push, State)
+    ),
+    receive
+        {arizona_loop_controller, Info} -> ?assertEqual({arizona_disconnect, closed}, Info)
+    after 1000 -> ct:fail(no_disconnect)
+    end.
 
 raw_get(Port, Path, ExtraHeaders) ->
     raw_request(Port, ~"GET", Path, ExtraHeaders).

@@ -39,7 +39,7 @@
 | `src/arizona_session_store_ets.erl`       | Default in-memory `arizona_session_store` -- a supervised public-ETS owner + periodic sweep + lazy expiry; `get/put/delete` run off the request process                                   |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
 | `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares and renders; `reply/3` folds it into `{Status, Headers, Body, Req}`                                                |
-| `src/arizona_controller.erl`              | Reply helpers for controller routes consumed by `arizona_js:fetch/2` -- `reply_effects/1` (the `{"e": [...]}` wire body), `reply_redirect/1` (a `navigate` effect)                        |
+| `src/arizona_controller.erl`              | Controller routes -- `dispatch/2` (pipeline + action + flush), `reply_effects/1,2` / `reply_redirect/1`, `state/1`, `bindings/1`, reply kinds                                             |
 | `src/arizona_static.erl`                  | Offline static-site generation -- `generate/2,3` renders route handlers to HTML files under an out-dir; returns `{Written, Failed}`                                                       |
 | `src/arizona_ws.erl`                      | Transport-agnostic WS upgrade -- `prepare/3` resolves + runs middlewares; `upgrade/3` answers the request (reply or `101` lines); `init/1` starts the socket                              |
 | `src/arizona_live.erl`                    | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                                              |
@@ -47,10 +47,9 @@
 | `src/arizona_socket.erl`                  | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff                    |
 | `src/arizona_roadrunner_http.erl`         | Roadrunner HTTP handler -- maps `arizona_http:reply/3` onto roadrunner's `{Response, Req}` reply shape                                                                                    |
 | `src/arizona_roadrunner_ws.erl`           | Roadrunner WebSocket handler -- maps `arizona_ws:upgrade/3`, `arizona_ws:init/1`, frames, and drain (`arizona_socket:drain/2`) onto roadrunner                                            |
-| `src/arizona_roadrunner_controller.erl`   | Roadrunner handler for controller routes -- middleware pipeline (CSRF default-on), restores `state`, then dispatches `Handler:Action/1` (`action` opt, default `handle`)                  |
+| `src/arizona_roadrunner_controller.erl`   | Roadrunner handler for controller routes -- maps `arizona_controller:dispatch/2`'s reply kinds onto roadrunner, loops included                                                            |
 | `src/arizona_roadrunner_server.erl`       | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                                 |
 | `src/arizona_roadrunner_req.erl`          | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                                     |
-| `src/arizona_roadrunner_resp.erl`         | Roadrunner response adapter -- `flush/2` folds the request's stashed response headers/cookies onto any handler response shape (buffered, stream, loop, sendfile)                          |
 | `src/arizona_roadrunner_reload.erl`       | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                                     |
 | `src/arizona_jsonrpc.erl`                 | JSON-RPC 2.0 codec -- `decode/1`, `result/2`, `error/3`, `notification/2`                                                                                                                 |
 | `src/arizona_mcp.erl`                     | MCP server behaviour an app implements (`init/1`, `tools/1`, `handle_tool/4`, optional `resources`/`prompts`/`channels`/`terminate`) plus the server-push API (`broadcast/3`, `notify/3`) |
@@ -1180,8 +1179,8 @@ build-opts variant supports hot-reload-safe rebuilds.
   (`Spec` = a verb, a list of verbs, a custom uppercase binary like `~"PROPFIND"`, or `'*'`). Behind
   the Arizona middleware pipeline (CSRF `check_origin` on by default); `Opts` is `controller_opts()`
   carrying `state`/`action`/`middlewares`/`check_origin`. Dispatches through
-  `arizona_roadrunner_controller`, which calls `Handler:Action/1` (the `action` option, default
-  `handle`). A wrong-verb request gets `405` + `Allow` from `roadrunner_router:match/3` before any
+  `arizona_controller:dispatch/2`, which calls `Handler:Action/1` (the `action` option, default
+  `handle`). A wrong-verb request gets `405` + `Allow` from the adapter's router before any
   middleware, and two routes may share a path with disjoint verbs for REST-style dispatch. (Declare
   mutations non-GET: a state-changing GET is CSRF-able regardless -- a cross-site GET nav carries a
   `SameSite=Lax` cookie but no `Origin`.)
@@ -1897,9 +1896,18 @@ Reply helpers for **controller routes** -- plain HTTP handlers (a verb tag like 
 `{match, ...}`) that the browser reaches through `arizona_js:fetch/2`. Because a controller answers
 a real HTTP request, its response can carry a `Set-Cookie` (HttpOnly honored) that the WebSocket
 transport cannot, which is what makes it the right place to rotate a session cookie while the page
-stays put. The route dispatches through `arizona_roadrunner_controller`, which runs the middleware
+stays put. The adapter dispatches the route through `dispatch/2`, which runs the middleware
 pipeline (Origin check default-on) and then calls `Handler:Action/1` -- the `action` option,
-default `handle` -- with the route's `state` restored into the request.
+default `handle` -- with the post-middleware `arizona_req:request()`. The action returns
+`{Reply, Request}`, and what the returned request carries (session, flash, cookies) is flushed
+ahead of the reply's headers.
+
+A reply is one of four kinds. A buffered `{Status, Headers, Body}` works on every adapter; a
+`{stream, Status, Headers, Fun}`, a `{sendfile, Status, Headers, {Path, Offset, Length}}` and a
+`{loop, Status, Headers, State}` (messages reach the controller's `handle_info(Msg, Push,
+State)`, a client gone away as `{arizona_disconnect, Reason}`) are capabilities: an adapter
+whose server lacks one raises `{unsupported_reply, Kind, Adapter}` (`unsupported_reply/2`)
+rather than degrade the reply. Roadrunner has all four.
 
 - `reply_effects/1(Effects)` -- a `200` whose body is the `{"e": [...]}` effects wire payload, the
   same shape the WebSocket sends. A fetch form auto-resets on this leg (`az-form-reset` fires only
@@ -1914,9 +1922,9 @@ default `handle` -- with the route's `state` restored into the request.
   `full => true`, since `pushState` refuses another origin; a relative one loads resolved
   against the current URL, as over HTTP. An unsafe scheme (`javascript:`, `data:`) raises
   `{unsafe_redirect, Location}` rather than reach the client
-- `req/1(RoadrunnerReq)` -- the **post-middleware** `arizona_req:request()`, so an action can call
-  `arizona_req:get_session/2,3` after a `fetch_session` step
-- `bindings/1(RoadrunnerReq)` -- the bindings the middleware pipeline produced
+- `state/1(Request)` -- the route's `state` option
+- `bindings/1(Request)` -- the bindings the middleware pipeline produced (`session` after a
+  `fetch_session` step)
 
 The response is deliberately **effects-only, no ops**: a stateless controller holds no diff
 snapshot to make ops from (hence the `accept: application/json` request header). To re-render the
@@ -1963,7 +1971,7 @@ type). The transport handler translates the returned result into its native repl
   transport can flush any middleware-stashed response headers/cookies):
   - `{halt, Request}` -- middleware halted; the transport decodes the stashed redirect
     (`arizona_req:halted_redirect/1`) or status off the request via
-    `arizona_roadrunner_resp:halt/1`, which answers a halt carrying neither with `403`
+    `arizona_req:halt_reply/1`, which answers a halt carrying neither with `403`
     (one default for pages, controllers, and the WS upgrade alike)
   - `{ok, resp_status(), ContentType, iolist(), Request}` -- rendered page body; the status
     defaults to 200, but a view or middleware may stash a non-200 (e.g. 401). `ContentType` is
@@ -2018,10 +2026,6 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   `arizona_ws:prepare/3`, flushes the middlewares' stash onto the 101, and forwards
   frames to `arizona_socket`. Translates `arizona_socket:result()` to roadrunner
   return tuples
-- `arizona_roadrunner_resp.erl` -- shared response side. `flush/2` folds the request's
-  middleware-stashed response headers/cookies onto the outgoing response, for every
-  shape (buffered triple, the `stream`/`loop`/`sendfile` quadruples, and a `websocket`
-  upgrade, whose headers ride the 101) and commits a written session
 
 ## Data flow
 
@@ -2990,11 +2994,9 @@ callbacks and Arizona's shared pipeline:
 - `arizona_roadrunner_ws` -- WebSocket handler; answers the upgrade with `arizona_ws:upgrade/3`
   (the middlewares' stash rides the 101), starts the socket with `arizona_ws:init/1`, forwards
   frames to `arizona_socket`, and relays drain through `arizona_socket:drain/2`
-- `arizona_roadrunner_controller` -- controller-route handler; runs the middleware pipeline
-  (Origin check default-on), restores the route's `state` into the request, then dispatches
-  `Handler:Action/1` (the `action` opt, default `handle`)
-- `arizona_roadrunner_resp` -- response side; `flush/2` folds the request's stashed headers and
-  cookies onto any handler response shape, and calls `arizona_req:commit_session/1`
+- `arizona_roadrunner_controller` -- controller-route handler; maps what
+  `arizona_controller:dispatch/2` returns onto roadrunner, routing a loop's messages to the
+  controller's `handle_info/3`
 - `arizona_roadrunner_reload` -- dev-mode SSE reload endpoint
 - `arizona_roadrunner_req` -- implements the `arizona_req` behaviour (the request abstraction
   consumed by handlers), including the optional `resolve_route/3` for SPA navigate

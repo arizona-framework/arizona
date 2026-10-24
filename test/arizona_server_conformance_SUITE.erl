@@ -85,6 +85,10 @@ call into an adapter module or inspect its internal state.
 -export([security_headers_are_added/1]).
 -export([listener_compress_off_leaves_pages_identity/1]).
 -export([explicit_compress_beats_listener_default_off/1]).
+%% Controller replies
+-export([stream_reply_arrives_in_chunks/1]).
+-export([sendfile_reply_sends_the_range/1]).
+-export([loop_reply_pushes_until_it_stops/1]).
 %% Render
 -export([mount_crash_is_500/1]).
 -export([native_page_is_json/1]).
@@ -109,6 +113,7 @@ all() ->
         {group, websocket},
         {group, transforms},
         {group, compress_off},
+        {group, controller_replies},
         {group, render},
         {group, drain}
     ].
@@ -191,6 +196,13 @@ groups() ->
         {compress_off, [], [
             listener_compress_off_leaves_pages_identity,
             explicit_compress_beats_listener_default_off
+        ]},
+        %% Non-buffered reply kinds are an adapter capability: a case is
+        %% skipped for a kind the driver says its adapter cannot send.
+        {controller_replies, [], [
+            stream_reply_arrives_in_chunks,
+            sendfile_reply_sends_the_range,
+            loop_reply_pushes_until_it_stops
         ]},
         {render, [], [
             mount_crash_is_500,
@@ -376,6 +388,18 @@ main_routes(AssetDir) ->
         {live, ~"/secure", arizona_crashable, #{
             middlewares => [arizona_middleware:security_headers()]
         }},
+        %% Controller replies
+        {get, ~"/reply/stream", arizona_stream_controller, #{
+            middlewares => [
+                fun(Req, B) ->
+                    {cont, arizona_req:put_resp_cookie(Req, ~"probe", ~"stream", #{}), B}
+                end
+            ]
+        }},
+        {get, ~"/reply/sendfile", arizona_sendfile_controller, #{
+            state => #{path => filename:join(AssetDir, "app.txt")}
+        }},
+        {get, ~"/reply/loop", arizona_loop_controller, #{}},
         %% Render
         {live, ~"/crash_on_mount", arizona_crashable, #{bindings => #{crash_on_mount => true}}},
         {live, ~"/native_page", arizona_native_counter_demo, #{}},
@@ -797,6 +821,37 @@ explicit_compress_beats_listener_default_off(Config) ->
     {200, Headers, Body} = req(Config, ~"GET", ~"/big_compressed", [{~"accept-encoding", ~"gzip"}]),
     ?assertEqual(~"gzip", header(~"content-encoding", Headers)),
     ?assertNotEqual(nomatch, binary:match(zlib:gunzip(Body), ~"tag-100")).
+
+%% --------------------------------------------------------------------
+%% Controller replies
+%% --------------------------------------------------------------------
+
+%% A middleware's cookie reaches a non-buffered reply too.
+stream_reply_arrives_in_chunks(Config) ->
+    when_supported(stream, Config, fun() ->
+        {200, Headers, Body} = req(Config, ~"GET", ~"/reply/stream", []),
+        ?assertEqual(~"STREAM_OK", Body),
+        ?assertMatch([<<"probe=stream", _/binary>>], cookies(~"probe", Headers))
+    end).
+
+sendfile_reply_sends_the_range(Config) ->
+    when_supported(sendfile, Config, fun() ->
+        ?assertMatch({200, _, ~"sset-bytes"}, req(Config, ~"GET", ~"/reply/sendfile", []))
+    end).
+
+loop_reply_pushes_until_it_stops(Config) ->
+    when_supported(loop, Config, fun() ->
+        {200, Headers, Body} = req(Config, ~"GET", ~"/reply/loop", []),
+        ?assertEqual(~"text/event-stream", header(~"content-type", Headers)),
+        ?assertEqual(~"data: 1\n\ndata: 2\n\n", Body)
+    end).
+
+%% Runs `Case` when the adapter can send this reply kind, else skips it.
+when_supported(Kind, Config, Case) ->
+    case arizona_conformance_driver:supports_reply(?config(driver, Config), Kind) of
+        true -> Case();
+        false -> {skip, {unsupported_reply, Kind}}
+    end.
 
 %% --------------------------------------------------------------------
 %% Render
