@@ -1,278 +1,88 @@
 -module(arizona_watcher).
 -moduledoc """
-File system watcher with debouncing and pattern matching.
+Behaviour for a file-system watcher: the source of the file changes the dev
+reloader acts on.
 
-Wraps the `fs` library in a `gen_server` that watches a directory for
-file events, debounces bursts of changes, filters by regex patterns,
-and broadcasts the resulting file list via `arizona_pubsub` (and
-optionally invokes a user callback).
-
-## Usage
+Arizona ships no implementation, so the file-system dependency stays out of
+every consumer that does not reload code. `arizona_watcher_fs` (a separate
+package, built on the `fs` library) is the reference one; add it to a dev-only
+rebar3 profile and name it in the `reloader` application env:
 
 ```erlang
-1> arizona_watcher:start_link("/home/me/myapp/src", #{
-       patterns => [".*\\.erl$"],
-       debounce => 200,
-       callback => fun(Files) -> io:format("changed: ~p~n", [Files]) end
-   }).
-{ok, <0.123.0>}
+{arizona, [
+    {reloader, #{
+        enabled => true,
+        watcher => arizona_watcher_fs,
+        rules => [#{directory => "src", patterns => [".*\\.erl$"],
+                    callback => fun arizona_reloader:reload_erl/1}]
+    }}
+]}
 ```
 
-Subscribers receive `{arizona_watcher, Files}` messages via the pubsub
-topic named `arizona_watcher`.
+`watcher` is a module, or `{Module, Opts}` to hand the implementation its own
+options (`Opts` is a map; a bare module gets `#{}`).
 
-## Options
+## Contract
 
-- `patterns` -- list of regex strings to filter file paths (default `[".*"]`)
-- `callback` -- optional `fun([string()]) -> term()` invoked synchronously
-  with the changed file list before the broadcast
-- `debounce` -- milliseconds to wait after the last event before flushing
-  (default `100`); coalesces editor-save bursts into a single event
+An implementation is a callback module, not a process. Each reloader rule runs
+in its own `arizona_reloader_rule` process, which calls `init/2` once and then
+hands every message it does not own to `handle_info/2`, so whatever the
+implementation subscribes to must deliver its events to the **calling**
+process. The rule process owns everything above the raw events -- the rule's
+`patterns`, debouncing, the callback, and the `arizona_watcher` pubsub
+broadcast -- so every implementation behaves the same from the configuration's
+side.
 
-Both in-place saves (`modified`) and atomic-rename saves (`renamed`, the
-write-temp-then-`rename()` pattern used by vim, `sed -i`, and most editors and
-agent file-writers) trigger a reload. Directory renames (`isdir`) and files
-moved out of the watched directory (`removed`) do not.
+`handle_info/2` reports **content changes** only: a file created, modified in
+place, deleted, or renamed into the directory (the atomic-rename save most
+editors use). A directory rename and a file moved out of the directory are not
+content changes. Paths are absolute strings, as the implementation's watch
+reports them (one that resolves symlinks reports resolved paths, so patterns
+should not depend on the directory prefix).
 
-## Lifecycle and shutdown
-
-The `fs` library spawns an OS process (`sh` + `inotifywait`) with the
-watched directory as cwd. `terminate/2` shuts that down explicitly and
-sleeps briefly so callers that delete the watched directory don't race
-with the OS process's `getcwd`.
+A watch may need a moment after `init/2` returns before it reports anything
+(the `fs` implementation starts an OS process that sets its watches up
+asynchronously), so a change made in that window can be missed.
 """.
--behaviour(gen_server).
 
 %% --------------------------------------------------------------------
-%% API function exports
-%% --------------------------------------------------------------------
-
--export([start_link/2]).
--export([broadcast/1]).
-
-%% --------------------------------------------------------------------
-%% gen_server callback exports
-%% --------------------------------------------------------------------
-
--export([init/1]).
--export([handle_call/3]).
--export([handle_cast/2]).
--export([handle_info/2]).
--export([terminate/2]).
-
-%% --------------------------------------------------------------------
-%% Ignore xref warnings
-%% --------------------------------------------------------------------
-
--ignore_xref([start_link/2, broadcast/1]).
-
-%% --------------------------------------------------------------------
-%% Ignore elvis warnings
-%% --------------------------------------------------------------------
-
-%% Watcher names are derived from a hash of {self, dir} and registered as
-%% atoms because the underlying `fs` library requires named processes.
--elvis([{elvis_style, no_common_caveats_call, disable}]).
-
-%% --------------------------------------------------------------------
-%% Records
-%% --------------------------------------------------------------------
-
--record(state, {
-    abs_dir :: string(),
-    fs_sup :: atom(),
-    compiled :: [re:mp()],
-    callback :: fun(([string()]) -> term()) | undefined,
-    debounce_ms :: pos_integer(),
-    debounce_timer :: reference() | undefined,
-    pending_files :: sets:set(string())
-}).
-
-%% --------------------------------------------------------------------
-%% Types definitions
-%% --------------------------------------------------------------------
-
--type state() :: #state{}.
-
-%% --------------------------------------------------------------------
-%% API Functions
+%% Callbacks
 %% --------------------------------------------------------------------
 
 -doc """
-Starts a watcher process for `Dir` with the given options.
+Starts watching `Dir` (an absolute path to an existing directory) recursively,
+delivering the events to the calling process. `Opts` is the map given as
+`{Module, Opts}` in the `reloader` env (`#{}` for a bare module).
 
-Errors with `{not_a_directory, Dir}` if the path is not an existing
-directory.
+Returning `{error, Reason}` stops the rule process with `Reason`.
 """.
--spec start_link(Dir, Opts) -> gen_server:start_ret() when
-    Dir :: string(),
-    Opts :: map().
-start_link(Dir, Opts) ->
-    case filelib:is_dir(Dir) of
-        true -> gen_server:start_link(?MODULE, {Dir, Opts}, []);
-        false -> {error, {not_a_directory, Dir}}
-    end.
+-callback init(Dir :: string(), Opts :: map()) ->
+    {ok, State :: term()} | {error, Reason :: term()}.
 
 -doc """
-Broadcasts a `{arizona_watcher, Files}` message on the
-`arizona_watcher` pubsub topic.
+Translates one message the rule process received into the paths it changed.
 
-Called internally after debounce expires; exposed so callers can
-manually trigger a broadcast (useful in tests).
+Called with every message the rule process does not own, so a message that is
+not one of this watcher's events -- or is one but not a content change --
+returns `{ok, [], State}`. `{stop, Reason, State}` reports a watch that can no
+longer deliver events (its backend gave up): the rule process stops with
+`Reason`, running `terminate/1`, and its supervisor restarts it.
 """.
--spec broadcast(Files) -> ok when
-    Files :: [string()].
-broadcast(Files) ->
-    arizona_pubsub:broadcast(?MODULE, {?MODULE, Files}).
+-callback handle_info(Info :: term(), State :: term()) ->
+    {ok, Paths :: [string()], NewState :: term()}
+    | {stop, Reason :: term(), NewState :: term()}.
 
-%% --------------------------------------------------------------------
-%% gen_server Callbacks
-%% --------------------------------------------------------------------
+-doc """
+Stops watching. Called whenever the rule process stops -- a supervisor
+shutdown, an orderly `gen_server:stop/1`, or a crash -- so an implementation
+can release what it holds and wait for it to go. It must return within the
+rule's shutdown timeout (5 seconds), or the supervisor kills the process.
 
--spec init({Dir, Opts}) -> {ok, state()} when
-    Dir :: string(),
-    Opts :: map().
-init({Dir, Opts}) ->
-    AbsDir = filename:absname(Dir),
-    proc_lib:set_label({arizona_watcher, AbsDir}),
-    Patterns = maps:get(patterns, Opts, [".*"]),
-    Compiled = [compile_pattern(P) || P <- Patterns],
-    Callback = maps:get(callback, Opts, undefined),
-    DebounceMs = maps:get(debounce, Opts, 100),
-    Name = watcher_name(AbsDir),
-    SupName = list_to_atom(atom_to_list(Name) ++ "sup"),
-    {ok, _} = fs:start_link(Name, AbsDir),
-    ok = fs:subscribe(Name),
-    {ok, #state{
-        abs_dir = AbsDir,
-        fs_sup = SupName,
-        compiled = Compiled,
-        callback = Callback,
-        debounce_ms = DebounceMs,
-        debounce_timer = undefined,
-        pending_files = sets:new([{version, 2}])
-    }}.
+The rule process traps exits, so a process the implementation links to it
+that exits abnormally stops the rule with that reason (and its supervisor
+restarts it); such `'EXIT'` messages never reach `handle_info/2`. Optional: an
+implementation with nothing to release can omit it.
+""".
+-callback terminate(State :: term()) -> ok.
 
-handle_call(_Request, _From, State) ->
-    {reply, ok, State}.
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-handle_info({_Pid, {fs, file_event}, {FilePath, Events}}, State) ->
-    case is_relevant_event(Events) andalso file_matches(FilePath, State) of
-        true ->
-            Pending = sets:add_element(FilePath, State#state.pending_files),
-            {noreply, restart_debounce(State#state{pending_files = Pending})};
-        false ->
-            {noreply, State}
-    end;
-handle_info(debounce_fire, #state{pending_files = Pending} = State) ->
-    case sets:size(Pending) of
-        0 ->
-            {noreply, State#state{debounce_timer = undefined}};
-        _ ->
-            Files = sets:to_list(Pending),
-            call_callback(State#state.callback, Files),
-            broadcast(Files),
-            {noreply, State#state{
-                debounce_timer = undefined,
-                pending_files = sets:new([{version, 2}])
-            }}
-    end;
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-terminate(_Reason, #state{fs_sup = SupName}) ->
-    case erlang:whereis(SupName) of
-        undefined ->
-            ok;
-        Pid ->
-            Ref = monitor(process, Pid),
-            unlink(Pid),
-            exit(Pid, shutdown),
-            receive
-                {'DOWN', Ref, process, Pid, _} -> ok
-            after 5000 ->
-                exit(Pid, kill),
-                receive
-                    {'DOWN', Ref, process, Pid, _} -> ok
-                after 1000 -> ok
-                end
-            end
-    end,
-    %% The fs port spawns an OS process (sh + inotifywait) with the
-    %% watched directory as cwd. port_close sends SIGHUP but the OS
-    %% process may still be exiting. Give it a moment so that callers
-    %% who delete the watched directory don't race with its getcwd.
-    timer:sleep(10).
-
-%% --------------------------------------------------------------------
-%% Internal functions
-%% --------------------------------------------------------------------
-
-compile_pattern(Pattern) ->
-    {ok, MP} = re:compile(Pattern),
-    MP.
-
-watcher_name(AbsDir) ->
-    Hash = erlang:phash2({self(), AbsDir}),
-    list_to_atom("arizona_watcher_fs_" ++ integer_to_list(Hash)).
-
-is_relevant_event(Events) ->
-    lists:member(created, Events) orelse
-        lists:member(modified, Events) orelse
-        lists:member(deleted, Events) orelse
-        is_file_rename(Events).
-
-%% Atomic-rename saves -- write to a temp file then rename() over the target --
-%% are what vim (default), `sed -i`, and most editors/agent file-writers do.
-%% The `fs` inotify backend maps the resulting MOVED_TO to `renamed`, so treat
-%% it as a real edit or those saves would silently skip hot reload.
-%%
-%% Two deliberate exclusions:
-%%   - `isdir`: a directory being renamed is not a source-file edit; skip it.
-%%   - `removed` (MOVED_FROM): a file moving *out* of the watched dir is
-%%     delete-like; the path is now absent, so forcing a recompile of a
-%%     vanished path is pointless. Real deletes already emit `deleted`.
-is_file_rename(Events) ->
-    lists:member(renamed, Events) andalso not lists:member(isdir, Events).
-
-file_matches(FilePath, #state{abs_dir = AbsDir, compiled = Compiled}) ->
-    in_directory(FilePath, AbsDir) andalso matches_pattern(FilePath, Compiled).
-
-in_directory(FilePath, AbsDir) ->
-    lists:prefix(AbsDir ++ "/", FilePath).
-
-matches_pattern(FilePath, Compiled) ->
-    lists:any(
-        fun(MP) ->
-            re:run(FilePath, MP) =/= nomatch
-        end,
-        Compiled
-    ).
-
-restart_debounce(#state{debounce_timer = OldTimer, debounce_ms = Ms} = State) ->
-    cancel_timer(OldTimer),
-    NewTimer = erlang:send_after(Ms, self(), debounce_fire),
-    State#state{debounce_timer = NewTimer}.
-
-cancel_timer(undefined) ->
-    ok;
-cancel_timer(Ref) ->
-    case erlang:cancel_timer(Ref) of
-        false ->
-            %% The timer already fired: its `debounce_fire` is sitting in the
-            %% mailbox. Flush it so a stale fire can't trigger the debounce early
-            %% right after we arm a fresh timer, which would defeat coalescing
-            %% (and possibly recompile a half-written file).
-            receive
-                debounce_fire -> ok
-            after 0 -> ok
-            end;
-        _RemainingMs ->
-            ok
-    end.
-
-call_callback(undefined, _Files) -> ok;
-call_callback(Fun, Files) -> Fun(Files).
+-optional_callbacks([terminate/1]).

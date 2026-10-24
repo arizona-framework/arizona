@@ -7,9 +7,10 @@ Subscribers `join/1` the reloader's pubsub topic and receive
 change: the browser's SSE reload endpoint, and -- while the reloader is
 `enabled/0` -- every live view's transport, which remounts the view on
 fresh code (a WebSocket closes `1001` so its client reconnects; a
-`?terminal` session remounts in place). The watcher process
-(`arizona_watcher`) calls `reload_erl/1` or `reload_css/1` after a
-debounced burst of file events.
+`?terminal` session remounts in place). A reloader rule process
+(`arizona_reloader_rule`, fed by the configured `arizona_watcher`
+implementation) calls `reload_erl/1` or `reload_css/1` after a debounced
+burst of file changes.
 
 ## Compilation flow
 
@@ -130,9 +131,10 @@ leave(Pid) ->
 
 -doc """
 Whether this node can broadcast a code reload: the `reloader` app env holds
-`enabled => true` and a `rules` list (the condition under which `arizona_sup`
-starts its watchers), or an `arizona_dev_mcp` route is mounted, whose `reload`
-tool runs `sync/0` with or without the watchers.
+`enabled => true` and a `rules` list -- an empty one too, which starts no
+`arizona_reloader_rule` but leaves the node able to reload (something else
+calls `reload_erl/1` or `broadcast/0`) -- or an `arizona_dev_mcp` route is
+mounted, whose `reload` tool runs `sync/0` with or without rule processes.
 
 A live view's transport joins the reload topic only when this holds, so a
 production node pays one persistent-term read and one app-env read per

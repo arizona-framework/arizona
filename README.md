@@ -38,7 +38,8 @@ across upgrades.
 - **Route middlewares** -- gate or rewrite requests before mount (auth, sessions, URL projection)
 - **On-mount hooks** -- per-route pipeline that runs before every mount, including navigate
 - **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az_hook`
-- **Dev-mode hot reload** -- `fs` watcher recompiles changed `.erl` files and pushes reload events
+- **Dev-mode hot reload** -- a pluggable file watcher (`arizona_watcher_fs`, a dev-only dep)
+  recompiles changed `.erl` files and pushes reload events
 - **HTTP/WebSocket transport** -- HTTP/1.1, HTTP/2, HTTP/3 (experimental), and WebSocket built in
 - **Native (JSON) render target** -- the same templates and diff engine also emit a JSON widget tree
   via `?native` for non-browser clients. In-repo Android (Compose), iOS (SwiftUI), and JS

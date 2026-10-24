@@ -15,7 +15,9 @@
     transport_deps_are_not_forced/1,
     prep_stop_stops_listener_before_tree/1,
     boot_logs_reloader_enabled/1,
-    boot_logs_reloader_disabled/1
+    boot_logs_reloader_disabled/1,
+    boot_fails_on_rules_without_watcher/1,
+    crash_looping_watcher_spares_app/1
 ]).
 
 -define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
@@ -29,7 +31,9 @@ all() ->
         transport_deps_are_not_forced,
         prep_stop_stops_listener_before_tree,
         boot_logs_reloader_enabled,
-        boot_logs_reloader_disabled
+        boot_logs_reloader_disabled,
+        boot_fails_on_rules_without_watcher,
+        crash_looping_watcher_spares_app
     ].
 
 init_per_testcase(boot_with_server_and_reloader, Config) ->
@@ -37,6 +41,7 @@ init_per_testcase(boot_with_server_and_reloader, Config) ->
     ok = application:set_env(arizona, server, server_opts()),
     ok = application:set_env(arizona, reloader, #{
         enabled => true,
+        watcher => arizona_fake_watcher,
         rules => [
             #{directory => ?WATCH_DIR, patterns => [".*"], callback => fun(_) -> ok end}
         ]
@@ -63,6 +68,7 @@ init_per_testcase(boot_logs_reloader_enabled, Config) ->
     ok = ensure_dir(?WATCH_DIR),
     ok = application:set_env(arizona, reloader, #{
         enabled => true,
+        watcher => arizona_fake_watcher,
         rules => [
             #{directory => ?WATCH_DIR, patterns => [".*\\.erl$"], callback => fun(_) -> ok end}
         ]
@@ -70,10 +76,27 @@ init_per_testcase(boot_logs_reloader_enabled, Config) ->
     Config;
 init_per_testcase(boot_logs_reloader_disabled, Config) ->
     Config;
+init_per_testcase(crash_looping_watcher_spares_app, Config) ->
+    ok = ensure_dir(?WATCH_DIR),
+    ok = application:set_env(arizona, reloader, #{
+        enabled => true,
+        watcher => {arizona_fake_watcher, #{notify => self(), link => true}},
+        rules => [#{directory => ?WATCH_DIR, callback => fun(_) -> ok end}]
+    }),
+    {ok, _} = application:ensure_all_started(arizona),
+    Config;
+init_per_testcase(boot_fails_on_rules_without_watcher, Config) ->
+    ok = ensure_dir(?WATCH_DIR),
+    ok = application:set_env(arizona, reloader, #{
+        enabled => true,
+        rules => [#{directory => ?WATCH_DIR, callback => fun(_) -> ok end}]
+    }),
+    Config;
 init_per_testcase(boot_with_only_reloader, Config) ->
     ok = ensure_dir(?WATCH_DIR),
     ok = application:set_env(arizona, reloader, #{
         enabled => true,
+        watcher => arizona_fake_watcher,
         rules => [
             #{directory => ?WATCH_DIR, patterns => [".*"], callback => fun(_) -> ok end}
         ]
@@ -81,6 +104,10 @@ init_per_testcase(boot_with_only_reloader, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     Config.
 
+end_per_testcase(boot_fails_on_rules_without_watcher, Config) ->
+    ok = unset_env(reloader),
+    ok = remove_dir(?WATCH_DIR),
+    Config;
 end_per_testcase(_TC, Config) ->
     ok = application:stop(arizona),
     ok = unset_env(server),
@@ -112,12 +139,11 @@ boot_with_only_reloader(Config) when is_list(Config) ->
 
 %% Arizona lazy-starts its heavy deps on demand: roadrunner only when a `server`
 %% env is set (arizona_app:maybe_start_server/0), ssh only when the SSH transport
-%% starts (arizona_terminal_ssh:start/1), fs via standalone fs:start_link/2. So it
-%% forces none of them onto the boot path. Listing any in `applications` -- or in
-%% `optional_applications`, which relx also bundles AND force-starts -- would boot
-%% them for every consumer, including a server-less/static-generation user, and
-%% would start fs's default CWD watcher in production. A consumer that ships the
-%% server declares roadrunner/ssh in its OWN app's `applications`.
+%% starts (arizona_terminal_ssh:start/1). So it forces neither onto the boot path.
+%% Listing either in `applications` -- or in `optional_applications`, which relx
+%% also bundles AND force-starts -- would boot them for every consumer, including
+%% a server-less/static-generation user. A consumer that ships the server
+%% declares roadrunner/ssh in its OWN app's `applications`.
 %% The HTTP listener must go down in prep_stop/1 -- BEFORE the supervision tree
 %% -- or shutdown briefly serves requests against dead infrastructure (pubsub,
 %% MCP registry, session store). prep_stop stops the listener while arizona_sup
@@ -135,15 +161,13 @@ transport_deps_are_not_forced(Config) when is_list(Config) ->
     ?assert(lists:member(crypto, Apps)),
     ?assertNot(lists:member(roadrunner, Apps)),
     ?assertNot(lists:member(ssh, Apps)),
-    ?assertNot(lists:member(fs, Apps)),
     Optional =
         case application:get_key(arizona, optional_applications) of
             {ok, L} -> L;
             undefined -> []
         end,
     ?assertNot(lists:member(roadrunner, Optional)),
-    ?assertNot(lists:member(ssh, Optional)),
-    ?assertNot(lists:member(fs, Optional)).
+    ?assertNot(lists:member(ssh, Optional)).
 
 %% Boot logs one line stating the reloader state, so a dev node silently
 %% missing hot reload is visible. Enabled logs at `info`, naming the watched
@@ -155,6 +179,7 @@ boot_logs_reloader_enabled(Config) when is_list(Config) ->
     end),
     ?assertEqual(info, Level),
     ?assertMatch({_, _}, binary:match(Text, ~"hot reload enabled")),
+    ?assertMatch({_, _}, binary:match(Text, ~"arizona_fake_watcher")),
     ?assertMatch({_, _}, binary:match(Text, list_to_binary(?WATCH_DIR))),
     ?assertMatch({_, _}, binary:match(Text, ~".erl")).
 
@@ -169,8 +194,49 @@ boot_logs_reloader_disabled(Config) when is_list(Config) ->
     ?assertMatch({_, _}, binary:match(Text, ~"hot reload off")),
     ?assertMatch({_, _}, binary:match(Text, ~"reloader")).
 
+%% Rules with no watcher to run them refuse to boot -- silently starting no
+%% watcher would leave hot reload off with nothing saying why -- and the reason
+%% is the `child_specs/1` config error that names the missing dependency.
+boot_fails_on_rules_without_watcher(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, {arizona, {{no_watcher, _Stacktrace}, {arizona_app, start, _}}}},
+        application:ensure_all_started(arizona)
+    ),
+    ?assertEqual(undefined, erlang:whereis(arizona_sup)).
+
+%% A watch that keeps dying exhausts the reloader's own supervisor, which
+%% `arizona_sup` runs as a temporary child: hot reload stops and the rest of the
+%% application keeps running, instead of the restarts counting against
+%% `arizona_sup` and stopping everything.
+crash_looping_watcher_spares_app(Config) when is_list(Config) ->
+    ReloaderSup = erlang:whereis(arizona_reloader_sup),
+    ?assert(is_pid(ReloaderSup)),
+    Ref = monitor(process, ReloaderSup),
+    ok = crash_watch_until_down(Ref, 20),
+    %% Given up for good: nothing restarts the reloader (a restart would mount
+    %% a fresh watch, whose linked helper reports in).
+    receive
+        {arizona_fake_watcher, linked, _} -> ct:fail(reloader_restarted)
+    after 500 -> ok
+    end,
+    ?assertEqual(undefined, erlang:whereis(arizona_reloader_sup)),
+    ?assert(is_process_alive(erlang:whereis(arizona_sup))),
+    ?assert(is_process_alive(erlang:whereis(arizona_pubsub))).
+
 %% ============================================================================
 %% Helpers
+
+crash_watch_until_down(_Ref, 0) ->
+    ct:fail(reloader_sup_never_gave_up);
+crash_watch_until_down(Ref, Tries) ->
+    receive
+        {'DOWN', Ref, process, _, _} ->
+            ok;
+        {arizona_fake_watcher, linked, Helper} ->
+            _ = Helper ! {exit, watch_lost},
+            crash_watch_until_down(Ref, Tries - 1)
+    after 2000 -> ct:fail(no_restart)
+    end.
 %% ============================================================================
 
 %% Capture logs at `Level` while Fun runs: install the forwarding handler and
@@ -239,15 +305,15 @@ is_listener_up(Name) ->
     end.
 
 has_watcher_child() ->
-    case erlang:whereis(arizona_sup) of
+    case erlang:whereis(arizona_reloader_sup) of
         undefined ->
             false;
         _ ->
             lists:any(
                 fun
-                    ({{arizona_watcher, _}, Pid, _, _}) when is_pid(Pid) -> true;
+                    ({{arizona_reloader_rule, _}, Pid, _, _}) when is_pid(Pid) -> true;
                     (_) -> false
                 end,
-                supervisor:which_children(arizona_sup)
+                supervisor:which_children(arizona_reloader_sup)
             )
     end.

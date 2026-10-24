@@ -8,8 +8,8 @@ registry and starts per-session processes on demand), and owns the hot
 reloader's beam-facts cache table (`arizona_reloader_consistency:create_table/0`,
 created in `init/1` so the cache outlives the short-lived processes that read
 it) and the dev MCP's log ring table (`arizona_dev_log:create_table/0`, for the
-same reason). Also supervises one
-`arizona_watcher` per rule when the dev-mode reloader is enabled via the
+same reason). Also supervises `arizona_reloader_sup` (one
+`arizona_reloader_rule` per rule) when the dev-mode reloader has rules in the
 `reloader` application env, and the configured server-side session store when
 the `session_store` env names a backend that exports `child_spec/0` (e.g.
 `arizona_session_store_ets`). Live processes are not managed here -- they're
@@ -22,19 +22,21 @@ to the calling WebSocket process so they share its lifetime.
 {arizona, [
     {reloader, #{
         enabled => true,
+        watcher => arizona_watcher_fs,
         rules => [
             #{directory => "src",
-              patterns => [".*\\\\.erl$"],
+              patterns => [".*\\.erl$"],
               callback => fun arizona_reloader:reload_erl/1}
         ]
     }}
 ]}
 ```
 
-Each rule map is passed to `arizona_watcher:start_link/2` with
-`directory` stripped out. Malformed config (missing `directory`,
-non-list `rules`) crashes the supervisor init so boot errors are
-obvious.
+`arizona_reloader_rule:child_specs/1` turns the rules into one rule process
+each, under `arizona_reloader_sup`, run by the `watcher` (an `arizona_watcher`
+implementation, from a dev-only dependency). Malformed config (missing
+`directory` or `watcher`, a watcher that is not on the code path) crashes the
+supervisor init so boot errors are obvious.
 """.
 -behaviour(supervisor).
 
@@ -71,6 +73,7 @@ start_link() ->
     ChildSpec :: supervisor:child_spec().
 init(#{}) ->
     Reloader = arizona_config:get_env(reloader, #{}),
+    RuleSpecs = arizona_reloader_rule:child_specs(Reloader),
     ok = log_reloader_state(Reloader),
     %% Owned by this process so it spans the node's lifetime: the checks that
     %% read it run from short-lived callers (the dev MCP dispatch worker), and a
@@ -85,7 +88,7 @@ init(#{}) ->
     %% node that never mounts the dev MCP route pays nothing per log event.
     ok = arizona_dev_log:create_table(),
     Children =
-        [pubsub_spec(), mcp_sup_spec()] ++ store_specs() ++ watcher_specs(Reloader),
+        [pubsub_spec(), mcp_sup_spec()] ++ store_specs() ++ reloader_specs(RuleSpecs),
     {ok, {#{strategy => one_for_one}, Children}}.
 
 %% --------------------------------------------------------------------
@@ -97,10 +100,13 @@ init(#{}) ->
 %% so) is visible. Enabled is ordinary dev-mode operation: `info`. Disabled
 %% logs at `notice`: OTP's default primary level is `notice`, so the line shows
 %% on a default node -- where an `info` would be filtered before any handler --
-%% without being an alarming warning. The clauses mirror watcher_specs/1, so
-%% the line always states what actually started.
-log_reloader_state(#{enabled := true, rules := Rules}) when is_list(Rules) ->
-    logger:info("Arizona hot reload enabled: watching ~ts", [summarize_rules(Rules)]);
+%% without being an alarming warning. The clauses mirror
+%% arizona_reloader_rule:child_specs/1, so the line always states what actually
+%% started.
+log_reloader_state(#{enabled := true, rules := [_ | _] = Rules, watcher := Watcher}) ->
+    logger:info("Arizona hot reload enabled: ~tp watching ~ts", [
+        Watcher, summarize_rules(Rules)
+    ]);
 log_reloader_state(_Reloader) ->
     logger:notice("Arizona hot reload off; set the arizona `reloader` app env to enable it").
 
@@ -110,6 +116,11 @@ summarize_rules(Rules) ->
 summarize_rule(#{directory := Dir} = Rule) ->
     Patterns = maps:get(patterns, Rule, [".*"]),
     io_lib:format("~ts (~ts)", [Dir, lists:join(", ", Patterns)]).
+
+reloader_specs([]) ->
+    [];
+reloader_specs(RuleSpecs) ->
+    [arizona_reloader_sup:child_spec(RuleSpecs)].
 
 pubsub_spec() ->
     #{
@@ -142,16 +153,3 @@ store_specs() ->
                 false -> []
             end
     end.
-
-watcher_specs(#{enabled := true, rules := Rules}) when is_list(Rules) ->
-    [watcher_spec(I, R) || {I, R} <- lists:enumerate(Rules)];
-watcher_specs(_) ->
-    [].
-
-watcher_spec(I, #{directory := Dir} = Rule) ->
-    Opts = maps:without([directory], Rule),
-    #{
-        id => {arizona_watcher, I},
-        start => {arizona_watcher, start_link, [Dir, Opts]},
-        type => worker
-    }.

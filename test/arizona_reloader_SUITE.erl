@@ -28,8 +28,8 @@
 
 %% integration group tests
 -export([
-    watcher_triggers_reload/1,
-    watch_delegates_to_watcher/1
+    rule_triggers_reload/1,
+    rule_runs_callback/1
 ]).
 
 %% compile group tests
@@ -111,8 +111,8 @@ groups() ->
             broadcast_dead_member
         ]},
         {integration, [sequence], [
-            watcher_triggers_reload,
-            watch_delegates_to_watcher
+            rule_triggers_reload,
+            rule_runs_callback
         ]},
         {compile, [sequence], [
             get_error_default_undefined,
@@ -162,11 +162,6 @@ groups() ->
     ].
 
 init_per_suite(Config) ->
-    %% fs's default env starts an extra recursive watcher on the whole cwd
-    %% (node_modules, _build), which can exhaust the inotify watch limit and
-    %% fail the suite with enospc. The tests only use their own named watchers.
-    ok = application:set_env(fs, backwards_compatible, false, [{persistent, true}]),
-    {ok, _} = application:ensure_all_started(fs),
     Config.
 
 end_per_suite(Config) when is_list(Config) ->
@@ -317,14 +312,15 @@ broadcast_dead_member(Config) when is_list(Config) ->
 %% integration group tests
 %% ============================================================================
 
-watcher_triggers_reload(Config) ->
+rule_triggers_reload(Config) ->
     Dir = proplists:get_value(tmp_dir, Config),
     arizona_reloader:join(self()),
-    {ok, W} = arizona_watcher:start_link(Dir, #{
+    {ok, W} = arizona_reloader_rule:start_link(Dir, #{
+        watcher => arizona_fake_watcher,
         debounce => 30,
         callback => fun(_Files) -> arizona_reloader:broadcast() end
     }),
-    send_fs_event(W, Dir ++ "/file.erl", [modified]),
+    change(W, [Dir ++ "/file.erl"]),
     receive
         {arizona_reloader, reload} -> ok
     after 500 -> ct:fail(no_reload)
@@ -332,15 +328,16 @@ watcher_triggers_reload(Config) ->
     gen_server:stop(W),
     arizona_pubsub:unsubscribe(arizona_reloader, self()).
 
-watch_delegates_to_watcher(Config) ->
+rule_runs_callback(Config) ->
     Dir = proplists:get_value(tmp_dir, Config),
     Self = self(),
-    {ok, W} = arizona_watcher:start_link(Dir, #{
+    {ok, W} = arizona_reloader_rule:start_link(Dir, #{
+        watcher => arizona_fake_watcher,
         callback => fun(Files) -> Self ! {cb, Files} end,
         debounce => 30
     }),
     File = Dir ++ "/test.erl",
-    send_fs_event(W, File, [modified]),
+    change(W, [File]),
     receive
         {cb, Files} -> ?assert(lists:member(File, Files))
     after 500 -> ct:fail(no_callback)
@@ -870,8 +867,9 @@ ensure_pg_stopped() ->
             ok
     end.
 
-send_fs_event(Watcher, FilePath, Events) ->
-    _ = Watcher ! {self(), {fs, file_event}, {FilePath, Events}},
+%% Reports `Paths` as changed through the fake watcher.
+change(Rule, Paths) ->
+    _ = Rule ! {arizona_fake_watcher, Paths},
     ok.
 
 flush() ->

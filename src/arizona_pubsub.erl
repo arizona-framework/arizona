@@ -14,7 +14,7 @@ check-then-join is not atomic). In that essentially-unreachable state a
 subscriber receives one copy per membership until `unsubscribe/2` clears
 them all; `subscribers/1` still reports each pid once.
 
-Used by `arizona_watcher` (file change events), `arizona_reloader`
+Used by `arizona_reloader_rule` (file change events), `arizona_reloader`
 (dev hot reload), and any handler that wants cross-process messaging
 (e.g. multi-tab chat in `arizona_chat`).
 
