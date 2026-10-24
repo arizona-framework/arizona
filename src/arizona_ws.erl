@@ -25,6 +25,15 @@ via `arizona_req:raw/1`.
 %% --------------------------------------------------------------------
 
 -export([prepare/3]).
+-export([upgrade/3]).
+-export([init/1]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+%% The step under `upgrade/3`, kept public for an adapter that answers the upgrade itself.
+-ignore_xref([prepare/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -33,6 +42,7 @@ via `arizona_req:raw/1`.
 -export_type([qs/0]).
 -export_type([state/0]).
 -export_type([result/0]).
+-export_type([upgrade/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -52,6 +62,13 @@ via `arizona_req:raw/1`.
 }.
 
 -nominal result() :: {halt, az:request()} | {cont, state()} | not_found.
+
+%% What an adapter answers a WebSocket upgrade request with: a plain HTTP reply
+%% (a middleware halt, or `404` for a path that is no live route), or the
+%% upgrade itself, whose `101` carries `Headers`. Header lines are in send order.
+-nominal upgrade() ::
+    {reply, arizona_req:resp_status(), [{binary(), binary()}], AdapterState :: term()}
+    | {upgrade, [{binary(), binary()}], state()}.
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -117,6 +134,44 @@ prepare(QS, Adapter, AdapterState) ->
                     }}
             end
     end.
+
+-doc """
+`prepare/3` folded into the answer to the upgrade request. A halt becomes its
+`arizona_req:halt_reply/1` and an unresolvable `_az_path` a `404`, both with
+the adapter state the reply belongs to; otherwise the upgrade proceeds and
+`arizona_req:flush/1`'s lines (cookies and headers the route's middlewares
+stashed, and a committed session write) ride the `101`.
+""".
+-spec upgrade(QS, Adapter, AdapterState) -> upgrade() when
+    QS :: qs(),
+    Adapter :: module(),
+    AdapterState :: term().
+upgrade(QS, Adapter, AdapterState) ->
+    case prepare(QS, Adapter, AdapterState) of
+        {halt, HaltReq} ->
+            {Status, Headers} = arizona_req:halt_reply(HaltReq),
+            {reply, Status, Headers, arizona_req:raw(HaltReq)};
+        not_found ->
+            {reply, 404, [], AdapterState};
+        {cont, #{req := ArzReq} = State} ->
+            {upgrade, arizona_req:flush(ArzReq), State}
+    end.
+
+-doc """
+Starts the Arizona socket for an upgraded connection, in the process that owns
+it, from the state `upgrade/3` returned. The result is `arizona_socket`'s,
+which the adapter maps onto its server's WebSocket replies.
+""".
+-spec init(State) -> arizona_socket:result() when
+    State :: state().
+init(#{handler := H, bindings := IB, on_mount := OM, req := ArzReq} = State) ->
+    arizona_socket:init(H, IB, ArzReq, #{
+        reconnect => maps:get(reconnect, State),
+        fps_follow => maps:get(fps_follow, State),
+        on_mount => OM,
+        layouts => maps:get(layouts, State),
+        capabilities => maps:get(capabilities, State)
+    }).
 
 %% --------------------------------------------------------------------
 %% Internal functions
