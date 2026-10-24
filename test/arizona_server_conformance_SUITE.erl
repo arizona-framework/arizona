@@ -67,6 +67,7 @@ call into an adapter module or inspect its internal state.
 -export([controller_session_clear_sends_a_clearing_cookie/1]).
 -export([flash_round_trips_through_a_redirect/1]).
 -export([ws_upgrade_carries_middleware_cookie_and_session/1]).
+-export([cookie_written_twice_sends_its_latest_value_last/1]).
 -export([store_session_write_lands_in_the_store/1]).
 -export([store_session_clear_deletes_the_entry/1]).
 %% WebSocket
@@ -162,7 +163,8 @@ groups() ->
             controller_session_write_sets_a_decodable_cookie,
             controller_session_clear_sends_a_clearing_cookie,
             flash_round_trips_through_a_redirect,
-            ws_upgrade_carries_middleware_cookie_and_session
+            ws_upgrade_carries_middleware_cookie_and_session,
+            cookie_written_twice_sends_its_latest_value_last
         ]},
         %% Store mode is read per request from the `session_store` app env, so it
         %% is switched on around this group only.
@@ -342,6 +344,15 @@ main_routes(AssetDir) ->
                 fun(Req, B) ->
                     Req1 = arizona_req:put_resp_cookie(Req, ~"probe", ~"ws", #{path => ~"/"}),
                     {cont, arizona_req:put_session(Req1, ~"seen", ~"ws"), B}
+                end
+            ]
+        }},
+        {live, ~"/cookie_twice", arizona_crashable, #{
+            middlewares => [
+                fun(Req, B) ->
+                    Req1 = arizona_req:put_resp_cookie(Req, ~"theme", ~"dark", #{path => ~"/"}),
+                    {cont, arizona_req:put_resp_cookie(Req1, ~"theme", ~"light", #{path => ~"/"}),
+                        B}
                 end
             ]
         }},
@@ -642,6 +653,14 @@ ws_upgrade_carries_middleware_cookie_and_session(Config) ->
     {101, Headers} = upgrade_head(Config, ~"/upgrade_writes", []),
     ?assertMatch([<<"probe=ws", _/binary>>], cookies(~"probe", Headers)),
     ?assertEqual(#{~"seen" => ~"ws"}, arizona_session:decode(session_value(Headers))).
+
+%% A browser keeps the last `Set-Cookie` for a name, so a cookie written twice
+%% must go out in the order it was written.
+cookie_written_twice_sends_its_latest_value_last(Config) ->
+    {200, Headers, _} = req(Config, ~"GET", ~"/cookie_twice", []),
+    ?assertMatch(
+        [<<"theme=dark", _/binary>>, <<"theme=light", _/binary>>], cookies(~"theme", Headers)
+    ).
 
 store_session_write_lands_in_the_store(Config) ->
     Id = seed_stored_session(),

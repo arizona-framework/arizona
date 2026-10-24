@@ -695,9 +695,14 @@ maybe_delete_stored(Store, Id) -> Store:delete(Id).
 
 -doc """
 Ends the request: commits a written session (`commit_session/1`) and returns
-the header lines to add to the response -- the stashed headers
-(`put_resp_header/3`) then one `set-cookie` line per `resp_cookies/1` entry,
-serialized by `arizona_cookie:serialize/3`.
+the header lines to add to the response, **in the order they must be sent**:
+one `set-cookie` line per `resp_cookies/1` entry (serialized by
+`arizona_cookie:serialize/3`), then the stashed headers (`put_resp_header/3`),
+each oldest first. Values are binaries.
+
+The order is part of the contract: the stash is newest first, and a browser
+keeps the **last** `Set-Cookie` for a name, so a cookie written twice must
+reach the wire in the order it was written. Emit the lines as listed.
 
 A server adapter calls this, or `halt_reply/1` on a middleware halt, exactly
 once for every response it builds from an Arizona request, whatever the
@@ -705,20 +710,20 @@ response's shape: a page, a controller reply, a stream, a WebSocket upgrade
 (whose `101` then carries the cookies). Skipping it drops the stashed cookies
 and, in store mode, the session write, with nothing reporting it.
 """.
--spec flush(Request) -> [{binary(), iodata()}] when
+-spec flush(Request) -> [{binary(), binary()}] when
     Request :: request().
 flush(Req) ->
     ok = commit_session(Req),
-    resp_headers(Req) ++
-        [
-            {~"set-cookie", arizona_cookie:serialize(Name, Value, Opts)}
-         || {Name, Value, Opts} <- resp_cookies(Req)
-        ].
+    [
+        {~"set-cookie", arizona_cookie:serialize(Name, Value, Opts)}
+     || {Name, Value, Opts} <- lists:reverse(resp_cookies(Req))
+    ] ++
+        [{Name, iolist_to_binary(Value)} || {Name, Value} <- lists:reverse(resp_headers(Req))].
 
 -doc """
 The response to a middleware `{halt, Request}`: its status, and its header
-lines with `flush/1`'s appended (so it also commits the session). The body is
-empty.
+lines in send order -- `flush/1`'s (so it also commits the session), then a
+redirect's `location`. The body is empty.
 
 A halting middleware says what the client should see by stashing a redirect
 (`redirect/2,3`: the status and a `location` header) or a status
@@ -727,12 +732,12 @@ disclosed, which is exactly `403 Forbidden` (RFC 9110 §15.5.4): `204` would
 report a denial as success (a `fetch` sees `ok` and resets the form), and `400`
 would blame request syntax the framework knows nothing about.
 """.
--spec halt_reply(Request) -> {resp_status(), [{binary(), iodata()}]} when
+-spec halt_reply(Request) -> {resp_status(), [{binary(), binary()}]} when
     Request :: request().
 halt_reply(Req) ->
     case halted_redirect(Req) of
         {Status, Location} ->
-            {Status, [{~"location", Location} | flush(Req)]};
+            {Status, flush(Req) ++ [{~"location", Location}]};
         undefined ->
             case resp_status(Req) of
                 undefined -> {403, flush(Req)};

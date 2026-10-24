@@ -61,8 +61,10 @@ flush(ArzReq, Resp) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
+%% `add_header/3` prepends, so folding from the right lands the lines ahead of
+%% the response's own in the order given.
 add_headers(Resp, Headers) ->
-    lists:foldl(fun({Name, Value}, R) -> add_header(R, Name, Value) end, Resp, Headers).
+    lists:foldr(fun({Name, Value}, R) -> add_header(R, Name, Value) end, Resp, Headers).
 
 %% Prepend one header onto a handler response. The buffered triple goes through
 %% roadrunner's own builder (it guards the name and flattens an iodata value);
