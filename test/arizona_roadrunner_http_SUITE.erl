@@ -21,6 +21,7 @@
 -export([cors_plain_options_allow_follows_pattern_overlaps/1]).
 -export([cors_beside_default_origin_check/1]).
 -export([asset_route_answers_get_and_head_only/1]).
+-export([stopped_dev_listener_leaves_no_dev_error_page/1]).
 
 all() ->
     [
@@ -38,7 +39,8 @@ all() ->
         cors_route_keeps_its_verbs_and_405,
         cors_plain_options_allow_follows_pattern_overlaps,
         cors_beside_default_origin_check,
-        asset_route_answers_get_and_head_only
+        asset_route_answers_get_and_head_only,
+        stopped_dev_listener_leaves_no_dev_error_page
     ].
 
 init_per_suite(Config) ->
@@ -70,6 +72,7 @@ init_per_suite(Config) ->
             middlewares => [arizona_middleware:etag()]
         }},
         {live, ~"/native_page", arizona_native_counter_demo, #{}},
+        {live, ~"/crash_page", arizona_crashable, #{bindings => #{crash_on_mount => true}}},
         %% CORS wire fixtures: a POST controller sharing its path with a
         %% cors-less DELETE sibling, and a live page.
         {post, ~"/cors_api", arizona_transform_probe_controller, #{
@@ -470,6 +473,26 @@ asset_route_answers_get_and_head_only(Config) when is_list(Config) ->
         {405, #{~"allow" := ~"GET, HEAD, OPTIONS"}, _},
         raw_request(Port, ~"POST", ~"/cors_files/app.txt", Len0)
     ).
+
+%% --------------------------------------------------------------------
+%% Dev state
+%% --------------------------------------------------------------------
+
+%% The reload URL is the node's dev signal: while set, a render crash serves the
+%% rich error page (class, reason, stack). A dev listener stopped in the same
+%% node must take it along, or this production listener keeps leaking internals.
+stopped_dev_listener_leaves_no_dev_error_page(Config) when is_list(Config) ->
+    undefined = persistent_term:get(arizona_reload_url, undefined),
+    Dev = arizona_dev_listener_test,
+    {ok, _} = arizona_roadrunner_server:start(Dev, #{
+        routes => [{reload, ~"/dev-reload", #{}}],
+        transport_opts => [{port, arizona_test_port:pick()}]
+    }),
+    ok = arizona_roadrunner_server:stop(Dev),
+    ?assertEqual(undefined, persistent_term:get(arizona_reload_url, undefined)),
+    {Status, _Headers, Body} = raw_get(?config(port, Config), ~"/crash_page", []),
+    ?assertEqual(500, Status),
+    ?assertEqual(nomatch, binary:match(Body, ~"crash_on_mount")).
 
 raw_get(Port, Path, ExtraHeaders) ->
     raw_request(Port, ~"GET", Path, ExtraHeaders).
