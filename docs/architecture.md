@@ -61,7 +61,9 @@
 | `src/arizona_error.erl`                   | Error-reporting helpers -- `did_you_mean/2` (missing-key suggestions for `format_error/2`) and `raise_or_propagate/6` (re-tag a failure at the user's callback, propagate anything else)  |
 | `src/arizona_error_page.erl`              | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                                  |
 | `src/arizona_config.erl`                  | App-env reader with env-var resolution -- `get_env/1,2` (drop-in for `application:get_env`) + `resolve/1`; expands `{env, "VAR"}` / `{env, "VAR", Default}` refs, coerced by default type |
-| `src/arizona_app.erl`                     | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the roadrunner listener                                                                          |
+| `src/arizona_app.erl`                     | Application callback -- starts `arizona_sup` and, when the `server` env is set, boots its listener through the `adapter` it names                                                         |
+| `src/arizona_server.erl`                  | Behaviour for an HTTP/WS server adapter -- `start/2`, `stop/1`, `drain/2` (delivers `{arizona_drain, Deadline}`), `recompile_routes/0`                                                    |
+| `src/arizona_server_registry.erl`         | `persistent_term` set of adapters that ran a listener -- `register/1`, `adapters/0`, `recompile_routes/0` (called by the dev reloader)                                                    |
 | `src/arizona_watcher.erl`                 | Behaviour for a file-system watcher -- `init/2`, `handle_info/2` (raw event to changed paths), optional `terminate/1`; no implementation in core                                          |
 | `src/arizona_reloader_rule.erl`           | One reloader rule per process -- runs the configured `arizona_watcher`, filters by patterns, debounces, calls the callback, broadcasts via `arizona_pubsub`                               |
 | `src/arizona_reloader_sup.erl`            | Supervisor of the rule processes -- a `temporary` child of `arizona_sup`, so a crash-looping watch stops hot reload, not the app                                                          |
@@ -1602,8 +1604,9 @@ matters because the JS worker treats **any non-1000 code as reconnectable**:
 | any failure to mount the view | `?CLOSE_MOUNT_FAILED` (4501) | **Reconnects**, and reloads the page after a random 5-10 s delay (the page may be stale, e.g. after a deploy); a reconnect that mounts first cancels the reload. Consecutive reloads of one path are counted per tab, in one `sessionStorage` key holding `{path, count}` (a reload of another path starts over), so a failing path, which may carry a secret, never outlives the tab; only a successful mount removes it (`pagehide` and `disconnect()` just cancel the pending reload); from the 10th on the delay is 30 s, logged once per page load, and retrying never stops. Form fields saved on the close are lost by the reload, unless a reconnect mounts first and restores them. Never resets the backoff |
 
 An application stop takes the drain path: `arizona_app:prep_stop/1` drains the `arizona_http`
-listener (`arizona_roadrunner_server:drain/2`) instead of stopping it, so a restart or deploy
-closes every live socket 1001 and its clients reconnect -- to the new node once it is up. The
+listener (its adapter's `drain/2`, `arizona_roadrunner_server:drain/2` by default) instead of
+stopping it, so a restart or deploy closes every live socket 1001 and its clients reconnect --
+to the new node once it is up. The
 listen socket closes first, each view gets `handle_drain/2`, and the stop waits up to the
 `server` config's `drain_timeout` (milliseconds, default 5000) for the sessions before killing
 what is left.
@@ -2969,10 +2972,14 @@ search-and-replace blindly:
 
 The core engine (`arizona_template`, `arizona_render`, `arizona_diff`, `arizona_live`,
 `arizona_stream`, `arizona_pubsub`, `arizona_js`, parse transform) is transport-agnostic. The
-roadrunner server is wired in through a thin layer of `arizona_*` modules that translate between
-roadrunner's callbacks and Arizona's shared pipeline:
+server is an `arizona_server` adapter (the `server` env's `adapter`, default
+`arizona_roadrunner_server`); each adapter routes natively and must pass the black-box
+`arizona_server_conformance_SUITE` through its own `arizona_conformance_driver`. Roadrunner is
+wired in through a thin layer of `arizona_*` modules that translate between roadrunner's
+callbacks and Arizona's shared pipeline:
 
-- `arizona_roadrunner_server` -- boots the listener and compiles routes
+- `arizona_roadrunner_server` -- the `arizona_server` adapter: boots the listener and compiles
+  routes
 - `arizona_roadrunner_router` -- compiles route specs into roadrunner's dispatch
 - `arizona_roadrunner_http` -- HTTP handler; delegates to `arizona_http:render/3`
 - `arizona_roadrunner_ws` -- WebSocket handler; delegates the upgrade to `arizona_ws:prepare/3`,

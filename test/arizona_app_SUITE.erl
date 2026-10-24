@@ -17,7 +17,9 @@
     boot_logs_reloader_enabled/1,
     boot_logs_reloader_disabled/1,
     boot_fails_on_rules_without_watcher/1,
-    crash_looping_watcher_spares_app/1
+    crash_looping_watcher_spares_app/1,
+    server_adapter_runs_the_listener_lifecycle/1,
+    reload_recompiles_every_registered_adapter/1
 ]).
 
 -define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
@@ -33,7 +35,9 @@ all() ->
         boot_logs_reloader_enabled,
         boot_logs_reloader_disabled,
         boot_fails_on_rules_without_watcher,
-        crash_looping_watcher_spares_app
+        crash_looping_watcher_spares_app,
+        server_adapter_runs_the_listener_lifecycle,
+        reload_recompiles_every_registered_adapter
     ].
 
 init_per_testcase(boot_with_server_and_reloader, Config) ->
@@ -92,6 +96,19 @@ init_per_testcase(boot_fails_on_rules_without_watcher, Config) ->
         rules => [#{directory => ?WATCH_DIR, callback => fun(_) -> ok end}]
     }),
     Config;
+init_per_testcase(TC, Config) when
+    TC =:= server_adapter_runs_the_listener_lifecycle;
+    TC =:= reload_recompiles_every_registered_adapter
+->
+    Registered = arizona_server_registry:adapters(),
+    ok = application:set_env(arizona, server, #{
+        adapter => arizona_fake_server,
+        notify => self(),
+        drain_timeout => 1234,
+        own_opt => kept
+    }),
+    {ok, _} = application:ensure_all_started(arizona),
+    [{registered, Registered} | Config];
 init_per_testcase(boot_with_only_reloader, Config) ->
     ok = ensure_dir(?WATCH_DIR),
     ok = application:set_env(arizona, reloader, #{
@@ -107,6 +124,16 @@ init_per_testcase(boot_with_only_reloader, Config) ->
 end_per_testcase(boot_fails_on_rules_without_watcher, Config) ->
     ok = unset_env(reloader),
     ok = remove_dir(?WATCH_DIR),
+    Config;
+end_per_testcase(TC, Config) when
+    TC =:= server_adapter_runs_the_listener_lifecycle;
+    TC =:= reload_recompiles_every_registered_adapter
+->
+    ok = application:stop(arizona),
+    ok = unset_env(server),
+    %% The registry outlives the app; put back what other suites registered.
+    persistent_term:put(arizona_server_adapters, proplists:get_value(registered, Config)),
+    true = persistent_term:erase({arizona_fake_server, notify}),
     Config;
 end_per_testcase(_TC, Config) ->
     ok = application:stop(arizona),
@@ -136,6 +163,37 @@ boot_with_only_server(Config) when is_list(Config) ->
 boot_with_only_reloader(Config) when is_list(Config) ->
     ?assertNot(is_listener_up(arizona_http)),
     ?assert(has_watcher_child()).
+
+%% The `server` env's `adapter` boots, drains, and stops the listener, and gets
+%% the rest of the map minus the keys the application itself reads.
+server_adapter_runs_the_listener_lifecycle(Config) when is_list(Config) ->
+    Self = self(),
+    receive
+        {arizona_fake_server, {start, arizona_http, Opts}} ->
+            ?assertEqual(#{notify => Self, own_opt => kept}, Opts)
+    after 1000 -> ct:fail(adapter_not_started)
+    end,
+    ?assertEqual([], arizona_app:prep_stop([])),
+    receive
+        {arizona_fake_server, Drain} -> ?assertEqual({drain, arizona_http, 1234}, Drain)
+    after 1000 -> ct:fail(adapter_not_drained)
+    end,
+    %% Drained already, so the backstop stop finds nothing and must not fail.
+    ?assertEqual(ok, arizona_app:stop([])),
+    receive
+        {arizona_fake_server, Stop} -> ?assertEqual({stop, arizona_http}, Stop)
+    after 1000 -> ct:fail(adapter_not_stopped)
+    end.
+
+%% A hot reload refreshes the routes of every adapter that ran a listener, not
+%% only roadrunner's.
+reload_recompiles_every_registered_adapter(Config) when is_list(Config) ->
+    ?assert(lists:member(arizona_fake_server, arizona_server_registry:adapters())),
+    ok = arizona_reloader:reload_erl([]),
+    receive
+        {arizona_fake_server, recompile_routes} -> ok
+    after 1000 -> ct:fail(routes_not_recompiled)
+    end.
 
 %% Arizona lazy-starts its heavy deps on demand: roadrunner only when a `server`
 %% env is set (arizona_app:maybe_start_server/0), ssh only when the SSH transport

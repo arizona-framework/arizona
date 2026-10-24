@@ -223,6 +223,9 @@ Replace `yourapp` with your project's app name. Then declare routes in `config/s
 ]}].
 ```
 
+The listener runs on roadrunner by default. The `server` map's optional `adapter` key names
+another `arizona_server` implementation; every other key is that adapter's own options.
+
 A config file is read by `file:consult/1`, so every route entry must be a literal **term**. That
 becomes visible once a route needs `middlewares`: a `{Module, Function}` pair is a term, but a
 call such as `arizona_middleware:extract([path_bindings])` is not, and the node refuses to boot

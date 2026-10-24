@@ -169,7 +169,7 @@ change. It never crashes or interferes with the reload.
     Files :: [file:filename()].
 reload_erl(Files) ->
     CompileResult = compile(Files),
-    arizona_roadrunner_server:recompile_routes(),
+    ok = arizona_server_registry:recompile_routes(),
     broadcast(),
     case CompileResult of
         ok -> arizona_reloader_consistency:check(Files);
@@ -196,7 +196,7 @@ sync() ->
     maybe
         {ok, AgentUsed} ?= agent_compile(),
         Reloaded = reload_stale_modules(),
-        ok = arizona_roadrunner_server:recompile_routes(),
+        ok = arizona_server_registry:recompile_routes(),
         ok = broadcast(),
         {ok, #{agent => AgentUsed, reloaded => Reloaded}}
     end.

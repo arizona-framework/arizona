@@ -3,9 +3,10 @@
 OTP application entry point.
 
 Boots `arizona_sup`, then -- if the `server` application env is set --
-starts a roadrunner listener named `arizona_http` via
-`arizona_roadrunner_server:start/2`. On shutdown, drains that listener in
-`prep_stop/1` -- **before** the supervision tree goes down -- so it never
+starts a listener named `arizona_http` through the `arizona_server` adapter
+its `adapter` key names (default `arizona_roadrunner_server`). On shutdown,
+drains that listener in `prep_stop/1` -- **before** the supervision tree goes
+down -- so it never
 serves a request against already-dead infrastructure (pubsub, the MCP
 registry, the session store); `stop/1` re-runs the same idempotent
 cleanup as a backstop. Draining, not just stopping, is what lets clients
@@ -18,10 +19,11 @@ which they take as a deliberate end of session.
 ```erlang
 {arizona, [
     {server, #{
+        adapter => arizona_roadrunner_server,           %% arizona_server module (default)
         scheme => http,                                 %% http | https
         transport_opts => [{port, 4040}],               %% port shorthand
         drain_timeout => 5000,                          %% ms a stop waits for sessions
-        proto_opts => #{                                %% roadrunner protocol opts
+        proto_opts => #{                                %% adapter-specific: roadrunner's
             max_clients => 200,
             max_content_length => 10485760
         },
@@ -45,6 +47,7 @@ The `server` key is optional: if absent, only the supervisor starts
 
 -define(LISTENER, arizona_http).
 -define(DRAIN_TIMEOUT, 5000).
+-define(DEFAULT_ADAPTER, arizona_roadrunner_server).
 
 %% --------------------------------------------------------------------
 %% application callback exports
@@ -100,8 +103,8 @@ stop(_State) ->
 maybe_start_server() ->
     case application:get_env(arizona, server) of
         {ok, ServerOpts} ->
-            {ok, _} = application:ensure_all_started(roadrunner),
-            case arizona_roadrunner_server:start(?LISTENER, ServerOpts) of
+            {Adapter, AdapterOpts} = adapter(ServerOpts),
+            case Adapter:start(?LISTENER, AdapterOpts) of
                 {ok, _} -> ok;
                 {error, _} = Err -> Err
             end;
@@ -112,8 +115,9 @@ maybe_start_server() ->
 drain_server() ->
     case application:get_env(arizona, server) of
         {ok, ServerOpts} ->
+            {Adapter, _AdapterOpts} = adapter(ServerOpts),
             Timeout = maps:get(drain_timeout, arizona_config:resolve(ServerOpts), ?DRAIN_TIMEOUT),
-            case arizona_roadrunner_server:drain(?LISTENER, Timeout) of
+            case Adapter:drain(?LISTENER, Timeout) of
                 ok -> ok;
                 {error, not_found} -> ok
             end;
@@ -123,11 +127,18 @@ drain_server() ->
 
 stop_server() ->
     case application:get_env(arizona, server) of
-        {ok, _ServerOpts} ->
-            case arizona_roadrunner_server:stop(?LISTENER) of
+        {ok, ServerOpts} ->
+            {Adapter, _AdapterOpts} = adapter(ServerOpts),
+            case Adapter:stop(?LISTENER) of
                 ok -> ok;
                 {error, not_found} -> ok
             end;
         undefined ->
             ok
     end.
+
+%% The `server` map names its adapter; every other key but `drain_timeout`
+%% (which this module reads) is the adapter's own.
+adapter(ServerOpts) ->
+    Adapter = maps:get(adapter, ServerOpts, ?DEFAULT_ADAPTER),
+    {Adapter, maps:without([adapter, drain_timeout], ServerOpts)}.
