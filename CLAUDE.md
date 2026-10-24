@@ -2,7 +2,7 @@
 
 Erlang/OTP real-time web framework with server-side diffing. The project is in the `0.x` series -- the API may change between minor versions, so changes don't need to preserve backward compatibility for now.
 
-Dependencies: `roadrunner` (HTTP/WS server); `fs` (file system events for dev-mode watcher).
+Dependencies: `roadrunner` (HTTP/WS server). The dev reloader's file watcher is the `arizona_watcher` behaviour; its `fs`-based implementation lives in the separate `arizona_watcher_fs` package, which consumers add to a dev-only profile.
 
 ## Build & Test
 

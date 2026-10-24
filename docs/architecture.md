@@ -62,13 +62,15 @@
 | `src/arizona_error_page.erl`              | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                                  |
 | `src/arizona_config.erl`                  | App-env reader with env-var resolution -- `get_env/1,2` (drop-in for `application:get_env`) + `resolve/1`; expands `{env, "VAR"}` / `{env, "VAR", Default}` refs, coerced by default type |
 | `src/arizona_app.erl`                     | Application callback -- starts `arizona_sup` and, when the `server` env is set, launches the roadrunner listener                                                                          |
-| `src/arizona_watcher.erl`                 | File watcher gen_server -- subscribes to `fs` events, debounces, calls callback, broadcasts via `arizona_pubsub`                                                                          |
+| `src/arizona_watcher.erl`                 | Behaviour for a file-system watcher -- `init/2`, `handle_info/2` (raw event to changed paths), optional `terminate/1`; no implementation in core                                          |
+| `src/arizona_reloader_rule.erl`           | One reloader rule per process -- runs the configured `arizona_watcher`, filters by patterns, debounces, calls the callback, broadcasts via `arizona_pubsub`                               |
+| `src/arizona_reloader_sup.erl`            | Supervisor of the rule processes -- a `temporary` child of `arizona_sup`, so a crash-looping watch stops hot reload, not the app                                                          |
 | `src/arizona_reloader.erl`                | Dev-mode hot reloader -- recompiles changed `.erl` files, broadcasts reload messages on the `arizona_reloader` pubsub topic                                                               |
 | `src/arizona_reloader_consistency.erl`    | Post-reload call-consistency check -- `check/1` reports callers whose beam `imports` chunk names a function a just-reloaded module no longer exports, plus loaded-vs-disk stale modules   |
 | `src/arizona_dev_mcp.erl`                 | Dev-time MCP server exposing the running node to a coding agent -- introspection tools plus `eval`/`reload`; localhost-only by default (`allow_remote_access => false`); see docs/mcp.md  |
 | `src/arizona_dev_log.erl`                 | Bounded log ring behind the dev MCP's `get_logs` tool -- a `logger` handler keeping the last 1024 formatted events; table owned by `arizona_sup`, handler installed on first MCP session  |
 | `src/arizona_pubsub.erl`                  | PubSub -- thin `pg` wrapper for cross-view communication                                                                                                                                  |
-| `src/arizona_sup.erl`                     | Supervisor -- always starts `arizona_pubsub`; additionally starts one `arizona_watcher` per configured reloader rule                                                                      |
+| `src/arizona_sup.erl`                     | Supervisor -- always starts `arizona_pubsub`; additionally starts `arizona_reloader_sup` when the reloader has rules                                                                      |
 | `src/az.erl`                              | User-facing facade -- shared type aliases and short-form helpers re-exported from internal modules                                                                                        |
 
 ## API -- `arizona_template.erl`
@@ -1335,17 +1337,60 @@ a content update to an already-visible item.
 
 ## API -- `arizona_watcher.erl`
 
-File watcher gen_server -- subscribes to `fs` events for a directory, debounces, calls optional
-callback, broadcasts changed files via `arizona_pubsub`.
+Behaviour for the file-system watcher behind the dev reloader. Core ships no implementation, so the
+file-system dependency stays out of every build that does not reload code; `arizona_watcher_fs` (a
+separate package on the `fs` library) is the reference one, added to a dev-only rebar3 profile and
+named in the `reloader` env:
 
-- `start_link(Dir, Opts)` -- starts a linked gen_server that subscribes to `fs` events for `Dir`.
-  Options: `patterns` (list of regex strings, default `[".*"]`), `callback` (fun receiving list of
-  changed file paths), `debounce` (ms, default 100). On debounce fire: calls callback, then
-  `broadcast/1`. Relevant file events are `created`, `modified`, `deleted`, and `renamed`
-  (MOVED_TO) -- the last covers atomic-rename saves (vim, `sed -i`, agent file-writers); directory
-  renames (`isdir`) and files moved out of the dir (`removed`) are ignored
-- `broadcast(Files)` -- broadcasts `{arizona_watcher, Files}` via `arizona_pubsub` on channel
-  `arizona_watcher`
+```erlang
+%% rebar.config
+{profiles, [{dev, [{deps, [arizona_watcher_fs]}]}]}.
+
+%% config/dev.config
+{arizona, [
+    {reloader, #{
+        enabled => true,
+        watcher => arizona_watcher_fs,
+        rules => [
+            #{directory => "src", patterns => [".*\\.erl$"],
+              callback => fun arizona_reloader:reload_erl/1},
+            #{directory => "priv/static", patterns => [".*\\.css$"],
+              callback => fun arizona_reloader:reload_css/1}
+        ]
+    }}
+]}.
+```
+
+`watcher` is a module or `{Module, Opts}` (an `Opts` map handed to `init/2`). An implementation is a
+callback module run inside the rule process, not a process of its own:
+
+- `init(Dir, Opts) -> {ok, State} | {error, Reason}` -- start watching the absolute `Dir`,
+  delivering events to the calling process
+- `handle_info(Info, State) -> {ok, Paths, State} | {stop, Reason, State}` -- translate one
+  message into the paths whose content changed (created, modified, deleted, renamed into the
+  directory); `[]` for anything else, including a directory rename or a file moved out. `stop`
+  reports a dead watch: the rule stops with `Reason` and is restarted
+- `terminate(State) -> ok` (optional) -- release what the watch holds; runs on every stop,
+  supervisor shutdown included (the rule traps exits), within the 5 s shutdown timeout
+
+The rule traps exits, so a process the implementation links to it that exits abnormally stops the
+rule with that reason. Rules with no `watcher`, a watcher not on the code path (its package is not
+a dependency of the running profile), or a rule without `directory` fail the boot with a formatted
+error naming the fix. An `enabled` env with no rules needs no watcher (code still reloads through
+the dev MCP `reload` tool).
+
+## API -- `arizona_reloader_rule.erl`
+
+One process per reloader rule, from `child_specs/1`, under `arizona_reloader_sup`. That supervisor
+is a `temporary` child of `arizona_sup`, so a watch that keeps crashing exhausts the reloader's
+restart intensity (5 in 10 s) and stops hot reload, not the application.
+
+- `start_link(Dir, Opts)` -- starts a linked gen_server that runs `Opts`' `watcher` on `Dir`.
+  Options: `watcher` (required), `patterns` (list of regex strings, default `[".*"]`), `callback`
+  (fun receiving the list of changed file paths), `debounce` (ms, default 100). On debounce fire:
+  calls the callback, then broadcasts `{arizona_watcher, Dir, Files}` (`Dir` the rule's absolute
+  directory) via `arizona_pubsub` on channel `arizona_watcher`
+- `child_specs(Reloader)` -- the rule processes for a `reloader` env map, validating its `watcher`
 
 ## API -- `arizona_pubsub.erl`
 
