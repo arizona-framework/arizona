@@ -78,6 +78,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([resp_headers/1]).
 -export([resp_cookies/1]).
 -export([commit_session/1]).
+-export([flush/1]).
+-export([halt_reply/1]).
 -export([resp_status/1]).
 -export([put_flash/3]).
 -export([flash/1]).
@@ -122,6 +124,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -ignore_xref([resp_headers/1]).
 -ignore_xref([resp_cookies/1]).
 -ignore_xref([resp_status/1]).
+-ignore_xref([commit_session/1]).
 -ignore_xref([put_flash/3]).
 -ignore_xref([flash/1]).
 -ignore_xref([put_session/3]).
@@ -237,7 +240,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -nominal session() :: #{binary() => term()}.
 
 %% Response cookie options stashed by `put_resp_cookie/4` and serialized by
-%% the transport. Mirrors the transport cookie serializer's options.
+%% `arizona_cookie:serialize/3` at `flush/1`.
 -nominal resp_cookie_opts() :: #{
     domain => binary(),
     path => binary(),
@@ -689,6 +692,53 @@ commit_session_store(Store, Req) ->
 
 maybe_delete_stored(_Store, undefined) -> ok;
 maybe_delete_stored(Store, Id) -> Store:delete(Id).
+
+-doc """
+Ends the request: commits a written session (`commit_session/1`) and returns
+the header lines to add to the response -- the stashed headers
+(`put_resp_header/3`) then one `set-cookie` line per `resp_cookies/1` entry,
+serialized by `arizona_cookie:serialize/3`.
+
+A server adapter calls this, or `halt_reply/1` on a middleware halt, exactly
+once for every response it builds from an Arizona request, whatever the
+response's shape: a page, a controller reply, a stream, a WebSocket upgrade
+(whose `101` then carries the cookies). Skipping it drops the stashed cookies
+and, in store mode, the session write, with nothing reporting it.
+""".
+-spec flush(Request) -> [{binary(), iodata()}] when
+    Request :: request().
+flush(Req) ->
+    ok = commit_session(Req),
+    resp_headers(Req) ++
+        [
+            {~"set-cookie", arizona_cookie:serialize(Name, Value, Opts)}
+         || {Name, Value, Opts} <- resp_cookies(Req)
+        ].
+
+-doc """
+The response to a middleware `{halt, Request}`: its status, and its header
+lines with `flush/1`'s appended (so it also commits the session). The body is
+empty.
+
+A halting middleware says what the client should see by stashing a redirect
+(`redirect/2,3`: the status and a `location` header) or a status
+(`put_resp_status/2`). A halt carrying neither is a refusal with no reason
+disclosed, which is exactly `403 Forbidden` (RFC 9110 §15.5.4): `204` would
+report a denial as success (a `fetch` sees `ok` and resets the form), and `400`
+would blame request syntax the framework knows nothing about.
+""".
+-spec halt_reply(Request) -> {resp_status(), [{binary(), iodata()}]} when
+    Request :: request().
+halt_reply(Req) ->
+    case halted_redirect(Req) of
+        {Status, Location} ->
+            {Status, [{~"location", Location} | flush(Req)]};
+        undefined ->
+            case resp_status(Req) of
+                undefined -> {403, flush(Req)};
+                Status -> {Status, flush(Req)}
+            end
+    end.
 
 -doc """
 Stashes the HTTP status for a rendered page. Lets a view or middleware return

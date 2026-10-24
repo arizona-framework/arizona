@@ -8,7 +8,9 @@ them on yet. Every roadrunner dispatcher (`arizona_roadrunner_http`,
 `arizona_roadrunner_ws`, `arizona_roadrunner_controller`) therefore ends by
 folding that stash onto whatever response it is about to return -- which is what
 `flush/2` does, for every response shape a handler may return, not just the
-buffered `{Status, Headers, Body}` triple.
+buffered `{Status, Headers, Body}` triple. What goes on the wire is decided
+server-neutrally by `arizona_req:flush/1` and `arizona_req:halt_reply/1`; this
+module only maps it onto roadrunner's response shapes.
 
 `halt/1` builds the whole response for a middleware `{halt, Request}` the same
 way for all three, so the status a denied request sees does not depend on which
@@ -27,39 +29,22 @@ dispatcher happened to run it.
 %% --------------------------------------------------------------------
 
 -doc """
-Builds the response for a middleware `{halt, Request}`, stashed headers and
-cookies included.
-
-A halting middleware says what the client should see by stashing a redirect
-(`arizona_req:redirect/2,3`) or a status (`arizona_req:put_resp_status/2`) --
-`check_origin/2`'s `403` is the built-in example. A halt carrying neither is a
-refusal with no reason disclosed, which is exactly `403 Forbidden` (RFC 9110
-§15.5.4): `204` would report a denial as success (a browser sits on the page
-with no feedback, a `fetch` sees `ok` and resets the form), and `400` would
-blame request syntax the framework knows nothing about.
+Builds the roadrunner response for a middleware `{halt, Request}` from
+`arizona_req:halt_reply/1` (stashed headers and cookies included, session
+committed), so the status a denied request sees does not depend on which
+dispatcher happened to run it.
 """.
 -spec halt(Request) -> Resp when
     Request :: arizona_req:request(),
     Resp :: roadrunner_resp:buffered_response().
 halt(HaltReq) ->
-    Resp =
-        case arizona_req:halted_redirect(HaltReq) of
-            {Status, Location} ->
-                roadrunner_resp:redirect(Status, Location);
-            undefined ->
-                case arizona_req:resp_status(HaltReq) of
-                    undefined -> roadrunner_resp:forbidden();
-                    Status -> roadrunner_resp:status(Status)
-                end
-        end,
-    flush(HaltReq, Resp).
+    {Status, Headers} = arizona_req:halt_reply(HaltReq),
+    add_headers(roadrunner_resp:status(Status), Headers).
 
 -doc """
-Folds the request's stashed response headers and cookies onto `Resp`, then
-commits a written server-side session (`arizona_req:commit_session/1`) -- the
-flush is the commit-on-success point, so the store write happens only once a
-response has actually been built, never as a side effect of reading
-`arizona_req:resp_cookies/1`.
+Folds `arizona_req:flush/1`'s header lines onto `Resp`, which also commits a
+written server-side session: the flush is the commit-on-success point, so the
+store write happens only once a response has actually been built.
 
 Accepts every `t:roadrunner_handler:response/0` shape: the buffered triple, the
 `stream`/`loop`/`sendfile` quadruples, and a `websocket` upgrade, whose headers
@@ -69,25 +54,15 @@ headers element). Flushing an empty stash leaves any shape unchanged.
 -spec flush(Request, Resp) -> Resp when
     Request :: arizona_req:request(),
     Resp :: roadrunner_handler:response().
-flush(ArzReq, Resp0) ->
-    Resp1 = lists:foldl(
-        fun({Name, Value}, R) -> add_header(R, Name, Value) end,
-        Resp0,
-        arizona_req:resp_headers(ArzReq)
-    ),
-    Resp = lists:foldl(
-        fun({Name, Value, Opts}, R) ->
-            add_header(R, ~"set-cookie", roadrunner_cookie:serialize(Name, Value, Opts))
-        end,
-        Resp1,
-        arizona_req:resp_cookies(ArzReq)
-    ),
-    ok = arizona_req:commit_session(ArzReq),
-    Resp.
+flush(ArzReq, Resp) ->
+    add_headers(Resp, arizona_req:flush(ArzReq)).
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+add_headers(Resp, Headers) ->
+    lists:foldl(fun({Name, Value}, R) -> add_header(R, Name, Value) end, Resp, Headers).
 
 %% Prepend one header onto a handler response. The buffered triple goes through
 %% roadrunner's own builder (it guards the name and flattens an iodata value);

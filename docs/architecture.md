@@ -1822,9 +1822,14 @@ adapter's behaviour callbacks on first access and cached in the returned request
 - `put_resp_header/3`, `put_resp_cookie/4`, `put_resp_status/2` -- accumulate onto the request
 - `resp_headers/1`, `resp_cookies/1`, `resp_status/1` -- pure getters the transport reads at flush;
   `resp_cookies/1` only *builds* the cookie list, it performs no side effect
-- `commit_session/1` -- called by the transports at response flush. In server-side store mode this
+- `commit_session/1` -- called at response flush (by `flush/1`). In server-side store mode this
   is the write that persists the session, so the persist is **commit-on-success**: a handler that
   crashes after `put_session/3` leaves the store untouched
+- `flush/1` -- what a server adapter calls once per response: commits the session and returns the
+  header lines to add (stashed headers, then one `set-cookie` per cookie, serialized by
+  `arizona_cookie:serialize/3`), whatever the response's shape
+- `halt_reply/1` -- the `{Status, Headers}` of a middleware halt (redirect, else stashed status,
+  else `403`), `flush/1`'s lines included
 
 Every response a transport builds flushes the stash, the WebSocket upgrade included: a cookie, a
 header or a session write a route middleware stashes during `arizona_ws:prepare/3` rides the
