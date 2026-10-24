@@ -1,7 +1,7 @@
 -module(arizona_ws_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("common_test/include/ct.hrl").
--include("arizona.hrl").
+-include("arizona_wire.hrl").
 -include_lib("arizona/include/arizona_effect.hrl").
 
 -export([all/0, groups/0, init_per_group/2, end_per_group/2]).

@@ -522,7 +522,7 @@ would `innerHTML`-wipe the enclosing element's static siblings (the client's `re
 no element for the slot `az` and falls back to that enclosing element); a sole-child `?each`
 only appeared to work with one by coincidence. That is why op code 3 (the innerHTML op) is
 **removed** rather than kept for the cases where it happened to resolve correctly -- 3 is now
-unassigned in `arizona.hrl` and in every client.
+unassigned in `include/arizona_wire.hrl` and in every client.
 
 **A stream `?each` container full render follows the same rule.** SSR anchors a stream each by
 the identical content-slot markers, so every container-level full render is the marker-aware

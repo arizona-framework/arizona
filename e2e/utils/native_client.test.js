@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NativeClient } from './native_client.js';
 
 // arizona_effect op codes (must match include/arizona_effect.hrl); the
-// cross-language sync is guarded by test/arizona_effect_wire_SUITE.erl.
+// cross-language sync is guarded by test/arizona_wire_SUITE.erl.
 const EFFECT_PUSH_EVENT = 0;
 const EFFECT_NAVIGATE = 10;
 
-// Diff op codes (mirror src/arizona.hrl).
+// Diff op codes (mirror include/arizona_wire.hrl).
 const OP_TEXT = 0;
 const OP_SET_ATTR = 1;
 const OP_REMOVE_NODE = 4;

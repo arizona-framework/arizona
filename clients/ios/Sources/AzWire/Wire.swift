@@ -1,6 +1,6 @@
 import Foundation
 
-/// Diff op codes (mirror src/arizona.hrl).
+/// Diff op codes (mirror include/arizona_wire.hrl).
 public enum Op {
     public static let text = 0
     public static let setAttr = 1

@@ -67,6 +67,7 @@ list to that fallback instead of a per-item patch).
 """.
 
 -include("arizona.hrl").
+-include("arizona_wire.hrl").
 
 %% How much smaller a wholesale container re-render must be before it is worth
 %% giving up per-item ops. Those ops preserve the DOM -- the container is never torn

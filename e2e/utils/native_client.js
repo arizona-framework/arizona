@@ -16,7 +16,7 @@
 // Native has no SSR page, so the client connects with `_az_reconnect=1` to make
 // the live process send its `mount_and_render` output as the first OP_REPLACE.
 
-// Op codes (mirror src/arizona.hrl).
+// Op codes (mirror include/arizona_wire.hrl).
 const OP_TEXT = 0;
 const OP_SET_ATTR = 1;
 const OP_REM_ATTR = 2;

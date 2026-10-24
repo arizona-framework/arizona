@@ -139,7 +139,7 @@ describe('OP constants', () => {
     });
 
     // 3 was the removed innerHTML op. It must stay unassigned here as long as it
-    // is unassigned in arizona.hrl -- binding it to a different op on one side
+    // is unassigned in arizona_wire.hrl -- binding it to a different op on one side
     // only would silently re-interpret the other side's operands.
     it('leaves op code 3 unassigned', () => {
         expect(Object.values(OP)).not.toContain(3);

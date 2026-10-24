@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Op codes (must match include/arizona.hrl / include/arizona_effect.hrl).
+// Op codes (must match include/arizona_wire.hrl / include/arizona_effect.hrl).
 const OP_TEXT = 0;
 const OP_REPLACE = 8;
 const JS_PUSH_EVENT = 0;

@@ -17,7 +17,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * stitches statics and dynamics into a JSON string.
  */
 
-/** Diff op codes (mirror src/arizona.hrl). */
+/** Diff op codes (mirror include/arizona_wire.hrl). */
 object Op {
     const val TEXT = 0
     const val SET_ATTR = 1

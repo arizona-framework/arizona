@@ -1,6 +1,6 @@
 -module(arizona_socket_SUITE).
 -include_lib("stdlib/include/assert.hrl").
--include("arizona.hrl").
+-include("arizona_wire.hrl").
 -include("arizona_effect.hrl").
 
 -define(BAD_UTF8, <<"a", 255, "b">>).

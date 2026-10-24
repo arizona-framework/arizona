@@ -1,6 +1,6 @@
 -module(arizona_eval_SUITE).
 -include_lib("stdlib/include/assert.hrl").
--include("arizona.hrl").
+-include("arizona_wire.hrl").
 -dialyzer({nowarn_function, eval_each_def_3tuple/1}).
 
 -export([all/0, groups/0]).

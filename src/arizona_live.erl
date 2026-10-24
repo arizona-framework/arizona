@@ -62,6 +62,7 @@ fingerprints already shipped in the initial HTML.
 -behaviour(gen_server).
 
 -include("arizona.hrl").
+-include("arizona_wire.hrl").
 
 %% --------------------------------------------------------------------
 %% API function exports

@@ -1,6 +1,6 @@
 -module(arizona_native_SUITE).
 -include_lib("stdlib/include/assert.hrl").
--include("arizona.hrl").
+-include("arizona_wire.hrl").
 
 -export([all/0]).
 -export([static_single_element/1]).
