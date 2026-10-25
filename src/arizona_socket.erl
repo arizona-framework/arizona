@@ -75,6 +75,10 @@ the client reloads it after a jittered delay.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([handle_in/2]).
+-ignore_xref([handle_info/2]).
+-ignore_xref([drain/2]).
 %% Read by `drain/2` in-tree; public for adapters and tests that need the live process.
 -ignore_xref([live_pid/1]).
 

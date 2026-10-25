@@ -22,6 +22,14 @@ behind a TLS-terminating proxy too).
 -export([wrap/3]).
 
 %% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([preflight/3]).
+-ignore_xref([wrap/3]).
+
+%% --------------------------------------------------------------------
 %% Macros
 %% --------------------------------------------------------------------
 

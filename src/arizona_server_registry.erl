@@ -36,6 +36,9 @@ unregistered; one with no listener left recompiles nothing.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([listener_up/3]).
+-ignore_xref([listener_down/1]).
 %% Introspection for apps and tests; in-tree code only calls it internally.
 -ignore_xref([adapters/0]).
 

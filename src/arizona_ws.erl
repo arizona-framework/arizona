@@ -32,6 +32,9 @@ via `arizona_req:raw/1`.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([upgrade/3]).
+-ignore_xref([init/1]).
 %% The step under `upgrade/3`, kept public for an adapter that answers the upgrade itself.
 -ignore_xref([prepare/3]).
 

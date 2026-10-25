@@ -106,6 +106,9 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([new/3]).
+
 -ignore_xref([method/1]).
 -ignore_xref([path/1]).
 -ignore_xref([scheme/1]).
