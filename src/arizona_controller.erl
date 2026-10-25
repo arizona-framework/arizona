@@ -43,9 +43,10 @@ response (and, in store mode, the session store). Thread it through
 | sendfile | `{sendfile, Status, Headers, {Path, Offset, Length}}` |
 | loop | `{loop, Status, Headers, State}` -- the controller exports `handle_info/3` |
 
-Every adapter answers a buffered reply. The others are a capability: an adapter
-whose server cannot produce one raises `{unsupported_reply, Kind, Adapter}`
-(`unsupported_reply/2`) rather than degrading it silently.
+Every adapter answers a buffered reply. The others are a capability the
+adapter declares (`c:arizona_server:capabilities/0`): `dispatch/3` refuses one it
+lacks with `{unsupported_reply, Kind, Adapter}` before the session commits,
+rather than the reply degrading silently.
 
 A loop keeps the response open and hands every message the connection receives
 to `Handler:handle_info(Msg, Push, State)`, where `Push(Data)` writes one chunk;
@@ -64,11 +65,10 @@ error/success) or a `navigate`.
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([dispatch/2]).
+-export([dispatch/3]).
 -export([reply_effects/1]).
 -export([reply_effects/2]).
 -export([reply_redirect/1]).
--export([unsupported_reply/2]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -78,8 +78,6 @@ error/success) or a `navigate`.
 -ignore_xref([reply_effects/1]).
 -ignore_xref([reply_effects/2]).
 -ignore_xref([reply_redirect/1]).
-%% For adapters whose server lacks a reply kind; roadrunner has them all.
--ignore_xref([unsupported_reply/2]).
 %% Called by `erl_error` via the `error_info` annotation, not directly.
 -ignore_xref([format_error/2]).
 
@@ -135,7 +133,8 @@ error/success) or a `navigate`.
 %% --------------------------------------------------------------------
 
 -doc """
-Runs a controller route against a request: the route's middleware pipeline
+Runs a controller route against a request for the server adapter `Adapter`: the
+route's middleware pipeline
 (the CSRF `check_origin` step included by default), then the action, handed the
 route `state` and the pipeline's bindings as its `t:context/0`.
 
@@ -145,15 +144,17 @@ the action returned, whose raw value is what the adapter hands back to its
 server. A middleware halt returns its `arizona_req:halt_reply/1` as a buffered
 reply, without running the action.
 
-An adapter maps the reply onto its server, raising `unsupported_reply/2` for a
-kind it cannot produce. For a loop it routes the connection's messages to
+A reply kind `Adapter` lacks raises `{unsupported_reply, Kind, Adapter}`, like a
+malformed reply, before the flush. The adapter maps the rest onto its server;
+for a loop it routes the connection's messages to
 `Handler:handle_info/3`, translating its server's disconnect signal into
 `{arizona_disconnect, Reason}`.
 """.
--spec dispatch(Route, Request) -> {reply(), Request} when
+-spec dispatch(Route, Request, Adapter) -> {reply(), Request} when
     Route :: route(),
-    Request :: arizona_req:request().
-dispatch(#{middlewares := Middlewares} = Route, ArzReq) ->
+    Request :: arizona_req:request(),
+    Adapter :: module().
+dispatch(#{middlewares := Middlewares} = Route, ArzReq, Adapter) ->
     case arizona_middleware:apply_middlewares(Middlewares, ArzReq, #{}) of
         {halt, HaltReq} ->
             {Status, Headers} = arizona_req:halt_reply(HaltReq),
@@ -165,6 +166,7 @@ dispatch(#{middlewares := Middlewares} = Route, ArzReq) ->
             %% Checked before the flush, which commits a written session: a
             %% reply the adapter cannot send must not leave a write behind.
             ok = check_reply(Handler, Reply),
+            ok = check_supported(Reply, Adapter),
             {with_flush(Reply, arizona_req:flush(ArzReq3)), ArzReq3}
     end.
 
@@ -237,19 +239,6 @@ reply_redirect(Location) ->
                 {error_info, #{module => ?MODULE}}
             ])
     end.
-
--doc """
-Raises `{unsupported_reply, Kind, Adapter}`: what an adapter does with a reply
-kind its server cannot produce, so the controller fails where it asked for it
-instead of the client receiving something else.
-""".
--spec unsupported_reply(Kind, Adapter) -> no_return() when
-    Kind :: reply_kind(),
-    Adapter :: module().
-unsupported_reply(Kind, Adapter) ->
-    erlang:error({unsupported_reply, Kind, Adapter}, [Kind, Adapter], [
-        {error_info, #{module => ?MODULE}}
-    ]).
 
 -doc """
 Renders this module's errors. Picked up by `erl_error` via the `error_info`
@@ -344,8 +333,27 @@ check_reply(Handler, {loop, Status, _Headers, _State}) when is_integer(Status) -
 check_reply(_Handler, Reply) ->
     erlang:error({bad_reply, Reply}, none, [{error_info, #{module => ?MODULE}}]).
 
+check_supported({Kind, _Status, _Headers, _Payload}, Adapter) ->
+    #{replies := Supported} = arizona_server_registry:capabilities(Adapter),
+    case lists:member(Kind, Supported) of
+        true -> ok;
+        false -> unsupported_reply(Kind, Adapter)
+    end;
+check_supported(_Buffered, _Adapter) ->
+    ok.
+
 %% The flushed lines go ahead of the action's own headers, every reply kind.
 with_flush({Status, Headers, Body}, Flush) when is_integer(Status) ->
     {Status, Flush ++ Headers, Body};
 with_flush({Kind, Status, Headers, Payload}, Flush) ->
     {Kind, Status, Flush ++ Headers, Payload}.
+
+%% A reply kind the adapter lacks: the controller fails where it asked for it
+%% instead of the client receiving something else.
+-spec unsupported_reply(Kind, Adapter) -> no_return() when
+    Kind :: reply_kind(),
+    Adapter :: module().
+unsupported_reply(Kind, Adapter) ->
+    erlang:error({unsupported_reply, Kind, Adapter}, [Kind, Adapter], [
+        {error_info, #{module => ?MODULE}}
+    ]).

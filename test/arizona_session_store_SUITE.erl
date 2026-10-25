@@ -195,7 +195,16 @@ controller_refused_reply_commits_nothing(Config) when is_list(Config) ->
     },
     Req = arizona_req_test_adapter:new(#{cookies => []}),
     Before = ets:tab2list(?STORE_TABLE),
-    ?assertError({bad_reply, not_a_reply}, arizona_controller:dispatch(Route, Req)),
+    ?assertError(
+        {bad_reply, not_a_reply}, arizona_controller:dispatch(Route, Req, arizona_roadrunner_server)
+    ),
+    ?assertEqual(Before, ets:tab2list(?STORE_TABLE)),
+    %% A well-formed reply the adapter cannot send is refused just as early.
+    Loop = Route#{handler => arizona_loop_controller, action => write_then_loop},
+    ?assertError(
+        {unsupported_reply, loop, arizona_fake_server},
+        arizona_controller:dispatch(Loop, Req, arizona_fake_server)
+    ),
     ?assertEqual(Before, ets:tab2list(?STORE_TABLE)).
 
 %% A cookie that cannot be serialized fails the response; it must fail it

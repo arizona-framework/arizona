@@ -19,6 +19,7 @@ adapter is never unregistered; one with no listener left recompiles nothing.
 -export([register/1]).
 -export([adapters/0]).
 -export([recompile_routes/0]).
+-export([capabilities/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -55,6 +56,21 @@ register(Adapter) when is_atom(Adapter) ->
 -spec adapters() -> [module()].
 adapters() ->
     persistent_term:get(?KEY, []).
+
+-doc """
+`Adapter`'s capabilities (`c:arizona_server:capabilities/0`); every kind when it
+does not declare them.
+""".
+-spec capabilities(Adapter) ->
+    #{routes := [mcp | reload], replies := [stream | sendfile | loop]}
+when
+    Adapter :: module().
+capabilities(Adapter) ->
+    {module, Adapter} = code:ensure_loaded(Adapter),
+    case erlang:function_exported(Adapter, capabilities, 0) of
+        true -> Adapter:capabilities();
+        false -> #{routes => [mcp, reload], replies => [stream, sendfile, loop]}
+    end.
 
 -doc "Asks every registered adapter to recompile its listeners' routes.".
 -spec recompile_routes() -> ok.

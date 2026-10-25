@@ -11,6 +11,7 @@ process, so `stop/1` and `drain/2` answer `{error, not_found}` once it is gone.
 -export([stop/1]).
 -export([drain/2]).
 -export([recompile_routes/0]).
+-export([capabilities/0]).
 
 -define(NOTIFY, {?MODULE, notify}).
 
@@ -37,6 +38,10 @@ drain(Name, Timeout) ->
 
 recompile_routes() ->
     notify(recompile_routes).
+
+%% The baseline only, so a capability kind is refused.
+capabilities() ->
+    #{routes => [], replies => []}.
 
 stop_listener(Name) ->
     case whereis(Name) of

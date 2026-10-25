@@ -37,8 +37,8 @@ stop(Name) ->
 drain(Name, TimeoutMs) ->
     arizona_cowboy_server:drain(Name, TimeoutMs).
 
-%% The dev routes (`mcp`, `reload`) are roadrunner-only for now.
 -spec supports_route(Kind) -> boolean() when
     Kind :: mcp | reload.
-supports_route(_Kind) ->
-    false.
+supports_route(Kind) ->
+    #{routes := Routes} = arizona_cowboy_server:capabilities(),
+    lists:member(Kind, Routes).

@@ -4,14 +4,14 @@ The Cowboy `arizona_server` adapter: boots a Cowboy listener serving Arizona
 routes.
 
 Cowboy's router sees one catch-all route to `arizona_cowboy_handler`; the
-Arizona routes are compiled by `arizona_cowboy_router` into a table kept per
+Arizona routes are compiled by `arizona_route_table` into a table kept per
 listener in a `persistent_term`, which the handler and
 `arizona_cowboy_req:resolve_route/3` read.
 
 ## Options
 
 - `routes` -- the Arizona route list (required). `mcp` and `reload` routes are
-  refused: this adapter does not serve them.
+  refused (`capabilities/0`): this adapter does not serve them yet.
 - `transport_opts` -- `[{port, Port}]` (default `4040`); other entries go to
   Ranch's socket options.
 - `compress` -- `true` (default) compresses pages and assets
@@ -32,6 +32,7 @@ Not supported yet: TLS (`scheme => https`) and Cowboy's HTTP/2 WebSocket.
 -export([stop/1]).
 -export([drain/2]).
 -export([recompile_routes/0]).
+-export([capabilities/0]).
 -export([table/1]).
 -export([sessions/1]).
 
@@ -55,7 +56,7 @@ start(Name, Opts0) ->
         compress => maps:get(compress, Opts, true),
         error_page => maps:get(error_page, Opts, {arizona_error_page, render})
     },
-    Table = arizona_cowboy_router:compile(Routes, BuildOpts),
+    Table = arizona_route_table:compile(Routes, BuildOpts, ?MODULE),
     {ok, _} = application:ensure_all_started(cowboy),
     persistent_term:put(?KEY(Name), {Routes, BuildOpts, Table}),
     Dispatch = cowboy_router:compile([{'_', [{"/[...]", arizona_cowboy_handler, Name}]}]),
@@ -102,7 +103,7 @@ recompile_routes() ->
     lists:foreach(
         fun
             ({?KEY(Name), {Routes, BuildOpts, _Table}}) ->
-                Table = arizona_cowboy_router:compile(Routes, BuildOpts),
+                Table = arizona_route_table:compile(Routes, BuildOpts, ?MODULE),
                 persistent_term:put(?KEY(Name), {Routes, BuildOpts, Table});
             (_Other) ->
                 ok
@@ -110,8 +111,13 @@ recompile_routes() ->
         persistent_term:get()
     ).
 
+-doc "Every controller reply kind; neither dev route (`mcp`, `reload`) yet.".
+-spec capabilities() -> #{routes := [mcp | reload], replies := [stream | sendfile | loop]}.
+capabilities() ->
+    #{routes => [], replies => [stream, sendfile, loop]}.
+
 -doc "The compiled route table of the listener `Name`.".
--spec table(Name) -> arizona_cowboy_router:table() when
+-spec table(Name) -> arizona_route_table:table() when
     Name :: atom().
 table(Name) ->
     {_Routes, _BuildOpts, Table} = persistent_term:get(?KEY(Name)),

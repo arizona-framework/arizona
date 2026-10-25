@@ -1,10 +1,10 @@
 -module(arizona_cowboy_handler).
 -moduledoc """
 The Cowboy adapter's single handler: every request reaches it through the
-listener's catch-all route, and it routes with `arizona_cowboy_router`.
+listener's catch-all route, and it routes with `arizona_route_table`.
 
 What each route kind answers comes from core -- `arizona_http:reply/3` for a
-page, `arizona_ws:upgrade/3` for a WebSocket, `arizona_controller:dispatch/2`
+page, `arizona_ws:upgrade/3` for a WebSocket, `arizona_controller:dispatch/3`
 for a controller -- and this module only maps it onto Cowboy, wrapping it in the
 route's response transforms (`arizona_cowboy_transforms`). It is also the
 `cowboy_loop` handler of a controller's `{loop, ...}` reply and the
@@ -50,7 +50,7 @@ route's response transforms (`arizona_cowboy_transforms`). It is also the
         | {cowboy_websocket, Req, map(), map()}.
 init(Req, Listener) ->
     Table = arizona_cowboy_server:table(Listener),
-    case arizona_cowboy_router:match(cowboy_req:method(Req), cowboy_req:path(Req), Table) of
+    case arizona_route_table:match(cowboy_req:method(Req), cowboy_req:path(Req), Table) of
         not_found ->
             {ok, reply({404, [], <<>>}, Req), Listener};
         {method_not_allowed, Allow} ->
@@ -137,19 +137,19 @@ websocket_info(Msg, #{socket := Sock} = State) ->
 %% A plain OPTIONS reaches a route only when it was opened for a CORS
 %% preflight; it answers with the URL's Allow set, never the route.
 serve(#{cors_options := true} = Entry, #{method := ~"OPTIONS"} = Req, Listener) ->
-    Allow = arizona_cowboy_router:allow(
+    Allow = arizona_route_table:allow(
         cowboy_req:path(Req), arizona_cowboy_server:table(Listener)
     ),
     finish(Entry, Req, {204, [{~"allow", join(Allow)} || Allow =/= []], <<>>}, Listener);
-serve(#{kind := live, route := Route, build_opts := BuildOpts} = Entry, Req, Listener) ->
-    #{handler := Handler} = Live = arizona_route:live(Route, BuildOpts),
+serve(#{kind := live, target := #{handler := Handler} = Live} = Entry, Req, Listener) ->
     {Status, Headers, Body, ArzReq} = arizona_http:reply(
         Handler, arizona_cowboy_req:new(Req), Live
     ),
     finish(Entry, arizona_req:raw(ArzReq), {Status, Headers, Body}, Listener);
-serve(#{kind := controller, route := Route} = Entry, Req, Listener) ->
-    #{handler := Handler} = Controller = arizona_route:controller(Route),
-    {Reply, ArzReq} = arizona_controller:dispatch(Controller, arizona_cowboy_req:new(Req)),
+serve(#{kind := controller, target := #{handler := Handler} = Controller} = Entry, Req, Listener) ->
+    {Reply, ArzReq} = arizona_controller:dispatch(
+        Controller, arizona_cowboy_req:new(Req), arizona_cowboy_server
+    ),
     controller_reply(Entry, Handler, Reply, arizona_req:raw(ArzReq), Listener);
 serve(#{kind := ws}, Req, Listener) ->
     case arizona_ws:upgrade(cowboy_req:parse_qs(Req), arizona_cowboy_req, Req) of
@@ -162,9 +162,9 @@ serve(#{kind := ws}, Req, Listener) ->
                 idle_timeout => infinity
             }}
     end;
-serve(#{kind := asset, route := Route} = Entry, Req, Listener) ->
+serve(#{kind := asset, route := Route, target := Dir} = Entry, Req, Listener) ->
     Segments = maps:get(~"path", cowboy_req:bindings(Req), []),
-    case asset_file(arizona_route:asset_dir(Route), Segments) of
+    case asset_file(Dir, Segments) of
         undefined -> finish(Entry, Req, {404, [], <<>>}, Listener);
         File -> serve_file(Entry, Route, File, Req, Listener)
     end.

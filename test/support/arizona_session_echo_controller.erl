@@ -1,7 +1,7 @@
 -module(arizona_session_echo_controller).
 -moduledoc """
 **TEST FIXTURE.** Echoes the middleware-produced session back, to verify
-`arizona_controller:dispatch/2` threads the middleware pipeline's product to the
+`arizona_controller:dispatch/3` threads the middleware pipeline's product to the
 action: the post-middleware `arizona_req:request()` (`arizona_controller:req/1`)
 and the produced bindings (the `bindings` of the action's context).
 """.

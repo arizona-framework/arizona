@@ -343,7 +343,7 @@ route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
     ];
 route_to_roadrunner(Route, BuildOpts) ->
     %% A controller (verb tag or `{match, ...}`); `arizona_roadrunner_controller`
-    %% runs `arizona_controller:dispatch/2` on what `arizona_route:controller/1`
+    %% runs `arizona_controller:dispatch/3` on what `arizona_route:controller/1`
     %% names.
     controller = arizona_route:kind(Route),
     [

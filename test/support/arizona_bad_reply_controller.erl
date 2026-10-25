@@ -1,6 +1,6 @@
 -module(arizona_bad_reply_controller).
 -moduledoc """
-**TEST FIXTURE.** Actions whose reply `arizona_controller:dispatch/2` must refuse:
+**TEST FIXTURE.** Actions whose reply `arizona_controller:dispatch/3` must refuse:
 a term that is no reply kind, and a `{loop, ...}` from a module with no
 `handle_info/3`. Both write the session first, so a refusal that came after the
 flush would have committed it.

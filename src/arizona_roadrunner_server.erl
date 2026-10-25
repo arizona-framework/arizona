@@ -82,6 +82,7 @@ when `protocols` is omitted is `[http1]` (HTTP/1.1 only).
 -export([stop/1]).
 -export([drain/2]).
 -export([recompile_routes/0]).
+-export([capabilities/0]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -184,6 +185,11 @@ recompile_routes() ->
         end,
         Terms
     ).
+
+-doc "Roadrunner serves every route and reply kind.".
+-spec capabilities() -> #{routes := [mcp | reload], replies := [stream | sendfile | loop]}.
+capabilities() ->
+    #{routes => [mcp, reload], replies => [stream, sendfile, loop]}.
 
 -doc """
 Formats runtime errors raised with an `error_info` annotation pointing at

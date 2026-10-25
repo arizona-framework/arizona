@@ -182,7 +182,7 @@ reply_redirect_refuses_unsafe_scheme(Config) when is_list(Config) ->
     ).
 
 %% --------------------------------------------------------------------
-%% dispatch/2
+%% dispatch/3
 %% --------------------------------------------------------------------
 
 %% The cookie an action writes on its request goes out ahead of the reply's own
@@ -220,7 +220,7 @@ dispatch_flushes_the_returned_request(Config) when is_list(Config) ->
     Session = arizona_session:encode(#{~"user_id" => ~"u1"}),
     Req = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Session}]}),
     Route = route(arizona_logout_controller, handle_dropped, #{}, []),
-    {{200, Dropped, _}, _} = arizona_controller:dispatch(Route, Req),
+    {{200, Dropped, _}, _} = arizona_controller:dispatch(Route, Req, arizona_roadrunner_server),
     ?assertEqual([{~"content-type", ~"application/json"}], Dropped).
 
 %% A reply no adapter could send is refused before the flush commits anything.
@@ -239,22 +239,27 @@ dispatch_names_a_missing_action(Config) when is_list(Config) ->
         dispatch(arizona_users_controller, nope, #{}, [])
     ).
 
+%% A reply kind the adapter does not declare is refused, naming both.
 unsupported_reply_names_kind_and_adapter(Config) when is_list(Config) ->
+    Route = route(arizona_loop_controller, handle, #{}, []),
+    Req = arizona_req_test_adapter:new(#{cookies => []}),
     {error, Reason, ST} =
-        try arizona_controller:unsupported_reply(loop, some_adapter) of
+        try arizona_controller:dispatch(Route, Req, arizona_fake_server) of
             _ -> error(not_raised)
         catch
             error:R:S -> {error, R, S}
         end,
-    ?assertEqual({unsupported_reply, loop, some_adapter}, Reason),
+    ?assertEqual({unsupported_reply, loop, arizona_fake_server}, Reason),
     Message = iolist_to_binary(erl_error:format_exception(error, Reason, ST)),
     ?assertNotEqual(
-        nomatch, binary:match(Message, ~"some_adapter server adapter cannot send a loop")
+        nomatch, binary:match(Message, ~"arizona_fake_server server adapter cannot send a loop")
     ).
 
 dispatch(Handler, Action, State, Middlewares) ->
     arizona_controller:dispatch(
-        route(Handler, Action, State, Middlewares), arizona_req_test_adapter:new(#{cookies => []})
+        route(Handler, Action, State, Middlewares),
+        arizona_req_test_adapter:new(#{cookies => []}),
+        arizona_roadrunner_server
     ).
 
 route(Handler, Action, State, Middlewares) ->

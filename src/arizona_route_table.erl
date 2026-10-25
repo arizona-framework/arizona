@@ -1,27 +1,28 @@
--module(arizona_cowboy_router).
+-module(arizona_route_table).
 -moduledoc """
-Route matching for the Cowboy adapter.
+A compiled Arizona route list and its matcher: the routing contract in
+`docs/adapters.md`, for an adapter whose server's router cannot express it.
 
-Cowboy's own router cannot express Arizona's routing contract: it has no method
-dimension, so it can neither dispatch one path to several routes by verb nor
-build a `405`'s `Allow` set, and it answers a miss itself. So the adapter mounts
-a single catch-all route on Cowboy and matches here, from the rules in
-`arizona_route`.
+Cowboy's router, for one, has no method dimension, so it can neither dispatch a
+path to several routes by verb nor build a `405`'s `Allow` set, and it answers a
+miss itself. Such an adapter mounts one catch-all route and matches here, so
+every adapter routes by the same rules. A server whose router does express them
+(roadrunner) keeps its own.
 
-`compile/2` turns an Arizona route list into an ordered table (refusing what
-the contract refuses: a route the earlier ones fully shadow, a `mcp` or
-`reload` route this adapter does not serve). `match/3` follows the contract
-in `docs/adapters.md`: declaration order, first match wins; `:name` captures one
-segment and `*name` the rest, percent-decoded; empty segments ignored; a path
-whose matching routes all refuse the method answers `method_not_allowed` with
-the union of their methods.
+`compile/3` turns a route list into an ordered table, refusing what the contract
+refuses: a route kind the adapter lacks (`c:arizona_server:capabilities/0`), a
+`*name` followed by more segments, and a route the earlier ones fully shadow.
+`match/3`: declaration order, first match wins; `:name` captures one segment and
+`*name` the rest, percent-decoded; empty segments ignored; a path whose matching
+routes all refuse the method answers `method_not_allowed` with the union of
+their methods.
 """.
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([compile/2]).
+-export([compile/3]).
 -export([match/3]).
 -export([allow/2]).
 -export([format_error/2]).
@@ -56,7 +57,10 @@ the union of their methods.
     %% `OPTIONS` is then answered by the adapter, never the route.
     cors_options := boolean(),
     transforms := [arizona_middleware:http_transform()],
-    build_opts := arizona_route:build_opts()
+    %% What the route is served with, computed once: `arizona_route:live/2` for
+    %% a page, `arizona_route:controller/1` for a controller, the directory for
+    %% an asset, the route options for the rest.
+    target := term()
 }.
 
 -nominal table() :: [entry()].
@@ -66,16 +70,18 @@ the union of their methods.
 %% --------------------------------------------------------------------
 
 -doc """
-Compiles `Routes` into a match table. Raises `arizona_route:unsupported/2` for a
-`mcp` or `reload` route, `{invalid_route_path, Path, wildcard_not_last}` for a
-`*name` followed by more segments, and `{unreachable_route, Pos, Path, By}` for a
-route the earlier ones fully shadow.
+Compiles `Routes` for the adapter `Adapter`. Raises `arizona_route:unsupported/2`
+for a route kind `Adapter` lacks, `{invalid_route_path, Path, wildcard_not_last}`
+for a `*name` followed by more segments, and `{unreachable_route, Pos, Path, By}`
+for a route the earlier ones fully shadow.
 """.
--spec compile(Routes, BuildOpts) -> table() when
+-spec compile(Routes, BuildOpts, Adapter) -> table() when
     Routes :: [term()],
-    BuildOpts :: arizona_route:build_opts().
-compile(Routes, BuildOpts) ->
-    Table = [entry(Route, BuildOpts) || Route <- Routes],
+    BuildOpts :: arizona_route:build_opts(),
+    Adapter :: module().
+compile(Routes, BuildOpts, Adapter) ->
+    #{routes := Supported} = arizona_server_registry:capabilities(Adapter),
+    Table = [entry(Route, BuildOpts, Supported, Adapter) || Route <- Routes],
     ok = check_shadowing(lists:zip(lists:seq(1, length(Table)), Table)),
     Table.
 
@@ -103,9 +109,14 @@ it answers every method (no set can enumerate that).
     Path :: binary(),
     Table :: table().
 allow(Path, Table) ->
-    case match(~"ARIZONA-ALLOW-PROBE", Path, Table) of
-        {method_not_allowed, Allow} -> Allow;
-        _Answered -> []
+    Segments = segments(Path),
+    Methods = [
+        M
+     || #{pattern := P, methods := M} <- Table, match_pattern(P, Segments, #{}) =/= nomatch
+    ],
+    case lists:member(any, Methods) of
+        true -> [];
+        false -> lists:usort(lists:append(Methods))
     end.
 
 -doc "Renders this module's route-compilation errors.".
@@ -135,28 +146,33 @@ format_error({unreachable_route, Pos, Path, By}, _ST) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-entry(Route, BuildOpts) ->
+entry(Route, BuildOpts, Supported, Adapter) ->
     Kind = arizona_route:kind(Route),
-    ok = check_supported(Kind),
-    Path = route_path(Route),
-    Pattern = pattern(Path),
+    ok = check_supported(Kind, Supported, Adapter),
     Transforms = arizona_route:transforms(Route, BuildOpts),
-    Methods0 = arizona_route:methods(Route),
-    {Methods, CorsOptions} = open_cors_options(Methods0, Transforms),
+    {Methods, CorsOptions} = open_cors_options(arizona_route:methods(Route), Transforms),
     #{
         route => Route,
         kind => Kind,
-        pattern => Pattern,
+        pattern => pattern(route_path(Route)),
         methods => Methods,
         cors_options => CorsOptions,
         transforms => Transforms,
-        build_opts => BuildOpts
+        target => target(Kind, Route, BuildOpts)
     }.
 
-check_supported(Kind) when Kind =:= mcp; Kind =:= reload ->
-    arizona_route:unsupported(Kind, arizona_cowboy_server);
-check_supported(_Kind) ->
+check_supported(Kind, Supported, Adapter) when Kind =:= mcp; Kind =:= reload ->
+    case lists:member(Kind, Supported) of
+        true -> ok;
+        false -> arizona_route:unsupported(Kind, Adapter)
+    end;
+check_supported(_Kind, _Supported, _Adapter) ->
     ok.
+
+target(live, Route, BuildOpts) -> arizona_route:live(Route, BuildOpts);
+target(controller, Route, _BuildOpts) -> arizona_route:controller(Route);
+target(asset, Route, _BuildOpts) -> arizona_route:asset_dir(Route);
+target(_Kind, Route, _BuildOpts) -> element(tuple_size(Route), Route).
 
 %% An asset route serves everything under its prefix.
 route_path({asset, Path, _Source}) -> <<Path/binary, "/*path">>;

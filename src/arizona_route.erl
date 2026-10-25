@@ -220,7 +220,7 @@ live({live, _Path, Handler, Opts} = Route, BuildOpts) ->
 
 -doc """
 What a `controller` route runs: the `arizona_controller:route()` that
-`arizona_controller:dispatch/2` takes.
+`arizona_controller:dispatch/3` takes.
 """.
 -spec controller(Route) -> arizona_controller:route() when
     Route :: term().

@@ -8,6 +8,7 @@ so a disconnect can be observed.
 """.
 
 -export([handle/2]).
+-export([write_then_loop/2]).
 -export([handle_info/3]).
 
 -spec handle(Req, Ctx) -> {Reply, Req} when
@@ -18,6 +19,15 @@ handle(Req, #{state := State}) ->
     self() ! {tick, 1},
     self() ! {tick, 2},
     {{loop, 200, [{~"content-type", ~"text/event-stream"}], State}, Req}.
+
+%% Writes the session, then asks for a loop: an adapter without loops must
+%% refuse it before that write commits.
+-spec write_then_loop(Req, Ctx) -> {Reply, Req} when
+    Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
+    Reply :: arizona_controller:reply().
+write_then_loop(Req, _Ctx) ->
+    {{loop, 200, [], #{}}, arizona_req:put_session(Req, ~"k", ~"v")}.
 
 -spec handle_info(Info, Push, State) -> {ok, State} | {stop, State} when
     Info :: term(),

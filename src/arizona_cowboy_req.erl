@@ -3,7 +3,7 @@
 Cowboy adapter for the `arizona_req` behaviour.
 
 The raw value is Cowboy's request map. Path bindings are the ones
-`arizona_cowboy_router` matched, stored on the request under Cowboy's own
+`arizona_route_table` matched, stored on the request under Cowboy's own
 `bindings` key (binary names, percent-decoded values), since Cowboy's router
 only saw the adapter's catch-all route.
 """.
@@ -101,9 +101,8 @@ Resolves a navigate target against the routes of the listener that accepted
     RouteOpts :: arizona_live:route_opts(),
     ArzReq :: arizona_req:request().
 resolve_route(Path, Qs, #{ref := Listener} = CowboyReq) when is_binary(Path) ->
-    case arizona_cowboy_router:match(~"GET", Path, arizona_cowboy_server:table(Listener)) of
-        {ok, #{kind := live, route := Route, build_opts := BuildOpts}, Bindings} ->
-            #{handler := Handler} = Live = arizona_route:live(Route, BuildOpts),
+    case arizona_route_table:match(~"GET", Path, arizona_cowboy_server:table(Listener)) of
+        {ok, #{kind := live, target := #{handler := Handler} = Live}, Bindings} ->
             NavReq = CowboyReq#{path => Path, qs => Qs, bindings => Bindings},
             {ok, Handler, maps:without([handler], Live), new(NavReq)};
         _NotALivePage ->

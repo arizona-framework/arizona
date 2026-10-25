@@ -1,6 +1,6 @@
 -module(arizona_roadrunner_controller).
 -moduledoc """
-Roadrunner handler for controller routes: runs `arizona_controller:dispatch/2`
+Roadrunner handler for controller routes: runs `arizona_controller:dispatch/3`
 and maps its reply onto roadrunner's response shapes.
 
 A controller route (`{get, ...}`/`{post, ...}`/.../`{match, ...}`) compiles to this
@@ -34,7 +34,9 @@ body read advanced.
     Response :: roadrunner_handler:response().
 handle(Req) ->
     #{arizona := #{handler := Handler} = Route} = roadrunner_req:state(Req),
-    {Reply, ArzReq} = arizona_controller:dispatch(Route, arizona_roadrunner_req:new(Req)),
+    {Reply, ArzReq} = arizona_controller:dispatch(
+        Route, arizona_roadrunner_req:new(Req), arizona_roadrunner_server
+    ),
     {to_roadrunner(Handler, Reply), arizona_req:raw(ArzReq)}.
 
 -doc """

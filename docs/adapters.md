@@ -4,7 +4,7 @@ Arizona runs on any HTTP/WebSocket server through an **adapter**. Two are built 
 (`arizona_roadrunner_*`, the default) and Cowboy's (`arizona_cowboy_*`, selected with
 `adapter => arizona_cowboy_server`), and both pass the conformance suite. Cowboy's is also the
 worked example of an adapter for a server whose router cannot express the routing contract: it
-mounts one catch-all route and matches in `arizona_cowboy_router`. This page is the contract an
+mounts one catch-all route and matches in `arizona_route_table`. This page is the contract an
 adapter meets and the core functions it builds on.
 
 Everything security-relevant or user-visible is decided in core, once: what a route means, the
@@ -37,13 +37,16 @@ The application starts the `server` env's listener through the adapter its `adap
 | Its router | `arizona_route` | the [routing contract](#routing) |
 | Live pages | `arizona_http:reply/3` | reply as returned, plus framing |
 | WebSocket | `arizona_ws:upgrade/3`, `arizona_ws:init/1`, `arizona_socket` | the [WebSocket](#websocket) mapping |
-| Controllers | `arizona_controller:dispatch/2` | the [reply kinds](#controllers) |
+| Controllers | `arizona_controller:dispatch/3` | the [reply kinds](#controllers) |
 | Assets | `arizona_route:asset_dir/1` | the server's own static-file handler |
 | Response transforms | `arizona_route:transforms/2` | etag, compress, cors, security headers |
 
 ### Listener lifecycle -- `arizona_server`
 
-`start/2`, `stop/1`, `drain/2`, `recompile_routes/0`. A listener that is up registers its adapter
+`start/2`, `stop/1`, `drain/2`, `recompile_routes/0`, and the optional `capabilities/0`: the
+capability route kinds (`mcp`, `reload`) and controller reply kinds (`stream`, `sendfile`,
+`loop`) the adapter supports, every kind when omitted. Core refuses the rest for you, so an
+unsupported kind fails loudly instead of degrading. A listener that is up registers its adapter
 with `arizona_server_registry:register/1`, so the dev reloader recompiles its routes after a code
 reload (route terms can hold funs from reloaded modules). A listener another framework owns
 registers the same way.
@@ -68,9 +71,9 @@ arrives as `CONNECT`), and match exactly as an HTTP request to that path would.
 ### Routing
 
 `arizona_route:kind/1` names a route (`live`, `ws`, `asset`, `controller`, `mcp`, `reload`) and
-refuses a term that is no route. `mcp` and `reload` are capabilities: an adapter without one
-raises `arizona_route:unsupported/2` while compiling its routes, so the listener refuses to
-start. For the rest, compile from `arizona_route` rather than restating its rules:
+refuses a term that is no route. `mcp` and `reload` are capabilities: a route kind the adapter
+lacks raises `arizona_route:unsupported/2` while compiling, so the listener refuses to start.
+Compile from `arizona_route` rather than restating its rules:
 
 - `path/1`, `methods/1` -- the pattern and the allowlist (`GET` implies `HEAD`; `any`).
 - `steps/1` -- the pipeline, the CSRF `check_origin` step first unless opted out.
@@ -78,8 +81,11 @@ start. For the rest, compile from `arizona_route` rather than restating its rule
   for pages and assets.
 - `live/2`, `controller/1`, `asset_dir/1` -- what each kind is served with.
 
-The router itself must behave as follows; most servers' routers do not, so expect to match
-routes yourself:
+The router must behave as follows. Most servers' routers do not (no method dimension, no `Allow`
+union), and for those core has the whole matcher: `arizona_route_table:compile(Routes, BuildOpts,
+Adapter)` builds the table (refusing unsupported kinds and shadowed routes) and `match/3` and
+`allow/2` answer requests, so the adapter mounts one catch-all route and calls it, as Cowboy's
+does. A server whose router already expresses the rules (roadrunner) may compile to it natively:
 
 - Routes are tried in declaration order; the first match wins. A route the earlier ones fully
   shadow is a configuration error, refused at start.
@@ -112,9 +118,9 @@ frames in order), or `{close, Code, Reason, Socket}`.
 
 ### Controllers
 
-`arizona_controller:dispatch(arizona_route:controller(Route), ArzReq)` runs the pipeline and the
-action and returns `{Reply, ArzReq1}`, the reply's headers already carrying the flushed
-cookies. A reply is one of four kinds:
+`arizona_controller:dispatch(arizona_route:controller(Route), ArzReq, Adapter)` runs the pipeline
+and the action (`Handler:Action(Request, #{state, bindings})`) and returns `{Reply, ArzReq1}`,
+the reply's headers already carrying the flushed cookies. A reply is one of four kinds:
 
 | Kind | Shape |
 | ---- | ----- |
@@ -123,8 +129,8 @@ cookies. A reply is one of four kinds:
 | sendfile | `{sendfile, Status, Headers, {Path, Offset, Length}}` |
 | loop | `{loop, Status, Headers, State}` |
 
-The last three are capabilities: one your server cannot send raises
-`arizona_controller:unsupported_reply/2` rather than degrading. For a loop, route every message
+The last three are capabilities: `dispatch/3` refuses one `Adapter` lacks with
+`{unsupported_reply, Kind, Adapter}` before the session commits. For a loop, route every message
 the connection receives to `Handler:handle_info(Msg, Push, State)` (the route's handler), where
 `Push(Data)` writes one chunk; `{ok, State}` continues and `{stop, State}` ends the response.
 Translate your server's client-disconnect signal into one final `{arizona_disconnect, Reason}`.

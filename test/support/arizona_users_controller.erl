@@ -1,7 +1,7 @@
 -module(arizona_users_controller).
 -moduledoc """
 **TEST FIXTURE.** A resource-style controller with named actions (no `handle/1`),
-to verify `arizona_controller:dispatch/2` dispatches `Handler:Action/2` from the
+to verify `arizona_controller:dispatch/3` dispatches `Handler:Action/2` from the
 route's `action` option. Two same-path verb-tag routes dispatch to different
 actions here (`GET` -> `index`, `POST` -> `create`).
 """.

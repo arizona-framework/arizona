@@ -72,3 +72,18 @@ module is rebuilt before the purge can strand it. A listener that is gone is
 skipped.
 """.
 -callback recompile_routes() -> ok.
+
+-doc """
+What the adapter can do beyond the baseline every adapter serves: the
+capability route kinds (`arizona_route`: `mcp`, `reload`) and controller reply
+kinds (`arizona_controller`: `stream`, `sendfile`, `loop`) it supports. Core
+refuses the rest before anything happens -- a route at route compilation, a
+reply before the session commits. Omitted, every kind is supported.
+""".
+-callback capabilities() ->
+    #{
+        routes := [mcp | reload],
+        replies := [stream | sendfile | loop]
+    }.
+
+-optional_callbacks([capabilities/0]).
