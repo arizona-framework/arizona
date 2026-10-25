@@ -43,17 +43,28 @@ all() ->
 init_per_suite(Config) ->
     %% The demo view subscribes to a pubsub channel at mount, so the pg scope must be
     %% running (the arizona app is not started in this suite).
-    case erlang:whereis(arizona_pubsub) of
-        undefined ->
-            {ok, Pid} = pg:start_link(arizona_pubsub),
-            unlink(Pid);
-        _ ->
-            ok
-    end,
-    Config.
+    PubSub =
+        case erlang:whereis(arizona_pubsub) of
+            undefined ->
+                {ok, Pid} = pg:start_link(arizona_pubsub),
+                true = unlink(Pid),
+                Pid;
+            _ ->
+                undefined
+        end,
+    [{pubsub, PubSub} | Config].
 
 end_per_suite(Config) when is_list(Config) ->
+    ok = stop_pubsub(Config),
     Config.
+
+%% The scope init_per_suite started, if it started one: a suite run after this
+%% one boots the arizona application, whose own pubsub would find the name taken.
+stop_pubsub(Config) ->
+    case proplists:get_value(pubsub, Config) of
+        undefined -> ok;
+        Pid -> gen_server:stop(Pid)
+    end.
 
 %% --------------------------------------------------------------------
 %% serve/2 exit paths -- the loop must reap the live view and input reader.
