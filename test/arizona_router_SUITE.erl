@@ -616,15 +616,15 @@ compile_routes_http_transform_errors(Config) when is_list(Config) ->
         {unknown_http_transform, etga},
         Router:routes([{live, ~"/", my_page, #{middlewares => [{http_transform, etga}]}}])
     ),
-    Stack = [{Router, routes, 1, []}],
+    Stack = [{arizona_route, transforms, 2, []}],
     #{general := UnknownMsg} =
-        Router:format_error({unknown_http_transform, etga}, Stack),
+        arizona_route:format_error({unknown_http_transform, etga}, Stack),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(UnknownMsg), ~"etga")),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(UnknownMsg), ~"etag")),
     #{general := AssetMsg} =
-        Router:format_error({asset_middleware_not_transform, [{my_mod, my_step}]}, Stack),
+        arizona_route:format_error({asset_middleware_not_transform, [{my_mod, my_step}]}, Stack),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(AssetMsg), ~"my_mod")),
-    #{general := WildcardMsg} = Router:format_error(wildcard_in_method_list, Stack),
+    #{general := WildcardMsg} = arizona_route:format_error(wildcard_in_method_list, Stack),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(WildcardMsg), ~"'*'")).
 
 compile_routes_cors_opens_options(Config) ->

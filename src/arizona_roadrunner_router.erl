@@ -263,27 +263,6 @@ Formats route-compilation errors into a human-readable message. Picked up by
     Reason :: term(),
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
-format_error({unknown_http_transform, Unknown}, [{_M, _F, _Args, _Info} | _]) ->
-    #{
-        general => io_lib:format(
-            "~tp is not an HTTP response transform. The valid terms are "
-            "{http_transform, etag | compress | security_headers | "
-            "{cors, Config} | {security_headers, Config}} -- built by the "
-            "arizona_middleware constructors, or spelled literally in a "
-            "sys.config route.",
-            [Unknown]
-        )
-    };
-format_error({asset_middleware_not_transform, Steps}, [{_M, _F, _Args, _Info} | _]) ->
-    #{
-        general => io_lib:format(
-            "an asset route runs no Arizona middleware pipeline, so these "
-            "`middlewares` entries would never run: ~tp. Asset routes accept "
-            "HTTP response transforms only (arizona_middleware:cors/1, "
-            "security_headers/0,1, ...).",
-            [Steps]
-        )
-    };
 format_error(
     {cors_options_shadows_route, {CorsPos, CorsPath}, {ShadowedPos, ShadowedPath}},
     [{_M, _F, _Args, _Info} | _]
@@ -297,14 +276,6 @@ format_error(
             "the cors transform from route #~b.",
             [CorsPos, CorsPath, ShadowedPos, ShadowedPath, CorsPos, CorsPos]
         )
-    };
-format_error(wildcard_in_method_list, [{_M, _F, _Args, _Info} | _]) ->
-    #{
-        general =>
-            "'*' (any method) is only valid as the whole method spec: "
-            "{match, '*', Path, Handler, Opts}. Inside a method list -- or "
-            "spelled as the binary ~\"*\" -- it would match no real method; "
-            "list explicit verbs, or use '*' alone."
     }.
 
 %% --------------------------------------------------------------------
@@ -315,31 +286,20 @@ format_error(wildcard_in_method_list, [{_M, _F, _Args, _Info} | _]) ->
 %% route's `state` so roadrunner's pipeline does not interpret arizona's
 %% middleware list as its own (incompatible signatures). A route's single
 %% `middlewares` opt may hold both kinds -- request-to-bindings steps and
-%% HTTP response transforms (`arizona_middleware:etag/0`, ...) -- and is
-%% split here at compile time: steps stay in `state.arizona`, transforms
-%% map to roadrunner middlewares at the top-level `middlewares` key, where
-%% `roadrunner_router:compile/2` bakes them into the pipeline closure
-%% (with the framework's `roadrunner_compress` prepended outermost --
-%% with_compress/2).
-route_to_roadrunner({live, Path, Handler, Opts}, BuildOpts) ->
+%% HTTP response transforms (`arizona_middleware:etag/0`, ...) -- which
+%% `arizona_route` splits: steps (`arizona_route:steps/1`) stay in
+%% `state.arizona`, transforms (`arizona_route:transforms/2`, compression
+%% outermost) map to roadrunner middlewares at the top-level `middlewares`
+%% key, where `roadrunner_router:compile/2` bakes them into the pipeline.
+route_to_roadrunner({live, Path, _Handler, _Opts} = Route, BuildOpts) ->
     %% A live route is GET-only (the page render) plus HEAD; the WebSocket
     %% upgrade rides its own `{ws, ...}` route. A non-GET to a live path gets 405.
-    {Transforms0, Steps} = split_middlewares(Opts),
-    Methods = [~"GET", ~"HEAD"],
-    Transforms = cors_options(Methods, Transforms0),
     [
-        with_compress(
-            with_transforms(
-                #{
-                    path => Path,
-                    handler => arizona_roadrunner_http,
-                    methods => Methods,
-                    state => #{arizona => build_live_meta(Handler, Opts, Steps, BuildOpts)}
-                },
-                Transforms
-            ),
-            BuildOpts
-        )
+        roadrunner_route(Route, BuildOpts, #{
+            path => Path,
+            handler => arizona_roadrunner_http,
+            state => #{arizona => arizona_route:live(Route, BuildOpts)}
+        })
     ];
 route_to_roadrunner({ws, Path, Opts}, _BuildOpts) ->
     [
@@ -349,29 +309,18 @@ route_to_roadrunner({ws, Path, Opts}, _BuildOpts) ->
             state => #{arizona => Opts}
         }
     ];
-route_to_roadrunner({asset, Path, Source}, BuildOpts) ->
-    route_to_roadrunner({asset, Path, Source, #{}}, BuildOpts);
-route_to_roadrunner({asset, Path, {dir, Dir}, Opts}, BuildOpts) ->
-    asset_route(Path, Dir, Opts, BuildOpts);
-route_to_roadrunner({asset, Path, {priv_dir, App, SubDir}, Opts}, BuildOpts) ->
-    asset_route(Path, filename:join(code:priv_dir(App), SubDir), Opts, BuildOpts);
-route_to_roadrunner({match, Spec, Path, Handler, Opts}, _BuildOpts) ->
-    %% General controller route: a multi-verb list, a custom method binary,
-    %% or `'*'` (any method) -- all normalized to roadrunner's allowlist.
-    controller_route(normalize_methods(Spec), Path, Handler, Opts);
-route_to_roadrunner({Verb, Path, Handler, Opts}, _BuildOpts) when
-    Verb =:= get;
-    Verb =:= post;
-    Verb =:= put;
-    Verb =:= patch;
-    Verb =:= delete;
-    Verb =:= head;
-    Verb =:= options
-->
-    %% Single-verb controller sugar (`{post, ...}` etc.). The kind-tag clauses
-    %% above match first, so `Verb` here is always an HTTP method atom; the
-    %% explicit guard also makes an unknown verb tag fail loudly (no clause).
-    controller_route(normalize_methods(Verb), Path, Handler, Opts);
+route_to_roadrunner({asset, _Path, _Source} = Route, BuildOpts) ->
+    route_to_roadrunner(erlang:append_element(Route, #{}), BuildOpts);
+route_to_roadrunner({asset, Path, _Source, Opts} = Route, BuildOpts) ->
+    %% roadrunner_static serves the file whatever the method, so the allowlist
+    %% is what makes a POST/DELETE to an asset path a 405.
+    [
+        roadrunner_route(Route, BuildOpts, #{
+            path => <<Path/binary, "/*path">>,
+            handler => roadrunner_static,
+            state => asset_state(arizona_route:asset_dir(Route), Opts)
+        })
+    ];
 route_to_roadrunner({mcp, Path, Handler, Opts}, _BuildOpts) ->
     %% The handler module is folded into the opts so `arizona_mcp_handler`
     %% reads it from the per-route `arizona` state at request time, the
@@ -391,7 +340,31 @@ route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
             handler => arizona_roadrunner_reload,
             state => #{arizona => Opts}
         }
+    ];
+route_to_roadrunner(Route, BuildOpts) ->
+    %% A controller (verb tag or `{match, ...}`); `arizona_roadrunner_controller`
+    %% runs `arizona_controller:dispatch/2` on what `arizona_route:controller/1`
+    %% names.
+    controller = arizona_route:kind(Route),
+    [
+        roadrunner_route(Route, BuildOpts, #{
+            path => arizona_route:path(Route),
+            handler => arizona_roadrunner_controller,
+            state => #{arizona => arizona_route:controller(Route)}
+        })
     ].
+
+%% The allowlist and the response transforms are `arizona_route`'s; mapped onto
+%% roadrunner's `methods` (`undefined` = any) and per-route middlewares, with a
+%% cors route's OPTIONS placeholder innermost (see cors_options/2).
+roadrunner_route(Route, BuildOpts, Entry) ->
+    Methods =
+        case arizona_route:methods(Route) of
+            any -> undefined;
+            List -> List
+        end,
+    Transforms = [transform_to_roadrunner(T) || T <- arizona_route:transforms(Route, BuildOpts)],
+    with_transforms(Entry#{methods => Methods}, cors_options(Methods, Transforms)).
 
 %% Set at mount, not at the first MCP session (`arizona_dev_mcp:init/1`): a live
 %% view connected before the agent's session must already have joined the
@@ -416,35 +389,6 @@ put_reload_url(Routes) ->
 %% when the client accepts it), and path-traversal/symlink guards. Its state is
 %% `#{dir => Dir}` (not arizona-namespaced), optionally carrying `cache_control`,
 %% and it reads the `*path` wildcard binding, which arizona's route provides.
-asset_route(Path, Dir, Opts, BuildOpts) ->
-    %% No Arizona pipeline runs on an asset route, so a request-to-bindings
-    %% step in its `middlewares` would silently never run -- fail loudly.
-    case split_middlewares(Opts) of
-        {Transforms0, []} ->
-            %% roadrunner_static serves the file whatever the method, so the
-            %% allowlist is what makes a POST/DELETE to an asset path a 405.
-            Methods = [~"GET", ~"HEAD"],
-            Transforms = cors_options(Methods, Transforms0),
-            [
-                with_compress(
-                    with_transforms(
-                        #{
-                            path => <<Path/binary, "/*path">>,
-                            handler => roadrunner_static,
-                            methods => Methods,
-                            state => asset_state(Dir, Opts)
-                        },
-                        Transforms
-                    ),
-                    BuildOpts
-                )
-            ];
-        {_Transforms, Steps} ->
-            error({asset_middleware_not_transform, Steps}, none, [
-                {error_info, #{module => ?MODULE}}
-            ])
-    end.
-
 %% roadrunner_static's state is a plain `#{dir => Dir}`; `cache_control` is
 %% threaded through only when the route declares it, so an asset route without
 %% the opt produces byte-for-byte the same responses as before.
@@ -452,133 +396,6 @@ asset_state(Dir, #{cache_control := Value}) ->
     #{dir => Dir, cache_control => Value};
 asset_state(Dir, _Opts) ->
     #{dir => Dir}.
-
-%% `error_page` is a per-listener choice (the server's `error_page` opt, threaded
-%% in via `BuildOpts`), baked into each live route's state so `arizona_http`'s
-%% crash path reads the owning listener's error page from `Opts` -- no shared
-%% global term that a second listener could clobber or `stop/1` erase.
-build_live_meta(Handler, Opts, Steps, BuildOpts) ->
-    #{
-        handler => Handler,
-        layouts => maps:get(layouts, Opts, []),
-        bindings => maps:get(bindings, Opts, #{}),
-        on_mount => maps:get(on_mount, Opts, []),
-        middlewares => with_origin_check(Opts, Steps),
-        error_page => maps:get(error_page, BuildOpts, {arizona_error_page, render})
-    }.
-
-%% Build the roadrunner route entry shared by every controller shape (verb tags
-%% and `match`). `arizona_roadrunner_controller` runs the Arizona middleware
-%% pipeline (CSRF check_origin on by default), restores the app `state`, then
-%% dispatches Handler:Action/1 (default `handle`). `Methods` is roadrunner's
-%% method allowlist (`undefined` = any method).
-controller_route(Methods, Path, Handler, Opts) ->
-    {Transforms0, Steps} = split_middlewares(Opts),
-    Transforms = cors_options(Methods, Transforms0),
-    [
-        compress_first(
-            with_transforms(
-                #{
-                    path => Path,
-                    handler => arizona_roadrunner_controller,
-                    methods => Methods,
-                    state => #{
-                        arizona => #{
-                            handler => Handler,
-                            action => maps:get(action, Opts, handle),
-                            state => maps:get(state, Opts, #{}),
-                            middlewares => with_origin_check(Opts, Steps)
-                        }
-                    }
-                },
-                Transforms
-            )
-        )
-    ].
-
-%% Normalize a verb tag or `{match, ...}` spec into roadrunner's uppercase
-%% method-binary allowlist, or `undefined` (any method) for `'*'`.
-normalize_methods('*') ->
-    undefined;
-normalize_methods(Methods) when is_list(Methods) ->
-    with_head([method_bin(M) || M <- Methods]);
-normalize_methods(Method) ->
-    with_head([method_bin(Method)]).
-
-%% `'*'` (any method) is only meaningful as the WHOLE `{match, ...}` spec, where
-%% `normalize_methods/1` turns it into roadrunner's "no allowlist". Reaching here
-%% -- inside a method list, or as the binary spelling `~"*"` -- it would silently
-%% normalize to the literal method `~"*"`, which no real request carries (while
-%% the 405 Allow header advertised `*`), so fail loudly at route compilation
-%% instead, mirroring the unknown-verb-tag failure.
-method_bin('*') ->
-    erlang:error(wildcard_in_method_list, ['*'], [{error_info, #{module => ?MODULE}}]);
-method_bin(~"*") ->
-    erlang:error(wildcard_in_method_list, [~"*"], [{error_info, #{module => ?MODULE}}]);
-method_bin(M) when is_atom(M) -> upper(atom_to_binary(M, utf8));
-method_bin(M) when is_binary(M) -> upper(M).
-
-%% HTTP methods are case-sensitive, conventionally uppercase, and roadrunner
-%% compares byte-exact -- so normalize every declared method to uppercase.
-upper(Bin) -> iolist_to_binary(string:uppercase(Bin)).
-
-%% HEAD is a bodyless GET, so a GET allowlist answers HEAD too.
-with_head(Methods) ->
-    case lists:member(~"GET", Methods) andalso not lists:member(~"HEAD", Methods) of
-        true -> Methods ++ [~"HEAD"];
-        false -> Methods
-    end.
-
-%% CSRF defense is on by default: prepend the check_origin step (covers the page
-%% render and -- since arizona_ws:prepare runs the resolved route's middlewares -- the
-%% WebSocket upgrade). Opt a route out with `check_origin => false`.
-with_origin_check(#{check_origin := false}, Middlewares) ->
-    Middlewares;
-with_origin_check(_Opts, Middlewares) ->
-    [{arizona_middleware, check_origin} | Middlewares].
-
-%% Attach roadrunner_compress as a per-route middleware on the
-%% map-shape route entry when the build-time `compress` flag is on.
-with_compress(Route, #{compress := false}) ->
-    %% The framework attaches no compression -- but an EXPLICIT per-route
-    %% `arizona_middleware:compress()` still applies (a route-level request
-    %% beats the listener-level default-off), and still goes outermost.
-    compress_first(Route);
-with_compress(Route, _BuildOpts) ->
-    Route#{middlewares => [roadrunner_compress | exclude_compress(Route)]}.
-
-%% Compression is OUTERMOST wherever it is written -- an invariant, not a
-%% default. A middleware list runs head-outermost, and compress must touch
-%% the response LAST so any other transform -- an etag, say -- sees the body
-%% BEFORE it is re-encoded: that is the composition the etag's weak validator
-%% is designed for (a representation-independent tag, a 304 flowing out
-%% through compress untouched). Normalizing the position (rather than
-%% deduping in place) is what makes `arizona_middleware:compress()`
-%% genuinely position-independent: `[etag(), compress()]` and
-%% `[compress(), etag()]` compile to the same pipeline.
-compress_first(Route) ->
-    Mws = maps:get(middlewares, Route, []),
-    case lists:member(roadrunner_compress, Mws) of
-        true -> Route#{middlewares => [roadrunner_compress | exclude_compress(Route)]};
-        false -> Route
-    end.
-
-exclude_compress(Route) ->
-    [M || M <- maps:get(middlewares, Route, []), M =/= roadrunner_compress].
-
-%% Split a route's single `middlewares` opt into its HTTP response transforms
-%% (mapped to roadrunner middlewares, order preserved) and its Arizona
-%% pipeline steps. Order across the two kinds has phase semantics, not list
-%% semantics: transforms wrap the whole exchange, steps run inside it.
-split_middlewares(Opts) ->
-    {Transforms, Steps} = lists:partition(
-        fun
-            ({http_transform, _}) -> true;
-            (_) -> false
-        end,
-        maps:get(middlewares, Opts, [])
-    ),
-    {[transform_to_roadrunner(T) || T <- Transforms], Steps}.
 
 transform_to_roadrunner({http_transform, etag}) ->
     roadrunner_etag;
@@ -589,12 +406,7 @@ transform_to_roadrunner({http_transform, security_headers}) ->
 transform_to_roadrunner({http_transform, {cors, Config}}) ->
     {roadrunner_cors, Config};
 transform_to_roadrunner({http_transform, {security_headers, Config}}) ->
-    {roadrunner_security_headers, Config};
-transform_to_roadrunner({http_transform, Unknown}) ->
-    %% A transform is a plain term a sys.config route can hand-spell, so a
-    %% typo arrives here rather than at a constructor -- name the valid set
-    %% instead of dying with a bare function_clause at boot.
-    error({unknown_http_transform, Unknown}, none, [{error_info, #{module => ?MODULE}}]).
+    {roadrunner_security_headers, Config}.
 
 %% roadrunner enforces a route's method allowlist (405) before any per-route
 %% middleware runs, so a CORS transform on a route that does not declare
