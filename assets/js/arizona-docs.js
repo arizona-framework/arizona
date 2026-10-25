@@ -22,6 +22,22 @@ export const _viewDocs = new Map();
 export const _pipWindows = new Map();
 
 /**
+ * Close every floating (PiP) view window and forget them; each window's pagehide
+ * handler moves its view back inline first. A page's teardown.
+ */
+export function closeAllPip() {
+    for (const d of [..._viewDocs.values()]) {
+        try {
+            d.defaultView?.close();
+        } catch {
+            /* window already gone */
+        }
+    }
+    _viewDocs.clear();
+    _pipWindows.clear();
+}
+
+/**
  * Close any popped-out (PiP) window whose inline placeholder is no longer in
  * the DOM -- its home was destroyed (a navigate OP_REPLACE swapped the page),
  * so the floating view shows dead server state. Closing fires the window's

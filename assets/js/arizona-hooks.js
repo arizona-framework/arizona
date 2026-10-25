@@ -150,6 +150,15 @@ export function mountHooks(root) {
 }
 
 /**
+ * Run destroyed() on every tracked hook and forget them: a page's teardown.
+ * Without it, instances leak when host code removes the DOM by means Arizona did
+ * not observe (third-party libs, a test's `document.body.innerHTML = ''`).
+ */
+export function destroyAllHooks() {
+    for (const el of [..._hooks.keys()]) destroyHook(el);
+}
+
+/**
  * Is any hook definition registered? `hooks` is a plain object apps assign onto, so
  * there is nothing to cache against; `for...in` over an empty object allocates nothing
  * and returns immediately.

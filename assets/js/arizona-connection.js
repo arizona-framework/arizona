@@ -1,17 +1,12 @@
 import { applyEffects, executeJS, formFields, JS_NAVIGATE, osHost } from './arizona-commands.js';
-import { _pipWindows, _viewDocs, allDocs } from './arizona-docs.js';
-import {
-    _eventDocs,
-    _passiveBound,
-    bindDocumentEvents,
-    clearItemDrag,
-    noteAzAttrs,
-} from './arizona-events.js';
-import { _hooks, destroyHook, mountHooks } from './arizona-hooks.js';
+import { allDocs, closeAllPip } from './arizona-docs.js';
+import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
+import { destroyAllHooks, mountHooks } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
 import { _pendingScroll, applyScroll, setPendingScroll } from './arizona-scroll.js';
 import { parseTransitionAttr, runTransition } from './arizona-transitions.js';
+import { isWebUrl, loadPage } from './arizona-util.js';
 
 /** Worker protocol opcodes -- must match arizona-worker.js. */
 const W_CONNECT = 0;
@@ -532,16 +527,11 @@ function sendNav(kind, path, qs) {
  * @param {boolean} [replace]
  */
 function leavePage(url, replace) {
-    const { protocol } = new URL(url, location.href);
-    if (protocol !== 'http:' && protocol !== 'https:') {
-        console.warn('[arizona] refused non-http(s) URL:', url);
-        return;
-    }
+    if (!isWebUrl(url)) return;
     // A replace finishes a navigation whose entry already names `url`, so the
     // scroll on screen is not that entry's to keep (see _unloadingToOtherPage).
     _unloadingToOtherPage = Boolean(replace);
-    if (replace) location.replace(url);
-    else location.assign(url);
+    loadPage(url, replace);
 }
 
 /**
@@ -1330,37 +1320,13 @@ export function connect(endpoint, params = {}) {
         setPendingScroll(null);
         _unloadingToOtherPage = false;
         _pendingTransition = null;
-        clearItemDrag();
         _navInFlight = 0;
         _navAwaitResync = false;
         _connectQs = '';
         _savedForms.clear();
-        // Close any floating (PiP) view windows; each window's pagehide handler
-        // moves its view back inline and unregisters it.
-        for (const d of [..._viewDocs.values()]) {
-            try {
-                d.defaultView?.close();
-            } catch {
-                /* window already gone */
-            }
-        }
-        _viewDocs.clear();
-        _pipWindows.clear();
-        // Tear down each bound document's delegated listeners, then drop the
-        // bookkeeping. The connect-level signal covers the MAIN document only: a
-        // PiP document's listeners hang off requestPip's own controller, so
-        // without this they survive disconnect and the next connect() re-arms them
-        // -- pushing events from the orphaned window under the previous view's id.
-        // `_eventTypes` deliberately survives: it is what this PAGE delegates, so a
-        // reconnect rebinds the same types without waiting for the connect frame.
-        for (const rec of _eventDocs.values()) rec.abort?.();
-        _eventDocs.clear();
-        _passiveBound.clear();
-        // Run destroyed() on every tracked hook and clear the map. Without
-        // this, hook instances leak when host code removes the DOM by means
-        // arizona didn't observe (third-party libs, test teardown via
-        // `document.body.innerHTML = ''`).
-        for (const el of [..._hooks.keys()]) destroyHook(el);
+        closeAllPip();
+        unbindDocuments();
+        destroyAllHooks();
         // Debounce/throttle timers live in a WeakMap keyed by element and aren't
         // iterable, so they are left to expire: each captured the epoch this
         // bump retires and drops its send, which would otherwise reach the NEXT
@@ -1381,7 +1347,7 @@ export function connect(endpoint, params = {}) {
 // The shared runtime (delegation, commands, hooks) reaches the socket and the
 // history through `host`; this module is what serves a live page.
 setHost({
-    isConnected: () => _connected,
+    ready: () => _connected,
     epoch: () => _navEpoch,
     sendEvent,
     awaitsReply: (url) => navRoute(new URL(url, location.href)) === 'server',

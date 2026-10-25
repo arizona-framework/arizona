@@ -4,7 +4,7 @@ import { constants as zlibConstants } from 'node:zlib';
 import filesize from 'rollup-plugin-filesize';
 import license from 'rollup-plugin-license';
 import { visualizer } from 'rollup-plugin-visualizer';
-import { createLogger, defineConfig } from 'vite';
+import { build, createLogger, defineConfig } from 'vite';
 import { compression, defineAlgorithm } from 'vite-plugin-compression2';
 
 const require = createRequire(import.meta.url);
@@ -19,6 +19,27 @@ for (const method of ['warn', 'warnOnce']) {
     };
 }
 
+// The static client (`arizona-static.min.js`, for pages with no server) is its
+// own self-contained file, built in a second pass of this same config: given as
+// another entry of the main pass, the modules it shares with `arizona.min.js`
+// would be split into a chunk both import, and each must stay one file. The
+// first pass runs the second when it closes, so `vite build` builds both.
+const STATIC_PASS = process.env.ARIZONA_BUILD_PASS === 'static';
+
+/** @param {string} mode */
+const staticPass = (mode) => ({
+    name: 'arizona-static-pass',
+    apply: 'build',
+    async closeBundle() {
+        process.env.ARIZONA_BUILD_PASS = 'static';
+        try {
+            await build({ configFile: resolve(import.meta.dirname, 'vite.config.js'), mode });
+        } finally {
+            delete process.env.ARIZONA_BUILD_PASS;
+        }
+    },
+});
+
 export default defineConfig(({ mode }) => ({
     customLogger: logger,
     // Relative base so the built `new Worker(new URL('./arizona-worker.min.js',
@@ -30,6 +51,7 @@ export default defineConfig(({ mode }) => ({
     // 404 standalone and be treated as a passthrough (never re-hashed) downstream.
     base: './',
     plugins: [
+        ...(STATIC_PASS ? [] : [staticPass(mode)]),
         license({
             thirdParty: {
                 output: {
@@ -80,7 +102,8 @@ export default defineConfig(({ mode }) => ({
         },
         target: 'es2020',
         outDir: resolve(import.meta.dirname, 'priv/static/assets/js'),
-        emptyOutDir: true,
+        // The static pass writes beside the main pass's output.
+        emptyOutDir: !STATIC_PASS,
         sourcemap: mode === 'development',
         minify: 'terser',
         terserOptions: {
@@ -99,10 +122,15 @@ export default defineConfig(({ mode }) => ({
             },
         },
         lib: {
-            entry: {
-                arizona: resolve(import.meta.dirname, 'assets/js/arizona.js'),
-                'arizona-reloader': resolve(import.meta.dirname, 'assets/js/arizona-reloader.js'),
-            },
+            entry: STATIC_PASS
+                ? { 'arizona-static': resolve(import.meta.dirname, 'assets/js/arizona-static.js') }
+                : {
+                      arizona: resolve(import.meta.dirname, 'assets/js/arizona.js'),
+                      'arizona-reloader': resolve(
+                          import.meta.dirname,
+                          'assets/js/arizona-reloader.js',
+                      ),
+                  },
             formats: ['es'],
             fileName: (_format, entryName) => `${entryName}.min.js`,
         },

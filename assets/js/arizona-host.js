@@ -8,7 +8,8 @@
  * the live implementations when it is loaded.
  *
  * @typedef {object} Host
- * @property {() => boolean} isConnected whether a live socket is open
+ * @property {() => boolean} ready whether delegated commands run now: on a live
+ *   page while its socket is open, on a page with no server always
  * @property {() => number} epoch the navigation epoch a deferred event captures
  * @property {(name: string, msg: string, epoch?: number) => void} sendEvent send a
  *   view event raised in `epoch` (default: the current one)
