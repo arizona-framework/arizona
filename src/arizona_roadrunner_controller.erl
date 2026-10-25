@@ -5,7 +5,7 @@ and maps its reply onto roadrunner's response shapes.
 
 A controller route (`{get, ...}`/`{post, ...}`/.../`{match, ...}`) compiles to this
 dispatcher (the way `{live, ...}` routes go through `arizona_roadrunner_http`).
-Roadrunner has every `arizona_controller:reply/0` kind, so each maps one to one; a
+Roadrunner has every `t:arizona_controller:reply/0` kind, so each maps one to one; a
 loop's state carries the controller module, so `handle_info/3` reaches it, and
 roadrunner's `{roadrunner_disconnect, Reason}` reaches it as
 `{arizona_disconnect, Reason}`.

@@ -194,7 +194,7 @@ transforms(Route, BuildOpts) ->
 -doc """
 What a `live` route renders with: its handler, `bindings`, `on_mount`,
 `layouts`, the pipeline `steps/1`, and the listener's `error_page` (default
-`{arizona_error_page, render}`). An adapter's `arizona_req:resolve_route/3`
+`{arizona_error_page, render}`). An adapter's `c:arizona_req:resolve_route/3`
 returns these, minus `handler`, as the route options.
 """.
 -spec live(Route, BuildOpts) -> Live when

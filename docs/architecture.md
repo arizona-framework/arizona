@@ -2983,9 +2983,9 @@ The core engine (`arizona_template`, `arizona_render`, `arizona_diff`, `arizona_
 `arizona_stream`, `arizona_pubsub`, `arizona_js`, parse transform) is transport-agnostic. The
 server is an `arizona_server` adapter (the `server` env's `adapter`, default
 `arizona_roadrunner_server`); each adapter routes natively and must pass the black-box
-`arizona_server_conformance_SUITE` through its own `arizona_conformance_driver`. Roadrunner is
-wired in through a thin layer of `arizona_*` modules that translate between roadrunner's
-callbacks and Arizona's shared pipeline:
+`arizona_server_conformance_SUITE` through its own `arizona_conformance_driver` -- the full
+contract is in [adapters.md](adapters.md). Roadrunner is wired in through a thin layer of
+`arizona_*` modules that translate between roadrunner's callbacks and Arizona's shared pipeline:
 
 - `arizona_roadrunner_server` -- the `arizona_server` adapter: boots the listener and compiles
   routes

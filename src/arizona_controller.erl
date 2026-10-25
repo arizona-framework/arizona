@@ -93,6 +93,8 @@ error/success) or a `navigate`.
 %% --------------------------------------------------------------------
 
 -export_type([route/0]).
+-export_type([headers/0]).
+-export_type([sendfile_spec/0]).
 -export_type([reply/0]).
 -export_type([reply_kind/0]).
 -export_type([send_fun/0]).

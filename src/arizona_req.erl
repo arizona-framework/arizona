@@ -286,8 +286,24 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% live (page) route, or `error` when it does not -- no matching route, a
 %% non-live route (controller/asset/ws), or a method mismatch. The path is
 %% client-supplied (`_az_path` on the WS upgrade, or a navigate/patch frame), so
-%% the callback must never crash on it; the caller turns `error` into a 404
-%% upgrade rejection or a full-page navigate. HTTP-only adapters can omit it.
+%% the callback must never crash on it, and must not answer the request itself
+%% (a router that replies 404 on a miss is unusable here: the raw request may
+%% already be a WebSocket); the caller turns `error` into a 404 upgrade
+%% rejection or a full-page navigate. HTTP-only adapters can omit it.
+%%
+%% The rest of the contract, which `arizona_server_conformance_SUITE` checks:
+%%
+%% - Match as a GET, whatever the raw request's own method: a navigate targets a
+%%   page, and an HTTP/2 WebSocket upgrade arrives as `CONNECT`.
+%% - Match exactly as an HTTP request to `Path` would: same routes (those of the
+%%   listener that accepted the raw request), same order, same percent-decoded
+%%   bindings.
+%% - `RouteOpts` is what that route renders with: `bindings`, `on_mount`,
+%%   `layouts` (the socket compares them to decide whether a navigate can swap
+%%   the page in place), and `middlewares` with the `check_origin` step the
+%%   route compiles in.
+%% - `NavRequest` reports `Path` as its path and `Qs` as its query string, not the
+%%   WebSocket endpoint's, and carries the raw request's headers and cookies.
 -callback resolve_route(path(), qs(), raw()) ->
     {ok, module(), arizona_live:route_opts(), request()} | error.
 
