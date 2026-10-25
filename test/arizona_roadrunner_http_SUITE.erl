@@ -112,7 +112,9 @@ init_per_suite(Config) ->
 
 end_per_suite(Config) ->
     ok = arizona_roadrunner_server:stop(?config(listener, Config)),
-    ok.
+    %% Started here, so stopped here: `arizona_app_SUITE` boots the application
+    %% with its own `server` env, which a still-running one never reads.
+    application:stop(arizona).
 
 %% --------------------------------------------------------------------
 %% Request threading

@@ -47,13 +47,7 @@ all() ->
 init_per_suite(Config) ->
     %% The demo view subscribes to a pubsub channel at mount, so the pg scope
     %% must be running (the arizona app is not started in this suite).
-    case erlang:whereis(arizona_pubsub) of
-        undefined ->
-            {ok, Pid} = pg:start_link(arizona_pubsub),
-            unlink(Pid);
-        _ ->
-            ok
-    end,
+    PubSub = arizona_test_pubsub:start(),
     {ok, _Started} = application:ensure_all_started(ssh),
     SystemDir = filename:join(proplists:get_value(priv_dir, Config), "host_keys"),
     ok = filelib:ensure_path(SystemDir),
@@ -70,10 +64,11 @@ init_per_suite(Config) ->
     }),
     {ok, Info} = ssh:daemon_info(Daemon),
     Port = proplists:get_value(port, Info),
-    [{daemon, Daemon}, {port, Port} | Config].
+    [{daemon, Daemon}, {port, Port}, {pubsub, PubSub} | Config].
 
 end_per_suite(Config) ->
     ok = ssh:stop_daemon(proplists:get_value(daemon, Config)),
+    ok = arizona_test_pubsub:stop(proplists:get_value(pubsub, Config)),
     Config.
 
 serves_initial_frame(Config) when is_list(Config) ->

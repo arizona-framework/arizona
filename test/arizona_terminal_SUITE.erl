@@ -61,16 +61,11 @@ all() ->
 init_per_suite(Config) ->
     %% The demo view subscribes to a pubsub channel at mount, so the pg scope
     %% must be running (the arizona app is not started in this suite).
-    case erlang:whereis(arizona_pubsub) of
-        undefined ->
-            {ok, Pid} = pg:start_link(arizona_pubsub),
-            unlink(Pid);
-        _ ->
-            ok
-    end,
-    Config.
+    PubSub = arizona_test_pubsub:start(),
+    [{pubsub, PubSub} | Config].
 
 end_per_suite(Config) when is_list(Config) ->
+    ok = arizona_test_pubsub:stop(proplists:get_value(pubsub, Config)),
     Config.
 
 %% A local TTY in unicode mode delivers codepoints (a list, not bytes); "€" is 8364,
