@@ -6,7 +6,7 @@ listener's catch-all route, and it routes with `arizona_route_table`.
 What each route kind answers comes from core -- `arizona_http:reply/3` for a
 page, `arizona_ws:upgrade/3` for a WebSocket, `arizona_controller:dispatch/3`
 for a controller -- and this module only maps it onto Cowboy, wrapping it in the
-route's response transforms (`arizona_cowboy_transforms`). It is also the
+route's response transforms (`arizona_http_transforms`). It is also the
 `cowboy_loop` handler of a controller's `{loop, ...}` reply and the
 `cowboy_websocket` handler of a live session.
 """.
@@ -58,7 +58,7 @@ init(Req, Listener) ->
         {ok, #{transforms := Transforms} = Entry, Bindings} ->
             Req1 = Req#{bindings => Bindings},
             case
-                arizona_cowboy_transforms:preflight(
+                arizona_http_transforms:preflight(
                     Transforms, cowboy_req:method(Req1), cowboy_req:headers(Req1)
                 )
             of
@@ -211,11 +211,13 @@ wrap_head(Entry, Req, Status, Headers) ->
     {Status1, Headers1}.
 
 wrap(#{transforms := Transforms}, Req, Response) ->
+    {Scheme, _ArzReq} = arizona_req:client_scheme(arizona_cowboy_req:new(Req)),
     Request = #{
+        method => cowboy_req:method(Req),
         headers => cowboy_req:headers(Req),
-        scheme => arizona_cowboy_req:scheme(Req)
+        scheme => Scheme
     },
-    arizona_cowboy_transforms:wrap(Transforms, Request, Response).
+    arizona_http_transforms:wrap(Transforms, Request, Response).
 
 reply({Status, Headers, Body}, Req) ->
     {Cookies, Others} = split_cookies(Headers),

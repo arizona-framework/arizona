@@ -58,6 +58,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([method/1]).
 -export([path/1]).
 -export([scheme/1]).
+-export([client_scheme/1]).
 -export([request_id/1]).
 -export([raw/1]).
 -export([set_raw/2]).
@@ -351,6 +352,23 @@ reports `http` even though the browser spoke HTTPS. Callers that need the
 """.
 -spec scheme(request()) -> scheme().
 scheme(#{adapter := Adapter, raw := Raw}) -> Adapter:scheme(Raw).
+
+-doc """
+The scheme the **browser** used: `scheme/1`, upgraded to `https` when a proxy in
+front reports the original request was (`X-Forwarded-Proto`, its first,
+client-facing entry). Upgrade-only, so a forged header can tighten what depends
+on it (the Origin check rejecting the forger's own request) but never loosen it,
+which is why it needs no trusted-proxy configuration. Threads the request, whose
+headers it may have parsed.
+""".
+-spec client_scheme(Request) -> {scheme(), Request} when
+    Request :: request().
+client_scheme(Req0) ->
+    {Headers, Req} = headers(Req0),
+    case scheme(Req) of
+        https -> {https, Req};
+        http -> {forwarded_scheme(Headers), Req}
+    end.
 
 -doc """
 Returns the adapter-supplied request ID (e.g. roadrunner's 16-char
@@ -1202,3 +1220,14 @@ ensure_session_id(Req) ->
         undefined -> Req;
         _ -> Req#{session_id => arizona_session:new_id()}
     end.
+
+%% `X-Forwarded-Proto` is a comma-separated chain when several proxies append to
+%% it; the client-facing hop is the first entry.
+forwarded_scheme(#{~"x-forwarded-proto" := Proto}) ->
+    [First | _] = binary:split(iolist_to_binary(Proto), ~","),
+    case string:equal(string:trim(First), ~"https", true) of
+        true -> https;
+        false -> http
+    end;
+forwarded_scheme(#{}) ->
+    http.

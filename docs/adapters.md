@@ -34,12 +34,12 @@ The application starts the `server` env's listener through the adapter its `adap
 | ------------------- | -------- | -------- |
 | Listener lifecycle | `arizona_server` behaviour, `arizona_server_registry` | start, stop, drain, recompile routes |
 | Request access | `arizona_req` behaviour | parse callbacks, `read_body/1`, `scheme/1`, `resolve_route/3` |
-| Its router | `arizona_route` | the [routing contract](#routing) |
+| Its router | `arizona_route`, `arizona_route_table` | the [routing contract](#routing) |
 | Live pages | `arizona_http:reply/3` | reply as returned, plus framing |
 | WebSocket | `arizona_ws:upgrade/3`, `arizona_ws:init/1`, `arizona_socket` | the [WebSocket](#websocket) mapping |
 | Controllers | `arizona_controller:dispatch/3` | the [reply kinds](#controllers) |
 | Assets | `arizona_route:asset_dir/1` | the server's own static-file handler |
-| Response transforms | `arizona_route:transforms/2` | etag, compress, cors, security headers |
+| Response transforms | `arizona_http_transforms` | etag, compress, cors, security headers |
 
 ### Listener lifecycle -- `arizona_server`
 
@@ -144,11 +144,14 @@ under any spelling of `..`, and the route's `cache_control` option, when set, on
 
 ### Response transforms
 
-`arizona_route:transforms/2` lists them in wrapping order, first outermost; implement each with
-whatever your server offers:
+`arizona_route:transforms/2` lists them in wrapping order, first outermost. Core implements them
+all in `arizona_http_transforms` -- `preflight/3` answers a CORS preflight, `wrap/3` applies the
+rest to a response -- so an adapter applies those rather than re-deriving CORS or HSTS. A server
+with native equivalents (roadrunner) may use them instead, as long as the conformance suite
+passes. What each does:
 
-- `etag` -- a weak validator of the body; a matching `If-None-Match` gets `304`. It hashes the
-  uncompressed body, which is why compression wraps it.
+- `etag` -- a weak validator of the body; on a `GET` or `HEAD`, a matching `If-None-Match`
+  gets `304`. It hashes the uncompressed body, which is why compression wraps it.
 - `compress` -- gzip or deflate by `Accept-Encoding`, for a body above a size threshold
   (roadrunner's is 860 bytes).
 - `{cors, Config}` -- preflight and response headers for the configured origins.

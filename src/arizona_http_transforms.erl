@@ -1,15 +1,17 @@
--module(arizona_cowboy_transforms).
+-module(arizona_http_transforms).
 -moduledoc """
-The HTTP response transforms (`arizona_route:transforms/2`) for the Cowboy
-adapter, which has none of them: etag, compress, cors, and security headers,
-each a function from a response to a response.
+The reference implementation of the HTTP response transforms
+(`arizona_route:transforms/2`): etag, compress, cors, and security headers,
+independent of any server. An adapter whose server lacks them (Cowboy) applies
+these; one with native equivalents (roadrunner) may use those instead, as long as
+the conformance suite still passes.
 
 A response here is `{Status, Headers, Body}`, the header lines in send order;
 `Body` is `stream` for a response whose body is not known up front (stream,
-sendfile, loop, a static file), which only gets header-level transforms (cors,
-security headers). Cowboy's own `cowboy_compress_h` is not used: it skips any
-response that carries an etag, which would leave every `etag()` route
-uncompressed.
+sendfile, loop, a static file), which only gets the header-level transforms
+(cors, security headers). The request is described by its method, headers, and
+the scheme the browser used (`arizona_req:client_scheme/1`, so HSTS is sent
+behind a TLS-terminating proxy too).
 """.
 
 %% --------------------------------------------------------------------
@@ -83,7 +85,11 @@ Applies `Transforms` (first outermost) to a response for a request with
 """.
 -spec wrap(Transforms, Request, Response) -> Response when
     Transforms :: [arizona_middleware:http_transform()],
-    Request :: #{headers := #{binary() => binary()}, scheme := http | https},
+    Request :: #{
+        method := binary(),
+        headers := #{binary() => binary()},
+        scheme := http | https
+    },
     Response :: response().
 wrap(Transforms, Request, Response) ->
     lists:foldr(fun(T, R) -> transform(T, Request, R) end, Response, Transforms).
@@ -92,8 +98,13 @@ wrap(Transforms, Request, Response) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-transform({http_transform, etag}, #{headers := ReqHeaders}, {200, Headers, Body}) when
-    Body =/= stream
+%% A validator only means something to a safe request: a conditional POST must
+%% still run, so it is never answered `304`.
+transform(
+    {http_transform, etag}, #{method := Method, headers := ReqHeaders}, {200, Headers, Body}
+) when
+    Body =/= stream, Method =:= ~"GET";
+    Body =/= stream, Method =:= ~"HEAD"
 ->
     Tag = <<"W/\"", (integer_to_binary(erlang:phash2(Body, 1 bsl 32), 36))/binary, "\"">>,
     case maps:get(~"if-none-match", ReqHeaders, undefined) of
@@ -154,16 +165,24 @@ weak(Tag) ->
         Opaque -> Opaque
     end.
 
+%% `gzip` (or `*`) listed with a non-zero quality (RFC 9110 §12.5.3); `q=0`,
+%% `q=0.0`, `q=0.000` all refuse it.
 accepts_gzip(AcceptEncoding) ->
     lists:any(
         fun(Coding) ->
             case [string:trim(P) || P <- binary:split(Coding, ~";", [global])] of
-                [~"gzip" | Params] -> not lists:member(~"q=0", Params);
+                [Name | Params] when Name =:= ~"gzip"; Name =:= ~"*" -> nonzero_quality(Params);
                 _Other -> false
             end
         end,
-        binary:split(AcceptEncoding, ~",", [global])
+        binary:split(string:lowercase(AcceptEncoding), ~",", [global])
     ).
+
+nonzero_quality(Params) ->
+    case [Q || <<"q=", Q/binary>> <- Params] of
+        [] -> true;
+        [Q | _] -> lists:any(fun(C) -> C >= $1 andalso C =< $9 end, binary_to_list(Q))
+    end.
 
 allowed_origin(Origin, #{origins := any} = Config) ->
     case maps:get(credentials, Config, false) of
