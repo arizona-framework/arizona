@@ -16,8 +16,11 @@ Templates are plain Erlang terms compiled via parse transform. The server owns t
 is thin -- a DOM patcher in the browser, and the same diff stream drives a JSON widget tree on native
 app clients (see the native target below).
 
-Arizona is powered by [Roadrunner](https://github.com/arizona-framework/roadrunner), a pure-Erlang
-HTTP and WebSocket server. Beep beep.
+Arizona runs on the HTTP/WebSocket server you pick, through an adapter package:
+[`arizona_roadrunner`](https://github.com/arizona-framework/arizona_roadrunner) for
+[Roadrunner](https://github.com/arizona-framework/roadrunner), a pure-Erlang server (beep beep),
+[`arizona_cowboy`](https://github.com/arizona-framework/arizona_cowboy) for Cowboy, or
+[`arizona_nova`](https://github.com/arizona-framework/arizona_nova) inside a Nova application.
 
 ## 🚧 Status
 
@@ -40,7 +43,9 @@ across upgrades.
 - **Element hooks** -- client-side `mounted`/`updated`/`destroyed` callbacks via `az_hook`
 - **Dev-mode hot reload** -- a pluggable file watcher (`arizona_watcher_fs`, a dev-only dep)
   recompiles changed `.erl` files and pushes reload events
-- **HTTP/WebSocket transport** -- HTTP/1.1, HTTP/2, HTTP/3 (experimental), and WebSocket built in
+- **Server adapters** -- Roadrunner (HTTP/1.1, HTTP/2, HTTP/3) or Cowboy (HTTP/1.1, HTTP/2), each
+  in its own package and held to one conformance suite; Arizona can also share a listener another
+  framework owns, as `arizona_nova` does for Nova
 - **Native (JSON) render target** -- the same templates and diff engine also emit a JSON widget tree
   via `?native` for non-browser clients. In-repo Android (Compose), iOS (SwiftUI), and JS
   reference clients consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML
