@@ -15,6 +15,7 @@ kept for the next `ws_recv/1,2` instead of being dropped.
 """.
 
 -export([request/5]).
+-export([request_head/4]).
 -export([header/2]).
 -export([headers/2]).
 -export([ws_connect/3]).
@@ -65,6 +66,29 @@ request(Port, Method, Path, Headers0, Body) ->
         {Status, RespHeaders} = parse_head(Head),
         RespBody = read_body(Sock, Method, Status, RespHeaders, Rest),
         {Status, RespHeaders, RespBody}
+    after
+        gen_tcp:close(Sock)
+    end.
+
+-doc """
+Sends one request and reads only the response head: for a response whose body
+never ends (an event stream).
+""".
+-spec request_head(Port, Method, Path, Headers) -> {Status, headers()} when
+    Port :: inet:port_number(),
+    Method :: binary(),
+    Path :: binary(),
+    Headers :: headers(),
+    Status :: 100..599.
+request_head(Port, Method, Path, Headers0) ->
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    try
+        Headers = default_headers(Port, Method, Headers0, 0),
+        ok = gen_tcp:send(Sock, [
+            Method, ~" ", Path, ~" HTTP/1.1\r\n", header_lines(Headers), ~"\r\n"
+        ]),
+        {Head, _Rest} = recv_head(Sock, <<>>),
+        parse_head(Head)
     after
         gen_tcp:close(Sock)
     end.

@@ -221,6 +221,9 @@ routes(Routes) ->
     Routes :: [route()],
     BuildOpts :: map().
 routes(Routes, BuildOpts) when is_map(BuildOpts) ->
+    %% Roadrunner serves every route kind, so classifying only refuses a term
+    %% that is no route, naming the valid shapes.
+    ok = lists:foreach(fun(R) -> true = is_atom(arizona_route:kind(R)) end, Routes),
     open_cors_options(lists:flatmap(fun(R) -> route_to_roadrunner(R, BuildOpts) end, Routes)).
 
 -doc """

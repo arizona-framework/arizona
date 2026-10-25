@@ -24,6 +24,7 @@ listener down: live views run `handle_drain/2` and their sockets close `1001`.
 -export([stop/2]).
 -export([drain/3]).
 -export([supports_reply/2]).
+-export([supports_route/2]).
 
 -callback start(Name :: atom(), Routes :: list(), Opts :: map()) ->
     {ok, Port :: inet:port_number()} | {error, term()}.
@@ -35,7 +36,12 @@ listener down: live views run `handle_drain/2` and their sockets close `1001`.
 %% is expected.
 -callback supports_reply(Kind :: stream | sendfile | loop) -> boolean().
 
--optional_callbacks([supports_reply/1]).
+%% Whether the adapter serves a capability route kind. A driver whose adapter
+%% lacks one must make `start/3` refuse a route of that kind; omitted, every
+%% kind is expected to be served.
+-callback supports_route(Kind :: mcp | reload) -> boolean().
+
+-optional_callbacks([supports_reply/1, supports_route/1]).
 
 -spec start(Driver, Name, Routes, Opts) -> {ok, inet:port_number()} | {error, term()} when
     Driver :: module(),
@@ -64,5 +70,14 @@ drain(Driver, Name, TimeoutMs) ->
 supports_reply(Driver, Kind) ->
     case erlang:function_exported(Driver, supports_reply, 1) of
         true -> Driver:supports_reply(Kind);
+        false -> true
+    end.
+
+-spec supports_route(Driver, Kind) -> boolean() when
+    Driver :: module(),
+    Kind :: mcp | reload.
+supports_route(Driver, Kind) ->
+    case erlang:function_exported(Driver, supports_route, 1) of
+        true -> Driver:supports_route(Kind);
         false -> true
     end.

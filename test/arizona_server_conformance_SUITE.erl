@@ -37,6 +37,7 @@ call into an adapter module or inspect its internal state.
 -export([first_declared_route_wins/1]).
 -export([wildcard_matches_zero_and_many_segments/1]).
 -export([fully_shadowed_route_fails_to_start/1]).
+-export([capability_routes_are_served_or_refused/1]).
 %% Assets
 -export([asset_get_serves_the_file/1]).
 -export([asset_head_has_no_body/1]).
@@ -133,7 +134,8 @@ groups() ->
             empty_segments_and_trailing_slash_are_ignored,
             first_declared_route_wins,
             wildcard_matches_zero_and_many_segments,
-            fully_shadowed_route_fails_to_start
+            fully_shadowed_route_fails_to_start,
+            capability_routes_are_served_or_refused
         ]},
         {assets, [], [
             asset_get_serves_the_file,
@@ -232,7 +234,9 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     ok = arizona_conformance_driver:stop(?config(driver, Config), conformance_main),
     ok = application:unset_env(arizona, secret_key),
-    ok.
+    %% Started here, so stopped here: a suite run after this one may boot the
+    %% application itself, with its own `server` env.
+    application:stop(arizona).
 
 init_per_group(session_store, Config) ->
     ok = application:set_env(arizona, session_store, arizona_session_store_ets),
@@ -508,6 +512,46 @@ fully_shadowed_route_fails_to_start(Config) ->
         {raised, _, _} ->
             ok
     end.
+
+%% An `mcp` or `reload` route is served by an adapter that has the kind and
+%% refused at start, naming it, by one that does not -- never accepted and then
+%% answered with something else.
+capability_routes_are_served_or_refused(Config) ->
+    Driver = ?config(driver, Config),
+    Cases = [
+        {reload, [{reload, ~"/cap/reload", #{}}], ~"/cap/reload"},
+        {mcp, [arizona_dev_mcp:route(~"/cap/mcp")], undefined}
+    ],
+    [capability_route(Driver, Kind, Routes, Probe) || {Kind, Routes, Probe} <- Cases],
+    ok.
+
+capability_route(Driver, Kind, Routes, Probe) ->
+    Name = conformance_capability,
+    case arizona_conformance_driver:supports_route(Driver, Kind) of
+        true ->
+            {ok, Port} = arizona_conformance_driver:start(Driver, Name, Routes, #{}),
+            try
+                ok = probe_capability(Port, Probe)
+            after
+                ok = arizona_conformance_driver:stop(Driver, Name)
+            end;
+        false ->
+            ?assertError(
+                {unsupported_route, Kind, _},
+                arizona_conformance_driver:start(Driver, Name, Routes, #{})
+            )
+    end.
+
+%% The reload route is an event stream; only its response head is read, since
+%% the stream stays open.
+probe_capability(_Port, undefined) ->
+    ok;
+probe_capability(Port, Path) ->
+    {200, Headers} = arizona_wire_client:request_head(Port, ~"GET", Path, []),
+    ?assertMatch(
+        <<"text/event-stream", _/binary>>, arizona_wire_client:header(~"content-type", Headers)
+    ),
+    ok.
 
 %% --------------------------------------------------------------------
 %% Assets
