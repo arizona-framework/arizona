@@ -11,19 +11,21 @@ pinning the boundary: what gets flushed is the request the action returns, so th
 discarded write is dropped.
 """.
 
--export([handle/1]).
--export([handle_dropped/1]).
+-export([handle/2]).
+-export([handle_dropped/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req) ->
+handle(Req, _Ctx) ->
     {arizona_controller:reply_effects([]), arizona_req:clear_session(Req)}.
 
--spec handle_dropped(Req) -> {Reply, Req} when
+-spec handle_dropped(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle_dropped(Req) ->
+handle_dropped(Req, _Ctx) ->
     %% Deliberately NOT returned: the cleared request is discarded, so the
     %% dispatcher flushes the one the action was given.
     _ClearedReq = arizona_req:clear_session(Req),

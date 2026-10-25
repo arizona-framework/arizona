@@ -138,9 +138,9 @@ anything.
 -nominal method_spec() :: atom() | binary() | [atom() | binary()].
 
 -nominal controller_opts() :: #{
-    %% State passed to the controller action (read via arizona_controller:state/1).
+    %% State handed to the controller action, as its context's `state`.
     state => term(),
-    %% Controller action function: dispatched as Handler:Action/1 (default `handle`).
+    %% Controller action function: dispatched as Handler:Action/2 (default `handle`).
     action => atom(),
     %% Arizona pipeline steps and HTTP response transforms, split at
     %% route-compile time (see split_middlewares/1).

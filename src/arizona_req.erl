@@ -48,10 +48,6 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% cohesive set of small accessors, so it legitimately exceeds the god-module
 %% function count.
 -elvis([{elvis_style, no_god_modules, disable}]).
-%% `request()` is one map holding every lazily parsed field, the response stash,
-%% and the session/flash state, each a key of its own so an accessor is one
-%% match; splitting it into sub-maps would only add a lookup to every access.
--elvis([{elvis_style, max_map_type_keys, #{max_keys => 30}}]).
 
 %% --------------------------------------------------------------------
 %% API function exports
@@ -65,8 +61,6 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([request_id/1]).
 -export([raw/1]).
 -export([set_raw/2]).
--export([private/1]).
--export([put_private/3]).
 -export([bindings/1]).
 -export([params/1]).
 -export([cookies/1]).
@@ -198,10 +192,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
     session_id => binary(),
     %% The pre-rotation id, dropped from the store on flush (store mode).
     session_prev_id => binary(),
-    session_error => {error, term()},
-    %% Framework-owned values riding the request to code that only sees the
-    %% request (a controller action's route `state`). See `put_private/3`.
-    private => #{term() => term()}
+    session_error => {error, term()}
 }.
 
 -nominal adapter() :: module().
@@ -387,28 +378,6 @@ they may no longer reflect the new raw.
 -spec set_raw(request(), raw()) -> request().
 set_raw(Req, Raw) ->
     maps:without([bindings, params, cookies, headers, body], Req#{raw => Raw}).
-
--doc """
-The framework's private values on the request (`#{}` when none). Survives
-`set_raw/2`, unlike the parse caches.
-""".
--spec private(Request) -> #{term() => term()} when
-    Request :: request().
-private(Req) ->
-    maps:get(private, Req, #{}).
-
--doc """
-Puts a framework-private value on the request: data that must reach code that
-is handed only the request, such as the route `state` a controller action reads
-with `arizona_controller:state/1`. Key it by the owning module
-(`{arizona_controller, state}`) so two owners cannot collide.
-""".
--spec put_private(Request, Key, Value) -> Request when
-    Request :: request(),
-    Key :: term(),
-    Value :: term().
-put_private(Req, Key, Value) ->
-    Req#{private => (private(Req))#{Key => Value}}.
 
 -doc """
 Returns route-pattern path bindings. Lazy-loaded via the adapter on

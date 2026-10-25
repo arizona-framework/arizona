@@ -7,12 +7,13 @@ effect plus a `push_event` carrying the new name so the submitting view re-rende
 all without a reload. Drives `e2e/parallel/arizona_session.spec.js`.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req0) ->
+handle(Req0, _Ctx) ->
     {ok, Body, Req1} = arizona_req:body(Req0),
     Name = proplists:get_value(~"name", uri_string:dissect_query(Body), ~""),
     %% The real Set-Cookie -- the reason fetch exists -- carrying the encrypted session.

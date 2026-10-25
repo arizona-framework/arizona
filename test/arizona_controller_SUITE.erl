@@ -235,7 +235,7 @@ dispatch_refuses_a_loop_without_handle_info(Config) when is_list(Config) ->
 
 dispatch_names_a_missing_action(Config) when is_list(Config) ->
     ?assertError(
-        {missing_action, arizona_users_controller, nope, 1},
+        {missing_action, arizona_users_controller, nope, 2},
         dispatch(arizona_users_controller, nope, #{}, [])
     ).
 

@@ -6,16 +6,18 @@ a term that is no reply kind, and a `{loop, ...}` from a module with no
 flush would have committed it.
 """.
 
--export([handle/1]).
--export([loop/1]).
+-export([handle/2]).
+-export([loop/2]).
 
--spec handle(Req) -> {not_a_reply, Req} when
-    Req :: arizona_req:request().
-handle(Req) ->
+-spec handle(Req, Ctx) -> {not_a_reply, Req} when
+    Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context().
+handle(Req, _Ctx) ->
     {not_a_reply, arizona_req:put_session(Req, ~"k", ~"v")}.
 
--spec loop(Req) -> {Reply, Req} when
+-spec loop(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-loop(Req) ->
+loop(Req, _Ctx) ->
     {{loop, 200, [], state}, arizona_req:put_session(Req, ~"k", ~"v")}.

@@ -17,12 +17,13 @@ Query params:
 Always replies `204 No Content`.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req0) ->
+handle(Req0, _Ctx) ->
     {Qs, Req1} = arizona_req:params(Req0),
     Listener = binary_to_existing_atom(proplists:get_value(~"listener", Qs, ~"http")),
     DeadlineMs = binary_to_integer(proplists:get_value(~"deadline_ms", Qs, ~"5000")),

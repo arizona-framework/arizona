@@ -6,10 +6,11 @@ fetch's `on_error` commands and dispatches `arizona:fetch-error`. Drives
 `e2e/parallel/arizona_fetch_error.spec.js`.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req) ->
+handle(Req, _Ctx) ->
     {{500, [], <<>>}, Req}.

@@ -485,7 +485,7 @@ init_per_group(roadrunner, Config) ->
             state => #{marker => ~"STATE_OK"}
         }},
         %% Controller route whose middleware output the action reads back
-        %% (the request it is handed + arizona_controller:bindings/1).
+        %% (the request it is handed + the bindings in its context).
         {get, <<"/_test/session-echo">>, arizona_session_echo_controller, #{
             middlewares => [{arizona_middleware, fetch_session}]
         }},
@@ -947,7 +947,7 @@ controller_action_reads_middleware_output(Config) ->
     %% The middleware pipeline's product reaches the action: fetch_session runs
     %% on the controller route and the action sees both the post-middleware
     %% request it is handed (get_session sees the decoded session) and the
-    %% produced bindings (arizona_controller:bindings/1 -- the `session`
+    %% produced bindings (its context's `bindings` -- the `session`
     %% binding). They used to be discarded, so fetch_session/extract
     %% middlewares on controller routes ran for nothing.
     Cookie = arizona_session:encode(#{~"user_id" => ~"u1"}),

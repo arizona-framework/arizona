@@ -39,7 +39,7 @@
 | `src/arizona_session_store_ets.erl`       | Default in-memory `arizona_session_store` -- a supervised public-ETS owner + periodic sweep + lazy expiry; `get/put/delete` run off the request process                                   |
 | `src/arizona_user_agent.erl`              | User-Agent classification for dual-serve views -- `browser/1`, `os/1`, `mobile/1` (best-effort); pairs with `arizona_req:user_agent/1`                                                    |
 | `src/arizona_http.erl`                    | Transport-agnostic HTTP render pipeline -- `render/3` runs middlewares and renders; `reply/3` folds it into `{Status, Headers, Body, Req}`                                                |
-| `src/arizona_controller.erl`              | Controller routes -- `dispatch/2` (pipeline + action + flush), `reply_effects/1,2` / `reply_redirect/1`, `state/1`, `bindings/1`, reply kinds                                             |
+| `src/arizona_controller.erl`              | Controller routes -- `dispatch/2` (pipeline + action + flush), `reply_effects/1,2` / `reply_redirect/1`, the action context, reply kinds                                                   |
 | `src/arizona_static.erl`                  | Offline static-site generation -- `generate/2,3` renders route handlers to HTML files under an out-dir; returns `{Written, Failed}`                                                       |
 | `src/arizona_ws.erl`                      | Transport-agnostic WS upgrade -- `prepare/3` resolves + runs middlewares; `upgrade/3` answers the request (reply or `101` lines); `init/1` starts the socket                              |
 | `src/arizona_live.erl`                    | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                                              |
@@ -1179,7 +1179,7 @@ build-opts variant supports hot-reload-safe rebuilds.
   (`Spec` = a verb, a list of verbs, a custom uppercase binary like `~"PROPFIND"`, or `'*'`). Behind
   the Arizona middleware pipeline (CSRF `check_origin` on by default); `Opts` is `controller_opts()`
   carrying `state`/`action`/`middlewares`/`check_origin`. Dispatches through
-  `arizona_controller:dispatch/2`, which calls `Handler:Action/1` (the `action` option, default
+  `arizona_controller:dispatch/2`, which calls `Handler:Action/2` (the `action` option, default
   `handle`). A wrong-verb request gets `405` + `Allow` from the adapter's router before any
   middleware, and two routes may share a path with disjoint verbs for REST-style dispatch. (Declare
   mutations non-GET: a state-changing GET is CSRF-able regardless -- a cross-site GET nav carries a
@@ -1897,8 +1897,10 @@ Reply helpers for **controller routes** -- plain HTTP handlers (a verb tag like 
 a real HTTP request, its response can carry a `Set-Cookie` (HttpOnly honored) that the WebSocket
 transport cannot, which is what makes it the right place to rotate a session cookie while the page
 stays put. The adapter dispatches the route through `dispatch/2`, which runs the middleware
-pipeline (Origin check default-on) and then calls `Handler:Action/1` -- the `action` option,
-default `handle` -- with the post-middleware `arizona_req:request()`. The action returns
+pipeline (Origin check default-on) and then calls `Handler:Action/2` -- the `action` option,
+default `handle` -- with the post-middleware `arizona_req:request()` and a context,
+`#{state := State, bindings := Bindings}` (the route's `state` option and the bindings the
+pipeline produced, such as `session` after `fetch_session`). The action returns
 `{Reply, Request}`, and what the returned request carries (session, flash, cookies) is flushed
 ahead of the reply's headers.
 
@@ -1922,9 +1924,6 @@ rather than degrade the reply. Roadrunner has all four.
   `full => true`, since `pushState` refuses another origin; a relative one loads resolved
   against the current URL, as over HTTP. An unsafe scheme (`javascript:`, `data:`) raises
   `{unsafe_redirect, Location}` rather than reach the client
-- `state/1(Request)` -- the route's `state` option
-- `bindings/1(Request)` -- the bindings the middleware pipeline produced (`session` after a
-  `fetch_session` step)
 
 The response is deliberately **effects-only, no ops**: a stateless controller holds no diff
 snapshot to make ops from (hence the `accept: application/json` request header). To re-render the

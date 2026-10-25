@@ -7,16 +7,16 @@ runs) and each one is pushed as an event; the second ends the response. A
 so a disconnect can be observed.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 -export([handle_info/3]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req) ->
+handle(Req, #{state := State}) ->
     self() ! {tick, 1},
     self() ! {tick, 2},
-    State = arizona_controller:state(Req),
     {{loop, 200, [{~"content-type", ~"text/event-stream"}], State}, Req}.
 
 -spec handle_info(Info, Push, State) -> {ok, State} | {stop, State} when

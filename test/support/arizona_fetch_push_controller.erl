@@ -6,12 +6,13 @@ existing WebSocket so the **submitting** view re-renders via `handle_event/3`, w
 pubsub. Drives `e2e/parallel/arizona_fetch_push.spec.js`.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req) ->
+handle(Req, _Ctx) ->
     %% Tell the submitting view to refresh -- the client relays this over its WS.
     Reply = arizona_controller:reply_effects([arizona_js:push_event(~"saved")]),
     {Reply,

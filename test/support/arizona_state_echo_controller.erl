@@ -2,14 +2,14 @@
 -moduledoc """
 **TEST FIXTURE.** Returns its route-configured `state` marker as the response body,
 to verify `arizona_controller:dispatch/2` runs the handler through the middleware
-pipeline and restores the app `state` (read via `arizona_controller:state/1`).
+pipeline and restores the app `state` (the `state` of the action's context).
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req) ->
-    #{marker := Marker} = arizona_controller:state(Req),
+handle(Req, #{state := #{marker := Marker}}) ->
     {{200, [{~"content-type", ~"text/plain"}], Marker}, Req}.

@@ -15,12 +15,13 @@ reload topic, which keeps the close away from the specs running beside this one.
 Always replies `204 No Content`.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req0) ->
+handle(Req0, _Ctx) ->
     {Params, Req1} = arizona_req:params(Req0),
     ok =
         case proplists:get_value(~"step", Params) of

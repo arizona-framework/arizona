@@ -6,12 +6,13 @@ broadcasts over `arizona_pubsub` so the live view re-renders, and returns a requ
 effect -- all without a page reload. Drives `e2e/sequential/arizona_fetch_account.spec.js`.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req) ->
+handle(Req, _Ctx) ->
     %% Re-render the live view via pubsub: server-computed content (the message)
     %% reaches the connected view and is rendered server-authoritatively over the WS.
     arizona_pubsub:broadcast(fetch_account, {saved, ~"Account updated"}),

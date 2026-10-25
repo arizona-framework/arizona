@@ -5,7 +5,7 @@ written against Arizona's request and reply types only, so the same controller
 runs on any `arizona_server` adapter.
 
 A controller route (a verb tag like `{post, ...}`, or `{match, ...}`) dispatches to an
-action function, `Handler:Action/1` (the `action` option, default `handle`), that the
+action function, `Handler:Action/2` (the `action` option, default `handle`), that the
 browser reaches via `arizona_js:fetch/2`. Because it is a real HTTP request, the
 response may carry a `Set-Cookie` (HttpOnly honored) the WebSocket transport can't --
 so it suits flows that rotate a session cookie while the page stays put.
@@ -13,10 +13,12 @@ so it suits flows that rotate a session cookie while the page stays put.
 ## The action
 
 The action receives the `arizona_req:request()` the route's middleware pipeline
-produced and returns `{Reply, Request}`:
+produced and a context, `#{state := State, bindings := Bindings}` -- the route's
+`state` option (`#{}` when unset) and the bindings the pipeline produced
+(`session` from `fetch_session`, ...) -- and returns `{Reply, Request}`:
 
 ```erlang
-handle(Req0) ->
+handle(Req0, _Ctx) ->
     {ok, Body, Req1} = arizona_req:body(Req0),
     %% ...parse Body, validate, derive UserId...
     Req2 = arizona_req:clear_session(Req1),
@@ -31,9 +33,6 @@ Return the request you wrote to: what it carries -- session and flash writes,
 `arizona_req:put_resp_cookie/4` and `put_resp_header/3` -- is what reaches the
 response (and, in store mode, the session store). Thread it through
 `arizona_req:body/1` too, since reading the body advances the request.
-
-The route's `state` option is read with `state/1`, the bindings the pipeline
-produced (`session` from `fetch_session`, ...) with `bindings/1`.
 
 ## Replies
 
@@ -69,8 +68,6 @@ error/success) or a `navigate`.
 -export([reply_effects/1]).
 -export([reply_effects/2]).
 -export([reply_redirect/1]).
--export([state/1]).
--export([bindings/1]).
 -export([unsupported_reply/2]).
 -export([format_error/2]).
 
@@ -81,8 +78,6 @@ error/success) or a `navigate`.
 -ignore_xref([reply_effects/1]).
 -ignore_xref([reply_effects/2]).
 -ignore_xref([reply_redirect/1]).
--ignore_xref([state/1]).
--ignore_xref([bindings/1]).
 %% For adapters whose server lacks a reply kind; roadrunner has them all.
 -ignore_xref([unsupported_reply/2]).
 %% Called by `erl_error` via the `error_info` annotation, not directly.
@@ -93,6 +88,7 @@ error/success) or a `navigate`.
 %% --------------------------------------------------------------------
 
 -export_type([route/0]).
+-export_type([context/0]).
 -export_type([headers/0]).
 -export_type([sendfile_spec/0]).
 -export_type([reply/0]).
@@ -110,6 +106,12 @@ error/success) or a `navigate`.
     action := atom(),
     state := term(),
     middlewares := [arizona_middleware:middleware()]
+}.
+
+%% What an action is handed beside the request.
+-nominal context() :: #{
+    state := term(),
+    bindings := az:bindings()
 }.
 
 -nominal headers() :: [{binary(), iodata()}].
@@ -134,9 +136,8 @@ error/success) or a `navigate`.
 
 -doc """
 Runs a controller route against a request: the route's middleware pipeline
-(the CSRF `check_origin` step included by default), then the action with the
-route `state` and the pipeline's bindings on the request (`state/1`,
-`bindings/1`).
+(the CSRF `check_origin` step included by default), then the action, handed the
+route `state` and the pipeline's bindings as its `t:context/0`.
 
 Returns the reply with `arizona_req:flush/1`'s lines ahead of the action's own
 headers (so a written session is committed and its cookie sent), and the request
@@ -159,12 +160,8 @@ dispatch(#{middlewares := Middlewares} = Route, ArzReq) ->
             {{Status, Headers, <<>>}, HaltReq};
         {cont, ArzReq1, Bindings} ->
             #{handler := Handler, action := Action, state := State} = Route,
-            ArzReq2 = arizona_req:put_private(
-                arizona_req:put_private(ArzReq1, {?MODULE, state}, State),
-                {?MODULE, bindings},
-                Bindings
-            ),
-            {Reply, ArzReq3} = dispatch_action(Handler, Action, ArzReq2),
+            Ctx = #{state => State, bindings => Bindings},
+            {Reply, ArzReq3} = dispatch_action(Handler, Action, ArzReq1, Ctx),
             %% Checked before the flush, which commits a written session: a
             %% reply the adapter cannot send must not leave a write behind.
             ok = check_reply(Handler, Reply),
@@ -197,7 +194,7 @@ the page a controller sends the user to, set it on the request and navigate in
 full, so the browser's next GET carries the cookie:
 
 ```erlang
-handle(Req) ->
+handle(Req, _Ctx) ->
     Reply = arizona_controller:reply_effects([arizona_js:navigate(~"/done", #{full => true})]),
     {Reply, arizona_req:put_flash(Req, info, ~"Saved.")}.
 ```
@@ -240,29 +237,6 @@ reply_redirect(Location) ->
                 {error_info, #{module => ?MODULE}}
             ])
     end.
-
--doc """
-The route's `state` option (`#{}` when it sets none), as the action received it.
-Only a request a controller route dispatched carries it; any other crashes.
-""".
--spec state(Request) -> term() when
-    Request :: arizona_req:request().
-state(ArzReq) ->
-    #{{?MODULE, state} := State} = arizona_req:private(ArzReq),
-    State.
-
--doc """
-The bindings the route's middleware pipeline produced -- e.g. `session` from
-`fetch_session`, `flash` from `fetch_flash`, or the keys an
-`arizona_middleware:extract/1` step pulled from the request -- the same map a
-live route hands its view as mount bindings. Like `state/1`, only set on a
-request a controller route dispatched.
-""".
--spec bindings(Request) -> az:bindings() when
-    Request :: arizona_req:request().
-bindings(ArzReq) ->
-    #{{?MODULE, bindings} := Bindings} = arizona_req:private(ArzReq),
-    Bindings.
 
 -doc """
 Raises `{unsupported_reply, Kind, Adapter}`: what an adapter does with a reply
@@ -333,20 +307,20 @@ format_error({unsupported_reply, Kind, Adapter}, _ST) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Dispatch to the controller's action (Handler:Action/1, `action` defaulting to
+%% Dispatch to the controller's action (Handler:Action/2, `action` defaulting to
 %% `handle` at compile time). A missing/unexported action is re-tagged into a clear
 %% `{missing_action, ...}` error (rendered by format_error/2); an `undef` from
 %% *inside* the action body propagates untagged.
-dispatch_action(Handler, Action, ArzReq) ->
+dispatch_action(Handler, Action, ArzReq, Ctx) ->
     try
-        Handler:Action(ArzReq)
+        Handler:Action(ArzReq, Ctx)
     catch
         error:undef:ST ->
             arizona_error:raise_or_propagate(
                 undef,
                 ST,
-                {Handler, Action, 1},
-                {missing_action, Handler, Action, 1},
+                {Handler, Action, 2},
+                {missing_action, Handler, Action, 2},
                 [Handler, Action, ArzReq],
                 ?MODULE
             )

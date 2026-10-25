@@ -9,10 +9,11 @@ out as the encrypted `Set-Cookie`. The store-mode fixture
 server-side entry to check.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req) ->
+handle(Req, _Ctx) ->
     {arizona_controller:reply_effects([]), arizona_req:put_session(Req, user_id, ~"u42")}.

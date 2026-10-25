@@ -4,10 +4,11 @@
 tests: same bytes every call, so a weak ETag derived from it revalidates.
 """.
 
--export([handle/1]).
+-export([handle/2]).
 
--spec handle(Req) -> {Reply, Req} when
+-spec handle(Req, Ctx) -> {Reply, Req} when
     Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
     Reply :: arizona_controller:reply().
-handle(Req) ->
+handle(Req, _Ctx) ->
     {{200, [{~"content-type", ~"text/plain"}], ~"stable-transform-probe-body"}, Req}.
