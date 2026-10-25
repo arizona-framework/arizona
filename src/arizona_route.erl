@@ -132,7 +132,8 @@ path(Route) ->
 -doc """
 The method allowlist of `Route`. A page or asset answers `GET` and `HEAD`; a
 controller its declared verbs, uppercased, `HEAD` added beside `GET`; a
-`{match, '*', ...}` controller and the `ws`, `mcp`, and `reload` kinds `any`.
+`{match, '*', ...}` controller and the `ws` and `mcp` kinds `any`; a `reload`
+route is an event stream, `GET` and `HEAD`.
 `'*'` inside a method list raises `wildcard_in_method_list`: there it would
 match no real method.
 """.
@@ -140,7 +141,7 @@ match no real method.
     Route :: term().
 methods(Route) ->
     case kind(Route) of
-        Kind when Kind =:= live; Kind =:= asset -> [~"GET", ~"HEAD"];
+        Kind when Kind =:= live; Kind =:= asset; Kind =:= reload -> [~"GET", ~"HEAD"];
         controller -> controller_methods(Route);
         _Other -> any
     end.
@@ -219,10 +220,14 @@ live({live, _Path, Handler, Opts} = Route, BuildOpts) ->
 
 -doc """
 What a `controller` route runs: the `arizona_controller:route()` that
-`arizona_controller:dispatch/3` takes.
+`arizona_controller:dispatch/3` takes. A `reload` route is a controller too,
+`arizona_reload_controller` behind no pipeline: a dev endpoint the page it
+serves opens itself.
 """.
 -spec controller(Route) -> arizona_controller:route() when
     Route :: term().
+controller({reload, _Path, _Opts}) ->
+    #{handler => arizona_reload_controller, action => handle, state => #{}, middlewares => []};
 controller(Route) ->
     controller = kind(Route),
     Opts = opts(Route),

@@ -46,10 +46,11 @@ The application starts the `server` env's listener through the adapter its `adap
 `start/2`, `stop/1`, `drain/2`, `recompile_routes/0`, and the optional `capabilities/0`: the
 capability route kinds (`mcp`, `reload`) and controller reply kinds (`stream`, `sendfile`,
 `loop`) the adapter supports, every kind when omitted. Core refuses the rest for you, so an
-unsupported kind fails loudly instead of degrading. A listener that is up registers its adapter
-with `arizona_server_registry:register/1`, so the dev reloader recompiles its routes after a code
-reload (route terms can hold funs from reloaded modules). A listener another framework owns
-registers the same way.
+unsupported kind fails loudly instead of degrading. Report each listener once it is up,
+`arizona_server_registry:listener_up(Adapter, Name, Routes)`, and when it stops,
+`listener_down(Name)`: the dev reloader then recompiles its routes after a code reload (route
+terms can hold funs from reloaded modules), and the node's dev-mode signals follow the `reload`
+and dev MCP routes actually running. A listener another framework owns reports the same way.
 
 **Drain** closes the listen socket and sends each live WebSocket session's live process
 `{arizona_drain, Deadline}` through `arizona_socket:drain/2`, with `Deadline` an
@@ -73,7 +74,9 @@ arrives as `CONNECT`), and match exactly as an HTTP request to that path would.
 
 `arizona_route:kind/1` names a route (`live`, `ws`, `asset`, `controller`, `mcp`, `reload`) and
 refuses a term that is no route. `mcp` and `reload` are capabilities: a route kind the adapter
-lacks raises `arizona_route:unsupported/2` while compiling, so the listener refuses to start.
+lacks raises `arizona_route:unsupported/2` while compiling, so the listener refuses to start. A
+`reload` route is a controller (`arizona_route:controller/1` names `arizona_reload_controller`, a
+`loop` reply), so an adapter that sends loops serves it like any other controller route.
 Compile from `arizona_route` rather than restating its rules:
 
 - `path/1`, `methods/1` -- the pattern and the allowlist (`GET` implies `HEAD`; `any`).

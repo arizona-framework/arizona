@@ -22,7 +22,7 @@ reload without restarting the listener.
 | `{Verb, Path, Handler, Opts}` | Single-verb controller | `arizona_roadrunner_controller` |
 | `{match, Spec, Path, Handler, Opts}` | Multi/custom methods | `arizona_roadrunner_controller` |
 | `{mcp, Path, Handler, Opts}` | MCP (Model Context Protocol) server | `arizona_mcp_handler` |
-| `{reload, Path, Opts}` | Dev SSE reload endpoint | `arizona_roadrunner_reload` |
+| `{reload, Path, Opts}` | Dev SSE reload endpoint | `arizona_roadrunner_controller` |
 
 `Verb` is `get`/`post`/`put`/`patch`/`delete`/`head`/`options`; `match`'s `Spec` is a
 single verb, a list of verbs, a custom uppercase method binary, or `'*'` (any method).
@@ -40,13 +40,10 @@ in list order, which makes an asset path listed ahead of a longer one it prefixe
 swallow that one -- `~"/static"` before `~"/static/arizona"` serves, and 404s, every
 request meant for the latter. Order the longer prefix first.
 
-Compiling a `{reload, ...}` route (`compile_routes/3`) also stashes its path in
-the `arizona_reload_url` persistent term so the dev error page can build the SSE
-connect URL, and compiling an `arizona_dev_mcp` route sets the
-`arizona_dev_mcp_route` persistent term, which `arizona_reloader:enabled/0` reads
-(its `reload` tool swaps code even with no `reloader` env); `routes/1,2` only
-expand, so a listener start can build and validate its table before writing
-anything.
+The dev-mode signals a `{reload, ...}` or `arizona_dev_mcp` route carries are
+not written here: the server reports its running listeners to
+`arizona_server_registry`, which keeps them in step. `routes/1,2` only expand,
+so a listener start can build and validate its table before writing anything.
 """.
 
 %% --------------------------------------------------------------------
@@ -192,8 +189,7 @@ compile_routes(Routes, BuildOpts, Name) when is_map(BuildOpts), is_atom(Name) ->
         {?DISPATCH_KEY, Name},
         roadrunner_router:compile(routes(Routes, BuildOpts), [])
     ),
-    ok = put_dev_mcp_route(Routes),
-    put_reload_url(Routes).
+    ok.
 
 -doc """
 Erases the listener-scoped dispatch key written by `compile_routes/3`.
@@ -333,19 +329,11 @@ route_to_roadrunner({mcp, Path, Handler, Opts}, _BuildOpts) ->
             state => #{arizona => Opts#{handler => Handler}}
         }
     ];
-route_to_roadrunner({reload, Path, Opts}, _BuildOpts) ->
-    [
-        #{
-            path => Path,
-            handler => arizona_roadrunner_reload,
-            state => #{arizona => Opts}
-        }
-    ];
 route_to_roadrunner(Route, BuildOpts) ->
-    %% A controller (verb tag or `{match, ...}`); `arizona_roadrunner_controller`
-    %% runs `arizona_controller:dispatch/3` on what `arizona_route:controller/1`
-    %% names.
-    controller = arizona_route:kind(Route),
+    %% A controller (verb tag or `{match, ...}`), or the dev reload endpoint,
+    %% which is one too; `arizona_roadrunner_controller` runs
+    %% `arizona_controller:dispatch/3` on what `arizona_route:controller/1` names.
+    true = lists:member(arizona_route:kind(Route), [controller, reload]),
     [
         roadrunner_route(Route, BuildOpts, #{
             path => arizona_route:path(Route),
@@ -365,22 +353,6 @@ roadrunner_route(Route, BuildOpts, Entry) ->
         end,
     Transforms = [transform_to_roadrunner(T) || T <- arizona_route:transforms(Route, BuildOpts)],
     with_transforms(Entry#{methods => Methods}, cors_options(Methods, Transforms)).
-
-%% Set at mount, not at the first MCP session (`arizona_dev_mcp:init/1`): a live
-%% view connected before the agent's session must already have joined the
-%% reloader topic when that session's `reload` swaps its code.
-put_dev_mcp_route(Routes) ->
-    case [Path || {mcp, Path, arizona_dev_mcp, _Opts} <- Routes] of
-        [] -> ok;
-        [_ | _] -> persistent_term:put(arizona_dev_mcp_route, true)
-    end.
-
-%% The last `{reload, ...}` route wins, as it did when the expansion wrote it.
-put_reload_url(Routes) ->
-    case [Path || {reload, Path, _Opts} <- Routes] of
-        [] -> ok;
-        Paths -> persistent_term:put(arizona_reload_url, lists:last(Paths))
-    end.
 
 %% Assets are served by roadrunner's built-in `roadrunner_static`: zero-copy
 %% sendfile plus ETag/`If-None-Match` (304), `Range`, precompressed-sibling

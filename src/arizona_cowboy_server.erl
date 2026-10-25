@@ -10,8 +10,8 @@ listener in a `persistent_term`, which the handler and
 
 ## Options
 
-- `routes` -- the Arizona route list (required). `mcp` and `reload` routes are
-  refused (`capabilities/0`): this adapter does not serve them yet.
+- `routes` -- the Arizona route list (required). `mcp` routes are refused
+  (`capabilities/0`): this adapter does not serve them yet.
 - `transport_opts` -- `[{port, Port}]` (default `4040`); other entries go to
   Ranch's socket options.
 - `compress` -- `true` (default) compresses pages and assets
@@ -82,6 +82,7 @@ stop(Name) ->
     %% The listener goes first: a request still in flight reads the table.
     Result = cowboy:stop_listener(Name),
     persistent_term:erase(?KEY(Name)),
+    ok = arizona_server_registry:listener_down(Name),
     Result.
 
 -doc """
@@ -120,10 +121,10 @@ recompile_routes() ->
         persistent_term:get()
     ).
 
--doc "Every controller reply kind; neither dev route (`mcp`, `reload`) yet.".
+-doc "Every controller reply kind and the dev reload route; not `mcp` yet.".
 -spec capabilities() -> #{routes := [mcp | reload], replies := [stream | sendfile | loop]}.
 capabilities() ->
-    #{routes => [], replies => [stream, sendfile, loop]}.
+    #{routes => [reload], replies => [stream, sendfile, loop]}.
 
 -doc "The compiled route table of the listener `Name`.".
 -spec table(Name) -> arizona_route_table:table() when
@@ -191,7 +192,7 @@ start_new(Name, #{routes := Routes} = Opts) ->
     ProtoOpts = maps:merge(#{env => #{dispatch => Dispatch}}, maps:get(proto_opts, Opts, #{})),
     case cowboy:start_clear(Name, transport_opts(Opts), ProtoOpts) of
         {ok, _Pid} = Ok ->
-            ok = arizona_server_registry:register(?MODULE),
+            ok = arizona_server_registry:listener_up(?MODULE, Name, Routes),
             Ok;
         {error, _Reason} = Error ->
             persistent_term:erase(?KEY(Name)),

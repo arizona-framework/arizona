@@ -2109,7 +2109,7 @@ test_tls_opts() ->
 reload_endpoint_streams_event(Config) ->
     %% Connect to the dev reload SSE endpoint, broadcast a reload, and
     %% verify the event is written to the stream. Exercises
-    %% `arizona_roadrunner_reload`.
+    %% `arizona_reload_controller` on roadrunner.
     Port = proplists:get_value(port, Config),
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     Req = [

@@ -129,7 +129,7 @@ Returns `{error, not_found}` if `Name` is not a running listener.
 stop(Name) ->
     persistent_term:erase({?ROUTES_KEY, Name}),
     ok = arizona_roadrunner_router:forget_routes(Name),
-    ok = forget_dev_terms(),
+    ok = arizona_server_registry:listener_down(Name),
     roadrunner:stop_listener(Name).
 
 -doc """
@@ -256,21 +256,17 @@ start_new(Name, Opts0) ->
 %% The routes are written BEFORE the listener starts so its first WS upgrade
 %% already resolves, which is also why a failed start must put back whatever
 %% was there: a stash for a listener that never came up sends
-%% `recompile_routes/0` to a dead process, and its `{reload, ...}` path would
-%% have every page connect to a reload endpoint nothing serves.
-start_listener(Name, ListenerOpts, Stash) ->
+%% `recompile_routes/0` to a dead process. The registry hears of the listener
+%% only once it is up, so a failed start never turns dev mode on.
+start_listener(Name, ListenerOpts, {Routes, _BuildOpts} = Stash) ->
     Previous = persistent_term:get({?ROUTES_KEY, Name}, undefined),
-    PreviousReloadUrl = persistent_term:get(arizona_reload_url, undefined),
-    PreviousDevMcp = persistent_term:get(arizona_dev_mcp_route, undefined),
     ok = put_routes(Name, Stash),
     case roadrunner:start_listener(Name, ListenerOpts) of
         {ok, _Pid} = Ok ->
-            ok = arizona_server_registry:register(?MODULE),
+            ok = arizona_server_registry:listener_up(?MODULE, Name, Routes),
             Ok;
         {error, _Reason} = Error ->
             ok = restore_routes(Name, Previous),
-            ok = restore_reload_url(PreviousReloadUrl),
-            ok = restore_dev_mcp_route(PreviousDevMcp),
             Error
     end.
 
@@ -287,43 +283,6 @@ restore_routes(Name, undefined) ->
     arizona_roadrunner_router:forget_routes(Name);
 restore_routes(Name, Previous) ->
     put_routes(Name, Previous).
-
-restore_reload_url(undefined) ->
-    persistent_term:erase(arizona_reload_url),
-    ok;
-restore_reload_url(Url) ->
-    persistent_term:put(arizona_reload_url, Url).
-
-restore_dev_mcp_route(undefined) ->
-    persistent_term:erase(arizona_dev_mcp_route),
-    ok;
-restore_dev_mcp_route(Mounted) ->
-    persistent_term:put(arizona_dev_mcp_route, Mounted).
-
-%% The dev terms are node-wide, written by whichever listener compiled a reload
-%% or dev MCP route, so a stopped listener's survive it unless they are
-%% recomputed from the listeners still stashed. Left behind, a production
-%% listener started later in the same node serves the dev error page, stack
-%% traces included, on every render crash.
-forget_dev_terms() ->
-    Remaining = lists:append([
-        Routes
-     || {{?ROUTES_KEY, _Name}, {Routes, _BuildOpts}} <- persistent_term:get()
-    ]),
-    ok = keep_reload_url([Path || {reload, Path, _Opts} <- Remaining]),
-    keep_dev_mcp_route([Path || {mcp, Path, arizona_dev_mcp, _Opts} <- Remaining]).
-
-keep_reload_url([]) ->
-    restore_reload_url(undefined);
-keep_reload_url(Paths) ->
-    Current = persistent_term:get(arizona_reload_url, undefined),
-    case lists:member(Current, Paths) of
-        true -> ok;
-        false -> restore_reload_url(lists:last(Paths))
-    end.
-
-keep_dev_mcp_route([]) -> restore_dev_mcp_route(undefined);
-keep_dev_mcp_route([_ | _]) -> restore_dev_mcp_route(true).
 
 %% A listener can be gone while its stash survives (stopped behind
 %% `stop/1`'s back, or its supervisor gave up on it); one such listener must
