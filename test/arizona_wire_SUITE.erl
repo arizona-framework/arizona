@@ -4,12 +4,13 @@ Cross-language wire op-code sync check.
 
 The diff op codes in `include/arizona_wire.hrl` and the effect op codes in
 `include/arizona_effect.hrl` are hand-copied into every client runtime
-(`assets/js/arizona.js` and its worker, the reference `e2e/utils/native_client.js`,
-and the Android/iOS `Wire.kt`/`Wire.swift`). Nothing else compares them, so a
-renumber or addition in one artifact drifts silently -- a native client skips an
-unknown op non-strictly, hiding the mismatch until a patch or event misfires in
-production. This suite reads the Erlang headers as the source of truth and asserts
-every client's declared codes still agree with them.
+(`assets/js/arizona-ops.js`, `arizona-commands.js` and the worker, the reference
+`e2e/utils/native_client.js`, and the Android/iOS `Wire.kt`/`Wire.swift`).
+Nothing else compares them, so a renumber or addition in one artifact drifts
+silently -- a native client skips an unknown op non-strictly, hiding the
+mismatch until a patch or event misfires in production. This suite reads the
+Erlang headers as the source of truth and asserts every client's declared codes
+still agree with them.
 """.
 -include_lib("stdlib/include/assert.hrl").
 
@@ -138,10 +139,10 @@ native_backend_ops() ->
 %% The web client's `const OP = { NAME: N, ... }` table, and its 30 `JS_NAME = N`
 %% effect constants.
 web_js(ops) ->
-    Body = block(read(["assets", "js", "arizona.js"]), ~"const OP = \\{(.*?)\\}"),
+    Body = block(read(["assets", "js", "arizona-ops.js"]), ~"const OP = \\{(.*?)\\}"),
     extract(Body, ~"([A-Z0-9_]+):\\s*([0-9]+)");
 web_js(effects) ->
-    extract(read(["assets", "js", "arizona.js"]), ~"JS_([A-Z0-9_]+)\\s*=\\s*([0-9]+)").
+    extract(read(["assets", "js", "arizona-commands.js"]), ~"JS_([A-Z0-9_]+)\\s*=\\s*([0-9]+)").
 
 %% The `const OP_NAME = N` constants in the web client's frame worker.
 web_worker() ->

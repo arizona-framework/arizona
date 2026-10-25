@@ -9,6 +9,16 @@ paths:
 
 `assets/js/arizona.js` -- ES module, zero dependencies. Built by Vite to `priv/static/assets/js/arizona.min.js`.
 
+It is the entry point only: it re-exports the public API from the modules beside it, split by concern.
+The **shared** runtime -- `arizona-hooks.js`, `-docs.js` (multi-document / PiP), `-slots.js` (comment
+markers), `-attrs.js`, `-locals.js` (`?local`), `-transitions.js`, `-commands.js` (`executeJS`),
+`-events.js` (delegation), `-util.js` -- never imports the **live** side (`arizona-connection.js`: the
+socket, the Worker and navigation; `-ops.js`: the diff ops; `-scroll.js`). Where it needs one -- send an
+event, navigate, ask whether a socket is open -- it calls through `host` (`arizona-host.js`), which
+`arizona-connection.js` fills in when it is loaded. Keep that direction: a shared module that imports a
+live one ties every page to the socket. Mutable module state is written only in the module that
+declares it (an ES import is read-only), through a setter when another module must change it.
+
 Exports (the full list, alphabetical as in the module): `applyEffects`, `applyOps`, `connect`, `executeJS`, `exitPip`, `get`, `hooks`, `mountHooks`, `OP`, `pushEvent`, `pushEventTo`, `requestPip`, `resolveEl`, `restoreFormState`, `saveFormState`, `set`, `setAll`.
 
 - `connect(endpoint, params?)` -- bootstrap: spawns Worker, installs document/window-level event delegation, takes over `history.scrollRestoration`. **Returns a `disconnect` function** that aborts every listener it registered, terminates the Worker, clears module state (`_connected`, `_pendingScroll`, saved forms), and restores the previous `scrollRestoration`. Idempotent. Use for teardown in tests and for host apps that want to unmount Arizona on route change. **One live connection at a time:** the connection owns module-level state, so calling `connect` again warns and retires the previous one first (otherwise its Worker keeps a second socket patching the same document, and its `disconnect` -- reading the same module state -- would tear down the newer connection instead).

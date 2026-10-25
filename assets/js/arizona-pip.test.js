@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     applyOps,
     executeJS,
+    exitPip,
     hooks,
     mountHooks,
     OP,
@@ -324,6 +325,8 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
     it('carries the effect detail to every document it reaches', async () => {
         document.body.innerHTML = '<div id="v9" az-view az="0"></div>';
         const pip = makePipWindow();
+        // A real PiP document's window is the PiP window, which exitPip closes.
+        Object.defineProperty(pip.document, 'defaultView', { value: pip });
         stubPip(pip);
         await requestPip('v9');
 
@@ -352,6 +355,71 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         expect(document.getElementById('v3')).not.toBeNull();
         // Patches resolve against the main document again.
         expect(resolveEl('v3:0')?.ownerDocument).toBe(document);
+    });
+
+    it('exitPip closes the window, which moves the view back inline', async () => {
+        document.body.innerHTML = '<div id="v9" az-view az="0"></div>';
+        const pip = makePipWindow();
+        // A real PiP document's window is the PiP window, which exitPip closes.
+        Object.defineProperty(pip.document, 'defaultView', { value: pip });
+        stubPip(pip);
+        await requestPip('v9');
+        expect(document.getElementById('v9')).toBeNull();
+
+        exitPip('v9');
+        expect(pip.closed).toBe(true);
+        expect(document.getElementById('v9')).not.toBeNull();
+    });
+
+    it('exitPip on a view that is not popped out does nothing', () => {
+        document.body.innerHTML = '<div id="v10" az-view az="0"></div>';
+        expect(() => exitPip('v10')).not.toThrow();
+        expect(document.getElementById('v10')).not.toBeNull();
+    });
+
+    it('resolves an unknown view to null while a PiP window is open', async () => {
+        document.body.innerHTML = '<div id="v11" az-view az="0"></div>';
+        const pip = makePipWindow();
+        stubPip(pip);
+        await requestPip('v11');
+        // Searched in the main document and every PiP document, found in none.
+        expect(resolveEl('nope:0')).toBeNull();
+        pip.fire('pagehide');
+    });
+
+    it("gives the PiP document the page's styles, relinking an unreadable sheet", async () => {
+        document.body.innerHTML = '<div id="v12" az-view az="0"></div>';
+        const readable = { cssRules: [{ cssText: '.a { color: red; }' }] };
+        const crossOrigin = {
+            href: 'https://cdn.example/site.css',
+            get cssRules() {
+                throw new DOMException('cross-origin', 'SecurityError');
+            },
+        };
+        const noHref = {
+            href: null,
+            get cssRules() {
+                throw new DOMException('cross-origin', 'SecurityError');
+            },
+        };
+        const spy = vi
+            .spyOn(document, 'styleSheets', 'get')
+            .mockReturnValue(/** @type {any} */ ([readable, crossOrigin, noHref]));
+        const pip = makePipWindow();
+        stubPip(pip);
+        try {
+            await requestPip('v12');
+            const head = pip.document.head;
+            expect(head.querySelector('style')?.textContent).toBe('.a { color: red; }');
+            const links = head.querySelectorAll('link[rel="stylesheet"]');
+            // The sheet with no href has nothing to relink and is skipped.
+            expect(Array.from(links, (l) => l.getAttribute('href'))).toEqual([
+                'https://cdn.example/site.css',
+            ]);
+        } finally {
+            spy.mockRestore();
+            pip.fire('pagehide');
+        }
     });
 
     it('JS_REQUEST_PIP effect triggers a pop-out at the browser default size', async () => {

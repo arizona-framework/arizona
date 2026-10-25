@@ -33,6 +33,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { clientSource } from './client_source.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -48,7 +49,7 @@ for (let i = 0; i < rest.length; i++) {
     else if (rest[i] === '--runs') runs = Number(rest[++i]);
 }
 
-const CLIENT = readFileSync(join(ROOT, 'assets/js/arizona.js'), 'utf8');
+const CLIENT = await clientSource(ROOT);
 const CORE = readFileSync(join(ROOT, 'assets/js/arizona-core.js'), 'utf8');
 const WORKER = readFileSync(join(ROOT, 'assets/js/arizona-worker.js'), 'utf8');
 // The committed production bundle: one minified ESM file with the same named
