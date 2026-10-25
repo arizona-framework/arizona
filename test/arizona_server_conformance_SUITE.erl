@@ -94,6 +94,7 @@ internal state.
 -export([sendfile_reply_sends_the_range/1]).
 -export([loop_reply_pushes_until_it_stops/1]).
 -export([loop_hears_the_client_go_away/1]).
+-export([loop_keeps_a_linked_process_exit_meaning/1]).
 %% Render
 -export([mount_crash_is_500/1]).
 -export([native_page_is_json/1]).
@@ -220,7 +221,8 @@ groups() ->
                 stream_reply_arrives_in_chunks,
                 sendfile_reply_sends_the_range,
                 loop_reply_pushes_until_it_stops,
-                loop_hears_the_client_go_away
+                loop_hears_the_client_go_away,
+                loop_keeps_a_linked_process_exit_meaning
             ]},
             {render, [], [
                 mount_crash_is_500,
@@ -427,6 +429,9 @@ main_routes(AssetDir) ->
         {get, ~"/reply/loop_hold", arizona_loop_controller, #{
             action => hold, state => #{notify => ?LOOP_WATCHER}
         }},
+        {get, ~"/reply/loop_linked", arizona_loop_controller, #{
+            action => linked, state => #{notify => ?LOOP_WATCHER}
+        }},
         %% Render
         {live, ~"/crash_on_mount", arizona_crashable, #{bindings => #{crash_on_mount => true}}},
         {live, ~"/native_page", arizona_native_counter_demo, #{}},
@@ -556,7 +561,7 @@ capability_routes_are_served_or_refused(Config) ->
     Driver = ?config(driver, Config),
     Cases = [
         {reload, [{reload, ~"/cap/reload", #{}}], ~"/cap/reload"},
-        {mcp, [arizona_dev_mcp:route(~"/cap/mcp")], undefined}
+        {mcp, [arizona_dev_mcp:route(~"/cap/mcp")], {mcp, ~"/cap/mcp"}}
     ],
     [capability_route(Driver, Kind, Routes, Probe) || {Kind, Routes, Probe} <- Cases],
     ok.
@@ -578,10 +583,49 @@ capability_route(Driver, Kind, Routes, Probe) ->
             )
     end.
 
+%% The MCP route answers an `initialize` POST with a session, and that session's
+%% GET opens its server-to-client event stream (a controller `loop` reply).
+probe_capability(Port, {mcp, Path}) ->
+    Init = json:encode(#{
+        ~"jsonrpc" => ~"2.0",
+        ~"id" => 1,
+        ~"method" => ~"initialize",
+        ~"params" => #{
+            ~"protocolVersion" => ~"2025-06-18",
+            ~"capabilities" => #{},
+            ~"clientInfo" => #{~"name" => ~"conformance", ~"version" => ~"1"}
+        }
+    }),
+    {200, Headers, Body} = arizona_wire_client:request(
+        Port,
+        ~"POST",
+        Path,
+        [
+            {~"content-type", ~"application/json"},
+            {~"accept", ~"application/json, text/event-stream"}
+        ],
+        Init
+    ),
+    SessionId = arizona_wire_client:header(~"mcp-session-id", Headers),
+    ?assert(is_binary(SessionId)),
+    ?assertMatch(#{~"id" := 1, ~"result" := #{~"protocolVersion" := _}}, json:decode(Body)),
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    try
+        ok = gen_tcp:send(Sock, [
+            ~"GET ",
+            Path,
+            ~" HTTP/1.1\r\nhost: localhost\r\naccept: text/event-stream\r\nmcp-session-id: ",
+            SessionId,
+            ~"\r\n\r\n"
+        ]),
+        Head = recv_until(Sock, ~"\r\n\r\n", <<>>),
+        ?assertMatch(<<"HTTP/1.1 200", _/binary>>, Head),
+        ?assertNotEqual(nomatch, binary:match(string:lowercase(Head), ~"text/event-stream"))
+    after
+        gen_tcp:close(Sock)
+    end;
 %% The reload route is an event stream that stays open: a reloader broadcast
 %% must arrive on it as a `reload` event.
-probe_capability(_Port, undefined) ->
-    ok;
 probe_capability(Port, Path) ->
     {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
     try
@@ -986,6 +1030,45 @@ loop_hears_the_client_go_away(Config) ->
             true = unregister(?LOOP_WATCHER)
         end
     end).
+
+%% A loop's links mean what they mean to any process, however the adapter hears
+%% its client go: a linked process exiting `normal` is no event (the controller
+%% is not handed it), and one exiting with any other reason takes the loop down
+%% with that reason (a server catching its request process's crash may add a
+%% stacktrace).
+loop_keeps_a_linked_process_exit_meaning(Config) ->
+    when_supported(loop, Config, fun() ->
+        true = register(?LOOP_WATCHER, self()),
+        try
+            {ok, Sock} = gen_tcp:connect("localhost", ?config(port, Config), [
+                binary, {active, false}
+            ]),
+            ok = gen_tcp:send(Sock, ~"GET /reply/loop_linked HTTP/1.1\r\nhost: localhost\r\n\r\n"),
+            [Normal, Crash, Loop] =
+                receive
+                    {arizona_loop_controller, {linked, LoopPid, [A, B]}} -> [A, B, LoopPid]
+                after 3000 -> ct:fail(no_loop)
+                end,
+            Mon = erlang:monitor(process, Loop),
+            Normal ! {exit, normal},
+            receive
+                {'DOWN', Mon, process, Loop, Early} -> ct:fail({loop_died, Early});
+                {arizona_loop_controller, {'EXIT', _, _} = Exit} -> ct:fail({handed, Exit})
+            after 300 -> ok
+            end,
+            Crash ! {exit, linked_crash},
+            receive
+                {'DOWN', Mon, process, Loop, Reason} -> ok = linked_crash(Reason)
+            after 3000 -> ct:fail(loop_alive)
+            end,
+            gen_tcp:close(Sock)
+        after
+            true = unregister(?LOOP_WATCHER)
+        end
+    end).
+
+linked_crash(linked_crash) -> ok;
+linked_crash({linked_crash, Stacktrace}) when is_list(Stacktrace) -> ok.
 
 %% --------------------------------------------------------------------
 %% Render

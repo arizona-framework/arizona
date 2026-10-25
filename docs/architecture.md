@@ -53,7 +53,7 @@
 | `src/arizona_reload_controller.erl`       | Dev hot-reload endpoint as a controller -- a `loop` reply that streams `arizona_reloader` broadcasts as Server-Sent Events                                                                |
 | `src/arizona_jsonrpc.erl`                 | JSON-RPC 2.0 codec -- `decode/1`, `result/2`, `error/3`, `notification/2`                                                                                                                 |
 | `src/arizona_mcp.erl`                     | MCP server behaviour an app implements (`init/1`, `tools/1`, `handle_tool/4`, optional `resources`/`prompts`/`channels`/`terminate`) plus the server-push API (`broadcast/3`, `notify/3`) |
-| `src/arizona_mcp_handler.erl`             | Roadrunner handler -- MCP Streamable HTTP transport (POST/GET/DELETE), the Origin/auth gate, and the pure `dispatch/3` / `handle_method/4` method dispatch                                |
+| `src/arizona_mcp_handler.erl`             | Controller -- MCP Streamable HTTP transport (POST/GET/DELETE), the peer/Origin/auth gate, and the pure `dispatch/3` / `handle_method/4` method dispatch                                   |
 | `src/arizona_mcp_session.erl`             | Per-session `gen_server` -- holds the handler state, serializes a session's requests, owns the SSE channel and the resumability buffer                                                    |
 | `src/arizona_mcp_session_registry.erl`    | ETS registry mapping `Mcp-Session-Id` to a session pid; sweeps dead pids on lookup                                                                                                        |
 | `src/arizona_mcp_sup.erl`                 | `simple_one_for_one` supervisor owning the session processes (so a session outlives its connection) and the registry table                                                                |
@@ -3071,15 +3071,17 @@ Claude Desktop) by implementing the `arizona_mcp` behaviour and mounting it on a
 {mcp, ~"/mcp", my_mcp, #{sessions => true, origins => [~"http://localhost:3000"]}}
 ```
 
-MCP rides the same roadrunner transport as everything else -- it is pure application-layer code,
-with no MCP-aware feature in roadrunner. The boundary: roadrunner supplies the mechanism (routes,
-immutable request/response values, the `{loop, ...}` streaming shape, `roadrunner_sse` framing, the
-`{roadrunner_disconnect, _}` signal); Arizona supplies the JSON-RPC 2.0 envelope, the MCP lifecycle,
-the tool/resource/prompt registry, the session lifecycle, and the Origin/auth policy.
+MCP rides the same transport as everything else -- it is pure application-layer code, a controller
+(`arizona_route:controller/1` turns an `{mcp, ...}` route into `arizona_mcp_handler` behind no
+pipeline), with no MCP-aware feature in any server. The boundary: the server adapter supplies the
+mechanism (routing, the request, the controller `{loop, ...}` reply, the
+`{arizona_disconnect, _}` signal); Arizona supplies the JSON-RPC 2.0 envelope, `arizona_sse`
+framing, the MCP lifecycle, the tool/resource/prompt registry, the session lifecycle, and the
+peer/Origin/auth policy.
 
 ### Transport
 
-MCP's Streamable HTTP maps onto roadrunner response shapes with no new transport feature:
+MCP's Streamable HTTP maps onto controller reply kinds with no new transport feature:
 
 - **POST** -- the client sends one JSON-RPC message. The handler decodes and dispatches; it returns
   a buffered `application/json` reply, or -- for a `tools/call` carrying a `_meta.progressToken`
@@ -3087,12 +3089,13 @@ MCP's Streamable HTTP maps onto roadrunner response shapes with no new transport
   `notifications/progress`, then the result, then close).
 - **GET** (session mode) -- opens the long-lived server-to-client SSE channel as
   `{loop, 200, [event-stream headers], State}`; `handle_info/3` forwards server-initiated
-  notifications and stops the loop on `{roadrunner_disconnect, _}`.
+  notifications and stops the loop on `{arizona_disconnect, _}`.
 - **DELETE** (session mode) -- tears the session down.
 
-The `{loop, ...}` SSE shape is wired on h1, h2, and h3, so the channel works on all three (h2/h3
-multiplex many sessions over one connection with no head-of-line blocking). Every `Push` flushes one
-frame to the wire with no coalescing, so a `notifications/*` message reaches the agent at emit time.
+The channel works on every protocol the adapter sends loops over; roadrunner wires them on h1, h2,
+and h3 (h2/h3 multiplex many sessions over one connection with no head-of-line blocking). Every
+`Push` flushes one frame to the wire with no coalescing, so a `notifications/*` message reaches the
+agent at emit time.
 
 ### Progress streaming
 
@@ -3210,7 +3213,9 @@ resumption, and the timer runs only while a channel is attached.
 `init/1` returns an atom-keyed capability map; the transport serves `resources/*` and `prompts/*`
 only when the matching capability was advertised, answering `method not found` otherwise. Tools are
 always available. Before any dispatch a request passes the security gate: the `Origin` allowlist (a
-DNS-rebinding defense) and the route's optional `auth` hook.
+DNS-rebinding defense), the loopback-peer check unless `allow_remote_access => true`
+(`arizona_req:peer/1`), and the route's optional `auth` hook, which is handed the
+`arizona_req:request()`.
 
 ### Known caveat -- loop backpressure
 

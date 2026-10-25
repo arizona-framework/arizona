@@ -170,9 +170,9 @@ has no session to end.
 Clients that use `fetch` (browsers and the official MCP SDK) refuse to
 connect to ports on the WHATWG Fetch "bad ports" blocklist, so mount the
 listener on a normal HTTP port (not, e.g., 4045 / 6000 / 6666). The SSE
-channel rides roadrunner's version-parity `{loop, ...}` path, so it works
-over HTTP/1.1, h2, and h3 (h2/h3 over TLS). The endpoint is verified against
-the official MCP SDK client.
+channel is a controller `{loop, ...}` reply, so it works on every protocol the
+server adapter sends loops over (roadrunner: HTTP/1.1, h2, and h3, the last two
+over TLS). The endpoint is verified against the official MCP SDK client.
 """.
 
 %% --------------------------------------------------------------------

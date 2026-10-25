@@ -1,6 +1,7 @@
 -module(arizona_mcp_handler).
 -moduledoc """
-Roadrunner handler for an MCP (Model Context Protocol) route.
+The MCP (Model Context Protocol) endpoint, a controller (`arizona_controller`)
+every `arizona_server` adapter with the `mcp` capability serves.
 
 Implements MCP's Streamable HTTP transport for a tools server: a client
 POSTs a single JSON-RPC 2.0 message and receives a buffered
@@ -12,18 +13,17 @@ and the route's optional `auth` hook.
 The MCP method dispatch (`dispatch/3`) is a pure function over a decoded
 request and the app's `arizona_mcp` module -- it is exported so it can be
 unit-tested without a transport, mirroring `arizona_stateful`'s `call_*`
-helpers. `handle/1` owns the transport: reading the body, the `Origin`
+helpers. `handle/2` owns the transport: reading the body, the `Origin`
 gate, and mapping a dispatch crash to a JSON-RPC `-32603` error so the
-protocol contract holds even when a tool raises.
+protocol contract holds even when a tool raises. The SSE channel and a
+streaming POST are controller `loop` replies, fed by `handle_info/3`.
 """.
-
--behaviour(roadrunner_handler).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
--export([handle/1]).
+-export([handle/2]).
 -export([handle_info/3]).
 -export([dispatch/3]).
 -export([handle_method/4]).
@@ -37,14 +37,18 @@ protocol contract holds even when a tool raises.
 -export_type([session/0]).
 -export_type([auth_hook/0]).
 -export_type([auth_result/0]).
+-export_type([route_opts/0]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
-%% `dispatch/3` is called by `handle/1` and exercised directly from the
+%% `dispatch/3` is called by `handle/2` and exercised directly from the
 %% test suite; it has no cross-module caller in the release.
 -ignore_xref([dispatch/3]).
+%% Called by the controller dispatch an `{mcp, ...}` route compiles to.
+-ignore_xref([handle/2]).
+-ignore_xref([handle_info/3]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -66,8 +70,25 @@ protocol contract holds even when a tool raises.
 
 %% An optional per-route auth hook, run after the Origin check and before any
 %% dispatch. `{reject, Status}` short-circuits with that HTTP status.
--type auth_hook() :: fun((roadrunner_req:request()) -> auth_result()) | {module(), atom()}.
--type auth_result() :: ok | {reject, roadrunner_http:status()}.
+-type auth_hook() :: fun((arizona_req:request()) -> auth_result()) | {module(), atom()}.
+-type auth_result() :: ok | {reject, arizona_req:resp_status()}.
+
+%% The options of an `{mcp, Path, Handler, Opts}` route.
+-type route_opts() :: #{
+    origins => [binary()],
+    auth => auth_hook(),
+    sessions => boolean(),
+    max_sessions => pos_integer() | infinity,
+    session_ttl_ms => pos_integer(),
+    session_buffer_max => pos_integer(),
+    %% Localhost gate (default `false`, safe-by-default like `origins`): unless
+    %% `true`, refuse a request whose peer is not a loopback address, regardless
+    %% of the listener's bind interface. `arizona_dev_mcp` relies on this for its
+    %% always-on `eval` (RCE). Void behind a same-host proxy/tunnel -- use `auth`
+    %% for non-direct remote exposure.
+    allow_remote_access => boolean(),
+    _ => term()
+}.
 
 %% --------------------------------------------------------------------
 %% Macros
@@ -114,28 +135,40 @@ protocol contract holds even when a tool raises.
 %% --------------------------------------------------------------------
 
 -doc """
-Roadrunner `handle/1` callback. Serves the MCP endpoint: a JSON-RPC POST
-returns a buffered `application/json` reply. When sessions are enabled,
-`DELETE` tears a session down; otherwise non-POST methods return `405`.
+The controller action. Serves the MCP endpoint: a JSON-RPC POST returns a
+buffered `application/json` reply (or, for a progress-tracked `tools/call`, an
+SSE stream). When sessions are enabled, `GET` opens the SSE channel and
+`DELETE` tears a session down; otherwise non-POST methods return `405`. The
+route options, the `handler` module among them, are the context's `state`.
 """.
--spec handle(Req) -> {Response, Req} when
-    Req :: roadrunner_req:request(),
-    Response :: roadrunner_handler:response().
-handle(Req) ->
-    #{arizona := Opts} = roadrunner_req:state(Req),
-    {serve(roadrunner_req:method(Req), Req, Opts), Req}.
+-spec handle(Req, Ctx) -> {Reply, Req} when
+    Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
+    Reply :: arizona_controller:reply().
+handle(Req0, #{state := Opts}) ->
+    %% Parsed once; `header/2` reads the cached map.
+    {_Headers, Req} = arizona_req:headers(Req0),
+    serve(arizona_req:method(Req), Req, Opts).
 
-%% POST is always served. DELETE tears a session down when sessions are
-%% enabled. Everything else is method-not-allowed (the server-to-client GET
-%% stream is a later phase).
+%% POST is always served. GET (the SSE channel) and DELETE (teardown) exist only
+%% in session mode. Everything else is method-not-allowed. Every arm hands back
+%% the request it ends with: reading the body advances it.
 serve(~"POST", Req, Opts) ->
-    with_gate(Req, Opts, fun() -> handle_post(Req, Opts) end);
+    gated(Req, Opts, fun() -> handle_post(Req, Opts) end);
 serve(~"GET", Req, Opts) ->
-    session_verb(Req, Opts, fun() -> handle_get(Req) end);
+    {session_verb(Req, Opts, fun() -> handle_get(Req) end), Req};
 serve(~"DELETE", Req, Opts) ->
-    session_verb(Req, Opts, fun() -> handle_delete(Req) end);
-serve(_Method, _Req, Opts) ->
-    method_not_allowed(Opts).
+    {session_verb(Req, Opts, fun() -> handle_delete(Req) end), Req};
+serve(_Method, Req, Opts) ->
+    {method_not_allowed(Opts), Req}.
+
+%% The POST arm reads the body, so the gate's refusals carry the request it
+%% was handed and a success the one `handle_post/2` returns.
+gated(Req, Opts, Fun) ->
+    case gate(Req, Opts) of
+        ok -> Fun();
+        Refusal -> {Refusal, Req}
+    end.
 
 sessions_enabled(Opts) ->
     maps:get(sessions, Opts, false).
@@ -152,17 +185,23 @@ session_verb(Req, Opts, Fun) ->
 %% the DNS-rebinding `Origin` check, then the optional auth hook. Any may
 %% short-circuit the request.
 with_gate(Req, Opts, Fun) ->
+    case gate(Req, Opts) of
+        ok -> Fun();
+        Refusal -> Refusal
+    end.
+
+gate(Req, Opts) ->
     case check_remote_access(Req, Opts) of
         forbidden ->
-            roadrunner_resp:forbidden();
+            status(403);
         ok ->
             case check_origin(Req, Opts) of
                 forbidden ->
-                    roadrunner_resp:forbidden();
+                    status(403);
                 ok ->
                     case check_auth(Req, Opts) of
-                        ok -> Fun();
-                        {reject, Status} -> roadrunner_resp:status(Status)
+                        ok -> ok;
+                        {reject, Status} -> status(Status)
                     end
             end
     end.
@@ -183,7 +222,7 @@ with_gate(Req, Opts, Fun) ->
 check_remote_access(Req, Opts) ->
     case maps:get(allow_remote_access, Opts, false) of
         false ->
-            case is_loopback_peer(roadrunner_req:peer(Req)) of
+            case is_loopback_peer(arizona_req:peer(Req)) of
                 true -> ok;
                 false -> forbidden
             end;
@@ -213,10 +252,10 @@ method_not_allowed(Opts) ->
             true -> ~"POST, GET, DELETE";
             false -> ~"POST"
         end,
-    roadrunner_resp:status(405, [{~"allow", Allow}]).
+    {405, [{~"allow", Allow}], <<>>}.
 
 -doc """
-Roadrunner loop `handle_info/3` callback for the two SSE loops:
+The controller `loop` callback for the two SSE loops:
 
 - the **GET channel** (`#{session := Pid}`) -- forwards server-initiated events
   from the session; on client disconnect it detaches from the session (which
@@ -231,7 +270,7 @@ releases the connection instead of leaving it open forever.
 """.
 -spec handle_info(Info, Push, State) -> {ok, State} | {stop, State} when
     Info :: term(),
-    Push :: roadrunner_handler:push_fun(),
+    Push :: arizona_controller:push_fun(),
     State :: #{session := pid(), _ => term()} | #{mcp_post_stream := true, _ => term()}.
 %% Each message carries an already-framed (and so already encoded) event: this
 %% process only pushes bytes. Encoding here would run outside every crash guard,
@@ -261,10 +300,10 @@ handle_info({'DOWN', Mon, process, _Pid, _Reason}, _Push, #{session_mon := Mon} 
     {stop, State};
 %% The streaming-POST disconnect is checked first: its state may also carry
 %% `session`, which would otherwise match the GET-channel clause below.
-handle_info({roadrunner_disconnect, _Reason}, _Push, #{mcp_post_stream := true} = State) ->
+handle_info({arizona_disconnect, _Reason}, _Push, #{mcp_post_stream := true} = State) ->
     cancel_stream(State),
     {stop, State};
-handle_info({roadrunner_disconnect, _Reason}, _Push, #{session := SessionPid} = State) ->
+handle_info({arizona_disconnect, _Reason}, _Push, #{session := SessionPid} = State) ->
     ok = arizona_mcp_session:detach_channel(SessionPid, self()),
     {stop, State};
 handle_info(_Info, _Push, State) ->
@@ -273,7 +312,7 @@ handle_info(_Info, _Push, State) ->
 %% On client disconnect, stop the running streaming tool: kill the stateless
 %% worker, or ask the session to cancel the request it tracks. Unlink first so
 %% the kill does not ride the link back into this connection process, which is
-%% mid-teardown and owes roadrunner a clean return.
+%% mid-teardown and owes its server a clean return.
 cancel_stream(#{worker := Worker}) ->
     true = unlink(Worker),
     true = exit(Worker, kill),
@@ -298,7 +337,7 @@ see the socket drop with no reply.
 -spec message_frame(Object) -> iodata() when
     Object :: map().
 message_frame(Object) ->
-    roadrunner_sse:event(~"message", iolist_to_binary(json:encode(Object))).
+    arizona_sse:event(~"message", iolist_to_binary(json:encode(Object))).
 
 -doc """
 Pure MCP method dispatch. Maps a decoded JSON-RPC request and the app's
@@ -308,7 +347,7 @@ Pure MCP method dispatch. Maps a decoded JSON-RPC request and the app's
 - `notification` -- an accepted notification with no reply (HTTP 202),
 - `{error, Object}` -- a JSON-RPC error object to encode and return.
 
-Exported for unit testing; `handle/1` calls it inside a crash guard.
+Exported for unit testing; `handle/2` calls it inside a crash guard.
 """.
 -spec dispatch(Mod, Request, Ctx) -> {reply, map()} | notification | {error, map()} when
     Mod :: module(),
@@ -373,16 +412,26 @@ initialize_result(ServerInfo, Caps, Params) ->
 %% Internal functions - transport
 %% --------------------------------------------------------------------
 
-handle_post(Req, Opts) ->
-    Body = iolist_to_binary(roadrunner_req:body(Req)),
-    case arizona_jsonrpc:decode(Body) of
-        {error, parse_error} ->
-            json(arizona_jsonrpc:error(null, -32700, ~"Parse error"));
-        {error, invalid_request} ->
-            json(arizona_jsonrpc:error(null, -32600, ~"Invalid Request"));
-        {ok, Request} ->
-            serve_request(Request, Req, Opts)
+handle_post(Req0, Opts) ->
+    case arizona_req:body(Req0) of
+        {ok, Body, Req} ->
+            {decoded(arizona_jsonrpc:decode(Body), Req, Opts), Req};
+        {error, Reason} ->
+            {status(body_error_status(Reason)), Req0}
     end.
+
+decoded({error, parse_error}, _Req, _Opts) ->
+    json(arizona_jsonrpc:error(null, -32700, ~"Parse error"));
+decoded({error, invalid_request}, _Req, _Opts) ->
+    json(arizona_jsonrpc:error(null, -32600, ~"Invalid Request"));
+decoded({ok, Request}, Req, Opts) ->
+    serve_request(Request, Req, Opts).
+
+%% The status a server answers a body it could not read with.
+body_error_status(too_large) -> 413;
+body_error_status(trailers_too_large) -> 431;
+body_error_status(timeout) -> 408;
+body_error_status(invalid) -> 400.
 
 %% A `tools/call` carrying a `_meta.progressToken` streams its POST as SSE (the
 %% progress notifications, then the result, then close) -- but only when the
@@ -404,7 +453,7 @@ serve_request(Request, Req, Opts) ->
 %% The client opts into a streamed response by listing `text/event-stream` in
 %% its `Accept`. Absent it, the server must answer with a buffered body.
 accepts_sse(Req) ->
-    case roadrunner_req:header(~"accept", Req) of
+    case header(~"accept", Req) of
         undefined -> false;
         Accept -> binary:match(Accept, ~"text/event-stream") =/= nomatch
     end.
@@ -438,7 +487,7 @@ serve_buffered(Request, Req, Opts) ->
 %% browser-only). An empty allowlist rejects every browser origin -- an
 %% app opts its origins in explicitly.
 check_origin(Req, Opts) ->
-    case roadrunner_req:header(~"origin", Req) of
+    case header(~"origin", Req) of
         undefined ->
             ok;
         Origin ->
@@ -469,7 +518,7 @@ reply_session(#{method := Method, params := Params, id := Id} = Request, Req, Op
     case Id of
         undefined ->
             session_notification(Method, Params, Req),
-            roadrunner_resp:status(202);
+            status(202);
         _ when Method =:= ~"initialize" ->
             session_initialize(Params, Id, Req, Opts);
         _ ->
@@ -480,7 +529,7 @@ reply_session(#{method := Method, params := Params, id := Id} = Request, Req, Op
 %% request on the addressed session; any other notification is accepted with no
 %% action. (Stateless mode has no session to route a cancel to.)
 session_notification(~"notifications/cancelled", #{~"requestId" := RequestId}, Req) ->
-    case roadrunner_req:header(~"mcp-session-id", Req) of
+    case header(~"mcp-session-id", Req) of
         undefined ->
             ok;
         SessionId ->
@@ -499,10 +548,10 @@ request_timeout(Opts) ->
 session_initialize(Params, Id, Req, Opts) ->
     %% The route key is the request path, so the `max_sessions` cap is per route
     %% (two routes sharing a handler module still cap independently).
-    RouteKey = roadrunner_req:path(Req),
+    RouteKey = arizona_req:path(Req),
     case at_capacity(RouteKey, Opts) of
         true ->
-            roadrunner_resp:json(503, arizona_jsonrpc:error(Id, -32603, ~"Server at capacity"));
+            json(503, arizona_jsonrpc:error(Id, -32603, ~"Server at capacity"));
         false ->
             start_initialized_session(Params, Id, RouteKey, Opts)
     end.
@@ -537,7 +586,8 @@ start_initialized_session(Params, Id, RouteKey, #{handler := Mod} = Opts) ->
         },
         {ok, _Pid} = arizona_mcp_sup:start_session(SessionId, Session, SessionOpts),
         Result = arizona_jsonrpc:result(Id, initialize_result(ServerInfo, Caps, Params)),
-        roadrunner_resp:add_header(json(Result), ~"mcp-session-id", SessionId)
+        {200, Headers, Body} = json(Result),
+        {200, [{~"mcp-session-id", SessionId} | Headers], Body}
     catch
         Class:Reason:Stacktrace ->
             logger:error("MCP initialize crashed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]),
@@ -545,7 +595,7 @@ start_initialized_session(Params, Id, RouteKey, #{handler := Mod} = Opts) ->
     end.
 
 session_request(Method, Params, Id, Request, Req, Timeout) ->
-    case roadrunner_req:header(~"mcp-session-id", Req) of
+    case header(~"mcp-session-id", Req) of
         undefined ->
             json(arizona_jsonrpc:error(reply_id(Request), -32600, ~"Missing Mcp-Session-Id"));
         SessionId ->
@@ -562,34 +612,34 @@ session_request(Method, Params, Id, Request, Req, Timeout) ->
 %% The 404 a session-scoped request gets when its `Mcp-Session-Id` names no live
 %% session -- the client should re-initialize.
 unknown_session(Id) ->
-    roadrunner_resp:json(404, arizona_jsonrpc:error(Id, -32600, ~"Unknown or expired session")).
+    json(404, arizona_jsonrpc:error(Id, -32600, ~"Unknown or expired session")).
 
 handle_delete(Req) ->
-    case roadrunner_req:header(~"mcp-session-id", Req) of
+    case header(~"mcp-session-id", Req) of
         undefined ->
-            roadrunner_resp:bad_request();
+            status(400);
         SessionId ->
             with_session(
                 SessionId,
                 fun(Pid) ->
                     ok = arizona_mcp_session:stop(Pid),
-                    roadrunner_resp:no_content()
+                    status(204)
                 end,
-                fun roadrunner_resp:not_found/0
+                fun() -> status(404) end
             )
     end.
 
 %% GET opens the server-to-client SSE channel: attach this loop process to
 %% the named session, then stream events from it.
 handle_get(Req) ->
-    case roadrunner_req:header(~"mcp-session-id", Req) of
+    case header(~"mcp-session-id", Req) of
         undefined ->
-            roadrunner_resp:bad_request();
+            status(400);
         SessionId ->
             with_session(
                 SessionId,
-                fun(Pid) -> attach_or_reject(Pid, roadrunner_req:header(~"last-event-id", Req)) end,
-                fun roadrunner_resp:not_found/0
+                fun(Pid) -> attach_or_reject(Pid, header(~"last-event-id", Req)) end,
+                fun() -> status(404) end
             )
     end.
 
@@ -621,7 +671,7 @@ attach_or_reject(Pid, LastEventId) ->
             Mon = erlang:monitor(process, Pid),
             {loop, 200, sse_headers(), #{session => Pid, session_mon => Mon}};
         {error, already_attached} ->
-            roadrunner_resp:status(409)
+            status(409)
     end.
 
 sse_headers() ->
@@ -671,7 +721,7 @@ serve_streaming(#{name := Name, args := Args, token := Token, id := Id}, Req, Op
                     json(arizona_jsonrpc:error(Id, -32603, ~"Internal error"))
             end;
         true ->
-            case roadrunner_req:header(~"mcp-session-id", Req) of
+            case header(~"mcp-session-id", Req) of
                 undefined ->
                     json(arizona_jsonrpc:error(Id, -32600, ~"Missing Mcp-Session-Id"));
                 SessionId ->
@@ -767,7 +817,7 @@ reply_dispatch(Mod, Request, PageSize) ->
     try dispatch(Mod, Request, #{page_size => PageSize}) of
         {reply, Object} -> safe_json(Object, reply_id(Request));
         {error, Object} -> safe_json(Object, reply_id(Request));
-        notification -> roadrunner_resp:status(202)
+        notification -> status(202)
     catch
         Class:Reason:Stacktrace ->
             logger:error("MCP dispatch crashed: ~ts:~tp~n~tp", [Class, Reason, Stacktrace]),
@@ -782,9 +832,20 @@ reply_id(#{id := Id}) -> Id.
 %% JSON-RPC responses -- including error objects -- ride HTTP 200; the
 %% fault is carried in the JSON-RPC envelope, not the HTTP status.
 json(Object) ->
-    roadrunner_resp:json(200, Object).
+    json(200, Object).
 
-%% `roadrunner_resp:json/2` encodes eagerly, and `json:encode/1` rejects a binary
+json(Status, Object) ->
+    {Status, [{~"content-type", ~"application/json"}], json:encode(Object)}.
+
+status(Status) ->
+    {Status, [], <<>>}.
+
+%% A request header, from the map `handle/2` parsed (lowercase names).
+header(Name, Req) ->
+    {Headers, _Req} = arizona_req:headers(Req),
+    maps:get(Name, Headers, undefined).
+
+%% `json/1` encodes eagerly, and `json:encode/1` rejects a binary
 %% that is not valid UTF-8 -- which a callback module can return. Both buffered
 %% reply sites encode outside any guard (in `reply_dispatch/3`'s `of` body, and
 %% after the session's own guarded dispatch has returned), so a bad object would

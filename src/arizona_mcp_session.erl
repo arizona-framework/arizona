@@ -62,7 +62,7 @@ sends `DELETE`) does not leak; every served request resets it.
     session :: arizona_mcp_handler:session(),
     ttl_ms :: pos_integer(),
     ttl_timer :: reference() | undefined,
-    %% The attached server-to-client SSE channel (a roadrunner loop process),
+    %% The attached server-to-client SSE channel (a controller `loop` process),
     %% monitored so a racing conn death still detaches.
     channel :: pid() | undefined,
     channel_mon :: reference() | undefined,
@@ -197,7 +197,7 @@ cancel(Pid, Id) ->
     gen_server:cast(Pid, {cancel, Id}).
 
 -doc """
-Attach a server-to-client SSE channel (a roadrunner loop process) to the
+Attach a server-to-client SSE channel (a controller `loop` process) to the
 session. Buffered events newer than `LastEventId` (a `Last-Event-ID` header
 value, or `undefined` for a fresh stream) are replayed to the channel.
 Returns `{error, already_attached}` if one is already attached -- the spec
@@ -441,7 +441,7 @@ handle_info(mcp_keepalive, #state{channel = undefined} = State) ->
 handle_info(mcp_keepalive, #state{channel = ChannelPid} = State) ->
     %% A comment line keeps idle proxies from closing the SSE stream. It carries
     %% no event id, so it is never buffered for resumption.
-    ChannelPid ! {mcp_event, roadrunner_sse:comment(~"keepalive")},
+    ChannelPid ! {mcp_event, arizona_sse:comment(~"keepalive")},
     {noreply, arm_keepalive(State)};
 handle_info({timeout, Ref, session_ttl_expired}, #state{ttl_timer = Ref} = State) ->
     {stop, normal, State};
@@ -634,7 +634,7 @@ emit(Method, Params, #state{next_event_id = EventId} = State) ->
     Notification = arizona_jsonrpc:notification(Method, Params),
     try iolist_to_binary(json:encode(Notification)) of
         Data ->
-            Frame = roadrunner_sse:event(~"message", Data, integer_to_binary(EventId)),
+            Frame = arizona_sse:event(~"message", Data, integer_to_binary(EventId)),
             push_frame(Frame, State),
             buffer_event(EventId, Frame, State#state{next_event_id = EventId + 1})
     catch

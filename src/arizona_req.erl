@@ -58,6 +58,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([method/1]).
 -export([path/1]).
 -export([scheme/1]).
+-export([peer/1]).
 -export([client_scheme/1]).
 -export([request_id/1]).
 -export([raw/1]).
@@ -299,7 +300,13 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -callback resolve_route(path(), qs(), raw()) ->
     {ok, module(), arizona_live:route_opts(), request()} | error.
 
--optional_callbacks([resolve_route/3]).
+%% Optional: the address and port of the connection's peer -- the immediate TCP
+%% peer, so a same-host proxy makes every client look like itself. Read by
+%% gates that trust the network position of a client (the MCP localhost gate);
+%% an adapter that omits it reports `undefined`, which such a gate fails closed.
+-callback peer(raw()) -> {inet:ip_address(), inet:port_number()} | undefined.
+
+-optional_callbacks([resolve_route/3, peer/1]).
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -352,6 +359,17 @@ reports `http` even though the browser spoke HTTPS. Callers that need the
 """.
 -spec scheme(request()) -> scheme().
 scheme(#{adapter := Adapter, raw := Raw}) -> Adapter:scheme(Raw).
+
+-doc """
+The connection's peer address and port, or `undefined` when the adapter does not
+report it. The immediate TCP peer: behind a same-host proxy it is the proxy.
+""".
+-spec peer(request()) -> {inet:ip_address(), inet:port_number()} | undefined.
+peer(#{adapter := Adapter, raw := Raw}) ->
+    case erlang:function_exported(Adapter, peer, 1) of
+        true -> Adapter:peer(Raw);
+        false -> undefined
+    end.
 
 -doc """
 The scheme the **browser** used: `scheme/1`, upgraded to `https` when a proxy in
