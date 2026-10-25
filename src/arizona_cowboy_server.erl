@@ -10,8 +10,7 @@ listener in a `persistent_term`, which the handler and
 
 ## Options
 
-- `routes` -- the Arizona route list (required). `mcp` routes are refused
-  (`capabilities/0`): this adapter does not serve them yet.
+- `routes` -- the Arizona route list (required).
 - `transport_opts` -- `[{port, Port}]` (default `4040`); other entries go to
   Ranch's socket options.
 - `compress` -- `true` (default) compresses pages and assets
@@ -121,10 +120,10 @@ recompile_routes() ->
         persistent_term:get()
     ).
 
--doc "Every controller reply kind and the dev reload route; not `mcp` yet.".
+-doc "Every controller reply kind, the MCP route and the dev reload route.".
 -spec capabilities() -> #{routes := [mcp | reload], replies := [stream | sendfile | loop]}.
 capabilities() ->
-    #{routes => [reload], replies => [stream, sendfile, loop]}.
+    #{routes => [mcp, reload], replies => [stream, sendfile, loop]}.
 
 -doc "The compiled route table of the listener `Name`.".
 -spec table(Name) -> arizona_route_table:table() when

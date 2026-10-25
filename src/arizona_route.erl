@@ -220,12 +220,21 @@ live({live, _Path, Handler, Opts} = Route, BuildOpts) ->
 
 -doc """
 What a `controller` route runs: the `arizona_controller:route()` that
-`arizona_controller:dispatch/3` takes. A `reload` route is a controller too,
-`arizona_reload_controller` behind no pipeline: a dev endpoint the page it
-serves opens itself.
+`arizona_controller:dispatch/3` takes. The `mcp` and `reload` kinds are
+controllers too, behind no pipeline: `arizona_mcp_handler` gates its own
+requests (origin, peer, auth hook) and answers its own `405`, with the route's
+handler module folded into its state; `arizona_reload_controller` is a dev
+endpoint the page it serves opens itself.
 """.
 -spec controller(Route) -> arizona_controller:route() when
     Route :: term().
+controller({mcp, _Path, Handler, Opts}) ->
+    #{
+        handler => arizona_mcp_handler,
+        action => handle,
+        state => Opts#{handler => Handler},
+        middlewares => []
+    };
 controller({reload, _Path, _Opts}) ->
     #{handler => arizona_reload_controller, action => handle, state => #{}, middlewares => []};
 controller(Route) ->

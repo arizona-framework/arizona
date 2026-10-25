@@ -76,6 +76,14 @@ init(Req, Listener) ->
     Msg :: term(),
     Req :: cowboy_req:req(),
     State :: map().
+%% Trapping exits is only how a client disconnect reaches `terminate/3`; any
+%% other linked process's exit keeps its untrapped meaning (Cowboy's parent exit
+%% never gets here, `cowboy_loop` takes it). A `normal` one is no event, and any
+%% other ends the loop with that reason, taking the processes linked to it along.
+info({'EXIT', _Pid, normal}, Req, State) ->
+    {ok, Req, State};
+info({'EXIT', _Pid, Reason}, _Req, _State) ->
+    exit(Reason);
 info(Msg, Req, #{loop := {Handler, LoopState}} = State) ->
     Push = fun(Data) -> cowboy_req:stream_body(Data, nofin, Req) end,
     case Handler:handle_info(Msg, Push, LoopState) of
@@ -151,7 +159,7 @@ serve(#{kind := live, target := #{handler := Handler} = Live} = Entry, Req, List
     ),
     finish(Entry, arizona_req:raw(ArzReq), {Status, Headers, Body}, Listener);
 serve(#{kind := Kind, target := #{handler := Handler} = Controller} = Entry, Req, Listener) when
-    Kind =:= controller; Kind =:= reload
+    Kind =:= controller; Kind =:= mcp; Kind =:= reload
 ->
     {Reply, ArzReq} = arizona_controller:dispatch(
         Controller, arizona_cowboy_req:new(Req), arizona_cowboy_server

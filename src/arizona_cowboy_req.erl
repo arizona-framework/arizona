@@ -26,6 +26,7 @@ only saw the adapter's catch-all route.
 -export([parse_headers/1]).
 -export([read_body/1]).
 -export([scheme/1]).
+-export([peer/1]).
 -export([resolve_route/3]).
 
 %% --------------------------------------------------------------------
@@ -87,6 +88,10 @@ scheme(CowboyReq) ->
         ~"https" -> https;
         ~"http" -> http
     end.
+
+-spec peer(cowboy_req:req()) -> {inet:ip_address(), inet:port_number()}.
+peer(CowboyReq) ->
+    cowboy_req:peer(CowboyReq).
 
 -doc """
 Resolves a navigate target against the routes of the listener that accepted

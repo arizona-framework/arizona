@@ -73,6 +73,7 @@
     handle_auth_rejects/1,
     handle_auth_reads_header/1,
     handle_auth_mfa/1,
+    handle_body_error_status/1,
     handle_tool_crash_internal_error/1,
     handle_tool_unencodable_result_internal_error/1
 ]).
@@ -155,6 +156,7 @@ all() ->
         handle_auth_rejects,
         handle_auth_reads_header,
         handle_auth_mfa,
+        handle_body_error_status,
         handle_tool_crash_internal_error,
         handle_tool_unencodable_result_internal_error
     ].
@@ -686,8 +688,8 @@ handle_auth_rejects(_Config) ->
 
 handle_auth_reads_header(_Config) ->
     Auth = fun(Req) ->
-        case roadrunner_req:header(~"authorization", Req) of
-            ~"Bearer ok" -> ok;
+        case arizona_req:headers(Req) of
+            {#{~"authorization" := ~"Bearer ok"}, _Req} -> ok;
             _ -> {reject, 401}
         end
     end,
@@ -704,6 +706,23 @@ handle_auth_mfa(_Config) ->
 
 reject_auth(_Req) ->
     {reject, 403}.
+
+%% A body the server could not read is answered with the status that names why.
+handle_body_error_status(_Config) ->
+    Opts = #{handler => ?SERVER, allow_remote_access => true},
+    Status = fun(Reason) ->
+        Req = arizona_req:new(
+            arizona_req_test_adapter,
+            #{headers => #{}, body_error => Reason},
+            #{method => ~"POST", path => ~"/mcp"}
+        ),
+        {Resp, _Req} = arizona_mcp_handler:handle(Req, #{state => Opts, bindings => #{}}),
+        status(Resp)
+    end,
+    ?assertEqual(
+        [413, 431, 408, 400],
+        [Status(R) || R <- [too_large, trailers_too_large, timeout, invalid]]
+    ).
 
 handle_tool_crash_internal_error(_Config) ->
     Body =
@@ -817,33 +836,24 @@ dispatch_on(Mod, Method, Params, Id) ->
     Request = #{method => Method, params => Params, id => Id},
     arizona_mcp_handler:dispatch(Mod, Request, #{}).
 
+%% A loopback peer, so the default localhost gate treats the request as a local
+%% one; `handle_peer/5` overrides the peer.
 handle(Method, Headers, Body, Opts) ->
-    %% A complete `roadrunner_req:request()` (method/target/version/headers are
-    %% required) with a loopback peer, so the default localhost gate treats it as
-    %% a local request; `handle_peer/5` overrides the peer.
-    Req = #{
-        method => Method,
-        target => ~"/mcp",
-        version => {1, 1},
-        headers => Headers,
-        body => Body,
-        peer => {{127, 0, 0, 1}, 0},
-        state => #{arizona => Opts}
-    },
-    {Resp, _Req} = arizona_mcp_handler:handle(Req),
-    Resp.
+    handle_peer(Method, Headers, Body, Opts, {{127, 0, 0, 1}, 0}).
 
+%% The request is a complete `roadrunner_req:request()` (method/target/version/
+%% headers are required) wrapped as an `arizona_req:request()`, the shape every
+%% adapter hands a controller.
 handle_peer(Method, Headers, Body, Opts, Peer) ->
-    Req = #{
+    Req = arizona_roadrunner_req:new(#{
         method => Method,
         target => ~"/mcp",
         version => {1, 1},
         headers => Headers,
         body => Body,
-        peer => Peer,
-        state => #{arizona => Opts}
-    },
-    {Resp, _Req} = arizona_mcp_handler:handle(Req),
+        peer => Peer
+    }),
+    {Resp, _Req} = arizona_mcp_handler:handle(Req, #{state => Opts, bindings => #{}}),
     Resp.
 
 ping_body() ->

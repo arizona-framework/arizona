@@ -68,7 +68,9 @@ stops, which closes the idle keep-alive connections.
 invalid}`), and `scheme/1` (the connection's own, `https` only on TLS). `resolve_route/3` resolves a
 navigate target: its full contract is on the callback in `arizona_req`. In short, never crash or
 reply on an unknown path (it is client-supplied), match as a `GET` (an HTTP/2 WebSocket upgrade
-arrives as `CONNECT`), and match exactly as an HTTP request to that path would.
+arrives as `CONNECT`), and match exactly as an HTTP request to that path would. The optional
+`peer/1` is the connection's `{IP, Port}`: without it, `arizona_req:peer/1` is `undefined` and an
+`mcp` route's localhost gate refuses every request.
 
 ### Routing
 
@@ -76,7 +78,9 @@ arrives as `CONNECT`), and match exactly as an HTTP request to that path would.
 refuses a term that is no route. `mcp` and `reload` are capabilities: a route kind the adapter
 lacks raises `arizona_route:unsupported/2` while compiling, so the listener refuses to start. A
 `reload` route is a controller (`arizona_route:controller/1` names `arizona_reload_controller`, a
-`loop` reply), so an adapter that sends loops serves it like any other controller route.
+`loop` reply), and so is an `mcp` route (`arizona_mcp_handler`, buffered JSON and `loop`
+replies, gating its own requests), so an adapter that sends loops serves both like any other
+controller route.
 Compile from `arizona_route` rather than restating its rules:
 
 - `path/1`, `methods/1` -- the pattern and the allowlist (`GET` implies `HEAD`; `any`).
@@ -138,6 +142,9 @@ The last three are capabilities: `dispatch/3` refuses one `Adapter` lacks with
 the connection receives to `Handler:handle_info(Msg, Push, State)` (the route's handler), where
 `Push(Data)` writes one chunk; `{ok, State}` continues and `{stop, State}` ends the response.
 Translate your server's client-disconnect signal into one final `{arizona_disconnect, Reason}`.
+If hearing it means trapping exits, keep every other link's meaning: a linked process exiting
+`normal` is no event, and one exiting with any other reason ends the loop with that reason (the MCP
+handler relies on a link to stop a streaming tool when its connection dies).
 
 ### Assets
 

@@ -96,7 +96,7 @@ DNS-rebinding posture). `eval` is always available, and the route is
 """.
 -spec route(Path) -> Route when
     Path :: binary(),
-    Route :: arizona_roadrunner_router:route().
+    Route :: {mcp, binary(), module(), arizona_mcp_handler:route_opts()}.
 route(Path) ->
     route(Path, #{}).
 
@@ -110,8 +110,8 @@ mode.
 """.
 -spec route(Path, Opts) -> Route when
     Path :: binary(),
-    Opts :: arizona_roadrunner_router:arizona_mcp_route_opts(),
-    Route :: arizona_roadrunner_router:route().
+    Opts :: arizona_mcp_handler:route_opts(),
+    Route :: {mcp, binary(), module(), arizona_mcp_handler:route_opts()}.
 route(Path, Opts) ->
     Defaults = #{sessions => true, max_sessions => 32, allow_remote_access => false},
     {mcp, Path, ?MODULE, maps:merge(Defaults, Opts)}.

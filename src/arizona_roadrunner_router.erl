@@ -21,7 +21,7 @@ reload without restarting the listener.
 | `{asset, Path, {priv_dir, App, Sub}[, Opts]}` | Static files from app priv | `roadrunner_static` |
 | `{Verb, Path, Handler, Opts}` | Single-verb controller | `arizona_roadrunner_controller` |
 | `{match, Spec, Path, Handler, Opts}` | Multi/custom methods | `arizona_roadrunner_controller` |
-| `{mcp, Path, Handler, Opts}` | MCP (Model Context Protocol) server | `arizona_mcp_handler` |
+| `{mcp, Path, Handler, Opts}` | MCP server | `arizona_roadrunner_controller` |
 | `{reload, Path, Opts}` | Dev SSE reload endpoint | `arizona_roadrunner_controller` |
 
 `Verb` is `get`/`post`/`put`/`patch`/`delete`/`head`/`options`; `match`'s `Spec` is a
@@ -78,7 +78,6 @@ so a listener start can build and validate its table before writing anything.
 -export_type([method/0]).
 -export_type([method_spec/0]).
 -export_type([controller_opts/0]).
--export_type([arizona_mcp_route_opts/0]).
 
 %% --------------------------------------------------------------------
 %% Macros
@@ -101,7 +100,7 @@ so a listener start can build and validate its table before writing anything.
     | {asset, path(), asset_source(), asset_opts()}
     | {method(), path(), module(), controller_opts()}
     | {match, method_spec(), path(), module(), controller_opts()}
-    | {mcp, path(), module(), arizona_mcp_route_opts()}
+    | {mcp, path(), module(), arizona_mcp_handler:route_opts()}
     | {reload, path(), map()}.
 
 %% Where an `{asset, ...}` route's files live: a directory path, or a
@@ -144,22 +143,6 @@ so a listener start can build and validate its table before writing anything.
     middlewares => [arizona_middleware:middleware()],
     %% CSRF Origin check is on by default; set false to opt this route out.
     check_origin => boolean(),
-    _ => term()
-}.
-
--nominal arizona_mcp_route_opts() :: #{
-    origins => [binary()],
-    auth => arizona_mcp_handler:auth_hook(),
-    sessions => boolean(),
-    max_sessions => pos_integer() | infinity,
-    session_ttl_ms => pos_integer(),
-    session_buffer_max => pos_integer(),
-    %% Localhost gate (default `false`, safe-by-default like `origins`): unless
-    %% `true`, refuse a request whose peer is not a loopback address, regardless of
-    %% the listener's bind interface. `arizona_dev_mcp` relies on this for its
-    %% always-on `eval` (RCE). Void behind a same-host proxy/tunnel -- use `auth`
-    %% for non-direct remote exposure.
-    allow_remote_access => boolean(),
     _ => term()
 }.
 
@@ -317,23 +300,11 @@ route_to_roadrunner({asset, Path, _Source, Opts} = Route, BuildOpts) ->
             state => asset_state(arizona_route:asset_dir(Route), Opts)
         })
     ];
-route_to_roadrunner({mcp, Path, Handler, Opts}, _BuildOpts) ->
-    %% The handler module is folded into the opts so `arizona_mcp_handler`
-    %% reads it from the per-route `arizona` state at request time, the
-    %% same wrapping convention `live`/`reload` use. No compression
-    %% middleware -- MCP replies must stay unbuffered for the later SSE path.
-    [
-        #{
-            path => Path,
-            handler => arizona_mcp_handler,
-            state => #{arizona => Opts#{handler => Handler}}
-        }
-    ];
 route_to_roadrunner(Route, BuildOpts) ->
-    %% A controller (verb tag or `{match, ...}`), or the dev reload endpoint,
-    %% which is one too; `arizona_roadrunner_controller` runs
+    %% A controller (verb tag or `{match, ...}`), or the MCP or dev reload
+    %% endpoint, which are ones too; `arizona_roadrunner_controller` runs
     %% `arizona_controller:dispatch/3` on what `arizona_route:controller/1` names.
-    true = lists:member(arizona_route:kind(Route), [controller, reload]),
+    true = lists:member(arizona_route:kind(Route), [controller, mcp, reload]),
     [
         roadrunner_route(Route, BuildOpts, #{
             path => arizona_route:path(Route),

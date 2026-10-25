@@ -4,7 +4,8 @@ Arizona can serve the [Model Context Protocol](https://modelcontextprotocol.io) 
 agent (Claude Code, Cursor, the MCP Inspector, ...) can call into your app. You write a handler
 module that exposes **tools**, **resources**, and **prompts**, and mount it on a route. The
 transport is MCP's Streamable HTTP (JSON-RPC over HTTP POST, with an optional SSE channel for
-server-initiated messages); it rides the same roadrunner listener as the rest of your app.
+server-initiated messages); it rides the same listener as the rest of your app, on any server
+adapter with the `mcp` capability (roadrunner and Cowboy both have it).
 
 Two shapes fall out of the same engine:
 
@@ -174,7 +175,7 @@ All optional, with safe defaults; a route that sets none behaves as a plain stat
 | ------ | ------- | ------- |
 | `sessions` | `false` | Opt into stateful sessions (`initialize` mints an `Mcp-Session-Id`). |
 | `origins` | `[]` | `Origin` allowlist (no-`Origin` requests are always allowed). |
-| `auth` | none | A per-route auth hook run after the `Origin` check. |
+| `auth` | none | A per-route auth hook run after the `Origin` check: `fun((arizona_req:request()) -> ok \| {reject, Status})` or `{Module, Function}`. |
 | `allow_remote_access` | `false` | Localhost-only unless `true`: refuse a non-loopback peer (void behind a same-host proxy/tunnel -- use `auth`). |
 | `max_sessions` | unbounded | Cap on live sessions for this route; `initialize` past it gets a `503`. |
 | `session_ttl_ms` | `300000` | Idle timeout before an abandoned session is reaped. |

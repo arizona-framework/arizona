@@ -26,6 +26,7 @@ and everything else lazy-loaded on first access.
 -export([parse_headers/1]).
 -export([read_body/1]).
 -export([scheme/1]).
+-export([peer/1]).
 -export([resolve_route/3]).
 
 %% --------------------------------------------------------------------
@@ -124,6 +125,11 @@ scheme(RoadrunnerReq) ->
     %% Roadrunner derives this from the accepting socket, so it is `https` only
     %% for a TLS connection to this node -- never from a client-supplied header.
     roadrunner_req:scheme(RoadrunnerReq).
+
+-spec peer(RoadrunnerReq) -> {inet:ip_address(), inet:port_number()} | undefined when
+    RoadrunnerReq :: roadrunner_req:request().
+peer(RoadrunnerReq) ->
+    roadrunner_req:peer(RoadrunnerReq).
 
 -doc """
 Resolves a path to `{ok, Handler, RouteOpts, Request}` by running the

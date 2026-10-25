@@ -404,12 +404,14 @@ compile_routes_mcp(Config) ->
     compile(Config, [
         {mcp, <<"/mcp">>, my_mcp, #{origins => [<<"http://localhost:3000">>]}}
     ]),
-    {Handler, Opts} = route_match(<<"/mcp">>),
-    ?assertEqual(arizona_mcp_handler, Handler),
-    %% The app handler module is folded into the per-route opts so the
-    %% transport reads it at request time.
-    ?assertEqual(my_mcp, maps:get(handler, Opts)),
-    ?assertEqual([<<"http://localhost:3000">>], maps:get(origins, Opts)).
+    {Handler, Controller} = route_match(<<"/mcp">>),
+    %% A controller route running `arizona_mcp_handler`, with the app handler
+    %% module folded into its state so the transport reads it at request time.
+    ?assertEqual(arizona_roadrunner_controller, Handler),
+    ?assertMatch(#{handler := arizona_mcp_handler, middlewares := []}, Controller),
+    #{state := State} = Controller,
+    ?assertEqual(my_mcp, maps:get(handler, State)),
+    ?assertEqual([<<"http://localhost:3000">>], maps:get(origins, State)).
 
 compile_routes_mixed(Config) ->
     compile(Config, [

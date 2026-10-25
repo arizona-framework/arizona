@@ -171,7 +171,7 @@ check_supported(_Kind, _Supported, _Adapter) ->
 
 target(live, Route, BuildOpts) ->
     arizona_route:live(Route, BuildOpts);
-target(Kind, Route, _BuildOpts) when Kind =:= controller; Kind =:= reload ->
+target(Kind, Route, _BuildOpts) when Kind =:= controller; Kind =:= mcp; Kind =:= reload ->
     arizona_route:controller(Route);
 target(asset, Route, _BuildOpts) ->
     arizona_route:asset_dir(Route);

@@ -2,7 +2,9 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("common_test/include/ct.hrl").
 
--export([all/0, init_per_suite/1, end_per_suite/1]).
+-export([all/0, groups/0]).
+-export([init_per_suite/1, end_per_suite/1]).
+-export([init_per_group/2, end_per_group/2]).
 -export([
     post_initialize/1,
     post_tools_list/1,
@@ -53,7 +55,14 @@
 -define(LISTENER, arizona_mcp_e2e).
 -define(ALLOWED_ORIGIN, ~"http://localhost:3000").
 
+%% Every case runs on each adapter, through its conformance driver.
 all() ->
+    [{group, roadrunner}, {group, cowboy}].
+
+groups() ->
+    [{roadrunner, [], cases()}, {cowboy, [], cases()}].
+
+cases() ->
     [
         post_initialize,
         post_tools_list,
@@ -103,11 +112,17 @@ all() ->
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(arizona),
-    {ok, _} = application:ensure_all_started(roadrunner),
-    Port = arizona_test_port:pick(),
+    Config.
+
+end_per_suite(_Config) ->
+    _ = application:stop(arizona),
+    ok.
+
+init_per_group(Group, Config) ->
+    Driver = driver(Group),
     Auth = fun(Req) ->
-        case roadrunner_req:header(~"authorization", Req) of
-            ~"Bearer let-me-in" -> ok;
+        case arizona_req:headers(Req) of
+            {#{~"authorization" := ~"Bearer let-me-in"}, _Req} -> ok;
             _ -> {reject, 401}
         end
     end,
@@ -140,16 +155,14 @@ init_per_suite(Config) ->
             max_sessions => 1
         }}
     ],
-    {ok, _} = arizona_roadrunner_server:start(?LISTENER, #{
-        transport_opts => [{port, Port}],
-        routes => Routes
-    }),
-    [{port, Port} | Config].
+    {ok, Port} = arizona_conformance_driver:start(Driver, ?LISTENER, Routes, #{}),
+    [{driver, Driver}, {port, Port} | Config].
 
-end_per_suite(_Config) ->
-    _ = arizona_roadrunner_server:stop(?LISTENER),
-    _ = application:stop(arizona),
-    ok.
+end_per_group(_Group, Config) ->
+    ok = arizona_conformance_driver:stop(?config(driver, Config), ?LISTENER).
+
+driver(roadrunner) -> arizona_conformance_roadrunner;
+driver(cowboy) -> arizona_conformance_cowboy.
 
 %% --------------------------------------------------------------------
 %% Tests
@@ -307,7 +320,7 @@ stateless_disconnect_kills_worker(Config) ->
 
 stateless_conn_kill_kills_worker(Config) ->
     %% The stateless streaming worker is linked to its POST connection, so a
-    %% conn death that never delivers `roadrunner_disconnect` reaps it too --
+    %% conn death that never delivers `arizona_disconnect` reaps it too --
     %% the `exit(Pid, shutdown)` a listener drain sends at its deadline. Nothing
     %% else could: a stateless worker has no session, no monitor, and no TTL.
     Before = streaming_workers(),
@@ -607,7 +620,7 @@ session_streaming_progress(Config) ->
 session_cancel_stops_stream(Config) ->
     SessionId = open_session(Config),
     %% Open a blocking streaming tool, then cancel it by request id on another
-    %% connection. The streaming connection then closes (the loop stopped).
+    %% connection. The streaming response then ends (the loop stopped).
     Body =
         ~"""
     {"jsonrpc":"2.0","id":18,"method":"tools/call",
@@ -622,7 +635,7 @@ session_cancel_stops_stream(Config) ->
     """,
     CancelResp = post(Config, "/mcp-session", session_header(SessionId), Cancel),
     ?assertEqual(202, status_code(CancelResp)),
-    ?assertEqual(closed, wait_closed(Sock, 5000)),
+    ?assertEqual(ended, wait_ended(Sock, 5000)),
     gen_tcp:close(Sock).
 
 session_disconnect_cancels_stream(Config) ->
@@ -648,7 +661,7 @@ session_disconnect_cancels_stream(Config) ->
 session_delete_releases_streaming_post(Config) ->
     SessionId = open_session(Config),
     %% A DELETE during a streaming tools/call must release the POST connection
-    %% (its loop stops and the socket closes) -- not just kill the worker while
+    %% (its loop stops and the response ends) -- not just kill the worker while
     %% the conn hangs open forever.
     Body =
         ~"""
@@ -660,7 +673,7 @@ session_delete_releases_streaming_post(Config) ->
     ?assertNotEqual(nomatch, binary:match(Head, ~"200 OK")),
     Deleted = request(Config, "DELETE", "/mcp-session", session_header(SessionId), <<>>),
     ?assertEqual(204, status_code(Deleted)),
-    ?assertEqual(closed, wait_closed(Sock, 5000)),
+    ?assertEqual(ended, wait_ended(Sock, 5000)),
     gen_tcp:close(Sock).
 
 session_death_releases_streaming_post(Config) ->
@@ -679,7 +692,7 @@ session_death_releases_streaming_post(Config) ->
     %% immediate 'DOWN' instead of leaving the loop waiting forever.)
     {ok, Pid} = arizona_mcp_session_registry:lookup(SessionId),
     exit(Pid, kill),
-    ?assertEqual(closed, wait_closed(Sock, 5000)),
+    ?assertEqual(ended, wait_ended(Sock, 5000)),
     gen_tcp:close(Sock).
 
 session_delete_releases_channel_get(Config) ->
@@ -689,7 +702,7 @@ session_delete_releases_channel_get(Config) ->
     %% otherwise stops only on client disconnect.
     Deleted = request(Config, "DELETE", "/mcp-session", session_header(SessionId), <<>>),
     ?assertEqual(204, status_code(Deleted)),
-    ?assertEqual(closed, wait_closed(Sock, 5000)),
+    ?assertEqual(ended, wait_ended(Sock, 5000)),
     gen_tcp:close(Sock).
 
 session_buffered_cancel_frees_request(Config) ->
@@ -719,7 +732,11 @@ session_max_sessions_503(Config) ->
     R1 = post(Config, "/mcp-capped", [], initialize_body()),
     ?assertEqual(200, status_code(R1)),
     R2 = post(Config, "/mcp-capped", [], initialize_body()),
-    ?assertEqual(503, status_code(R2)).
+    ?assertEqual(503, status_code(R2)),
+    %% Sessions outlive the listener, so free the route for the next group.
+    SessionId = header_value(R1, ~"mcp-session-id"),
+    Deleted = request(Config, "DELETE", "/mcp-capped", session_header(SessionId), <<>>),
+    ?assertEqual(204, status_code(Deleted)).
 
 %% --------------------------------------------------------------------
 %% Auth-gated tests (/mcp-auth, auth => bearer hook)
@@ -842,11 +859,27 @@ stream_post(Config, Path, ExtraHeaders, Body) ->
     Sock.
 
 %% Read until the peer closes the connection (or `open` if it stays up).
-wait_closed(Sock, Timeout) ->
+%% Whether the response being read ends: its connection closes, or (kept alive
+%% for the next request) its chunked body's last chunk arrives.
+wait_ended(Sock, Timeout) ->
+    wait_ended(Sock, Timeout, <<>>).
+
+wait_ended(Sock, Timeout, Acc) ->
     case gen_tcp:recv(Sock, 0, Timeout) of
-        {error, closed} -> closed;
-        {error, timeout} -> open;
-        {ok, _Chunk} -> wait_closed(Sock, Timeout)
+        {error, closed} ->
+            ended;
+        {error, timeout} ->
+            open;
+        {ok, Chunk} ->
+            Data = <<Acc/binary, Chunk/binary>>,
+            %% The last chunk follows the head (already read) or another chunk.
+            case
+                Data =:= ~"0\r\n\r\n" orelse
+                    binary:longest_common_suffix([Data, ~"\r\n0\r\n\r\n"]) =:= 7
+            of
+                true -> ended;
+                false -> wait_ended(Sock, Timeout, Data)
+            end
     end.
 
 post_stream_until(Config, Path, ExtraHeaders, Body, Needle) ->
