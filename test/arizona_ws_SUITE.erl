@@ -94,6 +94,7 @@
     transport_opts_port_wins_over_proto_opts/1,
     unsupported_transport_opt_errors/1,
     failed_start_leaves_no_routes_behind/1,
+    stop_hands_reload_url_back_to_a_running_listener/1,
     drain_closes_live_sockets_going_away/1,
     prep_stop_drains_the_app_listener/1,
     failed_start_keeps_running_listener_routes/1,
@@ -217,6 +218,7 @@ groups() ->
         transport_opts_port_wins_over_proto_opts,
         unsupported_transport_opt_errors,
         failed_start_leaves_no_routes_behind,
+        stop_hands_reload_url_back_to_a_running_listener,
         drain_closes_live_sockets_going_away,
         prep_stop_drains_the_app_listener,
         failed_start_keeps_running_listener_routes,
@@ -1938,6 +1940,20 @@ failed_start_leaves_no_routes_behind(Config) when is_list(Config) ->
     ?assertEqual(undefined, persistent_term:get({arizona_roadrunner_dispatch, Name}, undefined)),
     ?assertEqual(ok, arizona_roadrunner_server:recompile_routes()).
 
+%% The reload URL is node-wide and the last listener to compile a reload route
+%% wins it. Stopping that listener must hand it back to one still running (the
+%% suite's own `/reload`), not leave the stopped one's path behind.
+stop_hands_reload_url_back_to_a_running_listener(Config) when is_list(Config) ->
+    Name = arizona_second_reload_test,
+    ReloadUrlBefore = persistent_term:get(arizona_reload_url),
+    {ok, _} = arizona_roadrunner_server:start(Name, #{
+        routes => [{reload, ~"/second-reload", #{}}],
+        transport_opts => [{port, arizona_test_port:pick()}]
+    }),
+    ?assertEqual(~"/second-reload", persistent_term:get(arizona_reload_url)),
+    ok = arizona_roadrunner_server:stop(Name),
+    ?assertEqual(ReloadUrlBefore, persistent_term:get(arizona_reload_url)).
+
 %% A drained listener's live sessions close 1001 ("going away"), which clients
 %% reconnect from -- a plain stop closes 1000, which they take as the end of the
 %% session. The listener is gone afterwards, with nothing left stashed for it.
@@ -2226,9 +2242,12 @@ reload_closes_socket_with_only_dev_mcp(Config) when is_list(Config) ->
         ?assertMatch({close, 1001, _}, ws_recv(Sock)),
         ok = gen_tcp:close(Sock)
     after
-        ok = arizona_roadrunner_server:stop(Name),
-        true = persistent_term:erase(arizona_dev_mcp_route)
-    end.
+        ok = arizona_roadrunner_server:stop(Name)
+    end,
+    %% No running listener mounts the dev MCP any more, so the node is not
+    %% reloadable through it.
+    ?assertEqual(undefined, persistent_term:get(arizona_dev_mcp_route, undefined)),
+    ?assertNot(arizona_reloader:enabled()).
 
 %% The failure the close exists for: a fun in the view's bindings is made by a
 %% module the reloader then loads twice, which purges the code the fun points

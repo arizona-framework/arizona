@@ -125,6 +125,7 @@ Returns `{error, not_found}` if `Name` is not a running listener.
 stop(Name) ->
     persistent_term:erase({?ROUTES_KEY, Name}),
     ok = arizona_roadrunner_router:forget_routes(Name),
+    ok = forget_dev_terms(),
     roadrunner:stop_listener(Name).
 
 -doc """
@@ -285,6 +286,31 @@ restore_dev_mcp_route(undefined) ->
     ok;
 restore_dev_mcp_route(Mounted) ->
     persistent_term:put(arizona_dev_mcp_route, Mounted).
+
+%% The dev terms are node-wide, written by whichever listener compiled a reload
+%% or dev MCP route, so a stopped listener's survive it unless they are
+%% recomputed from the listeners still stashed. Left behind, a production
+%% listener started later in the same node serves the dev error page, stack
+%% traces included, on every render crash.
+forget_dev_terms() ->
+    Remaining = lists:append([
+        Routes
+     || {{?ROUTES_KEY, _Name}, {Routes, _BuildOpts}} <- persistent_term:get()
+    ]),
+    ok = keep_reload_url([Path || {reload, Path, _Opts} <- Remaining]),
+    keep_dev_mcp_route([Path || {mcp, Path, arizona_dev_mcp, _Opts} <- Remaining]).
+
+keep_reload_url([]) ->
+    restore_reload_url(undefined);
+keep_reload_url(Paths) ->
+    Current = persistent_term:get(arizona_reload_url, undefined),
+    case lists:member(Current, Paths) of
+        true -> ok;
+        false -> restore_reload_url(lists:last(Paths))
+    end.
+
+keep_dev_mcp_route([]) -> restore_dev_mcp_route(undefined);
+keep_dev_mcp_route([_ | _]) -> restore_dev_mcp_route(true).
 
 %% A listener can be gone while its stash survives (stopped behind
 %% `stop/1`'s back, or its supervisor gave up on it); one such listener must
