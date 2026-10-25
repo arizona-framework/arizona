@@ -57,10 +57,10 @@
 
 %% Every case runs on each adapter, through its conformance driver.
 all() ->
-    [{group, roadrunner}, {group, cowboy}].
+    [{group, roadrunner}, {group, cowboy}, {group, cowboy_mounted}].
 
 groups() ->
-    [{roadrunner, [], cases()}, {cowboy, [], cases()}].
+    [{roadrunner, [], cases()}, {cowboy, [], cases()}, {cowboy_mounted, [], cases()}].
 
 cases() ->
     [
@@ -162,7 +162,8 @@ end_per_group(_Group, Config) ->
     ok = arizona_conformance_driver:stop(?config(driver, Config), ?LISTENER).
 
 driver(roadrunner) -> arizona_conformance_roadrunner;
-driver(cowboy) -> arizona_conformance_cowboy.
+driver(cowboy) -> arizona_conformance_cowboy;
+driver(cowboy_mounted) -> arizona_conformance_cowboy_mounted.
 
 %% --------------------------------------------------------------------
 %% Tests
