@@ -39,6 +39,7 @@ the union of their methods.
 
 -export_type([table/0]).
 -export_type([entry/0]).
+-export_type([segment/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
