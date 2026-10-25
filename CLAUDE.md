@@ -254,6 +254,8 @@ arizona_static:generate(~"_site", [
 ], #{layouts => [{site_layout, render}]}).
 ```
 
+A generated page has no server, but its browser-side commands still run: the layout loads the **static client** (`priv/static/assets/js/arizona-static.min.js`, `@arizona-framework/client/static`) and calls `start()` in place of `connect('/ws')`. `?local` updates, toggles, dialogs, view transitions, PiP and `az-hook`s all work; a `push_event` warns and is dropped, and a `navigate`/`patch` loads its URL as a page. Only proven event names are delegated (a data value under an `az-*` name never runs), so `generate` embeds each page's names -- compile-time ones from the handler, its layouts and every rendered module, plus commands built at render time -- as `<script type="application/json" id="arizona-attrs">` before the last `</body>`, the static counterpart of the connect frame's set.
+
 ## Native-shell capabilities -- `arizona_os`
 
 When a browser renderer is wrapped in a **native shell** (Tauri, Electron, a webview wrapper), the server can drive OS capabilities the browser sandbox forbids (window control, native notifications, screen-capture protection). The renderer is the **same** web (`?html`) client over the **same** WebSocket -- the shell adds only a native side-channel, so an existing app runs in a shell unchanged and the whole seam is a **safe no-op in a plain browser**. (This is **not** the `?native` JSON render target; see [docs/os.md](docs/os.md).)

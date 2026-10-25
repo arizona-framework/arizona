@@ -45,7 +45,7 @@ function runDelegated(e, attr, sel, capture) {
     // the connection check too: a declared suppression holds while disconnected
     // (a submit button's click would otherwise submit its form natively).
     if (el.hasAttribute('az-prevent-default')) e.preventDefault();
-    if (!host.isConnected()) return;
+    if (!host.ready()) return;
     const raw = el.getAttribute(attr);
     if (!raw) return;
     // The value is a command list by DECLARATION, so it is not inspected to decide
@@ -344,8 +344,17 @@ function scanEvents(root) {
  */
 let _itemDrag = false;
 
-/** Forget an item drag in flight (a connection's teardown). */
-export function clearItemDrag() {
+/**
+ * Tear down every bound document's delegated listeners and drop the bookkeeping:
+ * a page's teardown. The caller's own signal covers the MAIN document only; a PiP
+ * document's listeners hang off requestPip's own controller, so without this they
+ * would survive and the next start re-arm them. `_eventTypes` deliberately
+ * survives: it is what this PAGE delegates, so a restart rebinds the same types.
+ */
+export function unbindDocuments() {
+    for (const rec of _eventDocs.values()) rec.abort?.();
+    _eventDocs.clear();
+    _passiveBound.clear();
     _itemDrag = false;
 }
 
@@ -392,11 +401,11 @@ export function bindDocumentEvents(target, signal, abort) {
                 //   A navigation beside a fetch drops too: the load would cancel it.
                 // - a `fetch` needs no socket and runs, so an HTTP login form works
                 //   before the first open.
-                if (!host.isConnected() && needs.nav && !needs.event && !needs.fetch) {
+                if (!host.ready() && needs.nav && !needs.event && !needs.fetch) {
                     host.leavePage(needs.nav[1], needs.nav[2]?.replace);
                     return;
                 }
-                if (!host.isConnected() && (needs.event || needs.nav)) {
+                if (!host.ready() && (needs.event || needs.nav)) {
                     console.warn('[arizona] az-submit dropped: disconnected');
                     form.dispatchEvent(
                         new CustomEvent('arizona:submit-dropped', {
@@ -409,7 +418,7 @@ export function bindDocumentEvents(target, signal, abort) {
                 // Flush pending debounced inputs so the server sees them before the
                 // submit. Only while connected: a flush now would send them into a
                 // closed socket, while a still-armed timer can deliver them later.
-                if (host.isConnected())
+                if (host.ready())
                     form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
@@ -470,7 +479,7 @@ export function bindDocumentEvents(target, signal, abort) {
             if (!container) return;
             _itemDrag = false;
             e.preventDefault();
-            if (!host.isConnected()) return;
+            if (!host.ready()) return;
             const raw = container.getAttribute('az-drop');
             if (!raw) return;
             try {

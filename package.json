@@ -10,7 +10,8 @@
       "import": "./priv/static/assets/js/arizona.min.js",
       "require": "./priv/static/assets/js/arizona.min.js"
     },
-    "./reloader": "./priv/static/assets/js/arizona-reloader.min.js"
+    "./reloader": "./priv/static/assets/js/arizona-reloader.min.js",
+    "./static": "./priv/static/assets/js/arizona-static.min.js"
   },
   "files": [
     "README.md",

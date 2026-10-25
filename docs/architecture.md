@@ -2015,7 +2015,11 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   caller's own path, not untrusted input).
   `Opts` (and the optional `DefaultOpts`, which each spec's `Opts` override) is the offline subset
   of `t:arizona_live:route_opts/0` (`bindings`/`on_mount`/`layouts`; no `middlewares`). The client
-  `<script>` / `connect('/ws')` lives in the layout, so a pure-static page omits the WS connect.
+  `<script>` lives in the layout: a pure-static page loads `arizona-static.min.js` and calls
+  `start()` instead of `connect('/ws')`, and browser-side commands (`?local`, toggles, dialogs,
+  PiP) run with no server. Each page with event attributes embeds their proven names as
+  `<script type="application/json" id="arizona-attrs">` before its last `</body>` -- what the
+  socket's connect frame carries on a live page -- and `start()` delegates exactly those.
 
 ## Roadrunner handlers
 

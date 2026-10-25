@@ -19,6 +19,11 @@
 -export([failed_entries_cover_every_spec_shape/1]).
 -export([collects_write_errors/1]).
 -export([collects_non_map_spec_opts/1]).
+-export([embeds_compile_time_proven_attrs/1]).
+-export([embeds_render_time_proven_attrs/1]).
+-export([page_without_events_has_no_attrs/1]).
+-export([page_without_body_is_left_as_rendered/1]).
+-export([leaves_the_collector_disarmed/1]).
 
 all() ->
     [{group, generate}].
@@ -38,7 +43,12 @@ groups() ->
             failure_carries_render_location,
             failed_entries_cover_every_spec_shape,
             collects_write_errors,
-            collects_non_map_spec_opts
+            collects_non_map_spec_opts,
+            embeds_compile_time_proven_attrs,
+            embeds_render_time_proven_attrs,
+            page_without_events_has_no_attrs,
+            page_without_body_is_left_as_rendered,
+            leaves_the_collector_disarmed
         ]}
     ].
 
@@ -204,6 +214,58 @@ collects_non_map_spec_opts(Config) when is_list(Config) ->
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+%% The static client delegates exactly the names the page carries: a counter's
+%% `az-click` is proven by the compiler and lands before `</body>`.
+embeds_compile_time_proven_attrs(Config) when is_list(Config) ->
+    Content = generate_with_layout(Config, "proven_compile", arizona_counter),
+    ?assertEqual([~"az-click"], embedded_attrs(Content)),
+    {Script, _} = binary:match(Content, ~"<script type=\"application/json\" id=\"arizona-attrs\">"),
+    {Body, _} = binary:match(Content, ~"</body>"),
+    ?assert(Script < Body).
+
+%% A command built at render time is invisible to the compiler: only the armed
+%% collector proves `az-dblclick`.
+embeds_render_time_proven_attrs(Config) when is_list(Config) ->
+    Content = generate_with_layout(Config, "proven_render", arizona_static_runtime_cmd),
+    ?assertEqual([~"az-dblclick"], embedded_attrs(Content)).
+
+page_without_events_has_no_attrs(Config) when is_list(Config) ->
+    Content = generate_with_layout(Config, "no_events", arizona_static_page),
+    ?assertEqual(nomatch, binary:match(Content, ~"arizona-attrs")).
+
+%% With no `</body>` to anchor it (a fragment, a `?native` document), nothing is
+%% appended: the page stays exactly what rendering produced.
+page_without_body_is_left_as_rendered(Config) when is_list(Config) ->
+    Dir = subdir(Config, "no_body"),
+    {[Out], []} = arizona_static:generate(Dir, [{arizona_counter, ~"index.html"}]),
+    Content = read(Out),
+    ?assertEqual(nomatch, binary:match(Content, ~"arizona-attrs")),
+    ?assertEqual(
+        iolist_to_binary(arizona_render:render_view_to_iolist(arizona_counter, #{})), Content
+    ).
+
+%% The collector is armed for each page's render only, so the caller's process is
+%% not left recording what it renders later.
+leaves_the_collector_disarmed(Config) when is_list(Config) ->
+    _Content = generate_with_layout(Config, "disarmed", arizona_counter),
+    ok = arizona_event_attrs:observe_attr(~"az-later"),
+    ?assertEqual({[], []}, arizona_event_attrs:drain()).
+
+generate_with_layout(Config, Name, Handler) ->
+    Dir = subdir(Config, Name),
+    {[Out], []} = arizona_static:generate(
+        Dir, [{Handler, ~"index.html", #{layouts => [{arizona_layout, render}]}}]
+    ),
+    read(Out).
+
+embedded_attrs(Content) ->
+    {match, [Json]} = re:run(
+        Content,
+        ~"<script type=\"application/json\" id=\"arizona-attrs\">(.*?)</script>",
+        [{capture, all_but_first, binary}]
+    ),
+    json:decode(Json).
 
 subdir(Config, Name) ->
     filename:join(proplists:get_value(priv_dir, Config), Name).

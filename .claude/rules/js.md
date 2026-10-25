@@ -19,6 +19,19 @@ event, navigate, ask whether a socket is open -- it calls through `host` (`arizo
 live one ties every page to the socket. Mutable module state is written only in the module that
 declares it (an ES import is read-only), through a setter when another module must change it.
 
+**Static entry.** `assets/js/arizona-static.js` is a second entry, built to
+`priv/static/assets/js/arizona-static.min.js` (a second Vite pass, `ARIZONA_BUILD_PASS=static`) and
+exported as `./static`. It imports only the shared modules and installs its own `host`: `ready` is
+always true, `sendEvent` warns and drops (`push_event "<name>" dropped: this page has no server`),
+`navigate`/`leavePage` load the URL as a page (`loadPage`, http(s) only), and a transition waits for
+no reply. It exports `start`, `executeJS`, `exitPip`, `requestPip`, `mountHooks`, `hooks`, `get`,
+`set`, `setAll`. `start({attrs}?)` binds delegation, notes the event names (`attrs`, else the JSON
+list `arizona_static` embedded in `#arizona-attrs`), mounts hooks, and returns an idempotent `stop`
+(unbinds, closes PiP windows, destroys hooks); a second `start()` stops the first. The host member
+`ready` -- whether delegated commands run now -- is the socket being open on a live page. The static
+bundle must never grow a Worker or a socket: anything it needs from the live side goes through
+`host`.
+
 Exports (the full list, alphabetical as in the module): `applyEffects`, `applyOps`, `connect`, `executeJS`, `exitPip`, `get`, `hooks`, `mountHooks`, `OP`, `pushEvent`, `pushEventTo`, `requestPip`, `resolveEl`, `restoreFormState`, `saveFormState`, `set`, `setAll`.
 
 - `connect(endpoint, params?)` -- bootstrap: spawns Worker, installs document/window-level event delegation, takes over `history.scrollRestoration`. **Returns a `disconnect` function** that aborts every listener it registered, terminates the Worker, clears module state (`_connected`, `_pendingScroll`, saved forms), and restores the previous `scrollRestoration`. Idempotent. Use for teardown in tests and for host apps that want to unmount Arizona on route change. **One live connection at a time:** the connection owns module-level state, so calling `connect` again warns and retires the previous one first (otherwise its Worker keeps a second socket patching the same document, and its `disconnect` -- reading the same module state -- would tear down the newer connection instead).

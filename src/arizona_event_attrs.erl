@@ -92,6 +92,7 @@ Known limits, all loud or documented rather than silent:
 
 -export([all/1]).
 -export([arm/0]).
+-export([disarm/0]).
 -export([drain/0]).
 -export([forget/1]).
 -export([observe_attr/1]).
@@ -138,6 +139,16 @@ Arms the render-time collector in the calling process. Until armed,
 arm() ->
     put(?ATTRS_KEY, []),
     put(?MODS_KEY, []),
+    ok.
+
+-doc """
+Disarms the render-time collector in the calling process, dropping what it held:
+a render that armed it only for itself leaves the process as it found it.
+""".
+-spec disarm() -> ok.
+disarm() ->
+    _ = erase(?ATTRS_KEY),
+    _ = erase(?MODS_KEY),
     ok.
 
 -doc """

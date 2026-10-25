@@ -61,12 +61,35 @@ report(Spec, {error, Reason}) ->
     io:format("~ts: write failed: ~p~n", [element(2, Spec), Reason]).
 ```
 
+## Client commands on a static page
+
+A page served as plain files has no server to send events to, but every command
+that runs in the browser still works -- `?local` updates, toggles, dialogs, view
+transitions, Picture-in-Picture, `copy_to_clipboard`. The layout loads the static
+client and calls its `start()` instead of `connect('/ws')`:
+
+```html
+<script type="module">
+  import { start } from '/arizona-static.min.js';
+  start();
+</script>
+```
+
+A data value under an `az-*` name is never run as a command, so the client only
+delegates the event names proven to hold one, exactly as the live socket's
+connect frame does. `generate/2,3` therefore embeds those names in each page
+that has any, as `<script type="application/json" id="arizona-attrs">` before the
+last `</body>`: the compile-time names of the handler, its layouts and every
+module rendered into the page, plus the names whose command was built at render
+time. A page with no `</body>` (a `?native` document, a fragment) is written as
+rendered. A `push_event` has no server to reach and is dropped with a warning;
+a `navigate`/`patch` loads its URL as a page.
+
 ## Caveats
 
-Generated pages are SSR HTML. The client `<script>` / `connect('/ws')` lives in
-your layout, not here: a purely static page uses a layout without the WS connect.
-The output carries the usual `az-view` / `id` markers (inert as static HTML;
-meaningful only if later hydrated by an Arizona server). A page whose root
+Generated pages are SSR HTML. The client `<script>` lives in your layout, not
+here. The output carries the usual `az-view` / `id` markers, which the static
+client uses to find a `?local`'s view. A page whose root
 element carries `az-nodiff` drops the per-slot `az` attributes and comment
 markers from every template nested in it. Three things keep theirs: an element
 holding a content `?local` (the client's address for it), templates built inside
@@ -202,8 +225,50 @@ safe_generate(Handler, OutDir, Outfile, DefaultOpts, SpecOpts) ->
 generate_one(Handler, Filename, Opts) when is_atom(Handler), is_map(Opts) ->
     maybe
         RenderOpts = maps:with([bindings, on_mount, layouts], Opts),
-        Content = arizona_render:render_view_to_iolist(Handler, RenderOpts),
+        Content = render(Handler, RenderOpts),
         ok ?= filelib:ensure_dir(Filename),
         ok ?= file:write_file(Filename, Content),
         ok
+    end.
+
+%% The page, carrying the `az-*` attribute names proven to hold commands, for the
+%% static client (`arizona-static.js`'s `start()`) to delegate: the names a live
+%% page receives on its socket's connect frame. Both proofs count -- what the
+%% compiler saw in the handler, its layouts and the modules they name, and what
+%% rendering evaluated to a command -- so the collector is armed for this render
+%% only.
+render(Handler, RenderOpts) ->
+    ok = arizona_event_attrs:arm(),
+    try
+        Html = arizona_render:render_view_to_iolist(Handler, RenderOpts),
+        {Rendered, Mods} = arizona_event_attrs:drain(),
+        Layouts = [Mod || {Mod, _Fun} <:- maps:get(layouts, RenderOpts, [])],
+        Compiled = arizona_event_attrs:all([Handler | Layouts] ++ Mods),
+        with_attrs(Html, lists:usort(Rendered ++ Compiled))
+    after
+        ok = arizona_event_attrs:disarm()
+    end.
+
+%% Embedded before the last `</body>`. A page with none -- a fragment, a
+%% `?native` JSON document -- is left as rendered: appending markup could corrupt
+%% it, and its client can be handed the names by `start({attrs})`. `<` is escaped
+%% so no name can close the script element.
+with_attrs(Html, []) ->
+    Html;
+with_attrs(Html0, Names) ->
+    Html = iolist_to_binary(Html0),
+    case binary:matches(Html, ~"</body>") of
+        [] ->
+            Html;
+        Matches ->
+            {At, _Len} = lists:last(Matches),
+            Json = binary:replace(iolist_to_binary(json:encode(Names)), ~"<", ~"\\u003c", [global]),
+            <<Before:At/binary, After/binary>> = Html,
+            [
+                Before,
+                ~"<script type=\"application/json\" id=\"arizona-attrs\">",
+                Json,
+                ~"</script>",
+                After
+            ]
     end.
