@@ -12,17 +12,20 @@ ARIZONA_CONFORMANCE_DRIVER=arizona_cowboy_conformance \
     rebar3 ct --suite=arizona_server_conformance_SUITE
 ```
 
-`stop/1` and `drain/2` answer `{error, not_found}` for a listener that is not running.
+`stop/1`, `drain/2` and `notify_drain/2` answer `{error, not_found}` for a listener
+that is not running.
 
 `Opts` may carry `compress => boolean()` (the listener-wide default compression).
 `start/3` must fail -- an error tuple or an exception -- on a route table it
 refuses, such as a route the earlier ones fully shadow. `drain/2` winds the
 listener down: live views run `handle_drain/2` and their sockets close `1001`.
+`notify_drain/2` does the same to the live views and leaves the listener serving.
 """.
 
 -export([start/4]).
 -export([stop/2]).
 -export([drain/3]).
+-export([notify_drain/3]).
 -export([supports_reply/2]).
 -export([supports_route/2]).
 
@@ -30,6 +33,7 @@ listener down: live views run `handle_drain/2` and their sockets close `1001`.
     {ok, Port :: inet:port_number()} | {error, term()}.
 -callback stop(Name :: atom()) -> ok | {error, not_found}.
 -callback drain(Name :: atom(), TimeoutMs :: non_neg_integer()) -> ok | {error, not_found}.
+-callback notify_drain(Name :: atom(), TimeoutMs :: non_neg_integer()) -> ok | {error, not_found}.
 
 %% Whether the adapter can send a non-buffered controller reply kind. The suite
 %% skips the cases of a kind the adapter does not support; omitted, every kind
@@ -63,6 +67,13 @@ stop(Driver, Name) ->
     TimeoutMs :: non_neg_integer().
 drain(Driver, Name, TimeoutMs) ->
     Driver:drain(Name, TimeoutMs).
+
+-spec notify_drain(Driver, Name, TimeoutMs) -> ok | {error, not_found} when
+    Driver :: module(),
+    Name :: atom(),
+    TimeoutMs :: non_neg_integer().
+notify_drain(Driver, Name, TimeoutMs) ->
+    Driver:notify_drain(Name, TimeoutMs).
 
 -spec supports_reply(Driver, Kind) -> boolean() when
     Driver :: module(),

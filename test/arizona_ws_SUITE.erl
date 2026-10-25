@@ -2497,8 +2497,9 @@ drain_then_navigate_check(Config) ->
 %% stopping the listener — every WS session auto-joins at upgrade.
 %% In a sequential test suite only this test's session is in flight.
 send_drain_to_session() ->
-    broadcast_drain(erlang:monotonic_time(millisecond) + 30000).
+    ok = arizona_roadrunner_server:notify_drain(ws_test, 30000).
 
+%% An exact deadline, for the telemetry roadrunner reports it with.
 broadcast_drain(Deadline) ->
     ok = roadrunner_listener:notify_drain(ws_test, Deadline).
 

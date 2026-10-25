@@ -66,6 +66,19 @@ Returns `{error, not_found}` when no such listener runs.
 -callback drain(Name :: atom(), Timeout :: non_neg_integer()) -> ok | {error, not_found}.
 
 -doc """
+Tells every live WebSocket session of the listener named `Name` to wind down,
+as `drain/2` does, without stopping the listener: it keeps accepting, so a
+client that reconnects is served by it. This is the rolling-deploy drain: the
+sessions move over while the node keeps answering, and the operator stops the
+listener (or the node) later.
+
+`Deadline` in `{arizona_drain, Deadline}` is `Timeout` milliseconds ahead, as
+in `drain/2`; nothing enforces it, so a view that stays alive past it stays.
+Returns `{error, not_found}` when no such listener runs.
+""".
+-callback notify_drain(Name :: atom(), Timeout :: non_neg_integer()) -> ok | {error, not_found}.
+
+-doc """
 Recompiles the routes of every listener this adapter runs, from the route lists
 they were started with. The dev reloader calls it after loading new code and
 before broadcasting the reload, so a route term holding a fun from a reloaded

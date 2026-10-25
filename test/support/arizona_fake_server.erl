@@ -3,13 +3,14 @@
 In-memory `arizona_server` for the app and reloader suites: it serves nothing,
 and reports each callback it receives to the `notify` pid its `start/2` opts
 carry, as `{arizona_fake_server, Callback, Args}`. Its listener is a plain
-process, so `stop/1` and `drain/2` answer `{error, not_found}` once it is gone.
+process, so `stop/1`, `drain/2` and `notify_drain/2` answer `{error, not_found}` once it is gone.
 """.
 -behaviour(arizona_server).
 
 -export([start/2]).
 -export([stop/1]).
 -export([drain/2]).
+-export([notify_drain/2]).
 -export([recompile_routes/0]).
 -export([capabilities/0]).
 
@@ -35,6 +36,13 @@ stop(Name) ->
 drain(Name, Timeout) ->
     ok = notify({drain, Name, Timeout}),
     stop_listener(Name).
+
+notify_drain(Name, Timeout) ->
+    ok = notify({notify_drain, Name, Timeout}),
+    case whereis(Name) of
+        undefined -> {error, not_found};
+        _Pid -> ok
+    end.
 
 recompile_routes() ->
     notify(recompile_routes).
