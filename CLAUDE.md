@@ -2,7 +2,7 @@
 
 Erlang/OTP real-time web framework with server-side diffing. The project is in the `0.x` series -- the API may change between minor versions, so changes don't need to preserve backward compatibility for now.
 
-Dependencies: `roadrunner` and `cowboy` (HTTP/WS servers, each behind an `arizona_server` adapter; both move to their own repos once the adapter contracts settle). The dev reloader's file watcher is the `arizona_watcher` behaviour; its `fs`-based implementation lives in the separate `arizona_watcher_fs` package, which consumers add to a dev-only profile.
+Dependencies: none at runtime beyond OTP. The HTTP/WS server comes from an adapter package -- [`arizona_roadrunner`](https://github.com/arizona-framework/arizona_roadrunner) or [`arizona_cowboy`](https://github.com/arizona-framework/arizona_cowboy), each implementing `arizona_server` -- which the `server` env's required `adapter` key names. Both are **test-profile** dependencies here (every integration suite, the e2e test server and the bench run on them); they do not depend on arizona back (only in their own test profiles), which is what keeps that from being a cycle rebar3 refuses. The dev reloader's file watcher is the `arizona_watcher` behaviour; its `fs`-based implementation lives in the separate `arizona_watcher_fs` package, which consumers add to a dev-only profile.
 
 ## Build & Test
 
@@ -160,6 +160,7 @@ Any `arizona` app-env value (sys.config) may be declared as an environment-varia
     {secret_key, {env, "SECRET_KEY"}},
     {session_secure, {env, "SESSION_SECURE", false}},
     {server, #{
+        adapter => arizona_roadrunner_server,
         scheme => {env, "SCHEME", http},
         transport_opts => [{port, {env, "PORT", 8080}}],
         routes => [ ... ]

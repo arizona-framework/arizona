@@ -1,8 +1,9 @@
 # Server adapters
 
-Arizona runs on any HTTP/WebSocket server through an **adapter**. Two are built in: roadrunner's
-(`arizona_roadrunner_*`, the default) and Cowboy's (`arizona_cowboy_*`, selected with
-`adapter => arizona_cowboy_server`), and both pass the conformance suite. Cowboy's is also the
+Arizona runs on any HTTP/WebSocket server through an **adapter**, a package of its own. Two exist:
+[`arizona_roadrunner`](https://github.com/arizona-framework/arizona_roadrunner) (`adapter =>
+arizona_roadrunner_server`) and [`arizona_cowboy`](https://github.com/arizona-framework/arizona_cowboy)
+(`adapter => arizona_cowboy_server`), and both pass the conformance suite. Cowboy's is also the
 worked example of an adapter for a server whose router cannot express the routing contract: it
 mounts one catch-all route and matches in `arizona_route_table`. This page is the contract an
 adapter meets and the core functions it builds on.
@@ -14,8 +15,9 @@ black-box `arizona_server_conformance_SUITE` checks (see [Conformance](#conforma
 
 ## Configuration
 
-The application starts the `server` env's listener through the adapter its `adapter` key names
-(default `arizona_roadrunner_server`). Every other key but `drain_timeout` is the adapter's own:
+The application starts the `server` env's listener through the adapter its required `adapter` key
+names; Arizona ships none, so there is no default. Every other key but `drain_timeout` is the
+adapter's own:
 
 ```erlang
 {arizona, [
@@ -184,7 +186,7 @@ as listed, since a browser keeps the last `Set-Cookie` for a name.
 ## Conformance
 
 `arizona_server_conformance_SUITE` boots listeners through a driver
-(`arizona_conformance_driver`: `start/3`, `stop/1`, `drain/2`, and the optional
+(`arizona_conformance_driver`: `start/3`, `stop/1`, `drain/2`, `notify_drain/2`, and the optional
 `supports_reply/1` and `supports_route/1`) and asserts only what crosses the wire. Write a driver
 for your adapter and run the suite with it:
 
@@ -195,7 +197,10 @@ ARIZONA_CONFORMANCE_DRIVER=my_cowboy_conformance \
 
 A capability your driver reports unsupported is skipped for replies and must be refused for
 routes. Run it in your adapter's CI against Arizona's `main`, so a change in core that breaks
-your adapter shows up there.
+your adapter shows up there. `arizona_roadrunner` and `arizona_cowboy` do it with `make
+test-conformance`: clone Arizona, link the adapter checkout into its `_checkouts`, and run the suite
+with the adapter's driver. Arizona's own test profile depends on both, so its CI runs every driver
+too.
 
 Not covered by the suite, so not proven for any adapter: HTTP/2 WebSockets (its client speaks
 HTTP/1.1) and request-size limits, which each server configures its own way.

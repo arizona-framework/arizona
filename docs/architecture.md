@@ -22,7 +22,6 @@
 | `src/arizona_terminal_tty.erl`            | Local TTY transport -- raw-mode `shell:start_interactive`, a blocking input reader, `io:put_chars` as the output                                                                          |
 | `src/arizona_terminal_ssh.erl`            | SSH transport -- serves a `?terminal` view over an `ssh_server_channel` (pty-req, window-change), one live view per connection                                                            |
 | `src/arizona_diff.erl`                    | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                                           |
-| `src/arizona_roadrunner_router.erl`       | Roadrunner route compilation -- `compile_routes/3`, `routes/1,2` (map-shape routes with state under `#{arizona => ...}` namespace)                                                        |
 | `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
 | `src/arizona_js.erl`                      | Web/browser command/effect builders -- `push_event`, `navigate`, `patch`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
 | `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
@@ -45,11 +44,6 @@
 | `src/arizona_live.erl`                    | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                                              |
 | `src/arizona_parse_transform.erl`         | Compile-time transform -- `?html`/`?native`, `?each` DSL to `#{s, d, f}` maps, `az-view` auto-injection, `az-nodiff`, attribute compilation, cross-target nesting guard                   |
 | `src/arizona_socket.erl`                  | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff                    |
-| `src/arizona_roadrunner_http.erl`         | Roadrunner HTTP handler -- maps `arizona_http:reply/3` onto roadrunner's `{Response, Req}` reply shape                                                                                    |
-| `src/arizona_roadrunner_ws.erl`           | Roadrunner WebSocket handler -- maps `arizona_ws:upgrade/3`, `arizona_ws:init/1`, frames, and drain (`arizona_socket:drain/2`) onto roadrunner                                            |
-| `src/arizona_roadrunner_controller.erl`   | Roadrunner handler for controller routes -- maps `arizona_controller:dispatch/3`'s reply kinds onto roadrunner, loops included                                                            |
-| `src/arizona_roadrunner_server.erl`       | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                                 |
-| `src/arizona_roadrunner_req.erl`          | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                                     |
 | `src/arizona_reload_controller.erl`       | Dev hot-reload endpoint as a controller -- a `loop` reply that streams `arizona_reloader` broadcasts as Server-Sent Events                                                                |
 | `src/arizona_jsonrpc.erl`                 | JSON-RPC 2.0 codec -- `decode/1`, `result/2`, `error/3`, `notification/2`                                                                                                                 |
 | `src/arizona_mcp.erl`                     | MCP server behaviour an app implements (`init/1`, `tools/1`, `handle_tool/4`, optional `resources`/`prompts`/`channels`/`terminate`) plus the server-push API (`broadcast/3`, `notify/3`) |
@@ -67,9 +61,6 @@
 | `src/arizona_route_table.erl`             | The routing-contract matcher for adapters whose router lacks it -- `compile/3` (refuses unsupported kinds, shadowing), `match/3`, `allow/2`                                               |
 | `src/arizona_http_transforms.erl`         | Reference HTTP response transforms over `{Status, Headers, Body}` -- etag, compress, cors (`preflight/3`), security headers (`wrap/3`)                                                    |
 | `src/arizona_cookie.erl`                  | `Set-Cookie` serialization independent of any server -- `serialize/3`, used by `arizona_req:flush/1`                                                                                      |
-| `src/arizona_cowboy_server.erl`           | Cowboy `arizona_server` adapter -- one catch-all Cowboy route, the Arizona table in `persistent_term`, drain, `capabilities/0`                                                            |
-| `src/arizona_cowboy_handler.erl`          | Cowboy handler -- matches with `arizona_route_table`, maps core's answers onto Cowboy; also its `cowboy_loop` and WebSocket handler                                                       |
-| `src/arizona_cowboy_req.erl`              | Cowboy `arizona_req` adapter -- parsing callbacks, bounded body read, `resolve_route/3` against the listener's table                                                                      |
 | `src/arizona_watcher.erl`                 | Behaviour for a file-system watcher -- `init/2`, `handle_info/2` (raw event to changed paths), optional `terminate/1`; no implementation in core                                          |
 | `src/arizona_reloader_rule.erl`           | One reloader rule per process -- runs the configured `arizona_watcher`, filters by patterns, debounces, calls the callback, broadcasts via `arizona_pubsub`                               |
 | `src/arizona_reloader_sup.erl`            | Supervisor of the rule processes -- a `temporary` child of `arizona_sup`, so a crash-looping watch stops hot reload, not the app                                                          |
@@ -1611,7 +1602,7 @@ matters because the JS worker treats **any non-1000 code as reconnectable**:
 | any failure to mount the view | `?CLOSE_MOUNT_FAILED` (4501) | **Reconnects**, and reloads the page after a random 5-10 s delay (the page may be stale, e.g. after a deploy); a reconnect that mounts first cancels the reload. Consecutive reloads of one path are counted per tab, in one `sessionStorage` key holding `{path, count}` (a reload of another path starts over), so a failing path, which may carry a secret, never outlives the tab; only a successful mount removes it (`pagehide` and `disconnect()` just cancel the pending reload); from the 10th on the delay is 30 s, logged once per page load, and retrying never stops. Form fields saved on the close are lost by the reload, unless a reconnect mounts first and restores them. Never resets the backoff |
 
 An application stop takes the drain path: `arizona_app:prep_stop/1` drains the `arizona_http`
-listener (its adapter's `drain/2`, `arizona_roadrunner_server:drain/2` by default) instead of
+listener (its adapter's `drain/2`) instead of
 stopping it, so a restart or deploy closes every live socket 1001 and its clients reconnect --
 to the new node once it is up. The
 listen socket closes first, each view gets `handle_drain/2`, and the stop waits up to the
@@ -2989,11 +2980,12 @@ search-and-replace blindly:
 
 The core engine (`arizona_template`, `arizona_render`, `arizona_diff`, `arizona_live`,
 `arizona_stream`, `arizona_pubsub`, `arizona_js`, parse transform) is transport-agnostic. The
-server is an `arizona_server` adapter (the `server` env's `adapter`, default
-`arizona_roadrunner_server`); each adapter routes natively and must pass the black-box
+server is an `arizona_server` adapter package (the `server` env's required `adapter`), not part of
+Arizona; each adapter routes natively and must pass the black-box
 `arizona_server_conformance_SUITE` through its own `arizona_conformance_driver` -- the full
-contract is in [adapters.md](adapters.md). Roadrunner is wired in through a thin layer of
-`arizona_*` modules that translate between roadrunner's callbacks and Arizona's shared pipeline:
+contract is in [adapters.md](adapters.md). The `arizona_roadrunner` package wires roadrunner in
+through a thin layer of modules that translate between roadrunner's callbacks and Arizona's shared
+pipeline (`arizona_cowboy` does the same for Cowboy with three):
 
 - `arizona_roadrunner_server` -- the `arizona_server` adapter: boots the listener and compiles
   routes
@@ -3020,10 +3012,10 @@ startup. `arizona_config` centralizes both the read and the resolution:
   Default])` that pass the stored value through `resolve/1`. The scattered scalar reads
   (`arizona_origin`, `arizona_session`, `arizona_flash`, `arizona_crypto`, `arizona_sup`,
   `arizona_req`, `arizona_session_store_ets`) call these.
-- `resolve/1` -- expands references in an arbitrary term. Called once at the top of
-  `arizona_roadrunner_server:start/2` to resolve the whole `server` opts map, so nested `port` /
-  `scheme` / `tls` / `proto_opts` references work and every direct caller (the test server, CT
-  suites) benefits without change.
+- `resolve/1` -- expands references in an arbitrary term. Called once at the top of each
+  adapter's `start/2` (`arizona_roadrunner_server`, `arizona_cowboy_server`) to resolve the whole
+  `server` opts map, so nested `port` / `scheme` / `tls` / `proto_opts` references work and every
+  direct caller (the test server, CT suites) benefits without change.
 
 Reference forms:
 

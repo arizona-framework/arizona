@@ -31,6 +31,10 @@ their methods.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([compile/3]).
+-ignore_xref([match/3]).
+-ignore_xref([allow/2]).
 %% Called by `erl_error` via the `error_info` annotation, not directly.
 -ignore_xref([format_error/2]).
 

@@ -38,6 +38,8 @@ transport's native reply shape.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([reply/3]).
 %% The step under `reply/3`, kept public for an adapter that frames its own reply.
 -ignore_xref([render/3]).
 

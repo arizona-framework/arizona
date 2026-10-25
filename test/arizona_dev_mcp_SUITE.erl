@@ -119,7 +119,9 @@ end_per_suite(_Config) ->
 
 init_per_testcase(_Case, Config) ->
     %% list_routes reads the `server` app env; seed it with the dev server routes.
-    ok = application:set_env(arizona, server, #{routes => arizona_test_server:routes()}),
+    ok = application:set_env(arizona, server, #{
+        adapter => arizona_roadrunner_server, routes => arizona_test_server:routes()
+    }),
     Config.
 
 end_per_testcase(_Case, _Config) ->

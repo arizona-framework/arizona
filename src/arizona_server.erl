@@ -3,10 +3,10 @@
 Behaviour for an HTTP/WebSocket server adapter: what boots, drains, stops, and
 refreshes the routes of the listeners that serve Arizona.
 
-`arizona_roadrunner_server` is the built-in implementation. The application
-starts the `server` env's listener through the adapter named by its `adapter`
-key (default `arizona_roadrunner_server`); every other key of that map is the
-adapter's own options:
+Arizona ships no implementation: each lives in its own package
+(`arizona_roadrunner`, `arizona_cowboy`). The application starts the `server`
+env's listener through the adapter named by its required `adapter` key; every
+other key of that map is the adapter's own options:
 
 ```erlang
 {arizona, [

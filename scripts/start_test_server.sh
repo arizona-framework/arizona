@@ -15,6 +15,8 @@ exec erl \
     -pa "_build/test/lib/arizona/ebin" \
     -pa "_build/test/lib/arizona/test" \
     -pa "_build/test/lib/roadrunner/ebin" \
+    -pa "_build/test/lib/arizona_roadrunner/ebin" \
+    -pa "_build/test/checkouts/arizona_roadrunner/ebin" \
     -pa "_build/test/lib/telemetry/ebin" \
     ${ERLANG_EXTRA_ARGS} \
     -eval "

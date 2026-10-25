@@ -4,7 +4,9 @@ OTP application entry point.
 
 Boots `arizona_sup`, then -- if the `server` application env is set --
 starts a listener named `arizona_http` through the `arizona_server` adapter
-its `adapter` key names (default `arizona_roadrunner_server`). On shutdown,
+its required `adapter` key names, a module of an adapter package the
+application depends on (`arizona_roadrunner`'s `arizona_roadrunner_server`,
+`arizona_cowboy`'s `arizona_cowboy_server`, ...). On shutdown,
 drains that listener in `prep_stop/1` -- **before** the supervision tree goes
 down -- so it never
 serves a request against already-dead infrastructure (pubsub, the MCP
@@ -19,7 +21,7 @@ which they take as a deliberate end of session.
 ```erlang
 {arizona, [
     {server, #{
-        adapter => arizona_roadrunner_server,           %% arizona_server module (default)
+        adapter => arizona_roadrunner_server,           %% arizona_server module (required)
         scheme => http,                                 %% http | https
         transport_opts => [{port, 4040}],               %% port shorthand
         drain_timeout => 5000,                          %% ms a stop waits for sessions
@@ -47,7 +49,6 @@ The `server` key is optional: if absent, only the supervisor starts
 
 -define(LISTENER, arizona_http).
 -define(DRAIN_TIMEOUT, 5000).
--define(DEFAULT_ADAPTER, arizona_roadrunner_server).
 
 %% --------------------------------------------------------------------
 %% application callback exports
@@ -56,6 +57,14 @@ The `server` key is optional: if absent, only the supervisor starts
 -export([start/2]).
 -export([prep_stop/1]).
 -export([stop/1]).
+-export([format_error/2]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+%% Called by `erl_error` via the `error_info` annotation, not directly.
+-ignore_xref([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% application Callbacks
@@ -95,6 +104,28 @@ prep_stop(State) ->
 stop(_State) ->
     ok = arizona_dev_log:uninstall(),
     stop_server().
+
+-doc "Renders the `server` env errors this module raises.".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error(missing_server_adapter, _ST) ->
+    #{
+        general =>
+            "the server env has no adapter: name the arizona_server module of the "
+            "adapter package your application depends on, e.g. "
+            "adapter => arizona_roadrunner_server (arizona_roadrunner) or "
+            "adapter => arizona_cowboy_server (arizona_cowboy)"
+    };
+format_error({unknown_server_adapter, Adapter}, _ST) ->
+    #{
+        general => io_lib:format(
+            "the server adapter ~0tp is not loadable: add the package that provides it "
+            "to your application's dependencies",
+            [Adapter]
+        )
+    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -139,8 +170,17 @@ stop_server() ->
 
 %% The `server` map names its adapter; every other key but `drain_timeout`
 %% (which this module reads) is the adapter's own.
-adapter(ServerOpts) ->
+%% Arizona ships no server, so there is no default to fall back on.
+adapter(#{adapter := Ref} = ServerOpts) ->
     %% Resolved here, not by the adapter: it names the adapter, so it may be an
     %% `{env, ...}` reference like any other key.
-    Adapter = arizona_config:resolve(maps:get(adapter, ServerOpts, ?DEFAULT_ADAPTER)),
-    {Adapter, maps:without([adapter, drain_timeout], ServerOpts)}.
+    Adapter = arizona_config:resolve(Ref),
+    case code:ensure_loaded(Adapter) of
+        {module, Adapter} -> {Adapter, maps:without([adapter, drain_timeout], ServerOpts)};
+        {error, _} -> server_error({unknown_server_adapter, Adapter}, ServerOpts)
+    end;
+adapter(ServerOpts) ->
+    server_error(missing_server_adapter, ServerOpts).
+
+server_error(Reason, ServerOpts) ->
+    erlang:error(Reason, [ServerOpts], [{error_info, #{module => ?MODULE}}]).

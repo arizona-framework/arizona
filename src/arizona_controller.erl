@@ -75,6 +75,9 @@ error/success) or a `navigate`.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([dispatch/3]).
+
 -ignore_xref([reply_effects/1]).
 -ignore_xref([reply_effects/2]).
 -ignore_xref([reply_redirect/1]).

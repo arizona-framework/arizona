@@ -2,7 +2,7 @@
 -moduledoc """
 Bridges a WebSocket frame stream with the live process.
 
-The transport layer (`arizona_roadrunner_ws`) creates a socket
+The server adapter's WebSocket handler creates a socket
 via `init/4`, then forwards inbound text frames to `handle_in/2` and
 inbox messages to `handle_info/2`. Each call returns a result tuple
 that the transport translates into WebSocket frames or close codes.
@@ -75,6 +75,10 @@ the client reloads it after a jittered delay.
 %% Ignore xref warnings
 %% --------------------------------------------------------------------
 
+%% Called by the server adapters, which live in their own packages.
+-ignore_xref([handle_in/2]).
+-ignore_xref([handle_info/2]).
+-ignore_xref([drain/2]).
 %% Read by `drain/2` in-tree; public for adapters and tests that need the live process.
 -ignore_xref([live_pid/1]).
 

@@ -19,6 +19,7 @@ the `server` map:
     {secret_key, {env, "SECRET_KEY"}},
     {session_secure, {env, "SESSION_SECURE", false}},
     {server, #{
+        adapter => arizona_roadrunner_server,
         scheme => {env, "SCHEME", http},
         transport_opts => [{port, {env, "PORT", 8080}}],
         routes => [ ... ]
