@@ -23,6 +23,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { clientSource } from './client_source.mjs';
 
 // Relative to this script, not the cwd, so it runs from anywhere.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -39,7 +40,6 @@ for (let i = 0; i < rest.length; i++) {
     else if (rest[i] === '--runs') runs = Number(rest[++i]);
 }
 
-const CLIENT = join(ROOT, 'assets/js/arizona.js');
 const CORE = join(ROOT, 'assets/js/arizona-core.js');
 
 // Module-internal functions worth a per-call breakdown. A name that is not a
@@ -97,7 +97,7 @@ if (labels.length === 0) {
     process.exit(1);
 }
 
-const client = readFileSync(CLIENT, 'utf8');
+const client = await clientSource(ROOT);
 const core = readFileSync(CORE, 'utf8');
 let browser;
 try {
