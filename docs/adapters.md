@@ -1,8 +1,10 @@
 # Server adapters
 
-Arizona runs on any HTTP/WebSocket server through an **adapter**. Roadrunner's
-(`arizona_roadrunner_*`) is built in; another server -- Cowboy, or a framework on top of one --
-gets its own. This page is the contract an adapter meets and the core functions it builds on.
+Arizona runs on any HTTP/WebSocket server through an **adapter**. Two are built in: roadrunner's
+(`arizona_roadrunner_*`, the default) and Cowboy's (`arizona_cowboy_*`, selected with
+`adapter => arizona_cowboy_server`), and both pass the conformance suite. Cowboy's is also the
+worked example of an adapter for a server whose router cannot express the routing contract: it
+mounts one catch-all route and matches in `arizona_cowboy_router`. This page is the contract an adapter meets and the core functions it builds on.
 
 Everything security-relevant or user-visible is decided in core, once: what a route means, the
 CSRF check, sessions and cookies, what a page, an upgrade, or a controller answers. An adapter

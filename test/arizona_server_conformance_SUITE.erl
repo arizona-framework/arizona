@@ -5,10 +5,11 @@ must reproduce.
 
 Each adapter routes natively, so this suite is what keeps them in step. It boots
 listeners through an `arizona_conformance_driver` -- `arizona_conformance_roadrunner`
-by default; an adapter repo runs it with its own driver via
-`ARIZONA_CONFORMANCE_DRIVER=<module>` -- and asserts ONLY what crosses the wire:
-raw HTTP/1.1 and WebSocket over `gen_tcp` (`arizona_wire_client`). No case may
-call into an adapter module or inspect its internal state.
+and `arizona_conformance_cowboy` by default (one run each); an adapter repo runs
+it with its own driver via `ARIZONA_CONFORMANCE_DRIVER=<module>` -- and asserts
+ONLY what crosses the wire: raw HTTP/1.1 and WebSocket over `gen_tcp`
+(`arizona_wire_client`). No case may call into an adapter module or inspect its
+internal state.
 """.
 
 -include_lib("stdlib/include/assert.hrl").
@@ -96,13 +97,18 @@ call into an adapter module or inspect its internal state.
 %% Drain
 -export([drain_runs_handle_drain_then_closes_1001/1]).
 
--define(DEFAULT_DRIVER, arizona_conformance_roadrunner).
+-define(IN_TREE_DRIVERS, [arizona_conformance_roadrunner, arizona_conformance_cowboy]).
 -define(SECRET, ~"conformance-secret-key-0123456789").
 -define(EVIL, ~"https://evil.example").
 -define(TRUSTED, ~"https://trusted.example").
 -define(CACHE_CONTROL, ~"public, max-age=60").
 
 all() ->
+    [{group, Driver} || Driver <- drivers()].
+
+%% The suite runs once per driver: the in-tree adapters by default, or the one
+%% `ARIZONA_CONFORMANCE_DRIVER` names (an adapter repo's own).
+features() ->
     [
         {group, routing},
         {group, assets},
@@ -120,131 +126,146 @@ all() ->
     ].
 
 groups() ->
-    [
-        {routing, [], [
-            live_get_is_200_html,
-            live_head_has_the_get_status_and_no_body,
-            live_path_answers_other_methods_with_405,
-            unknown_path_is_404,
-            same_path_verbs_reach_their_own_controllers,
-            allow_is_the_union_across_overlapping_patterns,
-            get_controller_answers_head,
-            match_any_answers_a_custom_method,
-            path_params_are_percent_decoded,
-            empty_segments_and_trailing_slash_are_ignored,
-            first_declared_route_wins,
-            wildcard_matches_zero_and_many_segments,
-            fully_shadowed_route_fails_to_start,
-            capability_routes_are_served_or_refused
-        ]},
-        {assets, [], [
-            asset_get_serves_the_file,
-            asset_head_has_no_body,
-            asset_answers_post_with_405,
-            asset_missing_file_is_404,
-            asset_traversal_is_not_served,
-            asset_cache_control_rides_a_200
-        ]},
-        {csrf, [], [
-            cross_origin_post_is_403,
-            same_origin_post_is_allowed,
-            post_without_origin_is_allowed,
-            null_origin_is_403,
-            check_origin_false_accepts_cross_origin,
-            csrf_origins_allowlist_accepts,
-            forwarded_https_demands_an_https_origin,
-            cross_origin_ws_upgrade_is_403
-        ]},
-        {cors, [], [
-            cors_preflight_is_204_with_allow_origin,
-            cors_plain_options_is_204_with_allow,
-            cors_405_lists_options
-        ]},
-        {halts, [], [
-            halt_redirect_carries_location_and_cookie,
-            bare_halt_is_403,
-            halt_with_status_uses_that_status,
-            ws_upgrade_halted_by_redirect_gets_the_redirect
-        ]},
-        {session, [], [
-            controller_session_write_sets_a_decodable_cookie,
-            controller_session_clear_sends_a_clearing_cookie,
-            flash_round_trips_through_a_redirect,
-            ws_upgrade_carries_middleware_cookie_and_session,
-            cookie_written_twice_sends_its_latest_value_last
-        ]},
-        %% Store mode is read per request from the `session_store` app env, so it
-        %% is switched on around this group only.
-        {session_store, [], [
-            store_session_write_lands_in_the_store,
-            store_session_clear_deletes_the_entry
-        ]},
-        {websocket, [], [
-            ws_upgrade_to_live_path_opens_with_names,
-            ws_upgrade_to_unknown_path_is_404,
-            ws_navigate_to_param_route_replaces,
-            ws_navigate_to_non_live_path_is_a_full_navigate,
-            ws_patch_same_handler_diffs_in_place,
-            ws_patch_other_handler_replaces,
-            ws_navigate_into_redirecting_gate_replaces_history
-        ]},
-        {transforms, [], [
-            etag_tags_and_revalidates,
-            default_compress_gzips_a_big_live_page,
-            etag_revalidates_through_compression,
-            security_headers_are_added
-        ]},
-        %% Its own listener: compression is a listener-wide default.
-        {compress_off, [], [
-            listener_compress_off_leaves_pages_identity,
-            explicit_compress_beats_listener_default_off
-        ]},
-        %% Non-buffered reply kinds are an adapter capability: a case is
-        %% skipped for a kind the driver says its adapter cannot send.
-        {controller_replies, [], [
-            stream_reply_arrives_in_chunks,
-            sendfile_reply_sends_the_range,
-            loop_reply_pushes_until_it_stops
-        ]},
-        {render, [], [
-            mount_crash_is_500,
-            native_page_is_json
-        ]},
-        %% Its own listener: a drain stops it.
-        {drain, [], [
-            drain_runs_handle_drain_then_closes_1001
-        ]}
-    ].
+    [{Driver, [], features()} || Driver <- drivers()] ++
+        [
+            {routing, [], [
+                live_get_is_200_html,
+                live_head_has_the_get_status_and_no_body,
+                live_path_answers_other_methods_with_405,
+                unknown_path_is_404,
+                same_path_verbs_reach_their_own_controllers,
+                allow_is_the_union_across_overlapping_patterns,
+                get_controller_answers_head,
+                match_any_answers_a_custom_method,
+                path_params_are_percent_decoded,
+                empty_segments_and_trailing_slash_are_ignored,
+                first_declared_route_wins,
+                wildcard_matches_zero_and_many_segments,
+                fully_shadowed_route_fails_to_start,
+                capability_routes_are_served_or_refused
+            ]},
+            {assets, [], [
+                asset_get_serves_the_file,
+                asset_head_has_no_body,
+                asset_answers_post_with_405,
+                asset_missing_file_is_404,
+                asset_traversal_is_not_served,
+                asset_cache_control_rides_a_200
+            ]},
+            {csrf, [], [
+                cross_origin_post_is_403,
+                same_origin_post_is_allowed,
+                post_without_origin_is_allowed,
+                null_origin_is_403,
+                check_origin_false_accepts_cross_origin,
+                csrf_origins_allowlist_accepts,
+                forwarded_https_demands_an_https_origin,
+                cross_origin_ws_upgrade_is_403
+            ]},
+            {cors, [], [
+                cors_preflight_is_204_with_allow_origin,
+                cors_plain_options_is_204_with_allow,
+                cors_405_lists_options
+            ]},
+            {halts, [], [
+                halt_redirect_carries_location_and_cookie,
+                bare_halt_is_403,
+                halt_with_status_uses_that_status,
+                ws_upgrade_halted_by_redirect_gets_the_redirect
+            ]},
+            {session, [], [
+                controller_session_write_sets_a_decodable_cookie,
+                controller_session_clear_sends_a_clearing_cookie,
+                flash_round_trips_through_a_redirect,
+                ws_upgrade_carries_middleware_cookie_and_session,
+                cookie_written_twice_sends_its_latest_value_last
+            ]},
+            %% Store mode is read per request from the `session_store` app env, so it
+            %% is switched on around this group only.
+            {session_store, [], [
+                store_session_write_lands_in_the_store,
+                store_session_clear_deletes_the_entry
+            ]},
+            {websocket, [], [
+                ws_upgrade_to_live_path_opens_with_names,
+                ws_upgrade_to_unknown_path_is_404,
+                ws_navigate_to_param_route_replaces,
+                ws_navigate_to_non_live_path_is_a_full_navigate,
+                ws_patch_same_handler_diffs_in_place,
+                ws_patch_other_handler_replaces,
+                ws_navigate_into_redirecting_gate_replaces_history
+            ]},
+            {transforms, [], [
+                etag_tags_and_revalidates,
+                default_compress_gzips_a_big_live_page,
+                etag_revalidates_through_compression,
+                security_headers_are_added
+            ]},
+            %% Its own listener: compression is a listener-wide default.
+            {compress_off, [], [
+                listener_compress_off_leaves_pages_identity,
+                explicit_compress_beats_listener_default_off
+            ]},
+            %% Non-buffered reply kinds are an adapter capability: a case is
+            %% skipped for a kind the driver says its adapter cannot send.
+            {controller_replies, [], [
+                stream_reply_arrives_in_chunks,
+                sendfile_reply_sends_the_range,
+                loop_reply_pushes_until_it_stops
+            ]},
+            {render, [], [
+                mount_crash_is_500,
+                native_page_is_json
+            ]},
+            %% Its own listener: a drain stops it.
+            {drain, [], [
+                drain_runs_handle_drain_then_closes_1001
+            ]}
+        ].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(arizona),
     ok = application:set_env(arizona, secret_key, ?SECRET),
-    Driver = driver(),
     Priv = ?config(priv_dir, Config),
     AssetDir = filename:join(Priv, "assets"),
     ok = filelib:ensure_path(AssetDir),
     ok = file:write_file(filename:join(AssetDir, "app.txt"), ~"asset-bytes"),
     %% A file beside (not under) the asset dir: what a traversal would reach.
     ok = file:write_file(filename:join(Priv, "secret.txt"), ~"top-secret-bytes"),
-    {ok, Port} = arizona_conformance_driver:start(
-        Driver, conformance_main, main_routes(AssetDir), #{}
-    ),
-    [{driver, Driver}, {port, Port} | Config].
+    [{asset_dir, AssetDir} | Config].
 
-end_per_suite(Config) ->
-    ok = arizona_conformance_driver:stop(?config(driver, Config), conformance_main),
+end_per_suite(Config) when is_list(Config) ->
     ok = application:unset_env(arizona, secret_key),
     %% Started here, so stopped here: a suite run after this one may boot the
     %% application itself, with its own `server` env.
     application:stop(arizona).
 
-init_per_group(session_store, Config) ->
+%% A driver group is named after its driver module and boots the main listener;
+%% a feature group sets up what its cases need.
+init_per_group(Group, Config) ->
+    case lists:member(Group, drivers()) of
+        true ->
+            {ok, Port} = arizona_conformance_driver:start(
+                Group, conformance_main, main_routes(?config(asset_dir, Config)), #{}
+            ),
+            [{driver, Group}, {port, Port} | Config];
+        false ->
+            init_feature(Group, Config)
+    end.
+
+end_per_group(Group, Config) ->
+    case lists:member(Group, drivers()) of
+        true -> arizona_conformance_driver:stop(Group, conformance_main);
+        false -> end_feature(Group, Config)
+    end.
+
+init_feature(session_store, Config) ->
     ok = application:set_env(arizona, session_store, arizona_session_store_ets),
     {ok, Pid} = arizona_session_store_ets:start_link(),
     %% Unlinked so the store outlives this init process.
     true = unlink(Pid),
     [{store, Pid} | Config];
-init_per_group(compress_off, Config) ->
+init_feature(compress_off, Config) ->
     Routes = [
         {live, ~"/big", arizona_about, #{bindings => big_page_bindings()}},
         {live, ~"/big_compressed", arizona_about, #{
@@ -253,39 +274,38 @@ init_per_group(compress_off, Config) ->
         {ws, ~"/ws", #{}}
     ],
     start_group_listener(conformance_compress_off, Routes, #{compress => false}, Config);
-init_per_group(drain, Config) ->
+init_feature(drain, Config) ->
     Routes = [
         {live, ~"/drain_stop", arizona_drainable, #{bindings => #{drain_mode => stop}}},
         {ws, ~"/ws", #{}}
     ],
     start_group_listener(conformance_drain, Routes, #{}, Config);
-init_per_group(_Group, Config) ->
+init_feature(_Group, Config) ->
     Config.
 
-end_per_group(session_store, Config) ->
+end_feature(session_store, Config) ->
     ok = gen_server:stop(?config(store, Config)),
     ok = application:unset_env(arizona, session_store),
     ok;
-end_per_group(compress_off, Config) ->
+end_feature(compress_off, Config) ->
     arizona_conformance_driver:stop(?config(driver, Config), conformance_compress_off);
-end_per_group(drain, Config) ->
+end_feature(drain, Config) ->
     %% Gone already when the drain ran; still up when the case failed before it.
     case arizona_conformance_driver:stop(?config(driver, Config), conformance_drain) of
         ok -> ok;
         {error, not_found} -> ok
     end;
-end_per_group(_Group, _Config) ->
+end_feature(_Group, _Config) ->
     ok.
 
 start_group_listener(Name, Routes, Opts, Config) ->
     {ok, Port} = arizona_conformance_driver:start(?config(driver, Config), Name, Routes, Opts),
     [{port, Port} | proplists:delete(port, Config)].
 
-driver() ->
+drivers() ->
     case os:getenv("ARIZONA_CONFORMANCE_DRIVER") of
-        false -> ?DEFAULT_DRIVER;
-        "" -> ?DEFAULT_DRIVER;
-        Name -> list_to_atom(Name)
+        Unset when Unset =:= false; Unset =:= "" -> ?IN_TREE_DRIVERS;
+        Name -> [list_to_atom(Name)]
     end.
 
 %% --------------------------------------------------------------------

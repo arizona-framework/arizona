@@ -218,6 +218,7 @@ transport_deps_are_not_forced(Config) when is_list(Config) ->
     {ok, Apps} = application:get_key(arizona, applications),
     ?assert(lists:member(crypto, Apps)),
     ?assertNot(lists:member(roadrunner, Apps)),
+    ?assertNot(lists:member(cowboy, Apps)),
     ?assertNot(lists:member(ssh, Apps)),
     Optional =
         case application:get_key(arizona, optional_applications) of
@@ -225,6 +226,7 @@ transport_deps_are_not_forced(Config) when is_list(Config) ->
             undefined -> []
         end,
     ?assertNot(lists:member(roadrunner, Optional)),
+    ?assertNot(lists:member(cowboy, Optional)),
     ?assertNot(lists:member(ssh, Optional)).
 
 %% Boot logs one line stating the reloader state, so a dev node silently
