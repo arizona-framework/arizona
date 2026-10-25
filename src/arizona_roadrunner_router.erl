@@ -138,7 +138,7 @@ anything.
 -nominal method_spec() :: atom() | binary() | [atom() | binary()].
 
 -nominal controller_opts() :: #{
-    %% State passed to the controller action (read via roadrunner_req:state/1).
+    %% State passed to the controller action (read via arizona_controller:state/1).
     state => term(),
     %% Controller action function: dispatched as Handler:Action/1 (default `handle`).
     action => atom(),

@@ -140,5 +140,7 @@ stop_server() ->
 %% The `server` map names its adapter; every other key but `drain_timeout`
 %% (which this module reads) is the adapter's own.
 adapter(ServerOpts) ->
-    Adapter = maps:get(adapter, ServerOpts, ?DEFAULT_ADAPTER),
+    %% Resolved here, not by the adapter: it names the adapter, so it may be an
+    %% `{env, ...}` reference like any other key.
+    Adapter = arizona_config:resolve(maps:get(adapter, ServerOpts, ?DEFAULT_ADAPTER)),
     {Adapter, maps:without([adapter, drain_timeout], ServerOpts)}.

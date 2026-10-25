@@ -760,12 +760,17 @@ and, in store mode, the session write, with nothing reporting it.
 -spec flush(Request) -> [{binary(), binary()}] when
     Request :: request().
 flush(Req) ->
+    %% Serialize before committing: a cookie that cannot be sent raises here, and
+    %% must do so before the store is written (or, on a login rotation, the old
+    %% session revoked) for a response that then never goes out.
+    Lines =
+        [
+            {~"set-cookie", arizona_cookie:serialize(Name, Value, Opts)}
+         || {Name, Value, Opts} <- lists:reverse(resp_cookies(Req))
+        ] ++
+            [{Name, iolist_to_binary(Value)} || {Name, Value} <- lists:reverse(resp_headers(Req))],
     ok = commit_session(Req),
-    [
-        {~"set-cookie", arizona_cookie:serialize(Name, Value, Opts)}
-     || {Name, Value, Opts} <- lists:reverse(resp_cookies(Req))
-    ] ++
-        [{Name, iolist_to_binary(Value)} || {Name, Value} <- lists:reverse(resp_headers(Req))].
+    Lines.
 
 -doc """
 The response to a middleware `{halt, Request}`: its status, and its header

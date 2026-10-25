@@ -116,9 +116,9 @@
     controller_dispatches_action_by_verb/1,
     controller_missing_action_errors/1,
     controller_flushes_stash_onto_stream_response/1,
-    controller_put_req_commits_cookie_mode_session_write/1,
-    controller_put_req_commits_action_session_write/1,
-    controller_without_put_req_flushes_pre_action_req/1,
+    controller_returned_req_commits_cookie_mode_session_write/1,
+    controller_returned_req_commits_action_session_write/1,
+    controller_returning_its_input_flushes_pre_action_req/1,
     bare_halt_is_forbidden_on_every_dispatcher/1,
     crash_event_closes/1,
     crash_info_closes/1,
@@ -240,15 +240,15 @@ groups() ->
         controller_dispatches_action_by_verb,
         controller_missing_action_errors,
         controller_flushes_stash_onto_stream_response,
-        controller_put_req_commits_cookie_mode_session_write,
+        controller_returned_req_commits_cookie_mode_session_write,
         bare_halt_is_forbidden_on_every_dispatcher
     ],
     %% Store-mode session tests: their own group so the `session_store` app env
     %% (and the store owner process) are set up and torn down around them
     %% instead of leaking cookie-mode assumptions into the rest of the suite.
     SessionStore = [
-        controller_put_req_commits_action_session_write,
-        controller_without_put_req_flushes_pre_action_req,
+        controller_returned_req_commits_action_session_write,
+        controller_returning_its_input_flushes_pre_action_req,
         ws_upgrade_commits_middleware_session_write,
         ws_upgrade_commits_middleware_session_clear,
         ws_upgrade_rotated_session_reaches_navigate
@@ -987,7 +987,7 @@ controller_missing_action_errors(Config) ->
     Resp = http_req(Config, "GET", "/_test/bad-action", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)).
 
-controller_put_req_commits_cookie_mode_session_write(Config) ->
+controller_returned_req_commits_cookie_mode_session_write(Config) ->
     %% Cookie mode -- the default, and the mode the store-mode group's tests
     %% cannot speak for. A session written on the post-middleware request and
     %% threaded back with put_req/2 reaches the client as the encrypted
@@ -1005,7 +1005,7 @@ session_cookie_value(Resp) ->
     [Value | _] = binary:split(Rest, ~";"),
     Value.
 
-controller_put_req_commits_action_session_write(Config) ->
+controller_returned_req_commits_action_session_write(Config) ->
     %% An action's OWN session write reaches the response and the store: the
     %% logout controller clears the session on the request it is handed and
     %% returns it. Flushing anything but the returned request would send no
@@ -1017,7 +1017,7 @@ controller_put_req_commits_action_session_write(Config) ->
     ?assertNotEqual(nomatch, binary:match(Resp, ~"az_session=;")),
     ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
 
-controller_without_put_req_flushes_pre_action_req(Config) ->
+controller_returning_its_input_flushes_pre_action_req(Config) ->
     %% The boundary, pinned explicitly: an action that mutates the request but
     %% returns the one it was given leaves the PRE-action request flushed -- no
     %% clearing cookie, store entry untouched. The thread-back is the documented

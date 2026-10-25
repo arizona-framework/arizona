@@ -19,6 +19,7 @@
 -export([req_resp_cookies_is_pure_getter/1]).
 -export([req_transport_flush_commits_store_write/1]).
 -export([controller_refused_reply_commits_nothing/1]).
+-export([unsendable_cookie_commits_nothing/1]).
 -export([req_put_session_persists_to_store/1]).
 -export([req_session_id_available_after_write/1]).
 -export([req_read_session_from_store/1]).
@@ -55,6 +56,7 @@ all() ->
         req_resp_cookies_is_pure_getter,
         req_transport_flush_commits_store_write,
         controller_refused_reply_commits_nothing,
+        unsendable_cookie_commits_nothing,
         req_put_session_persists_to_store,
         req_session_id_available_after_write,
         req_read_session_from_store,
@@ -194,6 +196,16 @@ controller_refused_reply_commits_nothing(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{cookies => []}),
     Before = ets:tab2list(?STORE_TABLE),
     ?assertError({bad_reply, not_a_reply}, arizona_controller:dispatch(Route, Req)),
+    ?assertEqual(Before, ets:tab2list(?STORE_TABLE)).
+
+%% A cookie that cannot be serialized fails the response; it must fail it
+%% before the session write reaches the store, not after.
+unsendable_cookie_commits_nothing(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+    Req2 = arizona_req:put_resp_cookie(Req1, ~"pref", ~"a;b", #{}),
+    Before = ets:tab2list(?STORE_TABLE),
+    ?assertError({invalid_cookie_value, ~"a;b"}, arizona_req:flush(Req2)),
     ?assertEqual(Before, ets:tab2list(?STORE_TABLE)).
 
 req_put_session_persists_to_store(Config) when is_list(Config) ->
