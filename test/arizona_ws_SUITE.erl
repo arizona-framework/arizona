@@ -1978,7 +1978,7 @@ prep_stop_drains_the_app_listener(Config) when is_list(Config) ->
     undefined = application:get_env(arizona, server),
     Port = arizona_test_port:pick(),
     Opts = (drain_test_opts(Port))#{drain_timeout => 5000},
-    ok = application:set_env(arizona, server, Opts),
+    ok = application:set_env(arizona, server, Opts#{adapter => arizona_roadrunner_server}),
     try
         {ok, _} = arizona_roadrunner_server:start(arizona_http, Opts),
         {ok, Sock} = ws_connect([{port, Port}], <<"/drain">>),

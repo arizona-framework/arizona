@@ -13,7 +13,9 @@ start() ->
     %% Set the server app env *after* the listener is up (arizona_app has already
     %% booted, so this won't double-start a server) so the dev MCP server's
     %% `list_routes` tool can read the live routes.
-    ok = application:set_env(arizona, server, #{routes => routes()}),
+    ok = application:set_env(arizona, server, #{
+        adapter => arizona_roadrunner_server, routes => routes()
+    }),
     ok.
 
 %% The dev server's routes. Exposed so the dev MCP server's `list_routes` tool

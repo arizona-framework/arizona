@@ -695,7 +695,9 @@ setup_code_paths(BaseDir) ->
         end,
         Libs
     ),
-    ok.
+    %% A `_checkouts` dependency (a local adapter checkout) builds here instead.
+    Checkouts = filename:join([BaseDir, "_build", "test", "checkouts", "*", "ebin"]),
+    lists:foreach(fun code:add_pathz/1, filelib:wildcard(Checkouts)).
 
 project_dir() ->
     filename:dirname(filename:absname(filename:dirname(escript:script_name()))).

@@ -3,7 +3,7 @@
 HTTP request abstraction with adapter pattern for different web servers.
 
 Provides a unified interface for HTTP requests behind a transport
-behaviour (roadrunner is the built-in implementation). Features lazy
+behaviour each server adapter implements. Features lazy
 loading of request data with caching to avoid re-parsing across accesses.
 
 ## Adapter pattern

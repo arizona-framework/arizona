@@ -55,13 +55,19 @@ across upgrades.
 
 ## Installation
 
-Add Arizona to your `rebar.config` dependencies:
+Add Arizona and a server adapter to your `rebar.config` dependencies:
 
 ```erlang
 {deps, [
-    arizona
+    arizona,
+    arizona_roadrunner
 ]}.
 ```
+
+Arizona ships no HTTP server. The listener comes from a server adapter package:
+[`arizona_roadrunner`](https://github.com/arizona-framework/arizona_roadrunner) (roadrunner:
+HTTP/1.1, HTTP/2, HTTP/3) or [`arizona_cowboy`](https://github.com/arizona-framework/arizona_cowboy)
+(Cowboy). An app that only renders offline (`arizona_static`) needs neither.
 
 To track unreleased changes, swap the version for a git ref:
 
@@ -186,15 +192,14 @@ render(Bindings) ->
 
 ### 4. Configure the server
 
-Add `arizona` and `roadrunner` (the HTTP/WebSocket server) to your app's `applications`
-list in `.app.src`:
+Add `arizona` and the adapter to your app's `applications` list in `.app.src`:
 
 ```erlang
-{applications, [kernel, stdlib, arizona, roadrunner]}
+{applications, [kernel, stdlib, arizona, arizona_roadrunner]}
 ```
 
-Arizona starts the server on demand but does not list it itself, so an app that renders pages
-offline only (`arizona_static`) never boots it. Add `ssh` too if you serve the SSH transport.
+Arizona lists no server itself, so an app that renders pages offline only (`arizona_static`)
+never boots one. Add `ssh` too if you serve the SSH transport.
 
 Ensure `rebar3 shell` loads the config and starts your app by adding
 to `rebar.config`:
@@ -211,6 +216,7 @@ Replace `yourapp` with your project's app name. Then declare routes in `config/s
 ```erlang
 [{arizona, [
     {server, #{
+        adapter => arizona_roadrunner_server,
         routes => [
             {live, ~"/", my_page, #{
                 layouts => [{my_layout, render}],
@@ -223,8 +229,9 @@ Replace `yourapp` with your project's app name. Then declare routes in `config/s
 ]}].
 ```
 
-The listener runs on roadrunner by default. The `server` map's optional `adapter` key names
-another `arizona_server` implementation; every other key is that adapter's own options.
+The `server` map's required `adapter` key names the `arizona_server` module of the adapter
+package (`arizona_roadrunner_server`, `arizona_cowboy_server`); every other key is that adapter's
+own options.
 
 A config file is read by `file:consult/1`, so every route entry must be a literal **term**. That
 becomes visible once a route needs `middlewares`: a `{Module, Function}` pair is a term, but a

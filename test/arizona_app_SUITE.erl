@@ -19,7 +19,9 @@
     boot_fails_on_rules_without_watcher/1,
     crash_looping_watcher_spares_app/1,
     server_adapter_runs_the_listener_lifecycle/1,
-    reload_recompiles_every_registered_adapter/1
+    reload_recompiles_every_registered_adapter/1,
+    boot_fails_without_an_adapter/1,
+    boot_fails_on_an_adapter_that_is_not_loadable/1
 ]).
 
 -define(WATCH_DIR, "/tmp/arizona_app_suite_watch").
@@ -37,7 +39,9 @@ all() ->
         boot_fails_on_rules_without_watcher,
         crash_looping_watcher_spares_app,
         server_adapter_runs_the_listener_lifecycle,
-        reload_recompiles_every_registered_adapter
+        reload_recompiles_every_registered_adapter,
+        boot_fails_without_an_adapter,
+        boot_fails_on_an_adapter_that_is_not_loadable
     ].
 
 init_per_testcase(boot_with_server_and_reloader, Config) ->
@@ -51,6 +55,11 @@ init_per_testcase(boot_with_server_and_reloader, Config) ->
         ]
     }),
     {ok, _} = application:ensure_all_started(arizona),
+    Config;
+init_per_testcase(TC, Config) when
+    TC =:= boot_fails_without_an_adapter;
+    TC =:= boot_fails_on_an_adapter_that_is_not_loadable
+->
     Config;
 init_per_testcase(boot_without_config, Config) ->
     {ok, _} = application:ensure_all_started(arizona),
@@ -135,6 +144,13 @@ end_per_testcase(TC, Config) when
     persistent_term:put(arizona_server_adapters, proplists:get_value(registered, Config)),
     true = persistent_term:erase({arizona_fake_server, notify}),
     Config;
+end_per_testcase(TC, Config) when
+    TC =:= boot_fails_without_an_adapter;
+    TC =:= boot_fails_on_an_adapter_that_is_not_loadable
+->
+    %% The boot failed, so there is no application to stop.
+    ok = unset_env(server),
+    Config;
 end_per_testcase(_TC, Config) ->
     ok = application:stop(arizona),
     ok = unset_env(server),
@@ -185,6 +201,32 @@ server_adapter_runs_the_listener_lifecycle(Config) when is_list(Config) ->
     after 1000 -> ct:fail(adapter_not_stopped)
     end.
 
+%% Arizona ships no server, so a `server` env without an `adapter` has nothing to
+%% fall back on: the boot fails, naming what to add, rather than serving nothing.
+boot_fails_without_an_adapter(Config) when is_list(Config) ->
+    ok = application:set_env(arizona, server, maps:remove(adapter, server_opts())),
+    Result = application:ensure_all_started(arizona),
+    ?assertMatch({error, _}, Result),
+    ?assert(mentions(missing_server_adapter, Result)).
+
+%% An adapter whose package is not a dependency fails the boot the same way.
+boot_fails_on_an_adapter_that_is_not_loadable(Config) when is_list(Config) ->
+    ok = application:set_env(arizona, server, (server_opts())#{adapter => arizona_no_such_server}),
+    Result = application:ensure_all_started(arizona),
+    ?assertMatch({error, _}, Result),
+    ?assert(mentions({unknown_server_adapter, arizona_no_such_server}, Result)).
+
+%% Whether `Term` appears anywhere in `Result` (the application controller wraps
+%% a start crash in its own reason).
+mentions(Term, Term) ->
+    true;
+mentions(Term, Tuple) when is_tuple(Tuple) ->
+    mentions(Term, tuple_to_list(Tuple));
+mentions(Term, List) when is_list(List) ->
+    lists:any(fun(E) -> mentions(Term, E) end, List);
+mentions(_Term, _Other) ->
+    false.
+
 %% A hot reload refreshes the routes of every adapter that ran a listener, not
 %% only roadrunner's.
 reload_recompiles_every_registered_adapter(Config) when is_list(Config) ->
@@ -195,13 +237,13 @@ reload_recompiles_every_registered_adapter(Config) when is_list(Config) ->
     after 1000 -> ct:fail(routes_not_recompiled)
     end.
 
-%% Arizona lazy-starts its heavy deps on demand: roadrunner only when a `server`
-%% env is set (arizona_app:maybe_start_server/0), ssh only when the SSH transport
-%% starts (arizona_terminal_ssh:start/1). So it forces neither onto the boot path.
+%% Arizona ships no HTTP server -- an adapter package brings one and starts it
+%% with its listener -- and lazy-starts ssh only when the SSH transport starts
+%% (arizona_terminal_ssh:start/1). So it forces neither onto the boot path.
 %% Listing either in `applications` -- or in `optional_applications`, which relx
 %% also bundles AND force-starts -- would boot them for every consumer, including
-%% a server-less/static-generation user. A consumer that ships the server
-%% declares roadrunner/ssh in its OWN app's `applications`.
+%% a server-less/static-generation user. A consumer that ships them declares its
+%% adapter, server and ssh in its OWN app's `applications`.
 %% The HTTP listener must go down in prep_stop/1 -- BEFORE the supervision tree
 %% -- or shutdown briefly serves requests against dead infrastructure (pubsub,
 %% MCP registry, session store). prep_stop stops the listener while arizona_sup
@@ -338,6 +380,7 @@ format_log_msg(Other) ->
 
 server_opts() ->
     #{
+        adapter => arizona_roadrunner_server,
         scheme => http,
         transport_opts => [{port, arizona_test_port:pick()}],
         routes => [{asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}}]

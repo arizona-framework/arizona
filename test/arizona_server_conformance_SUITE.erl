@@ -32,6 +32,7 @@ internal state.
 -export([same_path_verbs_reach_their_own_controllers/1]).
 -export([allow_is_the_union_across_overlapping_patterns/1]).
 -export([get_controller_answers_head/1]).
+-export([get_controller_answers_other_methods_with_405/1]).
 -export([match_any_answers_a_custom_method/1]).
 -export([path_params_are_percent_decoded/1]).
 -export([empty_segments_and_trailing_slash_are_ignored/1]).
@@ -145,6 +146,7 @@ groups() ->
                 same_path_verbs_reach_their_own_controllers,
                 allow_is_the_union_across_overlapping_patterns,
                 get_controller_answers_head,
+                get_controller_answers_other_methods_with_405,
                 match_any_answers_a_custom_method,
                 path_params_are_percent_decoded,
                 empty_segments_and_trailing_slash_are_ignored,
@@ -492,6 +494,12 @@ allow_is_the_union_across_overlapping_patterns(Config) ->
     ?assertMatch({200, _, ~"OV_DELETE"}, req(Config, ~"DELETE", ~"/ov/42", [])),
     {405, Headers, _} = req(Config, ~"GET", ~"/ov/42", []),
     ?assertEqual(~"DELETE, POST", header(~"allow", Headers)).
+
+%% A `get` controller's allowlist is GET and HEAD: anything else is refused
+%% before the action runs.
+get_controller_answers_other_methods_with_405(Config) ->
+    {405, Headers, _} = req(Config, ~"POST", ~"/echo", []),
+    ?assertEqual(~"GET, HEAD", header(~"allow", Headers)).
 
 get_controller_answers_head(Config) ->
     {200, GetHeaders, ~"ECHO_GET"} = req(Config, ~"GET", ~"/echo", []),
