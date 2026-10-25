@@ -55,8 +55,9 @@ registers the same way.
 `{arizona_drain, Deadline}` through `arizona_socket:drain/2`, with `Deadline` an
 `erlang:monotonic_time(millisecond)` value `Timeout` ahead; the view runs `handle_drain/2` and by
 default closes `1001`, which clients reconnect from. Sessions still open at the deadline are
-killed. A server with no drain of its own (Cowboy) suspends accepting, closes idle keep-alive
-connections, and notifies the WebSocket processes it tracks.
+killed. A server with no drain of its own (Cowboy) stops accepting, notifies the WebSocket
+sessions it tracks, waits for every request in flight (pages, controller replies, loops), then
+stops, which closes the idle keep-alive connections.
 
 ### Request access -- `arizona_req`
 
@@ -139,8 +140,8 @@ Translate your server's client-disconnect signal into one final `{arizona_discon
 
 Serve `arizona_route:asset_dir/1` with your server's static handler, from the `*path` capture:
 `GET` and `HEAD` only (`405` otherwise), `404` for a missing file, nothing outside the directory
-under any spelling of `..`, and the route's `cache_control` option, when set, on a cacheable
-`200` only.
+under any spelling of `..` or through a symlink whose target lies outside it, and the route's
+`cache_control` option, when set, on a cacheable `200` only.
 
 ### Response transforms
 

@@ -13,6 +13,8 @@ route's response transforms (`arizona_http_transforms`). It is also the
 
 -behaviour(cowboy_handler).
 
+-include_lib("kernel/include/file.hrl").
+
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -49,6 +51,8 @@ route's response transforms (`arizona_http_transforms`). It is also the
         | {cowboy_loop, Req, map()}
         | {cowboy_websocket, Req, map(), map()}.
 init(Req, Listener) ->
+    %% Counted in flight until this process exits, so a drain waits for it.
+    ok = arizona_pubsub:subscribe(arizona_cowboy_server:requests(Listener), self()),
     Table = arizona_cowboy_server:table(Listener),
     case arizona_route_table:match(cowboy_req:method(Req), cowboy_req:path(Req), Table) of
         not_found ->
@@ -158,17 +162,18 @@ serve(#{kind := ws}, Req, Listener) ->
         {upgrade, Headers, WsState} ->
             {Cookies, Others} = split_cookies(Headers),
             Req1 = cowboy_req:set_resp_headers(header_map(Others), with_cookies(Cookies, Req)),
-            {cowboy_websocket, Req1, #{listener => Listener, ws => WsState}, #{
-                idle_timeout => infinity
-            }}
+            {cowboy_websocket, Req1, #{listener => Listener, ws => WsState},
+                arizona_cowboy_server:ws_opts(Listener)}
     end;
 serve(#{kind := asset, route := Route, target := Dir} = Entry, Req, Listener) ->
     Segments = maps:get(~"path", cowboy_req:bindings(Req), []),
     case asset_file(Dir, Segments) of
         undefined -> finish(Entry, Req, {404, [], <<>>}, Listener);
-        File -> serve_file(Entry, Route, File, Req, Listener)
+        File -> serve_file(Entry, Route, inside(Dir, File), Req, Listener)
     end.
 
+serve_file(Entry, _Route, outside, Req, Listener) ->
+    finish(Entry, Req, {404, [], <<>>}, Listener);
 serve_file(Entry, Route, File, Req, Listener) ->
     case filelib:is_regular(File) of
         true ->
@@ -199,6 +204,9 @@ controller_reply(
     {ok, reply({Status1, Headers1, {sendfile, Offset, Length, Path}}, Req), Listener};
 controller_reply(Entry, Handler, {loop, Status, Headers, LoopState}, Req, _Listener) ->
     {Status1, Headers1} = wrap_head(Entry, Req, Status, Headers),
+    %% A client that goes away makes Cowboy shut this process down: trapped, the
+    %% shutdown reaches `terminate/3`, which tells the controller.
+    _WasTrapping = process_flag(trap_exit, true),
     {cowboy_loop, stream_reply(Status1, Headers1, Req), #{loop => {Handler, LoopState}}}.
 
 finish(Entry, Req, Response, Listener) ->
@@ -236,8 +244,38 @@ split_cookies(Headers) ->
 
 with_cookies([], Req) ->
     Req;
+with_cookies(Cookies, Req) when length(Cookies) =< 32 ->
+    Req#{resp_cookies => maps:from_list(lists:enumerate(Cookies))};
 with_cookies(Cookies, Req) ->
-    Req#{resp_cookies => maps:from_list(lists:enumerate(Cookies))}.
+    %% Past 32 keys the map stops iterating in key order, so the order cannot be
+    %% kept. Keep what the browser would: the last line per cookie (name, domain,
+    %% path), after which no two lines name the same cookie and order is moot.
+    Req#{resp_cookies => maps:from_list(lists:enumerate(last_per_cookie(Cookies)))}.
+
+last_per_cookie(Cookies) ->
+    {Kept, _Seen} = lists:foldr(
+        fun(Line, {Acc, Seen}) ->
+            Id = cookie_id(Line),
+            case Seen of
+                #{Id := _} -> {Acc, Seen};
+                #{} -> {[Line | Acc], Seen#{Id => true}}
+            end
+        end,
+        {[], #{}},
+        Cookies
+    ),
+    Kept.
+
+cookie_id(Line) ->
+    [Pair | Attrs] = binary:split(iolist_to_binary(Line), ~"; ", [global]),
+    [Name | _] = binary:split(Pair, ~"="),
+    Attr = fun(Key) ->
+        case [V || A <- Attrs, [K, V] <- [binary:split(A, ~"=")], string:lowercase(K) =:= Key] of
+            [Value | _] -> Value;
+            [] -> undefined
+        end
+    end,
+    {Name, Attr(~"domain"), Attr(~"path")}.
 
 %% A field sent twice becomes one comma-joined line (RFC 9110 §5.3).
 header_map(Headers) ->
@@ -260,6 +298,48 @@ asset_file(Dir, Segments) ->
     case Segments =/= [] andalso not lists:any(Unsafe, Segments) of
         true -> filename:join([Dir | Segments]);
         false -> undefined
+    end.
+
+%% `File` with its symlinks resolved when it stays inside `Dir` (also
+%% resolved), else `outside`: a link must not serve what lies beyond the asset
+%% directory, the rule roadrunner's static handler applies by default.
+inside(Dir, File) ->
+    case {real_path(Dir), real_path(File)} of
+        {{ok, RealDir}, {ok, RealFile}} ->
+            case string:prefix(RealFile, <<RealDir/binary, "/">>) of
+                nomatch -> outside;
+                _Rest -> RealFile
+            end;
+        _Unresolved ->
+            outside
+    end.
+
+%% Paths as binaries throughout (asset segments arrive as binaries).
+real_path(Path) ->
+    resolve(filename:split(unicode:characters_to_binary(filename:absname(Path))), [], 0).
+
+resolve(_Components, _Resolved, Links) when Links > 40 ->
+    error;
+resolve([], Resolved, _Links) ->
+    {ok, filename:join(lists:reverse(Resolved))};
+resolve([~"." | Rest], Resolved, Links) ->
+    resolve(Rest, Resolved, Links);
+resolve([~".." | Rest], [Root], Links) ->
+    resolve(Rest, [Root], Links);
+resolve([~".." | Rest], [_Last | Resolved], Links) ->
+    resolve(Rest, Resolved, Links);
+resolve([Component | Rest], Resolved, Links) ->
+    Path = filename:join(lists:reverse([Component | Resolved])),
+    case file:read_link_info(Path) of
+        {ok, #file_info{type = symlink}} ->
+            {ok, Target} = file:read_link(Path),
+            Base = filename:join(lists:reverse(Resolved)),
+            Next = unicode:characters_to_binary(filename:absname(Target, Base)),
+            resolve(filename:split(Next) ++ Rest, [], Links + 1);
+        {ok, _Info} ->
+            resolve(Rest, [Component | Resolved], Links);
+        {error, _Reason} ->
+            error
     end.
 
 cache_control({asset, _Path, _Source, #{cache_control := Value}}) ->

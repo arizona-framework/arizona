@@ -9,6 +9,7 @@ so a disconnect can be observed.
 
 -export([handle/2]).
 -export([write_then_loop/2]).
+-export([hold/2]).
 -export([handle_info/3]).
 
 -spec handle(Req, Ctx) -> {Reply, Req} when
@@ -18,6 +19,14 @@ so a disconnect can be observed.
 handle(Req, #{state := State}) ->
     self() ! {tick, 1},
     self() ! {tick, 2},
+    {{loop, 200, [{~"content-type", ~"text/event-stream"}], State}, Req}.
+
+%% Holds the response open, pushing nothing, until the client goes away.
+-spec hold(Req, Ctx) -> {Reply, Req} when
+    Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
+    Reply :: arizona_controller:reply().
+hold(Req, #{state := State}) ->
     {{loop, 200, [{~"content-type", ~"text/event-stream"}], State}, Req}.
 
 %% Writes the session, then asks for a loop: an adapter without loops must

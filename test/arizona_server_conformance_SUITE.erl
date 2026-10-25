@@ -38,6 +38,7 @@ internal state.
 -export([first_declared_route_wins/1]).
 -export([wildcard_matches_zero_and_many_segments/1]).
 -export([fully_shadowed_route_fails_to_start/1]).
+-export([duplicate_start_keeps_the_running_listener/1]).
 -export([capability_routes_are_served_or_refused/1]).
 %% Assets
 -export([asset_get_serves_the_file/1]).
@@ -45,6 +46,7 @@ internal state.
 -export([asset_answers_post_with_405/1]).
 -export([asset_missing_file_is_404/1]).
 -export([asset_traversal_is_not_served/1]).
+-export([asset_symlink_escape_is_not_served/1]).
 -export([asset_cache_control_rides_a_200/1]).
 %% CSRF
 -export([cross_origin_post_is_403/1]).
@@ -91,17 +93,21 @@ internal state.
 -export([stream_reply_arrives_in_chunks/1]).
 -export([sendfile_reply_sends_the_range/1]).
 -export([loop_reply_pushes_until_it_stops/1]).
+-export([loop_hears_the_client_go_away/1]).
 %% Render
 -export([mount_crash_is_500/1]).
 -export([native_page_is_json/1]).
 %% Drain
 -export([drain_runs_handle_drain_then_closes_1001/1]).
+-export([drain_lets_a_request_in_flight_finish/1]).
 
 -define(IN_TREE_DRIVERS, [arizona_conformance_roadrunner, arizona_conformance_cowboy]).
 -define(SECRET, ~"conformance-secret-key-0123456789").
 -define(EVIL, ~"https://evil.example").
 -define(TRUSTED, ~"https://trusted.example").
 -define(CACHE_CONTROL, ~"public, max-age=60").
+%% The registered name a held loop reports what it receives to.
+-define(LOOP_WATCHER, arizona_conformance_loop_watcher).
 
 all() ->
     [{group, Driver} || Driver <- drivers()].
@@ -142,6 +148,7 @@ groups() ->
                 first_declared_route_wins,
                 wildcard_matches_zero_and_many_segments,
                 fully_shadowed_route_fails_to_start,
+                duplicate_start_keeps_the_running_listener,
                 capability_routes_are_served_or_refused
             ]},
             {assets, [], [
@@ -150,6 +157,7 @@ groups() ->
                 asset_answers_post_with_405,
                 asset_missing_file_is_404,
                 asset_traversal_is_not_served,
+                asset_symlink_escape_is_not_served,
                 asset_cache_control_rides_a_200
             ]},
             {csrf, [], [
@@ -211,7 +219,8 @@ groups() ->
             {controller_replies, [], [
                 stream_reply_arrives_in_chunks,
                 sendfile_reply_sends_the_range,
-                loop_reply_pushes_until_it_stops
+                loop_reply_pushes_until_it_stops,
+                loop_hears_the_client_go_away
             ]},
             {render, [], [
                 mount_crash_is_500,
@@ -219,7 +228,8 @@ groups() ->
             ]},
             %% Its own listener: a drain stops it.
             {drain, [], [
-                drain_runs_handle_drain_then_closes_1001
+                drain_runs_handle_drain_then_closes_1001,
+                drain_lets_a_request_in_flight_finish
             ]}
         ].
 
@@ -232,6 +242,8 @@ init_per_suite(Config) ->
     ok = file:write_file(filename:join(AssetDir, "app.txt"), ~"asset-bytes"),
     %% A file beside (not under) the asset dir: what a traversal would reach.
     ok = file:write_file(filename:join(Priv, "secret.txt"), ~"top-secret-bytes"),
+    %% A link inside the asset dir pointing at it.
+    ok = file:make_symlink("../secret.txt", filename:join(AssetDir, "leak.txt")),
     [{asset_dir, AssetDir} | Config].
 
 end_per_suite(Config) when is_list(Config) ->
@@ -274,12 +286,6 @@ init_feature(compress_off, Config) ->
         {ws, ~"/ws", #{}}
     ],
     start_group_listener(conformance_compress_off, Routes, #{compress => false}, Config);
-init_feature(drain, Config) ->
-    Routes = [
-        {live, ~"/drain_stop", arizona_drainable, #{bindings => #{drain_mode => stop}}},
-        {ws, ~"/ws", #{}}
-    ],
-    start_group_listener(conformance_drain, Routes, #{}, Config);
 init_feature(_Group, Config) ->
     Config.
 
@@ -289,12 +295,6 @@ end_feature(session_store, Config) ->
     ok;
 end_feature(compress_off, Config) ->
     arizona_conformance_driver:stop(?config(driver, Config), conformance_compress_off);
-end_feature(drain, Config) ->
-    %% Gone already when the drain ran; still up when the case failed before it.
-    case arizona_conformance_driver:stop(?config(driver, Config), conformance_drain) of
-        ok -> ok;
-        {error, not_found} -> ok
-    end;
 end_feature(_Group, _Config) ->
     ok.
 
@@ -424,6 +424,9 @@ main_routes(AssetDir) ->
             state => #{path => filename:join(AssetDir, "app.txt")}
         }},
         {get, ~"/reply/loop", arizona_loop_controller, #{}},
+        {get, ~"/reply/loop_hold", arizona_loop_controller, #{
+            action => hold, state => #{notify => ?LOOP_WATCHER}
+        }},
         %% Render
         {live, ~"/crash_on_mount", arizona_crashable, #{bindings => #{crash_on_mount => true}}},
         {live, ~"/native_page", arizona_native_counter_demo, #{}},
@@ -509,6 +512,19 @@ wildcard_matches_zero_and_many_segments(Config) ->
      || Path <- [~"/wc", ~"/wc/a", ~"/wc/a/b/c"]
     ],
     ?assertMatch({404, _, _}, req(Config, ~"GET", ~"/wcx", [])).
+
+%% Starting a listener under a running one's name fails, and the running one
+%% keeps serving its own routes.
+duplicate_start_keeps_the_running_listener(Config) ->
+    Driver = ?config(driver, Config),
+    Result =
+        try arizona_conformance_driver:start(Driver, conformance_main, [], #{}) of
+            Started -> Started
+        catch
+            Class:Reason -> {raised, Class, Reason}
+        end,
+    ?assertNotMatch({ok, _}, Result),
+    ?assertMatch({200, _, _}, req(Config, ~"GET", ~"/", [])).
 
 %% A route no request can reach is a configuration error, refused at start.
 fully_shadowed_route_fails_to_start(Config) ->
@@ -608,6 +624,14 @@ asset_traversal_is_not_served(Config) ->
         ]
     ],
     ok.
+
+%% `leak.txt` is a symlink inside the asset dir to the file above it.
+asset_symlink_escape_is_not_served(Config) ->
+    ?assertMatch(
+        {Status, _, Body} when
+            Status >= 400 andalso Status < 500 andalso Body =/= ~"top-secret-bytes",
+        req(Config, ~"GET", ~"/files/leak.txt", [])
+    ).
 
 asset_cache_control_rides_a_200(Config) ->
     {200, Headers, _} = req(Config, ~"GET", ~"/files/app.txt", []),
@@ -917,6 +941,25 @@ when_supported(Kind, Config, Case) ->
         false -> {skip, {unsupported_reply, Kind}}
     end.
 
+%% The client closing a held loop reaches the controller as a final
+%% `{arizona_disconnect, Reason}`, so it can clean up (unsubscribe, ...).
+loop_hears_the_client_go_away(Config) ->
+    when_supported(loop, Config, fun() ->
+        true = register(?LOOP_WATCHER, self()),
+        try
+            Head = arizona_wire_client:request_head(
+                ?config(port, Config), ~"GET", ~"/reply/loop_hold", []
+            ),
+            ?assertMatch({200, _}, Head),
+            receive
+                {arizona_loop_controller, {arizona_disconnect, _Reason}} -> ok
+            after 3000 -> ct:fail(no_disconnect)
+            end
+        after
+            true = unregister(?LOOP_WATCHER)
+        end
+    end).
+
 %% --------------------------------------------------------------------
 %% Render
 %% --------------------------------------------------------------------
@@ -935,7 +978,8 @@ native_page_is_json(Config) ->
 
 %% `arizona_drainable` (drain_mode stop) answers the drain with an effect and
 %% stops: the effect frame arrives first, then a going-away close.
-drain_runs_handle_drain_then_closes_1001(Config) ->
+drain_runs_handle_drain_then_closes_1001(Config0) ->
+    Config = drain_listener(Config0),
     Sock = live_socket(Config, ~"/drain_stop"),
     Self = self(),
     Driver = ?config(driver, Config),
@@ -952,9 +996,44 @@ drain_runs_handle_drain_then_closes_1001(Config) ->
     end,
     ok = arizona_wire_client:ws_close(Sock).
 
+%% A drain waits for the requests in flight: one that started before it
+%% finishes with its response instead of being cut off.
+drain_lets_a_request_in_flight_finish(Config0) ->
+    Config = drain_listener(Config0),
+    Port = ?config(port, Config),
+    Self = self(),
+    _Requester = spawn_link(fun() ->
+        Self ! {slow, arizona_wire_client:request(Port, ~"GET", ~"/slow", [], <<>>)}
+    end),
+    receive
+    after 150 -> ok
+    end,
+    ?assertEqual(
+        ok, arizona_conformance_driver:drain(?config(driver, Config), conformance_drain, 5000)
+    ),
+    receive
+        {slow, Response} -> ?assertMatch({200, _, ~"SLOW_OK"}, Response)
+    after 5000 -> ct:fail(slow_request_lost)
+    end.
+
 %% --------------------------------------------------------------------
 %% Helpers
 %% --------------------------------------------------------------------
+
+%% A listener of its own for one drain case: draining stops it. A case that
+%% fails before its drain leaves it running, so a leftover is stopped first.
+drain_listener(Config) ->
+    Driver = ?config(driver, Config),
+    case arizona_conformance_driver:stop(Driver, conformance_drain) of
+        ok -> ok;
+        {error, not_found} -> ok
+    end,
+    Routes = [
+        {live, ~"/drain_stop", arizona_drainable, #{bindings => #{drain_mode => stop}}},
+        {get, ~"/slow", arizona_slow_controller, #{state => #{delay_ms => 500}}},
+        {ws, ~"/ws", #{}}
+    ],
+    start_group_listener(conformance_drain, Routes, #{}, Config).
 
 req(Config, Method, Path, Headers) ->
     arizona_wire_client:request(?config(port, Config), Method, Path, Headers, <<>>).
