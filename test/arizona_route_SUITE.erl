@@ -59,14 +59,14 @@ kind_refuses_a_term_that_is_no_route(Config) when is_list(Config) ->
             {fetch, ~"/c", ctrl, #{}}
         ]
     ],
-    Message = format(fun() -> arizona_route:kind({lvie, ~"/", page, #{}}) end),
+    Message = format(arizona_route, kind, [{lvie, ~"/", page, #{}}]),
     ?assertNotEqual(nomatch, binary:match(Message, ~"is not a route")).
 
 unsupported_names_kind_and_adapter(Config) when is_list(Config) ->
     ?assertError(
         {unsupported_route, mcp, some_adapter}, arizona_route:unsupported(mcp, some_adapter)
     ),
-    Message = format(fun() -> arizona_route:unsupported(mcp, some_adapter) end),
+    Message = format(arizona_route, unsupported, [mcp, some_adapter]),
     ?assertNotEqual(
         nomatch, binary:match(Message, ~"some_adapter server adapter cannot serve a mcp")
     ).
@@ -160,8 +160,9 @@ live_and_controller_name_what_they_run(Config) when is_list(Config) ->
     ),
     ?assertEqual("priv", arizona_route:asset_dir({asset, ~"/a", {dir, "priv"}})).
 
-format(Fun) ->
-    try Fun() of
+%% The rendered error of calling `M:F(A...)`, which must raise.
+format(M, F, A) ->
+    try apply(M, F, A) of
         Value -> error({not_raised, Value})
     catch
         error:Reason:ST -> iolist_to_binary(erl_error:format_exception(error, Reason, ST))
