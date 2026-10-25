@@ -6,8 +6,7 @@ An `arizona_server` adapter compiles each route into its server's own routing.
 `kind/1` names what a route is, so an adapter dispatches on one atom instead of
 re-matching every tuple shape, and refuses a route it cannot serve with
 `unsupported/2` -- at route compilation, before a request could reach it, the
-way an adapter refuses a controller reply kind it cannot send
-(`arizona_controller:unsupported_reply/2`).
+way `arizona_controller:dispatch/3` refuses a reply kind the adapter cannot send.
 
 | Kind | Route |
 |------|-------|
