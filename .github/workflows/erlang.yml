@@ -84,7 +84,20 @@ jobs:
           otp="${{ steps.setup-beam.outputs.otp-version }}"
           cfg_hash="${{ hashFiles('rebar.config') }}"
           lock_hash="${{ hashFiles('rebar.lock') }}"
-          prefix="_build-${os}-otp-${otp}-cfg-${cfg_hash}-"
+          # A git dependency on a branch (the server adapters in the test
+          # profile) is not locked, and rebar3 never refetches one already in
+          # _build: key the cache on each branch's current commit too.
+          git_heads="$(erl -noshell -eval '
+            {ok, C} = file:consult("rebar.config"),
+            Profiles = [P || {_, P} <- proplists:get_value(profiles, C, [])],
+            Deps = proplists:get_value(deps, C, []) ++
+              lists:append([proplists:get_value(deps, P, []) || P <- Profiles]),
+            [io:format("~s ~s~n", [U, B]) || {_, {git, U, {branch, B}}} <- Deps],
+            halt().' |
+            while read -r url branch; do
+              git ls-remote "${url}" "refs/heads/${branch}" | cut -c1-12
+            done | tr '\n' '-')"
+          prefix="_build-${os}-otp-${otp}-cfg-${cfg_hash}-git-${git_heads}"
           echo "prefix=${prefix}" >> "${GITHUB_OUTPUT}"
           echo "key=${prefix}lock-${lock_hash}" >> "${GITHUB_OUTPUT}"
 

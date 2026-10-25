@@ -4,8 +4,10 @@ Black-box server conformance: the HTTP/WS behaviour every Arizona server adapter
 must reproduce.
 
 Each adapter routes natively, so this suite is what keeps them in step. It boots
-listeners through an `arizona_conformance_driver` -- `arizona_conformance_roadrunner`
-and `arizona_conformance_cowboy` by default (one run each); an adapter repo runs
+listeners through an `arizona_conformance_driver` -- `arizona_conformance_roadrunner`,
+`arizona_conformance_cowboy`, and `arizona_conformance_cowboy_mounted` (Arizona
+mounted on a Cowboy listener another framework owns) by default, one run each;
+an adapter repo runs
 it with its own driver via `ARIZONA_CONFORMANCE_DRIVER=<module>` -- and asserts
 ONLY what crosses the wire: raw HTTP/1.1 and WebSocket over `gen_tcp`
 (`arizona_wire_client`). No case may call into an adapter module or inspect its
@@ -105,7 +107,9 @@ internal state.
 -export([notify_drain_winds_sessions_down_and_keeps_serving/1]).
 -export([drains_answer_not_found_for_no_listener/1]).
 
--define(IN_TREE_DRIVERS, [arizona_conformance_roadrunner, arizona_conformance_cowboy]).
+-define(IN_TREE_DRIVERS, [
+    arizona_conformance_roadrunner, arizona_conformance_cowboy, arizona_conformance_cowboy_mounted
+]).
 -define(SECRET, ~"conformance-secret-key-0123456789").
 -define(EVIL, ~"https://evil.example").
 -define(TRUSTED, ~"https://trusted.example").
