@@ -28,10 +28,11 @@ wire behaviour `arizona_server_conformance_SUITE` pins down; the request side
 goes through an `arizona_req` adapter, the WebSocket through `arizona_ws` and
 `arizona_socket`.
 
-A listener that compiles routes must be registered with
-`arizona_server_registry:register/1` once it is up, so a hot reload reaches it
-(see `recompile_routes/0`). An adapter whose listeners are owned by another
-framework registers the same way.
+Each listener is reported to `arizona_server_registry` once it is up
+(`listener_up/3`) and when it stops (`listener_down/1`), so a hot reload reaches
+it (see `recompile_routes/0`) and the node's dev-mode signals follow its `reload`
+and dev MCP routes. An adapter whose listeners are owned by another framework
+reports them the same way.
 """.
 
 %% --------------------------------------------------------------------

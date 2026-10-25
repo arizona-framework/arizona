@@ -50,7 +50,7 @@
 | `src/arizona_roadrunner_controller.erl`   | Roadrunner handler for controller routes -- maps `arizona_controller:dispatch/3`'s reply kinds onto roadrunner, loops included                                                            |
 | `src/arizona_roadrunner_server.erl`       | Roadrunner listener boot -- compiles routes, stashes them for hot reload, validates TLS opts, starts a clear/TLS listener                                                                 |
 | `src/arizona_roadrunner_req.erl`          | Roadrunner `arizona_req` adapter -- parsing callbacks plus `resolve_route/3` for SPA navigate; populates `request_id` from roadrunner                                                     |
-| `src/arizona_roadrunner_reload.erl`       | Dev-mode SSE endpoint -- streams reload events from `arizona_reloader` to the browser                                                                                                     |
+| `src/arizona_reload_controller.erl`       | Dev hot-reload endpoint as a controller -- a `loop` reply that streams `arizona_reloader` broadcasts as Server-Sent Events                                                                |
 | `src/arizona_jsonrpc.erl`                 | JSON-RPC 2.0 codec -- `decode/1`, `result/2`, `error/3`, `notification/2`                                                                                                                 |
 | `src/arizona_mcp.erl`                     | MCP server behaviour an app implements (`init/1`, `tools/1`, `handle_tool/4`, optional `resources`/`prompts`/`channels`/`terminate`) plus the server-push API (`broadcast/3`, `notify/3`) |
 | `src/arizona_mcp_handler.erl`             | Roadrunner handler -- MCP Streamable HTTP transport (POST/GET/DELETE), the Origin/auth gate, and the pure `dispatch/3` / `handle_method/4` method dispatch                                |
@@ -1191,7 +1191,8 @@ build-opts variant supports hot-reload-safe rebuilds.
   middleware, and two routes may share a path with disjoint verbs for REST-style dispatch. (Declare
   mutations non-GET: a state-changing GET is CSRF-able regardless -- a cross-site GET nav carries a
   `SameSite=Lax` cookie but no `Origin`.)
-- `{reload, Path, Opts}` -- dev SSE reload endpoint (roadrunner-only convenience)
+- `{reload, Path, Opts}` -- dev SSE reload endpoint (`arizona_reload_controller`, served as a
+  controller `loop` reply by any adapter that supports the `reload` capability)
 
 ## API -- `arizona_stream.erl`
 
@@ -3004,7 +3005,6 @@ contract is in [adapters.md](adapters.md). Roadrunner is wired in through a thin
 - `arizona_roadrunner_controller` -- controller-route handler; maps what
   `arizona_controller:dispatch/3` returns onto roadrunner, routing a loop's messages to the
   controller's `handle_info/3`
-- `arizona_roadrunner_reload` -- dev-mode SSE reload endpoint
 - `arizona_roadrunner_req` -- implements the `arizona_req` behaviour (the request abstraction
   consumed by handlers), including the optional `resolve_route/3` for SPA navigate
 

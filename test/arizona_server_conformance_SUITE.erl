@@ -578,16 +578,43 @@ capability_route(Driver, Kind, Routes, Probe) ->
             )
     end.
 
-%% The reload route is an event stream; only its response head is read, since
-%% the stream stays open.
+%% The reload route is an event stream that stays open: a reloader broadcast
+%% must arrive on it as a `reload` event.
 probe_capability(_Port, undefined) ->
     ok;
 probe_capability(Port, Path) ->
-    {200, Headers} = arizona_wire_client:request_head(Port, ~"GET", Path, []),
-    ?assertMatch(
-        <<"text/event-stream", _/binary>>, arizona_wire_client:header(~"content-type", Headers)
-    ),
-    ok.
+    {ok, Sock} = gen_tcp:connect("localhost", Port, [binary, {active, false}]),
+    try
+        ok = gen_tcp:send(Sock, [
+            ~"GET ", Path, ~" HTTP/1.1\r\nhost: localhost\r\n\r\n"
+        ]),
+        Head = recv_until(Sock, ~"\r\n\r\n", <<>>),
+        ?assertMatch(<<"HTTP/1.1 200", _/binary>>, Head),
+        ?assertNotEqual(nomatch, binary:match(string:lowercase(Head), ~"text/event-stream")),
+        %% The stream joins the reloader topic as it opens; a broadcast before
+        %% that would be missed, so keep broadcasting until one lands.
+        ?assertNotEqual(nomatch, binary:match(await_reload_event(Sock, 50), ~"event: reload"))
+    after
+        gen_tcp:close(Sock)
+    end.
+
+await_reload_event(_Sock, 0) ->
+    ct:fail(no_reload_event);
+await_reload_event(Sock, Tries) ->
+    ok = arizona_reloader:broadcast(),
+    case gen_tcp:recv(Sock, 0, 100) of
+        {ok, Data} -> Data;
+        {error, timeout} -> await_reload_event(Sock, Tries - 1)
+    end.
+
+recv_until(Sock, Marker, Acc) ->
+    case binary:match(Acc, Marker) of
+        nomatch ->
+            {ok, Data} = gen_tcp:recv(Sock, 0, 5000),
+            recv_until(Sock, Marker, <<Acc/binary, Data/binary>>);
+        _Found ->
+            Acc
+    end.
 
 %% --------------------------------------------------------------------
 %% Assets

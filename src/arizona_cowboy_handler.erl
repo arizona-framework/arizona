@@ -150,7 +150,9 @@ serve(#{kind := live, target := #{handler := Handler} = Live} = Entry, Req, List
         Handler, arizona_cowboy_req:new(Req), Live
     ),
     finish(Entry, arizona_req:raw(ArzReq), {Status, Headers, Body}, Listener);
-serve(#{kind := controller, target := #{handler := Handler} = Controller} = Entry, Req, Listener) ->
+serve(#{kind := Kind, target := #{handler := Handler} = Controller} = Entry, Req, Listener) when
+    Kind =:= controller; Kind =:= reload
+->
     {Reply, ArzReq} = arizona_controller:dispatch(
         Controller, arizona_cowboy_req:new(Req), arizona_cowboy_server
     ),

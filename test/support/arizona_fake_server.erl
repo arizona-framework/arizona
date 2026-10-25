@@ -24,7 +24,7 @@ start(Name, #{notify := Pid} = Opts) ->
         end
     end),
     true = register(Name, Listener),
-    ok = arizona_server_registry:register(?MODULE),
+    ok = arizona_server_registry:listener_up(?MODULE, Name, []),
     ok = notify({start, Name, Opts}),
     {ok, Listener}.
 
@@ -44,6 +44,7 @@ capabilities() ->
     #{routes => [], replies => []}.
 
 stop_listener(Name) ->
+    ok = arizona_server_registry:listener_down(Name),
     case whereis(Name) of
         undefined ->
             {error, not_found};

@@ -169,10 +169,14 @@ check_supported(Kind, Supported, Adapter) when Kind =:= mcp; Kind =:= reload ->
 check_supported(_Kind, _Supported, _Adapter) ->
     ok.
 
-target(live, Route, BuildOpts) -> arizona_route:live(Route, BuildOpts);
-target(controller, Route, _BuildOpts) -> arizona_route:controller(Route);
-target(asset, Route, _BuildOpts) -> arizona_route:asset_dir(Route);
-target(_Kind, Route, _BuildOpts) -> element(tuple_size(Route), Route).
+target(live, Route, BuildOpts) ->
+    arizona_route:live(Route, BuildOpts);
+target(Kind, Route, _BuildOpts) when Kind =:= controller; Kind =:= reload ->
+    arizona_route:controller(Route);
+target(asset, Route, _BuildOpts) ->
+    arizona_route:asset_dir(Route);
+target(_Kind, Route, _BuildOpts) ->
+    element(tuple_size(Route), Route).
 
 %% An asset route serves everything under its prefix.
 route_path({asset, Path, _Source}) -> <<Path/binary, "/*path">>;
