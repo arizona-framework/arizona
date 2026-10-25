@@ -8,6 +8,7 @@
 -export([start/3]).
 -export([stop/1]).
 -export([drain/2]).
+-export([notify_drain/2]).
 -export([supports_route/1]).
 
 -spec start(Name, Routes, Opts) -> {ok, inet:port_number()} | {error, term()} when
@@ -36,6 +37,12 @@ stop(Name) ->
     TimeoutMs :: non_neg_integer().
 drain(Name, TimeoutMs) ->
     arizona_cowboy_server:drain(Name, TimeoutMs).
+
+-spec notify_drain(Name, TimeoutMs) -> ok | {error, not_found} when
+    Name :: atom(),
+    TimeoutMs :: non_neg_integer().
+notify_drain(Name, TimeoutMs) ->
+    arizona_cowboy_server:notify_drain(Name, TimeoutMs).
 
 -spec supports_route(Kind) -> boolean() when
     Kind :: mcp | reload.

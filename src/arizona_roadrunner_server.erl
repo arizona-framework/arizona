@@ -81,6 +81,7 @@ when `protocols` is omitted is `[http1]` (HTTP/1.1 only).
 -export([start/2]).
 -export([stop/1]).
 -export([drain/2]).
+-export([notify_drain/2]).
 -export([recompile_routes/0]).
 -export([capabilities/0]).
 -export([format_error/2]).
@@ -153,6 +154,22 @@ drain(Name, Timeout) ->
                 {timeout, _Remaining} -> ok
             end,
             stop(Name)
+    end.
+
+-doc """
+Tells every connection and WebSocket session of the listener `Name` to wind
+down, as `drain/2` does, while the listener keeps accepting. Returns
+`{error, not_found}` if `Name` is not a running listener.
+""".
+-spec notify_drain(Name, Timeout) -> ok | {error, not_found} when
+    Name :: atom(),
+    Timeout :: non_neg_integer().
+notify_drain(Name, Timeout) ->
+    case whereis(Name) of
+        undefined ->
+            {error, not_found};
+        _Pid ->
+            roadrunner_listener:notify_drain(Name, erlang:monotonic_time(millisecond) + Timeout)
     end.
 
 -doc """

@@ -175,7 +175,9 @@ routes() ->
             bindings => #{drain_mode => stop},
             layouts => Layouts
         }},
-        {get, <<"/_test/drain">>, arizona_drain_admin, #{}},
+        {get, <<"/_test/drain">>, arizona_drain_admin, #{
+            state => #{adapter => arizona_roadrunner_server}
+        }},
         %% Dev-reload fixture: a native view holding a fun made by a module the
         %% admin endpoint reloads (e2e/native/reload.spec.js).
         {live, <<"/native/reload-fun">>, arizona_reload_fun_view, #{}},

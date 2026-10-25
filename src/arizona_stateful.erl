@@ -73,9 +73,9 @@ rather than folded into the navigate reply.
 
 ## Graceful drain
 
-When the transport adapter receives a drain signal (e.g.
-`roadrunner_listener:notify_drain/2` during a rolling deploy, or
-`roadrunner_listener:drain/2` for a full listener shutdown), each
+When the server adapter drains its listener (`arizona_server`:
+`notify_drain/2` during a rolling deploy, which leaves the listener
+serving, or `drain/2` for a full listener shutdown), each
 live handler's optional `handle_drain/2` runs. If a handler doesn't
 export it, the framework defaults to exiting the live process with reason
 `{shutdown, drain}` so the WebSocket closes with code 1001 (going
@@ -134,7 +134,7 @@ optional; implement either, both, or neither.
 
 Sequence on a deploy drain when both are implemented:
 
-1. Listener broadcasts `{roadrunner_drain, Deadline}`.
+1. The server adapter sends the live process `{arizona_drain, Deadline}`.
 2. Live process's `handle_drain/2` runs -- e.g. pushes a
    "reconnecting" indicator and returns `{stop, B, Effects}`.
 3. Push frame leaves the WS session toward the client.

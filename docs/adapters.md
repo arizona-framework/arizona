@@ -43,14 +43,14 @@ The application starts the `server` env's listener through the adapter its `adap
 
 ### Listener lifecycle -- `arizona_server`
 
-`start/2`, `stop/1`, `drain/2`, `recompile_routes/0`, and the optional `capabilities/0`: the
-capability route kinds (`mcp`, `reload`) and controller reply kinds (`stream`, `sendfile`,
-`loop`) the adapter supports, every kind when omitted. Core refuses the rest for you, so an
-unsupported kind fails loudly instead of degrading. Report each listener once it is up,
+`start/2`, `stop/1`, `drain/2`, `notify_drain/2`, `recompile_routes/0`, and the optional
+`capabilities/0`: the capability route kinds (`mcp`, `reload`) and controller reply kinds (`stream`,
+`sendfile`, `loop`) the adapter supports, every kind when omitted. Core refuses the rest for you, so
+an unsupported kind fails loudly instead of degrading. Report each listener once it is up,
 `arizona_server_registry:listener_up(Adapter, Name, Routes)`, and when it stops,
-`listener_down(Name)`: the dev reloader then recompiles its routes after a code reload (route
-terms can hold funs from reloaded modules), and the node's dev-mode signals follow the `reload`
-and dev MCP routes actually running. A listener another framework owns reports the same way.
+`listener_down(Name)`: the dev reloader then recompiles its routes after a code reload (route terms
+can hold funs from reloaded modules), and the node's dev-mode signals follow the `reload` and dev
+MCP routes actually running. A listener another framework owns reports the same way.
 
 **Drain** closes the listen socket and sends each live WebSocket session's live process
 `{arizona_drain, Deadline}` through `arizona_socket:drain/2`, with `Deadline` an
@@ -58,7 +58,9 @@ and dev MCP routes actually running. A listener another framework owns reports t
 default closes `1001`, which clients reconnect from. Sessions still open at the deadline are
 killed. A server with no drain of its own (Cowboy) stops accepting, notifies the WebSocket
 sessions it tracks, waits for every request in flight (pages, controller replies, loops), then
-stops, which closes the idle keep-alive connections.
+stops, which closes the idle keep-alive connections. **`notify_drain/2`** is the rolling-deploy
+half: it tells the live sessions exactly as a drain does, but closes nothing and stops nothing, so
+the listener keeps accepting and the reconnects land on it.
 
 ### Request access -- `arizona_req`
 

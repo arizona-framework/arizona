@@ -34,6 +34,7 @@ Not supported yet, and refused rather than ignored: TLS (`scheme => https`,
 -export([start/2]).
 -export([stop/1]).
 -export([drain/2]).
+-export([notify_drain/2]).
 -export([recompile_routes/0]).
 -export([capabilities/0]).
 -export([table/1]).
@@ -101,9 +102,22 @@ drain(Name, Timeout) ->
         _Stash ->
             ok = ranch:suspend_listener(Name),
             Deadline = erlang:monotonic_time(millisecond) + Timeout,
-            ok = arizona_pubsub:broadcast(sessions(Name), {arizona_cowboy_drain, Deadline}),
+            ok = notify_sessions(Name, Deadline),
             ok = await_requests(Name, Deadline),
             stop(Name)
+    end.
+
+-doc """
+Tells every live session of the listener `Name` `{arizona_drain, Deadline}`, as
+`drain/2` does, while the listener keeps accepting.
+""".
+-spec notify_drain(Name, Timeout) -> ok | {error, not_found} when
+    Name :: atom(),
+    Timeout :: non_neg_integer().
+notify_drain(Name, Timeout) ->
+    case persistent_term:get(?KEY(Name), undefined) of
+        undefined -> {error, not_found};
+        _Stash -> notify_sessions(Name, erlang:monotonic_time(millisecond) + Timeout)
     end.
 
 -doc "Recompiles every running listener's routes from the list it started with.".
@@ -216,6 +230,9 @@ transport_opts(Opts) ->
         true -> TransportOpts;
         false -> [{port, 4040} | TransportOpts]
     end.
+
+notify_sessions(Name, Deadline) ->
+    arizona_pubsub:broadcast(sessions(Name), {arizona_cowboy_drain, Deadline}).
 
 %% A process leaves its group when it exits. A WebSocket session counts too: it
 %% leaves the request process when it upgrades and joins `sessions/1`.

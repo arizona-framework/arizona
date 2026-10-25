@@ -101,6 +101,8 @@ internal state.
 %% Drain
 -export([drain_runs_handle_drain_then_closes_1001/1]).
 -export([drain_lets_a_request_in_flight_finish/1]).
+-export([notify_drain_winds_sessions_down_and_keeps_serving/1]).
+-export([drains_answer_not_found_for_no_listener/1]).
 
 -define(IN_TREE_DRIVERS, [arizona_conformance_roadrunner, arizona_conformance_cowboy]).
 -define(SECRET, ~"conformance-secret-key-0123456789").
@@ -231,7 +233,9 @@ groups() ->
             %% Its own listener: a drain stops it.
             {drain, [], [
                 drain_runs_handle_drain_then_closes_1001,
-                drain_lets_a_request_in_flight_finish
+                drain_lets_a_request_in_flight_finish,
+                notify_drain_winds_sessions_down_and_keeps_serving,
+                drains_answer_not_found_for_no_listener
             ]}
         ].
 
@@ -1125,6 +1129,29 @@ drain_lets_a_request_in_flight_finish(Config0) ->
         {slow, Response} -> ?assertMatch({200, _, ~"SLOW_OK"}, Response)
     after 5000 -> ct:fail(slow_request_lost)
     end.
+
+%% The rolling-deploy drain: a live view answers it as it answers `drain/2`,
+%% and the listener keeps serving, so the client's reconnect lands on it.
+notify_drain_winds_sessions_down_and_keeps_serving(Config0) ->
+    Config = drain_listener(Config0),
+    Driver = ?config(driver, Config),
+    Sock = live_socket(Config, ~"/drain_stop"),
+    ?assertEqual(ok, arizona_conformance_driver:notify_drain(Driver, conformance_drain, 5000)),
+    {text, Effect} = arizona_wire_client:ws_recv(Sock),
+    ?assertMatch(#{~"e" := [_ | _]}, json:decode(Effect)),
+    ?assertMatch({close, 1001, _}, arizona_wire_client:ws_recv(Sock)),
+    ok = arizona_wire_client:ws_close(Sock),
+    ?assertMatch({200, _, _}, req(Config, ~"GET", ~"/drain_stop", [])),
+    Again = live_socket(Config, ~"/drain_stop"),
+    ok = arizona_wire_client:ws_close(Again),
+    ok = arizona_conformance_driver:stop(Driver, conformance_drain).
+
+drains_answer_not_found_for_no_listener(Config) ->
+    Driver = ?config(driver, Config),
+    ?assertEqual({error, not_found}, arizona_conformance_driver:drain(Driver, no_listener, 0)),
+    ?assertEqual(
+        {error, not_found}, arizona_conformance_driver:notify_drain(Driver, no_listener, 0)
+    ).
 
 %% --------------------------------------------------------------------
 %% Helpers
