@@ -23,6 +23,10 @@
 -export([put_resp_cookie_accumulates/1]).
 -export([put_resp_status_stashes/1]).
 -export([resp_stash_defaults_empty/1]).
+-export([flush_returns_lines_in_send_order/1]).
+-export([halt_reply_redirects_with_a_location/1]).
+-export([halt_reply_uses_a_stashed_status/1]).
+-export([halt_reply_without_reason_is_403/1]).
 -export([put_flash_serializes_into_resp_cookies/1]).
 -export([consume_flash_round_trips_and_clears/1]).
 -export([consume_flash_absent_is_empty/1]).
@@ -62,6 +66,10 @@ groups() ->
             put_resp_cookie_accumulates,
             put_resp_status_stashes,
             resp_stash_defaults_empty,
+            flush_returns_lines_in_send_order,
+            halt_reply_redirects_with_a_location,
+            halt_reply_uses_a_stashed_status,
+            halt_reply_without_reason_is_403,
             put_flash_serializes_into_resp_cookies,
             consume_flash_round_trips_and_clears,
             consume_flash_absent_is_empty,
@@ -232,6 +240,45 @@ resp_stash_defaults_empty(Config) when is_list(Config) ->
     ?assertEqual([], arizona_req:resp_headers(Req)),
     ?assertEqual([], arizona_req:resp_cookies(Req)),
     ?assertEqual(undefined, arizona_req:resp_status(Req)).
+
+%% Send order: cookies then headers, each oldest first, so a cookie written
+%% twice goes out with its latest value last -- the one a browser keeps.
+flush_returns_lines_in_send_order(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{}),
+    ?assertEqual([], arizona_req:flush(Req0)),
+    Req1 = arizona_req:put_resp_header(Req0, ~"x-a", [~"1", ~"0"]),
+    Req2 = arizona_req:put_resp_header(Req1, ~"x-b", ~"2"),
+    Req3 = arizona_req:put_resp_cookie(Req2, ~"theme", ~"dark", #{path => ~"/"}),
+    Req4 = arizona_req:put_resp_cookie(Req3, ~"theme", ~"light", #{path => ~"/"}),
+    ?assertEqual(
+        [
+            {~"set-cookie", ~"theme=dark; Path=/"},
+            {~"set-cookie", ~"theme=light; Path=/"},
+            {~"x-a", ~"10"},
+            {~"x-b", ~"2"}
+        ],
+        arizona_req:flush(Req4)
+    ).
+
+halt_reply_redirects_with_a_location(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{}),
+    Req1 = arizona_req:put_resp_cookie(Req0, ~"gate", ~"seen", #{}),
+    Req2 = arizona_req:redirect(Req1, 303, ~"/login"),
+    ?assertEqual(
+        {303, [{~"set-cookie", ~"gate=seen"}, {~"location", ~"/login"}]},
+        arizona_req:halt_reply(Req2)
+    ).
+
+halt_reply_uses_a_stashed_status(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{}),
+    Req1 = arizona_req:put_resp_header(Req0, ~"www-authenticate", ~"Basic"),
+    ?assertEqual(
+        {401, [{~"www-authenticate", ~"Basic"}]},
+        arizona_req:halt_reply(arizona_req:put_resp_status(Req1, 401))
+    ).
+
+halt_reply_without_reason_is_403(Config) when is_list(Config) ->
+    ?assertEqual({403, []}, arizona_req:halt_reply(arizona_req_test_adapter:new(#{}))).
 
 put_flash_serializes_into_resp_cookies(Config) when is_list(Config) ->
     Req0 = arizona_req_test_adapter:new(#{}),

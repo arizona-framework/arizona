@@ -288,7 +288,7 @@ max_bytes() ->
     arizona_config:get_env(session_max_bytes, ?DEFAULT_MAX_BYTES).
 
 %% What the `Set-Cookie` line adds around the encoded value, mirroring the
-%% transport serializer over this module's own `cookie_opts/1`: `name` + `=`,
+%% `arizona_cookie:serialize/3` over this module's own `cookie_opts/1`: `name` + `=`,
 %% `; Path=/` (8), `; Max-Age=` (10) plus its digits, `; HttpOnly` (10), and
 %% `; SameSite=Lax` (14). The `; Secure` budget (8) and the longer `__Host-`
 %% prefixed name are counted regardless of `session_secure`, so enabling it in

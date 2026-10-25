@@ -15,20 +15,20 @@ reload topic, which keeps the close away from the specs running beside this one.
 Always replies `204 No Content`.
 """.
 
--behaviour(roadrunner_handler).
+-export([handle/2]).
 
--export([handle/1]).
-
--spec handle(Req) -> {Response, Req} when
-    Req :: roadrunner_req:request(),
-    Response :: roadrunner_handler:response().
-handle(Req) ->
+-spec handle(Req, Ctx) -> {Reply, Req} when
+    Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
+    Reply :: arizona_controller:reply().
+handle(Req0, _Ctx) ->
+    {Params, Req1} = arizona_req:params(Req0),
     ok =
-        case proplists:get_value(~"step", roadrunner_req:parse_qs(Req)) of
+        case proplists:get_value(~"step", Params) of
             ~"arm" -> arm();
             ~"fire" -> fire()
         end,
-    {roadrunner_resp:no_content(), Req}.
+    {{204, [], <<>>}, Req1}.
 
 arm() ->
     application:set_env(arizona, reloader, #{enabled => true, rules => []}).

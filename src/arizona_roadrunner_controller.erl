@@ -1,20 +1,14 @@
 -module(arizona_roadrunner_controller).
 -moduledoc """
-Roadrunner handler that runs the Arizona middleware pipeline before a plain
-controller handler.
+Roadrunner handler for controller routes: runs `arizona_controller:dispatch/3`
+and maps its reply onto roadrunner's response shapes.
 
 A controller route (`{get, ...}`/`{post, ...}`/.../`{match, ...}`) compiles to this
-dispatcher (the way `{live, ...}` routes go through `arizona_roadrunner_http`). It wraps
-the request in an `arizona_req:request()`, runs the route's `middlewares` (so CSRF
-`check_origin` and any app middleware apply to controllers too), and on `{cont, ...}`
-restores the controller's `state` into the request and calls the app controller action
-(`Handler:Action/1`, the route's `action` option defaulting to `handle`), flushing any
-middleware-stashed cookies/headers onto its response. The pipeline's product is
-threaded to the action through the request: `arizona_controller:req/1` recovers the
-post-middleware `arizona_req:request()` and `arizona_controller:bindings/1` the
-produced bindings (so e.g. a `fetch_session` step's session is readable in the
-action). On `{halt, ...}` it ships the halt (e.g. `check_origin`'s `403`) without
-invoking the action.
+dispatcher (the way `{live, ...}` routes go through `arizona_roadrunner_http`).
+Roadrunner has every `t:arizona_controller:reply/0` kind, so each maps one to one; a
+loop's state carries the controller module, so `handle_info/3` reaches it, and
+roadrunner's `{roadrunner_disconnect, Reason}` reaches it as
+`{arizona_disconnect, Reason}`.
 """.
 
 -behaviour(roadrunner_handler).
@@ -24,115 +18,54 @@ invoking the action.
 %% --------------------------------------------------------------------
 
 -export([handle/1]).
--export([format_error/2]).
-
-%% Called by `erl_error` via the `error_info` annotation, not directly.
--ignore_xref([format_error/2]).
+-export([handle_info/3]).
 
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
 -doc """
-Roadrunner `handle/1` callback. Runs the route middlewares, then the app controller
-handler with its configured `state` restored.
+Roadrunner `handle/1` callback. Dispatches the controller route and hands
+roadrunner back the request the action returned, whose body reader a manual
+body read advanced.
 """.
 -spec handle(Req) -> {Response, Req} when
     Req :: roadrunner_req:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
-    #{
-        arizona := #{
-            handler := Handler,
-            action := Action,
-            state := State,
-            middlewares := Middlewares
-        }
-    } = roadrunner_req:state(Req),
-    ArzReq = arizona_roadrunner_req:new(Req),
-    case arizona_middleware:apply_middlewares(Middlewares, ArzReq, #{}) of
-        {halt, HaltReq} ->
-            {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
-        {cont, ArzReq1, Bindings} ->
-            %% Restore the controller's own state into the raw request (the dispatcher
-            %% overwrote it with the arizona meta) and thread the pipeline's product --
-            %% the post-middleware arizona_req and the produced bindings -- through the
-            %% roadrunner `private` scratchpad, where `arizona_controller:req/1` and
-            %% `arizona_controller:bindings/1` recover them (mirroring how `state` rides
-            %% the request to `roadrunner_req:state/1`). Then run the action and flush
-            %% any middleware-stashed cookies/headers onto its response.
-            Raw = arizona_req:raw(ArzReq1),
-            ActionReq = roadrunner_req:merge_private(
-                #{{arizona, req} => ArzReq1, {arizona, bindings} => Bindings},
-                Raw#{state => State}
-            ),
-            {Resp, Req1} = dispatch_action(Handler, Action, ActionReq),
-            %% Flush the action's OWN arizona_req, recovered from the request it
-            %% returned: an action that writes the session/flash
-            %% (`put_session/3`, `clear_session/1`, ...) through
-            %% `arizona_controller:req/1` threads the mutated request back with
-            %% `arizona_controller:put_req/2`, and those writes are then
-            %% serialized and committed rather than dropped in favour of the
-            %% pre-action copy. An action that threads nothing back (or returns
-            %% a hand-built request without the stash) falls back to the
-            %% pipeline's own -- the read-only path.
-            FlushReq = action_arizona_req(Req1, ArzReq1),
-            %% Drop the stash before roadrunner sees the request again: it holds
-            %% the DECRYPTED session, and a handler crash logs the request.
-            {arizona_roadrunner_resp:flush(FlushReq, Resp), strip_arizona_private(Req1)}
-    end.
-
-%% The action's post-write arizona_req, or the pipeline's when the action
-%% returned a request that no longer carries the stash.
-action_arizona_req(Req, Fallback) ->
-    case roadrunner_req:private(Req) of
-        #{{arizona, req} := ArzReq} -> ArzReq;
-        #{} -> Fallback
-    end.
-
-%% The stash exists for the action only; roadrunner logs the request on a
-%% handler crash, so the decrypted session must not ride back out with it.
-strip_arizona_private(Req) ->
-    roadrunner_req:delete_private(
-        {arizona, bindings}, roadrunner_req:delete_private({arizona, req}, Req)
-    ).
+    #{arizona := #{handler := Handler} = Route} = roadrunner_req:state(Req),
+    {Reply, ArzReq} = arizona_controller:dispatch(
+        Route, arizona_roadrunner_req:new(Req), arizona_roadrunner_server
+    ),
+    {to_roadrunner(Handler, Reply), arizona_req:raw(ArzReq)}.
 
 -doc """
-Renders a friendly message when a route names an `action` the controller module
-does not export. Picked up by `erl_error` via the `error_info` annotation.
+Roadrunner `handle_info/3` callback for a `{loop, ...}` reply: hands each message
+to the controller's own `handle_info/3`.
 """.
--spec format_error(Reason, Stacktrace) -> ErrorInfo when
-    Reason :: term(),
-    Stacktrace :: [tuple()],
-    ErrorInfo :: #{general := iolist()}.
-format_error({missing_action, Handler, Action, Arity}, _ST) ->
-    #{
-        general => io_lib:format(
-            "controller ~s does not export the action ~s/~b. "
-            "Check the route's `action` option (default `handle`), or define the function.",
-            [Handler, Action, Arity]
-        )
-    }.
+-spec handle_info(Info, Push, State) -> {ok, State} | {stop, State} when
+    Info :: term(),
+    Push :: roadrunner_handler:push_fun(),
+    State :: {module(), term()}.
+handle_info({roadrunner_disconnect, Reason}, Push, State) ->
+    handle_info({arizona_disconnect, Reason}, Push, State);
+handle_info(Info, Push, {Handler, LoopState}) ->
+    case Handler:handle_info(Info, Push, LoopState) of
+        {ok, LoopState1} -> {ok, {Handler, LoopState1}};
+        {stop, LoopState1} -> {stop, {Handler, LoopState1}}
+    end.
 
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Dispatch to the controller's action (Handler:Action/1, `action` defaulting to
-%% `handle` at compile time). A missing/unexported action is re-tagged into a clear
-%% `{missing_action, ...}` error (rendered by format_error/2); an `undef` from
-%% *inside* the action body propagates untagged.
-dispatch_action(Handler, Action, Req) ->
-    try
-        Handler:Action(Req)
-    catch
-        error:undef:ST ->
-            arizona_error:raise_or_propagate(
-                undef,
-                ST,
-                {Handler, Action, 1},
-                {missing_action, Handler, Action, 1},
-                [Handler, Action, Req],
-                ?MODULE
-            )
-    end.
+%% A buffered reply without framing gets its `content-length` from roadrunner.
+to_roadrunner(_Handler, {Status, Headers, Body}) when is_integer(Status) ->
+    {Status, binary_headers(Headers), Body};
+to_roadrunner(Handler, {loop, Status, Headers, State}) ->
+    {loop, Status, binary_headers(Headers), {Handler, State}};
+to_roadrunner(_Handler, {Kind, Status, Headers, Payload}) ->
+    {Kind, Status, binary_headers(Headers), Payload}.
+
+binary_headers(Headers) ->
+    [{Name, iolist_to_binary(Value)} || {Name, Value} <- Headers].

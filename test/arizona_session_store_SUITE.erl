@@ -1,6 +1,9 @@
 -module(arizona_session_store_SUITE).
 -include_lib("stdlib/include/assert.hrl").
 
+%% The ETS store's table, named after its module.
+-define(STORE_TABLE, arizona_session_store_ets).
+
 -export([all/0]).
 -export([init_per_suite/1]).
 -export([end_per_suite/1]).
@@ -15,6 +18,8 @@
 -export([ets_sweep_reaps_expired/1]).
 -export([req_resp_cookies_is_pure_getter/1]).
 -export([req_transport_flush_commits_store_write/1]).
+-export([controller_refused_reply_commits_nothing/1]).
+-export([unsendable_cookie_commits_nothing/1]).
 -export([req_put_session_persists_to_store/1]).
 -export([req_session_id_available_after_write/1]).
 -export([req_read_session_from_store/1]).
@@ -50,6 +55,8 @@ all() ->
         ets_sweep_reaps_expired,
         req_resp_cookies_is_pure_getter,
         req_transport_flush_commits_store_write,
+        controller_refused_reply_commits_nothing,
+        unsendable_cookie_commits_nothing,
         req_put_session_persists_to_store,
         req_session_id_available_after_write,
         req_read_session_from_store,
@@ -166,19 +173,49 @@ req_resp_cookies_is_pure_getter(Config) when is_list(Config) ->
     ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)).
 
 req_transport_flush_commits_store_write(Config) when is_list(Config) ->
-    %% The roadrunner transport flush is the commit point: flushing a response
+    %% The flush is the commit point: flushing a response
     %% both serializes the session Set-Cookie onto it and commits the store
     %% write -- so a handler that crashes before a response is flushed leaves
     %% the store untouched (commit-on-success).
     Req0 = arizona_req_test_adapter:new(#{cookies => []}),
     Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
-    {200, Headers, <<>>} = arizona_roadrunner_resp:flush(Req1, {200, [], <<>>}),
+    Headers = arizona_req:flush(Req1),
     {~"set-cookie", SetCookie} = lists:keyfind(~"set-cookie", 1, Headers),
     [~"az_session", Value | _] = binary:split(iolist_to_binary(SetCookie), [~"=", ~";"], [
         global
     ]),
     {ok, Id} = arizona_session:decode_id(Value),
     ?assertEqual({ok, #{~"user_id" => ~"42"}}, arizona_session_store_ets:get(Id)).
+
+%% A controller reply the adapter cannot send is refused before the flush, so
+%% the session the action wrote never reaches the store.
+controller_refused_reply_commits_nothing(Config) when is_list(Config) ->
+    Route = #{
+        handler => arizona_bad_reply_controller, action => handle, state => #{}, middlewares => []
+    },
+    Req = arizona_req_test_adapter:new(#{cookies => []}),
+    Before = ets:tab2list(?STORE_TABLE),
+    ?assertError(
+        {bad_reply, not_a_reply}, arizona_controller:dispatch(Route, Req, arizona_roadrunner_server)
+    ),
+    ?assertEqual(Before, ets:tab2list(?STORE_TABLE)),
+    %% A well-formed reply the adapter cannot send is refused just as early.
+    Loop = Route#{handler => arizona_loop_controller, action => write_then_loop},
+    ?assertError(
+        {unsupported_reply, loop, arizona_fake_server},
+        arizona_controller:dispatch(Loop, Req, arizona_fake_server)
+    ),
+    ?assertEqual(Before, ets:tab2list(?STORE_TABLE)).
+
+%% A cookie that cannot be serialized fails the response; it must fail it
+%% before the session write reaches the store, not after.
+unsendable_cookie_commits_nothing(Config) when is_list(Config) ->
+    Req0 = arizona_req_test_adapter:new(#{cookies => []}),
+    Req1 = arizona_req:put_session(Req0, user_id, ~"42"),
+    Req2 = arizona_req:put_resp_cookie(Req1, ~"pref", ~"a;b", #{}),
+    Before = ets:tab2list(?STORE_TABLE),
+    ?assertError({invalid_cookie_value, ~"a;b"}, arizona_req:flush(Req2)),
+    ?assertEqual(Before, ets:tab2list(?STORE_TABLE)).
 
 req_put_session_persists_to_store(Config) when is_list(Config) ->
     Req0 = arizona_req_test_adapter:new(#{cookies => []}),

@@ -58,6 +58,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([method/1]).
 -export([path/1]).
 -export([scheme/1]).
+-export([client_scheme/1]).
 -export([request_id/1]).
 -export([raw/1]).
 -export([set_raw/2]).
@@ -78,6 +79,8 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -export([resp_headers/1]).
 -export([resp_cookies/1]).
 -export([commit_session/1]).
+-export([flush/1]).
+-export([halt_reply/1]).
 -export([resp_status/1]).
 -export([put_flash/3]).
 -export([flash/1]).
@@ -122,6 +125,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -ignore_xref([resp_headers/1]).
 -ignore_xref([resp_cookies/1]).
 -ignore_xref([resp_status/1]).
+-ignore_xref([commit_session/1]).
 -ignore_xref([put_flash/3]).
 -ignore_xref([flash/1]).
 -ignore_xref([put_session/3]).
@@ -237,7 +241,7 @@ Method = arizona_req:method(Req).          %% eager, no thread
 -nominal session() :: #{binary() => term()}.
 
 %% Response cookie options stashed by `put_resp_cookie/4` and serialized by
-%% the transport. Mirrors the transport cookie serializer's options.
+%% `arizona_cookie:serialize/3` at `flush/1`.
 -nominal resp_cookie_opts() :: #{
     domain => binary(),
     path => binary(),
@@ -274,8 +278,24 @@ Method = arizona_req:method(Req).          %% eager, no thread
 %% live (page) route, or `error` when it does not -- no matching route, a
 %% non-live route (controller/asset/ws), or a method mismatch. The path is
 %% client-supplied (`_az_path` on the WS upgrade, or a navigate/patch frame), so
-%% the callback must never crash on it; the caller turns `error` into a 404
-%% upgrade rejection or a full-page navigate. HTTP-only adapters can omit it.
+%% the callback must never crash on it, and must not answer the request itself
+%% (a router that replies 404 on a miss is unusable here: the raw request may
+%% already be a WebSocket); the caller turns `error` into a 404 upgrade
+%% rejection or a full-page navigate. HTTP-only adapters can omit it.
+%%
+%% The rest of the contract, which `arizona_server_conformance_SUITE` checks:
+%%
+%% - Match as a GET, whatever the raw request's own method: a navigate targets a
+%%   page, and an HTTP/2 WebSocket upgrade arrives as `CONNECT`.
+%% - Match exactly as an HTTP request to `Path` would: same routes (those of the
+%%   listener that accepted the raw request), same order, same percent-decoded
+%%   bindings.
+%% - `RouteOpts` is what that route renders with: `bindings`, `on_mount`,
+%%   `layouts` (the socket compares them to decide whether a navigate can swap
+%%   the page in place), and `middlewares` with the `check_origin` step the
+%%   route compiles in.
+%% - `NavRequest` reports `Path` as its path and `Qs` as its query string, not the
+%%   WebSocket endpoint's, and carries the raw request's headers and cookies.
 -callback resolve_route(path(), qs(), raw()) ->
     {ok, module(), arizona_live:route_opts(), request()} | error.
 
@@ -332,6 +352,23 @@ reports `http` even though the browser spoke HTTPS. Callers that need the
 """.
 -spec scheme(request()) -> scheme().
 scheme(#{adapter := Adapter, raw := Raw}) -> Adapter:scheme(Raw).
+
+-doc """
+The scheme the **browser** used: `scheme/1`, upgraded to `https` when a proxy in
+front reports the original request was (`X-Forwarded-Proto`, its first,
+client-facing entry). Upgrade-only, so a forged header can tighten what depends
+on it (the Origin check rejecting the forger's own request) but never loosen it,
+which is why it needs no trusted-proxy configuration. Threads the request, whose
+headers it may have parsed.
+""".
+-spec client_scheme(Request) -> {scheme(), Request} when
+    Request :: request().
+client_scheme(Req0) ->
+    {Headers, Req} = headers(Req0),
+    case scheme(Req) of
+        https -> {https, Req};
+        http -> {forwarded_scheme(Headers), Req}
+    end.
 
 -doc """
 Returns the adapter-supplied request ID (e.g. roadrunner's 16-char
@@ -689,6 +726,63 @@ commit_session_store(Store, Req) ->
 
 maybe_delete_stored(_Store, undefined) -> ok;
 maybe_delete_stored(Store, Id) -> Store:delete(Id).
+
+-doc """
+Ends the request: commits a written session (`commit_session/1`) and returns
+the header lines to add to the response, **in the order they must be sent**:
+one `set-cookie` line per `resp_cookies/1` entry (serialized by
+`arizona_cookie:serialize/3`), then the stashed headers (`put_resp_header/3`),
+each oldest first. Values are binaries.
+
+The order is part of the contract: the stash is newest first, and a browser
+keeps the **last** `Set-Cookie` for a name, so a cookie written twice must
+reach the wire in the order it was written. Emit the lines as listed.
+
+A server adapter calls this, or `halt_reply/1` on a middleware halt, exactly
+once for every response it builds from an Arizona request, whatever the
+response's shape: a page, a controller reply, a stream, a WebSocket upgrade
+(whose `101` then carries the cookies). Skipping it drops the stashed cookies
+and, in store mode, the session write, with nothing reporting it.
+""".
+-spec flush(Request) -> [{binary(), binary()}] when
+    Request :: request().
+flush(Req) ->
+    %% Serialize before committing: a cookie that cannot be sent raises here, and
+    %% must do so before the store is written (or, on a login rotation, the old
+    %% session revoked) for a response that then never goes out.
+    Lines =
+        [
+            {~"set-cookie", arizona_cookie:serialize(Name, Value, Opts)}
+         || {Name, Value, Opts} <- lists:reverse(resp_cookies(Req))
+        ] ++
+            [{Name, iolist_to_binary(Value)} || {Name, Value} <- lists:reverse(resp_headers(Req))],
+    ok = commit_session(Req),
+    Lines.
+
+-doc """
+The response to a middleware `{halt, Request}`: its status, and its header
+lines in send order -- `flush/1`'s (so it also commits the session), then a
+redirect's `location`. The body is empty.
+
+A halting middleware says what the client should see by stashing a redirect
+(`redirect/2,3`: the status and a `location` header) or a status
+(`put_resp_status/2`). A halt carrying neither is a refusal with no reason
+disclosed, which is exactly `403 Forbidden` (RFC 9110 §15.5.4): `204` would
+report a denial as success (a `fetch` sees `ok` and resets the form), and `400`
+would blame request syntax the framework knows nothing about.
+""".
+-spec halt_reply(Request) -> {resp_status(), [{binary(), binary()}]} when
+    Request :: request().
+halt_reply(Req) ->
+    case halted_redirect(Req) of
+        {Status, Location} ->
+            {Status, flush(Req) ++ [{~"location", Location}]};
+        undefined ->
+            case resp_status(Req) of
+                undefined -> {403, flush(Req)};
+                Status -> {Status, flush(Req)}
+            end
+    end.
 
 -doc """
 Stashes the HTTP status for a rendered page. Lets a view or middleware return
@@ -1126,3 +1220,14 @@ ensure_session_id(Req) ->
         undefined -> Req;
         _ -> Req#{session_id => arizona_session:new_id()}
     end.
+
+%% `X-Forwarded-Proto` is a comma-separated chain when several proxies append to
+%% it; the client-facing hop is the first entry.
+forwarded_scheme(#{~"x-forwarded-proto" := Proto}) ->
+    [First | _] = binary:split(iolist_to_binary(Proto), ~","),
+    case string:equal(string:trim(First), ~"https", true) of
+        true -> https;
+        false -> http
+    end;
+forwarded_scheme(#{}) ->
+    http.

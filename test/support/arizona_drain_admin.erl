@@ -17,17 +17,17 @@ Query params:
 Always replies `204 No Content`.
 """.
 
--behaviour(roadrunner_handler).
+-export([handle/2]).
 
--export([handle/1]).
-
--spec handle(Req) -> {Response, Req} when
-    Req :: roadrunner_req:request(),
-    Response :: roadrunner_handler:response().
-handle(Req) ->
-    Qs = roadrunner_req:parse_qs(Req),
+-spec handle(Req, Ctx) -> {Reply, Req} when
+    Req :: arizona_req:request(),
+    Ctx :: arizona_controller:context(),
+    Reply :: arizona_controller:reply().
+handle(Req0, _Ctx) ->
+    {Qs, Req1} = arizona_req:params(Req0),
     Listener = binary_to_existing_atom(proplists:get_value(~"listener", Qs, ~"http")),
     DeadlineMs = binary_to_integer(proplists:get_value(~"deadline_ms", Qs, ~"5000")),
     Deadline = erlang:monotonic_time(millisecond) + DeadlineMs,
+    %% Roadrunner's rolling-deploy drain: this fixture drives that listener only.
     ok = roadrunner_listener:notify_drain(Listener, Deadline),
-    {roadrunner_resp:no_content(), Req}.
+    {{204, [], <<>>}, Req1}.

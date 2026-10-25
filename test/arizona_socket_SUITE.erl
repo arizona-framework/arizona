@@ -1773,7 +1773,7 @@ navigate_sees_session_rotated_at_upgrade_in_store_mode(Config) when is_list(Conf
             {cont, R, B}
         end,
         {H, B, ArzReq} = upgrade(#{cookies => [stored_cookie(OldId)]}, [Rotate]),
-        %% What the transport does on the 101 (arizona_roadrunner_resp:flush/2).
+        %% What the transport does on the 101 (arizona_req:flush/1).
         ok = arizona_req:commit_session(ArzReq),
         NewId = arizona_req:session_id(ArzReq),
         ?assertNotEqual(OldId, NewId),

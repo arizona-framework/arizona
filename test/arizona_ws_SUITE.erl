@@ -116,9 +116,9 @@
     controller_dispatches_action_by_verb/1,
     controller_missing_action_errors/1,
     controller_flushes_stash_onto_stream_response/1,
-    controller_put_req_commits_cookie_mode_session_write/1,
-    controller_put_req_commits_action_session_write/1,
-    controller_without_put_req_flushes_pre_action_req/1,
+    controller_returned_req_commits_cookie_mode_session_write/1,
+    controller_returned_req_commits_action_session_write/1,
+    controller_returning_its_input_flushes_pre_action_req/1,
     bare_halt_is_forbidden_on_every_dispatcher/1,
     crash_event_closes/1,
     crash_info_closes/1,
@@ -240,15 +240,15 @@ groups() ->
         controller_dispatches_action_by_verb,
         controller_missing_action_errors,
         controller_flushes_stash_onto_stream_response,
-        controller_put_req_commits_cookie_mode_session_write,
+        controller_returned_req_commits_cookie_mode_session_write,
         bare_halt_is_forbidden_on_every_dispatcher
     ],
     %% Store-mode session tests: their own group so the `session_store` app env
     %% (and the store owner process) are set up and torn down around them
     %% instead of leaking cookie-mode assumptions into the rest of the suite.
     SessionStore = [
-        controller_put_req_commits_action_session_write,
-        controller_without_put_req_flushes_pre_action_req,
+        controller_returned_req_commits_action_session_write,
+        controller_returning_its_input_flushes_pre_action_req,
         ws_upgrade_commits_middleware_session_write,
         ws_upgrade_commits_middleware_session_clear,
         ws_upgrade_rotated_session_reaches_navigate
@@ -485,7 +485,7 @@ init_per_group(roadrunner, Config) ->
             state => #{marker => ~"STATE_OK"}
         }},
         %% Controller route whose middleware output the action reads back
-        %% (arizona_controller:req/1 + bindings/1).
+        %% (the request it is handed + the bindings in its context).
         {get, <<"/_test/session-echo">>, arizona_session_echo_controller, #{
             middlewares => [{arizona_middleware, fetch_session}]
         }},
@@ -494,12 +494,12 @@ init_per_group(roadrunner, Config) ->
         {post, <<"/_test/users">>, arizona_users_controller, #{action => create}},
         %% Route naming an action the controller does not export (error path).
         {get, <<"/_test/bad-action">>, arizona_users_controller, #{action => nope}},
-        %% Cookie-mode (no session_store) session write through the same
-        %% req/1 -> write -> put_req/2 round trip.
+        %% Cookie-mode (no session_store) session write on the request the
+        %% action returns.
         {post, <<"/_test/session-write">>, arizona_session_write_controller, #{}},
-        %% Store-mode logout: the action mutates the post-middleware arizona_req
-        %% and threads it back with arizona_controller:put_req/2 (`/logout`), or
-        %% deliberately does not (`/logout-dropped`), pinning the boundary.
+        %% Store-mode logout: the action clears the session on its request and
+        %% returns it (`/logout`), or deliberately returns the one it was given
+        %% (`/logout-dropped`), pinning the boundary.
         {post, <<"/_test/logout">>, arizona_logout_controller, #{}},
         {post, <<"/_test/logout-dropped">>, arizona_logout_controller, #{
             action => handle_dropped
@@ -945,10 +945,10 @@ controller_runs_handler_with_state(Config) ->
 
 controller_action_reads_middleware_output(Config) ->
     %% The middleware pipeline's product reaches the action: fetch_session runs
-    %% on the controller route and the action recovers both the post-middleware
-    %% arizona_req (arizona_controller:req/1 -- get_session sees the decoded
-    %% session) and the produced bindings (arizona_controller:bindings/1 -- the
-    %% `session` binding). They used to be discarded, so fetch_session/extract
+    %% on the controller route and the action sees both the post-middleware
+    %% request it is handed (get_session sees the decoded session) and the
+    %% produced bindings (its context's `bindings` -- the `session`
+    %% binding). They used to be discarded, so fetch_session/extract
     %% middlewares on controller routes ran for nothing.
     Cookie = arizona_session:encode(#{~"user_id" => ~"u1"}),
     CookieHeader = ["Cookie: az_session=", binary_to_list(Cookie), "\r\n"],
@@ -987,7 +987,7 @@ controller_missing_action_errors(Config) ->
     Resp = http_req(Config, "GET", "/_test/bad-action", []),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"500">>)).
 
-controller_put_req_commits_cookie_mode_session_write(Config) ->
+controller_returned_req_commits_cookie_mode_session_write(Config) ->
     %% Cookie mode -- the default, and the mode the store-mode group's tests
     %% cannot speak for. A session written on the post-middleware request and
     %% threaded back with put_req/2 reaches the client as the encrypted
@@ -1005,20 +1005,19 @@ session_cookie_value(Resp) ->
     [Value | _] = binary:split(Rest, ~";"),
     Value.
 
-controller_put_req_commits_action_session_write(Config) ->
+controller_returned_req_commits_action_session_write(Config) ->
     %% An action's OWN session write reaches the response and the store: the
-    %% logout controller clears the session on the post-middleware arizona_req
-    %% and threads it back with arizona_controller:put_req/2. Without the
-    %% writer the dispatcher recovered the PRE-action request from the stash,
-    %% so `clear_session/1` sent no clearing cookie and left the store entry
-    %% live for its full TTL -- a logout that revoked nothing.
+    %% logout controller clears the session on the request it is handed and
+    %% returns it. Flushing anything but the returned request would send no
+    %% clearing cookie and leave the store entry live for its full TTL -- a
+    %% logout that revoked nothing.
     Id = seed_stored_session(),
     Resp = http_req(Config, "POST", "/_test/logout", [stored_session_cookie(Id)]),
     ?assertNotEqual(nomatch, binary:match(Resp, ~"200 OK")),
     ?assertNotEqual(nomatch, binary:match(Resp, ~"az_session=;")),
     ?assertEqual(no_session, arizona_session_store_ets:get(Id)).
 
-controller_without_put_req_flushes_pre_action_req(Config) ->
+controller_returning_its_input_flushes_pre_action_req(Config) ->
     %% The boundary, pinned explicitly: an action that mutates the request but
     %% returns the one it was given leaves the PRE-action request flushed -- no
     %% clearing cookie, store entry untouched. The thread-back is the documented

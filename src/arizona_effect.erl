@@ -213,8 +213,8 @@ flash_message(Op) ->
         "follows. In an event attribute or a controller response nothing carries "
         "it, so it would be lost and its content shipped to the page. From a "
         "template, push an event whose handler returns the ~s; from a controller, "
-        "set the flash with arizona_req:put_flash/3 through the req/1 -> put_req/2 "
-        "round trip and navigate with #{full => true}, so the browser's next GET "
+        "set the flash with arizona_req:put_flash/3 on the request the action "
+        "returns and navigate with #{full => true}, so the browser's next GET "
         "carries the flash cookie",
         [Op, Op]
     ).

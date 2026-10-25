@@ -7,7 +7,7 @@ Translates roadrunner's split handler model (upgrade-time
 transport-agnostic `arizona_socket` API:
 
 - `handle/1` -- the `roadrunner_handler` callback. Delegates the
-  upgrade-time handshake to `arizona_ws:prepare/3` (parse
+  upgrade-time handshake to `arizona_ws:upgrade/3` (parse
   `_az_path`/`_az_reconnect`, resolve the route via
   `arizona_roadrunner_req`, run middlewares) and returns either a
   plain HTTP halt reply or a `{websocket, ?MODULE, State}` upgrade
@@ -52,19 +52,14 @@ middlewares, and returns the websocket upgrade tuple.
     Req :: roadrunner_req:request(),
     Response :: roadrunner_handler:response().
 handle(Req) ->
-    QS = roadrunner_req:parse_qs(Req),
-    case arizona_ws:prepare(QS, arizona_roadrunner_req, Req) of
-        {halt, HaltReq} ->
-            {arizona_roadrunner_resp:halt(HaltReq), arizona_req:raw(HaltReq)};
-        not_found ->
-            %% The client-supplied `_az_path` did not resolve to a live route.
-            %% Reject the upgrade with 404 rather than crashing the handler.
-            {roadrunner_resp:not_found(), Req};
-        {cont, #{req := ArzReq} = State} ->
-            %% Fold what the route's middlewares stashed (cookies, headers, a
-            %% session write) onto the 101, as the HTTP dispatchers do onto
-            %% theirs.
-            {arizona_roadrunner_resp:flush(ArzReq, {websocket, ?MODULE, State}), Req}
+    case arizona_ws:upgrade(roadrunner_req:parse_qs(Req), arizona_roadrunner_req, Req) of
+        {reply, Status, Headers, Raw} ->
+            {{Status, Headers ++ [{~"content-length", ~"0"}], <<>>}, Raw};
+        {upgrade, [], State} ->
+            {{websocket, ?MODULE, State}, Req};
+        {upgrade, Headers, State} ->
+            %% What the route's middlewares stashed rides the 101.
+            {{websocket, ?MODULE, State, Headers}, Req}
     end.
 
 -doc """
@@ -78,18 +73,8 @@ the announced fingerprints.
 -spec init(State) -> Result when
     State :: map(),
     Result :: roadrunner_ws_handler:result().
-init(#{handler := H, bindings := IB, on_mount := OM, req := ArzReq, reconnect := R} = State) ->
-    Caps = maps:get(capabilities, State, #{}),
-    FpsFollow = maps:get(fps_follow, State, false),
-    Layouts = maps:get(layouts, State, []),
-    Opts = #{
-        reconnect => R,
-        fps_follow => FpsFollow,
-        on_mount => OM,
-        layouts => Layouts,
-        capabilities => Caps
-    },
-    to_roadrunner(arizona_socket:init(H, IB, ArzReq, Opts), State).
+init(State) ->
+    to_roadrunner(arizona_ws:init(State), State).
 
 -doc """
 Roadrunner `handle_frame/2` callback. Forwards text frames to the
@@ -129,14 +114,7 @@ alive past drain.
     Result :: roadrunner_ws_handler:result().
 handle_drain(Deadline, #{socket := Sock, req := Req} = State) ->
     ok = roadrunner:acknowledge_drain(arizona_req:raw(Req), Deadline),
-    ok =
-        case arizona_socket:live_pid(Sock) of
-            undefined ->
-                ok;
-            Pid ->
-                Pid ! {arizona_drain, Deadline},
-                ok
-        end,
+    ok = arizona_socket:drain(Sock, Deadline),
     {ok, State}.
 
 %% --------------------------------------------------------------------

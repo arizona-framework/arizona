@@ -1,6 +1,7 @@
 -module(arizona_roadrunner_server).
 -moduledoc """
-Boots a roadrunner listener wired up with Arizona routes.
+Boots a roadrunner listener wired up with Arizona routes: the built-in
+`arizona_server` adapter.
 
 `start/2` compiles the route list, stashes the originals so they
 can be re-compiled later, configures this listener's own dispatch
@@ -75,10 +76,13 @@ when `protocols` is omitted is `[http1]` (HTTP/1.1 only).
 %% API function exports
 %% --------------------------------------------------------------------
 
+-behaviour(arizona_server).
+
 -export([start/2]).
 -export([stop/1]).
 -export([drain/2]).
 -export([recompile_routes/0]).
+-export([capabilities/0]).
 -export([format_error/2]).
 
 %% --------------------------------------------------------------------
@@ -182,6 +186,11 @@ recompile_routes() ->
         Terms
     ).
 
+-doc "Roadrunner serves every route and reply kind.".
+-spec capabilities() -> #{routes := [mcp | reload], replies := [stream | sendfile | loop]}.
+capabilities() ->
+    #{routes => [mcp, reload], replies => [stream, sendfile, loop]}.
+
 -doc """
 Formats runtime errors raised with an `error_info` annotation pointing at
 this module. Picked up by `erl_error:format_exception/3`.
@@ -215,6 +224,9 @@ format_error({unsupported_transport_opt, Opt}, _ST) ->
 %% --------------------------------------------------------------------
 
 start_new(Name, Opts0) ->
+    %% Arizona does not list roadrunner as an application (a server-less consumer
+    %% never boots it), so the adapter starts it on its first listener.
+    {ok, _} = application:ensure_all_started(roadrunner),
     %% Resolve `{env, ...}` references (port, tls paths, proto_opts, ...) before
     %% reading any option. `resolve/1` leaves the route tuples untouched, so
     %% `Routes` is unchanged; it is idempotent, so a caller that already resolved
@@ -253,6 +265,7 @@ start_listener(Name, ListenerOpts, Stash) ->
     ok = put_routes(Name, Stash),
     case roadrunner:start_listener(Name, ListenerOpts) of
         {ok, _Pid} = Ok ->
+            ok = arizona_server_registry:register(?MODULE),
             Ok;
         {error, _Reason} = Error ->
             ok = restore_routes(Name, Previous),

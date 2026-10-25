@@ -5,6 +5,8 @@
 -export([groups/0]).
 
 -export([halt_keeps_redirect_and_cookie/1]).
+-export([reply_sends_flush_lines_then_content_type/1]).
+-export([reply_turns_a_halt_into_its_halt_reply/1]).
 -export([render_threads_cookie/1]).
 -export([render_answers_the_targets_content_type/1]).
 -export([render_refuses_a_cross_target_layout/1]).
@@ -21,6 +23,8 @@ groups() ->
     [
         {render, [parallel], [
             halt_keeps_redirect_and_cookie,
+            reply_sends_flush_lines_then_content_type,
+            reply_turns_a_halt_into_its_halt_reply,
             render_threads_cookie,
             render_answers_the_targets_content_type,
             render_refuses_a_cross_target_layout,
@@ -56,6 +60,30 @@ halt_keeps_redirect_and_cookie(Config) when is_list(Config) ->
     ?assertEqual(
         [{~"session", ~"abc", #{path => ~"/"}}],
         arizona_req:resp_cookies(HaltReq)
+    ).
+
+%% reply/3 is what an adapter sends: the stash in send order, then the page's
+%% media type, with the body render/3 produced.
+reply_sends_flush_lines_then_content_type(Config) when is_list(Config) ->
+    Mw = [
+        fun(R, B) ->
+            {cont, arizona_req:put_resp_cookie(R, ~"theme", ~"dark", #{path => ~"/"}), B}
+        end
+    ],
+    {200, Headers, Body, _Req} = arizona_http:reply(
+        arizona_about, arizona_req_test_adapter:new(#{}), #{middlewares => Mw}
+    ),
+    ?assertEqual(
+        [{~"set-cookie", ~"theme=dark; Path=/"}, {~"content-type", arizona_html:content_type()}],
+        Headers
+    ),
+    ?assertNotEqual(<<>>, iolist_to_binary(Body)).
+
+reply_turns_a_halt_into_its_halt_reply(Config) when is_list(Config) ->
+    Mw = [fun(R, _B) -> {halt, arizona_req:redirect(R, 303, ~"/login")} end],
+    ?assertMatch(
+        {303, [{~"location", ~"/login"}], <<>>, _},
+        arizona_http:reply(arizona_about, arizona_req_test_adapter:new(#{}), #{middlewares => Mw})
     ).
 
 %% A middleware that stashes a cookie then continues. The rendered result threads

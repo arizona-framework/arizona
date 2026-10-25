@@ -2,14 +2,14 @@
     {description, "Real-time web framework for Erlang"},
     {vsn, semver},
     {registered, []},
-    %% Only what arizona ALWAYS needs. roadrunner (HTTP server) and ssh (SSH/TTY
-    %% transport) are deliberately in NEITHER `applications` nor
-    %% `optional_applications`: arizona lazy-starts each on demand (roadrunner
-    %% when a `server` env is set, ssh when the SSH transport starts). Listing
+    %% Only what arizona ALWAYS needs. The HTTP servers (roadrunner, cowboy) and
+    %% ssh (SSH/TTY transport) are deliberately in NEITHER `applications` nor
+    %% `optional_applications`: arizona lazy-starts each on demand (a server when
+    %% its adapter starts a listener, ssh when the SSH transport starts). Listing
     %% them here -- or in optional_applications, which relx also bundles AND
     %% force-starts -- would boot them for every consumer, including
     %% server-less/static-generation use. A consumer that ships the server
-    %% declares roadrunner (and ssh) in its OWN app's `applications`, so its
+    %% declares its server (and ssh) in its OWN app's `applications`, so its
     %% release bundles them and arizona lazy-starts them. The dev reloader's file
     %% watcher is no dependency at all: it is an `arizona_watcher` implementation
     %% the consumer adds to a dev-only profile.

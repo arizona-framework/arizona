@@ -69,6 +69,14 @@ the client reloads it after a jittered delay.
 -export([handle_in/2]).
 -export([handle_info/2]).
 -export([live_pid/1]).
+-export([drain/2]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+%% Read by `drain/2` in-tree; public for adapters and tests that need the live process.
+-ignore_xref([live_pid/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -386,6 +394,25 @@ the socket was constructed without one (test fixtures).
 """.
 -spec live_pid(socket()) -> pid() | undefined.
 live_pid(#socket{pid = Pid}) -> Pid.
+
+-doc """
+Tells the socket's live process its listener is draining, as
+`{arizona_drain, Deadline}` (`Deadline` an `erlang:monotonic_time(millisecond)`
+value): the view's `handle_drain/2` runs and, by default, the socket closes
+`1001`, which clients reconnect from. A socket built without a live process
+(a test fixture) has nothing to tell.
+""".
+-spec drain(Socket, Deadline) -> ok when
+    Socket :: socket(),
+    Deadline :: integer().
+drain(Sock, Deadline) ->
+    case live_pid(Sock) of
+        undefined ->
+            ok;
+        Pid ->
+            Pid ! {arizona_drain, Deadline},
+            ok
+    end.
 
 -doc """
 Handles inbox messages forwarded by the transport.

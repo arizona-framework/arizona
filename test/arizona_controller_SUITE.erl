@@ -11,7 +11,14 @@
 -export([reply_redirect_off_origin_loads_full_page/1]).
 -export([reply_redirect_reads_location_as_a_browser_does/1]).
 -export([reply_redirect_refuses_unsafe_scheme/1]).
--export([set_cookie_layers_onto_reply/1]).
+-export([dispatch_sends_flushed_lines_ahead_of_the_reply/1]).
+-export([dispatch_hands_the_action_state_and_bindings/1]).
+-export([dispatch_halt_skips_the_action/1]).
+-export([dispatch_flushes_the_returned_request/1]).
+-export([dispatch_refuses_a_bad_reply_before_committing/1]).
+-export([dispatch_refuses_a_loop_without_handle_info/1]).
+-export([dispatch_names_a_missing_action/1]).
+-export([unsupported_reply_names_kind_and_adapter/1]).
 -export([reply_effects_refuses_navigate_flash/1]).
 -export([put_flash_with_full_navigate_reaches_target/1]).
 -export([init_per_suite/1]).
@@ -31,7 +38,14 @@ groups() ->
             reply_redirect_off_origin_loads_full_page,
             reply_redirect_reads_location_as_a_browser_does,
             reply_redirect_refuses_unsafe_scheme,
-            set_cookie_layers_onto_reply,
+            dispatch_sends_flushed_lines_ahead_of_the_reply,
+            dispatch_hands_the_action_state_and_bindings,
+            dispatch_halt_skips_the_action,
+            dispatch_flushes_the_returned_request,
+            dispatch_refuses_a_bad_reply_before_committing,
+            dispatch_refuses_a_loop_without_handle_info,
+            dispatch_names_a_missing_action,
+            unsupported_reply_names_kind_and_adapter,
             reply_effects_refuses_navigate_flash,
             put_flash_with_full_navigate_reaches_target,
             reply_effects_flattens_nested_commands
@@ -168,19 +182,88 @@ reply_redirect_refuses_unsafe_scheme(Config) when is_list(Config) ->
     ).
 
 %% --------------------------------------------------------------------
-%% Cookies layer on with the roadrunner_resp builders
+%% dispatch/3
 %% --------------------------------------------------------------------
 
-%% The real Set-Cookie -- the reason fetch exists -- rides on the reply via the
-%% existing roadrunner_resp:set_cookie/4, with no controller-specific plumbing.
-set_cookie_layers_onto_reply(Config) when is_list(Config) ->
-    Resp0 = arizona_controller:reply_effects([arizona_js:set_title(~"Saved")]),
-    {200, Headers, _Body} = roadrunner_resp:set_cookie(Resp0, ~"sid", ~"new", #{
-        http_only => true, path => ~"/"
-    }),
-    Cookie = proplists:get_value(~"set-cookie", Headers),
-    ?assertNotEqual(undefined, Cookie),
-    ?assertNotEqual(nomatch, binary:match(Cookie, ~"sid=new")).
+%% The cookie an action writes on its request goes out ahead of the reply's own
+%% headers, the way every adapter sends it.
+dispatch_sends_flushed_lines_ahead_of_the_reply(Config) when is_list(Config) ->
+    {{200, Headers, _Body}, _Req} = dispatch(arizona_fetch_push_controller, handle, #{}, []),
+    ?assertMatch(
+        [{~"set-cookie", <<"pushed=1; ", _/binary>>}, {~"content-type", ~"application/json"}],
+        Headers
+    ).
+
+dispatch_hands_the_action_state_and_bindings(Config) when is_list(Config) ->
+    Bind = fun(R, B) -> {cont, R, B#{session => #{~"user_id" => ~"u7"}}} end,
+    ?assertMatch(
+        {{200, _, ~"MARK"}, _},
+        dispatch(arizona_state_echo_controller, handle, #{marker => ~"MARK"}, [])
+    ),
+    ?assertMatch(
+        {{200, _, <<"session=anon binding=u7">>}, _},
+        dispatch(arizona_session_echo_controller, handle, #{}, [Bind])
+    ).
+
+dispatch_halt_skips_the_action(Config) when is_list(Config) ->
+    Gate = fun(R, _B) -> {halt, arizona_req:redirect(R, 303, ~"/login")} end,
+    ?assertMatch(
+        {{303, [{~"location", ~"/login"}], <<>>}, _},
+        dispatch(arizona_fetch_push_controller, handle, #{}, [Gate])
+    ).
+
+%% What is flushed is the request the action returned: a write it discards never
+%% reaches the response.
+dispatch_flushes_the_returned_request(Config) when is_list(Config) ->
+    {{200, Written, _}, _} = dispatch(arizona_session_write_controller, handle, #{}, []),
+    ?assertMatch([{~"set-cookie", <<"az_session=", _/binary>>} | _], Written),
+    Session = arizona_session:encode(#{~"user_id" => ~"u1"}),
+    Req = arizona_req_test_adapter:new(#{cookies => [{~"az_session", Session}]}),
+    Route = route(arizona_logout_controller, handle_dropped, #{}, []),
+    {{200, Dropped, _}, _} = arizona_controller:dispatch(Route, Req, arizona_roadrunner_server),
+    ?assertEqual([{~"content-type", ~"application/json"}], Dropped).
+
+%% A reply no adapter could send is refused before the flush commits anything.
+dispatch_refuses_a_bad_reply_before_committing(Config) when is_list(Config) ->
+    ?assertError({bad_reply, not_a_reply}, dispatch(arizona_bad_reply_controller, handle, #{}, [])).
+
+dispatch_refuses_a_loop_without_handle_info(Config) when is_list(Config) ->
+    ?assertError(
+        {missing_loop_callback, arizona_bad_reply_controller},
+        dispatch(arizona_bad_reply_controller, loop, #{}, [])
+    ).
+
+dispatch_names_a_missing_action(Config) when is_list(Config) ->
+    ?assertError(
+        {missing_action, arizona_users_controller, nope, 2},
+        dispatch(arizona_users_controller, nope, #{}, [])
+    ).
+
+%% A reply kind the adapter does not declare is refused, naming both.
+unsupported_reply_names_kind_and_adapter(Config) when is_list(Config) ->
+    Route = route(arizona_loop_controller, handle, #{}, []),
+    Req = arizona_req_test_adapter:new(#{cookies => []}),
+    {error, Reason, ST} =
+        try arizona_controller:dispatch(Route, Req, arizona_fake_server) of
+            _ -> error(not_raised)
+        catch
+            error:R:S -> {error, R, S}
+        end,
+    ?assertEqual({unsupported_reply, loop, arizona_fake_server}, Reason),
+    Message = iolist_to_binary(erl_error:format_exception(error, Reason, ST)),
+    ?assertNotEqual(
+        nomatch, binary:match(Message, ~"arizona_fake_server server adapter cannot send a loop")
+    ).
+
+dispatch(Handler, Action, State, Middlewares) ->
+    arizona_controller:dispatch(
+        route(Handler, Action, State, Middlewares),
+        arizona_req_test_adapter:new(#{cookies => []}),
+        arizona_roadrunner_server
+    ).
+
+route(Handler, Action, State, Middlewares) ->
+    #{handler => Handler, action => Action, state => State, middlewares => Middlewares}.
 
 %% --------------------------------------------------------------------
 %% A navigate/patch flash has no carrier in a fetch response
@@ -211,17 +294,16 @@ reply_effects_refuses_navigate_flash(Config) when is_list(Config) ->
         {200, _, _}, arizona_controller:reply_effects([arizona_js:navigate(~"/done", #{})])
     ).
 
-%% What carries a flash out of a controller: `put_flash/3` through the request
-%% round trip sets the signed cookie on this response, and a FULL navigation makes
+%% What carries a flash out of a controller: `put_flash/3` on the returned
+%% request sets the signed cookie on this response, and a FULL navigation makes
 %% the browser's next GET carry it. (A SPA navigate would not: the socket's request
 %% predates the cookie.)
 put_flash_with_full_navigate_reaches_target(Config) when is_list(Config) ->
     ArzReq = arizona_req:put_flash(arizona_req_test_adapter:new(#{}), info, ~"Saved"),
-    Resp = arizona_roadrunner_resp:flush(
-        ArzReq,
-        arizona_controller:reply_effects([arizona_js:navigate(~"/done", #{full => true})])
-    ),
-    {200, Headers, Body} = Resp,
+    {200, _ReplyHeaders, Body} = arizona_controller:reply_effects([
+        arizona_js:navigate(~"/done", #{full => true})
+    ]),
+    Headers = arizona_req:flush(ArzReq),
     ?assertEqual(
         #{~"e" => [[10, ~"/done", #{~"full" => true}]]}, json:decode(iolist_to_binary(Body))
     ),

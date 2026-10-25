@@ -32,6 +32,14 @@ transport's native reply shape.
 %% --------------------------------------------------------------------
 
 -export([render/3]).
+-export([reply/3]).
+
+%% --------------------------------------------------------------------
+%% Ignore xref warnings
+%% --------------------------------------------------------------------
+
+%% The step under `reply/3`, kept public for an adapter that frames its own reply.
+-ignore_xref([render/3]).
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -39,6 +47,7 @@ transport's native reply shape.
 
 -export_type([error_info/0]).
 -export_type([result/0]).
+-export_type([reply/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -55,6 +64,12 @@ transport's native reply shape.
     {halt, arizona_req:request()}
     | {ok, arizona_req:resp_status(), ContentType :: binary(), iolist(), arizona_req:request()}
     | {error, 500, ContentType :: binary(), iolist(), arizona_req:request()}.
+
+%% A page response as plain data: status, header lines in send order, body, and
+%% the threaded request (its raw value is what the adapter hands back to its
+%% server).
+-nominal reply() ::
+    {arizona_req:resp_status(), [{binary(), binary()}], iodata(), arizona_req:request()}.
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -80,6 +95,27 @@ render(Handler, ArzReq, Opts) ->
             %% Thread the req so the transport can flush response headers/cookies
             %% a middleware stashed before rendering.
             do_render(Handler, ArzReq1, Bindings1, Opts)
+    end.
+
+-doc """
+`render/3` folded into the response a server adapter sends: a halt becomes its
+`arizona_req:halt_reply/1` (empty body), a rendered page (or its error page)
+gets `arizona_req:flush/1`'s lines then its `content-type`. Either way the
+session is committed and the header lines are in send order, so the adapter
+only adds its own framing (a `content-length`) and replies.
+""".
+-spec reply(Handler, ArzReq, Opts) -> reply() when
+    Handler :: module(),
+    ArzReq :: arizona_req:request(),
+    Opts :: arizona_live:route_opts().
+reply(Handler, ArzReq, Opts) ->
+    case render(Handler, ArzReq, Opts) of
+        {halt, HaltReq} ->
+            {Status, Headers} = arizona_req:halt_reply(HaltReq),
+            {Status, Headers, <<>>, HaltReq};
+        {Outcome, Status, ContentType, Body, ArzReq1} when Outcome =:= ok; Outcome =:= error ->
+            Headers = arizona_req:flush(ArzReq1) ++ [{~"content-type", ContentType}],
+            {Status, Headers, Body, ArzReq1}
     end.
 
 %% --------------------------------------------------------------------
