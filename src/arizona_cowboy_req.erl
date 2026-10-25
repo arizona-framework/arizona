@@ -30,13 +30,6 @@ only saw the adapter's catch-all route.
 -export([resolve_route/3]).
 
 %% --------------------------------------------------------------------
-%% Macros
-%% --------------------------------------------------------------------
-
-%% A body larger than this is refused (`too_large`) rather than buffered.
--define(MAX_BODY, 10485760).
-
-%% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
 
@@ -74,9 +67,9 @@ parse_headers(CowboyReq) ->
     {ok, arizona_req:body(), CowboyReq} | {error, arizona_req:body_error()}
 when
     CowboyReq :: cowboy_req:req().
-read_body(CowboyReq) ->
+read_body(#{ref := Listener} = CowboyReq) ->
     try
-        read_body(CowboyReq, [], 0)
+        read_body(CowboyReq, [], 0, arizona_cowboy_server:max_content_length(Listener))
     catch
         exit:{timeout, _} -> {error, timeout};
         exit:timeout -> {error, timeout}
@@ -120,12 +113,13 @@ resolve_route(_Path, _Qs, _CowboyReq) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-read_body(CowboyReq0, Acc, Size) ->
+%% A body larger than `Max` is refused (`too_large`) rather than buffered.
+read_body(CowboyReq0, Acc, Size, Max) ->
     case cowboy_req:read_body(CowboyReq0) of
-        {ok, Data, CowboyReq} when Size + byte_size(Data) =< ?MAX_BODY ->
+        {ok, Data, CowboyReq} when Size + byte_size(Data) =< Max ->
             {ok, iolist_to_binary(lists:reverse([Data | Acc])), CowboyReq};
-        {more, Data, CowboyReq} when Size + byte_size(Data) =< ?MAX_BODY ->
-            read_body(CowboyReq, [Data | Acc], Size + byte_size(Data));
+        {more, Data, CowboyReq} when Size + byte_size(Data) =< Max ->
+            read_body(CowboyReq, [Data | Acc], Size + byte_size(Data), Max);
         {_OkOrMore, _Data, _CowboyReq} ->
             {error, too_large}
     end.
