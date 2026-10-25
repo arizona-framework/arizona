@@ -4,8 +4,8 @@ Cross-language wire op-code sync check.
 
 The diff op codes in `include/arizona_wire.hrl` and the effect op codes in
 `include/arizona_effect.hrl` are hand-copied into every client runtime
-(`assets/js/arizona-ops.js` and `arizona-commands.js` and the worker, the reference `e2e/utils/native_client.js`,
-and the Android/iOS `Wire.kt`/`Wire.swift`). Nothing else compares them, so a
+(`assets/js/arizona-ops.js`, `arizona-commands.js` and the worker, the reference
+`e2e/utils/native_client.js`, and the Android/iOS `Wire.kt`/`Wire.swift`). Nothing else compares them, so a
 renumber or addition in one artifact drifts silently -- a native client skips an
 unknown op non-strictly, hiding the mismatch until a patch or event misfires in
 production. This suite reads the Erlang headers as the source of truth and asserts
