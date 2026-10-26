@@ -109,11 +109,17 @@ route_match(Method, Path) ->
     %% arizona's per-route opts live under the `arizona` namespace
     %% inside `state` to keep them opaque from roadrunner's pipeline.
     %% Unwrap so the assertions can read handler/layouts/etc. directly.
-    %% asset routes have no arizona wrap and expose their opts at the top level.
+    %% asset routes have no arizona wrap and expose roadrunner_static's state.
     case State of
         #{arizona := ArzOpts} -> {Handler, ArzOpts};
         _ -> {Handler, State}
     end.
+
+%% What roadrunner_static holds for the opts the adapter hands it: the router
+%% runs its `init_route/1` when the routes compile, so a matched asset route
+%% carries that compiled state rather than the opts map.
+static_state(Opts) ->
+    roadrunner_static:init_route(Opts).
 
 %% The raw `match/3` result (incl. `{method_not_allowed, Allow}` and `not_found`).
 match_result(Method, Path) ->
@@ -218,7 +224,7 @@ compile_routes_asset_dir(Config) ->
     ]),
     {Handler, Opts} = route_match(<<"/static/foo.js">>),
     ?assertEqual(?config(static_handler, Config), Handler),
-    ?assertEqual(#{dir => "/tmp/assets"}, Opts),
+    ?assertEqual(static_state(#{dir => "/tmp/assets"}), Opts),
     %% roadrunner_static serves whatever the method, so the allowlist is
     %% what turns a non-read verb into a 405.
     ?assertMatch({ok, _, _, _, _}, match_result(~"HEAD", <<"/static/foo.js">>)),
@@ -239,11 +245,11 @@ compile_routes_asset_priv_dir(Config) ->
     {Handler, Opts} = route_match(<<"/priv/arizona.min.js">>),
     ExpectedDir = filename:join(code:priv_dir(arizona), "static/assets/js"),
     ?assertEqual(?config(static_handler, Config), Handler),
-    ?assertEqual(#{dir => ExpectedDir}, Opts).
+    ?assertEqual(static_state(#{dir => ExpectedDir}), Opts).
 
 compile_routes_asset_cache_control(Config) ->
     %% The 4-tuple asset form threads `cache_control` into roadrunner_static's
-    %% state verbatim; the 3-tuple form (covered above) carries only `dir`.
+    %% opts; the 3-tuple form (covered above) carries only `dir`.
     compile(Config, [
         {asset, <<"/static">>, {dir, "/tmp/assets"}, #{
             cache_control => ~"public, max-age=31536000, immutable"
@@ -252,7 +258,9 @@ compile_routes_asset_cache_control(Config) ->
     {Handler, Opts} = route_match(<<"/static/foo.js">>),
     ?assertEqual(?config(static_handler, Config), Handler),
     ?assertEqual(
-        #{dir => "/tmp/assets", cache_control => ~"public, max-age=31536000, immutable"},
+        static_state(#{
+            dir => "/tmp/assets", cache_control => ~"public, max-age=31536000, immutable"
+        }),
         Opts
     ).
 
@@ -427,7 +435,7 @@ compile_routes_mixed(Config) ->
     ?assertEqual(#{timeout => 30}, Opts2),
     {H3, Opts3} = route_match(<<"/assets/style.css">>),
     ?assertEqual(?config(static_handler, Config), H3),
-    ?assertEqual(#{dir => "/var/www"}, Opts3),
+    ?assertEqual(static_state(#{dir => "/var/www"}), Opts3),
     {H4, Opts4} = route_match(~"POST", <<"/health">>),
     ?assertEqual(arizona_roadrunner_controller, H4),
     ?assertEqual(health_h, maps:get(handler, Opts4)),
