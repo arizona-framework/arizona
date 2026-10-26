@@ -10,7 +10,7 @@ import org.junit.Test
 /**
  * Reconnect decisions, as pure functions plus the frame handler that feeds them.
  * Mirrors clients/ios Tests/AzWireTests/ReconnectTests.swift and
- * e2e/utils/native_client.test.js.
+ * e2e/utils/json_client.test.js.
  *
  * Run with ./gradlew :arizona:testDebugUnitTest
  */
@@ -40,11 +40,11 @@ class ReconnectTest {
     // The mount is the OP_REPLACE, not any frame carrying ops.
     @Test
     fun anOpReplaceMarksTheMount() {
-        val client = AzClient("http://localhost:4040", "/native/x")
+        val client = AzClient("http://localhost:4040", "/json/x")
         client.handleText("""{"o":[]}""")
         assertNull(client.mountedAt)
         client.handleText(
-            """{"o":[[8,"native_x",{"f":"R","s":$rootStatics,"d":["native_x"]}]]}""",
+            """{"o":[[8,"json_x",{"f":"R","s":$rootStatics,"d":["json_x"]}]]}""",
         )
         assertNotNull(client.mountedAt)
     }

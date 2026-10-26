@@ -1,6 +1,6 @@
 -module(arizona_android).
 -moduledoc """
-Builders for **Android** client effects, used inside `?native` views.
+Builders for **Android** client effects, used inside `?json` views.
 
 Each function returns an `t:arizona_effect:cmd/0` tuple
 `{arizona_effect, [OpCode | Args]}` -- the shared wire format every client
@@ -8,7 +8,7 @@ command module produces (op codes in `include/arizona_effect.hrl`), encoded by
 `arizona_effect:encode_json/1`. Use them as event props (`on_tap`, ...) or as
 effects from `handle_event/3`.
 
-Commands are per platform on purpose: a native view reaches for `arizona_android`
+Commands are per platform on purpose: a `?json` view reaches for `arizona_android`
 (not the browser's `arizona_js`), and this module is the home for Android-specific
 commands as they're added. `push_event`/`navigate` mirror their web counterparts.
 

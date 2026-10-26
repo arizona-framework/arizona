@@ -20,18 +20,18 @@ class TreeTest {
     fun rootSubtreeIndexedUnderTheRenderedRootId() {
         val json = Json.parseToJsonElement(
             """
-            {"type":"Column","az":"F-0","az_view":true,"id":"native_ticker",
+            {"type":"Column","az":"F-0","az_view":true,"id":"json_ticker",
              "children":[{"type":"#slot","az":"F-0t0","children":[]}]}
             """.trimIndent(),
         )
-        val root = buildTree(json, "native_ticker") // OP_REPLACE passes the root's id
+        val root = buildTree(json, "json_ticker") // OP_REPLACE passes the root's id
         val slot = root.children[0] as Node
-        assertEquals("native_ticker", root.viewId)
-        assertEquals("native_ticker", slot.viewId)
+        assertEquals("json_ticker", root.viewId)
+        assertEquals("json_ticker", slot.viewId)
 
         val views = HashMap<String, MutableMap<String, Node>>()
         indexByViews(root, views)
-        assertEquals(slot, views["native_ticker"]?.get("F-0t0"))
+        assertEquals(slot, views["json_ticker"]?.get("F-0t0"))
     }
 
     // A nested stateful child owns its subtree under its own id (the server
@@ -40,21 +40,21 @@ class TreeTest {
     fun nestedAzViewChildSwitchesView() {
         val json = Json.parseToJsonElement(
             """
-            {"type":"Column","az":"P-0","az_view":true,"id":"native_nested","children":[
+            {"type":"Column","az":"P-0","az_view":true,"id":"json_nested","children":[
               {"type":"Column","az":"C-0","az_view":true,"id":"child_a","children":[
                 {"type":"#slot","az":"C-0t0","children":[]}]}]}
             """.trimIndent(),
         )
-        val root = buildTree(json, "native_nested")
+        val root = buildTree(json, "json_nested")
         val child = root.children[0] as Node
         val childSlot = child.children[0] as Node
-        assertEquals("native_nested", root.viewId)
+        assertEquals("json_nested", root.viewId)
         assertEquals("child_a", child.viewId)
         assertEquals("child_a", childSlot.viewId)
 
         val views = HashMap<String, MutableMap<String, Node>>()
         indexByViews(root, views)
-        assertEquals(root, views["native_nested"]?.get("P-0"))
+        assertEquals(root, views["json_nested"]?.get("P-0"))
         assertEquals(child, views["child_a"]?.get("C-0"))
     }
 }

@@ -7,8 +7,8 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * On-device nested event routing -- the Kotlin analogue of e2e/native/nested.spec.js.
- * Navigate to /native/nested (two stateful child counters); tapping a child's
+ * On-device nested event routing -- the Kotlin analogue of e2e/json/nested.spec.js.
+ * Navigate to /json/nested (two stateful child counters); tapping a child's
  * button routes the event to THAT child's view id, so only its count changes.
  * Each child shows "<label><count>" (e.g. "A0") and a button labelled "<label>".
  *

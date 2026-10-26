@@ -2,21 +2,21 @@ import XCTest
 @testable import AzWire
 
 /// Pure tests of the interleaver, against the actual first frames the Arizona
-/// server emits for /native/counter and /native/list (captured live, shared
+/// server emits for /json/counter and /json/list (captured live, shared
 /// verbatim with the Android client's InterleaverTest). Run anywhere: swift test.
 final class InterleaverTests: XCTestCase {
-    // The {f, s, d} payload from the real /native/counter OP_REPLACE first frame.
-    let counterFrame = ##"{"d":["native_counter","0"],"f":"1M2KTR","s":["{\"type\":\"Column\",\"az\":\"1M2KTR-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"Text\",\"az\":\"1M2KTR-1\",\"children\":[\"Count: \",{\"type\":\"#slot\",\"az\":\"1M2KTR-1t0\",\"children\":[","]}]},{\"type\":\"Button\",\"az\":\"1M2KTR-2\",\"on_tap\":[0,\"inc\"],\"children\":[\"+\"]},{\"type\":\"Button\",\"az\":\"1M2KTR-3\",\"on_tap\":[0,\"dec\"],\"children\":[\"-\"]}]}"]}"##
+    // The {f, s, d} payload from the real /json/counter OP_REPLACE first frame.
+    let counterFrame = ##"{"d":["json_counter","0"],"f":"1M2KTR","s":["{\"type\":\"Column\",\"az\":\"1M2KTR-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"Text\",\"az\":\"1M2KTR-1\",\"children\":[\"Count: \",{\"type\":\"#slot\",\"az\":\"1M2KTR-1t0\",\"children\":[","]}]},{\"type\":\"Button\",\"az\":\"1M2KTR-2\",\"on_tap\":[0,\"inc\"],\"children\":[\"+\"]},{\"type\":\"Button\",\"az\":\"1M2KTR-3\",\"on_tap\":[0,\"dec\"],\"children\":[\"-\"]}]}"]}"##
 
-    // The /native/list OP_REPLACE first frame: a Column whose #slot wraps an
+    // The /json/list OP_REPLACE first frame: a Column whose #slot wraps an
     // each-array of keyed Row items.
-    let listFrame = ##"{"d":["native_list",{"d":[["1","One"],["2","Two"],["3","Three"]],"f":"O1M0B","s":["{\"type\":\"Row\",\"az\":\"O1M0B-0\",\"az_key\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"O1M0B-0t0\",\"children\":[","]}]}"],"t":0}],"f":"JW7VZ","s":["{\"type\":\"Column\",\"az\":\"JW7VZ-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"JW7VZ-0t0\",\"children\":[","]}]}"]}"##
+    let listFrame = ##"{"d":["json_list",{"d":[["1","One"],["2","Two"],["3","Three"]],"f":"O1M0B","s":["{\"type\":\"Row\",\"az\":\"O1M0B-0\",\"az_key\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"O1M0B-0t0\",\"children\":[","]}]}"],"t":0}],"f":"JW7VZ","s":["{\"type\":\"Column\",\"az\":\"JW7VZ-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"JW7VZ-0t0\",\"children\":[","]}]}"]}"##
 
     func testInterleavesCounterFrameIntoValidWidgetTree() throws {
         let tree = try Interleaver(FingerprintCache()).interleave(JSONValue.parse(counterFrame))
 
         XCTAssertEqual(tree["type"]?.stringValue, "Column")
-        XCTAssertEqual(tree["id"]?.stringValue, "native_counter")
+        XCTAssertEqual(tree["id"]?.stringValue, "json_counter")
 
         let children = tree["children"]!.arrayValue!
         XCTAssertEqual(children[0]["type"]?.stringValue, "Text")
@@ -34,7 +34,7 @@ final class InterleaverTests: XCTestCase {
         let interleaver = Interleaver(FingerprintCache())
         _ = try interleaver.interleave(JSONValue.parse(counterFrame))
         // A later frame sends only {f, d}; statics come from the cache.
-        let tree = try interleaver.interleave(JSONValue.parse(##"{"f":"1M2KTR","d":["native_counter","5"]}"##))
+        let tree = try interleaver.interleave(JSONValue.parse(##"{"f":"1M2KTR","d":["json_counter","5"]}"##))
         let slot = tree["children"]![0]["children"]![1]
         XCTAssertEqual(slot["children"]!.arrayValue![0].stringValue, "5")
     }
@@ -87,11 +87,11 @@ final class InterleaverTests: XCTestCase {
     func testDecodesNavigateCommandProp() throws {
         // A folded navigate command prop is a raw [10, path] array in the statics;
         // it survives interleaving as a JSON array the client dispatches on tap.
-        let frame = ##"{"d":[],"f":"MENU1","s":["{\"type\":\"Button\",\"on_tap\":[10,\"/native/counter\"],\"children\":[\"Counter\"]}"]}"##
+        let frame = ##"{"d":[],"f":"MENU1","s":["{\"type\":\"Button\",\"on_tap\":[10,\"/json/counter\"],\"children\":[\"Counter\"]}"]}"##
         let node = try Interleaver(FingerprintCache()).interleave(JSONValue.parse(frame))
         XCTAssertEqual(node["type"]?.stringValue, "Button")
         XCTAssertEqual(node["on_tap"]![0].intValue, 10)
-        XCTAssertEqual(node["on_tap"]![1].stringValue, "/native/counter")
+        XCTAssertEqual(node["on_tap"]![1].stringValue, "/json/counter")
     }
 
     func testDecodesDynamicBooleanProp() throws {

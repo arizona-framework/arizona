@@ -14,7 +14,7 @@ enough, match the raw string yourself: you know your own native client's UA.
 {UA, _Req1} = arizona_req:user_agent(Req),
 case arizona_user_agent:browser(UA) of
     true -> ?html(...);
-    false -> ?native(...)
+    false -> ?json(...)
 end.
 ```
 """.
@@ -44,7 +44,7 @@ Whether the `User-Agent` looks like a web browser or webview.
 
 True when the UA carries `Mozilla` -- every mainstream browser and webview does.
 A native app's HTTP stack typically does not, which is the signal to render a
-native tree instead of HTML.
+`?json` tree instead of HTML.
 """.
 -spec browser(UserAgent) -> boolean() when UserAgent :: binary().
 browser(UserAgent) ->

@@ -5,7 +5,7 @@ import AzWire
 /// A widget: maps a node to a SwiftUI view. The `RenderContext` gives access to
 /// child rendering, text flattening, and event dispatch. The framework is
 /// vocabulary-agnostic -- the host app registers whatever widget types its
-/// `?native` views use. Mirrors Android's `Widget` typealias.
+/// `?json` views use. Mirrors Android's `Widget` typealias.
 public typealias Widget = (RenderContext, Node) -> AnyView
 
 /// Maps a widget `type` -> view builder. Populated by the host app.

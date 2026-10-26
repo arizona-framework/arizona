@@ -14,7 +14,7 @@ the template level, and pushes minimal updates to the browser over WebSocket.
 
 Templates are plain Erlang terms compiled via parse transform. The server owns the state; the client
 is thin -- a DOM patcher in the browser, and the same diff stream drives a JSON widget tree on native
-app clients (see the native target below).
+app clients (see the JSON target below).
 
 Arizona runs on the HTTP/WebSocket server you pick, through an adapter package:
 [`arizona_roadrunner`](https://github.com/arizona-framework/arizona_roadrunner) for
@@ -45,10 +45,10 @@ minor versions. Pin an exact version in your deps if you need stability across u
 - **Server adapters** -- Roadrunner (HTTP/1.1, HTTP/2, HTTP/3) or Cowboy (HTTP/1.1, HTTP/2), each
   in its own package and held to one conformance suite; Arizona can also share a listener another
   framework owns, as `arizona_nova` does for Nova
-- **Native (JSON) render target** -- the same templates and diff engine also emit a JSON widget tree
-  via `?native` for non-browser clients. In-repo Android (Compose), iOS (SwiftUI), and JS
+- **JSON render target** -- the same templates and diff engine also emit a JSON widget tree
+  via `?json` for non-browser clients. In-repo Android (Compose), iOS (SwiftUI), and JS
   reference clients consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML
-  or native by `User-Agent`. See [docs/native.md](docs/native.md)
+  or JSON by `User-Agent`. See [docs/json.md](docs/json.md)
 - **Terminal (ANSI) render target** -- the same templates and diff engine also render to an ANSI
   terminal via `?terminal`, served over a local TTY or SSH; a transport-agnostic session and a
   pluggable driver model the key map and paint. See [docs/architecture.md](docs/architecture.md)
@@ -264,8 +264,8 @@ pushes minimal diffs over WebSocket as the count changes.
 See [docs/architecture.md](docs/architecture.md) for the full architecture reference -- module
 breakdown, op codes, dev-mode file watchers, custom schemes/proto_opts, and imperative startup.
 
-See [docs/native.md](docs/native.md) for the native (JSON widget-tree) render target -- authoring
-`?native` views, serving HTML and native from one view, the client wire contract, and the in-repo
+See [docs/json.md](docs/json.md) for the JSON (widget-tree) render target -- authoring
+`?json` views, serving HTML and JSON from one view, the client wire contract, and the in-repo
 Android client.
 
 ## Sponsors

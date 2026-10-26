@@ -23,7 +23,7 @@ final class SendTests: XCTestCase {
     private func client(_ socket: MockTransport) -> AzClient {
         AzClient(
             baseUrl: "http://localhost:4040",
-            path: "/native/v",
+            path: "/json/v",
             makeTransport: { _ in socket },
             runOnMain: { $0() },
             runAfter: { _, _ in })
@@ -58,7 +58,7 @@ final class SendTests: XCTestCase {
     func testNavigateBeforeConnectIsReported() {
         let c = client(MockTransport())
 
-        c.navigate("/native/menu")
+        c.navigate("/json/menu")
 
         // The frame's object keys come out in no fixed order, so compare it decoded.
         let prefix = "frame dropped: no socket: "
@@ -66,7 +66,7 @@ final class SendTests: XCTestCase {
         XCTAssertEqual(warnings.first?.hasPrefix(prefix), true)
         XCTAssertEqual(
             warnings.first.map { JSONValue.parse(String($0.dropFirst(prefix.count))) },
-            JSONValue.parse(#"["navigate",{"path":"/native/menu","qs":""}]"#))
+            JSONValue.parse(#"["navigate",{"path":"/json/menu","qs":""}]"#))
     }
 
     func testEventOnAMountedViewIsSentWithoutAReport() {

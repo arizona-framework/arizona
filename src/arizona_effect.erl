@@ -11,7 +11,7 @@ the `t:cmd/0` type, and the two encoders.
 
 `encode/1` serializes to JSON and HTML-escapes `&`, `"`, `<` for embedding in an
 HTML attribute (the web path). `encode_json/1` serializes to raw JSON for clients
-that embed the command as a JSON value (the native path).
+that embed the command as a JSON value (the `?json` path).
 
 These encoders serve commands that reach a client as data -- an event attribute or
 prop, a controller response -- never the effects a live handler returns, which the
@@ -89,7 +89,7 @@ encode(Cmds) ->
 
 -doc """
 Serializes a command (or list of commands) to raw JSON, without the HTML
-attribute escaping `encode/1` applies. Used by non-HTML backends (native) that
+attribute escaping `encode/1` applies. Used by non-HTML backends (JSON) that
 embed the command as a JSON value.
 """.
 -spec encode_json(Cmds) -> binary() when
@@ -97,7 +97,7 @@ embed the command as a JSON value.
 encode_json(Cmds) ->
     %% A string argument that is not UTF-8 is named `non_utf8_render`, not left
     %% as the encoder's `unexpected_end` (arizona_utf8:refuse/3, as in
-    %% arizona_native). The try is inline: this runs per command per render, and
+    %% arizona_json). The try is inline: this runs per command per render, and
     %% only a failure should pay for the rename.
     Json = json_value(Cmds),
     try
@@ -109,7 +109,7 @@ encode_json(Cmds) ->
 -doc """
 The command (or list of commands) as the JSON term it serializes to: `[OpCode |
 Args]`, or a list of those. A wire that JSON-encodes its values itself (a diff
-op, the native hydration payload) carries this, so the client receives the
+op, the JSON hydration payload) carries this, so the client receives the
 command as an array rather than a string of one.
 
 A list may nest, and `[]` stands for no command: the list is flattened in order

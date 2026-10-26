@@ -6,7 +6,7 @@ import androidx.compose.runtime.Composable
  * A widget renderer: maps a node's `type` string to a Composable. Receiver is
  * the [RenderContext], giving access to child rendering, text flattening, and
  * event dispatch. The framework is vocabulary-agnostic -- the host app registers
- * whatever widget types its `?native` views use.
+ * whatever widget types its `?json` views use.
  */
 typealias Widget = @Composable RenderContext.(node: Node) -> Unit
 

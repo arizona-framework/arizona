@@ -7,8 +7,8 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * On-device (emulator) e2e -- the Playwright analogue for the native target.
- * The launcher opens the menu; this navigates to /native/counter and drives it:
+ * On-device (emulator) e2e -- the Playwright analogue for the JSON target.
+ * The launcher opens the menu; this navigates to /json/counter and drives it:
  * tap "+", count goes up; tap "-", down. Each change is a real server round-trip
  * (push_event -> diff -> OP_TEXT).
  *

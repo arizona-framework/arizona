@@ -2173,7 +2173,7 @@ make_op(Az, remove, _Old) ->
 %% string -- the wire is unescaped (the client text-nodes it, which is safe and matches
 %% SSR); only `?raw` needs the tag because the client cannot otherwise tell trusted markup
 %% from a scalar that merely contains `<`. `?raw` is an HTML-target feature (the JS client
-%% applies this tag); `?native`/`?terminal` don't HTML-escape, so `?raw` there is
+%% applies this tag); `?json`/`?terminal` don't HTML-escape, so `?raw` there is
 %% unsupported (see `arizona_template:raw/1`).
 make_op(Az, {arizona_raw, V}, _Old) ->
     [?OP_TEXT, Az, #{~"raw" => arizona_template:to_bin(V)}];

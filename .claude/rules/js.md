@@ -176,7 +176,7 @@ so the server closes that window: the `?html` target renders `method="post"` on 
 `az-submit` and no `method` of its own (`arizona_renderer:implied_attrs/2`). Such a submit is then a
 POST with the fields in the body -- a live route answers `405` -- never a GET with them in the URL.
 The client's `fetch` already treats a method-less form as POST, so nothing else changes; an
-author's `method` (static, dynamic, any casing) is never overridden, and `?native`/`?terminal`
+author's `method` (static, dynamic, any casing) is never overridden, and `?json`/`?terminal`
 imply nothing.
 
 **Three cases the compile-time set cannot cover, and how each is handled:**

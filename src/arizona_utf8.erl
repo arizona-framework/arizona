@@ -3,7 +3,7 @@
 The UTF-8 output contract: naming a rendered value that is not UTF-8.
 
 Every render target writes UTF-8 -- an HTML response is served as
-`text/html; charset=utf-8`, and a WebSocket frame and a `?native` document are
+`text/html; charset=utf-8`, and a WebSocket frame and a `?json` document are
 JSON. A rendered binary must therefore hold UTF-8. Lists need nothing from this
 module: `arizona_template:to_bin/1` decodes them as chardata and refuses one that
 does not decode. A binary is emitted as the bytes it holds, and checking every
@@ -13,7 +13,7 @@ one of them on the render path was measured too expensive (see
 - **Compile time** -- `arizona_parse_transform` warns about a non-ASCII
   `<<"...">>` literal that is not folded into a template static, the usual
   source of Latin-1 bytes.
-- **Failure paths** -- a JSON encoder that refuses a frame or a `?native` value
+- **Failure paths** -- a JSON encoder that refuses a frame or a `?json` value
   already proved the bytes bad; `refuse/3` renames its `{invalid_byte, _}` /
   `unexpected_end` to `{non_utf8_render, Byte, Offset}`, naming the value.
 - **Dev mode** -- when the dev reloader is wired, `arizona_http` renders each

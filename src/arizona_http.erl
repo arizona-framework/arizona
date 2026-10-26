@@ -24,7 +24,7 @@ transport's native reply shape.
    hot-reload error, `{error, 500, ContentType, ErrorPage, Req1}` (the
    threaded req carries any response headers/cookies for the transport to
    flush). `ContentType` is the rendered document's media type, answered by
-   its render backend, so a `?native` route serves JSON and an HTML one HTML.
+   its render backend, so a `?json` route serves JSON and an HTML one HTML.
 """.
 
 %% --------------------------------------------------------------------

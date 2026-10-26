@@ -100,7 +100,7 @@ internal state.
 -export([loop_keeps_a_linked_process_exit_meaning/1]).
 %% Render
 -export([mount_crash_is_500/1]).
--export([native_page_is_json/1]).
+-export([json_page_is_json/1]).
 %% Drain
 -export([drain_runs_handle_drain_then_closes_1001/1]).
 -export([drain_lets_a_request_in_flight_finish/1]).
@@ -234,7 +234,7 @@ groups() ->
             ]},
             {render, [], [
                 mount_crash_is_500,
-                native_page_is_json
+                json_page_is_json
             ]},
             %% Its own listener: a drain stops it.
             {drain, [], [
@@ -444,7 +444,7 @@ main_routes(AssetDir) ->
         }},
         %% Render
         {live, ~"/crash_on_mount", arizona_crashable, #{bindings => #{crash_on_mount => true}}},
-        {live, ~"/native_page", arizona_native_counter_demo, #{}},
+        {live, ~"/json_page", arizona_json_counter_demo, #{}},
         {ws, ~"/ws", #{}}
     ].
 
@@ -1093,8 +1093,8 @@ linked_crash({linked_crash, Stacktrace}) when is_list(Stacktrace) -> ok.
 mount_crash_is_500(Config) ->
     ?assertMatch({500, _, _}, req(Config, ~"GET", ~"/crash_on_mount", [])).
 
-native_page_is_json(Config) ->
-    {200, Headers, Body} = req(Config, ~"GET", ~"/native_page", []),
+json_page_is_json(Config) ->
+    {200, Headers, Body} = req(Config, ~"GET", ~"/json_page", []),
     ?assertEqual(~"application/json", header(~"content-type", Headers)),
     ?assertMatch(#{~"type" := _}, json:decode(Body)).
 

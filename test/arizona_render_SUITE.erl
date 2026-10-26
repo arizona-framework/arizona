@@ -92,10 +92,10 @@
     ssr_counter/1,
     ssr_cross_target_child_raises/1,
     ssr_cross_target_layout_raises/1,
-    ssr_same_target_native_layout/1,
-    ssr_multi_root_native_layout_raises/1,
-    ssr_nested_multi_root_native_layout_raises/1,
-    ssr_multi_root_inner_native_layout_renders/1,
+    ssr_same_target_json_layout/1,
+    ssr_multi_root_json_layout_raises/1,
+    ssr_nested_multi_root_json_layout_raises/1,
+    ssr_multi_root_inner_json_layout_renders/1,
     ssr_backendless_layout_keeps_page_target/1,
     ssr_backendless_page_in_layout/1,
     ssr_counter_with_bindings/1,
@@ -206,10 +206,10 @@ groups() ->
             snapshot_observes_window_and_local,
             snapshot_html_matches_render_unprinted,
             ssr_cross_target_layout_raises,
-            ssr_same_target_native_layout,
-            ssr_multi_root_native_layout_raises,
-            ssr_nested_multi_root_native_layout_raises,
-            ssr_multi_root_inner_native_layout_renders,
+            ssr_same_target_json_layout,
+            ssr_multi_root_json_layout_raises,
+            ssr_nested_multi_root_json_layout_raises,
+            ssr_multi_root_inner_json_layout_renders,
             ssr_backendless_layout_keeps_page_target,
             ssr_backendless_page_in_layout,
             ssr_counter_with_bindings,
@@ -366,7 +366,7 @@ render_float_any_magnitude(Config) when is_list(Config) ->
         <<"<p az=\"0\">1.0e300</p><i az=\"1\" data-v=\"-1.0e-11\"></i>">>,
         iolist_to_binary(HTML)
     ),
-    ?assertEqual(~"1.0e300", arizona_native:wire_attr(~"label", 1.0e300)).
+    ?assertEqual(~"1.0e300", arizona_json:wire_attr(~"label", 1.0e300)).
 
 render_attr(Config) when is_list(Config) ->
     T = #{
@@ -866,7 +866,7 @@ to_bin_rejects_non_chardata_list(Config) when is_list(Config) ->
         {bad_template_value, [~"a-", false]}, arizona_html:render_attr(~"class", [~"a-", false])
     ),
     ?assertError(
-        {bad_template_value, [~"a-", true]}, arizona_native:render_attr(~"label", [~"a-", true])
+        {bad_template_value, [~"a-", true]}, arizona_json:render_attr(~"label", [~"a-", true])
     ),
     ?assertEqual(~"a-b", arizona_template:to_bin([~"a-", "b"])).
 
@@ -927,7 +927,7 @@ render_nested_sd(Config) when is_list(Config) ->
 %% 3. SSR tests -- render_to_iolist
 %% =============================================================================
 
-%% A `?html` child inside a `?native` parent used to render silently, splicing
+%% A `?html` child inside a `?json` parent used to render silently, splicing
 %% HTML bytes into the JSON envelope and producing a frame no client can parse.
 %% The compile-time `cross_target_nesting` guard only sees targets nested in ONE
 %% template, so a child module slips past it -- and its message used to recommend
@@ -944,10 +944,10 @@ ssr_cross_target_child_raises(Config) when is_list(Config) ->
         s => [<<"{\"type\":\"Column\",\"children\":[">>, <<"]}">>],
         d => [{<<"0">>, fun() -> #{callback => fun(_) -> HtmlChild end, props => #{}} end}],
         f => <<"parent">>,
-        backend => arizona_native
+        backend => arizona_json
     },
     ?assertError(
-        {cross_target_child, arizona_native, arizona_html},
+        {cross_target_child, arizona_json, arizona_html},
         arizona_render:render(NativeParent, #{})
     ).
 
@@ -964,11 +964,11 @@ fingerprint_payload_cross_target_child_raises(Config) when is_list(Config) ->
         s => [<<"{\"type\":\"Column\",\"children\":[">>, <<"]}">>],
         d => [{<<"0">>, fun() -> #{callback => fun(_) -> HtmlChild end, props => #{}} end}],
         f => <<"parent">>,
-        backend => arizona_native
+        backend => arizona_json
     },
     {Snap, _Views} = arizona_render:render_snapshot(NativeParent, #{}),
     ?assertError(
-        {cross_target_child, arizona_native, arizona_html},
+        {cross_target_child, arizona_json, arizona_html},
         arizona_render:fingerprint_payload(Snap)
     ),
     %% A nested template without a fingerprint takes the payload's flat-zip
@@ -979,7 +979,7 @@ fingerprint_payload_cross_target_child_raises(Config) when is_list(Config) ->
     },
     {UnprintedSnap, _} = arizona_render:render_snapshot(UnprintedParent, #{}),
     ?assertError(
-        {cross_target_child, arizona_native, arizona_html},
+        {cross_target_child, arizona_json, arizona_html},
         arizona_render:fingerprint_payload(UnprintedSnap)
     ).
 
@@ -1094,9 +1094,9 @@ snapshot_fixtures() ->
         arizona_stream_with_child,
         arizona_mixed_children,
         arizona_opaque_events,
-        arizona_native_parent,
-        arizona_native_stream_child,
-        arizona_native_list
+        arizona_json_parent,
+        arizona_json_stream_child,
+        arizona_json_list
     ].
 
 %% The page reaches a layout as a backendless template, so the nested-template
@@ -1104,38 +1104,38 @@ snapshot_fixtures() ->
 %% Refused at the layout boundary instead, in both directions.
 ssr_cross_target_layout_raises(Config) when is_list(Config) ->
     ?assertError(
-        {cross_target_layout, arizona_layout, render, arizona_html, arizona_native},
+        {cross_target_layout, arizona_layout, render, arizona_html, arizona_json},
         arizona_render:render_view_to_iolist(
-            arizona_native_counter_demo, #{layouts => [{arizona_layout, render}]}
+            arizona_json_counter_demo, #{layouts => [{arizona_layout, render}]}
         )
     ),
     ?assertError(
-        {cross_target_layout, arizona_native_layout, render, arizona_native, arizona_html},
+        {cross_target_layout, arizona_json_layout, render, arizona_json, arizona_html},
         arizona_render:render_view_to_iolist(
-            arizona_counter, #{layouts => [{arizona_native_layout, render}]}
+            arizona_counter, #{layouts => [{arizona_json_layout, render}]}
         )
     ).
 
-%% A native document is one JSON node; a layout with several top-level nodes
+%% A JSON document is one JSON node; a layout with several top-level nodes
 %% would serve them comma-joined, which no client parses. A layer that adds no
-%% node of its own (backendless, or `?native([?inner_content])`) leaves the
+%% node of its own (backendless, or `?json([?inner_content])`) leaves the
 %% fragment as the document root, so it is refused through those too.
-ssr_multi_root_native_layout_raises(Config) when is_list(Config) ->
-    Reason = {multi_root_layout, arizona_native_multi_root_layout, render, arizona_native},
+ssr_multi_root_json_layout_raises(Config) when is_list(Config) ->
+    Reason = {multi_root_layout, arizona_json_multi_root_layout, render, arizona_json},
     ?assertError(
         Reason,
         arizona_render:render_view(
-            arizona_native_counter_demo,
-            #{layouts => [{arizona_native_multi_root_layout, render}]}
+            arizona_json_counter_demo,
+            #{layouts => [{arizona_json_multi_root_layout, render}]}
         )
     ),
     ?assertError(
         Reason,
         arizona_render:render_view(
-            arizona_native_counter_demo,
+            arizona_json_counter_demo,
             #{
                 layouts => [
-                    {arizona_passthrough_layout, render}, {arizona_native_multi_root_layout, render}
+                    {arizona_passthrough_layout, render}, {arizona_json_multi_root_layout, render}
                 ]
             }
         )
@@ -1143,11 +1143,11 @@ ssr_multi_root_native_layout_raises(Config) when is_list(Config) ->
     ?assertError(
         Reason,
         arizona_render:render_view(
-            arizona_native_counter_demo,
+            arizona_json_counter_demo,
             #{
                 layouts => [
-                    {arizona_native_passthrough_layout, render},
-                    {arizona_native_multi_root_layout, render}
+                    {arizona_json_passthrough_layout, render},
+                    {arizona_json_multi_root_layout, render}
                 ]
             }
         )
@@ -1156,28 +1156,28 @@ ssr_multi_root_native_layout_raises(Config) when is_list(Config) ->
     ?assertMatch(
         {_, _},
         binary:match(
-            unicode:characters_to_binary(Msg), ~"arizona_native_multi_root_layout:render/1"
+            unicode:characters_to_binary(Msg), ~"arizona_json_multi_root_layout:render/1"
         )
     ).
 
 %% The same nodes one literal list deeper still make a two-node document root.
-ssr_nested_multi_root_native_layout_raises(Config) when is_list(Config) ->
+ssr_nested_multi_root_json_layout_raises(Config) when is_list(Config) ->
     ?assertError(
-        {multi_root_layout, arizona_native_nested_multi_root_layout, render, arizona_native},
+        {multi_root_layout, arizona_json_nested_multi_root_layout, render, arizona_json},
         arizona_render:render_view(
-            arizona_native_counter_demo,
-            #{layouts => [{arizona_native_nested_multi_root_layout, render}]}
+            arizona_json_counter_demo,
+            #{layouts => [{arizona_json_nested_multi_root_layout, render}]}
         )
     ).
 
 %% Only the document root must be one node. Wrapped by a single-root layout, a
 %% multi-root one is just that layout's children.
-ssr_multi_root_inner_native_layout_renders(Config) when is_list(Config) ->
+ssr_multi_root_inner_json_layout_renders(Config) when is_list(Config) ->
     {ContentType, Doc} = arizona_render:render_view(
-        arizona_native_counter_demo,
+        arizona_json_counter_demo,
         #{
             layouts => [
-                {arizona_native_layout, render}, {arizona_native_multi_root_layout, render}
+                {arizona_json_layout, render}, {arizona_json_multi_root_layout, render}
             ]
         }
     ),
@@ -1185,20 +1185,20 @@ ssr_multi_root_inner_native_layout_renders(Config) when is_list(Config) ->
     ?assertMatch(
         #{
             ~"type" := ~"Column",
-            ~"children" := [#{~"type" := ~"Banner"}, #{~"id" := ~"native_counter"}]
+            ~"children" := [#{~"type" := ~"Banner"}, #{~"id" := ~"json_counter"}]
         },
         json:decode(iolist_to_binary(Doc))
     ),
     %% A layer that adds no node over a single-root page is still one node.
     {_, Passed} = arizona_render:render_view(
-        arizona_native_counter_demo, #{layouts => [{arizona_native_passthrough_layout, render}]}
+        arizona_json_counter_demo, #{layouts => [{arizona_json_passthrough_layout, render}]}
     ),
-    ?assertMatch(#{~"id" := ~"native_counter"}, json:decode(iolist_to_binary(Passed))).
+    ?assertMatch(#{~"id" := ~"json_counter"}, json:decode(iolist_to_binary(Passed))).
 
-ssr_same_target_native_layout(Config) when is_list(Config) ->
+ssr_same_target_json_layout(Config) when is_list(Config) ->
     Doc = iolist_to_binary(
         arizona_render:render_view_to_iolist(
-            arizona_native_counter_demo, #{layouts => [{arizona_native_layout, render}]}
+            arizona_json_counter_demo, #{layouts => [{arizona_json_layout, render}]}
         )
     ),
     ?assertMatch(
@@ -1209,7 +1209,7 @@ ssr_same_target_native_layout(Config) when is_list(Config) ->
 %% mismatch and the document keeps the page's target and media type.
 ssr_backendless_layout_keeps_page_target(Config) when is_list(Config) ->
     {ContentType, Doc} = arizona_render:render_view(
-        arizona_native_counter_demo, #{layouts => [{arizona_passthrough_layout, render}]}
+        arizona_json_counter_demo, #{layouts => [{arizona_passthrough_layout, render}]}
     ),
     ?assertEqual(~"application/json", ContentType),
     ?assertMatch(#{~"type" := ~"Column"}, json:decode(iolist_to_binary(Doc))).

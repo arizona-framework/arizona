@@ -73,7 +73,7 @@ init_per_suite(Config) ->
             },
             middlewares => [arizona_middleware:etag()]
         }},
-        {live, ~"/native_page", arizona_native_counter_demo, #{}},
+        {live, ~"/json_page", arizona_json_counter_demo, #{}},
         {live, ~"/crash_page", arizona_crashable, #{bindings => #{crash_on_mount => true}}},
         %% CORS wire fixtures: a POST controller sharing its path with a
         %% cors-less DELETE sibling, and a live page.
@@ -309,15 +309,15 @@ transforms_apply_over_the_wire(Config) when is_list(Config) ->
         {~"if-none-match", PageTag}
     ]).
 
-%% A `?native` route answers GET and HEAD with its JSON document under
+%% A `?json` route answers GET and HEAD with its JSON document under
 %% `application/json`, an HTML route with `text/html`, and a render crash's error
 %% page (HTML) keeps `text/html`.
 page_carries_its_targets_content_type(Config) when is_list(Config) ->
     Port = ?config(port, Config),
-    {200, NativeHeaders, NativeBody} = raw_get(Port, ~"/native_page", []),
+    {200, NativeHeaders, NativeBody} = raw_get(Port, ~"/json_page", []),
     ?assertEqual(~"application/json", maps:get(~"content-type", NativeHeaders)),
     ?assertMatch(#{~"type" := ~"Column"}, json:decode(NativeBody)),
-    {200, HeadHeaders, <<>>} = raw_request(Port, ~"HEAD", ~"/native_page", []),
+    {200, HeadHeaders, <<>>} = raw_request(Port, ~"HEAD", ~"/json_page", []),
     ?assertEqual(~"application/json", maps:get(~"content-type", HeadHeaders)),
     {200, HtmlHeaders, _} = raw_get(Port, ~"/etag_page", []),
     ?assertEqual(~"text/html; charset=utf-8", maps:get(~"content-type", HtmlHeaders)),

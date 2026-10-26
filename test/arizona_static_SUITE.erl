@@ -234,7 +234,7 @@ page_without_events_has_no_attrs(Config) when is_list(Config) ->
     Content = generate_with_layout(Config, "no_events", arizona_static_page),
     ?assertEqual(nomatch, binary:match(Content, ~"arizona-attrs")).
 
-%% With no `</body>` to anchor it (a fragment, a `?native` document), nothing is
+%% With no `</body>` to anchor it (a fragment, a `?json` document), nothing is
 %% appended: the page stays exactly what rendering produced.
 page_without_body_is_left_as_rendered(Config) when is_list(Config) ->
     Dir = subdir(Config, "no_body"),

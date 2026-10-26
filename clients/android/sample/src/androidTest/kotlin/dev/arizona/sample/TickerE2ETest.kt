@@ -10,7 +10,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * On-device server push: navigate to /native/ticker; a handle_info timer pushes
+ * On-device server push: navigate to /json/ticker; a handle_info timer pushes
  * count updates unsolicited, so the displayed count rises without any tap. Run
  * with ./gradlew :sample:connectedCheck (server at 10.0.2.2:4040).
  */

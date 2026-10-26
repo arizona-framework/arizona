@@ -2,7 +2,7 @@
 -include("arizona_stateful.hrl").
 -export([mount/1, render/1, handle_event/3]).
 
-%% A native view holding a fun made by another module in its bindings, the shape
+%% A JSON view holding a fun made by another module in its bindings, the shape
 %% (a stream's key fun, a fun prop) that a dev reload of that module breaks.
 
 -spec mount(az:bindings()) -> az:mount_ret().
@@ -11,7 +11,7 @@ mount(_Bindings) ->
 
 -spec render(az:bindings()) -> az:template().
 render(Bindings) ->
-    ?native(
+    ?json(
         {'Column', [{id, ?get(id)}], [
             {'Text', [], [~"Count: ", ?get(count)]},
             {'Button', [{on_tap, arizona_android:push_event(~"inc")}], [~"+"]}

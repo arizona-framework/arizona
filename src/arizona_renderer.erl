@@ -41,8 +41,8 @@ for `false`; a `value` backend renders the boolean as the prop's value.
 -doc """
 An attribute whose value is a compile-time-folded effect command (e.g.
 `{az_click, arizona_js:push_event(...)}` on the web, `{on_tap,
-arizona_android:push_event(...)}` on native). HTML escapes it into the attribute
-(`name="[0,&quot;inc&quot;]"`); native embeds it as a raw JSON value
+arizona_android:push_event(...)}` on JSON). HTML escapes it into the attribute
+(`name="[0,&quot;inc&quot;]"`); JSON embeds it as a raw JSON value
 (`,"name":[0,"inc"]`). `Cmd` is an `t:arizona_effect:cmd/0` term --
 `{arizona_effect, list()}` or a list of them.
 """.
@@ -50,7 +50,7 @@ arizona_android:push_event(...)}` on native). HTML escapes it into the attribute
 
 -doc """
 Static prefix emitted before a *dynamic* attribute's value. HTML keeps the name
-in the dynamic (so this is empty); native bakes the prop name into the static
+in the dynamic (so this is empty); JSON bakes the prop name into the static
 (`,"name":`) so the dynamic carries only the value to stringify.
 """.
 -callback attr_dyn_name(Name :: binary()) -> binary().
@@ -63,19 +63,19 @@ needs a comma between array elements).
 
 -doc """
 Joins an `?each`'s rendered items in the zipped document. HTML and the terminal
-concatenate them; native emits a JSON array, the nested array its client builds
+concatenate them; JSON emits a JSON array, the nested array its client builds
 from the wire and splices into the parent -- which also keeps an empty `?each`
 between siblings valid.
 """.
 -callback each_items(Items :: [iodata()]) -> iodata().
 
--doc "A static text child (raw text for HTML; a JSON string for native).".
+-doc "A static text child (raw text for HTML; a JSON string for the JSON target).".
 -callback text_child(Text :: binary()) -> binary().
 
 -doc """
 The `az` for a dynamic text slot, given the element's `az` and the child slot
 index. HTML reuses the element `az` for slot 0 (the comment marker and the
-element attribute coexist); native needs a distinct `az` because every node
+element attribute coexist); JSON needs a distinct `az` because every node
 shares one flat registry.
 """.
 -callback text_az(ElemAz :: binary(), Slot :: non_neg_integer()) -> binary().
@@ -170,8 +170,8 @@ path the client already handles. A backend capability, declared by each backend.
 -callback supports_list_patch() -> boolean().
 
 -doc """
-This backend's render-target name (`html` | `native` | `terminal`) -- the atom the
-`?html`/`?native`/`?terminal` macros expand to. Lets the parse transform recover a
+This backend's render-target name (`html` | `json` | `terminal`) -- the atom the
+`?html`/`?json`/`?terminal` macros expand to. Lets the parse transform recover a
 target name from a backend module without hardcoding the module -> name mapping.
 """.
 -callback target() -> atom().
@@ -212,7 +212,7 @@ with nothing to imply returns `[]`.
 
 -doc """
 Whether a whole document of this backend must be a single root node. `true` for
-native, whose document is one JSON value; `false` where a fragment is a valid
+JSON, whose document is one JSON value; `false` where a fragment is a valid
 document (an HTML doctype beside `<html>`, terminal lines). When `true`, the parse
 transform stamps `multi_root => true` on a template whose body is a literal list of
 more than one node (at any depth of nested literal lists), and the render refuses
@@ -254,7 +254,7 @@ terminal's styles are SGR escapes that compose in order).
 Escape a dynamic value's rendered bytes for this backend's zipped document.
 Called at the render boundary on interpolated scalar values
 (`arizona_template:escape_value/2`). HTML entity-escapes (`<`, `&`, ...); the
-terminal strips control bytes that would inject escape sequences; native emits a
+terminal strips control bytes that would inject escape sequences; JSON emits a
 JSON string. A `?raw` opt-out is classified out before this callback runs, so it
 never sees trusted fragments.
 """.
@@ -299,7 +299,7 @@ Render a dynamic attribute's evaluated value to this backend's output bytes.
 
 Called at the render boundary for a dynamic attribute (`{attr, Name, Value}`).
 HTML emits ` Name="Escaped"` (or a bare/absent name for a boolean value); the
-native backend bakes the prop name into the static, so it emits just the value
+JSON backend bakes the prop name into the static, so it emits just the value
 as JSON: a string, an effect command's array, or a typed boolean. Escaping is
 governed by the backend (via `escape/1`, through `arizona_template:escape_value/2`,
 so a `?raw` opt-out or effect command is classified out first). A backend that
@@ -311,7 +311,7 @@ callback reached.
 -doc """
 How a dynamic attribute value travels in the fingerprint (hydration) payload --
 `render_attr/2`'s counterpart, as `wire_escape/1` is `escape/1`'s. Any JSON value:
-the payload is JSON-encoded as a whole, so a native effect command travels as its
+the payload is JSON-encoded as a whole, so a JSON effect command travels as its
 array.
 """.
 -callback wire_attr(Name :: binary(), Value :: term()) -> json:encode_value().

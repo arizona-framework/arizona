@@ -11,24 +11,24 @@ import org.junit.Test
 
 /**
  * Pure JVM tests (no emulator) of the interleaver, against the actual first
- * frame the Arizona server emits for /native/counter (captured from the live
+ * frame the Arizona server emits for /json/counter (captured from the live
  * server). Run with: ./gradlew :arizona:testDebugUnitTest
  */
 class InterleaverTest {
 
     // The {f, s, d} payload from the real OP_REPLACE first frame.
     private val frame0 = """
-        {"d":["native_counter","0"],"f":"1M2KTR","s":[
+        {"d":["json_counter","0"],"f":"1M2KTR","s":[
         "{\"type\":\"Column\",\"az\":\"1M2KTR-0\",\"az_view\":true,\"id\":",
         ",\"children\":[{\"type\":\"Text\",\"az\":\"1M2KTR-1\",\"children\":[\"Count: \",{\"type\":\"#slot\",\"az\":\"1M2KTR-1t0\",\"children\":[",
         "]}]},{\"type\":\"Button\",\"az\":\"1M2KTR-2\",\"on_tap\":[0,\"inc\"],\"children\":[\"+\"]},{\"type\":\"Button\",\"az\":\"1M2KTR-3\",\"on_tap\":[0,\"dec\"],\"children\":[\"-\"]}]}"
         ]}
     """.trimIndent()
 
-    // The {f, s, d} payload from the real /native/list OP_REPLACE first frame: a
+    // The {f, s, d} payload from the real /json/list OP_REPLACE first frame: a
     // Column whose #slot wraps an each-array of keyed Row items (captured live).
     private val listFrame0 = """
-        {"d":["native_list",{"d":[["1","One"],["2","Two"],["3","Three"]],
+        {"d":["json_list",{"d":[["1","One"],["2","Two"],["3","Three"]],
         "f":"O1M0B","s":[
         "{\"type\":\"Row\",\"az\":\"O1M0B-0\",\"az_key\":",
         ",\"children\":[{\"type\":\"#slot\",\"az\":\"O1M0B-0t0\",\"children\":[",
@@ -44,7 +44,7 @@ class InterleaverTest {
         val tree = Json.parseToJsonElement(Interleaver(FingerprintCache()).interleave(payload)).jsonObject
 
         assertEquals("Column", tree.getValue("type").jsonPrimitive.content)
-        assertEquals("native_counter", tree.getValue("id").jsonPrimitive.content)
+        assertEquals("json_counter", tree.getValue("id").jsonPrimitive.content)
 
         val children = tree.getValue("children").jsonArray
         val text = children[0].jsonObject
@@ -67,7 +67,7 @@ class InterleaverTest {
         // First frame caches statics for f=1M2KTR.
         interleaver.interleave(Json.parseToJsonElement(frame0).jsonObject)
         // A later frame sends only {f, d}; statics come from the cache.
-        val cachedOnly = Json.parseToJsonElement("""{"f":"1M2KTR","d":["native_counter","5"]}""").jsonObject
+        val cachedOnly = Json.parseToJsonElement("""{"f":"1M2KTR","d":["json_counter","5"]}""").jsonObject
         val tree = Json.parseToJsonElement(interleaver.interleave(cachedOnly)).jsonObject
         val slot = tree.getValue("children").jsonArray[0].jsonObject
             .getValue("children").jsonArray[1].jsonObject
@@ -134,7 +134,7 @@ class InterleaverTest {
         val frame =
             """
             {"d":[],"f":"MENU1","s":[
-            "{\"type\":\"Button\",\"on_tap\":[10,\"/native/counter\"],\"children\":[\"Counter\"]}"]}
+            "{\"type\":\"Button\",\"on_tap\":[10,\"/json/counter\"],\"children\":[\"Counter\"]}"]}
             """.trimIndent()
         val node = Json.parseToJsonElement(
             Interleaver(FingerprintCache()).interleave(Json.parseToJsonElement(frame).jsonObject),
@@ -142,7 +142,7 @@ class InterleaverTest {
         assertEquals("Button", node.getValue("type").jsonPrimitive.content)
         val cmd = node.getValue("on_tap").jsonArray
         assertEquals(10, cmd[0].jsonPrimitive.int)
-        assertEquals("/native/counter", cmd[1].jsonPrimitive.content)
+        assertEquals("/json/counter", cmd[1].jsonPrimitive.content)
     }
 
     @Test

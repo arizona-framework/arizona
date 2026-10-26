@@ -1,7 +1,7 @@
 import XCTest
 
 /// On-device (Simulator) e2e -- the XCUITest analogue of the Android
-/// CounterE2ETest. Launch the menu, navigate to /native/counter, and drive it:
+/// CounterE2ETest. Launch the menu, navigate to /json/counter, and drive it:
 /// tap "+", count goes up; tap "-", down. Each change is a real server round-trip
 /// (push_event -> diff -> OP_TEXT). Requires the test server on localhost:4040.
 final class CounterE2ETest: XCTestCase {

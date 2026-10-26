@@ -1,6 +1,6 @@
 # Arizona Android client (`clients/android`)
 
-The **Android client** for Arizona's `?native` (JSON) render target — the native
+The **Android client** for Arizona's `?json` render target — the native
 counterpart of the browser client in `assets/js/`, kept in this repo so it
 evolves atomically with the wire protocol. Built separately from the Erlang/JS
 toolchain (its own Gradle build; not part of `make ci`).
@@ -12,7 +12,7 @@ logic and ships a cached-statics + diff stream; this thin client reconstructs a
 device, and nothing is compiled to native ahead of time — the UI is real Compose
 widgets built at runtime from the server's JSON.
 
-It mirrors the proven JS reference client (`e2e/utils/native_client.js` in the
+It mirrors the proven JS reference client (`e2e/utils/json_client.js` in the
 Arizona repo): connect → cache statics by fingerprint → interleave statics+dynamics
 (JSON-encoding each value) → flatten `#slot` fragments → apply ops against an
 `az → node` registry → send events.
@@ -26,7 +26,7 @@ Arizona repo): connect → cache statics by fingerprint → interleave statics+d
   - `Renderer.kt` — `WidgetRegistry` + `RenderContext` + `ArizonaView` (vocabulary-agnostic
     Compose dispatch).
 - **`:sample`** — a demo app: registers a `Column`/`Row`/`Text`/`Button` vocabulary and
-  renders the server's `/native/counter` view.
+  renders the server's `/json/counter` view.
 
 ## Status & caveats
 

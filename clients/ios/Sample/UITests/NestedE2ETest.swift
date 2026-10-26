@@ -1,7 +1,7 @@
 import XCTest
 
 /// On-device nested event routing -- the analogue of the Android NestedE2ETest.
-/// Navigate to /native/nested (two stateful child counters); tapping a child's
+/// Navigate to /json/nested (two stateful child counters); tapping a child's
 /// button routes the event to THAT child's view id, so only its count changes.
 /// Each child shows "<label><count>" (e.g. "A0") and a button labelled "<label>".
 final class NestedE2ETest: XCTestCase {

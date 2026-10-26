@@ -3,7 +3,7 @@
 #   - logic: the AzWire protocol tests, run on Linux in the official Swift image
 #     (no Mac needed) -- fast, free feedback for the bulk of the client.
 #   - simulator-e2e: the SwiftUI render + XCUITest e2e, which need macOS. Starts
-#     the Arizona server on :4040 and drives the /native examples on an iOS
+#     the Arizona server on :4040 and drives the /json examples on an iOS
 #     Simulator. The Simulator shares the runner's localhost, so it reaches the
 #     server directly -- no tunnel (unlike android-e2e's adb reverse).
 #
@@ -17,8 +17,8 @@ name: ios-e2e
 # tauri-shell.yml. The Tauri tests assert only the internal consistency of the
 # shell's own Rust constants, so its dependency surface really is one directory.
 # The simulator-e2e job below is the opposite: it drives the LIVE server's
-# `/native/*` routes, and `scripts/start_test_server.sh` builds that server from
-# `src/`, `test/support/` (the native fixtures and the route table) and the Vite
+# `/json/*` routes, and `scripts/start_test_server.sh` builds that server from
+# `src/`, `test/support/` (the JSON fixtures and the route table) and the Vite
 # bundle -- so nearly the whole repo is a genuine input. An allowlist there fails
 # unsafe (a new dependency directory silently loses coverage); a denylist fails
 # safe (an unlisted new directory still triggers). So list only what provably

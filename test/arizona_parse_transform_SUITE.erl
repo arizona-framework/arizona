@@ -7,10 +7,10 @@
 -export([
     literal_list_attr_folds/1,
     literal_list_attr_matches_runtime/1,
-    literal_list_attr_native_matches_runtime/1,
+    literal_list_attr_json_matches_runtime/1,
     literal_list_attr_empty/1,
     literal_list_content_folds/1,
-    literal_list_content_native_matches_runtime/1,
+    literal_list_content_json_matches_runtime/1,
     literal_list_in_conditional_and_each/1,
     literal_list_attr_diff_no_op/1,
     literal_list_content_local_slot/1,
@@ -53,9 +53,9 @@
     each_named_fun_same_module_ref/1,
     each_named_fun_imported_rejected/1,
     each_named_fun_variable_module_rejected/1,
-    each_named_fun_ref_native/1,
+    each_named_fun_ref_json/1,
     each_named_fun_ref_html_body_diffs/1,
-    each_named_fun_ref_native_html/1,
+    each_named_fun_ref_json_html/1,
     each_body_html_wrapped_diffs/1,
     each_body_two_arg_html_diffs/1,
     each_body_list_with_html_rejected/1,
@@ -70,7 +70,7 @@
     each_single_root_flag/1,
     each_multi_root_no_single_root_flag/1,
     each_stream_no_single_root_flag/1,
-    each_native_no_single_root_flag/1,
+    each_json_no_single_root_flag/1,
     each_stream_reuse_flags/1,
     each_stream_reuse_flags_compiled_body/1,
     each_stream_no_reuse_without_tracked_reads/1,
@@ -93,8 +93,8 @@
     boolean_attr/1,
     case_expression_dynamic/1,
     counter_pattern/1,
-    cross_target_html_in_native/1,
-    cross_target_native_in_html/1,
+    cross_target_html_in_json/1,
+    cross_target_json_in_html/1,
     cross_target_siblings_compile/1,
     cross_target_html_in_terminal/1,
     cross_target_terminal_in_html/1,
@@ -215,7 +215,7 @@
     nodiff_inherited_hoisted_source/1,
     nodiff_each_stateful_item/1,
     nodiff_stream_az_key/1,
-    nodiff_inherited_native/1,
+    nodiff_inherited_json/1,
     nodiff_inherited_raw_text/1,
     nodiff_live_root_hoisted_each/1,
     nodiff_call_not_compiled_error/1,
@@ -471,7 +471,7 @@
     local_attr_interp_boolean/1,
     local_attr_interp_numeric/1,
     local_attr_interp_multi_static/1,
-    local_in_native_error/1,
+    local_in_json_error/1,
     local_content_in_raw_text_error/1,
     local_attr_in_raw_text_ok/1,
     local_in_each_renders/1,
@@ -489,7 +489,7 @@
     value_template_inner_escaped/1,
     diff_value_stays_raw/1,
     fingerprint_escapes_value/1,
-    native_backend_not_escaped/1,
+    json_backend_not_escaped/1,
     static_binary_sized_integer_not_utf8/1,
     static_binary_utf8_and_ascii_still_fold/1
 ]).
@@ -535,7 +535,7 @@
     raw_text_conditional_value_markerless/1,
     raw_text_attr_diffs_content_render_once/1,
     raw_text_escapable_adjacent_to_raw/1,
-    native_script_tag_unaffected/1
+    json_script_tag_unaffected/1
 ]).
 -export([
     cond_case_bare_element_renders/1,
@@ -555,10 +555,10 @@
     list_child_hoisted_html/1,
     list_child_helper_html/1,
     list_child_helper_each/1,
-    helper_arg_each_native/1,
+    helper_arg_each_json/1,
     helper_arg_each_terminal/1,
     helper_arg_each_svg/1,
-    hoisted_each_native/1,
+    hoisted_each_json/1,
     hoisted_each_terminal/1,
     hoisted_each_svg/1,
     hoisted_each_helper_arg_svg/1,
@@ -643,10 +643,10 @@ groups() ->
         {literal_fold, [parallel], [
             literal_list_attr_folds,
             literal_list_attr_matches_runtime,
-            literal_list_attr_native_matches_runtime,
+            literal_list_attr_json_matches_runtime,
             literal_list_attr_empty,
             literal_list_content_folds,
-            literal_list_content_native_matches_runtime,
+            literal_list_content_json_matches_runtime,
             literal_list_in_conditional_and_each,
             literal_list_attr_diff_no_op,
             literal_list_content_local_slot,
@@ -737,7 +737,7 @@ groups() ->
             local_attr_interp_boolean,
             local_attr_interp_numeric,
             local_attr_interp_multi_static,
-            local_in_native_error,
+            local_in_json_error,
             local_content_in_raw_text_error,
             local_attr_in_raw_text_ok,
             local_in_each_renders,
@@ -797,9 +797,9 @@ groups() ->
             each_named_fun_same_module_ref,
             each_named_fun_imported_rejected,
             each_named_fun_variable_module_rejected,
-            each_named_fun_ref_native,
+            each_named_fun_ref_json,
             each_named_fun_ref_html_body_diffs,
-            each_named_fun_ref_native_html,
+            each_named_fun_ref_json_html,
             each_body_html_wrapped_diffs,
             each_body_two_arg_html_diffs,
             each_body_list_with_html_rejected,
@@ -814,7 +814,7 @@ groups() ->
             each_single_root_flag,
             each_multi_root_no_single_root_flag,
             each_stream_no_single_root_flag,
-            each_native_no_single_root_flag,
+            each_json_no_single_root_flag,
             each_stream_reuse_flags,
             each_stream_reuse_flags_compiled_body,
             each_stream_no_reuse_without_tracked_reads,
@@ -885,7 +885,7 @@ groups() ->
             nodiff_inherited_hoisted_source,
             nodiff_each_stateful_item,
             nodiff_stream_az_key,
-            nodiff_inherited_native,
+            nodiff_inherited_json,
             nodiff_inherited_raw_text,
             nodiff_live_root_hoisted_each,
             nodiff_call_not_compiled_error,
@@ -893,7 +893,7 @@ groups() ->
             mixed_attr_forms
         ]},
         %% HTML auto-escaping: value interpolations are escaped at the HTML
-        %% boundary; blocks/raw/native are not; the live-diff path stays raw.
+        %% boundary; blocks/raw/json are not; the live-diff path stays raw.
         {escaping, [parallel], [
             ssr_escapes_content_value,
             ssr_escapes_attr_value,
@@ -904,7 +904,7 @@ groups() ->
             value_template_inner_escaped,
             diff_value_stays_raw,
             fingerprint_escapes_value,
-            native_backend_not_escaped,
+            json_backend_not_escaped,
             static_binary_sized_integer_not_utf8,
             static_binary_utf8_and_ascii_still_fold
         ]},
@@ -953,7 +953,7 @@ groups() ->
             raw_text_conditional_value_markerless,
             raw_text_attr_diffs_content_render_once,
             raw_text_escapable_adjacent_to_raw,
-            native_script_tag_unaffected
+            json_script_tag_unaffected
         ]},
         %% Bare element tuples as case/if/begin branch results -- compiled into
         %% nested templates (no ?html wrap), inheriting the enclosing target.
@@ -975,10 +975,10 @@ groups() ->
             list_child_hoisted_html,
             list_child_helper_html,
             list_child_helper_each,
-            helper_arg_each_native,
+            helper_arg_each_json,
             helper_arg_each_terminal,
             helper_arg_each_svg,
-            hoisted_each_native,
+            hoisted_each_json,
             hoisted_each_terminal,
             hoisted_each_svg,
             hoisted_each_helper_arg_svg,
@@ -1238,10 +1238,10 @@ groups() ->
             element_error_keeps_file_and_column,
             improper_list_error_keeps_file_and_column
         ]},
-        %% Inline cross-target nesting guard (?html in ?native and vice-versa)
+        %% Inline cross-target nesting guard (?html in ?json and vice-versa)
         {cross_target, [parallel], [
-            cross_target_html_in_native,
-            cross_target_native_in_html,
+            cross_target_html_in_json,
+            cross_target_json_in_html,
             cross_target_siblings_compile,
             cross_target_html_in_terminal,
             cross_target_terminal_in_html
@@ -1799,14 +1799,14 @@ local_attr_interp_multi_static(Config) when is_list(Config) ->
         decode_local_descriptor(HTML)
     ).
 
-%% ?local is HTML-only: in a ?native template it is a compile error (the client
-%% slot mechanism -- comment markers + DOM set -- has no native equivalent).
-local_in_native_error(Config) when is_list(Config) ->
+%% ?local is HTML-only: in a ?json template it is a compile error (the client
+%% slot mechanism -- comment markers + DOM set -- has no JSON equivalent).
+local_in_json_error(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_local_native). "
+        "-module(pt_local_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:native("
+        "    arizona_template:json("
         "        {'Text', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]}"
         "    ). ",
         fun(R) -> R =:= local_unsupported end
@@ -2477,25 +2477,25 @@ fingerprint_escapes_value(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(DBin, <<"<i>">>)),
     ?assertNotEqual(nomatch, binary:match(DBin, <<"&lt;i&gt;">>)).
 
-%% Escaping is governed by the backend module, not the render target. The native
+%% Escaping is governed by the backend module, not the render target. The JSON
 %% backend marks value interpolations like every backend (`{esc, Fun}`), but its
 %% `arizona_renderer:escape/1` is the identity, so values reach the JSON wire
 %% unescaped (HTML-escaping there would corrupt the output).
-native_backend_not_escaped(Config) when is_list(Config) ->
+json_backend_not_escaped(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_esc_native). "
+        "-module(pt_esc_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:native({'Text', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:json({'Text', [], [arizona_template:get(x, Bindings)]}). "
     ),
     T = Mod:render(#{x => <<"<not-escaped>">>}),
-    ?assertEqual(arizona_native, maps:get(backend, T)),
+    ?assertEqual(arizona_json, maps:get(backend, T)),
     ?assertMatch([{_Az, {esc, _Fun}, _Loc}], maps:get(d, T)),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
     %% Never HTML-escaped: the zipped document carries it as a JSON string, the
     %% wire carries it raw for the client to JSON-encode.
-    ?assertEqual(<<"\"<not-escaped>\"">>, arizona_template:escape_value(arizona_native, Fun())),
-    ?assertEqual(<<"<not-escaped>">>, arizona_native:wire_escape(Fun())).
+    ?assertEqual(<<"\"<not-escaped>\"">>, arizona_template:escape_value(arizona_json, Fun())),
+    ?assertEqual(<<"<not-escaped>">>, arizona_json:wire_escape(Fun())).
 
 %% A bare ?get inside <script> is spliced VERBATIM (raw text decodes no character
 %% references, so escaping cannot apply) -- the value could close the JS string it
@@ -3416,15 +3416,15 @@ raw_text_escapable_adjacent_to_raw(Config) when is_list(Config) ->
     %% The trailing <meta> still carries its az (its dynamic attr is diffable).
     ?assertNotEqual(nomatch, binary:match(HTML, ~"<meta az=")).
 
-%% The raw-text rule is HTML-only: a `script`-tagged element on the native backend
+%% The raw-text rule is HTML-only: a `script`-tagged element on the JSON backend
 %% is unaffected (raw_text_kind is `none`), so its content keeps a normal addressed
 %% dynamic (a binary az), not the markerless `undefined`.
-native_script_tag_unaffected(Config) when is_list(Config) ->
+json_script_tag_unaffected(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_rt_native). "
+        "-module(pt_rt_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:native({'script', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:json({'script', [], [arizona_template:get(x, Bindings)]}). "
     ),
     T = Mod:render(#{x => <<"NV">>}),
     ?assertMatch([{Az, _Fun, _Loc}] when is_binary(Az), maps:get(d, T)).
@@ -4295,11 +4295,11 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
         )
     ),
     %% Other targets have no native form submission to guard.
-    ?assertEqual([], arizona_native:implied_attrs(form, [<<"az-submit">>])),
+    ?assertEqual([], arizona_json:implied_attrs(form, [<<"az-submit">>])),
     ?assertEqual([], arizona_terminal:implied_attrs(form, [<<"az-submit">>])),
     NativeMod = compile_module(
-        "-module(pt_sub_native). -export([render/1]). render(Bindings) -> "
-        "_ = Bindings, arizona_template:native({form, [{az_submit, "
+        "-module(pt_sub_json). -export([render/1]). render(Bindings) -> "
+        "_ = Bindings, arizona_template:json({form, [{az_submit, "
         "arizona_js:push_event(<<\"login\">>)}], []}). "
     ),
     {Native, _} = arizona_render:render(NativeMod:render(#{})),
@@ -4308,7 +4308,7 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
 %% `[{class, ~"a"}, {class, ?get(x)}]` renders `class="a" class="1"`: the browser keeps
 %% the first, the diff patches the dynamic one, and the DOM after an update no longer
 %% matches a fresh render. Names compare as the backend emits them, under its
-%% `attr_names/0` policy -- HTML folds ASCII case and `_` -> `-`; native props are
+%% `attr_names/0` policy -- HTML folds ASCII case and `_` -> `-`; JSON props are
 %% case-sensitive JSON keys; terminal styles are SGR escapes that compose, so a repeat
 %% there is legal.
 duplicate_attr_rejected(Config) when is_list(Config) ->
@@ -4348,24 +4348,24 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
         Dup(~"id")
     ),
     assert_parse_error(
-        "-module(pt_dup_native). -export([render/1]). render(Bindings) -> "
-        "arizona_template:native({'Text', [{text, ~\"a\"}, "
+        "-module(pt_dup_json). -export([render/1]). render(Bindings) -> "
+        "arizona_template:json({'Text', [{text, ~\"a\"}, "
         "{text, arizona_template:get(x, Bindings)}], []}). ",
         Dup(~"text")
     ),
-    %% Controls: distinct names, native's case-sensitive keys, terminal repeats.
+    %% Controls: distinct names, JSON's case-sensitive keys, terminal repeats.
     Ok = compile_module(
-        "-module(pt_dup_ok). -export([html/1, native/1, terminal/1]). "
+        "-module(pt_dup_ok). -export([html/1, json/1, terminal/1]). "
         "html(Bindings) -> arizona_template:html({'p', [{class, ~\"a\"}, "
         "{id, arizona_template:get(x, Bindings)}], []}). "
-        "native(_Bindings) -> arizona_template:native({'Text', [{text, ~\"a\"}, "
+        "json(_Bindings) -> arizona_template:json({'Text', [{text, ~\"a\"}, "
         "{'Text', ~\"b\"}], []}). "
         "terminal(_Bindings) -> arizona_template:terminal({line, [], [{span, "
         "[{sgr, ~\"\\e[5m\"}, {sgr, ~\"\\e[7m\"}], [~\"x\"]}]}). "
     ),
     {HTML, _} = arizona_render:render(Ok:html(#{x => ~"i"})),
     ?assertMatch({match, _}, re:run(iolist_to_binary(HTML), ~"class=\"a\" id=\"i\"")),
-    ?assert(is_map(Ok:native(#{}))),
+    ?assert(is_map(Ok:json(#{}))),
     ?assert(is_map(Ok:terminal(#{}))).
 
 %% The error names the repeated attribute as the author wrote it, as reserved_attr
@@ -4391,7 +4391,7 @@ duplicate_attr_folds_ascii_case_only(Config) when is_list(Config) ->
         iolist_to_binary(HTML)
     ).
 
-%% The error is raised for every backend that refuses a repeat (`?native` included)
+%% The error is raised for every backend that refuses a repeat (`?json` included)
 %% and for two static values as much as a dynamic one, so its text must not describe
 %% one target's resolution.
 duplicate_attr_message_target_neutral(Config) when is_list(Config) ->
@@ -6274,13 +6274,13 @@ nodiff_stream_az_key(Config) when is_list(Config) ->
         render_markerless(Mod:render(#{items => S}))
     ).
 
-%% Inheritance is target-neutral: a nested ?native template loses its `az` too.
-nodiff_inherited_native(Config) when is_list(Config) ->
+%% Inheritance is target-neutral: a nested ?json template loses its `az` too.
+nodiff_inherited_json(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_nodiff_inh_native). "
+        "-module(pt_nodiff_inh_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:native("
+        "    arizona_template:json("
         "        {'Column', ['az-nodiff'], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> "
@@ -7340,7 +7340,7 @@ each_stream_multi_root_body_nodiff_renders(Config) when is_list(Config) ->
 %% without one is invisible to every keyed op: a remove leaves it on the page, a move
 %% leaves it in place, an item patch never lands -- and nothing reports it. Refused when
 %% the stream pairing is rendered, in each form a single-element body reaches: inline,
-%% whole-body ?html, a one-element list, a named 2-arg ref, and on the native target,
+%% whole-body ?html, a one-element list, a named 2-arg ref, and on the JSON target,
 %% whose clients find items the same way.
 each_stream_keyless_body_refused_at_render(Config) when is_list(Config) ->
     Each = fun(Name, Fun, Defs) ->
@@ -7351,8 +7351,8 @@ each_stream_keyless_body_refused_at_render(Config) when is_list(Config) ->
         )
     end,
     Native = compile_module(
-        "-module(pt_each_stream_keyless_native). -export([render/1]). "
-        "render(Bindings) -> arizona_template:native({'Column', [], [arizona_template:each("
+        "-module(pt_each_stream_keyless_json). -export([render/1]). "
+        "render(Bindings) -> arizona_template:json({'Column', [], [arizona_template:each("
         "fun(I, _K) -> {'Text', [], [I]} end, arizona_template:get(items, Bindings))]}). "
     ),
     Mods = [
@@ -7758,16 +7758,16 @@ each_named_fun_variable_module_rejected(Config) when is_list(Config) ->
         fun(R) -> R =:= each_remote_fun_ref end
     ).
 
-%% A named-fun ?each inside ?native is marked for the native backend: the callback is
-%% resolved/inlined with the native backend, and a PRIVATE callback is suppressed the same
+%% A named-fun ?each inside ?json is marked for the JSON backend: the callback is
+%% resolved/inlined with the JSON backend, and a PRIVATE callback is suppressed the same
 %% way (compile_module_strict -> warnings_as_errors).
-each_named_fun_ref_native(Config) when is_list(Config) ->
+each_named_fun_ref_json(Config) when is_list(Config) ->
     Mod = compile_module_strict(
-        "-module(pt_each_named_native). "
+        "-module(pt_each_named_json). "
         "-export([render/1]). "
         "row(#{text := T}, Key) -> {'Text', [{az_key, Key}], [T]}. "
         "render(Bindings) -> "
-        "    arizona_template:native({'Column', [{id, arizona_template:get(id, Bindings)}], "
+        "    arizona_template:json({'Column', [{id, arizona_template:get(id, Bindings)}], "
         "        [arizona_template:each(fun row/2, arizona_template:get(items, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{id => ~"c", items => #{1 => #{text => ~"a"}}}))).
@@ -7791,15 +7791,15 @@ each_named_fun_ref_html_body_diffs(Config) when is_list(Config) ->
     {Ops, _Snap1, _V1} = arizona_diff:diff(Mod:render(B1), Snap0, V0, Changed),
     ?assertNotEqual([], Ops).
 
-%% A named-ref callback whose body is ?native(...) inside a ?native(...) view unwraps too
+%% A named-ref callback whose body is ?json(...) inside a ?json(...) view unwraps too
 %% (the private row/2 is covered by the injected nowarn_unused_function / ignore_xref).
-each_named_fun_ref_native_html(Config) when is_list(Config) ->
+each_named_fun_ref_json_html(Config) when is_list(Config) ->
     Mod = compile_module_strict(
-        "-module(pt_each_named_native_html). "
+        "-module(pt_each_named_json_html). "
         "-export([render/1]). "
-        "row(#{text := T}, Key) -> arizona_template:native({'Text', [{az_key, Key}], [T]}). "
+        "row(#{text := T}, Key) -> arizona_template:json({'Text', [{az_key, Key}], [T]}). "
         "render(Bindings) -> "
-        "    arizona_template:native({'Column', [{id, arizona_template:get(id, Bindings)}], "
+        "    arizona_template:json({'Column', [{id, arizona_template:get(id, Bindings)}], "
         "        [arizona_template:each(fun row/2, arizona_template:get(items, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{id => ~"c", items => #{1 => #{text => ~"a"}}}))).
@@ -8033,12 +8033,12 @@ invalid_each_fun_arity(Config) when is_list(Config) ->
         end
     ).
 
-cross_target_html_in_native(Config) when is_list(Config) ->
+cross_target_html_in_json(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_html_in_native). "
+        "-module(pt_html_in_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:native({'Column', [], ["
+        "    arizona_template:json({'Column', [], ["
         "        arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
@@ -8047,13 +8047,13 @@ cross_target_html_in_native(Config) when is_list(Config) ->
         end
     ).
 
-cross_target_native_in_html(Config) when is_list(Config) ->
+cross_target_json_in_html(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_native_in_html). "
+        "-module(pt_json_in_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
-        "        arizona_template:native({'Text', [], [arizona_template:get(x, Bindings)]})"
+        "        arizona_template:json({'Text', [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
             (cross_target_nesting) -> true;
@@ -8062,15 +8062,15 @@ cross_target_native_in_html(Config) when is_list(Config) ->
     ).
 
 cross_target_siblings_compile(Config) when is_list(Config) ->
-    %% A dual-serve render with ?html and ?native in sibling clauses (not nested
+    %% A dual-serve render with ?html and ?json in sibling clauses (not nested
     %% in one another) must compile -- the guard rejects only inline nesting.
     Mod = compile_module(
         "-module(pt_dual_serve). "
         "-export([render/1]). "
         "render(#{target := html} = Bindings) -> "
         "    arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]}); "
-        "render(#{target := native} = Bindings) -> "
-        "    arizona_template:native({'Text', [], [arizona_template:get(x, Bindings)]}). "
+        "render(#{target := json} = Bindings) -> "
+        "    arizona_template:json({'Text', [], [arizona_template:get(x, Bindings)]}). "
     ),
     ?assertEqual(pt_dual_serve, Mod).
 
@@ -8617,19 +8617,19 @@ stream_each_template(Mod, Fun) ->
     Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, []),
     maps:get(template, Mod:Fun(#{stream => Stream})).
 
-%% A `?native` single-root list each is NOT flagged single_root: the gate is the
+%% A `?json` single-root list each is NOT flagged single_root: the gate is the
 %% backend's `supports_list_patch/0` callback (asked at compile time), and
-%% arizona_native returns false because no native client implements `?OP_LIST_PATCH`
-%% -- so a native list each keeps the wholesale path. Contrast each_single_root_flag
+%% arizona_json returns false because no native client implements `?OP_LIST_PATCH`
+%% -- so a JSON list each keeps the wholesale path. Contrast each_single_root_flag
 %% (html: supports_list_patch/0 is true -> single_root).
-each_native_no_single_root_flag(Config) when is_list(Config) ->
+each_json_no_single_root_flag(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_each_native_gate). "
+        "-module(pt_each_json_gate). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:each(fun(Item) -> "
         "        {'Text', [], [maps:get(name, Item)]} "
-        "    end, arizona_template:get(items, Bindings), arizona_native, html). "
+        "    end, arizona_template:get(items, Bindings), arizona_json, html). "
     ),
     Result = Mod:render(#{items => [#{name => <<"a">>}]}),
     Tmpl = maps:get(template, Result),
@@ -12633,7 +12633,7 @@ strip_markers(HTML) ->
 nodiff_token_only_on_nodiff_roots(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_nodiff_token_only). "
-        "-export([marked/1, layout/1, native/1, fragment/1]). "
+        "-export([marked/1, layout/1, json/1, fragment/1]). "
         "marked(Bindings) -> "
         "    arizona_template:html({'div', ['az-nodiff'], ["
         "        case arizona_template:get(on, Bindings) of "
@@ -12644,8 +12644,8 @@ nodiff_token_only_on_nodiff_roots(Config) when is_list(Config) ->
         "    ]}). "
         "layout(Bindings) -> "
         "    arizona_template:html({'main', ['az-nodiff'], [az:inner_content(Bindings)]}). "
-        "native(_Bindings) -> "
-        "    arizona_template:native({'Column', ['az-nodiff'], [<<\"n\">>]}). "
+        "json(_Bindings) -> "
+        "    arizona_template:json({'Column', ['az-nodiff'], [<<\"n\">>]}). "
         "fragment(_Bindings) -> "
         "    arizona_template:html([{'p', ['az-nodiff'], [<<\"a\">>]}, {'p', [], [<<\"b\">>]}]). "
     ),
@@ -12656,7 +12656,7 @@ nodiff_token_only_on_nodiff_roots(Config) when is_list(Config) ->
         arizona_render:render_to_iolist(Mod:layout(#{inner_content => ~"page"}))
     ),
     ?assertEqual(nomatch, binary:match(Layout, ~"az-nodiff")),
-    Native = iolist_to_binary(arizona_render:render_to_iolist(Mod:native(#{}))),
+    Native = iolist_to_binary(arizona_render:render_to_iolist(Mod:json(#{}))),
     ?assertEqual(nomatch, binary:match(Native, ~"az-nodiff")),
     %% A root of a multi-element fragment keeps its directive bare: the element the
     %% author marked, no other, and no token -- it is not a single az-nodiff element.
@@ -12872,12 +12872,12 @@ list_child_helper_each(Config) when is_list(Config) ->
 %% An `?each` handed to a local element helper is compiled before the helper is
 %% inlined, so the helper's body is marked around an already-compiled pairing. That
 %% pairing must pass through the marking untouched under every target.
-helper_arg_each_native(Config) when is_list(Config) ->
+helper_arg_each_json(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_helper_arg_each_native). "
+        "-module(pt_helper_arg_each_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:native({column, [], [wrap(arizona_template:each("
+        "    arizona_template:json({column, [], [wrap(arizona_template:each("
         "        fun(I) -> {text, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
         "wrap(X) -> {box, [], [X]}. "
     ),
@@ -12936,15 +12936,15 @@ helper_arg_each_svg(Config) when is_list(Config) ->
 
 %% A hoisted `?each` is bound outside every template, so nothing at its binding
 %% says what it renders in. It compiles where its variable is used, exactly as if
-%% it were written there: under `?native` its items are native JSON nodes.
-hoisted_each_native(Config) when is_list(Config) ->
+%% it were written there: under `?json` its items are JSON nodes.
+hoisted_each_json(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_hoisted_each_native). "
+        "-module(pt_hoisted_each_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Items = arizona_template:each("
         "        fun(I) -> {text, [], [I]} end, arizona_template:get(items, Bindings)), "
-        "    arizona_template:native({column, [], [Items]}). "
+        "    arizona_template:json({column, [], [Items]}). "
     ),
     Wire = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
     ?assertMatch(
@@ -13026,7 +13026,7 @@ hoisted_each_helper_arg_svg(Config) when is_list(Config) ->
     ).
 
 %% Marking the splice site checks a hoisted template like a written one: a
-%% hoisted `?html` used inside `?native` is cross-target nesting at compile time,
+%% hoisted `?html` used inside `?json` is cross-target nesting at compile time,
 %% not a render-time `cross_target_child`.
 hoisted_cross_target_nesting(Config) when is_list(Config) ->
     assert_parse_error(
@@ -13034,7 +13034,7 @@ hoisted_cross_target_nesting(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Row = arizona_template:html({p, [], [arizona_template:get(x, Bindings)]}), "
-        "    arizona_template:native({column, [], [Row]}). ",
+        "    arizona_template:json({column, [], [Row]}). ",
         fun
             (cross_target_nesting) -> true;
             (_) -> false
@@ -13454,13 +13454,13 @@ literal_list_attr_matches_runtime(Config) when is_list(Config) ->
     ?assertEqual(<<" title=\"&lt;a&gt;&amp;b&quot;&#39;c", 16#2764/utf8, "\"">>, Runtime),
     ?assertEqual([<<"<p", Runtime/binary, "></p>">>], maps:get(s, T)).
 
-%% ?native: the folded prop is the JSON the runtime path produces.
-literal_list_attr_native_matches_runtime(Config) when is_list(Config) ->
+%% ?json: the folded prop is the JSON the runtime path produces.
+literal_list_attr_json_matches_runtime(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_fold_attr_native). "
+        "-module(pt_fold_attr_json). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:native("
+        "    arizona_template:json("
         "        {'Text', [{label, [<<\"a\">>, [<<\"\\\"b\">>, $c]]}], []}"
         "    ). "
     ),
@@ -13468,8 +13468,8 @@ literal_list_attr_native_matches_runtime(Config) when is_list(Config) ->
     T = Mod:render(#{}),
     ?assertEqual([], maps:get(d, T)),
     Prop = <<
-        (arizona_native:attr_dyn_name(<<"label">>))/binary,
-        (arizona_native:render_attr(<<"label">>, Value))/binary
+        (arizona_json:attr_dyn_name(<<"label">>))/binary,
+        (arizona_json:render_attr(<<"label">>, Value))/binary
     >>,
     ?assertEqual(
         [<<"{\"type\":\"Text\"", Prop/binary, ",\"children\":[]}">>], maps:get(s, T)
@@ -13505,16 +13505,16 @@ literal_list_content_folds(Config) when is_list(Config) ->
     ?assertEqual(<<"&lt;a&gt;&amp;b">>, Escaped),
     ?assertEqual([<<"<p>", Escaped/binary, "<i>c</i></p>">>], maps:get(s, T)).
 
-literal_list_content_native_matches_runtime(Config) when is_list(Config) ->
+literal_list_content_json_matches_runtime(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_fold_content_native). "
+        "-module(pt_fold_content_json). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:native({'Column', [], [<<\"x\">>, [<<\"a\">>, \"\\\"b\"]]}). "
+        "    arizona_template:json({'Column', [], [<<\"x\">>, [<<\"a\">>, \"\\\"b\"]]}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([], maps:get(d, T)),
-    Value = arizona_template:escape_value(arizona_native, [<<"a">>, "\"b"]),
+    Value = arizona_template:escape_value(arizona_json, [<<"a">>, "\"b"]),
     ?assertEqual(
         [<<"{\"type\":\"Column\",\"children\":[\"x\",", Value/binary, "]}">>],
         maps:get(s, T)

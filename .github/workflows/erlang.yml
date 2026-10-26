@@ -5,7 +5,7 @@
 # - resolve-playwright-version: Standalone, runs first for E2E jobs
 # - cache-erlang: Standalone, caches Erlang build artifacts
 # - check/test/artifacts: Depend on cache-erlang only
-# - e2e-parallel/e2e-sequential/e2e-native: Depend on both
+# - e2e-parallel/e2e-sequential/e2e-json: Depend on both
 #   resolve-playwright-version and cache-erlang
 #
 # E2E tests use Playwright Docker containers with pre-installed browsers,
@@ -491,12 +491,12 @@ jobs:
           path: test-results/
           retention-days: 7
 
-  # Runs the native (`?native` JSON-wire) E2E project: a real WebSocket client
+  # Runs the `json` (`?json` wire) E2E project: a real WebSocket client
   # (no browser) drives the JSON render target against the running server. Same
-  # container setup as the other E2E jobs. Without this job the native-wire
-  # suite ran only on dev machines and a `?native` regression could merge green.
-  e2e-native:
-    name: E2E Tests (Native)
+  # container setup as the other E2E jobs. Without this job the JSON-wire
+  # suite ran only on dev machines and a `?json` regression could merge green.
+  e2e-json:
+    name: E2E Tests (JSON)
 
     needs: [resolve-playwright-version, cache-erlang]
 
@@ -578,13 +578,13 @@ jobs:
       - name: Compile Arizona for test
         run: make compile-test
 
-      - name: Run native E2E tests
-        run: make test-e2e-native
+      - name: Run JSON E2E tests
+        run: make test-e2e-json
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: playwright-report-native
+          name: playwright-report-json
           path: test-results/
           retention-days: 7

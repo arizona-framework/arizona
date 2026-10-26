@@ -161,7 +161,7 @@ export default defineConfig(({ mode }) => ({
     },
     test: {
         environment: 'jsdom',
-        // The reference native client (e2e/utils/native_client.js) has unit tests
+        // The reference native client (e2e/utils/json_client.js) has unit tests
         // beside it; the browser client's live under assets/.
         include: ['assets/**/*.test.js', 'e2e/utils/**/*.test.js'],
         setupFiles: ['./assets/js/test-setup.js'],

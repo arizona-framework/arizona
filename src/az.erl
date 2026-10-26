@@ -14,7 +14,7 @@ optimized template map.
 
 ## Parse transform stubs
 
-`html/1`, `native/1`, `terminal/1` and `each/2` are stubs -- they exist
+`html/1`, `json/1`, `terminal/1` and `each/2` are stubs -- they exist
 so callers can write `az:html({...})` and the parse transform can detect
 and replace the call. They never actually execute at runtime; calling
 them directly errors with `parse_transform_not_applied`.
@@ -39,7 +39,7 @@ function's own docs.
 -export([inner_content/1]).
 -export([track/1]).
 -export([html/1]).
--export([native/1]).
+-export([json/1]).
 -export([terminal/1]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -60,7 +60,7 @@ function's own docs.
     inner_content/1,
     track/1,
     html/1,
-    native/1,
+    json/1,
     terminal/1,
     stateful/2,
     stateless/2,
@@ -218,13 +218,13 @@ html(Elems) ->
     arizona_template:html(Elems).
 
 -doc """
-Parse transform stub. The parse transform replaces `az:native(...)` (or
-`arizona_template:native(...)`) calls with compiled JSON template maps before
+Parse transform stub. The parse transform replaces `az:json(...)` (or
+`arizona_template:json(...)`) calls with compiled JSON template maps before
 code generation.
 """.
--spec native(term()) -> no_return().
-native(Elems) ->
-    arizona_template:native(Elems).
+-spec json(term()) -> no_return().
+json(Elems) ->
+    arizona_template:json(Elems).
 
 -doc """
 Parse transform stub. The parse transform replaces `az:terminal(...)` (or

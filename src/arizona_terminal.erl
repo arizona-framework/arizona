@@ -6,7 +6,7 @@ Emits the byte sequences that make up the `s` statics as plain text decorated
 with ANSI escape codes, for views rendered into a terminal via `?terminal(...)`.
 Built for a transport that **repaints the whole frame** each update (see
 `arizona_live:render_current/1`) rather than applying diff ops, so unlike the
-HTML and native backends it writes **no `az`/slot markers** into the output --
+HTML and JSON backends it writes **no `az`/slot markers** into the output --
 `az_attr/1`, `text_slot_open/1`, `text_slot_close/0` and `scope_static/3` are
 no-ops. (`text_az/2` still hands out distinct slot ids so the snapshot's
 `d`-list stays well-formed for the diff engine, whose ops the terminal

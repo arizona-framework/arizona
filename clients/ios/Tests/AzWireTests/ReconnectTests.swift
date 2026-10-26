@@ -12,7 +12,7 @@ import XCTest
 /// one vanishes. That is what flaked the Simulator reconnect e2e -- the tap after
 /// a reconnect incremented one live process while a second mount reset the view.
 final class ReconnectTests: XCTestCase {
-    private let counterFrame = ##"{"d":["native_counter","0"],"f":"1M2KTR","s":["{\"type\":\"Column\",\"az\":\"1M2KTR-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"Text\",\"az\":\"1M2KTR-1\",\"children\":[\"Count: \",{\"type\":\"#slot\",\"az\":\"1M2KTR-1t0\",\"children\":[","]}]},{\"type\":\"Button\",\"az\":\"1M2KTR-2\",\"on_tap\":[0,\"inc\"],\"children\":[\"+\"]},{\"type\":\"Button\",\"az\":\"1M2KTR-3\",\"on_tap\":[0,\"dec\"],\"children\":[\"-\"]}]}"]}"##
+    private let counterFrame = ##"{"d":["json_counter","0"],"f":"1M2KTR","s":["{\"type\":\"Column\",\"az\":\"1M2KTR-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"Text\",\"az\":\"1M2KTR-1\",\"children\":[\"Count: \",{\"type\":\"#slot\",\"az\":\"1M2KTR-1t0\",\"children\":[","]}]},{\"type\":\"Button\",\"az\":\"1M2KTR-2\",\"on_tap\":[0,\"inc\"],\"children\":[\"+\"]},{\"type\":\"Button\",\"az\":\"1M2KTR-3\",\"on_tap\":[0,\"dec\"],\"children\":[\"-\"]}]}"]}"##
 
     /// What the injected seams recorded: one entry per socket the client opened
     /// and one per reconnect it scheduled.
@@ -35,7 +35,7 @@ final class ReconnectTests: XCTestCase {
             self.rec = rec
             client = AzClient(
                 baseUrl: "http://localhost:4040",
-                path: "/native/counter",
+                path: "/json/counter",
                 makeTransport: { url in
                     rec.urls.append(url)
                     let socket = MockTransport()
@@ -70,8 +70,8 @@ final class ReconnectTests: XCTestCase {
     }
 
     private func mountFrame(count: String) -> String {
-        let frame = counterFrame.replacingOccurrences(of: ##"["native_counter","0"]"##, with: ##"["native_counter","\##(count)"]"##)
-        return "{\"o\":[[8,\"native_counter\",\(frame)]]}"
+        let frame = counterFrame.replacingOccurrences(of: ##"["json_counter","0"]"##, with: ##"["json_counter","\##(count)"]"##)
+        return "{\"o\":[[8,\"json_counter\",\(frame)]]}"
     }
 
     /// Bring a harness up to a rendered counter on its first socket.
@@ -121,7 +121,7 @@ final class ReconnectTests: XCTestCase {
         // The tap still reaches the socket that rendered what the user sees.
         let inc = childNodes(h.client.root!).first { $0.props["on_tap"]?.arrayValue?[1].stringValue == "inc" }
         h.client.tap(inc!)
-        XCTAssertEqual(reopened.sent.last, "[\"native_counter\",\"inc\",{}]")
+        XCTAssertEqual(reopened.sent.last, "[\"json_counter\",\"inc\",{}]")
         XCTAssertEqual(h.socketCount, 2, "no third socket")
     }
 
@@ -136,7 +136,7 @@ final class ReconnectTests: XCTestCase {
         let reopened = h.current
         reopened.simulateOpen()
         reopened.simulateText(mountFrame(count: "0"))
-        reopened.simulateText("{\"o\":[[0,\"native_counter:1M2KTR-1t0\",\"1\"]]}")
+        reopened.simulateText("{\"o\":[[0,\"json_counter:1M2KTR-1t0\",\"1\"]]}")
         XCTAssertTrue(flatText(h.client.root!).contains("Count: 1"))
 
         dropped.simulateText(mountFrame(count: "0"))

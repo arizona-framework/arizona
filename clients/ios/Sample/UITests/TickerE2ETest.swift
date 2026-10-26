@@ -1,6 +1,6 @@
 import XCTest
 
-/// On-device server push: navigate to /native/ticker; a handle_info timer pushes
+/// On-device server push: navigate to /json/ticker; a handle_info timer pushes
 /// count updates unsolicited, so the displayed count rises without any tap. The
 /// Android analogue is TickerE2ETest.
 final class TickerE2ETest: XCTestCase {

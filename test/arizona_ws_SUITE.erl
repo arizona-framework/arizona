@@ -79,7 +79,7 @@
     static_asset_brotli_served/1,
     static_asset_missing_returns_404/1,
     reload_endpoint_streams_event/1,
-    reload_closes_native_socket_once/1,
+    reload_closes_json_socket_once/1,
     reload_closes_html_socket/1,
     reload_css_keeps_socket/1,
     reload_ignored_without_reloader/1,
@@ -203,7 +203,7 @@ groups() ->
         static_asset_brotli_served,
         static_asset_missing_returns_404,
         reload_endpoint_streams_event,
-        reload_closes_native_socket_once,
+        reload_closes_json_socket_once,
         reload_closes_html_socket,
         reload_css_keeps_socket,
         reload_ignored_without_reloader,
@@ -2171,9 +2171,9 @@ recv_until(Sock, Needle, Timeout, Acc) ->
     end.
 
 %% In dev mode a live socket closes 1001 on a reload broadcast, so its client
-%% reconnects and remounts on fresh code -- a `?native` client has no page reload
+%% reconnects and remounts on fresh code -- a `?json` client has no page reload
 %% to do it. The session exits on the first close, so a burst closes it once.
-reload_closes_native_socket_once(Config) ->
+reload_closes_json_socket_once(Config) ->
     with_reloader(fun() ->
         {ok, Sock} = ws_connect(Config, <<"/reload_fun">>, [{reconnect, true}]),
         {text, _Replace} = ws_recv(Sock),

@@ -6,9 +6,9 @@ import XCTest
 /// exercises OP_REPLACE / per-view resolve / OP_TEXT / the full stream-op set on
 /// any platform -- coverage the Android client only gets via on-device e2e.
 final class DispatchTests: XCTestCase {
-    private let counterFrame = ##"{"d":["native_counter","0"],"f":"1M2KTR","s":["{\"type\":\"Column\",\"az\":\"1M2KTR-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"Text\",\"az\":\"1M2KTR-1\",\"children\":[\"Count: \",{\"type\":\"#slot\",\"az\":\"1M2KTR-1t0\",\"children\":[","]}]},{\"type\":\"Button\",\"az\":\"1M2KTR-2\",\"on_tap\":[0,\"inc\"],\"children\":[\"+\"]},{\"type\":\"Button\",\"az\":\"1M2KTR-3\",\"on_tap\":[0,\"dec\"],\"children\":[\"-\"]}]}"]}"##
+    private let counterFrame = ##"{"d":["json_counter","0"],"f":"1M2KTR","s":["{\"type\":\"Column\",\"az\":\"1M2KTR-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"Text\",\"az\":\"1M2KTR-1\",\"children\":[\"Count: \",{\"type\":\"#slot\",\"az\":\"1M2KTR-1t0\",\"children\":[","]}]},{\"type\":\"Button\",\"az\":\"1M2KTR-2\",\"on_tap\":[0,\"inc\"],\"children\":[\"+\"]},{\"type\":\"Button\",\"az\":\"1M2KTR-3\",\"on_tap\":[0,\"dec\"],\"children\":[\"-\"]}]}"]}"##
 
-    private let listFrame = ##"{"d":["native_list",{"d":[["1","One"],["2","Two"],["3","Three"]],"f":"O1M0B","s":["{\"type\":\"Row\",\"az\":\"O1M0B-0\",\"az_key\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"O1M0B-0t0\",\"children\":[","]}]}"],"t":0}],"f":"JW7VZ","s":["{\"type\":\"Column\",\"az\":\"JW7VZ-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"JW7VZ-0t0\",\"children\":[","]}]}"]}"##
+    private let listFrame = ##"{"d":["json_list",{"d":[["1","One"],["2","Two"],["3","Three"]],"f":"O1M0B","s":["{\"type\":\"Row\",\"az\":\"O1M0B-0\",\"az_key\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"O1M0B-0t0\",\"children\":[","]}]}"],"t":0}],"f":"JW7VZ","s":["{\"type\":\"Column\",\"az\":\"JW7VZ-0\",\"az_view\":true,\"id\":",",\"children\":[{\"type\":\"#slot\",\"az\":\"JW7VZ-0t0\",\"children\":[","]}]}"]}"##
 
     private func newClient(path: String) -> AzClient {
         AzClient(baseUrl: "http://localhost:4040", path: path, makeTransport: { _ in MockTransport() }, runOnMain: { $0() })
@@ -29,40 +29,40 @@ final class DispatchTests: XCTestCase {
     }
 
     func testReplaceThenTextUpdatesTheCount() {
-        let client = newClient(path: "/native/counter")
-        client.handleText("{\"o\":[[8,\"native_counter\",\(counterFrame)]]}")
+        let client = newClient(path: "/json/counter")
+        client.handleText("{\"o\":[[8,\"json_counter\",\(counterFrame)]]}")
 
         XCTAssertEqual(client.status, .connected)
         XCTAssertEqual(client.root?.type, "Column")
         XCTAssertTrue(flatText(client.root!).contains("Count: 0"))
 
         // OP_TEXT against "ViewId:az" -- resolved through the per-view registry.
-        client.handleText("{\"o\":[[0,\"native_counter:1M2KTR-1t0\",\"1\"]]}")
+        client.handleText("{\"o\":[[0,\"json_counter:1M2KTR-1t0\",\"1\"]]}")
         XCTAssertTrue(flatText(client.root!).contains("Count: 1"))
         XCTAssertFalse(flatText(client.root!).contains("Count: 0"))
     }
 
     func testStreamInsertRemoveMovePatch() {
-        let client = newClient(path: "/native/list")
-        client.handleText("{\"o\":[[8,\"native_list\",\(listFrame)]]}")
+        let client = newClient(path: "/json/list")
+        client.handleText("{\"o\":[[8,\"json_list\",\(listFrame)]]}")
         XCTAssertEqual(rowKeys(client), ["1", "2", "3"])
         XCTAssertEqual(rowText(client, key: "2"), "Two")
 
         // OP_INSERT (append): pos -1.
-        client.handleText("{\"o\":[[5,\"native_list:JW7VZ-0t0\",\"9\",-1,{\"f\":\"O1M0B\",\"d\":[\"9\",\"Nine\"]}]]}")
+        client.handleText("{\"o\":[[5,\"json_list:JW7VZ-0t0\",\"9\",-1,{\"f\":\"O1M0B\",\"d\":[\"9\",\"Nine\"]}]]}")
         XCTAssertEqual(rowKeys(client), ["1", "2", "3", "9"])
         XCTAssertEqual(rowText(client, key: "9"), "Nine")
 
         // OP_REMOVE by az_key.
-        client.handleText("{\"o\":[[6,\"native_list:JW7VZ-0t0\",\"2\"]]}")
+        client.handleText("{\"o\":[[6,\"json_list:JW7VZ-0t0\",\"2\"]]}")
         XCTAssertEqual(rowKeys(client), ["1", "3", "9"])
 
         // OP_MOVE "1" to after "9".
-        client.handleText("{\"o\":[[9,\"native_list:JW7VZ-0t0\",\"1\",\"9\"]]}")
+        client.handleText("{\"o\":[[9,\"json_list:JW7VZ-0t0\",\"1\",\"9\"]]}")
         XCTAssertEqual(rowKeys(client), ["3", "9", "1"])
 
         // OP_ITEM_PATCH "9": an inner OP_TEXT scoped to the item's own az map.
-        client.handleText("{\"o\":[[7,\"native_list:JW7VZ-0t0\",\"9\",[[0,\"O1M0B-0t0\",\"Updated\"]]]]}")
+        client.handleText("{\"o\":[[7,\"json_list:JW7VZ-0t0\",\"9\",[[0,\"O1M0B-0t0\",\"Updated\"]]]]}")
         XCTAssertEqual(rowText(client, key: "9"), "Updated")
     }
 
@@ -70,14 +70,14 @@ final class DispatchTests: XCTestCase {
         var captured: MockTransport?
         let client = AzClient(
             baseUrl: "http://localhost:4040",
-            path: "/native/counter",
+            path: "/json/counter",
             makeTransport: { _ in let m = MockTransport(); captured = m; return m },
             runOnMain: { $0() })
         client.connect()
         captured?.simulateOpen()
         XCTAssertEqual(captured?.sent.first, "[\"cached_fps\",[]]")
 
-        captured?.simulateText("{\"o\":[[8,\"native_counter\",\(counterFrame)]]}")
+        captured?.simulateText("{\"o\":[[8,\"json_counter\",\(counterFrame)]]}")
         XCTAssertEqual(client.status, .connected)
         XCTAssertTrue(flatText(client.root!).contains("Count: 0"))
     }
@@ -86,16 +86,16 @@ final class DispatchTests: XCTestCase {
         var captured: MockTransport?
         let client = AzClient(
             baseUrl: "http://localhost:4040",
-            path: "/native/counter",
+            path: "/json/counter",
             makeTransport: { _ in let m = MockTransport(); captured = m; return m },
             runOnMain: { $0() })
         client.connect()
         captured?.simulateOpen()
-        captured?.simulateText("{\"o\":[[8,\"native_counter\",\(counterFrame)]]}")
+        captured?.simulateText("{\"o\":[[8,\"json_counter\",\(counterFrame)]]}")
 
         let incButton = childNodes(client.root!).first { $0.props["on_tap"]?.arrayValue?[1].stringValue == "inc" }
         client.tap(incButton!)
-        XCTAssertEqual(captured?.sent.last, "[\"native_counter\",\"inc\",{}]")
+        XCTAssertEqual(captured?.sent.last, "[\"json_counter\",\"inc\",{}]")
     }
 
     // A push_event/2 effect carries an explicit payload. On native there is no
@@ -104,7 +104,7 @@ final class DispatchTests: XCTestCase {
     // required key crash the live process.
     // ----------------------------------------------------------------------
     // The az -> node registry vs. nodes the DIFF creates. Mirrors
-    // clients/android .../DispatchTest.kt and e2e/utils/native_client.test.js.
+    // clients/android .../DispatchTest.kt and e2e/utils/json_client.test.js.
     // ----------------------------------------------------------------------
 
     // A view root whose single `#slot` (az "R-0t0") holds the swappable content.
@@ -136,7 +136,7 @@ final class DispatchTests: XCTestCase {
         let items = keys.map { "[\"\($0)\",\"\"]" }.joined(separator: ",")
         client.handleText(
             frame(
-                ##"[8,"native_l",{"f":"R","s":\##(rootStatics),"d":["native_l",{"t":0,"f":"S","s":\##(slotItemStatics),"d":[\##(items)]}]}]"##
+                ##"[8,"json_l",{"f":"R","s":\##(rootStatics),"d":["json_l",{"t":0,"f":"S","s":\##(slotItemStatics),"d":[\##(items)]}]}]"##
             ))
     }
 
@@ -145,14 +145,14 @@ final class DispatchTests: XCTestCase {
 
     // OP_REPLACE of the root view with an empty content slot.
     private func replaceRoot(_ client: AzClient) {
-        client.handleText(frame(##"[8,"native_x",{"f":"R","s":\##(rootStatics),"d":["native_x",""]}]"##))
+        client.handleText(frame(##"[8,"json_x",{"f":"R","s":\##(rootStatics),"d":["json_x",""]}]"##))
     }
 
     // OP_REPLACE of a stream root holding one keyed item that wraps a child view.
     private func replaceList(_ client: AzClient) {
         client.handleText(
             frame(
-                ##"[8,"native_l",{"f":"R","s":\##(rootStatics),"d":["native_l",{"t":0,"f":"I","s":\##(itemStatics),"d":[["k1","child_1","0"]]}]}]"##
+                ##"[8,"json_l",{"f":"R","s":\##(rootStatics),"d":["json_l",{"t":0,"f":"I","s":\##(itemStatics),"d":[["k1","child_1","0"]]}]}]"##
             ))
     }
 
@@ -169,13 +169,13 @@ final class DispatchTests: XCTestCase {
     // OP_REPLACE, so every az the second frame introduced was invisible and the
     // third frame hit "unknown target".
     func testAddressesANodeTheDiffCreatedViaOpText() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         client.handleText(
             frame(
-                ##"[0,"native_x:R-0t0",{"f":"T","s":["{\"type\":\"Text\",\"az\":\"T-0\",\"children\":[\"a\"]}"],"d":[]}]"##
+                ##"[0,"json_x:R-0t0",{"f":"T","s":["{\"type\":\"Text\",\"az\":\"T-0\",\"children\":[\"a\"]}"],"d":[]}]"##
             ))
-        client.handleText(frame(##"[1,"native_x:T-0","color","red"]"##))
+        client.handleText(frame(##"[1,"json_x:T-0","color","red"]"##))
 
         let text = content(client)
         XCTAssertEqual(text.type, "Text")
@@ -186,10 +186,10 @@ final class DispatchTests: XCTestCase {
     // the installed payload carries its OWN view id, which must be registered or
     // the child's very first update crashes.
     func testRegistersAChildViewIdIntroducedByAnOpTextPayload() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         client.handleText(
-            frame(##"[0,"native_x:R-0t0",{"f":"C","s":\##(childStatics),"d":["cond_child","0"]}]"##))
+            frame(##"[0,"json_x:R-0t0",{"f":"C","s":\##(childStatics),"d":["cond_child","0"]}]"##))
         XCTAssertEqual(content(client).viewId, "cond_child")
         XCTAssertEqual(flatText(content(client)), "0")
 
@@ -201,12 +201,12 @@ final class DispatchTests: XCTestCase {
     // A rebuilt slot must not leave the destroyed subtree's azs in the registry,
     // or the map retains detached nodes for the life of the connection.
     func testDropsTheEntriesOfASubtreeAnOpTextReplaced() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         client.handleText(
-            frame(##"[0,"native_x:R-0t0",{"f":"C","s":\##(childStatics),"d":["cond_child","0"]}]"##))
+            frame(##"[0,"json_x:R-0t0",{"f":"C","s":\##(childStatics),"d":["cond_child","0"]}]"##))
         XCTAssertNotNil(client.views["cond_child"])
-        client.handleText(frame(##"[0,"native_x:R-0t0",""]"##))
+        client.handleText(frame(##"[0,"json_x:R-0t0",""]"##))
         XCTAssertNil(client.views["cond_child"])
     }
 
@@ -214,12 +214,12 @@ final class DispatchTests: XCTestCase {
     // a `[ChildViewId, ChildOps]` wrapper nested in the item patch (flatten_ops/2
     // only unwraps that at top level), so the first element is a view-id STRING.
     func testAppliesAChildViewOpWrapperNestedInAnItemPatch() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         replaceList(client)
         let item = child(child(client.root!, 0), 0)
         XCTAssertEqual(flatText(item), "0")
 
-        client.handleText(frame(##"[7,"native_l:R-0t0","k1",[["child_1",[[0,"C-0t0","9"]]]]]"##))
+        client.handleText(frame(##"[7,"json_l:R-0t0","k1",[["child_1",[[0,"C-0t0","9"]]]]]"##))
         XCTAssertEqual(flatText(item), "9")
     }
 
@@ -228,14 +228,14 @@ final class DispatchTests: XCTestCase {
     // child's own ops come back top-level. Indexing an inner rebuild only into the
     // item-local map leaves it unaddressable and its slot frozen.
     func testRegistersAChildViewAnItemPatchInnerOpInstalled() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         client.handleText(
             frame(
-                ##"[8,"native_l",{"f":"R","s":\##(rootStatics),"d":["native_l",{"t":0,"f":"S","s":\##(slotItemStatics),"d":[["k1",""]]}]}]"##
+                ##"[8,"json_l",{"f":"R","s":\##(rootStatics),"d":["json_l",{"t":0,"f":"S","s":\##(slotItemStatics),"d":[["k1",""]]}]}]"##
             ))
         client.handleText(
             frame(
-                ##"[7,"native_l:R-0t0","k1",[[0,"I-0t0",{"f":"C","s":\##(childStatics),"d":["inner_kid","0"]}]]]"##
+                ##"[7,"json_l:R-0t0","k1",[[0,"I-0t0",{"f":"C","s":\##(childStatics),"d":["inner_kid","0"]}]]]"##
             ))
         let item = child(child(client.root!, 0), 0)
         XCTAssertEqual(flatText(item), "0")
@@ -248,9 +248,9 @@ final class DispatchTests: XCTestCase {
     // An inserted stream item's child view is a new view id too -- OP_REPLACE
     // already indexes the items it renders, so an insert must as well.
     func testRegistersAChildViewInsideAnInsertedStreamItem() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         replaceList(client)
-        client.handleText(frame(##"[5,"native_l:R-0t0","k2",-1,{"f":"I","d":["k2","child_2","0"]}]"##))
+        client.handleText(frame(##"[5,"json_l:R-0t0","k2",-1,{"f":"I","d":["k2","child_2","0"]}]"##))
         client.handleText(frame(##"[0,"child_2:C-0t0","7"]"##))
 
         XCTAssertEqual(flatText(child(child(client.root!, 0), 1)), "7")
@@ -259,22 +259,22 @@ final class DispatchTests: XCTestCase {
     // Per-op isolation: an unresolvable target and an op code this client does not
     // implement (e.g. OP_LIST_PATCH) must degrade those slots only.
     func testSkipsABadOpWithoutDroppingTheRestOfTheBatch() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         client.handleText(
             frame(
-                ##"[0,"native_x:nope","ignored"],[10,"native_x:R-0t0","unimplemented op code"],[0,"native_x:R-0t0","applied"]"##
+                ##"[0,"json_x:nope","ignored"],[10,"json_x:R-0t0","unimplemented op code"],[0,"json_x:R-0t0","applied"]"##
             ))
         XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
     }
 
     // A malformed payload throws inside the op body; the batch must survive it.
     func testSkipsAnOpWhosePayloadIsMalformed() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         client.handleText(
             frame(
-                ##"[0,"native_x:R-0t0",{"f":"never-cached","d":[]}],[0,"native_x:R-0t0","applied"]"##
+                ##"[0,"json_x:R-0t0",{"f":"never-cached","d":[]}],[0,"json_x:R-0t0","applied"]"##
             ))
         XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
     }
@@ -285,11 +285,11 @@ final class DispatchTests: XCTestCase {
     // is not catchable, so a `preconditionFailure` there would kill the app over one
     // slot (Kotlin's counterpart raises, and its catch already handles it).
     func testSkipsAnOpWhosePayloadIsNotANode() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         client.handleText(
             frame(
-                ##"[0,"native_x:R-0t0",{"f":"B","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}],[0,"native_x:R-0t0","applied"]"##
+                ##"[0,"json_x:R-0t0",{"f":"B","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}],[0,"json_x:R-0t0","applied"]"##
             ))
         XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
     }
@@ -302,7 +302,7 @@ final class DispatchTests: XCTestCase {
         var captured: MockTransport?
         let client = AzClient(
             baseUrl: "http://localhost:4040",
-            path: "/native/x",
+            path: "/json/x",
             makeTransport: { _ in let m = MockTransport(); captured = m; return m },
             runOnMain: { $0() })
         client.connect()
@@ -312,7 +312,7 @@ final class DispatchTests: XCTestCase {
 
         // A frame arrives and caches fingerprint "R" ...
         captured?.simulateText(
-            frame(##"[8,"native_x",{"f":"R","s":\##(rootStatics),"d":["native_x",""]}]"##))
+            frame(##"[8,"json_x",{"f":"R","s":\##(rootStatics),"d":["json_x",""]}]"##))
         // ... so the next open announces it instead of an empty list.
         client.connect()
         captured?.simulateOpen()
@@ -324,13 +324,13 @@ final class DispatchTests: XCTestCase {
     // would TRAP without the guards (`JSONValue.parse` and a bare `cmd[1]`), and a
     // Swift trap is not catchable. (`[0]` is a push_event with no event name.)
     func testSurvivesAnUnparseableFrameAndAMalformedEffectCommand() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         client.handleText("not json")
         client.handleText(##"{"e":[[0]]}"##)
 
         // Still live: a well-formed frame after both still applies.
-        client.handleText(frame(##"[0,"native_x:R-0t0","applied"]"##))
+        client.handleText(frame(##"[0,"json_x:R-0t0","applied"]"##))
         XCTAssertEqual(flatText(child(client.root!, 0)), "applied")
     }
 
@@ -342,18 +342,18 @@ final class DispatchTests: XCTestCase {
         var captured: MockTransport?
         let client = AzClient(
             baseUrl: "http://localhost:4040",
-            path: "/native/x",
+            path: "/json/x",
             makeTransport: { _ in let m = MockTransport(); captured = m; return m },
             runOnMain: { $0() })
         client.connect()
         captured?.simulateOpen()
         captured?.simulateText(
-            ##"{"o":[[8,"native_x",{"f":"R","s":\##(rootStatics),"d":["native_x",""]}]],"## +
+            ##"{"o":[[8,"json_x",{"f":"R","s":\##(rootStatics),"d":["json_x",""]}]],"## +
                 ##""e":[[0,"saved",{"id":"1"}],[0],[10,"/done?x=1"]]}"##)
         XCTAssertEqual(
             captured?.sent.dropFirst().map { JSONValue.parse($0) },
             [
-                JSONValue.parse(##"["native_x","saved",{"id":"1"}]"##),
+                JSONValue.parse(##"["json_x","saved",{"id":"1"}]"##),
                 JSONValue.parse(##"["navigate",{"path":"/done","qs":"x=1"}]"##),
             ])
     }
@@ -363,46 +363,46 @@ final class DispatchTests: XCTestCase {
     // detached subtree) once per cycle, for the life of the connection. Each item
     // here carries a child view with its own id, so the leak is unambiguous.
     func testDoesNotGrowTheRegistryAcrossInsertRemoveCycles() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         replaceList(client)
-        let baseline = client.views["native_l"]?.count ?? 0
+        let baseline = client.views["json_l"]?.count ?? 0
         for i in 0..<50 {
             client.handleText(
-                frame(##"[5,"native_l:R-0t0","x\##(i)",-1,{"f":"I","d":["x\##(i)","kid\##(i)",""]}]"##)
+                frame(##"[5,"json_l:R-0t0","x\##(i)",-1,{"f":"I","d":["x\##(i)","kid\##(i)",""]}]"##)
             )
-            client.handleText(frame(##"[6,"native_l:R-0t0","x\##(i)"]"##))
+            client.handleText(frame(##"[6,"json_l:R-0t0","x\##(i)"]"##))
         }
         // Only the root view and the surviving item's child view are left.
-        XCTAssertEqual(client.views.keys.sorted(), ["child_1", "native_l"])
+        XCTAssertEqual(client.views.keys.sorted(), ["child_1", "json_l"])
         // The root view's own entries never grow either. (They can SHRINK: every
         // item shares one fingerprint's az values, so the entry for a shared az names
         // whichever item was indexed last, and removing that item drops it. Harmless
         // -- a stream item is only ever addressed through its container by `az_key`,
         // never by "ViewId:az".)
-        XCTAssertLessThanOrEqual(client.views["native_l"]?.count ?? 0, baseline)
+        XCTAssertLessThanOrEqual(client.views["json_l"]?.count ?? 0, baseline)
     }
 
     // A child view an inner op installed, then removed with its item, must not
     // leave a live registry entry pointing into the detached subtree.
     func testDropsARemovedItemChildViewFromTheRegistry() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         replaceSharedAzList(client, ["k1"])
         client.handleText(
             frame(
-                ##"[7,"native_l:R-0t0","k1",[[0,"I-0t0",{"f":"C","s":\##(childStatics),"d":["kid","0"]}]]]"##
+                ##"[7,"json_l:R-0t0","k1",[[0,"I-0t0",{"f":"C","s":\##(childStatics),"d":["kid","0"]}]]]"##
             ))
         XCTAssertNotNil(client.views["kid"])
-        client.handleText(frame(##"[6,"native_l:R-0t0","k1"]"##))
+        client.handleText(frame(##"[6,"json_l:R-0t0","k1"]"##))
         XCTAssertNil(client.views["kid"])
     }
 
     // The `remove` sentinel drops a node one-way, so its registry entries are dead
     // the moment the splice lands -- including a whole child view's.
     func testDropsANodeRemovedByTheRemoveSentinelFromTheRegistry() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         client.handleText(
-            frame(##"[0,"native_x:R-0t0",{"f":"C","s":\##(childStatics),"d":["cond_child","0"]}]"##))
+            frame(##"[0,"json_x:R-0t0",{"f":"C","s":\##(childStatics),"d":["cond_child","0"]}]"##))
         XCTAssertNotNil(client.views["cond_child"])
 
         client.handleText(frame(##"[4,"cond_child:C-0"]"##))
@@ -415,17 +415,17 @@ final class DispatchTests: XCTestCase {
     // item was indexed last. Unindexing a destroyed item by key alone would delete
     // the entry naming a LIVE sibling.
     func testKeepsASurvivingSiblingRegisteredWhenAnItemSharingItsAzIsRemoved() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         replaceSharedAzList(client, ["k1", "k2"])
         // Last-indexed wins: the entry names item k2's slot.
         guard case let .node(second) = items(client)[1] else { return XCTFail("expected a node") }
         let survivorSlot = child(second, 0)
-        XCTAssertTrue(client.views["native_l"]?["I-0t0"] === survivorSlot)
+        XCTAssertTrue(client.views["json_l"]?["I-0t0"] === survivorSlot)
 
-        client.handleText(frame(##"[6,"native_l:R-0t0","k1"]"##))
-        XCTAssertTrue(client.views["native_l"]?["I-0t0"] === survivorSlot)
+        client.handleText(frame(##"[6,"json_l:R-0t0","k1"]"##))
+        XCTAssertTrue(client.views["json_l"]?["I-0t0"] === survivorSlot)
         guard case let .node(remaining) = items(client)[0] else { return XCTFail("expected a node") }
-        XCTAssertTrue(client.views["native_l"]?["I-0"] === remaining)
+        XCTAssertTrue(client.views["json_l"]?["I-0"] === remaining)
     }
 
     // THE identity check, item-local half: two cells of a nested each inside one
@@ -433,13 +433,13 @@ final class DispatchTests: XCTestCase {
     // later inner op naming that az would then fall back to the ITEM and overwrite
     // the whole row.
     func testKeepsASurvivingNestedCellResolvableWhenItsAzSharingSiblingIsRemoved() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         client.handleText(
             frame(
-                ##"[8,"native_l",{"f":"R","s":\##(rootStatics),"d":["native_l",{"t":0,"f":"NI","s":\##(nestedItemStatics),"d":[["k1",{"t":0,"f":"CE","s":\##(cellStatics),"d":[["n1"],["n2"]]}]]}]}]"##
+                ##"[8,"json_l",{"f":"R","s":\##(rootStatics),"d":["json_l",{"t":0,"f":"NI","s":\##(nestedItemStatics),"d":[["k1",{"t":0,"f":"CE","s":\##(cellStatics),"d":[["n1"],["n2"]]}]]}]}]"##
             ))
         client.handleText(
-            frame(##"[7,"native_l:R-0t0","k1",[[6,"I-0t0","n1"],[0,"N-0","patched"]]]"##))
+            frame(##"[7,"json_l:R-0t0","k1",[[6,"I-0t0","n1"],[0,"N-0","patched"]]]"##))
 
         // The surviving cell took the patch, and the row is still a row.
         guard case let .node(row) = items(client)[0] else { return XCTFail("expected a node") }
@@ -454,17 +454,17 @@ final class DispatchTests: XCTestCase {
     // -- since an uncached fingerprint dies before either ordering commits anything
     // and so cannot tell them apart.
     func testKeepsThePreviousTreeAndRegistryWhenAnOpReplacePayloadIsBad() {
-        let client = newClient(path: "/native/x")
+        let client = newClient(path: "/json/x")
         replaceRoot(client)
         let before = client.root
 
         client.handleText(
-            frame(##"[8,"native_x",{"f":"BAD","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}]"##))
+            frame(##"[8,"json_x",{"f":"BAD","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}]"##))
         XCTAssertTrue(client.root === before)
-        XCTAssertNotNil(client.views["native_x"])
+        XCTAssertNotNil(client.views["json_x"])
 
         // The old registry still resolves, so the view keeps patching.
-        client.handleText(frame(##"[0,"native_x:R-0t0","still here"]"##))
+        client.handleText(frame(##"[0,"json_x:R-0t0","still here"]"##))
         XCTAssertEqual(flatText(child(client.root!, 0)), "still here")
     }
 
@@ -472,10 +472,10 @@ final class DispatchTests: XCTestCase {
     // never sends: any out-of-range value appends. Left as `== -1`, a raw negative
     // index TRAPS `Array.insert` here, so this guard is load-bearing on iOS.
     func testAppendsAnInsertWhosePositionIsOutOfRange() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         replaceList(client)
         client.handleText(
-            frame(##"[5,"native_l:R-0t0","k2",-5,{"f":"I","d":["k2","child_2","0"]}]"##))
+            frame(##"[5,"json_l:R-0t0","k2",-5,{"f":"I","d":["k2","child_2","0"]}]"##))
         let slot = child(client.root!, 0)
         XCTAssertEqual(slot.children.count, 2)
         guard case let .node(inserted) = slot.children[1] else { return XCTFail("expected a node") }
@@ -485,10 +485,10 @@ final class DispatchTests: XCTestCase {
     // Spec parity: an inserted item that is ITSELF a view root owns its subtree
     // under its own id, rather than registering in the container's view.
     func testRegistersAnInsertedItemThatIsItselfAViewRoot() {
-        let client = newClient(path: "/native/l")
+        let client = newClient(path: "/json/l")
         replaceList(client)
         client.handleText(
-            frame(##"[5,"native_l:R-0t0","solo",-1,{"f":"C","s":\##(childStatics),"d":["solo","0"]}]"##))
+            frame(##"[5,"json_l:R-0t0","solo",-1,{"f":"C","s":\##(childStatics),"d":["solo","0"]}]"##))
         XCTAssertNotNil(client.views["solo"])
 
         client.handleText(frame(##"[0,"solo:C-0t0","7"]"##))
@@ -499,7 +499,7 @@ final class DispatchTests: XCTestCase {
         var captured: MockTransport?
         let client = AzClient(
             baseUrl: "http://localhost:4040",
-            path: "/native/counter",
+            path: "/json/counter",
             makeTransport: { _ in let m = MockTransport(); captured = m; return m },
             runOnMain: { $0() })
         client.connect()
@@ -507,18 +507,18 @@ final class DispatchTests: XCTestCase {
         // Turn the `inc` button's on_tap into a push_event with a payload.
         let frame = counterFrame.replacingOccurrences(
             of: ##"[0,\"inc\"]"##, with: ##"[0,\"save\",{\"id\":\"42\"}]"##)
-        captured?.simulateText("{\"o\":[[8,\"native_counter\",\(frame)]]}")
+        captured?.simulateText("{\"o\":[[8,\"json_counter\",\(frame)]]}")
 
         let saveButton = childNodes(client.root!).first { $0.props["on_tap"]?.arrayValue?[1].stringValue == "save" }
         client.tap(saveButton!)
-        XCTAssertEqual(captured?.sent.last, "[\"native_counter\",\"save\",{\"id\":\"42\"}]")
+        XCTAssertEqual(captured?.sent.last, "[\"json_counter\",\"save\",{\"id\":\"42\"}]")
     }
 
     func testTapRunsEveryCommandOfAList() {
         var captured: MockTransport?
         let client = AzClient(
             baseUrl: "http://localhost:4040",
-            path: "/native/counter",
+            path: "/json/counter",
             makeTransport: { _ in let m = MockTransport(); captured = m; return m },
             runOnMain: { $0() })
         client.connect()
@@ -526,13 +526,13 @@ final class DispatchTests: XCTestCase {
         // Turn the `inc` button's on_tap into a list of two commands.
         let frame = counterFrame.replacingOccurrences(
             of: ##"[0,\"inc\"]"##, with: ##"[[0,\"save\"],[0,\"inc\"]]"##)
-        captured?.simulateText("{\"o\":[[8,\"native_counter\",\(frame)]]}")
+        captured?.simulateText("{\"o\":[[8,\"json_counter\",\(frame)]]}")
 
         let button = childNodes(client.root!).first { $0.props["on_tap"]?.arrayValue?.first?.arrayValue != nil }
         client.tap(button!)
         XCTAssertEqual(
             captured?.sent.suffix(2),
-            ["[\"native_counter\",\"save\",{}]", "[\"native_counter\",\"inc\",{}]"])
+            ["[\"json_counter\",\"save\",{}]", "[\"json_counter\",\"inc\",{}]"])
     }
 
     // A disabled command prop reads `false`; tapping it sends nothing.
@@ -540,13 +540,13 @@ final class DispatchTests: XCTestCase {
         var captured: MockTransport?
         let client = AzClient(
             baseUrl: "http://localhost:4040",
-            path: "/native/counter",
+            path: "/json/counter",
             makeTransport: { _ in let m = MockTransport(); captured = m; return m },
             runOnMain: { $0() })
         client.connect()
         captured?.simulateOpen()
         let frame = counterFrame.replacingOccurrences(of: ##"[0,\"inc\"]"##, with: "false")
-        captured?.simulateText("{\"o\":[[8,\"native_counter\",\(frame)]]}")
+        captured?.simulateText("{\"o\":[[8,\"json_counter\",\(frame)]]}")
         let sentBefore = captured?.sent.count
 
         let button = childNodes(client.root!).first { $0.props["on_tap"] == .bool(false) }

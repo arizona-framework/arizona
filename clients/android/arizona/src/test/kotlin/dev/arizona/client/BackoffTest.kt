@@ -6,7 +6,7 @@ import org.junit.Test
 /**
  * Pure JVM tests (no emulator) of the reconnect backoff: each attempt's delay
  * lands in the jittered band around its step (±20%), capping at the 10s step.
- * Mirrors e2e/utils/native_client.js's backoff(). Run with:
+ * Mirrors e2e/utils/json_client.js's backoff(). Run with:
  * ./gradlew :arizona:testDebugUnitTest
  */
 class BackoffTest {
