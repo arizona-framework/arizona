@@ -3,8 +3,8 @@
 -export([mount/1]).
 -export([render/1]).
 -export([handle_event/3]).
--export([native/1]).
--export([native_cmd/1]).
+-export([json/1]).
+-export([json_cmd/1]).
 -export([latin1/0]).
 
 %% Fixture: every render target writes UTF-8, so a value holding another encoding
@@ -63,13 +63,13 @@ handle_event(~"break", #{~"key" := ~"items"}, Bindings) ->
 handle_event(~"break", #{~"key" := Key}, Bindings) ->
     {Bindings#{binary_to_existing_atom(Key) => latin1()}, #{}, []}.
 
--spec native(az:bindings()) -> az:template().
-native(Bindings) ->
-    ?native({'Text', [{label, ?get(label)}], [?get(text)]}).
+-spec json(az:bindings()) -> az:template().
+json(Bindings) ->
+    ?json({'Text', [{label, ?get(label)}], [?get(text)]}).
 
--spec native_cmd(az:bindings()) -> az:template().
-native_cmd(Bindings) ->
-    ?native({'Button', [{on_tap, arizona_android:push_event(~"go", #{~"v" => ?get(cmd)})}], []}).
+-spec json_cmd(az:bindings()) -> az:template().
+json_cmd(Bindings) ->
+    ?json({'Button', [{on_tap, arizona_android:push_event(~"go", #{~"v" => ?get(cmd)})}], []}).
 
 %% "café" as Latin-1: 0xE9 is a lead byte with no continuation, never valid UTF-8.
 %% Spelled with an explicit byte so this file's own encoding cannot make it valid --

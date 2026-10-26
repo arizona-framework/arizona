@@ -8,8 +8,8 @@ screen-capture protection, and so on. The renderer is still the **same** web
 side-channel. So an existing app runs in a shell **unchanged**, and the seam is
 **purely additive**: in a plain browser everything below is a safe no-op.
 
-This is **not** a new render target (that is [`docs/native.md`](native.md), the
-`?native` JSON-widget target for iOS/Android). A desktop shell's renderer is a
+This is **not** a new render target (that is [`docs/json.md`](json.md), the
+`?json` JSON-widget target for iOS/Android). A desktop shell's renderer is a
 browser, so it uses the web path; this page is only about the native capability
 side-channel.
 
@@ -89,7 +89,7 @@ render(Bindings) ->
 ## Issuing OS commands -- `arizona_os`
 
 `arizona_os` is the per-target command builder (beside `arizona_js` for the
-browser and `arizona_android` for `?native`). Unlike those, **every** command
+browser and `arizona_android` for `?json`). Unlike those, **every** command
 funnels through one generic op (`?EFFECT_OS`) carrying a capability **name** plus
 args -- the engine is a pass-through; the shell owns the vocabulary. New
 capabilities are new names, never new op codes.

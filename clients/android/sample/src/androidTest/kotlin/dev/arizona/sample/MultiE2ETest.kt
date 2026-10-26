@@ -8,7 +8,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * On-device multiple independent counters: navigate to /native/multi and tap the
+ * On-device multiple independent counters: navigate to /json/multi and tap the
  * middle counter's "+"; only its count changes. Run with
  * ./gradlew :sample:connectedCheck (server at 10.0.2.2:4040).
  */

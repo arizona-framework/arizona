@@ -66,7 +66,7 @@ stateless_3(Config) when is_list(Config) ->
 
 html_stub(Config) when is_list(Config) ->
     ?assertError(parse_transform_not_applied, az:html(foo)),
-    ?assertError(parse_transform_not_applied, az:native(foo)),
+    ?assertError(parse_transform_not_applied, az:json(foo)),
     ?assertError(parse_transform_not_applied, az:terminal(foo)).
 
 %% `each/2` is a parse transform stub like `html/1`, so an un-transformed call

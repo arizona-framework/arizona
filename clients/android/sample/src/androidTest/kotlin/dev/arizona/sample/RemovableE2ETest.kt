@@ -7,10 +7,10 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * On-device OP_REMOVE_NODE (the `remove` sentinel). Navigate to /native/removable
+ * On-device OP_REMOVE_NODE (the `remove` sentinel). Navigate to /json/removable
  * and tap "Hide": the banner's text dynamic returns `remove`, the server diffs to
  * op 4, and the client must drop the node rather than crash. The Playwright
- * analogue is e2e/native/removable.spec.js.
+ * analogue is e2e/json/removable.spec.js.
  *
  * Requires the Arizona test server reachable at localhost:4040 (adb reverse
  * tcp:4040 tcp:4040). Run with: ./gradlew :sample:connectedCheck

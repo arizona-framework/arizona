@@ -14,7 +14,7 @@ import org.junit.Test
  * [AzClient.handleText], the resulting node tree comes out. The focus is the
  * `az -> node` registry vs. nodes the DIFF creates -- coverage the on-device e2e
  * cannot give cheaply. Mirrors clients/ios Tests/AzWireTests/DispatchTests.swift
- * and e2e/utils/native_client.test.js.
+ * and e2e/utils/json_client.test.js.
  *
  * Run with ./gradlew :arizona:testDebugUnitTest
  */
@@ -53,7 +53,7 @@ class DispatchTest {
     private val cellStatics =
         """["{\"type\":\"Cell\",\"az\":\"N-0\",\"az_key\":",",\"children\":[\"x\"]}"]"""
 
-    private fun newClient() = AzClient("http://localhost:4040", "/native/x")
+    private fun newClient() = AzClient("http://localhost:4040", "/json/x")
 
     // OP_REPLACE of a stream root holding `keys`, all sharing one item fingerprint
     // (so every item carries the SAME az values -- the collision the identity check
@@ -62,7 +62,7 @@ class DispatchTest {
         val items = keys.joinToString(",") { """["$it",""]""" }
         client.handleText(
             frame(
-                """[8,"native_l",{"f":"R","s":$rootStatics,"d":["native_l",""" +
+                """[8,"json_l",{"f":"R","s":$rootStatics,"d":["json_l",""" +
                     """{"t":0,"f":"S","s":$slotItemStatics,"d":[$items]}]}]""",
             ),
         )
@@ -76,7 +76,7 @@ class DispatchTest {
     // OP_REPLACE of the root view with an empty content slot.
     private fun replaceRoot(client: AzClient) {
         client.handleText(
-            frame("""[8,"native_x",{"f":"R","s":$rootStatics,"d":["native_x",""]}]"""),
+            frame("""[8,"json_x",{"f":"R","s":$rootStatics,"d":["json_x",""]}]"""),
         )
     }
 
@@ -84,7 +84,7 @@ class DispatchTest {
     private fun replaceList(client: AzClient) {
         client.handleText(
             frame(
-                """[8,"native_l",{"f":"R","s":$rootStatics,"d":["native_l",""" +
+                """[8,"json_l",{"f":"R","s":$rootStatics,"d":["json_l",""" +
                     """{"t":0,"f":"I","s":$itemStatics,"d":[["k1","child_1","0"]]}]}]""",
             ),
         )
@@ -105,12 +105,12 @@ class DispatchTest {
         replaceRoot(client)
         client.handleText(
             frame(
-                """[0,"native_x:R-0t0",""" +
+                """[0,"json_x:R-0t0",""" +
                     """{"f":"T","s":["{\"type\":\"Text\",\"az\":\"T-0\",\"children\":[\"a\"]}"],""" +
                     """"d":[]}]""",
             ),
         )
-        client.handleText(frame("""[1,"native_x:T-0","color","red"]"""))
+        client.handleText(frame("""[1,"json_x:T-0","color","red"]"""))
 
         val text = content(client)
         assertEquals("Text", text.type)
@@ -125,12 +125,12 @@ class DispatchTest {
         replaceRoot(client)
         client.handleText(
             frame(
-                """[0,"native_x:R-0t0",""" +
+                """[0,"json_x:R-0t0",""" +
                     """{"f":"B","s":["{\"type\":\"Button\",\"az\":\"B-0\",\"on_tap\":[0,\"go\"],""" +
                     """\"children\":[\"b\"]}"],"d":[]}]""",
             ),
         )
-        client.handleText(frame("""[1,"native_x:B-0","on_tap",false]"""))
+        client.handleText(frame("""[1,"json_x:B-0","on_tap",false]"""))
 
         val button = content(client)
         assertEquals("false", button.props["on_tap"].toString())
@@ -147,7 +147,7 @@ class DispatchTest {
         val client = newClient()
         replaceRoot(client)
         client.handleText(
-            frame("""[0,"native_x:R-0t0",{"f":"C","s":$childStatics,"d":["cond_child","0"]}]"""),
+            frame("""[0,"json_x:R-0t0",{"f":"C","s":$childStatics,"d":["cond_child","0"]}]"""),
         )
         val child = content(client)
         assertEquals("cond_child", child.viewId)
@@ -165,10 +165,10 @@ class DispatchTest {
         val client = newClient()
         replaceRoot(client)
         client.handleText(
-            frame("""[0,"native_x:R-0t0",{"f":"C","s":$childStatics,"d":["cond_child","0"]}]"""),
+            frame("""[0,"json_x:R-0t0",{"f":"C","s":$childStatics,"d":["cond_child","0"]}]"""),
         )
         assertNotNull(client.views["cond_child"])
-        client.handleText(frame("""[0,"native_x:R-0t0",""]"""))
+        client.handleText(frame("""[0,"json_x:R-0t0",""]"""))
         assertNull(client.views["cond_child"])
     }
 
@@ -182,7 +182,7 @@ class DispatchTest {
         val item = node(node(client.root.value!!, 0), 0)
         assertEquals("0", node(node(item, 0), 0).children[0])
 
-        client.handleText(frame("""[7,"native_l:R-0t0","k1",[["child_1",[[0,"C-0t0","9"]]]]]"""))
+        client.handleText(frame("""[7,"json_l:R-0t0","k1",[["child_1",[[0,"C-0t0","9"]]]]]"""))
         assertEquals("9", node(node(item, 0), 0).children[0])
     }
 
@@ -195,13 +195,13 @@ class DispatchTest {
         val client = newClient()
         client.handleText(
             frame(
-                """[8,"native_l",{"f":"R","s":$rootStatics,"d":["native_l",""" +
+                """[8,"json_l",{"f":"R","s":$rootStatics,"d":["json_l",""" +
                     """{"t":0,"f":"S","s":$slotItemStatics,"d":[["k1",""]]}]}]""",
             ),
         )
         client.handleText(
             frame(
-                """[7,"native_l:R-0t0","k1",""" +
+                """[7,"json_l:R-0t0","k1",""" +
                     """[[0,"I-0t0",{"f":"C","s":$childStatics,"d":["inner_kid","0"]}]]]""",
             ),
         )
@@ -222,7 +222,7 @@ class DispatchTest {
         val client = newClient()
         replaceList(client)
         client.handleText(
-            frame("""[5,"native_l:R-0t0","k2",-1,{"f":"I","d":["k2","child_2","0"]}]"""),
+            frame("""[5,"json_l:R-0t0","k2",-1,{"f":"I","d":["k2","child_2","0"]}]"""),
         )
         client.handleText(frame("""[0,"child_2:C-0t0","7"]"""))
 
@@ -238,7 +238,7 @@ class DispatchTest {
         val client = newClient()
         replaceList(client)
         client.handleText(
-            frame("""[5,"native_l:R-0t0","k2",-5,{"f":"I","d":["k2","child_2","0"]}]"""),
+            frame("""[5,"json_l:R-0t0","k2",-5,{"f":"I","d":["k2","child_2","0"]}]"""),
         )
         val slot = node(client.root.value!!, 0)
         assertEquals(2, slot.children.size)
@@ -254,7 +254,7 @@ class DispatchTest {
         replaceList(client)
         // The item payload's root carries az_view + id, unlike the usual az_key row.
         client.handleText(
-            frame("""[5,"native_l:R-0t0","k2",-1,{"f":"C","s":$childStatics,"d":["solo","0"]}]"""),
+            frame("""[5,"json_l:R-0t0","k2",-1,{"f":"C","s":$childStatics,"d":["solo","0"]}]"""),
         )
         assertNotNull(client.views["solo"])
 
@@ -271,9 +271,9 @@ class DispatchTest {
         replaceRoot(client)
         client.handleText(
             frame(
-                """[0,"native_x:nope","ignored"],""" +
-                    """[10,"native_x:R-0t0","unimplemented op code"],""" +
-                    """[0,"native_x:R-0t0","applied"]""",
+                """[0,"json_x:nope","ignored"],""" +
+                    """[10,"json_x:R-0t0","unimplemented op code"],""" +
+                    """[0,"json_x:R-0t0","applied"]""",
             ),
         )
         assertEquals("applied", node(client.root.value!!, 0).children[0])
@@ -286,8 +286,8 @@ class DispatchTest {
         replaceRoot(client)
         client.handleText(
             frame(
-                """[0,"native_x:R-0t0",{"f":"never-cached","d":[]}],""" +
-                    """[0,"native_x:R-0t0","applied"]""",
+                """[0,"json_x:R-0t0",{"f":"never-cached","d":[]}],""" +
+                    """[0,"json_x:R-0t0","applied"]""",
             ),
         )
         assertEquals("applied", node(client.root.value!!, 0).children[0])
@@ -303,8 +303,8 @@ class DispatchTest {
         replaceRoot(client)
         client.handleText(
             frame(
-                """[0,"native_x:R-0t0",{"f":"B","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}],""" +
-                    """[0,"native_x:R-0t0","applied"]""",
+                """[0,"json_x:R-0t0",{"f":"B","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}],""" +
+                    """[0,"json_x:R-0t0","applied"]""",
             ),
         )
         assertEquals("applied", node(client.root.value!!, 0).children[0])
@@ -340,7 +340,7 @@ class DispatchTest {
         client.handleText("""{"e":[[0]]}""")
 
         // Still live: a well-formed frame after both still applies.
-        client.handleText(frame("""[0,"native_x:R-0t0","applied"]"""))
+        client.handleText(frame("""[0,"json_x:R-0t0","applied"]"""))
         assertEquals("applied", node(client.root.value!!, 0).children[0])
     }
 
@@ -353,12 +353,12 @@ class DispatchTest {
         val ws = RecordingWebSocket()
         client.ws = ws
         client.handleText(
-            """{"o":[[8,"native_x",{"f":"R","s":$rootStatics,"d":["native_x",""]}]],""" +
+            """{"o":[[8,"json_x",{"f":"R","s":$rootStatics,"d":["json_x",""]}]],""" +
                 """"e":[[0,"saved",{"id":"1"}],[0],[10,"/done?x=1"]]}""",
         )
         assertEquals(
             listOf(
-                """["native_x","saved",{"id":"1"}]""",
+                """["json_x","saved",{"id":"1"}]""",
                 """["navigate",{"path":"/done","qs":"x=1"}]""",
             ),
             ws.sent,
@@ -390,21 +390,21 @@ class DispatchTest {
     fun doesNotGrowTheRegistryAcrossInsertRemoveCycles() {
         val client = newClient()
         replaceList(client)
-        val baseline = client.views.getValue("native_l").size
+        val baseline = client.views.getValue("json_l").size
         for (i in 0 until 50) {
             client.handleText(
-                frame("""[5,"native_l:R-0t0","x$i",-1,{"f":"I","d":["x$i","kid$i",""]}]"""),
+                frame("""[5,"json_l:R-0t0","x$i",-1,{"f":"I","d":["x$i","kid$i",""]}]"""),
             )
-            client.handleText(frame("""[6,"native_l:R-0t0","x$i"]"""))
+            client.handleText(frame("""[6,"json_l:R-0t0","x$i"]"""))
         }
         // Only the root view and the surviving item's child view are left.
-        assertEquals(listOf("child_1", "native_l"), client.views.keys.sorted())
+        assertEquals(listOf("child_1", "json_l"), client.views.keys.sorted())
         // The root view's own entries never grow either. (They can SHRINK: every
         // item shares one fingerprint's az values, so the entry for a shared az
         // names whichever item was indexed last, and removing that item drops it.
         // Harmless -- a stream item is only ever addressed through its container by
         // `az_key`, never by "ViewId:az".)
-        assertTrue(client.views.getValue("native_l").size <= baseline)
+        assertTrue(client.views.getValue("json_l").size <= baseline)
     }
 
     // A child view an inner op installed, then removed with its item, must not
@@ -415,12 +415,12 @@ class DispatchTest {
         replaceSharedAzList(client, listOf("k1"))
         client.handleText(
             frame(
-                """[7,"native_l:R-0t0","k1",""" +
+                """[7,"json_l:R-0t0","k1",""" +
                     """[[0,"I-0t0",{"f":"C","s":$childStatics,"d":["kid","0"]}]]]""",
             ),
         )
         assertNotNull(client.views["kid"])
-        client.handleText(frame("""[6,"native_l:R-0t0","k1"]"""))
+        client.handleText(frame("""[6,"json_l:R-0t0","k1"]"""))
         assertNull(client.views["kid"])
     }
 
@@ -431,7 +431,7 @@ class DispatchTest {
         val client = newClient()
         replaceRoot(client)
         client.handleText(
-            frame("""[0,"native_x:R-0t0",{"f":"C","s":$childStatics,"d":["cond_child","0"]}]"""),
+            frame("""[0,"json_x:R-0t0",{"f":"C","s":$childStatics,"d":["cond_child","0"]}]"""),
         )
         assertNotNull(client.views["cond_child"])
 
@@ -448,12 +448,12 @@ class DispatchTest {
     fun keepsASurvivingSiblingRegisteredWhenAnItemSharingItsAzIsRemoved() {
         val client = newClient()
         replaceSharedAzList(client, listOf("k1", "k2"))
-        val registry = client.views.getValue("native_l")
+        val registry = client.views.getValue("json_l")
         // Last-indexed wins: the entry names item k2's slot.
         val survivorSlot = node(items(client)[1] as Node, 0)
         assertEquals(survivorSlot, registry["I-0t0"])
 
-        client.handleText(frame("""[6,"native_l:R-0t0","k1"]"""))
+        client.handleText(frame("""[6,"json_l:R-0t0","k1"]"""))
         assertEquals(survivorSlot, registry["I-0t0"])
         assertEquals(items(client)[0], registry["I-0"])
     }
@@ -467,13 +467,13 @@ class DispatchTest {
         val client = newClient()
         client.handleText(
             frame(
-                """[8,"native_l",{"f":"R","s":$rootStatics,"d":["native_l",""" +
+                """[8,"json_l",{"f":"R","s":$rootStatics,"d":["json_l",""" +
                     """{"t":0,"f":"NI","s":$nestedItemStatics,"d":[["k1",""" +
                     """{"t":0,"f":"CE","s":$cellStatics,"d":[["n1"],["n2"]]}]]}]}]""",
             ),
         )
         client.handleText(
-            frame("""[7,"native_l:R-0t0","k1",[[6,"I-0t0","n1"],[0,"N-0","patched"]]]"""),
+            frame("""[7,"json_l:R-0t0","k1",[[6,"I-0t0","n1"],[0,"N-0","patched"]]]"""),
         )
         // The surviving cell took the patch, and the row is still a row.
         val row = items(client)[0] as Node
@@ -494,13 +494,13 @@ class DispatchTest {
         val before = client.root.value
 
         client.handleText(
-            frame("""[8,"native_x",{"f":"BAD","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}]"""),
+            frame("""[8,"json_x",{"f":"BAD","s":["{\"az\":\"B-0\",\"children\":[]}"],"d":[]}]"""),
         )
         assertEquals(before, client.root.value)
-        assertNotNull(client.views["native_x"])
+        assertNotNull(client.views["json_x"])
 
         // The old registry still resolves, so the view keeps patching.
-        client.handleText(frame("""[0,"native_x:R-0t0","still here"]"""))
+        client.handleText(frame("""[0,"json_x:R-0t0","still here"]"""))
         assertEquals("still here", node(client.root.value!!, 0).children[0])
     }
 }

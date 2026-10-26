@@ -106,7 +106,7 @@
     conditional_nested_element_recurses/1,
     conditional_attr_name_swap_replaces_branch/1,
     conditional_event_attr_name_swap_replaces_branch/1,
-    conditional_native_attr_name_swap_replaces_branch/1,
+    conditional_json_attr_name_swap_replaces_branch/1,
     wire_get_value_raw/1,
     wire_raw_value_tagged_html/1,
     wire_helper_raw_value_escaped/1,
@@ -271,7 +271,7 @@ groups() ->
             conditional_nested_element_recurses,
             conditional_attr_name_swap_replaces_branch,
             conditional_event_attr_name_swap_replaces_branch,
-            conditional_native_attr_name_swap_replaces_branch
+            conditional_json_attr_name_swap_replaces_branch
         ]},
         {wire_payload, [parallel], [
             wire_get_value_raw,
@@ -1974,11 +1974,11 @@ conditional_event_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
     ?assert(cond_payload_has(Ops, ~"az-submit")),
     ?assertNot(cond_payload_has(Ops, ~"az-click")).
 
-%% `?native` bakes the prop name into the statics, so its branches fingerprint
+%% `?json` bakes the prop name into the statics, so its branches fingerprint
 %% apart on their own; this pins that.
-conditional_native_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
+conditional_json_attr_name_swap_replaces_branch(Config) when is_list(Config) ->
     B0 = #{mode => a, v => ~"hi"},
-    Ops = cond_diff(native_attr_name_swap, B0, B0#{mode => b}, #{mode => true}),
+    Ops = cond_diff(json_attr_name_swap, B0, B0#{mode => b}, #{mode => true}),
     ?assertMatch([[?OP_TEXT, _, _]], Ops),
     ?assert(cond_payload_has(Ops, ~"weight")),
     ?assertNot(cond_payload_has(Ops, ~"color")).

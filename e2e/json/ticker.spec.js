@@ -1,0 +1,26 @@
+import { expect, test } from '@playwright/test';
+import { NativeClient } from '../utils/json_client.js';
+
+// JSON server-pushed updates: a handle_info timer increments a count
+// and pushes OP_TEXT unsolicited (the client sends no event). Proves
+// timer/pubsub-driven ops reach the native client, which applies any incoming
+// ops regardless of trigger.
+test.describe('JSON wire -- ticker (server push)', () => {
+    test('applies server-pushed count updates without any client event', async ({ baseURL }) => {
+        const client = new NativeClient(baseURL, '/json/ticker');
+        await client.connect();
+        // Text is ["Tick: ", "<count>"]; read the count leaf.
+        const count = (t) => Number(t.children[0].children[1]);
+        try {
+            expect(client.tree().type).toBe('Column');
+            expect(count(client.tree())).toBe(0);
+            // No pushEvent -- the server's 1s timer drives the updates. Budget is
+            // generous (>= 2 is ~2s nominal): under parallel CI load the BEAM timers
+            // slip, and a tight bound flaked. Stays under the 15s per-test timeout.
+            await client.waitFor((t) => count(t) >= 2, 10000);
+            expect(count(client.tree())).toBeGreaterThanOrEqual(2);
+        } finally {
+            client.close();
+        }
+    });
+});

@@ -32,7 +32,7 @@ render(Bindings) ->
 
 -include("arizona.hrl").
 
-%% The html/native/terminal (+ each) stubs are intentionally identical: each
+%% The html/json/terminal (+ each) stubs are intentionally identical: each
 %% raises parse_transform_not_applied inline so the raising stub is the top stack
 %% frame, pointing the user at the exact un-transformed call. A shared helper would
 %% move that frame and obscure which call was made, so dedup does not apply here.
@@ -54,7 +54,7 @@ render(Bindings) ->
 -export([with/2]).
 -export([track/1]).
 -export([html/1]).
--export([native/1]).
+-export([json/1]).
 -export([terminal/1]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -312,13 +312,13 @@ html(_Elems) ->
     ]).
 
 -doc """
-Compile-time stub for the native (JSON) render target. The parse transform
-replaces every `?native(...)` (and `arizona_template:native/1`) call with a
+Compile-time stub for the JSON render target. The parse transform
+replaces every `?json(...)` (and `arizona_template:json/1`) call with a
 precomputed `t:template/0` map whose statics are JSON fragments. If this
 function runs, the parse transform was not applied.
 """.
--spec native(term()) -> no_return().
-native(_Elems) ->
+-spec json(term()) -> no_return().
+json(_Elems) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).
@@ -575,8 +575,8 @@ already-safe HTML fragments -- never for user-controlled data.
 
 This is an **HTML-target** feature: on the live diff a `?raw` value is tagged so the
 client `innerHTML`s it (vs text-noding a plain `?get` value -- the escaping boundary).
-The `?native` and `?terminal` targets do not HTML-escape, so `?raw` there is a no-op
-with no defined meaning; using it in a `?native`/`?terminal` template is unsupported.
+The `?json` and `?terminal` targets do not HTML-escape, so `?raw` there is a no-op
+with no defined meaning; using it in a `?json`/`?terminal` template is unsupported.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
@@ -594,7 +594,7 @@ raw_attr(Backend, Parts) ->
     {arizona_raw, <<<<(escape_value(Backend, P))/binary>> || P <- Parts>>}.
 
 %% Internal, emitted only by the parse transform for a `value`-boolean backend
-%% (`boolean_attrs/0`, i.e. ?native): tags a dynamic attribute's boolean so the diff
+%% (`boolean_attrs/0`, i.e. ?json): tags a dynamic attribute's boolean so the diff
 %% sends `true`/`false` as the prop value instead of adding and removing it. Any
 %% other value passes through. Never valid in a presence-boolean (?html) template.
 -doc false.

@@ -42,7 +42,7 @@ browser_true_for_browser_uas(Config) when is_list(Config) ->
 
 browser_false_for_non_browser(Config) when is_list(Config) ->
     %% A native app's HTTP stack carries no "Mozilla" -- the signal to render
-    %% native instead of HTML.
+    %% `?json` instead of HTML.
     ?assertNot(arizona_user_agent:browser(~"MyArizonaApp/1.2.0 (iOS 17.0)")),
     ?assertNot(arizona_user_agent:browser(<<>>)).
 

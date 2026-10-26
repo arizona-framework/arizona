@@ -5,7 +5,7 @@ Cross-language wire op-code sync check.
 The diff op codes in `include/arizona_wire.hrl` and the effect op codes in
 `include/arizona_effect.hrl` are hand-copied into every client runtime
 (`assets/js/arizona-ops.js`, `arizona-commands.js` and the worker, the reference
-`e2e/utils/native_client.js`, and the Android/iOS `Wire.kt`/`Wire.swift`).
+`e2e/utils/json_client.js`, and the Android/iOS `Wire.kt`/`Wire.swift`).
 Nothing else compares them, so a renumber or addition in one artifact drifts
 silently -- a native client skips an unknown op non-strictly, hiding the
 mismatch until a patch or event misfires in production. This suite reads the
@@ -20,15 +20,15 @@ still agree with them.
 -export([canonical_ops_extraction_sane/1]).
 -export([web_js_ops_match_canonical/1]).
 -export([web_worker_ops_match_canonical/1]).
--export([android_ops_match_native_backend/1]).
--export([ios_ops_match_native_backend/1]).
--export([native_client_ops_match_native_backend/1]).
+-export([android_ops_match_json_backend/1]).
+-export([ios_ops_match_json_backend/1]).
+-export([json_client_ops_match_json_backend/1]).
 -export([canonical_effects_extraction_sane/1]).
 -export([web_js_effects_match_canonical/1]).
 -export([android_effects_match_canonical/1]).
 -export([ios_effects_match_canonical/1]).
--export([native_client_effects_match_canonical/1]).
--export([native_clients_effects_agree/1]).
+-export([json_client_effects_match_canonical/1]).
+-export([json_clients_effects_agree/1]).
 
 all() ->
     [{group, ops}, {group, effects}].
@@ -39,17 +39,17 @@ groups() ->
             canonical_ops_extraction_sane,
             web_js_ops_match_canonical,
             web_worker_ops_match_canonical,
-            android_ops_match_native_backend,
-            ios_ops_match_native_backend,
-            native_client_ops_match_native_backend
+            android_ops_match_json_backend,
+            ios_ops_match_json_backend,
+            json_client_ops_match_json_backend
         ]},
         {effects, [parallel], [
             canonical_effects_extraction_sane,
             web_js_effects_match_canonical,
             android_effects_match_canonical,
             ios_effects_match_canonical,
-            native_client_effects_match_canonical,
-            native_clients_effects_agree
+            json_client_effects_match_canonical,
+            json_clients_effects_agree
         ]}
     ].
 
@@ -75,17 +75,17 @@ web_js_ops_match_canonical(Config) when is_list(Config) ->
 web_worker_ops_match_canonical(Config) when is_list(Config) ->
     assert_agrees_with_canonical(ops, web_worker, web_worker()).
 
-%% A native client must handle every op the native backend can emit -- exactly
+%% A native client must handle every op the JSON backend can emit -- exactly
 %% the header minus what the backend opts out of -- so a new op the backend starts
 %% emitting fails here until each native client implements it.
-android_ops_match_native_backend(Config) when is_list(Config) ->
-    ?assertEqual(native_backend_ops(), android_wire(ops)).
+android_ops_match_json_backend(Config) when is_list(Config) ->
+    ?assertEqual(json_backend_ops(), android_wire(ops)).
 
-ios_ops_match_native_backend(Config) when is_list(Config) ->
-    ?assertEqual(native_backend_ops(), ios_wire(ops)).
+ios_ops_match_json_backend(Config) when is_list(Config) ->
+    ?assertEqual(json_backend_ops(), ios_wire(ops)).
 
-native_client_ops_match_native_backend(Config) when is_list(Config) ->
-    ?assertEqual(native_backend_ops(), native_client(ops)).
+json_client_ops_match_json_backend(Config) when is_list(Config) ->
+    ?assertEqual(json_backend_ops(), json_client(ops)).
 
 %% --------------------------------------------------------------------
 %% Effect op code test cases
@@ -111,16 +111,16 @@ android_effects_match_canonical(Config) when is_list(Config) ->
 ios_effects_match_canonical(Config) when is_list(Config) ->
     assert_agrees_with_canonical(effects, ios, ios_wire(effects)).
 
-native_client_effects_match_canonical(Config) when is_list(Config) ->
-    assert_agrees_with_canonical(effects, native_client, native_client(effects)).
+json_client_effects_match_canonical(Config) when is_list(Config) ->
+    assert_agrees_with_canonical(effects, json_client, json_client(effects)).
 
 %% The three native clients must declare the identical effect set: a portable
 %% effect added to one but not the others is a drift the per-client checks above
 %% (subset-only) would miss.
-native_clients_effects_agree(Config) when is_list(Config) ->
+json_clients_effects_agree(Config) when is_list(Config) ->
     Android = android_wire(effects),
     ?assertEqual(Android, ios_wire(effects)),
-    ?assertEqual(Android, native_client(effects)).
+    ?assertEqual(Android, json_client(effects)).
 
 %% --------------------------------------------------------------------
 %% Source extraction
@@ -132,9 +132,9 @@ canonical(ops) ->
 canonical(effects) ->
     extract(read(["include", "arizona_effect.hrl"]), ~"EFFECT_([A-Z0-9_]+),\\s*([0-9]+)").
 
-%% The ops the native backend can emit: the header minus the capability-gated ones.
-native_backend_ops() ->
-    maps:without([~"LIST_PATCH" || not arizona_native:supports_list_patch()], canonical(ops)).
+%% The ops the JSON backend can emit: the header minus the capability-gated ones.
+json_backend_ops() ->
+    maps:without([~"LIST_PATCH" || not arizona_json:supports_list_patch()], canonical(ops)).
 
 %% The web client's `const OP = { NAME: N, ... }` table, and its 30 `JS_NAME = N`
 %% effect constants.
@@ -150,13 +150,13 @@ web_worker() ->
 
 %% The `OP_NAME = N` / `EFFECT_NAME = N` constants in the reference native
 %% (JSON-wire) client.
-native_client(ops) ->
-    extract(read(native_client_path()), ~"OP_([A-Z0-9_]+)\\s*=\\s*([0-9]+)");
-native_client(effects) ->
-    extract(read(native_client_path()), ~"EFFECT_([A-Z0-9_]+)\\s*=\\s*([0-9]+)").
+json_client(ops) ->
+    extract(read(json_client_path()), ~"OP_([A-Z0-9_]+)\\s*=\\s*([0-9]+)");
+json_client(effects) ->
+    extract(read(json_client_path()), ~"EFFECT_([A-Z0-9_]+)\\s*=\\s*([0-9]+)").
 
-native_client_path() ->
-    ["e2e", "utils", "native_client.js"].
+json_client_path() ->
+    ["e2e", "utils", "json_client.js"].
 
 %% The `const val NAME = N` entries inside the Kotlin `object Op { ... }` /
 %% `object Effect { ... }`.

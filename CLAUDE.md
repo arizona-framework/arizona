@@ -35,10 +35,10 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-ct` | Common Test only |
 | `make test-eunit` | EUnit only (inline private fn tests) |
 | `make test-js` | JS unit tests (Vitest) |
-| `make test-e2e` | Playwright E2E tests (incl. the `native` JSON-wire project) |
+| `make test-e2e` | Playwright E2E tests (incl. the `json` wire project) |
 | `make test-e2e-parallel` | Playwright `parallel` project only |
 | `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`) |
-| `make test-e2e-native` | Playwright `native` project only (`?native` JSON wire, no browser) |
+| `make test-e2e-json` | Playwright `json` project only (`?json` wire, no browser) |
 | `make test-android` | Android client e2e (opt-in; needs Android SDK + emulator; **not** in `ci`) |
 | `make test-ios` | iOS client tests (opt-in; `swift test` anywhere + Simulator e2e on macOS; **not** in `ci`) |
 | `make build-tauri` | Build the reference Tauri desktop shell (opt-in; needs Rust + webview deps; **not** in `ci`) |
@@ -74,7 +74,7 @@ Read it before optimising anything -- several plausible changes measured *worse*
 
 Client runtimes that consume the wire protocol live in-repo so they evolve atomically with it:
 the **web** client (browser) is `assets/js/` (built into `priv/static` by Vite); the **Android**
-client for the `?native` target is `clients/android/` (Kotlin/Compose, its own Gradle build --
+client for the `?json` target is `clients/android/` (Kotlin/Compose, its own Gradle build --
 **not** part of `make ci`; see `make test-android`); the **iOS** client is `clients/ios/`
 (Swift/SwiftUI -- a SwiftPM package whose logic tests run on any platform via `swift test`, plus an
 XcodeGen sample app for the Simulator e2e -- also **not** part of `make ci`; see `make test-ios`).
@@ -84,7 +84,7 @@ go through the host-neutral `arizona_os` seam; the reference shell is `clients/t
 
 ## Event attributes & effects -- `arizona_js` / `arizona_android`
 
-Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?native` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders.
+Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?json` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders.
 
 **Any element event works.** `az-<event>` binds `addEventListener(<event>)` with the attribute suffix used verbatim as the listener type, so there is no supported-event list: `az_toggle` on a `<dialog popover>`, `az_close` on a `<dialog>`, `az_error` on an `<img>`, and a custom element's own `az_sl_change` all bind. Non-bubbling events are delivered too, matched on the element that declares them rather than by ancestor lookup, since such an event has no propagation path. The name must be lowercase (the HTML parser lowercases attribute names), which is what custom elements use kebab-case for anyway.
 
@@ -174,7 +174,7 @@ References resolve **anywhere** in the config surface: the scalar keys (`secret_
 
 ## CSRF / Origin checking
 
-CSRF defense is an **Origin check**, not a token: `arizona_origin:check(Origin, Host, Scheme)` rejects a request whose `Origin` header is neither same-origin (its authority equals the `Host`, and an HTTPS request demands an `https` Origin -- a plain-HTTP page on the same authority is a different origin an active network attacker can serve) nor in an allowlist. A missing `Origin` (native `?native` clients, CLI tools, top-level GET navigations) is allowed.
+CSRF defense is an **Origin check**, not a token: `arizona_origin:check(Origin, Host, Scheme)` rejects a request whose `Origin` header is neither same-origin (its authority equals the `Host`, and an HTTPS request demands an `https` Origin -- a plain-HTTP page on the same authority is a different origin an active network attacker can serve) nor in an allowlist. A missing `Origin` (native `?json` clients, CLI tools, top-level GET navigations) is allowed.
 
 It's the `arizona_middleware:check_origin/2` middleware step, and the router **applies it by default** to `{live, ...}` routes -- so it runs on both the page render (GET, usually no `Origin`) and the **WebSocket upgrade** (`arizona_ws:prepare/3` runs the resolved route's middlewares; a cross-origin upgrade gets `403`). Off by exception, not omission:
 
@@ -258,7 +258,7 @@ A generated page has no server, but its browser-side commands still run: the lay
 
 ## Native-shell capabilities -- `arizona_os`
 
-When a browser renderer is wrapped in a **native shell** (Tauri, Electron, a webview wrapper), the server can drive OS capabilities the browser sandbox forbids (window control, native notifications, screen-capture protection). The renderer is the **same** web (`?html`) client over the **same** WebSocket -- the shell adds only a native side-channel, so an existing app runs in a shell unchanged and the whole seam is a **safe no-op in a plain browser**. (This is **not** the `?native` JSON render target; see [docs/os.md](docs/os.md).)
+When a browser renderer is wrapped in a **native shell** (Tauri, Electron, a webview wrapper), the server can drive OS capabilities the browser sandbox forbids (window control, native notifications, screen-capture protection). The renderer is the **same** web (`?html`) client over the **same** WebSocket -- the shell adds only a native side-channel, so an existing app runs in a shell unchanged and the whole seam is a **safe no-op in a plain browser**. (This is **not** the `?json` JSON render target; see [docs/os.md](docs/os.md).)
 
 The seam is defined at one boundary: a JS object `globalThis.__arizona_os__` the shell installs **before** the page scripts run, with `capabilities` (a map), `invoke(name, args)` (to the shell's native layer), and `onEvent(cb)` (inbound OS events). Arizona has **zero shell-specific code**; a new shell is a new adapter providing that object.
 

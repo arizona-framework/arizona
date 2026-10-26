@@ -4,7 +4,7 @@ Walks compiled templates and produces final rendered output.
 
 Scalar values are escaped, and dynamic attributes rendered, through the
 template's render backend (an `arizona_renderer` module carried in the `backend`
-field) -- so the output format (HTML, the native JSON wire, terminal ANSI) is the
+field) -- so the output format (HTML, the JSON wire, terminal ANSI) is the
 backend's concern, not this module's. `undefined` backend on a hand-constructed
 map means a plain-value-only template that never invokes a backend callback;
 templates from the parse transform always carry one.
@@ -275,7 +275,7 @@ render_view_to_iolist(Handler, Opts) ->
 -doc """
 Like `render_view_to_iolist/2`, paired with the document's media type: the
 outermost rendered template's backend answers it (`content_type/0`), so a route
-serving a `?native` view answers with JSON and an HTML one with HTML.
+serving a `?json` view answers with JSON and an HTML one with HTML.
 """.
 -spec render_view(Handler, Opts) -> {ContentType, iolist()} when
     Handler :: module(),
@@ -382,7 +382,7 @@ render_dyn(Backend, V) ->
     text_leaf(Backend, arizona_template:to_bin(V)).
 
 %% An unescaped scalar (a trusted value, or one from a slot that is not escaped)
-%% is spliced as a text child: verbatim for HTML, a JSON string for native.
+%% is spliced as a text child: verbatim for HTML, a JSON string for the JSON target.
 text_leaf(undefined, Bin) ->
     Bin;
 text_leaf(Backend, Bin) ->
@@ -698,14 +698,14 @@ assert_layout_target(Mod, Fun, LayoutBackend, PageBackend) ->
         [{error_info, #{module => ?MODULE}}]
     ).
 
-%% On a backend whose document is one node (native), a document root of several
+%% On a backend whose document is one node (JSON), a document root of several
 %% top-level nodes renders them comma-joined, which is no JSON document. Only the
 %% root of the final document matters: a multi-root layout wrapped in a
 %% single-root one is just that layer's children. So each layer says what the
 %% document root is once it has wrapped: its own several roots (the parse
 %% transform's stamp, asked of the backend at compile time), whatever it wraps
 %% when it adds no node itself (a backendless `?inner_content`, or a body that is
-%% one bare dynamic, such as `?native(?inner_content)`), or one node otherwise.
+%% one bare dynamic, such as `?json(?inner_content)`), or one node otherwise.
 %% The layer that made it several is kept to name in the error.
 layer_root(Mod, Fun, #{multi_root := true} = Tmpl, _InnerRoot) ->
     {multi, Mod, Fun, backend(Tmpl)};
@@ -902,7 +902,7 @@ render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
     %% A nested template carries its own backend, so render its dynamics through
     %% that rather than the enclosing one -- but only when the two agree. They
     %% cannot be mixed: the targets emit incompatible statics, so an `?html` child
-    %% under a `?native` parent splices HTML bytes into the JSON envelope and the
+    %% under a `?json` parent splices HTML bytes into the JSON envelope and the
     %% client cannot parse the frame at all.
     NestedBackend = backend(Tmpl),
     ok = assert_same_target(Backend, NestedBackend),
@@ -937,12 +937,12 @@ render_ssr_esc_val(Backend, V) ->
 
 render_fp_val(Backend, {arizona_esc, V}) ->
     %% The fingerprint (initial hydration) payload carries a scalar content value
-    %% the way its client zips it (`wire_escape/1`): HTML entity-escaped, native
+    %% the way its client zips it (`wire_escape/1`): HTML entity-escaped, JSON
     %% raw for the client to JSON-encode. This is unlike the live diff, where
     %% `make_op` sends the value raw for the client to text-node.
     Backend:wire_escape(arizona_template:to_bin(V));
 render_fp_val(Backend, {attr, Name, V}) ->
-    %% One clause for every backend: HTML emits ` Name="Escaped"`, native strips
+    %% One clause for every backend: HTML emits ` Name="Escaped"`, JSON strips
     %% the name (baked into the static) and sends the raw value -- both via the
     %% backend's wire_attr/2, so no backend is named here.
     Backend:wire_attr(Name, V);
@@ -950,7 +950,7 @@ render_fp_val(Backend, #{az_local := _, target := {attr, Name}, v := V}) ->
     Backend:render_attr(Name, V);
 render_fp_val(Backend, #{az_local := _, v := V}) ->
     %% Escape the content `?local` init to match the client's text-node semantics
-    %% (see render_dyn/2). `?local` is HTML-only (compile-rejected for native), so
+    %% (see render_dyn/2). `?local` is HTML-only (compile-rejected for JSON), so
     %% the enclosing backend is always HTML here.
     arizona_template:escape_value(Backend, V);
 render_fp_val(Backend, #{f := _} = Nested) ->

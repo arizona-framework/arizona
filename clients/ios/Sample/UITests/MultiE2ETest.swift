@@ -1,6 +1,6 @@
 import XCTest
 
-/// On-device multiple independent counters: navigate to /native/multi and tap the
+/// On-device multiple independent counters: navigate to /json/multi and tap the
 /// middle counter's "+"; only its count changes. The Android analogue is
 /// MultiE2ETest.
 final class MultiE2ETest: XCTestCase {

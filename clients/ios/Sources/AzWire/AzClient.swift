@@ -53,14 +53,14 @@ func azWarn(_ message: String) {
     azWarnSink(message)
 }
 
-/// Connects to an Arizona server's WebSocket and renders its `?native` view.
+/// Connects to an Arizona server's WebSocket and renders its `?json` view.
 ///
 /// Native has no SSR page, so we connect with `_az_reconnect=1` to make the live
 /// process emit its `mount_and_render` output as the first `OP_REPLACE`. Incoming
 /// ops mutate the `root` node tree in place; `onChange` fires so a UI layer can
 /// re-render. The apply path (`handleText`/`dispatch`) is synchronous and
 /// UI-agnostic, so it is unit-testable on any platform. Mirrors
-/// e2e/utils/native_client.js and Android's `AzClient`.
+/// e2e/utils/json_client.js and Android's `AzClient`.
 public final class AzClient {
     /// The current root widget node; nil until the first frame arrives.
     public private(set) var root: Node?

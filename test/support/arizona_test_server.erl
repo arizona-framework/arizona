@@ -187,9 +187,9 @@ routes() ->
         {get, <<"/_test/drain">>, arizona_drain_admin, #{
             state => #{adapter => arizona_roadrunner_server}
         }},
-        %% Dev-reload fixture: a native view holding a fun made by a module the
-        %% admin endpoint reloads (e2e/native/reload.spec.js).
-        {live, <<"/native/reload-fun">>, arizona_reload_fun_view, #{}},
+        %% Dev-reload fixture: a JSON view holding a fun made by a module the
+        %% admin endpoint reloads (e2e/json/reload.spec.js).
+        {live, <<"/json/reload-fun">>, arizona_reload_fun_view, #{}},
         {get, <<"/_test/reload">>, arizona_reload_admin, #{}},
         %% arizona_js:fetch e2e -- a form posts to the controller (sets an HttpOnly
         %% cookie, broadcasts to the live view via pubsub, returns an effect); no reload.
@@ -227,10 +227,10 @@ routes() ->
             middlewares => [{arizona_middleware, fetch_session}]
         }},
         {post, <<"/session/save">>, arizona_session_controller, #{}},
-        %% Native (JSON) view -- no layouts (native has no HTTP page); the first
+        %% JSON view -- no layouts (JSON has no HTTP page); the first
         %% frame is mount_and_render over the WebSocket.
-        {live, <<"/native/counter">>, arizona_native_counter_demo, #{}},
-        {live, <<"/native/list">>, arizona_native_list, #{
+        {live, <<"/json/counter">>, arizona_json_counter_demo, #{}},
+        {live, <<"/json/list">>, arizona_json_list, #{
             bindings => #{
                 items => [
                     #{id => ~"1", text => ~"One"},
@@ -239,14 +239,14 @@ routes() ->
                 ]
             }
         }},
-        {live, <<"/native/tabs">>, arizona_native_tabs, #{}},
-        {live, <<"/native/ticker">>, arizona_native_ticker, #{}},
-        {live, <<"/native/multi">>, arizona_native_multi, #{}},
-        {live, <<"/native/nested">>, arizona_native_nested, #{}},
-        {live, <<"/native/removable">>, arizona_native_removable, #{}},
-        {live, <<"/native/conditional">>, arizona_native_conditional, #{}},
-        {live, <<"/native/stream-child">>, arizona_native_stream_child, #{}},
-        {live, <<"/native/menu">>, arizona_native_menu, #{}},
+        {live, <<"/json/tabs">>, arizona_json_tabs, #{}},
+        {live, <<"/json/ticker">>, arizona_json_ticker, #{}},
+        {live, <<"/json/multi">>, arizona_json_multi, #{}},
+        {live, <<"/json/nested">>, arizona_json_nested, #{}},
+        {live, <<"/json/removable">>, arizona_json_removable, #{}},
+        {live, <<"/json/conditional">>, arizona_json_conditional, #{}},
+        {live, <<"/json/stream-child">>, arizona_json_stream_child, #{}},
+        {live, <<"/json/menu">>, arizona_json_menu, #{}},
         {ws, <<"/ws">>, #{}},
         {asset, <<"/priv">>, {priv_dir, arizona, "static/assets/js"}},
         {asset, <<"/static-site">>, {dir, static_site_dir()}},

@@ -14,8 +14,8 @@
 -export([warns_latin1_literal_in_unfolded_list/1]).
 -export([no_warning_for_utf8_ascii_or_byte_literals/1]).
 -export([folded_statics_render_utf8_at_ssr_and_in_diff/1]).
--export([native_ssr_names_non_utf8_at_its_line/1]).
--export([native_command_prop_names_non_utf8/1]).
+-export([json_ssr_names_non_utf8_at_its_line/1]).
+-export([json_command_prop_names_non_utf8/1]).
 -export([refuse_renames_only_the_encoder_utf8_error/1]).
 -export([chardata_wrapping_non_utf8_binary/1]).
 -export([format_error_names_the_byte_and_the_fix/1]).
@@ -43,8 +43,8 @@ groups() ->
             warns_latin1_literal_in_unfolded_list,
             no_warning_for_utf8_ascii_or_byte_literals,
             folded_statics_render_utf8_at_ssr_and_in_diff,
-            native_ssr_names_non_utf8_at_its_line,
-            native_command_prop_names_non_utf8,
+            json_ssr_names_non_utf8_at_its_line,
+            json_command_prop_names_non_utf8,
             refuse_renames_only_the_encoder_utf8_error,
             chardata_wrapping_non_utf8_binary,
             format_error_names_the_byte_and_the_fix,
@@ -199,14 +199,14 @@ folded_statics_render_utf8_at_ssr_and_in_diff(Config) when is_list(Config) ->
 %% Free renames on the failure paths
 %% --------------------------------------------------------------------
 
-%% `?native` escapes through the JSON encoder, which already refuses the bytes;
+%% `?json` escapes through the JSON encoder, which already refuses the bytes;
 %% the refusal used to surface as the encoder's `unexpected_end`.
-native_ssr_names_non_utf8_at_its_line(Config) when is_list(Config) ->
+json_ssr_names_non_utf8_at_its_line(Config) when is_list(Config) ->
     Line = line_of(~"?get(label)"),
     [
         ?assertEqual(
             {Key, {arizona_loc, {?VIEW, Line}, {non_utf8_render, 16#E9, 3}}},
-            {Key, raised(fun() -> arizona_render:render_to_iolist(?VIEW:native(Bindings)) end)}
+            {Key, raised(fun() -> arizona_render:render_to_iolist(?VIEW:json(Bindings)) end)}
         )
      || {Key, Bindings} <- [
             {text, #{label => ~"ok", text => latin1()}},
@@ -216,14 +216,14 @@ native_ssr_names_non_utf8_at_its_line(Config) when is_list(Config) ->
 
 %% A command prop is a structured JSON value; the string nested in its payload
 %% gets the same name.
-native_command_prop_names_non_utf8(Config) when is_list(Config) ->
+json_command_prop_names_non_utf8(Config) when is_list(Config) ->
     ?assertEqual(
         {arizona_loc, {?VIEW, line_of(~"?get(cmd)")}, {non_utf8_render, 16#E9, 3}},
-        raised(fun() -> arizona_render:render_to_iolist(?VIEW:native_cmd(#{cmd => latin1()})) end)
+        raised(fun() -> arizona_render:render_to_iolist(?VIEW:json_cmd(#{cmd => latin1()})) end)
     ),
     ?assertError(
         {non_utf8_render, 16#E9, 3},
-        arizona_native:render_attr(
+        arizona_json:render_attr(
             ~"on_tap", arizona_android:push_event(~"go", #{~"v" => [latin1()]})
         )
     ).
@@ -319,7 +319,7 @@ to_bin_matches_the_classify_first_reference(Config) when is_list(Config) ->
             {B, V, outcome(fun(X) -> reference_escape_value(B, X) end, V)},
             {B, V, outcome(fun(X) -> arizona_template:escape_value(B, X) end, V)}
         )
-     || B <- [arizona_html, arizona_terminal, arizona_native], V <- Inputs
+     || B <- [arizona_html, arizona_terminal, arizona_json], V <- Inputs
     ].
 
 %% On main, escaping a list value classified it twice: escape_value/2 asked, then

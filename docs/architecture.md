@@ -10,9 +10,9 @@
 | `src/arizona_eval.erl`                    | Template evaluation -- dynamics to snapshots, stateful/stateless child eval, stream/each eval                                                                                             |
 | `src/arizona_render.erl`                  | Render orchestration (target-aware) -- `render/1,2`, SSR (`render_to_iolist/1,2`, `render_view_to_iolist/2`), `zip/2`, `fingerprint_payload/1`                                            |
 | `src/arizona_utf8.erl`                    | UTF-8 output contract -- `refuse/3` (names an encoder failure `non_utf8_render`), dev-mode `render_view/2` / `locate_live/3`, `format_error/2`                                            |
-| `src/arizona_renderer.erl`                | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and native JSON backends below                                                                                  |
+| `src/arizona_renderer.erl`                | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and JSON backends below                                                                                         |
 | `src/arizona_html.erl`                    | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                                      |
-| `src/arizona_native.erl`                  | Native render backend -- emits a JSON widget tree (the `?native` target); see docs/native.md                                                                                              |
+| `src/arizona_json.erl`                    | JSON render backend -- emits a JSON widget tree (the `?json` target); see docs/json.md                                                                                                    |
 | `src/arizona_terminal.erl`                | Terminal render backend -- emits text + ANSI escapes (the `?terminal` target); vocabulary in "Terminal render target" below                                                               |
 | `src/arizona_terminal_session.erl`        | Transport-agnostic orchestrator for `?terminal` views -- mounts, dispatches key/push events, repaints; parameterized by a driver module + an output fun                                   |
 | `src/arizona_terminal_driver.erl`         | Terminal UX-policy behaviour -- `init/1`, `keys/2`, `paint/3`, `setup/1`, `teardown/1` (all optional; defaults in `arizona_terminal_default_driver`)                                      |
@@ -24,7 +24,7 @@
 | `src/arizona_diff.erl`                    | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                                           |
 | `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
 | `src/arizona_js.erl`                      | Web/browser command/effect builders -- `push_event`, `navigate`, `patch`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
-| `src/arizona_android.erl`                 | Native (`?native`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                   |
+| `src/arizona_android.erl`                 | Android (`?json`) command builders -- the portable `push_event/1,2` and `navigate/1,2`                                                                                                    |
 | `src/arizona_os.erl`                      | Native-shell (OS) capability command builders -- typed sugars (`set_title`, `focus`, `notify`, ...) plus the `command/2` escape hatch, all funnelled through the single `?EFFECT_OS` op   |
 | `src/arizona_stream.erl`                  | Pure stream data structure -- create, insert, delete, update, move, sort, reset, `clear_stream_pending/2`, `stream_keys/1`, drain marks (`drain_mark/1`, `undrained_ops/2`)               |
 | `src/arizona_stateful.erl`                | Behaviour for all live handlers (route-page roots + embedded `?stateful`) -- `mount`/`render`/`handle_*`/`unmount` callbacks, the `call_*` dispatchers, and `format_error/2`              |
@@ -42,7 +42,7 @@
 | `src/arizona_static.erl`                  | Offline static-site generation -- `generate/2,3` renders route handlers to HTML files under an out-dir; returns `{Written, Failed}`                                                       |
 | `src/arizona_ws.erl`                      | Transport-agnostic WS upgrade -- `prepare/3` resolves + runs middlewares; `upgrade/3` answers the request (reply or `101` lines); `init/1` starts the socket                              |
 | `src/arizona_live.erl`                    | Gen_server -- mount (stateful or view), handle_event, handle_info, views map, transport push                                                                                              |
-| `src/arizona_parse_transform.erl`         | Compile-time transform -- `?html`/`?native`, `?each` DSL to `#{s, d, f}` maps, `az-view` auto-injection, `az-nodiff`, attribute compilation, cross-target nesting guard                   |
+| `src/arizona_parse_transform.erl`         | Compile-time transform -- `?html`/`?json`, `?each` DSL to `#{s, d, f}` maps, `az-view` auto-injection, `az-nodiff`, attribute compilation, cross-target nesting guard                     |
 | `src/arizona_socket.erl`                  | Framework-agnostic WebSocket protocol state machine -- JSON encode/decode, event dispatch, navigation, op scoping. Crash closes cleanly; client reconnects via backoff                    |
 | `src/arizona_reload_controller.erl`       | Dev hot-reload endpoint as a controller -- a `loop` reply that streams `arizona_reloader` broadcasts as Server-Sent Events                                                                |
 | `src/arizona_jsonrpc.erl`                 | JSON-RPC 2.0 codec -- `decode/1`, `result/2`, `error/3`, `notification/2`                                                                                                                 |
@@ -153,7 +153,7 @@ takes. It adds no reductions; only a crash pays, for the re-raise.
 ### Output is UTF-8 -- `non_utf8_render`
 
 Every render target writes UTF-8: an HTML response is served as `text/html;
-charset=utf-8`, and a WebSocket frame and a `?native` document are JSON. So a rendered
+charset=utf-8`, and a WebSocket frame and a `?json` document are JSON. So a rendered
 **binary must be UTF-8**. A list is chardata and needs nothing from the app:
 `arizona_template:to_bin/1` decodes it as Unicode code points, producing UTF-8, and
 refuses one that does not decode (a list wrapping non-UTF-8 bytes raises
@@ -187,11 +187,11 @@ The contract is enforced where it costs nothing:
   (`<<"\351":8>>`, `<<"é":8>>`), which compile to the same bytes. The warning text
   names both.
 - **Failure paths.** The JSON encoder validates UTF-8 as it escapes, so a frame or a
-  `?native` value holding other bytes is already refused -- as the encoder's
+  `?json` value holding other bytes is already refused -- as the encoder's
   `{invalid_byte, _}` or `unexpected_end`, which names neither the value nor the cause.
   `arizona_utf8:refuse/3`, run only after the encoder raised, renames it
   `{non_utf8_render, Byte, Offset}`, finding the bytes in a structured value too (a
-  command array). `?native` escapes inside the slot's located evaluation, so its error
+  command array). `?json` escapes inside the slot's located evaluation, so its error
   carries the template line; a socket frame failure is logged with the formatted
   reason and closes 4500 (4501 for the frame delivering a mount), as before.
 - **Dev mode** (the dev reloader is wired, the signal that also gates the rich error
@@ -216,7 +216,7 @@ The contract is enforced where it costs nothing:
 integers -- `~p` would print a Latin-1 binary as the very text it fails to be) and the
 fix. What `Offset` counts depends on where the bytes were refused:
 
-- **A binary** -- a JSON encoder's refusal (`?native`, an effect command, a socket
+- **A binary** -- a JSON encoder's refusal (`?json`, an effect command, a socket
   frame; `arizona_utf8:refuse/3`) and the dev-mode per-value check: the offset into
   that binary, which the preview shows.
 - **A list** -- `arizona_template:to_bin/1` decoding chardata: the offset into the
@@ -233,7 +233,7 @@ string in one is named on the same failure path.
 
 `?terminal(Elems)` renders a view to ANSI text instead of HTML or JSON. The backend
 is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
-`arizona_native`. Its transport **repaints the whole frame** on every update
+`arizona_json`. Its transport **repaints the whole frame** on every update
 (`arizona_live:render_current/1`) rather than applying diff ops, so the backend
 writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
 
@@ -254,8 +254,8 @@ Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected
 render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
 bytes except `\n`/`\t`, DEL, and the C1 controls, and replaces every byte outside
 well-formed UTF-8 with U+FFFD, so the output is always valid UTF-8; this assumes a UTF-8
-terminal, since an 8-bit one reads UTF-8 continuation bytes `80`-`9F` as C1 controls), native
-emits a JSON string. Native alone carries a value
+terminal, since an 8-bit one reads UTF-8 continuation bytes `80`-`9F` as C1 controls), JSON
+emits a JSON string. JSON alone carries a value
 differently on the wire: its client JSON-encodes each `d` value itself, so the
 fingerprint payload takes the raw value from `c:arizona_renderer:wire_escape/1`
 (`wire_attr/2` for a prop) while the zipped document keeps the JSON string.
@@ -479,7 +479,7 @@ a whole: the transform wraps it in a `raw_attr` call, which splices the raw part
 verbatim and escapes every other part, static or dynamic, so SSR and the tagged live update
 carry the same assembled markup.
 (`?raw` is an HTML-target feature; the
-`?native`/`?terminal` backends don't HTML-escape, so `?raw` there is unsupported -- a
+`?json`/`?terminal` backends don't HTML-escape, so `?raw` there is unsupported -- a
 target-aware tag would be the follow-up if it ever needs to behave like a plain value.)
 
 **Usage convention:** outer-scope `?get` reads belong in the props
@@ -765,7 +765,7 @@ referenced as a bare `fun row/1` falls through to `each_named_fun_undefined` sin
 different per-item structures, but there is only one shared per-item template); collapse
 multiple clauses into a `case` inside the returned element.
 
-A whole-body backend wrapper -- `?html(...)` (or `?native`/`?terminal` matching the each's
+A whole-body backend wrapper -- `?html(...)` (or `?json`/`?terminal` matching the each's
 target) -- is **accepted**: `compile_each` unwraps it to the element it wraps and builds the
 same per-item template as the bare element (both go through `compile_body_parts/4` +
 `scope_az/4` with the same fingerprint, so the result is byte-identical). The two callback
@@ -1071,7 +1071,7 @@ Authoring (`?local` = `arizona_template:local/2`, also `az:local/2`):
 
 Compile-time constraints: `Key` must be a literal binary or atom (an atom normalizes to a
 binary); a key can't bind both content and an attribute on one element; not allowed in
-`?native` templates. Under `az-nodiff` only the element holding a content `?local` gets an `az`
+`?json` templates. Under `az-nodiff` only the element holding a content `?local` gets an `az`
 and that slot's marker; a layout's local sits outside every view, so `set_all` reaches it.
 A content `?local` does **not** have to be the sole child -- an element can hold several
 content slots, freely mixed with static text and other dynamic children. An attribute value
@@ -1975,7 +1975,7 @@ type). The transport handler translates the returned result into its native repl
   - `{ok, resp_status(), ContentType, iolist(), Request}` -- rendered page body; the status
     defaults to 200, but a view or middleware may stash a non-200 (e.g. 401). `ContentType` is
     the document's media type, answered by its render backend's `content_type/0` (HTML for an
-    `?html` view, `application/json` for a `?native` one)
+    `?html` view, `application/json` for a `?json` one)
   - `{error, 500, ContentType, iolist(), Request}` -- rendered error page body (crash or stashed
     hot-reload error), under the error page's own media type
 
@@ -2051,15 +2051,15 @@ a `?stateful` under a user `az-nodiff` renders on the live path, is registered, 
 `?stateless` for layout chrome; chrome that must stay live across navigation belongs in a view the
 routes share, linked with `az_patch`. A layout must share the page's render target
 (`cross_target_layout` otherwise): the page reaches it as a backendless template, which the
-nested-template target check waves through. A `?native` document, like a `?native` view, must
-have a single root node (`multi_root_layout` otherwise): a native document is one JSON value, and
+nested-template target check waves through. A `?json` document, like a `?json` view, must
+have a single root node (`multi_root_layout` otherwise): a JSON document is one JSON value, and
 several top-level nodes would be served comma-joined. Only the final document root counts, so a
 multi-root layout wrapped by a single-root one renders; a layer that adds no node of its own
-(`?inner_content` returned bare, `?native([?inner_content])`) passes the wrapped root through. The
+(`?inner_content` returned bare, `?json([?inner_content])`) passes the wrapped root through. The
 parse transform stamps the shape (`multi_root`, a literal list of several nodes at any depth of
 nested lists) when the backend's `single_root_document/0` asks for it, and the render threads the
 document root through the layers, since only the route config says which functions are layouts.
-Roots known only at runtime are not judged, nor is a layout with no node (`?native([])`, an empty
+Roots known only at runtime are not judged, nor is a layout with no node (`?json([])`, an empty
 document). `?html` and `?terminal` layouts may have several roots. `layouts` is always a list,
 applied outermost-first
 (`[Root, Section]` produces `Root(Section(Page))`); an empty list renders the page directly, with no
@@ -2371,7 +2371,7 @@ az-nodiff element the fresh state names. A navigate is a new page and keeps noth
   az-nodiff element into a different slot, so it is remounted; a wrapper with the same statics keeps
   it (see "What the same az-nodiff element means"), and `az_key` remounts it.
 - Only a template whose single root element carries `az-nodiff` is named. A root of a multi-element
-  nodiff fragment keeps a bare `az-nodiff`, and the `?native` and `?terminal` targets (whose clients
+  nodiff fragment keeps a bare `az-nodiff`, and the `?json` and `?terminal` targets (whose clients
   keep no az-nodiff elements) emit none; all are re-created by a wholesale re-render.
 - The directive is written bare. Its value in the HTML is the compiler's, so an authored one
   (`{'az-nodiff', V}`, `{az_nodiff, true}`) is a compile error.
@@ -2492,7 +2492,7 @@ on the root element of `render/1` when the module declares the `arizona_stateful
 `az_view` manually outside this context raises a compile error.
 
 The injection (and the `{id, ?get(id)}` enforcement below) happens only when the parse transform
-sees a **literal template call** (`?html`/`?native`) as `render/1`'s tail expression. A route-root
+sees a **literal template call** (`?html`/`?json`) as `render/1`'s tail expression. A route-root
 `render/1` that **delegates** instead -- `render(B) -> page(B).` -- falls through both: the root
 carries no `az-view` marker and skips the `id` check, so events resolve to the enclosing view with
 no diagnostic. This is not caught at compile time (a non-template tail is legal for embeddable
@@ -2606,15 +2606,15 @@ map appears in the `Changed` map (via `maps:intersect`). If none do, the dynamic
 ## Op codes
 
 Defined in the public header `include/arizona_wire.hrl`. Every client mirrors them by hand
-(`assets/js/arizona.js`, its worker, `e2e/utils/native_client.js`, the Android `Wire.kt`, the iOS
+(`assets/js/arizona.js`, its worker, `e2e/utils/json_client.js`, the Android `Wire.kt`, the iOS
 `Wire.swift`), and `arizona_wire_SUITE` checks each copy against the header. The web client must
 declare the whole set; a native client must declare every op its backend can emit (all but
-`OP_LIST_PATCH`, which `arizona_native:supports_list_patch/0` opts out of).
+`OP_LIST_PATCH`, which `arizona_json:supports_list_patch/0` opts out of).
 
 | Code | Name             | Args                       | Description                                            |
 | ---- | ---------------- | -------------------------- | ------------------------------------------------------ |
 | 0    | `OP_TEXT`        | `[target, value]`          | Replace marker content (text, nested tmpl, plain each) |
-| 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attr (command: its array; native bool: JSON bool)  |
+| 1    | `OP_SET_ATTR`    | `[target, attr, value]`    | Set attr (command: its array; `?json` bool: JSON bool) |
 | 2    | `OP_REM_ATTR`    | `[target, attr]`           | Remove attribute                                       |
 | 4    | `OP_REMOVE_NODE` | `[target]`                 | Remove element                                         |
 | 5    | `OP_INSERT`      | `[target, key, pos, html]` | Stream insert (pos=-1 -> append, otherwise index)      |
@@ -2701,10 +2701,10 @@ An `?each` is marked once, at the place it appears in the template that renders 
 `Items = ?each(...)` is bound outside every template, where the pass can only give it the default
 target and context, so that marking is provisional: the hoisted value has it stripped
 (`prepare_inline/2`) and is marked again where `Items` is spliced in (`splice_vars/4`, at the root
-of the `?html`/`?native`/`?terminal` that uses it, or the target and context of the `?each` whose
+of the `?html`/`?json`/`?terminal` that uses it, or the target and context of the `?each` whose
 callback or source uses it). It therefore compiles exactly as the same `?each` written at the use
-site -- native nodes under `?native`, foreign content inside `<svg>` -- and the splice is checked
-like written code, so a hoisted `?html` used inside `?native` is a `cross_target_nesting` compile
+site -- JSON nodes under `?json`, foreign content inside `<svg>` -- and the splice is checked
+like written code, so a hoisted `?html` used inside `?json` is a `cross_target_nesting` compile
 error rather than a render-time `cross_target_child`. A local element helper does **not** re-mark
 what it is handed: its body is marked, but an argument -- a written `?each` already compiled
 bottom-up, or a spliced hoisted one already marked -- keeps the context of the call site. So
@@ -2975,7 +2975,7 @@ search-and-replace blindly:
   would share a fingerprint and the diff would patch one into the other, leaving the old attribute.
 - **Runtime** (the `scope_static/3` renderer callback) has only bytes, so it anchors on the
   template's own fingerprint: every framework `az` in a compiled static is `<Fp>-<id>`, so the
-  backend matches `az="<Fp>` / `<!--az:<Fp>` (HTML) or `"az":"<Fp>` (native), never the bare marker
+  backend matches `az="<Fp>` / `<!--az:<Fp>` (HTML) or `"az":"<Fp>` (JSON), never the bare marker
   opener. After a pass the statics read `<Prefix>-<Fp>-<id>` and `f` becomes `<Prefix>-<Fp>`, so
   re-scoping an already-scoped snapshot anchors correctly too. The terminal backend writes no
   markers, so its `scope_static/3` is the identity.

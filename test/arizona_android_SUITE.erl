@@ -1,6 +1,6 @@
 -module(arizona_android_SUITE).
 -moduledoc """
-Builder unit tests for `arizona_android`, the `?native` client command module.
+Builder unit tests for `arizona_android`, the `?json` client command module.
 
 Asserts each builder produces the shared `{arizona_effect, [OpCode | Args]}`
 wire tuple with the right op code and arguments, and -- crucially for the native
@@ -46,7 +46,7 @@ push_event_1_builds_command(Config) when is_list(Config) ->
         arizona_android:push_event(~"inc")
     ).
 
-%% The explicit payload is retained in the command tuple: on native it is the
+%% The explicit payload is retained in the command tuple: on JSON it is the
 %% only way to attach data to an event (no auto-collection), so dropping it makes
 %% a handler matching a required key crash the live process.
 push_event_2_carries_payload(Config) when is_list(Config) ->
@@ -67,7 +67,7 @@ navigate_2_carries_opts(Config) when is_list(Config) ->
         arizona_android:navigate(~"/p", #{replace => true})
     ).
 
-%% The neutral encoder (the native wire path) serializes the whole command,
+%% The neutral encoder (the JSON wire path) serializes the whole command,
 %% payload included -- the server half of the "carry the explicit payload"
 %% guarantee the client dispatch tests assert on the frame side.
 encode_json_preserves_payload(Config) when is_list(Config) ->
@@ -75,9 +75,9 @@ encode_json_preserves_payload(Config) when is_list(Config) ->
     ?assertEqual(~"[0,\"save\",{\"id\":\"42\"}]", arizona_effect:encode_json(Cmd)).
 
 %% A `flash` opt is carried by the socket, for an effect a live handler returns.
-%% As an event prop the command reaches the client as data, so the native wire
+%% As an event prop the command reaches the client as data, so the JSON wire
 %% refuses it instead of shipping a flash nothing would deliver.
 navigate_flash_prop_refused(Config) when is_list(Config) ->
     Nav = arizona_android:navigate(~"/p", #{flash => #{~"info" => ~"Saved"}}),
-    ?assertError({flash_outside_live_effect, navigate}, arizona_native:wire_attr(~"on_tap", Nav)),
+    ?assertError({flash_outside_live_effect, navigate}, arizona_json:wire_attr(~"on_tap", Nav)),
     ?assertError({flash_outside_live_effect, navigate}, arizona_effect:encode_json(Nav)).

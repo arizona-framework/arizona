@@ -38,11 +38,11 @@ For everything else (single-suite runs, coverage reports, individual
 check stages, doc generation, etc.) see the targets in the project's
 `Makefile`.
 
-The native (`?native`) Android client lives in-repo at `clients/android/`
+The native (`?json`) Android client lives in-repo at `clients/android/`
 (Kotlin/Compose, its own Gradle build). It is **not** part of `make ci`; build
 it with `make build-android` and run its tests with `make test-android` (needs
 the Android SDK + an emulator/device). Its CI runs separately via the
-`android-e2e` workflow. See [docs/native.md](docs/native.md).
+`android-e2e` workflow. See [docs/json.md](docs/json.md).
 
 The native iOS client lives in-repo at `clients/ios/` (Swift/SwiftUI). Its
 protocol logic is a Swift package you can test on any platform with `swift test`

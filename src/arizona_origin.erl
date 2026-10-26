@@ -4,7 +4,7 @@ Origin checking for CSRF defense.
 
 Rejects a state-changing request or a WebSocket upgrade whose `Origin` header neither
 matches the request `Host` + scheme (same-origin) nor appears in the configured
-allowlist. A missing `Origin` -- native (`?native`) clients, CLI tools, top-level GET
+allowlist. A missing `Origin` -- native (`?json`) clients, CLI tools, top-level GET
 navigations -- is allowed: those carry no ambient cross-site authority to abuse.
 
 Used by the `arizona_middleware:check_origin/2` step, which the router applies to

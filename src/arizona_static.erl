@@ -81,7 +81,7 @@ connect frame does. `generate/2,3` therefore embeds those names in each page
 that has any, as `<script type="application/json" id="arizona-attrs">` before the
 last `</body>`: the compile-time names of the handler, its layouts and every
 module rendered into the page, plus the names whose command was built at render
-time. A page with no `</body>` (a `?native` document, a fragment) is written as
+time. A page with no `</body>` (a `?json` document, a fragment) is written as
 rendered. A `push_event` has no server to reach and is dropped with a warning;
 a `navigate`/`patch` loads its URL as a page.
 
@@ -250,7 +250,7 @@ render(Handler, RenderOpts) ->
     end.
 
 %% Embedded before the last `</body>`. A page with none -- a fragment, a
-%% `?native` JSON document -- is left as rendered: appending markup could corrupt
+%% `?json` JSON document -- is left as rendered: appending markup could corrupt
 %% it, and its client can be handed the names by `start({attrs})`. `<` is escaped
 %% so no name can close the script element.
 with_attrs(Html, []) ->

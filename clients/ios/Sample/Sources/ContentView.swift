@@ -31,7 +31,7 @@ struct ContentView: View {
 
     init() {
         let args = ProcessInfo.processInfo.arguments
-        var path = "/native/menu"
+        var path = "/json/menu"
         if let i = args.firstIndex(of: "-az-path"), i + 1 < args.count {
             path = args[i + 1]
         }
@@ -45,7 +45,7 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button("\u{2630} Menu") { client.navigate("/native/menu") }
+            Button("\u{2630} Menu") { client.navigate("/json/menu") }
             content
             if showDebugToolbar {
                 DebugToolbar(client: client)

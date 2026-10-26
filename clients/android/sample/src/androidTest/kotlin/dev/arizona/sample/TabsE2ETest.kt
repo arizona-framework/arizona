@@ -7,7 +7,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * On-device conditional rendering: navigate to /native/tabs and switch tabs;
+ * On-device conditional rendering: navigate to /json/tabs and switch tabs;
  * the content subtree swaps (push_event -> OP_TEXT). Run with
  * ./gradlew :sample:connectedCheck (server at 10.0.2.2:4040).
  */

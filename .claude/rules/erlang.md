@@ -72,7 +72,7 @@ Void elements (`br`, `img`, `input`, `hr`, `meta`, `link`, `base`, `col`, `embed
 
 A tag may be an **atom** or a **binary**, the same pair as an attribute name and for the same reason. The atom form goes through the backend's `name/1`, which for `?html` translates `_` to `-` so `az_click` and `my_widget` need no quoting; the binary form is taken verbatim. That matters for a name that really does contain an underscore: `{'my-widget_v2', [], []}` emits `<my-widget-v2>` (a different element, silently), while `{~"my-widget_v2", [], []}` emits what it says. Both forms resolve identically through the tag-keyed callbacks (`is_void/1`, `raw_text_kind/2`, `content_context/2`), so classification does not depend on which you write. A tag that is neither -- a number, or an expression evaluated at runtime -- is a compile error.
 
-Tag **classification** in the `?html` target (void, raw-text) is ASCII case-insensitive, as HTML itself is -- `{'BR', [], []}` self-closes and `{'SCRIPT', ...}` is raw text. The tag is still *emitted* exactly as written, so a camelCase SVG element or a `viewBox` attribute is never rewritten. `?native` and `?terminal` tags are case-**sensitive**: their vocabularies are Arizona's own (native tags map to Compose/SwiftUI component names). `?terminal` goes further and **rejects an unknown tag at compile time**, the way it already rejects an unknown style/attribute -- its six tags are the whole vocabulary, so `{'Line', ...}` is a typo, not an extension point.
+Tag **classification** in the `?html` target (void, raw-text) is ASCII case-insensitive, as HTML itself is -- `{'BR', [], []}` self-closes and `{'SCRIPT', ...}` is raw text. The tag is still *emitted* exactly as written, so a camelCase SVG element or a `viewBox` attribute is never rewritten. `?json` and `?terminal` tags are case-**sensitive**: their vocabularies are Arizona's own (`?json` tags map to Compose/SwiftUI component names). `?terminal` goes further and **rejects an unknown tag at compile time**, the way it already rejects an unknown style/attribute -- its six tags are the whole vocabulary, so `{'Line', ...}` is a typo, not an extension point.
 
 ## Parse transform attribute forms
 
@@ -84,7 +84,7 @@ Tag **classification** in the `?html` target (void, raw-text) is ASCII case-inse
 | `name` (atom) | `disabled` | `disabled` |
 | `<<"name">>` (binary) | `<<"hidden">>` | `hidden` |
 | `{name, true}` | `{hidden, true}` | `hidden` |
-| `{name, false}` | `{hidden, false}` | Stripped (`?native` keeps a typed `false` prop) |
+| `{name, false}` | `{hidden, false}` | Stripped (`?json` keeps a typed `false` prop) |
 | `'az-nodiff'` / `<<"az-nodiff">>` | Directive | Emits `diff => false`; the HTML keeps a compiler-owned `az-nodiff` (token or bare) |
 
 A `form` carrying `az_submit` and no `method` renders `method="post"` in the `?html` target
@@ -114,7 +114,7 @@ repeated name as written): both copies would be emitted, and which one takes eff
 on the target (HTML keeps the first, a JSON object the last) and on which one an update
 patches. Names compare after the backend's `name/1`, under its `attr_names/0` policy: `?html`
 folds ASCII case only, as the HTML parser does (`az_click` and `<<"AZ-CLICK">>` collide,
-`data-É` and `data-é` do not), `?native` compares case-sensitively, and `?terminal` allows a
+`data-É` and `data-é` do not), `?json` compares case-sensitively, and `?terminal` allows a
 repeat (its SGR styles compose in order). Combine
 values in one list value instead (`{class, [~"btn ", ?get(kind)]}`).
 
@@ -165,21 +165,21 @@ must stay live across navigation, put it in a view the routes share and link wit
 registered. The disqualifying property is the render path, not the nodiff flag, which is why
 this is not a compile-time check.)
 
-A layout must also share the page's render target: an `?html` layout around a `?native`
+A layout must also share the page's render target: an `?html` layout around a `?json`
 page, or the reverse, is a render-time error (`cross_target_layout`). The page reaches a
 layout as a backendless nested template, so the nested-template target check cannot see it;
 the layout boundary compares the two instead.
 
-A `?native` document must have a single root node, like a `?native` view: a native document
-is one JSON value, so `?native([{'Banner', [], [~"top"]}, ?inner_content])` as the outermost
+A `?json` document must have a single root node, like a `?json` view: a JSON document
+is one JSON value, so `?json([{'Banner', [], [~"top"]}, ?inner_content])` as the outermost
 layout is a render-time error (`multi_root_layout`) -- wrap the nodes in one container. Only
 the final document root counts: wrapped by a single-root layout, the same layout is just that
 layout's children and renders. A layer that adds no node of its own (`?inner_content` returned
-bare, or `?native([?inner_content])`) passes the root it wraps through, so a multi-root layer
+bare, or `?json([?inner_content])`) passes the root it wraps through, so a multi-root layer
 under it is still refused. The parse transform stamps `multi_root` on a literal list of several
 nodes, also one nested inside another (`[[A, B]]`), when the backend's `single_root_document/0`
 says so; a layout is just a function a route names, so the check runs at render. Roots known
-only at runtime are not judged, and neither is a layout with no node at all (`?native([])`),
+only at runtime are not judged, and neither is a layout with no node at all (`?json([])`),
 which drops the page and serves an empty document. An `?html` or `?terminal` layout may have
 several roots (a doctype beside `<html>`).
 
@@ -240,9 +240,9 @@ matches every entry.
 
 ## az-nodiff
 
-Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time directive and emits `diff => false`. All dynamics in that compile unit get `undefined` Az (pre-scanned via `prescan_directives/1`), and no `az` attribute or `<!--az:...-->` slot marker is emitted. The directive itself stays in the HTML as a compiler-owned attribute on the element that carries it (html target only, `supports_nodiff_keep/0`): `az-nodiff="TOKEN"` on a keepable az-nodiff element root -- the single root element of a template, or of a **keyed** `?each` item -- and a bare `az-nodiff` on one that is client-owned but not keepable -- an unkeyed `?each` item root, or a root of a multi-element fragment. A template that only inherits nodiff, a layout, a mixed text+element fragment, and the `?native`/`?terminal` targets emit nothing. The bare form is the only one an author writes; a value is a compile error (`nodiff_value`).
+Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time directive and emits `diff => false`. All dynamics in that compile unit get `undefined` Az (pre-scanned via `prescan_directives/1`), and no `az` attribute or `<!--az:...-->` slot marker is emitted. The directive itself stays in the HTML as a compiler-owned attribute on the element that carries it (html target only, `supports_nodiff_keep/0`): `az-nodiff="TOKEN"` on a keepable az-nodiff element root -- the single root element of a template, or of a **keyed** `?each` item -- and a bare `az-nodiff` on one that is client-owned but not keepable -- an unkeyed `?each` item root, or a root of a multi-element fragment. A template that only inherits nodiff, a layout, a mixed text+element fragment, and the `?json`/`?terminal` targets emit nothing. The bare form is the only one an author writes; a value is a compile error (`nodiff_value`).
 
-**It inherits downward.** Every template nested in a nodiff one renders once with it, so the directive reaches all of them at compile time: conditional-branch templates, nested `?html`/`?native`/`?terminal`, `?each` item templates at any depth, hoisted constructors and inlined local helpers all compile nodiff and emit no markers. `az_nodiff` on an `?each` item's root element, or on a bare element in a conditional branch, reaches the templates nested in it the same way, and a layout (auto-nodiff via `?inner_content`) inherits too. It stops where what is built can land in a live view's diffed slot, where a nodiff value never updates in place: a `?stateful` child's props, and any fun, anonymous or named, other than an `?each` callback (a fun prop is called later, by whichever view receives it). A `?stateless` callback is a separate compile unit that may also be used live, so it keeps its own markers. A `?local` under a nodiff template still works: only the element holding a content local gets an `az` and that slot's marker (an attribute-only local needs neither). Outside any view -- a layout -- the client reaches it with `set_all`.
+**It inherits downward.** Every template nested in a nodiff one renders once with it, so the directive reaches all of them at compile time: conditional-branch templates, nested `?html`/`?json`/`?terminal`, `?each` item templates at any depth, hoisted constructors and inlined local helpers all compile nodiff and emit no markers. `az_nodiff` on an `?each` item's root element, or on a bare element in a conditional branch, reaches the templates nested in it the same way, and a layout (auto-nodiff via `?inner_content`) inherits too. It stops where what is built can land in a live view's diffed slot, where a nodiff value never updates in place: a `?stateful` child's props, and any fun, anonymous or named, other than an `?each` callback (a fun prop is called later, by whichever view receives it). A `?stateless` callback is a separate compile unit that may also be used live, so it keeps its own markers. A `?local` under a nodiff template still works: only the element holding a content local gets an `az` and that slot's marker (an attribute-only local needs neither). Outside any view -- a layout -- the client reaches it with `set_all`.
 
 **An az-nodiff element is rendered by the server once, then owned by the client** -- the seam for a client-side component mounted from an `az_hook` (see "Embedding client-side components" in [docs/architecture.md](../../docs/architecture.md)). Nothing inside it is ever patched, but the slot holding it still diffs: the server can hide it, show it, or switch it to another az-nodiff element, and the switch replaces the slot through its markers so the hooks' `destroyed()`/`mounted()` run. The same az-nodiff element chosen again keeps its DOM untouched even when the values it was rendered from changed. An az-nodiff element is identified by its fingerprint, the conditional branch that produced it, and an optional `az_key` on its root -- not by its values -- so two clauses producing the same markup or calling the same helper are two az-nodiff elements, and a new `az_key` value remounts. A child view whose own root is az-nodiff is identified by its id. The branch is the one chosen by the conditional in the az-nodiff element's **own** slot: a switch above it between non-nodiff wrappers with the same statics (`case ?get(tab) of a -> {section, [], [chart()]}; b -> {section, [], [chart()]} end`) descends into the wrapper and keeps the az-nodiff element, so put `{az_key, ?get(tab)}` on the az-nodiff element's root to remount it. A slot re-run landing on the same az-nodiff element costs O(1) (the check runs before the az-nodiff element is evaluated); a plain-list item, a wrapper the diff descends into and `diff/3` evaluate the az-nodiff element and then compare, with the same result. A child view inside an az-nodiff element takes its props at mount only (no parent-driven `handle_update/3` on any path, including when a switch replaces the az-nodiff element: a same-handler, same-id child keeps its state). Reads inside an az-nodiff element are not tracked on its slot; only the reads that choose it, and its `az_key`, re-run the slot. The az-nodiff element's root carries that identity as the value of its `az-nodiff` attribute (`arizona_template:nodiff_token/3`; see above for which elements get a token and which a bare marker), so the client keeps the az-nodiff element's DOM -- and its widget -- across a wholesale re-render that names it again at the same place: a list `?each` container `?OP_TEXT` (keyed items only -- unkeyed items cannot be matched, so they remount), a stream container render, and the reconnect resync `?OP_REPLACE` (not a navigate).
 
@@ -257,7 +257,7 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?get_lazy(Key, Fun)` | `arizona_template:get_lazy(Key, Bindings, Fun)` |
 | `?with(Keys)` | `arizona_template:with(Keys, Bindings)` -- tracks each key on the enclosing slot, then projects `Bindings` to just those keys (see "Handing a bindings subset to a sub-context") |
 | `?html(Elems)` | `arizona_template:html(Elems)` |
-| `?native(Elems)` | `arizona_template:native(Elems)` -- `?native` JSON render target (Android/iOS clients) |
+| `?json(Elems)` | `arizona_template:json(Elems)` -- JSON render target (Android/iOS clients) |
 | `?terminal(Elems)` | `arizona_template:terminal(Elems)` -- ANSI render target; tags `line`/`col`/`row`/`text`/`span`/`br` + bare-atom style attrs (see docs/architecture.md "Terminal render target") |
 | `?each(Fun, Source)` | `arizona_template:each(Fun, Source)` -- 1-arg for lists, 2-arg for streams/maps. The callback must return an element (see "?each body must return an element") |
 | `?stateful(Handler, Props)` | `arizona_template:stateful(Handler, Props)` |
@@ -292,7 +292,7 @@ convert external Latin-1 data with `unicode:characters_to_binary(Bin, latin1)`.
   the compile warning `latin1_binary_literal` -- an error under `warnings_as_errors`. There
   is no suppression option: spell intended bytes as integer segments
   (`<<16#89, "PNG">>`) or a sized string (`<<"\351":8>>`), which do not warn.
-- At runtime a refused frame or `?native` value raises/logs `{non_utf8_render, Byte,
+- At runtime a refused frame or `?json` value raises/logs `{non_utf8_render, Byte,
   Offset}` (the JSON encoder already refused it; only the name is new). In dev mode an
   HTTP page renders with every value checked (same mount, same bytes), so the failure
   is located at its template line.
@@ -349,7 +349,7 @@ varying sibling tag is legitimate in exactly those containers (`th`/`td` in a ro
 `option`/`optgroup` in a select) and has no workaround today, so `ul`/`ol` is the only container
 where "the child tag was never free anyway" actually holds.
 
-A whole-body `?html(...)` (or `?native`/`?terminal`) **is** accepted: it's unwrapped to the
+A whole-body `?html(...)` (or `?json`/`?terminal`) **is** accepted: it's unwrapped to the
 element it wraps and compiled identically to returning that element bare -- so a helper that
 returns `?html(...)` can be reused as an `?each` callback. Only a **whole-body** wrapper
 unwraps; a wrapper as a **list item** (`[?html(...)]`) stays rejected (it lands in the same
@@ -385,7 +385,7 @@ written in, so this is not relabelable.
 - Plain values: use a list comprehension or `lists:map/2` (no per-item diffing, fine for
   small or static lists). A content-slot comprehension builds its list at render, as one
   value, so it cannot hold markup: one whose body is an element (a literal, an element
-  helper, a `?html`/`?native`/`?terminal`, or a list, nested comprehension or conditional
+  helper, a `?html`/`?json`/`?terminal`, or a list, nested comprehension or conditional
   tail of those) is a compile error (`element_in_comprehension`). Use `?each`.
 - A conditional: put it **inside** an element as a text/value child. Only the `?each`
   **body** must be a direct element -- a conditional sitting in a content slot may itself
@@ -409,7 +409,7 @@ row(U) -> ?html({li, [], [case U of #{name := N} -> N; _ -> ~"-" end]}).
 ## Content-slot lists
 
 A literal list in a content slot that holds a **block** -- an element, a nested
-`?html`/`?native`/`?terminal`, an `?each`, a `?stateful`/`?stateless` component,
+`?html`/`?json`/`?terminal`, an `?each`, a `?stateful`/`?stateless` component,
 `?inner_content`, or `?raw`, or a `case`/`if` whose tail can be one -- compiles as a fragment:
 each item gets its own slot. So `{ul, [], [[~"Tags: ", ?each(...)]]}` renders and diffs like a
 literal mixed fragment, and so does the same list as a conditional tail, a hoisted template that
@@ -449,7 +449,7 @@ A control-flow expression in a **content slot** -- `case`, `if`, `begin`, `recei
 `try`, or `maybe` -- may return a bare element tuple, an element list, or a mixed fragment
 (static text/values interleaved with elements) directly from a tail position. The parse
 transform compiles each tail into a nested template, exactly as a literal
-`?html`/`?native`/`?terminal` there would, inheriting the enclosing render target and the
+`?html`/`?json`/`?terminal` there would, inheriting the enclosing render target and the
 content context of the slot, so a branch's `<script>` or `<title>` under `<svg>` is foreign
 content exactly as when written directly there. A whole-tail wrapper of the enclosing target
 around markup (`true -> ?html({title, [], [?get(t)]})` in an element's child) is unwrapped to
@@ -628,7 +628,7 @@ read inlines into that branch's templates only.
 A hoisted **template constructor** also compiles and tracks:
 `Header = ?html({h1, [], [?get(title)]})`, `Items = ?each(...)`, or
 `Card = ?stateless(card, #{x => ?get(x)})` bound to a local and used in a content
-slot is spliced back and compiled -- a `?html`/`?native`/`?terminal` constructor
+slot is spliced back and compiled -- a `?html`/`?json`/`?terminal` constructor
 additionally gets track touches for the literal keys read inside it (a nested
 template's inner reads are otherwise isolated from the slot bracket), so the slot
 re-renders when they change. A hoisted `?html` used as a whole `?each` callback
@@ -637,11 +637,11 @@ flag.
 
 An `?each` compiles its items for the render target and content context of the
 place it appears in the template that renders it. For a hoisted `Items = ?each(...)`
-that place is where `Items` is used, not where it is bound: used inside `?native`
-its items are native nodes, used directly inside `<svg>` its `<title>` items are
+that place is where `Items` is used, not where it is bound: used inside `?json`
+its items are JSON nodes, used directly inside `<svg>` its `<title>` items are
 foreign content (markers, diffable), exactly as if the `?each` were written there.
 A hoisted value is checked like written code too, so a hoisted `?html` used inside
-`?native` is a `cross_target_nesting` compile error. A local element helper's body
+`?json` is a `cross_target_nesting` compile error. A local element helper's body
 is **not** such a place for its arguments: an `?each` passed to a helper (written
 in the call, or a hoisted variable) keeps the context of the call site, so
 `wrap(Items)` with `wrap(X) -> {svg, [], [X]}` called from HTML content compiles

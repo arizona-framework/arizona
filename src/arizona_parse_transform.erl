@@ -438,7 +438,7 @@ maybe_helper_pair(Name, Arity, FunDefs, Acc) ->
                 _ -> false
             end
         end,
-        [html, native, terminal]
+        [html, json, terminal]
     ),
     case Inlineable of
         true -> Acc#{{Name, Arity} => true};
@@ -446,7 +446,7 @@ maybe_helper_pair(Name, Arity, FunDefs, Acc) ->
     end.
 
 %% Scan the original forms (pre-mark_targets -- which unwraps an inline
-%% `?html`/`?native`/`?terminal` callback body, but never rewrites a
+%% `?html`/`?json`/`?terminal` callback body, but never rewrites a
 %% `fun Name/Arity` reference) for local `fun Name/Arity` (and same-module
 %% `fun ?MODULE:Name/Arity`) callbacks. Returns the deduped pairs defined in this module.
 collect_each_callback_pairs(Forms, FunDefs, Module) ->
@@ -619,13 +619,13 @@ is_module_attr({attribute, _, module, _}) -> true;
 is_module_attr(_) -> false.
 
 %% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
-%% any template, else `html` | `native` | `terminal`). Three jobs:
+%% any template, else `html` | `json` | `terminal`). Three jobs:
 %%
 %%   1. A single `?each` serves every target. Each one is marked with the backend
 %%      of the target it sits in (the default `html` one standalone) and the
 %%      content context there, so the bottom-up transform compiles it with both.
 %%   2. Reject inline cross-target nesting: any target macro literally inside a
-%%      different one (e.g. `?html(...)` in `?native(...)`) would mix incompatible
+%%      different one (e.g. `?html(...)` in `?json(...)`) would mix incompatible
 %%      statics in one tree. Caught here as a compile error instead of corrupting
 %%      the output at runtime.
 %%   3. Unwrap a whole-body backend wrapper in an `?each` INLINE callback
@@ -636,21 +636,21 @@ is_module_attr(_) -> false.
 %%      See `unwrap_each_body/2`.
 %%
 %% Each target call resets `Ctx` for its own argument, so sibling targets (e.g. a
-%% dual-serve render with `?html` and `?native` in different clauses) are fine --
+%% dual-serve render with `?html` and `?json` in different clauses) are fine --
 %% only one literally nested in the other errors. Cross-target nesting via a
 %% `?stateful`/`?stateless` child *module* is invisible at this AST level, so it
 %% is caught at render instead (`arizona_render:assert_same_target/2`); it used to
 %% pass silently and emit a payload the client could not parse.
 mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, _}, Ctx, _CCtx) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (Target =:= html orelse Target =:= native orelse Target =:= terminal) andalso
-        (Ctx =:= html orelse Ctx =:= native orelse Ctx =:= terminal) andalso
+        (Target =:= html orelse Target =:= json orelse Target =:= terminal) andalso
+        (Ctx =:= html orelse Ctx =:= json orelse Ctx =:= terminal) andalso
         Ctx =/= Target
 ->
     parse_error(cross_target_nesting, L);
 mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [Arg]}, _Ctx, _CCtx) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (Target =:= html orelse Target =:= native orelse Target =:= terminal)
+        (Target =:= html orelse Target =:= json orelse Target =:= terminal)
 ->
     %% Entering a target resets the content context to that backend's default.
     Default = root_content_context(Target),
@@ -706,7 +706,7 @@ mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
     ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
     {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- unwrap_child_tail_wrappers(Parts, Ctx)]}.
 
-%% A whole-tail `?html`/`?native`/`?terminal` (matching the enclosing target) in a
+%% A whole-tail `?html`/`?json`/`?terminal` (matching the enclosing target) in a
 %% conditional child is the bare element in a wrapper: unwrap it here, before the
 %% bottom-up pass compiles it at the root content context, so the branch compiles in
 %% the context of the slot holding it exactly as the bare form does (an SVG `<title>`
@@ -714,7 +714,7 @@ mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
 %% as raw statics, which a bare value tail would escape. A wrapper anywhere else (bound,
 %% passed, or below the tail) keeps starting its own template.
 unwrap_child_tail_wrappers([Tag, Attrs, Children], Ctx) when
-    Ctx =:= html; Ctx =:= native; Ctx =:= terminal
+    Ctx =:= html; Ctx =:= json; Ctx =:= terminal
 ->
     Unwrap = fun(Child) ->
         case is_control_flow_ast(Child) of
@@ -883,7 +883,7 @@ inherit_spliced_each_nodiff(false, FunArg) ->
 %% A not-yet-compiled template constructor. A compiled `?each` keeps the `each`
 %% name with two args, and is already final; a marked one carries four.
 is_template_ctor(F, [_Arg]) ->
-    F =:= html orelse F =:= native orelse F =:= terminal;
+    F =:= html orelse F =:= json orelse F =:= terminal;
 is_template_ctor(each, [_FunArg, _SourceArg, _Backend, _CCtx]) ->
     true;
 is_template_ctor(_F, _Args) ->
@@ -901,7 +901,7 @@ template_is_nodiff(Arg) ->
             false
     end.
 
-%% Unwrap a whole-body backend wrapper (`?html`/`?native`/`?terminal`, spelled
+%% Unwrap a whole-body backend wrapper (`?html`/`?json`/`?terminal`, spelled
 %% `Wrapper`) in an each's INLINE single-clause callback: rewrite the body's last
 %% expr `Wrapper(Inner)` to the bare `Inner` element. This MUST run in the
 %% top-down pre-pass, before the bottom-up transform compiles that inner wrapper
@@ -1057,7 +1057,7 @@ format_error(nested_nodiff) ->
     "element, or split the subtree into its own ?html/?stateless template whose root "
     "carries az-nodiff";
 format_error(cross_target_nesting) ->
-    "cannot nest ?html, ?native and ?terminal in one template -- they produce "
+    "cannot nest ?html, ?json and ?terminal in one template -- they produce "
     "incompatible statics. A ?stateful/?stateless child does NOT bridge them: the "
     "child's target is invisible here, so the mismatch survives compilation and "
     "is caught at render instead (cross_target_child), where the payload would "
@@ -1482,7 +1482,7 @@ transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
 %% has already spelled an inherited constructor with ?NODIFF_MOD.
 has_template_ctor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) when
     (Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD) andalso
-        (F =:= html orelse F =:= native orelse F =:= terminal orelse F =:= each)
+        (F =:= html orelse F =:= json orelse F =:= terminal orelse F =:= each)
 ->
     true;
 has_template_ctor(T) when is_tuple(T) ->
@@ -1516,14 +1516,14 @@ transform_expr(Expr, Module, Inline, FunDefs) ->
 transform_node(Node, Module, Inline, FunDefs) ->
     N = erl_syntax:revert(Node),
     case N of
-        %% `?html`/`?native`/`?terminal` all compile non-live here (LiveRender =
+        %% `?html`/`?json`/`?terminal` all compile non-live here (LiveRender =
         %% false). The live root is handled in transform_live_render_leaf/4; and
         %% `?terminal` is *always* non-live -- no client root id / az_view is
         %% injected (the transport repaints whole frames rather than addressing the
         %% root node), so the live-render last-expr path also falls through to here.
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Arg]} when
             (Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD) andalso
-                (Target =:= html orelse Target =:= native orelse Target =:= terminal)
+                (Target =:= html orelse Target =:= json orelse Target =:= terminal)
         ->
             Inherited = Mod =:= ?NODIFF_MOD,
             Arg1 = splice_vars(Arg, Inline, Target, root_content_context(Target)),
@@ -1666,7 +1666,7 @@ is_track_touch(_Stmt) ->
 %%
 %% A LOCAL call in a template whose callee is a single-clause function
 %% returning an element -- `brand()`, `alert(Kind, Msg)` -- is inlined at the
-%% call site: the body (unwrapped from a whole-body `?html`/`?native`/
+%% call site: the body (unwrapped from a whole-body `?html`/`?json`/
 %% `?terminal` wrapper, exactly as ?each callbacks unwrap) replaces the call,
 %% with each parameter substituted by its argument expression via the ordinary
 %% inline_vars/2 machinery. The spliced element then compiles like a literal
@@ -1766,7 +1766,7 @@ ih_content_lc(L, Body, Quals, {Module, FunDefs, Target, _Stack} = Ctx, Ch) ->
 %% A comprehension in content builds a runtime list, which the slot renders as one
 %% value: an element per item is a template the list cannot hold, so it would fail
 %% at render (bad_template_value). The body is element-shaped when it is an element,
-%% a compiled or uncompiled ?html/?native/?terminal, a local helper with an element
+%% a compiled or uncompiled ?html/?json/?terminal, a local helper with an element
 %% clause, or a list, nested comprehension or control-flow tail of those. A plain
 %% value body renders fine and is left alone.
 is_lc_element_body({tuple, _, [_, Attrs]}, _Ctx) ->
@@ -1819,7 +1819,7 @@ is_lc_element_body(_Value, _Ctx) ->
 
 is_template_ctor_call(Mod, Fun, [_Arg]) ->
     lists:member(Mod, [arizona_template, az, ?NODIFF_MOD]) andalso
-        lists:member(Fun, [html, native, terminal]);
+        lists:member(Fun, [html, json, terminal]);
 is_template_ctor_call(_Mod, _Fun, _Args) ->
     false.
 
@@ -2428,7 +2428,7 @@ transform_live_render_clause({clause, L, Patterns, Guards, Body}, Module, FunDef
     ok = check_markup_vars(Init ++ [Last], Inline),
     Transform = fun(Expr, Inl) -> transform_expr(Expr, Module, Inl, FunDefs) end,
     TransformedInit = [Transform(Expr, Inline) || Expr <- Init],
-    %% The last expression carries the live-root template -- a direct ?html/?native
+    %% The last expression carries the live-root template -- a direct ?html/?json
     %% call, or a control-flow expression whose every tail carries a root, compiled
     %% at each leaf.
     TransformedLast = transform_scoped_tail(
@@ -2572,12 +2572,12 @@ bind_names(Names, Bound) ->
 
 transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
     case erl_syntax:revert(Expr) of
-        %% A live root is `?html` or `?native` (LiveRender = true, injecting the
+        %% A live root is `?html` or `?json` (LiveRender = true, injecting the
         %% client root id / az_view). `?terminal` is always non-live, so it is not
         %% matched here and falls through to the non-live path (transform_node/4).
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Arg]} when
             (Mod =:= arizona_template orelse Mod =:= az) andalso
-                (Target =:= html orelse Target =:= native)
+                (Target =:= html orelse Target =:= json)
         ->
             validate_live_root(Arg, L, Inline),
             Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
@@ -2831,7 +2831,7 @@ collect_inline(Body) ->
     keep_reaching(maps:without(maps:keys(Poisoned), Raw)).
 
 %% Post-process the collected inline map: an RHS containing a template
-%% constructor (`?html`/`?native`/`?terminal`) is pre-inlined (in statement
+%% constructor (`?html`/`?json`/`?terminal`) is pre-inlined (in statement
 %% order, so a reference to an earlier hoisted var resolves to its prepared
 %% form) and wrapped with a track touch per literal binding key read inside the
 %% constructor subtrees. The constructor compiles (retransform_spliced/4) to a
@@ -2880,7 +2880,7 @@ prepare_inline_rhs(RHS0, Prepared) ->
 %% without a wrap.)
 rhs_has_template_ctor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (F =:= html orelse F =:= native orelse F =:= terminal)
+        (F =:= html orelse F =:= json orelse F =:= terminal)
 ->
     true;
 rhs_has_template_ctor(T) when is_tuple(T) ->
@@ -2899,7 +2899,7 @@ rhs_has_template_ctor_any([H | T]) ->
 %% of an RHS -- the reads a spliced compiled template isolates from the slot.
 ctor_read_keys({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args} = Call, Acc) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (F =:= html orelse F =:= native orelse F =:= terminal)
+        (F =:= html orelse F =:= json orelse F =:= terminal)
 ->
     collect_read_keys(Call, Acc);
 ctor_read_keys(T, Acc) when is_tuple(T) ->
@@ -3672,7 +3672,7 @@ compile_template(Arg, Line, Module, LiveRender, Backend, Inherited, CCtx) ->
     end.
 
 %% A template nested as a child may hold several nodes, but one that is a whole
-%% document may not on a backend whose document is one node (native: a JSON
+%% document may not on a backend whose document is one node (JSON: one JSON
 %% value). Only render knows which templates are documents (a layout is any
 %% function a route names), so stamp the shape here, asking the backend at compile
 %% time, and arizona_render refuses a layout whose document root ends up stamped.
@@ -3834,7 +3834,7 @@ compile_named_each(Name, Arity, SourceAST, L, Module, Backend, CCtx, FunDefs, In
 
 %% Compile one inline `?each` callback clause (`Kind` = list | stream, from the arity) into
 %% the iteration AST. The body's last expr may be a bare element/fragment (the common case),
-%% or a whole-body backend wrapper (`?html`/`?native`/`?terminal`): raw (a named-fun ref
+%% or a whole-body backend wrapper (`?html`/`?json`/`?terminal`): raw (a named-fun ref
 %% resolves to its untransformed clause) or already compiled to a template map (an inline fun,
 %% compiled bottom-up before the enclosing each). Both wrapper forms reduce to the same
 %% per-item template the bare element would build -- `?html` and `?each` share
@@ -3881,7 +3881,7 @@ unwrap_one_root_list(_Kind, Body) ->
 %% in place (?OP_LIST_PATCH) instead of re-rendering the whole list, which churns
 %% childList and reverts an in-progress scroll on WebKit. Whether that op is usable
 %% is the backend's call, asked at compile time via the `supports_list_patch/0`
-%% renderer callback (the web client implements it; native/terminal don't, and keep
+%% renderer callback (the web client implements it; JSON/terminal don't, and keep
 %% the wholesale re-render). Multi-root/fragment items have no unambiguous
 %% per-position DOM node, so they are never flagged.
 %%
@@ -3932,7 +3932,7 @@ maybe_keyless_opt(_Backend, _Kind, _Classification, _ElemAST, Opts) ->
     Opts.
 
 %% Classify an ?each callback's last expr. A whole-body backend wrapper call
-%% (`?html`/`?native`/`?terminal` matching this each's `Backend`) unwraps to the element it
+%% (`?html`/`?json`/`?terminal` matching this each's `Backend`) unwraps to the element it
 %% wraps, so the normal element path builds the per-item template. An already-compiled
 %% template map literal (an inline wrapper, compiled bottom-up) is taken as the per-item
 %% template directly. Anything else (a non-matching wrapper, a user map, a bare value) is
@@ -3955,13 +3955,13 @@ each_body_unwrap({map, _, Fields} = Map, _Backend) ->
 each_body_unwrap(LastExpr, _Backend) ->
     {element, LastExpr}.
 
-%% The single registry mapping a render-target name (`html`/`native`/`terminal`,
-%% the `?html`/`?native`/`?terminal` macro atoms) to its renderer backend module.
+%% The single registry mapping a render-target name (`html`/`json`/`terminal`,
+%% the `?html`/`?json`/`?terminal` macro atoms) to its renderer backend module.
 %% This is the ONLY place the parse transform names a concrete backend module;
 %% each backend's behaviour (`Backend:target/0`, `name/1`, `supports_local/0`, ...)
 %% covers everything else.
 target_backend(html) -> arizona_html;
-target_backend(native) -> arizona_native;
+target_backend(json) -> arizona_json;
 target_backend(terminal) -> arizona_terminal.
 
 %% A compiled template map literal carries the `s`/`d`/`f` assoc keys plus the
@@ -3973,7 +3973,7 @@ is_compiled_template_map(Fields) ->
     lists:all(fun(Key) -> lists:member(Key, Keys) end, [s, d, f, backend]).
 
 %% Build the ?each iteration AST from an already-compiled template map (an inline
-%% `?html`/`?native`/`?terminal` body). Mirror build_each_ast but reuse the map's prebuilt
+%% `?html`/`?json`/`?terminal` body). Mirror build_each_ast but reuse the map's prebuilt
 %% assocs: keep `s`/`f`/opts verbatim, wrap the existing `d`-list (nullary closures capturing
 %% the item vars) in the per-item fun, and add `t => 0`. Scoping/fingerprint were already
 %% computed by compile_template from the same body the element path would use, so the result
@@ -4004,7 +4004,7 @@ set_template_map_d_field(Field, _DFunAST) ->
     Field.
 
 %% An ?each callback must build a per-item template: its body must be an element, a list
-%% of elements, a static/mixed fragment, or a whole-body `?html`/`?native`/`?terminal`
+%% of elements, a static/mixed fragment, or a whole-body `?html`/`?json`/`?terminal`
 %% wrapper (unwrapped to its element before this check). A `text_dynamic` body (a bare value,
 %% a runtime binary, a ?stateful/?stateless descriptor, or a case/if) compiles to one opaque
 %% value slot that renders at SSR but loses per-item diffing (and a descriptor value crashes
@@ -4016,7 +4016,7 @@ validate_each_body(Kind, text_dynamic, LastExpr) ->
     parse_error(each_body_error(Kind, LastExpr), anno(LastExpr));
 validate_each_body(Kind, list_ast, LastExpr) ->
     %% A mixed-list fragment is fine UNLESS an item is a nested template (a transformed
-    %% ?html/?native/?terminal map literal) or a ?stateful/?stateless descriptor: those land
+    %% ?html/?json/?terminal map literal) or a ?stateful/?stateless descriptor: those land
     %% in a per-item value slot and crash on diff exactly like a bare body. (A component as
     %% an ?each item child is a known limitation -- it crashes on the per-item diff for now.)
     walk_each_list_items(Kind, LastExpr);
@@ -4044,7 +4044,7 @@ walk_each_list_items(_Kind, _Nil) ->
     ok.
 
 %% A list item that compiles to a fragile per-item value slot (renders at SSR, crashes on
-%% diff): a nested template (a transformed ?html/?native/?terminal map literal) or a
+%% diff): a nested template (a transformed ?html/?json/?terminal map literal) or a
 %% ?stateful/?stateless descriptor call.
 is_fragile_each_item({map, _, _}) ->
     true;
@@ -4300,7 +4300,7 @@ compile_mixed_items(Items, Module, Backend, CCtx, Inherited) ->
     {Statics, DynASTs, Fingerprint, Opts}.
 
 %% Compile a fragment's top-level items in order, with the backend's children
-%% separator between them as an element's children get one (native joins JSON
+%% separator between them as an element's children get one (JSON joins
 %% array members with a comma). Unlike maybe_children_sep/2 an empty separator
 %% (HTML, terminal) adds no segment at all: a fragment's fingerprint hashes its
 %% static segments, so an extra empty one would re-fingerprint every existing
@@ -5004,7 +5004,7 @@ static_segments(_Rest) ->
     [].
 
 %% Emit a separator before every child after the first. HTML uses an empty
-%% separator (no-op); native emits a comma between JSON array elements.
+%% separator (no-op); JSON emits a comma between JSON array elements.
 maybe_children_sep(State, 0) ->
     State;
 maybe_children_sep(State, _Index) ->
@@ -5462,7 +5462,7 @@ track_call_ast(KeyAST) ->
 %% fragment) sitting in a tail is compiled into a nested template -- exactly as a
 %% literal ?html(...) there would be -- so branches don't need an explicit ?html
 %% wrap. The current Backend is threaded through, so a bare element under
-%% ?native/?terminal inherits that target (mirroring how ?each does). Non-tail
+%% ?json/?terminal inherits that target (mirroring how ?each does). Non-tail
 %% sub-expressions and non-element tails are left untouched (a non-element tail
 %% renders as an escaped scalar, as before). The set of walked forms is shared
 %% with the live-render-root transform via map_tail_exprs/3.
@@ -5552,7 +5552,7 @@ is_markup_item(Item) ->
 %% Tag a value interpolation `{esc, Fun}` so it is escaped at the render boundary,
 %% or leave a block bare. Every backend marks scalar values uniformly -- the
 %% backend's `arizona_renderer:escape/1` is the sole escaping authority (HTML
-%% entity-escapes, the terminal sanitizes control bytes, the native JSON wire is
+%% entity-escapes, the terminal sanitizes control bytes, the JSON wire is
 %% the identity), so the parse transform never special-cases a backend here.
 %% Blocks (nested templates, descriptors, `raw/1`, effects) are always left bare
 %% and spliced structurally.
@@ -5570,7 +5570,7 @@ is_block_content_expr({call, _, {remote, _, {atom, _, M}, {atom, _, F}}, _Args})
     (M =:= arizona_template orelse M =:= az) andalso
         lists:member(F, [
             html,
-            native,
+            json,
             terminal,
             each,
             stateful,
@@ -6352,7 +6352,7 @@ bare_attr_name(_AtomName, _) ->
 %% `az` (the element's diff address, emitted by `Backend:az_attr/1` on any element
 %% carrying dynamics) and `az-local` (the `?local` descriptor injected by
 %% maybe_inject_local_descriptor/5). A template-authored copy is emitted *beside*
-%% the injected one: HTML keeps the first of a duplicate pair and the native wire
+%% the injected one: HTML keeps the first of a duplicate pair and the JSON wire
 %% keeps the last, so one of the two silently disappears -- and when the element
 %% has no dynamics the user's `az` is the only one, is fingerprint-scoped like a
 %% real address (`scope_static/2` rewrites every ` az="`), and can collide with a

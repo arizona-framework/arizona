@@ -2,7 +2,7 @@ import Foundation
 
 /// A dynamic JSON value: decoded from arbitrary wire JSON and re-serialized to
 /// canonical JSON. The Swift counterpart of kotlinx `JsonElement` (Android) and
-/// raw `JSON` values (the browser/reference client): the `?native` wire carries
+/// raw `JSON` values (the browser/reference client): the `?json` wire carries
 /// open-ended props, so the tree and op payloads are modeled structurally rather
 /// than with fixed Codable structs.
 public enum JSONValue: Equatable, Sendable {

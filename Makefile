@@ -179,8 +179,8 @@ test-e2e-parallel:
 test-e2e-sequential:
 	npx playwright test --project sequential
 
-test-e2e-native:
-	npx playwright test --project native
+test-e2e-json:
+	npx playwright test --project json
 
 # Performance bench. Intentionally NOT wired into ci/precommit:
 # numbers are noisy under shared CI runners and need human comparison.

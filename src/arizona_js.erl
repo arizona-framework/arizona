@@ -11,7 +11,7 @@ or as effects from `handle_event/3`.
 Most of these are browser/DOM-only (`toggle`, the class ops, `set_attr`,
 `dispatch_event`, ...): they address the DOM by CSS selector or touch
 document/window state. `push_event` and `navigate` have portable counterparts
-in the per-platform modules (e.g. `arizona_android`) for `?native` views.
+in the per-platform modules (e.g. `arizona_android`) for `?json` views.
 
 ## Example
 

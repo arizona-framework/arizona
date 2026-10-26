@@ -10,7 +10,7 @@ import org.junit.Test
  * On-device (emulator) e2e for reconnect-with-backoff. Navigate to the counter
  * and drive it; force an abrupt socket drop; the client reopens on its own
  * (re-mounting via _az_reconnect=1, so the count resets to 0) and the new socket
- * works -- no relaunch. The Playwright analogue is e2e/native/reconnect.spec.js.
+ * works -- no relaunch. The Playwright analogue is e2e/json/reconnect.spec.js.
  *
  * Requires the Arizona test server reachable at localhost:4040 (adb reverse
  * tcp:4040 tcp:4040). Run with: ./gradlew :sample:connectedCheck

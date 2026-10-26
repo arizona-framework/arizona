@@ -43,7 +43,7 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([raw_interp_attr/1]).
 -export([attr_name_swap/1]).
 -export([event_attr_name_swap/1]).
--export([native_attr_name_swap/1]).
+-export([json_attr_name_swap/1]).
 
 %% Constant scrutinee (`flag`), branch reads `val`: a change to `val` must
 %% re-render the `<p>` even though `flag` is unchanged.
@@ -460,10 +460,10 @@ event_attr_name_swap(Bindings) ->
         ]}
     ).
 
-%% The `?native` counterpart of attr_name_swap/1.
--spec native_attr_name_swap(az:bindings()) -> az:template().
-native_attr_name_swap(Bindings) ->
-    ?native(
+%% The `?json` counterpart of attr_name_swap/1.
+-spec json_attr_name_swap(az:bindings()) -> az:template().
+json_attr_name_swap(Bindings) ->
+    ?json(
         {'Column', [], [
             case ?get(mode) of
                 a -> {'Text', [{color, ?get(v)}], [~"x"]};

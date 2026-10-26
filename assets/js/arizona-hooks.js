@@ -97,7 +97,7 @@ function runHookCallback(instance, cb, phase) {
     } catch (err) {
         // Static format string: a hook name / op code goes in an ARGUMENT, never in
         // the format position, where a `%s` in it would consume the `err` that
-        // follows (and `%c` would restyle the line) -- see native_client.js.
+        // follows (and `%c` would restyle the line) -- see json_client.js.
         console.error('[arizona] hook %s %s() threw', instance.__name, phase, err);
     }
 }

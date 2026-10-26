@@ -1,0 +1,317 @@
+# JSON render target
+
+Arizona renders HTML to browsers via `?html`. The **JSON** target (`?json`) renders the
+same server-side-diffing model to a **JSON widget tree** that a thin native
+client (iOS/SwiftUI, Android/Jetpack Compose, or any other) turns into real
+widgets. The server stays the source of truth: it ships JSON + diff ops over the
+WebSocket and receives events back, reusing the *entire* engine — the diff,
+the fingerprint cache, the op codes, and the transport — unchanged.
+
+The web (`?html`) path is untouched: same HTML statics, SSR, SEO, and browser
+client.
+
+## Authoring
+
+Use `?json(...)` instead of `?html(...)`. The element-tuple form, macros, and
+handlers are identical:
+
+```erlang
+-include_lib("arizona/include/arizona_stateful.hrl").
+
+mount(Bindings) ->
+    {#{id => ~"counter", count => maps:get(count, Bindings, 0)}, #{}}.
+
+render(Bindings) ->
+    ?json({'Column', [{id, ?get(id)}, {padding, ~"16"}], [
+        {'Text', [], [?get(count)]},
+        {'Button', [{on_tap, arizona_android:push_event(~"inc")}], [~"+"]},
+        {'List', [], [
+            ?each(fun item/1, ?get(items))
+        ]}
+    ]}).
+
+item(Item) ->
+    {'Text', [], [maps:get(label, Item)]}.
+
+handle_event(~"inc", _Payload, Bindings) ->
+    {Bindings#{count => maps:get(count, Bindings) + 1}, #{}, []}.
+```
+
+- **The tag is the widget type, verbatim.** `'Column'`, `'VStack'`, `'Text'`,
+  `'Button'`, … The framework is **vocabulary-agnostic** — it never interprets
+  the tag; the client engine maps the `type` string to a real widget. There is
+  no fixed widget list and no server-side validation: an unknown widget is the
+  client's / your tests' concern, not a compile error.
+- **Attributes are widget props.** Static and dynamic both supported. Values are
+  string-encoded on the wire; the client coerces (typed props are a future
+  addition). A whole-value boolean prop is the exception: it is a JSON
+  `true`/`false`, static (`{visible, true}`) or dynamic (`{enabled, ?get(on)}`),
+  and a dynamic one stays present in both states -- `OP_SET_ATTR` sets it to
+  `false` rather than removing the prop. A static `false` stays too
+  (`"enabled":false`), unlike the web, where `false` means the attribute is
+  absent. Only a whole-value prop is typed: a boolean in content renders as the
+  text `true`/`false`, an interpolated prop value (`[~"a-", ?get(on)]`) is text,
+  so a boolean in it raises `bad_template_value`.
+- **Event handlers are props** whose value is an effect command built with the
+  platform module: `{on_tap, arizona_android:push_event(~"inc")}`. The command
+  reaches the client as its JSON array (`[0, "inc"]`) whether it is folded into
+  the statics or computed at runtime (`{on_tap, ?get(cmd)}`, carried in `d` and
+  patched by `OP_SET_ATTR`). A list of commands arrives as a list of arrays and
+  runs in order, as on the web. A disabled command reads `false`
+  (`{on_tap, case ?get(on) of true -> Cmd; false -> false end}`); a client treats
+  a tap prop that is not an array as no command and fires nothing. Events
+  flow back exactly as on the web (`[ViewId, Event, Payload]` → `handle_event/3`).
+- **`?each` works uniformly.** A `?each` inside `?json` is compiled for the
+  JSON target automatically — no separate macro. `?stateful`/`?stateless`
+  children also work; the embedded module must use the same target (see
+  *Constraints*).
+
+## Serving HTML and JSON from one view
+
+The framework injects nothing and decides nothing. To serve browsers HTML and
+native apps a JSON tree from a single view, read the connecting client (its
+`User-Agent`, supplied as a binding by `arizona_middleware:extract([user_agent])`) and
+branch in `render/1`.
+
+`arizona_req:user_agent/1` returns the raw `User-Agent` header (no custom header
+needed — most clients send one), or `<<>>` if absent. `arizona_user_agent`
+turns it into a coarse, best-effort classification through **pure, composable**
+helpers — call only the one(s) you need, no precomputed map:
+
+- `browser/1` — true when the UA carries `Mozilla` (browsers/webviews do; a
+  native app's HTTP stack typically does not).
+- `os/1` — `watchos | tvos | webos | tizen | ios | android | windows | macos |
+  linux | other`. The smart-TV ones (`tvos`/`webos`/`tizen`) come from real
+  TV-browser UAs; `watchos` and native apps need a descriptive UA (a generic one
+  → `other`), so for native clients you control an explicit platform signal is
+  more reliable than UA sniffing.
+- `mobile/1` — best-effort mobile-device guess.
+
+```erlang
+%% Route opts: middlewares => [arizona_middleware:extract([user_agent])]
+mount(Bindings) ->
+    {#{id => ~"page", user_agent => ?get(user_agent)}, #{}}.
+
+%% A browser/webview carries "Mozilla" -> HTML; a native app's HTTP stack
+%% typically does not -> `?json`. Reach for arizona_user_agent:os/1 or mobile/1,
+%% or match the raw UA (e.g. your app's custom UA), only when you need to.
+render(#{user_agent := UA} = Bindings) ->
+    case arizona_user_agent:browser(UA) of
+        true -> ?html({'div', [{id, ?get(id)}], [...]});
+        false -> ?json({'Column', [{id, ?get(id)}], [...]})
+    end.
+```
+
+These helpers are heuristic and request-level; the `extract([user_agent])`
+middleware runs on both the HTTP and WS paths. You own the binding name and the
+branch -- if you prefer an explicit signal, your client can send a query param
+and you extract it with `arizona_middleware:extract([params])` instead.
+
+## The JSON widget tree
+
+Each element compiles to a flat JSON object — `type`, `az`, and `children` are
+reserved keys; every other key is a prop:
+
+```json
+{
+  "type": "Column",
+  "az": "f1-0",
+  "az_view": true,
+  "id": "counter",
+  "padding": "16",
+  "children": [
+    { "type": "Text", "az": "f1-1",
+      "children": [ { "type": "#slot", "az": "f1-1t0", "children": ["42"] } ] },
+    { "type": "Button", "on_tap": [0, "inc"], "children": ["+"] }
+  ]
+}
+```
+
+- **`az`** is the diff-target token. Ops address `"ViewId:az"`; the client keeps
+  an `az` → node registry.
+- **`az_view`** (`true`) marks a view root; its `id` prop is the `ViewId` (the
+  `id` returned by `mount`). Events from a node route to the nearest enclosing
+  `az_view`.
+- **`#slot`** is the addressable, *transparent* wrapper for any **dynamic** child
+  (dynamic text, an `?each`, or a child component). The client renders a `#slot`
+  by splicing its `children` into the parent — a fragment. One `#slot` per
+  dynamic child (the JSON analogue of the HTML comment markers).
+- **No void elements** — a childless widget is just `"children": []`.
+
+## Wire protocol — reuses the fingerprint cache
+
+The JSON target uses the **same** op codes and the **same** statics-deduplication as the
+browser, so statics are sent once and never re-sent:
+
+- The first time a fingerprint `f` is seen, the payload is
+  `{"f": F, "s": [...statics...], "d": [...values...]}`.
+- Once the client has cached `f` (it reports them via `["cached_fps", [...]]` on
+  connect), the server omits `s`: `{"f": F, "d": [...]}`.
+- `d` carries **raw** values: strings, numbers, and an effect command's JSON
+  array. The browser concatenates them; the native client `JSON.stringify`s each
+  one as it interleaves.
+- Op codes (`OP_TEXT`, `OP_SET_ATTR`, `OP_INSERT`/`OP_MOVE`/`OP_REMOVE`/
+  `OP_ITEM_PATCH`, `OP_REPLACE`, …) are identical; only the payload
+  *content* is a JSON widget skeleton instead of HTML.
+- A native client never loads an SSR page: its first frame is the live process's
+  `mount_and_render` output wrapped as `OP_REPLACE` over the WebSocket. An HTTP
+  GET of a `?json` route is still served: the JSON document below, as
+  `application/json` (each render backend names its document's media type via
+  `content_type/0`; a render crash's error page stays HTML). The request-free
+  render (`arizona_render:render_to_iolist/1`, `render_view_to_iolist/2`, so
+  `arizona_static` and the dev tools) zips the same JSON a client builds from that
+  frame: each scalar a JSON string (a whole-value boolean prop a JSON boolean, an
+  effect command its array), each `?each` a nested array.
+
+## Native client contract
+
+Reference implementations live in-repo: `e2e/utils/json_client.js` (a JS client used
+by the `json` e2e project), `clients/android/` (the Kotlin/Compose Android client), and
+`clients/ios/` (the Swift/SwiftUI iOS client).
+All three are near-copies of the browser worker (`assets/js/arizona-worker.js` + `arizona-core.js`):
+
+1. **Cache statics by fingerprint** in platform storage (browser uses
+   IndexedDB); send `["cached_fps", [...]]` on connect. Bound it: a fingerprint
+   hashes a template's statics, so every edit mints a key and orphans the old
+   one. The browser client keeps the 1000 most recently used and announces no
+   more (`FP_CACHE_MAX` in `assets/js/arizona-core.js`); evicting only ever
+   costs a re-send, since the server ships statics for anything unannounced.
+2. **Interleave** `s` + `d` to reconstruct content — identical to the browser's
+   `zipTemplate`, except each `d` value is **JSON-encoded** (string → quoted,
+   number → as-is) rather than text-concatenated. Recurse into nested
+   `{f,s,d}` payloads and each `{t:0,...}` item-lists.
+3. **Flatten fragments:** render a `#slot` by splicing its `children` into the
+   parent, and splice a nested array (an `?each` expansion) one level up. So
+   `["#slot children"]` and `[[item, item]]` both flatten into the parent's
+   children.
+4. **Apply the op codes** against a per-view `az` → node registry (the browser
+   uses the DOM): an op's `"ViewId:az"` target resolves within that view, so
+   sibling instances of the same stateful child — which share a fingerprint's `az`
+   values — don't collide. `OP_TEXT` sets a `#slot`'s content,
+   `OP_SET_ATTR`/`OP_REM_ATTR` set/drop a prop, `OP_REMOVE_NODE` drops a node from
+   its parent (a dynamic that returned the `remove` sentinel; one-way — re-adding
+   needs a parent re-render), and the stream ops manage a container's keyed
+   children — items keyed by `az_key`, with `OP_INSERT`/`OP_REMOVE`/`OP_MOVE`
+   reordering the list, `OP_ITEM_PATCH` applying inner ops scoped to one item, and
+   a container-level `OP_TEXT` re-rendering the whole list.
+
+   **The registry is a derived index of the tree, not a snapshot of the first
+   frame.** Every op that (re)builds a subtree — `OP_TEXT` replacing a node's
+   children, `OP_INSERT` grafting a stream item — must index the new nodes
+   and drop the destroyed ones, exactly as `OP_REPLACE` indexes what it renders.
+   Otherwise every `az` the *diff* introduced is unaddressable: the browser
+   re-queries the DOM each time and never sees this, but a registry built only at
+   `OP_REPLACE` fails the very next op. That includes a nested `az_view` the
+   payload brings in — the documented
+   `case ?get(flag) of true -> ?stateful(child, …)` pattern installs a whole child
+   **view id** through an `OP_TEXT`, and its first update is addressed to it. This
+   holds for an `OP_ITEM_PATCH`'s **inner** ops too: they *address* item-locally,
+   but a subtree they rebuild still has to reach the per-view registry, because the
+   child view it may introduce is addressed top-level (`/json/stream-child` is
+   exactly this shape).
+
+   Removal is the same obligation in reverse: `OP_REMOVE`/`OP_REMOVE_NODE` must
+   drop the entries of what they detach. Skipping it is not merely untidy — because
+   `OP_INSERT` indexes what it grafts in, a churning stream would add one registry
+   (and pin one detached subtree) per insert/remove cycle, for the life of the
+   connection, reclaimed only by a reconnect. Unindexing is **identity-checked**
+   (`registry[az] === node`): stream items share `az` values from one fingerprint,
+   so deleting by key alone would unregister a *surviving* sibling. `OP_REMOVE_NODE`
+   unindexes only when the splice actually found the node, so the registry never
+   loses something still in the tree.
+
+   **Isolate each op — and each frame, and each effect.** A batch's ops are
+   independent, so an unexpected wire shape or an unresolvable target must log and
+   skip that one op (as `applyOps`/`applyItemOps` do in `assets/js/arizona.js`),
+   degrading one slot instead of taking the app down. That includes an op code the
+   client does not implement — `OP_LIST_PATCH` is browser-only today. The same
+   applies to the two paths *outside* the op loop, which are equally server-driven:
+   a frame whose JSON does not parse, and a malformed command in the `"e"` array.
+   Both run on the client's main thread, where an escaping error is process death,
+   not a lost frame. A **tap** keeps the strict, throwing path — it is a synchronous
+   call on the caller's stack and the throw is the signal that a template built a
+   bad command.
+
+   On iOS this shapes the code, not just the error handling: `preconditionFailure`
+   and `!` **trap**, and a Swift trap is not catchable. Every wire-facing failure on
+   the apply path therefore throws `WireError` (`FingerprintCache.statics`,
+   `Interleaver`, `buildTree`/`addChild`) or is guarded before the access
+   (`JSONValue.parseChecked`, the effect argument, the `OP_INSERT` position, which
+   traps `Array.insert` on a negative index).
+5. **Run effects and navigate.** A tap fires its node's command prop, routed to
+   the node's nearest enclosing `az_view` (the root, or a nested `?stateful`
+   child) — so events reach stateful children, not just the root. The prop holds
+   one command or a list of them, told apart by whether its first element is an
+   array, and a list runs in order; a prop that is not an array (`false` for a
+   disabled command) fires nothing. The server's `"e"` (effects) array, one
+   command per entry, is dispatched after the ops. The portable commands are
+   handled — `push_event`, and `navigate` (which sends
+   `["navigate", {path, qs}]` on the same socket; the server's `handle_navigate`
+   re-mounts the target view and replies with `OP_REPLACE`). Web-only effects
+   (`set_title`, `dispatch_event`, …) are skipped on native.
+6. **Reconnect with backoff.** On a dropped socket — any close other than a
+   normal `1000`, or an abrupt failure — reopen with exponential backoff
+   (`[1, 2, 5, 10]`s steps, capped at 10s, ±20% jitter), resetting the attempt
+   counter once a frame arrives. Because the native URL carries `_az_reconnect=1`,
+   each reopen re-mounts and replies with a fresh `OP_REPLACE` (native has no
+   form state to preserve — that path is browser-only), so a server restart
+   self-heals. An intentional `close()` (code `1000`) does not reconnect. To catch
+   a silently half-open socket (no TCP error), the clients also send a 30s
+   heartbeat ping (`'0'`; the server pongs `'1'`); a pong still pending at the next
+   tick means the socket is dead, so they drop it and reconnect via the same path.
+
+The `json` e2e exercises each example over the real socket: a counter
+(`/json/counter`), a keyed list (`/json/list`), conditional tab switching
+(`/json/tabs`), server-pushed ticks (`/json/ticker`), independent counters
+(`/json/multi`), nested stateful children with per-child event routing
+(`/json/nested`), a conditionally rendered stateful child whose view id only the
+diff ever ships (`/json/conditional`) and the same shape nested inside a stream
+item, where it arrives through an item-patch inner op (`/json/stream-child`),
+navigation (`/json/menu`), and reconnect-after-drop. The in-repo Android
+(`clients/android`) and iOS (`clients/ios`) samples are launchers that open `/json/menu` and
+navigate to each on a device or Simulator.
+
+## Effect commands
+
+Event-attribute values and `handle_event/3` effects are built **per platform**,
+all producing the same neutral wire format (`{arizona_effect, [OpCode | Args]}`,
+op codes in `include/arizona_effect.hrl`, encoded by `arizona_effect`):
+
+- **`arizona_js`** — web/browser builders. `push_event`, `navigate`, plus
+  DOM-specific ones: `toggle`/`show`/`hide`, the class ops, `set_attr`/
+  `remove_attr`, `dispatch_event`, `focus`/`blur`/`scroll_to` (CSS selectors),
+  `on_key` (keyboard), `set_title`, `reload`.
+- **`arizona_android`** — Android builders for `?json` views. `push_event` and
+  `navigate` (duplicated; same wire as the web ones), and the home for
+  Android-specific commands as they're added.
+
+Only `push_event`/`navigate` are portable enough to exist on both — they're pure
+client→server actions. The DOM/selector/keyboard commands (`toggle`, `focus`,
+`scroll_to`, `on_key`, …) are web-only by nature and live only in `arizona_js`.
+
+The reference native clients implement both portable commands: `push_event`
+(from a tap or the `"e"` array) and `navigate` (a same-socket view transition).
+Web-only effects appearing in the `"e"` array are skipped, so a handler that
+returns them won't crash a native client.
+
+## Constraints
+
+- **One target per view tree.** A `?json` view's `?stateful`/`?stateless`/
+  `?each` children must also be `?json` (and vice-versa for `?html`). Mixing
+  targets in one tree mismatches the statics format. This is a documented rule,
+  not a checked one.
+- **No server-side widget validation** (let-it-crash / the client's concern).
+- **Props are string-encoded** (a boolean, which is JSON `true`/`false`, and an
+  event prop's command, which is an array, excepted); the client coerces. Typed props, opt-in
+  per-platform compile-time validators, and a portable cross-platform
+  vocabulary helper are possible future additions.
+- **A stateful child inside a stream item resolves through its own view.** The
+  item's ordinary inner ops are applied via `OP_ITEM_PATCH` against a flat
+  item-local `az` map, but a child view reaches the clients three ways, all of which
+  land in the per-view registry: a `[ChildViewId, ChildOps]` wrapper *nested inside*
+  the item patch (`flatten_ops/2` in `arizona_socket` unwraps that wrapper only at
+  top level, so its first element is a **view-id string, not an op code**); an
+  `OP_INSERT` that grafts in an item already containing the child; and an item-patch
+  **inner** `OP_TEXT` that installs the child a conditional in the item template just
+  switched on. That last one is why an inner-op rebuild indexes into the per-view
+  registry as well as the item-local map — the child's own ops arrive top-level.

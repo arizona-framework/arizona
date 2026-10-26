@@ -32,7 +32,7 @@ enum class ConnStatus { CONNECTING, CONNECTED, DISCONNECTED }
 
 /**
  * Reconnect backoff: step delays (ms) by attempt, capped at 10s, with ±20%
- * jitter. Mirrors assets/js/arizona-core.js (and e2e/utils/native_client.js).
+ * jitter. Mirrors assets/js/arizona-core.js (and e2e/utils/json_client.js).
  * Pure -> JVM-testable without an emulator.
  */
 fun backoffDelayMs(attempt: Int): Long {
@@ -49,12 +49,12 @@ private const val HEARTBEAT_MS = 30_000L
 private const val TAG = "AzClient"
 
 /**
- * Connects to an Arizona server's WebSocket and renders its `?native` view.
+ * Connects to an Arizona server's WebSocket and renders its `?json` view.
  *
  * Native has no SSR page, so we connect with `_az_reconnect=1` to make the live
  * process emit its `mount_and_render` output as the first `OP_REPLACE`. Incoming
  * ops mutate the [root] node tree (Compose snapshot state) on the main thread,
- * driving recomposition. Mirrors e2e/utils/native_client.js.
+ * driving recomposition. Mirrors e2e/utils/json_client.js.
  */
 class AzClient(baseUrl: String, path: String) {
     private val wsBase = baseUrl.replaceFirst("http", "ws") + "/ws?_az_path="

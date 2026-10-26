@@ -20,12 +20,12 @@ import dev.arizona.client.ConnStatus
 import dev.arizona.client.WidgetRegistry
 
 /**
- * Multi-example launcher: opens the server-driven `/native/menu` view, whose
+ * Multi-example launcher: opens the server-driven `/json/menu` view, whose
  * buttons navigate to each example on the same socket; the chrome "Menu" button
  * navigates back. The app supplies the widget vocabulary (Column/Row/Text/Button);
  * the library supplies transport, diff, dispatch, and navigation. Launch a
  * specific view directly with the `az_path` intent extra (e.g. for instrumented
- * tests or `adb shell am start ... --es az_path /native/tabs`).
+ * tests or `adb shell am start ... --es az_path /json/tabs`).
  */
 class MainActivity : ComponentActivity() {
     // internal (not private) so the androidTest reconnect case can force a drop.
@@ -39,7 +39,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val path = intent.getStringExtra("az_path") ?: "/native/menu"
+        val path = intent.getStringExtra("az_path") ?: "/json/menu"
         client = AzClient(SERVER, path)
         setContent {
             MaterialTheme {
@@ -47,7 +47,7 @@ class MainActivity : ComponentActivity() {
                     // targetSdk 35 forces edge-to-edge; inset below the status bar.
                     Box(Modifier.safeDrawingPadding()) {
                         Column {
-                            Button(onClick = { client.navigate("/native/menu") }) { Text("☰ Menu") }
+                            Button(onClick = { client.navigate("/json/menu") }) { Text("☰ Menu") }
                             when {
                                 client.status.value == ConnStatus.DISCONNECTED ->
                                     Text("⚠ No server connection — is it running on :4040?")

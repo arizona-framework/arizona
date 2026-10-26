@@ -1329,7 +1329,7 @@ unencodable_push_closes_crash(Config) when is_list(Config) ->
                 Handler
             )
         end,
-        [arizona_root_counter, arizona_native_counter]
+        [arizona_root_counter, arizona_json_counter]
     ).
 
 unencodable_resync_closes_mount_failed(Config) when is_list(Config) ->
@@ -1358,7 +1358,7 @@ unencodable_resync_closes_mount_failed(Config) when is_list(Config) ->
                 Handler
             )
         end,
-        [{H, L} || H <- [arizona_root_counter, arizona_native_counter], L <- Settle]
+        [{H, L} || H <- [arizona_root_counter, arizona_json_counter], L <- Settle]
     ).
 
 connect_mount_crash_closes_mount_failed(Config) when is_list(Config) ->

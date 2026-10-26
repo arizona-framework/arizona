@@ -13,7 +13,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * Pure wire-protocol logic, with no Android/Compose dependency, so it is
  * unit-testable on the JVM. Mirrors the browser worker's `zipTemplate`/
  * `resolveHtml` (assets/js/arizona-core.js) and the reference client
- * (e2e/utils/native_client.js): a fingerprint cache plus an interleaver that
+ * (e2e/utils/json_client.js): a fingerprint cache plus an interleaver that
  * stitches statics and dynamics into a JSON string.
  */
 

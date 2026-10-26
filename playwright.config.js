@@ -38,9 +38,9 @@ export default defineConfig({
         },
         {
             // Native (JSON) wire e2e: a real WebSocket client (no browser),
-            // exercising the ?native render target end-to-end.
-            name: 'native',
-            testDir: './e2e/native',
+            // exercising the ?json render target end-to-end.
+            name: 'json',
+            testDir: './e2e/json',
         },
     ],
     webServer: {

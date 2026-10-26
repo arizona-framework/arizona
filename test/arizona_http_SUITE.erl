@@ -104,12 +104,12 @@ render_threads_cookie(Config) when is_list(Config) ->
         arizona_req:resp_cookies(ReqOut)
     ).
 
-%% The page is served under the media type of its render target: a `?native` view
+%% The page is served under the media type of its render target: a `?json` view
 %% is a JSON document, an HTML view (bare or in a layout) an HTML one.
 render_answers_the_targets_content_type(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{}),
     {ok, 200, NativeType, NativeBody, _} =
-        arizona_http:render(arizona_native_counter_demo, Req, #{}),
+        arizona_http:render(arizona_json_counter_demo, Req, #{}),
     ?assertEqual(~"application/json", NativeType),
     ?assertMatch(#{~"type" := ~"Column"}, json:decode(iolist_to_binary(NativeBody))),
     {ok, 200, HtmlType, _, _} = arizona_http:render(arizona_about, Req, #{}),
@@ -126,7 +126,7 @@ render_refuses_a_cross_target_layout(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{}),
     ?assertMatch(
         {error, 500, ~"text/html; charset=utf-8", _, _},
-        arizona_http:render(arizona_native_counter_demo, Req, #{
+        arizona_http:render(arizona_json_counter_demo, Req, #{
             bindings => #{title => ~"Native"},
             layouts => [{arizona_layout, render}]
         })
@@ -134,7 +134,7 @@ render_refuses_a_cross_target_layout(Config) when is_list(Config) ->
 
 renderers_name_their_content_type(Config) when is_list(Config) ->
     ?assertEqual(~"text/html; charset=utf-8", arizona_html:content_type()),
-    ?assertEqual(~"application/json", arizona_native:content_type()),
+    ?assertEqual(~"application/json", arizona_json:content_type()),
     ?assertEqual(~"text/plain; charset=utf-8", arizona_terminal:content_type()).
 
 %% --------------------------------------------------------------------
@@ -178,7 +178,7 @@ error_page_custom_target_type(Config) when is_list(Config) ->
     persistent_term:put(arizona_reload_url, ~"/arizona/reload"),
     try
         Req = arizona_req_test_adapter:new(#{}),
-        Opts = (crash_opts())#{error_page => {arizona_native_error_page, render}},
+        Opts = (crash_opts())#{error_page => {arizona_json_error_page, render}},
         {error, 500, ContentType, Body, _} = arizona_http:render(arizona_crashable, Req, Opts),
         ?assertEqual(~"application/json", ContentType),
         ?assertMatch(#{~"type" := ~"Text"}, json:decode(iolist_to_binary(Body)))

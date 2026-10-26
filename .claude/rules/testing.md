@@ -13,7 +13,7 @@ Four layers, in the order to reach for them:
 |-------|-------|-----|
 | Common Test (default) | `test/*_SUITE.erl` | `make test-ct`, `rebar3 ct --suite=arizona_diff_SUITE` |
 | Inline EUnit (private fns only) | `-ifdef(TEST)` blocks in `src/*.erl` | `make test-eunit`, `rebar3 eunit --module=arizona_socket` |
-| Playwright E2E | `e2e/parallel`, `e2e/sequential`, `e2e/native` | `make test-e2e` |
+| Playwright E2E | `e2e/parallel`, `e2e/sequential`, `e2e/json` | `make test-e2e` |
 | Vitest (client JS) | `assets/js/*.test.js` | `make test-js` |
 
 **New tests go in a CT suite.** Inline EUnit exists only to reach module-private functions;
@@ -63,10 +63,10 @@ Playwright, split into projects/directories, all served by
   whole run, so anything keyed globally outlives every test. A spec needing isolation must scope
   its own state (the chat spec scopes its pubsub channel to the `:room` path segment and visits
   a fresh random room per test); putting it here instead will not fix it.
-- `e2e/native/` -- the `?native` (JSON) wire e2e. A real WebSocket client, no browser
-  (`e2e/utils/native_client.js`), driving the native views over the live server.
+- `e2e/json/` -- the `?json` wire e2e. A real WebSocket client, no browser
+  (`e2e/utils/json_client.js`), driving the JSON views over the live server.
 
-`make test-e2e-parallel` / `test-e2e-sequential` / `test-e2e-native` run one project.
+`make test-e2e-parallel` / `test-e2e-sequential` / `test-e2e-json` run one project.
 
 ## `test/support/`
 
@@ -79,7 +79,7 @@ follows its naming.
 | Embeddable stateful components | `arizona_<thing>` | `arizona_stateful.hrl` | Instantiated via `?stateful(...)`; never their own live process |
 | Stateless templates / layouts | `arizona_<name>`, `arizona_*_layout` | `arizona_stateless.hrl` | Pure `render/1` |
 | HTTP controllers | `arizona_*_controller` | plain module | Reached by `arizona_js:fetch/2`; export the action (default `handle/1`) |
-| `?native` render target | `arizona_native_*` | `arizona_stateful.hrl` | Drive the `e2e/native` specs and `arizona_native_SUITE` |
+| `?json` render target | `arizona_json_*` | `arizona_stateful.hrl` | Drive the `e2e/json` specs and `arizona_json_SUITE` |
 | Terminal render target | `arizona_term_*` | `arizona_stateful.hrl` | `?terminal` views plus drivers for the TTY/SSH suites |
 | MCP servers | `arizona_mcp_*_server` | `-behaviour(arizona_mcp)` | Minimal / crashing / unencodable variants for the MCP suites |
 | `?local` fixtures | `arizona_local*`, `*_local` | either | Client-owned slots: content, attribute, nested, XSS |
