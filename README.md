@@ -25,8 +25,7 @@ Arizona runs on the HTTP/WebSocket server you pick, through an adapter package:
 ## 🚧 Status
 
 Arizona is in `0.x`. The core is functional and covered by tests, but the API may change between
-minor versions. Pin an exact version in your deps (e.g. `{arizona, "0.1.0"}`) if you need stability
-across upgrades.
+minor versions. Pin an exact version in your deps if you need stability across upgrades.
 
 ## Features
 
