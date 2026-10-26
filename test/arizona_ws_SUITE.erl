@@ -1562,7 +1562,9 @@ static_asset_served(Config) ->
     {ok, Resp} = gen_tcp:recv(Sock, 0, 5000),
     gen_tcp:close(Sock),
     ?assertNotEqual(nomatch, binary:match(Resp, <<"200 OK">>)),
-    ?assertNotEqual(nomatch, binary:match(Resp, <<"content-type: application/javascript">>)).
+    %% Servers disagree on the JavaScript type (roadrunner 0.11 sends
+    %% `text/javascript`, Cowboy `application/javascript`); both are valid.
+    ?assertMatch({match, _}, re:run(Resp, ~"content-type: (text|application)/javascript")).
 
 static_asset_body_matches_file(Config) ->
     %% End-to-end: the bytes coming back over the wire must equal the
