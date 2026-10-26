@@ -71,7 +71,7 @@
     drain_user_callback_pushes_effect_then_stops/1,
     drain_user_callback_keeps_alive/1,
     drain_user_callback_noop_keeps_alive/1,
-    drain_emits_telemetry/1,
+    drain_acknowledges_with_deadline/1,
     drain_then_navigate_closes_gracefully/1,
     static_asset_served/1,
     static_asset_body_matches_file/1,
@@ -195,7 +195,7 @@ groups() ->
         drain_user_callback_pushes_effect_then_stops,
         drain_user_callback_keeps_alive,
         drain_user_callback_noop_keeps_alive,
-        drain_emits_telemetry,
+        drain_acknowledges_with_deadline,
         drain_then_navigate_closes_gracefully,
         static_asset_served,
         static_asset_body_matches_file,
@@ -2434,38 +2434,29 @@ drain_noop_check(Config) ->
     ?assertMatch({text, <<"1">>}, ws_recv(Sock)),
     ws_close(Sock).
 
-drain_emits_telemetry(Config) ->
-    %% acknowledge_drain/2 fires `[roadrunner, drain, acknowledged]` with
-    %% the deadline in metadata. Use the keep-alive route so the WS stays
-    %% open long enough for cleanup.
-    drain_telemetry_check(Config).
+drain_acknowledges_with_deadline(Config) ->
+    %% acknowledge_drain/2 hands roadrunner's event handler a
+    %% `drain_acknowledged` event carrying the deadline. Use the keep-alive
+    %% route so the WS stays open long enough for cleanup.
+    drain_ack_check(Config).
 
-drain_telemetry_check(Config) ->
+drain_ack_check(Config) ->
     {ok, Sock} = ws_connect(Config, <<"/drain_keep">>),
     ok = ws_send(Sock, <<"0">>),
     {text, <<"1">>} = ws_recv(Sock),
-    Self = self(),
-    Ref = make_ref(),
-    HandlerId = {drain_telemetry_test, Ref},
-    ok = telemetry:attach(
-        HandlerId,
-        [roadrunner, drain, acknowledged],
-        fun(_Event, _Measurements, Metadata, _Config) ->
-            Self ! {telemetry_fired, Ref, Metadata}
-        end,
-        []
-    ),
+    true = register(arizona_drain_event_probe, self()),
+    ok = roadrunner_event:put_handler(arizona_drain_event_handler),
     try
         Deadline = erlang:monotonic_time(millisecond) + 30000,
         broadcast_drain(Deadline),
         receive
-            {telemetry_fired, Ref, Metadata} ->
-                ?assertMatch(#{deadline := Deadline}, Metadata)
+            {drain_acknowledged, Acked} -> ?assertEqual(Deadline, Acked)
         after 5000 ->
-            error(telemetry_timeout)
+            error(drain_ack_timeout)
         end
     after
-        telemetry:detach(HandlerId)
+        ok = roadrunner_event:put_handler(roadrunner_event_noop),
+        true = unregister(arizona_drain_event_probe)
     end,
     ws_close(Sock).
 
@@ -2501,7 +2492,7 @@ drain_then_navigate_check(Config) ->
 send_drain_to_session() ->
     ok = arizona_roadrunner_server:notify_drain(ws_test, 30000).
 
-%% An exact deadline, for the telemetry roadrunner reports it with.
+%% An exact deadline, for the drain event roadrunner reports it with.
 broadcast_drain(Deadline) ->
     ok = roadrunner_listener:notify_drain(ws_test, Deadline).
 
