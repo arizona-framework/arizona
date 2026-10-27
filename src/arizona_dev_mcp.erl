@@ -13,7 +13,7 @@ arizona_dev_mcp:route(~"/mcp")
 
 Tools:
 
-- `list_routes` -- the app's routes (from the `arizona` `server` app env).
+- `list_routes` -- the routes of every running listener, by listener name.
 - `describe_component` -- a component's kind (stateful/stateless), its exports, and moduledoc.
 - `get_docs` -- a module's or function's documentation (EEP-48).
 - `get_source_location` -- where a module (or function) is defined.
@@ -278,16 +278,25 @@ dispatch_tool(~"view_state", Args, State) ->
 %% Internal functions -- tool implementations
 %% --------------------------------------------------------------------
 
+%% The running listeners' routes, so a listener the host started itself (rather
+%% than through the `arizona` `server` env) is listed too.
 list_routes() ->
-    case application:get_env(arizona, server) of
-        {ok, ServerOpts} ->
-            case maps:get(routes, ServerOpts, []) of
-                [] -> ~"(no routes configured)";
-                Routes -> iolist_to_binary(lists:join($\n, [format_route(R) || R <- Routes]))
-            end;
-        undefined ->
-            ~"(no routes configured)"
+    case arizona_server_registry:listeners() of
+        Listeners when map_size(Listeners) =:= 0 ->
+            ~"(no listeners running)";
+        Listeners ->
+            iolist_to_binary(
+                lists:join($\n, [
+                    format_listener(Name, Routes)
+                 || {Name, Routes} <- lists:sort(maps:to_list(Listeners))
+                ])
+            )
     end.
+
+format_listener(Name, []) ->
+    fmt("~p: (no routes)", [Name]);
+format_listener(Name, Routes) ->
+    [fmt("~p:", [Name]) | [[$\n, "  ", format_route(R)] || R <- Routes]].
 
 %% Route shapes: 4-tuple `{live|controller|mcp, Path, Handler, Opts}` and 3-tuple
 %% `{ws|asset|reload, Path, _}`; a catch-all keeps an unknown shape from crashing.

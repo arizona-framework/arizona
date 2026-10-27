@@ -100,7 +100,8 @@ npx @modelcontextprotocol/inspector
 The built-in `arizona_dev_mcp` ships these, each a thin wrapper over data the running node already
 has. Mount it with `arizona_dev_mcp:route(~"/mcp")` and point your agent at `/mcp`:
 
-- `list_routes` -- the app's routes, read from the `arizona` `server` app env.
+- `list_routes` -- the routes of every running listener, grouped by listener name, whether the
+  application started it from the `server` env or the host started it through an adapter.
 - `describe_component` -- a component's kind (stateful/stateless), its exports, and its moduledoc.
 - `get_docs` -- a module's or function's documentation via `code:get_doc/1` (EEP-48).
 - `get_source_location` -- where a module (or function) is defined.
