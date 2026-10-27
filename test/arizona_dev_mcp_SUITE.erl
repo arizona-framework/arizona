@@ -7,7 +7,9 @@
     route_bounds_sessions/1,
     list_routes_lists_mcp_route/1,
     list_routes_formats_shapes/1,
-    list_routes_env_unset/1,
+    list_routes_names_each_listener/1,
+    list_routes_listener_without_routes/1,
+    list_routes_none_running/1,
     get_logs_returns_captured_output/1,
     get_logs_rejects_unknown_level/1,
     get_logs_rejects_non_integer_tail/1,
@@ -61,7 +63,9 @@ all() ->
         route_bounds_sessions,
         list_routes_lists_mcp_route,
         list_routes_formats_shapes,
-        list_routes_env_unset,
+        list_routes_names_each_listener,
+        list_routes_listener_without_routes,
+        list_routes_none_running,
         get_logs_returns_captured_output,
         get_logs_rejects_unknown_level,
         get_logs_rejects_non_integer_tail,
@@ -118,14 +122,15 @@ end_per_suite(_Config) ->
     ok.
 
 init_per_testcase(_Case, Config) ->
-    %% list_routes reads the `server` app env; seed it with the dev server routes.
-    ok = application:set_env(arizona, server, #{
-        adapter => arizona_roadrunner_server, routes => arizona_test_server:routes()
-    }),
+    %% list_routes reads the running listeners; report one serving the dev
+    %% server's routes, as an adapter does once its listener is up.
+    ok = arizona_server_registry:listener_up(
+        arizona_fake_server, arizona_http, arizona_test_server:routes()
+    ),
     Config.
 
 end_per_testcase(_Case, _Config) ->
-    ok = application:unset_env(arizona, server),
+    [ok = arizona_server_registry:listener_down(Name) || Name <- [arizona_http, host_http]],
     ok.
 
 %% --------------------------------------------------------------------
@@ -181,9 +186,24 @@ list_routes_formats_shapes(_Config) ->
     ?assertMatch({_, _}, binary:match(Text, ~"ws")),
     ?assertMatch({_, _}, binary:match(Text, ~"asset")).
 
-list_routes_env_unset(_Config) ->
-    ok = application:unset_env(arizona, server),
-    ?assertMatch({reply, ~"(no routes configured)", _}, call(~"list_routes", #{})).
+%% A listener the host started itself, not through the `server` env, is listed
+%% under its own name beside the application's.
+list_routes_names_each_listener(_Config) ->
+    ok = arizona_server_registry:listener_up(arizona_fake_server, host_http, [
+        {live, ~"/host", host_page, #{}}
+    ]),
+    {reply, Text, _} = call(~"list_routes", #{}),
+    ?assertMatch({_, _}, binary:match(Text, ~"arizona_http:\n  ")),
+    ?assertMatch({_, _}, binary:match(Text, ~"\nhost_http:\n  live /host -> host_page")).
+
+list_routes_listener_without_routes(_Config) ->
+    ok = arizona_server_registry:listener_down(arizona_http),
+    ok = arizona_server_registry:listener_up(arizona_fake_server, host_http, []),
+    ?assertMatch({reply, ~"host_http: (no routes)", _}, call(~"list_routes", #{})).
+
+list_routes_none_running(_Config) ->
+    ok = arizona_server_registry:listener_down(arizona_http),
+    ?assertMatch({reply, ~"(no listeners running)", _}, call(~"list_routes", #{})).
 
 %% --------------------------------------------------------------------
 %% describe_component

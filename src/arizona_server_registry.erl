@@ -29,6 +29,7 @@ unregistered; one with no listener left recompiles nothing.
 -export([listener_up/3]).
 -export([listener_down/1]).
 -export([adapters/0]).
+-export([listeners/0]).
 -export([recompile_routes/0]).
 -export([capabilities/1]).
 
@@ -94,6 +95,16 @@ adapters() ->
     persistent_term:get(?KEY, []).
 
 -doc """
+The listeners running now, each with the routes it serves, whoever started it:
+the application from its `server` env or the host by calling an adapter itself.
+""".
+-spec listeners() -> #{Name => Routes} when
+    Name :: atom(),
+    Routes :: [term()].
+listeners() ->
+    persistent_term:get(?LISTENERS, #{}).
+
+-doc """
 `Adapter`'s capabilities (`c:arizona_server:capabilities/0`); every kind when it
 does not declare them.
 """.
@@ -127,9 +138,6 @@ register(Adapter) when is_atom(Adapter) ->
         true -> ok;
         false -> persistent_term:put(?KEY, [Adapter | Adapters])
     end.
-
-listeners() ->
-    persistent_term:get(?LISTENERS, #{}).
 
 %% Each term is written only when it changes: a `persistent_term` update makes
 %% every process that read it copy the old value, so it must not run per start.
