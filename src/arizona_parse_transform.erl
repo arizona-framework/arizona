@@ -155,6 +155,14 @@ render(Bindings) ->
 %% which reach the abstract-code chunk -- are identical across compiles.
 -define(HOIST_SITE_KEY, arizona_hoist_site).
 
+%% Process-dictionary map of the render targets this module may use, name to
+%% backend (see declare_target/1). Per module: a target is declared by the header
+%% that defines its macro, so two modules of one compiler process may differ.
+-define(TARGETS_KEY, arizona_render_targets).
+
+%% The targets every module has, whose macros arizona_common.hrl defines.
+-define(BUILTIN_TARGETS, #{html => arizona_html, json => arizona_json}).
+
 %% Stands in for a helper argument when counting how many times substitution puts
 %% it in (see check_helper_args_pure/5).
 -define(PARAM_USE_MARKER, {atom, 0, '$arizona_param_use'}).
@@ -237,6 +245,7 @@ parse_transform(Forms, _Options) ->
     _ = put(?PARAM_SEQ_KEY, 0),
     _ = put(?HOIST_SITE_KEY, 0),
     try
+        ok = declare_targets(File, Forms),
         Transformed = map_forms_in_file(
             fun(Form) -> transform_form(mark_targets(Form, none), Module, IsLive, FunDefs) end,
             File,
@@ -258,9 +267,77 @@ parse_transform(Forms, _Options) ->
             _ = erase(?FOLDED_KEY),
             {error, [{ErrorFile, [{erl_anno:location(Anno), ?MODULE, Reason}]}], []}
     after
-        _ = erase(?PARAM_SEQ_KEY),
-        _ = erase(?HOIST_SITE_KEY)
+        ok = erase_module_state()
     end.
+
+erase_module_state() ->
+    _ = erase(?PARAM_SEQ_KEY),
+    _ = erase(?HOIST_SITE_KEY),
+    _ = erase(?TARGETS_KEY),
+    ok.
+
+declare_targets(File, Forms) ->
+    _ = put(?TARGETS_KEY, ?BUILTIN_TARGETS),
+    Forms = map_forms_in_file(fun declare_target/1, File, Forms),
+    ok.
+
+%% Record a render target declared with `-arizona_target({Name, Backend}).`, the
+%% attribute a target's header carries beside its `?Name` macro, so a target from
+%% any package compiles without the transform naming it. The backend is called
+%% while this module compiles, so it must already be loadable, and its `target/0`
+%% must give the name back: an `?each` recovers its target from the backend.
+%% Including the header twice repeats the same declaration, which is accepted.
+declare_target({attribute, Anno, arizona_target, Decl} = Form) ->
+    Targets = get(?TARGETS_KEY),
+    case Decl of
+        {Name, Backend} when is_atom(Name), is_atom(Backend) ->
+            case Targets of
+                #{Name := Backend} ->
+                    Form;
+                #{Name := _Other} ->
+                    parse_error({target, {redeclared, Name}}, Anno);
+                #{} ->
+                    ok = check_target_name(Name, Anno),
+                    ok = check_target_backend(Name, Backend, Anno),
+                    _ = put(?TARGETS_KEY, Targets#{Name => Backend}),
+                    Form
+            end;
+        _ ->
+            parse_error({target, invalid_decl}, Anno)
+    end;
+declare_target(Form) ->
+    Form.
+
+%% A target macro expands to `arizona_template:Name(Elems)`, so a name that is
+%% already a one-argument template function (`raw`, `track`) would be taken for
+%% that function, or that function for a template.
+check_target_name(Name, Anno) ->
+    {module, arizona_template} = code:ensure_loaded(arizona_template),
+    {module, az} = code:ensure_loaded(az),
+    case
+        erlang:function_exported(arizona_template, Name, 1) orelse
+            erlang:function_exported(az, Name, 1)
+    of
+        true -> parse_error({target, {name_reserved, Name}}, Anno);
+        false -> ok
+    end.
+
+check_target_backend(Name, Backend, Anno) ->
+    case code:ensure_loaded(Backend) of
+        {module, Backend} ->
+            case erlang:function_exported(Backend, target, 0) andalso Backend:target() of
+                Name -> ok;
+                _ -> parse_error({target, {bad_backend, Name, Backend}}, Anno)
+            end;
+        {error, _Reason} ->
+            parse_error({target, {bad_backend, Name, Backend}}, Anno)
+    end.
+
+is_target(Name) ->
+    is_map_key(Name, get(?TARGETS_KEY)).
+
+targets() ->
+    maps:keys(get(?TARGETS_KEY)).
 
 %% Apply Fun to each form, attributing a parse error it raises to the file the form
 %% came from: epp marks every include boundary with a `-file` attribute, so a template
@@ -438,7 +515,7 @@ maybe_helper_pair(Name, Arity, FunDefs, Acc) ->
                 _ -> false
             end
         end,
-        [html, json, terminal]
+        targets()
     ),
     case Inlineable of
         true -> Acc#{{Name, Arity} => true};
@@ -619,7 +696,7 @@ is_module_attr({attribute, _, module, _}) -> true;
 is_module_attr(_) -> false.
 
 %% Top-down pre-pass threading the enclosing render target `Ctx` (`none` outside
-%% any template, else `html` | `json` | `terminal`). Three jobs:
+%% any template, else the target's name, as is_target/1 knows it). Three jobs:
 %%
 %%   1. A single `?each` serves every target. Each one is marked with the backend
 %%      of the target it sits in (the default `html` one standalone) and the
@@ -641,22 +718,23 @@ is_module_attr(_) -> false.
 %% `?stateful`/`?stateless` child *module* is invisible at this AST level, so it
 %% is caught at render instead (`arizona_render:assert_same_target/2`); it used to
 %% pass silently and emit a payload the client could not parse.
-mark_targets({call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, _}, Ctx, _CCtx) when
-    (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (Target =:= html orelse Target =:= json orelse Target =:= terminal) andalso
-        (Ctx =:= html orelse Ctx =:= json orelse Ctx =:= terminal) andalso
-        Ctx =/= Target
+mark_targets(
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [Arg]} = Call, Ctx, CCtx
+) when
+    Mod =:= arizona_template orelse Mod =:= az
 ->
-    parse_error(cross_target_nesting, L);
-mark_targets({call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [Arg]}, _Ctx, _CCtx) when
-    (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (Target =:= html orelse Target =:= json orelse Target =:= terminal)
-->
-    %% Entering a target resets the content context to that backend's default.
-    Default = root_content_context(Target),
-    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [
-        maybe_inherit_nodiff(mark_targets(Arg, Target, Default))
-    ]};
+    case is_target(Target) of
+        true when Ctx =/= none andalso Ctx =/= Target ->
+            parse_error(cross_target_nesting, L);
+        true ->
+            %% Entering a target resets the content context to that backend's default.
+            Default = root_content_context(Target),
+            {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [
+                maybe_inherit_nodiff(mark_targets(Arg, Target, Default))
+            ]};
+        false ->
+            mark_targets_node(Call, Ctx, CCtx)
+    end;
 %% An `?each` gets the backend and content context of where it sits appended as
 %% two bare atom args, `each(Fun, Source, Backend, CCtx)` -- bare, because a tuple
 %% there would be walked as an element. It is marked once, where it appears in the
@@ -692,15 +770,18 @@ mark_targets({tuple, L, [{atom, _, Tag}, _Attrs, _Children] = Parts}, Ctx, CCtx)
 %% template: outside one (`none`) a tail is plain data -- `{K, [V]}` is a pair,
 %% not an element -- and nothing compiles it.
 mark_targets(Node, Ctx, CCtx) when is_tuple(Node) ->
-    Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
-    case Ctx =/= none andalso is_control_flow_ast(Node) of
-        true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
-        false -> Marked
-    end;
+    mark_targets_node(Node, Ctx, CCtx);
 mark_targets(Nodes, Ctx, CCtx) when is_list(Nodes) ->
     [mark_targets(E, Ctx, CCtx) || E <- Nodes];
 mark_targets(Node, _Ctx, _CCtx) ->
     Node.
+
+mark_targets_node(Node, Ctx, CCtx) ->
+    Marked = list_to_tuple([mark_targets(E, Ctx, CCtx) || E <- tuple_to_list(Node)]),
+    case Ctx =/= none andalso is_control_flow_ast(Node) of
+        true -> map_tail_exprs(Marked, fun maybe_inherit_nodiff/1, fun(E) -> E end);
+        false -> Marked
+    end.
 
 mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
     ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
@@ -713,9 +794,7 @@ mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
 %% stays diffable). Only markup is unwrapped: a wrapped value list renders its binaries
 %% as raw statics, which a bare value tail would escape. A wrapper anywhere else (bound,
 %% passed, or below the tail) keeps starting its own template.
-unwrap_child_tail_wrappers([Tag, Attrs, Children], Ctx) when
-    Ctx =:= html; Ctx =:= json; Ctx =:= terminal
-->
+unwrap_child_tail_wrappers([Tag, Attrs, Children], Ctx) when Ctx =/= none ->
     Unwrap = fun(Child) ->
         case is_control_flow_ast(Child) of
             true ->
@@ -883,7 +962,7 @@ inherit_spliced_each_nodiff(false, FunArg) ->
 %% A not-yet-compiled template constructor. A compiled `?each` keeps the `each`
 %% name with two args, and is already final; a marked one carries four.
 is_template_ctor(F, [_Arg]) ->
-    F =:= html orelse F =:= json orelse F =:= terminal;
+    is_target(F);
 is_template_ctor(each, [_FunArg, _SourceArg, _Backend, _CCtx]) ->
     true;
 is_template_ctor(_F, _Args) ->
@@ -1056,13 +1135,10 @@ format_error(nested_nodiff) ->
     "be scoped and would leak the reserved attribute into the DOM. Move it to the root "
     "element, or split the subtree into its own ?html/?stateless template whose root "
     "carries az-nodiff";
-format_error(cross_target_nesting) ->
-    "cannot nest ?html, ?json and ?terminal in one template -- they produce "
-    "incompatible statics. A ?stateful/?stateless child does NOT bridge them: the "
-    "child's target is invisible here, so the mismatch survives compilation and "
-    "is caught at render instead (cross_target_child), where the payload would "
-    "otherwise be unparseable. One target per template tree -- render the other "
-    "target from its own tree";
+%% Render-target errors: nesting one target in another, and a `-arizona_target`
+%% declaration declare_target/1 refused (tagged `target`).
+format_error(Reason) when Reason =:= cross_target_nesting; element(1, Reason) =:= target ->
+    format_target_error(Reason);
 %% The `?each` callback errors live in their own function: they are a related family
 %% and, together, they carried `format_error/1` past the cyclomatic limit.
 format_error(Reason) when
@@ -1214,6 +1290,36 @@ helper_arg_runs(Uses) ->
         "and the parameter is used ~p times, so the argument runs once per use and the "
         "uses disagree",
         [Uses]
+    ).
+
+format_target_error(cross_target_nesting) ->
+    "cannot nest two render targets (?html, ?json, ...) in one template -- they produce "
+    "incompatible statics. A ?stateful/?stateless child does NOT bridge them: the "
+    "child's target is invisible here, so the mismatch survives compilation and "
+    "is caught at render instead (cross_target_child), where the payload would "
+    "otherwise be unparseable. One target per template tree -- render the other "
+    "target from its own tree";
+format_target_error({target, {redeclared, Name}}) ->
+    io_lib:format(
+        "render target ~p is declared with two different backends -- each target "
+        "name maps to one backend module",
+        [Name]
+    );
+format_target_error({target, invalid_decl}) ->
+    "-arizona_target must be {Name, Backend}, two atoms: the name the target macro "
+    "calls (arizona_template:Name(Elems)) and its arizona_renderer backend module";
+format_target_error({target, {name_reserved, Name}}) ->
+    io_lib:format(
+        "render target name ~p is already a template function (arizona_template:~p/1) "
+        "-- pick another name for the target macro to call",
+        [Name, Name]
+    );
+format_target_error({target, {bad_backend, Name, Backend}}) ->
+    io_lib:format(
+        "render target ~p names backend ~p, which must be a loadable arizona_renderer "
+        "module whose target/0 returns ~p. It is called while this module compiles, "
+        "so compile it first (a dependency, or erl_first_files in the same app)",
+        [Name, Backend, Name]
     ).
 
 impure_remedy() ->
@@ -1480,11 +1586,10 @@ transform_clause({clause, L, Patterns, Guards, Body0}, Module, FunDefs) ->
 %% Does the body construct a template a hoisted variable can be spliced into? The
 %% splice happens only while compiling one (transform_node/4), and the pre-pass
 %% has already spelled an inherited constructor with ?NODIFF_MOD.
-has_template_ctor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) when
-    (Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD) andalso
-        (F =:= html orelse F =:= json orelse F =:= terminal orelse F =:= each)
+has_template_ctor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args} = Call) when
+    Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD
 ->
-    true;
+    F =:= each orelse is_target(F) orelse has_template_ctor(tuple_to_list(Call));
 has_template_ctor(T) when is_tuple(T) ->
     has_template_ctor(tuple_to_list(T));
 has_template_ctor([H | T]) ->
@@ -1515,15 +1620,16 @@ transform_expr(Expr, Module, Inline, FunDefs) ->
 
 transform_node(Node, Module, Inline, FunDefs) ->
     N = erl_syntax:revert(Node),
+    Targets = get(?TARGETS_KEY),
     case N of
-        %% `?html`/`?json`/`?terminal` all compile non-live here (LiveRender =
-        %% false). The live root is handled in transform_live_render_leaf/4; and
-        %% `?terminal` is *always* non-live -- no client root id / az_view is
-        %% injected (the transport repaints whole frames rather than addressing the
-        %% root node), so the live-render last-expr path also falls through to here.
+        %% Every target compiles non-live here (LiveRender = false). The live root
+        %% is handled in transform_live_render_leaf/4; a target whose backend's
+        %% `live_root/0` is false (its transport repaints whole frames rather than
+        %% addressing the root node) never gets a client root id / az_view, so its
+        %% live-render last expr falls through to here too.
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Arg]} when
             (Mod =:= arizona_template orelse Mod =:= az orelse Mod =:= ?NODIFF_MOD) andalso
-                (Target =:= html orelse Target =:= json orelse Target =:= terminal)
+                is_map_key(Target, Targets)
         ->
             Inherited = Mod =:= ?NODIFF_MOD,
             Arg1 = splice_vars(Arg, Inline, Target, root_content_context(Target)),
@@ -1819,7 +1925,7 @@ is_lc_element_body(_Value, _Ctx) ->
 
 is_template_ctor_call(Mod, Fun, [_Arg]) ->
     lists:member(Mod, [arizona_template, az, ?NODIFF_MOD]) andalso
-        lists:member(Fun, [html, json, terminal]);
+        is_target(Fun);
 is_template_ctor_call(_Mod, _Fun, _Args) ->
     false.
 
@@ -2571,28 +2677,36 @@ bind_names(Names, Bound) ->
     maps:merge(Bound, #{N => true || N <- Names}).
 
 transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
+    Targets = get(?TARGETS_KEY),
     case erl_syntax:revert(Expr) of
-        %% A live root is `?html` or `?json` (LiveRender = true, injecting the
-        %% client root id / az_view). `?terminal` is always non-live, so it is not
-        %% matched here and falls through to the non-live path (transform_node/4).
+        %% A live root compiles live (LiveRender = true, injecting the client root
+        %% id / az_view) when its backend's `live_root/0` says the client addresses
+        %% it. A target that repaints whole frames does not, so its root falls
+        %% through to the non-live path (transform_node/4).
         {call, L, {remote, _, {atom, _, Mod}, {atom, _, Target}}, [Arg]} when
             (Mod =:= arizona_template orelse Mod =:= az) andalso
-                (Target =:= html orelse Target =:= json)
+                is_map_key(Target, Targets)
         ->
-            validate_live_root(Arg, L, Inline),
-            Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
-            Arg2 = splice_vars(Arg1, Inline, Target, root_content_context(Target)),
-            {Arg3, HelperCh} = inline_helper_calls(Arg2, Module, FunDefs, Target),
-            Arg4 = retransform_spliced(
-                inherit_spliced_nodiff(false, Arg3),
-                map_size(Inline) > 0 orelse HelperCh,
-                Module,
-                FunDefs
-            ),
-            compile_template(Arg4, L, Module, true, target_backend(Target));
+            case (target_backend(Target)):live_root() of
+                true -> transform_live_root(Target, Arg, L, Module, Inline, FunDefs);
+                false -> transform_expr(Expr, Module, Inline, FunDefs)
+            end;
         _ ->
             transform_expr(Expr, Module, Inline, FunDefs)
     end.
+
+transform_live_root(Target, Arg, L, Module, Inline, FunDefs) ->
+    validate_live_root(Arg, L, Inline),
+    Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
+    Arg2 = splice_vars(Arg1, Inline, Target, root_content_context(Target)),
+    {Arg3, HelperCh} = inline_helper_calls(Arg2, Module, FunDefs, Target),
+    Arg4 = retransform_spliced(
+        inherit_spliced_nodiff(false, Arg3),
+        map_size(Inline) > 0 orelse HelperCh,
+        Module,
+        FunDefs
+    ),
+    compile_template(Arg4, L, Module, true, target_backend(Target)).
 
 %% Walk the tail (value-producing) positions of a control-flow expression,
 %% applying `TailFun` at each tail leaf (a tail that is not itself control-flow)
@@ -2878,11 +2992,10 @@ prepare_inline_rhs(RHS0, Prepared) ->
 %% template-map literal? (`?each`/`?stateless` are deliberately not listed:
 %% their spliced calls evaluate inside the slot bracket, so their reads track
 %% without a wrap.)
-rhs_has_template_ctor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) when
-    (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (F =:= html orelse F =:= json orelse F =:= terminal)
+rhs_has_template_ctor({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args} = Call) when
+    Mod =:= arizona_template orelse Mod =:= az
 ->
-    true;
+    is_target(F) orelse rhs_has_template_ctor_any(tuple_to_list(Call));
 rhs_has_template_ctor(T) when is_tuple(T) ->
     rhs_has_template_ctor_any(tuple_to_list(T));
 rhs_has_template_ctor(L) when is_list(L) ->
@@ -2898,10 +3011,12 @@ rhs_has_template_ctor_any([H | T]) ->
 %% Literal binding keys read anywhere inside the template-constructor subtrees
 %% of an RHS -- the reads a spliced compiled template isolates from the slot.
 ctor_read_keys({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args} = Call, Acc) when
-    (Mod =:= arizona_template orelse Mod =:= az) andalso
-        (F =:= html orelse F =:= json orelse F =:= terminal)
+    Mod =:= arizona_template orelse Mod =:= az
 ->
-    collect_read_keys(Call, Acc);
+    case is_target(F) of
+        true -> collect_read_keys(Call, Acc);
+        false -> ctor_read_keys(tuple_to_list(Call), Acc)
+    end;
 ctor_read_keys(T, Acc) when is_tuple(T) ->
     ctor_read_keys(tuple_to_list(T), Acc);
 ctor_read_keys([H | T], Acc) ->
@@ -3955,14 +4070,12 @@ each_body_unwrap({map, _, Fields} = Map, _Backend) ->
 each_body_unwrap(LastExpr, _Backend) ->
     {element, LastExpr}.
 
-%% The single registry mapping a render-target name (`html`/`json`/`terminal`,
-%% the `?html`/`?json`/`?terminal` macro atoms) to its renderer backend module.
-%% This is the ONLY place the parse transform names a concrete backend module;
-%% each backend's behaviour (`Backend:target/0`, `name/1`, `supports_local/0`, ...)
-%% covers everything else.
-target_backend(html) -> arizona_html;
-target_backend(json) -> arizona_json;
-target_backend(terminal) -> arizona_terminal.
+%% The renderer backend module of a render-target name (the atom a target macro
+%% calls, `?html` -> `html`): a built-in one or one the module declared (see
+%% declare_target/1). Each backend's behaviour (`Backend:target/0`, `name/1`,
+%% `supports_local/0`, ...) covers everything else.
+target_backend(Name) ->
+    map_get(Name, get(?TARGETS_KEY)).
 
 %% A compiled template map literal carries the `s`/`d`/`f` assoc keys plus the
 %% `backend` build_template_ast/5 always adds, so a user data map spelling out
@@ -5568,17 +5681,15 @@ is_block_content_expr({map, _, _, _}) ->
     true;
 is_block_content_expr({call, _, {remote, _, {atom, _, M}, {atom, _, F}}, _Args}) ->
     (M =:= arizona_template orelse M =:= az) andalso
-        lists:member(F, [
-            html,
-            json,
-            terminal,
-            each,
-            stateful,
-            stateless,
-            inner_content,
-            local,
-            raw
-        ]);
+        (is_target(F) orelse
+            lists:member(F, [
+                each,
+                stateful,
+                stateless,
+                inner_content,
+                local,
+                raw
+            ]));
 is_block_content_expr(_) ->
     false.
 

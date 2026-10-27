@@ -1,5 +1,6 @@
 -module(arizona_term_demo).
 -include("arizona_stateful.hrl").
+-include("arizona_terminal.hrl").
 -export([mount/1, render/1, handle_event/3, handle_info/2]).
 
 %% A terminal (?terminal) demo view exercising the three real-time paths:

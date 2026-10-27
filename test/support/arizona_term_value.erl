@@ -1,5 +1,6 @@
 -module(arizona_term_value).
 -include("arizona_stateless.hrl").
+-include("arizona_terminal.hrl").
 -export([render/1]).
 
 %% A `?terminal` line holding one dynamic value, so a suite can render arbitrary

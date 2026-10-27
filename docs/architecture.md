@@ -233,7 +233,9 @@ string in one is named on the same failure path.
 
 `?terminal(Elems)` renders a view to ANSI text instead of HTML or JSON. The backend
 is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
-`arizona_json`. Its transport **repaints the whole frame** on every update
+`arizona_json`. Unlike `?html` and `?json`, its macro is not in `arizona_common.hrl`:
+include `arizona_terminal.hrl` beside `arizona_stateful.hrl`/`arizona_stateless.hrl`.
+Its transport **repaints the whole frame** on every update
 (`arizona_live:render_current/1`) rather than applying diff ops, so the backend
 writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
 
@@ -262,6 +264,27 @@ fingerprint payload takes the raw value from `c:arizona_renderer:wire_escape/1`
 So a dynamic value in a `?terminal` view cannot inject ANSI/OSC escape sequences into
 another user's terminal (the terminal analog of XSS). The `?raw` opt-out bypasses it --
 never wrap untrusted data in `?raw` in a `?terminal` template.
+
+### Declaring a render target
+
+The parse transform knows `?html` and `?json` by default. Any other target is
+declared by the header that defines its macro, with one attribute naming the macro's
+call and the backend:
+
+```erlang
+-arizona_target({terminal, arizona_terminal}).
+-define(terminal(Elems), arizona_template:terminal(Elems)).
+```
+
+A module that includes the header compiles `arizona_template:terminal(...)` with that
+backend; a module that does not leaves the call alone, and it fails at runtime with
+`undef`. The declaration is per module, so the transform never names a backend
+outside core. The backend is called while the module compiles, so it must already be
+loadable (a dependency, or `erl_first_files` in the same app), and its
+`c:arizona_renderer:target/0` must return the declared name. The name cannot be one
+that `arizona_template` already exports with arity 1 (`raw`, `track`, ...). Whether a
+live handler's root is compiled live is the backend's `c:arizona_renderer:live_root/0`:
+`?terminal` answers `false`, because its transport repaints whole frames.
 
 ### Elements
 
