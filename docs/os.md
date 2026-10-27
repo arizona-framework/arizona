@@ -215,17 +215,17 @@ don't repaint the visible title bar, so the demo also exposes a `Maximize` butto
 for an unmistakable effect. (Electron's `ipcRenderer` has none of these
 restrictions and reaches any command -- the simpler shell for the thin shape.)
 
-The **reference shell** is `clients/tauri/` (Tauri v2): one
-worked implementor of this contract, run opt-in via `make build-tauri` /
-`make test-tauri` (not part of `make ci`, like the iOS/Android clients). It loads
-the in-repo `/os` demo by default (`ARIZONA_URL` overrides). An Electron adapter
+The **reference shell** is
+[`arizona_tauri`](https://github.com/arizona-framework/arizona_tauri) (Tauri v2): one
+worked implementor of this contract, in its own repo. It loads the `/os` demo of this
+repo's e2e server by default (`ARIZONA_URL` overrides). An Electron adapter
 implements the same contract with `preload.js` + `ipcMain`.
 
 ## Deployment shapes
 
 - **Thin (primary).** The shell's renderer loads a **remote** Arizona URL; the
   BEAM stays on the server. The page is same-origin with its own WebSocket, so the
-  Origin check passes untouched. This is what `clients/tauri` does.
+  Origin check passes untouched. This is what `arizona_tauri` does.
 - **Fat (deferred).** The OTP release is bundled and run locally; the renderer
   connects to localhost. Adds process-lifecycle/readiness/port concerns; not built
   yet, but the seam does not foreclose it.

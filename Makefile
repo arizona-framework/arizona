@@ -13,8 +13,8 @@ SSH_DEMO_USER := arizona
 	fmt fmt-erl fmt-js \
 	lint \
 	check check-dirty check-fast check-erl check-fmt check-lint check-hank check-xref check-dialyzer check-js \
-	build-js analyze-js build-android build-ios build-tauri dev-tauri \
-	test test-eunit test-ct test-erl test-js test-e2e test-android test-ios test-tauri \
+	build-js analyze-js \
+	test test-eunit test-ct test-erl test-js test-e2e \
 	bench bench-client bench-client-connect term-demo ssh-server ssh-client \
 	cover cover-erl cover-js \
 	doc doc-erl doc-js \
@@ -125,53 +125,6 @@ test-js:
 
 test-e2e:
 	npx playwright test
-
-# Build the Android client debug APK (clients/android) -- opt-in; needs the
-# Android SDK + a `gradle` install (no wrapper is committed; Android Studio's
-# Gradle tool window works too). No device required. NOT part of `ci`.
-build-android:
-	cd clients/android && gradle :sample:assembleDebug
-
-# Android client tests (clients/android) -- opt-in; needs the Android SDK, a
-# running emulator/device, the Arizona server on :4040, and a `gradle` install.
-# The :sample build's adbReverse task tunnels the device's localhost:4040 to the
-# server (it runs before connectedCheck). NOT part of `ci`/`test`.
-test-android:
-	cd clients/android && gradle :arizona:testDebugUnitTest :sample:connectedCheck
-
-# Build the sample iOS app (clients/ios) -- opt-in; needs macOS + Xcode and
-# xcodegen (`brew install xcodegen`) to generate the project from project.yml.
-# No device required. NOT part of `ci`. Adjust the simulator name to one your
-# Xcode provides (`xcrun simctl list devices`).
-build-ios:
-	cd clients/ios/Sample && xcodegen generate && xcodebuild build -scheme Sample -destination 'platform=iOS Simulator,name=iPhone 16'
-
-# iOS client tests (clients/ios) -- opt-in. The AzWire logic tests run anywhere
-# via `swift test` (no Mac needed); the XCUITest e2e needs macOS + Xcode +
-# xcodegen and the Arizona server on :4040 (the Simulator shares the host's
-# localhost, so no tunnel). NOT part of `ci`/`test`.
-test-ios:
-	cd clients/ios && swift test
-	cd clients/ios/Sample && xcodegen generate && xcodebuild test -scheme Sample -destination 'platform=iOS Simulator,name=iPhone 16'
-
-# Build the reference Tauri shell (clients/tauri) -- opt-in; needs the Rust
-# toolchain, Node, and the platform webview deps (e.g. webkit2gtk + libsoup on
-# Linux; see https://v2.tauri.app/start/prerequisites/). `npm run build` needs
-# app icons (run `npm run tauri icon <path>`). NOT part of `ci`.
-build-tauri:
-	cd clients/tauri && npm install && npm run build
-
-# Tauri shell tests (clients/tauri) -- opt-in; compiles the Rust shell and runs
-# its unit tests (no display needed). The full UI flow is run manually with
-# `npm run dev` against the Arizona server on :4040 (see clients/tauri/README.md).
-# NOT part of `ci`/`test`.
-test-tauri:
-	cd clients/tauri/src-tauri && cargo test
-
-# Run the reference Tauri shell in dev mode (devtools enabled) against a running
-# Arizona server (`make start` on :4040). Opt-in; needs the toolchain. NOT in `ci`.
-dev-tauri:
-	cd clients/tauri && npm install && npm run dev
 
 test-e2e-parallel:
 	npx playwright test --project parallel

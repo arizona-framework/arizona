@@ -165,9 +165,12 @@ browser, so statics are sent once and never re-sent:
 
 ## Native client contract
 
-Reference implementations live in-repo: `e2e/utils/json_client.js` (a JS client used
-by the `json` e2e project), `clients/android/` (the Kotlin/Compose Android client), and
-`clients/ios/` (the Swift/SwiftUI iOS client).
+Reference implementations: `e2e/utils/json_client.js` in this repo (a JS client used
+by the `json` e2e project),
+[`arizona_android`](https://github.com/arizona-framework/arizona_android) (the
+Kotlin/Compose Android client), and
+[`arizona_ios`](https://github.com/arizona-framework/arizona_ios) (the Swift/SwiftUI iOS
+client).
 All three are near-copies of the browser worker (`assets/js/arizona-worker.js` + `arizona-core.js`):
 
 1. **Cache statics by fingerprint** in platform storage (browser uses
@@ -267,8 +270,8 @@ The `json` e2e exercises each example over the real socket: a counter
 (`/json/nested`), a conditionally rendered stateful child whose view id only the
 diff ever ships (`/json/conditional`) and the same shape nested inside a stream
 item, where it arrives through an item-patch inner op (`/json/stream-child`),
-navigation (`/json/menu`), and reconnect-after-drop. The in-repo Android
-(`clients/android`) and iOS (`clients/ios`) samples are launchers that open `/json/menu` and
+navigation (`/json/menu`), and reconnect-after-drop. The Android
+(`arizona_android`) and iOS (`arizona_ios`) samples are launchers that open `/json/menu` and
 navigate to each on a device or Simulator.
 
 ## Effect commands
