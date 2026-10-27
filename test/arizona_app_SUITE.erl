@@ -238,12 +238,11 @@ reload_recompiles_every_registered_adapter(Config) when is_list(Config) ->
     end.
 
 %% Arizona ships no HTTP server -- an adapter package brings one and starts it
-%% with its listener -- and lazy-starts ssh only when the SSH transport starts
-%% (arizona_terminal_ssh:start/1). So it forces neither onto the boot path.
-%% Listing either in `applications` -- or in `optional_applications`, which relx
-%% also bundles AND force-starts -- would boot them for every consumer, including
-%% a server-less/static-generation user. A consumer that ships them declares its
-%% adapter, server and ssh in its OWN app's `applications`.
+%% with its listener -- so it forces none onto the boot path. Listing one in
+%% `applications` -- or in `optional_applications`, which relx also bundles AND
+%% force-starts -- would boot it for every consumer, including a
+%% server-less/static-generation user. A consumer that ships them declares its
+%% adapter and server in its OWN app's `applications`.
 %% The HTTP listener must go down in prep_stop/1 -- BEFORE the supervision tree
 %% -- or shutdown briefly serves requests against dead infrastructure (pubsub,
 %% MCP registry, session store). prep_stop stops the listener while arizona_sup
@@ -261,15 +260,13 @@ transport_deps_are_not_forced(Config) when is_list(Config) ->
     ?assert(lists:member(crypto, Apps)),
     ?assertNot(lists:member(roadrunner, Apps)),
     ?assertNot(lists:member(cowboy, Apps)),
-    ?assertNot(lists:member(ssh, Apps)),
     Optional =
         case application:get_key(arizona, optional_applications) of
             {ok, L} -> L;
             undefined -> []
         end,
     ?assertNot(lists:member(roadrunner, Optional)),
-    ?assertNot(lists:member(cowboy, Optional)),
-    ?assertNot(lists:member(ssh, Optional)).
+    ?assertNot(lists:member(cowboy, Optional)).
 
 %% Boot logs one line stating the reloader state, so a dev node silently
 %% missing hot reload is visible. Enabled logs at `info`, naming the watched

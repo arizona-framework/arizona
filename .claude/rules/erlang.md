@@ -29,7 +29,6 @@ Templates are plain maps: `#{s => [binary()], d => [dynamic()], f => binary()}`.
 include/arizona_common.hrl      -- utility macros (?get, ?html, ?each, ?stateful, ?stateless, ?inner_content, ?connected)
 include/arizona_stateful.hrl    -- -behaviour(arizona_stateful); parse_transform, send/subscribe macros, arizona_common.hrl
 include/arizona_stateless.hrl   -- parse_transform, includes arizona_common.hrl
-include/arizona_terminal.hrl    -- ?terminal, and the -arizona_target declaring it (include beside one of the above)
 ```
 
 Rule of thumb:
@@ -259,7 +258,7 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?with(Keys)` | `arizona_template:with(Keys, Bindings)` -- tracks each key on the enclosing slot, then projects `Bindings` to just those keys (see "Handing a bindings subset to a sub-context") |
 | `?html(Elems)` | `arizona_template:html(Elems)` |
 | `?json(Elems)` | `arizona_template:json(Elems)` -- JSON render target (Android/iOS clients) |
-| `?terminal(Elems)` | `arizona_template:terminal(Elems)` -- from `arizona_terminal.hrl`, not `arizona_common.hrl`; ANSI render target; tags `line`/`col`/`row`/`text`/`span`/`br` + bare-atom style attrs (see docs/architecture.md "Terminal render target") |
+| `?terminal(Elems)` | `arizona_template:terminal(Elems)` -- from the `arizona_terminal` package's header, which declares the target (see docs/architecture.md "Render targets outside core"); ANSI render target; tags `line`/`col`/`row`/`text`/`span`/`br` + bare-atom style attrs (see the package README) |
 | `?each(Fun, Source)` | `arizona_template:each(Fun, Source)` -- 1-arg for lists, 2-arg for streams/maps. The callback must return an element (see "?each body must return an element") |
 | `?stateful(Handler, Props)` | `arizona_template:stateful(Handler, Props)` |
 | `?stateless(Fun, Props)` | `arizona_template:stateless(Fun, Props)` -- `Fun` is a fun reference (`fun bar/1`); a literal atom is sugar the transform rewrites to `fun Atom/1` |

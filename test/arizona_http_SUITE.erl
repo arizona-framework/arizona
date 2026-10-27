@@ -134,8 +134,7 @@ render_refuses_a_cross_target_layout(Config) when is_list(Config) ->
 
 renderers_name_their_content_type(Config) when is_list(Config) ->
     ?assertEqual(~"text/html; charset=utf-8", arizona_html:content_type()),
-    ?assertEqual(~"application/json", arizona_json:content_type()),
-    ?assertEqual(~"text/plain; charset=utf-8", arizona_terminal:content_type()).
+    ?assertEqual(~"application/json", arizona_json:content_type()).
 
 %% --------------------------------------------------------------------
 %% Error page: production must not leak internals; crashes must be logged

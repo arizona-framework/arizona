@@ -13,14 +13,6 @@
 | `src/arizona_renderer.erl`                | Render-target backend behaviour -- byte emission + `attr_command/2`; HTML and JSON backends below                                                                                         |
 | `src/arizona_html.erl`                    | HTML render backend -- emits HTML statics/attrs (the `?html` target)                                                                                                                      |
 | `src/arizona_json.erl`                    | JSON render backend -- emits a JSON widget tree (the `?json` target); see docs/json.md                                                                                                    |
-| `src/arizona_terminal.erl`                | Terminal render backend -- emits text + ANSI escapes (the `?terminal` target); vocabulary in "Terminal render target" below                                                               |
-| `src/arizona_terminal_session.erl`        | Transport-agnostic orchestrator for `?terminal` views -- mounts, dispatches key/push events, repaints; parameterized by a driver module + an output fun                                   |
-| `src/arizona_terminal_driver.erl`         | Terminal UX-policy behaviour -- `init/1`, `keys/2`, `paint/3`, `setup/1`, `teardown/1` (all optional; defaults in `arizona_terminal_default_driver`)                                      |
-| `src/arizona_terminal_default_driver.erl` | Default `arizona_terminal_driver` -- idiomatic key events, Ctrl-D quits, cursor hide/show, non-flickering repaint, quit/set_title/bell effects; the session falls back to it per callback |
-| `src/arizona_terminal_io.erl`             | Low-level terminal byte helpers -- `keys/1` decodes a raw input read into idiomatic keys (the input complement to OTP's output-only `io_ansi`)                                            |
-| `src/arizona_terminal_effect.erl`         | Framework terminal effect builders -- `quit/0`, `set_title/1`, `bell/0` (the `?terminal` analog of `arizona_js` / `arizona_android`)                                                      |
-| `src/arizona_terminal_tty.erl`            | Local TTY transport -- raw-mode `shell:start_interactive`, a blocking input reader, `io:put_chars` as the output                                                                          |
-| `src/arizona_terminal_ssh.erl`            | SSH transport -- serves a `?terminal` view over an `ssh_server_channel` (pty-req, window-change), one live view per connection                                                            |
 | `src/arizona_diff.erl`                    | Diff engine -- `diff/2,3,4`, stream/list diffing, LIS algorithm                                                                                                                           |
 | `src/arizona_effect.erl`                  | Neutral effect plumbing -- the `{arizona_effect, [...]}` tuple; `encode/1` (HTML attr) + `encode_json/1` (raw); op codes in `include/arizona_effect.hrl`                                  |
 | `src/arizona_js.erl`                      | Web/browser command/effect builders -- `push_event`, `navigate`, `patch`, `fetch`, `toggle`/`show`/`hide`, `focus`/`blur`/`scroll_to`, `on_key`, `dispatch_event`, `set_title`, `reload`  |
@@ -229,47 +221,13 @@ fix. What `Offset` counts depends on where the bytes were refused:
 Handler effects are not template values; the socket encodes them, so a non-UTF-8
 string in one is named on the same failure path.
 
-## Terminal render target -- `?terminal`
-
-`?terminal(Elems)` renders a view to ANSI text instead of HTML or JSON. The backend
-is `arizona_terminal` (an `arizona_renderer`), the sibling of `arizona_html` and
-`arizona_json`. Unlike `?html` and `?json`, its macro is not in `arizona_common.hrl`:
-include `arizona_terminal.hrl` beside `arizona_stateful.hrl`/`arizona_stateless.hrl`.
-Its transport **repaints the whole frame** on every update
-(`arizona_live:render_current/1`) rather than applying diff ops, so the backend
-writes **no `az`/slot markers** -- the diff engine's ops are computed but ignored.
-
-The frame is printed from the live process's **diffed snapshot** (the root's, with each
-child view's current copy refreshed in), not from a fresh render of the template, so a
-repaint runs no `mount/1` or `handle_update/3` and shows exactly the state the process
-holds. It follows that a terminal sees what a web client sees: `az-nodiff` content
-renders once, and a slot whose reads are not tracked freezes after its first render.
-When the node can reload code (`arizona_reloader:enabled/0`) a hot reload remounts the view
-in place (`arizona_terminal_session:handle_reload/1,2`): the session joins the reloader
-topic at start, and on `{arizona_reloader, reload}` stops the live process, mounts a fresh one from
-the connection's bindings (an SSH channel's current geometry) and repaints, so the view's
-state resets as a browser page's does. A terminal client does not reconnect, so this is the
-terminal's counterpart of the WebSocket close described under "Exit reason to close code".
-Otherwise, edited template text appears once a slot depending on it changes.
-
-Escaping is per-backend via the `c:arizona_renderer:escape/1` callback, selected by the
-render target: HTML entity-escapes, terminal **control-char sanitizes** (strips C0
-bytes except `\n`/`\t`, DEL, and the C1 controls, and replaces every byte outside
-well-formed UTF-8 with U+FFFD, so the output is always valid UTF-8; this assumes a UTF-8
-terminal, since an 8-bit one reads UTF-8 continuation bytes `80`-`9F` as C1 controls), JSON
-emits a JSON string. JSON alone carries a value
-differently on the wire: its client JSON-encodes each `d` value itself, so the
-fingerprint payload takes the raw value from `c:arizona_renderer:wire_escape/1`
-(`wire_attr/2` for a prop) while the zipped document keeps the JSON string.
-So a dynamic value in a `?terminal` view cannot inject ANSI/OSC escape sequences into
-another user's terminal (the terminal analog of XSS). The `?raw` opt-out bypasses it --
-never wrap untrusted data in `?raw` in a `?terminal` template.
-
-### Declaring a render target
+## Render targets outside core
 
 The parse transform knows `?html` and `?json` by default. Any other target is
 declared by the header that defines its macro, with one attribute naming the macro's
-call and the backend:
+call and its `arizona_renderer` backend. The
+[arizona_terminal](https://github.com/arizona-framework/arizona_terminal) package's
+header, for one:
 
 ```erlang
 -arizona_target({terminal, arizona_terminal}).
@@ -282,100 +240,14 @@ backend; a module that does not leaves the call alone, and it fails at runtime w
 outside core. The backend is called while the module compiles, so it must already be
 loadable (a dependency, or `erl_first_files` in the same app), and its
 `c:arizona_renderer:target/0` must return the declared name. The name cannot be one
-that `arizona_template` already exports with arity 1 (`raw`, `track`, ...). Whether a
-live handler's root is compiled live is the backend's `c:arizona_renderer:live_root/0`:
-`?terminal` answers `false`, because its transport repaints whole frames.
+that `arizona_template` already exports with arity 1 (`raw`, `track`, ...).
 
-### Elements
-
-| Tag             | Emits                                                          |
-| --------------- | -------------------------------------------------------------- |
-| `line`          | its content, a style reset, then a newline -- one terminal row |
-| `col` / `row`   | its content, then a style reset -- a transparent container     |
-| `text` / `span` | its content, then a style reset -- inline, no newline          |
-| `br`            | a void element emitting a newline                              |
-
-Only `line` (newline) and `br` (void newline) affect layout; `col`, `row`, `text`,
-and `span` are behaviorally identical (open emits nothing, close emits a style
-reset) -- the names are documentary. So **vertical layout is a `col` of `line`s**,
-and horizontal is several `text`/`span` inside one `line`.
-
-### Styling
-
-Set styles with **bare-atom boolean attributes** mapped to `io_ansi` escapes:
-`bold`, `dim`, `italic`, `underline`, `inverse`, and the colours
-`black`/`red`/`green`/`yellow`/`blue`/`magenta`/`cyan`/`white` plus their `light_*`
-variants. For anything the atoms don't cover, use a valued attribute: `{sgr, Escape}`
-(a raw escape, verbatim), `{fg, Index}` / `{bg, Index}` (256-colour palette by
-index). Styles **do not inherit** across containers (every element resets on close),
-so put the style on the `line`/`text` that needs it. An unknown style atom, an
-unknown valued attribute, a dynamic attribute value, or an event-command attribute
-is **rejected at compile time**, not silently dropped. So is an unknown **element**:
-the tag table above is the whole vocabulary, so a tag outside it is a typo rather than
-an extension point, and accepting it as a transparent container swallowed the author's
-intent silently (`{'BR', [], []}` emitted a style reset instead of a newline). Terminal
-tag names are **case-sensitive** -- the vocabulary is Arizona's own, not HTML's, so
-`Line` is not `line`. (This is the opposite of the `?html` target, whose tag
-*classification* folds case because the browser's parser does.)
-
-```erlang
-render(Bindings) ->
-    ?terminal(
-        {col, [], [
-            {line, [bold, green], [~"== Title =="]},
-            {line, [], [~"plain ", {span, [yellow], [~"highlighted"]}, ~" tail"]},
-            {line, [{fg, ~"208"}], [~"256-colour orange"]}
-        ]}
-    ).
-```
-
-**Conditional rows:** a control-flow expression (`case`/`if`/`begin`/`receive`/`try`/
-`maybe`) returning a bare element tuple from a tail in a content slot is compiled into a
-nested template (inheriting the enclosing target), just as a literal `?html`/`?terminal`
-there would be -- no wrap needed:
-
-```erlang
-{col, [], [
-    case ?get(mode) of
-        warn -> {line, [yellow], [~"check your input"]};
-        _ -> <<>>
-    end
-]}
-```
-
-For 0-or-N rows, `?each` over a list still applies:
-
-```erlang
-?each(fun(Msg) -> {line, [yellow], [Msg]} end, status_rows(?get(mode)))
-```
-
-### Running a `?terminal` view
-
-`arizona_terminal_session` is the transport-agnostic core: it mounts the view, turns
-input into `arizona_live:handle_event/4` calls, and repaints. It is parameterized by
-a **driver** (`arizona_terminal_driver` -- the key map, paint model, and screen
-setup/teardown, with defaults in `arizona_terminal_default_driver` that the session
-falls back to per callback) and an output fun. Two transports drive it:
-`arizona_terminal_tty` (a local raw-mode TTY) and `arizona_terminal_ssh` (a view served over
-SSH). `arizona_terminal_io:keys/1` decodes a raw input read into idiomatic keys
-(char codes, atoms like `up`/`enter`, `{ctrl, _}` / `{alt, _}`) for drivers to match
-on.
-
-Every `paint/3` decides `continue` or `stop`, the **initial** paint included: a driver
-that stops on the first frame gets its teardown emitted and the live view reaped, and
-`arizona_terminal_session:start/5` answers `quit` instead of handing back a session.
-The SSH transport serves one view per channel -- a second `shell` request is refused
-rather than mounting a second view over the first, `exec` is refused (this shell is
-interactive only), and input or a resize arriving before the `shell` request is
-dropped or folded into the mount geometry rather than reaching a session that does not
-exist yet.
-
-A view drives the terminal back with **effects** from `arizona_terminal_effect` (the
-`?terminal` analog of `arizona_js` / `arizona_android`): `quit/0` stops the session,
-`set_title/1` sets the terminal title, `bell/0` rings it. The default driver's
-`paint/3` interprets these and repaints in place (no full-screen clear, so no
-flicker). Effects tied to a specific paint model (e.g. a scrolling log above a pinned
-block) stay the concern of a custom driver, like the demo's.
+Everything else is the backend's capability callbacks, asked at compile time. Whether
+a live handler's root is compiled live is `c:arizona_renderer:live_root/0`: a target
+whose transport repaints whole frames (`?terminal`) answers `false`, so its root gets no
+view marker. `keyed_item_ops/0` false lets a stream `?each` body skip `az_key`, since
+nothing addresses an item; `attr_names/0` decides which repeated attribute names are an
+error. Mentions of `?terminal` elsewhere in this document describe that package's target.
 
 ## API -- `arizona_diff.erl`
 

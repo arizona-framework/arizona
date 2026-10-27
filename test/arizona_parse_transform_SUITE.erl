@@ -33,7 +33,7 @@
     each_stream_keyless_body_refused_at_render/1,
     each_map_keyless_body_renders_and_diffs/1,
     each_stream_keyless_body_nodiff_renders/1,
-    each_terminal_stream_keyless_body_renders/1,
+    each_keyless_stream_target_body_renders/1,
     computed_element_tag_rejected_with_idiom/1,
     malformed_element_still_invalid_element/1,
     each_stream_control_flow_wrapper_fix_keys_per_item/1,
@@ -96,28 +96,14 @@
     cross_target_html_in_json/1,
     cross_target_json_in_html/1,
     cross_target_siblings_compile/1,
-    cross_target_html_in_terminal/1,
-    cross_target_terminal_in_html/1,
+    cross_target_html_in_declared/1,
+    cross_target_declared_in_html/1,
     undeclared_target_not_compiled/1,
     target_declared_twice/1,
     target_redeclared_rejected/1,
     target_decl_invalid_rejected/1,
     target_name_reserved_rejected/1,
     target_backend_bad_rejected/1,
-    terminal_target_marked/1,
-    terminal_value_marked_for_escape/1,
-    terminal_sanitizes_control_chars/1,
-    terminal_renders_styled_ansi/1,
-    terminal_custom_sgr_attr/1,
-    terminal_fg_attr/1,
-    terminal_unknown_style_rejected/1,
-    terminal_unknown_false_style_rejected/1,
-    terminal_unknown_attr_rejected/1,
-    terminal_unknown_tag_rejected/1,
-    terminal_known_tags_accepted/1,
-    terminal_event_command_rejected/1,
-    terminal_dynamic_attr_rejected/1,
-    terminal_each_renders/1,
     deeply_nested/1,
     diff_integration/1,
     dynamic_only_child/1,
@@ -548,7 +534,7 @@
     cond_case_bare_matches_html/1,
     cond_if_bare_element/1,
     cond_nested_case_bare_element/1,
-    cond_case_terminal_inherits_target/1,
+    cond_case_declared_target_inherits_target/1,
     cond_case_diff_transition/1,
     cond_case_element_list_tail/1,
     cond_case_mixed_fragment_tail/1,
@@ -562,10 +548,10 @@
     list_child_helper_html/1,
     list_child_helper_each/1,
     helper_arg_each_json/1,
-    helper_arg_each_terminal/1,
+    helper_arg_each_declared_target/1,
     helper_arg_each_svg/1,
     hoisted_each_json/1,
-    hoisted_each_terminal/1,
+    hoisted_each_declared_target/1,
     hoisted_each_svg/1,
     hoisted_each_helper_arg_svg/1,
     hoisted_cross_target_nesting/1,
@@ -574,7 +560,7 @@
     list_child_local_orphaned/1,
     list_child_case_tail/1,
     list_child_stateful/1,
-    list_child_terminal/1,
+    list_child_declared_target/1,
     list_child_nodiff/1,
     list_child_wrapped_helper_off_tail/1,
     wrapped_helper_try_tail_tracked/1,
@@ -636,7 +622,6 @@ all() ->
         {group, errors},
         {group, cross_target},
         {group, declared_target},
-        {group, terminal},
         {group, az_macros},
         {group, az_view},
         {group, az_scoping},
@@ -784,7 +769,7 @@ groups() ->
             each_stream_keyless_body_refused_at_render,
             each_map_keyless_body_renders_and_diffs,
             each_stream_keyless_body_nodiff_renders,
-            each_terminal_stream_keyless_body_renders,
+            each_keyless_stream_target_body_renders,
             computed_element_tag_rejected_with_idiom,
             malformed_element_still_invalid_element,
             each_stream_control_flow_wrapper_fix_keys_per_item,
@@ -969,7 +954,7 @@ groups() ->
             cond_case_bare_matches_html,
             cond_if_bare_element,
             cond_nested_case_bare_element,
-            cond_case_terminal_inherits_target,
+            cond_case_declared_target_inherits_target,
             cond_case_diff_transition,
             cond_case_element_list_tail,
             cond_case_mixed_fragment_tail,
@@ -983,10 +968,10 @@ groups() ->
             list_child_helper_html,
             list_child_helper_each,
             helper_arg_each_json,
-            helper_arg_each_terminal,
+            helper_arg_each_declared_target,
             helper_arg_each_svg,
             hoisted_each_json,
-            hoisted_each_terminal,
+            hoisted_each_declared_target,
             hoisted_each_svg,
             hoisted_each_helper_arg_svg,
             hoisted_cross_target_nesting,
@@ -995,7 +980,7 @@ groups() ->
             list_child_local_orphaned,
             list_child_case_tail,
             list_child_stateful,
-            list_child_terminal,
+            list_child_declared_target,
             list_child_nodiff,
             list_child_wrapped_helper_off_tail,
             wrapped_helper_try_tail_tracked,
@@ -1250,8 +1235,8 @@ groups() ->
             cross_target_html_in_json,
             cross_target_json_in_html,
             cross_target_siblings_compile,
-            cross_target_html_in_terminal,
-            cross_target_terminal_in_html
+            cross_target_html_in_declared,
+            cross_target_declared_in_html
         ]},
         %% Render targets declared with -arizona_target
         {declared_target, [parallel], [
@@ -1261,23 +1246,6 @@ groups() ->
             target_decl_invalid_rejected,
             target_name_reserved_rejected,
             target_backend_bad_rejected
-        ]},
-        %% Terminal (ANSI) render target
-        {terminal, [parallel], [
-            terminal_target_marked,
-            terminal_value_marked_for_escape,
-            terminal_sanitizes_control_chars,
-            terminal_renders_styled_ansi,
-            terminal_custom_sgr_attr,
-            terminal_fg_attr,
-            terminal_unknown_style_rejected,
-            terminal_unknown_false_style_rejected,
-            terminal_unknown_attr_rejected,
-            terminal_unknown_tag_rejected,
-            terminal_known_tags_accepted,
-            terminal_event_command_rejected,
-            terminal_dynamic_attr_rejected,
-            terminal_each_renders
         ]},
         %% Tests 108-115: az:html and az:each equivalence tests
         {az_macros, [parallel], [
@@ -3547,14 +3515,14 @@ cond_nested_case_bare_element(Config) when is_list(Config) ->
     {Miss, _} = arizona_render:render(Mod:render(#{a => 1, b => 9})),
     ?assertEqual(nomatch, binary:match(iolist_to_binary(Miss), <<"<p">>)).
 
-%% Under ?terminal the branch element inherits the terminal backend (ANSI, not
+%% Under a declared target the branch element inherits that target's backend (not
 %% HTML): proving the render target threads through the tail walk.
-cond_case_terminal_inherits_target(Config) when is_list(Config) ->
+cond_case_declared_target_inherits_target(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_cond_term). -arizona_target({terminal, arizona_terminal}). "
+        "-module(pt_cond_text). -arizona_target({text, arizona_text_backend}). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:terminal({col, [], ["
+        "    arizona_template:text({col, [], ["
         "        case arizona_template:get(warn, Bindings) of "
         "            true -> {line, [green], [arizona_template:get(msg, Bindings)]}; "
         "            false -> <<\"\">> "
@@ -3562,10 +3530,7 @@ cond_case_terminal_inherits_target(Config) when is_list(Config) ->
         "    ]}). "
     ),
     {Output, _Snap} = arizona_render:render(Mod:render(#{warn => true, msg => ~"hi"})),
-    Bin = iolist_to_binary(Output),
-    ?assertNotEqual(nomatch, binary:match(Bin, ~"\e[32m")),
-    ?assertNotEqual(nomatch, binary:match(Bin, ~"hi")),
-    ?assertEqual(nomatch, binary:match(Bin, ~"<line")).
+    ?assertEqual(~"[col][line green]hi[/line][/col]", iolist_to_binary(Output)).
 
 %% Live diff: the conditional slot transitions empty (scalar) <-> element branch
 %% across renders -- the real login-error appear/disappear behaviour. make_op
@@ -4312,7 +4277,6 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
     ),
     %% Other targets have no native form submission to guard.
     ?assertEqual([], arizona_json:implied_attrs(form, [<<"az-submit">>])),
-    ?assertEqual([], arizona_terminal:implied_attrs(form, [<<"az-submit">>])),
     NativeMod = compile_module(
         "-module(pt_sub_json). -export([render/1]). render(Bindings) -> "
         "_ = Bindings, arizona_template:json({form, [{az_submit, "
@@ -4369,21 +4333,23 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
         "{text, arizona_template:get(x, Bindings)}], []}). ",
         Dup(~"text")
     ),
-    %% Controls: distinct names, JSON's case-sensitive keys, terminal repeats.
+    %% Controls: distinct names, JSON's case-sensitive keys, a target whose
+    %% attributes repeat (`attr_names/0` is `repeatable`).
     Ok = compile_module(
         "-module(pt_dup_ok). "
-        "-arizona_target({terminal, arizona_terminal}). -export([html/1, json/1, terminal/1]). "
+        "-arizona_target({text, arizona_text_backend}). -export([html/1, json/1, text/1]). "
         "html(Bindings) -> arizona_template:html({'p', [{class, ~\"a\"}, "
         "{id, arizona_template:get(x, Bindings)}], []}). "
         "json(_Bindings) -> arizona_template:json({'Text', [{text, ~\"a\"}, "
         "{'Text', ~\"b\"}], []}). "
-        "terminal(_Bindings) -> arizona_template:terminal({line, [], [{span, "
-        "[{sgr, ~\"\\e[5m\"}, {sgr, ~\"\\e[7m\"}], [~\"x\"]}]}). "
+        "text(_Bindings) -> arizona_template:text({line, [], [{span, "
+        "[{mark, ~\"1\"}, {mark, ~\"2\"}], [~\"x\"]}]}). "
     ),
     {HTML, _} = arizona_render:render(Ok:html(#{x => ~"i"})),
     ?assertMatch({match, _}, re:run(iolist_to_binary(HTML), ~"class=\"a\" id=\"i\"")),
     ?assert(is_map(Ok:json(#{}))),
-    ?assert(is_map(Ok:terminal(#{}))).
+    {Text, _} = arizona_render:render(Ok:text(#{})),
+    ?assertEqual(~"[line][span mark=1 mark=2]x[/span][/line]", iolist_to_binary(Text)).
 
 %% The error names the repeated attribute as the author wrote it, as reserved_attr
 %% does: a case-folded `viewbox` is a name that appears nowhere in the source.
@@ -7447,18 +7413,19 @@ each_stream_keyless_body_nodiff_renders(Config) when is_list(Config) ->
      || F <- [inherited, own]
     ].
 
-%% A `?terminal` view redraws whole frames, so it never addresses a stream item, and an
-%% `az_key` is not even expressible there (the backend refuses dynamic attributes).
-each_terminal_stream_keyless_body_renders(Config) when is_list(Config) ->
+%% A target whose `keyed_item_ops/0` is false (it redraws whole frames) never addresses
+%% a stream item, and an `az_key` is not even expressible there (the backend refuses
+%% dynamic attributes), so a keyless stream body renders.
+each_keyless_stream_target_body_renders(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_term_stream_keyless). "
-        "-arizona_target({terminal, arizona_terminal}). -export([render/1]). "
-        "render(Bindings) -> arizona_template:terminal({col, [], [arizona_template:each("
+        "-module(pt_text_stream_keyless). "
+        "-arizona_target({text, arizona_text_backend}). -export([render/1]). "
+        "render(Bindings) -> arizona_template:text({col, [], [arizona_template:each("
         "fun(I, _K) -> {line, [], [I]} end, arizona_template:get(s, Bindings))]}). "
     ),
     S = arizona_stream:new(fun(X) -> X end, [~"a"]),
     {Output, _, _} = arizona_render:render(Mod:render(#{s => S}), #{}),
-    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Output), ~"a\e[0m\n")).
+    ?assertEqual(~"[col][line]a[/line][/col]", iolist_to_binary(Output)).
 
 %% A one-element list is a single root, so it is the bare element in a list wrapper and
 %% compiles to the very same per-item template, the way a whole-body ?html does.
@@ -9135,12 +9102,12 @@ az_view_composed_id_raises(Config) when is_list(Config) ->
 %% Terminal (ANSI) render target
 %% ============================================================================
 
-cross_target_html_in_terminal(Config) when is_list(Config) ->
+cross_target_html_in_declared(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_html_in_terminal). -arizona_target({terminal, arizona_terminal}). "
+        "-module(pt_html_in_text). -arizona_target({text, arizona_text_backend}). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:terminal({col, [], ["
+        "    arizona_template:text({col, [], ["
         "        arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
@@ -9149,13 +9116,13 @@ cross_target_html_in_terminal(Config) when is_list(Config) ->
         end
     ).
 
-cross_target_terminal_in_html(Config) when is_list(Config) ->
+cross_target_declared_in_html(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_terminal_in_html). -arizona_target({terminal, arizona_terminal}). "
+        "-module(pt_text_in_html). -arizona_target({text, arizona_text_backend}). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
-        "        arizona_template:terminal({line, [], [arizona_template:get(x, Bindings)]})"
+        "        arizona_template:text({line, [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
             (cross_target_nesting) -> true;
@@ -9168,41 +9135,41 @@ cross_target_terminal_in_html(Config) when is_list(Config) ->
 %% call, left for the runtime, where no such template function exists.
 undeclared_target_not_compiled(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_term_undeclared). "
+        "-module(pt_text_undeclared). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:terminal({line, [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:text({line, [], [arizona_template:get(x, Bindings)]}). "
     ),
     ?assertError(undef, Mod:render(#{x => ~"a"})).
 
 %% A header included twice repeats its declaration, which must not be refused.
 target_declared_twice(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_term_twice). "
-        "-arizona_target({terminal, arizona_terminal}). "
-        "-arizona_target({terminal, arizona_terminal}). "
+        "-module(pt_text_twice). "
+        "-arizona_target({text, arizona_text_backend}). "
+        "-arizona_target({text, arizona_text_backend}). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:terminal({line, [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:text({line, [], [arizona_template:get(x, Bindings)]}). "
     ),
-    ?assertMatch(#{backend := arizona_terminal}, Mod:render(#{x => ~"a"})).
+    ?assertMatch(#{backend := arizona_text_backend}, Mod:render(#{x => ~"a"})).
 
 target_redeclared_rejected(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_target_redeclared). "
-        "-arizona_target({terminal, arizona_terminal}). "
-        "-arizona_target({terminal, arizona_html}). "
+        "-arizona_target({text, arizona_text_backend}). "
+        "-arizona_target({text, arizona_html}). "
         "-export([render/1]). "
         "render(_Bindings) -> ok. ",
         fun
-            ({target, {redeclared, terminal}}) -> true;
+            ({target, {redeclared, text}}) -> true;
             (_) -> false
         end
     ),
     %% A built-in target is taken too: `?html` always means arizona_html.
     assert_parse_error(
         "-module(pt_target_redeclared_builtin). "
-        "-arizona_target({html, arizona_terminal}). "
+        "-arizona_target({html, arizona_text_backend}). "
         "-export([render/1]). "
         "render(_Bindings) -> ok. ",
         fun
@@ -9226,7 +9193,7 @@ target_decl_invalid_rejected(Config) when is_list(Config) ->
                 end
             )
         end,
-        ["terminal", "{terminal, \"arizona_terminal\"}", "{terminal, arizona_terminal, x}"]
+        ["text", "{text, \"arizona_text_backend\"}", "{text, arizona_text_backend, x}"]
     ).
 
 %% A name that is already a one-argument template function would be compiled as a
@@ -9234,7 +9201,7 @@ target_decl_invalid_rejected(Config) when is_list(Config) ->
 target_name_reserved_rejected(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_target_reserved). "
-        "-arizona_target({raw, arizona_terminal}). "
+        "-arizona_target({raw, arizona_text_backend}). "
         "-export([render/1]). "
         "render(_Bindings) -> ok. ",
         fun
@@ -9260,250 +9227,8 @@ target_backend_bad_rejected(Config) when is_list(Config) ->
             )
         end,
         %% not loadable; loadable without target/0; a backend for another name
-        ["pt_no_such_backend", "lists", "arizona_terminal"]
+        ["pt_no_such_backend", "lists", "arizona_html"]
     ).
-
-terminal_target_marked(Config) when is_list(Config) ->
-    %% A ?terminal template carries `backend => arizona_terminal`.
-    Mod = compile_module(
-        "-module(pt_term_marked). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {line, [green], [arizona_template:get(msg, Bindings)]}"
-        "    ). "
-    ),
-    T = Mod:render(#{msg => ~"hi"}),
-    ?assertEqual(arizona_terminal, maps:get(backend, T)).
-
-%% A `?terminal` value interpolation is now escape-marked (`{esc, Fun}`), like
-%% the HTML backend, so the terminal escaper (control-char sanitizer) runs on it
-%% at the render boundary. Before, terminal values were emitted bare.
-terminal_value_marked_for_escape(Config) when is_list(Config) ->
-    Mod = compile_module(
-        "-module(pt_term_esc). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {col, [], [{line, [], [arizona_template:get(msg, Bindings)]}]}"
-        "    ). "
-    ),
-    T = Mod:render(#{msg => ~"hi"}),
-    ?assertMatch([{_Az, {esc, _Fun}, {pt_term_esc, 1}}], maps:get(d, T)),
-    [{_, {esc, Fun}, _}] = maps:get(d, T),
-    ?assertEqual(~"hi", Fun()).
-
-%% A `?terminal` dynamic value carrying control bytes is sanitized at render, so
-%% it cannot inject ANSI/OSC escape sequences into the terminal (the terminal
-%% analog of XSS). ESC and BEL from the value are stripped -- neutralizing the
-%% OSC-52 clipboard write -- while printable bytes and UTF-8 survive. The line's
-%% own ANSI (CSI `\e[`) is framework static, not a dynamic value, so it is intact.
-terminal_sanitizes_control_chars(Config) when is_list(Config) ->
-    Mod = compile_module(
-        "-module(pt_term_sanitize). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {col, [], [{line, [], [arizona_template:get(msg, Bindings)]}]}"
-        "    ). "
-    ),
-    %% 'a' ESC ]52;c;<base64> BEL 'b' -- an OSC-52 clipboard-write injection.
-    %% (Erlang has no `\a` escape, so BEL 0x07 is written as an explicit byte.)
-    {Output, _Snap} = arizona_render:render(Mod:render(#{msg => <<"a\e]52;c;ZXZpbA==", 7, "b">>})),
-    Bin = iolist_to_binary(Output),
-    ?assertEqual(nomatch, binary:match(Bin, ~"\e]")),
-    ?assertEqual(nomatch, binary:match(Bin, <<7>>)),
-    ?assertNotEqual(nomatch, binary:match(Bin, ~"]52;c;ZXZpbA==")),
-    %% UTF-8 multi-byte content is preserved byte-intact.
-    {Output2, _} = arizona_render:render(Mod:render(#{msg => <<"café"/utf8>>})),
-    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Output2), <<"café"/utf8>>)).
-
-terminal_renders_styled_ansi(Config) when is_list(Config) ->
-    Mod = compile_module(
-        "-module(pt_term_styled). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {col, [], ["
-        "            {line, [green], [arizona_template:get(msg, Bindings)]}"
-        "        ]}"
-        "    ). "
-    ),
-    T = Mod:render(#{msg => ~"hi"}),
-    {Output, _Snap} = arizona_render:render(T),
-    %% green SGR (\e[32m), the dynamic text, then the line's reset+newline
-    %% (\e[0m\n) followed by the col's reset (\e[0m).
-    ?assertEqual(~"\e[32mhi\e[0m\n\e[0m", iolist_to_binary(Output)).
-
-terminal_custom_sgr_attr(Config) when is_list(Config) ->
-    %% {sgr, Escape} emits a raw escape verbatim (escape hatch for custom codes).
-    Mod = compile_module(
-        "-module(pt_term_sgr). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {text, [{sgr, <<\"\\e[1m\">>}], [arizona_template:get(msg, Bindings)]}"
-        "    ). "
-    ),
-    T = Mod:render(#{msg => ~"x"}),
-    {Output, _Snap} = arizona_render:render(T),
-    ?assertEqual(~"\e[1mx\e[0m", iolist_to_binary(Output)).
-
-terminal_fg_attr(Config) when is_list(Config) ->
-    %% {fg, Index} selects a 256-colour palette entry.
-    Mod = compile_module(
-        "-module(pt_term_fg). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {text, [{fg, <<\"208\">>}], [arizona_template:get(msg, Bindings)]}"
-        "    ). "
-    ),
-    T = Mod:render(#{msg => ~"x"}),
-    {Output, _Snap} = arizona_render:render(T),
-    ?assertEqual(~"\e[38;5;208mx\e[0m", iolist_to_binary(Output)).
-
-terminal_unknown_style_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
-        "-module(pt_term_bad_style). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {text, [grween], [arizona_template:get(x, Bindings)]}"
-        "    ). ",
-        fun
-            ({render_reject, _}) -> true;
-            (_) -> false
-        end
-    ).
-
-%% A static `false` emits nothing, but a misspelled style is still a typo: it is
-%% rejected like the `true` form, not dropped silently.
-terminal_unknown_false_style_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
-        "-module(pt_term_bad_false_style). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {text, [{bolld, false}], [arizona_template:get(x, Bindings)]}"
-        "    ). ",
-        fun
-            ({render_reject, _}) -> true;
-            (_) -> false
-        end
-    ).
-
-terminal_unknown_attr_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
-        "-module(pt_term_bad_attr). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {text, [{class, <<\"box\">>}], [arizona_template:get(x, Bindings)]}"
-        "    ). ",
-        fun
-            ({render_reject, _}) -> true;
-            (_) -> false
-        end
-    ).
-
-%% The terminal backend rejects an unknown attribute name loudly but used to accept
-%% ANY tag as a transparent container, so a typo'd tag silently lost its meaning:
-%% `{'BR', [], []}` emitted a style reset instead of a newline, and `{'Line', ...}`
-%% dropped the newline the author asked for. The vocabulary is closed -- reject an
-%% unknown element the same way an unknown attribute is rejected.
-terminal_unknown_tag_rejected(Config) when is_list(Config) ->
-    Bad = [
-        {"pt_term_bad_tag", "{'div', [], [arizona_template:get(x, Bindings)]}"},
-        %% The exact silent-typo shapes: a terminal tag in the wrong case.
-        {"pt_term_upper_br", "{'BR', [], []}"},
-        {"pt_term_upper_line", "{'Line', [], [arizona_template:get(x, Bindings)]}"}
-    ],
-    lists:foreach(
-        fun({Mod, Elem}) ->
-            assert_parse_error(
-                lists:flatten([
-                    "-module(",
-                    Mod,
-                    "). -arizona_target({terminal, arizona_terminal}). ",
-                    "-export([render/1]). render(Bindings) -> ",
-                    "arizona_template:terminal({col, [], [",
-                    Elem,
-                    "]}). "
-                ]),
-                fun
-                    ({render_reject, _}) -> true;
-                    (_) -> false
-                end
-            )
-        end,
-        Bad
-    ).
-
-%% Control: every documented tag still compiles and keeps its emission -- `line`
-%% resets and breaks, `br` breaks, the rest are transparent containers.
-terminal_known_tags_accepted(Config) when is_list(Config) ->
-    Mod = compile_module(
-        "-module(pt_term_tags_ok). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal({col, [], ["
-        "        {row, [], [{text, [], [<<\"a\">>]}, {span, [], [<<\"b\">>]}]}, "
-        "        {line, [], [<<\"c\">>]}, "
-        "        {br, [], []}"
-        "    ]}). "
-    ),
-    {Output, _Snap} = arizona_render:render(Mod:render(#{})),
-    ?assertEqual(~"a\e[0mb\e[0m\e[0mc\e[0m\n\n\e[0m", iolist_to_binary(Output)).
-
-terminal_event_command_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
-        "-module(pt_term_bad_cmd). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {text, [{az_click, arizona_js:push_event(<<\"go\">>)}], "
-        "               [arizona_template:get(x, Bindings)]}"
-        "    ). ",
-        fun
-            ({render_reject, _}) -> true;
-            (_) -> false
-        end
-    ).
-
-terminal_dynamic_attr_rejected(Config) when is_list(Config) ->
-    assert_parse_error(
-        "-module(pt_term_dyn_attr). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal("
-        "        {text, [{fg, arizona_template:get(color, Bindings)}], "
-        "               [arizona_template:get(x, Bindings)]}"
-        "    ). ",
-        fun
-            ({render_reject, _}) -> true;
-            (_) -> false
-        end
-    ).
-
-terminal_each_renders(Config) when is_list(Config) ->
-    %% ?each inside ?terminal compiles each item with the terminal backend and
-    %% renders one ANSI line per list element.
-    Mod = compile_module(
-        "-module(pt_term_each). -arizona_target({terminal, arizona_terminal}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:terminal({col, [], ["
-        "        arizona_template:each("
-        "            fun(Item) -> {line, [], [Item]} end,"
-        "            arizona_template:get(items, Bindings))"
-        "    ]}). "
-    ),
-    T = Mod:render(#{items => [~"a", ~"b"]}),
-    {Output, _Snap} = arizona_render:render(T),
-    Bin = iolist_to_binary(Output),
-    ?assertNotEqual(nomatch, binary:match(Bin, ~"a\e[0m\n")),
-    ?assertNotEqual(nomatch, binary:match(Bin, ~"b\e[0m\n")).
 
 %% ============================================================================
 %% Binding-read inlining
@@ -13020,19 +12745,17 @@ helper_arg_each_json(Config) when is_list(Config) ->
         json:decode(Wire)
     ).
 
-helper_arg_each_terminal(Config) when is_list(Config) ->
+helper_arg_each_declared_target(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_helper_arg_each_terminal). -arizona_target({terminal, arizona_terminal}). "
+        "-module(pt_helper_arg_each_text). -arizona_target({text, arizona_text_backend}). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:terminal({col, [], [wrap(arizona_template:each("
+        "    arizona_template:text({col, [], [wrap(arizona_template:each("
         "        fun(I) -> {line, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
         "wrap(X) -> {col, [], [X]}. "
     ),
     Out = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
-    ?assertEqual(nomatch, binary:match(Out, [~"<", ~"{"])),
-    ?assertNotEqual(nomatch, binary:match(Out, ~"a")),
-    ?assertNotEqual(nomatch, binary:match(Out, ~"b")).
+    ?assertEqual(~"[col][col][line]a[/line][line]b[/line][/col][/col]", Out).
 
 %% Under `?html` the pairing passes through a helper that opens `<svg>`.
 helper_arg_each_svg(Config) when is_list(Config) ->
@@ -13083,21 +12806,17 @@ hoisted_each_json(Config) when is_list(Config) ->
         json:decode(Wire)
     ).
 
-hoisted_each_terminal(Config) when is_list(Config) ->
+hoisted_each_declared_target(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_hoisted_each_terminal). -arizona_target({terminal, arizona_terminal}). "
+        "-module(pt_hoisted_each_text). -arizona_target({text, arizona_text_backend}). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Items = arizona_template:each("
         "        fun(I) -> {line, [], [I]} end, arizona_template:get(items, Bindings)), "
-        "    arizona_template:terminal({col, [], [Items]}). "
+        "    arizona_template:text({col, [], [Items]}). "
     ),
     Out = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
-    ?assertEqual(nomatch, binary:match(Out, [~"<", ~"{"])),
-    ?assertMatch(
-        {match, [[~"a"], [~"b"]]},
-        re:run(Out, ~"([ab])", [global, {capture, all_but_first, binary}])
-    ).
+    ?assertEqual(~"[col][line]a[/line][line]b[/line][/col]", Out).
 
 %% Used directly inside `<svg>`, a hoisted `?each` compiles its items in foreign
 %% content, where `<title>` is ordinary markup: each item's slot keeps its markers
@@ -13241,18 +12960,17 @@ list_child_stateful(Config) when is_list(Config) ->
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"x")),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(HTML), ~"7")).
 
-%% The terminal target renders a content list holding a nested template.
-list_child_terminal(Config) when is_list(Config) ->
+%% A declared target renders a content list holding a nested template.
+list_child_declared_target(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_list_child_term). -arizona_target({terminal, arizona_terminal}). "
+        "-module(pt_list_child_text). -arizona_target({text, arizona_text_backend}). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:terminal({line, [], [[<<\"x\">>, "
-        "        arizona_template:terminal({text, [], [arizona_template:get(y, Bindings)]})]]}). "
+        "    arizona_template:text({line, [], [[<<\"x\">>, "
+        "        arizona_template:text({span, [], [arizona_template:get(y, Bindings)]})]]}). "
     ),
     Out = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{y => ~"Y"}))),
-    ?assertNotEqual(nomatch, binary:match(Out, ~"x")),
-    ?assertNotEqual(nomatch, binary:match(Out, ~"Y")).
+    ?assertEqual(~"[line]x[span]Y[/span][/line]", Out).
 
 %% Under az-nodiff the list renders once, markerless.
 list_child_nodiff(Config) when is_list(Config) ->

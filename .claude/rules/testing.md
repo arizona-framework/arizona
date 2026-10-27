@@ -43,8 +43,7 @@ suite drives -- refuses to connect to one of those.
 
 Current users: `arizona_app_SUITE`, `arizona_ws_SUITE`, `arizona_roadrunner_http_SUITE`,
 `arizona_mcp_e2e_SUITE`, `arizona_mcp_conformance_SUITE`, `arizona_bench_lib`. A suite whose
-server assigns the port itself (`arizona_terminal_ssh_SUITE` reads it back from
-`ssh:daemon_info/1`) needs nothing.
+server assigns the port itself and reads it back needs nothing.
 
 ## E2E tests
 
@@ -80,7 +79,7 @@ follows its naming.
 | Stateless templates / layouts | `arizona_<name>`, `arizona_*_layout` | `arizona_stateless.hrl` | Pure `render/1` |
 | HTTP controllers | `arizona_*_controller` | plain module | Reached by `arizona_js:fetch/2`; export the action (default `handle/1`) |
 | `?json` render target | `arizona_json_*` | `arizona_stateful.hrl` | Drive the `e2e/json` specs and `arizona_json_SUITE` |
-| Terminal render target | `arizona_term_*` | `arizona_stateful.hrl` | `?terminal` views plus drivers for the TTY/SSH suites |
+| Declared render target | `arizona_text_backend` | `-behaviour(arizona_renderer)` | A target outside core (`-arizona_target({text, arizona_text_backend})`) for the parse transform suite |
 | MCP servers | `arizona_mcp_*_server` | `-behaviour(arizona_mcp)` | Minimal / crashing / unencodable variants for the MCP suites |
 | `?local` fixtures | `arizona_local*`, `*_local` | either | Client-owned slots: content, attribute, nested, XSS |
 | Parse-transform + diff shapes | `arizona_conditional_*`, `arizona_each_*`, `arizona_nested_*`, ... | either | One module per compile/diff shape under test |

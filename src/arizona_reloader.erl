@@ -71,6 +71,9 @@ recompile would otherwise log a supervisor report.
 -ignore_xref([
     broadcast/0, reload_erl/1, reload_css/0, reload_css/1, compile/1, clear_error/0, format_error/1
 ]).
+%% A transport outside core leaves the reload topic when its session ends
+%% (arizona_terminal's sessions).
+-ignore_xref([leave/1]).
 -ignore_xref({rebar_agent, do, 1}).
 -ignore_xref({rebar_state, get, 3}).
 
