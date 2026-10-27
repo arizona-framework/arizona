@@ -3,14 +3,17 @@
 Cross-language wire op-code sync check.
 
 The diff op codes in `include/arizona_wire.hrl` and the effect op codes in
-`include/arizona_effect.hrl` are hand-copied into every client runtime
-(`assets/js/arizona-ops.js`, `arizona-commands.js` and the worker, the reference
-`e2e/utils/json_client.js`, and the Android/iOS `Wire.kt`/`Wire.swift`).
-Nothing else compares them, so a renumber or addition in one artifact drifts
-silently -- a native client skips an unknown op non-strictly, hiding the
-mismatch until a patch or event misfires in production. This suite reads the
-Erlang headers as the source of truth and asserts every client's declared codes
-still agree with them.
+`include/arizona_effect.hrl` are hand-copied into every client runtime in this
+repo (`assets/js/arizona-ops.js`, `arizona-commands.js` and the worker, and the
+reference `e2e/utils/json_client.js`). Nothing else compares them, so a
+renumber or addition in one artifact drifts silently -- a JSON client skips an
+unknown op non-strictly, hiding the mismatch until a patch or event misfires in
+production. This suite reads the Erlang headers as the source of truth and
+asserts every client's declared codes still agree with them.
+
+The Android and iOS clients live in their own repos (`arizona_android`,
+`arizona_ios`), each running the same comparison against this repo's headers and
+`json_client.js` in its CI.
 """.
 -include_lib("stdlib/include/assert.hrl").
 
@@ -20,15 +23,10 @@ still agree with them.
 -export([canonical_ops_extraction_sane/1]).
 -export([web_js_ops_match_canonical/1]).
 -export([web_worker_ops_match_canonical/1]).
--export([android_ops_match_json_backend/1]).
--export([ios_ops_match_json_backend/1]).
 -export([json_client_ops_match_json_backend/1]).
 -export([canonical_effects_extraction_sane/1]).
 -export([web_js_effects_match_canonical/1]).
--export([android_effects_match_canonical/1]).
--export([ios_effects_match_canonical/1]).
 -export([json_client_effects_match_canonical/1]).
--export([json_clients_effects_agree/1]).
 
 all() ->
     [{group, ops}, {group, effects}].
@@ -39,17 +37,12 @@ groups() ->
             canonical_ops_extraction_sane,
             web_js_ops_match_canonical,
             web_worker_ops_match_canonical,
-            android_ops_match_json_backend,
-            ios_ops_match_json_backend,
             json_client_ops_match_json_backend
         ]},
         {effects, [parallel], [
             canonical_effects_extraction_sane,
             web_js_effects_match_canonical,
-            android_effects_match_canonical,
-            ios_effects_match_canonical,
-            json_client_effects_match_canonical,
-            json_clients_effects_agree
+            json_client_effects_match_canonical
         ]}
     ].
 
@@ -78,12 +71,6 @@ web_worker_ops_match_canonical(Config) when is_list(Config) ->
 %% A native client must handle every op the JSON backend can emit -- exactly
 %% the header minus what the backend opts out of -- so a new op the backend starts
 %% emitting fails here until each native client implements it.
-android_ops_match_json_backend(Config) when is_list(Config) ->
-    ?assertEqual(json_backend_ops(), android_wire(ops)).
-
-ios_ops_match_json_backend(Config) when is_list(Config) ->
-    ?assertEqual(json_backend_ops(), ios_wire(ops)).
-
 json_client_ops_match_json_backend(Config) when is_list(Config) ->
     ?assertEqual(json_backend_ops(), json_client(ops)).
 
@@ -105,22 +92,8 @@ web_js_effects_match_canonical(Config) when is_list(Config) ->
 %% Native clients implement only the portable subset (push_event/navigate), so
 %% they need only agree on the codes they do declare -- but that set must be
 %% non-empty and every entry must match the header.
-android_effects_match_canonical(Config) when is_list(Config) ->
-    assert_agrees_with_canonical(effects, android, android_wire(effects)).
-
-ios_effects_match_canonical(Config) when is_list(Config) ->
-    assert_agrees_with_canonical(effects, ios, ios_wire(effects)).
-
 json_client_effects_match_canonical(Config) when is_list(Config) ->
     assert_agrees_with_canonical(effects, json_client, json_client(effects)).
-
-%% The three native clients must declare the identical effect set: a portable
-%% effect added to one but not the others is a drift the per-client checks above
-%% (subset-only) would miss.
-json_clients_effects_agree(Config) when is_list(Config) ->
-    Android = android_wire(effects),
-    ?assertEqual(Android, ios_wire(effects)),
-    ?assertEqual(Android, json_client(effects)).
 
 %% --------------------------------------------------------------------
 %% Source extraction
@@ -157,40 +130,6 @@ json_client(effects) ->
 
 json_client_path() ->
     ["e2e", "utils", "json_client.js"].
-
-%% The `const val NAME = N` entries inside the Kotlin `object Op { ... }` /
-%% `object Effect { ... }`.
-android_wire(Kind) ->
-    Body = block(read(android_wire_path()), [~"object ", block_name(Kind), ~" \\{(.*?)\\}"]),
-    extract(Body, ~"([A-Z0-9_]+)\\s*=\\s*([0-9]+)").
-
-android_wire_path() ->
-    [
-        "clients",
-        "android",
-        "arizona",
-        "src",
-        "main",
-        "kotlin",
-        "dev",
-        "arizona",
-        "client",
-        "Wire.kt"
-    ].
-
-%% The `let name = N` entries inside the Swift `enum Op { ... }` /
-%% `enum Effect { ... }`, with the camelCase names normalized to the header's
-%% UPPER_SNAKE spelling.
-ios_wire(Kind) ->
-    Body = block(
-        read(["clients", "ios", "Sources", "AzWire", "Wire.swift"]),
-        [~"enum ", block_name(Kind), ~" \\{(.*?)\\}"]
-    ),
-    CamelCased = extract(Body, ~"let ([a-zA-Z0-9]+)\\s*=\\s*([0-9]+)"),
-    #{to_upper_snake(Name) => Code || Name := Code <- CamelCased}.
-
-block_name(ops) -> ~"Op";
-block_name(effects) -> ~"Effect".
 
 %% --------------------------------------------------------------------
 %% Helpers
@@ -229,24 +168,11 @@ block(Text, Pattern) ->
         nomatch -> ct:fail({block_not_found, iolist_to_binary(Pattern)})
     end.
 
-%% camelCase -> UPPER_SNAKE: `pushEvent` -> `PUSH_EVENT`, `navigate` -> `NAVIGATE`.
-to_upper_snake(Name) when is_binary(Name) ->
-    list_to_binary(to_upper_snake(binary_to_list(Name), [])).
-
-to_upper_snake([C | Rest], Acc) when C >= $A, C =< $Z, Acc =/= [] ->
-    to_upper_snake(Rest, [C, $_ | Acc]);
-to_upper_snake([C | Rest], Acc) when C >= $a, C =< $z ->
-    to_upper_snake(Rest, [C - 32 | Acc]);
-to_upper_snake([C | Rest], Acc) ->
-    to_upper_snake(Rest, [C | Acc]);
-to_upper_snake([], Acc) ->
-    lists:reverse(Acc).
-
 read(Parts) ->
     {ok, Bin} = file:read_file(filename:join([repo_root() | Parts])),
     Bin.
 
-%% The client artifacts (assets/, clients/, e2e/) live at the repo root, which
+%% The client artifacts (assets/, e2e/) live at the repo root, which
 %% rebar3 does not symlink into `_build`. Walk up from the app lib dir (four
 %% levels: arizona -> lib -> <profile> -> _build -> root), falling back to the
 %% test cwd, and pick whichever actually holds the sources.

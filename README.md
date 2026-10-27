@@ -46,8 +46,9 @@ minor versions. Pin an exact version in your deps if you need stability across u
   in its own package and held to one conformance suite; Arizona can also share a listener another
   framework owns, as `arizona_nova` does for Nova
 - **JSON render target** -- the same templates and diff engine also emit a JSON widget tree
-  via `?json` for non-browser clients. In-repo Android (Compose), iOS (SwiftUI), and JS
-  reference clients consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML
+  via `?json` for non-browser clients. [Android](https://github.com/arizona-framework/arizona_android)
+  (Compose), [iOS](https://github.com/arizona-framework/arizona_ios) (SwiftUI), and JS reference
+  clients consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML
   or JSON by `User-Agent`. See [docs/json.md](docs/json.md)
 - **Terminal (ANSI) render target** -- the same templates and diff engine also render to an ANSI
   terminal via `?terminal`, served over a local TTY or SSH; a transport-agnostic session and a

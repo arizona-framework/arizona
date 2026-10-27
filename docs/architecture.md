@@ -2631,7 +2631,8 @@ client resolves destroys the slot's static siblings (the whole view when that el
 view root). Nothing emits it and no client claims it. It is free to reuse for a genuinely new
 op: codes 0..9 emit as a single byte (`arizona_socket`'s op-code encoder) and 10+ cost an extra
 one per op, so the cheap range is worth reclaiming -- but a reuse must land on the server and
-all four clients together, since a code means whatever both ends agree it means.
+every client together (the web client, `json_client.js`, and the `arizona_android` and
+`arizona_ios` repos), since a code means whatever both ends agree it means.
 
 A content-slot dynamic -- a value, a nested template, *or a plain-list `?each`* -- is anchored
 by `<!--az:X-->...<!--/az-->` comment markers in SSR (no wrapper element carries the slot `az`),

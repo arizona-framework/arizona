@@ -38,18 +38,14 @@ For everything else (single-suite runs, coverage reports, individual
 check stages, doc generation, etc.) see the targets in the project's
 `Makefile`.
 
-The native (`?json`) Android client lives in-repo at `clients/android/`
-(Kotlin/Compose, its own Gradle build). It is **not** part of `make ci`; build
-it with `make build-android` and run its tests with `make test-android` (needs
-the Android SDK + an emulator/device). Its CI runs separately via the
-`android-e2e` workflow. See [docs/json.md](docs/json.md).
-
-The native iOS client lives in-repo at `clients/ios/` (Swift/SwiftUI). Its
-protocol logic is a Swift package you can test on any platform with `swift test`
-(no Mac needed); the SwiftUI render + XCUITest e2e need macOS + Xcode +
-`xcodegen` (`brew install xcodegen`). Build with `make build-ios` and test with
-`make test-ios`; like the Android client it is **not** part of `make ci` and has
-its own `ios-e2e` workflow.
+The JSON-target (`?json`) clients live in their own repos:
+[`arizona_android`](https://github.com/arizona-framework/arizona_android)
+(Kotlin/Compose) and [`arizona_ios`](https://github.com/arizona-framework/arizona_ios)
+(Swift/SwiftUI). The reference native shell for `arizona_os` is
+[`arizona_tauri`](https://github.com/arizona-framework/arizona_tauri). Each pins
+an arizona release and tests against it, so nothing here depends on them; if you
+change the wire protocol or a `/json/*` fixture, the matching client change
+lands in the client repo when it moves to the release that carries yours. See [docs/json.md](docs/json.md).
 
 ## License
 

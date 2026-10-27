@@ -39,11 +39,6 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-e2e-parallel` | Playwright `parallel` project only |
 | `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`) |
 | `make test-e2e-json` | Playwright `json` project only (`?json` wire, no browser) |
-| `make test-android` | Android client e2e (opt-in; needs Android SDK + emulator; **not** in `ci`) |
-| `make test-ios` | iOS client tests (opt-in; `swift test` anywhere + Simulator e2e on macOS; **not** in `ci`) |
-| `make build-tauri` | Build the reference Tauri desktop shell (opt-in; needs Rust + webview deps; **not** in `ci`) |
-| `make test-tauri` | Tauri shell Rust tests (opt-in; compiles the shell; full UI run manually; **not** in `ci`) |
-| `make dev-tauri` | Run the reference Tauri shell in dev mode (devtools) against a running `make start`; opt-in, **not** in `ci` |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80% of the project total, not per module) |
 | `make doc` | Generate docs (`doc-erl` `doc-js`) |
@@ -72,15 +67,20 @@ Read it before optimising anything -- several plausible changes measured *worse*
 
 ## Clients
 
-Client runtimes that consume the wire protocol live in-repo so they evolve atomically with it:
-the **web** client (browser) is `assets/js/` (built into `priv/static` by Vite); the **Android**
-client for the `?json` target is `clients/android/` (Kotlin/Compose, its own Gradle build --
-**not** part of `make ci`; see `make test-android`); the **iOS** client is `clients/ios/`
-(Swift/SwiftUI -- a SwiftPM package whose logic tests run on any platform via `swift test`, plus an
-XcodeGen sample app for the Simulator e2e -- also **not** part of `make ci`; see `make test-ios`).
-OS-level capabilities for a browser renderer wrapped in a **native shell** (Tauri, Electron, ...)
-go through the host-neutral `arizona_os` seam; the reference shell is `clients/tauri/` (Tauri v2,
-**not** part of `make ci`; see `make test-tauri` and [docs/os.md](docs/os.md)).
+The **web** client (browser) is in-repo at `assets/js/` (built into `priv/static` by Vite), as is
+the reference JSON-wire client `e2e/utils/json_client.js`. The native clients each live in
+their own repo: [`arizona_android`](https://github.com/arizona-framework/arizona_android)
+(Kotlin/Compose) and [`arizona_ios`](https://github.com/arizona-framework/arizona_ios)
+(Swift/SwiftUI) for the `?json` target, and
+[`arizona_tauri`](https://github.com/arizona-framework/arizona_tauri), the reference
+**native shell** for the host-neutral `arizona_os` seam (see [docs/os.md](docs/os.md)).
+
+The dependency is one-way: nothing here builds, tests or waits on a client repo, so a change
+here never fails on a client. Each client pins an arizona release (`.arizona-version`) and tests
+against it -- its wire codes against `include/arizona_wire.hrl` / `include/arizona_effect.hrl`
+and `json_client.js`, and its device e2e against this repo's `scripts/start_test_server.sh`
+and `/json/*` fixtures. A breaking change here surfaces in the client's PR that bumps the pin
+(Renovate opens one per release); `arizona_wire_SUITE` still covers the in-repo clients.
 
 ## Event attributes & effects -- `arizona_js` / `arizona_android`
 
@@ -266,7 +266,7 @@ The seam is defined at one boundary: a JS object `globalThis.__arizona_os__` the
 
 **Commands -- `arizona_os`.** The per-shell command builder (beside `arizona_js`/`arizona_android`). Unlike those, **every** command funnels through one generic op `?EFFECT_OS` carrying a capability **name** plus args -- the engine is a pass-through, the shell owns the vocabulary, so new capabilities are new names not new op codes. Typed sugars (`set_title/1`, `focus/0`, `minimize/0`, `maximize/0,1`, `fullscreen/1`, `notify/1,2`, `capture_protection/1`) are the documented path; `command/2` is the unchecked escape hatch. Issue from an event attribute (client-triggered, no round-trip) or as a handler effect (server-emitted). Re-assert **declarative/idempotent** capabilities (`set_title`, `maximize`, `fullscreen`, capture protection) from server state on reconnect; do **not** re-fire **one-shot** ones (`notify`, `focus`). Inbound OS events arrive via `onEvent`, are relayed as a `push_event`, and land in the view's `handle_event/3` like any event.
 
-**Shell-neutral; Tauri is the reference.** The same contract is satisfied by Tauri (`initialization_script` + `window.__TAURI__.window.getCurrentWindow()` core window commands / `event.listen`) and Electron (`preload` + `contextBridge` + `ipcMain`/`webContents.send`). The reference shell is `clients/tauri/` (Tauri v2), opt-in via `make build-tauri`/`make test-tauri` (not in `make ci`). The **thin** shape (renderer loads a remote Arizona URL; same-origin WS) is primary; **fat** (bundled local BEAM) is deferred. CI proves the seam without a shell via a real-browser e2e with a fake `__arizona_os__` (`arizona_os_demo` / `arizona_os.spec.js`). Full contract in [docs/os.md](docs/os.md).
+**Shell-neutral; Tauri is the reference.** The same contract is satisfied by Tauri (`initialization_script` + `window.__TAURI__.window.getCurrentWindow()` core window commands / `event.listen`) and Electron (`preload` + `contextBridge` + `ipcMain`/`webContents.send`). The reference shell is [`arizona_tauri`](https://github.com/arizona-framework/arizona_tauri) (Tauri v2), in its own repo. The **thin** shape (renderer loads a remote Arizona URL; same-origin WS) is primary; **fat** (bundled local BEAM) is deferred. CI proves the seam without a shell via a real-browser e2e with a fake `__arizona_os__` (`arizona_os_demo` / `arizona_os.spec.js`). Full contract in [docs/os.md](docs/os.md).
 
 ## What's missing
 
