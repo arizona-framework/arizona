@@ -98,10 +98,10 @@
     cross_target_siblings_compile/1,
     cross_target_html_in_declared/1,
     cross_target_declared_in_html/1,
-    undeclared_target_not_compiled/1,
-    target_declared_twice/1,
-    target_redeclared_rejected/1,
-    target_decl_invalid_rejected/1,
+    target_call_compiles_with_its_backend/1,
+    target_call_names_builtin_backend/1,
+    target_backend_not_literal_rejected/1,
+    target_name_clash_rejected/1,
     target_name_reserved_rejected/1,
     target_backend_bad_rejected/1,
     deeply_nested/1,
@@ -621,7 +621,7 @@ all() ->
         {group, utf8},
         {group, errors},
         {group, cross_target},
-        {group, declared_target},
+        {group, target_call},
         {group, az_macros},
         {group, az_view},
         {group, az_scoping},
@@ -1238,12 +1238,12 @@ groups() ->
             cross_target_html_in_declared,
             cross_target_declared_in_html
         ]},
-        %% Render targets declared with -arizona_target
-        {declared_target, [parallel], [
-            undeclared_target_not_compiled,
-            target_declared_twice,
-            target_redeclared_rejected,
-            target_decl_invalid_rejected,
+        %% Render targets outside core, named by backend in target/2
+        {target_call, [parallel], [
+            target_call_compiles_with_its_backend,
+            target_call_names_builtin_backend,
+            target_backend_not_literal_rejected,
+            target_name_clash_rejected,
             target_name_reserved_rejected,
             target_backend_bad_rejected
         ]},
@@ -3519,10 +3519,10 @@ cond_nested_case_bare_element(Config) when is_list(Config) ->
 %% HTML): proving the render target threads through the tail walk.
 cond_case_declared_target_inherits_target(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_cond_text). -arizona_target({text, arizona_text_backend}). "
+        "-module(pt_cond_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:text({col, [], ["
+        "    arizona_template:target(arizona_text_backend, {col, [], ["
         "        case arizona_template:get(warn, Bindings) of "
         "            true -> {line, [green], [arizona_template:get(msg, Bindings)]}; "
         "            false -> <<\"\">> "
@@ -4337,12 +4337,12 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
     %% attributes repeat (`attr_names/0` is `repeatable`).
     Ok = compile_module(
         "-module(pt_dup_ok). "
-        "-arizona_target({text, arizona_text_backend}). -export([html/1, json/1, text/1]). "
+        "-export([html/1, json/1, text/1]). "
         "html(Bindings) -> arizona_template:html({'p', [{class, ~\"a\"}, "
         "{id, arizona_template:get(x, Bindings)}], []}). "
         "json(_Bindings) -> arizona_template:json({'Text', [{text, ~\"a\"}, "
         "{'Text', ~\"b\"}], []}). "
-        "text(_Bindings) -> arizona_template:text({line, [], [{span, "
+        "text(_Bindings) -> arizona_template:target(arizona_text_backend, {line, [], [{span, "
         "[{mark, ~\"1\"}, {mark, ~\"2\"}], [~\"x\"]}]}). "
     ),
     {HTML, _} = arizona_render:render(Ok:html(#{x => ~"i"})),
@@ -7419,8 +7419,9 @@ each_stream_keyless_body_nodiff_renders(Config) when is_list(Config) ->
 each_keyless_stream_target_body_renders(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_text_stream_keyless). "
-        "-arizona_target({text, arizona_text_backend}). -export([render/1]). "
-        "render(Bindings) -> arizona_template:text({col, [], [arizona_template:each("
+        "-export([render/1]). "
+        "render(Bindings) -> arizona_template:target(arizona_text_backend, "
+        "{col, [], [arizona_template:each("
         "fun(I, _K) -> {line, [], [I]} end, arizona_template:get(s, Bindings))]}). "
     ),
     S = arizona_stream:new(fun(X) -> X end, [~"a"]),
@@ -9104,10 +9105,10 @@ az_view_composed_id_raises(Config) when is_list(Config) ->
 
 cross_target_html_in_declared(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_html_in_text). -arizona_target({text, arizona_text_backend}). "
+        "-module(pt_html_in_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:text({col, [], ["
+        "    arizona_template:target(arizona_text_backend, {col, [], ["
         "        arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
@@ -9118,11 +9119,12 @@ cross_target_html_in_declared(Config) when is_list(Config) ->
 
 cross_target_declared_in_html(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_text_in_html). -arizona_target({text, arizona_text_backend}). "
+        "-module(pt_text_in_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:html({'div', [], ["
-        "        arizona_template:text({line, [], [arizona_template:get(x, Bindings)]})"
+        "        arizona_template:target(arizona_text_backend, "
+        "            {line, [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
             (cross_target_nesting) -> true;
@@ -9130,104 +9132,95 @@ cross_target_declared_in_html(Config) when is_list(Config) ->
         end
     ).
 
-%% A target outside core is known only to a module that declares it: without the
-%% `-arizona_target` its header carries, the macro's call is an ordinary remote
-%% call, left for the runtime, where no such template function exists.
-undeclared_target_not_compiled(Config) when is_list(Config) ->
+%% A target outside core is named by backend: `arizona_template:target(Backend, Elems)`
+%% compiles with that backend, under the name its `target/0` gives.
+target_call_compiles_with_its_backend(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_text_undeclared). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:text({line, [], [arizona_template:get(x, Bindings)]}). "
+        "-module(pt_target_call). -export([render/1]). render(Bindings) -> "
+        "arizona_template:target(arizona_text_backend, "
+        "{line, [], [arizona_template:get(x, Bindings)]}). "
     ),
-    ?assertError(undef, Mod:render(#{x => ~"a"})).
+    T = Mod:render(#{x => ~"a"}),
+    ?assertMatch(#{backend := arizona_text_backend}, T),
+    ?assertEqual(~"[line]a[/line]", iolist_to_binary(arizona_render:render_to_iolist(T))).
 
-%% A header included twice repeats its declaration, which must not be refused.
-target_declared_twice(Config) when is_list(Config) ->
+%% A built-in target named by its backend is that target.
+target_call_names_builtin_backend(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_text_twice). "
-        "-arizona_target({text, arizona_text_backend}). "
-        "-arizona_target({text, arizona_text_backend}). "
-        "-export([render/1]). "
-        "render(Bindings) -> "
-        "    arizona_template:text({line, [], [arizona_template:get(x, Bindings)]}). "
+        "-module(pt_target_html). -export([render/1, html/1]). "
+        "render(Bindings) -> arizona_template:target(arizona_html, "
+        "{p, [], [arizona_template:get(x, Bindings)]}). "
+        "html(Bindings) -> arizona_template:html({p, [], [arizona_template:get(x, Bindings)]}). "
     ),
-    ?assertMatch(#{backend := arizona_text_backend}, Mod:render(#{x => ~"a"})).
+    Render = fun(F) ->
+        iolist_to_binary(arizona_render:render_to_iolist(Mod:F(#{x => ~"a"})))
+    end,
+    ?assertEqual(Render(html), Render(render)).
 
-target_redeclared_rejected(Config) when is_list(Config) ->
+target_backend_not_literal_rejected(Config) when is_list(Config) ->
     assert_parse_error(
-        "-module(pt_target_redeclared). "
-        "-arizona_target({text, arizona_text_backend}). "
-        "-arizona_target({text, arizona_html}). "
-        "-export([render/1]). "
-        "render(_Bindings) -> ok. ",
+        "-module(pt_target_var). -export([render/2]). render(B, Bindings) -> "
+        "arizona_template:target(B, {line, [], [arizona_template:get(x, Bindings)]}). ",
         fun
-            ({target, {redeclared, text}}) -> true;
-            (_) -> false
-        end
-    ),
-    %% A built-in target is taken too: `?html` always means arizona_html.
-    assert_parse_error(
-        "-module(pt_target_redeclared_builtin). "
-        "-arizona_target({html, arizona_text_backend}). "
-        "-export([render/1]). "
-        "render(_Bindings) -> ok. ",
-        fun
-            ({target, {redeclared, html}}) -> true;
+            ({target, backend_not_literal}) -> true;
             (_) -> false
         end
     ).
 
-target_decl_invalid_rejected(Config) when is_list(Config) ->
-    lists:foreach(
-        fun(Decl) ->
-            assert_parse_error(
-                lists:flatten([
-                    "-module(pt_target_invalid). -arizona_target(",
-                    Decl,
-                    "). -export([render/1]). render(_Bindings) -> ok. "
-                ]),
-                fun
-                    ({target, invalid_decl}) -> true;
-                    (_) -> false
-                end
-            )
-        end,
-        ["text", "{text, \"arizona_text_backend\"}", "{text, arizona_text_backend, x}"]
+%% One name is one backend per module, a built-in name included.
+target_name_clash_rejected(Config) when is_list(Config) ->
+    _ = compile_module("-module(pt_other_text). -export([target/0]). target() -> text. "),
+    _ = compile_module("-module(pt_other_html). -export([target/0]). target() -> html. "),
+    assert_parse_error(
+        "-module(pt_target_clash). -export([a/1, b/1]). "
+        "a(_Bindings) -> arizona_template:target(arizona_text_backend, {line, [], []}). "
+        "b(_Bindings) -> arizona_template:target(pt_other_text, {line, [], []}). ",
+        fun
+            ({target, {name_clash, text, arizona_text_backend, pt_other_text}}) -> true;
+            (_) -> false
+        end
+    ),
+    assert_parse_error(
+        "-module(pt_target_clash_builtin). -export([a/1]). "
+        "a(_Bindings) -> arizona_template:target(pt_other_html, {p, [], []}). ",
+        fun
+            ({target, {name_clash, html, arizona_html, pt_other_html}}) -> true;
+            (_) -> false
+        end
     ).
 
-%% A name that is already a one-argument template function would be compiled as a
-%% template wherever that function is called.
+%% A name that is already a template function would have its calls taken for
+%% templates, or the target's calls for that function.
 target_name_reserved_rejected(Config) when is_list(Config) ->
+    _ = compile_module("-module(pt_raw_target). -export([target/0]). target() -> raw. "),
     assert_parse_error(
-        "-module(pt_target_reserved). "
-        "-arizona_target({raw, arizona_text_backend}). "
-        "-export([render/1]). "
-        "render(_Bindings) -> ok. ",
+        "-module(pt_target_reserved). -export([a/1]). "
+        "a(_Bindings) -> arizona_template:target(pt_raw_target, {line, [], []}). ",
         fun
-            ({target, {name_reserved, raw}}) -> true;
+            ({target, {name_reserved, raw, pt_raw_target}}) -> true;
             (_) -> false
         end
     ).
 
-%% The backend is called at compile time and must name the target back.
+%% The backend is called at compile time, so it must load and name its target.
 target_backend_bad_rejected(Config) when is_list(Config) ->
     lists:foreach(
         fun(Backend) ->
             assert_parse_error(
                 lists:flatten([
-                    "-module(pt_target_bad_backend). -arizona_target({tui, ",
+                    "-module(pt_target_bad_backend). -export([a/1]). "
+                    "a(_Bindings) -> arizona_template:target(",
                     Backend,
-                    "}). -export([render/1]). render(_Bindings) -> ok. "
+                    ", {line, [], []}). "
                 ]),
                 fun
-                    ({target, {bad_backend, tui, _}}) -> true;
+                    ({target, {bad_backend, B}}) -> atom_to_list(B) =:= Backend;
                     (_) -> false
                 end
             )
         end,
-        %% not loadable; loadable without target/0; a backend for another name
-        ["pt_no_such_backend", "lists", "arizona_html"]
+        %% not loadable; loadable without target/0
+        ["pt_no_such_backend", "lists"]
     ).
 
 %% ============================================================================
@@ -12747,10 +12740,10 @@ helper_arg_each_json(Config) when is_list(Config) ->
 
 helper_arg_each_declared_target(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_helper_arg_each_text). -arizona_target({text, arizona_text_backend}). "
+        "-module(pt_helper_arg_each_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:text({col, [], [wrap(arizona_template:each("
+        "    arizona_template:target(arizona_text_backend, {col, [], [wrap(arizona_template:each("
         "        fun(I) -> {line, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
         "wrap(X) -> {col, [], [X]}. "
     ),
@@ -12808,12 +12801,12 @@ hoisted_each_json(Config) when is_list(Config) ->
 
 hoisted_each_declared_target(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_hoisted_each_text). -arizona_target({text, arizona_text_backend}). "
+        "-module(pt_hoisted_each_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Items = arizona_template:each("
         "        fun(I) -> {line, [], [I]} end, arizona_template:get(items, Bindings)), "
-        "    arizona_template:text({col, [], [Items]}). "
+        "    arizona_template:target(arizona_text_backend, {col, [], [Items]}). "
     ),
     Out = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
     ?assertEqual(~"[col][line]a[/line][line]b[/line][/col]", Out).
@@ -12963,11 +12956,12 @@ list_child_stateful(Config) when is_list(Config) ->
 %% A declared target renders a content list holding a nested template.
 list_child_declared_target(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_list_child_text). -arizona_target({text, arizona_text_backend}). "
+        "-module(pt_list_child_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:text({line, [], [[<<\"x\">>, "
-        "        arizona_template:text({span, [], [arizona_template:get(y, Bindings)]})]]}). "
+        "    arizona_template:target(arizona_text_backend, {line, [], [[<<\"x\">>, "
+        "        arizona_template:target(arizona_text_backend, "
+        "            {span, [], [arizona_template:get(y, Bindings)]})]]}). "
     ),
     Out = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{y => ~"Y"}))),
     ?assertEqual(~"[line]x[span]Y[/span][/line]", Out).

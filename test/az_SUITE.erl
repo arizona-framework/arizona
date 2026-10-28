@@ -66,7 +66,8 @@ stateless_3(Config) when is_list(Config) ->
 
 html_stub(Config) when is_list(Config) ->
     ?assertError(parse_transform_not_applied, az:html(foo)),
-    ?assertError(parse_transform_not_applied, az:json(foo)).
+    ?assertError(parse_transform_not_applied, az:json(foo)),
+    ?assertError(parse_transform_not_applied, az:target(arizona_text_backend, foo)).
 
 %% `each/2` is a parse transform stub like `html/1`, so an un-transformed call
 %% must name the cause. `arizona_template:each/2` doubles as the runtime pairing

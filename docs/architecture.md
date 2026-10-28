@@ -223,24 +223,22 @@ string in one is named on the same failure path.
 
 ## Render targets outside core
 
-The parse transform knows `?html` and `?json` by default. Any other target is
-declared by the header that defines its macro, with one attribute naming the macro's
-call and its `arizona_renderer` backend. The
+The parse transform knows `?html` and `?json` by name. Any other target's macro
+names its `arizona_renderer` backend instead; the
 [arizona_terminal](https://github.com/arizona-framework/arizona_terminal) package's
 header, for one:
 
 ```erlang
--arizona_target({terminal, arizona_terminal}).
--define(terminal(Elems), arizona_template:terminal(Elems)).
+-define(terminal(Elems), arizona_template:target(arizona_terminal, Elems)).
 ```
 
-A module that includes the header compiles `arizona_template:terminal(...)` with that
-backend; a module that does not leaves the call alone, and it fails at runtime with
-`undef`. The declaration is per module, so the transform never names a backend
-outside core. The backend is called while the module compiles, so it must already be
-loadable (a dependency, or `erl_first_files` in the same app), and its
-`c:arizona_renderer:target/0` must return the declared name. The name cannot be one
-that `arizona_template` already exports with arity 1 (`raw`, `track`, ...).
+The transform calls the backend's `c:arizona_renderer:target/0` while it compiles
+the module, to learn the target's name, and compiles the call with that backend,
+so it never names a backend outside core. The backend must therefore be written as
+a literal module and already be loadable (a dependency, or `erl_first_files` in the
+same app). One name is one backend per module, the built-in names included, and a
+name cannot be an `arizona_template` function (`raw`, `each`, ...). Without the
+parse transform the call raises `parse_transform_not_applied`, like `?html`.
 
 Everything else is the backend's capability callbacks, asked at compile time. Whether
 a live handler's root is compiled live is `c:arizona_renderer:live_root/0`: a target

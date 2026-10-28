@@ -2,9 +2,9 @@
 -moduledoc false.
 -behaviour(arizona_renderer).
 
-%% A render target the framework does not ship, declared to the parse transform
-%% with `-arizona_target({text, arizona_text_backend}).` and called as
-%% `arizona_template:text(Elems)`. It writes elements as `[tag attrs]...[/tag]`,
+%% A render target the framework does not ship, named by backend in a template
+%% (`arizona_template:target(arizona_text_backend, Elems)`) and compiled as the
+%% target `text`. It writes elements as `[tag attrs]...[/tag]`,
 %% so its output is told apart from HTML at a glance, and it answers the capability
 %% callbacks the way a frame-repainting target does: no live root, no keyed item
 %% ops, no list patch, no `?local`, repeatable attributes.

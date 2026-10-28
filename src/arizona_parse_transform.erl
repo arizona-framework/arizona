@@ -155,9 +155,10 @@ render(Bindings) ->
 %% which reach the abstract-code chunk -- are identical across compiles.
 -define(HOIST_SITE_KEY, arizona_hoist_site).
 
-%% Process-dictionary map of the render targets this module may use, name to
-%% backend (see declare_target/1). Per module: a target is declared by the header
-%% that defines its macro, so two modules of one compiler process may differ.
+%% Process-dictionary map of the render targets this module uses, name to backend
+%% (see resolve_targets/2). Per module: it holds the built-in targets plus every
+%% backend a `target/2` call in the module names, so two modules of one compiler
+%% process may differ.
 -define(TARGETS_KEY, arizona_render_targets).
 
 %% The targets every module has, whose macros arizona_common.hrl defines.
@@ -234,7 +235,6 @@ parse_transform(Forms, _Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
     IsLive = has_behaviour(Forms, arizona_stateful),
-    FunDefs = collect_fun_defs(Forms),
     %% `az-*` names are collected in the process dictionary rather than threaded
     %% through `#state{}`: the state is per-template, and this set spans every
     %% template in the module. Erased on entry so a previous module in the same
@@ -245,14 +245,15 @@ parse_transform(Forms, _Options) ->
     _ = put(?PARAM_SEQ_KEY, 0),
     _ = put(?HOIST_SITE_KEY, 0),
     try
-        ok = declare_targets(File, Forms),
+        Forms1 = resolve_targets(File, Forms),
+        FunDefs = collect_fun_defs(Forms1),
         Transformed = map_forms_in_file(
             fun(Form) -> transform_form(mark_targets(Form, none), Module, IsLive, FunDefs) end,
             File,
-            Forms
+            Forms1
         ),
-        WithSuppressions = inject_each_callback_suppressions(Transformed, Forms, FunDefs, Module),
-        WithEvents = inject_az_attrs(WithSuppressions, collect_dep_mods(Module, Forms)),
+        WithSuppressions = inject_each_callback_suppressions(Transformed, Forms1, FunDefs, Module),
+        WithEvents = inject_az_attrs(WithSuppressions, collect_dep_mods(Module, Forms1)),
         Reverted = map_forms_in_file(
             fun(Form) ->
                 ok = assert_no_nodiff_call(Form),
@@ -276,62 +277,77 @@ erase_module_state() ->
     _ = erase(?TARGETS_KEY),
     ok.
 
-declare_targets(File, Forms) ->
+%% A target outside core is named by its macro: `?terminal(Elems)` expands to
+%% `arizona_template:target(arizona_terminal, Elems)`. Rewrite each such call to
+%% `arizona_template:Name(Elems)`, `Name` being the backend's `target/0`, and record
+%% the backend under that name, so the rest of the transform sees one shape for
+%% every target and the per-module target set stays finite. Runs before anything
+%% reads the forms, helper bodies included.
+resolve_targets(File, Forms) ->
     _ = put(?TARGETS_KEY, ?BUILTIN_TARGETS),
-    Forms = map_forms_in_file(fun declare_target/1, File, Forms),
-    ok.
+    map_forms_in_file(
+        fun
+            ({function, _, _, _, _} = Form) -> resolve_target_calls(Form);
+            (Form) -> Form
+        end,
+        File,
+        Forms
+    ).
 
-%% Record a render target declared with `-arizona_target({Name, Backend}).`, the
-%% attribute a target's header carries beside its `?Name` macro, so a target from
-%% any package compiles without the transform naming it. The backend is called
-%% while this module compiles, so it must already be loadable, and its `target/0`
-%% must give the name back: an `?each` recovers its target from the backend.
-%% Including the header twice repeats the same declaration, which is accepted.
-declare_target({attribute, Anno, arizona_target, Decl} = Form) ->
+resolve_target_calls(
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, target}}, [BackendAST, Elems]}
+) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    Name = declare_target(BackendAST, L),
+    {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Name}}, [resolve_target_calls(Elems)]};
+resolve_target_calls(Node) when is_tuple(Node) ->
+    list_to_tuple(resolve_target_calls(tuple_to_list(Node)));
+resolve_target_calls(Nodes) when is_list(Nodes) ->
+    [resolve_target_calls(N) || N <- Nodes];
+resolve_target_calls(Leaf) ->
+    Leaf.
+
+%% The backend is called while this module compiles, so it must be a literal,
+%% loadable module, and its `target/0` names the target: an `?each` recovers its
+%% target from the backend the same way. A name is one backend per module, and it
+%% must not be a template function already (`raw`, `each`), whose calls would be
+%% taken for templates.
+declare_target({atom, _, Backend}, L) ->
+    Name = backend_target(Backend, L),
     Targets = get(?TARGETS_KEY),
-    case Decl of
-        {Name, Backend} when is_atom(Name), is_atom(Backend) ->
-            case Targets of
-                #{Name := Backend} ->
-                    Form;
-                #{Name := _Other} ->
-                    parse_error({target, {redeclared, Name}}, Anno);
-                #{} ->
-                    ok = check_target_name(Name, Anno),
-                    ok = check_target_backend(Name, Backend, Anno),
-                    _ = put(?TARGETS_KEY, Targets#{Name => Backend}),
-                    Form
-            end;
-        _ ->
-            parse_error({target, invalid_decl}, Anno)
+    case Targets of
+        #{Name := Backend} ->
+            Name;
+        #{Name := Other} ->
+            parse_error({target, {name_clash, Name, Other, Backend}}, L);
+        #{} ->
+            ok = check_target_name(Name, Backend, L),
+            _ = put(?TARGETS_KEY, Targets#{Name => Backend}),
+            Name
     end;
-declare_target(Form) ->
-    Form.
+declare_target(_BackendAST, L) ->
+    parse_error({target, backend_not_literal}, L).
 
-%% A target macro expands to `arizona_template:Name(Elems)`, so a name that is
-%% already a one-argument template function (`raw`, `track`) would be taken for
-%% that function, or that function for a template.
-check_target_name(Name, Anno) ->
-    {module, arizona_template} = code:ensure_loaded(arizona_template),
-    {module, az} = code:ensure_loaded(az),
-    case
-        erlang:function_exported(arizona_template, Name, 1) orelse
-            erlang:function_exported(az, Name, 1)
-    of
-        true -> parse_error({target, {name_reserved, Name}}, Anno);
+backend_target(Backend, L) ->
+    case code:ensure_loaded(Backend) of
+        {module, Backend} ->
+            case erlang:function_exported(Backend, target, 0) of
+                true -> Backend:target();
+                false -> parse_error({target, {bad_backend, Backend}}, L)
+            end;
+        {error, _Reason} ->
+            parse_error({target, {bad_backend, Backend}}, L)
+    end.
+
+check_target_name(Name, Backend, L) ->
+    case lists:keymember(Name, 1, template_functions()) of
+        true -> parse_error({target, {name_reserved, Name, Backend}}, L);
         false -> ok
     end.
 
-check_target_backend(Name, Backend, Anno) ->
-    case code:ensure_loaded(Backend) of
-        {module, Backend} ->
-            case erlang:function_exported(Backend, target, 0) andalso Backend:target() of
-                Name -> ok;
-                _ -> parse_error({target, {bad_backend, Name, Backend}}, Anno)
-            end;
-        {error, _Reason} ->
-            parse_error({target, {bad_backend, Name, Backend}}, Anno)
-    end.
+template_functions() ->
+    arizona_template:module_info(exports) ++ az:module_info(exports).
 
 is_target(Name) ->
     is_map_key(Name, get(?TARGETS_KEY)).
@@ -1135,8 +1151,8 @@ format_error(nested_nodiff) ->
     "be scoped and would leak the reserved attribute into the DOM. Move it to the root "
     "element, or split the subtree into its own ?html/?stateless template whose root "
     "carries az-nodiff";
-%% Render-target errors: nesting one target in another, and a `-arizona_target`
-%% declaration declare_target/1 refused (tagged `target`).
+%% Render-target errors: nesting one target in another, and a `target/2` call
+%% declare_target/2 refused (tagged `target`).
 format_error(Reason) when Reason =:= cross_target_nesting; element(1, Reason) =:= target ->
     format_target_error(Reason);
 %% The `?each` callback errors live in their own function: they are a related family
@@ -1299,27 +1315,27 @@ format_target_error(cross_target_nesting) ->
     "is caught at render instead (cross_target_child), where the payload would "
     "otherwise be unparseable. One target per template tree -- render the other "
     "target from its own tree";
-format_target_error({target, {redeclared, Name}}) ->
+format_target_error({target, {name_clash, Name, Backend1, Backend2}}) ->
     io_lib:format(
-        "render target ~p is declared with two different backends -- each target "
-        "name maps to one backend module",
-        [Name]
+        "backends ~p and ~p both name render target ~p -- a module can render one "
+        "backend per target name",
+        [Backend1, Backend2, Name]
     );
-format_target_error({target, invalid_decl}) ->
-    "-arizona_target must be {Name, Backend}, two atoms: the name the target macro "
-    "calls (arizona_template:Name(Elems)) and its arizona_renderer backend module";
-format_target_error({target, {name_reserved, Name}}) ->
+format_target_error({target, backend_not_literal}) ->
+    "the backend of arizona_template:target(Backend, Elems) must be a literal module "
+    "name: the parse transform calls it while compiling, to know what to compile";
+format_target_error({target, {name_reserved, Name, Backend}}) ->
     io_lib:format(
-        "render target name ~p is already a template function (arizona_template:~p/1) "
-        "-- pick another name for the target macro to call",
-        [Name, Name]
+        "backend ~p names its render target ~p, which is already an arizona_template "
+        "function -- its target/0 must return another name",
+        [Backend, Name]
     );
-format_target_error({target, {bad_backend, Name, Backend}}) ->
+format_target_error({target, {bad_backend, Backend}}) ->
     io_lib:format(
-        "render target ~p names backend ~p, which must be a loadable arizona_renderer "
-        "module whose target/0 returns ~p. It is called while this module compiles, "
-        "so compile it first (a dependency, or erl_first_files in the same app)",
-        [Name, Backend, Name]
+        "render backend ~p must be a loadable arizona_renderer module whose target/0 "
+        "returns its target name. It is called while this module compiles, so compile "
+        "it first (a dependency, or erl_first_files in the same app)",
+        [Backend]
     ).
 
 impure_remedy() ->
@@ -4071,8 +4087,8 @@ each_body_unwrap(LastExpr, _Backend) ->
     {element, LastExpr}.
 
 %% The renderer backend module of a render-target name (the atom a target macro
-%% calls, `?html` -> `html`): a built-in one or one the module declared (see
-%% declare_target/1). Each backend's behaviour (`Backend:target/0`, `name/1`,
+%% calls, `?html` -> `html`): a built-in one or one a `target/2` call in the
+%% module named (see resolve_targets/2). Each backend's behaviour (`Backend:target/0`, `name/1`,
 %% `supports_local/0`, ...) covers everything else.
 target_backend(Name) ->
     map_get(Name, get(?TARGETS_KEY)).

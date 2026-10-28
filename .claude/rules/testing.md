@@ -79,7 +79,7 @@ follows its naming.
 | Stateless templates / layouts | `arizona_<name>`, `arizona_*_layout` | `arizona_stateless.hrl` | Pure `render/1` |
 | HTTP controllers | `arizona_*_controller` | plain module | Reached by `arizona_js:fetch/2`; export the action (default `handle/1`) |
 | `?json` render target | `arizona_json_*` | `arizona_stateful.hrl` | Drive the `e2e/json` specs and `arizona_json_SUITE` |
-| Declared render target | `arizona_text_backend` | `-behaviour(arizona_renderer)` | A target outside core (`-arizona_target({text, arizona_text_backend})`) for the parse transform suite |
+| Render target outside core | `arizona_text_backend` | `-behaviour(arizona_renderer)` | Named by backend (`arizona_template:target(arizona_text_backend, Elems)`) in the parse transform suite |
 | MCP servers | `arizona_mcp_*_server` | `-behaviour(arizona_mcp)` | Minimal / crashing / unencodable variants for the MCP suites |
 | `?local` fixtures | `arizona_local*`, `*_local` | either | Client-owned slots: content, attribute, nested, XSS |
 | Parse-transform + diff shapes | `arizona_conditional_*`, `arizona_each_*`, `arizona_nested_*`, ... | either | One module per compile/diff shape under test |
