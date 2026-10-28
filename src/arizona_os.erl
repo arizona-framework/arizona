@@ -35,6 +35,7 @@ Whether the running shell offers a capability is read with `?capability(Name)`
 is a UI/effect hint only and must never gate a server-side authorization
 decision.
 """.
+-behaviour(arizona_command_builder).
 
 -include("arizona_effect.hrl").
 
@@ -42,6 +43,7 @@ decision.
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([target/0]).
 -export([command/1]).
 -export([command/2]).
 -export([set_title/1]).
@@ -154,3 +156,11 @@ safe no-op.
     Url :: binary(),
     Opts :: map().
 open_window(Url, Opts) -> command(~"open_window", [Url, Opts]).
+
+%% --------------------------------------------------------------------
+%% arizona_command_builder callbacks
+%% --------------------------------------------------------------------
+
+-doc false.
+-spec target() -> atom() | all.
+target() -> html.

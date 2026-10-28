@@ -52,6 +52,7 @@ clipboard. It is the same reasoning behind there being deliberately no
 `set_text`/`set_html` -- writing content from an effect would fight the diff
 engine, which is authoritative for what a view shows.
 """.
+-behaviour(arizona_command_builder).
 
 -include("arizona_effect.hrl").
 
@@ -63,6 +64,7 @@ engine, which is authoritative for what a view shows.
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([target/0]).
 -export([push_event/1]).
 -export([push_event/2]).
 -export([toggle/1]).
@@ -603,6 +605,14 @@ nest_on_error(#{on_error := Cmds} = Opts) ->
     Opts#{on_error => arizona_effect:nest(deferred, Cmds)};
 nest_on_error(Opts) ->
     Opts.
+
+%% --------------------------------------------------------------------
+%% arizona_command_builder callbacks
+%% --------------------------------------------------------------------
+
+-doc false.
+-spec target() -> atom() | all.
+target() -> html.
 
 -ifdef(TEST).
 

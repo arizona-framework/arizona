@@ -16,11 +16,13 @@ commands as they're added. `push_event`/`navigate` mirror their web counterparts
 {'Button', [{on_tap, arizona_android:push_event(~"inc")}], [~"+"]}
 ```
 """.
+-behaviour(arizona_command_builder).
 
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([target/0]).
 -export([push_event/1]).
 -export([push_event/2]).
 -export([navigate/1]).
@@ -80,3 +82,11 @@ them is silently ignored rather than an error.
     Path :: binary(),
     Opts :: map().
 navigate(Path, Opts) -> arizona_effect:navigate(Path, Opts).
+
+%% --------------------------------------------------------------------
+%% arizona_command_builder callbacks
+%% --------------------------------------------------------------------
+
+-doc false.
+-spec target() -> atom() | all.
+target() -> json.

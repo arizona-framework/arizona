@@ -84,7 +84,7 @@ and `/json/*` fixtures. A breaking change here surfaces in the client's PR that 
 
 ## Event attributes & effects -- `arizona_js` / `arizona_android`
 
-Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?json` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders.
+Web event attributes (`az-click`, `az-submit`, etc.) use `arizona_js` commands; `?json` views use `arizona_android`. Both build the same neutral effect tuple `{arizona_effect, [OpCode, ...Args]}` (encoded by `arizona_effect`). Handler effects use the same builders. A builder is any module declaring `-behaviour(arizona_command_builder)`, whose `target/0` names the render target its commands are for (`all` for the protocol's own, `arizona_effect`); the parse transform recognises builders by it, and calling one in a template of another target is a compile error.
 
 **Any element event works.** `az-<event>` binds `addEventListener(<event>)` with the attribute suffix used verbatim as the listener type, so there is no supported-event list: `az_toggle` on a `<dialog popover>`, `az_close` on a `<dialog>`, `az_error` on an `<img>`, and a custom element's own `az_sl_change` all bind. Non-bubbling events are delivered too, matched on the element that declares them rather than by ancestor lookup, since such an event has no propagation path. The name must be lowercase (the HTML parser lowercases attribute names), which is what custom elements use kebab-case for anyway.
 

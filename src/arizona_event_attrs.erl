@@ -210,8 +210,9 @@ unprovable_in_layout(Name) ->
                 "az attribute ~ts in layout ~p:~p/1 carries a command the "
                 "client will never delegate: a layout renders once, at SSR, "
                 "so its render-time proof reaches no frame. Build the command "
-                "with a literal arizona_js/arizona_android/arizona_os call so "
-                "it is proven at compile time instead",
+                "with a literal call to a command builder (a module with "
+                "-behaviour(arizona_command_builder)) so it is proven at "
+                "compile time instead",
                 [Name, Mod, Fun]
             )
     end.

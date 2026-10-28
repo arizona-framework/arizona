@@ -594,6 +594,9 @@
 -export([scope_slot_keeps_static_marker_text/1]).
 -export([scope_repeated_stateless_keeps_static_marker_text/1]).
 -export([az_attrs_records_command_names/1]).
+-export([builder_of_other_target_rejected/1]).
+-export([builder_outside_core_folds/1]).
+-export([builder_non_command_not_folded/1]).
 -export([az_attrs_skips_unproven_values/1]).
 -export([az_attrs_keeps_prevent_default_with_a_value/1]).
 -export([az_attrs_skips_injected_az_view/1]).
@@ -1299,6 +1302,9 @@ groups() ->
         ]},
         {az_attrs, [parallel], [
             az_attrs_records_command_names,
+            builder_of_other_target_rejected,
+            builder_outside_core_folds,
+            builder_non_command_not_folded,
             az_attrs_skips_unproven_values,
             az_attrs_keeps_prevent_default_with_a_value,
             az_attrs_skips_injected_az_view,
@@ -4295,7 +4301,7 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
     NativeMod = compile_module(
         "-module(pt_sub_json). -export([render/1]). render(Bindings) -> "
         "_ = Bindings, arizona_template:json({form, [{az_submit, "
-        "arizona_js:push_event(<<\"login\">>)}], []}). "
+        "arizona_android:push_event(<<\"login\">>)}], []}). "
     ),
     {Native, _} = arizona_render:render(NativeMod:render(#{})),
     ?assertEqual(nomatch, binary:match(iolist_to_binary(Native), <<"method">>)).
@@ -12118,6 +12124,49 @@ compute_changed(OldBindings, NewBindings) ->
 %% expression -- literal args, dynamic args, a list of commands, a branch of a
 %% conditional -- because the builders are the only producers of effect tuples,
 %% so the call is proof the value is a command.
+%% A builder's commands run on its target's client: one of another target in a
+%% template is refused, the protocol's own (`all`) is accepted in any.
+builder_of_other_target_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_builder_cross). -export([render/1]). render(_Bindings) -> "
+        "arizona_template:html({button, [{az_click, arizona_android:push_event(~\"x\")}], []}). ",
+        fun
+            ({target, {builder_target, arizona_android, json, html}}) -> true;
+            (_) -> false
+        end
+    ).
+
+%% A builder is recognised by its behaviour, so one outside core is proven and folded
+%% at compile time exactly like the framework's own.
+builder_outside_core_folds(Config) when is_list(Config) ->
+    _ = compile_module(
+        "-module(pt_ext_builder). -behaviour(arizona_command_builder). "
+        "-export([target/0, ping/1]). target() -> html. "
+        "ping(E) -> {arizona_effect, [0, E]}. "
+    ),
+    Mod = compile_module(
+        "-module(pt_ext_builder_use). -export([render/1]). render(_Bindings) -> "
+        "arizona_template:html({button, [{az_click, pt_ext_builder:ping(~\"p\")}], []}). "
+    ),
+    T = Mod:render(#{}),
+    %% Folded: the command is part of the statics, no dynamic carries it.
+    ?assertEqual([], maps:get(d, T)),
+    ?assertNotEqual(nomatch, binary:match(iolist_to_binary(maps:get(s, T)), ~"az-click")),
+    ?assertEqual([<<"az-click">>], az_attrs_of(Mod)).
+
+%% Only a command is folded: a builder function yielding anything else (an encoder,
+%% a helper) is evaluated at render, like any other value.
+builder_non_command_not_folded(Config) when is_list(Config) ->
+    _ = compile_module(
+        "-module(pt_ext_builder_label). -behaviour(arizona_command_builder). "
+        "-export([target/0, label/1]). target() -> all. label(X) -> X. "
+    ),
+    Mod = compile_module(
+        "-module(pt_ext_builder_label_use). -export([render/1]). render(_Bindings) -> "
+        "arizona_template:html({button, [{title, pt_ext_builder_label:label(~\"t\")}], []}). "
+    ),
+    ?assertMatch([_], maps:get(d, Mod:render(#{}))).
+
 az_attrs_records_command_names(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_az_cmd). "
@@ -12131,7 +12180,7 @@ az_attrs_records_command_names(Config) when is_list(Config) ->
         "                [arizona_js:push_event(<<\"d\">>), arizona_js:toggle(<<\"#m\">>)]},"
         "            {az_mouseenter, case az:get(os, Bindings) of"
         "                true -> arizona_os:focus();"
-        "                false -> arizona_android:push_event(<<\"m\">>)"
+        "                false -> arizona_effect:push_event(<<\"m\">>)"
         "            end},"
         "            'az-prevent-default'"
         "        ], [<<\"x\">>]}"
