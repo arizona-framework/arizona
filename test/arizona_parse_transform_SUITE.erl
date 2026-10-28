@@ -2774,11 +2774,11 @@ raw_text_uppercase_tag_classified(Config) when is_list(Config) ->
     ?assertEqual(nomatch, binary:match(HTML, ~"<!--az:")),
     ?assertEqual(<<"<ScRiPt az=\"1KL9229-0\">a<\\/script>b</ScRiPt>">>, HTML),
     %% The classifier itself, for every raw-text tag and a non-raw-text one.
-    ?assertEqual(raw, arizona_html:raw_text_kind('SCRIPT', html)),
-    ?assertEqual(raw, arizona_html:raw_text_kind('Style', html)),
-    ?assertEqual(escapable, arizona_html:raw_text_kind('TEXTAREA', html)),
-    ?assertEqual(escapable, arizona_html:raw_text_kind('Title', html)),
-    ?assertEqual(none, arizona_html:raw_text_kind('DIV', html)).
+    ?assertEqual(raw, arizona_html:raw_text_kind('SCRIPT', undefined)),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Style', undefined)),
+    ?assertEqual(escapable, arizona_html:raw_text_kind('TEXTAREA', undefined)),
+    ?assertEqual(escapable, arizona_html:raw_text_kind('Title', undefined)),
+    ?assertEqual(none, arizona_html:raw_text_kind('DIV', undefined)).
 
 %% Inside `<svg>` the parser is in foreign content, where an element is ordinary
 %% parsed markup: comments really are comments, so a slot keeps its markers and
@@ -2821,10 +2821,10 @@ raw_text_svg_title_diffable(Config) when is_list(Config) ->
     %% verbatim `?raw` splice into a context that parses markup.
     ?assertEqual(none, arizona_html:raw_text_kind('Style', foreign)),
     ?assertEqual(none, arizona_html:raw_text_kind('Script', foreign)),
-    ?assertEqual(raw, arizona_html:raw_text_kind('Style', html)),
-    ?assertEqual(raw, arizona_html:raw_text_kind('Script', html)),
-    ?assertEqual(foreign, arizona_html:content_context('SVG', html)),
-    ?assertEqual(html, arizona_html:content_context('FOREIGNOBJECT', foreign)),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Style', undefined)),
+    ?assertEqual(raw, arizona_html:raw_text_kind('Script', undefined)),
+    ?assertEqual(foreign, arizona_html:content_context('SVG', undefined)),
+    ?assertEqual(undefined, arizona_html:content_context('FOREIGNOBJECT', foreign)),
     ?assertEqual(foreign, arizona_html:content_context(g, foreign)).
 
 %% The content context is per-template, so how SVG chrome is factored decides
@@ -7085,10 +7085,12 @@ binary_element_tag_classifies(Config) when is_list(Config) ->
     ?assertEqual(arizona_html:is_void(input), arizona_html:is_void(~"input")),
     ?assertEqual(arizona_html:is_void('BR'), arizona_html:is_void(~"BR")),
     ?assertEqual(
-        arizona_html:raw_text_kind(script, html), arizona_html:raw_text_kind(~"script", html)
+        arizona_html:raw_text_kind(script, undefined),
+        arizona_html:raw_text_kind(~"script", undefined)
     ),
     ?assertEqual(
-        arizona_html:content_context(svg, html), arizona_html:content_context(~"svg", html)
+        arizona_html:content_context(svg, undefined),
+        arizona_html:content_context(~"svg", undefined)
     ),
     Mod = compile_module(
         "-module(pt_bin_tag_cls). "
@@ -8631,7 +8633,7 @@ each_json_no_single_root_flag(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    arizona_template:each(fun(Item) -> "
         "        {'Text', [], [maps:get(name, Item)]} "
-        "    end, arizona_template:get(items, Bindings), arizona_json, html). "
+        "    end, arizona_template:get(items, Bindings), arizona_json, undefined). "
     ),
     Result = Mod:render(#{items => [#{name => <<"a">>}]}),
     Tmpl = maps:get(template, Result),

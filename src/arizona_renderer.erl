@@ -109,7 +109,9 @@ does not use HTML comment markers.
 -doc """
 The content context an element's children are parsed in.
 
-`foreign` is the HTML parser's foreign-content mode (inside `<svg>`), where an
+Contexts are the backend's own names; `undefined` is a template's root, where the
+parse transform starts every template. HTML parses its root as HTML content and
+uses `foreign` for the HTML parser's foreign-content mode (inside `<svg>`), where an
 element is ordinary parsed content -- comments are comments, so a slot keeps its
 markers and stays diffable. The distinction only matters for a tag classified
 differently in each: an HTML `<title>` makes comment markers literal text, an SVG
@@ -117,7 +119,7 @@ differently in each: an HTML `<title>` makes comment markers literal text, an SV
 """.
 -callback content_context(Tag :: tag(), Parent :: content_context()) -> content_context().
 
--type content_context() :: html | foreign.
+-type content_context() :: atom().
 -export_type([content_context/0]).
 
 -doc """
