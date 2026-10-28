@@ -188,7 +188,7 @@ routes() ->
             state => #{adapter => arizona_roadrunner_server}
         }},
         %% Dev-reload fixture: a JSON view holding a fun made by a module the
-        %% admin endpoint reloads (e2e/json/reload.spec.js).
+        %% admin endpoint reloads (e2e/sequential/arizona_reload.spec.js).
         {live, <<"/json/reload-fun">>, arizona_reload_fun_view, #{}},
         {get, <<"/_test/reload">>, arizona_reload_admin, #{}},
         %% arizona_js:fetch e2e -- a form posts to the controller (sets an HttpOnly
