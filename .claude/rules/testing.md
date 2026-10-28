@@ -56,16 +56,20 @@ Playwright, split into projects/directories, all served by
   `window.__arizona_os__` installed via `page.addInitScript` (the Electron-preload equivalent),
   and `arizona_stream_siblings` covers a stream `?each` among static siblings, the shape whose
   container render must patch through the slot marker rather than the enclosing element.
-- `e2e/sequential/` -- `workers: 1`. A spec belongs here only if it cannot tolerate overlap:
-  today that is the drain spec, which soft-drains the whole listener and remounts every live
-  view. Serializing buys ordering, **not** state isolation -- the e2e server starts once for the
+- `e2e/sequential/` -- `workers: 1`, and `dependencies` on the other two projects, so it runs
+  after them and alone. A spec belongs here if it disturbs every connection on the server: the
+  drain spec soft-drains the whole listener, and the reload spec (a JSON client) turns the dev
+  reloader on node-wide, so every socket opened before it fires closes `1001` and remounts its
+  view empty. Run beside another project, either one resets that project's pages mid-test.
+  Serializing buys ordering, **not** state isolation -- the e2e server starts once for the
   whole run, so anything keyed globally outlives every test. A spec needing isolation must scope
   its own state (the chat spec scopes its pubsub channel to the `:room` path segment and visits
   a fresh random room per test); putting it here instead will not fix it.
 - `e2e/json/` -- the `?json` wire e2e. A real WebSocket client, no browser
   (`e2e/utils/json_client.js`), driving the JSON views over the live server.
 
-`make test-e2e-parallel` / `test-e2e-sequential` / `test-e2e-json` run one project.
+`make test-e2e-parallel` / `test-e2e-sequential` / `test-e2e-json` run one project
+(`test-e2e-sequential` passes `--no-deps`, so it skips the projects it waits for).
 
 ## `test/support/`
 

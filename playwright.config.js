@@ -26,15 +26,19 @@ export default defineConfig({
             testDir: './e2e/parallel',
         },
         {
-            // One worker so the drain spec cannot overlap the others: it soft-drains
-            // the whole listener, which stops every live process on the server and
-            // forces every open page to remount. Isolation of per-test *state* is
-            // not this project's job -- `arizona_chat` scopes its pubsub channel to
-            // the room in the URL, so serializing is not what keeps it clean.
+            // Specs that disturb every connection on the server: the drain spec
+            // soft-drains the whole listener, and the reload spec turns the dev
+            // reloader on, so every socket opened before it fires closes `1001`
+            // and remounts its view, empty. Either one beside another spec resets
+            // that spec's page mid-test, so this project waits for the others
+            // (`dependencies`) and then runs alone, one spec at a time. Isolation
+            // of per-test *state* is not this project's job -- `arizona_chat`
+            // scopes its pubsub channel to the room in the URL.
             name: 'sequential',
             testDir: './e2e/sequential',
             fullyParallel: false,
             workers: 1,
+            dependencies: ['parallel', 'json'],
         },
         {
             // Native (JSON) wire e2e: a real WebSocket client (no browser),

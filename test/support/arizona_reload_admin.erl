@@ -9,8 +9,10 @@ watch a native client remount. The test server runs without the dev reloader, so
 `step=arm` enables it (`reloader` app env) for the connection the spec opens next,
 and `step=fire` reloads `arizona_reload_fun_source` twice with a different `STEP`
 (`code:purge/1` then `code:load_binary/3`, broadcasting after each, as a reload wave
-does) and disables it again. Only connections opened between the two join the
-reload topic, which keeps the close away from the specs running beside this one.
+does) and disables it again. The reloader env is node-wide, so every connection
+opened between the two joins the reload topic and is closed `1001` -- not only the
+spec's own. That is why the spec lives in the `sequential` Playwright project,
+which runs after the others and alone.
 
 Always replies `204 No Content`.
 """.

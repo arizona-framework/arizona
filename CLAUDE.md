@@ -37,7 +37,7 @@ npx vitest run                            # JS unit tests (Vitest + jsdom)
 | `make test-js` | JS unit tests (Vitest) |
 | `make test-e2e` | Playwright E2E tests (incl. the `json` wire project) |
 | `make test-e2e-parallel` | Playwright `parallel` project only |
-| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`) |
+| `make test-e2e-sequential` | Playwright `sequential` project only (`workers: 1`; in a full run it waits for the other projects, since its specs disturb every connection) |
 | `make test-e2e-json` | Playwright `json` project only (`?json` wire, no browser) |
 | `make cover` | Coverage check (`cover-erl` `cover-js`) |
 | `make cover-erl` | Erlang coverage (min 80% of the project total, not per module) |

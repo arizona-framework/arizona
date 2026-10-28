@@ -126,7 +126,7 @@ test-e2e-parallel:
 	npx playwright test --project parallel
 
 test-e2e-sequential:
-	npx playwright test --project sequential
+	npx playwright test --project sequential --no-deps
 
 test-e2e-json:
 	npx playwright test --project json
