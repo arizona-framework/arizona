@@ -251,6 +251,50 @@ jobs:
       - name: Coverage
         run: make cover-erl
 
+  test-otp:
+    # The other jobs run the .tool-versions OTP (the newest supported, with
+    # coverage). This one runs every older release rebar.config's minimum_otp_vsn
+    # admits, so syntax or an API newer than the minimum fails here instead of on
+    # a user's build. Keep the list in step with minimum_otp_vsn.
+    name: Test (OTP ${{ matrix.otp }})
+
+    runs-on: ubuntu-26.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ["28"]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24
+        id: setup-beam
+        with:
+          otp-version: ${{ matrix.otp }}
+          rebar3-version: "3.27.3"
+
+      # No _build cache: the test profile's adapters are git deps on a branch,
+      # which rebar3 never refetches once in _build, and this job is the one
+      # that must see their current minimum_otp_vsn.
+      - name: Cache rebar3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/rebar3
+          key: "\
+            rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-\
+            config-${{ hashFiles('rebar.config') }}"
+          restore-keys: rebar3-${{ runner.os }}-otp-${{ steps.setup-beam.outputs.otp-version }}-
+
+      - name: Install inotify tools
+        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
+        with:
+          packages: inotify-tools
+          version: 1.0
+
+      - name: Test
+        run: make test-erl
+
   artifacts:
     name: Verify artifacts
 
