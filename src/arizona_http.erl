@@ -138,7 +138,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
                     layouts => maps:get(layouts, Opts, []),
                     on_mount => maps:get(on_mount, Opts, [])
                 },
-                {ContentType, Page} = render_view(H, RenderOpts),
+                {Backend, Page} = render_view(H, RenderOpts),
                 %% A view or middleware may stash a non-200 status (e.g. 401)
                 %% while still rendering a body; default to 200.
                 OkStatus =
@@ -146,7 +146,7 @@ do_render(H, ArzReq, Bindings, Opts) ->
                         undefined -> 200;
                         Status -> Status
                     end,
-                {ok, OkStatus, ContentType, Page, ArzReq}
+                {ok, OkStatus, Backend:content_type(), Page, ArzReq}
             catch
                 Class:Reason:Stacktrace ->
                     %% arizona catches the render crash here, before roadrunner's

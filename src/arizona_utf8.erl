@@ -94,16 +94,16 @@ what no slot produced (a layout's values), raising `{non_utf8_render, Byte,
 Offset}` with the offset in the document. The output is the same bytes
 `render_view/2` returns.
 """.
--spec render_view(Handler, Opts) -> {ContentType, iolist()} when
+-spec render_view(Handler, Opts) -> {Backend, iolist()} when
     Handler :: module(),
     Opts :: arizona_live:route_opts(),
-    ContentType :: binary().
+    Backend :: module().
 render_view(Handler, Opts) ->
-    {ContentType, Doc} = arizona_render:render_view(Handler, Opts, fun(Page) ->
+    {Backend, Doc} = arizona_render:render_view(Handler, Opts, fun(Page) ->
         wrap(Page, mount)
     end),
     ok = check_document(iolist_to_binary(Doc)),
-    {ContentType, Doc}.
+    {Backend, Doc}.
 
 -doc """
 Stands in for a `?stateful` child's handler in a dev-mode page (see
