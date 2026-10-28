@@ -12,9 +12,12 @@
 -export([encode_refuses_non_utf8_like_json/1]).
 -export([protocol_builders_build_protocol_ops/1]).
 -export([platform_builders_share_protocol_builders/1]).
+-export([nested_reaches_wire_as_plain_list/1]).
+-export([mapfold_nested_walks_every_nested_list/1]).
+-export([nested_flash_refused_whatever_the_op/1]).
 
 all() ->
-    [{group, encode}, {group, protocol}].
+    [{group, encode}, {group, protocol}, {group, nested}].
 
 groups() ->
     [
@@ -28,6 +31,11 @@ groups() ->
         {protocol, [parallel], [
             protocol_builders_build_protocol_ops,
             platform_builders_share_protocol_builders
+        ]},
+        {nested, [parallel], [
+            nested_reaches_wire_as_plain_list,
+            mapfold_nested_walks_every_nested_list,
+            nested_flash_refused_whatever_the_op
         ]}
     ].
 
@@ -52,11 +60,14 @@ encode_flattens_nested_lists(Config) when is_list(Config) ->
         ~"[[1,&quot;#b&quot;],[0,&quot;a&quot;]]", arizona_template:to_bin([[], [B], A])
     ),
     ?assertEqual(value, arizona_template:classify_trusted([[~"text"], A])),
-    %% A command list wrapped by another command flattens the same way.
+    %% A command list another command nests flattens the same way, and reaches the
+    %% wire as that plain list.
+    OnKey = arizona_js:on_key(enter, [A, [], [B]]),
     ?assertMatch(
-        {arizona_effect, [_OnKey, _Key, [[0, ~"a"], [1, ~"#b"]]]},
-        arizona_js:on_key(enter, [A, [], [B]])
-    ).
+        {arizona_effect, [_OnKey, _Key, {arizona_effect, deferred, [[0, ~"a"], [1, ~"#b"]]}]},
+        OnKey
+    ),
+    ?assertMatch([_OnKey, _Key, [[0, ~"a"], [1, ~"#b"]]], arizona_effect:json_value(OnKey)).
 
 %% `[]` is no command: dropped wherever it sits, so a conditional item with a
 %% `false -> []` branch needs no filtering. A list of nothing but empty items is
@@ -217,3 +228,56 @@ platform_builders_share_protocol_builders(Config) when is_list(Config) ->
         Mod <- [arizona_js, arizona_android],
         erlang:function_exported(Mod, F, length(A))
     ].
+
+%% A nested command reaches the client as the bare command or list it holds, in the
+%% shape the builder gave it, wherever it sits: an argument, a map value, or inside
+%% a command that is itself nested.
+nested_reaches_wire_as_plain_list(Config) when is_list(Config) ->
+    Toggle = arizona_js:toggle(~"#m"),
+    ?assertEqual(
+        [?EFFECT_TRANSITION, #{}, [?EFFECT_TOGGLE, ~"#m"]],
+        arizona_effect:json_value(arizona_js:transition(Toggle))
+    ),
+    ?assertEqual(
+        [?EFFECT_FETCH, ~"/x", #{on_error => [[?EFFECT_TOGGLE, ~"#m"], [?EFFECT_HIDE, ~"#n"]]}],
+        arizona_effect:json_value(
+            arizona_js:fetch(~"/x", #{on_error => [Toggle, arizona_js:hide(~"#n")]})
+        )
+    ),
+    ?assertEqual(
+        [?EFFECT_ON_KEY, [escape], [?EFFECT_TRANSITION, #{}, [?EFFECT_TOGGLE, ~"#m"]]],
+        arizona_effect:json_value(arizona_js:on_key(escape, arizona_js:transition(Toggle)))
+    ).
+
+%% The walk hands each nested list to the fun with when it runs, and rebuilds the
+%% command around what the fun returns; a command nesting nothing is unchanged.
+mapfold_nested_walks_every_nested_list(Config) when is_list(Config) ->
+    {arizona_effect, Fetch} = arizona_js:fetch(~"/x", #{
+        on_error => arizona_js:transition(arizona_js:toggle(~"#m"))
+    }),
+    Hide = arizona_js:hide(~"#h"),
+    {Rebuilt, Seen} = arizona_effect:mapfold_nested(
+        fun(When, [_Inner], Acc) ->
+            {arizona_effect, Bare} = Hide,
+            {[Bare], [When | Acc]}
+        end,
+        [],
+        Fetch
+    ),
+    ?assertEqual([deferred], Seen),
+    ?assertEqual(
+        [?EFFECT_FETCH, ~"/x", #{on_error => [?EFFECT_HIDE, ~"#h"]}],
+        arizona_effect:to_wire(Rebuilt)
+    ),
+    {arizona_effect, Plain} = arizona_js:toggle(~"#p"),
+    ?assertEqual(
+        {Plain, none},
+        arizona_effect:mapfold_nested(fun(_When, Inner, _Acc) -> {Inner, called} end, none, Plain)
+    ).
+
+%% The encoder knows no op that nests: a command of any op code holding a
+%% navigate with a flash, as data, is refused like a bare one.
+nested_flash_refused_whatever_the_op(Config) when is_list(Config) ->
+    Nav = arizona_effect:navigate(~"/p", #{flash => #{~"k" => ~"v"}}),
+    Cmd = {arizona_effect, [999, arizona_effect:nest(now, Nav)]},
+    ?assertError({flash_outside_live_effect, navigate}, arizona_effect:json_value(Cmd)).
