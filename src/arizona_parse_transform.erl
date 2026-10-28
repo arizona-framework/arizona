@@ -231,7 +231,7 @@ receives additional validation and `az-view` injection.
     Forms :: [erl_parse:abstract_form()],
     Options :: [compile:option()],
     Errors :: [{file:filename(), [{erl_anno:location(), module(), term()}]}].
-parse_transform(Forms, _Options) ->
+parse_transform(Forms, Options) ->
     File = extract_file(Forms),
     Module = extract_module(Forms),
     IsLive = has_behaviour(Forms, arizona_stateful),
@@ -254,14 +254,7 @@ parse_transform(Forms, _Options) ->
         ),
         WithSuppressions = inject_each_callback_suppressions(Transformed, Forms1, FunDefs, Module),
         WithEvents = inject_az_attrs(WithSuppressions, collect_dep_mods(Module, Forms1)),
-        Reverted = map_forms_in_file(
-            fun(Form) ->
-                ok = assert_no_nodiff_call(Form),
-                Form
-            end,
-            File,
-            erl_syntax:revert_forms(WithEvents)
-        ),
+        Reverted = check_forms(File, Module, Options, erl_syntax:revert_forms(WithEvents)),
         with_warnings(Reverted, latin1_warnings(Forms, erase(?FOLDED_KEY)))
     catch
         throw:{arizona_parse_error, ErrorFile, Anno, Reason} ->
@@ -448,6 +441,93 @@ group_by_file(Warnings) ->
 
 %% An inherited constructor call (inherit_nodiff/1) that no compile path reached
 %% would otherwise reach the runtime as an `undef` on a module that does not exist.
+%% Last checks over the transformed module, each refusing what no template compiled.
+check_forms(File, Module, Options, Forms) ->
+    Reachable = reachable_functions(Module, Options, Forms),
+    map_forms_in_file(
+        fun(Form) ->
+            ok = assert_no_nodiff_call(Form),
+            ok = assert_no_raw_each(Form, Reachable),
+            Form
+        end,
+        File,
+        Forms
+    ).
+
+%% A raw `?each` still in a function that can run had no template take it in, so it
+%% has no target to compile with. One in a function nothing calls any more (a helper
+%% inlined at every call) never runs, and is left alone.
+assert_no_raw_each({function, _, Name, Arity, Clauses}, Reachable) when
+    is_map_key({Name, Arity}, Reachable)
+->
+    find_raw_each(Clauses);
+assert_no_raw_each(_Form, _Reachable) ->
+    ok.
+
+find_raw_each({call, L, {remote, _, {atom, _, _}, {atom, _, each}}, [_, _]} = Call) ->
+    case has_raw_each(Call) of
+        true -> parse_error(each_outside_target, L);
+        false -> find_raw_each(tuple_to_list(Call))
+    end;
+find_raw_each(Node) when is_tuple(Node) ->
+    find_raw_each(tuple_to_list(Node));
+find_raw_each(Nodes) when is_list(Nodes) ->
+    lists:foreach(fun find_raw_each/1, Nodes);
+find_raw_each(_Leaf) ->
+    ok.
+
+%% The functions that can run: the exported ones (all of them under `export_all`)
+%% and `on_load`, then whatever they call locally, or reference as `fun f/A`.
+%% A function reached only through `apply/3` or `spawn/3` is not seen.
+reachable_functions(Module, Options, Forms) ->
+    Callees = #{{N, A} => local_callees(Module, Cs, []) || {function, _, N, A, Cs} <- Forms},
+    Roots =
+        case is_export_all(Options, Forms) of
+            true -> maps:keys(Callees);
+            false -> exported_functions(Forms)
+        end,
+    reach(Roots, Callees, #{}).
+
+exported_functions(Forms) ->
+    [FA || {attribute, _, export, FAs} <- Forms, FA <- FAs] ++
+        [FA || {attribute, _, on_load, FA} <- Forms].
+
+reach([], _Callees, Seen) ->
+    Seen;
+reach([F | Rest], Callees, Seen) when is_map_key(F, Seen) ->
+    reach(Rest, Callees, Seen);
+reach([F | Rest], Callees, Seen) ->
+    Next =
+        case Callees of
+            #{F := Cs} -> Cs;
+            #{} -> []
+        end,
+    reach(Next ++ Rest, Callees, Seen#{F => true}).
+
+is_export_all(Options, Forms) ->
+    lists:member(export_all, Options) orelse
+        lists:any(
+            fun(Opts) -> lists:member(export_all, lists:flatten([Opts])) end,
+            [Opts || {attribute, _, compile, Opts} <- Forms]
+        ).
+
+local_callees(Module, {call, _, {atom, _, F}, Args} = Call, Acc) ->
+    local_callees(Module, tuple_to_list(Call), [{F, length(Args)} | Acc]);
+local_callees(Module, {call, _, {remote, _, {atom, _, Module}, {atom, _, F}}, Args} = Call, Acc) ->
+    local_callees(Module, tuple_to_list(Call), [{F, length(Args)} | Acc]);
+local_callees(_Module, {'fun', _, {function, F, A}}, Acc) when is_atom(F) ->
+    [{F, A} | Acc];
+local_callees(
+    Module, {'fun', _, {function, {atom, _, Module}, {atom, _, F}, {integer, _, A}}}, Acc
+) ->
+    [{F, A} | Acc];
+local_callees(Module, Node, Acc) when is_tuple(Node) ->
+    local_callees(Module, tuple_to_list(Node), Acc);
+local_callees(Module, [H | T], Acc) ->
+    local_callees(Module, T, local_callees(Module, H, Acc));
+local_callees(_Module, _Leaf, Acc) ->
+    Acc.
+
 assert_no_nodiff_call({call, L, {remote, _, {atom, _, ?NODIFF_MOD}, _}, _}) ->
     parse_error(nodiff_call_not_compiled, L);
 assert_no_nodiff_call(Node) when is_tuple(Node) ->
@@ -715,8 +795,11 @@ is_module_attr(_) -> false.
 %% any template, else the target's name, as is_target/1 knows it). Three jobs:
 %%
 %%   1. A single `?each` serves every target. Each one is marked with the backend
-%%      of the target it sits in (the default `html` one standalone) and the
-%%      content context there, so the bottom-up transform compiles it with both.
+%%      of the target it sits in and the content context there, so the bottom-up
+%%      transform compiles it with both. One outside every target is left as
+%%      written: it is marked where a template takes it in (a hoisted value where
+%%      it is spliced, a helper body where it is inlined), and one no template
+%%      takes in is refused by assert_no_raw_each/2.
 %%   2. Reject inline cross-target nesting: any target macro literally inside a
 %%      different one (e.g. `?html(...)` in `?json(...)`) would mix incompatible
 %%      statics in one tree. Caught here as a compile error instead of corrupting
@@ -764,11 +847,11 @@ mark_targets(
 ) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
-    case is_compiled_each_pairing(SourceArg) of
+    case is_compiled_each_pairing(SourceArg) orelse Ctx =:= none of
         true ->
             {call, L, Callee, mark_targets(Args, Ctx, CCtx)};
         false ->
-            Backend = ctx_backend(Ctx),
+            Backend = target_backend(Ctx),
             Unwrapped = unwrap_each_body([FunArg, SourceArg], Backend:target()),
             Marked = maybe_inherit_each_nodiff([mark_targets(A, Ctx, CCtx) || A <- Unwrapped]),
             {call, L, Callee, Marked ++ [{atom, L, Backend}, {atom, L, CCtx}]}
@@ -799,8 +882,12 @@ mark_targets_node(Node, Ctx, CCtx) ->
         false -> Marked
     end.
 
+%% Outside every template an element-shaped tuple is plain data, with no backend to
+%% ask about content contexts.
+mark_element_children(L, _Tag, Parts, none, CCtx) ->
+    {tuple, L, [mark_targets(P, none, CCtx) || P <- Parts]};
 mark_element_children(L, Tag, Parts, Ctx, CCtx) ->
-    ChildCCtx = (ctx_backend(Ctx)):content_context(Tag, CCtx),
+    ChildCCtx = (target_backend(Ctx)):content_context(Tag, CCtx),
     {tuple, L, [mark_targets(P, Ctx, ChildCCtx) || P <- unwrap_child_tail_wrappers(Parts, Ctx)]}.
 
 %% A whole-tail `?html`/`?json`/`?terminal` (matching the enclosing target) in a
@@ -853,28 +940,6 @@ map_cons_items(F, {cons, L, Head, Tail}) ->
 map_cons_items(_F, Tail) ->
     Tail.
 
-%% The backend for a marking context. `none` (no target entered yet) uses the
-%% default target's backend so the two callbacks above always have an answer.
-ctx_backend(none) -> target_backend(html);
-ctx_backend(Ctx) -> target_backend(Ctx).
-
-%% A hoisted value is bound outside every template, so an `?each` in it was marked
-%% with the default target and context, which say nothing about where it renders.
-%% prepare_inline/2 strips that marking and splice_vars/4 marks it again for the
-%% position the value is spliced into.
-unmark_eaches(
-    {call, L, {remote, _, {atom, _, Mod}, {atom, _, each}} = Callee, [FunArg, SourceArg, _, _]}
-) when
-    Mod =:= arizona_template orelse Mod =:= az
-->
-    {call, L, Callee, [unmark_eaches(FunArg), unmark_eaches(SourceArg)]};
-unmark_eaches(Node) when is_tuple(Node) ->
-    list_to_tuple(unmark_eaches(tuple_to_list(Node)));
-unmark_eaches(Nodes) when is_list(Nodes) ->
-    [unmark_eaches(N) || N <- Nodes];
-unmark_eaches(Node) ->
-    Node.
-
 %% Splice the hoisted values into `Expr`, then mark the `?each`es they carry for
 %% the target `Ctx` and content context `CCtx` of where they land.
 splice_vars(Expr, Inline, _Ctx, _CCtx) when map_size(Inline) =:= 0 ->
@@ -886,8 +951,10 @@ splice_vars(Expr, Inline, Ctx, CCtx) ->
 root_content_context(Target) ->
     (target_backend(Target)):content_context(undefined, html).
 
-mark_targets(Node, Ctx) ->
-    mark_targets(Node, Ctx, (ctx_backend(Ctx)):content_context(undefined, html)).
+mark_targets(Node, none) ->
+    mark_targets(Node, none, none);
+mark_targets(Node, Target) ->
+    mark_targets(Node, Target, root_content_context(Target)).
 
 %% A template renders its nested templates (a conditional branch, an `?each` item,
 %% a template passed as a `?stateless` prop) inside its own output, so under
@@ -1164,7 +1231,8 @@ format_error(Reason) when
     Reason =:= each_named_fun_multi_clause;
     Reason =:= each_named_fun_undefined;
     Reason =:= each_remote_fun_ref;
-    Reason =:= element_in_comprehension
+    Reason =:= element_in_comprehension;
+    Reason =:= each_outside_target
 ->
     format_each_error(Reason);
 format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
@@ -1229,6 +1297,12 @@ binder_kind(fun_param) -> "fun parameter";
 binder_kind(named_fun) -> "named fun";
 binder_kind(generator) -> "generator pattern variable".
 
+format_each_error(each_outside_target) ->
+    "this ?each is outside every template (?html, ?json, ...), so it has no render "
+    "target to compile with. An ?each compiles where a template takes it in: write it "
+    "inside the template, bind it to a variable the template uses, or return it from "
+    "a local helper the template calls. A function that returns it on its own (to "
+    "another module, or as a value) must wrap it in its target, e.g. ?html([?each(...)])";
 format_each_error(element_in_comprehension) ->
     "a comprehension in a content slot builds its list at render time, so the slot "
     "holds one plain value and an element (or template) per item fails at render. "
@@ -2523,10 +2597,17 @@ helper_body_shape(
         false -> none
     end;
 helper_body_shape(Expr, _Target) ->
-    case is_nested_template_leaf(Expr) of
+    case is_nested_template_leaf(Expr) orelse has_raw_each_root(Expr) of
         true -> {bare, Expr};
         false -> none
     end.
+
+%% A helper whose whole body is an `?each` returns it raw: it takes the target of
+%% the template it is inlined into.
+has_raw_each_root({call, _, {remote, _, {atom, _, _}, {atom, _, each}}, [_, _]} = Expr) ->
+    has_raw_each(Expr);
+has_raw_each_root(_Expr) ->
+    false.
 
 %% All params must be distinct plain variables (not `_`) so substitution is
 %% faithful; anything else returns `invalid`.
@@ -2985,7 +3066,7 @@ prepare_inline(Raw, Body, Outer) ->
 
 prepare_inline_stmt({match, _, {var, _, V}, _RHS}, Raw, Acc) ->
     case Raw of
-        #{V := RHS} -> Acc#{V => unmark_eaches(prepare_inline_rhs(RHS, Acc))};
+        #{V := RHS} -> Acc#{V => prepare_inline_rhs(RHS, Acc)};
         #{} -> Acc
     end;
 prepare_inline_stmt(_Stmt, _Raw, Acc) ->
@@ -3159,9 +3240,24 @@ reaching_fixpoint(Candidates, Acc) ->
 %% or its tracking runs outside any bracket (a no-op) and the slot freezes. Only a FREE
 %% reference counts: a comprehension generator or a fun head binding the same name
 %% reads its own variable, not the hoisted one.
+%% A raw `?each` reaches too: it has no target until a template takes it in, so the
+%% value must be spliced where it is used, never compiled where it is bound.
 rhs_reaches(RHS, Reaching) ->
-    has_tracked_read(RHS) orelse
+    has_tracked_read(RHS) orelse has_raw_each(RHS) orelse
         lists:any(fun(V) -> is_map_key(V, Reaching) end, maps:keys(free_vars(RHS, #{}, #{}))).
+
+%% An `?each` not yet compiled: the macro's own `(Fun, Source)` pairing, before any
+%% template marked it with a backend.
+has_raw_each({call, _, {remote, _, {atom, _, Mod}, {atom, _, each}}, [_FunArg, SourceArg]}) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    not is_compiled_each_pairing(SourceArg);
+has_raw_each(T) when is_tuple(T) ->
+    has_raw_each(tuple_to_list(T));
+has_raw_each([H | T]) ->
+    has_raw_each(H) orelse has_raw_each(T);
+has_raw_each(_) ->
+    false.
 
 has_tracked_read({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, _Args}) when
     (Mod =:= arizona_template orelse Mod =:= az) andalso
@@ -3771,10 +3867,17 @@ without_source_unused(Inline, Body, Others) ->
 %% match_underscore_var) and never warns.
 %% A use is a FREE reference anywhere else in the body: a generator or fun head that
 %% rebinds the name is its own variable.
+%% A binding whose value holds a raw `?each` is dropped instead: every use was spliced,
+%% and the raw `?each` has no target to run with (definitions may run zero times).
 maybe_underscore_match({match, L, {var, VL, V}, RHS} = M, Inline, Body) ->
     case is_map_key(V, Inline) andalso not is_map_key(V, free_vars(Body -- [M], #{}, #{})) of
-        true -> {match, L, {var, VL, '_'}, RHS};
-        false -> M
+        true ->
+            case has_raw_each(RHS) of
+                true -> {atom, L, ok};
+                false -> {match, L, {var, VL, '_'}, RHS}
+            end;
+        false ->
+            M
     end;
 maybe_underscore_match(E, _Inline, _Body) ->
     E.

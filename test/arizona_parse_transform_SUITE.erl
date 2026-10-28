@@ -97,6 +97,9 @@
     cross_target_json_in_html/1,
     cross_target_siblings_compile/1,
     cross_target_html_in_declared/1,
+    each_hoisted_takes_use_site_target/1,
+    each_helper_takes_use_site_target/1,
+    each_outside_target_rejected/1,
     cross_target_declared_in_html/1,
     target_call_compiles_with_its_backend/1,
     target_call_names_builtin_backend/1,
@@ -621,6 +624,7 @@ all() ->
         {group, utf8},
         {group, errors},
         {group, cross_target},
+        {group, each_target},
         {group, target_call},
         {group, az_macros},
         {group, az_view},
@@ -1230,6 +1234,12 @@ groups() ->
             element_error_keeps_file_and_column,
             improper_list_error_keeps_file_and_column
         ]},
+        %% An ?each compiles with the target of the template that takes it in
+        {each_target, [parallel], [
+            each_hoisted_takes_use_site_target,
+            each_helper_takes_use_site_target,
+            each_outside_target_rejected
+        ]},
         %% Inline cross-target nesting guard (?html in ?json and vice-versa)
         {cross_target, [parallel], [
             cross_target_html_in_json,
@@ -1300,6 +1310,11 @@ groups() ->
 %% ============================================================================
 %% Test Helper
 %% ============================================================================
+
+%% A test module's `render/1` wraps its `?each` in `?html` (an `?each` compiles only
+%% inside a target); this hands back the each container the template's one slot holds.
+each_container(#{d := [{_Az, Fun, _Loc}]}) ->
+    Fun().
 
 compile_module(Source) ->
     {ok, Tokens, _} = erl_scan:string(Source),
@@ -4486,11 +4501,11 @@ template2_basic(Config) when is_list(Config) ->
         "-module(pt_each_basic). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        {'li', [], [maps:get(name, Item)]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => [#{name => <<"Alice">>}]}),
+    Result = each_container(Mod:render(#{items => [#{name => <<"Alice">>}]})),
     %% template/2 returns arizona_template:each(Source, Tmpl),
     %% which is #{t => 0, source => Source, template => Tmpl}
     ?assertEqual(0, maps:get(t, Result)),
@@ -4521,13 +4536,13 @@ template2_dynamic_attr(Config) when is_list(Config) ->
         "-module(pt_each_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        {'div', [{<<\"az-key\">>, maps:get(id, Item)}, "
         "                 {class, maps:get(cls, Item)}], "
         "         [maps:get(text, Item)]} "
-        "    end, arizona_template:get(rows, Bindings, [])). "
+        "    end, arizona_template:get(rows, Bindings, []))). "
     ),
-    Result = Mod:render(#{rows => []}),
+    Result = each_container(Mod:render(#{rows => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     ?assertEqual(
@@ -4560,14 +4575,14 @@ template2_multiple_children(Config) when is_list(Config) ->
         "-module(pt_each_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Row) -> "
+        "    arizona_template:html(arizona_template:each(fun(Row) -> "
         "        {'tr', [{<<\"az-key\">>, maps:get(id, Row)}], ["
         "            {'td', [], [maps:get(name, Row)]},"
         "            {'td', [], [maps:get(age, Row)]}"
         "        ]} "
-        "    end, arizona_template:get(rows, Bindings, [])). "
+        "    end, arizona_template:get(rows, Bindings, []))). "
     ),
-    Result = Mod:render(#{rows => []}),
+    Result = each_container(Mod:render(#{rows => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     ?assertEqual(
@@ -4655,11 +4670,11 @@ template2_static_and_dynamic(Config) when is_list(Config) ->
         "-module(pt_each_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        {'p', [], [<<\"Name: \">>, maps:get(name, Item)]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => []}),
+    Result = each_container(Mod:render(#{items => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     ?assertEqual(
@@ -4722,11 +4737,11 @@ template2_compound_markers(Config) when is_list(Config) ->
         "-module(pt_each_compound). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        {'span', [], [maps:get(first, Item), <<\" \">>, maps:get(last, Item)]} "
-        "    end, arizona_template:get(people, Bindings, [])). "
+        "    end, arizona_template:get(people, Bindings, []))). "
     ),
-    Result = Mod:render(#{people => []}),
+    Result = each_container(Mod:render(#{people => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     ?assertEqual(
@@ -4755,13 +4770,13 @@ template2_multi_expr_body(Config) when is_list(Config) ->
         "-module(pt_each_multi_expr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        Name = maps:get(name, Item), "
         "        Upper = string:uppercase(Name), "
         "        {'li', [], [Upper]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => []}),
+    Result = each_container(Mod:render(#{items => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     ?assertEqual(
@@ -4785,12 +4800,12 @@ template2_multi_expr_attr(Config) when is_list(Config) ->
         "-module(pt_each_multi_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        Id = maps:get(id, Item), "
         "        {'div', [{class, Id}], [maps:get(text, Item)]} "
-        "    end, arizona_template:get(rows, Bindings, [])). "
+        "    end, arizona_template:get(rows, Bindings, []))). "
     ),
-    Result = Mod:render(#{rows => []}),
+    Result = each_container(Mod:render(#{rows => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     DFun = maps:get(d, Tmpl),
@@ -4809,11 +4824,11 @@ template2_guard(Config) when is_list(Config) ->
         "-module(pt_each_guard). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) when is_map(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) when is_map(Item) -> "
         "        {'li', [], [maps:get(name, Item)]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => []}),
+    Result = each_container(Mod:render(#{items => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     DFun = maps:get(d, Tmpl),
@@ -4827,11 +4842,11 @@ template2_static_item(Config) when is_list(Config) ->
         "-module(pt_each_static_item). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(_Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(_Item) -> "
         "        {'li', [{class, <<\"row\">>}], [<<\"fixed\">>]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => [a, b]}),
+    Result = each_container(Mod:render(#{items => [a, b]})),
     Tmpl = maps:get(template, Result),
     ?assertEqual([<<"<li class=\"row\">fixed</li>">>], maps:get(s, Tmpl)),
     DFun = maps:get(d, Tmpl),
@@ -4843,11 +4858,11 @@ template2_void_item(Config) when is_list(Config) ->
         "-module(pt_each_void). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        {'input', [{type, <<\"text\">>}, {value, maps:get(val, Item)}], []} "
-        "    end, arizona_template:get(fields, Bindings, [])). "
+        "    end, arizona_template:get(fields, Bindings, []))). "
     ),
-    Result = Mod:render(#{fields => []}),
+    Result = each_container(Mod:render(#{fields => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     ?assertEqual(
@@ -4871,13 +4886,13 @@ template2_inner_template1(Config) when is_list(Config) ->
         "-module(pt_each_inner_t1). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        {'div', [], ["
         "            arizona_template:html({'span', [], [maps:get(x, Item)]})"
         "        ]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => []}),
+    Result = each_container(Mod:render(#{items => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     %% Outer item element has a dynamic child (the inner template map)
@@ -5025,9 +5040,9 @@ template2_non_element_expr(Config) when is_list(Config) ->
         "-module(pt_each_non_elem). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        maps:get(name, Item) "
-        "    end, arizona_template:get(items, Bindings, [])). ",
+        "    end, arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
     ).
 
@@ -5053,11 +5068,11 @@ template2_static_binary_body(Config) when is_list(Config) ->
         "-module(pt_each_static_bin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(_Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(_Item) -> "
         "        <<\"hello\">> "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => []}),
+    Result = each_container(Mod:render(#{items => []})),
     Tmpl = maps:get(template, Result),
     ?assertEqual([<<"hello">>], maps:get(s, Tmpl)),
     DFun = maps:get(d, Tmpl),
@@ -5069,10 +5084,10 @@ template2_non_element_multi_expr(Config) when is_list(Config) ->
         "-module(pt_each_non_elem_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        Name = maps:get(name, Item), "
         "        string:uppercase(Name) "
-        "    end, arizona_template:get(items, Bindings, [])). ",
+        "    end, arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
     ).
 
@@ -5146,12 +5161,12 @@ template2_fragment_body(Config) when is_list(Config) ->
         "-module(pt_each_frag). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        [{td, [], [maps:get(name, Item)]}, "
         "         {td, [], [maps:get(age, Item)]}] "
-        "    end, arizona_template:get(rows, Bindings, [])). "
+        "    end, arizona_template:get(rows, Bindings, []))). "
     ),
-    Result = Mod:render(#{rows => []}),
+    Result = each_container(Mod:render(#{rows => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     ?assertEqual(
@@ -5216,14 +5231,14 @@ template2_fragment_multi_expr(Config) when is_list(Config) ->
         "-module(pt_each_frag_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        Name = maps:get(name, Item), "
         "        Upper = string:uppercase(Name), "
         "        [{td, [], [Upper]}, "
         "         {td, [], [maps:get(age, Item)]}] "
-        "    end, arizona_template:get(rows, Bindings, [])). "
+        "    end, arizona_template:get(rows, Bindings, []))). "
     ),
-    Result = Mod:render(#{rows => []}),
+    Result = each_container(Mod:render(#{rows => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     DFun = maps:get(d, Tmpl),
@@ -5242,14 +5257,14 @@ template2_map_pattern(Config) when is_list(Config) ->
         "-module(pt_each_map_pat). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(#{name := Name, age := Age}) -> "
+        "    arizona_template:html(arizona_template:each(fun(#{name := Name, age := Age}) -> "
         "        {'tr', [], ["
         "            {'td', [], [Name]}, "
         "            {'td', [], [Age]}"
         "        ]} "
-        "    end, arizona_template:get(rows, Bindings, [])). "
+        "    end, arizona_template:get(rows, Bindings, []))). "
     ),
-    Result = Mod:render(#{rows => []}),
+    Result = each_container(Mod:render(#{rows => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     ?assertEqual(
@@ -5288,9 +5303,9 @@ template2_map_pattern_non_element(Config) when is_list(Config) ->
         "-module(pt_each_map_pat_ne). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(#{name := Name}) -> "
+        "    arizona_template:html(arizona_template:each(fun(#{name := Name}) -> "
         "        Name "
-        "    end, arizona_template:get(items, Bindings, [])). ",
+        "    end, arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
     ).
 
@@ -5300,12 +5315,12 @@ template2_prefix_static_body(Config) when is_list(Config) ->
         "-module(pt_each_prefix_static). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        _Name = maps:get(name, Item), "
         "        {li, [{class, <<\"row\">>}], [<<\"fixed\">>]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => [a]}),
+    Result = each_container(Mod:render(#{items => [a]})),
     Tmpl = maps:get(template, Result),
     ?assertEqual([<<"<li class=\"row\">fixed</li>">>], maps:get(s, Tmpl)),
     DFun = maps:get(d, Tmpl),
@@ -5317,16 +5332,17 @@ template2_prefix_partial_use(Config) when is_list(Config) ->
         "-module(pt_each_prefix_partial). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(#{id := Id, name := Name, age := Age}) -> "
+        "    arizona_template:html(arizona_template:each("
+        "        fun(#{id := Id, name := Name, age := Age}) -> "
         "        IdBin = integer_to_binary(Id), "
         "        {'tr', [{<<\"az-key\">>, IdBin}], ["
         "            {'td', [], [IdBin]}, "
         "            {'td', [], [Name]}, "
         "            {'td', [], [Age]}"
         "        ]} "
-        "    end, arizona_template:get(rows, Bindings, [])). "
+        "    end, arizona_template:get(rows, Bindings, []))). "
     ),
-    Result = Mod:render(#{rows => []}),
+    Result = each_container(Mod:render(#{rows => []})),
     Tmpl = maps:get(template, Result),
     Fp = maps:get(f, Tmpl),
     DFun = maps:get(d, Tmpl),
@@ -5517,11 +5533,11 @@ nodiff_each(Config) when is_list(Config) ->
         "-module(pt_nodiff_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item) -> "
         "        {'li', ['az-nodiff'], [maps:get(name, Item)]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => [#{name => <<"a">>}]}),
+    Result = each_container(Mod:render(#{items => [#{name => <<"a">>}]})),
     Tmpl = maps:get(template, Result),
     ?assertEqual(false, maps:get(diff, Tmpl)),
     %% An unkeyed item keeps the directive bare: no token, no diff address.
@@ -6796,11 +6812,11 @@ utf8_each_static(Config) when is_list(Config) ->
         "-module(pt_utf8_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(_Item) -> "
+        "    arizona_template:html(arizona_template:each(fun(_Item) -> "
         "        {'li', [], [<<\"\\x{2705} done\">>]} "
-        "    end, arizona_template:get(items, Bindings, [])). "
+        "    end, arizona_template:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => [a]}),
+    Result = each_container(Mod:render(#{items => [a]})),
     Tmpl = maps:get(template, Result),
     [Static] = maps:get(s, Tmpl),
     Expected = <<"<li>", 16#2705/utf8, " done</li>">>,
@@ -7016,10 +7032,10 @@ void_in_each_with_children(Config) when is_list(Config) ->
         "-module(pt_void_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each("
+        "    arizona_template:html(arizona_template:each("
         "        fun(Item) -> {'input', [], [<<\"bad\">>]} end,"
         "        arizona_template:get(items, Bindings, [])"
-        "    ). ",
+        "    )). ",
         fun
             ({void_with_children, input}) -> true;
             (_) -> false
@@ -7131,8 +7147,8 @@ each_named_fun_ref_non_element_rejected(Config) when is_list(Config) ->
         "-export([render/1, row/1]). "
         "row(Name) -> <<\"row:\", Name/binary>>. "
         "render(Bindings) -> "
-        "    arizona_template:each(fun row/1, "
-        "        arizona_template:get(items, Bindings, [])). ",
+        "    arizona_template:html(arizona_template:each(fun row/1, "
+        "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
     ).
 
@@ -7143,8 +7159,8 @@ each_named_fun_ref_arity_2_non_element_rejected(Config) when is_list(Config) ->
         "-export([render/1, row/2]). "
         "row(Item, Key) -> <<Key/binary, \"=\", Item/binary>>. "
         "render(Bindings) -> "
-        "    arizona_template:each(fun row/2, "
-        "        arizona_template:get(items, Bindings, [])). ",
+        "    arizona_template:html(arizona_template:each(fun row/2, "
+        "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_stream_body_not_element end
     ).
 
@@ -7188,12 +7204,12 @@ each_stream_control_flow_body_rejected_with_wrapper_advice(Config) when is_list(
         "-module(pt_each_stream_cond). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(Item, Key) -> "
+        "    arizona_template:html(arizona_template:each(fun(Item, Key) -> "
         "        case Item of "
         "            note -> {'em', [{az_key, Key}], [Item]}; "
         "            _ -> {'strong', [{az_key, Key}], [Item]} "
         "        end "
-        "    end, arizona_template:get(items, Bindings, [])). ",
+        "    end, arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_stream_body_control_flow end
     ).
 
@@ -7485,8 +7501,8 @@ each_with_remote_fun_ref(Config) when is_list(Config) ->
         "-module(pt_each_remote_ref). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun erlang:integer_to_binary/1, "
-        "        arizona_template:get(items, Bindings, [])). ",
+        "    arizona_template:html(arizona_template:each(fun erlang:integer_to_binary/1, "
+        "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_remote_fun_ref end
     ).
 
@@ -7613,7 +7629,7 @@ each_named_fun_ref_loc_names_callee(Config) when is_list(Config) ->
 each_named_fun_ref_nested_each(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_named_nested). "
-        "-export([render/1, section/1, item/1]). "
+        "-export([render/1]). "
         "item(I) -> {'li', [], [I]}. "
         "section(S) -> {'ul', [], [arizona_template:each(fun item/1, "
         "    arizona_template:get(items, S))]}. "
@@ -7637,7 +7653,7 @@ each_named_fun_ref_nested_each(Config) when is_list(Config) ->
 each_named_fun_ref_nested_macros_render(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_named_nested_macros). "
-        "-export([render/1, row/1]). "
+        "-export([render/1]). "
         "row(R) -> {'div', [], ["
         "    arizona_template:html({'span', [], [arizona_template:get(title, R)]}),"
         "    {'ul', [], [arizona_template:each(fun(I) -> {'li', [], [I]} end, "
@@ -7662,8 +7678,8 @@ each_named_fun_multi_clause_rejected(Config) when is_list(Config) ->
         "row(a) -> {'li', [], [~\"a\"]}; "
         "row(X) -> {'li', [], [X]}. "
         "render(Bindings) -> "
-        "    arizona_template:each(fun row/1, "
-        "        arizona_template:get(items, Bindings, [])). ",
+        "    arizona_template:html(arizona_template:each(fun row/1, "
+        "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_named_fun_multi_clause end
     ).
 
@@ -7674,8 +7690,8 @@ each_named_fun_wrong_arity_rejected(Config) when is_list(Config) ->
         "-module(pt_each_named_arity3). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun row/3, "
-        "        arizona_template:get(items, Bindings, [])). ",
+        "    arizona_template:html(arizona_template:each(fun row/3, "
+        "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= invalid_each_fun end
     ).
 
@@ -7685,8 +7701,8 @@ each_named_fun_undefined_rejected(Config) when is_list(Config) ->
         "-module(pt_each_named_undef). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun missing_row/1, "
-        "        arizona_template:get(items, Bindings, [])). ",
+        "    arizona_template:html(arizona_template:each(fun missing_row/1, "
+        "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_named_fun_undefined end
     ).
 
@@ -7727,8 +7743,8 @@ each_named_fun_imported_rejected(Config) when is_list(Config) ->
         "-export([render/1]). "
         "-import(other_mod, [row/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun row/1, "
-        "        arizona_template:get(items, Bindings, [])). ",
+        "    arizona_template:html(arizona_template:each(fun row/1, "
+        "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_named_fun_undefined end
     ).
 
@@ -7739,8 +7755,8 @@ each_named_fun_variable_module_rejected(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    M = other_mod, "
-        "    arizona_template:each(fun M:row/1, "
-        "        arizona_template:get(items, Bindings, [])). ",
+        "    arizona_template:html(arizona_template:each(fun M:row/1, "
+        "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_remote_fun_ref end
     ).
 
@@ -7866,9 +7882,9 @@ each_body_runtime_binary_rejected(Config) when is_list(Config) ->
         "-module(pt_each_runtime_bin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each(fun(X) -> "
+        "    arizona_template:html(arizona_template:each(fun(X) -> "
         "        <<\"row \", X/binary>> "
-        "    end, arizona_template:get(xs, Bindings, [])). ",
+        "    end, arizona_template:get(xs, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
     ).
 
@@ -8009,10 +8025,10 @@ invalid_each_fun_arity(Config) when is_list(Config) ->
         "-module(pt_invalid_each_arity). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each("
+        "    arizona_template:html(arizona_template:each("
         "        fun(A, B, C) -> {'div', [], [A]} end,"
         "        arizona_template:get(items, Bindings, [])"
-        "    ). ",
+        "    )). ",
         fun
             (invalid_each_fun) -> true;
             (_) -> false
@@ -8066,10 +8082,10 @@ invalid_each_not_fun(Config) when is_list(Config) ->
         "-module(pt_invalid_each_notfun). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each("
+        "    arizona_template:html(arizona_template:each("
         "        my_fun,"
         "        arizona_template:get(items, Bindings, [])"
-        "    ). ",
+        "    )). ",
         fun
             (invalid_each_fun) -> true;
             (_) -> false
@@ -8097,11 +8113,11 @@ invalid_each_multi_clause(Config) when is_list(Config) ->
         "-module(pt_invalid_each_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:each("
+        "    arizona_template:html(arizona_template:each("
         "        fun(a) -> {'div', [], [<<\"a\">>]};"
         "           (b) -> {'div', [], [<<\"b\">>]} end,"
         "        arizona_template:get(items, Bindings, [])"
-        "    ). ",
+        "    )). ",
         fun
             (invalid_each_fun) -> true;
             (_) -> false
@@ -8425,11 +8441,11 @@ az_each_basic(Config) when is_list(Config) ->
         "-module(pt_az_each_basic). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:each(fun(Item) -> "
+        "    az:html(az:each(fun(Item) -> "
         "        {'li', [], [maps:get(name, Item)]} "
-        "    end, az:get(items, Bindings, [])). "
+        "    end, az:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => [#{name => <<"Alice">>}]}),
+    Result = each_container(Mod:render(#{items => [#{name => <<"Alice">>}]})),
     ?assertEqual(0, maps:get(t, Result)),
     Tmpl = maps:get(template, Result),
     ?assertEqual(0, maps:get(t, Tmpl)),
@@ -8457,11 +8473,11 @@ each_single_root_flag(Config) when is_list(Config) ->
         "-module(pt_each_single_root). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:each(fun(Item) -> "
+        "    az:html(az:each(fun(Item) -> "
         "        {'li', [], [maps:get(name, Item)]} "
-        "    end, az:get(items, Bindings, [])). "
+        "    end, az:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => [#{name => <<"Alice">>}]}),
+    Result = each_container(Mod:render(#{items => [#{name => <<"Alice">>}]})),
     Tmpl = maps:get(template, Result),
     ?assertEqual(true, maps:get(single_root, Tmpl)).
 
@@ -8473,11 +8489,11 @@ each_multi_root_no_single_root_flag(Config) when is_list(Config) ->
         "-module(pt_each_multi_root). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:each(fun(Item) -> "
+        "    az:html(az:each(fun(Item) -> "
         "        [{'dt', [], [maps:get(k, Item)]}, {'dd', [], [maps:get(v, Item)]}] "
-        "    end, az:get(items, Bindings, [])). "
+        "    end, az:get(items, Bindings, []))). "
     ),
-    Result = Mod:render(#{items => [#{k => <<"a">>, v => <<"1">>}]}),
+    Result = each_container(Mod:render(#{items => [#{k => <<"a">>, v => <<"1">>}]})),
     Tmpl = maps:get(template, Result),
     ?assertEqual(undefined, maps:get(single_root, Tmpl, undefined)).
 
@@ -8488,12 +8504,12 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
         "-module(pt_each_stream). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:each(fun(Item, Key) -> "
+        "    az:html(az:each(fun(Item, Key) -> "
         "        {'li', [{'az-key', Key}], [maps:get(name, Item)]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
     ),
     Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, [#{id => 1, name => <<"A">>}]),
-    Result = Mod:render(#{stream => Stream}),
+    Result = each_container(Mod:render(#{stream => Stream})),
     Tmpl = maps:get(template, Result),
     %% `single_root` describes the item BODY (one top-level element), not the
     %% source kind -- and a 2-arg callback compiles to one template that serves
@@ -8511,7 +8527,7 @@ each_stream_reuse_flags(Config) when is_list(Config) ->
         "-module(pt_each_reuse). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:each(fun(Item, Key) -> "
+        "    az:html(az:each(fun(Item, Key) -> "
         "        {'li', [{'az-key', Key}], [ "
         "            arizona_template:get(a, Item), "
         "            maps:get(b, Item), "
@@ -8521,7 +8537,7 @@ each_stream_reuse_flags(Config) when is_list(Config) ->
         "                false -> <<>> "
         "            end "
         "        ]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
     ),
     ?assertMatch(#{reuse := [true, true, false, true, false]}, stream_each_template(Mod)).
 
@@ -8531,11 +8547,11 @@ each_stream_reuse_flags_compiled_body(Config) when is_list(Config) ->
         "-module(pt_each_reuse_compiled). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:each(fun(Item, Key) -> "
+        "    az:html(az:each(fun(Item, Key) -> "
         "        az:html({'li', [{'az-key', Key}], [ "
         "            arizona_template:get(a, Item), maps:get(b, Item) "
         "        ]}) "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
     ),
     ?assertMatch(#{reuse := [true, true, false]}, stream_each_template(Mod)).
 
@@ -8545,13 +8561,13 @@ each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
         "-module(pt_each_no_reuse). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:each(fun(#{n := N}, _Key) -> "
+        "    az:html(az:each(fun(#{n := N}, _Key) -> "
         "        {'li', [], [N]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
     ),
     %% A keyed root's `az_key` dynamic always qualifies, so the body is unkeyed and
     %% the template is read over a map source, which a stream would refuse.
-    ?assertNot(is_map_key(reuse, maps:get(template, Mod:render(#{stream => #{}})))).
+    ?assertNot(is_map_key(reuse, maps:get(template, each_container(Mod:render(#{stream => #{}}))))).
 
 %% A tracked read vouches for an item read only when its map IS the item (the bare
 %% parameter, or the variable side of a `Pat = Var` head) or the view bindings. A
@@ -8564,30 +8580,30 @@ each_stream_reuse_map_must_be_item(Config) when is_list(Config) ->
         "-module(pt_each_reuse_item_map). "
         "-export([sub/1, sub_alias/1, sub_bindings/1, sub_with/1, alias/1, whole/1]). "
         "sub(Bindings) -> "
-        "    az:each(fun({_, Sub}, K) -> "
+        "    az:html(az:each(fun({_, Sub}, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub)]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
         "sub_alias(Bindings) -> "
-        "    az:each(fun({_, Sub} = I, K) -> "
+        "    az:html(az:each(fun({_, Sub} = I, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub), az:get(n, I)]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
         "sub_bindings(Bindings) -> "
-        "    az:each(fun({_, Bindings}, K) -> "
+        "    az:html(az:each(fun({_, Bindings}, K) -> "
         "        {'li', [{'az-key', K}], [az:get(v, Bindings)]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
         "sub_with(Bindings) -> "
-        "    az:each(fun({_, Sub}, K) -> "
+        "    az:html(az:each(fun({_, Sub}, K) -> "
         "        {'li', [{'az-key', K}], [maps:get(v, arizona_template:with([v], Sub))]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
         "alias(Bindings) -> "
-        "    az:each(fun(I, K) -> "
+        "    az:html(az:each(fun(I, K) -> "
         "        I2 = I, "
         "        {'li', [{'az-key', K}], [arizona_template:get(n, I2)]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
         "whole(Bindings) -> "
-        "    az:each(fun(I = #{}, K) -> "
+        "    az:html(az:each(fun(I = #{}, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(n, I), az:get(x, Bindings)]} "
-        "    end, az:get(stream, Bindings)). "
+        "    end, az:get(stream, Bindings))). "
     ),
     ?assertMatch(#{reuse := [true, false]}, stream_each_template(Mod, sub)),
     ?assertMatch(#{reuse := [true, false, true]}, stream_each_template(Mod, sub_alias)),
@@ -8601,7 +8617,7 @@ stream_each_template(Mod) ->
 
 stream_each_template(Mod, Fun) ->
     Stream = arizona_stream:new(fun(I) -> maps:get(id, I) end, []),
-    maps:get(template, Mod:Fun(#{stream => Stream})).
+    maps:get(template, each_container(Mod:Fun(#{stream => Stream}))).
 
 %% A `?json` single-root list each is NOT flagged single_root: the gate is the
 %% backend's `supports_list_patch/0` callback (asked at compile time), and
@@ -9102,6 +9118,59 @@ az_view_composed_id_raises(Config) when is_list(Config) ->
 %% ============================================================================
 %% Terminal (ANSI) render target
 %% ============================================================================
+
+%% A hoisted `?each` has no target where it is bound, so it is spliced and compiled
+%% where the template uses it: inside `?json` it renders JSON nodes, not HTML.
+each_hoisted_takes_use_site_target(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_hoisted_json). -export([render/1]). render(_Bindings) -> "
+        "    Items = arizona_template:each(fun(I) -> {'Text', [], [I]} end, [~\"a\"]), "
+        "    arizona_template:json({'Col', [], [Items]}). "
+    ),
+    T = Mod:render(#{}),
+    ?assertMatch(#{backend := arizona_json}, T),
+    Out = iolist_to_binary(arizona_render:render_to_iolist(T)),
+    ?assertEqual(nomatch, binary:match(Out, [~"<", ~"<!--"])),
+    ?assertMatch(#{~"type" := ~"Col"}, json:decode(Out)).
+
+%% A local helper whose body is an `?each` is inlined into the template that calls
+%% it, so its items compile for that template's target.
+each_helper_takes_use_site_target(Config) when is_list(Config) ->
+    Mod = compile_module(
+        "-module(pt_each_helper_json). -export([render/1]). "
+        "render(Bindings) -> "
+        "    arizona_template:json({'Col', [], [rows(arizona_template:get(items, Bindings))]}). "
+        "rows(Xs) -> arizona_template:each(fun(I) -> {'Text', [], [I]} end, Xs). "
+    ),
+    Out = iolist_to_binary(
+        arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))
+    ),
+    ?assertEqual(nomatch, binary:match(Out, [~"<", ~"<!--"])),
+    ?assertMatch(#{~"type" := ~"Col"}, json:decode(Out)).
+
+%% An `?each` no template takes in has no target to compile with.
+each_outside_target_rejected(Config) when is_list(Config) ->
+    Sources = [
+        %% returned as the whole value
+        "-module(pt_each_out_ret). -export([render/1]). render(Bindings) -> "
+        "arizona_template:each(fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings)). ",
+        %% hoisted, and used outside the template too
+        "-module(pt_each_out_escape). -export([render/1]). render(Bindings) -> "
+        "Items = arizona_template:each(fun(I) -> {li, [], [I]} end, "
+        "arizona_template:get(xs, Bindings)), "
+        "_ = erlang:phash2(Items), "
+        "arizona_template:html({ul, [], [Items]}). ",
+        %% an exported function holding one, though the template inlines it
+        "-module(pt_each_out_export). -export([render/1, rows/1]). render(Bindings) -> "
+        "arizona_template:html({ul, [], [rows(arizona_template:get(xs, Bindings))]}). "
+        "rows(Xs) -> arizona_template:each(fun(I) -> {li, [], [I]} end, Xs). "
+    ],
+    lists:foreach(
+        fun(Source) ->
+            assert_parse_error(Source, fun(R) -> R =:= each_outside_target end)
+        end,
+        Sources
+    ).
 
 cross_target_html_in_declared(Config) when is_list(Config) ->
     assert_parse_error(

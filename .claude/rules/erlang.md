@@ -648,6 +648,17 @@ in the call, or a hoisted variable) keeps the context of the call site, so
 the items as HTML (an HTML `<title>` is escapable raw text, so markerless). Write
 the `?each` inside the `<svg>` element to get SVG treatment.
 
+An `?each` has **no target of its own**: it compiles only where a template takes it
+in -- written inside it, a hoisted variable the template uses (always spliced, even
+when it reads no binding; the binding left behind is dropped), or the body of a local
+helper the template calls (`rows(Xs) -> ?each(...)` inlines like an element helper).
+One left in code that can run outside every template is the compile error
+`each_outside_target`: a function returning a bare `?each` as its value, a hoisted one
+also used outside the template, an exported function holding one. Wrap such a value in
+its target (`?html([?each(...)])`). "Can run" means reachable from the exports (all of
+them under `export_all`) or `on_load`; a helper inlined at every call is not, and is
+left alone.
+
 The invariant behind all of this: a slot tracks only the reads performed **inside
 its own closure**. The transform arranges that for a `?get` reaching the slot through
 a bare variable (it inlines a fresh read into the closure). It cannot when the value
