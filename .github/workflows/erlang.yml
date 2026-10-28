@@ -272,7 +272,7 @@ jobs:
         id: setup-beam
         with:
           otp-version: ${{ matrix.otp }}
-          rebar3-version: "3.27.3"
+          rebar3-version: "3.28.0"
 
       # No _build cache: the test profile's adapters are git deps on a branch,
       # which rebar3 never refetches once in _build, and this job is the one
