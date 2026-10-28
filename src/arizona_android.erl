@@ -17,8 +17,6 @@ commands as they're added. `push_event`/`navigate` mirror their web counterparts
 ```
 """.
 
--include("arizona_effect.hrl").
-
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
@@ -46,18 +44,18 @@ commands as they're added. `push_event`/`navigate` mirror their web counterparts
 -doc "Pushes a named event to the server.".
 -spec push_event(Event) -> arizona_effect:cmd() when
     Event :: binary().
-push_event(Event) -> {arizona_effect, [?EFFECT_PUSH_EVENT, Event]}.
+push_event(Event) -> arizona_effect:push_event(Event).
 
 -doc "Pushes a named event with an explicit payload.".
 -spec push_event(Event, Payload) -> arizona_effect:cmd() when
     Event :: binary(),
     Payload :: map().
-push_event(Event, Payload) -> {arizona_effect, [?EFFECT_PUSH_EVENT, Event, Payload]}.
+push_event(Event, Payload) -> arizona_effect:push_event(Event, Payload).
 
 -doc "Navigates the client to the server route `Path`.".
 -spec navigate(Path) -> arizona_effect:cmd() when
     Path :: binary().
-navigate(Path) -> {arizona_effect, [?EFFECT_NAVIGATE, Path]}.
+navigate(Path) -> arizona_effect:navigate(Path).
 
 -doc """
 Navigates to `Path` with options.
@@ -81,4 +79,4 @@ them is silently ignored rather than an error.
 -spec navigate(Path, Opts) -> arizona_effect:cmd() when
     Path :: binary(),
     Opts :: map().
-navigate(Path, Opts) -> {arizona_effect, [?EFFECT_NAVIGATE, Path, Opts]}.
+navigate(Path, Opts) -> arizona_effect:navigate(Path, Opts).

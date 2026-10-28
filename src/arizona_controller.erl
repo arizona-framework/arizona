@@ -234,9 +234,9 @@ instead, so the socket re-handshakes with the new session.
 reply_redirect(Location) ->
     case arizona_req:location_kind(Location) of
         local ->
-            reply_effects([arizona_js:navigate(Location)]);
+            reply_effects([arizona_effect:navigate(Location)]);
         external ->
-            reply_effects([arizona_js:navigate(Location, #{full => true})]);
+            reply_effects([arizona_effect:navigate(Location, #{full => true})]);
         unsafe ->
             erlang:error({unsafe_redirect, Location}, [Location], [
                 {error_info, #{module => ?MODULE}}

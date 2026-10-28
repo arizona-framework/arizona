@@ -903,7 +903,7 @@ halt_navigate(Requested, HaltReq, Socket) ->
                 local ->
                     encode_reply(
                         [],
-                        [arizona_js:navigate(Location, #{replace => true})],
+                        [arizona_effect:navigate(Location, #{replace => true})],
                         stash_halt_flash(Requested, Location, HaltReq, Socket)
                     );
                 _ExternalOrUnsafe ->
@@ -931,7 +931,7 @@ untake_pending_flash(HaltReq, #socket{pending_flash = Flash, flash_replay = Repl
 %% -- which the browser would do whenever the URL differs from the recorded one
 %% (a flash replay through the gate, a fragment the frame did not carry).
 replace_load(Url) ->
-    arizona_js:navigate(Url, #{full => true, replace => true}).
+    arizona_effect:navigate(Url, #{full => true, replace => true}).
 
 %% Stash the halting middleware's flash BESIDE the path that produced it. Unlike
 %% an in-view handler's flash, this one is reproducible: any later request to

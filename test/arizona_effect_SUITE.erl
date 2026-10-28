@@ -10,9 +10,11 @@
 -export([encode_rejects_non_command_item/1]).
 -export([encode_matches_escaped_json/1]).
 -export([encode_refuses_non_utf8_like_json/1]).
+-export([protocol_builders_build_protocol_ops/1]).
+-export([platform_builders_share_protocol_builders/1]).
 
 all() ->
-    [{group, encode}].
+    [{group, encode}, {group, protocol}].
 
 groups() ->
     [
@@ -22,6 +24,10 @@ groups() ->
             encode_rejects_non_command_item,
             encode_matches_escaped_json,
             encode_refuses_non_utf8_like_json
+        ]},
+        {protocol, [parallel], [
+            protocol_builders_build_protocol_ops,
+            platform_builders_share_protocol_builders
         ]}
     ].
 
@@ -169,3 +175,45 @@ gen_string() ->
         lists:nth(rand:uniform(length(Pieces)), Pieces)
      || _ <- lists:seq(1, rand:uniform(12) - 1)
     ]).
+
+%% The commands the socket protocol defines are built in core, so the server builds
+%% a redirect without naming a platform's builders.
+protocol_builders_build_protocol_ops(Config) when is_list(Config) ->
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_PUSH_EVENT, ~"e"]}, arizona_effect:push_event(~"e")
+    ),
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_PUSH_EVENT, ~"e", #{a => 1}]},
+        arizona_effect:push_event(~"e", #{a => 1})
+    ),
+    ?assertEqual({arizona_effect, [?EFFECT_NAVIGATE, ~"/p"]}, arizona_effect:navigate(~"/p")),
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_NAVIGATE, ~"/p", #{full => true}]},
+        arizona_effect:navigate(~"/p", #{full => true})
+    ),
+    ?assertEqual({arizona_effect, [?EFFECT_PATCH, ~"/p"]}, arizona_effect:patch(~"/p")),
+    ?assertEqual(
+        {arizona_effect, [?EFFECT_PATCH, ~"/p", #{replace => true}]},
+        arizona_effect:patch(~"/p", #{replace => true})
+    ).
+
+%% Every platform's builders return the very protocol command, so a client of any
+%% platform receives the same op.
+platform_builders_share_protocol_builders(Config) when is_list(Config) ->
+    %% function_exported/3 is false for a module not yet loaded.
+    {module, arizona_js} = code:ensure_loaded(arizona_js),
+    {module, arizona_android} = code:ensure_loaded(arizona_android),
+    Calls = [
+        {push_event, [~"e"]},
+        {push_event, [~"e", #{a => 1}]},
+        {navigate, [~"/p"]},
+        {navigate, [~"/p", #{replace => true}]},
+        {patch, [~"/p"]},
+        {patch, [~"/p", #{replace => true}]}
+    ],
+    [
+        ?assertEqual({F, A, apply(arizona_effect, F, A)}, {F, A, apply(Mod, F, A)})
+     || {F, A} <- Calls,
+        Mod <- [arizona_js, arizona_android],
+        erlang:function_exported(Mod, F, length(A))
+    ].
