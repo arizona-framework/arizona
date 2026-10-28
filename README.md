@@ -58,7 +58,7 @@ minor versions. Pin an exact version in your deps if you need stability across u
 
 ## Requirements
 
-- Erlang/OTP 29+
+- Erlang/OTP 28+
 
 ## Installation
 
