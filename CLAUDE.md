@@ -110,6 +110,8 @@ handle_event(~"inc", _P, B) ->
 
 `push_event` auto-collects payload from inputs/forms. Explicit payload merges on top. Op codes in `include/arizona_effect.hrl`.
 
+A command in **content** is an error, not text: no client runs it there. A literal builder call in a content slot is the compile error `effect_in_content`; one reaching content at runtime raises `{effect_in_content, V}`. To show a command as text, encode it explicitly (`arizona_effect:encode_json(Cmd)`).
+
 Nesting and `[]` items are flattened wherever a command list is encoded as data -- an event attribute or prop, a command a `transition`/`on_key`/`fetch` `on_error` wraps, a controller response (`arizona_controller:reply_effects/1,2`). The effects a **handler returns** are not: the socket threads them as a flat `[arizona_effect:cmd()]` (flash capture, the old-page drop on navigate, `arizona_socket:unwrap_effects/1`), so build that list flat (`[arizona_js:hide(~"#hint") || Dirty]`).
 
 ### HTTP fetch -- `arizona_js:fetch/2`

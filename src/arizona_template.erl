@@ -69,6 +69,7 @@ render(Bindings) ->
 -export([escape_value/2]).
 -export([escape_marked/2]).
 -export([mark_esc/1]).
+-export([effect_in_content/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
 -export([format_error/2]).
@@ -418,7 +419,9 @@ each(Fun, _Source) when is_function(Fun, 1); is_function(Fun, 2) ->
 -doc """
 Converts a template value to its binary HTML representation.
 
-Errors with `{bad_template_value, V}` for unsupported types.
+Errors with `{effect_in_content, V}` for a value holding an effect command (a
+command is not text; an attribute renders one through its backend before it gets
+here) and `{bad_template_value, V}` for any other unsupported type.
 """.
 -spec to_bin(Value) -> binary() when
     Value :: term().
@@ -434,17 +437,12 @@ to_bin(V) when is_atom(V) -> atom_to_binary(V);
 %% stays raw end to end.
 to_bin({arizona_esc, V}) ->
     to_bin(V);
-%% The trusted shapes of classify_trusted/1, matched in the clause heads rather
-%% than by asking it: escape_value/2, escape_marked/2 and the backends'
-%% render_attr/2 classify a value and then convert it here, and a second
-%% classify_trusted/1 call per list value was the one thing that cost. A head
-%% match dispatches without a call, and the answer is the same for every input.
+%% The raw shape of classify_trusted/1, matched in the clause head rather than by
+%% asking it: escape_value/2, escape_marked/2 and the backends' render_attr/2
+%% classify a value and then convert it here, and a second classify_trusted/1 call
+%% per list value was the one thing that cost.
 to_bin({arizona_raw, V}) ->
     to_bin(V);
-to_bin({arizona_effect, _} = Cmd) ->
-    arizona_effect:encode(Cmd);
-to_bin([{arizona_effect, _} | _] = Cmds) ->
-    arizona_effect:encode(Cmds);
 to_bin(V) when is_list(V) ->
     %% A charlist/iodata is text: decode it as Unicode codepoints so the output is
     %% valid UTF-8. `iolist_to_binary/1` truncates a 128..255 codepoint to an
@@ -470,19 +468,32 @@ to_bin(V) when is_list(V) ->
                     ])
             end;
         error ->
-            %% A command list leading with a nested list or `[]` is not text either;
-            %% asked only once the decoder refused, so text pays nothing for it.
-            case leads_with_effect(V) of
-                true ->
-                    arizona_effect:encode(V);
-                false ->
-                    erlang:error({bad_template_value, V}, [V], [
-                        {error_info, #{module => ?MODULE}}
-                    ])
-            end
+            erlang:error(not_text(V), [V], [{error_info, #{module => ?MODULE}}])
     end;
 to_bin(V) ->
-    erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}]).
+    erlang:error(not_text(V), [V], [{error_info, #{module => ?MODULE}}]).
+
+%% Asked only once a value failed to convert, so text pays nothing for naming a
+%% command anywhere inside it (`[~"a", Cmd]`, not only at its head).
+not_text(V) ->
+    case holds_effect(V) of
+        true -> {effect_in_content, V};
+        false -> {bad_template_value, V}
+    end.
+
+holds_effect({arizona_effect, _}) -> true;
+holds_effect({arizona_raw, V}) -> holds_effect(V);
+holds_effect([H | T]) -> holds_effect(H) orelse holds_effect(T);
+holds_effect(_) -> false.
+
+%% Internal: raises `{effect_in_content, Value}` where a content value is classified
+%% (here, arizona_eval, the backends' raw-text guard). No client runs a command
+%% from content.
+-doc false.
+-spec effect_in_content(Value) -> no_return() when
+    Value :: term().
+effect_in_content(V) ->
+    erlang:error({effect_in_content, V}, [V], [{error_info, #{module => ?MODULE}}]).
 
 %% The first element the decoder could not convert: a byte when it is binary
 %% data, `error` when it is an integer that is not a code point.
@@ -514,6 +525,16 @@ format_error(parse_transform_not_applied) ->
     "parse transform not applied -- include arizona_stateful.hrl or arizona_stateless.hrl";
 format_error({bad_template_value, V}) ->
     lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V]));
+format_error({effect_in_content, V}) ->
+    lists:flatten(
+        io_lib:format(
+            "an effect command is not content, so ~0tp cannot render as text: no client "
+            "runs a command there. Put the command itself in an event attribute's value "
+            "(e.g. {az_click, Cmd}), or return it from a handler. To show a command as "
+            "text, encode it explicitly: arizona_effect:encode_json(Cmd)",
+            [V]
+        )
+    );
 format_error(stream_each_multi_root) ->
     "an ?each over a stream must return ONE element per item, not a list of elements, a "
     "fragment mixing text and elements, or bare text: a keyed op (insert, remove, move, "
@@ -536,6 +557,10 @@ this module. Picked up by `erl_error:format_exception/3`.
     Reason :: term(),
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
+format_error({arizona_loc, {Mod, Line}, Reason}, ST) ->
+    %% A slot's located evaluation wraps the reason; the frame still names this module.
+    #{general := Msg} = format_error(Reason, ST),
+    #{general => io_lib:format("~s:~b: ~s", [Mod, Line, Msg])};
 format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
     Available = lists:sort(maps:keys(Bindings)),
     Suggestion =
@@ -552,6 +577,8 @@ format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
         )
     };
 format_error({bad_template_value, _V} = Reason, _ST) ->
+    #{general => format_error(Reason)};
+format_error({effect_in_content, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error(parse_transform_not_applied = Reason, _ST) ->
     #{general => format_error(Reason)};
@@ -605,16 +632,17 @@ bool_attr(Bool) when is_boolean(Bool) -> {arizona_bool, Bool};
 bool_attr(Value) -> Value.
 
 -doc """
-Classifies the escape-exempt content shapes: a `raw/1` opt-out
-(`{arizona_raw, V}`, returned unwrapped) and an already-encoded effect command
-or command list (`{arizona_effect, _}`). Every other value is `value`.
+Classifies the trusted shapes: a `raw/1` opt-out (`{arizona_raw, V}`, returned
+unwrapped) and an effect command or command list (`{arizona_effect, _}`). Every
+other value is `value`.
 
 The definition of the shape vocabulary -- `escape_value/2`, `mark_esc/1`, and
-`arizona_html:render_attr/2` dispatch on it. `to_bin/1` matches the same shapes
-in its clause heads instead, because it runs right after one of those callers
-has already classified the value; growing the vocabulary means updating both.
-Each call site decides the policy for a shape (`mark_esc/1` deliberately unwraps
-and re-escapes a helper-produced raw).
+the backends' attribute renderers dispatch on it. `to_bin/1` matches the raw
+shape in its clause head instead, because it runs right after one of those
+callers has already classified the value; growing the vocabulary means updating
+both. Each call site decides the policy for a shape: an attribute renders a
+command through its backend, a content slot refuses one (`effect_in_content/1`),
+and `mark_esc/1` deliberately unwraps and re-escapes a helper-produced raw.
 """.
 -spec classify_trusted(Value) -> {raw, term()} | {effect, Effect} | value when
     Value :: term(),
@@ -643,9 +671,9 @@ leads_with_effect(_) -> false.
 -doc """
 Renders a value to its output binary, escaping via `Backend` (an
 `arizona_renderer`): HTML entity-escaping, terminal control-char sanitizing, or
-JSON string encoding. `raw/1`-wrapped values and already-encoded
-`arizona_effect` commands are classified out and pass through unescaped (the
-`?raw` opt-out and effects are trusted, backend-independent).
+JSON string encoding. A `raw/1`-wrapped value is classified out and passes
+through unescaped (the `?raw` opt-out is trusted, backend-independent). An
+effect command is not text and raises `{effect_in_content, Cmd}`.
 """.
 -spec escape_value(Backend, Value) -> binary() when
     Backend :: module(),
@@ -653,7 +681,7 @@ JSON string encoding. `raw/1`-wrapped values and already-encoded
 escape_value(Backend, V0) ->
     case classify_trusted(V0) of
         {raw, V} -> to_bin(V);
-        {effect, Cmd} -> arizona_effect:encode(Cmd);
+        {effect, Cmd} -> effect_in_content(Cmd);
         value -> Backend:escape(to_bin(V0))
     end.
 
@@ -673,9 +701,10 @@ escape_marked(Backend, V) ->
 
 -doc """
 Marks an evaluated value for HTML escaping at output. Only scalars are marked --
-nested templates/descriptors and stateless-child snapshots (all maps) and
-effects pass through untouched so they render structurally (their own inner
-dynamics carry their own marks). A stateless descriptor returned from a
+nested templates/descriptors and stateless-child snapshots (all maps) pass
+through untouched so they render structurally (their own inner dynamics carry
+their own marks). An effect command raises `{effect_in_content, Cmd}`: it is not
+text. A stateless descriptor returned from a
 conditional content slot reduces to a bare snapshot map here, so the `is_map`
 clause passes it through and `scope_slot/2` later namespaces it -- the same
 treatment a directly-slotted stateless child gets.
@@ -698,7 +727,7 @@ mark_esc(V) when is_map(V) ->
 mark_esc(V0) ->
     case classify_trusted(V0) of
         {raw, V} -> mark_esc(V);
-        {effect, E} -> E;
+        {effect, Cmd} -> effect_in_content(Cmd);
         value -> {arizona_esc, V0}
     end.
 

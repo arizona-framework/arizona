@@ -6,9 +6,13 @@
 %% per-function rather than fixing the spec, matching the precedent in
 %% arizona_parse_transform_SUITE.
 -dialyzer({nowarn_function, to_bin_bad_value_routes_through_format_error_2/1}).
+-dialyzer({nowarn_function, effect_in_content_message_names_fix/1}).
 
 -export([all/0, groups/0]).
 -export([
+    effect_in_content_to_bin_refused/1,
+    effect_in_content_escape_refused/1,
+    effect_in_content_message_names_fix/1,
     html_stub/1,
     stateful_descriptor/1,
     stateless_descriptor_fun/1,
@@ -36,6 +40,9 @@ all() ->
 groups() ->
     [
         {tests, [parallel], [
+            effect_in_content_to_bin_refused,
+            effect_in_content_escape_refused,
+            effect_in_content_message_names_fix,
             html_stub,
             stateful_descriptor,
             stateless_descriptor_fun,
@@ -314,3 +321,62 @@ with_deps_bracket(Fun) ->
     undefined = erlang:put('$arizona_deps', #{}),
     ok = Fun(),
     erlang:erase('$arizona_deps').
+
+%% --- an effect command is not content ---
+
+%% An attribute renders a command through its backend before to_bin/1 is reached, so
+%% to_bin/1 only sees one in content: refused, with a command anywhere in a value
+%% named as such rather than as an unconvertible value.
+effect_in_content_to_bin_refused(Config) when is_list(Config) ->
+    Hide = arizona_js:hide(~"#x"),
+    [
+        ?assertError({effect_in_content, Refused}, arizona_template:to_bin(V))
+     || {V, Refused} <- [
+            {Hide, Hide},
+            {[Hide, arizona_js:show(~"#y")], [Hide, arizona_js:show(~"#y")]},
+            {[[], Hide], [[], Hide]},
+            {[~"a", Hide], [~"a", Hide]},
+            {[~"a", [~"b", Hide]], [~"a", [~"b", Hide]]},
+            {{arizona_raw, Hide}, Hide},
+            {{arizona_esc, [~"a", Hide]}, [~"a", Hide]}
+        ]
+    ],
+    ?assertError({bad_template_value, [~"a", {x}]}, arizona_template:to_bin([~"a", {x}])).
+
+%% escape_value/2 and mark_esc/1 classify a value first; a command is refused
+%% there, explicitly, on every backend.
+effect_in_content_escape_refused(Config) when is_list(Config) ->
+    Hide = arizona_js:hide(~"#x"),
+    Cmds = [Hide, [Hide], [[], Hide]],
+    [
+        ?assertError({effect_in_content, Cmd}, arizona_template:escape_value(B, Cmd))
+     || B <- [arizona_html, arizona_json], Cmd <- Cmds
+    ],
+    [?assertError({effect_in_content, Cmd}, arizona_template:mark_esc(Cmd)) || Cmd <- Cmds],
+    ?assertError({effect_in_content, Hide}, arizona_template:mark_esc({arizona_raw, Hide})).
+
+%% The message names the fix: an event attribute, a handler's effects, or an
+%% explicit encoding to show the command as text.
+effect_in_content_message_names_fix(Config) when is_list(Config) ->
+    Hide = arizona_js:hide(~"#x"),
+    {Reason, ST} =
+        try arizona_template:to_bin(Hide) of
+            _ -> error(expected_effect_in_content)
+        catch
+            error:R:S -> {R, S}
+        end,
+    [{arizona_template, to_bin, [Hide], Info} | _] = ST,
+    ?assertEqual(#{module => arizona_template}, proplists:get_value(error_info, Info)),
+    #{general := Msg0} = arizona_template:format_error(Reason, ST),
+    Msg = unicode:characters_to_binary(Msg0),
+    [
+        ?assertNotEqual(nomatch, binary:match(Msg, Part), Part)
+     || Part <- [
+            ~"not content",
+            ~"{az_click, Cmd}",
+            ~"return it from a handler",
+            ~"arizona_effect:encode_json(Cmd)"
+        ]
+    ],
+    #{general := Located} = arizona_template:format_error({arizona_loc, {my_view, 12}, Reason}, ST),
+    ?assertEqual(<<"my_view:12: ", Msg/binary>>, unicode:characters_to_binary(Located)).

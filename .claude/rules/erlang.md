@@ -95,6 +95,12 @@ A list attribute value (`{class, [~"btn-", ?get(kind)]}`) is text -- chardata, s
 integer in it is a codepoint. A boolean or other atom inside it is not text and raises
 `bad_template_value`; a boolean belongs in a whole-value attribute (`{disabled, ?get(off)}`).
 
+An effect command is not text either. In content -- a slot, a content-slot list, a `?raw`, a
+content `?local` -- no client runs it, so a literal builder call there is the compile error
+`effect_in_content` and one arriving at runtime raises `{effect_in_content, V}`, located at the
+slot. Put it in an event attribute (`{az_click, Cmd}`) or a handler's effects; to show it as
+text, encode it explicitly (`arizona_effect:encode_json(Cmd)`).
+
 A literal list in **content** (`{p, [], [[~"a", ~"b"], ~"c"]}`) folds the same way, but it
 keeps its meaning as a value: it is escaped exactly as the runtime would escape it, unlike a
 bare binary literal child, which is spliced as raw markup. Inside raw-text elements

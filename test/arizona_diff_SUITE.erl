@@ -5,6 +5,7 @@
 
 -export([all/0, groups/0]).
 -export([
+    effect_in_content_diff_refused/1,
     diff_attr_op/1,
     diff_attr_command_op_is_json_array/1,
     diff_attr_nav_flash_refused/1,
@@ -160,7 +161,8 @@ all() ->
         {group, conditional_dep},
         {group, wire_payload},
         {group, markerless_slots},
-        {group, each_callback_deps}
+        {group, each_callback_deps},
+        {group, effect_in_content}
     ].
 
 groups() ->
@@ -290,6 +292,7 @@ groups() ->
             markerless_list_no_change_no_ops,
             markerless_stateful_child_update_targets_element_az
         ]},
+        {effect_in_content, [parallel], [effect_in_content_diff_refused]},
         {each_callback_deps, [parallel], [
             each_list_callback_tracks,
             each_stream_callback_tracks,
@@ -2962,3 +2965,41 @@ each_bindings() ->
         ])
     },
     arizona_stream:clear_stream_pending(B, [s, ss, gs]).
+
+%% --------------------------------------------------------------------
+%% An effect command in content is refused
+%% --------------------------------------------------------------------
+
+%% A slot that changes to a command is refused on the update, as on the first render:
+%% no client runs a command from content. The slot's evaluation locates it; a command
+%% after text in a list is found only when the text op converts it, unlocated.
+effect_in_content_diff_refused(Config) when is_list(Config) ->
+    Hide = arizona_js:hide(~"#x"),
+    [
+        ?assertEqual({F, Cmd, diff_refused(F, Cmd)}, {F, Cmd, diff_to(F, Cmd)})
+     || F <- [text, raw, text_list, item, script, json], Cmd <- [Hide, [[], Hide]]
+    ].
+
+diff_to(F, Cmd) ->
+    {_HTML, Snap, Views} = arizona_render:render(effect_template(F, ~"x"), #{}),
+    try arizona_diff:diff(effect_template(F, Cmd), Snap, Views, #{v => true, items => true}) of
+        Result -> error({expected_error, Result})
+    catch
+        error:Reason -> Reason
+    end.
+
+effect_template(item, V) -> arizona_effect_content:item(#{items => [V]});
+effect_template(F, V) -> arizona_effect_content:F(#{v => V}).
+
+diff_refused(text_list, Cmd) ->
+    {effect_in_content, [~"a: ", Cmd]};
+diff_refused(F, Cmd) ->
+    Source = proplists:get_value(source, arizona_effect_content:module_info(compile)),
+    {ok, Src} = file:read_file(Source),
+    Head = <<(atom_to_binary(F))/binary, "(Bindings) ->">>,
+    [Line] = [
+        N
+     || {N, L} <- lists:enumerate(binary:split(Src, ~"\n", [global])),
+        binary:match(L, Head) =:= {0, byte_size(Head)}
+    ],
+    {arizona_loc, {arizona_effect_content, Line}, {effect_in_content, Cmd}}.

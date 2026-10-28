@@ -672,7 +672,8 @@ finish_page(PageTmpl, Bindings, Opts) ->
 %% what renders to a binary, so any tuple this module unwrapped back to raw
 %% output would be an escape bypass the moment a binding carried the same shape
 %% -- unlike `{arizona_raw, _}`/`{arizona_effect, _}`, which are safe precisely
-%% because `arizona_template:classify_trusted/1` knows them and re-escapes.
+%% because `arizona_template:classify_trusted/1` knows them (a content slot
+%% re-escapes the one and refuses the other).
 %% The `#{s, d}` shape adds no surface: a binding holding one already splices
 %% raw (a nested template is exactly what it claims to be).
 apply_layouts([], _PageBackend, Inner, _Bindings) ->
@@ -932,9 +933,9 @@ render_ssr_val(Backend, Val) ->
 
 %% A value interpolation, classified as the live render classifies it
 %% (`arizona_template:mark_esc/1`): a map -- nested template, descriptor, `?local`
-%% -- renders structurally with its own escaping, an effect passes through encoded,
-%% and anything else is escaped once. Escaping whatever came back as a binary
-%% instead escaped an effect or a `?local` init a second time. A binary or an integer
+%% -- renders structurally with its own escaping, an effect is refused, and
+%% anything else is escaped once. Escaping whatever came back as a binary instead
+%% escaped a `?local` init a second time. A binary or an integer
 %% is escaped directly, the answer the classification is certain to give.
 render_ssr_esc_val(Backend, V) when is_binary(V) ->
     Backend:escape(V);
@@ -945,7 +946,8 @@ render_ssr_esc_val(Backend, V) when is_map(V) ->
 render_ssr_esc_val(Backend, V) ->
     case arizona_template:mark_esc(V) of
         {arizona_esc, X} -> arizona_template:escape_marked(Backend, X);
-        Trusted -> text_leaf(Backend, arizona_template:to_bin(Trusted))
+        %% Only a helper's raw/1 around a map is left unmarked; live renders it whole.
+        Map -> render_ssr_val(Backend, Map)
     end.
 
 render_fp_val(Backend, {arizona_esc, V}) ->

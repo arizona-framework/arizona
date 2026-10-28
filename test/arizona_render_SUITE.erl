@@ -10,6 +10,10 @@
 
 -export([all/0, groups/0]).
 -export([
+    effect_in_content_ssr_refused/1,
+    effect_in_content_live_refused/1,
+    effect_in_content_fingerprint_refused/1,
+    effect_in_content_message_names_fix/1,
     to_bin_rejects_non_chardata_list/1,
     render_float_any_magnitude/1,
     diff4_nodiff_shortcircuit/1,
@@ -146,11 +150,18 @@ all() ->
         {group, fingerprint},
         {group, error_page},
         {group, nodiff},
-        {group, root_dynamic_anchor}
+        {group, root_dynamic_anchor},
+        {group, effect_in_content}
     ].
 
 groups() ->
     [
+        {effect_in_content, [parallel], [
+            effect_in_content_ssr_refused,
+            effect_in_content_live_refused,
+            effect_in_content_fingerprint_refused,
+            effect_in_content_message_names_fix
+        ]},
         {zip, [parallel], [
             zip_static_only,
             zip_text_slot,
@@ -2678,3 +2689,108 @@ diff4_nodiff_shortcircuit(Config) when is_list(Config) ->
     ?assertEqual([], Ops),
     ?assertEqual(OldSnap, Snap),
     ?assertEqual(#{}, Views).
+
+%% --------------------------------------------------------------------
+%% An effect command in content is refused
+%% --------------------------------------------------------------------
+
+%% A command is not text: no client runs one from a content slot. The SSR walk
+%% refuses it at the slot that holds it, on every content path, for a command, a
+%% command list and a list leading with a conditional's empty item.
+effect_in_content_ssr_refused(Config) when is_list(Config) ->
+    [
+        ?assertEqual(
+            {F, Cmd, {arizona_loc, {arizona_effect_content, effect_line(F)}, refused(F, Cmd)}},
+            {F, Cmd, raised(fun() -> arizona_render:render_to_iolist(effect_template(F, Cmd)) end)}
+        )
+     || F <- effect_paths(), Cmd <- effect_cmds()
+    ].
+
+%% The live render (view tracking and dependency capture, as a mount evaluates)
+%% refuses it inside the slot's located evaluation too. A command after text in a
+%% list is the exception: an escaped value is converted only at output, where the
+%% location is gone, so finding it there would cost every list value a walk.
+effect_in_content_live_refused(Config) when is_list(Config) ->
+    [
+        ?assertEqual(
+            {F, Cmd, live_refused(F, Cmd)},
+            {F, Cmd, raised(fun() -> arizona_render:render(effect_template(F, Cmd), #{}) end)}
+        )
+     || F <- effect_paths(), Cmd <- effect_cmds()
+    ].
+
+live_refused(text_list, Cmd) ->
+    refused(text_list, Cmd);
+live_refused(F, Cmd) ->
+    {arizona_loc, {arizona_effect_content, effect_line(F)}, refused(F, Cmd)}.
+
+%% The fingerprint payload converts a content value itself. Evaluation refuses a
+%% command before a snapshot can hold one, so this pins the conversion's own refusal.
+effect_in_content_fingerprint_refused(Config) when is_list(Config) ->
+    Cmd = arizona_js:hide(~"#x"),
+    [
+        ?assertError(
+            {effect_in_content, Cmd},
+            arizona_render:fingerprint_payload(#{
+                s => [~"<p>", ~"</p>"], d => [{~"0", Value}], f => ~"fp"
+            })
+        )
+     || Value <- [{arizona_esc, Cmd}, #{az_local => ~"k", v => Cmd}, Cmd]
+    ].
+
+%% The message says what is wrong and how to fix it, located at the slot.
+effect_in_content_message_names_fix(Config) when is_list(Config) ->
+    Cmd = arizona_js:hide(~"#x"),
+    {Reason, ST} =
+        try arizona_render:render(effect_template(text, Cmd), #{}) of
+            _ -> error(expected_effect_in_content)
+        catch
+            error:R:S -> {R, S}
+        end,
+    ?assertMatch({arizona_loc, _, {effect_in_content, Cmd}}, Reason),
+    Msg = unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST)),
+    [
+        ?assertNotEqual(nomatch, binary:match(Msg, Part), Part)
+     || Part <- [
+            ~"not content",
+            ~"{az_click, Cmd}",
+            ~"return it from a handler",
+            ~"arizona_effect:encode_json(Cmd)",
+            iolist_to_binary(["arizona_effect_content:", integer_to_list(effect_line(text))])
+        ]
+    ].
+
+effect_paths() ->
+    [text, nodiff, raw, local, text_list, item, script, json].
+
+effect_cmds() ->
+    Hide = arizona_js:hide(~"#x"),
+    [Hide, [Hide, arizona_js:show(~"#y")], [[], Hide]].
+
+effect_template(item, Cmd) ->
+    arizona_effect_content:item(#{items => [Cmd]});
+effect_template(F, Cmd) ->
+    arizona_effect_content:F(#{v => Cmd}).
+
+%% What the refusal names: the command, or the text list holding it.
+refused(text_list, Cmd) -> {effect_in_content, [~"a: ", Cmd]};
+refused(_F, Cmd) -> {effect_in_content, Cmd}.
+
+%% Each fixture template sits on its function's one line.
+effect_line(F) ->
+    Source = proplists:get_value(source, arizona_effect_content:module_info(compile)),
+    {ok, Src} = file:read_file(Source),
+    Head = <<(atom_to_binary(F))/binary, "(Bindings) ->">>,
+    [Line] = [
+        N
+     || {N, L} <- lists:enumerate(binary:split(Src, ~"\n", [global])),
+        binary:match(L, Head) =:= {0, byte_size(Head)}
+    ],
+    Line.
+
+raised(Fun) ->
+    try Fun() of
+        Result -> error({expected_error, Result})
+    catch
+        error:Reason -> Reason
+    end.
