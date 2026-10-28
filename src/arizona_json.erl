@@ -60,6 +60,7 @@ the wire value. On the wire itself a value stays raw
 -export([render_attr/2]).
 -export([wire_escape/1]).
 -export([wire_attr/2]).
+-export([static_document/2]).
 
 -spec name(arizona_renderer:tag()) -> binary().
 name(Bin) when is_binary(Bin) ->
@@ -246,3 +247,9 @@ json_value(Value) ->
     catch
         error:Reason:Stacktrace -> arizona_utf8:refuse(Value, Reason, Stacktrace)
     end.
+
+%% A JSON document is one value, which cannot take extra content; the static
+%% client is handed the names by `start({attrs})` instead.
+-spec static_document(iodata(), [binary()]) -> iodata().
+static_document(Doc, _EventNames) ->
+    Doc.

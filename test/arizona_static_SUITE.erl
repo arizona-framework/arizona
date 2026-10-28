@@ -23,6 +23,7 @@
 -export([embeds_render_time_proven_attrs/1]).
 -export([page_without_events_has_no_attrs/1]).
 -export([page_without_body_is_left_as_rendered/1]).
+-export([target_decides_how_a_document_carries_names/1]).
 -export([leaves_the_collector_disarmed/1]).
 
 all() ->
@@ -48,6 +49,7 @@ groups() ->
             embeds_render_time_proven_attrs,
             page_without_events_has_no_attrs,
             page_without_body_is_left_as_rendered,
+            target_decides_how_a_document_carries_names,
             leaves_the_collector_disarmed
         ]}
     ].
@@ -244,6 +246,24 @@ page_without_body_is_left_as_rendered(Config) when is_list(Config) ->
     ?assertEqual(
         iolist_to_binary(arizona_render:render_view_to_iolist(arizona_counter, #{})), Content
     ).
+
+%% How a document carries the names is its target's: HTML embeds a script before the
+%% last `</body>`; a JSON document is one value, left whole even when its text holds
+%% a `</body>`, which an HTML-shaped splice would have cut into.
+target_decides_how_a_document_carries_names(Config) when is_list(Config) ->
+    Names = [~"az-click"],
+    Html = iolist_to_binary(
+        arizona_html:static_document(~"<html><body><p>x</p></body></html>", Names)
+    ),
+    ?assertEqual(
+        iolist_to_binary([
+            ~"<html><body><p>x</p><script type=\"application/json\" id=\"arizona-attrs\">",
+            ~"[\"az-click\"]</script></body></html>"
+        ]),
+        Html
+    ),
+    Json = ~"{\"type\":\"Text\",\"children\":[\"</body>\"]}",
+    ?assertEqual(Json, iolist_to_binary(arizona_json:static_document(Json, Names))).
 
 %% The collector is armed for each page's render only, so the caller's process is
 %% not left recording what it renders later.

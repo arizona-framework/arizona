@@ -329,3 +329,13 @@ the payload is JSON-encoded as a whole, so a JSON effect command travels as its
 array.
 """.
 -callback wire_attr(Name :: binary(), Value :: term()) -> json:encode_value().
+
+-doc """
+A statically generated document (`arizona_static`) carrying the `az-*` event names
+proven to hold commands -- what a live page's client gets on its socket's connect
+frame, here for a client with no server to ask. Called only when the page has any.
+How a document carries them is the target's: HTML embeds them as a JSON script
+element; a target whose document cannot take extra content (a single JSON value)
+returns `Doc` as it is, and its client is handed the names another way.
+""".
+-callback static_document(Doc :: iodata(), EventNames :: [binary()]) -> iodata().
