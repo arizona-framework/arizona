@@ -1910,9 +1910,11 @@ process, or WebSocket (built on `arizona_render:render_view_to_iolist/2`).
   of `t:arizona_live:route_opts/0` (`bindings`/`on_mount`/`layouts`; no `middlewares`). The client
   `<script>` lives in the layout: a pure-static page loads `arizona-static.min.js` and calls
   `start()` instead of `connect('/ws')`, and browser-side commands (`?local`, toggles, dialogs,
-  PiP) run with no server. Each page with event attributes embeds their proven names as
-  `<script type="application/json" id="arizona-attrs">` before its last `</body>` -- what the
-  socket's connect frame carries on a live page -- and `start()` delegates exactly those.
+  PiP) run with no server. Each page with event attributes is handed their proven names -- what
+  the socket's connect frame carries on a live page -- through its target's
+  `static_document/2` renderer callback: HTML embeds them as
+  `<script type="application/json" id="arizona-attrs">` before its last `</body>`, and
+  `start()` delegates exactly those.
 
 ## Roadrunner handlers
 

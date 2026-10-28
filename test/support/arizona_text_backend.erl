@@ -45,6 +45,7 @@
 -export([render_attr/2]).
 -export([wire_escape/1]).
 -export([wire_attr/2]).
+-export([static_document/2]).
 
 name(Bin) when is_binary(Bin) -> Bin;
 name(Atom) -> atom_to_binary(Atom).
@@ -125,6 +126,8 @@ wire_escape(Bin) -> escape(Bin).
 
 -spec wire_attr(binary(), term()) -> no_return().
 wire_attr(Name, _Value) -> reject(Name).
+
+static_document(Doc, _EventNames) -> Doc.
 
 -spec reject(binary()) -> no_return().
 reject(Name) ->

@@ -45,6 +45,7 @@ identical to the previous inlined emission.
 -export([render_attr/2]).
 -export([wire_escape/1]).
 -export([wire_attr/2]).
+-export([static_document/2]).
 
 %% A byte that needs no entity. Letters and UTF-8 bytes (> `>`) answer on the
 %% first test; the rest of the safe set lies between and around `"`, `&`/`'`
@@ -292,6 +293,28 @@ content_context_name(~"foreignobject", foreign) ->
     undefined;
 content_context_name(_Other, Parent) ->
     Parent.
+
+-spec static_document(iodata(), [binary()]) -> iodata().
+static_document(Doc, Names) ->
+    %% Before the last `</body>`, where the static client reads it. A document with
+    %% none (a fragment) is left as rendered: appending markup could corrupt it.
+    %% `<` is escaped so no name can close the script element.
+    Html = iolist_to_binary(Doc),
+    case binary:matches(Html, ~"</body>") of
+        [] ->
+            Html;
+        Matches ->
+            {At, _Len} = lists:last(Matches),
+            Json = binary:replace(iolist_to_binary(json:encode(Names)), ~"<", ~"\\u003c", [global]),
+            <<Before:At/binary, After/binary>> = Html,
+            [
+                Before,
+                ~"<script type=\"application/json\" id=\"arizona-attrs\">",
+                Json,
+                ~"</script>",
+                After
+            ]
+    end.
 
 %% Every framework-emitted `az` in a compiled static is `<Fp>-<id>` (the parse
 %% transform builds the marker from the id, so the fingerprint is always the

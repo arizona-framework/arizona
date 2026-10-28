@@ -77,12 +77,13 @@ client and calls its `start()` instead of `connect('/ws')`:
 
 A data value under an `az-*` name is never run as a command, so the client only
 delegates the event names proven to hold one, exactly as the live socket's
-connect frame does. `generate/2,3` therefore embeds those names in each page
-that has any, as `<script type="application/json" id="arizona-attrs">` before the
-last `</body>`: the compile-time names of the handler, its layouts and every
-module rendered into the page, plus the names whose command was built at render
-time. A page with no `</body>` (a `?json` document, a fragment) is written as
-rendered. A `push_event` has no server to reach and is dropped with a warning;
+connect frame does. `generate/2,3` therefore hands those names to each page that
+has any -- the compile-time names of the handler, its layouts and every module
+rendered into the page, plus the names whose command was built at render time --
+through its render target's `static_document/2` callback. An `?html` page embeds
+them as `<script type="application/json" id="arizona-attrs">` before the last
+`</body>` (a fragment with none is written as rendered); a `?json` document is
+written as rendered, its client handed the names by `start({attrs})`. A `push_event` has no server to reach and is dropped with a warning;
 a `navigate`/`patch` loads its URL as a page.
 
 ## Caveats
@@ -236,39 +237,18 @@ generate_one(Handler, Filename, Opts) when is_atom(Handler), is_map(Opts) ->
 %% page receives on its socket's connect frame. Both proofs count -- what the
 %% compiler saw in the handler, its layouts and the modules they name, and what
 %% rendering evaluated to a command -- so the collector is armed for this render
-%% only.
+%% only. How the page carries them is its render target's (`static_document/2`).
 render(Handler, RenderOpts) ->
     ok = arizona_event_attrs:arm(),
     try
-        Html = arizona_render:render_view_to_iolist(Handler, RenderOpts),
+        {Backend, Doc} = arizona_render:render_view(Handler, RenderOpts),
         {Rendered, Mods} = arizona_event_attrs:drain(),
         Layouts = [Mod || {Mod, _Fun} <:- maps:get(layouts, RenderOpts, [])],
         Compiled = arizona_event_attrs:all([Handler | Layouts] ++ Mods),
-        with_attrs(Html, lists:usort(Rendered ++ Compiled))
+        case lists:usort(Rendered ++ Compiled) of
+            [] -> Doc;
+            Names -> Backend:static_document(Doc, Names)
+        end
     after
         ok = arizona_event_attrs:disarm()
-    end.
-
-%% Embedded before the last `</body>`. A page with none -- a fragment, a
-%% `?json` JSON document -- is left as rendered: appending markup could corrupt
-%% it, and its client can be handed the names by `start({attrs})`. `<` is escaped
-%% so no name can close the script element.
-with_attrs(Html, []) ->
-    Html;
-with_attrs(Html0, Names) ->
-    Html = iolist_to_binary(Html0),
-    case binary:matches(Html, ~"</body>") of
-        [] ->
-            Html;
-        Matches ->
-            {At, _Len} = lists:last(Matches),
-            Json = binary:replace(iolist_to_binary(json:encode(Names)), ~"<", ~"\\u003c", [global]),
-            <<Before:At/binary, After/binary>> = Html,
-            [
-                Before,
-                ~"<script type=\"application/json\" id=\"arizona-attrs\">",
-                Json,
-                ~"</script>",
-                After
-            ]
     end.
