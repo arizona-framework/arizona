@@ -270,7 +270,10 @@ mapfold_nested_walks_every_nested_list(Config) when is_list(Config) ->
         arizona_effect:to_wire(Rebuilt)
     ),
     {arizona_effect, Plain} = arizona_js:toggle(~"#p"),
-    ?assertEqual({Plain, none}, arizona_effect:mapfold_nested(fun erlang:error/1, none, Plain)).
+    ?assertEqual(
+        {Plain, none},
+        arizona_effect:mapfold_nested(fun(_When, Inner, _Acc) -> {Inner, called} end, none, Plain)
+    ).
 
 %% The encoder knows no op that nests: a command of any op code holding a
 %% navigate with a flash, as data, is refused like a bare one.
