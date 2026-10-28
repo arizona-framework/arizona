@@ -202,10 +202,11 @@ render(Bindings) ->
     %% straddle a slot and its static neighbour.
     raw_text_after = <<>> :: binary(),
     %% Content context of the enclosing element while compiling its children
-    %% (Backend:content_context/2). `foreign` is inside `<svg>`, where an element
-    %% is ordinary parsed content, so a tag HTML treats as escapable raw text
+    %% (Backend:content_context/2), `undefined` at a template's root. The backend
+    %% names the rest: HTML's `foreign` is inside `<svg>`, where an element is
+    %% ordinary parsed content, so a tag HTML treats as escapable raw text
     %% (`title`) keeps its markers and stays diffable.
-    content_ctx = html :: arizona_renderer:content_context(),
+    content_ctx = undefined :: arizona_renderer:content_context(),
     module = undefined :: module() | undefined,
     live_render = false :: boolean(),
     root = false :: boolean(),
@@ -826,10 +827,9 @@ mark_targets(
         true when Ctx =/= none andalso Ctx =/= Target ->
             parse_error(cross_target_nesting, L);
         true ->
-            %% Entering a target resets the content context to that backend's default.
-            Default = root_content_context(Target),
+            %% Entering a target starts at the document root's content context.
             {call, L, {remote, RL, {atom, ML, Mod}, {atom, FL, Target}}, [
-                maybe_inherit_nodiff(mark_targets(Arg, Target, Default))
+                maybe_inherit_nodiff(mark_targets(Arg, Target, undefined))
             ]};
         false ->
             mark_targets_node(Call, Ctx, CCtx)
@@ -947,14 +947,10 @@ splice_vars(Expr, Inline, _Ctx, _CCtx) when map_size(Inline) =:= 0 ->
 splice_vars(Expr, Inline, Ctx, CCtx) ->
     mark_targets(inline_vars(Expr, Inline), Ctx, CCtx).
 
-%% The content context at the root of a `Target` template.
-root_content_context(Target) ->
-    (target_backend(Target)):content_context(undefined, html).
-
 mark_targets(Node, none) ->
     mark_targets(Node, none, none);
 mark_targets(Node, Target) ->
-    mark_targets(Node, Target, root_content_context(Target)).
+    mark_targets(Node, Target, undefined).
 
 %% A template renders its nested templates (a conditional branch, an `?each` item,
 %% a template passed as a `?stateless` prop) inside its own output, so under
@@ -1722,7 +1718,7 @@ transform_node(Node, Module, Inline, FunDefs) ->
                 is_map_key(Target, Targets)
         ->
             Inherited = Mod =:= ?NODIFF_MOD,
-            Arg1 = splice_vars(Arg, Inline, Target, root_content_context(Target)),
+            Arg1 = splice_vars(Arg, Inline, Target, undefined),
             {Arg2, HelperCh} = inline_helper_calls(Arg1, Module, FunDefs, Target),
             Arg3 = retransform_spliced(
                 inherit_spliced_nodiff(Inherited, Arg2),
@@ -2795,7 +2791,7 @@ transform_live_render_leaf(Expr, Module, Inline, FunDefs) ->
 transform_live_root(Target, Arg, L, Module, Inline, FunDefs) ->
     validate_live_root(Arg, L, Inline),
     Arg1 = transform_expr(Arg, Module, Inline, FunDefs),
-    Arg2 = splice_vars(Arg1, Inline, Target, root_content_context(Target)),
+    Arg2 = splice_vars(Arg1, Inline, Target, undefined),
     {Arg3, HelperCh} = inline_helper_calls(Arg2, Module, FunDefs, Target),
     Arg4 = retransform_spliced(
         inherit_spliced_nodiff(false, Arg3),
@@ -3888,7 +3884,7 @@ compile_template(Arg, Line, Module, LiveRender, Backend) ->
 %% `Inherited` is true for a template nested in an `az-nodiff` one (see
 %% inherit_nodiff/1): it compiles nodiff whatever its own attributes say.
 compile_template(Arg, Line, Module, LiveRender, Backend, Inherited) ->
-    compile_template(Arg, Line, Module, LiveRender, Backend, Inherited, html).
+    compile_template(Arg, Line, Module, LiveRender, Backend, Inherited, undefined).
 
 %% `CCtx` is the content context the template renders in: a conditional tail's
 %% element compiles in the context of the slot holding it (an SVG `<script>` or

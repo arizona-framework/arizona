@@ -236,7 +236,7 @@ raw_text_kind(Tag, Context) ->
 %% As `none` the slot is escaped instead, and the parser decodes the references
 %% straight back (`a &gt; b` reaches CSS as `a > b`), so the content is unchanged
 %% and the value can no longer escape its element.
-raw_text_kind_name(~"script", html) ->
+raw_text_kind_name(~"script", undefined) ->
     raw;
 %% Escapable-raw-text elements: character references are decoded, so a scalar
 %% slot is HTML-escaped, but comments are still literal -- so still markerless.
@@ -244,11 +244,11 @@ raw_text_kind_name(~"script", html) ->
 %% comments really are comments, so its slot can keep markers and stay diffable.
 %% That matters because an SVG `<title>` is a graphic's accessible name, and
 %% classifying it here would freeze a bound one after SSR.
-raw_text_kind_name(~"textarea", html) ->
+raw_text_kind_name(~"textarea", undefined) ->
     escapable;
-raw_text_kind_name(~"title", html) ->
+raw_text_kind_name(~"title", undefined) ->
     escapable;
-raw_text_kind_name(Name, html) ->
+raw_text_kind_name(Name, undefined) ->
     case lists:member(Name, rawtext_names()) of
         true -> raw;
         false -> none
@@ -284,11 +284,12 @@ content_context(Tag, Parent) ->
 %% `<svg>` switches the parser into foreign content; `<foreignObject>` switches
 %% back for its children. MathML is deliberately not tracked: it would need its
 %% own integration points (`mtext` and friends) to be correct, and leaving it in
-%% `html` keeps today's behaviour rather than half-handling it.
+%% HTML content keeps today's behaviour rather than half-handling it. HTML content
+%% is the root context, `undefined`, so `<foreignObject>` returns to it.
 content_context_name(~"svg", _Parent) ->
     foreign;
 content_context_name(~"foreignobject", foreign) ->
-    html;
+    undefined;
 content_context_name(_Other, Parent) ->
     Parent.
 
