@@ -1088,10 +1088,10 @@ nav_flash_ops(Cmds) ->
 nav_flash_cmd([Op, _Path, #{flash := _}]) when Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH ->
     [Op];
 nav_flash_cmd(Cmd) ->
-    case arizona_effect:wrapped(Cmd) of
-        {_When, Inner, _Rewrap} -> nav_flash_ops(Inner);
-        none -> []
-    end.
+    {_Cmd, Ops} = arizona_effect:mapfold_nested(
+        fun(_When, Inner, Acc) -> {Inner, Acc ++ nav_flash_ops(Inner)} end, [], Cmd
+    ),
+    Ops.
 
 %% The compile-time walk roots for a page: the route handler plus its layout
 %% modules. Layouts render az-* markup too -- once, at SSR -- and no later frame
@@ -1153,19 +1153,24 @@ encode_reply_1([], [], #socket{az_pending = []} = Socket) ->
 encode_reply_1(Ops, [], #socket{az_pending = []} = Socket) ->
     {reply, encode(#{?OPS => Ops}), Socket};
 encode_reply_1([], Effects, #socket{az_pending = []} = Socket) ->
-    {reply, encode(#{?EFFECTS => unwrap_effects(Effects)}), Socket};
+    {reply, encode(#{?EFFECTS => wire_effects(Effects)}), Socket};
 encode_reply_1(Ops, Effects, #socket{az_pending = []} = Socket) ->
-    {reply, encode(#{?OPS => Ops, ?EFFECTS => unwrap_effects(Effects)}), Socket};
+    {reply, encode(#{?OPS => Ops, ?EFFECTS => wire_effects(Effects)}), Socket};
 encode_reply_1(Ops, Effects, Socket0) ->
     {Attrs, Socket} = take_az_pending(Socket0),
     Fields =
         [{?OPS, Ops} || Ops =/= []] ++
-            [{?EFFECTS, unwrap_effects(Effects)} || Effects =/= []] ++
+            [{?EFFECTS, wire_effects(Effects)} || Effects =/= []] ++
             [{?AZ_ATTRS, Attrs}],
     {reply, encode(maps:from_list(Fields)), Socket}.
 
 unwrap_effects(Effects) ->
     [Cmd || {arizona_effect, Cmd} <:- Effects].
+
+%% The effects as the client receives them: the commands they nest lowered to
+%% plain lists, once every walk over them (the flash capture) has run.
+wire_effects(Effects) ->
+    [arizona_effect:to_wire(Cmd) || {arizona_effect, Cmd} <:- Effects].
 
 %% Move any `flash` opt off a navigate/patch effect onto the socket's one-shot
 %% pending flash (merged) and strip it from the outgoing effect. The flash is
@@ -1203,15 +1208,14 @@ capture_flash_cmd([Op, Path, #{flash := Flash} = Opts], Pending) when
 ->
     capture_nav_flash(Op, Path, Flash, Opts, Pending);
 capture_flash_cmd(Cmd, Pending0) ->
-    case arizona_effect:wrapped(Cmd) of
-        {now, Inner0, Rewrap} ->
-            {Inner, Pending} = lists:mapfoldl(fun capture_flash_cmd/2, Pending0, Inner0),
-            {Rewrap(Inner), Pending};
-        {deferred, Inner, Rewrap} ->
-            {Rewrap([strip_flash_cmd(C) || C <- Inner]), Pending0};
-        none ->
-            {Cmd, Pending0}
-    end.
+    arizona_effect:mapfold_nested(
+        fun
+            (now, Inner, Pending) -> lists:mapfoldl(fun capture_flash_cmd/2, Pending, Inner);
+            (deferred, Inner, Pending) -> {[strip_flash_cmd(C) || C <- Inner], Pending}
+        end,
+        Pending0,
+        Cmd
+    ).
 
 strip_flash_cmd([Op, Path, #{flash := _} = Opts]) when
     Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH
@@ -1223,10 +1227,10 @@ strip_flash_cmd([Op, Path, #{flash := _} = Opts]) when
     ),
     [Op, Path, maps:remove(flash, Opts)];
 strip_flash_cmd(Cmd) ->
-    case arizona_effect:wrapped(Cmd) of
-        {_When, Inner, Rewrap} -> Rewrap([strip_flash_cmd(C) || C <- Inner]);
-        none -> Cmd
-    end.
+    {Stripped, ok} = arizona_effect:mapfold_nested(
+        fun(_When, Inner, ok) -> {[strip_flash_cmd(C) || C <- Inner], ok} end, ok, Cmd
+    ),
+    Stripped.
 
 %% `flash` is always stripped from the client effect (the browser never sees it),
 %% regardless of its shape -- so no non-map `flash` opt can leak. A non-map value is

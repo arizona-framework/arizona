@@ -45,9 +45,10 @@ content shipped to the page.
 -export([encode/1]).
 -export([encode_json/1]).
 -export([json_value/1]).
--export([bare/1]).
+-export([to_wire/1]).
+-export([nest/2]).
+-export([mapfold_nested/3]).
 -export([format_error/2]).
--export([wrapped/1]).
 
 %% --------------------------------------------------------------------
 %% Ignore elvis warnings
@@ -64,6 +65,7 @@ content shipped to the page.
 
 -export_type([cmd/0]).
 -export_type([cmds/0]).
+-export_type([nested/0]).
 
 %% --------------------------------------------------------------------
 %% Types definitions
@@ -72,6 +74,9 @@ content shipped to the page.
 -nominal cmd() :: {?MODULE, list()}.
 %% A command list, nested to any depth; `[]` is no command.
 -type cmds() :: [cmd() | cmds()].
+%% Commands held inside another command's arguments (see nest/2): one bare command
+%% or a list of them, and when they run.
+-nominal nested() :: {?MODULE, now | deferred, list()}.
 
 %% --------------------------------------------------------------------
 %% API Functions
@@ -177,23 +182,56 @@ other item fails with `function_clause`.
 -spec json_value(Cmds) -> list() when
     Cmds :: cmd() | cmds().
 json_value({?MODULE, _} = Cmd) ->
-    no_flash(bare(Cmd));
+    to_wire(no_flash(bare(Cmd)));
 json_value(Cmds) when is_list(Cmds) ->
-    [no_flash(C) || C <- bare(Cmds)].
+    [to_wire(no_flash(C)) || C <- bare(Cmds)].
 
 -doc """
-`json_value/1` without the `flash` refusal: the bare command (or the flattened
-list of them) for a builder that wraps commands -- `transition`, `on_key`, a
-`fetch`'s `on_error` -- whose result may still be a live handler's effect, where
-the socket carries a navigate's flash. The refusal runs when the wrapper itself
-is encoded as data, and sees inside it (wrapped/1).
+A bare command (`[OpCode | Args]`) as its client receives it: every `t:nested/0`
+in its arguments -- at any depth of lists and map values, and inside the commands
+it holds -- lowered to the command or list it holds. `json_value/1` applies it;
+a wire that encodes a live handler's effects itself (the socket) applies it last,
+after walking them with `mapfold_nested/3`.
 """.
--spec bare(Cmds) -> list() when
+-spec to_wire(Cmd) -> list() when
+    Cmd :: list().
+to_wire([Op | Args]) ->
+    [Op | [wire_arg(A) || A <- Args]].
+
+-doc """
+Commands held inside another command, to put where its client expects them: a
+builder that wraps commands (`arizona_js:transition/2`, `on_key/2`, a `fetch`'s
+`on_error`) nests them with this. `When` is when they run: `now`, with the command
+holding them, or `deferred`, later if ever. Encoding lowers it to the bare command
+or list (`to_wire/1`), so a client sees the same array it always did, and every
+walk that must see inside a wrapper finds it by this shape (`mapfold_nested/3`)
+instead of knowing which commands wrap others.
+
+`Cmds` is flattened like any command list (nested lists spliced, `[]` dropped);
+a single command stays one command rather than a list of one.
+""".
+-spec nest(When, Cmds) -> nested() when
+    When :: now | deferred,
     Cmds :: cmd() | cmds().
-bare({?MODULE, Cmd}) ->
-    Cmd;
-bare(Cmds) when is_list(Cmds) ->
-    lists:reverse(flatten(Cmds, [])).
+nest(When, Cmds) when When =:= now; When =:= deferred ->
+    {?MODULE, When, bare(Cmds)}.
+
+-doc """
+Folds `Fun` over the command lists nested in a bare command (`[OpCode | Args]`) --
+in any argument, list or map value -- and rebuilds the command around what it
+returns. `Fun(When, Cmds, Acc)` gets each `t:nested/0`'s commands as a list (one
+command nested alone too) and returns `{Cmds1, Acc1}`, `Cmds1` the same length
+when it nested one. A command nesting nothing comes back as it is. The one walk
+shared by everything that must see inside a wrapper (`arizona_socket`'s flash
+capture, this module's flash refusal).
+""".
+-spec mapfold_nested(Fun, Acc, Cmd) -> {list(), Acc} when
+    Fun :: fun((now | deferred, [list()], Acc) -> {[list()], Acc}),
+    Acc :: term(),
+    Cmd :: list().
+mapfold_nested(Fun, Acc0, [Op | Args0]) ->
+    {Args, Acc} = lists:mapfoldl(fun(A, Acc1) -> nested_arg(Fun, A, Acc1) end, Acc0, Args0),
+    {[Op | Args], Acc}.
 
 -doc """
 Formats the errors this module raises with an `error_info` annotation. Picked up
@@ -206,28 +244,48 @@ by `erl_error:format_exception/3`.
 format_error({flash_outside_live_effect, Op}, _Stacktrace) ->
     #{general => flash_message(Op)}.
 
--doc """
-The commands a bare command (`[OpCode | Args]`, as `json_value/1` yields) wraps --
-a `transition`, an `on_key`, or a `fetch`'s `on_error` -- as a list, with when they
-run (`now` when the command does, `deferred` later, if ever) and a fun that
-rebuilds the wrapper around a replacement list. `none` for any other command.
-The one list of wrapper shapes, shared by every walk that must see inside them
-(`arizona_socket`'s flash capture, this module's flash refusal).
-""".
--spec wrapped(Cmd) -> {now | deferred, [list()], fun(([list()]) -> list())} | none when
-    Cmd :: list().
-wrapped([?EFFECT_TRANSITION, Opts, Cmds]) ->
-    unwrap(now, Cmds, fun(New) -> [?EFFECT_TRANSITION, Opts, New] end);
-wrapped([?EFFECT_ON_KEY, Key, Cmds]) ->
-    unwrap(deferred, Cmds, fun(New) -> [?EFFECT_ON_KEY, Key, New] end);
-wrapped([?EFFECT_FETCH, Url, #{on_error := Cmds} = Opts]) ->
-    unwrap(deferred, Cmds, fun(New) -> [?EFFECT_FETCH, Url, Opts#{on_error => New}] end);
-wrapped(_Cmd) ->
-    none.
-
 %% --------------------------------------------------------------------
 %% Internal functions
 %% --------------------------------------------------------------------
+
+%% A command, or a command list flattened in order with `[]` items dropped.
+bare({?MODULE, Cmd}) ->
+    Cmd;
+bare(Cmds) when is_list(Cmds) ->
+    lists:reverse(flatten(Cmds, [])).
+
+wire_arg({?MODULE, _When, [Op | _] = Cmd}) when is_integer(Op) ->
+    to_wire(Cmd);
+wire_arg({?MODULE, _When, Cmds}) ->
+    [to_wire(C) || C <- Cmds];
+wire_arg(List) when is_list(List) ->
+    [wire_arg(A) || A <- List];
+wire_arg(Map) when is_map(Map) ->
+    #{K => wire_arg(V) || K := V <- Map};
+wire_arg(Arg) ->
+    Arg.
+
+%% A nested single command is handed to `Fun` as a list of one and rebuilt as one.
+nested_arg(Fun, {?MODULE, When, [Op | _] = Cmd}, Acc0) when is_integer(Op) ->
+    {[New], Acc} = Fun(When, [Cmd], Acc0),
+    {{?MODULE, When, New}, Acc};
+nested_arg(Fun, {?MODULE, When, Cmds}, Acc0) ->
+    {New, Acc} = Fun(When, Cmds, Acc0),
+    {{?MODULE, When, New}, Acc};
+nested_arg(Fun, List, Acc0) when is_list(List) ->
+    lists:mapfoldl(fun(A, Acc) -> nested_arg(Fun, A, Acc) end, Acc0, List);
+nested_arg(Fun, Map, Acc0) when is_map(Map) ->
+    {Pairs, Acc} = lists:mapfoldl(
+        fun({K, V}, Acc1) ->
+            {V1, Acc2} = nested_arg(Fun, V, Acc1),
+            {{K, V1}, Acc2}
+        end,
+        Acc0,
+        maps:to_list(Map)
+    ),
+    {maps:from_list(Pairs), Acc};
+nested_arg(_Fun, Arg, Acc) ->
+    {Arg, Acc}.
 
 flatten([], Acc) ->
     Acc;
@@ -241,24 +299,21 @@ no_flash(Cmd) ->
     ok = refuse_flash(Cmd),
     Cmd.
 
-%% Refuse a navigate/patch `flash` opt in a command or in a command it wraps
-%% (see wrapped/1).
+%% Refuse a navigate/patch `flash` opt in a command or in a command it nests.
 refuse_flash([Op, _Path, #{flash := _}]) when Op =:= ?EFFECT_NAVIGATE; Op =:= ?EFFECT_PATCH ->
     erlang:error({flash_outside_live_effect, op_name(Op)}, none, [
         {error_info, #{module => ?MODULE}}
     ]);
 refuse_flash(Cmd) ->
-    case wrapped(Cmd) of
-        {_When, Inner, _Rewrap} -> lists:foreach(fun(C) -> ok = refuse_flash(C) end, Inner);
-        none -> ok
-    end.
-
-%% A wrapper holds one command (its head is an op code) or a list: the walks get
-%% a list either way, and the rebuild restores the shape it was given.
-unwrap(When, [Op | _] = Cmd, Wrap) when is_integer(Op) ->
-    {When, [Cmd], fun([New]) -> Wrap(New) end};
-unwrap(When, Cmds, Wrap) ->
-    {When, Cmds, Wrap}.
+    {_Cmd, ok} = mapfold_nested(
+        fun(_When, Inner, ok) ->
+            ok = lists:foreach(fun(C) -> ok = refuse_flash(C) end, Inner),
+            {Inner, ok}
+        end,
+        ok,
+        Cmd
+    ),
+    ok.
 
 op_name(?EFFECT_NAVIGATE) -> navigate;
 op_name(?EFFECT_PATCH) -> patch.

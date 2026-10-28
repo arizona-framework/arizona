@@ -382,7 +382,7 @@ controller (e.g. via `arizona_controller:reply_redirect/1`) rather than an HTTP
         on_error => arizona_effect:cmd() | arizona_effect:cmds(),
         keep_alive => boolean()
     }.
-fetch(Url, Opts) -> {arizona_effect, [?EFFECT_FETCH, Url, unwrap_on_error(Opts)]}.
+fetch(Url, Opts) -> {arizona_effect, [?EFFECT_FETCH, Url, nest_on_error(Opts)]}.
 
 -doc "Focuses the first element matching the selector.".
 -spec focus(Selector) -> arizona_effect:cmd() when
@@ -510,7 +510,7 @@ Matching is **case-insensitive**: the client lowercases the browser's
     Key :: atom() | [atom()] | binary(),
     Cmd :: arizona_effect:cmd() | arizona_effect:cmds().
 on_key(Key, Cmds) ->
-    {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), unwrap_cmds(Cmds)]}.
+    {arizona_effect, [?EFFECT_ON_KEY, encode_key(Key), arizona_effect:nest(deferred, Cmds)]}.
 
 -doc """
 Sets a client-owned slot (`?local`) to `Value` in the **closest view** of the
@@ -588,7 +588,7 @@ CSS), letting one stylesheet pick a different animation per call.
     Cmd :: arizona_effect:cmd() | arizona_effect:cmds(),
     Opts :: #{types => [binary()]}.
 transition(Cmds, Opts) ->
-    {arizona_effect, [?EFFECT_TRANSITION, Opts, unwrap_cmds(Cmds)]}.
+    {arizona_effect, [?EFFECT_TRANSITION, Opts, arizona_effect:nest(now, Cmds)]}.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -598,18 +598,11 @@ encode_key(Key) when is_atom(Key) -> [Key];
 encode_key(Keys) when is_list(Keys) -> Keys;
 encode_key(Pattern) when is_binary(Pattern) -> Pattern.
 
-%% Unwrap nested cmd tuple(s) to bare op-array(s) so the result is JSON-encodable.
-%% A single `{arizona_effect, Inner}` yields its bare `Inner`; a list of cmd tuples
-%% yields a list of bare op-arrays, flattened like any command list (nested lists
-%% spliced, `[]` items dropped) -- including [] (dynamic construction via a
-%% comprehension can legitimately yield no commands; the client runs an empty
-%% list as a no-op). Shared by on_key/2, transition/2, and unwrap_on_error/1.
-unwrap_cmds(Cmds) -> arizona_effect:bare(Cmds).
-
-%% fetch/2's on_error carries cmd tuple(s) inside the Opts map; arizona_effect:encode/1
-%% does not recurse into map values, so unwrap them here before embedding Opts.
-unwrap_on_error(#{on_error := Cmds} = Opts) -> Opts#{on_error => unwrap_cmds(Cmds)};
-unwrap_on_error(Opts) -> Opts.
+%% A fetch's on_error commands run later, if the request fails.
+nest_on_error(#{on_error := Cmds} = Opts) ->
+    Opts#{on_error => arizona_effect:nest(deferred, Cmds)};
+nest_on_error(Opts) ->
+    Opts.
 
 -ifdef(TEST).
 
@@ -653,16 +646,20 @@ exit_pip_test() ->
     {arizona_effect, [?EFFECT_EXIT_PIP, ~"v"]} = exit_pip(~"v").
 
 transition_test() ->
-    {arizona_effect, [?EFFECT_TRANSITION, #{}, [?EFFECT_TOGGLE, ~"#m"]]} =
+    {arizona_effect, [?EFFECT_TRANSITION, #{}, {arizona_effect, now, [?EFFECT_TOGGLE, ~"#m"]}]} =
         transition(toggle(~"#m")).
 
 transition_with_opts_test() ->
-    {arizona_effect, [?EFFECT_TRANSITION, #{types := [~"slide"]}, [?EFFECT_NAVIGATE, ~"/p"]]} =
+    {arizona_effect, [
+        ?EFFECT_TRANSITION, #{types := [~"slide"]}, {arizona_effect, now, [?EFFECT_NAVIGATE, ~"/p"]}
+    ]} =
         transition(navigate(~"/p"), #{types => [~"slide"]}).
 
 transition_list_test() ->
     {arizona_effect, [
-        ?EFFECT_TRANSITION, #{}, [[?EFFECT_ADD_CLASS, ~"#m", ~"on"], [?EFFECT_TOGGLE, ~"#n"]]
+        ?EFFECT_TRANSITION,
+        #{},
+        {arizona_effect, now, [[?EFFECT_ADD_CLASS, ~"#m", ~"on"], [?EFFECT_TOGGLE, ~"#n"]]}
     ]} =
         transition([add_class(~"#m", ~"on"), toggle(~"#n")]).
 
@@ -751,31 +748,43 @@ builders_test() ->
     ).
 
 on_key_atom_test() ->
-    {arizona_effect, [?EFFECT_ON_KEY, [enter], [?EFFECT_PUSH_EVENT, ~"x"]]} =
+    {arizona_effect, [
+        ?EFFECT_ON_KEY, [enter], {arizona_effect, deferred, [?EFFECT_PUSH_EVENT, ~"x"]}
+    ]} =
         on_key(enter, push_event(~"x")).
 
 on_key_list_test() ->
-    {arizona_effect, [?EFFECT_ON_KEY, [enter, escape], [?EFFECT_PUSH_EVENT, ~"x"]]} =
+    {arizona_effect, [
+        ?EFFECT_ON_KEY, [enter, escape], {arizona_effect, deferred, [?EFFECT_PUSH_EVENT, ~"x"]}
+    ]} =
         on_key([enter, escape], push_event(~"x")).
 
 on_key_regex_test() ->
-    {arizona_effect, [?EFFECT_ON_KEY, ~"^[a-z]$", [?EFFECT_PUSH_EVENT, ~"x"]]} =
+    {arizona_effect, [
+        ?EFFECT_ON_KEY, ~"^[a-z]$", {arizona_effect, deferred, [?EFFECT_PUSH_EVENT, ~"x"]}
+    ]} =
         on_key(~"^[a-z]$", push_event(~"x")).
 
 on_key_multiple_cmds_test() ->
     {arizona_effect, [
-        ?EFFECT_ON_KEY, [enter], [[?EFFECT_PUSH_EVENT, ~"x"], [?EFFECT_TOGGLE, ~"#m"]]
+        ?EFFECT_ON_KEY,
+        [enter],
+        {arizona_effect, deferred, [[?EFFECT_PUSH_EVENT, ~"x"], [?EFFECT_TOGGLE, ~"#m"]]}
     ]} =
         on_key(enter, [push_event(~"x"), toggle(~"#m")]).
 
 on_key_empty_list_test() ->
-    {arizona_effect, [?EFFECT_ON_KEY, [], [?EFFECT_PUSH_EVENT, ~"x"]]} =
+    {arizona_effect, [?EFFECT_ON_KEY, [], {arizona_effect, deferred, [?EFFECT_PUSH_EVENT, ~"x"]}]} =
         on_key([], push_event(~"x")).
 
 on_key_nested_test() ->
     Inner = on_key(enter, push_event(~"x")),
     {arizona_effect, [
-        ?EFFECT_ON_KEY, [escape], [?EFFECT_ON_KEY, [enter], [?EFFECT_PUSH_EVENT, ~"x"]]
+        ?EFFECT_ON_KEY,
+        [escape],
+        {arizona_effect, deferred, [
+            ?EFFECT_ON_KEY, [enter], {arizona_effect, deferred, [?EFFECT_PUSH_EVENT, ~"x"]}
+        ]}
     ]} =
         on_key(escape, Inner).
 
