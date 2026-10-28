@@ -5332,7 +5332,8 @@ template2_prefix_partial_use(Config) when is_list(Config) ->
         "-module(pt_each_prefix_partial). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(#{id := Id, name := Name, age := Age}) -> "
+        "    arizona_template:html(arizona_template:each("
+        "        fun(#{id := Id, name := Name, age := Age}) -> "
         "        IdBin = integer_to_binary(Id), "
         "        {'tr', [{<<\"az-key\">>, IdBin}], ["
         "            {'td', [], [IdBin]}, "
@@ -9155,7 +9156,8 @@ each_outside_target_rejected(Config) when is_list(Config) ->
         "arizona_template:each(fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings)). ",
         %% hoisted, and used outside the template too
         "-module(pt_each_out_escape). -export([render/1]). render(Bindings) -> "
-        "Items = arizona_template:each(fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings)), "
+        "Items = arizona_template:each(fun(I) -> {li, [], [I]} end, "
+        "arizona_template:get(xs, Bindings)), "
         "_ = erlang:phash2(Items), "
         "arizona_template:html({ul, [], [Items]}). ",
         %% an exported function holding one, though the template inlines it
