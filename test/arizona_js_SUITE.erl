@@ -43,12 +43,12 @@ fetch_unwraps_single_on_error_cmd(Config) when is_list(Config) ->
         on_error => arizona_js:remove_attr(~"#f", ~"disabled")
     }),
     ?assertMatch(
-        {arizona_effect, [
+        [
             ?EFFECT_FETCH,
             ~"/x",
             #{on_error := [?EFFECT_REMOVE_ATTR, ~"#f", ~"disabled"]}
-        ]},
-        Cmd
+        ],
+        arizona_effect:json_value(Cmd)
     ),
     Bin = arizona_effect:encode(Cmd),
     ?assert(is_binary(Bin)),
@@ -65,7 +65,7 @@ fetch_unwraps_on_error_cmd_list(Config) when is_list(Config) ->
         ]
     }),
     ?assertMatch(
-        {arizona_effect, [
+        [
             ?EFFECT_FETCH,
             ~"/x",
             #{
@@ -74,8 +74,8 @@ fetch_unwraps_on_error_cmd_list(Config) when is_list(Config) ->
                     [?EFFECT_REMOVE_ATTR, ~"#f", ~"disabled"]
                 ]
             }
-        ]},
-        Cmd
+        ],
+        arizona_effect:json_value(Cmd)
     ),
     ?assert(is_binary(arizona_effect:encode(Cmd))).
 
@@ -98,17 +98,17 @@ fetch_without_on_error_unchanged(Config) when is_list(Config) ->
 fetch_empty_on_error_list(Config) when is_list(Config) ->
     Cmd = arizona_js:fetch(~"/x", #{method => post, on_error => []}),
     ?assertMatch(
-        {arizona_effect, [?EFFECT_FETCH, ~"/x", #{on_error := []}]},
-        Cmd
+        [?EFFECT_FETCH, ~"/x", #{on_error := []}],
+        arizona_effect:json_value(Cmd)
     ),
     ?assert(is_binary(arizona_effect:encode(Cmd))).
 
 transition_empty_cmd_list(Config) when is_list(Config) ->
     Cmd = arizona_js:transition([]),
-    ?assertMatch({arizona_effect, [?EFFECT_TRANSITION, #{}, []]}, Cmd),
+    ?assertMatch([?EFFECT_TRANSITION, #{}, []], arizona_effect:json_value(Cmd)),
     ?assert(is_binary(arizona_effect:encode(Cmd))).
 
 on_key_empty_cmd_list(Config) when is_list(Config) ->
     Cmd = arizona_js:on_key(enter, []),
-    ?assertMatch({arizona_effect, [?EFFECT_ON_KEY, _Key, []]}, Cmd),
+    ?assertMatch([?EFFECT_ON_KEY, _Key, []], arizona_effect:json_value(Cmd)),
     ?assert(is_binary(arizona_effect:encode(Cmd))).
