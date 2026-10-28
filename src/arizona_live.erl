@@ -113,6 +113,11 @@ fingerprints already shipped in the initial HTML.
     capabilities/0,
     capability/1,
     reconnected/0,
+    %% For transports outside core that start, repaint and stop a view
+    %% themselves (arizona_terminal's TTY and SSH sessions).
+    start_link/4,
+    render_current/1,
+    stop/1,
     send/2,
     send_after/3,
     navigate/3,

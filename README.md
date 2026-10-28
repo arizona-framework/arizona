@@ -50,13 +50,15 @@ minor versions. Pin an exact version in your deps if you need stability across u
   (Compose), [iOS](https://github.com/arizona-framework/arizona_ios) (SwiftUI), and JS reference
   clients consume the same wire, and `arizona_user_agent` lets one view dual-serve HTML
   or JSON by `User-Agent`. See [docs/json.md](docs/json.md)
-- **Terminal (ANSI) render target** -- the same templates and diff engine also render to an ANSI
-  terminal via `?terminal`, served over a local TTY or SSH; a transport-agnostic session and a
-  pluggable driver model the key map and paint. See [docs/architecture.md](docs/architecture.md)
+- **Render targets beyond HTML and JSON** -- a package can add its own: a header declares the
+  target to the parse transform, so the same templates and diff engine render to it. The
+  [arizona_terminal](https://github.com/arizona-framework/arizona_terminal) package renders to an
+  ANSI terminal via `?terminal`, served over a local TTY or SSH. See
+  [docs/architecture.md](docs/architecture.md)
 
 ## Requirements
 
-- Erlang/OTP 29+
+- Erlang/OTP 28+
 
 ## Installation
 
@@ -204,7 +206,7 @@ Add `arizona` and the adapter to your app's `applications` list in `.app.src`:
 ```
 
 Arizona lists no server itself, so an app that renders pages offline only (`arizona_static`)
-never boots one. Add `ssh` too if you serve the SSH transport.
+never boots one.
 
 Ensure `rebar3 shell` loads the config and starts your app by adding
 to `rebar.config`:

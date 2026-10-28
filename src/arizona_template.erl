@@ -32,7 +32,7 @@ render(Bindings) ->
 
 -include("arizona.hrl").
 
-%% The html/json/terminal (+ each) stubs are intentionally identical: each
+%% The html/json/target (+ each) stubs are intentionally identical: each
 %% raises parse_transform_not_applied inline so the raising stub is the top stack
 %% frame, pointing the user at the exact un-transformed call. A shared helper would
 %% move that frame and obscure which call was made, so dedup does not apply here.
@@ -55,7 +55,7 @@ render(Bindings) ->
 -export([track/1]).
 -export([html/1]).
 -export([json/1]).
--export([terminal/1]).
+-export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
 -export([stateless/3]).
@@ -324,13 +324,14 @@ json(_Elems) ->
     ]).
 
 -doc """
-Compile-time stub for the terminal (ANSI) render target. The parse transform
-replaces every `?terminal(...)` (and `arizona_template:terminal/1`) call with a
-precomputed `t:template/0` map whose statics are ANSI-decorated text. If this
-function runs, the parse transform was not applied.
+Compile-time stub for a render target outside core, which its macro names by
+backend: `?terminal(Elems)` expands to `arizona_template:target(arizona_terminal,
+Elems)`. The parse transform asks `Backend:target/0` for the target's name and
+compiles the call with that backend. If this function runs, the parse transform
+was not applied.
 """.
--spec terminal(term()) -> no_return().
-terminal(_Elems) ->
+-spec target(module(), term()) -> no_return().
+target(_Backend, _Elems) ->
     erlang:error(parse_transform_not_applied, [], [
         {error_info, #{module => ?MODULE}}
     ]).

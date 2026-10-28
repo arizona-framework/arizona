@@ -170,11 +170,23 @@ path the client already handles. A backend capability, declared by each backend.
 -callback supports_list_patch() -> boolean().
 
 -doc """
-This backend's render-target name (`html` | `json` | `terminal`) -- the atom the
-`?html`/`?json`/`?terminal` macros expand to. Lets the parse transform recover a
+This backend's render-target name (`?html` expands to `arizona_template:html/1`,
+so `html`). A target outside core names its backend in its macro instead
+(`arizona_template:target(Backend, Elems)`), and the parse transform calls this to
+learn the target's name while it compiles the template. Lets the parse transform recover a
 target name from a backend module without hardcoding the module -> name mapping.
 """.
 -callback target() -> atom().
+
+-doc """
+Whether the client addresses a live view's root in this target. When `true`, the
+parse transform compiles a live handler's root template live: it requires
+`{id, ?get(id)}` on the single root element and injects the view marker there.
+When `false` (a target whose transport repaints whole frames instead of patching
+addressed nodes), the root compiles like any other template. A backend capability,
+declared by each backend.
+""".
+-callback live_root() -> boolean().
 
 -doc """
 The media type of a whole document rendered by this backend, used when a route

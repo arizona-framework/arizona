@@ -319,7 +319,7 @@ to_bin_matches_the_classify_first_reference(Config) when is_list(Config) ->
             {B, V, outcome(fun(X) -> reference_escape_value(B, X) end, V)},
             {B, V, outcome(fun(X) -> arizona_template:escape_value(B, X) end, V)}
         )
-     || B <- [arizona_html, arizona_terminal, arizona_json], V <- Inputs
+     || B <- [arizona_html, arizona_text_backend, arizona_json], V <- Inputs
     ].
 
 %% On main, escaping a list value classified it twice: escape_value/2 asked, then

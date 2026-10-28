@@ -4,13 +4,11 @@
     {registered, []},
     %% Only what arizona ALWAYS needs. It ships no HTTP server: an adapter
     %% package (arizona_roadrunner, arizona_cowboy, ...) brings one and starts it
-    %% with its listener. ssh (SSH/TTY transport) is deliberately in NEITHER
-    %% `applications` nor `optional_applications`: arizona lazy-starts it when the
-    %% SSH transport starts. Listing it here -- or in optional_applications, which
-    %% relx also bundles AND force-starts -- would boot it for every consumer,
-    %% including server-less/static-generation use. A consumer that ships it
-    %% declares ssh, like its adapter and server, in its OWN app's `applications`,
-    %% so its release bundles them. The dev reloader's file
+    %% with its listener. Neither it nor its server is listed here -- or in
+    %% optional_applications, which relx also bundles AND force-starts -- which
+    %% would boot them for every consumer, including server-less/static-generation
+    %% use. A consumer declares its adapter and server in its OWN app's
+    %% `applications`, so its release bundles them. The dev reloader's file
     %% watcher is no dependency at all: it is an `arizona_watcher` implementation
     %% the consumer adds to a dev-only profile.
     {applications, [
