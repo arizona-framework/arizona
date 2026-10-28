@@ -34,7 +34,6 @@ values() ->
         helper_raw(~"<i>raw</i>"),
         ?html({em, [], [~"nested"]}),
         ?stateless(fun badge/1, #{label => ~"<s>"}),
-        arizona_js:push_event(~"x"),
         helper_local(~"<l>")
     ].
 

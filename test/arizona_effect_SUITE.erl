@@ -54,11 +54,8 @@ encode_flattens_nested_lists(Config) when is_list(Config) ->
     ?assertEqual(
         ~"[[0,&quot;a&quot;],[1,&quot;#b&quot;]]", arizona_effect:encode([A, [B]])
     ),
-    %% to_bin/1 matches the same shapes classify_trusted/1 names, nested included.
+    %% classify_trusted/1 names a nested command list too, so an attribute renders it.
     ?assertEqual({effect, [[], [B], A]}, arizona_template:classify_trusted([[], [B], A])),
-    ?assertEqual(
-        ~"[[1,&quot;#b&quot;],[0,&quot;a&quot;]]", arizona_template:to_bin([[], [B], A])
-    ),
     ?assertEqual(value, arizona_template:classify_trusted([[~"text"], A])),
     %% A command list another command nests flattens the same way, and reaches the
     %% wire as that plain list.

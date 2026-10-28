@@ -354,6 +354,10 @@
     helper_multi_clause_comprehension_arg_untouched/1,
     element_in_comprehension_rejected/1,
     element_in_comprehension_names_line/1,
+    effect_in_content_rejected/1,
+    effect_in_content_names_line/1,
+    effect_in_content_message_names_fix/1,
+    effect_encoded_in_content_compiles/1,
     value_comprehension_renders/1,
     element_comprehension_arg_untouched/1,
     impure_hoisted_rhs_rejected/1,
@@ -1107,6 +1111,10 @@ groups() ->
             helper_multi_clause_comprehension_arg_untouched,
             element_in_comprehension_rejected,
             element_in_comprehension_names_line,
+            effect_in_content_rejected,
+            effect_in_content_names_line,
+            effect_in_content_message_names_fix,
+            effect_encoded_in_content_compiles,
             value_comprehension_renders,
             element_comprehension_arg_untouched
         ]},
@@ -11027,6 +11035,87 @@ element_in_comprehension_names_line(Config) when is_list(Config) ->
             []
         )
     ).
+
+%% A command builder call in content folds to a command, which no client runs from
+%% there: rejected at compile time wherever a content value can hold it -- the slot
+%% itself, a content-slot list (nested too), a conditional tail, the value a ?raw
+%% splices or a content ?local starts with, an az-nodiff template and a ?json one.
+effect_in_content_rejected(Config) when is_list(Config) ->
+    Hide = "arizona_js:hide(<<\"#x\">>)",
+    Get = "arizona_template:get(on, Bindings)",
+    lists:foreach(
+        fun({Name, Template}) ->
+            assert_parse_error(
+                "-module(" ++ Name ++
+                    "). "
+                    "-export([render/1]). "
+                    "render(Bindings) -> " ++ Template ++ ". ",
+                fun(R) -> R =:= effect_in_content end
+            )
+        end,
+        [
+            {"pt_cmd_slot", "arizona_template:html({'p', [], [" ++ Hide ++ "]})"},
+            {"pt_cmd_expr", "arizona_template:html({'p', [], " ++ Hide ++ "})"},
+            {"pt_cmd_list", "arizona_template:html({'p', [], [[<<\"a\">>, " ++ Hide ++ "]]})"},
+            {"pt_cmd_nested", "arizona_template:html({'p', [], [[[], [" ++ Hide ++ "]]]})"},
+            {"pt_cmd_cmds", "arizona_template:html({'p', [], [[" ++ Hide ++ ", " ++ Hide ++ "]]})"},
+            {"pt_cmd_case",
+                "arizona_template:html({'p', [], [case " ++ Get ++ " of true -> " ++ Hide ++
+                    "; false -> <<>> end]})"},
+            {"pt_cmd_raw",
+                "arizona_template:html({'p', [], [arizona_template:raw(" ++ Hide ++ ")]})"},
+            {"pt_cmd_local",
+                "arizona_template:html({'p', [], [arizona_template:local(<<\"k\">>, " ++ Hide ++
+                    ")]})"},
+            {"pt_cmd_nodiff", "arizona_template:html({'p', [az_nodiff], [" ++ Hide ++ "]})"},
+            {"pt_cmd_script",
+                "arizona_template:html({'script', [], [arizona_template:raw(" ++ Hide ++ ")]})"},
+            {"pt_cmd_json",
+                "arizona_template:json({'Text', [], [arizona_effect:push_event(<<\"x\">>)]})"}
+        ]
+    ).
+
+effect_in_content_names_line(Config) when is_list(Config) ->
+    ?assertMatch(
+        {error, [{_File, [{5, arizona_parse_transform, effect_in_content}]}], []},
+        arizona_parse_transform:parse_transform(
+            parse_forms(
+                "-module(pt_cmd_line).\n"
+                "-export([render/1]).\n"
+                "render(_Bindings) ->\n"
+                "    arizona_template:html({'p', [], [\n"
+                "        arizona_js:hide(<<\"#x\">>)\n"
+                "    ]}).\n"
+            ),
+            []
+        )
+    ).
+
+effect_in_content_message_names_fix(Config) when is_list(Config) ->
+    Msg = unicode:characters_to_binary(arizona_parse_transform:format_error(effect_in_content)),
+    [
+        ?assertNotEqual(nomatch, binary:match(Msg, Part), Part)
+     || Part <- [
+            ~"is not content",
+            ~"{az_click, Cmd}",
+            ~"return it from a handler",
+            ~"arizona_effect:encode_json(Cmd)"
+        ]
+    ].
+
+%% Encoding a command explicitly shows it as text, and a builder call that is an
+%% argument (here, the encoder's) is not content; the attribute keeps its command.
+effect_encoded_in_content_compiles(Config) when is_list(Config) ->
+    Mod = compile_module_strict(
+        "-module(pt_cmd_encoded). "
+        "-export([render/1]). "
+        "render(_Bindings) -> "
+        "    arizona_template:html({'button', [{az_click, arizona_js:hide(<<\"#x\">>)}], "
+        "        [arizona_effect:encode_json(arizona_js:hide(<<\"#x\">>))]}). "
+    ),
+    HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~"az-click=\"[3,&quot;#x&quot;]\"")),
+    ?assertNotEqual(nomatch, binary:match(HTML, ~">[3,&quot;#x&quot;]<")).
 
 %% A comprehension of plain values (directly or through a scalar helper) is one
 %% value list and renders as before.

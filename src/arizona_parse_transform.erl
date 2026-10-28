@@ -1308,7 +1308,8 @@ format_error({hoisted_var_captured, Kind, Binder, Hoisted}) ->
 format_error(Reason) when
     Reason =:= tracked_get_on_non_bindings_map;
     Reason =:= latin1_binary_literal;
-    Reason =:= improper_template_list
+    Reason =:= improper_template_list;
+    Reason =:= effect_in_content
 ->
     format_source_error(Reason).
 
@@ -1318,6 +1319,12 @@ format_source_error(latin1_binary_literal) ->
     "non-ASCII binary literal is encoded as latin1; write ~\"...\" or <<\"...\"/utf8>>. "
     "For intended bytes, spell them so they do not warn: integer segments "
     "(<<16#89, \"PNG\">>) or a sized string (<<\"\\351\":8>>)";
+format_source_error(effect_in_content) ->
+    "an effect command (a command builder call, e.g. arizona_js:hide(~\"#x\")) is not "
+    "content: a content slot renders it as text, and no client runs a command there. Put "
+    "the command in an event attribute's value, e.g. {button, [{az_click, Cmd}], "
+    "[~\"Hide\"]}, or return it from a handler. To show a command as text, encode it "
+    "explicitly: arizona_effect:encode_json(Cmd)";
 format_source_error(improper_template_list) ->
     "a template's attribute, child and body lists must be proper list literals: "
     "their items are laid out one slot each at compile time, so a list ending in "
@@ -5360,7 +5367,34 @@ compile_dynamic_child(Child, ElemAz, State0, Slot) ->
             parse_error({invalid_child, ValueStr}, anno(Child));
         false ->
             ok = reject_markup_in_raw_text(Child, State0#state.raw_text_kind),
+            ok = reject_command_in_content(Child),
             emit_child_dynamic(Child, ElemAz, State0, Slot)
+    end.
+
+%% A content slot renders its value as text, and no client runs a command there.
+%% A builder call with literal arguments folds to a command here, as it does in an
+%% attribute (try_fold_command/1), which proves the slot would hold one; any other
+%% command is refused when it renders (`effect_in_content`).
+reject_command_in_content(Child) ->
+    _Walked = map_tail_exprs(Child, fun reject_command_leaf/1, fun(E) -> E end),
+    ok.
+
+reject_command_leaf({nil, _} = Leaf) ->
+    Leaf;
+reject_command_leaf({cons, _, Head, Tail} = Leaf) ->
+    ok = reject_command_in_content(Head),
+    _Tail = reject_command_leaf(Tail),
+    Leaf;
+reject_command_leaf({call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, Args} = Leaf) when
+    (Mod =:= arizona_template orelse Mod =:= az) andalso (F =:= raw orelse F =:= local)
+->
+    %% The value a ?raw splices or a content ?local starts with is content too.
+    ok = reject_command_in_content(lists:last(Args)),
+    Leaf;
+reject_command_leaf(Leaf) ->
+    case try_fold_command(Leaf) of
+        {ok, _Cmd} -> parse_error(effect_in_content, anno(Leaf));
+        error -> Leaf
     end.
 
 %% Escapable raw text (title/textarea) decodes character references but parses no

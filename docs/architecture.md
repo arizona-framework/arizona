@@ -79,8 +79,10 @@ Pure helpers for binding access, descriptor construction, and template compositi
 - `stateless/3` -- returns `#{callback => fun Handler:Fun/1, props => Props}` descriptor
 - `each/2` -- template composition: 1-arg `fun(Item)` for lists, 2-arg `fun(Item, Key)` for streams,
   2-arg `fun(Key, Value)` for maps. Returns `#{t, source, template}` descriptor
-- `to_bin/1` -- convert value to binary (binary/integer/float/atom/iolist). A float prints the
-  shortest digits that read back as the same float: positional when `1.0e-7 =< |x| < 1.0e21`
+- `to_bin/1` -- convert value to binary (binary/integer/float/atom/iolist). An effect command is
+  not text: a value holding one raises `{effect_in_content, V}` (see "Effects in content"). A
+  float prints the shortest digits that read back as the same float: positional when
+  `1.0e-7 =< |x| < 1.0e21`
   (the range JS prints positionally; `1500.0`, `0.00001`), exponent form outside it (`1.0e21`,
   `1.0e-8`). An integral value keeps the Erlang `.0` (`1000.0`), and `-0.0` stays `-0.0`
 
@@ -787,7 +789,17 @@ Used in two contexts:
 {'button', [{az_click, [arizona_js:push_event(~"inc"), arizona_js:toggle(~"#modal")]}], [<<"Both">>]}
 ```
 
-Auto-encoded to HTML-safe JSON by `arizona_template:to_bin/1`. No explicit `encode` call needed.
+Auto-encoded by the render target's attribute renderer (HTML-safe JSON for `?html`, a JSON value
+for `?json`). No explicit `encode` call needed.
+
+**Effects in content.** A command belongs in an event attribute's value or in a handler's
+returned effects. In content no client runs it, so it is an error: a literal builder call there
+(`{p, [], [arizona_js:hide(~"#x")]}`, in a content-slot list, a conditional tail, a `?raw` or a
+content `?local`) is the compile error `effect_in_content`, and a command reaching content at
+runtime (through a binding, a helper) raises `{effect_in_content, V}`, located at the slot, on
+SSR, live render and diff alike. To show a command as text, encode it explicitly:
+`arizona_effect:encode_json(Cmd)`. A command after text in a list (`[~"a", Cmd]`) is found only
+when the value is converted at output, so on the live path that one is not located.
 
 **Handler effects** -- returned from `handle_event/3` and `handle_info/2`:
 
@@ -842,8 +854,8 @@ handle_event(~"inc", _P, B) ->
   that default (`#{block => <<"center">>}` stays smooth, `#{behavior => <<"auto">>}` jumps)
 - `set_title/1` -- set document title
 - `reload/0` -- reload page
-- `encode/1` -- encode single cmd or list of cmds to HTML-safe JSON binary (called automatically by
-  `to_bin`)
+- `encode/1` -- encode single cmd or list of cmds to HTML-safe JSON binary (called by the `?html`
+  attribute renderer)
 
 **Native-shell (OS) commands (`arizona_os`).** When the app runs inside a native shell
 (Tauri/Electron/...), `arizona_os` builds OS-capability commands -- all through one generic op
@@ -2723,8 +2735,8 @@ shape `to_bin/1` can turn into attacker-chosen bytes: a binary, an **atom** (ren
 `atom_to_binary`, so it carries bytes exactly like a binary), **chardata** -- the documented remedy
 `?raw(json:encode(Data))` hands it an iolist, not a binary, so a binary-only guard would wave a
 breakout through on the very form the compile error recommends -- and a `?raw` wrapping any of
-those. An integer, a float and an effect command (whose JSON `arizona_effect:encode/1` already
-HTML-escapes) cannot spell a sequence, so they pass through.
+those. An integer and a float cannot spell a sequence, so they pass through; an effect command is
+not text and is refused (`effect_in_content`).
 
 **Where the known text ends, a partial sequence counts.** A slot sees at most 8 bytes of each
 static neighbour; past them -- another slot, whose bytes exist only at render time, or the

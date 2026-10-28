@@ -487,10 +487,10 @@ escape_runs(Bin, Acc, _Run) ->
 %% attacker-chosen bytes: a **binary**, an **atom** (`to_bin` renders it with
 %% `atom_to_binary`, so an atom carries arbitrary bytes just like a binary),
 %% **chardata**, and a `?raw` opt-out wrapping any of those. An integer and a float
-%% stringify to digits and a sign, and an effect command's JSON is already
-%% HTML-escaped by `arizona_effect:encode/1` (`<` -> `&lt;`), so none of them can
-%% spell a sequence below; they pass through untouched, as does a map (a nested
-%% template renders structurally through the escaping path, not as bytes).
+%% stringify to digits and a sign, so neither can spell a sequence below; both
+%% pass through untouched, as does a map (a nested template renders structurally
+%% through the escaping path, not as bytes). An effect command is refused: it is
+%% not text (`effect_in_content`).
 %%
 %% The template's own static text is not checked: it is the author's markup, so
 %% statics that spell a sequence around an EMPTY value (`</scr`, `<<>>`, `ipt>`) are
@@ -518,7 +518,8 @@ raw_text_1(Ctx, Value) ->
     %% documented opt-out is not a hole around this check.
     case arizona_template:classify_trusted(Value) of
         {raw, Raw} -> arizona_template:raw(raw_text_1(Ctx, Raw));
-        _Other -> raw_text_chardata(Ctx, Value)
+        {effect, Cmd} -> arizona_template:effect_in_content(Cmd);
+        value -> raw_text_chardata(Ctx, Value)
     end.
 
 %% How the tokenizer reads this element's content. `<script>` is read in the

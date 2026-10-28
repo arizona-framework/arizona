@@ -521,7 +521,6 @@ connect_frame_failure_log_names_the_view(Config) when is_list(Config) ->
 %% op value); a string argument that is not UTF-8 is named like any other refusal.
 effect_command_names_non_utf8(Config) when is_list(Config) ->
     Cmd = arizona_js:push_event(~"x", #{v => <<233>>}),
-    ?assertError({non_utf8_render, 233, 0}, arizona_template:to_bin(Cmd)),
     ?assertError({non_utf8_render, 233, 0}, arizona_effect:encode_json(Cmd)),
     ?assertError({non_utf8_render, 233, 0}, arizona_html:render_attr(~"az-click", Cmd)),
     ?assertEqual(
@@ -577,7 +576,8 @@ outcome(Fun, V) ->
 
 %% to_bin/1 as it was before it matched the trusted shapes itself. A float is
 %% formatted by the real to_bin/1: this reference pins the shape matching, and
-%% the float format has its own tests.
+%% the float format has its own tests. An effect command is not text, so both
+%% refuse it as content.
 reference_to_bin(V) when is_binary(V) -> V;
 reference_to_bin(V) when is_integer(V) -> integer_to_binary(V);
 reference_to_bin(V) when is_float(V) -> arizona_template:to_bin(V);
@@ -589,7 +589,7 @@ reference_to_bin(V0) ->
         {raw, V} ->
             reference_to_bin(V);
         {effect, Cmd} ->
-            arizona_effect:encode(Cmd);
+            error({effect_in_content, Cmd});
         value when is_list(V0) ->
             try unicode:characters_to_binary(V0) of
                 Bin when is_binary(Bin) -> Bin;
@@ -604,7 +604,7 @@ reference_to_bin(V0) ->
 reference_escape_value(Backend, V0) ->
     case arizona_template:classify_trusted(V0) of
         {raw, V} -> reference_to_bin(V);
-        {effect, Cmd} -> reference_to_bin(Cmd);
+        {effect, Cmd} -> error({effect_in_content, Cmd});
         value -> Backend:escape(reference_to_bin(V0))
     end.
 
