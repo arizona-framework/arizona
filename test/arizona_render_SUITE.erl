@@ -98,6 +98,7 @@
     ssr_multi_root_inner_json_layout_renders/1,
     ssr_backendless_layout_keeps_page_target/1,
     ssr_backendless_page_in_layout/1,
+    ssr_backendless_page_without_target_raises/1,
     ssr_counter_with_bindings/1,
     ssr_each_map/1,
     nested_each_render/1,
@@ -212,6 +213,7 @@ groups() ->
             ssr_multi_root_inner_json_layout_renders,
             ssr_backendless_layout_keeps_page_target,
             ssr_backendless_page_in_layout,
+            ssr_backendless_page_without_target_raises,
             ssr_counter_with_bindings,
             ssr_counter_custom_id,
             ssr_page_with_child,
@@ -1173,7 +1175,7 @@ ssr_nested_multi_root_json_layout_raises(Config) when is_list(Config) ->
 %% Only the document root must be one node. Wrapped by a single-root layout, a
 %% multi-root one is just that layout's children.
 ssr_multi_root_inner_json_layout_renders(Config) when is_list(Config) ->
-    {ContentType, Doc} = arizona_render:render_view(
+    {Backend, Doc} = arizona_render:render_view(
         arizona_json_counter_demo,
         #{
             layouts => [
@@ -1181,7 +1183,7 @@ ssr_multi_root_inner_json_layout_renders(Config) when is_list(Config) ->
             ]
         }
     ),
-    ?assertEqual(~"application/json", ContentType),
+    ?assertEqual(arizona_json, Backend),
     ?assertMatch(
         #{
             ~"type" := ~"Column",
@@ -1208,20 +1210,31 @@ ssr_same_target_json_layout(Config) when is_list(Config) ->
 %% A layout returning `?inner_content` bare records no backend, so it is not a
 %% mismatch and the document keeps the page's target and media type.
 ssr_backendless_layout_keeps_page_target(Config) when is_list(Config) ->
-    {ContentType, Doc} = arizona_render:render_view(
+    {Backend, Doc} = arizona_render:render_view(
         arizona_json_counter_demo, #{layouts => [{arizona_passthrough_layout, render}]}
     ),
-    ?assertEqual(~"application/json", ContentType),
+    ?assertEqual(arizona_json, Backend),
     ?assertMatch(#{~"type" := ~"Column"}, json:decode(iolist_to_binary(Doc))).
 
 %% A hand-built page records no backend either; any layout may wrap it.
 ssr_backendless_page_in_layout(Config) when is_list(Config) ->
-    {ContentType, Doc} = arizona_render:render_view(
+    {Backend, Doc} = arizona_render:render_view(
         arizona_backendless_page, #{layouts => [{arizona_layout, render}]}
     ),
-    ?assertEqual(~"text/html; charset=utf-8", ContentType),
+    ?assertEqual(arizona_html, Backend),
     ?assertNotEqual(
         nomatch, binary:match(iolist_to_binary(Doc), ~"<p id=\"backendless\">plain</p>")
+    ).
+
+%% With no layout either, nothing names the document's target: refused, not
+%% served as some default.
+ssr_backendless_page_without_target_raises(Config) when is_list(Config) ->
+    Reason = {no_render_target, arizona_backendless_page},
+    ?assertError(Reason, arizona_render:render_view(arizona_backendless_page, #{})),
+    #{general := Msg} = arizona_render:format_error(Reason, []),
+    ?assertMatch(
+        {_, _},
+        binary:match(unicode:characters_to_binary(Msg), ~"arizona_backendless_page:render/1")
     ).
 
 ssr_counter(Config) when is_list(Config) ->

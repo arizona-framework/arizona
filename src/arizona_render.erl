@@ -258,7 +258,7 @@ render_to_iolist(Handler, Opts) ->
 
 -doc """
 SSR render for a route-level page, returning the page alone (static
-generation; the HTTP path uses `render_view/2`, which also names its media type).
+generation; the HTTP path uses `render_view/2`, which also names its backend).
 
 Applies the `on_mount` chain, mounts the handler, renders, and optionally
 wraps the page output in a layout module. Request data is supplied as
@@ -269,18 +269,20 @@ Use `render_to_iolist/2` for embedded-component SSR (no `on_mount`).
     Handler :: module(),
     Opts :: arizona_live:route_opts().
 render_view_to_iolist(Handler, Opts) ->
-    {_ContentType, Page} = render_view(Handler, Opts),
+    {_Backend, Page} = render_view(Handler, Opts),
     Page.
 
 -doc """
-Like `render_view_to_iolist/2`, paired with the document's media type: the
-outermost rendered template's backend answers it (`content_type/0`), so a route
-serving a `?json` view answers with JSON and an HTML one with HTML.
+Like `render_view_to_iolist/2`, paired with the document's backend: the outermost
+rendered template's, so a caller that needs the media type asks it
+(`Backend:content_type()`), and a route serving a `?json` view answers with JSON
+and an HTML one with HTML. A page whose templates, layouts included, all lack a
+backend (hand-built maps) has no target to name, and raises `no_render_target`.
 """.
--spec render_view(Handler, Opts) -> {ContentType, iolist()} when
+-spec render_view(Handler, Opts) -> {Backend, iolist()} when
     Handler :: module(),
     Opts :: arizona_live:route_opts(),
-    ContentType :: binary().
+    Backend :: module().
 render_view(Handler, Opts) ->
     render_view(Handler, Opts, none).
 
@@ -290,11 +292,11 @@ render_view(Handler, Opts) ->
 `none` (the template as it is); `arizona_utf8:render_view/2` (dev mode) passes a wrap that checks
 every value the walk evaluates, so the page still mounts once.
 """.
--spec render_view(Handler, Opts, TmplFun) -> {ContentType, iolist()} when
+-spec render_view(Handler, Opts, TmplFun) -> {Backend, iolist()} when
     Handler :: module(),
     Opts :: arizona_live:route_opts(),
     TmplFun :: none | fun((arizona_template:template()) -> arizona_template:template()),
-    ContentType :: binary().
+    Backend :: module().
 render_view(Handler, Opts, TmplFun) ->
     Bindings0 = arizona_live:apply_on_mount(
         maps:get(on_mount, Opts, []),
@@ -305,8 +307,12 @@ render_view(Handler, Opts, TmplFun) ->
     %% root that rewrites a restricted key fails here instead of SSRing cleanly.
     ok = arizona_eval:check_restricted_keys(Bindings, Bindings0, Handler),
     PageTmpl = page_template(TmplFun, arizona_stateful:call_render(Handler, Bindings)),
-    {Backend, Page} = finish_page(PageTmpl, Bindings, Opts),
-    {content_type(Backend), Page}.
+    case finish_page(PageTmpl, Bindings, Opts) of
+        {undefined, _Page} ->
+            error({no_render_target, Handler}, none, [{error_info, #{module => ?MODULE}}]);
+        {_Backend, _Page} = Rendered ->
+            Rendered
+    end.
 
 -doc """
 Resolves an id-or-template to a binary id.
@@ -567,6 +573,16 @@ format_error({cross_target_child, Parent, Child}, _ST) ->
             [macro_of(Child), macro_of(Parent), macro_of(Parent)]
         )
     };
+format_error({no_render_target, Handler}, _ST) ->
+    #{
+        general => io_lib:format(
+            "~s:render/1 returned a hand-built template, and no layout around it has "
+            "a render target either, so nothing names the document's target (its media "
+            "type, how its client reads it). Build the page or one of its layouts with "
+            "a target macro (?html, ?json, ...).",
+            [Handler]
+        )
+    };
 format_error({cross_target_layout, Mod, Fun, LayoutBackend, PageBackend}, _ST) ->
     #{
         general => io_lib:format(
@@ -635,10 +651,6 @@ finish_page(PageTmpl, Bindings, Opts) ->
     ),
     ok = assert_document_root(Root),
     {DocBackend, Doc}.
-
-%% A hand-built template carries no backend; it renders as the default target.
-content_type(undefined) -> arizona_html:content_type();
-content_type(Backend) -> Backend:content_type().
 
 %% Wraps `Inner` with each layer. List is outermost-first, so the page
 %% HTML ends up nested inside every layer in the order given:
