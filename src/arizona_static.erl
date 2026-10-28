@@ -83,8 +83,9 @@ rendered into the page, plus the names whose command was built at render time --
 through its render target's `static_document/2` callback. An `?html` page embeds
 them as `<script type="application/json" id="arizona-attrs">` before the last
 `</body>` (a fragment with none is written as rendered); a `?json` document is
-written as rendered, its client handed the names by `start({attrs})`. A `push_event` has no server to reach and is dropped with a warning;
-a `navigate`/`patch` loads its URL as a page.
+written as rendered, its client handed the names by `start({attrs})`. A
+`push_event` has no server to reach and is dropped with a warning; a
+`navigate`/`patch` loads its URL as a page.
 
 ## Caveats
 
