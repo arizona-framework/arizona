@@ -17,8 +17,6 @@ commands as they're added. `push_event`/`navigate` mirror their web counterparts
 ```
 """.
 
--include("arizona_effect.hrl").
-
 %% --------------------------------------------------------------------
 %% API function exports
 %% --------------------------------------------------------------------
