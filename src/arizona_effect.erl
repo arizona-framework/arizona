@@ -7,7 +7,11 @@ runtime executes. The tuple shape and op codes (`include/arizona_effect.hrl`)
 are the same on every client; only the *builders* are per platform
 (`arizona_js` for the web, `arizona_android` for native, ...), so neither
 platform owns the representation. This module is the shared plumbing: the tag,
-the `t:cmd/0` type, and the two encoders.
+the `t:cmd/0` type, the two encoders, and the builders of the commands the socket
+protocol itself defines -- `push_event`, `navigate` and `patch` -- which the server
+also builds (a redirect, a degraded navigation) and every platform's builders share.
+The platform modules re-export them under their own names, with what their client
+does with each option.
 
 `encode/1` serializes to JSON and HTML-escapes `&`, `"`, `<` for embedding in an
 HTML attribute (the web path). `encode_json/1` serializes to raw JSON for clients
@@ -32,6 +36,12 @@ content shipped to the page.
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([push_event/1]).
+-export([push_event/2]).
+-export([navigate/1]).
+-export([navigate/2]).
+-export([patch/1]).
+-export([patch/2]).
 -export([encode/1]).
 -export([encode_json/1]).
 -export([json_value/1]).
@@ -66,6 +76,53 @@ content shipped to the page.
 %% --------------------------------------------------------------------
 %% API Functions
 %% --------------------------------------------------------------------
+
+-doc """
+Pushes the named event to the view the command runs against, which handles it in
+`handle_event/3`. A client may collect a payload of its own (the web client reads
+the triggering element's fields).
+""".
+-spec push_event(Event) -> cmd() when
+    Event :: binary().
+push_event(Event) -> {?MODULE, [?EFFECT_PUSH_EVENT, Event]}.
+
+-doc "Pushes the named event with an explicit payload.".
+-spec push_event(Event, Payload) -> cmd() when
+    Event :: binary(),
+    Payload :: map().
+push_event(Event, Payload) -> {?MODULE, [?EFFECT_PUSH_EVENT, Event, Payload]}.
+
+-doc "Navigates to the route `Path`, replacing the live view.".
+-spec navigate(Path) -> cmd() when
+    Path :: binary().
+navigate(Path) -> {?MODULE, [?EFFECT_NAVIGATE, Path]}.
+
+-doc """
+Navigates to the route `Path` with options. The protocol defines:
+
+- `flash` -- a flash map for the view navigated to, carried in-process by the
+  socket and stripped from the client effect; only on an effect a live handler
+  returns (see the moduledoc).
+- `replace` -- the navigation replaces the current history entry.
+- `full` -- a full page load instead of a live navigation.
+
+A client without history or page loads ignores the last two.
+""".
+-spec navigate(Path, Opts) -> cmd() when
+    Path :: binary(),
+    Opts :: map().
+navigate(Path, Opts) -> {?MODULE, [?EFFECT_NAVIGATE, Path, Opts]}.
+
+-doc "Navigates in place to the route `Path`, keeping the live view (`handle_update/3`).".
+-spec patch(Path) -> cmd() when
+    Path :: binary().
+patch(Path) -> {?MODULE, [?EFFECT_PATCH, Path]}.
+
+-doc "Navigates in place to `Path` with the options of `navigate/2`.".
+-spec patch(Path, Opts) -> cmd() when
+    Path :: binary(),
+    Opts :: map().
+patch(Path, Opts) -> {?MODULE, [?EFFECT_PATCH, Path, Opts]}.
 
 -doc """
 Encodes a command (or list of commands) as an HTML-attribute-safe binary: JSON
