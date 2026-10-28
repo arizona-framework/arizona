@@ -63,9 +63,12 @@ never fires -- which is what custom elements use kebab-case for anyway.)
 **The set of types comes from proofs, never from guessing.** There are exactly two moments the
 command-versus-data question is answerable, and the delivery uses both (`arizona_event_attrs`):
 
-- **Compile time.** `compile_attr` records an `az-*` name when a builder call
-  (`arizona_js`/`arizona_android`/`arizona_os`) is visible anywhere in its value expression --
-  builders are the only producers of effect tuples, so the call is proof. The names land in an
+- **Compile time.** `compile_attr` records an `az-*` name when a builder call (a module declaring
+  `-behaviour(arizona_command_builder)`: `arizona_js`, `arizona_android`, `arizona_os`,
+  `arizona_effect`, or one from any package) is visible anywhere in its value expression --
+  builders are the only producers of effect tuples, so the call is proof. A builder whose
+  `target/0` names another render target than the template's is a compile error, since that
+  client would not know its commands. The names land in an
   `arizona_az_attrs` module attribute beside `arizona_az_deps` (the component modules the templates
   name literally, plus every module the module calls by a literal name -- a remote helper's
   template carries its folded names in statics no render re-proves, so a call such as

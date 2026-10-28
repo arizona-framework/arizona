@@ -155,6 +155,10 @@ render(Bindings) ->
 %% which reach the abstract-code chunk -- are identical across compiles.
 -define(HOIST_SITE_KEY, arizona_hoist_site).
 
+%% Process-dictionary cache of each called module's builder status (see
+%% builder_status/1), per module compiled.
+-define(BUILDERS_KEY, arizona_command_builders).
+
 %% Process-dictionary map of the render targets this module uses, name to backend
 %% (see resolve_targets/2). Per module: it holds the built-in targets plus every
 %% backend a `target/2` call in the module names, so two modules of one compiler
@@ -245,6 +249,7 @@ parse_transform(Forms, Options) ->
     undefined = put(?FOLDED_KEY, #{}),
     _ = put(?PARAM_SEQ_KEY, 0),
     _ = put(?HOIST_SITE_KEY, 0),
+    _ = put(?BUILDERS_KEY, #{}),
     try
         Forms1 = resolve_targets(File, Forms),
         FunDefs = collect_fun_defs(Forms1),
@@ -268,6 +273,7 @@ parse_transform(Forms, Options) ->
 erase_module_state() ->
     _ = erase(?PARAM_SEQ_KEY),
     _ = erase(?HOIST_SITE_KEY),
+    _ = erase(?BUILDERS_KEY),
     _ = erase(?TARGETS_KEY),
     ok.
 
@@ -741,16 +747,76 @@ component_mod_args(_Fun, _Args) -> [].
 %% in an attribute value is proof the value is a command and not app data. The
 %% converse is settled at render time (see the dynamic-attr clause of
 %% `compile_attr`), never guessed from shape.
-has_builder_call({call, _, {remote, _, {atom, _, Mod}, _}, _}) when
-    Mod =:= arizona_js; Mod =:= arizona_android; Mod =:= arizona_os
-->
-    true;
-has_builder_call(Tuple) when is_tuple(Tuple) ->
-    has_builder_call(tuple_to_list(Tuple));
-has_builder_call([Head | Tail]) ->
-    has_builder_call(Head) orelse has_builder_call(Tail);
-has_builder_call(_Other) ->
-    false.
+has_builder_call(ValueAST) ->
+    builder_calls(ValueAST, []) =/= [].
+
+%% The modules of the builder calls in an expression, a module not loadable yet
+%% included (see builder_status/1).
+builder_calls({call, _, {remote, _, {atom, _, Mod}, _}, _} = Call, Acc) ->
+    Acc1 =
+        case builder_status(Mod) of
+            not_builder -> Acc;
+            _Builder -> [Mod | Acc]
+        end,
+    builder_calls(tuple_to_list(Call), Acc1);
+builder_calls(Tuple, Acc) when is_tuple(Tuple) ->
+    builder_calls(tuple_to_list(Tuple), Acc);
+builder_calls([Head | Tail], Acc) ->
+    builder_calls(Tail, builder_calls(Head, Acc));
+builder_calls(_Other, Acc) ->
+    Acc.
+
+%% A builder is a module declaring the `arizona_command_builder` behaviour, read
+%% from its attributes, so loading it runs its `-on_load` in the compiler VM. A
+%% module not loadable yet counts as one, `unloadable`: a same-app builder is
+%% unloadable on a clean build but loadable from its stale beam on an incremental
+%% one, and the recorded event names must not depend on which. A spurious name
+%% costs one listener; a missing one leaves an event in a layout unbound. Only a
+%% `builder` folds or is checked against the template's target.
+builder_status(Mod) ->
+    Cache = get(?BUILDERS_KEY),
+    case Cache of
+        #{Mod := Status} ->
+            Status;
+        #{} ->
+            Status = read_builder_status(Mod),
+            _ = put(?BUILDERS_KEY, Cache#{Mod => Status}),
+            Status
+    end.
+
+read_builder_status(Mod) ->
+    case code:ensure_loaded(Mod) of
+        {module, Mod} ->
+            Behaviours = lists:append(
+                [
+                    Bs
+                 || {Attr, Bs} <- erlang:get_module_info(Mod, attributes),
+                    Attr =:= behaviour orelse Attr =:= behavior
+                ]
+            ),
+            case lists:member(arizona_command_builder, Behaviours) of
+                true -> builder;
+                false -> not_builder
+            end;
+        {error, _Reason} ->
+            unloadable
+    end.
+
+%% A builder's commands run on its target's client, so one called in a template of
+%% another target would hand that client commands it does not know.
+check_builder_targets(ValueAST, Backend, Line) ->
+    Target = Backend:target(),
+    lists:foreach(
+        fun(Mod) ->
+            case builder_status(Mod) =:= builder andalso Mod:target() of
+                false -> ok;
+                all -> ok;
+                Target -> ok;
+                Other -> parse_error({target, {builder_target, Mod, Other, Target}}, Line)
+            end
+        end,
+        lists:usort(builder_calls(ValueAST, []))
+    ).
 
 %% The two recording levels for the declared `az-*` set, called from
 %% `compile_attr`, the single point every attribute name resolves through.
@@ -1399,6 +1465,13 @@ format_target_error({target, {name_reserved, Name, Backend}}) ->
         "backend ~p names its render target ~p, which is already an arizona_template "
         "function -- its target/0 must return another name",
         [Backend, Name]
+    );
+format_target_error({target, {builder_target, Mod, BuilderTarget, Target}}) ->
+    io_lib:format(
+        "~p builds commands for the ~p target's client, but this is a ~p template, "
+        "whose client would receive commands it does not know. Use the builder of "
+        "this template's target (or arizona_effect for the protocol's own commands)",
+        [Mod, BuilderTarget, Target]
     );
 format_target_error({target, {bad_backend, Backend}}) ->
     io_lib:format(
@@ -4846,6 +4919,7 @@ compile_attr({tuple, _, [NameAST, ValueAST]}, ElemAz, State0, ElemLine) when
             %% time instead, where the evaluated value's type is proof
             %% (arizona_event_attrs observes the `{arizona_effect, _}`
             %% classification and the socket ships the name on that frame).
+            ok = check_builder_targets(ValueAST, State0#state.backend, line(ValueAST)),
             _ =
                 case has_builder_call(ValueAST) of
                     true -> record_az_attr(NameBin);
@@ -4904,7 +4978,7 @@ compile_dynamic_attr(Backend, NameBin, ValueAST, ElemAz, State0) ->
 compile_dynamic_attr_value(Backend, NameBin, ValueAST0, ElemAz, State0) ->
     ValueAST = raw_interp_attr_ast(Backend, ValueAST0),
     ValAnno = anno(ValueAST),
-    case try_fold_arizona_js(ValueAST) of
+    case try_fold_command(ValueAST) of
         {ok, Cmd} ->
             buf_append(
                 State0, emit_backend(fun() -> Backend:attr_command(NameBin, Cmd) end, ValAnno)
@@ -6369,32 +6443,38 @@ literal_chardata_item({bin, _, _} = Bin) ->
 literal_chardata_item(Item) ->
     literal_chardata(Item).
 
-%% Try to fold an attribute value AST that is a literal `arizona_js`
-%% command (or literal list of commands) into the final
-%% HTML-attribute-safe encoded binary at compile time. Returns
-%% `{ok, Bin}` on success; `error` if the value isn't foldable (any
-%% non-literal sub-expression, unknown shape, or `arizona_js` not
-%% loaded). Falling through to the runtime dynamic path is always safe.
-try_fold_arizona_js(ExprAST) ->
-    try
-        {ok, eval_arizona_js_expr(ExprAST)}
+%% Try to fold an attribute value AST that is a literal builder call (or a
+%% literal list of them) into the command it yields at compile time. Returns
+%% `{ok, Cmd}` when it yields one; `error` when it isn't foldable (a non-literal
+%% sub-expression, a call to a module that is not a loaded builder, or a builder
+%% function that yields something other than commands, such as an encoder).
+%% Falling through to the runtime dynamic path is always safe.
+try_fold_command(ExprAST) ->
+    try eval_builder_expr(ExprAST) of
+        Cmd ->
+            case is_command_value(Cmd) of
+                true -> {ok, Cmd};
+                false -> error
+            end
     catch
         _:_ -> error
     end.
 
-%% Evaluate a command-builder call AST (`arizona_js:Fn(...)` /
-%% `arizona_android:Fn(...)`) or a literal list of such calls into the runtime
-%% term it would yield. Throws on any non-literal sub-expression --
-%% `try_fold_arizona_js/1` catches it. Add new platform builder modules here.
-eval_arizona_js_expr(
-    {call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, ArgsAST}
-) when Mod =:= arizona_js orelse Mod =:= arizona_android orelse Mod =:= arizona_os ->
+is_command_value({arizona_effect, Cmd}) when is_list(Cmd) -> true;
+is_command_value(Cmds) when is_list(Cmds) -> lists:all(fun is_command_value/1, Cmds);
+is_command_value(_Value) -> false.
+
+%% Evaluate a builder call AST (`Mod:Fn(...)`, `Mod` a `builder` per
+%% builder_status/1) or a literal list of such calls into the term it would yield.
+%% Throws on anything else -- try_fold_command/1 catches it.
+eval_builder_expr({call, _, {remote, _, {atom, _, Mod}, {atom, _, Fn}}, ArgsAST}) ->
+    builder = builder_status(Mod),
     Args = [erl_syntax:concrete(A) || A <- ArgsAST],
     apply(Mod, Fn, Args);
-eval_arizona_js_expr({nil, _}) ->
+eval_builder_expr({nil, _}) ->
     [];
-eval_arizona_js_expr({cons, _, H, T}) ->
-    [eval_arizona_js_expr(H) | eval_arizona_js_expr(T)].
+eval_builder_expr({cons, _, H, T}) ->
+    [eval_builder_expr(H) | eval_builder_expr(T)].
 
 is_element_tuple({tuple, _, [_, Second]}) ->
     is_list_ast(Second);
@@ -6439,13 +6519,13 @@ has_dynamic_attr(_) ->
 
 %% A value compile_attr/4 emits as static bytes: a literal (literal_text/1) or a
 %% literal command, which compile_dynamic_attr_value/5 folds through the same
-%% try_fold_arizona_js/1. The element's `az` is only an op target -- event
+%% try_fold_command/1. The element's `az` is only an op target -- event
 %% delegation resolves the view through the closest `az-view` (or `az-target`),
 %% and a native tap through the node's view id -- so a folded command needs none.
 is_static_attr_value(ValueAST) ->
     case literal_text(ValueAST) of
         {ok, _} -> true;
-        error -> try_fold_arizona_js(ValueAST) =/= error
+        error -> try_fold_command(ValueAST) =/= error
     end.
 
 has_dynamic_child([], _RawKind) ->

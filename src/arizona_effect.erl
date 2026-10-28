@@ -25,6 +25,7 @@ in-process to the navigation that follows its effect, and nothing would carry it
 from a client that received it as data -- the message would be lost silently, its
 content shipped to the page.
 """.
+-behaviour(arizona_command_builder).
 
 -include("arizona_effect.hrl").
 
@@ -36,6 +37,7 @@ content shipped to the page.
 %% API function exports
 %% --------------------------------------------------------------------
 
+-export([target/0]).
 -export([push_event/1]).
 -export([push_event/2]).
 -export([navigate/1]).
@@ -420,6 +422,14 @@ escape_attr(Bin, Acc, Orig, Skip, Len) ->
         <<_C, Rest/binary>> ->
             escape_attr(Rest, Acc, Orig, Skip, Len + 1)
     end.
+
+%% --------------------------------------------------------------------
+%% arizona_command_builder callbacks
+%% --------------------------------------------------------------------
+
+-doc false.
+-spec target() -> atom() | all.
+target() -> all.
 
 -ifdef(TEST).
 
