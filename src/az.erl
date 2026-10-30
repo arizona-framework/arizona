@@ -4,18 +4,18 @@ Short alias module for `arizona_template` and `arizona_stateful`.
 
 Provides the same runtime API surface as `arizona_template` under a
 shorter prefix so handcrafted templates that don't use the macros can
-be written as `az:get(...)`, `az:html(...)`, etc. It also re-exports
+be written as `az:get(...)`, `az:target(arizona_html, ...)`, etc. It also re-exports
 the common types so users writing handler specs can reference them
 through a single module: `az:bindings()`, `az:mount_ret()`, etc.
 
-The parse transform recognizes both `arizona_template:html/1` and
-`az:html/1` (same for `each/2`), so either alias compiles to the same
+The parse transform recognizes both `arizona_template:target/2` and
+`az:target/2` (same for `each/2`), so either alias compiles to the same
 optimized template map.
 
 ## Parse transform stubs
 
-`html/1`, `json/1`, `target/2` and `each/2` are stubs -- they exist
-so callers can write `az:html({...})` and the parse transform can detect
+`target/2` and `each/2` are stubs -- they exist so callers can write
+`az:target(arizona_html, {...})` and the parse transform can detect
 and replace the call. They never actually execute at runtime; calling
 them directly errors with `parse_transform_not_applied`.
 
@@ -38,8 +38,6 @@ function's own docs.
 -export([with/2]).
 -export([inner_content/1]).
 -export([track/1]).
--export([html/1]).
--export([json/1]).
 -export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -59,8 +57,6 @@ function's own docs.
     with/2,
     inner_content/1,
     track/1,
-    html/1,
-    json/1,
     target/2,
     stateful/2,
     stateless/2,
@@ -207,24 +203,6 @@ Alias for `arizona_template:track/1`.
     Key :: term().
 track(Key) ->
     arizona_template:track(Key).
-
--doc """
-Parse transform stub. Calling this at runtime errors -- the parse
-transform replaces `az:html(...)` (or `arizona_template:html(...)`)
-calls with compiled template maps before code generation.
-""".
--spec html(term()) -> no_return().
-html(Elems) ->
-    arizona_template:html(Elems).
-
--doc """
-Parse transform stub. The parse transform replaces `az:json(...)` (or
-`arizona_template:json(...)`) calls with compiled JSON template maps before
-code generation.
-""".
--spec json(term()) -> no_return().
-json(Elems) ->
-    arizona_template:json(Elems).
 
 -doc """
 Parse transform stub. The parse transform replaces `az:target(Backend, ...)` (or

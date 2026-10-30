@@ -3,7 +3,8 @@
 Compile-time parse transform that converts Erlang element tuples into
 optimized template maps with static/dynamic separation.
 
-Intercepts calls to `arizona_template:html/1` (or `az:html/1`) and
+Intercepts calls to `arizona_template:target/2` (or `az:target/2`) -- what
+`?html`, `?json` and every other target macro expand to -- and
 `arizona_template:each/2` (or `az:each/2`), compiling element tuples
 into `#{s => Statics, d => Dynamics, f => Fingerprint}` maps at compile
 time. For `arizona_stateful` modules, it additionally validates and
@@ -160,13 +161,10 @@ render(Bindings) ->
 -define(BUILDERS_KEY, arizona_command_builders).
 
 %% Process-dictionary map of the render targets this module uses, name to backend
-%% (see resolve_targets/2). Per module: it holds the built-in targets plus every
-%% backend a `target/2` call in the module names, so two modules of one compiler
-%% process may differ.
+%% (see resolve_targets/2). Per module: it holds every backend a `target/2` call in
+%% the module names (`?html` and `?json` are such calls too), so two modules of one
+%% compiler process may differ.
 -define(TARGETS_KEY, arizona_render_targets).
-
-%% The targets every module has, whose macros arizona_common.hrl defines.
--define(BUILTIN_TARGETS, #{html => arizona_html, json => arizona_json}).
 
 %% Stands in for a helper argument when counting how many times substitution puts
 %% it in (see check_helper_args_pure/5).
@@ -217,7 +215,9 @@ render(Bindings) ->
     %% What the element being compiled emits for its own `az-nodiff` directive
     %% (see nodiff_mark/3): its token, the bare attribute, or nothing.
     nodiff_mark = none :: none | bare | token,
-    backend = target_backend(html) :: module()
+    %% The target's renderer. No default: every template is compiled for the target
+    %% it sits in, so each construction names it.
+    backend :: module()
 }).
 
 %% --------------------------------------------------------------------
@@ -227,7 +227,7 @@ render(Bindings) ->
 -doc """
 Entry point for the Erlang compiler parse transform.
 
-Walks all forms in the module, transforming `arizona_template:html/1`
+Walks all forms in the module, transforming `arizona_template:target/2`
 and `arizona_template:each/2` calls into compiled template maps. For
 modules with `-behaviour(arizona_stateful)`, the `render/1` callback
 receives additional validation and `az-view` injection.
@@ -277,14 +277,14 @@ erase_module_state() ->
     _ = erase(?TARGETS_KEY),
     ok.
 
-%% A target outside core is named by its macro: `?terminal(Elems)` expands to
-%% `arizona_template:target(arizona_terminal, Elems)`. Rewrite each such call to
+%% Every target is named by its macro: `?html(Elems)` expands to
+%% `arizona_template:target(arizona_html, Elems)`. Rewrite each such call to
 %% `arizona_template:Name(Elems)`, `Name` being the backend's `target/0`, and record
 %% the backend under that name, so the rest of the transform sees one shape for
 %% every target and the per-module target set stays finite. Runs before anything
 %% reads the forms, helper bodies included.
 resolve_targets(File, Forms) ->
-    _ = put(?TARGETS_KEY, ?BUILTIN_TARGETS),
+    _ = put(?TARGETS_KEY, #{}),
     map_forms_in_file(
         fun
             ({function, _, _, _, _} = Form) -> resolve_target_calls(Form);
@@ -454,6 +454,7 @@ check_forms(File, Module, Options, Forms) ->
     map_forms_in_file(
         fun(Form) ->
             ok = assert_no_nodiff_call(Form),
+            ok = assert_no_unknown_constructor(Form),
             ok = assert_no_raw_each(Form, Reachable),
             Form
         end,
@@ -542,6 +543,23 @@ assert_no_nodiff_call(Node) when is_tuple(Node) ->
 assert_no_nodiff_call(Nodes) when is_list(Nodes) ->
     lists:foreach(fun assert_no_nodiff_call/1, Nodes);
 assert_no_nodiff_call(_Node) ->
+    ok.
+
+%% A one-arg template call no target compiled and the module does not export (a
+%% hand-written `arizona_template:html(Elems)` in a module that never names the
+%% `arizona_html` backend) would otherwise be an `undef` at render.
+assert_no_unknown_constructor({call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, [Arg]}) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    case lists:member({F, 1}, Mod:module_info(exports)) of
+        true -> assert_no_unknown_constructor(Arg);
+        false -> parse_error({target, {unknown_constructor, Mod, F}}, L)
+    end;
+assert_no_unknown_constructor(Node) when is_tuple(Node) ->
+    assert_no_unknown_constructor(tuple_to_list(Node));
+assert_no_unknown_constructor(Nodes) when is_list(Nodes) ->
+    lists:foreach(fun assert_no_unknown_constructor/1, Nodes);
+assert_no_unknown_constructor(_Node) ->
     ok.
 
 %% Map every `{Name, Arity}` to its clause list, so a `?each(fun Name/Arity, _)`
@@ -1480,6 +1498,13 @@ format_target_error({target, {builder_target, Mod, BuilderTarget, Target}}) ->
         "this template's target (or arizona_effect for the protocol's own commands)",
         [Mod, BuilderTarget, Target]
     );
+format_target_error({target, {unknown_constructor, Mod, F}}) ->
+    io_lib:format(
+        "~p:~p/1 is not a template constructor. A render target is named by its "
+        "backend: use its macro (?html, ?json) or ~p:target(Backend, Elems), e.g. "
+        "~p:target(arizona_html, Elems)",
+        [Mod, F, Mod, Mod]
+    );
 format_target_error({target, {bad_backend, Backend}}) ->
     io_lib:format(
         "render backend ~p must be a loadable arizona_renderer module whose target/0 "
@@ -1860,9 +1885,9 @@ transform_node(Node, Module, Inline, FunDefs) ->
 
 %% Inlining a hoisted variable (inline_vars/2) or a local element helper
 %% (inline_helper_calls/4) may splice a raw, untransformed template-constructor
-%% call -- `arizona_template:html/1`, `each/2`, the `stateless(atom, Props)`
-%% sugar -- into an expression the bottom-up transform has already finished
-%% with. Left raw, the call hits the runtime stub (parse_transform_not_applied)
+%% call -- a resolved target such as `html/1`, `each/2`, the `stateless(atom,
+%% Props)` sugar -- into an expression the bottom-up transform has already
+%% finished with. Left raw, the call hits the runtime stub (parse_transform_not_applied)
 %% or the untransformed sugar (function_clause) at first render. Re-run the
 %% bottom-up transform over the spliced expression so those constructors
 %% compile exactly as written-inline code would. The re-run is idempotent on

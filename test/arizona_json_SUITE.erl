@@ -87,7 +87,7 @@ static_single_element(Config) when is_list(Config) ->
         "-module(nt_single). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Text', [{style, <<\"title\">>}], [<<\"Hello\">>]}). "
+        "    az:target(arizona_json, {'Text', [{style, <<\"title\">>}], [<<\"Hello\">>]}). "
     ),
     T = Mod:render(#{}),
     %% Fully static: one static fragment, no dynamics.
@@ -106,7 +106,7 @@ static_nested_elements(Config) when is_list(Config) ->
         "-module(nt_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json("
+        "    az:target(arizona_json, "
         "        {'Column', [{padding, <<\"16\">>}], ["
         "            {'Text', [], [<<\"a\">>]},"
         "            {'Text', [], [<<\"b\">>]}"
@@ -131,7 +131,7 @@ static_empty_children(Config) when is_list(Config) ->
         "-module(nt_empty). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Spacer', [], []}). "
+        "    az:target(arizona_json, {'Spacer', [], []}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual(#{~"type" => ~"Spacer", ~"children" => []}, decode_static(T)).
@@ -143,7 +143,7 @@ void_shorthand_has_empty_children(Config) when is_list(Config) ->
         "-module(nt_void). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Image', [{src, <<\"x.png\">>}]}). "
+        "    az:target(arizona_json, {'Image', [{src, <<\"x.png\">>}]}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual(
@@ -158,7 +158,7 @@ dynamic_text_uses_text_node(Config) when is_list(Config) ->
         "-module(nt_dyn). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Text', [], [az:get(name, Bindings, <<\"world\">>)]}). "
+        "    az:target(arizona_json, {'Text', [], [az:get(name, Bindings, <<\"world\">>)]}). "
     ),
     T = Mod:render(#{name => ~"Alice"}),
     {_Html, Snap} = arizona_render:render(T),
@@ -186,7 +186,7 @@ dynamic_attr_inlines_as_prop(Config) when is_list(Config) ->
         "-module(nt_dynattr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Button', [{color, az:get(color, Bindings, "
+        "    az:target(arizona_json, {'Button', [{color, az:get(color, Bindings, "
         "<<\"gray\">>)}], [<<\"OK\">>]}). "
     ),
     T = Mod:render(#{color => ~"red"}),
@@ -206,7 +206,8 @@ event_prop_is_raw_json_command(Config) when is_list(Config) ->
         "-module(nt_event). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Button', [{on_tap, arizona_android:push_event(<<\"inc\">>)}], "
+        "    az:target(arizona_json, "
+        "{'Button', [{on_tap, arizona_android:push_event(<<\"inc\">>)}], "
         "[<<\"OK\">>]}). "
     ),
     Decoded = decode_static(Mod:render(#{})),
@@ -220,7 +221,8 @@ event_prop_navigate_command(Config) when is_list(Config) ->
         "-module(nt_nav). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Button', [{on_tap, arizona_android:navigate(<<\"/json/counter\">>)}], "
+        "    az:target(arizona_json, "
+        "{'Button', [{on_tap, arizona_android:navigate(<<\"/json/counter\">>)}], "
         "[<<\"Go\">>]}). "
     ),
     Decoded = decode_static(Mod:render(#{})),
@@ -234,7 +236,7 @@ dynamic_event_prop_is_json_array(Config) when is_list(Config) ->
         "-module(nt_dyn_event). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Column', [], ["
+        "    az:target(arizona_json, {'Column', [], ["
         "        {'Button', [{on_tap, arizona_android:push_event(az:get(ev, Bindings))}], "
         "[<<\"A\">>]}, "
         "        {'Button', [{on_tap, az:get(cmd, Bindings)}], [<<\"B\">>]}"
@@ -263,7 +265,8 @@ diff_dynamic_event_prop_op(Config) when is_list(Config) ->
         "-module(nt_diff_event). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Button', [{on_tap, arizona_android:push_event(az:get(ev, Bindings))}], "
+        "    az:target(arizona_json, "
+        "{'Button', [{on_tap, arizona_android:push_event(az:get(ev, Bindings))}], "
         "[<<\"OK\">>]}). "
     ),
     {_, Snap0} = arizona_render:render(Mod:render(#{ev => ~"a"})),
@@ -306,7 +309,7 @@ html_dynamic_boolean_attr_keeps_presence(Config) when is_list(Config) ->
         "-module(nt_bool_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html({button, [{disabled, az:get(on, Bindings)}], [<<\"x\">>]}). "
+        "    az:target(arizona_html, {button, [{disabled, az:get(on, Bindings)}], [<<\"x\">>]}). "
     ),
     {Page, Snap0} = arizona_render:render(Mod:render(#{on => true})),
     ?assertMatch({_, _}, binary:match(iolist_to_binary(Page), ~" disabled>")),
@@ -322,7 +325,8 @@ static_false_prop_is_present(Config) when is_list(Config) ->
         "-module(nt_bool_static). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    az:json({'Button', [{enabled, false}, {visible, true}], [<<\"x\">>]}). "
+        "    az:target(arizona_json, "
+        "{'Button', [{enabled, false}, {visible, true}], [<<\"x\">>]}). "
     ),
     Doc = json:decode(iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{})))),
     ?assertMatch(#{~"enabled" := false, ~"visible" := true}, Doc).
@@ -333,7 +337,7 @@ html_static_false_attr_is_dropped(Config) when is_list(Config) ->
         "-module(nt_bool_static_html). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    az:html({button, [{disabled, false}, {hidden, true}], [<<\"x\">>]}). "
+        "    az:target(arizona_html, {button, [{disabled, false}, {hidden, true}], [<<\"x\">>]}). "
     ),
     ?assertEqual(
         ~"<button hidden>x</button>",
@@ -347,7 +351,7 @@ framework_dynamic_bool_matches_diff(Config) when is_list(Config) ->
         "-module(nt_bool_framework_dyn). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Button', [{az_hint, az:get(on, Bindings)}], [<<\"x\">>]}). "
+        "    az:target(arizona_json, {'Button', [{az_hint, az:get(on, Bindings)}], [<<\"x\">>]}). "
     ),
     Doc = json:decode(
         iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{on => false})))
@@ -365,7 +369,7 @@ dedup_keeps_command_prop_payload(Config) when is_list(Config) ->
         "-module(nt_dedup_cmd). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Column', [], ["
+        "    az:target(arizona_json, {'Column', [], ["
         "        {'Button', [{on_tap, az:get(cmd, Bindings)}], [<<\"B\">>]}, "
         "        case az:get(show, Bindings) of "
         "            true -> {'Text', [], [<<\"on\">>]}; "
@@ -415,7 +419,7 @@ json_each_renders_item_array(Config) when is_list(Config) ->
         "-module(nt_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Column', [], ["
+        "    az:target(arizona_json, {'Column', [], ["
         "        az:each(fun(I) -> {'Text', [], [I]} end, az:get(items, Bindings, []))"
         "    ]}). "
     ),
@@ -438,7 +442,7 @@ json_each_empty_is_valid_json(Config) when is_list(Config) ->
         "-module(nt_each_empty). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Column', [], ["
+        "    az:target(arizona_json, {'Column', [], ["
         "        {'Text', [], [<<\"Header\">>]},"
         "        az:each(fun(I) -> {'Text', [], [I]} end, az:get(items, Bindings, []))"
         "    ]}). "
@@ -457,9 +461,10 @@ nested_json_stateless_component(Config) when is_list(Config) ->
         "-module(nt_nested_comp). "
         "-export([render/1, child/1]). "
         "render(Bindings) -> "
-        "    az:json({'Column', [], [az:stateless(fun child/1, #{label => <<\"Hi\">>})]}). "
+        "    az:target(arizona_json, "
+        "{'Column', [], [az:stateless(fun child/1, #{label => <<\"Hi\">>})]}). "
         "child(Bindings) -> "
-        "    az:json({'Text', [], [az:get(label, Bindings, <<\"\">>)]}). "
+        "    az:target(arizona_json, {'Text', [], [az:get(label, Bindings, <<\"\">>)]}). "
     ),
     T = Mod:render(#{}),
     {_Html, Snap, _Views} = arizona_render:render(T, #{}),
@@ -476,11 +481,11 @@ repeated_json_stateless_distinct(Config) when is_list(Config) ->
         "-module(nt_repeated_comp). "
         "-export([render/1, chip/1]). "
         "render(Bindings) -> "
-        "    az:json({'Column', [], ["
+        "    az:target(arizona_json, {'Column', [], ["
         "        az:stateless(fun chip/1, #{label => <<\"A\">>}), "
         "        az:stateless(fun chip/1, #{label => <<\"B\">>})]}). "
         "chip(Props) -> "
-        "    az:json({'Text', [], [maps:get(label, Props)]}). "
+        "    az:target(arizona_json, {'Text', [], [maps:get(label, Props)]}). "
     ),
     T = Mod:render(#{}),
     {_Html, Snap, _Views} = arizona_render:render(T, #{}),
@@ -521,7 +526,7 @@ diff_dynamic_text_op(Config) when is_list(Config) ->
         "-module(nt_diff_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Text', [], [az:get(label, Bindings, <<\"\">>)]}). "
+        "    az:target(arizona_json, {'Text', [], [az:get(label, Bindings, <<\"\">>)]}). "
     ),
     {_, Snap0} = arizona_render:render(Mod:render(#{label => ~"a"})),
     {Ops, _} = arizona_diff:diff(Mod:render(#{label => ~"b"}), Snap0),
@@ -534,7 +539,7 @@ diff_dynamic_attr_op(Config) when is_list(Config) ->
         "-module(nt_diff_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Button', [{color, az:get(color, Bindings, "
+        "    az:target(arizona_json, {'Button', [{color, az:get(color, Bindings, "
         "<<\"gray\">>)}], [<<\"OK\">>]}). "
     ),
     {_, Snap0} = arizona_render:render(Mod:render(#{color => ~"red"})),
@@ -549,11 +554,11 @@ diff_conditional_subtree_op(Config) when is_list(Config) ->
         "-module(nt_diff_cond). "
         "-export([render/1, content/1]). "
         "render(Bindings) -> "
-        "    az:json({'Column', [], [az:stateless(fun content/1, "
+        "    az:target(arizona_json, {'Column', [], [az:stateless(fun content/1, "
         "#{sel => az:get(sel, Bindings)})]}). "
         "content(#{sel := <<\"about\">>}) -> "
-        "    az:json({'Column', [], [{'Text', [], [<<\"About\">>]}]}); "
-        "content(#{sel := _}) -> az:json({'Text', [], [<<\"Home\">>]}). "
+        "    az:target(arizona_json, {'Column', [], [{'Text', [], [<<\"About\">>]}]}); "
+        "content(#{sel := _}) -> az:target(arizona_json, {'Text', [], [<<\"Home\">>]}). "
     ),
     {_, Snap0} = arizona_render:render(Mod:render(#{sel => ~"home"})),
     {Ops, _} = arizona_diff:diff(Mod:render(#{sel => ~"about"}), Snap0),
@@ -567,7 +572,7 @@ diff_independent_regions_op(Config) when is_list(Config) ->
         "-module(nt_diff_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Column', [], ["
+        "    az:target(arizona_json, {'Column', [], ["
         "        {'Text', [], [az:get(a, Bindings)]}, "
         "        {'Text', [], [az:get(b, Bindings)]}, "
         "        {'Text', [], [az:get(c, Bindings)]}]}). "
@@ -622,7 +627,7 @@ diff_remove_node_op(Config) when is_list(Config) ->
         "-module(nt_remove). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Text', [], [az:get(label, Bindings, <<\"x\">>)]}). "
+        "    az:target(arizona_json, {'Text', [], [az:get(label, Bindings, <<\"x\">>)]}). "
     ),
     {_, Snap0} = arizona_render:render(Mod:render(#{label => ~"Banner"})),
     {Ops, _} = arizona_diff:diff(Mod:render(#{label => remove}), Snap0),
@@ -637,7 +642,7 @@ scope_keeps_command_payload_az(Config) when is_list(Config) ->
         "-module(nt_scope_cmd). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:json({'Button', [{on_tap, arizona_android:push_event(<<\"inc\">>, "
+        "    az:target(arizona_json, {'Button', [{on_tap, arizona_android:push_event(<<\"inc\">>, "
         "                                     #{<<\"az\">> => <<\"7\">>})}], "
         "              [arizona_template:get(v, Bindings)]}). "
     ),
@@ -792,7 +797,8 @@ bool_prop_module(Name) ->
             "). "
             "-export([render/1]). "
             "render(Bindings) -> "
-            "    az:json({'Button', [{enabled, az:get(on, Bindings)}, {visible, true}], "
+            "    az:target(arizona_json, "
+            "{'Button', [{enabled, az:get(on, Bindings)}, {visible, true}], "
             "[<<\"x\">>]}). "
     ).
 

@@ -5,7 +5,7 @@ Runtime template API: bindings, descriptors, value rendering, and snapshots.
 Most of this module's surface is exposed through the macros in
 `include/arizona_common.hrl` (`?get`, `?html`, `?each`, `?stateful`,
 `?stateless`). Templates themselves are produced by `arizona_parse_transform`
-at compile time -- `html/1` is only a runtime stub that errors if the parse
+at compile time -- `target/2` is only a runtime stub that errors if the parse
 transform was not applied.
 
 ## Concepts
@@ -53,8 +53,6 @@ render(Bindings) ->
 -export([get_lazy/3]).
 -export([with/2]).
 -export([track/1]).
--export([html/1]).
--export([json/1]).
 -export([target/2]).
 -export([stateful/2]).
 -export([stateless/2]).
@@ -301,34 +299,10 @@ track(Key) ->
     end.
 
 -doc """
-Compile-time stub. The parse transform replaces every `?html(...)` (and
-`arizona_template:html/1`) call with a precomputed `t:template/0` map. If
-this function runs, the parse transform was not applied -- include
-`arizona_stateful.hrl` or `arizona_stateless.hrl`.
-""".
--spec html(term()) -> no_return().
-html(_Elems) ->
-    erlang:error(parse_transform_not_applied, [], [
-        {error_info, #{module => ?MODULE}}
-    ]).
-
--doc """
-Compile-time stub for the JSON render target. The parse transform
-replaces every `?json(...)` (and `arizona_template:json/1`) call with a
-precomputed `t:template/0` map whose statics are JSON fragments. If this
-function runs, the parse transform was not applied.
-""".
--spec json(term()) -> no_return().
-json(_Elems) ->
-    erlang:error(parse_transform_not_applied, [], [
-        {error_info, #{module => ?MODULE}}
-    ]).
-
--doc """
-Compile-time stub for a render target outside core, which its macro names by
-backend: `?terminal(Elems)` expands to `arizona_template:target(arizona_terminal,
-Elems)`. The parse transform asks `Backend:target/0` for the target's name and
-compiles the call with that backend. If this function runs, the parse transform
+Compile-time stub for a render target, which its macro names by backend:
+`?html(Elems)` expands to `arizona_template:target(arizona_html, Elems)`. The
+parse transform asks `Backend:target/0` for the target's name and compiles the
+call with that backend. If this function runs, the parse transform
 was not applied.
 """.
 -spec target(module(), term()) -> no_return().

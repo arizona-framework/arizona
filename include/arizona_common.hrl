@@ -28,9 +28,10 @@
 %% Layout inner content -- requires `Bindings` variable in scope
 -define(inner_content, az:inner_content(Bindings)).
 
-%% Template construction (parse transform intercepts the expanded calls)
--define(html(Elems), arizona_template:html(Elems)).
--define(json(Elems), arizona_template:json(Elems)).
+%% Template construction (parse transform intercepts the expanded calls). A render
+%% target is named by its backend, here as for a target outside core.
+-define(html(Elems), arizona_template:target(arizona_html, Elems)).
+-define(json(Elems), arizona_template:target(arizona_json, Elems)).
 -define(each(Fun, Source), arizona_template:each(Fun, Source)).
 
 %% Escape opt-out -- splices a trusted, already-safe HTML fragment verbatim into a

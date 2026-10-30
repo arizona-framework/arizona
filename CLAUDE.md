@@ -60,6 +60,14 @@ Server adapters: the contract an HTTP/WebSocket server adapter meets (the `arizo
 `arizona_req`, `arizona_route` and `arizona_controller` seams, the routing rules, and the
 conformance suite every adapter runs) is in [docs/adapters.md](docs/adapters.md).
 
+Render targets: every target macro names its `arizona_renderer` backend --
+`?html(E)` is `arizona_template:target(arizona_html, E)`, `?json(E)` is
+`arizona_template:target(arizona_json, E)` -- so the parse transform has no built-in
+target and one outside core (`?terminal`) works the same way. A target exists in a
+module only once a `target/2` call names it: a hand-written `arizona_template:html(E)`
+there is a compile error (`unknown_constructor`). See "Render targets outside core" in
+[docs/architecture.md](docs/architecture.md).
+
 Performance: how to measure without fooling yourself (benchmark noise floor, the
 recompile trap, eprof's bias), what tuning has already found, what was tried and
 rejected, and what is still open, is in [docs/performance.md](docs/performance.md).

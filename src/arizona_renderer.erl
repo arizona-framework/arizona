@@ -172,10 +172,10 @@ path the client already handles. A backend capability, declared by each backend.
 -callback supports_list_patch() -> boolean().
 
 -doc """
-This backend's render-target name (`?html` expands to `arizona_template:html/1`,
-so `html`). A target outside core names its backend in its macro instead
-(`arizona_template:target(Backend, Elems)`), and the parse transform calls this to
-learn the target's name while it compiles the template. Lets the parse transform recover a
+This backend's render-target name (`html` for `arizona_html`). A target's macro
+names its backend (`?html(Elems)` expands to
+`arizona_template:target(arizona_html, Elems)`), and the parse transform calls this
+to learn the target's name while it compiles the template. Lets the parse transform recover a
 target name from a backend module without hardcoding the module -> name mapping.
 """.
 -callback target() -> atom().

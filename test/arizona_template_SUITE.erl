@@ -13,7 +13,7 @@
     effect_in_content_to_bin_refused/1,
     effect_in_content_escape_refused/1,
     effect_in_content_message_names_fix/1,
-    html_stub/1,
+    target_stub/1,
     stateful_descriptor/1,
     stateless_descriptor_fun/1,
     stateless_descriptor/1,
@@ -43,7 +43,7 @@ groups() ->
             effect_in_content_to_bin_refused,
             effect_in_content_escape_refused,
             effect_in_content_message_names_fix,
-            html_stub,
+            target_stub,
             stateful_descriptor,
             stateless_descriptor_fun,
             stateless_descriptor,
@@ -179,10 +179,10 @@ to_bin_charlist_encodes_utf8(Config) when is_list(Config) ->
     %% A plain ASCII iodata list still concatenates unchanged.
     ?assertEqual(<<"abcd">>, arizona_template:to_bin([<<"a">>, $b, "cd"])).
 
-%% --- html/1 stub ---
+%% --- target/2 stub ---
 
-html_stub(Config) when is_list(Config) ->
-    ?assertError(parse_transform_not_applied, arizona_template:html(foo)).
+target_stub(Config) when is_list(Config) ->
+    ?assertError(parse_transform_not_applied, arizona_template:target(arizona_html, foo)).
 
 %% --- get/2 missing-binding error ---
 
@@ -243,16 +243,16 @@ to_bin_bad_value_routes_through_format_error_2(Config) when is_list(Config) ->
     Bin = unicode:characters_to_binary(Msg),
     ?assertNotEqual(nomatch, binary:match(Bin, <<"cannot convert">>)).
 
-%% --- html/1 routes parse_transform_not_applied through format_error/2 ---
+%% --- target/2 routes parse_transform_not_applied through format_error/2 ---
 
 parse_transform_not_applied_routes_through_format_error_2(Config) when is_list(Config) ->
     Stack =
-        try arizona_template:html(foo) of
+        try arizona_template:target(arizona_html, foo) of
             _ -> ct:fail(expected_parse_transform_not_applied)
         catch
             error:parse_transform_not_applied:ST -> ST
         end,
-    [{arizona_template, html, _, Info} | _] = Stack,
+    [{arizona_template, target, _, Info} | _] = Stack,
     ?assertEqual(
         #{module => arizona_template},
         proplists:get_value(error_info, Info)
