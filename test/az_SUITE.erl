@@ -8,7 +8,7 @@
     get_lazy/1,
     get/1,
     with/1,
-    html_stub/1,
+    target_stub/1,
     each_stub/1,
     stateful/1,
     stateless_2/1,
@@ -27,7 +27,7 @@ groups() ->
             get_lazy,
             get,
             with,
-            html_stub,
+            target_stub,
             each_stub,
             stateful,
             stateless_2,
@@ -64,12 +64,12 @@ stateless_3(Config) when is_list(Config) ->
     Desc = az:stateless(some_mod, some_fun, #{id => <<"x">>}),
     ?assertMatch(#{callback := _, props := #{id := <<"x">>}}, Desc).
 
-html_stub(Config) when is_list(Config) ->
-    ?assertError(parse_transform_not_applied, az:html(foo)),
-    ?assertError(parse_transform_not_applied, az:json(foo)),
+target_stub(Config) when is_list(Config) ->
+    ?assertError(parse_transform_not_applied, az:target(arizona_html, foo)),
+    ?assertError(parse_transform_not_applied, az:target(arizona_json, foo)),
     ?assertError(parse_transform_not_applied, az:target(arizona_text_backend, foo)).
 
-%% `each/2` is a parse transform stub like `html/1`, so an un-transformed call
+%% `each/2` is a parse transform stub like `target/2`, so an un-transformed call
 %% must name the cause. `arizona_template:each/2` doubles as the runtime pairing
 %% function the transform emits (with Source first), and forwarding the macro's
 %% own (Fun, Source) order into it used to fall off its only clause as a bare

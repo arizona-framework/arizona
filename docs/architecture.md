@@ -225,8 +225,10 @@ string in one is named on the same failure path.
 
 ## Render targets outside core
 
-The parse transform knows `?html` and `?json` by name. Any other target's macro
-names its `arizona_renderer` backend instead; the
+Every target's macro names its `arizona_renderer` backend, core's included:
+`?html(Elems)` expands to `arizona_template:target(arizona_html, Elems)` and `?json` to
+`arizona_template:target(arizona_json, Elems)`. The parse transform has no built-in
+target, so one outside core works exactly the same way. The
 [arizona_terminal](https://github.com/arizona-framework/arizona_terminal) package's
 header, for one:
 
@@ -236,11 +238,14 @@ header, for one:
 
 The transform calls the backend's `c:arizona_renderer:target/0` while it compiles
 the module, to learn the target's name, and compiles the call with that backend,
-so it never names a backend outside core. The backend must therefore be written as
-a literal module and already be loadable (a dependency, or `erl_first_files` in the
-same app). One name is one backend per module, the built-in names included, and a
-name cannot be an `arizona_template` function (`raw`, `each`, ...). Without the
-parse transform the call raises `parse_transform_not_applied`, like `?html`.
+so it never hardcodes a backend. The backend must therefore be written as a literal
+module and already be loadable (a dependency, or `erl_first_files` in the same app,
+where core lists `arizona_html` and `arizona_json`). One name is one backend per
+module, and a name cannot be an `arizona_template` function (`raw`, `each`, ...).
+A target exists in a module only once a `target/2` call names its backend, so a
+hand-written `arizona_template:html(Elems)` in a module that never does is a compile
+error (`unknown_constructor`), not an `undef` at render. Without the parse transform
+the call raises `parse_transform_not_applied`.
 
 Everything else is the backend's capability callbacks, asked at compile time. Whether
 a live handler's root is compiled live is `c:arizona_renderer:live_root/0`: a target
@@ -665,11 +670,11 @@ target) -- is **accepted**: `compile_each` unwraps it to the element it wraps an
 same per-item template as the bare element (both go through `compile_body_parts/4` +
 `scope_az/4` with the same fingerprint, so the result is byte-identical). The two callback
 forms reach `compile_each` as different AST: a **named** ref resolves to its untransformed
-clause, so its body is a raw `arizona_template:html(...)` call, unwrapped to its argument; an
-**inline** fun's `?html` was already compiled bottom-up into a template-map literal, taken
-directly (re-wrapping its `d`-list into the per-item `fun`). A wrapper as a **list item**
-(`[?html(...)]`) is **not** unwrapped -- only a whole-body wrapper -- so it stays rejected like
-a wrapped descriptor.
+clause, so its body is a raw `?html` call (resolved to `arizona_template:html(...)`),
+unwrapped to its argument; an **inline** fun's `?html` was already compiled bottom-up into a
+template-map literal, taken directly (re-wrapping its `d`-list into the per-item `fun`). A
+wrapper as a **list item** (`[?html(...)]`) is **not** unwrapped -- only a whole-body wrapper --
+so it stays rejected like a wrapped descriptor.
 
 A per-item **component** -- a descriptor **inside** the item element, `{li, [], [?stateless(...)]}`
 -- compiles, renders, and diffs. A `?stateless` child keeps the positional per-item path: an inner

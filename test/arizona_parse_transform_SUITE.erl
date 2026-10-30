@@ -102,7 +102,10 @@
     each_outside_target_rejected/1,
     cross_target_declared_in_html/1,
     target_call_compiles_with_its_backend/1,
-    target_call_names_builtin_backend/1,
+    target_call_explicit_html/1,
+    html_json_macros_name_backend/1,
+    html_json_macros_render_unchanged/1,
+    unknown_constructor_rejected/1,
     target_backend_not_literal_rejected/1,
     target_name_clash_rejected/1,
     target_name_reserved_rejected/1,
@@ -1262,7 +1265,10 @@ groups() ->
         %% Render targets outside core, named by backend in target/2
         {target_call, [parallel], [
             target_call_compiles_with_its_backend,
-            target_call_names_builtin_backend,
+            target_call_explicit_html,
+            html_json_macros_name_backend,
+            html_json_macros_render_unchanged,
+            unknown_constructor_rejected,
             target_backend_not_literal_rejected,
             target_name_clash_rejected,
             target_name_reserved_rejected,
@@ -1414,7 +1420,7 @@ local_content_render(Config) when is_list(Config) ->
         "-module(pt_local_content). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [], [arizona_template:local(<<\"title\">>, <<\"Hello\">>)]}"
         "    ). "
     ),
@@ -1436,7 +1442,7 @@ local_attr_render(Config) when is_list(Config) ->
         "-module(pt_local_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{'data-active', arizona_template:local(<<\"tab\">>, <<\"home\">>)}], "
         "            [<<\"x\">>]}"
         "    ). "
@@ -1461,7 +1467,7 @@ static_binary_sized_integer_not_utf8(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_static_sized). "
         "-export([render/1]). "
-        "render(Bindings) -> arizona_template:html({'p', [], [<<1024:16>>]}). "
+        "render(Bindings) -> arizona_template:target(arizona_html, {'p', [], [<<1024:16>>]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
     HTML = iolist_to_binary(HTML0),
@@ -1475,7 +1481,8 @@ static_binary_utf8_and_ascii_still_fold(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_static_ok). "
         "-export([render/1]). "
-        "render(Bindings) -> arizona_template:html({'p', [], [<<\"caf\", 233/utf8>>]}). "
+        "render(Bindings) -> arizona_template:target(arizona_html, "
+        "{'p', [], [<<\"caf\", 233/utf8>>]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
     HTML = iolist_to_binary(HTML0),
@@ -1488,7 +1495,7 @@ local_diff_skipped(Config) when is_list(Config) ->
         "-module(pt_local_skip). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [], [arizona_template:local(<<\"n\">>, "
         "            arizona_template:get(count, Bindings, 0))]}"
         "    ). "
@@ -1507,7 +1514,7 @@ nav_flash_in_folded_attribute_error(Config) when is_list(Config) ->
         "-module(pt_nav_flash). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'a', [{az_click, arizona_js:navigate(<<\"/x\">>,"
         "            #{flash => #{<<\"info\">> => <<\"Saved\">>}})}], [<<\"go\">>]}"
         "    ). ",
@@ -1525,7 +1532,7 @@ local_key_not_literal_error(Config) when is_list(Config) ->
         "-module(pt_local_badkey). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [], [arizona_template:local(Bindings, <<\"x\">>)]}"
         "    ). ",
         fun(R) -> R =:= local_key_not_literal end
@@ -1540,7 +1547,7 @@ local_content_multi_slot(Config) when is_list(Config) ->
         "-module(pt_local_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [arizona_template:local(<<\"a\">>, <<\"A\">>), "
         "                   <<\"foo\">>, "
         "                   arizona_template:get(x, Bindings, <<\"X\">>), "
@@ -1564,7 +1571,7 @@ local_in_nodiff(Config) when is_list(Config) ->
         "-module(pt_local_nodiff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            {'span', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]},"
         "            {'p', [], [arizona_template:get(a, Bindings)]}"
@@ -1584,7 +1591,7 @@ local_descriptor_merge(Config) when is_list(Config) ->
         "-module(pt_local_merge). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', "
         "            [{title, arizona_template:local(<<\"t\">>, <<\"\">>)}, "
         "             {lang, arizona_template:local(<<\"l\">>, <<\"en\">>)}], "
@@ -1606,7 +1613,7 @@ local_attr_coexists_dynamic(Config) when is_list(Config) ->
         "-module(pt_local_coexist). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', "
         "            [{open, arizona_template:local(<<\"o\">>, false)}, "
         "             {class, arizona_template:get(cls, Bindings, <<\"a\">>)}], "
@@ -1626,7 +1633,7 @@ local_key_reused_error(Config) when is_list(Config) ->
         "-module(pt_local_reuse). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [{title, arizona_template:local(<<\"x\">>, <<\"\">>)}], "
         "            [arizona_template:local(<<\"x\">>, <<\"y\">>)]}"
         "    ). ",
@@ -1640,7 +1647,7 @@ local_az_facade_render(Config) when is_list(Config) ->
         "-module(pt_local_az_facade). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [{title, az:local(<<\"t\">>, <<\"hi\">>)}], "
         "            [az:local(<<\"c\">>, <<\"body\">>)]}"
         "    ). "
@@ -1666,7 +1673,7 @@ local_attr_interp_render(Config) when is_list(Config) ->
         "-module(pt_local_attr_interp). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [{class, [<<\"foo \">>, arizona_template:local(<<\"x\">>, <<\"bar\">>)]}], "
         "            [<<\"hi\">>]}"
         "    ). "
@@ -1686,7 +1693,7 @@ local_attr_interp_affix(Config) when is_list(Config) ->
         "-module(pt_local_attr_affix). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'a', [{href, [<<\"/u/\">>, arizona_template:local(<<\"id\">>, <<\"1\">>), "
         "            <<\"/edit\">>]}], [<<\"e\">>]}"
         "    ). "
@@ -1709,7 +1716,7 @@ local_attr_affix_non_ascii(Config) when is_list(Config) ->
         "-module(pt_local_attr_affix_utf8). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'a', [{href, [<<\"\\x{e9}/\"/utf8>>, "
         "            arizona_template:local(<<\"id\">>, <<\"1\">>), <<\"/\\x{fc}\"/utf8>>]}], "
         "            [<<\"e\">>]}"
@@ -1732,7 +1739,7 @@ local_attr_multiple_error(Config) when is_list(Config) ->
         "-module(pt_local_attr_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [{class, [arizona_template:local(<<\"a\">>, <<\"\">>), <<\"-\">>, "
         "            arizona_template:local(<<\"b\">>, <<\"\">>)]}], [<<\"x\">>]}"
         "    ). ",
@@ -1745,7 +1752,7 @@ local_attr_mixed_error(Config) when is_list(Config) ->
         "-module(pt_local_attr_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [{class, [<<\"x\">>, arizona_template:local(<<\"a\">>, <<\"\">>), "
         "            arizona_template:get(y, Bindings)]}], [<<\"z\">>]}"
         "    ). ",
@@ -1760,7 +1767,7 @@ local_attr_interp_boolean(Config) when is_list(Config) ->
         "-module(pt_local_attr_bool). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'button', [{disabled, [<<\"\">>, arizona_template:local(<<\"d\">>, false)]}], "
         "            [<<\"x\">>]}"
         "    ). "
@@ -1777,7 +1784,7 @@ local_attr_interp_numeric(Config) when is_list(Config) ->
         "-module(pt_local_attr_num). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'li', [{style, [<<\"width: \">>, arizona_template:local(<<\"w\">>, 100), "
         "            <<\"%\">>]}], [<<\"x\">>]}"
         "    ). "
@@ -1797,7 +1804,7 @@ local_attr_interp_multi_static(Config) when is_list(Config) ->
         "-module(pt_local_attr_multistatic). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{class, [<<\"a \">>, <<\"b \">>, "
         "            arizona_template:local(<<\"c\">>, <<\"x\">>), <<\" y\">>, <<\" z\">>]}], "
         "            [<<\"t\">>]}"
@@ -1819,7 +1826,7 @@ local_in_json_error(Config) when is_list(Config) ->
         "-module(pt_local_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:json("
+        "    arizona_template:target(arizona_json, "
         "        {'Text', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]}"
         "    ). ",
         fun(R) -> R =:= local_unsupported end
@@ -1833,7 +1840,7 @@ local_content_in_raw_text_error(Config) when is_list(Config) ->
         "-module(pt_local_raw). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'script', [], [arizona_template:local(<<\"k\">>, <<\"x\">>)]}"
         "    ). ",
         fun(R) -> R =:= local_in_raw_text end
@@ -1846,7 +1853,7 @@ local_attr_in_raw_text_ok(Config) when is_list(Config) ->
         "-module(pt_local_raw_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'script', [{'data-k', arizona_template:local(<<\"k\">>, <<\"v\">>)}], "
         "            [<<\"body\">>]}"
         "    ). "
@@ -1863,7 +1870,7 @@ local_in_each_renders(Config) when is_list(Config) ->
         "-module(pt_local_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', [], [arizona_template:each(fun(Item) -> "
         "            {'li', [], ["
         "                arizona_template:local(<<\"m\">>, <<\"-\">>), "
@@ -1887,7 +1894,7 @@ local_atom_key(Config) when is_list(Config) ->
         "-module(pt_local_atom). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [], [arizona_template:local(open, <<\"x\">>)]}"
         "    ). "
     ),
@@ -1905,7 +1912,7 @@ local_atom_binary_reuse_error(Config) when is_list(Config) ->
         "-module(pt_local_atom_reuse). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [{title, arizona_template:local(x, <<\"\">>)}], "
         "            [arizona_template:local(<<\"x\">>, <<\"y\">>)]}"
         "    ). ",
@@ -1921,7 +1928,7 @@ local_orphaned_fragment_top_error(Config) when is_list(Config) ->
         "-module(pt_local_orphan_frag). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html([{'span', [], [<<\"x\">>]}, "
+        "    arizona_template:target(arizona_html, [{'span', [], [<<\"x\">>]}, "
         "        arizona_template:local(count, 0)]). ",
         fun(R) -> R =:= local_orphaned end
     ).
@@ -1935,7 +1942,7 @@ local_orphaned_conditional_branch_error(Config) when is_list(Config) ->
         "-module(pt_local_orphan_cond). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(open, Bindings) of"
         "            true -> arizona_template:local(k, <<\"v\">>);"
         "            false -> <<>>"
@@ -1951,7 +1958,7 @@ local_orphaned_whole_body_error(Config) when is_list(Config) ->
         "-module(pt_local_orphan_body). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:local(k, <<\"v\">>)). ",
+        "    arizona_template:target(arizona_html, arizona_template:local(k, <<\"v\">>)). ",
         fun(R) -> R =:= local_orphaned end
     ).
 
@@ -1961,7 +1968,8 @@ static_only(Config) when is_list(Config) ->
         "-module(pt_static). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [{class, <<\"greeting\">>}], [<<\"Hello!\">>]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [{class, <<\"greeting\">>}], [<<\"Hello!\">>]}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<p class=\"greeting\">Hello!</p>">>], maps:get(s, T)),
@@ -1974,7 +1982,7 @@ single_dynamic_text(Config) when is_list(Config) ->
         "-module(pt_dyn_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [<<\"Hello, \">>, arizona_template:get(name, Bindings, <<\"world\">>)]}"
         "    ). "
     ),
@@ -2000,7 +2008,7 @@ single_dynamic_attr(Config) when is_list(Config) ->
         "-module(pt_dyn_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{class, arizona_template:get(theme, Bindings, <<\"light\">>)}],"
         "         [<<\"content\">>]}"
         "    ). "
@@ -2027,7 +2035,7 @@ counter_pattern(Config) when is_list(Config) ->
         "-module(pt_counter). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{id, arizona_template:get(id, Bindings, <<\"counter\">>)}], ["
         "            {'button', [{<<\"az-click\">>, <<\"inc\">>}], [<<\"+\">>]},"
         "            {'button', [{<<\"az-click\">>, <<\"dec\">>}], [<<\"-\">>]},"
@@ -2068,7 +2076,7 @@ nested_elements(Config) when is_list(Config) ->
         "-module(pt_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            {'span', [], [arizona_template:get(a, Bindings, <<\"x\">>)]},"
         "            {'span', [], [arizona_template:get(b, Bindings, <<\"y\">>)]}"
@@ -2109,7 +2117,7 @@ void_element(Config) when is_list(Config) ->
         "-module(pt_void). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            {'input', [{type, <<\"text\">>},"
         "             {value, arizona_template:get(val, Bindings, <<>>)}], []}"
@@ -2138,7 +2146,8 @@ boolean_attr(Config) when is_list(Config) ->
         "-module(pt_bool). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'input', [{type, <<\"checkbox\">>}, checked], []}). "
+        "    arizona_template:target(arizona_html, "
+        "{'input', [{type, <<\"checkbox\">>}, checked], []}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<input type=\"checkbox\" checked />">>], maps:get(s, T)),
@@ -2150,7 +2159,7 @@ shared_az(Config) when is_list(Config) ->
         "-module(pt_shared). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{class, arizona_template:get(theme, Bindings, <<\"light\">>)}], ["
         "            arizona_template:get(content, Bindings, <<\"default\">>)"
         "        ]}"
@@ -2188,7 +2197,7 @@ mixed_fragment_bare_value_gets_own_az(Config) when is_list(Config) ->
         "-module(pt_mixed_frag). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(["
+        "    arizona_template:target(arizona_html, ["
         "        <<\"Hi \">>,"
         "        arizona_template:get(name, Bindings, <<\"Ada\">>),"
         "        {'b', [], [arizona_template:get(bold, Bindings, <<\"Lovelace\">>)]}"
@@ -2223,7 +2232,7 @@ event_attrs_static(Config) when is_list(Config) ->
         "-module(pt_event). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'button', [{<<\"az-click\">>, <<\"submit\">>}], [<<\"Click\">>]}"
         "    ). "
     ),
@@ -2237,7 +2246,7 @@ empty_children(Config) when is_list(Config) ->
         "-module(pt_empty). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [{id, <<\"empty\">>}], []}). "
+        "    arizona_template:target(arizona_html, {'div', [{id, <<\"empty\">>}], []}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<div id=\"empty\"></div>">>], maps:get(s, T)),
@@ -2249,7 +2258,8 @@ fingerprint_stability(Config) when is_list(Config) ->
         "-module(pt_fp). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings, <<\"a\">>)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [], [arizona_template:get(x, Bindings, <<\"a\">>)]}). "
     ),
     T1 = Mod:render(#{x => <<"a">>}),
     T2 = Mod:render(#{x => <<"b">>}),
@@ -2265,12 +2275,12 @@ fingerprint_avoids_phash2_collision(Config) when is_list(Config) ->
     ModA = compile_module(
         "-module(pt_fp_collide_a). "
         "-export([render/1]). "
-        "render(_Bindings) -> arizona_template:html(<<\"22906\">>). "
+        "render(_Bindings) -> arizona_template:target(arizona_html, <<\"22906\">>). "
     ),
     ModB = compile_module(
         "-module(pt_fp_collide_b). "
         "-export([render/1]). "
-        "render(_Bindings) -> arizona_template:html(<<\"28755\">>). "
+        "render(_Bindings) -> arizona_template:target(arizona_html, <<\"28755\">>). "
     ),
     %% Same collision under the old default phash2/1 range, proving the statics really
     %% collide (the precondition that made the two fingerprints equal before the fix).
@@ -2285,7 +2295,7 @@ render_integration(Config) when is_list(Config) ->
         "-module(pt_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{id, arizona_template:get(id, Bindings, <<\"test\">>)}], ["
         "            <<\"Count: \">>, arizona_template:get(count, Bindings, 0)"
         "        ]}"
@@ -2308,7 +2318,7 @@ diff_integration(Config) when is_list(Config) ->
         "-module(pt_diff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{class, arizona_template:get(cls, Bindings, <<\"a\">>)}], ["
         "            arizona_template:get(text, Bindings, <<\"hello\">>)"
         "        ]}"
@@ -2353,7 +2363,8 @@ ssr_escapes_content_value(Config) when is_list(Config) ->
         "-module(pt_esc_content). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [], [arizona_template:get(x, Bindings)]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"<script>alert(1)</script>">>})),
     HTML = iolist_to_binary(HTML0),
@@ -2366,7 +2377,7 @@ ssr_escapes_attr_value(Config) when is_list(Config) ->
         "-module(pt_esc_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{title, arizona_template:get(t, Bindings)}], [<<\"x\">>]}"
         "    ). "
     ),
@@ -2382,7 +2393,8 @@ ssr_escape_all_unsafe_chars(Config) when is_list(Config) ->
         "-module(pt_esc_all). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [], [arizona_template:get(x, Bindings)]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"<>&\"'">>})),
     HTML = iolist_to_binary(HTML0),
@@ -2394,7 +2406,7 @@ raw_opt_out_not_escaped(Config) when is_list(Config) ->
         "-module(pt_esc_raw). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        arizona_template:raw(arizona_template:get(x, Bindings))"
         "    ]}). "
     ),
@@ -2410,7 +2422,7 @@ az_raw_opt_out_not_escaped(Config) when is_list(Config) ->
         "-module(pt_esc_az_raw). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html({'div', [], [az:raw(az:get(x, Bindings))]}). "
+        "    az:target(arizona_html, {'div', [], [az:raw(az:get(x, Bindings))]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"<b>raw</b>">>})),
     HTML = iolist_to_binary(HTML0),
@@ -2423,8 +2435,9 @@ block_value_not_escaped(Config) when is_list(Config) ->
         "-module(pt_esc_block). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
-        "        arizona_template:html({'span', [], [arizona_template:get(x, Bindings)]})"
+        "    arizona_template:target(arizona_html, {'div', [], ["
+        "        arizona_template:target(arizona_html, "
+        "{'span', [], [arizona_template:get(x, Bindings)]})"
         "    ]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"hi">>})),
@@ -2439,10 +2452,10 @@ value_template_inner_escaped(Config) when is_list(Config) ->
         "-module(pt_esc_case_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(msg, Bindings) of "
         "            undefined -> <<\"\">>; "
-        "            Msg -> arizona_template:html({'p', [], [Msg]}) "
+        "            Msg -> arizona_template:target(arizona_html, {'p', [], [Msg]}) "
         "        end "
         "    ]}). "
     ),
@@ -2460,7 +2473,8 @@ diff_value_stays_raw(Config) when is_list(Config) ->
         "-module(pt_esc_diff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [], [arizona_template:get(x, Bindings)]}). "
     ),
     T1 = Mod:render(#{x => <<"a">>}),
     {_HTML, Snap} = arizona_render:render(T1),
@@ -2482,7 +2496,8 @@ fingerprint_escapes_value(Config) when is_list(Config) ->
         "-module(pt_esc_fp). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [], [arizona_template:get(x, Bindings)]}). "
     ),
     {_HTML, Snap} = arizona_render:render(Mod:render(#{x => <<"<i>">>})),
     Payload = arizona_render:fingerprint_payload(Snap),
@@ -2499,7 +2514,8 @@ json_backend_not_escaped(Config) when is_list(Config) ->
         "-module(pt_esc_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:json({'Text', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_json, "
+        "{'Text', [], [arizona_template:get(x, Bindings)]}). "
     ),
     T = Mod:render(#{x => <<"<not-escaped>">>}),
     ?assertEqual(arizona_json, maps:get(backend, T)),
@@ -2519,7 +2535,7 @@ raw_text_script_bare_dynamic_rejected(Config) when is_list(Config) ->
         "-module(pt_rt_bare_script). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], ["
+        "    arizona_template:target(arizona_html, {'script', [], ["
         "        <<\"var user = \\\"\">>, arizona_template:get(v, Bindings), <<\"\\\";\">>"
         "    ]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
@@ -2532,7 +2548,8 @@ raw_text_style_bare_dynamic_rejected(Config) when is_list(Config) ->
         "-module(pt_rt_bare_style). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'style', [], [arizona_template:get(css, Bindings)]}). ",
+        "    arizona_template:target(arizona_html, "
+        "{'style', [], [arizona_template:get(css, Bindings)]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
     ).
 
@@ -2546,7 +2563,7 @@ raw_text_rawtext_elements_bare_dynamic_rejected(Config) when is_list(Config) ->
                 "). "
                 "-export([render/1]). "
                 "render(Bindings) -> "
-                "    arizona_template:html({'" ++ Tag ++
+                "    arizona_template:target(arizona_html, {'" ++ Tag ++
                 "', [], [arizona_template:get(v, Bindings)]}). ",
             fun(R) -> R =:= dynamic_in_raw_text end
         )
@@ -2562,7 +2579,7 @@ plaintext_element_rejected(Config) when is_list(Config) ->
             "-module(pt_plaintext). "
             "-export([render/1]). "
             "render(_Bindings) -> "
-            "    arizona_template:html({" ++ Tag ++ ", [], [<<\"x\">>]}). ",
+            "    arizona_template:target(arizona_html, {" ++ Tag ++ ", [], [<<\"x\">>]}). ",
             fun
                 ({render_reject, Msg}) -> binary:match(Msg, ~"plaintext") =/= nomatch;
                 (_) -> false
@@ -2579,7 +2596,7 @@ raw_text_conditional_dynamic_rejected(Config) when is_list(Config) ->
         "-module(pt_rt_bare_cond). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], ["
+        "    arizona_template:target(arizona_html, {'script', [], ["
         "        case arizona_template:get(env, Bindings) of "
         "            prod -> <<\"prod()\">>; "
         "            _ -> <<\"dev()\">> "
@@ -2597,7 +2614,7 @@ raw_text_helper_call_rejected(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Json = erlang:atom_to_binary(ok), "
-        "    arizona_template:html({'script', [], [Json]}). ",
+        "    arizona_template:target(arizona_html, {'script', [], [Json]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
     ).
 
@@ -2608,7 +2625,7 @@ raw_text_static_only_still_compiles(Config) when is_list(Config) ->
         "-module(pt_rt_static_only). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {'script', [], [<<\"var a = 1 < 2 && 3 > 2;\">>]}, "
         "        {'style', [], [<<\".a > .b { color: red }\">>]}"
         "    ]}). "
@@ -2629,7 +2646,8 @@ raw_text_az_alias_raw_accepted(Config) when is_list(Config) ->
         "-module(pt_rt_az_alias). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], [az:raw(az:get(js, Bindings))]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'script', [], [az:raw(az:get(js, Bindings))]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => ~"a && b"})),
     ?assertEqual(<<"<script az=\"11AQ3M-0\">a && b</script>">>, iolist_to_binary(HTML0)).
@@ -2652,7 +2670,7 @@ raw_text_in_nodiff_bare_dynamic_rejected(Config) when is_list(Config) ->
         "-module(pt_rt_nodiff_bare). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "    arizona_template:target(arizona_html, {'div', ['az-nodiff'], ["
         "        {'script', [], [arizona_template:get(v, Bindings)]}"
         "    ]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
@@ -2666,7 +2684,7 @@ raw_text_in_nodiff_raw_neutralized(Config) when is_list(Config) ->
         "-module(pt_rt_nodiff_raw). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "    arizona_template:target(arizona_html, {'div', ['az-nodiff'], ["
         "        {'script', [], ["
         "            arizona_template:raw(arizona_template:get(v, Bindings))"
         "        ]}"
@@ -2693,7 +2711,7 @@ raw_text_style_css_round_trip(Config) when is_list(Config) ->
         "-module(pt_rt_style_css). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'style', [], ["
+        "    arizona_template:target(arizona_html, {'style', [], ["
         "        arizona_template:raw(arizona_template:get(css, Bindings))"
         "    ]}). "
     ),
@@ -2712,7 +2730,7 @@ raw_text_style_close_tag_still_neutralized(Config) when is_list(Config) ->
         "-module(pt_rt_style_close). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {'style', [], [arizona_template:raw(arizona_template:get(css, Bindings))]}, "
         "        {'script', [], [arizona_template:raw(arizona_template:get(js, Bindings))]}"
         "    ]}). "
@@ -2742,7 +2760,7 @@ raw_text_hoisted_raw_boundary(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    R = arizona_template:raw(arizona_template:get(js, Bindings)), "
-        "    arizona_template:html({'script', [], [R]}). "
+        "    arizona_template:target(arizona_html, {'script', [], [R]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{js => ~"a && b"})),
     ?assertEqual(<<"<script az=\"11AQ3M-0\">a && b</script>">>, iolist_to_binary(HTML0)),
@@ -2753,7 +2771,7 @@ raw_text_hoisted_raw_boundary(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    R = arizona_template:raw(<<\"x\">>), "
-        "    arizona_template:html({'script', [], [R]}). ",
+        "    arizona_template:target(arizona_html, {'script', [], [R]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
     ),
     %% The message must point at the fix that always works: wrap AT the slot.
@@ -2770,14 +2788,15 @@ raw_text_uppercase_tag_classified(Config) when is_list(Config) ->
         "-module(pt_rt_upper_bare). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'SCRIPT', [], [arizona_template:get(v, Bindings)]}). ",
+        "    arizona_template:target(arizona_html, "
+        "{'SCRIPT', [], [arizona_template:get(v, Bindings)]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
     ),
     Mod = compile_module(
         "-module(pt_rt_upper_raw). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ScRiPt', [], ["
+        "    arizona_template:target(arizona_html, {'ScRiPt', [], ["
         "        arizona_template:raw(arizona_template:get(v, Bindings))"
         "    ]}). "
     ),
@@ -2805,10 +2824,10 @@ raw_text_svg_title_diffable(Config) when is_list(Config) ->
         "-module(pt_rt_svg_title). "
         "-export([svg/1, fo/1]). "
         "svg(Bindings) -> "
-        "    arizona_template:html({svg, [], [{title, [], "
+        "    arizona_template:target(arizona_html, {svg, [], [{title, [], "
         "        [arizona_template:get(t, Bindings)]}]}). "
         "fo(Bindings) -> "
-        "    arizona_template:html({svg, [], [{foreignObject, [], [{title, [], "
+        "    arizona_template:target(arizona_html, {svg, [], [{foreignObject, [], [{title, [], "
         "        [arizona_template:get(t, Bindings)]}]}]}). "
     ),
     %% SVG: marked, and a changed value produces an op.
@@ -2852,15 +2871,18 @@ raw_text_svg_title_factoring(Config) when is_list(Config) ->
         "-module(pt_rt_svg_factor). "
         "-export([helper/1, component/1, icon/1, each/1]). "
         "helper(Bindings) -> "
-        "    arizona_template:html({svg, [], [badge(arizona_template:get(t, Bindings))]}). "
+        "    arizona_template:target(arizona_html, "
+        "{svg, [], [badge(arizona_template:get(t, Bindings))]}). "
         "badge(T) -> {title, [], [T]}. "
         "component(Bindings) -> "
-        "    arizona_template:html({svg, [], [arizona_template:stateless(fun icon/1, "
+        "    arizona_template:target(arizona_html, "
+        "{svg, [], [arizona_template:stateless(fun icon/1, "
         "        #{t => arizona_template:get(t, Bindings)})]}). "
         "icon(Bindings) -> "
-        "    arizona_template:html({title, [], [arizona_template:get(t, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{title, [], [arizona_template:get(t, Bindings)]}). "
         "each(Bindings) -> "
-        "    arizona_template:html({svg, [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {svg, [], [arizona_template:each("
         "        fun(R) -> {g, [], [{title, [], [R]}]} end, "
         "        arizona_template:get(rows, Bindings))]}). "
     ),
@@ -2899,11 +2921,13 @@ raw_text_svg_branch_context(Config) when is_list(Config) ->
         "-module(pt_rt_svg_branch). "
         "-export([script/1, title/1]). "
         "script(Bindings) -> "
-        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "    arizona_template:target(arizona_html, "
+        "{svg, [], [case arizona_template:get(f, Bindings) of "
         "        true -> {script, [], [arizona_template:get(x, Bindings)]}; "
         "        false -> ~\"\" end]}). "
         "title(Bindings) -> "
-        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "    arizona_template:target(arizona_html, "
+        "{svg, [], [case arizona_template:get(f, Bindings) of "
         "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
         "        false -> ~\"\" end]}). "
     ),
@@ -2927,12 +2951,15 @@ raw_text_svg_wrapped_branch_context(Config) when is_list(Config) ->
         "-module(pt_rt_svg_wrapped). "
         "-export([bare/1, wrapped/1]). "
         "bare(Bindings) -> "
-        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
+        "    arizona_template:target(arizona_html, "
+        "{svg, [], [case arizona_template:get(f, Bindings) of "
         "        true -> {title, [], [arizona_template:get(t, Bindings)]}; "
         "        false -> ~\"\" end]}). "
         "wrapped(Bindings) -> "
-        "    arizona_template:html({svg, [], [case arizona_template:get(f, Bindings) of "
-        "        true -> arizona_template:html({title, [], [arizona_template:get(t, Bindings)]}); "
+        "    arizona_template:target(arizona_html, "
+        "{svg, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:target(arizona_html, "
+        "{title, [], [arizona_template:get(t, Bindings)]}); "
         "        false -> ~\"\" end]}). "
     ),
     B0 = #{f => true, t => ~"A"},
@@ -2953,8 +2980,10 @@ wrapped_branch_reads_tracked(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_wrapped_branch_reads). -export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
-        "        true -> arizona_template:html({b, [], [arizona_template:get(t, Bindings)]}); "
+        "    arizona_template:target(arizona_html, "
+        "{p, [], [case arizona_template:get(f, Bindings) of "
+        "        true -> arizona_template:target(arizona_html, "
+        "{b, [], [arizona_template:get(t, Bindings)]}); "
         "        false -> ~\"\" end]}). "
     ),
     B0 = #{f => true, t => ~"A"},
@@ -2972,7 +3001,7 @@ raw_text_svg_title_local(Config) when is_list(Config) ->
         "-module(pt_rt_svg_local). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({svg, [], [{title, [], "
+        "    arizona_template:target(arizona_html, {svg, [], [{title, [], "
         "        [arizona_template:local(~\"t\", ~\"A\")]}]}). "
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
@@ -2983,7 +3012,7 @@ raw_text_svg_title_local(Config) when is_list(Config) ->
         "-module(pt_rt_html_local). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'head', [], [{title, [], "
+        "    arizona_template:target(arizona_html, {'head', [], [{title, [], "
         "        [arizona_template:local(~\"t\", ~\"A\")]}]}). ",
         fun(R) -> R =:= local_in_raw_text end
     ).
@@ -2998,7 +3027,7 @@ raw_text_foreign_script_style_escaped(Config) when is_list(Config) ->
         "-module(pt_rt_foreign_style). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({svg, [], [{style, [], "
+        "    arizona_template:target(arizona_html, {svg, [], [{style, [], "
         "        [arizona_template:get(v, Bindings)]}]}). "
     ),
     HTML = iolist_to_binary(
@@ -3014,7 +3043,7 @@ raw_text_foreign_script_style_escaped(Config) when is_list(Config) ->
         "-module(pt_rt_html_style). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [{style, [], "
+        "    arizona_template:target(arizona_html, {'div', [], [{style, [], "
         "        [arizona_template:get(v, Bindings)]}]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
     ).
@@ -3027,7 +3056,7 @@ raw_text_script_markerless(Config) when is_list(Config) ->
         "-module(pt_rt_script). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [{type, <<\"module\">>}], ["
+        "    arizona_template:target(arizona_html, {'script', [{type, <<\"module\">>}], ["
         "        arizona_template:raw(arizona_template:get(boot, Bindings))"
         "    ]}). "
     ),
@@ -3046,7 +3075,7 @@ raw_text_script_not_escaped(Config) when is_list(Config) ->
         "-module(pt_rt_script_esc). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], ["
+        "    arizona_template:target(arizona_html, {'script', [], ["
         "        arizona_template:raw(arizona_template:get(js, Bindings))"
         "    ]}). "
     ),
@@ -3063,7 +3092,7 @@ raw_text_style_markerless(Config) when is_list(Config) ->
         "-module(pt_rt_style). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'style', [], ["
+        "    arizona_template:target(arizona_html, {'style', [], ["
         "        arizona_template:raw(arizona_template:get(css, Bindings))"
         "    ]}). "
     ),
@@ -3080,7 +3109,7 @@ raw_text_json_ld_raw_verbatim(Config) when is_list(Config) ->
         "-module(pt_rt_jsonld). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'script', [{type, <<\"application/ld+json\">>}], ["
         "            arizona_template:raw(arizona_template:get(jsonld, Bindings))"
         "        ]}"
@@ -3101,7 +3130,8 @@ raw_text_title_escaped_markerless(Config) when is_list(Config) ->
         "-module(pt_rt_title). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'title', [], [arizona_template:get(t, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'title', [], [arizona_template:get(t, Bindings)]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{t => <<"A & B < C">>})),
     HTML = iolist_to_binary(HTML0),
@@ -3115,7 +3145,8 @@ raw_text_textarea_markerless(Config) when is_list(Config) ->
         "-module(pt_rt_textarea). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'textarea', [], [arizona_template:get(v, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'textarea', [], [arizona_template:get(v, Bindings)]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{v => <<"hello">>})),
     HTML = iolist_to_binary(HTML0),
@@ -3136,7 +3167,7 @@ raw_text_nodiff_keeps_script_render_once(Config) when is_list(Config) ->
         "-module(pt_rt_nodiff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', ['az-nodiff'], ["
+        "    arizona_template:target(arizona_html, {'script', ['az-nodiff'], ["
         "        arizona_template:raw(arizona_template:get(boot, Bindings))"
         "    ]}). "
     ),
@@ -3157,7 +3188,7 @@ raw_text_content_diffs_against_element_az(Config) when is_list(Config) ->
         "-module(pt_rt_once). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], ["
+        "    arizona_template:target(arizona_html, {'script', [], ["
         "        arizona_template:raw(arizona_template:get(boot, Bindings))"
         "    ]}). "
     ),
@@ -3180,7 +3211,7 @@ raw_text_dynamic_attr_still_diffable(Config) when is_list(Config) ->
         "-module(pt_rt_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'script', [{src, arizona_template:get(src, Bindings)}], []}"
         "    ). "
     ),
@@ -3199,7 +3230,8 @@ normal_element_keeps_markers(Config) when is_list(Config) ->
         "-module(pt_rt_normal). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'span', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'span', [], [arizona_template:get(x, Bindings)]}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{x => <<"hi">>})),
     HTML = iolist_to_binary(HTML0),
@@ -3214,7 +3246,7 @@ raw_text_sibling_after_restores_markers(Config) when is_list(Config) ->
         "-module(pt_rt_sib_after). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {'script', [], ["
         "            arizona_template:raw(arizona_template:get(boot, Bindings))"
         "        ]}, "
@@ -3235,7 +3267,7 @@ raw_text_sibling_before_keeps_markers(Config) when is_list(Config) ->
         "-module(pt_rt_sib_before). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {'span', [], [arizona_template:get(x, Bindings)]}, "
         "        {'script', [], ["
         "            arizona_template:raw(arizona_template:get(boot, Bindings))"
@@ -3256,7 +3288,7 @@ raw_text_between_normal_siblings_markers(Config) when is_list(Config) ->
         "-module(pt_rt_between). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {'span', [], [arizona_template:get(a, Bindings)]}, "
         "        {'script', [], ["
         "            arizona_template:raw(arizona_template:get(boot, Bindings))"
@@ -3283,7 +3315,7 @@ raw_text_mixed_az_numbering_diffs(Config) when is_list(Config) ->
         "-module(pt_rt_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {'script', [], ["
         "            arizona_template:raw(arizona_template:get(boot, Bindings))"
         "        ]}, "
@@ -3317,7 +3349,7 @@ raw_text_two_content_slots(Config) when is_list(Config) ->
         "-module(pt_rt_two). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], ["
+        "    arizona_template:target(arizona_html, {'script', [], ["
         "        arizona_template:raw(arizona_template:get(a, Bindings)), "
         "        arizona_template:raw(arizona_template:get(b, Bindings))"
         "    ]}). "
@@ -3334,7 +3366,7 @@ raw_text_static_text_around_slot(Config) when is_list(Config) ->
         "-module(pt_rt_static). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], ["
+        "    arizona_template:target(arizona_html, {'script', [], ["
         "        <<\"var x=\">>, "
         "        arizona_template:raw(arizona_template:get(url, Bindings)), "
         "        <<\"; init();\">>"
@@ -3355,7 +3387,7 @@ raw_text_conditional_value_markerless(Config) when is_list(Config) ->
         "-module(pt_rt_cond). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', [], ["
+        "    arizona_template:target(arizona_html, {'script', [], ["
         "        arizona_template:raw("
         "            case arizona_template:get(env, Bindings) of "
         "                prod -> <<\"prod()\">>; "
@@ -3381,7 +3413,7 @@ raw_text_attr_diffs_content_render_once(Config) when is_list(Config) ->
         "-module(pt_rt_attr_content). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'script', "
+        "    arizona_template:target(arizona_html, {'script', "
         "        [{src, arizona_template:get(src, Bindings)}], "
         "        [arizona_template:raw(arizona_template:get(body, Bindings))]}). "
     ),
@@ -3410,7 +3442,7 @@ raw_text_escapable_adjacent_to_raw(Config) when is_list(Config) ->
         "-module(pt_rt_head). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'head', [], ["
+        "    arizona_template:target(arizona_html, {'head', [], ["
         "        {'title', [], [arizona_template:get(t, Bindings)]}, "
         "        {'script', [], ["
         "            arizona_template:raw(arizona_template:get(boot, Bindings))"
@@ -3437,7 +3469,8 @@ json_script_tag_unaffected(Config) when is_list(Config) ->
         "-module(pt_rt_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:json({'script', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_json, "
+        "{'script', [], [arizona_template:get(x, Bindings)]}). "
     ),
     T = Mod:render(#{x => <<"NV">>}),
     ?assertMatch([{Az, _Fun, _Loc}] when is_binary(Az), maps:get(d, T)).
@@ -3450,7 +3483,7 @@ cond_case_bare_element_renders(Config) when is_list(Config) ->
         "-module(pt_cond_case_bare). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(msg, Bindings) of "
         "            undefined -> <<\"\">>; "
         "            Msg -> {'p', [{class, <<\"err\">>}], [Msg]} "
@@ -3472,7 +3505,7 @@ cond_case_bare_matches_html(Config) when is_list(Config) ->
         "-module(pt_cond_bare_eq). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(msg, Bindings) of "
         "            undefined -> <<\"\">>; "
         "            Msg -> {'p', [{class, <<\"err\">>}], [Msg]} "
@@ -3483,10 +3516,11 @@ cond_case_bare_matches_html(Config) when is_list(Config) ->
         "-module(pt_cond_html_eq). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(msg, Bindings) of "
         "            undefined -> <<\"\">>; "
-        "            Msg -> arizona_template:html({'p', [{class, <<\"err\">>}], [Msg]}) "
+        "            Msg -> arizona_template:target(arizona_html, "
+        "{'p', [{class, <<\"err\">>}], [Msg]}) "
         "        end "
         "    ]}). "
     ),
@@ -3505,7 +3539,7 @@ cond_if_bare_element(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Show = arizona_template:get(show, Bindings), "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        if "
         "            Show -> {'p', [], [<<\"yes\">>]}; "
         "            true -> <<\"\">> "
@@ -3528,7 +3562,7 @@ cond_nested_case_bare_element(Config) when is_list(Config) ->
         "-module(pt_cond_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(a, Bindings) of "
         "            1 -> "
         "                case arizona_template:get(b, Bindings) of "
@@ -3570,7 +3604,7 @@ cond_case_diff_transition(Config) when is_list(Config) ->
         "-module(pt_cond_diff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(error, Bindings) of "
         "            undefined -> <<\"\">>; "
         "            Message -> {'p', [{class, <<\"login-error\">>}], [Message]} "
@@ -3596,7 +3630,7 @@ cond_case_element_list_tail(Config) when is_list(Config) ->
         "-module(pt_cond_list). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], ["
+        "    arizona_template:target(arizona_html, {'ul', [], ["
         "        case arizona_template:get(show, Bindings) of "
         "            true -> [{'li', [], [<<\"a\">>]}, {'li', [], [<<\"b\">>]}]; "
         "            false -> <<\"\">> "
@@ -3615,7 +3649,7 @@ cond_case_mixed_fragment_tail(Config) when is_list(Config) ->
         "-module(pt_cond_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(show, Bindings) of "
         "            true -> [<<\"label: \">>, {'b', [], [arizona_template:get(v, Bindings)]}]; "
         "            false -> <<\"\">> "
@@ -3634,7 +3668,7 @@ cond_begin_block_tail(Config) when is_list(Config) ->
         "-module(pt_cond_begin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        begin "
         "            Msg = arizona_template:get(msg, Bindings), "
         "            {'p', [], [Msg]} "
@@ -3653,7 +3687,7 @@ cond_try_bare_element(Config) when is_list(Config) ->
         "-module(pt_cond_try). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        try {'p', [], [arizona_template:get(msg, Bindings)]} "
         "        catch _:_ -> <<\"\">> "
         "        end "
@@ -3671,7 +3705,7 @@ cond_maybe_bare_element(Config) when is_list(Config) ->
         "-module(pt_cond_maybe). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        maybe "
         "            {ok, M} ?= arizona_template:get(result, Bindings), "
         "            {'p', [], [M]} "
@@ -3693,7 +3727,7 @@ cond_receive_bare_element(Config) when is_list(Config) ->
         "-module(pt_cond_receive). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        receive "
         "            never -> <<\"\">> "
         "        after 0 -> {'p', [], [<<\"timeout\">>]} "
@@ -3746,7 +3780,7 @@ template_free_tails_beside_nodiff_template(Config) when is_list(Config) ->
         "pair(K, V) -> "
         "    case V of undefined -> {K, []}; _ -> {K, [V]} end. "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> {'span', [], [arizona_template:get(b, Bindings)]}; "
@@ -3766,7 +3800,7 @@ two_dynamic_attrs(Config) when is_list(Config) ->
         "-module(pt_two_attrs). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{class, arizona_template:get(cls, Bindings, <<\"a\">>)}, "
         "                 {id, arizona_template:get(id, Bindings, <<\"b\">>)}], "
         "         [<<\"content\">>]}"
@@ -3799,7 +3833,7 @@ two_dynamic_texts(Config) when is_list(Config) ->
         "-module(pt_two_texts). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [arizona_template:get(a, Bindings, <<\"x\">>), "
         "                   arizona_template:get(b, Bindings, <<\"y\">>)]}"
         "    ). "
@@ -3861,7 +3895,7 @@ static_between_dynamics(Config) when is_list(Config) ->
         "-module(pt_between). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [arizona_template:get(a, Bindings, <<\"x\">>), "
         "                   <<\" and \">>, "
         "                   arizona_template:get(b, Bindings, <<\"y\">>)]}"
@@ -3892,7 +3926,7 @@ case_expression_dynamic(Config) when is_list(Config) ->
         "-module(pt_case). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [], [case arizona_template:get(x, Bindings, true) of "
         "            true -> <<\"yes\">>; "
         "            false -> <<\"no\">> "
@@ -3922,7 +3956,7 @@ variable_dynamic(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Val = arizona_template:get(val, Bindings, <<\"default\">>), "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [Val]}"
         "    ). "
     ),
@@ -3948,7 +3982,7 @@ stateful_child_not_transformed(Config) when is_list(Config) ->
         "-module(pt_stateful_child). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], [arizona_template:stateful(child_mod, #{count => 0})]}"
         "    ). "
     ),
@@ -3976,9 +4010,9 @@ multiple_stateful_calls(Config) when is_list(Config) ->
         "-export([render/2]). "
         "render(Bindings, Type) -> "
         "    case Type of "
-        "        a -> arizona_template:html("
+        "        a -> arizona_template:target(arizona_html, "
         "            {'p', [], [arizona_template:get(x, Bindings, <<\"a\">>)]}); "
-        "        b -> arizona_template:html("
+        "        b -> arizona_template:target(arizona_html, "
         "            {'span', [], [arizona_template:get(x, Bindings, <<\"b\">>)]}) "
         "    end. "
     ),
@@ -4007,7 +4041,7 @@ deeply_nested(Config) when is_list(Config) ->
         "-module(pt_deep). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            {'section', [], ["
         "                {'p', [], [arizona_template:get(a, Bindings, <<\"x\">>)]}"
@@ -4052,7 +4086,7 @@ dynamic_only_child(Config) when is_list(Config) ->
         "-module(pt_dyn_only). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [], [arizona_template:get(x, Bindings, <<\"val\">>)]}"
         "    ). "
     ),
@@ -4078,7 +4112,7 @@ no_change_diff(Config) when is_list(Config) ->
         "-module(pt_nodiff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [arizona_template:get(x, Bindings, <<\"a\">>)]}"
         "    ). "
     ),
@@ -4094,7 +4128,7 @@ void_no_attrs(Config) when is_list(Config) ->
         "-module(pt_void_bare). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'br', [], []}). "
+        "    arizona_template:target(arizona_html, {'br', [], []}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<br />">>], maps:get(s, T)),
@@ -4114,7 +4148,7 @@ void_tag_folds_ascii_case_only(Config) when is_list(Config) ->
         "-module(pt_void_kelvin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {<<\"lin\\x{212A}\"/utf8>>, []}, "
         "        {<<\"LINK\">>, []}"
         "    ]}). "
@@ -4142,7 +4176,8 @@ az_key_folds_ascii_case_only(Config) when is_list(Config) ->
         compile_module(
             "-module(" ++ Name ++
                 "). -export([render/1]). render(Bindings) -> "
-                "arizona_template:html({'div', [], [case arizona_template:get(x, Bindings) of "
+                "arizona_template:target(arizona_html, "
+                "{'div', [], [case arizona_template:get(x, Bindings) of "
                 "_ -> {'div', [az_nodiff, {" ++ Attr ++
                 ", arizona_template:get(x, Bindings)}], "
                 "[<<\"w\">>]} end]}). "
@@ -4158,7 +4193,7 @@ void_tag_case_insensitive(Config) when is_list(Config) ->
         "-module(pt_void_case). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {'BR', [], []}, "
         "        {'Img', [{src, <<\"x\">>}], []}, "
         "        {'br', [], []}"
@@ -4186,7 +4221,7 @@ void_tag_case_insensitive_rejects_children(Config) when is_list(Config) ->
         "-module(pt_void_case_children). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'BR', [], [<<\"x\">>]}). ",
+        "    arizona_template:target(arizona_html, {'BR', [], [<<\"x\">>]}). ",
         fun
             ({void_with_children, 'BR'}) -> true;
             (_) -> false
@@ -4216,7 +4251,7 @@ reserved_attr_case_insensitive(Config) when is_list(Config) ->
                     "-module(",
                     Mod,
                     "). -export([render/1]). render(Bindings) -> ",
-                    "arizona_template:html({'p', [",
+                    "arizona_template:target(arizona_html, {'p', [",
                     Attr,
                     "], []}). "
                 ]),
@@ -4233,7 +4268,8 @@ reserved_attr_case_insensitive(Config) when is_list(Config) ->
         "-module(pt_res_ok). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [{'AZ-KEY', <<\"k\">>}, {az_click, <<\"c\">>}], []}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [{'AZ-KEY', <<\"k\">>}, {az_click, <<\"c\">>}], []}). "
     ),
     {HTML0, _Snap} = arizona_render:render(Mod:render(#{})),
     ?assertEqual(<<"<p AZ-KEY=\"k\" az-click=\"c\"></p>">>, iolist_to_binary(HTML0)).
@@ -4249,7 +4285,7 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
                 "-module(",
                 Mod,
                 "). -export([render/1]). render(Bindings) -> ",
-                "_ = Bindings, arizona_template:html(",
+                "_ = Bindings, arizona_template:target(arizona_html, ",
                 Form,
                 "). "
             ])
@@ -4308,7 +4344,7 @@ az_submit_form_implies_post(Config) when is_list(Config) ->
     ?assertEqual([], arizona_json:implied_attrs(form, [<<"az-submit">>])),
     NativeMod = compile_module(
         "-module(pt_sub_json). -export([render/1]). render(Bindings) -> "
-        "_ = Bindings, arizona_template:json({form, [{az_submit, "
+        "_ = Bindings, arizona_template:target(arizona_json, {form, [{az_submit, "
         "arizona_android:push_event(<<\"login\">>)}], []}). "
     ),
     {Native, _} = arizona_render:render(NativeMod:render(#{})),
@@ -4325,7 +4361,8 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
         lists:flatten([
             "-module(",
             Name,
-            "). -export([render/1]). render(Bindings) -> arizona_template:html({'p', [",
+            "). -export([render/1]). render(Bindings) -> arizona_template:target(arizona_html, "
+            "{'p', [",
             Attrs,
             "], []}). "
         ])
@@ -4353,12 +4390,13 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
     %% Nested elements are checked too, not only a template root.
     assert_parse_error(
         "-module(pt_dup_nested). -export([render/1]). render(_Bindings) -> "
-        "arizona_template:html({'div', [], [{'p', [{id, ~\"a\"}, {id, ~\"b\"}], []}]}). ",
+        "arizona_template:target(arizona_html, "
+        "{'div', [], [{'p', [{id, ~\"a\"}, {id, ~\"b\"}], []}]}). ",
         Dup(~"id")
     ),
     assert_parse_error(
         "-module(pt_dup_json). -export([render/1]). render(Bindings) -> "
-        "arizona_template:json({'Text', [{text, ~\"a\"}, "
+        "arizona_template:target(arizona_json, {'Text', [{text, ~\"a\"}, "
         "{text, arizona_template:get(x, Bindings)}], []}). ",
         Dup(~"text")
     ),
@@ -4367,9 +4405,9 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
     Ok = compile_module(
         "-module(pt_dup_ok). "
         "-export([html/1, json/1, text/1]). "
-        "html(Bindings) -> arizona_template:html({'p', [{class, ~\"a\"}, "
+        "html(Bindings) -> arizona_template:target(arizona_html, {'p', [{class, ~\"a\"}, "
         "{id, arizona_template:get(x, Bindings)}], []}). "
-        "json(_Bindings) -> arizona_template:json({'Text', [{text, ~\"a\"}, "
+        "json(_Bindings) -> arizona_template:target(arizona_json, {'Text', [{text, ~\"a\"}, "
         "{'Text', ~\"b\"}], []}). "
         "text(_Bindings) -> arizona_template:target(arizona_text_backend, {line, [], [{span, "
         "[{mark, ~\"1\"}, {mark, ~\"2\"}], [~\"x\"]}]}). "
@@ -4385,7 +4423,8 @@ duplicate_attr_rejected(Config) when is_list(Config) ->
 duplicate_attr_quotes_name_as_written(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_dup_camel). -export([render/1]). render(_Bindings) -> "
-        "arizona_template:html({svg, [{<<\"viewbox\">>, ~\"0\"}, {viewBox, ~\"1\"}], []}). ",
+        "arizona_template:target(arizona_html, "
+        "{svg, [{<<\"viewbox\">>, ~\"0\"}, {viewBox, ~\"1\"}], []}). ",
         fun(R) -> R =:= {duplicate_attr, ~"viewBox"} end
     ).
 
@@ -4394,7 +4433,7 @@ duplicate_attr_quotes_name_as_written(Config) when is_list(Config) ->
 duplicate_attr_folds_ascii_case_only(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_dup_unicode). -export([render/1]). render(_Bindings) -> "
-        "arizona_template:html({'p', [{<<\"data-\\x{c9}\"/utf8>>, ~\"a\"}, "
+        "arizona_template:target(arizona_html, {'p', [{<<\"data-\\x{c9}\"/utf8>>, ~\"a\"}, "
         "{<<\"data-\\x{e9}\"/utf8>>, ~\"b\"}], []}). "
     ),
     {HTML, _} = arizona_render:render(Mod:render(#{})),
@@ -4422,7 +4461,7 @@ az_view_attr_case_insensitive(Config) when is_list(Config) ->
                     "-module(",
                     Mod,
                     "). -export([render/1]). render(Bindings) -> ",
-                    "arizona_template:html({'p', [",
+                    "arizona_template:target(arizona_html, {'p', [",
                     Attr,
                     "], []}). "
                 ]),
@@ -4450,7 +4489,7 @@ nodiff_directive_case_insensitive(Config) when is_list(Config) ->
         "-module(pt_nodiff_case). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['AZ-NODIFF'], [arizona_template:get(count, Bindings, 0)]}"
         "    ). "
     ),
@@ -4476,7 +4515,7 @@ nodiff_directive_case_insensitive(Config) when is_list(Config) ->
         "-module(pt_nodiff_case_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {'p', ['AZ_NODIFF'], [arizona_template:get(v, Bindings)]}"
         "    ]}). ",
         fun(R) -> R =:= nested_nodiff end
@@ -4488,7 +4527,7 @@ static_after_dynamic_attr(Config) when is_list(Config) ->
         "-module(pt_static_after). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'input', [{value, arizona_template:get(v, Bindings, <<\"\">>)}, "
         "                   {type, <<\"text\">>}], []}"
         "    ). "
@@ -4515,7 +4554,7 @@ template2_basic(Config) when is_list(Config) ->
         "-module(pt_each_basic). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        {'li', [], [maps:get(name, Item)]} "
         "    end, arizona_template:get(items, Bindings, []))). "
     ),
@@ -4550,7 +4589,7 @@ template2_dynamic_attr(Config) when is_list(Config) ->
         "-module(pt_each_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        {'div', [{<<\"az-key\">>, maps:get(id, Item)}, "
         "                 {class, maps:get(cls, Item)}], "
         "         [maps:get(text, Item)]} "
@@ -4589,7 +4628,7 @@ template2_multiple_children(Config) when is_list(Config) ->
         "-module(pt_each_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Row) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Row) -> "
         "        {'tr', [{<<\"az-key\">>, maps:get(id, Row)}], ["
         "            {'td', [], [maps:get(name, Row)]},"
         "            {'td', [], [maps:get(age, Row)]}"
@@ -4640,7 +4679,7 @@ template2_nested_in_template(Config) when is_list(Config) ->
         "-module(pt_each_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{id, arizona_template:get(id, Bindings, <<\"list\">>)}], ["
         "            arizona_template:each(fun(Item) -> "
         "                {'li', [], [maps:get(text, Item)]} "
@@ -4684,7 +4723,7 @@ template2_static_and_dynamic(Config) when is_list(Config) ->
         "-module(pt_each_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        {'p', [], [<<\"Name: \">>, maps:get(name, Item)]} "
         "    end, arizona_template:get(items, Bindings, []))). "
     ),
@@ -4712,7 +4751,7 @@ template2_render_integration(Config) when is_list(Config) ->
         "-module(pt_each_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', [], ["
         "            arizona_template:each(fun(Item) -> "
         "                {'li', [{<<\"az-key\">>, maps:get(id, Item)}], ["
@@ -4751,7 +4790,7 @@ template2_compound_markers(Config) when is_list(Config) ->
         "-module(pt_each_compound). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        {'span', [], [maps:get(first, Item), <<\" \">>, maps:get(last, Item)]} "
         "    end, arizona_template:get(people, Bindings, []))). "
     ),
@@ -4784,7 +4823,7 @@ template2_multi_expr_body(Config) when is_list(Config) ->
         "-module(pt_each_multi_expr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        Name = maps:get(name, Item), "
         "        Upper = string:uppercase(Name), "
         "        {'li', [], [Upper]} "
@@ -4814,7 +4853,7 @@ template2_multi_expr_attr(Config) when is_list(Config) ->
         "-module(pt_each_multi_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        Id = maps:get(id, Item), "
         "        {'div', [{class, Id}], [maps:get(text, Item)]} "
         "    end, arizona_template:get(rows, Bindings, []))). "
@@ -4838,7 +4877,8 @@ template2_guard(Config) when is_list(Config) ->
         "-module(pt_each_guard). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) when is_map(Item) -> "
+        "    arizona_template:target(arizona_html, "
+        "arizona_template:each(fun(Item) when is_map(Item) -> "
         "        {'li', [], [maps:get(name, Item)]} "
         "    end, arizona_template:get(items, Bindings, []))). "
     ),
@@ -4856,7 +4896,7 @@ template2_static_item(Config) when is_list(Config) ->
         "-module(pt_each_static_item). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(_Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(_Item) -> "
         "        {'li', [{class, <<\"row\">>}], [<<\"fixed\">>]} "
         "    end, arizona_template:get(items, Bindings, []))). "
     ),
@@ -4872,7 +4912,7 @@ template2_void_item(Config) when is_list(Config) ->
         "-module(pt_each_void). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        {'input', [{type, <<\"text\">>}, {value, maps:get(val, Item)}], []} "
         "    end, arizona_template:get(fields, Bindings, []))). "
     ),
@@ -4900,9 +4940,9 @@ template2_inner_template1(Config) when is_list(Config) ->
         "-module(pt_each_inner_t1). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        {'div', [], ["
-        "            arizona_template:html({'span', [], [maps:get(x, Item)]})"
+        "            arizona_template:target(arizona_html, {'span', [], [maps:get(x, Item)]})"
         "        ]} "
         "    end, arizona_template:get(items, Bindings, []))). "
     ),
@@ -4946,7 +4986,7 @@ template2_empty_list_render(Config) when is_list(Config) ->
         "-module(pt_each_empty). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', [], ["
         "            arizona_template:each(fun(Item) -> "
         "                {'li', [], [maps:get(name, Item)]} "
@@ -4971,7 +5011,7 @@ template2_diff_integration(Config) when is_list(Config) ->
         "-module(pt_each_diff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            arizona_template:get(title, Bindings, <<\"default\">>),"
         "            arizona_template:each(fun(Item) -> "
@@ -5002,7 +5042,8 @@ template1_fragment(Config) when is_list(Config) ->
         "-module(pt_fragment). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html([{td, [], [arizona_template:get(a, Bindings, <<\"x\">>)]}, "
+        "    arizona_template:target(arizona_html, "
+        "[{td, [], [arizona_template:get(a, Bindings, <<\"x\">>)]}, "
         "                      {td, [], [arizona_template:get(b, Bindings, <<\"y\">>)]}]). "
     ),
     T = Mod:render(#{a => <<"A">>, b => <<"B">>}),
@@ -5033,7 +5074,8 @@ template1_fragment_render(Config) when is_list(Config) ->
         "-module(pt_fragment_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html([{td, [], [arizona_template:get(a, Bindings, <<\"x\">>)]}, "
+        "    arizona_template:target(arizona_html, "
+        "[{td, [], [arizona_template:get(a, Bindings, <<\"x\">>)]}, "
         "                      {td, [], [<<\"static\">>]}]). "
     ),
     Tmpl = Mod:render(#{a => <<"hello">>}),
@@ -5054,7 +5096,7 @@ template2_non_element_expr(Config) when is_list(Config) ->
         "-module(pt_each_non_elem). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        maps:get(name, Item) "
         "    end, arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
@@ -5066,7 +5108,7 @@ template2_non_element_render(Config) when is_list(Config) ->
         "-module(pt_each_non_elem_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', [], ["
         "            arizona_template:each(fun(Item) -> "
         "                maps:get(name, Item) "
@@ -5082,7 +5124,7 @@ template2_static_binary_body(Config) when is_list(Config) ->
         "-module(pt_each_static_bin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(_Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(_Item) -> "
         "        <<\"hello\">> "
         "    end, arizona_template:get(items, Bindings, []))). "
     ),
@@ -5098,7 +5140,7 @@ template2_non_element_multi_expr(Config) when is_list(Config) ->
         "-module(pt_each_non_elem_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        Name = maps:get(name, Item), "
         "        string:uppercase(Name) "
         "    end, arizona_template:get(items, Bindings, []))). ",
@@ -5111,7 +5153,7 @@ template1_static_binary(Config) when is_list(Config) ->
         "-module(pt_static_bin). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html(<<\"hello\">>). "
+        "    arizona_template:target(arizona_html, <<\"hello\">>). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"hello">>], maps:get(s, T)),
@@ -5126,7 +5168,8 @@ template1_dynamic_expr(Config) when is_list(Config) ->
         "-module(pt_dyn_expr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:get(content, Bindings, <<\"default\">>)). "
+        "    arizona_template:target(arizona_html, "
+        "arizona_template:get(content, Bindings, <<\"default\">>)). "
     ),
     T = Mod:render(#{content => <<"hello">>}),
     Fp = maps:get(f, T),
@@ -5143,7 +5186,8 @@ template1_dynamic_expr_render(Config) when is_list(Config) ->
         "-module(pt_dyn_expr_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:get(content, Bindings, <<\"default\">>)). "
+        "    arizona_template:target(arizona_html, "
+        "arizona_template:get(content, Bindings, <<\"default\">>)). "
     ),
     Tmpl = Mod:render(#{content => <<"hello">>}),
     Fp = maps:get(f, Tmpl),
@@ -5163,7 +5207,8 @@ template1_static_fragment(Config) when is_list(Config) ->
         "-module(pt_static_frag). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html([{td, [], [<<\"a\">>]}, {td, [], [<<\"b\">>]}]). "
+        "    arizona_template:target(arizona_html, "
+        "[{td, [], [<<\"a\">>]}, {td, [], [<<\"b\">>]}]). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<td>a</td><td>b</td>">>], maps:get(s, T)),
@@ -5175,7 +5220,7 @@ template2_fragment_body(Config) when is_list(Config) ->
         "-module(pt_each_frag). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        [{td, [], [maps:get(name, Item)]}, "
         "         {td, [], [maps:get(age, Item)]}] "
         "    end, arizona_template:get(rows, Bindings, []))). "
@@ -5212,7 +5257,7 @@ template2_fragment_render(Config) when is_list(Config) ->
         "-module(pt_each_frag_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'table', [], ["
         "            arizona_template:each(fun(Item) -> "
         "                [{td, [], [maps:get(name, Item)]}, "
@@ -5245,7 +5290,7 @@ template2_fragment_multi_expr(Config) when is_list(Config) ->
         "-module(pt_each_frag_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        Name = maps:get(name, Item), "
         "        Upper = string:uppercase(Name), "
         "        [{td, [], [Upper]}, "
@@ -5271,7 +5316,8 @@ template2_map_pattern(Config) when is_list(Config) ->
         "-module(pt_each_map_pat). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(#{name := Name, age := Age}) -> "
+        "    arizona_template:target(arizona_html, "
+        "arizona_template:each(fun(#{name := Name, age := Age}) -> "
         "        {'tr', [], ["
         "            {'td', [], [Name]}, "
         "            {'td', [], [Age]}"
@@ -5317,7 +5363,7 @@ template2_map_pattern_non_element(Config) when is_list(Config) ->
         "-module(pt_each_map_pat_ne). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(#{name := Name}) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(#{name := Name}) -> "
         "        Name "
         "    end, arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
@@ -5329,7 +5375,7 @@ template2_prefix_static_body(Config) when is_list(Config) ->
         "-module(pt_each_prefix_static). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        _Name = maps:get(name, Item), "
         "        {li, [{class, <<\"row\">>}], [<<\"fixed\">>]} "
         "    end, arizona_template:get(items, Bindings, []))). "
@@ -5346,7 +5392,7 @@ template2_prefix_partial_use(Config) when is_list(Config) ->
         "-module(pt_each_prefix_partial). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each("
+        "    arizona_template:target(arizona_html, arizona_template:each("
         "        fun(#{id := Id, name := Name, age := Age}) -> "
         "        IdBin = integer_to_binary(Id), "
         "        {'tr', [{<<\"az-key\">>, IdBin}], ["
@@ -5382,7 +5428,7 @@ nodiff_atom(Config) when is_list(Config) ->
         "-module(pt_nodiff_atom). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], [arizona_template:get(count, Bindings, 0)]}"
         "    ). "
     ),
@@ -5399,7 +5445,7 @@ nodiff_binary(Config) when is_list(Config) ->
         "-module(pt_nodiff_bin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [<<\"az-nodiff\">>], [arizona_template:get(count, Bindings, 0)]}"
         "    ). "
     ),
@@ -5415,7 +5461,7 @@ nodiff_absent(Config) when is_list(Config) ->
         "-module(pt_nodiff_absent). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], [arizona_template:get(count, Bindings, 0)]}"
         "    ). "
     ),
@@ -5428,7 +5474,7 @@ nodiff_diff_integration(Config) when is_list(Config) ->
         "-module(pt_nodiff_int). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], [arizona_template:get(count, Bindings, 0)]}"
         "    ). "
     ),
@@ -5444,7 +5490,7 @@ bool_attr_true(Config) when is_list(Config) ->
         "-module(pt_bool_true). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{hidden, true}], [<<\"content\">>]}"
         "    ). "
     ),
@@ -5458,7 +5504,7 @@ bool_attr_false(Config) when is_list(Config) ->
         "-module(pt_bool_false). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{hidden, false}], [<<\"content\">>]}"
         "    ). "
     ),
@@ -5472,7 +5518,7 @@ bare_binary_bool(Config) when is_list(Config) ->
         "-module(pt_bare_bin). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [<<\"hidden\">>], [<<\"content\">>]}"
         "    ). "
     ),
@@ -5486,7 +5532,7 @@ bool_dynamic_true(Config) when is_list(Config) ->
         "-module(pt_bool_dyn_true). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'input', [{type, <<\"checkbox\">>}, {checked, maps:get(c, Bindings)}], []}"
         "    ). "
     ),
@@ -5502,7 +5548,7 @@ bool_dynamic_false(Config) when is_list(Config) ->
         "-module(pt_bool_dyn_false). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'input', [{type, <<\"checkbox\">>}, {checked, maps:get(c, Bindings)}], []}"
         "    ). "
     ),
@@ -5516,7 +5562,7 @@ bool_dynamic_value(Config) when is_list(Config) ->
         "-module(pt_bool_dyn_val). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{class, maps:get(cls, Bindings)}], [<<\"ok\">>]}"
         "    ). "
     ),
@@ -5530,7 +5576,7 @@ nodiff_with_other_attrs(Config) when is_list(Config) ->
         "-module(pt_nodiff_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{class, <<\"box\">>}, 'az-nodiff'], "
         "            [arizona_template:get(count, Bindings, 0)]}"
         "    ). "
@@ -5547,7 +5593,7 @@ nodiff_each(Config) when is_list(Config) ->
         "-module(pt_nodiff_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item) -> "
         "        {'li', ['az-nodiff'], [maps:get(name, Item)]} "
         "    end, arizona_template:get(items, Bindings, []))). "
     ),
@@ -5565,7 +5611,7 @@ nodiff_inherited_branch(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_branch). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> {'span', [], [arizona_template:get(b, Bindings)]}; "
@@ -5589,7 +5635,7 @@ nodiff_bare_branch_inherited(Config) when is_list(Config) ->
                     "). "
                     "-export([render/1]). "
                     "render(Bindings) -> "
-                    "    arizona_template:html("
+                    "    arizona_template:target(arizona_html, "
                     "        {'div', [], ["
                     "            case arizona_template:get(f, Bindings) of "
                     "                true -> " ++ Branch ++
@@ -5610,13 +5656,14 @@ nodiff_bare_branch_inherited(Config) when is_list(Config) ->
         end,
         [
             {"pt_nodiff_bare_branch", nodiff_section()},
-            {"pt_nodiff_wrapped_branch", "arizona_template:html(" ++ nodiff_section() ++ ")"}
+            {"pt_nodiff_wrapped_branch",
+                "arizona_template:target(arizona_html, " ++ nodiff_section() ++ ")"}
         ]
     ).
 
 nodiff_section() ->
     "{'section', ['az-nodiff'], ["
-    "    arizona_template:html({'i', [], [arizona_template:get(b, Bindings)]}), "
+    "    arizona_template:target(arizona_html, {'i', [], [arizona_template:get(b, Bindings)]}), "
     "    arizona_template:each(fun(X) -> {'li', [], [X]} end, arizona_template:get(xs, Bindings))"
     "]}".
 
@@ -5629,7 +5676,7 @@ nodiff_branch_swaps_away(Config) when is_list(Config) ->
             {"pt_nodiff_swap_bare",
                 "{'section', ['az-nodiff'], [arizona_template:get(b, Bindings)]}"},
             {"pt_nodiff_swap_wrapped",
-                "arizona_template:html({'section', ['az-nodiff'], "
+                "arizona_template:target(arizona_html, {'section', ['az-nodiff'], "
                 "[arizona_template:get(b, Bindings)]})"}
         ]
     ).
@@ -5640,7 +5687,7 @@ assert_nodiff_swap(Name, Branch) ->
             "). "
             "-export([render/1]). "
             "render(Bindings) -> "
-            "    arizona_template:html("
+            "    arizona_template:target(arizona_html, "
             "        {'div', [], ["
             "            case arizona_template:get(f, Bindings) of "
             "                true -> " ++ Branch ++
@@ -5680,7 +5727,7 @@ nodiff_branch_same_template_skips_eval(Config) when is_list(Config) ->
         "-module(pt_nodiff_same_tmpl). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            case arizona_template:get(n, Bindings) > 0 of "
         "                true -> {'section', ['az-nodiff'], ["
@@ -5714,7 +5761,7 @@ nodiff_item_branch_swaps_away(Config) when is_list(Config) ->
         "-module(pt_nodiff_item_swap). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', [], [arizona_template:each(fun(X) -> "
         "            {'li', [], [case X of "
         "                1 -> {'b', ['az-nodiff'], [X]}; "
@@ -5735,10 +5782,10 @@ nodiff_same_statics_branches_swap(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_nodiff_same_statics). "
         "-export([render/1, home/1, about/1]). "
-        "home(_Bindings) -> arizona_template:html({'p', [], [<<\"Home\">>]}). "
-        "about(_Bindings) -> arizona_template:html({'p', [], [<<\"About\">>]}). "
+        "home(_Bindings) -> arizona_template:target(arizona_html, {'p', [], [<<\"Home\">>]}). "
+        "about(_Bindings) -> arizona_template:target(arizona_html, {'p', [], [<<\"About\">>]}). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            case arizona_template:get(lang, Bindings) of "
         "                en -> {'p', ['az-nodiff'], "
@@ -5772,11 +5819,11 @@ nodiff_root_child_kept_wherever_evaluated(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_nodiff_root_child_kept). "
         "-export([render/1, wrap/1]). "
-        "wrap(Bindings) -> arizona_template:html({'span', [], ["
+        "wrap(Bindings) -> arizona_template:target(arizona_html, {'span', [], ["
         "    arizona_template:stateful(arizona_no_diff_counter, "
         "        #{id => <<\"ndc_s\">>, count => arizona_template:get(c, Bindings)})]}). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> {'div', [], [<<\"x\">>, "
@@ -5808,7 +5855,7 @@ nodiff_root_child_slot_leaves(Config) when is_list(Config) ->
         "-module(pt_nodiff_root_child_leaves). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            case arizona_template:get(show, Bindings) of "
         "                true -> arizona_template:stateful(arizona_no_diff_counter, "
@@ -5842,7 +5889,7 @@ nodiff_child_view_branch_swaps_away(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(Bindings) -> {#{id => maps:get(id, Bindings), f => maps:get(f, Bindings)}, #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{id, arizona_template:get(id, Bindings)}], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> {'section', ['az-nodiff'], [<<\"on\">>]}; "
@@ -5855,7 +5902,8 @@ nodiff_child_view_branch_swaps_away(Config) when is_list(Config) ->
         "-module(pt_nodiff_child_parent). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'main', [], [arizona_template:stateful(pt_nodiff_child_view, "
+        "    arizona_template:target(arizona_html, "
+        "{'main', [], [arizona_template:stateful(pt_nodiff_child_view, "
         "        #{id => <<\"cv\">>, f => arizona_template:get(f, Bindings)})]}). "
     ),
     {_, Snap0, V0} = arizona_render:render(Parent:render(#{f => true}), #{}),
@@ -5869,7 +5917,7 @@ nodiff_branch_local_across_swap(Config) when is_list(Config) ->
         "-module(pt_nodiff_local_swap). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> {'section', ['az-nodiff'], ["
@@ -5893,9 +5941,10 @@ nodiff_inherited_nested_html(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
-        "            arizona_template:html({'em', [], [arizona_template:get(a, Bindings)]})"
+        "            arizona_template:target(arizona_html, "
+        "{'em', [], [arizona_template:get(a, Bindings)]})"
         "        ]}"
         "    ). "
     ),
@@ -5906,7 +5955,7 @@ nodiff_inherited_each(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], ["
         "            arizona_template:each(fun(I) -> {'li', [], [I]} end, "
         "                arizona_template:get(items, Bindings))"
@@ -5922,7 +5971,7 @@ nodiff_inherited_each_in_each(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_each_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], ["
         "            arizona_template:each(fun(I) -> "
         "                {'li', [], [arizona_template:each(fun(J) -> {'b', [], [J]} end, I)]} "
@@ -5942,7 +5991,7 @@ nodiff_inherited_hoisted_each(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Rows = arizona_template:each(fun(I) -> {'li', [], [I]} end, "
         "        arizona_template:get(items, Bindings)), "
-        "    arizona_template:html({'ul', ['az-nodiff'], [Rows]}). "
+        "    arizona_template:target(arizona_html, {'ul', ['az-nodiff'], [Rows]}). "
     ),
     ?assertEqual(
         <<"<ul><li>1</li><li>2</li></ul>">>, render_markerless(Mod:render(#{items => [1, 2]}))
@@ -5953,7 +6002,7 @@ nodiff_inherited_helper_each(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_helper). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], [row(arizona_template:get(a, Bindings))]}"
         "    ). "
         "row(X) -> {'li', [], [arizona_template:each(fun(I) -> {'i', [], [I]} end, [X])]}. "
@@ -5965,7 +6014,7 @@ nodiff_inherited_named_each(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_named). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], ["
         "            arizona_template:each(fun row/1, arizona_template:get(items, Bindings))"
         "        ]}"
@@ -5984,7 +6033,7 @@ nodiff_each_item_inherited(Config) when is_list(Config) ->
         "-module(pt_nodiff_item_inh). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'table', [], ["
         "            arizona_template:each(fun({Id, Msg}) -> "
         "                {'tr', ['az-nodiff'], ["
@@ -6007,7 +6056,7 @@ nodiff_layout_inherited_each(Config) when is_list(Config) ->
         "-module(pt_nodiff_layout_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'body', [], ["
         "            {'nav', [], [arizona_template:each(fun(L) -> {'a', [], [L]} end, "
         "                arizona_template:get(links, Bindings))]}, "
@@ -6027,10 +6076,10 @@ nodiff_stateful_props_not_inherited(Config) when is_list(Config) ->
         "-module(pt_nodiff_stateful_props). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            arizona_template:stateful(child_mod, #{"
-        "                body => arizona_template:html("
+        "                body => arizona_template:target(arizona_html, "
         "                    {'p', [], [arizona_template:get(a, Bindings)]})"
         "            })"
         "        ]}"
@@ -6052,7 +6101,7 @@ nodiff_inherited_local(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_local). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], ["
         "            arizona_template:each(fun(I) -> "
         "                {'li', [], [I, arizona_template:local(<<\"k\">>, <<\"x\">>)]} "
@@ -6073,7 +6122,7 @@ nodiff_layout_branch_local(Config) when is_list(Config) ->
         "-module(pt_nodiff_layout_local). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'body', [], ["
         "            case arizona_template:get(menu, Bindings) of "
         "                true -> {'nav', [], [{'span', [], "
@@ -6098,7 +6147,7 @@ nodiff_attr_local_no_az(Config) when is_list(Config) ->
         "-module(pt_nodiff_attr_local). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            {'dialog', ["
         "                {open, arizona_template:local(<<\"o\">>, false)},"
@@ -6121,7 +6170,7 @@ nodiff_local_slot_numbering(Config) when is_list(Config) ->
         "-module(pt_nodiff_local_slots). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            {'p', [], [arizona_template:get(a, Bindings), <<\" / \">>, "
         "                arizona_template:local(<<\"m\">>, <<\"M\">>), "
@@ -6143,17 +6192,17 @@ nodiff_fun_prop_not_inherited(Config) when is_list(Config) ->
         "-module(pt_nodiff_fun_prop). "
         "-export([marked/1, fwd/1, child/1]). "
         "marked(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            arizona_template:stateless(fun fwd/1, #{mk => fun(N) -> "
-        "                arizona_template:html({'b', [], [N]}) end})"
+        "                arizona_template:target(arizona_html, {'b', [], [N]}) end})"
         "        ]}"
         "    ). "
         "fwd(Bindings) -> "
         "    put(pt_nodiff_fun_prop, arizona_template:get(mk, Bindings)), "
-        "    arizona_template:html({'span', [], []}). "
+        "    arizona_template:target(arizona_html, {'span', [], []}). "
         "child(Bindings) -> "
-        "    arizona_template:html({'p', [], "
+        "    arizona_template:target(arizona_html, {'p', [], "
         "        [(arizona_template:get(mk, Bindings))(arizona_template:get(n, Bindings))]}). "
     ),
     _ = arizona_render:render_to_iolist(Mod:marked(#{})),
@@ -6171,17 +6220,17 @@ nodiff_named_fun_prop_not_inherited(Config) when is_list(Config) ->
         "-module(pt_nodiff_named_fun_prop). "
         "-export([marked/1, fwd/1, child/1]). "
         "marked(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            arizona_template:stateless(fun fwd/1, #{mk => fun Self(N) -> "
-        "                arizona_template:html({'b', [], [N]}) end})"
+        "                arizona_template:target(arizona_html, {'b', [], [N]}) end})"
         "        ]}"
         "    ). "
         "fwd(Bindings) -> "
         "    put(pt_nodiff_named_fun_prop, arizona_template:get(mk, Bindings)), "
-        "    arizona_template:html({'span', [], []}). "
+        "    arizona_template:target(arizona_html, {'span', [], []}). "
         "child(Bindings) -> "
-        "    arizona_template:html({'p', [], "
+        "    arizona_template:target(arizona_html, {'p', [], "
         "        [(arizona_template:get(mk, Bindings))(arizona_template:get(n, Bindings))]}). "
     ),
     _ = arizona_render:render_to_iolist(Mod:marked(#{})),
@@ -6199,14 +6248,14 @@ nodiff_inherited_named_each_helper(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_named_helper). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], ["
         "            arizona_template:each(fun row/1, arizona_template:get(items, Bindings))"
         "        ]}"
         "    ). "
         "row(I) -> {'li', [], [cell(I)]}. "
         "cell(X) -> {'span', [], ["
-        "    arizona_template:html({'i', [], [X]}), "
+        "    arizona_template:target(arizona_html, {'i', [], [X]}), "
         "    arizona_template:each(fun(J) -> {'u', [], [J]} end, [X])"
         "]}. "
     ),
@@ -6221,9 +6270,9 @@ nodiff_inherited_hoisted_source(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_source). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    Rows = [arizona_template:html({'b', [], [X]}) "
+        "    Rows = [arizona_template:target(arizona_html, {'b', [], [X]}) "
         "        || X <- arizona_template:get(items, Bindings)], "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], ["
         "            arizona_template:each(fun(R) -> {'li', [], [R]} end, Rows)"
         "        ]}"
@@ -6242,14 +6291,15 @@ nodiff_each_stateful_item(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {#{id => maps:get(id, B), v => 0}, #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'span', [{id, arizona_template:get(id, Bindings)}], "
+        "    arizona_template:target(arizona_html, "
+        "{'span', [{id, arizona_template:get(id, Bindings)}], "
         "        [arizona_template:get(v, Bindings)]}). "
     ),
     Mod = compile_module(
         "-module(pt_nodiff_each_stateful). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], ["
         "            arizona_template:each(fun(I) -> "
         "                {'li', [], [arizona_template:stateful(pt_nodiff_each_child, #{id => I})]}"
@@ -6274,7 +6324,7 @@ nodiff_stream_az_key(Config) when is_list(Config) ->
         "-module(pt_nodiff_stream_key). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff'], ["
         "            arizona_template:each(fun(I, K) -> {'li', [{az_key, K}], [I]} end, "
         "                arizona_template:get(items, Bindings))"
@@ -6293,7 +6343,7 @@ nodiff_inherited_json(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:json("
+        "    arizona_template:target(arizona_json, "
         "        {'Column', ['az-nodiff'], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> "
@@ -6314,7 +6364,7 @@ nodiff_inherited_raw_text(Config) when is_list(Config) ->
         "-module(pt_nodiff_inh_raw_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> {'textarea', [], [arizona_template:get(c, Bindings)]}; "
@@ -6344,7 +6394,7 @@ nodiff_live_root_hoisted_each(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Rows = arizona_template:each(fun(I) -> {'li', [], [I]} end, "
         "        arizona_template:get(items, Bindings)), "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', ['az-nodiff', {id, arizona_template:get(id, Bindings)}], [Rows]}"
         "    ). "
     ),
@@ -6369,7 +6419,7 @@ nodiff_absent_keeps_nested_markers(Config) when is_list(Config) ->
         "-module(pt_nodiff_absent_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', [], ["
         "            case arizona_template:get(f, Bindings) of "
         "                true -> {'li', [], [arizona_template:get(a, Bindings)]}; "
@@ -6397,7 +6447,7 @@ nodiff_nested_element_rejected(Config) when is_list(Config) ->
         "-module(pt_nodiff_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            {'span', ['az-nodiff'], [arizona_template:get(x, Bindings)]}"
         "        ]}"
@@ -6411,7 +6461,7 @@ mixed_attr_forms(Config) when is_list(Config) ->
         "-module(pt_mixed_attrs). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'input', [disabled, <<\"required\">>, {hidden, true}, "
         "                   {autofocus, false}, {class, <<\"field\">>}], []}"
         "    ). "
@@ -6430,7 +6480,7 @@ layout_single_element(Config) when is_list(Config) ->
         "-module(pt_layout_elem). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', ['az-nodiff'], [maps:get(text, Bindings, <<\"hi\">>)]}"
         "    ). "
     ),
@@ -6451,7 +6501,7 @@ layout_mixed_list(Config) when is_list(Config) ->
         "-module(pt_layout_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(["
+        "    arizona_template:target(arizona_html, ["
         "        <<\"<!DOCTYPE html>\">>, "
         "        {'html', ['az-nodiff'], ["
         "            {'head', [], [{'title', [], [maps:get(title, Bindings, <<\"Test\">>)]}]}"
@@ -6472,7 +6522,7 @@ layout_dynamic_attr(Config) when is_list(Config) ->
         "-module(pt_layout_dyn_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff', {class, maps:get(cls, Bindings, <<\"x\">>)}], [<<\"ok\">>]}"
         "    ). "
     ),
@@ -6494,7 +6544,7 @@ layout_render_integration(Config) when is_list(Config) ->
         "-module(pt_layout_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(["
+        "    arizona_template:target(arizona_html, ["
         "        <<\"<!DOCTYPE html>\">>, "
         "        {'html', ['az-nodiff'], ["
         "            {'head', [], [{'title', [], [maps:get(title, Bindings)]}]}, "
@@ -6518,7 +6568,8 @@ layout_static_only(Config) when is_list(Config) ->
         "-module(pt_layout_static). "
         "-export([render/0]). "
         "render() -> "
-        "    arizona_template:html({'p', ['az-nodiff', {class, <<\"box\">>}], [<<\"Hello\">>]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', ['az-nodiff', {class, <<\"box\">>}], [<<\"Hello\">>]}). "
     ),
     T = Mod:render(),
     ?assertEqual([<<"<p">>, <<" class=\"box\">Hello</p>">>], maps:get(s, T)),
@@ -6532,7 +6583,7 @@ layout_multiple_dynamic_children(Config) when is_list(Config) ->
         "-module(pt_layout_multi_dyn). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', ['az-nodiff'], ["
         "            maps:get(a, Bindings), "
         "            <<\" and \">>, "
@@ -6563,7 +6614,7 @@ layout_void_dynamic_attr(Config) when is_list(Config) ->
         "-module(pt_layout_void_dyn). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'input', ['az-nodiff', {value, maps:get(v, Bindings)}], []}"
         "    ). "
     ),
@@ -6588,7 +6639,7 @@ layout_bare_dynamic(Config) when is_list(Config) ->
         "-module(pt_layout_bare_dyn). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(maps:get(content, Bindings)). "
+        "    arizona_template:target(arizona_html, maps:get(content, Bindings)). "
     ),
     T = Mod:render(#{content => <<"hi">>}),
     Fp = maps:get(f, T),
@@ -6604,7 +6655,7 @@ layout_mixed_dynamic_item(Config) when is_list(Config) ->
         "-module(pt_layout_mixed_dyn). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(["
+        "    arizona_template:target(arizona_html, ["
         "        <<\"prefix\">>, "
         "        maps:get(x, Bindings), "
         "        <<\"suffix\">>"
@@ -6631,7 +6682,7 @@ layout_nested_no_az(Config) when is_list(Config) ->
         "-module(pt_layout_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ['az-nodiff'], ["
         "            {'section', [], ["
         "                {'p', [], [maps:get(a, Bindings)]}"
@@ -6654,7 +6705,7 @@ layout_mixed_with_bare_dynamic(Config) when is_list(Config) ->
         "-module(pt_layout_mixed_bare). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(["
+        "    arizona_template:target(arizona_html, ["
         "        <<\"prefix\">>, "
         "        maps:get(x, Bindings), "
         "        {'p', ['az-nodiff'], [maps:get(y, Bindings)]}"
@@ -6683,7 +6734,7 @@ mixed_list_no_nodiff(Config) when is_list(Config) ->
         "-module(pt_mixed_no_nodiff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(["
+        "    arizona_template:target(arizona_html, ["
         "        <<\"<!DOCTYPE html>\">>, "
         "        {'div', [], [maps:get(x, Bindings)]}"
         "    ]). "
@@ -6707,7 +6758,7 @@ auto_nodiff_inner_content_top_level(Config) when is_list(Config) ->
         "-module(pt_auto_nodiff_top). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(["
+        "    arizona_template:target(arizona_html, ["
         "        <<\"<outer>\">>, "
         "        az:inner_content(Bindings), "
         "        <<\"</outer>\">>"
@@ -6726,7 +6777,7 @@ auto_nodiff_inner_content_nested(Config) when is_list(Config) ->
         "-module(pt_auto_nodiff_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'html', [], ["
         "            {'body', [], [az:inner_content(Bindings)]}"
         "        ]}"
@@ -6745,7 +6796,7 @@ auto_nodiff_no_inner_content_no_diff_key(Config) when is_list(Config) ->
         "-module(pt_auto_nodiff_absent). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(["
+        "    arizona_template:target(arizona_html, ["
         "        {'p', [], []}, "
         "        <<\"foo\">>, "
         "        {'p', [], [maps:get(x, Bindings)]}"
@@ -6766,7 +6817,7 @@ utf8_static_child_emoji(Config) when is_list(Config) ->
         "-module(pt_utf8_emoji). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{class, <<\"operator\">>}], [<<\"\\x{1F9D1}\\x{200D}\\x{1F3ED}\">>]}"
         "    ). "
     ),
@@ -6781,7 +6832,7 @@ utf8_cactus_emoji(Config) when is_list(Config) ->
         "-module(pt_utf8_cactus). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [<<\"🌵\"/utf8>>]}"
         "    ). "
     ),
@@ -6796,7 +6847,7 @@ utf8_static_attr(Config) when is_list(Config) ->
         "-module(pt_utf8_attr). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [{title, <<\"\\x{2764}\">>}], [<<\"love\">>]}"
         "    ). "
     ),
@@ -6811,7 +6862,7 @@ utf8_mixed_ascii(Config) when is_list(Config) ->
         "-module(pt_utf8_mixed). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [<<\"Hello \\x{1F30D}\">>]}"
         "    ). "
     ),
@@ -6826,7 +6877,7 @@ utf8_each_static(Config) when is_list(Config) ->
         "-module(pt_utf8_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(_Item) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(_Item) -> "
         "        {'li', [], [<<\"\\x{2705} done\">>]} "
         "    end, arizona_template:get(items, Bindings, []))). "
     ),
@@ -6842,7 +6893,7 @@ utf8_render_integration(Config) when is_list(Config) ->
         "-module(pt_utf8_render). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], [<<\"\\x{1F9D1}\\x{200D}\\x{1F3ED} \">>,"
         "         arizona_template:get(name, Bindings, <<\"worker\">>)]}"
         "    ). "
@@ -6868,7 +6919,7 @@ iolist_dynamic_child(Config) when is_list(Config) ->
         "-module(pt_iolist_child). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], [arizona_template:get(content, Bindings, [<<\"a\">>, <<\"b\">>])]}"
         "    ). "
     ),
@@ -6894,7 +6945,7 @@ void_two_element_tuple(Config) when is_list(Config) ->
         "-module(pt_void_2elem). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'br', []}). "
+        "    arizona_template:target(arizona_html, {'br', []}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<br />">>], maps:get(s, T)),
@@ -6906,7 +6957,7 @@ void_two_element_dynamic_attr(Config) when is_list(Config) ->
         "-module(pt_void_2elem_dyn). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'input', [{type, <<\"text\">>}, "
         "                   {value, arizona_template:get(val, Bindings, <<>>)}]}"
         "    ). "
@@ -6933,7 +6984,7 @@ single_expr_child(Config) when is_list(Config) ->
         "-module(pt_single_expr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [], arizona_template:get(foo, Bindings, <<\"bar\">>)}"
         "    ). "
     ),
@@ -6965,7 +7016,7 @@ void_with_static_children(Config) when is_list(Config) ->
         "-module(pt_void_static). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'br', [], [<<\"text\">>]}). ",
+        "    arizona_template:target(arizona_html, {'br', [], [<<\"text\">>]}). ",
         fun
             ({void_with_children, br}) -> true;
             (_) -> false
@@ -6978,7 +7029,8 @@ void_with_dynamic_children(Config) when is_list(Config) ->
         "-module(pt_void_dynamic). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'hr', [], [arizona_template:get(x, Bindings)]}). ",
+        "    arizona_template:target(arizona_html, "
+        "{'hr', [], [arizona_template:get(x, Bindings)]}). ",
         fun
             ({void_with_children, hr}) -> true;
             (_) -> false
@@ -6991,7 +7043,7 @@ invalid_attribute(Config) when is_list(Config) ->
         "-module(pt_invalid_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [123], []}). ",
+        "    arizona_template:target(arizona_html, {'div', [123], []}). ",
         fun
             (invalid_attribute) -> true;
             (_) -> false
@@ -7018,7 +7070,8 @@ void_with_single_expr_child(Config) when is_list(Config) ->
         "-module(pt_void_single_expr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'br', [], arizona_template:get(x, Bindings)}). ",
+        "    arizona_template:target(arizona_html, "
+        "{'br', [], arizona_template:get(x, Bindings)}). ",
         fun
             ({void_with_children, br}) -> true;
             (_) -> false
@@ -7031,7 +7084,7 @@ void_nested_child_with_children(Config) when is_list(Config) ->
         "-module(pt_void_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], [{'img', [], [<<\"oops\">>]}]}"
         "    ). ",
         fun
@@ -7046,7 +7099,7 @@ void_in_each_with_children(Config) when is_list(Config) ->
         "-module(pt_void_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each("
+        "    arizona_template:target(arizona_html, arizona_template:each("
         "        fun(Item) -> {'input', [], [<<\"bad\">>]} end,"
         "        arizona_template:get(items, Bindings, [])"
         "    )). ",
@@ -7062,7 +7115,7 @@ invalid_attribute_nested(Config) when is_list(Config) ->
         "-module(pt_invalid_attr_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], [{'span', [123], [<<\"text\">>]}]}"
         "    ). ",
         fun
@@ -7083,7 +7136,7 @@ binary_element_tag_is_verbatim(Config) when is_list(Config) ->
         "-module(pt_bin_tag). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {<<\"my-widget_v2\">>, [], [<<\"a\">>]}, "
         "        {'my-widget_v2', [], [<<\"b\">>]}"
         "    ]}). "
@@ -7110,7 +7163,7 @@ binary_element_tag_classifies(Config) when is_list(Config) ->
         "-module(pt_bin_tag_cls). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({<<\"svg\">>, [], ["
+        "    arizona_template:target(arizona_html, {<<\"svg\">>, [], ["
         "        {<<\"title\">>, [], [arizona_template:get(t, Bindings)]}"
         "    ]}). "
     ),
@@ -7124,7 +7177,7 @@ non_name_literal_tag_still_invalid(Config) when is_list(Config) ->
         "-module(pt_num_tag). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({42, [], [<<\"hi\">>]}). ",
+        "    arizona_template:target(arizona_html, {42, [], [<<\"hi\">>]}). ",
         fun(R) -> R =:= invalid_element end
     ).
 
@@ -7138,7 +7191,7 @@ each_with_named_fun_ref(Config) when is_list(Config) ->
         "-export([render/1, row/1]). "
         "row(Name) -> {'li', [], [Name]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1, "
         "        arizona_template:get(items, Bindings, []))]}). "
     ),
     ?assert(is_map(Mod:render(#{items => [~"a", ~"b"]}))).
@@ -7150,7 +7203,7 @@ each_with_named_fun_ref_arity_2(Config) when is_list(Config) ->
         "-export([render/1, row/2]). "
         "row(Item, _Key) -> {'li', [], [Item]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/2, "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/2, "
         "        arizona_template:get(items, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{items => #{1 => ~"a"}}))).
@@ -7163,7 +7216,7 @@ each_named_fun_ref_non_element_rejected(Config) when is_list(Config) ->
         "-export([render/1, row/1]). "
         "row(Name) -> <<\"row:\", Name/binary>>. "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun row/1, "
         "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
     ).
@@ -7175,7 +7228,7 @@ each_named_fun_ref_arity_2_non_element_rejected(Config) when is_list(Config) ->
         "-export([render/1, row/2]). "
         "row(Item, Key) -> <<Key/binary, \"=\", Item/binary>>. "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun row/2, "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun row/2, "
         "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_stream_body_not_element end
     ).
@@ -7192,14 +7245,14 @@ computed_element_tag_rejected_with_idiom(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Tag = arizona_template:get(tag, Bindings), "
-        "    arizona_template:html({'div', [], [{Tag, [], [~\"x\"]}]}). ",
+        "    arizona_template:target(arizona_html, {'div', [], [{Tag, [], [~\"x\"]}]}). ",
     assert_parse_error(Bare, fun(R) -> R =:= computed_element_tag end),
     %% Computed in place, and inside an ?each item -- same answer.
     Computed =
         "-module(pt_ct_call). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each("
         "        fun(I, K) -> {maps:get(tag, I), [{az_key, K}], [~\"x\"]} end, "
         "        arizona_template:get(items, Bindings))]}). ",
     assert_parse_error(Computed, fun(R) -> R =:= computed_element_tag end).
@@ -7211,7 +7264,7 @@ malformed_element_still_invalid_element(Config) when is_list(Config) ->
         "-module(pt_ct_bad). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'div', [], [{'p', [], [~\"x\"], extra}]}). ",
+        "    arizona_template:target(arizona_html, {'div', [], [{'p', [], [~\"x\"], extra}]}). ",
         fun(R) -> R =:= invalid_element end
     ).
 
@@ -7220,7 +7273,7 @@ each_stream_control_flow_body_rejected_with_wrapper_advice(Config) when is_list(
         "-module(pt_each_stream_cond). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(Item, Key) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(Item, Key) -> "
         "        case Item of "
         "            note -> {'em', [{az_key, Key}], [Item]}; "
         "            _ -> {'strong', [{az_key, Key}], [Item]} "
@@ -7238,7 +7291,8 @@ each_stream_multi_root_body_refused_at_render(Config) when is_list(Config) ->
     Each = fun(Name, Fun, Defs) ->
         compile_module(
             "-module(" ++ Name ++ "). -export([render/1]). " ++ Defs ++
-                "render(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each(" ++
+                "render(Bindings) -> arizona_template:target(arizona_html, "
+                "{'ul', [], [arizona_template:each(" ++
                 Fun ++ ", arizona_template:get(items, Bindings))]}). "
         )
     end,
@@ -7255,7 +7309,8 @@ each_stream_multi_root_body_refused_at_render(Config) when is_list(Config) ->
         ),
         Each(
             "pt_each_stream_multi_html",
-            "fun(I, K) -> arizona_template:html([{li, [{az_key, K}], [I]}, {li, [], []}]) end",
+            "fun(I, K) -> arizona_template:target(arizona_html, "
+            "[{li, [{az_key, K}], [I]}, {li, [], []}]) end",
             ""
         ),
         Each(
@@ -7283,7 +7338,7 @@ each_stream_static_body_refused_at_render(Config) when is_list(Config) ->
         "-module(pt_each_stream_static). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each("
         "        fun(_I, _K) -> ~\"x\" end, arizona_template:get(items, Bindings))]}). "
     ),
     assert_stream_each_multi_root(Mod, #{items => arizona_stream:new(fun(X) -> X end, [~"a"])}).
@@ -7295,7 +7350,8 @@ each_stream_elementless_list_body_refused_at_render(Config) when is_list(Config)
         compile_module(
             "-module(" ++ Name ++
                 "). -export([render/1]). render(Bindings) -> "
-                "arizona_template:html({'ul', [], [arizona_template:each(fun(I, K) -> " ++ Body ++
+                "arizona_template:target(arizona_html, "
+                "{'ul', [], [arizona_template:each(fun(I, K) -> " ++ Body ++
                 " end, arizona_template:get(items, Bindings))]}). "
         )
     end,
@@ -7316,7 +7372,7 @@ assert_stream_each_multi_root(Mod, Bindings) ->
 each_map_multi_root_body_renders_and_diffs(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_map_dl). -export([render/1]). "
-        "render(Bindings) -> arizona_template:html({dl, [], [arizona_template:each("
+        "render(Bindings) -> arizona_template:target(arizona_html, {dl, [], [arizona_template:each("
         "fun(V, K) -> [{dt, [], [K]}, {dd, [], [V]}] end, arizona_template:get(m, Bindings))]}). "
     ),
     {HTML, Snap, _} = arizona_render:render(Mod:render(#{m => #{~"a" => ~"1"}}), #{}),
@@ -7343,7 +7399,8 @@ each_map_multi_root_body_renders_and_diffs(Config) when is_list(Config) ->
 each_stream_multi_root_body_nodiff_renders(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_stream_dl_nodiff). -export([render/1]). "
-        "render(Bindings) -> arizona_template:html({dl, ['az-nodiff'], [arizona_template:each("
+        "render(Bindings) -> arizona_template:target(arizona_html, "
+        "{dl, ['az-nodiff'], [arizona_template:each("
         "fun(V, K) -> [{dt, [], [K]}, {dd, [], [V]}] end, arizona_template:get(m, Bindings))]}). "
     ),
     {HTML, _, _} = arizona_render:render(
@@ -7361,20 +7418,22 @@ each_stream_keyless_body_refused_at_render(Config) when is_list(Config) ->
     Each = fun(Name, Fun, Defs) ->
         compile_module(
             "-module(" ++ Name ++ "). -export([render/1]). " ++ Defs ++
-                "render(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each(" ++
+                "render(Bindings) -> arizona_template:target(arizona_html, "
+                "{'ul', [], [arizona_template:each(" ++
                 Fun ++ ", arizona_template:get(items, Bindings))]}). "
         )
     end,
     Native = compile_module(
         "-module(pt_each_stream_keyless_json). -export([render/1]). "
-        "render(Bindings) -> arizona_template:json({'Column', [], [arizona_template:each("
+        "render(Bindings) -> arizona_template:target(arizona_json, "
+        "{'Column', [], [arizona_template:each("
         "fun(I, _K) -> {'Text', [], [I]} end, arizona_template:get(items, Bindings))]}). "
     ),
     Mods = [
         Each("pt_each_stream_keyless", "fun(I, _K) -> {li, [{class, ~\"row\"}], [I]} end", ""),
         Each(
             "pt_each_stream_keyless_html",
-            "fun(I, _K) -> arizona_template:html({li, [], [I]}) end",
+            "fun(I, _K) -> arizona_template:target(arizona_html, {li, [], [I]}) end",
             ""
         ),
         Each("pt_each_stream_keyless_listed", "fun(I, _K) -> [{li, [], [I]}] end", ""),
@@ -7406,7 +7465,7 @@ assert_stream_each_keyless(Mod, Bindings) ->
 each_map_keyless_body_renders_and_diffs(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_map_keyless). -export([render/1]). "
-        "render(Bindings) -> arizona_template:html({ul, [], [arizona_template:each("
+        "render(Bindings) -> arizona_template:target(arizona_html, {ul, [], [arizona_template:each("
         "fun(A, B) -> {li, [], [A, B]} end, arizona_template:get(m, Bindings))]}). "
     ),
     {HTML, Snap, _} = arizona_render:render(Mod:render(#{m => #{~"a" => ~"1"}}), #{}),
@@ -7428,9 +7487,10 @@ each_map_keyless_body_renders_and_diffs(Config) when is_list(Config) ->
 each_stream_keyless_body_nodiff_renders(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_stream_keyless_nodiff). -export([inherited/1, own/1]). "
-        "inherited(Bindings) -> arizona_template:html({ul, ['az-nodiff'], [arizona_template:each("
+        "inherited(Bindings) -> arizona_template:target(arizona_html, "
+        "{ul, ['az-nodiff'], [arizona_template:each("
         "fun(V, _K) -> {li, [], [V]} end, arizona_template:get(s, Bindings))]}). "
-        "own(Bindings) -> arizona_template:html({ul, [], [arizona_template:each("
+        "own(Bindings) -> arizona_template:target(arizona_html, {ul, [], [arizona_template:each("
         "fun(V, _K) -> {li, ['az-nodiff'], [V]} end, arizona_template:get(s, Bindings))]}). "
     ),
     S = arizona_stream:new(fun(X) -> X end, [~"a"]),
@@ -7465,9 +7525,10 @@ each_keyless_stream_target_body_renders(Config) when is_list(Config) ->
 each_stream_one_element_list_body_unwrapped(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_stream_one). -export([bare/1, listed/1]). "
-        "bare(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each("
+        "bare(Bindings) -> arizona_template:target(arizona_html, {'ul', [], [arizona_template:each("
         "fun(I, K) -> {li, [{az_key, K}], [I]} end, arizona_template:get(s, Bindings))]}). "
-        "listed(Bindings) -> arizona_template:html({'ul', [], [arizona_template:each("
+        "listed(Bindings) -> arizona_template:target(arizona_html, "
+        "{'ul', [], [arizona_template:each("
         "fun(I, K) -> [{li, [{az_key, K}], [I]}] end, arizona_template:get(s, Bindings))]}). "
     ),
     S0 = arizona_stream:new(fun(X) -> X end, [~"a", ~"b"]),
@@ -7487,7 +7548,8 @@ each_stream_control_flow_wrapper_fix_keys_per_item(Config) when is_list(Config) 
         "-module(pt_each_stream_cond_fix). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item, Key) -> "
+        "    arizona_template:target(arizona_html, "
+        "{'ul', [], [arizona_template:each(fun(Item, Key) -> "
         "        {'li', [{az_key, Key}], [case Item of "
         "            #{kind := note, t := T} -> {'em', [], [T]}; "
         "            #{t := T} -> {'strong', [], [T]} "
@@ -7517,7 +7579,8 @@ each_with_remote_fun_ref(Config) when is_list(Config) ->
         "-module(pt_each_remote_ref). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun erlang:integer_to_binary/1, "
+        "    arizona_template:target(arizona_html, "
+        "arizona_template:each(fun erlang:integer_to_binary/1, "
         "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_remote_fun_ref end
     ).
@@ -7530,7 +7593,7 @@ each_named_fun_ref_diffs(Config) when is_list(Config) ->
         "-export([render/1, row/1]). "
         "row(U) -> {'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1, "
         "        arizona_template:get(users, Bindings))]}). "
     ),
     B0 = #{users => [#{name => ~"Ada"}]},
@@ -7548,7 +7611,7 @@ each_named_fun_ref_pattern_param(Config) when is_list(Config) ->
         "-export([render/1, row/1]). "
         "row(#{name := N}) -> {'li', [], [N]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1, "
         "        arizona_template:get(users, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{users => [#{name => ~"Ada"}]}))).
@@ -7560,7 +7623,7 @@ each_named_fun_ref_guard(Config) when is_list(Config) ->
         "-export([render/1, row/1]). "
         "row(X) when is_map(X) -> {'li', [], [maps:get(n, X)]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1, "
         "        arizona_template:get(users, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{users => [#{n => ~"Ada"}]}))).
@@ -7573,7 +7636,7 @@ each_named_fun_ref_prefix_body(Config) when is_list(Config) ->
         "-export([render/1, row/1]). "
         "row(I) -> N = integer_to_binary(I), {'li', [], [N]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1, "
         "        arizona_template:get(ns, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{ns => [1, 2]}))).
@@ -7591,7 +7654,8 @@ each_named_fun_ref_shadows_caller_var(Config) when is_list(Config) ->
         "row(Bindings) -> Side = arizona_template:get(side, Bindings), {'li', [], [Side]}. "
         "render(Bindings) -> "
         "    Side = arizona_template:get(side, Bindings), "
-        "    arizona_template:html({'ul', [{class, Side}], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, "
+        "{'ul', [{class, Side}], [arizona_template:each(fun row/1, "
         "        arizona_template:get(rows, Bindings))]}). "
     ),
     T = Mod:render(#{side => ~"buy", rows => [#{side => ~"sell"}]}),
@@ -7616,7 +7680,7 @@ each_named_fun_ref_loc_names_callee(Config) when is_list(Config) ->
         "    Side = arizona_template:get(side, Bindings),\n"
         "    {'li', [], [erlang:error({boom, Side})]}.\n"
         "render(Bindings) ->\n"
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1,\n"
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1,\n"
         "        arizona_template:get(rows, Bindings))]}).\n"
     ),
     T = Mod:render(#{rows => [#{side => ~"sell"}]}),
@@ -7634,7 +7698,7 @@ each_named_fun_ref_loc_names_callee(Config) when is_list(Config) ->
         "    {ok, Side} = erlang:error({boom, arizona_template:get(side, Bindings)}),\n"
         "    {'li', [], [Side]}.\n"
         "render(Bindings) ->\n"
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1,\n"
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1,\n"
         "        arizona_template:get(rows, Bindings))]}).\n"
     ),
     ?assertError(
@@ -7650,7 +7714,8 @@ each_named_fun_ref_nested_each(Config) when is_list(Config) ->
         "section(S) -> {'ul', [], [arizona_template:each(fun item/1, "
         "    arizona_template:get(items, S))]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [arizona_template:each(fun section/1, "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [], [arizona_template:each(fun section/1, "
         "        arizona_template:get(sections, Bindings))]}). "
     ),
     T = Mod:render(#{sections => [#{items => [~"a", ~"b"]}]}),
@@ -7671,12 +7736,12 @@ each_named_fun_ref_nested_macros_render(Config) when is_list(Config) ->
         "-module(pt_each_named_nested_macros). "
         "-export([render/1]). "
         "row(R) -> {'div', [], ["
-        "    arizona_template:html({'span', [], [arizona_template:get(title, R)]}),"
+        "    arizona_template:target(arizona_html, {'span', [], [arizona_template:get(title, R)]}),"
         "    {'ul', [], [arizona_template:each(fun(I) -> {'li', [], [I]} end, "
         "        arizona_template:get(items, R))]}"
         "]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'main', [], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, {'main', [], [arizona_template:each(fun row/1, "
         "        arizona_template:get(rows, Bindings))]}). "
     ),
     T = Mod:render(#{rows => [#{title => ~"T", items => [~"a", ~"b"]}]}),
@@ -7694,7 +7759,7 @@ each_named_fun_multi_clause_rejected(Config) when is_list(Config) ->
         "row(a) -> {'li', [], [~\"a\"]}; "
         "row(X) -> {'li', [], [X]}. "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun row/1, "
         "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_named_fun_multi_clause end
     ).
@@ -7706,7 +7771,7 @@ each_named_fun_wrong_arity_rejected(Config) when is_list(Config) ->
         "-module(pt_each_named_arity3). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun row/3, "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun row/3, "
         "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= invalid_each_fun end
     ).
@@ -7717,7 +7782,7 @@ each_named_fun_undefined_rejected(Config) when is_list(Config) ->
         "-module(pt_each_named_undef). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun missing_row/1, "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun missing_row/1, "
         "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_named_fun_undefined end
     ).
@@ -7732,7 +7797,7 @@ each_named_fun_ref_private_local_strict(Config) when is_list(Config) ->
         "-export([render/1]). "
         "row(N) -> {'li', [], [N]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1, "
         "        arizona_template:get(items, Bindings, []))]}). "
     ),
     ?assert(is_map(Mod:render(#{items => [~"a", ~"b"]}))).
@@ -7746,7 +7811,8 @@ each_named_fun_same_module_ref(Config) when is_list(Config) ->
         "-export([render/1]). "
         "row(N) -> {'li', [], [N]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun pt_each_same_mod:row/1, "
+        "    arizona_template:target(arizona_html, "
+        "{'ul', [], [arizona_template:each(fun pt_each_same_mod:row/1, "
         "        arizona_template:get(items, Bindings, []))]}). "
     ),
     ?assert(is_map(Mod:render(#{items => [~"a", ~"b"]}))).
@@ -7759,7 +7825,7 @@ each_named_fun_imported_rejected(Config) when is_list(Config) ->
         "-export([render/1]). "
         "-import(other_mod, [row/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun row/1, "
         "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_named_fun_undefined end
     ).
@@ -7771,7 +7837,7 @@ each_named_fun_variable_module_rejected(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    M = other_mod, "
-        "    arizona_template:html(arizona_template:each(fun M:row/1, "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun M:row/1, "
         "        arizona_template:get(items, Bindings, []))). ",
         fun(R) -> R =:= each_remote_fun_ref end
     ).
@@ -7785,7 +7851,8 @@ each_named_fun_ref_json(Config) when is_list(Config) ->
         "-export([render/1]). "
         "row(#{text := T}, Key) -> {'Text', [{az_key, Key}], [T]}. "
         "render(Bindings) -> "
-        "    arizona_template:json({'Column', [{id, arizona_template:get(id, Bindings)}], "
+        "    arizona_template:target(arizona_json, "
+        "{'Column', [{id, arizona_template:get(id, Bindings)}], "
         "        [arizona_template:each(fun row/2, arizona_template:get(items, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{id => ~"c", items => #{1 => #{text => ~"a"}}}))).
@@ -7796,10 +7863,10 @@ each_named_fun_ref_html_body_diffs(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_named_html). "
         "-export([render/1, row/1]). "
-        "row(U) -> arizona_template:html({'li', [], "
+        "row(U) -> arizona_template:target(arizona_html, {'li', [], "
         "    [case U of #{name := N} -> N; _ -> ~\"-\" end]}). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun row/1, "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun row/1, "
         "        arizona_template:get(users, Bindings))]}). "
     ),
     B0 = #{users => [#{name => ~"Ada"}]},
@@ -7815,9 +7882,11 @@ each_named_fun_ref_json_html(Config) when is_list(Config) ->
     Mod = compile_module_strict(
         "-module(pt_each_named_json_html). "
         "-export([render/1]). "
-        "row(#{text := T}, Key) -> arizona_template:json({'Text', [{az_key, Key}], [T]}). "
+        "row(#{text := T}, Key) -> arizona_template:target(arizona_json, "
+        "{'Text', [{az_key, Key}], [T]}). "
         "render(Bindings) -> "
-        "    arizona_template:json({'Column', [{id, arizona_template:get(id, Bindings)}], "
+        "    arizona_template:target(arizona_json, "
+        "{'Column', [{id, arizona_template:get(id, Bindings)}], "
         "        [arizona_template:each(fun row/2, arizona_template:get(items, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{id => ~"c", items => #{1 => #{text => ~"a"}}}))).
@@ -7830,15 +7899,16 @@ each_body_html_wrapped_diffs(Config) when is_list(Config) ->
         "-module(pt_each_html_wrapped). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(U) -> "
-        "        arizona_template:html({'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]}) "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(U) -> "
+        "        arizona_template:target(arizona_html, "
+        "{'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]}) "
         "    end, arizona_template:get(users, Bindings))]}). "
     ),
     Bare = compile_module(
         "-module(pt_each_html_bare). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(U) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(U) -> "
         "        {'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]} "
         "    end, arizona_template:get(users, Bindings))]}). "
     ),
@@ -7858,7 +7928,7 @@ each_body_descriptor_rejected(Config) when is_list(Config) ->
         "-module(pt_each_descriptor). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(X) -> "
         "        arizona_template:stateful(some_component, #{id => X}) "
         "    end, arizona_template:get(xs, Bindings))]}). ",
         fun(R) -> R =:= each_body_not_element end
@@ -7870,9 +7940,9 @@ each_body_case_rejected(Config) when is_list(Config) ->
         "-module(pt_each_case). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(U) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(U) -> "
         "        case U of "
-        "            #{name := N} -> arizona_template:html({'li', [], [N]}); "
+        "            #{name := N} -> arizona_template:target(arizona_html, {'li', [], [N]}); "
         "            _ -> ~\"-\" "
         "        end "
         "    end, arizona_template:get(users, Bindings))]}). ",
@@ -7886,7 +7956,7 @@ each_body_if_rejected(Config) when is_list(Config) ->
         "-module(pt_each_if). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(X) -> "
         "        if is_binary(X) -> {'li', [], [X]}; true -> {'span', [], [X]} end "
         "    end, arizona_template:get(xs, Bindings))]}). ",
         fun(R) -> R =:= each_body_not_element end
@@ -7898,7 +7968,7 @@ each_body_runtime_binary_rejected(Config) when is_list(Config) ->
         "-module(pt_each_runtime_bin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each(fun(X) -> "
+        "    arizona_template:target(arizona_html, arizona_template:each(fun(X) -> "
         "        <<\"row \", X/binary>> "
         "    end, arizona_template:get(xs, Bindings, []))). ",
         fun(R) -> R =:= each_body_not_element end
@@ -7911,7 +7981,8 @@ each_body_two_arg_value_rejected(Config) when is_list(Config) ->
         "-module(pt_each_two_arg). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item, _Key) -> "
+        "    arizona_template:target(arizona_html, "
+        "{'ul', [], [arizona_template:each(fun(Item, _Key) -> "
         "        Item "
         "    end, arizona_template:get(xs, Bindings))]}). ",
         fun(R) -> R =:= each_stream_body_not_element end
@@ -7924,8 +7995,8 @@ each_body_two_arg_html_diffs(Config) when is_list(Config) ->
         "-module(pt_each_two_arg_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(V, K) -> "
-        "        arizona_template:html({'li', [], [K, ~\": \", V]}) "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(V, K) -> "
+        "        arizona_template:target(arizona_html, {'li', [], [K, ~\": \", V]}) "
         "    end, arizona_template:get(items, Bindings))]}). "
     ),
     ?assert(is_map(Mod:render(#{items => #{~"a" => ~"1"}}))).
@@ -7937,8 +8008,8 @@ each_body_list_with_html_rejected(Config) when is_list(Config) ->
         "-module(pt_each_list_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
-        "        [arizona_template:html({'li', [], [X]})] "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(X) -> "
+        "        [arizona_template:target(arizona_html, {'li', [], [X]})] "
         "    end, arizona_template:get(xs, Bindings))]}). ",
         fun(R) -> R =:= each_body_not_element end
     ).
@@ -7949,9 +8020,10 @@ each_body_list_with_descriptor_rejected(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_each_list_desc). "
         "-export([render/1, row/1]). "
-        "row(P) -> arizona_template:html({'span', [], [arizona_template:get(t, P)]}). "
+        "row(P) -> arizona_template:target(arizona_html, "
+        "{'span', [], [arizona_template:get(t, P)]}). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(X) -> "
         "        [arizona_template:stateless(fun row/1, #{t => X})] "
         "    end, arizona_template:get(xs, Bindings))]}). ",
         fun(R) -> R =:= each_body_not_element end
@@ -7963,7 +8035,7 @@ each_body_mixed_fragment_ok(Config) when is_list(Config) ->
         "-module(pt_each_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(X) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(X) -> "
         "        [~\"* \", X] "
         "    end, arizona_template:get(xs, Bindings))]}). "
     ),
@@ -7977,7 +8049,7 @@ each_body_conditional_child_diffs(Config) when is_list(Config) ->
         "-module(pt_each_cond_child). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(U) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(U) -> "
         "        {'li', [], [case U of #{name := N} -> N; _ -> ~\"-\" end]} "
         "    end, arizona_template:get(users, Bindings))]}). "
     ),
@@ -8041,7 +8113,7 @@ invalid_each_fun_arity(Config) when is_list(Config) ->
         "-module(pt_invalid_each_arity). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each("
+        "    arizona_template:target(arizona_html, arizona_template:each("
         "        fun(A, B, C) -> {'div', [], [A]} end,"
         "        arizona_template:get(items, Bindings, [])"
         "    )). ",
@@ -8056,8 +8128,9 @@ cross_target_html_in_json(Config) when is_list(Config) ->
         "-module(pt_html_in_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:json({'Column', [], ["
-        "        arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]})"
+        "    arizona_template:target(arizona_json, {'Column', [], ["
+        "        arizona_template:target(arizona_html, "
+        "{'div', [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
             (cross_target_nesting) -> true;
@@ -8070,8 +8143,9 @@ cross_target_json_in_html(Config) when is_list(Config) ->
         "-module(pt_json_in_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
-        "        arizona_template:json({'Text', [], [arizona_template:get(x, Bindings)]})"
+        "    arizona_template:target(arizona_html, {'div', [], ["
+        "        arizona_template:target(arizona_json, "
+        "{'Text', [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
             (cross_target_nesting) -> true;
@@ -8086,9 +8160,11 @@ cross_target_siblings_compile(Config) when is_list(Config) ->
         "-module(pt_dual_serve). "
         "-export([render/1]). "
         "render(#{target := html} = Bindings) -> "
-        "    arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]}); "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [], [arizona_template:get(x, Bindings)]}); "
         "render(#{target := json} = Bindings) -> "
-        "    arizona_template:json({'Text', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_json, "
+        "{'Text', [], [arizona_template:get(x, Bindings)]}). "
     ),
     ?assertEqual(pt_dual_serve, Mod).
 
@@ -8098,7 +8174,7 @@ invalid_each_not_fun(Config) when is_list(Config) ->
         "-module(pt_invalid_each_notfun). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each("
+        "    arizona_template:target(arizona_html, arizona_template:each("
         "        my_fun,"
         "        arizona_template:get(items, Bindings, [])"
         "    )). ",
@@ -8114,7 +8190,7 @@ invalid_attribute_name(Config) when is_list(Config) ->
         "-module(pt_invalid_attr_name). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{123, <<\"val\">>}], [<<\"text\">>]}"
         "    ). ",
         fun
@@ -8129,7 +8205,7 @@ invalid_each_multi_clause(Config) when is_list(Config) ->
         "-module(pt_invalid_each_multi). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html(arizona_template:each("
+        "    arizona_template:target(arizona_html, arizona_template:each("
         "        fun(a) -> {'div', [], [<<\"a\">>]};"
         "           (b) -> {'div', [], [<<\"b\">>]} end,"
         "        arizona_template:get(items, Bindings, [])"
@@ -8146,7 +8222,7 @@ invalid_attribute_name_true(Config) when is_list(Config) ->
         "-module(pt_invalid_attr_name_true). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{123, true}], [<<\"text\">>]}"
         "    ). ",
         fun
@@ -8161,7 +8237,7 @@ invalid_attribute_name_false(Config) when is_list(Config) ->
         "-module(pt_invalid_attr_name_false). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{123, false}], [<<\"text\">>]}"
         "    ). ",
         fun
@@ -8176,7 +8252,7 @@ invalid_element_single(Config) when is_list(Config) ->
         "-module(pt_invalid_elem_single). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div'}). ",
+        "    arizona_template:target(arizona_html, {'div'}). ",
         fun
             (invalid_element) -> true;
             (_) -> false
@@ -8193,10 +8269,12 @@ error_names_included_file(Config) when is_list(Config) ->
             "-module(pt_file_inc).\n"
             "-export([render/1, inc/1]).\n"
             "render(Bindings) ->\n"
-            "    arizona_template:html({p, [], [arizona_template:get(x, Bindings)]}).\n"
+            "    arizona_template:target(arizona_html, "
+            "{p, [], [arizona_template:get(x, Bindings)]}).\n"
             "-file(\"pt_inc.hrl\", 1).\n"
             "inc(_Bindings) ->\n"
-            "    arizona_template:html({p, [], [{span, [{az, <<\"bad\">>}], []}]}).\n"
+            "    arizona_template:target(arizona_html, "
+            "{p, [], [{span, [{az, <<\"bad\">>}], []}]}).\n"
             "-file(\"pt_main.erl\", 6).\n",
             1
         )
@@ -8215,7 +8293,7 @@ error_after_include_names_main_file(Config) when is_list(Config) ->
             "-file(\"pt_main.erl\", 4).\n"
             "render(_Bindings) ->\n"
             "    ok,\n"
-            "    arizona_template:html({'div', [], [], extra}).\n",
+            "    arizona_template:target(arizona_html, {'div', [], [], extra}).\n",
             1
         )
     ).
@@ -8223,11 +8301,12 @@ error_after_include_names_main_file(Config) when is_list(Config) ->
 %% A source scanned with columns reports the error's column too.
 error_keeps_column(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{_, [{{3, 49}, arizona_parse_transform, invalid_element}]}], []},
+        {error, [{_, [{{3, 65}, arizona_parse_transform, invalid_element}]}], []},
         transform_source(
             "-module(pt_err_column).\n"
             "-export([render/1]).\n"
-            "render(_B) -> ok, ok, ok, arizona_template:html({'div', [], [], extra}).\n",
+            "render(_B) -> ok, ok, ok, arizona_template:target(arizona_html, "
+            "{'div', [], [], extra}).\n",
             {1, 1}
         )
     ).
@@ -8242,7 +8321,8 @@ error_in_included_helper_names_its_file(Config) when is_list(Config) ->
             "-module(pt_helper_inc).\n"
             "-export([render/1]).\n"
             "render(Bindings) ->\n"
-            "    arizona_template:html({'div', [], [s(), arizona_template:get(y, Bindings)]}).\n"
+            "    arizona_template:target(arizona_html, "
+            "{'div', [], [s(), arizona_template:get(y, Bindings)]}).\n"
             "-file(\"pt_inc.hrl\", 1).\n"
             "s() -> {script, [], [foo()]}.\n"
             "foo() -> <<\"x\">>.\n"
@@ -8260,7 +8340,7 @@ error_in_included_each_fun_names_its_file(Config) when is_list(Config) ->
             "-file(\"pt_main.erl\", 1).\n"
             "-module(pt_each_inc).\n"
             "-export([render/1]).\n"
-            "render(Bindings) -> arizona_template:html({ul, [],\n"
+            "render(Bindings) -> arizona_template:target(arizona_html, {ul, [],\n"
             "    [arizona_template:each(fun row/1, arizona_template:get(xs, Bindings))]}).\n"
             "-file(\"pt_inc.hrl\", 1).\n"
             "row(X) -> {li, [{az, <<\"bad\">>}], [X]}.\n"
@@ -8280,7 +8360,8 @@ element_error_keeps_file_and_column(Config) when is_list(Config) ->
             "-module(pt_elem_inc).\n"
             "-export([render/1]).\n"
             "render(Bindings) ->\n"
-            "    arizona_template:html({'div', [], [b(), arizona_template:get(y, Bindings)]}).\n"
+            "    arizona_template:target(arizona_html, "
+            "{'div', [], [b(), arizona_template:get(y, Bindings)]}).\n"
             "-file(\"pt_inc.hrl\", 1).\n"
             "b() -> {br, [], [<<\"x\">>]}.\n"
             "-file(\"pt_main.erl\", 6).\n",
@@ -8292,14 +8373,15 @@ element_error_keeps_file_and_column(Config) when is_list(Config) ->
 %% when the list sits in a helper inlined from a header.
 improper_list_error_keeps_file_and_column(Config) when is_list(Config) ->
     ?assertMatch(
-        {error, [{"pt_main.erl", [{{5, 49}, arizona_parse_transform, improper_template_list}]}],
+        {error, [{"pt_main.erl", [{{5, 65}, arizona_parse_transform, improper_template_list}]}],
             []},
         transform_source(
             "-file(\"pt_main.erl\", 1).\n"
             "-module(pt_improper_main).\n"
             "-export([render/1]).\n"
             "render(Bindings) ->\n"
-            "    arizona_template:html({'ul', [], [<<\"x\">> | tail(Bindings)]}).\n",
+            "    arizona_template:target(arizona_html, "
+            "{'ul', [], [<<\"x\">> | tail(Bindings)]}).\n",
             {1, 1}
         )
     ),
@@ -8310,7 +8392,8 @@ improper_list_error_keeps_file_and_column(Config) when is_list(Config) ->
             "-module(pt_improper_inc).\n"
             "-export([render/1]).\n"
             "render(Bindings) ->\n"
-            "    arizona_template:html({'div', [], [b(), arizona_template:get(y, Bindings)]}).\n"
+            "    arizona_template:target(arizona_html, "
+            "{'div', [], [b(), arizona_template:get(y, Bindings)]}).\n"
             "-file(\"pt_inc.hrl\", 1).\n"
             "b() -> {ul, [], [<<\"x\">> | tail()]}.\n"
             "tail() -> [].\n"
@@ -8336,7 +8419,7 @@ invalid_element_four(Config) when is_list(Config) ->
         "-module(pt_invalid_elem_four). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [], extra}). ",
+        "    arizona_template:target(arizona_html, {'div', [], [], extra}). ",
         fun
             (invalid_element) -> true;
             (_) -> false
@@ -8349,7 +8432,7 @@ invalid_child_empty_tuple(Config) when is_list(Config) ->
         "-module(pt_invalid_child_tuple). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [{}]}). ",
+        "    arizona_template:target(arizona_html, {'div', [], [{}]}). ",
         fun
             ({invalid_child, _}) -> true;
             (_) -> false
@@ -8362,7 +8445,7 @@ invalid_child_tuple_literal(Config) when is_list(Config) ->
         "-module(pt_invalid_child_tuple2). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [{1, 2}]}). ",
+        "    arizona_template:target(arizona_html, {'div', [], [{1, 2}]}). ",
         fun
             ({invalid_child, _}) -> true;
             (_) -> false
@@ -8375,7 +8458,7 @@ invalid_child_mixed(Config) when is_list(Config) ->
         "-module(pt_invalid_child_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [<<\"ok\">>, {}]}). ",
+        "    arizona_template:target(arizona_html, {'div', [], [<<\"ok\">>, {}]}). ",
         fun
             ({invalid_child, _}) -> true;
             (_) -> false
@@ -8392,7 +8475,7 @@ az_html_static(Config) when is_list(Config) ->
         "-module(pt_az_static). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html({'p', [{class, <<\"greeting\">>}], [<<\"Hello!\">>]}). "
+        "    az:target(arizona_html, {'p', [{class, <<\"greeting\">>}], [<<\"Hello!\">>]}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<p class=\"greeting\">Hello!</p>">>], maps:get(s, T)),
@@ -8405,7 +8488,7 @@ az_html_dynamic(Config) when is_list(Config) ->
         "-module(pt_az_dyn_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html("
+        "    az:target(arizona_html, "
         "        {'p', [], [<<\"Hello, \">>, az:get(name, Bindings, <<\"world\">>)]}"
         "    ). "
     ),
@@ -8431,7 +8514,7 @@ az_html_dynamic_attr(Config) when is_list(Config) ->
         "-module(pt_az_dyn_attr). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html("
+        "    az:target(arizona_html, "
         "        {'div', [{class, az:get(theme, Bindings, <<\"light\">>)}], [<<\"content\">>]}"
         "    ). "
     ),
@@ -8457,7 +8540,7 @@ az_each_basic(Config) when is_list(Config) ->
         "-module(pt_az_each_basic). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html(az:each(fun(Item) -> "
+        "    az:target(arizona_html, az:each(fun(Item) -> "
         "        {'li', [], [maps:get(name, Item)]} "
         "    end, az:get(items, Bindings, []))). "
     ),
@@ -8489,7 +8572,7 @@ each_single_root_flag(Config) when is_list(Config) ->
         "-module(pt_each_single_root). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html(az:each(fun(Item) -> "
+        "    az:target(arizona_html, az:each(fun(Item) -> "
         "        {'li', [], [maps:get(name, Item)]} "
         "    end, az:get(items, Bindings, []))). "
     ),
@@ -8505,7 +8588,7 @@ each_multi_root_no_single_root_flag(Config) when is_list(Config) ->
         "-module(pt_each_multi_root). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html(az:each(fun(Item) -> "
+        "    az:target(arizona_html, az:each(fun(Item) -> "
         "        [{'dt', [], [maps:get(k, Item)]}, {'dd', [], [maps:get(v, Item)]}] "
         "    end, az:get(items, Bindings, []))). "
     ),
@@ -8520,7 +8603,7 @@ each_stream_no_single_root_flag(Config) when is_list(Config) ->
         "-module(pt_each_stream). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html(az:each(fun(Item, Key) -> "
+        "    az:target(arizona_html, az:each(fun(Item, Key) -> "
         "        {'li', [{'az-key', Key}], [maps:get(name, Item)]} "
         "    end, az:get(stream, Bindings))). "
     ),
@@ -8543,7 +8626,7 @@ each_stream_reuse_flags(Config) when is_list(Config) ->
         "-module(pt_each_reuse). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html(az:each(fun(Item, Key) -> "
+        "    az:target(arizona_html, az:each(fun(Item, Key) -> "
         "        {'li', [{'az-key', Key}], [ "
         "            arizona_template:get(a, Item), "
         "            maps:get(b, Item), "
@@ -8563,8 +8646,8 @@ each_stream_reuse_flags_compiled_body(Config) when is_list(Config) ->
         "-module(pt_each_reuse_compiled). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html(az:each(fun(Item, Key) -> "
-        "        az:html({'li', [{'az-key', Key}], [ "
+        "    az:target(arizona_html, az:each(fun(Item, Key) -> "
+        "        az:target(arizona_html, {'li', [{'az-key', Key}], [ "
         "            arizona_template:get(a, Item), maps:get(b, Item) "
         "        ]}) "
         "    end, az:get(stream, Bindings))). "
@@ -8577,7 +8660,7 @@ each_stream_no_reuse_without_tracked_reads(Config) when is_list(Config) ->
         "-module(pt_each_no_reuse). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html(az:each(fun(#{n := N}, _Key) -> "
+        "    az:target(arizona_html, az:each(fun(#{n := N}, _Key) -> "
         "        {'li', [], [N]} "
         "    end, az:get(stream, Bindings))). "
     ),
@@ -8596,28 +8679,28 @@ each_stream_reuse_map_must_be_item(Config) when is_list(Config) ->
         "-module(pt_each_reuse_item_map). "
         "-export([sub/1, sub_alias/1, sub_bindings/1, sub_with/1, alias/1, whole/1]). "
         "sub(Bindings) -> "
-        "    az:html(az:each(fun({_, Sub}, K) -> "
+        "    az:target(arizona_html, az:each(fun({_, Sub}, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub)]} "
         "    end, az:get(stream, Bindings))). "
         "sub_alias(Bindings) -> "
-        "    az:html(az:each(fun({_, Sub} = I, K) -> "
+        "    az:target(arizona_html, az:each(fun({_, Sub} = I, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(v, Sub), az:get(n, I)]} "
         "    end, az:get(stream, Bindings))). "
         "sub_bindings(Bindings) -> "
-        "    az:html(az:each(fun({_, Bindings}, K) -> "
+        "    az:target(arizona_html, az:each(fun({_, Bindings}, K) -> "
         "        {'li', [{'az-key', K}], [az:get(v, Bindings)]} "
         "    end, az:get(stream, Bindings))). "
         "sub_with(Bindings) -> "
-        "    az:html(az:each(fun({_, Sub}, K) -> "
+        "    az:target(arizona_html, az:each(fun({_, Sub}, K) -> "
         "        {'li', [{'az-key', K}], [maps:get(v, arizona_template:with([v], Sub))]} "
         "    end, az:get(stream, Bindings))). "
         "alias(Bindings) -> "
-        "    az:html(az:each(fun(I, K) -> "
+        "    az:target(arizona_html, az:each(fun(I, K) -> "
         "        I2 = I, "
         "        {'li', [{'az-key', K}], [arizona_template:get(n, I2)]} "
         "    end, az:get(stream, Bindings))). "
         "whole(Bindings) -> "
-        "    az:html(az:each(fun(I = #{}, K) -> "
+        "    az:target(arizona_html, az:each(fun(I = #{}, K) -> "
         "        {'li', [{'az-key', K}], [arizona_template:get(n, I), az:get(x, Bindings)]} "
         "    end, az:get(stream, Bindings))). "
     ),
@@ -8659,7 +8742,7 @@ az_each_inside_html(Config) when is_list(Config) ->
         "-module(pt_az_each_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html("
+        "    az:target(arizona_html, "
         "        {'div', [{id, az:get(id, Bindings, <<\"list\">>)}], ["
         "            az:each(fun(Item) -> "
         "                {'li', [], [maps:get(text, Item)]} "
@@ -8701,7 +8784,7 @@ az_layout(Config) when is_list(Config) ->
         "-module(pt_az_layout). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html("
+        "    az:target(arizona_html, "
         "        {'p', ['az-nodiff'], [maps:get(text, Bindings, <<\"hi\">>)]}"
         "    ). "
     ),
@@ -8722,7 +8805,7 @@ az_layout_mixed(Config) when is_list(Config) ->
         "-module(pt_az_layout_mixed). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html(["
+        "    az:target(arizona_html, ["
         "        <<\"<!DOCTYPE html>\">>, "
         "        {'html', ['az-nodiff'], ["
         "            {'head', [], [{'title', [], [maps:get(title, Bindings, <<\"Test\">>)]}]}"
@@ -8743,7 +8826,7 @@ az_html_nested(Config) when is_list(Config) ->
         "-module(pt_az_nested). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    az:html("
+        "    az:target(arizona_html, "
         "        {'div', [], ["
         "            {'span', [], [az:get(a, Bindings, <<\"x\">>)]},"
         "            {'span', [], [az:get(b, Bindings, <<\"y\">>)]}"
@@ -8772,7 +8855,8 @@ az_view_auto_injected(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [{id, az:get(id, Bindings)}], [<<\"hi\">>]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}], [<<\"hi\">>]}). "
     ),
     T = Mod:render(#{id => <<"v">>}),
     Statics = maps:get(s, T),
@@ -8787,7 +8871,8 @@ az_view_explicit_on_root_ok(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [{id, az:get(id, Bindings)}, az_view], [<<\"hi\">>]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}, az_view], [<<\"hi\">>]}). "
     ),
     T = Mod:render(#{id => <<"v">>}),
     Statics = maps:get(s, T),
@@ -8802,7 +8887,7 @@ az_view_on_child_raises(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{id, az:get(id, Bindings)}], ["
         "            {'span', [az_view], [<<\"bad\">>]}"
         "        ]}"
@@ -8819,7 +8904,7 @@ az_view_in_stateless_raises(Config) when is_list(Config) ->
         "-module(pt_az_view_stateless). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [az_view], [<<\"bad\">>]}). ",
+        "    arizona_template:target(arizona_html, {'div', [az_view], [<<\"bad\">>]}). ",
         fun
             (az_view_not_allowed) -> true;
             (_) -> false
@@ -8834,7 +8919,7 @@ az_view_explicit_tuple_true(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{id, az:get(id, Bindings)}, {az_view, true}], [<<\"hi\">>]}). "
     ),
     T = Mod:render(#{id => <<"v">>}),
@@ -8847,7 +8932,7 @@ az_view_binary_form_raises(Config) when is_list(Config) ->
         "-module(pt_az_view_bin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [<<\"az-view\">>], [<<\"bad\">>]}). ",
+        "    arizona_template:target(arizona_html, {'div', [<<\"az-view\">>], [<<\"bad\">>]}). ",
         fun
             (az_view_not_allowed) -> true;
             (_) -> false
@@ -8869,7 +8954,7 @@ reserved_az_attr_raises(Config) when is_list(Config) ->
         "-module(pt_reserved_az_tuple). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{az, <<\"0\">>}], [arizona_template:get(x, Bindings)]}"
         "    ). ",
         Reserved
@@ -8878,7 +8963,7 @@ reserved_az_attr_raises(Config) when is_list(Config) ->
         "-module(pt_reserved_az_atom). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [az], [arizona_template:get(x, Bindings)]}"
         "    ). ",
         Reserved
@@ -8887,7 +8972,7 @@ reserved_az_attr_raises(Config) when is_list(Config) ->
         "-module(pt_reserved_az_bin). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [<<\"az\">>], [arizona_template:get(x, Bindings)]}"
         "    ). ",
         Reserved
@@ -8898,7 +8983,7 @@ reserved_az_attr_raises(Config) when is_list(Config) ->
         "-module(pt_reserved_az_static). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'div', [{az, <<\"0\">>}], [<<\"static\">>]}). ",
+        "    arizona_template:target(arizona_html, {'div', [{az, <<\"0\">>}], [<<\"static\">>]}). ",
         Reserved
     ).
 
@@ -8916,7 +9001,7 @@ reserved_az_local_attr_raises(Config) when is_list(Config) ->
         "-module(pt_reserved_local_underscore). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{az_local, <<\"{}\">>}], "
         "                [arizona_template:local(<<\"k\">>, <<\"i\">>)]}"
         "    ). ",
@@ -8926,7 +9011,8 @@ reserved_az_local_attr_raises(Config) when is_list(Config) ->
         "-module(pt_reserved_local_dashed). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'div', [{'az-local', <<\"{}\">>}], [<<\"x\">>]}). ",
+        "    arizona_template:target(arizona_html, "
+        "{'div', [{'az-local', <<\"{}\">>}], [<<\"x\">>]}). ",
         Reserved
     ).
 
@@ -8939,7 +9025,7 @@ az_prefixed_user_attrs_allowed(Config) when is_list(Config) ->
         "-module(pt_az_user_attrs). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'ul', [{'az-drop', <<\"reorder\">>}], ["
         "            {'li', [{az_key, <<\"k1\">>}, "
         "                    {az_click, arizona_js:push_event(<<\"pick\">>)}, "
@@ -8962,7 +9048,7 @@ az_prefixed_user_attrs_allowed(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {#{id => maps:get(id, B, <<\"v\">>)}, #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{id, az:get(id, Bindings)}, az_view], [<<\"hi\">>]}"
         "    ). "
     ),
@@ -8978,8 +9064,10 @@ az_view_case_in_render(Config) when is_list(Config) ->
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
         "    case maps:get(mode, Bindings, a) of "
-        "        a -> arizona_template:html({'div', [{id, az:get(id, Bindings)}], [<<\"a\">>]}); "
-        "        b -> arizona_template:html({'span', [{id, az:get(id, Bindings)}], [<<\"b\">>]}) "
+        "        a -> arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}], [<<\"a\">>]}); "
+        "        b -> arizona_template:target(arizona_html, "
+        "{'span', [{id, az:get(id, Bindings)}], [<<\"b\">>]}) "
         "    end. "
     ),
     T = Mod:render(#{id => <<"v">>, mode => a}),
@@ -8995,7 +9083,8 @@ az_view_if_in_render(Config) when is_list(Config) ->
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
         "    if true -> "
-        "        arizona_template:html({'div', [{id, az:get(id, Bindings)}], [<<\"ok\">>]}) "
+        "        arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}], [<<\"ok\">>]}) "
         "    end. "
     ),
     T = Mod:render(#{id => <<"v">>}),
@@ -9011,9 +9100,11 @@ az_view_try_in_render(Config) when is_list(Config) ->
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
         "    try "
-        "        arizona_template:html({'div', [{id, az:get(id, Bindings)}], [<<\"ok\">>]}) "
+        "        arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}], [<<\"ok\">>]}) "
         "    catch _:_ -> "
-        "        arizona_template:html({'div', [{id, az:get(id, Bindings)}], [<<\"err\">>]}) "
+        "        arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}], [<<\"err\">>]}) "
         "    end. "
     ),
     T = Mod:render(#{id => <<"v">>}),
@@ -9031,7 +9122,8 @@ az_view_receive_in_render(Config) when is_list(Config) ->
         "    receive "
         "        {html, T} -> T "
         "    after 0 -> "
-        "        arizona_template:html({'div', [{id, az:get(id, Bindings)}], [<<\"timeout\">>]}) "
+        "        arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}], [<<\"timeout\">>]}) "
         "    end. "
     ),
     T = Mod:render(#{id => <<"v">>}),
@@ -9048,7 +9140,8 @@ az_view_block_in_render(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    begin "
         "        _X = ok, "
-        "        arizona_template:html({'div', [{id, az:get(id, Bindings)}], [<<\"block\">>]}) "
+        "        arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}], [<<\"block\">>]}) "
         "    end. "
     ),
     T = Mod:render(#{id => <<"v">>}),
@@ -9064,7 +9157,8 @@ az_view_maybe_in_render(Config) when is_list(Config) ->
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
         "    maybe "
-        "        arizona_template:html({'div', [{id, az:get(id, Bindings)}], [<<\"maybe\">>]}) "
+        "        arizona_template:target(arizona_html, "
+        "{'div', [{id, az:get(id, Bindings)}], [<<\"maybe\">>]}) "
         "    end. "
     ),
     T = Mod:render(#{id => <<"v">>}),
@@ -9079,9 +9173,11 @@ az_view_multi_clause_render(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(#{mode := a} = B) -> "
-        "    arizona_template:html({'div', [{id, arizona_template:get(id, B)}], [<<\"a\">>]}); "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [{id, arizona_template:get(id, B)}], [<<\"a\">>]}); "
         "render(B) -> "
-        "    arizona_template:html({'span', [{id, arizona_template:get(id, B)}], [<<\"b\">>]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'span', [{id, arizona_template:get(id, B)}], [<<\"b\">>]}). "
     ),
     T1 = Mod:render(#{id => <<"v">>, mode => a}),
     ?assertNotEqual(nomatch, binary:match(iolist_to_binary(maps:get(s, T1)), <<"az-view">>)),
@@ -9109,7 +9205,7 @@ az_view_static_id_raises(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [{id, <<\"v\">>}], [<<\"bad\">>]}). ",
+        "    arizona_template:target(arizona_html, {'div', [{id, <<\"v\">>}], [<<\"bad\">>]}). ",
         fun
             (live_render_id_must_be_get_id) -> true;
             (_) -> false
@@ -9124,7 +9220,8 @@ az_view_composed_id_raises(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {maps:merge(#{id => <<\"v\">>}, B), #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [{id, [<<\"a\">>, <<\"b\">>]}], [<<\"bad\">>]}). ",
+        "    arizona_template:target(arizona_html, "
+        "{'div', [{id, [<<\"a\">>, <<\"b\">>]}], [<<\"bad\">>]}). ",
         fun
             (live_render_id_must_be_get_id) -> true;
             (_) -> false
@@ -9141,7 +9238,7 @@ each_hoisted_takes_use_site_target(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_hoisted_json). -export([render/1]). render(_Bindings) -> "
         "    Items = arizona_template:each(fun(I) -> {'Text', [], [I]} end, [~\"a\"]), "
-        "    arizona_template:json({'Col', [], [Items]}). "
+        "    arizona_template:target(arizona_json, {'Col', [], [Items]}). "
     ),
     T = Mod:render(#{}),
     ?assertMatch(#{backend := arizona_json}, T),
@@ -9155,7 +9252,8 @@ each_helper_takes_use_site_target(Config) when is_list(Config) ->
     Mod = compile_module(
         "-module(pt_each_helper_json). -export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:json({'Col', [], [rows(arizona_template:get(items, Bindings))]}). "
+        "    arizona_template:target(arizona_json, "
+        "{'Col', [], [rows(arizona_template:get(items, Bindings))]}). "
         "rows(Xs) -> arizona_template:each(fun(I) -> {'Text', [], [I]} end, Xs). "
     ),
     Out = iolist_to_binary(
@@ -9175,10 +9273,11 @@ each_outside_target_rejected(Config) when is_list(Config) ->
         "Items = arizona_template:each(fun(I) -> {li, [], [I]} end, "
         "arizona_template:get(xs, Bindings)), "
         "_ = erlang:phash2(Items), "
-        "arizona_template:html({ul, [], [Items]}). ",
+        "arizona_template:target(arizona_html, {ul, [], [Items]}). ",
         %% an exported function holding one, though the template inlines it
         "-module(pt_each_out_export). -export([render/1, rows/1]). render(Bindings) -> "
-        "arizona_template:html({ul, [], [rows(arizona_template:get(xs, Bindings))]}). "
+        "arizona_template:target(arizona_html, "
+        "{ul, [], [rows(arizona_template:get(xs, Bindings))]}). "
         "rows(Xs) -> arizona_template:each(fun(I) -> {li, [], [I]} end, Xs). "
     ],
     lists:foreach(
@@ -9194,7 +9293,8 @@ cross_target_html_in_declared(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    arizona_template:target(arizona_text_backend, {col, [], ["
-        "        arizona_template:html({'div', [], [arizona_template:get(x, Bindings)]})"
+        "        arizona_template:target(arizona_html, "
+        "{'div', [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
         fun
             (cross_target_nesting) -> true;
@@ -9207,7 +9307,7 @@ cross_target_declared_in_html(Config) when is_list(Config) ->
         "-module(pt_text_in_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        arizona_template:target(arizona_text_backend, "
         "            {line, [], [arizona_template:get(x, Bindings)]})"
         "    ]}). ",
@@ -9229,18 +9329,126 @@ target_call_compiles_with_its_backend(Config) when is_list(Config) ->
     ?assertMatch(#{backend := arizona_text_backend}, T),
     ?assertEqual(~"[line]a[/line]", iolist_to_binary(arizona_render:render_to_iolist(T))).
 
-%% A built-in target named by its backend is that target.
-target_call_names_builtin_backend(Config) when is_list(Config) ->
+%% `html` is an ordinary target: a module naming arizona_html explicitly, with no
+%% header, compiles it like any other backend.
+target_call_explicit_html(Config) when is_list(Config) ->
     Mod = compile_module(
-        "-module(pt_target_html). -export([render/1, html/1]). "
+        "-module(pt_target_html). -export([render/1]). "
         "render(Bindings) -> arizona_template:target(arizona_html, "
-        "{p, [], [arizona_template:get(x, Bindings)]}). "
-        "html(Bindings) -> arizona_template:html({p, [], [arizona_template:get(x, Bindings)]}). "
+        "{p, [{class, ~\"c\"}], [arizona_template:get(x, Bindings)]}). "
     ),
-    Render = fun(F) ->
-        iolist_to_binary(arizona_render:render_to_iolist(Mod:F(#{x => ~"a"})))
-    end,
-    ?assertEqual(Render(html), Render(render)).
+    T = Mod:render(#{x => ~"a"}),
+    ?assertMatch(#{backend := arizona_html}, T),
+    ?assertMatch(
+        {match, _},
+        re:run(
+            arizona_render:render_to_iolist(T),
+            ~"^<p az=\"(\\w+)-0\" class=\"c\"><!--az:\\1-0-->a<!--/az--></p>$"
+        )
+    ).
+
+%% `?html`/`?json` name their backend, as an outside target's macro does, so the
+%% transform has no built-in target.
+html_json_macros_name_backend(Config) when is_list(Config) ->
+    File = write_header_module(Config, "pt_macro_expansion"),
+    {ok, Forms} = epp:parse_file(File, [{includes, [arizona_include_dir()]}]),
+    Calls = [
+        {Mod, F, Backend}
+     || {function, _, _, _, [{clause, _, _, _, [Body]}]} <- Forms,
+        {call, _, {remote, _, {atom, _, Mod}, {atom, _, F}}, [{atom, _, Backend}, _]} <- [Body]
+    ],
+    ?assertEqual(
+        [{arizona_template, target, arizona_html}, {arizona_template, target, arizona_json}],
+        Calls
+    ).
+
+%% The macros compile through the same path as before html/json lost their
+%% built-in status: these bytes are what origin/main renders for this module.
+html_json_macros_render_unchanged(Config) when is_list(Config) ->
+    File = write_header_module(Config, "pt_macro_render"),
+    {ok, Mod, Bin} = compile:file(File, [binary, return_errors, {i, arizona_include_dir()}]),
+    {module, Mod} = code:load_binary(Mod, File, Bin),
+    B = #{title => ~"T<&>", items => [~"a", ~"b"], flag => true},
+    ?assertEqual(
+        <<
+            "<main az=\"BZCP7H-0\" class=\"c\"><h1 az=\"BZCP7H-1\"><!--az:BZCP7H-1-->"
+            "T&lt;&amp;&gt;<!--/az--></h1><ul az=\"BZCP7H-2\"><!--az:BZCP7H-2-->"
+            "<li az=\"1Q5CICB-0\"><!--az:1Q5CICB-0-->a<!--/az--></li>"
+            "<li az=\"1Q5CICB-0\"><!--az:1Q5CICB-0-->b<!--/az--></li><!--/az--></ul>"
+            "<svg><title az=\"BZCP7H-3\"><!--az:BZCP7H-3-->T&lt;&amp;&gt;<!--/az--></title>"
+            "</svg><!--az:BZCP7H-0--><p>on</p><!--/az--></main>"
+        >>,
+        iolist_to_binary(arizona_render:render_to_iolist(Mod:page(B)))
+    ),
+    ?assertEqual(
+        <<
+            "{\"type\":\"Column\",\"az\":\"A67EQH-0\",\"children\":[{\"type\":\"Text\","
+            "\"az\":\"A67EQH-1\",\"children\":[{\"type\":\"#slot\",\"az\":\"A67EQH-1t0\","
+            "\"children\":[\"T<&>\"]}]},{\"type\":\"#slot\",\"az\":\"A67EQH-0t0\","
+            "\"children\":[[{\"type\":\"Text\",\"az\":\"1RTZ3TH-0\",\"children\":"
+            "[{\"type\":\"#slot\",\"az\":\"1RTZ3TH-0t0\",\"children\":[\"a\"]}]},"
+            "{\"type\":\"Text\",\"az\":\"1RTZ3TH-0\",\"children\":[{\"type\":\"#slot\","
+            "\"az\":\"1RTZ3TH-0t0\",\"children\":[\"b\"]}]}]]}]}"
+        >>,
+        iolist_to_binary(arizona_render:render_to_iolist(Mod:app(B)))
+    ).
+
+%% A hand-written `arizona_template:html(...)` in a module that never names
+%% arizona_html has no target to compile with; it is refused rather than left as
+%% an `undef` for render to hit. A target the module does name (`json` here) does
+%% not make another one known.
+unknown_constructor_rejected(Config) when is_list(Config) ->
+    Cases = [
+        {"r(_B) -> arizona_template:html({p, [], []}). ", arizona_template, html},
+        {"r(_B) -> az:json({'Text', [], []}). ", az, json},
+        {
+            "r(_B) -> arizona_template:target(arizona_json, "
+            "{'Column', [], [arizona_template:html({p, [], []})]}). ",
+            arizona_template,
+            html
+        }
+    ],
+    lists:foreach(
+        fun({Body, Mod, F}) ->
+            assert_parse_error(
+                "-module(pt_unknown_ctor). -export([r/1]). " ++ Body,
+                fun(Reason) -> Reason =:= {target, {unknown_constructor, Mod, F}} end
+            )
+        end,
+        Cases
+    ),
+    Msg = unicode:characters_to_binary(
+        arizona_parse_transform:format_error({target, {unknown_constructor, az, html}})
+    ),
+    ?assertMatch({_, _}, binary:match(Msg, ~"az:html/1 is not a template constructor")),
+    ?assertMatch({_, _}, binary:match(Msg, ~"?html")),
+    ?assertMatch({_, _}, binary:match(Msg, ~"az:target(arizona_html, Elems)")).
+
+write_header_module(Config, Name) ->
+    File = filename:join(proplists:get_value(priv_dir, Config), Name ++ ".erl"),
+    Source = [
+        "-module(",
+        Name,
+        ").\n"
+        "-include(\"arizona_stateless.hrl\").\n"
+        "-export([page/1]).\n"
+        "-export([app/1]).\n"
+        "page(Bindings) ->\n"
+        "    ?html({main, [{class, ~\"c\"}], [\n"
+        "        {h1, [], [?get(title)]},\n"
+        "        {ul, [], [?each(fun(I) -> {li, [], [I]} end, ?get(items))]},\n"
+        "        {svg, [], [{title, [], [?get(title)]}]},\n"
+        "        case ?get(flag) of true -> {p, [], [~\"on\"]}; false -> <<>> end\n"
+        "    ]}).\n"
+        "app(Bindings) ->\n"
+        "    ?json({'Column', [], [{'Text', [], [?get(title)]},\n"
+        "        ?each(fun(I) -> {'Text', [], [I]} end, ?get(items))]}).\n"
+    ],
+    ok = file:write_file(File, Source),
+    File.
+
+arizona_include_dir() ->
+    filename:join(code:lib_dir(arizona), "include").
 
 target_backend_not_literal_rejected(Config) when is_list(Config) ->
     assert_parse_error(
@@ -9252,7 +9460,7 @@ target_backend_not_literal_rejected(Config) when is_list(Config) ->
         end
     ).
 
-%% One name is one backend per module, a built-in name included.
+%% One name is one backend per module, `html` included: `?html` names arizona_html.
 target_name_clash_rejected(Config) when is_list(Config) ->
     _ = compile_module("-module(pt_other_text). -export([target/0]). target() -> text. "),
     _ = compile_module("-module(pt_other_html). -export([target/0]). target() -> html. "),
@@ -9266,8 +9474,9 @@ target_name_clash_rejected(Config) when is_list(Config) ->
         end
     ),
     assert_parse_error(
-        "-module(pt_target_clash_builtin). -export([a/1]). "
-        "a(_Bindings) -> arizona_template:target(pt_other_html, {p, [], []}). ",
+        "-module(pt_target_clash_builtin). -export([a/1, b/1]). "
+        "a(_Bindings) -> arizona_template:target(arizona_html, {p, [], []}). "
+        "b(_Bindings) -> arizona_template:target(pt_other_html, {p, [], []}). ",
         fun
             ({target, {name_clash, html, arizona_html, pt_other_html}}) -> true;
             (_) -> false
@@ -9320,7 +9529,7 @@ inline_hoisted_text_read(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Name = arizona_template:get(name, Bindings), "
-        "    arizona_template:html({'p', [], [Name]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Name]}). "
     ),
     T = Mod:render(#{name => ~"Ada"}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9333,7 +9542,7 @@ inline_hoisted_attr_read(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Cls = arizona_template:get(cls, Bindings), "
-        "    arizona_template:html({'div', [{class, Cls}], [<<\"x\">>]}). "
+        "    arizona_template:target(arizona_html, {'div', [{class, Cls}], [<<\"x\">>]}). "
     ),
     T = Mod:render(#{cls => ~"box"}),
     [{_Az, {attr, ~"class", Fun}, _Loc}] = maps:get(d, T),
@@ -9349,7 +9558,7 @@ inline_maps_get_chain(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    User = arizona_template:get(user, Bindings), "
         "    Name = maps:get(name, User), "
-        "    arizona_template:html({'p', [], [Name]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Name]}). "
     ),
     T = Mod:render(#{user => #{name => ~"Ada"}}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9368,7 +9577,7 @@ inline_case_value(Config) when is_list(Config) ->
         "                dark -> arizona_template:get(dark, Bindings); "
         "                _ -> <<\"L\">> "
         "            end, "
-        "    arizona_template:html({'p', [], [Label]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Label]}). "
     ),
     T = Mod:render(#{mode => dark, dark => ~"D"}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9386,7 +9595,7 @@ inline_case_of_case(Config) when is_list(Config) ->
         "                dark -> arizona_template:get(dark, Bindings); "
         "                _ -> <<\"L\">> "
         "            end, "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [case Label of foo -> foo; _ -> bar end]}). "
     ),
     T = Mod:render(#{mode => light}),
@@ -9401,7 +9610,7 @@ inline_opaque_call(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Name = string:uppercase(arizona_template:get(raw, Bindings)), "
-        "    arizona_template:html({'p', [], [Name]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Name]}). "
     ),
     T = Mod:render(#{raw => ~"ada"}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9416,7 +9625,7 @@ inline_side_effect_not_inlined(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Ref = erlang:unique_integer([monotonic]), "
-        "    arizona_template:html({'p', [], [Ref]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Ref]}). "
     ),
     T = Mod:render(#{}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9431,7 +9640,7 @@ inline_diff_updates(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Name = arizona_template:get(name, Bindings), "
-        "    arizona_template:html({'p', [], [Name]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Name]}). "
     ),
     B0 = #{name => ~"Ada"},
     {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -9447,7 +9656,7 @@ inline_unrelated_key_skipped(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Name = arizona_template:get(name, Bindings), "
-        "    arizona_template:html({'p', [], [Name]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Name]}). "
     ),
     B0 = #{name => ~"Ada", other => 1},
     {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -9466,7 +9675,7 @@ inline_hoisted_root_id(Config) when is_list(Config) ->
         "mount(B) -> {B, #{}}. "
         "render(Bindings) -> "
         "    Id = arizona_template:get(id, Bindings), "
-        "    arizona_template:html({'div', [{id, Id}], [<<\"x\">>]}). "
+        "    arizona_template:target(arizona_html, {'div', [{id, Id}], [<<\"x\">>]}). "
     ),
     T = Mod:render(#{id => ~"v1"}),
     [IdFun] = [F || {_Az, {attr, ~"id", F}, _Loc} <- maps:get(d, T)],
@@ -9484,7 +9693,7 @@ inline_branch_bound_var(Config) when is_list(Config) ->
         "        dark -> X = arizona_template:get(a, Bindings); "
         "        _ -> X = arizona_template:get(b, Bindings) "
         "    end, "
-        "    arizona_template:html({'p', [], [X]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [X]}). "
     ),
     T = Mod:render(#{mode => dark, a => ~"A"}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9502,7 +9711,7 @@ inline_underscore_collision(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    _Foo = side(), "
         "    Foo = arizona_template:get(foo, Bindings), "
-        "    arizona_template:html({'p', [], [Foo]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Foo]}). "
     ),
     T = Mod:render(#{foo => ~"Ada"}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9521,7 +9730,7 @@ inline_lifted_pattern_var(Config) when is_list(Config) ->
         "        {admin, Name} -> Label = Name; "
         "        _ -> Label = arizona_template:get(guest, Bindings) "
         "    end, "
-        "    arizona_template:html({'p', [], [Label]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Label]}). "
     ),
     T = Mod:render(#{user => {admin, ~"Ada"}}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9541,7 +9750,7 @@ inline_lifted_nested_match(Config) when is_list(Config) ->
         "        dark -> X = (Z = arizona_template:get(a, Bindings)); "
         "        _ -> X = (Z = arizona_template:get(b, Bindings)) "
         "    end, "
-        "    arizona_template:html({'p', [], [X, <<\" \">>, Z]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [X, <<\" \">>, Z]}). "
     ),
     T = Mod:render(#{mode => dark, a => ~"A"}),
     [{_Az, {esc, FunX}, _Loc} | _] = maps:get(d, T),
@@ -9556,7 +9765,8 @@ inline_hoisted_attr_list_read(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Cls = arizona_template:get(cls, Bindings), "
-        "    arizona_template:html({'div', [{class, [<<\"a \">>, Cls]}], [<<\"x\">>]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [{class, [<<\"a \">>, Cls]}], [<<\"x\">>]}). "
     ),
     T = Mod:render(#{cls => ~"box"}),
     [{_Az, {attr, ~"class", Fun}, _Loc}] = maps:get(d, T),
@@ -9571,7 +9781,7 @@ inline_each_hoisted_source(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Items = arizona_template:get(items, Bindings), "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(I) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(I) -> "
         "        {'li', [], [I]} end, Items)]}). "
     ),
     B0 = #{items => [~"a"]},
@@ -9590,7 +9800,8 @@ inline_distinct_slots_key_isolation(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    A = arizona_template:get(a, Bindings), "
         "    B = arizona_template:get(b, Bindings), "
-        "    arizona_template:html({'div', [], [{'span', [], [A]}, {'span', [], [B]}]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [], [{'span', [], [A]}, {'span', [], [B]}]}). "
     ),
     T = Mod:render(#{a => ~"AA", b => ~"BB"}),
     [{_Az0, {esc, FunA}, _L0}, {_Az1, {esc, FunB}, _L1}] = maps:get(d, T),
@@ -9606,10 +9817,10 @@ inline_multi_clause_render(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(#{mode := a} = Bindings) -> "
         "    X = arizona_template:get(x, Bindings), "
-        "    arizona_template:html({'p', [], [X]}); "
+        "    arizona_template:target(arizona_html, {'p', [], [X]}); "
         "render(#{mode := b} = Bindings) -> "
         "    Y = arizona_template:get(y, Bindings), "
-        "    arizona_template:html({'span', [], [Y]}). "
+        "    arizona_template:target(arizona_html, {'span', [], [Y]}). "
     ),
     TA = Mod:render(#{mode => a, x => ~"X"}),
     [{_AzA, {esc, FunA}, _LocA}] = maps:get(d, TA),
@@ -9628,7 +9839,7 @@ inline_get_lazy_hoisted(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Name = arizona_template:get_lazy(name, Bindings, fun() -> <<\"def\">> end), "
-        "    arizona_template:html({'p', [], [Name]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Name]}). "
     ),
     T = Mod:render(#{}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9643,8 +9854,8 @@ inline_nested_html_shared_var(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Outer = arizona_template:get(outer, Bindings), "
-        "    arizona_template:html({'div', [], [Outer, "
-        "        arizona_template:html({'span', [], [Outer]})]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [Outer, "
+        "        arizona_template:target(arizona_html, {'span', [], [Outer]})]}). "
     ),
     T = Mod:render(#{outer => ~"O"}),
     [{_Az0, {esc, Fun1}, _Loc1}, {_Az1, Fun2, _Loc2}] = maps:get(d, T),
@@ -9662,7 +9873,7 @@ inline_same_var_two_slots(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Name = arizona_template:get(name, Bindings), "
-        "    arizona_template:html({'div', [], [Name, <<\" / \">>, Name]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [Name, <<\" / \">>, Name]}). "
     ),
     T = Mod:render(#{name => ~"Ada"}),
     [{_Az0, {esc, Fun0}, _Loc0}, {_Az1, {esc, Fun1}, _Loc1}] = maps:get(d, T),
@@ -9679,7 +9890,7 @@ inline_non_bindings_var_name(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Ctx) -> "
         "    Name = arizona_template:get(name, Ctx), "
-        "    arizona_template:html({'p', [], [Name]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Name]}). "
     ),
     T = Mod:render(#{name => ~"Ada"}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9695,7 +9906,7 @@ inline_destructuring_not_inlined(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    {ok, Name} = {ok, arizona_template:get(name, Bindings)}, "
-        "    arizona_template:html({'p', [], [Name]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Name]}). "
     ),
     T = Mod:render(#{name => ~"Ada"}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9712,7 +9923,7 @@ inline_comprehension_source(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Names = arizona_template:get(names, Bindings), "
-        "    arizona_template:html({'p', [], [<< <<N/binary>> || N <- Names >>]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [<< <<N/binary>> || N <- Names >>]}). "
     ),
     T = Mod:render(#{names => [~"a", ~"b"]}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -9732,7 +9943,7 @@ inline_strict_generator_shadow(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Item = arizona_template:get(fallback, Bindings), "
-        "    arizona_template:html({'ul', [], ["
+        "    arizona_template:target(arizona_html, {'ul', [], ["
         "        {'li', [], [Item]},"
         "        [ Row || Item <:- arizona_template:get(items, Bindings), Row <- [Item] ]"
         "    ]}). "
@@ -9752,7 +9963,7 @@ inline_comprehension_binder_not_hoisted(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    L = [X || X <- [1]], "
         "    X = arizona_template:get(x, Bindings), "
-        "    arizona_template:html({'p', [], [integer_to_binary(length(L)), X]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [integer_to_binary(length(L)), X]}). "
     ),
     B0 = #{x => ~"a"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -9770,7 +9981,7 @@ inline_fun_param_not_hoisted(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    F = fun(X) -> <<X/binary, \"!\">> end, "
         "    X = arizona_template:get(x, Bindings), "
-        "    arizona_template:html({'p', [], [F(<<\"hi\">>), X]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [F(<<\"hi\">>), X]}). "
     ),
     B0 = #{x => ~"a"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -9787,42 +9998,50 @@ hoisted_var_captured_rejected(Config) when is_list(Config) ->
     Cases = [
         {"each",
             Outer ++
-                "arizona_template:html({ul, [], [arizona_template:each("
+                "arizona_template:target(arizona_html, {ul, [], [arizona_template:each("
                 "    fun(Y) -> {li, [], [Z]} end, arizona_template:get(items, Bindings))]}). ",
             {fun_param, 'Y', 'Z'}},
         {"fun",
             Outer ++
-                "arizona_template:html({p, [], ["
+                "arizona_template:target(arizona_html, {p, [], ["
                 "    (fun(Y) -> <<Z/binary, Y/binary>> end)(<<\"i\">>)]}). ",
             {fun_param, 'Y', 'Z'}},
-        {"gen", Outer ++ "arizona_template:html({p, [], [[[Z, Y] || Y <- [<<\"i\">>]]]}). ",
+        {"gen",
+            Outer ++
+                "arizona_template:target(arizona_html, "
+                "{p, [], [[[Z, Y] || Y <- [<<\"i\">>]]]}). ",
             {generator, 'Y', 'Z'}},
         {"bingen",
             Outer ++
-                "arizona_template:html({p, [], [<< <<Z/binary, Y>> || <<Y>> <= <<\"i\">> >>]}). ",
+                "arizona_template:target(arizona_html, "
+                "{p, [], [<< <<Z/binary, Y>> || <<Y>> <= <<\"i\">> >>]}). ",
             {generator, 'Y', 'Z'}},
         {"zip",
             Outer ++
-                "arizona_template:html({p, [], [[[Z, Y] || Y <- [<<\"i\">>] && _W <- [1]]]}). ",
+                "arizona_template:target(arizona_html, "
+                "{p, [], [[[Z, Y] || Y <- [<<\"i\">>] && _W <- [1]]]}). ",
             {generator, 'Y', 'Z'}},
         {"mapgen_key",
             Outer ++
-                "arizona_template:html({p, [], [[[Z] || Y := _ <- #{<<\"i\">> => 1}]]}). ",
+                "arizona_template:target(arizona_html, "
+                "{p, [], [[[Z] || Y := _ <- #{<<\"i\">> => 1}]]}). ",
             {generator, 'Y', 'Z'}},
         {"mapgen_strict_key",
             Outer ++
-                "arizona_template:html({p, [], [[[Z] || Y := _ <:- #{<<\"i\">> => 1}]]}). ",
+                "arizona_template:target(arizona_html, "
+                "{p, [], [[[Z] || Y := _ <:- #{<<\"i\">> => 1}]]}). ",
             {generator, 'Y', 'Z'}},
         {"named",
             "Self = <<\"outer\">>, "
             "Z = <<Self/binary, (arizona_template:get(a, Bindings))/binary>>, "
-            "arizona_template:html({p, [], ["
+            "arizona_template:target(arizona_html, {p, [], ["
             "    (fun Self(0) -> Z; Self(N) -> Self(N - 1) end)(1)]}). ", {named_fun, 'Self', 'Z'}},
         {"chain",
             "Y = <<\"outer\">>, "
             "A = <<(arizona_template:get(a, Bindings))/binary, Y/binary>>, "
             "B = <<A/binary, \"!\">>, "
-            "arizona_template:html({p, [], [(fun(Y) -> <<B/binary, Y/binary>> end)(<<\"i\">>)]}). ",
+            "arizona_template:target(arizona_html, "
+            "{p, [], [(fun(Y) -> <<B/binary, Y/binary>> end)(<<\"i\">>)]}). ",
             {fun_param, 'Y', 'A'}}
     ],
     [
@@ -9850,7 +10069,7 @@ hoisted_var_pattern_reads_not_captured(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Key = arizona_template:get(sort, Bindings), "
         "    Label = atom_to_binary(Key), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        [[Label, V] || #{Key := V} <- arizona_template:get(rows, Bindings)],"
         "        (fun(#{Key := V}) -> [Label, V] end)(arizona_template:get(row, Bindings))"
         "    ]}). "
@@ -9864,7 +10083,7 @@ hoisted_var_pattern_reads_not_captured(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Y = 8, "
         "    Z = integer_to_binary(Y + arizona_template:get(a, Bindings)), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        [[Z, <<\"|\">>, integer_to_binary(X)] || <<X:Y>> <= <<7>>],"
         "        (fun(<<X:Y>>) -> [Z, <<\"/\">>, integer_to_binary(X)] end)(<<7>>)"
         "    ]}). "
@@ -9878,7 +10097,7 @@ hoisted_var_internal_binder_not_captured(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Lbl = iolist_to_binary([Y || Y <- arizona_template:get(xs, Bindings)]), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        (fun(Y) -> <<Lbl/binary, Y/binary>> end)(<<\"!\">>)]}). "
     ),
     assert_captured_tracks(Mod, #{xs => [~"a", ~"b"]}, #{xs => [~"c"]}, [~"ab!"], [~"c!"]).
@@ -9895,7 +10114,7 @@ hoisted_var_case_binder_not_captured(Config) when is_list(Config) ->
         "        #{name := N} -> N; "
         "        _ -> <<\"anon\">> "
         "    end, "
-        "    arizona_template:html({ul, [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {ul, [], [arizona_template:each("
         "        fun(N) -> {li, [], [N, <<\" by \">>, Owner]} end, "
         "        arizona_template:get(items, Bindings))]}). "
     ),
@@ -9918,7 +10137,7 @@ hoisted_var_case_binder_copies_in_one_slot(Config) when is_list(Config) ->
         "        #{name := N} -> N; "
         "        _ -> <<\"anon\">> "
         "    end, "
-        "    arizona_template:html({p, [], [Owner, <<\" / \">>, [Owner, Owner]]}). "
+        "    arizona_template:target(arizona_html, {p, [], [Owner, <<\" / \">>, [Owner, Owner]]}). "
     ),
     B0 = #{user => #{name => ~"ada"}},
     assert_captured_tracks(
@@ -9937,7 +10156,7 @@ hoisted_var_bound_before_pattern_captured(Config) when is_list(Config) ->
         "        #{name := N} -> <<\"me\">>; "
         "        _ -> <<\"other\">> "
         "    end, "
-        "    arizona_template:html({ul, [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {ul, [], [arizona_template:each("
         "        fun(N) -> {li, [], [N, Owner]} end, "
         "        arizona_template:get(items, Bindings))]}). ",
         fun(R) -> R =:= {hoisted_var_captured, fun_param, 'N', 'Owner'} end
@@ -9951,7 +10170,7 @@ hoisted_var_internal_map_generator_key_not_captured(Config) when is_list(Config)
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Lbl = iolist_to_binary([K || K := _ <- arizona_template:get(m, Bindings)]), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        (fun(K) -> <<Lbl/binary, K/binary>> end)(<<\"!\">>)]}). "
     ),
     assert_captured_tracks(Mod, #{m => #{~"a" => 1}}, #{m => #{~"c" => 1}}, [~"a!"], [~"c!"]).
@@ -9964,7 +10183,7 @@ hoisted_var_zip_pattern_binds(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Z = arizona_template:get(a, Bindings), "
-        "    arizona_template:html({p, [], [Z, "
+        "    arizona_template:target(arizona_html, {p, [], [Z, "
         "        [[Z, integer_to_binary(W)] || Z <- [<<\"x\">>] && W <- [1]]]}). "
     ),
     assert_captured_tracks(Mod, #{a => ~"A"}, #{a => ~"B"}, [~"-->A<", ~"-->x1<"], [~"B"]).
@@ -9987,9 +10206,9 @@ inline_hoisted_html_renders_and_tracks(Config) when is_list(Config) ->
         "-module(pt_inline_hoisthtml). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    Header = arizona_template:html("
+        "    Header = arizona_template:target(arizona_html, "
         "        {'h1', [], [arizona_template:get(title, Bindings)]}), "
-        "    arizona_template:html({'div', [], [Header]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [Header]}). "
     ),
     B0 = #{title => ~"T1"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10009,10 +10228,10 @@ inline_hoisted_html_nested_chain(Config) when is_list(Config) ->
         "-module(pt_inline_hoistchain). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    Inner = arizona_template:html("
+        "    Inner = arizona_template:target(arizona_html, "
         "        {'em', [], [arizona_template:get(x, Bindings)]}), "
-        "    Outer = arizona_template:html({'p', [], [Inner]}), "
-        "    arizona_template:html({'div', [], [Outer]}). "
+        "    Outer = arizona_template:target(arizona_html, {'p', [], [Inner]}), "
+        "    arizona_template:target(arizona_html, {'div', [], [Outer]}). "
     ),
     B0 = #{x => ~"X1"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10034,7 +10253,7 @@ inline_hoisted_each_renders_and_tracks(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Items = arizona_template:each(fun(I) -> {'li', [], [I]} end, "
         "                                  arizona_template:get(items, Bindings)), "
-        "    arizona_template:html({'ul', [], [Items]}). "
+        "    arizona_template:target(arizona_html, {'ul', [], [Items]}). "
     ),
     B0 = #{items => [~"a"]},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10056,11 +10275,11 @@ inline_hoisted_stateless_atom_renders_and_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "-export([card/1]). "
         "card(Props) -> "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, Props)]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(x, Props)]}). "
         "render(Bindings) -> "
         "    Card = arizona_template:stateless(card, "
         "        #{x => arizona_template:get(x, Bindings)}), "
-        "    arizona_template:html({'div', [], [Card]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [Card]}). "
     ),
     B0 = #{x => ~"PX1"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10090,15 +10309,15 @@ each_param_rename_avoids_shadow_warning(Config) when is_list(Config) ->
         "-module(pt_each_param_rename). "
         "-export([shadow/1, ignored/1, underscored/1]). "
         "shadow(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each("
         "        fun(Bindings) -> {'li', [], [arizona_template:get(nm, Bindings)]} end, "
         "        arizona_template:get(items, Bindings))]}). "
         "ignored(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each("
         "        fun(_) -> {'li', [], [arizona_template:get(x, Bindings)]} end, "
         "        arizona_template:get(items, Bindings))]}). "
         "underscored(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each("
         "        fun(_I) -> {'li', [], [arizona_template:get(x, Bindings)]} end, "
         "        arizona_template:get(items, Bindings))]}). "
     ),
@@ -10135,11 +10354,11 @@ slot_tracks_only_reads_in_its_own_closure(Config) when is_list(Config) ->
         "-export([hoisted/1, derived/1, side/1]). "
         "hoisted(Bindings) -> "
         "    Instrument = arizona_template:get(instrument, Bindings), "
-        "    arizona_template:html({'div', [{class, Instrument}], [<<\"x\">>]}). "
+        "    arizona_template:target(arizona_html, {'div', [{class, Instrument}], [<<\"x\">>]}). "
         "derived(Bindings) -> "
         "    Instrument = arizona_template:get(instrument, Bindings), "
         "    #{side := Side} = side(Instrument), "
-        "    arizona_template:html({'div', [{class, Side}], [<<\"x\">>]}). "
+        "    arizona_template:target(arizona_html, {'div', [{class, Side}], [<<\"x\">>]}). "
         "side(<<\"a\">>) -> #{side => <<\"buy\">>}; "
         "side(_) -> #{side => <<\"sell\">>}. "
     ),
@@ -10158,9 +10377,9 @@ inline_hoisted_html_each_body_single_root(Config) when is_list(Config) ->
         "-module(pt_inline_hoisteachbody). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    Row = arizona_template:html("
+        "    Row = arizona_template:target(arizona_html, "
         "        {'li', [], [arizona_template:get(x, Bindings)]}), "
-        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each("
         "        fun(_I) -> Row end, arizona_template:get(items, Bindings))]}). "
     ),
     T = Mod:render(#{x => ~"X", items => [1, 2]}),
@@ -10181,9 +10400,9 @@ inline_hoisted_html_unrelated_key_skipped(Config) when is_list(Config) ->
         "-module(pt_inline_hoistscoped). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    Header = arizona_template:html("
+        "    Header = arizona_template:target(arizona_html, "
         "        {'h1', [], [arizona_template:get(title, Bindings)]}), "
-        "    arizona_template:html({'div', [], [Header]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [Header]}). "
     ),
     B0 = #{title => ~"T", other => 1},
     {_HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10202,8 +10421,8 @@ inline_branch_local_hoist_tracks(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    case arizona_template:get(mode, Bindings) of "
         "        a -> N = arizona_template:get(n, Bindings), "
-        "             arizona_template:html({'p', [], [N]}); "
-        "        b -> arizona_template:html({'p', [], [<<\"b\">>]}) "
+        "             arizona_template:target(arizona_html, {'p', [], [N]}); "
+        "        b -> arizona_template:target(arizona_html, {'p', [], [<<\"b\">>]}) "
         "    end. "
     ),
     B0 = #{mode => a, n => ~"1", other => 1},
@@ -10217,7 +10436,8 @@ inline_branch_local_hoist_live_root(Config) when is_list(Config) ->
     Mod = compile_live_branch_hoist(
         "pt_inline_branchlocal_live",
         "N = arizona_template:get(n, Bindings), "
-        "arizona_template:html({'p', [{id, arizona_template:get(id, Bindings)}], [N]})"
+        "arizona_template:target(arizona_html, "
+        "{'p', [{id, arizona_template:get(id, Bindings)}], [N]})"
     ),
     ?assertMatch([_ | _], branch_hoist_ops(Mod, B0, B0#{n => ~"2"})),
     ?assertEqual([], branch_hoist_ops(Mod, B0, B0#{other => 2})).
@@ -10228,7 +10448,7 @@ inline_branch_local_hoist_live_root_id(Config) when is_list(Config) ->
     Mod = compile_live_branch_hoist(
         "pt_inline_branchlocal_liveid",
         "Id = arizona_template:get(id, Bindings), "
-        "arizona_template:html({'p', [{id, Id}], [<<\"a\">>]})"
+        "arizona_template:target(arizona_html, {'p', [{id, Id}], [<<\"a\">>]})"
     ),
     T = Mod:render(#{id => ~"v", mode => a}),
     [IdFun] = [F || {_Az, {attr, ~"id", F}, _Loc} <- maps:get(d, T)],
@@ -10246,7 +10466,7 @@ compile_live_branch_hoist(Name, BranchA) ->
             "    case arizona_template:get(mode, Bindings) of "
             "        a -> " ++ BranchA ++
             "; "
-            "        b -> arizona_template:html("
+            "        b -> arizona_template:target(arizona_html, "
             "                 {'p', [{id, arizona_template:get(id, Bindings)}], [<<\"b\">>]}) "
             "    end. "
     ).
@@ -10256,8 +10476,8 @@ compile_live_branch_hoist(Name, BranchA) ->
 %% `maybe` else clause, and a `receive` after body.
 inline_branch_local_hoist_tail_forms(Config) when is_list(Config) ->
     Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
-    Tmpl = "arizona_template:html({'p', [], [N]})",
-    Other = "arizona_template:html({'p', [], [<<\"x\">>]})",
+    Tmpl = "arizona_template:target(arizona_html, {'p', [], [N]})",
+    Other = "arizona_template:target(arizona_html, {'p', [], [<<\"x\">>]})",
     Forms = [
         {"if",
             "M = " ++ Get("mode") ++ ", if M =:= a -> N = " ++ Get("n") ++ ", " ++ Tmpl ++
@@ -10305,8 +10525,8 @@ inline_branch_local_hoist_outer_chain(Config) when is_list(Config) ->
         "    M = arizona_template:get(m, Bindings), "
         "    case arizona_template:get(mode, Bindings) of "
         "        a -> N = <<M/binary, \"!\">>, "
-        "             arizona_template:html({'p', [], [N]}); "
-        "        b -> arizona_template:html({'p', [], [M]}) "
+        "             arizona_template:target(arizona_html, {'p', [], [N]}); "
+        "        b -> arizona_template:target(arizona_html, {'p', [], [M]}) "
         "    end. "
     ),
     B0 = #{mode => a, m => ~"1"},
@@ -10324,8 +10544,8 @@ inline_branch_local_hoist_scoping(Config) when is_list(Config) ->
         "    case arizona_template:get(user, Bindings) of "
         "        {admin, Name} -> "
         "            L = <<Name/binary, (arizona_template:get(sfx, Bindings))/binary>>, "
-        "            arizona_template:html({'p', [], [L]}); "
-        "        _ -> arizona_template:html({'p', [], [<<\"guest\">>]}) "
+        "            arizona_template:target(arizona_html, {'p', [], [L]}); "
+        "        _ -> arizona_template:target(arizona_html, {'p', [], [<<\"guest\">>]}) "
         "    end. "
     ),
     T = Mod:render(#{user => {admin, ~"Ada"}, sfx => ~"!"}),
@@ -10338,8 +10558,8 @@ inline_branch_local_hoist_scoping(Config) when is_list(Config) ->
         "render(#{n := N} = Bindings) -> "
         "    case arizona_template:get(mode, Bindings) of "
         "        a -> N = arizona_template:get(n, Bindings), "
-        "             arizona_template:html({'p', [], [N]}); "
-        "        b -> arizona_template:html({'p', [], [<<\"b\">>]}) "
+        "             arizona_template:target(arizona_html, {'p', [], [N]}); "
+        "        b -> arizona_template:target(arizona_html, {'p', [], [<<\"b\">>]}) "
         "    end. "
     ),
     T2 = Mod2:render(#{mode => a, n => ~"1"}),
@@ -10354,7 +10574,7 @@ inline_branch_local_hoist_scoping(Config) when is_list(Config) ->
 %% stays tracked. The render function re-runs on every diff, so the test runs on
 %% every render too.
 bound_match_stays_tested_and_tracked(Config) when is_list(Config) ->
-    Template = "arizona_template:html({'p', [], [N]})",
+    Template = "arizona_template:target(arizona_html, {'p', [], [N]})",
     Get = fun(K) -> "arizona_template:get(" ++ K ++ ", Bindings)" end,
     Shapes = [
         {"head", "render(#{n := N} = Bindings) -> N = " ++ Get("n") ++ ", " ++ Template},
@@ -10409,7 +10629,7 @@ helper_zero_arity_inlines(Config) when is_list(Config) ->
         "-export([render/1]). "
         "brand() -> {'svg', [{width, <<\"24\">>}], [<<\"logo\">>]}. "
         "render(_Bindings) -> "
-        "    arizona_template:html({'div', [], [brand()]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [brand()]}). "
     ),
     T = Mod:render(#{}),
     ?assert(
@@ -10430,7 +10650,7 @@ helper_with_args_renders_and_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "alert(Kind, Msg) -> {'p', [{class, Kind}], [Msg]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        alert(<<\"warn\">>, arizona_template:get(msg, Bindings))"
         "    ]}). "
     ),
@@ -10453,7 +10673,7 @@ helper_body_read_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "header(B) -> {'h1', [], [arizona_template:get(title, B)]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [header(Bindings)]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [header(Bindings)]}). "
     ),
     B0 = #{title => ~"T1"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10475,10 +10695,10 @@ helper_whole_body_html_unwraps_and_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "-export([card/1]). "
         "card(B) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'section', [], [arizona_template:get(x, B)]}). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [card(Bindings)]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [card(Bindings)]}). "
     ),
     B0 = #{x => ~"X1"},
     T = Mod:render(B0),
@@ -10509,7 +10729,7 @@ helper_body_var_shadows_caller_var(Config) when is_list(Config) ->
         "badge(B) -> {'span', [], [case maps:get(side, B) of Side -> Side end]}. "
         "render(Bindings) -> "
         "    Side = arizona_template:get(side, Bindings), "
-        "    arizona_template:html({'div', [{class, Side}], "
+        "    arizona_template:target(arizona_html, {'div', [{class, Side}], "
         "        [badge(arizona_template:get(entry, Bindings))]}). "
     ),
     T = Mod:render(#{side => ~"buy", entry => #{side => ~"sell"}}),
@@ -10530,7 +10750,7 @@ helper_param_in_case_pattern(Config) when is_list(Config) ->
         "-export([render/1]). "
         "mark(Sel, Id) -> {span, [], [case Id of Sel -> <<\"yes\">>; _ -> <<\"no\">> end]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        mark(arizona_template:get(sel, Bindings), arizona_template:get(id, Bindings))"
         "    ]}). "
     ),
@@ -10544,7 +10764,7 @@ helper_param_in_pattern_caller_same_name(Config) when is_list(Config) ->
         "mark(Sel, Id) -> {span, [], [case Id of Sel -> <<\"yes\">>; _ -> <<\"no\">> end]}. "
         "render(Bindings) -> "
         "    Sel = 1, "
-        "    arizona_template:html({'div', [], [integer_to_binary(Sel), "
+        "    arizona_template:target(arizona_html, {'div', [], [integer_to_binary(Sel), "
         "        mark(arizona_template:get(sel, Bindings), arizona_template:get(id, Bindings))"
         "    ]}). "
     ),
@@ -10557,7 +10777,7 @@ helper_param_in_guard(Config) when is_list(Config) ->
         "-export([render/1]). "
         "lim(Max, N) -> {span, [], [if N > Max -> <<\"over\">>; true -> <<\"ok\">> end]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        lim(arizona_template:get(max, Bindings), arizona_template:get(n, Bindings))"
         "    ]}). "
     ),
@@ -10570,7 +10790,7 @@ helper_param_in_guard_caller_same_name(Config) when is_list(Config) ->
         "lim(Max, N) -> {span, [], [if N > Max -> <<\"over\">>; true -> <<\"ok\">> end]}. "
         "render(Bindings) -> "
         "    Max = 100, N = 0, "
-        "    arizona_template:html({'div', [], [integer_to_binary(Max + N), "
+        "    arizona_template:target(arizona_html, {'div', [], [integer_to_binary(Max + N), "
         "        lim(arizona_template:get(max, Bindings), arizona_template:get(n, Bindings))"
         "    ]}). "
     ),
@@ -10585,7 +10805,7 @@ helper_param_in_map_key_and_bin_size(Config) when is_list(Config) ->
         "    case M of #{K := V} -> V; _ -> <<\"none\">> end, "
         "    case S of <<P:N/binary, _/binary>> -> P; _ -> <<\"short\">> end]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [pick("
+        "    arizona_template:target(arizona_html, {'div', [], [pick("
         "        arizona_template:get(k, Bindings), arizona_template:get(n, Bindings), "
         "        #{a => <<\"AA\">>, b => <<\"BB\">>}, <<\"xyz\">>)]}). "
     ),
@@ -10603,7 +10823,7 @@ helper_param_in_fun_guard(Config) when is_list(Config) ->
         "size_of(Min, N) -> {span, [], ["
         "    (fun(X) when X > Min -> <<\"big\">>; (_) -> <<\"small\">> end)(N)]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        size_of(arizona_template:get(min, Bindings), arizona_template:get(n, Bindings))"
         "    ]}). "
     ),
@@ -10617,7 +10837,7 @@ helper_param_in_maybe_and_match(Config) when is_list(Config) ->
         "    maybe Want ?= Have, <<\"match\">> else _ -> <<\"miss\">> end, "
         "    try {Want, X} = {Have, <<\"!\">>}, X catch error:{badmatch, _} -> <<\"?\">> end]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        chk(arizona_template:get(want, Bindings), arizona_template:get(have, Bindings))"
         "    ]}). "
     ),
@@ -10635,7 +10855,8 @@ helper_param_in_generator_key(Config) when is_list(Config) ->
         "-export([render/1]). "
         "col(K, Rows) -> {span, [], [[V || #{K := V} <- Rows]]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [col(arizona_template:get(k, Bindings), "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [], [col(arizona_template:get(k, Bindings), "
         "        [#{a => <<\"AA\">>, b => <<\"BB\">>}])]}). "
     ),
     assert_helper_param_tracks(Mod, #{k => a}, #{k => b}, ~"AA", ~"BB").
@@ -10649,7 +10870,8 @@ helper_param_shadowed_by_fun_param(Config) when is_list(Config) ->
         "inner(Sel) -> {span, [], [Sel, "
         "    (fun(Sel) -> case 7 of Sel -> <<\"seven\">>; _ -> <<\"other\">> end end)(7)]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [inner(arizona_template:get(sel, Bindings))]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [], [inner(arizona_template:get(sel, Bindings))]}). "
     ),
     SSR = helper_param_ssr(Mod, #{sel => ~"S"}),
     ?assertMatch({_, _}, binary:match(SSR, ~"seven"), SSR),
@@ -10665,7 +10887,8 @@ helper_param_in_each_guard_error(Config) when is_list(Config) ->
         "row(Min, Items) -> {ul, [], [arizona_template:each("
         "    fun(I) when I > Min -> {li, [], [integer_to_binary(I)]} end, Items)]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [row(arizona_template:get(min, Bindings), "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [], [row(arizona_template:get(min, Bindings), "
         "        arizona_template:get(items, Bindings))]}). ",
         fun(R) -> R =:= {helper_param_in_each_guard, row, 2} end
     ),
@@ -10694,7 +10917,7 @@ helper_nested_calls_inline(Config) when is_list(Config) ->
         "brand() -> {'svg', [], [<<\"logo\">>]}. "
         "card(B) -> {'section', [], [brand(), arizona_template:get(x, B)]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [card(Bindings)]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [card(Bindings)]}). "
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{x => ~"X"})),
     HTMLBin = iolist_to_binary(HTML),
@@ -10711,7 +10934,7 @@ helper_element_list_body_tracks(Config) when is_list(Config) ->
         "rows(B) -> "
         "    [{'p', [], [arizona_template:get(a, B)]}, {'p', [], [<<\"s\">>]}]. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [rows(Bindings)]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [rows(Bindings)]}). "
     ),
     B0 = #{a => ~"A1"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10731,7 +10954,7 @@ helper_in_each_item_body_inlines(Config) when is_list(Config) ->
         "-export([render/1]). "
         "item(I) -> {'li', [], [I]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each("
         "        fun(I) -> item(I) end, arizona_template:get(items, Bindings))]}). "
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{items => [~"a", ~"b"]})),
@@ -10749,7 +10972,7 @@ helper_same_module_call_inlines(Config) when is_list(Config) ->
         "-export([render/1]). "
         "brand() -> {'svg', [], [<<\"logo\">>]}. "
         "render(_Bindings) -> "
-        "    arizona_template:html({'div', [], [pt_helper_samemod:brand()]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [pt_helper_samemod:brand()]}). "
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{})),
     HTMLBin = iolist_to_binary(HTML),
@@ -10764,7 +10987,7 @@ element_list_child_tracks(Config) when is_list(Config) ->
         "-module(pt_elem_list_child). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        [{'p', [], [arizona_template:get(x, Bindings)]},"
         "         {'p', [], [<<\"s\">>]}]"
         "    ]}). "
@@ -10786,7 +11009,7 @@ helper_multi_clause_error(Config) when is_list(Config) ->
         "badge(ok) -> {'span', [{class, <<\"ok\">>}], [<<\"OK\">>]}; "
         "badge(_) -> {'span', [{class, <<\"err\">>}], [<<\"ERR\">>]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], "
+        "    arizona_template:target(arizona_html, {'div', [], "
         "        [badge(arizona_template:get(status, Bindings))]}). ",
         fun(R) -> R =:= {helper_multi_clause, badge, 1} end
     ).
@@ -10798,7 +11021,7 @@ helper_guarded_error(Config) when is_list(Config) ->
         "-export([render/1]). "
         "badge(K) when is_binary(K) -> {'span', [], [K]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], "
+        "    arizona_template:target(arizona_html, {'div', [], "
         "        [badge(arizona_template:get(k, Bindings))]}). ",
         fun(R) -> R =:= {helper_guarded, badge, 1} end
     ).
@@ -10810,7 +11033,7 @@ helper_params_not_vars_error(Config) when is_list(Config) ->
         "-export([render/1]). "
         "badge({K, V}) -> {'span', [{class, K}], [V]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], "
+        "    arizona_template:target(arizona_html, {'div', [], "
         "        [badge(arizona_template:get(kv, Bindings))]}). ",
         fun(R) -> R =:= {helper_params_not_vars, badge, 1} end
     ).
@@ -10825,7 +11048,7 @@ helper_body_not_single_expr_error(Config) when is_list(Config) ->
         "    Size = <<\"24\">>, "
         "    {'svg', [{width, Size}], [<<\"logo\">>]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [brand()]}). ",
+        "    arizona_template:target(arizona_html, {'div', [], [brand()]}). ",
         fun(R) -> R =:= {helper_body_not_single_expr, brand, 0} end
     ).
 
@@ -10836,7 +11059,7 @@ helper_recursive_error(Config) when is_list(Config) ->
         "-export([render/1]). "
         "tree() -> {'div', [], [tree()]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [tree()]}). ",
+        "    arizona_template:target(arizona_html, {'div', [], [tree()]}). ",
         fun(R) -> R =:= {helper_recursive, tree, 0} end
     ).
 
@@ -10850,7 +11073,7 @@ helper_scalar_body_read_still_tracks(Config) when is_list(Config) ->
         "-export([label/1]). "
         "label(B) -> arizona_template:get(x, B). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], [label(Bindings)]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [label(Bindings)]}). "
     ),
     B0 = #{x => ~"A"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10870,7 +11093,7 @@ helper_multi_clause_scalar_untouched(Config) when is_list(Config) ->
         "label(ok) -> <<\"OK\">>; "
         "label(_) -> <<\"ERR\">>. "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], "
+        "    arizona_template:target(arizona_html, {'p', [], "
         "        [label(arizona_template:get(status, Bindings))]}). "
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{status => ok})),
@@ -10886,10 +11109,10 @@ helper_wrapped_multi_statement_untouched(Config) when is_list(Config) ->
         "-export([card/1]). "
         "card(B) -> "
         "    Cls = <<\"card\">>, "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'section', [{class, Cls}], [arizona_template:get(x, B)]}). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], [card(Bindings)]}). "
+        "    arizona_template:target(arizona_html, {'div', [], [card(Bindings)]}). "
     ),
     B0 = #{x => ~"X1"},
     {HTML, Snap0, V0} = arizona_render:render(Mod:render(B0), #{}),
@@ -10913,7 +11136,7 @@ helper_multi_clause_data_arg_untouched(Config) when is_list(Config) ->
         "hex({rgb, R, G, B}) -> "
         "    iolist_to_binary(io_lib:format(\"#~2.16.0B~2.16.0B~2.16.0B\", [R, G, B])). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], "
+        "    arizona_template:target(arizona_html, {'p', [], "
         "        [hex(color(arizona_template:get(c, Bindings)))]}). "
     ),
     B0 = #{c => red},
@@ -10932,7 +11155,7 @@ helper_guarded_data_arg_untouched(Config) when is_list(Config) ->
         "show({point, X, Y, _}) -> "
         "    iolist_to_binary([integer_to_binary(X), $,, integer_to_binary(Y)]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], "
+        "    arizona_template:target(arizona_html, {'p', [], "
         "        [show(point(arizona_template:get(x, Bindings), 2))]}). "
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{x => 7})),
@@ -10949,7 +11172,7 @@ helper_multi_clause_comprehension_error(Config) when is_list(Config) ->
         "row(ok) -> {'li', [], [<<\"OK\">>]}; "
         "row(_) -> {'li', [], [<<\"ERR\">>]}. "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], "
+        "    arizona_template:target(arizona_html, {'ul', [], "
         "        [[row(X) || X <- arizona_template:get(xs, Bindings)]]}). ",
         fun(R) -> R =:= element_in_comprehension end
     ).
@@ -10964,7 +11187,7 @@ helper_multi_clause_comprehension_arg_untouched(Config) when is_list(Config) ->
         "color(_) -> {rgb, 0, 0, 0}. "
         "count(L) -> integer_to_binary(length([R || {rgb, R, _, _} <- L, R > 0])). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], "
+        "    arizona_template:target(arizona_html, {'p', [], "
         "        [count([color(C) || C <- arizona_template:get(cs, Bindings)])]}). "
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{cs => [red, blue, red]})),
@@ -10982,9 +11205,9 @@ element_in_comprehension_rejected(Config) when is_list(Config) ->
                     "). "
                     "-export([render/1]). "
                     "row(X) -> {'li', [], [X]}. "
-                    "html_row(X) -> arizona_template:html({'li', [], [X]}). "
+                    "html_row(X) -> arizona_template:target(arizona_html, {'li', [], [X]}). "
                     "render(Bindings) -> "
-                    "    arizona_template:html({'ul', [], [" ++ Content ++ "]}). ",
+                    "    arizona_template:target(arizona_html, {'ul', [], [" ++ Content ++ "]}). ",
                 fun(R) -> R =:= element_in_comprehension end
             )
         end,
@@ -10996,8 +11219,10 @@ element_in_comprehension_rejected(Config) when is_list(Config) ->
             {"pt_lc_void", "[{'br', []} || _ <- " ++ Xs ++ "]"},
             {"pt_lc_list", "[[row(X)] || X <- " ++ Xs ++ "]"},
             {"pt_lc_mixed_list", "[[<<\"-\">>, {'li', [], [X]}] || X <- " ++ Xs ++ "]"},
-            {"pt_lc_html", "[arizona_template:html({'li', [], [X]}) || X <- " ++ Xs ++ "]"},
-            {"pt_lc_az_html", "[az:html({'li', [], [X]}) || X <- " ++ Xs ++ "]"},
+            {"pt_lc_html",
+                "[arizona_template:target(arizona_html, "
+                "{'li', [], [X]}) || X <- " ++ Xs ++ "]"},
+            {"pt_lc_az_html", "[az:target(arizona_html, {'li', [], [X]}) || X <- " ++ Xs ++ "]"},
             {"pt_lc_block", "[begin row(X) end || X <- " ++ Xs ++ "]"},
             {"pt_lc_case",
                 "[case X of <<>> -> <<>>; _ -> {'li', [], [X]} end || X <- " ++ Xs ++ "]"},
@@ -11015,7 +11240,7 @@ element_in_comprehension_rejected(Config) when is_list(Config) ->
         "row(X) -> {'li', [], [X]}. "
         "render(Bindings) -> "
         "    L = [row(X) || X <- arizona_template:get(xs, Bindings)], "
-        "    arizona_template:html({'ul', [], [L]}). ",
+        "    arizona_template:target(arizona_html, {'ul', [], [L]}). ",
         fun(R) -> R =:= element_in_comprehension end
     ),
     ?assertMatch([_ | _], arizona_parse_transform:format_error(element_in_comprehension)).
@@ -11028,7 +11253,7 @@ element_in_comprehension_names_line(Config) when is_list(Config) ->
                 "-module(pt_lc_line).\n"
                 "-export([render/1]).\n"
                 "render(Bindings) ->\n"
-                "    arizona_template:html({'ul', [], [\n"
+                "    arizona_template:target(arizona_html, {'ul', [], [\n"
                 "        [{'li', [], [X]} || X <- arizona_template:get(xs, Bindings)]\n"
                 "    ]}).\n"
             ),
@@ -11054,24 +11279,37 @@ effect_in_content_rejected(Config) when is_list(Config) ->
             )
         end,
         [
-            {"pt_cmd_slot", "arizona_template:html({'p', [], [" ++ Hide ++ "]})"},
-            {"pt_cmd_expr", "arizona_template:html({'p', [], " ++ Hide ++ "})"},
-            {"pt_cmd_list", "arizona_template:html({'p', [], [[<<\"a\">>, " ++ Hide ++ "]]})"},
-            {"pt_cmd_nested", "arizona_template:html({'p', [], [[[], [" ++ Hide ++ "]]]})"},
-            {"pt_cmd_cmds", "arizona_template:html({'p', [], [[" ++ Hide ++ ", " ++ Hide ++ "]]})"},
+            {"pt_cmd_slot", "arizona_template:target(arizona_html, {'p', [], [" ++ Hide ++ "]})"},
+            {"pt_cmd_expr", "arizona_template:target(arizona_html, {'p', [], " ++ Hide ++ "})"},
+            {"pt_cmd_list",
+                "arizona_template:target(arizona_html, "
+                "{'p', [], [[<<\"a\">>, " ++ Hide ++ "]]})"},
+            {"pt_cmd_nested",
+                "arizona_template:target(arizona_html, "
+                "{'p', [], [[[], [" ++ Hide ++ "]]]})"},
+            {"pt_cmd_cmds",
+                "arizona_template:target(arizona_html, "
+                "{'p', [], [[" ++ Hide ++ ", " ++ Hide ++ "]]})"},
             {"pt_cmd_case",
-                "arizona_template:html({'p', [], [case " ++ Get ++ " of true -> " ++ Hide ++
+                "arizona_template:target(arizona_html, "
+                "{'p', [], [case " ++ Get ++ " of true -> " ++ Hide ++
                     "; false -> <<>> end]})"},
             {"pt_cmd_raw",
-                "arizona_template:html({'p', [], [arizona_template:raw(" ++ Hide ++ ")]})"},
+                "arizona_template:target(arizona_html, "
+                "{'p', [], [arizona_template:raw(" ++ Hide ++ ")]})"},
             {"pt_cmd_local",
-                "arizona_template:html({'p', [], [arizona_template:local(<<\"k\">>, " ++ Hide ++
+                "arizona_template:target(arizona_html, "
+                "{'p', [], [arizona_template:local(<<\"k\">>, " ++ Hide ++
                     ")]})"},
-            {"pt_cmd_nodiff", "arizona_template:html({'p', [az_nodiff], [" ++ Hide ++ "]})"},
+            {"pt_cmd_nodiff",
+                "arizona_template:target(arizona_html, "
+                "{'p', [az_nodiff], [" ++ Hide ++ "]})"},
             {"pt_cmd_script",
-                "arizona_template:html({'script', [], [arizona_template:raw(" ++ Hide ++ ")]})"},
+                "arizona_template:target(arizona_html, "
+                "{'script', [], [arizona_template:raw(" ++ Hide ++ ")]})"},
             {"pt_cmd_json",
-                "arizona_template:json({'Text', [], [arizona_effect:push_event(<<\"x\">>)]})"}
+                "arizona_template:target(arizona_json, "
+                "{'Text', [], [arizona_effect:push_event(<<\"x\">>)]})"}
         ]
     ).
 
@@ -11083,7 +11321,7 @@ effect_in_content_names_line(Config) when is_list(Config) ->
                 "-module(pt_cmd_line).\n"
                 "-export([render/1]).\n"
                 "render(_Bindings) ->\n"
-                "    arizona_template:html({'p', [], [\n"
+                "    arizona_template:target(arizona_html, {'p', [], [\n"
                 "        arizona_js:hide(<<\"#x\">>)\n"
                 "    ]}).\n"
             ),
@@ -11110,7 +11348,8 @@ effect_encoded_in_content_compiles(Config) when is_list(Config) ->
         "-module(pt_cmd_encoded). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'button', [{az_click, arizona_js:hide(<<\"#x\">>)}], "
+        "    arizona_template:target(arizona_html, "
+        "{'button', [{az_click, arizona_js:hide(<<\"#x\">>)}], "
         "        [arizona_effect:encode_json(arizona_js:hide(<<\"#x\">>))]}). "
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
@@ -11125,7 +11364,7 @@ value_comprehension_renders(Config) when is_list(Config) ->
         "-export([render/1]). "
         "label(X) -> <<\"#\", X/binary>>. "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        [label(X) || X <- arizona_template:get(xs, Bindings)], "
         "        [[X, <<\" \">>] || X <- arizona_template:get(xs, Bindings)]"
         "    ]}). "
@@ -11143,7 +11382,7 @@ element_comprehension_arg_untouched(Config) when is_list(Config) ->
         "row(X) -> {'li', [], [X]}. "
         "count(L) -> <<\"n=\", (integer_to_binary(length(L)))/binary>>. "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        count([row(X) || X <- arizona_template:get(xs, Bindings)]), "
         "        count(lists:map(fun(X) -> row(X) end, arizona_template:get(xs, Bindings)))"
         "    ]}). "
@@ -11163,7 +11402,7 @@ tracked_get_submap_errors(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Foo = arizona_template:get(foo, Bindings), "
-        "    arizona_template:html({'p', [], [arizona_template:get(bar, Foo)]}). ",
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(bar, Foo)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
 
@@ -11174,7 +11413,7 @@ tracked_get_submap_az_errors(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Foo = az:get(foo, Bindings), "
-        "    arizona_template:html({'p', [], [az:get(bar, Foo)]}). ",
+        "    arizona_template:target(arizona_html, {'p', [], [az:get(bar, Foo)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
 
@@ -11185,7 +11424,7 @@ tracked_get_lazy_submap_errors(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Foo = arizona_template:get(foo, Bindings), "
-        "    arizona_template:html({'p', [], "
+        "    arizona_template:target(arizona_html, {'p', [], "
         "        [arizona_template:get_lazy(bar, Foo, fun() -> <<>> end)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
@@ -11198,7 +11437,7 @@ tracked_get_maps_get_ok(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Foo = arizona_template:get(foo, Bindings), "
         "    Bar = maps:get(bar, Foo), "
-        "    arizona_template:html({'p', [], [Bar]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Bar]}). "
     ),
     ?assert(is_map(Mod:render(#{foo => #{bar => ~"x"}}))).
 
@@ -11209,7 +11448,7 @@ tracked_get_each_item_ok(Config) when is_list(Config) ->
         "-module(pt_tg_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], [arizona_template:each(fun(Item) -> "
+        "    arizona_template:target(arizona_html, {'ul', [], [arizona_template:each(fun(Item) -> "
         "        {'li', [], [arizona_template:get(name, Item)]} "
         "    end, arizona_template:get(items, Bindings))]}). "
     ),
@@ -11223,7 +11462,7 @@ tracked_get_alias_ok(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    B = Bindings, "
         "    C = B, "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, C)]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(x, C)]}). "
     ),
     ?assert(is_map(Mod:render(#{x => ~"y"}))).
 
@@ -11235,7 +11474,7 @@ tracked_get_literal_map_ok(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Real = arizona_template:get(real, Bindings), "
         "    V = arizona_template:get(k, #{k => v}), "
-        "    arizona_template:html({'p', [], [Real, <<\" \">>, V]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Real, <<\" \">>, V]}). "
     ),
     ?assert(is_map(Mod:render(#{real => ~"R"}))).
 
@@ -11245,7 +11484,7 @@ tracked_get_renamed_param_ok(Config) when is_list(Config) ->
         "-module(pt_tg_ctx). "
         "-export([render/1]). "
         "render(Ctx) -> "
-        "    arizona_template:html({'p', [], [arizona_template:get(name, Ctx)]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(name, Ctx)]}). "
     ),
     ?assert(is_map(Mod:render(#{name => ~"Ada"}))).
 
@@ -11258,7 +11497,7 @@ tracked_get_with_projection_ok(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Sub = arizona_template:with([x], Bindings), "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, Sub)]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(x, Sub)]}). "
     ),
     T = Mod:render(#{x => ~"y"}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -11274,7 +11513,7 @@ tracked_get_with_submap_errors(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Foo = arizona_template:get(foo, Bindings), "
         "    Sub = arizona_template:with([bar], Foo), "
-        "    arizona_template:html({'p', [], [arizona_template:get(bar, Sub)]}). ",
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(bar, Sub)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
 
@@ -11287,7 +11526,7 @@ tracked_get_case_aliased_bindings_ok(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    B = case Bindings of #{} -> Bindings end, "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, B)]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(x, B)]}). "
     ),
     T = Mod:render(#{x => <<"y">>}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -11317,7 +11556,7 @@ tracked_get_maps_get_submap_errors(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Foo = maps:get(foo, Bindings), "
-        "    arizona_template:html({'p', [], [arizona_template:get(bar, Foo)]}). ",
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(bar, Foo)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
 
@@ -11329,14 +11568,14 @@ tracked_get_submap_alias_errors(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Foo = arizona_template:get(foo, Bindings), "
         "    F = Foo, "
-        "    arizona_template:html({'p', [], [arizona_template:get(bar, F)]}). ",
+        "    arizona_template:target(arizona_html, {'p', [], [arizona_template:get(bar, F)]}). ",
         fun(R) -> R =:= tracked_get_on_non_bindings_map end
     ).
 
 %% A variable a map pattern binds to a value is a nested value, not the bindings,
 %% wherever the pattern sits: a match, the function head, a case clause, a fun head.
 tracked_get_map_pattern_value_errors(Config) when is_list(Config) ->
-    Read = "arizona_template:html({'p', [], [arizona_template:get(x, U)]})",
+    Read = "arizona_template:target(arizona_html, {'p', [], [arizona_template:get(x, U)]})",
     Cases = [
         {"match", "render(Bindings) -> #{user := U} = Bindings, " ++ Read ++ ". "},
         {"head", "render(#{user := U}) -> " ++ Read ++ ". "},
@@ -11363,7 +11602,8 @@ tracked_get_map_pattern_key_param_ok(Config) when is_list(Config) ->
         "-module(pt_tg_mappat_ok). "
         "-export([render/1]). "
         "render(#{x := _} = Bindings) -> "
-        "    arizona_template:html({'p', [], [arizona_template:get(x, Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [], [arizona_template:get(x, Bindings)]}). "
     ),
     T = Mod:render(#{x => <<"y">>}),
     [{_Az, {esc, Fun}, _Loc}] = maps:get(d, T),
@@ -11374,7 +11614,7 @@ tracked_get_map_pattern_key_param_ok(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    (fun(B) -> "
-        "        arizona_template:html({'p', [], [arizona_template:get(x, B)]}) "
+        "        arizona_template:target(arizona_html, {'p', [], [arizona_template:get(x, B)]}) "
         "    end)(Bindings). "
     ),
     ParamT = ParamMod:render(#{x => <<"z">>}),
@@ -11395,10 +11635,10 @@ with_handoff_freezes_without_tracking(Config) when is_list(Config) ->
         "-module(pt_with_freeze). "
         "-export([render/1, inner/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], [inner(Bindings)]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [inner(Bindings)]}). "
         "inner(B) -> "
         "    Cls = <<\"row\">>, "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'span', [{class, Cls}], [arizona_template:get(x, B)]}). "
     ),
     B0 = #{x => ~"Ada"},
@@ -11418,9 +11658,10 @@ with_handoff_tracks_outer_slot(Config) when is_list(Config) ->
         "-module(pt_with_track). "
         "-export([render/1, inner/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], [inner(arizona_template:with([x], Bindings))]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [], [inner(arizona_template:with([x], Bindings))]}). "
         "inner(B) -> "
-        "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
+        "    arizona_template:target(arizona_html, {'span', [], [arizona_template:get(x, B)]}). "
     ),
     B0 = #{x => ~"Ada"},
     [{_Az, {esc, OuterFun}, _Loc}] = maps:get(d, Mod:render(B0)),
@@ -11442,9 +11683,9 @@ with_handoff_hoisted_tracks_outer_slot(Config) when is_list(Config) ->
         "-export([render/1, inner/1]). "
         "render(Bindings) -> "
         "    Sub = arizona_template:with([x], Bindings), "
-        "    arizona_template:html({'p', [], [inner(Sub)]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [inner(Sub)]}). "
         "inner(B) -> "
-        "    arizona_template:html({'span', [], [arizona_template:get(x, B)]}). "
+        "    arizona_template:target(arizona_html, {'span', [], [arizona_template:get(x, B)]}). "
     ),
     B0 = #{x => ~"Ada"},
     [{_Az, {esc, OuterFun}, _Loc}] = maps:get(d, Mod:render(B0)),
@@ -11466,7 +11707,7 @@ guard_case_tracked_read_tracks(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Status = arizona_template:get(status, Bindings), "
         "    Confirming = arizona_template:get(confirming, Bindings), "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        case Status of "
         "            active when Confirming -> <<\"y\">>; "
         "            _ -> <<>> "
@@ -11487,7 +11728,7 @@ guard_if_tracked_read_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Confirming = arizona_template:get(confirming, Bindings), "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        if Confirming -> <<\"y\">>; true -> <<>> end]}). "
     ),
     {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{confirming => false}), #{}),
@@ -11500,7 +11741,7 @@ guard_buried_tracked_read_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    N = arizona_template:get(n, Bindings), "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        case ok of "
         "            _ when is_integer(N) andalso N > 5 -> <<\"y\">>; "
         "            _ -> <<>> "
@@ -11519,7 +11760,7 @@ guard_hoisted_case_result_tracks(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    N = arizona_template:get(n, Bindings), "
         "    Label = case x of _ when N > 5 -> <<\"big\">>; _ -> <<\"small\">> end, "
-        "    arizona_template:html({'p', [], [Label]}). "
+        "    arizona_template:target(arizona_html, {'p', [], [Label]}). "
     ),
     {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{n => 10}), #{}),
     ?assertEqual([#{n => true}], maps:get(deps, Snap)).
@@ -11533,7 +11774,7 @@ guard_tracked_read_also_in_body_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    N = arizona_template:get(n, Bindings), "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        case ok of "
         "            _ when N > 5 -> integer_to_binary(N); "
         "            _ -> <<>> "
@@ -11551,7 +11792,7 @@ guard_transitively_derived_read_tracks(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    N = arizona_template:get(n, Bindings), "
         "    M = N, "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        case x of _ when M > 5 -> <<\"big\">>; _ -> <<\"small\">> end]}). "
     ),
     {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{n => 10}), #{}),
@@ -11566,7 +11807,7 @@ guard_fun_clause_tracked_read_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    N = arizona_template:get(n, Bindings), "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        (fun (X) when N > 5 -> X; (_) -> <<>> end)(<<\"y\">>)]}). "
     ),
     {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{n => 10}), #{}),
@@ -11580,7 +11821,7 @@ guard_attr_value_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Dark = arizona_template:get(dark, Bindings), "
-        "    arizona_template:html({'div', [{class, "
+        "    arizona_template:target(arizona_html, {'div', [{class, "
         "        case x of _ when Dark -> <<\"d\">>; _ -> <<\"l\">> end"
         "    }], [<<\"hi\">>]}). "
     ),
@@ -11596,7 +11837,7 @@ guard_nodiff_compiles(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Show = arizona_template:get(show, Bindings), "
-        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "    arizona_template:target(arizona_html, {'div', ['az-nodiff'], ["
         "        if Show -> {'p', [], [<<\"yes\">>]}; true -> <<\"\">> end]}). "
     ),
     {HTML, _Snap} = arizona_render:render(Mod:render(#{show => true})),
@@ -11609,7 +11850,7 @@ guard_pattern_var_ok(Config) when is_list(Config) ->
         "-module(pt_guard_patvar). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        case arizona_template:get(count, Bindings) of "
         "            V when V > 0 -> <<\"some\">>; "
         "            _ -> <<\"none\">> "
@@ -11627,7 +11868,7 @@ guard_untracked_local_ok(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Limit = 10, "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        case arizona_template:get(count, Bindings) of "
         "            V when V > Limit -> <<\"over\">>; "
         "            _ -> <<\"ok\">> "
@@ -11644,7 +11885,7 @@ guard_tracked_read_in_scrutinee_ok(Config) when is_list(Config) ->
         "-module(pt_guard_scrut). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        case {arizona_template:get(status, Bindings), "
         "              arizona_template:get(confirming, Bindings)} of "
         "            {active, true} -> <<\"Confirm\">>; "
@@ -11665,7 +11906,7 @@ guard_pattern_bound_from_tracked_case_ok(Config) when is_list(Config) ->
         "-module(pt_guard_pbcase). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(show, Bindings) of "
         "            Show -> if Show -> {'p', [], [<<\"yes\">>]}; true -> <<\"\">> end "
         "        end]}). "
@@ -11684,7 +11925,7 @@ pattern_equality_hoisted_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Sel = arizona_template:get(sel, Bindings), "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(id, Bindings) of "
         "            Sel -> <<\"yes\">>; "
         "            _ -> <<\"no\">> "
@@ -11699,7 +11940,7 @@ pattern_equality_in_each_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Sel = arizona_template:get(sel, Bindings), "
-        "    arizona_template:html({ul, [], [arizona_template:each("
+        "    arizona_template:target(arizona_html, {ul, [], [arizona_template:each("
         "        fun(I) -> {li, [], [case I of Sel -> <<\"*\">>; _ -> <<\"-\">> end]} end, "
         "        arizona_template:get(items, Bindings))]}). "
     ),
@@ -11713,7 +11954,7 @@ pattern_map_key_hoisted_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    K = arizona_template:get(k, Bindings), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        case arizona_template:get(m, Bindings) of "
         "            #{K := V} -> V; "
         "            _ -> <<\"none\">> "
@@ -11729,7 +11970,7 @@ pattern_bin_size_hoisted_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    N = arizona_template:get(n, Bindings), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        case arizona_template:get(s, Bindings) of "
         "            <<P:N/binary, _/binary>> -> P; "
         "            _ -> <<\"short\">> "
@@ -11743,7 +11984,7 @@ pattern_maybe_match_hoisted_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Want = arizona_template:get(want, Bindings), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        maybe "
         "            Want ?= arizona_template:get(have, Bindings), "
         "            <<\"match\">> "
@@ -11762,7 +12003,7 @@ pattern_equality_and_body_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Sel = arizona_template:get(sel, Bindings), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        case arizona_template:get(id, Bindings) of "
         "            {Sel, X} -> [Sel, X]; "
         "            _ -> <<\"no\">> "
@@ -11779,7 +12020,7 @@ pattern_match_expr_hoisted_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    Sel = arizona_template:get(sel, Bindings), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        try "
         "            {Sel, X} = arizona_template:get(id, Bindings), "
         "            X "
@@ -11799,7 +12040,7 @@ pattern_generator_map_key_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    K = arizona_template:get(k, Bindings), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        [V || #{K := V} <- arizona_template:get(rows, Bindings)]]}). "
     ),
     assert_pattern_tracks(
@@ -11812,7 +12053,7 @@ pattern_fun_head_map_key_tracks(Config) when is_list(Config) ->
         "-export([render/1]). "
         "render(Bindings) -> "
         "    K = arizona_template:get(k, Bindings), "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        (fun(#{K := V}) -> V; (_) -> <<\"none\">> end)("
         "            arizona_template:get(row, Bindings))]}). "
     ),
@@ -11845,7 +12086,7 @@ scope_keeps_static_marker_text(Config) when is_list(Config) ->
         "-module(pt_scope_text). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        <<\"write az=\\\"1\\\" and <!--az:2--> to target\">>, "
         "        arizona_template:get(v, Bindings)"
         "    ]}). "
@@ -11866,7 +12107,7 @@ scope_keeps_static_marker_text_in_each_item(Config) when is_list(Config) ->
         "-module(pt_scope_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], ["
+        "    arizona_template:target(arizona_html, {'ul', [], ["
         "        arizona_template:each(fun(Item) -> "
         "            {'li', [], [<<\"write az=\\\"1\\\" here \">>, Item]} "
         "        end, arizona_template:get(items, Bindings))"
@@ -11884,7 +12125,7 @@ scope_slot_keeps_static_marker_text(Config) when is_list(Config) ->
         "-module(pt_scope_slot). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(flag, Bindings) of "
         "            true -> {'p', [], [<<\"write az=\\\"9\\\" here \">>, "
         "                               arizona_template:get(v, Bindings)]}; "
@@ -11910,12 +12151,12 @@ scope_repeated_stateless_keeps_static_marker_text(Config) when is_list(Config) -
         "-module(pt_scope_stateless). "
         "-export([render/1, row/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        arizona_template:stateless(fun row/1, #{n => arizona_template:get(a, Bindings)}), "
         "        arizona_template:stateless(fun row/1, #{n => arizona_template:get(b, Bindings)})"
         "    ]}). "
         "row(Bindings) -> "
-        "    arizona_template:html({'span', [], [<<\"write az=\\\"9\\\" here \">>, "
+        "    arizona_template:target(arizona_html, {'span', [], [<<\"write az=\\\"9\\\" here \">>, "
         "                                        arizona_template:get(n, Bindings)]}). "
     ),
     {HTML, Snap} = arizona_render:render(Mod:render(#{a => ~"A", b => ~"B"})),
@@ -12032,7 +12273,7 @@ impure_hoisted_rhs_rejected(Config) when is_list(Config) ->
                 "render(Bindings) -> "
                 "    X = {arizona_template:get(a, Bindings), " ++ Expr ++
                     "}, "
-                    "    arizona_template:html({p, [], [element(1, X)]}). "
+                    "    arizona_template:target(arizona_html, {p, [], [element(1, X)]}). "
             ),
             Expr
         )
@@ -12048,7 +12289,7 @@ impure_hoisted_rhs_location(Config) when is_list(Config) ->
             "-module(pt_impure_loc). -export([render/1]).\n"
             "render(Bindings) ->\n"
             "    Id = [arizona_template:get(p, Bindings), erlang:unique_integer([positive])],\n"
-            "    arizona_template:html({'div', [], [\n"
+            "    arizona_template:target(arizona_html, {'div', [], [\n"
             "        {label, [{for, Id}], []}, {input, [{id, Id}]}\n"
             "    ]}).\n"
         )
@@ -12064,7 +12305,7 @@ impure_helper_arg_multi_use_rejected(Config) when is_list(Config) ->
                 "-module(pt_impure_twice). -export([render/1]). "
                 "twice(V) -> {p, [{title, V}], [V]}. "
                 "render(_Bindings) -> "
-                "    arizona_template:html({'div', [], [twice(" ++ Expr ++ ")]}). "
+                "    arizona_template:target(arizona_html, {'div', [], [twice(" ++ Expr ++ ")]}). "
             ),
             Expr
         )
@@ -12081,7 +12322,7 @@ impure_helper_arg_unused_rejected(Config) when is_list(Config) ->
                 "-module(pt_impure_unused). -export([render/1]). "
                 "unused(_V, T) -> {p, [], [T]}. "
                 "render(Bindings) -> "
-                "    arizona_template:html({'div', [], ["
+                "    arizona_template:target(arizona_html, {'div', [], ["
                 "        unused(" ++ Expr ++
                     ", arizona_template:get(t, Bindings))]}). "
             ),
@@ -12124,7 +12365,7 @@ impure_hoisted_no_read_accepted(Config) when is_list(Config) ->
         "-module(pt_impure_noread). -export([render/1]). "
         "render(Bindings) -> "
         "    Id = integer_to_binary(erlang:unique_integer([positive])), "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {label, [{for, Id}], [arizona_template:get(t, Bindings)]},"
         "        {input, [{id, Id}]}"
         "    ]}). "
@@ -12151,7 +12392,7 @@ impure_helper_arg_single_use_accepted(Config) when is_list(Config) ->
         "-module(pt_impure_once). -export([render/1]). "
         "once(V) -> {p, [{title, V}], []}. "
         "render(_Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        once(integer_to_binary(erlang:unique_integer([positive])))]}). "
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
@@ -12165,7 +12406,8 @@ impure_user_function_accepted(Config) when is_list(Config) ->
         "twice(V) -> {p, [{title, V}], [V]}. "
         "render(Bindings) -> "
         "    Id = <<(arizona_template:get(p, Bindings))/binary, (suffix())/binary>>, "
-        "    arizona_template:html({'div', [], [{span, [{id, Id}], []}, twice(suffix())]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'div', [], [{span, [{id, Id}], []}, twice(suffix())]}). "
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{p => ~"p"}))),
     ?assertMatch({match, _}, re:run(HTML, ~"id=\"p[0-9]+\"")).
@@ -12178,7 +12420,7 @@ impure_constructed_fun_accepted(Config) when is_list(Config) ->
         "call(F) -> {p, [], [F(), F()]}. "
         "render(Bindings) -> "
         "    X = {arizona_template:get(a, Bindings), fun() -> self() ! clicked end}, "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {span, [], [element(1, X)]},"
         "        call(fun() -> integer_to_binary(erlang:unique_integer([positive])) end)"
         "    ]}). "
@@ -12218,7 +12460,8 @@ compute_changed(OldBindings, NewBindings) ->
 builder_of_other_target_rejected(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_builder_cross). -export([render/1]). render(_Bindings) -> "
-        "arizona_template:html({button, [{az_click, arizona_android:push_event(~\"x\")}], []}). ",
+        "arizona_template:target(arizona_html, "
+        "{button, [{az_click, arizona_android:push_event(~\"x\")}], []}). ",
         fun
             ({target, {builder_target, arizona_android, json, html}}) -> true;
             (_) -> false
@@ -12235,7 +12478,8 @@ builder_outside_core_folds(Config) when is_list(Config) ->
     ),
     Mod = compile_module(
         "-module(pt_ext_builder_use). -export([render/1]). render(_Bindings) -> "
-        "arizona_template:html({button, [{az_click, pt_ext_builder:ping(~\"p\")}], []}). "
+        "arizona_template:target(arizona_html, "
+        "{button, [{az_click, pt_ext_builder:ping(~\"p\")}], []}). "
     ),
     T = Mod:render(#{}),
     %% Folded: the command is part of the statics, no dynamic carries it.
@@ -12252,7 +12496,8 @@ builder_non_command_not_folded(Config) when is_list(Config) ->
     ),
     Mod = compile_module(
         "-module(pt_ext_builder_label_use). -export([render/1]). render(_Bindings) -> "
-        "arizona_template:html({button, [{title, pt_ext_builder_label:label(~\"t\")}], []}). "
+        "arizona_template:target(arizona_html, "
+        "{button, [{title, pt_ext_builder_label:label(~\"t\")}], []}). "
     ),
     ?assertMatch([_], maps:get(d, Mod:render(#{}))).
 
@@ -12261,7 +12506,7 @@ az_attrs_records_command_names(Config) when is_list(Config) ->
         "-module(pt_az_cmd). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ["
         "            {az_click, arizona_js:push_event(<<\"c\">>)},"
         "            {<<\"az-sl-change\">>, arizona_js:push_event(az:get(ev, Bindings))},"
@@ -12298,7 +12543,7 @@ az_attrs_skips_unproven_values(Config) when is_list(Config) ->
         "-module(pt_az_data). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ["
         "            {az_select, <<\"[1,2,3]\">>},"
         "            {az_meta, az:get(ids, Bindings)},"
@@ -12319,7 +12564,7 @@ az_attrs_keeps_prevent_default_with_a_value(Config) when is_list(Config) ->
         "-module(pt_az_pd). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', ["
         "            {az_prevent_default, <<\"true\">>},"
         "            {az_wheel, arizona_js:push_event(<<\"w\">>)}"
@@ -12331,7 +12576,7 @@ az_attrs_keeps_prevent_default_with_a_value(Config) when is_list(Config) ->
         "-module(pt_az_pd_dyn). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{az_prevent_default, az:get(pd, Bindings)}], [<<\"x\">>]}"
         "    ). "
     ),
@@ -12347,7 +12592,7 @@ az_attrs_skips_injected_az_view(Config) when is_list(Config) ->
         "-export([mount/1, render/1]). "
         "mount(B) -> {B, #{}}. "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [{id, az:get(id, Bindings)}], [<<\"hi\">>]}"
         "    ). "
     ),
@@ -12368,7 +12613,7 @@ az_attrs_records_component_modules(Config) when is_list(Config) ->
         "-module(pt_az_deps). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            arizona_template:stateless(other_component, row, #{}),"
         "            arizona_template:stateful(child_view, #{})"
@@ -12395,7 +12640,7 @@ az_attrs_records_remote_callees(Config) when is_list(Config) ->
         "local() -> <<\"l\">>. "
         "render(Bindings) -> "
         "    M = az:get(mod, Bindings), "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'div', [], ["
         "            button_helper:button(),"
         "            pt_az_remote_deps:local(),"
@@ -12491,7 +12736,7 @@ nodiff_slot_az_key_spellings(Config) when is_list(Config) ->
         "-module(pt_nodiff_az_key_spellings). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        case arizona_template:get(n, Bindings) of "
         "            1 -> {'p', ['az-nodiff', "
         "                {'az-key', arizona_template:get(k, Bindings)}], []}; "
@@ -12627,7 +12872,7 @@ nodiff_token_item_key(Config) when is_list(Config) ->
         "-module(pt_nodiff_token_item). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'ul', [], ["
+        "    arizona_template:target(arizona_html, {'ul', [], ["
         "        arizona_template:each(fun(I) -> "
         "            {'li', ['az-nodiff', {az_key, I}], [I]} "
         "        end, arizona_template:get(items, Bindings))"
@@ -12650,14 +12895,14 @@ nodiff_token_unkeyed_item(Config) when is_list(Config) ->
         "-module(pt_nodiff_token_unkeyed). "
         "-export([bare/1, wrapped/1]). "
         "bare(Bindings) -> "
-        "    arizona_template:html({'ul', [], ["
+        "    arizona_template:target(arizona_html, {'ul', [], ["
         "        arizona_template:each(fun(I) -> {'li', ['az-nodiff'], [I]} end, "
         "            arizona_template:get(items, Bindings))"
         "    ]}). "
         "wrapped(Bindings) -> "
-        "    arizona_template:html({'ul', [], ["
+        "    arizona_template:target(arizona_html, {'ul', [], ["
         "        arizona_template:each(fun(I) -> "
-        "            arizona_template:html({'li', ['az-nodiff'], [I]}) "
+        "            arizona_template:target(arizona_html, {'li', ['az-nodiff'], [I]}) "
         "        end, arizona_template:get(items, Bindings))"
         "    ]}). "
     ),
@@ -12681,19 +12926,21 @@ nodiff_token_only_on_nodiff_roots(Config) when is_list(Config) ->
         "-module(pt_nodiff_token_only). "
         "-export([marked/1, layout/1, json/1, fragment/1]). "
         "marked(Bindings) -> "
-        "    arizona_template:html({'div', ['az-nodiff'], ["
+        "    arizona_template:target(arizona_html, {'div', ['az-nodiff'], ["
         "        case arizona_template:get(on, Bindings) of "
         "            true -> {'p', [], [<<\"in\">>]}; "
         "            false -> <<>> "
         "        end, "
-        "        arizona_template:html({'span', [], [<<\"nested\">>]})"
+        "        arizona_template:target(arizona_html, {'span', [], [<<\"nested\">>]})"
         "    ]}). "
         "layout(Bindings) -> "
-        "    arizona_template:html({'main', ['az-nodiff'], [az:inner_content(Bindings)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'main', ['az-nodiff'], [az:inner_content(Bindings)]}). "
         "json(_Bindings) -> "
-        "    arizona_template:json({'Column', ['az-nodiff'], [<<\"n\">>]}). "
+        "    arizona_template:target(arizona_json, {'Column', ['az-nodiff'], [<<\"n\">>]}). "
         "fragment(_Bindings) -> "
-        "    arizona_template:html([{'p', ['az-nodiff'], [<<\"a\">>]}, {'p', [], [<<\"b\">>]}]). "
+        "    arizona_template:target(arizona_html, "
+        "[{'p', ['az-nodiff'], [<<\"a\">>]}, {'p', [], [<<\"b\">>]}]). "
     ),
     Marked = iolist_to_binary(arizona_render:render_to_iolist(Mod:marked(#{on => true}))),
     ?assertMatch([_], binary:matches(Marked, ~"az-nodiff")),
@@ -12720,7 +12967,7 @@ nodiff_value_raises(Config) when is_list(Config) ->
                 "-module(pt_nodiff_value_",
                 integer_to_list(N),
                 "). -export([render/1]). render(_Bindings) -> ",
-                "arizona_template:html(",
+                "arizona_template:target(arizona_html, ",
                 Elem,
                 "). "
             ]),
@@ -12775,7 +13022,7 @@ list_child_with_each(Config) when is_list(Config) ->
         "-module(pt_list_child_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({ul, [], [[<<\"x\">>, "
+        "    arizona_template:target(arizona_html, {ul, [], [[<<\"x\">>, "
         "        arizona_template:each(fun(I) -> {li, [], [I]} end, "
         "            arizona_template:get(items, Bindings))]]}). "
     ),
@@ -12787,11 +13034,11 @@ list_child_with_stateless(Config) when is_list(Config) ->
         "-module(pt_list_child_stateless). "
         "-export([render/1, item/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], [[<<\"x\">>, "
+        "    arizona_template:target(arizona_html, {p, [], [[<<\"x\">>, "
         "        arizona_template:stateless(fun item/1, "
         "            #{y => arizona_template:get(y, Bindings)})]]}). "
         "item(Bindings) -> "
-        "    arizona_template:html({i, [], [arizona_template:get(y, Bindings)]}). "
+        "    arizona_template:target(arizona_html, {i, [], [arizona_template:get(y, Bindings)]}). "
     ),
     assert_list_child(Mod, #{y => ~"Y"}, #{y => ~"Z"}, [~"Y"], ~"Z").
 
@@ -12801,8 +13048,9 @@ list_child_with_nested_html(Config) when is_list(Config) ->
         "-module(pt_list_child_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], [[<<\"x\">>, "
-        "        arizona_template:html({b, [], [arizona_template:get(y, Bindings)]})]]}). "
+        "    arizona_template:target(arizona_html, {p, [], [[<<\"x\">>, "
+        "        arizona_template:target(arizona_html, "
+        "{b, [], [arizona_template:get(y, Bindings)]})]]}). "
     ),
     assert_list_child(Mod, #{y => ~"Y"}, #{y => ~"Z"}, [~"Y"], ~"Z").
 
@@ -12826,7 +13074,7 @@ list_child_binary_key_map(Config) when is_list(Config) ->
         "-module(pt_list_child_bin_map). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        case arizona_template:get(f, Bindings) of"
         "            true -> [<<\"x\">>, #{<<\"a\">> => 1}];"
         "            false -> <<>>"
@@ -12845,7 +13093,7 @@ list_child_data_map_not_template(Config) when is_list(Config) ->
         "-module(pt_list_child_data_map). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        case arizona_template:get(f, Bindings) of"
         "            true -> [<<\"x\">>, #{s => [<<\"a\">>], d => [], f => <<\"z\">>}];"
         "            false -> <<>>"
@@ -12862,7 +13110,7 @@ list_child_guarded_helper_not_rejected(Config) when is_list(Config) ->
         "-module(pt_list_child_guarded_helper). "
         "-export([render/1, card/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        integer_to_binary(length(kids(arizona_template:get(r, Bindings)))),"
         "        integer_to_binary(length(kid(arizona_template:get(r, Bindings))))"
         "    ]}). "
@@ -12871,7 +13119,7 @@ list_child_guarded_helper_not_rejected(Config) when is_list(Config) ->
         "kids(_) -> []. "
         "kid(R) when is_atom(R) -> "
         "    [<<\"b\">>, arizona_template:stateless(fun card/1, #{})]. "
-        "card(_Bindings) -> arizona_template:html({i, [], [<<\"c\">>]}). "
+        "card(_Bindings) -> arizona_template:target(arizona_html, {i, [], [<<\"c\">>]}). "
     ),
     ?assertNotEqual(
         nomatch,
@@ -12887,8 +13135,9 @@ list_child_hoisted_html(Config) when is_list(Config) ->
         "-module(pt_list_child_hoisted). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    H = arizona_template:html({b, [], [arizona_template:get(y, Bindings)]}), "
-        "    arizona_template:html({p, [], [[<<\"x\">>, H]]}). "
+        "    H = arizona_template:target(arizona_html, "
+        "{b, [], [arizona_template:get(y, Bindings)]}), "
+        "    arizona_template:target(arizona_html, {p, [], [[<<\"x\">>, H]]}). "
     ),
     assert_list_child(Mod, #{y => ~"Y"}, #{y => ~"Z"}, [~"Y"], ~"Z").
 
@@ -12899,8 +13148,9 @@ list_child_helper_html(Config) when is_list(Config) ->
         "-module(pt_list_child_helper_html). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], [kids(arizona_template:get(y, Bindings))]}). "
-        "kids(Y) -> [<<\"x\">>, arizona_template:html({b, [], [Y]})]. "
+        "    arizona_template:target(arizona_html, "
+        "{p, [], [kids(arizona_template:get(y, Bindings))]}). "
+        "kids(Y) -> [<<\"x\">>, arizona_template:target(arizona_html, {b, [], [Y]})]. "
     ),
     assert_list_child(Mod, #{y => ~"Y"}, #{y => ~"Z"}, [~"Y"], ~"Z").
 
@@ -12910,7 +13160,8 @@ list_child_helper_each(Config) when is_list(Config) ->
         "-module(pt_list_child_helper_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({ul, [], [kids(arizona_template:get(items, Bindings))]}). "
+        "    arizona_template:target(arizona_html, "
+        "{ul, [], [kids(arizona_template:get(items, Bindings))]}). "
         "kids(Is) -> [<<\"x\">>, arizona_template:each(fun(I) -> {li, [], [I]} end, Is)]. "
     ),
     assert_list_child(Mod, #{items => [~"1", ~"2"]}, #{items => [~"1", ~"3"]}, [~"1", ~"2"], ~"3").
@@ -12923,7 +13174,7 @@ helper_arg_each_json(Config) when is_list(Config) ->
         "-module(pt_helper_arg_each_json). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:json({column, [], [wrap(arizona_template:each("
+        "    arizona_template:target(arizona_json, {column, [], [wrap(arizona_template:each("
         "        fun(I) -> {text, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
         "wrap(X) -> {box, [], [X]}. "
     ),
@@ -12965,7 +13216,7 @@ helper_arg_each_svg(Config) when is_list(Config) ->
         "-module(pt_helper_arg_each_svg). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({main, [], [wrap(arizona_template:each("
+        "    arizona_template:target(arizona_html, {main, [], [wrap(arizona_template:each("
         "        fun(I) -> {title, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
         "wrap(X) -> {svg, [], [X]}. "
     ),
@@ -12988,7 +13239,7 @@ hoisted_each_json(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Items = arizona_template:each("
         "        fun(I) -> {text, [], [I]} end, arizona_template:get(items, Bindings)), "
-        "    arizona_template:json({column, [], [Items]}). "
+        "    arizona_template:target(arizona_json, {column, [], [Items]}). "
     ),
     Wire = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{items => [~"a", ~"b"]}))),
     ?assertMatch(
@@ -13030,7 +13281,7 @@ hoisted_each_svg(Config) when is_list(Config) ->
         "render(Bindings) -> "
         "    Items = arizona_template:each("
         "        fun(I) -> {title, [], [I]} end, arizona_template:get(items, Bindings)), "
-        "    arizona_template:html({svg, [], [Items]}). "
+        "    arizona_template:target(arizona_html, {svg, [], [Items]}). "
     ),
     assert_svg_title_items(Mod).
 
@@ -13046,9 +13297,9 @@ hoisted_each_helper_arg_svg(Config) when is_list(Config) ->
         "hoisted(Bindings) -> "
         "    Items = arizona_template:each("
         "        fun(I) -> {title, [], [I]} end, arizona_template:get(items, Bindings)), "
-        "    arizona_template:html({main, [], [wrap(Items)]}). "
+        "    arizona_template:target(arizona_html, {main, [], [wrap(Items)]}). "
         "inline(Bindings) -> "
-        "    arizona_template:html({main, [], [wrap(arizona_template:each("
+        "    arizona_template:target(arizona_html, {main, [], [wrap(arizona_template:each("
         "        fun(I) -> {title, [], [I]} end, arizona_template:get(items, Bindings)))]}). "
         "wrap(X) -> {svg, [], [X]}. "
     ),
@@ -13073,8 +13324,9 @@ hoisted_cross_target_nesting(Config) when is_list(Config) ->
         "-module(pt_hoisted_cross_target). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    Row = arizona_template:html({p, [], [arizona_template:get(x, Bindings)]}), "
-        "    arizona_template:json({column, [], [Row]}). ",
+        "    Row = arizona_template:target(arizona_html, "
+        "{p, [], [arizona_template:get(x, Bindings)]}), "
+        "    arizona_template:target(arizona_json, {column, [], [Row]}). ",
         fun
             (cross_target_nesting) -> true;
             (_) -> false
@@ -13099,7 +13351,8 @@ list_child_inner_content(Config) when is_list(Config) ->
         "-module(pt_list_child_inner). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({main, [], [[<<\"x\">>, az:inner_content(Bindings)]]}). "
+        "    arizona_template:target(arizona_html, "
+        "{main, [], [[<<\"x\">>, az:inner_content(Bindings)]]}). "
     ),
     HTML = iolist_to_binary(
         arizona_render:render_to_iolist(Mod:render(#{inner_content => #{s => [~"PAGE"], d => []}}))
@@ -13113,7 +13366,8 @@ list_child_raw_beside_value(Config) when is_list(Config) ->
         "-module(pt_list_child_raw). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], [[arizona_template:raw(<<\"<i>r</i>\">>), "
+        "    arizona_template:target(arizona_html, "
+        "{p, [], [[arizona_template:raw(<<\"<i>r</i>\">>), "
         "        arizona_template:get(y, Bindings)]]}). "
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{y => ~"<y>"}))),
@@ -13126,7 +13380,8 @@ list_child_local_orphaned(Config) when is_list(Config) ->
         "-module(pt_list_child_local). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], [[<<\"x\">>, arizona_template:local(k, 0)]]}). ",
+        "    arizona_template:target(arizona_html, "
+        "{p, [], [[<<\"x\">>, arizona_template:local(k, 0)]]}). ",
         fun(R) -> R =:= local_orphaned end
     ).
 
@@ -13136,14 +13391,15 @@ list_child_case_tail(Config) when is_list(Config) ->
         "-module(pt_list_child_case). "
         "-export([render/1, item/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        case arizona_template:get(f, Bindings) of"
         "            true -> [<<\"x\">>, arizona_template:stateless(fun item/1, "
         "                #{y => arizona_template:get(y, Bindings)})];"
         "            false -> <<>>"
         "        end"
         "    ]}). "
-        "item(Bindings) -> arizona_template:html({i, [], [arizona_template:get(y, Bindings)]}). "
+        "item(Bindings) -> arizona_template:target(arizona_html, "
+        "{i, [], [arizona_template:get(y, Bindings)]}). "
     ),
     assert_list_child(Mod, #{f => true, y => ~"Y"}, #{f => true, y => ~"Z"}, [~"Y"], ~"Z").
 
@@ -13153,7 +13409,7 @@ list_child_stateful(Config) when is_list(Config) ->
         "-module(pt_list_child_stateful). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({section, [], [[<<\"x\">>, "
+        "    arizona_template:target(arizona_html, {section, [], [[<<\"x\">>, "
         "        arizona_template:stateful(arizona_counter, "
         "            #{id => <<\"lc\">>, count => arizona_template:get(n, Bindings)})]]}). "
     ),
@@ -13181,7 +13437,7 @@ list_child_nodiff(Config) when is_list(Config) ->
         "-module(pt_list_child_nodiff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({ul, ['az-nodiff'], [[<<\"x\">>, "
+        "    arizona_template:target(arizona_html, {ul, ['az-nodiff'], [[<<\"x\">>, "
         "        arizona_template:each(fun(I) -> {li, [], [I]} end, "
         "            arizona_template:get(items, Bindings))]]}). "
     ),
@@ -13196,11 +13452,12 @@ list_child_wrapped_helper_off_tail(Config) when is_list(Config) ->
         "-module(pt_list_child_off_tail). "
         "-export([render/1, inner/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        element(1, {lst(arizona_template:get(a, Bindings))})]}). "
-        "lst(Y) -> arizona_template:html([<<\"x\">>, "
+        "lst(Y) -> arizona_template:target(arizona_html, [<<\"x\">>, "
         "    arizona_template:stateless(fun inner/1, #{a => Y})]). "
-        "inner(Bindings) -> arizona_template:html({i, [], [arizona_template:get(a, Bindings)]}). "
+        "inner(Bindings) -> arizona_template:target(arizona_html, "
+        "{i, [], [arizona_template:get(a, Bindings)]}). "
     ),
     assert_list_child(Mod, #{a => ~"A"}, #{a => ~"B"}, [~"A"], ~"B").
 
@@ -13229,9 +13486,10 @@ assert_tail_tracked(Name, Tail) ->
         "-module(" ++ Name ++
             "). "
             "-export([render/1]). "
-            "render(Bindings) -> arizona_template:html({p, [], [" ++ Tail ++
+            "render(Bindings) -> arizona_template:target(arizona_html, {p, [], [" ++ Tail ++
             "]}). "
-            "w(Bindings) -> arizona_template:html({b, [], [arizona_template:get(x, Bindings)]}). "
+            "w(Bindings) -> arizona_template:target(arizona_html, "
+            "{b, [], [arizona_template:get(x, Bindings)]}). "
     ),
     {_HTML, Snap, _Views} = arizona_render:render(Mod:render(#{x => ~"X0"}), #{}),
     {Ops, _Snap1, _Views1} = arizona_diff:diff(Mod:render(#{x => ~"X1"}), Snap, #{}, #{x => true}),
@@ -13244,10 +13502,10 @@ list_child_wrapped_element_helper_off_tail(Config) when is_list(Config) ->
         "-module(pt_list_child_off_tail_el). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], ["
+        "    arizona_template:target(arizona_html, {p, [], ["
         "        case card(arizona_template:get(a, Bindings)) of T -> T end"
         "    ]}). "
-        "card(Y) -> arizona_template:html({b, [], [Y]}). "
+        "card(Y) -> arizona_template:target(arizona_html, {b, [], [Y]}). "
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{a => ~"A"}))),
     ?assertNotEqual(nomatch, binary:match(HTML, ~"<b")),
@@ -13261,7 +13519,7 @@ list_child_stream_insert(Config) when is_list(Config) ->
         "-module(pt_list_child_stream). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({ul, [], [[<<\"x\">>, "
+        "    arizona_template:target(arizona_html, {ul, [], [[<<\"x\">>, "
         "        arizona_template:each(fun(I, K) -> {li, [{az_key, K}], [I]} end, "
         "            arizona_template:get(s, Bindings))]]}). "
     ),
@@ -13283,7 +13541,7 @@ list_child_plain_each(Config) when is_list(Config) ->
         "-module(pt_list_child_plain). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({ul, [], [[<<\"x\">>, "
+        "    arizona_template:target(arizona_html, {ul, [], [[<<\"x\">>, "
         "        arizona_template:each(fun(I) -> {li, [], [I]} end, "
         "            arizona_template:get(items, Bindings))]]}). "
     ),
@@ -13299,7 +13557,7 @@ list_child_case_item_markup(Config) when is_list(Config) ->
         "-module(pt_list_child_case_item). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({p, [], [[<<\"x\">>, "
+        "    arizona_template:target(arizona_html, {p, [], [[<<\"x\">>, "
         "        case arizona_template:get(f, Bindings) of"
         "            true -> {b, [], [arizona_template:get(a, Bindings)]};"
         "            false -> <<>>"
@@ -13316,7 +13574,7 @@ raw_text_rejects_each(Config) when is_list(Config) ->
         "-module(pt_raw_text_each). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({textarea, [], ["
+        "    arizona_template:target(arizona_html, {textarea, [], ["
         "        arizona_template:each(fun(I) -> {b, [], [I]} end, "
         "            arizona_template:get(items, Bindings))]}). ",
         fun(R) -> R =:= markup_in_raw_text end
@@ -13327,7 +13585,8 @@ raw_text_rejects_element_child(Config) when is_list(Config) ->
         "-module(pt_raw_text_elem). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({title, [], [{b, [], [arizona_template:get(t, Bindings)]}]}). ",
+        "    arizona_template:target(arizona_html, "
+        "{title, [], [{b, [], [arizona_template:get(t, Bindings)]}]}). ",
         fun(R) -> R =:= markup_in_raw_text end
     ).
 
@@ -13335,7 +13594,7 @@ raw_text_rejects_inlined_element_helper(Config) when is_list(Config) ->
     assert_parse_error(
         "-module(pt_raw_text_helper). "
         "-export([render/1]). "
-        "render(_Bindings) -> arizona_template:html({title, [], [h()]}). "
+        "render(_Bindings) -> arizona_template:target(arizona_html, {title, [], [h()]}). "
         "h() -> {b, [], [<<\"x\">>]}. ",
         fun(R) -> R =:= markup_in_raw_text end
     ).
@@ -13346,7 +13605,8 @@ raw_text_keeps_text_template(Config) when is_list(Config) ->
         "-module(pt_raw_text_text_tmpl). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({title, [], [arizona_template:html(<<\"x\">>)]}). "
+        "    arizona_template:target(arizona_html, "
+        "{title, [], [arizona_template:target(arizona_html, <<\"x\">>)]}). "
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{}))),
     ?assertMatch({match, _}, re:run(HTML, ~"^<title[^>]*>x</title>$")).
@@ -13356,9 +13616,9 @@ raw_text_rejects_branch_markup(Config) when is_list(Config) ->
         "-module(pt_raw_text_branch). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({title, [], ["
+        "    arizona_template:target(arizona_html, {title, [], ["
         "        case arizona_template:get(f, Bindings) of"
-        "            true -> arizona_template:html({b, [], [<<\"x\">>]});"
+        "            true -> arizona_template:target(arizona_html, {b, [], [<<\"x\">>]});"
         "            false -> <<\"plain\">>"
         "        end]}). ",
         fun(R) -> R =:= markup_in_raw_text end
@@ -13370,7 +13630,7 @@ raw_text_keeps_values(Config) when is_list(Config) ->
         "-module(pt_raw_text_values). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({textarea, [], ["
+        "    arizona_template:target(arizona_html, {textarea, [], ["
         "        case arizona_template:get(f, Bindings) of"
         "            true -> arizona_template:get(y, Bindings);"
         "            false -> arizona_template:raw(<<\"&amp;\">>)"
@@ -13385,7 +13645,7 @@ raw_text_list_with_raw_is_text(Config) when is_list(Config) ->
         "-module(pt_raw_text_raw_list). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({title, [], [[<<\"a \">>, "
+        "    arizona_template:target(arizona_html, {title, [], [[<<\"a \">>, "
         "        arizona_template:raw(arizona_template:get(r, Bindings))]]}). "
     ),
     HTML = iolist_to_binary(arizona_render:render_to_iolist(Mod:render(#{r => ~"&amp;"}))),
@@ -13405,23 +13665,25 @@ markup_var_in_content_list_rejected(Config) when is_list(Config) ->
         )
      || {Suffix, Body} <- [
             {"each",
-                "Hdr = arizona_template:html({h1, [], [<<\"T\">>]}), "
-                "arizona_template:html({ul, [], [[Hdr, arizona_template:each("
+                "Hdr = arizona_template:target(arizona_html, {h1, [], [<<\"T\">>]}), "
+                "arizona_template:target(arizona_html, {ul, [], [[Hdr, arizona_template:each("
                 "    fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings))]]}). "},
             {"value",
                 "Hdr = {h1, [], [<<\"T\">>]}, "
-                "arizona_template:html({p, [], [[<<\"x\">>, Hdr, "
+                "arizona_template:target(arizona_html, {p, [], [[<<\"x\">>, Hdr, "
                 "    arizona_template:get(a, Bindings)]]}). "},
             {"tail",
                 "Hdr = [<<\"x\">>, {b, [], []}], "
-                "arizona_template:html({p, [], [case arizona_template:get(f, Bindings) of "
+                "arizona_template:target(arizona_html, "
+                "{p, [], [case arizona_template:get(f, Bindings) of "
                 "    true -> [Hdr, <<\"y\">>]; false -> <<>> end]}). "},
             {"branch",
                 "case arizona_template:get(f, Bindings) of "
-                "    true -> Hdr = arizona_template:html({h1, [], [<<\"T\">>]}), "
-                "        arizona_template:html({ul, [], [[Hdr, arizona_template:each("
+                "    true -> Hdr = arizona_template:target(arizona_html, {h1, [], [<<\"T\">>]}), "
+                "        arizona_template:target(arizona_html, "
+                "{ul, [], [[Hdr, arizona_template:each("
                 "            fun(I) -> {li, [], [I]} end, arizona_template:get(xs, Bindings))]]}); "
-                "    false -> arizona_template:html({p, [], [<<\"x\">>]}) "
+                "    false -> arizona_template:target(arizona_html, {p, [], [<<\"x\">>]}) "
                 "end. "}
         ]
     ],
@@ -13435,9 +13697,10 @@ markup_var_in_content_list_allowed(Config) when is_list(Config) ->
         "-module(pt_markup_var_ok). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    Hdr = arizona_template:html({h1, [], [arizona_template:get(t, Bindings)]}), "
+        "    Hdr = arizona_template:target(arizona_html, "
+        "{h1, [], [arizona_template:get(t, Bindings)]}), "
         "    Row = {b, [], []}, "
-        "    arizona_template:html({ul, [], ["
+        "    arizona_template:target(arizona_html, {ul, [], ["
         "        [Hdr, arizona_template:each(fun(Row) -> {li, [], [[<<\"r\">>, Row]]} end, "
         "            arizona_template:get(xs, Bindings))]]}). "
     ),
@@ -13451,7 +13714,8 @@ markup_var_in_content_list_allowed(Config) when is_list(Config) ->
             "-export([render/1]). "
             "render(_Bindings) -> "
             "    Row = {b, [], []}, "
-            "    [arizona_template:html({i, [], [[<<\"g\">>, Row]]}) || Row <- [<<\"x\">>]]. "
+            "    [arizona_template:target(arizona_html, "
+            "{i, [], [[<<\"g\">>, Row]]}) || Row <- [<<\"x\">>]]. "
         )
     ).
 
@@ -13466,7 +13730,7 @@ literal_list_attr_folds(Config) when is_list(Config) ->
         "-module(pt_fold_attr). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [{class, [<<\"foo\">>, <<\"bar\">>]}, {id, \"str\"}], "
         "            [<<\"baz\">>, <<\"qux\">>]}"
         "    ). "
@@ -13483,7 +13747,7 @@ literal_list_attr_matches_runtime(Config) when is_list(Config) ->
         "-module(pt_fold_attr_rt). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [{title, [<<\"<a>\">>, \"&b\", [<<\"\\\"'\">>, $c, 16#2764], []]}], []}"
         "    ). "
     ),
@@ -13500,7 +13764,7 @@ literal_list_attr_json_matches_runtime(Config) when is_list(Config) ->
         "-module(pt_fold_attr_json). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:json("
+        "    arizona_template:target(arizona_json, "
         "        {'Text', [{label, [<<\"a\">>, [<<\"\\\"b\">>, $c]]}], []}"
         "    ). "
     ),
@@ -13522,7 +13786,7 @@ literal_list_attr_empty(Config) when is_list(Config) ->
         "-module(pt_fold_attr_empty). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'p', [{class, []}, {id, [[], []]}], []}). "
+        "    arizona_template:target(arizona_html, {'p', [{class, []}, {id, [[], []]}], []}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([<<"<p class=\"\" id=\"\"></p>">>], maps:get(s, T)),
@@ -13535,7 +13799,7 @@ literal_list_content_folds(Config) when is_list(Config) ->
         "-module(pt_fold_content). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [], [[<<\"<a>\">>, [\"&\", $b]], <<\"<i>c</i>\">>]}"
         "    ). "
     ),
@@ -13550,7 +13814,8 @@ literal_list_content_json_matches_runtime(Config) when is_list(Config) ->
         "-module(pt_fold_content_json). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:json({'Column', [], [<<\"x\">>, [<<\"a\">>, \"\\\"b\"]]}). "
+        "    arizona_template:target(arizona_json, "
+        "{'Column', [], [<<\"x\">>, [<<\"a\">>, \"\\\"b\"]]}). "
     ),
     T = Mod:render(#{}),
     ?assertEqual([], maps:get(d, T)),
@@ -13569,14 +13834,14 @@ literal_list_in_conditional_and_each(Config) when is_list(Config) ->
         "-module(pt_fold_nested). "
         "-export([branch/1, each/1]). "
         "branch(Bindings) -> "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        case arizona_template:get(on, Bindings) of "
         "            true -> {span, [{class, [<<\"a\">>, <<\"b\">>]}], [[<<\"x\">>, <<\"y\">>]]}; "
         "            false -> <<>> "
         "        end"
         "    ]}). "
         "each(Bindings) -> "
-        "    arizona_template:html({ul, [], ["
+        "    arizona_template:target(arizona_html, {ul, [], ["
         "        arizona_template:each(fun(I) -> "
         "            {li, [{class, [<<\"a\">>, <<\"b\">>]}], [[<<\"x\">>, <<\"y\">>], I]} "
         "        end, arizona_template:get(items, Bindings))"
@@ -13597,7 +13862,7 @@ literal_list_attr_diff_no_op(Config) when is_list(Config) ->
         "-module(pt_fold_attr_diff). "
         "-export([render/1]). "
         "render(Bindings) -> "
-        "    arizona_template:html({'div', [], ["
+        "    arizona_template:target(arizona_html, {'div', [], ["
         "        {p, [{class, [<<\"a\">>, <<\"b\">>]}], [<<\"p\">>]}, "
         "        arizona_template:get(x, Bindings)"
         "    ]}). "
@@ -13619,7 +13884,7 @@ literal_list_content_local_slot(Config) when is_list(Config) ->
         "-module(pt_fold_local_slot). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'p', [], ["
+        "    arizona_template:target(arizona_html, {'p', [], ["
         "        [<<\"a\">>], arizona_template:local(<<\"k\">>, <<\"v\">>)"
         "    ]}). "
     ),
@@ -13636,16 +13901,17 @@ literal_list_mixed_not_folded(Config) when is_list(Config) ->
         "-module(pt_fold_mixed). "
         "-export([get/1, var/1, atom/1, content/1]). "
         "get(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'p', [{class, [<<\"a\">>, arizona_template:get(c, Bindings)]}], []}"
         "    ). "
         "var(_Bindings) -> "
         "    C = <<\"c\">>, "
-        "    arizona_template:html({'p', [{class, [<<\"a\">>, C]}], []}). "
+        "    arizona_template:target(arizona_html, {'p', [{class, [<<\"a\">>, C]}], []}). "
         "atom(_Bindings) -> "
-        "    arizona_template:html({'p', [{class, [<<\"a\">>, b]}], []}). "
+        "    arizona_template:target(arizona_html, {'p', [{class, [<<\"a\">>, b]}], []}). "
         "content(Bindings) -> "
-        "    arizona_template:html({'p', [], [[<<\"a\">>, arizona_template:get(c, Bindings)]]}). "
+        "    arizona_template:target(arizona_html, "
+        "{'p', [], [[<<\"a\">>, arizona_template:get(c, Bindings)]]}). "
     ),
     [
         ?assertMatch([{_, {attr, <<"class">>, _}, _}], maps:get(d, Mod:F(#{c => <<"c">>})))
@@ -13668,11 +13934,11 @@ literal_list_raw_and_command_not_folded(Config) when is_list(Config) ->
         "-module(pt_fold_raw_cmd). "
         "-export([raw/1, cmd/1]). "
         "raw(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'a', [{href, [<<\"/x?\">>, arizona_template:raw(<<\"a&b\">>)]}], []}"
         "    ). "
         "cmd(_Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'button', [{az_click, [arizona_js:push_event(<<\"inc\">>)]}], []}"
         "    ). "
     ),
@@ -13694,7 +13960,7 @@ literal_list_script_still_rejected(Config) when is_list(Config) ->
         "-module(pt_fold_script). "
         "-export([render/1]). "
         "render(_Bindings) -> "
-        "    arizona_template:html({'script', [], [[<<\"a\">>, <<\"b\">>]]}). ",
+        "    arizona_template:target(arizona_html, {'script', [], [[<<\"a\">>, <<\"b\">>]]}). ",
         fun(R) -> R =:= dynamic_in_raw_text end
     ).
 
@@ -13716,7 +13982,7 @@ improper_template_list_rejected(Config) when is_list(Config) ->
                     ").\n"
                     "-export([render/1]).\n"
                     "render(Bindings) ->\n"
-                    "    arizona_template:html(\n" ++ Template ++
+                    "    arizona_template:target(arizona_html, \n" ++ Template ++
                     "    ).\n",
             ?assertMatch(
                 {error, [{_File, [{6, arizona_parse_transform, improper_template_list}]}], []},
@@ -13747,11 +14013,11 @@ improper_attr_value_is_text(Config) when is_list(Config) ->
         "-module(pt_improper_attr_value). "
         "-export([plain/1, raw/1]). "
         "plain(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'a', [{href, [<<\"/u/\">> | arizona_template:get(id, Bindings)]}], []}"
         "    ). "
         "raw(Bindings) -> "
-        "    arizona_template:html("
+        "    arizona_template:target(arizona_html, "
         "        {'a', [{href, [<<\"/u?\">>,"
         "            arizona_template:raw(arizona_template:get(q, Bindings))"
         "            | arizona_template:get(id, Bindings)]}], []}"
@@ -13772,7 +14038,7 @@ improper_attr_value_is_text(Config) when is_list(Config) ->
                 "-module(pt_improper_attr_local). "
                 "-export([render/1]). "
                 "render(Bindings) -> "
-                "    arizona_template:html("
+                "    arizona_template:target(arizona_html, "
                 "        {'a', [{href, [<<\"/u/\">>, arizona_template:local(k, <<\"1\">>)"
                 "            | arizona_template:get(id, Bindings)]}], []}"
                 "    ). "
@@ -13800,7 +14066,7 @@ unused_hoisted_var_keeps_warning(Config) when is_list(Config) ->
             "render(Bindings) -> "
             "    Dropped = arizona_template:get(a, Bindings), "
             "    Used = arizona_template:get(b, Bindings), "
-            "    arizona_template:html({'p', [], [Used]}). "
+            "    arizona_template:target(arizona_html, {'p', [], [Used]}). "
         )
     ).
 
@@ -13816,8 +14082,8 @@ unused_branch_var_keeps_warning(Config) when is_list(Config) ->
             "        a -> "
             "            Dropped = arizona_template:get(x, Bindings), "
             "            Used = arizona_template:get(n, Bindings), "
-            "            arizona_template:html({'p', [], [Used]}); "
-            "        _ -> arizona_template:html({'p', [], [<<\"x\">>]}) "
+            "            arizona_template:target(arizona_html, {'p', [], [Used]}); "
+            "        _ -> arizona_template:target(arizona_html, {'p', [], [<<\"x\">>]}) "
             "    end. "
         )
     ).
@@ -13836,8 +14102,8 @@ unused_try_var_keeps_warning(Config) when is_list(Config) ->
             "        Used = arizona_template:get(n, Bindings), "
             "        arizona_template:get(mode, Bindings) "
             "    of "
-            "        a -> arizona_template:html({'p', [], [Used]}); "
-            "        _ -> arizona_template:html({'p', [], [<<\"x\">>]}) "
+            "        a -> arizona_template:target(arizona_html, {'p', [], [Used]}); "
+            "        _ -> arizona_template:target(arizona_html, {'p', [], [<<\"x\">>]}) "
             "    catch "
             "        _:_ -> ok "
             "    end. "

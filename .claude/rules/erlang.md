@@ -262,8 +262,8 @@ Adding `'az-nodiff'` to an element's attribute list marks it as a compile-time d
 | `?get(Key, Default)` | `arizona_template:get(Key, Bindings, Default)` |
 | `?get_lazy(Key, Fun)` | `arizona_template:get_lazy(Key, Bindings, Fun)` |
 | `?with(Keys)` | `arizona_template:with(Keys, Bindings)` -- tracks each key on the enclosing slot, then projects `Bindings` to just those keys (see "Handing a bindings subset to a sub-context") |
-| `?html(Elems)` | `arizona_template:html(Elems)` |
-| `?json(Elems)` | `arizona_template:json(Elems)` -- JSON render target (Android/iOS clients) |
+| `?html(Elems)` | `arizona_template:target(arizona_html, Elems)` -- a target's macro names its backend; none is built into the transform (see docs/architecture.md "Render targets outside core") |
+| `?json(Elems)` | `arizona_template:target(arizona_json, Elems)` -- JSON render target (Android/iOS clients) |
 | `?terminal(Elems)` | `arizona_template:target(arizona_terminal, Elems)` -- from the `arizona_terminal` package's header (see docs/architecture.md "Render targets outside core"); ANSI render target; tags `line`/`col`/`row`/`text`/`span`/`br` + bare-atom style attrs (see the package README) |
 | `?each(Fun, Source)` | `arizona_template:each(Fun, Source)` -- 1-arg for lists, 2-arg for streams/maps. The callback must return an element (see "?each body must return an element") |
 | `?stateful(Handler, Props)` | `arizona_template:stateful(Handler, Props)` |
