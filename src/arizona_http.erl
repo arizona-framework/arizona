@@ -83,7 +83,7 @@ plain text from `arizona_error:format_text/3`.
 -nominal result() ::
     {halt, arizona_req:request()}
     | {ok, arizona_req:resp_status(), ContentType :: binary(), iolist(), arizona_req:request()}
-    | {error, 500, ContentType :: binary(), iolist(), arizona_req:request()}.
+    | {error, 500, ContentType :: binary(), iodata(), arizona_req:request()}.
 
 %% A page response as plain data: status, header lines in send order, body, and
 %% the threaded request (its raw value is what the adapter hands back to its
