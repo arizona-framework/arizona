@@ -149,6 +149,17 @@ live_and_controller_name_what_they_run(Config) when is_list(Config) ->
             #{error_page => {my_err, render}}
         )
     ),
+    %% No listener `error_page`, none injected: a dev crash is then plain text.
+    ?assertEqual(
+        #{
+            handler => page,
+            layouts => [],
+            bindings => #{},
+            on_mount => [],
+            middlewares => [{arizona_middleware, check_origin}]
+        },
+        arizona_route:live({live, ~"/", page, #{}}, #{compress => true})
+    ),
     ?assertEqual(
         #{
             handler => ctrl,

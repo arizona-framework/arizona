@@ -157,8 +157,9 @@ browser, so statics are sent once and never re-sent:
   `mount_and_render` output wrapped as `OP_REPLACE` over the WebSocket. An HTTP
   GET of a `?json` route is still served: the JSON document below, as
   `application/json` (each render backend names its document's media type via
-  `content_type/0`; a render crash's error page stays HTML). The request-free
-  render (`arizona_render:render_to_iolist/1`, `render_view_to_iolist/2`, so
+  `content_type/0`; a render crash's 500 is plain text, or the listener's
+  `error_page` under its own target's type). The request-free render
+  (`arizona_render:render_to_iolist/1`, `render_view_to_iolist/2`, so
   `arizona_static` and the dev tools) zips the same JSON a client builds from that
   frame: each scalar a JSON string (a whole-value boolean prop a JSON boolean, an
   effect command its array), each `?each` a nested array.

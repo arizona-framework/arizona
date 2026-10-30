@@ -240,6 +240,10 @@ The `server` map's required `adapter` key names the `arizona_server` module of t
 package (`arizona_roadrunner_server`, `arizona_cowboy_server`); every other key is that adapter's
 own options.
 
+A page crash answers `500` with a plain-text `Internal Server Error` in production. With the dev
+reloader on it carries the crash (class, reason, location, stack) as plain text; for the rich HTML
+dev page, set `error_page => {arizona_error_page, render}` in the `server` map.
+
 A config file is read by `file:consult/1`, so every route entry must be a literal **term**. That
 becomes visible once a route needs `middlewares`: a `{Module, Function}` pair is a term, but a
 call such as `arizona_middleware:extract([path_bindings])` is not, and the node refuses to boot

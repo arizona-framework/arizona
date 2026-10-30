@@ -13,9 +13,11 @@ start() ->
         [{arizona_local, ~"index.html"}],
         #{layouts => [{arizona_static_layout, render}]}
     ),
+    %% The rich HTML dev error page is opt-in; the crash e2e specs assert on it.
     {ok, _} = arizona_roadrunner_server:start(http, #{
         transport_opts => [{port, {env, "PORT", 4040}}],
-        routes => routes()
+        routes => routes(),
+        error_page => {arizona_error_page, render}
     }),
     %% Set the server app env *after* the listener is up (arizona_app has already
     %% booted, so this won't double-start a server) so the dev MCP server's
