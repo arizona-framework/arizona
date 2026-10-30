@@ -43,8 +43,8 @@
 | `src/arizona_mcp_session.erl`             | Per-session `gen_server` -- holds the handler state, serializes a session's requests, owns the SSE channel and the resumability buffer                                                    |
 | `src/arizona_mcp_session_registry.erl`    | ETS registry mapping `Mcp-Session-Id` to a session pid; sweeps dead pids on lookup                                                                                                        |
 | `src/arizona_mcp_sup.erl`                 | `simple_one_for_one` supervisor owning the session processes (so a session outlives its connection) and the registry table                                                                |
-| `src/arizona_error.erl`                   | Error-reporting helpers -- `did_you_mean/2` (missing-key suggestions for `format_error/2`) and `raise_or_propagate/6` (re-tag a failure at the user's callback, propagate anything else)  |
-| `src/arizona_error_page.erl`              | Dev-mode error page renderer -- pretty-prints compile and runtime errors                                                                                                                  |
+| `src/arizona_error.erl`                   | Error-reporting helpers -- `did_you_mean/2`, `raise_or_propagate/6` (re-tag a failure at the user's callback), and the crash formatters the dev 500s share (`format_text/3`, ...)         |
+| `src/arizona_error_page.erl`              | Opt-in HTML dev error page (`error_page => {arizona_error_page, render}`) -- pretty-prints compile and runtime errors via `arizona_error`'s formatters                                    |
 | `src/arizona_config.erl`                  | App-env reader with env-var resolution -- `get_env/1,2` (drop-in for `application:get_env`) + `resolve/1`; expands `{env, "VAR"}` / `{env, "VAR", Default}` refs, coerced by default type |
 | `src/arizona_app.erl`                     | Application callback -- starts `arizona_sup` and, when the `server` env is set, boots its listener through the `adapter` it names                                                         |
 | `src/arizona_server.erl`                  | Behaviour for an HTTP/WS server adapter -- `start/2`, `stop/1`, `drain/2` (delivers `{arizona_drain, Deadline}`), `recompile_routes/0`                                                    |
@@ -134,12 +134,12 @@ branch or a `?stateless` body.
 
 An enclosing dynamic never re-wraps a tag a nested one already attached: the deepest
 location, closest to the failure, wins. The tag is the reason itself, so it reaches
-every consumer unchanged. The dev error page (`arizona_error_page`) titles the page with
-the location and formats the inner reason; the socket's crash log
-(`Live process ~p crashed: ~p`) prints the live process's exit reason, tag included. A
-crash in a `?stateful` child's `mount/1` or `handle_update/3` is tagged with the line of
-the slot that holds the child, as at SSR. A 2-tuple dynamic (no `Loc`, built by hand)
-is evaluated without the catch.
+every consumer unchanged. The dev 500 (`arizona_error:format_text/3`, or the opt-in
+`arizona_error_page`) titles the report with the location and formats the inner reason;
+the socket's crash log (`Live process ~p crashed: ~p`) prints the live process's exit
+reason, tag included. A crash in a `?stateful` child's `mount/1` or `handle_update/3` is
+tagged with the line of the slot that holds the child, as at SSR. A 2-tuple dynamic (no
+`Loc`, built by hand) is evaluated without the catch.
 
 The catch is one `try` per located dynamic on the path every slot evaluation already
 takes. It adds no reductions; only a crash pays, for the re-raise.
@@ -1881,8 +1881,11 @@ type). The transport handler translates the returned result into its native repl
     defaults to 200, but a view or middleware may stash a non-200 (e.g. 401). `ContentType` is
     the document's media type, answered by its render backend's `content_type/0` (HTML for an
     `?html` view, `application/json` for a `?json` one)
-  - `{error, 500, ContentType, iolist(), Request}` -- rendered error page body (crash or stashed
-    hot-reload error), under the error page's own media type
+  - `{error, 500, ContentType, iolist(), Request}` -- crash or stashed hot-reload error. In
+    production a `text/plain; charset=utf-8` `Internal Server Error`; in dev (reloader on) the
+    listener's `error_page` template under its backend's media type when one is configured, else
+    the crash as `text/plain` (`arizona_error:format_text/3`). Core sets no default page; the HTML
+    one is opt-in via `error_page => {arizona_error_page, render}`
 
 `arizona_roadrunner_http` consumes this helper and maps the three result shapes into roadrunner's
 reply tuple.

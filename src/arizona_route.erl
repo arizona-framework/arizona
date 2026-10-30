@@ -80,7 +80,8 @@ every adapter's router compiles from them rather than restating them:
 
 %% Listener-wide choices a route is compiled with: `compress` (default `true`)
 %% turns the default compression of pages and assets on or off, and
-%% `error_page` names the page a live route renders on a crash.
+%% `error_page` (unset by default) names the page a live route renders on a
+%% dev crash.
 -nominal build_opts() :: #{
     compress => boolean(),
     error_page => {module(), atom()},
@@ -193,9 +194,10 @@ transforms(Route, BuildOpts) ->
 
 -doc """
 What a `live` route renders with: its handler, `bindings`, `on_mount`,
-`layouts`, the pipeline `steps/1`, and the listener's `error_page` (default
-`{arizona_error_page, render}`). An adapter's `c:arizona_req:resolve_route/3`
-returns these, minus `handler`, as the route options.
+`layouts`, the pipeline `steps/1`, and the listener's `error_page` when it
+sets one (none by default: a dev crash is then served as plain text). An
+adapter's `c:arizona_req:resolve_route/3` returns these, minus `handler`, as
+the route options.
 """.
 -spec live(Route, BuildOpts) -> Live when
     Route :: term(),
@@ -206,17 +208,20 @@ returns these, minus `handler`, as the route options.
         on_mount := arizona_live:on_mount(),
         layouts := [arizona_render:layout()],
         middlewares := [arizona_middleware:middleware()],
-        error_page := {module(), atom()}
+        error_page => {module(), atom()}
     }.
 live({live, _Path, Handler, Opts} = Route, BuildOpts) ->
-    #{
+    Live = #{
         handler => Handler,
         layouts => maps:get(layouts, Opts, []),
         bindings => maps:get(bindings, Opts, #{}),
         on_mount => maps:get(on_mount, Opts, []),
-        middlewares => steps(Route),
-        error_page => maps:get(error_page, BuildOpts, {arizona_error_page, render})
-    }.
+        middlewares => steps(Route)
+    },
+    case BuildOpts of
+        #{error_page := ErrorPage} -> Live#{error_page => ErrorPage};
+        #{} -> Live
+    end.
 
 -doc """
 What a `controller` route runs: the `arizona_controller:route()` that

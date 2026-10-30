@@ -25,6 +25,14 @@ transport's native reply shape.
    threaded req carries any response headers/cookies for the transport to
    flush). `ContentType` is the rendered document's media type, answered by
    its render backend, so a `?json` route serves JSON and an HTML one HTML.
+
+## The 500 body
+
+In production (no dev reloader) the body is a plain-text `Internal Server
+Error`, with no class, reason or stack. In dev it carries the crash: rendered
+by the listener's `error_page` template when one is configured (under its
+backend's media type, e.g. `{arizona_error_page, render}` for HTML), else as
+plain text from `arizona_error:format_text/3`.
 """.
 
 %% --------------------------------------------------------------------
@@ -33,6 +41,7 @@ transport's native reply shape.
 
 -export([render/3]).
 -export([reply/3]).
+-export([format_error/2]).
 
 %% --------------------------------------------------------------------
 %% Ignore xref warnings
@@ -42,6 +51,15 @@ transport's native reply shape.
 -ignore_xref([reply/3]).
 %% The step under `reply/3`, kept public for an adapter that frames its own reply.
 -ignore_xref([render/3]).
+-ignore_xref([format_error/2]).
+
+%% --------------------------------------------------------------------
+%% Macros
+%% --------------------------------------------------------------------
+
+%% The 500 served when no `error_page` renders one: production's bare status
+%% line, and dev's crash detail when the listener configures no page.
+-define(TEXT_TYPE, ~"text/plain; charset=utf-8").
 
 %% --------------------------------------------------------------------
 %% Types exports
@@ -65,7 +83,7 @@ transport's native reply shape.
 -nominal result() ::
     {halt, arizona_req:request()}
     | {ok, arizona_req:resp_status(), ContentType :: binary(), iolist(), arizona_req:request()}
-    | {error, 500, ContentType :: binary(), iolist(), arizona_req:request()}.
+    | {error, 500, ContentType :: binary(), iodata(), arizona_req:request()}.
 
 %% A page response as plain data: status, header lines in send order, body, and
 %% the threaded request (its raw value is what the adapter hands back to its
@@ -119,6 +137,24 @@ reply(Handler, ArzReq, Opts) ->
             Headers = arizona_req:flush(ArzReq1) ++ [{~"content-type", ContentType}],
             {Status, Headers, Body, ArzReq1}
     end.
+
+-doc """
+Renders this module's errors. Picked up by `erl_error` via the `error_info`
+annotation.
+""".
+-spec format_error(Reason, Stacktrace) -> ErrorInfo when
+    Reason :: term(),
+    Stacktrace :: [tuple()],
+    ErrorInfo :: #{general := iolist()}.
+format_error({error_page_not_a_template, {Mod, Fun}, Value}, [{_M, _F, _Args, _Info} | _]) ->
+    #{
+        general => io_lib:format(
+            "the error page ~s:~s/1 returned ~0tp, which is not a template. An error "
+            "page is a template built by a render target (`?html`, `?json`, ...), "
+            "whose backend names the response's media type.",
+            [Mod, Fun, Value]
+        )
+    }.
 
 %% --------------------------------------------------------------------
 %% Internal functions
@@ -174,16 +210,15 @@ render_view(H, RenderOpts) ->
         _Dev -> arizona_utf8:render_view(H, RenderOpts)
     end.
 
-%% The rich error page (exception class, reason, and full stack with file:line)
-%% is a development aid -- serving it in production leaks internals to any visitor
-%% who can trigger a crash. Gate it on the dev signal (`reload_url` is set only
-%% when the dev reloader is wired) and default production to a minimal 500 with no
-%% internals. The compile-error branch only fires under a running reloader, so it
-%% always resolves to the rich page.
+%% The crash detail (class, reason, stack with file:line) is a development aid --
+%% serving it in production leaks internals to any visitor who can trigger a
+%% crash. Gate it on the dev signal (`reload_url` is set only when the dev
+%% reloader is wired) and default production to a bare 500. The compile-error
+%% branch only fires under a running reloader, so it always reaches the detail.
 error_body(Bindings, Class, Reason, Stacktrace, Opts) ->
     case reload_url() of
         undefined ->
-            {arizona_html:content_type(), minimal_error_body()};
+            {?TEXT_TYPE, ~"Internal Server Error"};
         ReloadUrl ->
             ErrorInfo = #{
                 class => Class,
@@ -191,31 +226,20 @@ error_body(Bindings, Class, Reason, Stacktrace, Opts) ->
                 stacktrace => Stacktrace,
                 reload_url => ReloadUrl
             },
-            render_error_body(Bindings, ErrorInfo, Opts)
+            dev_error_body(Bindings, ErrorInfo, Opts)
     end.
 
-render_error_body(Bindings, ErrorInfo, Opts) ->
-    {Mod, Fun} = error_page(Opts),
-    Tmpl = Mod:Fun(Bindings#{error_info => ErrorInfo}),
-    {error_page_type(Tmpl), arizona_render:render_to_iolist(Tmpl)}.
-
-%% The error page is whatever template the listener configured; its backend names
-%% its media type, defaulting to HTML for a hand-built template that carries none.
-error_page_type(#{backend := Backend}) -> Backend:content_type();
-error_page_type(_Tmpl) -> arizona_html:content_type().
-
-%% Production 500 body: no class/reason/stack and no reload script.
-minimal_error_body() ->
-    ~"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head><meta charset="utf-8"><title>500 -- Server Error</title></head>
-    <body><h1>Internal Server Error</h1></body>
-    </html>
-    """.
-
-%% The error page module/function is baked into the route's `Opts` by the router
-%% (from the owning listener's `error_page` config), so a multi-listener setup
-%% renders each listener's own error page and no shared global term is clobbered.
-error_page(Opts) ->
-    maps:get(error_page, Opts, {arizona_error_page, render}).
+%% The page is the listener's `error_page` template, baked into the route's
+%% `Opts` by the router, so each listener renders its own; its backend names
+%% the media type. With none configured the detail is served as plain text.
+dev_error_body(Bindings, ErrorInfo, #{error_page := {Mod, Fun}}) ->
+    case Mod:Fun(Bindings#{error_info => ErrorInfo}) of
+        #{backend := Backend} = Tmpl ->
+            {Backend:content_type(), arizona_render:render_to_iolist(Tmpl)};
+        Other ->
+            erlang:error({error_page_not_a_template, {Mod, Fun}, Other}, [Bindings, ErrorInfo], [
+                {error_info, #{module => ?MODULE}}
+            ])
+    end;
+dev_error_body(_Bindings, #{class := Class, reason := Reason, stacktrace := Stack}, _Opts) ->
+    {?TEXT_TYPE, arizona_error:format_text(Class, Reason, Stack)}.

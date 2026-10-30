@@ -174,6 +174,10 @@ References resolve **anywhere** in the config surface: the scalar keys (`secret_
 
 **`env` is a reserved tag.** Because 2-tuples are descended into, a reference is recognised by shape alone: anywhere in the resolved config, `{env, String}` and `{env, String, Default}` **are** references. A proplist pair that merely happens to be keyed `env` (`{env, "production"}` among a listener's options) is read as a reference to the variable `production` -- substituted when it is set, `env_not_set` when it is not, whose message names this collision. Never key a plain option `env` in `arizona` config.
 
+## Error page
+
+A page crash answers `500`: production serves a plain-text `Internal Server Error`; with the dev reloader on, the crash (class, reason, location, stack) as plain text (`arizona_error:format_text/3`), or the listener's `error_page => {Module, Function}` template under its backend's media type. There is no default page -- the rich HTML dev page is opt-in, `error_page => {arizona_error_page, render}` in the `server` map.
+
 ## CSRF / Origin checking
 
 CSRF defense is an **Origin check**, not a token: `arizona_origin:check(Origin, Host, Scheme)` rejects a request whose `Origin` header is neither same-origin (its authority equals the `Host`, and an HTTPS request demands an `https` Origin -- a plain-HTTP page on the same authority is a different origin an active network attacker can serve) nor in an allowlist. A missing `Origin` (native `?json` clients, CLI tools, top-level GET navigations) is allowed.
