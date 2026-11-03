@@ -527,12 +527,12 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                 host.leavePage(cmd[1], opts.replace);
                 break;
             }
-            host.navigate(cmd[1], opts, 'navigate');
+            host.navigate(cmd[1], opts, 'navigate', _transitionScope ?? undefined);
             break;
         }
         case JS_PATCH:
             // In-place SPA navigation: keep the view, re-render via handle_update.
-            host.navigate(cmd[1], cmd[2] || {}, 'patch');
+            host.navigate(cmd[1], cmd[2] || {}, 'patch', _transitionScope ?? undefined);
             break;
         case JS_FETCH: {
             // HTTP request via fetch() with no page reload. Unlike push_event (WS,

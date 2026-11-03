@@ -6,6 +6,7 @@ const JS_PUSH_EVENT = 0;
 const JS_TOGGLE = 1;
 const JS_ADD_CLASS = 4;
 const JS_NAVIGATE = 10;
+const JS_PATCH = 24;
 const JS_SET_TITLE = 14;
 const JS_TRANSITION = 20;
 
@@ -64,6 +65,8 @@ function setupMockWorker() {
     worker.onmessage({ data: [1, false] }); // open -> _connected = true
     return {
         posted,
+        simulateClose: (code = 1006) => worker.onmessage({ data: [2, code] }),
+        simulateOpen: (reconnect = true) => worker.onmessage({ data: [1, reconnect] }),
         simulateMessage: (ops, effects = null, ref = null) =>
             worker.onmessage({ data: [0, ops, effects, false, null, ref] }),
         // The reply ref the last frame sent carries, or null when it carries none.
@@ -529,5 +532,86 @@ describe('containment', () => {
         const wrapped = warn.mock.calls.filter(([m]) => m.includes('az-transition command failed'));
         expect(wrapped.length).toBe(1);
         warn.mockRestore();
+    });
+});
+
+// An 'any' transition is bound to the frame issued under it. Until that frame
+// goes out it is only an intent, and nothing else may claim it, keep it alive, or
+// write it into history.
+describe('view transitions -- reply binding', () => {
+    const debounced = () => {
+        document.body.innerHTML =
+            '<div id="page" az-view><p az="0">old</p>' +
+            `<button id="b" az-click='[${JS_TRANSITION},{},[${JS_PUSH_EVENT},"slow"]]' ` +
+            'az-debounce="100">b</button></div>';
+        document.getElementById('b').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    };
+
+    // The push_event is dropped by the page-swap window its own navigate opened;
+    // the transition is the navigate's to animate, not the event's to cancel.
+    it('a dropped event leaves a navigate transition armed', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        executeJS(document.body, null, [
+            JS_TRANSITION,
+            {},
+            [
+                [JS_NAVIGATE, '/z'],
+                [JS_PUSH_EVENT, 'after'],
+            ],
+        ]);
+        warn.mockRestore();
+        _mock.simulateMessage([replaceOp('Z')], null, _mock.lastRef());
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
+    // The debounced event belongs to the page a navigate replaces; its intent
+    // must not ride onto the new page and animate whatever patch comes next.
+    it('a navigate drops a transition still waiting for its event', () => {
+        vi.useFakeTimers();
+        try {
+            const fn = document.startViewTransition;
+            debounced();
+            executeJS(document.body, null, [JS_NAVIGATE, '/n']);
+            expect(history.state?._azTransitionPrev).toBeUndefined();
+            _mock.simulateMessage([replaceOp('N')], null, _mock.lastRef());
+            executeJS(document.body, null, [JS_PATCH, '/n?tab=2']);
+            _mock.simulateMessage([[OP.TEXT, 'page:0', 'tab']], null, _mock.lastRef());
+            expect(fn).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    // The worker drops a frame sent while disconnected, so its reply never comes:
+    // the transition goes with it instead of sitting armed past the resync.
+    it('an event raised while disconnected drops its transition', () => {
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
+        _mock.simulateClose();
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'offline']]);
+        expect(_mock.lastRef()).toBeNull();
+        _mock.simulateOpen();
+        _mock.simulateMessage([replaceOp('Back')]);
+        executeJS(document.body, null, [JS_NAVIGATE, '/after']);
+        expect(history.state?._azTransitionPrev).toBeUndefined();
+    });
+
+    // A patch not issued under the transition is not the frame it waits for: the
+    // debounced event still goes out on this page and is the one animated.
+    it('an unrelated patch does not take a transition waiting for its event', () => {
+        vi.useFakeTimers();
+        try {
+            const fn = document.startViewTransition;
+            debounced();
+            executeJS(document.body, null, [JS_PATCH, '/?tab=2']);
+            _mock.simulateMessage([[OP.TEXT, 'page:0', 'tab']], null, _mock.lastRef());
+            expect(fn).not.toHaveBeenCalled();
+            vi.advanceTimersByTime(100);
+            _mock.simulateMessage([[OP.TEXT, 'page:0', 'slow']], null, _mock.lastRef());
+            expect(fn).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

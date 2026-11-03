@@ -21,8 +21,9 @@
  *   transition for the reply a command just sent awaits
  * @property {() => (fn: () => void) => void} holdReplay hold the replay running now
  *   open for work a command runs later
- * @property {(url: string, opts: Object<string, *>, kind: 'navigate'|'patch') => void} navigate
- *   a navigate or patch effect
+ * @property {(url: string, opts: Object<string, *>, kind: 'navigate'|'patch',
+ *   transition?: {types?: string[], kind: 'any'|'replace'}) => void} navigate
+ *   a navigate or patch effect, under the view transition running it, if any
  * @property {(url: string, replace?: boolean) => void} leavePage load `url` as a real page
  */
 
