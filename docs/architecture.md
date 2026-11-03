@@ -243,9 +243,13 @@ module and already be loadable (a dependency, or `erl_first_files` in the same a
 where core lists `arizona_html` and `arizona_json`). One name is one backend per
 module, and a name cannot be an `arizona_template` function (`raw`, `each`, ...).
 A target exists in a module only once a `target/2` call names its backend, so a
-hand-written `arizona_template:html(Elems)` in a module that never does is a compile
-error (`unknown_constructor`), not an `undef` at render. Without the parse transform
-the call raises `parse_transform_not_applied`.
+hand-written `arizona_template:html(Elems)` (or a `fun arizona_template:html/1`) in a
+module that never does is the compile error `undefined_function` -- there it is just
+an undefined function, as is a typo -- not an `undef` at render. A fun reference to a
+target the module does name (`fun arizona_template:html/1`) is `unknown_constructor`:
+the parse transform compiles a target's calls, not a reference written by hand. Without the parse
+transform a `target/2` call raises `parse_transform_not_applied`, and a hand-written
+`html/1` is an `undef`.
 
 Everything else is the backend's capability callbacks, asked at compile time. Whether
 a live handler's root is compiled live is `c:arizona_renderer:live_root/0`: a target
