@@ -437,11 +437,11 @@ export function applyOps(ops, resync = false) {
             console.error('[arizona] op %s failed; skipping', op[0], err);
         }
     }
-    // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one).
-    // A patch has no OP_REPLACE, so it scrolls on the first non-empty diff batch
-    // after the patch frame (tagged `patch` on _pendingScroll); same concurrent-
-    // push race as patch transitions, and navigate is left strictly on didReplace.
-    if (_pendingScroll && (didReplace || (_pendingScroll.patch && ops.length > 0))) {
+    // Navigate scrolls on its OP_REPLACE (robust: only a navigation emits one), as
+    // does a patch the server degraded to a replace. A patch kept in place has no
+    // OP_REPLACE: it scrolls on its own reply, which the frame handler recognises
+    // by the patch's reply ref.
+    if (_pendingScroll && didReplace) {
         applyScroll(_pendingScroll);
         setPendingScroll(null);
     }

@@ -14,6 +14,7 @@ Inbound text frames are JSON arrays:
 ```
 [~"cached_fps", FpList]                           %% client tells us which fingerprints it has
 [~"navigate", #{~"path" := Path, ~"qs" := Qs}]    %% SPA navigation request
+[~"patch", #{~"path" := Path, ~"qs" := Qs}]       %% in-place SPA navigation
 [ViewId, Event, Payload]                          %% UI event
 ~"0"                                              %% ping (replied with ~"1")
 ```
@@ -23,6 +24,18 @@ Outbound text frames are JSON maps with keys `~"o"` (ops), `~"e"`
 frame carries the compile-time walk of the route's handler and layouts, any
 later frame only the per-socket delta; see `arizona_event_attrs`). `~"o"` and
 `~"e"` are arrays produced by `arizona_diff` and `arizona_js` respectively.
+
+A frame that changes nothing gets no reply. A client that must know when one
+was handled appends an integer reply ref, 0 to 2^53-1 (what a JavaScript number
+holds exactly), to a navigate, patch or event frame (`[~"navigate", Nav, Ref]`,
+`[~"patch", Nav, Ref]`, `[ViewId, Event, Payload, Ref]`). Such a frame is
+answered by exactly one frame carrying `~"r" => Ref`:
+merged into its reply when it has one, alone (`{"r":Ref}`) when it changed
+nothing or named a view that no longer exists. Replies keep frame order, and a
+frame without the `~"r"` key (a server push, the reply to an untagged frame)
+answers no ref. A frame the server cannot read is dropped as ever, ref and all,
+so a ref that never comes back means the frame was lost or refused; a close
+fails every ref still pending.
 
 ## Exit handling
 
@@ -101,6 +114,10 @@ the client reloads it after a jittered delay.
 %% walk on the connect frame, per-socket deltas after (see arizona_event_attrs).
 -define(AZ_ATTRS, ~"a").
 -define(EFFECTS, ~"e").
+%% The largest reply ref: the largest integer a JavaScript number holds exactly
+%% (`Number.MAX_SAFE_INTEGER`), so a ref round-trips through any client unchanged.
+-define(MAX_REF, 16#1FFFFFFFFFFFFF).
+-define(is_ref(Ref), (is_integer(Ref) andalso Ref >= 0 andalso Ref =< ?MAX_REF)).
 -define(SYS_PING, ~"0").
 -define(SYS_PONG, ~"1").
 -define(CLOSE_GOING_AWAY, 1001).
@@ -322,6 +339,8 @@ Recognized payloads:
 - `[~"patch", #{~"path" := Path, ~"qs" := Qs}]` -- in-place SPA navigation
 - `[ViewId, Event, Payload]` -- UI event dispatch (`Event` a binary,
   `Payload` a map)
+- any of the last three with a trailing integer reply ref, answered by one
+  frame carrying it back (see "Wire protocol" above)
 
 Unrecognized payloads, and frames whose body is not valid JSON, are
 silently dropped (a single bad frame must not crash the socket). An event
@@ -372,14 +391,24 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
             is_binary(Path), is_binary(Qs)
         ->
             handle_navigate(Path, Qs, Socket);
+        [~"navigate", #{~"path" := Path, ~"qs" := Qs}, Ref] when
+            is_binary(Path), is_binary(Qs), ?is_ref(Ref)
+        ->
+            answer(Ref, handle_navigate(Path, Qs, Socket));
         [~"patch", #{~"path" := Path, ~"qs" := Qs}] when
             is_binary(Path), is_binary(Qs)
         ->
             handle_patch(Path, Qs, Socket);
+        [~"patch", #{~"path" := Path, ~"qs" := Qs}, Ref] when
+            is_binary(Path), is_binary(Qs), ?is_ref(Ref)
+        ->
+            answer(Ref, handle_patch(Path, Qs, Socket));
         [Target, Event, Payload] when is_binary(Event), is_map(Payload) ->
-            ViewId = event_target(Target, RootViewId),
-            {AllOps, AllEffects, Observed} = dispatch_event(Pid, ViewId, Event, Payload),
-            reply_after_pending(AllOps, AllEffects, Observed, Socket);
+            handle_event(Target, Event, Payload, RootViewId, Socket);
+        [Target, Event, Payload, Ref] when
+            is_binary(Event), is_map(Payload), ?is_ref(Ref)
+        ->
+            answer(Ref, handle_event(Target, Event, Payload, RootViewId, Socket));
         _ ->
             {ok, Socket}
     catch
@@ -993,6 +1022,27 @@ replace_ops(ViewId, PageHTML) ->
 %% `null`-tagged op is unencodable, and an unencodable frame closes the session.
 event_target(Target, _RootViewId) when is_binary(Target) -> Target;
 event_target(_Target, RootViewId) -> RootViewId.
+
+%% Answer a frame that carried a reply ref: exactly one frame carrying it back,
+%% whatever handling the frame produced. Done here, on the frame's result, rather
+%% than in the encoders its handling reaches, so no path can lose the answer or
+%% leave the ref behind for a later frame (a push would then settle a frame the
+%% client sent next). A reply gets the ref spliced in at the front of its object
+%% (every reply frame is a JSON object built by encode_frame/1); no reply becomes
+%% one carrying only the ref. A close answers nothing: the client fails every
+%% ref still pending on it. A raise never reaches here -- crash_close/4 drops the
+%% frame and the exit or close that follows does the same.
+answer(Ref, {ok, Socket}) ->
+    {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $}], Socket};
+answer(Ref, {reply, [<<${, Rest/binary>> | Tail], Socket}) ->
+    {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $,, Rest | Tail], Socket};
+answer(_Ref, {close, _Code, _Reason, _Socket} = Close) ->
+    Close.
+
+handle_event(Target, Event, Payload, RootViewId, #socket{pid = Pid} = Socket) ->
+    ViewId = event_target(Target, RootViewId),
+    {AllOps, AllEffects, Observed} = dispatch_event(Pid, ViewId, Event, Payload),
+    reply_after_pending(AllOps, AllEffects, Observed, Socket).
 
 dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects, Observed} = arizona_live:handle_event(Pid, ViewId, Event, Payload),

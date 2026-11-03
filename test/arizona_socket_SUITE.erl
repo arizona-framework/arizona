@@ -85,6 +85,20 @@
 -export([navigate_does_not_replay_flash_consumed_by_halted_navigate/1]).
 -export([navigate_does_not_take_flash_set_at_upgrade/1]).
 -export([remote_helper_names_ride_the_connect_frame/1]).
+-export([ref_answers_event_that_changes_nothing/1]).
+-export([ref_rides_event_reply/1]).
+-export([ref_rides_reply_with_folded_push_and_names/1]).
+-export([ref_not_carried_onto_later_push/1]).
+-export([ref_answers_event_for_unknown_view/1]).
+-export([ref_answers_patch_that_changes_nothing/1]).
+-export([ref_rides_navigate_replies/1]).
+-export([ref_rides_event_reply_after_deferred_resync/1]).
+-export([unreadable_frame_with_ref_dropped/1]).
+-export([ref_leads_every_reply_shape/1]).
+-export([ref_rides_halt_full_loads/1]).
+-export([ref_rides_flash_replay/1]).
+-export([ref_rides_patch_that_replaces_the_view/1]).
+-export([ref_frame_lost_to_a_crash_gets_no_reply/1]).
 
 all() ->
     [
@@ -162,7 +176,21 @@ all() ->
         flash_replay_chains_only_from_its_own_target,
         gate_flash_replaces_carried_flash,
         flash_consumed_by_gated_route_is_spent,
-        remote_helper_names_ride_the_connect_frame
+        remote_helper_names_ride_the_connect_frame,
+        ref_answers_event_that_changes_nothing,
+        ref_rides_event_reply,
+        ref_rides_reply_with_folded_push_and_names,
+        ref_not_carried_onto_later_push,
+        ref_answers_event_for_unknown_view,
+        ref_answers_patch_that_changes_nothing,
+        ref_rides_navigate_replies,
+        ref_rides_event_reply_after_deferred_resync,
+        unreadable_frame_with_ref_dropped,
+        ref_leads_every_reply_shape,
+        ref_rides_halt_full_loads,
+        ref_rides_flash_replay,
+        ref_rides_patch_that_replaces_the_view,
+        ref_frame_lost_to_a_crash_gets_no_reply
     ].
 
 %% A `?stateful` inside a stream item re-renders when the item updates, so the item's
@@ -1952,6 +1980,264 @@ remote_helper_names_ride_the_connect_frame(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(),
     {reply, Frame, _} = arizona_socket:init(arizona_remote_helper_page, #{}, Req, #{}),
     ?assertMatch(#{~"a" := [~"az-dblclick"]}, decode(Frame)).
+
+%% A frame that changes nothing gets no reply, so a client cannot tell it handled
+%% from lost. A ref turns that silence into one frame carrying the ref alone; the
+%% same frame without a ref stays silent.
+ref_answers_event_that_changes_nothing(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {ok, Socket1} = arizona_socket:handle_in(event_frame(~"counter", ~"noop"), Socket0),
+    {reply, Frame, Socket2} =
+        arizona_socket:handle_in(event_frame(~"counter", ~"noop", 7), Socket1),
+    ?assertEqual(~"{\"r\":7}", iolist_to_binary(Frame)),
+    %% The largest ref a JavaScript number holds exactly round-trips.
+    Max = 1 bsl 53 - 1,
+    {reply, MaxFrame, _Socket3} =
+        arizona_socket:handle_in(event_frame(~"counter", ~"noop", Max), Socket2),
+    ?assertEqual(#{~"r" => Max}, decode(MaxFrame)).
+
+ref_rides_event_reply(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, Frame, _Socket1} =
+        arizona_socket:handle_in(event_frame(~"counter", ~"inc", 8), Socket0),
+    ?assertMatch(#{~"r" := 8, ~"o" := [[?OP_TEXT, _, ~"1"]]}, decode(Frame)),
+    ?assertEqual(2, map_size(decode(Frame))).
+
+%% A push queued ahead of the reply is folded into it, and the names it proved
+%% ride the same frame: the ref joins all three instead of answering apart.
+ref_rides_reply_with_folded_push_and_names(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    self() ! {arizona_push, ~"other", [[?OP_TEXT, ~"0", ~"x"]], [], {[~"az-probe"], []}},
+    {reply, Frame, _Socket1} =
+        arizona_socket:handle_in(event_frame(~"counter", ~"noop", 9), Socket0),
+    ?assertEqual(
+        #{~"r" => 9, ~"o" => [[?OP_TEXT, ~"other:0", ~"x"]], ~"a" => [~"az-probe"]},
+        decode(Frame)
+    ),
+    nothing_left_queued().
+
+%% The ref answers its own frame only: a push the socket encodes later is not a
+%% reply, and a ref left on it would settle a frame the client sends next.
+ref_not_carried_onto_later_push(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, _, Socket1} = arizona_socket:handle_in(event_frame(~"counter", ~"inc", 1), Socket0),
+    {reply, _, Socket2} = arizona_socket:handle_in(event_frame(~"counter", ~"noop", 2), Socket1),
+    {reply, Push, _Socket3} = arizona_socket:handle_info(
+        {arizona_push, ~"counter", [[?OP_TEXT, ~"0", ~"x"]], [], {[], []}}, Socket2
+    ),
+    ?assertEqual(#{~"o" => [[?OP_TEXT, ~"counter:0", ~"x"]]}, decode(Push)).
+
+%% An event for a view a diff just removed is dropped by the live process, which
+%% is still the server being done with the frame: the ref says so.
+ref_answers_event_for_unknown_view(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, Frame, _Socket1} =
+        arizona_socket:handle_in(event_frame(~"gone", ~"inc", 3), Socket0),
+    ?assertEqual(#{~"r" => 3}, decode(Frame)).
+
+ref_answers_patch_that_changes_nothing(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{routes => #{~"/rc" => {arizona_root_counter, #{}}}}),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {ok, Socket1} = arizona_socket:handle_in(patch_frame(~"/rc"), Socket0),
+    {reply, Frame, _Socket2} = arizona_socket:handle_in(patch_frame(~"/rc", 4), Socket1),
+    ?assertEqual(#{~"r" => 4}, decode(Frame)).
+
+%% Every way a navigate or patch is answered carries the ref: the replace, the
+%% full-page load a layout change degrades to, and a gate's redirect.
+ref_rides_navigate_replies(Config) when is_list(Config) ->
+    Gate = [fun(R, _B) -> {halt, arizona_req:redirect(R, ~"/login")} end],
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/next" => {arizona_root_counter, #{}},
+            ~"/framed" => {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}},
+            ~"/admin" => {arizona_root_counter, #{middlewares => Gate}}
+        }
+    }),
+    {reply, _, Socket0} = arizona_socket:init(arizona_timer, #{}, Req, #{}),
+    {reply, Replace, _} = arizona_socket:handle_in(navigate_frame(~"/next", 5), Socket0),
+    ?assertMatch(#{~"r" := 5, ~"o" := [[?OP_REPLACE, _, _]]}, decode(Replace)),
+    {reply, Full, _} = arizona_socket:handle_in(navigate_frame(~"/framed", 6), Socket0),
+    ?assertMatch(
+        #{~"r" := 6, ~"e" := [[?EFFECT_NAVIGATE, ~"/framed", #{~"full" := true}]]}, decode(Full)
+    ),
+    {reply, _, Socket1} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    {reply, Redirect, _} = arizona_socket:handle_in(patch_frame(~"/admin", 7), Socket1),
+    ?assertMatch(
+        #{~"r" := 7, ~"e" := [[?EFFECT_NAVIGATE, ~"/login", #{~"replace" := true}]]},
+        decode(Redirect)
+    ).
+
+%% A ref'd event that flushes a deferred resync: the resync frame answers no
+%% frame, so the ref rides the event's own reply behind it.
+ref_rides_event_reply_after_deferred_resync(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} =
+        arizona_socket:init(
+            arizona_root_counter, #{}, Req, #{reconnect => true, fps_follow => true}
+        ),
+    {reply_many, [Resync, Reply], _Socket1} =
+        arizona_socket:handle_in(event_frame(~"counter", ~"noop", 11), Socket0),
+    ?assertNotMatch(#{~"r" := _}, decode(Resync)),
+    ?assertEqual(#{~"r" => 11}, decode(Reply)).
+
+%% A frame the server cannot read is dropped whole, ref included, so the client's
+%% wait for it ends in a timeout -- the frame was refused, not handled.
+unreadable_frame_with_ref_dropped(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(),
+    {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+    Frames = [
+        iolist_to_binary(json:encode([~"counter", ~"inc", ~"not-a-map", 12])),
+        iolist_to_binary(json:encode([~"counter", ~"inc", #{}, ~"12"])),
+        %% Out of range: no client could have sent it intact.
+        iolist_to_binary(json:encode([~"counter", ~"inc", #{}, -1])),
+        iolist_to_binary(json:encode([~"counter", ~"inc", #{}, 1 bsl 53])),
+        iolist_to_binary(json:encode([~"counter", ~"inc", #{}, 1.5])),
+        iolist_to_binary(json:encode([~"navigate", #{~"path" => ~"/x"}, 12]))
+    ],
+    [?assertMatch({ok, _}, arizona_socket:handle_in(F, Socket0)) || F <- Frames].
+
+%% The ref is spliced into the front of whatever reply the frame produced, so it
+%% must stay valid JSON beside every combination of ops, effects and names a
+%% reply can carry. Pushes queued ahead of the event fold into its reply, which
+%% is how each combination is produced here.
+ref_leads_every_reply_shape(Config) when is_list(Config) ->
+    Ops = [[?OP_TEXT, ~"0", ~"x"]],
+    Effects = [arizona_js:set_title(~"T")],
+    Names = {[~"az-probe"], []},
+    None = {[], []},
+    Cases = [
+        {Ops, Effects, Names, [~"a", ~"e", ~"o", ~"r"]},
+        {[], Effects, Names, [~"a", ~"e", ~"r"]},
+        {Ops, [], Names, [~"a", ~"o", ~"r"]},
+        {[], [], Names, [~"a", ~"r"]},
+        {Ops, Effects, None, [~"e", ~"o", ~"r"]},
+        {[], Effects, None, [~"e", ~"r"]},
+        {Ops, [], None, [~"o", ~"r"]}
+    ],
+    lists:foreach(
+        fun({PushOps, PushEffects, Observed, Keys}) ->
+            Req = arizona_req_test_adapter:new(),
+            {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+            self() ! {arizona_push, ~"other", PushOps, PushEffects, Observed},
+            {reply, Frame, _} =
+                arizona_socket:handle_in(event_frame(~"counter", ~"noop", 5), Socket),
+            Bin = iolist_to_binary(Frame),
+            ?assertMatch(<<"{\"r\":5,", _/binary>>, Bin, Keys),
+            Decoded = json:decode(Bin),
+            ?assertEqual(Keys, lists:sort(maps:keys(Decoded))),
+            ?assertMatch(#{~"r" := 5}, Decoded),
+            nothing_left_queued()
+        end,
+        Cases
+    ).
+
+%% A gate whose response only HTTP can deliver turns the frame into a full load;
+%% that load is the frame's answer, navigate and patch alike.
+ref_rides_halt_full_loads(Config) when is_list(Config) ->
+    OffOrigin = [fun(R, _B) -> {halt, arizona_req:redirect(R, ~"https://idp.example.com/")} end],
+    NoRedirect = [fun(R, _B) -> {halt, R} end],
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/sso" => {arizona_root_counter, #{middlewares => OffOrigin}},
+            ~"/gated" => {arizona_root_counter, #{middlewares => NoRedirect}}
+        }
+    }),
+    lists:foreach(
+        fun({Frame, Path}) ->
+            {reply, _, Socket} = arizona_socket:init(arizona_root_counter, #{}, Req, #{}),
+            {reply, Reply, _} = arizona_socket:handle_in(Frame, Socket),
+            ?assertMatch(
+                #{~"r" := 21, ~"e" := [[?EFFECT_NAVIGATE, Path, #{~"full" := true}]]},
+                decode(Reply)
+            )
+        end,
+        [
+            {navigate_frame(~"/sso", 21), ~"/sso"},
+            {patch_frame(~"/sso", 21), ~"/sso"},
+            {navigate_frame(~"/gated", 21), ~"/gated"},
+            {patch_frame(~"/gated", 21), ~"/gated"}
+        ]
+    ).
+
+%% The follow-up navigate that replays a gate's flash over HTTP answers its ref
+%% with that replay.
+ref_rides_flash_replay(Config) when is_list(Config) ->
+    ok = application:set_env(arizona, secret_key, ~"socket-suite-secret-key-32-bytes"),
+    try
+        Gate = fun(Req0, _B) ->
+            Req1 = arizona_req:put_flash(Req0, error, ~"Please sign in first."),
+            {halt, arizona_req:redirect(Req1, ~"/target")}
+        end,
+        Req = arizona_req_test_adapter:new(#{
+            routes => #{
+                ~"/gate" =>
+                    {arizona_root_counter, #{
+                        layouts => [{arizona_layout, render}], middlewares => [Gate]
+                    }},
+                ~"/target" =>
+                    {arizona_root_counter, #{layouts => [{arizona_outer_layout, render}]}}
+            }
+        }),
+        {reply, _, Socket0} = arizona_socket:init(arizona_root_counter, #{}, Req, #{
+            layouts => [{arizona_layout, render}]
+        }),
+        {reply, Halt, Socket1} = arizona_socket:handle_in(navigate_frame(~"/gate", 31), Socket0),
+        ?assertMatch(#{~"r" := 31, ~"e" := [[?EFFECT_NAVIGATE, ~"/target", _]]}, decode(Halt)),
+        {reply, Replay, _} = arizona_socket:handle_in(navigate_frame(~"/target", 32), Socket1),
+        ?assertMatch(
+            #{~"r" := 32, ~"e" := [[?EFFECT_NAVIGATE, ~"/gate", #{~"full" := true}]]},
+            decode(Replay)
+        )
+    after
+        ok = application:unset_env(arizona, secret_key)
+    end.
+
+%% A patch the server cannot keep in place -- another handler, or the same one
+%% under another id -- is answered by the replace it degrades to.
+ref_rides_patch_that_replaces_the_view(Config) when is_list(Config) ->
+    Req = arizona_req_test_adapter:new(#{
+        routes => #{
+            ~"/counter" => {arizona_root_counter, #{}},
+            ~"/b" => {arizona_route_id_view, #{bindings => #{id => ~"b"}}}
+        }
+    }),
+    {reply, _, Timer} = arizona_socket:init(arizona_timer, #{}, Req, #{}),
+    {reply, Other, _} = arizona_socket:handle_in(patch_frame(~"/counter", 41), Timer),
+    ?assertMatch(#{~"r" := 41, ~"o" := [[?OP_REPLACE, _, _]]}, decode(Other)),
+    {reply, _, A} = arizona_socket:init(arizona_route_id_view, #{id => ~"a"}, Req, #{}),
+    {reply, OtherId, _} = arizona_socket:handle_in(patch_frame(~"/b", 42), A),
+    ?assertMatch(#{~"r" := 42, ~"o" := [[?OP_REPLACE, ~"a", _]]}, decode(OtherId)).
+
+%% A live process that crashes under a ref'd frame answers nothing: the frame is
+%% dropped and the close that follows is what fails the ref on the client.
+ref_frame_lost_to_a_crash_gets_no_reply(Config) when is_list(Config) ->
+    Socket = counter_socket(),
+    Pid = arizona_socket:live_pid(Socket),
+    ok = sys:suspend(Pid),
+    true = is_pid(spawn_link(fun() -> kill_when_queued(Pid) end)),
+    ?assertMatch(
+        {{[], {close, 4500, ~"server crash", _}}, 1},
+        error_logs(fun() ->
+            settle(arizona_socket:handle_in(event_frame(null, ~"inc", 51), Socket), Socket)
+        end)
+    ).
+
+event_frame(Target, Event) ->
+    iolist_to_binary(json:encode([Target, Event, #{}])).
+
+event_frame(Target, Event, Ref) ->
+    iolist_to_binary(json:encode([Target, Event, #{}, Ref])).
+
+navigate_frame(Path, Ref) ->
+    iolist_to_binary(json:encode([~"navigate", #{~"path" => Path, ~"qs" => <<>>}, Ref])).
+
+patch_frame(Path, Ref) ->
+    iolist_to_binary(json:encode([~"patch", #{~"path" => Path, ~"qs" => <<>>}, Ref])).
 
 navigate_frame(Path) ->
     iolist_to_binary(json:encode([~"navigate", #{~"path" => Path, ~"qs" => <<>>}])).

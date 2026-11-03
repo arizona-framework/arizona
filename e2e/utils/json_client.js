@@ -91,6 +91,11 @@ export class NativeClient {
         this._heartbeatTimer = null;
         this._heartbeatPending = false;
         this._mountedAt = null; // when the open socket's view last mounted
+        // Frames awaiting their reply, by the ref they carried. Replies keep frame
+        // order, but each one names its ref, so a frame without "r" (a push, the
+        // reply to an untagged frame) can never be mistaken for one.
+        this._nextRef = 1;
+        this._replies = new Map();
     }
 
     connect() {
@@ -133,6 +138,11 @@ export class NativeClient {
             // navigate's new view.
             if (msg.o?.some((op) => op[0] === OP_REPLACE)) this._mountedAt = Date.now();
             if (msg.o) this._applyOps(msg.o);
+            // After the ops, so an awaited frame resolves on the state its reply
+            // produced; before the effects, so a full navigate among them (which
+            // replaces this socket, failing what it still owes) cannot fail the
+            // very frame this one answers.
+            if (msg.r !== undefined) this._settleReply(msg.r);
             // Handler-returned effects (the "e" array): dispatch the portable
             // ones, skip web-only effects (set_title, dispatch_event, ...).
             // Isolated per effect, like the ops.
@@ -142,6 +152,8 @@ export class NativeClient {
         };
         this.ws.onclose = (e) => {
             this._stopHeartbeat();
+            // A close loses every reply still owed, whatever happens next.
+            this._failReplies(new Error(`socket closed (${e.code}) before the reply`));
             // No reconnect on an intentional close (1000) or a never-connected
             // initial failure; any other drop reconnects with backoff.
             if (this._closing || e.code === 1000 || !this.root) return;
@@ -221,17 +233,79 @@ export class NativeClient {
         this.ws.send(JSON.stringify([viewId, event, payload]));
     }
 
+    // pushEvent, resolved once the server has handled the event: the frame
+    // carries a reply ref, which the server answers with exactly one frame even
+    // when the event changes nothing (and so would otherwise get no reply). A
+    // ref that never comes back means the frame was lost or refused: the promise
+    // rejects on the timeout, or on a close.
+    pushEventAwait(event, payload = {}, viewId = this.viewId, timeoutMs = 2000) {
+        return this._sendAwait([viewId, event, payload], event, timeoutMs);
+    }
+
+    // navigate, resolved once the server has answered it: with the new view's
+    // OP_REPLACE, a redirect, or a full navigate (whose reload then replaces the
+    // socket).
+    navigateAwait(path, timeoutMs = 2000) {
+        const [p, qs = ''] = path.split('?');
+        return this._sendAwait(['navigate', { path: p, qs }], `navigate ${path}`, timeoutMs, () =>
+            this._retargetReconnect(p),
+        );
+    }
+
+    // Send `frame` with a fresh reply ref appended and wait for the frame that
+    // carries it back. `sent` runs once the frame is actually on the socket.
+    _sendAwait(frame, label, timeoutMs, sent = () => {}) {
+        const ref = this._nextRef++;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this._replies.delete(ref);
+                reject(new Error(`no reply to ${label} (ref ${ref})`));
+            }, timeoutMs);
+            this._replies.set(ref, { resolve, reject, timer });
+            try {
+                this.ws.send(JSON.stringify([...frame, ref]));
+                sent();
+            } catch (err) {
+                // Not sent (the socket is still connecting, or already gone), so
+                // no reply is coming: fail now rather than at the timeout.
+                clearTimeout(timer);
+                this._replies.delete(ref);
+                reject(err);
+            }
+        });
+    }
+
+    _settleReply(ref) {
+        const pending = this._replies.get(ref);
+        if (!pending) return;
+        this._replies.delete(ref);
+        clearTimeout(pending.timer);
+        pending.resolve(this.tree());
+    }
+
+    _failReplies(err) {
+        for (const { reject, timer } of this._replies.values()) {
+            clearTimeout(timer);
+            reject(err);
+        }
+        this._replies.clear();
+    }
+
     // SPA navigate: transition to a new view on the same socket (the server's
     // handle_navigate re-mounts and replies with OP_REPLACE). Mirrors the browser
     // sending ['navigate', {path, qs}].
     navigate(path) {
         const [p, qs = ''] = path.split('?');
         this.ws.send(JSON.stringify(['navigate', { path: p, qs }]));
-        // Keep the reconnect URL in sync so a drop re-mounts the navigated path,
-        // not the launch path (mirrors the browser worker updating _wsUrl on a
-        // navigate). Reconnect = a fresh mount, so only the route (_az_path) matters.
+        this._retargetReconnect(p);
+    }
+
+    // Keep the reconnect URL in sync so a drop re-mounts the navigated path, not
+    // the launch path (mirrors the browser worker updating _wsUrl on a navigate).
+    // Reconnect = a fresh mount, so only the route (_az_path) matters.
+    _retargetReconnect(path) {
         const u = new URL(this.wsUrl);
-        u.searchParams.set('_az_path', p);
+        u.searchParams.set('_az_path', path);
         this.wsUrl = u.toString();
     }
 
@@ -251,6 +325,9 @@ export class NativeClient {
         }
         for (const [k, v] of new URLSearchParams(qs)) u.searchParams.append(k, v);
         this.wsUrl = u.toString();
+        // The old socket's handlers are detached below, so its close would fail
+        // nothing: what it still owes is lost with it, now.
+        this._failReplies(new Error(`socket replaced by a full navigate to ${path}`));
         const old = this.ws;
         old.onmessage = null;
         old.onclose = null;

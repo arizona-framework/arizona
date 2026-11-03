@@ -6,7 +6,11 @@
  * Sends pre-computed DOM-ready data to the main thread.
  *
  * Worker -> Main protocol (arrays for fast structured clone):
- *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null] -- resolved message
+ *   [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null, ref|null]
+ *                                                     -- resolved message; `ref` is
+ *                                                        the reply ref of the frame
+ *                                                        it answers, if that one
+ *                                                        carried one
  *   [1, isReconnect]                                  -- WS opened
  *   [2, closeCode]                                    -- WS closed
  *   [3]                                               -- pong to a [4] ping
@@ -392,7 +396,7 @@ function openSocket() {
         const firstAfterReconnect = _reconnecting && ops !== null;
         if (firstAfterReconnect) _reconnecting = false;
 
-        postMessage([0, ops, effects, firstAfterReconnect, msg.a ?? null]);
+        postMessage([0, ops, effects, firstAfterReconnect, msg.a ?? null, msg.r ?? null]);
     };
 
     ws.onclose = (e) => {

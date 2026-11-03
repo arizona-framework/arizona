@@ -11,16 +11,19 @@
  * @property {() => boolean} ready whether delegated commands run now: on a live
  *   page while its socket is open, on a page with no server always
  * @property {() => number} epoch the navigation epoch a deferred event captures
- * @property {(name: string, msg: string, epoch?: number) => void} sendEvent send a
- *   view event raised in `epoch` (default: the current one)
+ * @property {(name: string, frame: Array<*>, epoch?: number,
+ *   transition?: {types?: string[], kind: 'any'|'replace'}|null) => void} sendEvent send
+ *   the view event `frame` (`[target, event, payload]`) raised in `epoch` (default:
+ *   the current one), under the view transition that waits for its reply, if any
  * @property {(url: string) => boolean} awaitsReply whether a navigate/patch to `url`
  *   is answered by a frame, so a view transition can wait for it
  * @property {(t: {types?: string[], kind: 'any'|'replace'}) => void} armTransition arm a view
  *   transition for the reply a command just sent awaits
  * @property {() => (fn: () => void) => void} holdReplay hold the replay running now
  *   open for work a command runs later
- * @property {(url: string, opts: Object<string, *>, kind: 'navigate'|'patch') => void} navigate
- *   a navigate or patch effect
+ * @property {(url: string, opts: Object<string, *>, kind: 'navigate'|'patch',
+ *   transition?: {types?: string[], kind: 'any'|'replace'}) => void} navigate
+ *   a navigate or patch effect, under the view transition running it, if any
  * @property {(url: string, replace?: boolean) => void} leavePage load `url` as a real page
  */
 

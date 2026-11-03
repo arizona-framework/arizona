@@ -75,4 +75,35 @@ test.describe('JSON wire -- counter', () => {
             client.close();
         }
     });
+
+    // Setting the same value twice changes nothing the second time, which the
+    // server answers with no frame at all -- indistinguishable from a lost frame
+    // to a client holding the press. With a reply ref both are answered.
+    test('answers an awaited event that changes nothing', async ({ baseURL }) => {
+        const client = new NativeClient(baseURL, '/json/counter');
+        await client.connect();
+        try {
+            const first = await client.pushEventAwait('set', { value: 42 });
+            expect(first.children[0].children).toEqual(['Count: ', '42']);
+            const again = await client.pushEventAwait('set', { value: 42 });
+            expect(again.children[0].children).toEqual(['Count: ', '42']);
+            // An event for a view that does not exist is dropped, and still answered.
+            await client.pushEventAwait('inc', {}, 'no_such_view');
+            expect(client.tree().children[0].children).toEqual(['Count: ', '42']);
+        } finally {
+            client.close();
+        }
+    });
+
+    test('answers an awaited navigate with the new view', async ({ baseURL }) => {
+        const client = new NativeClient(baseURL, '/json/counter');
+        await client.connect();
+        try {
+            const tree = await client.navigateAwait('/json/list');
+            expect(tree.id).not.toBe('json_counter');
+            expect(client.viewId).toBe(tree.id);
+        } finally {
+            client.close();
+        }
+    });
 });
