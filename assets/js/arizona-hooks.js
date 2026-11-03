@@ -77,7 +77,7 @@ export function mountHook(el) {
     instance.__name = name;
     /** @param {string} eventName @param {*} payload */
     instance.pushEvent = (eventName, payload) => {
-        host.sendEvent(eventName, JSON.stringify([resolveTarget(el), eventName, payload || {}]));
+        host.sendEvent(eventName, [resolveTarget(el), eventName, payload || {}]);
     };
     _hooks.set(el, instance);
     if (def.mounted) runHookCallback(instance, def.mounted, 'mounted');

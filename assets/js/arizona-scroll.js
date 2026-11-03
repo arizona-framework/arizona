@@ -22,10 +22,10 @@
 /**
  * Pending scroll intent set when az-navigate/az-patch/popstate is handled. A
  * navigate applies it after its OP_REPLACE; a patch (`patch: true`) applies it
- * after the first non-empty diff batch (it has no OP_REPLACE), and is dropped
- * at the end of the first worker frame after the patch either way (see the
- * worker message handler), so a no-op patch can't leave it armed indefinitely.
- * @type {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null, patch?: boolean}|null}
+ * on its own reply, the frame carrying the patch's reply ref (`ref`), when that
+ * reply carries a diff, and is dropped by that reply either way (see the worker
+ * message handler), so a no-op patch can't leave it armed for an unrelated diff.
+ * @type {{kind: 'push'|'pop', hash: string, saved?: {x:number,y:number}|null, patch?: boolean, ref?: number}|null}
  */
 export let _pendingScroll = null;
 

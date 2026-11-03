@@ -352,6 +352,13 @@ export function executeJS(el, event, cmds) {
     runCommands(el, event, cmds, '');
 }
 
+// The view transition whose inner commands are running now, if it waits for a
+// reply. A push_event among them captures it, so the transition settles on that
+// event's own reply even when the event is sent later (debounced) and other
+// events go out first.
+/** @type {{types?: string[], kind: 'any'|'replace'}|null} */
+let _transitionScope = null;
+
 /**
  * `executeJS` with the position of `cmds` in the attribute's command tree: `prefix`
  * is the index path of the wrapper (transition/on_key) holding them, '' at the
@@ -398,8 +405,16 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                   ? 'any'
                   : null;
             if (kind) {
-                host.armTransition({ types: opts.types, kind });
-                runCommands(el, event, inner, `${prefix}${index}.`);
+                /** @type {{types?: string[], kind: 'any'|'replace'}} */
+                const t = { types: opts.types, kind };
+                host.armTransition(t);
+                const outer = _transitionScope;
+                _transitionScope = t;
+                try {
+                    runCommands(el, event, inner, `${prefix}${index}.`);
+                } finally {
+                    _transitionScope = outer;
+                }
             } else {
                 // The update callback runs inside startViewTransition, OUTSIDE
                 // every caller's containment -- a throwing command would become
@@ -426,14 +441,15 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             const evt = cmd[1];
             const payload =
                 cmd.length > 2 ? { ...autoPayload(el, event), ...cmd[2] } : autoPayload(el, event);
-            const msg = JSON.stringify([resolveTarget(el), evt, payload]);
+            const frame = [resolveTarget(el), evt, payload];
+            const transition = _transitionScope;
             if (event) {
                 const epoch = host.epoch();
                 scheduleSend(el, event, prefix, index, () => {
-                    host.sendEvent(evt, msg, epoch);
+                    host.sendEvent(evt, frame, epoch, transition);
                 });
             } else {
-                host.sendEvent(evt, msg);
+                host.sendEvent(evt, frame, undefined, transition);
             }
             break;
         }

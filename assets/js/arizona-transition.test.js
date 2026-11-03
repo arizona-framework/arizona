@@ -64,8 +64,15 @@ function setupMockWorker() {
     worker.onmessage({ data: [1, false] }); // open -> _connected = true
     return {
         posted,
-        simulateMessage: (ops, effects = null) =>
-            worker.onmessage({ data: [0, ops, effects, false] }),
+        simulateMessage: (ops, effects = null, ref = null) =>
+            worker.onmessage({ data: [0, ops, effects, false, null, ref] }),
+        // The reply ref the last frame sent carries, or null when it carries none.
+        lastRef: () => {
+            const frames = posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
+            const last = frames.at(-1);
+            const ref = last?.at(-1);
+            return typeof ref === 'number' ? ref : null;
+        },
         restore: () => {
             disconnect(); // resets _pendingTransition + listeners
             globalThis.Worker = OrigWorker;
@@ -210,26 +217,62 @@ describe('view transitions -- navigation', () => {
 // ---------------------------------------------------------------------------
 
 describe('view transitions -- push_event', () => {
-    it('wraps the next server diff, even when it is not a REPLACE', () => {
+    it('wraps the reply diff, even when it is not a REPLACE', () => {
         const fn = document.startViewTransition;
         document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
         executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'load_more']]);
-        _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']]);
+        const ref = _mock.lastRef();
+        expect(ref).toEqual(expect.any(Number));
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']], null, ref);
         expect(fn).toHaveBeenCalledOnce();
         expect(document.querySelector('#page [az="0"]').innerHTML).toBe('new');
     });
 
-    it('does not let a no-diff push_event linger onto a later diff', () => {
+    it('does not let an effects-only reply linger onto a later diff', () => {
         const fn = document.startViewTransition;
         document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
         executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'noop']]);
         // The event produced no diff (effects-only response) -- the intent is
         // consumed, not held.
-        _mock.simulateMessage(null, [[JS_SET_TITLE, 'x']]);
+        _mock.simulateMessage(null, [[JS_SET_TITLE, 'x']], _mock.lastRef());
         expect(fn).not.toHaveBeenCalled();
         // A later, unrelated diff must NOT inherit the stale intent.
         _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']]);
         expect(fn).not.toHaveBeenCalled();
+    });
+
+    // An event that changes nothing used to get no frame at all, so the intent
+    // waited for the next frame of any kind -- a push seconds later animated.
+    it('is consumed by a reply that changes nothing', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'noop']]);
+        _mock.simulateMessage(null, null, _mock.lastRef());
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'tick']]);
+        expect(fn).not.toHaveBeenCalled();
+    });
+
+    it('does not wrap a push that lands ahead of the reply', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p><p az="1">old</p></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'load_more']]);
+        const ref = _mock.lastRef();
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'tick']]);
+        expect(fn).not.toHaveBeenCalled();
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']], null, ref);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
+    // Only the frame a transition waits for is tagged: an event sent outside one
+    // goes out as it always did.
+    it('tags only the event the transition wraps', () => {
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
+        executeJS(document.body, null, [JS_PUSH_EVENT, 'plain']);
+        expect(_mock.lastRef()).toBeNull();
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'wrapped']]);
+        expect(_mock.lastRef()).toEqual(expect.any(Number));
+        executeJS(document.body, null, [JS_PUSH_EVENT, 'after']);
+        expect(_mock.lastRef()).toBeNull();
     });
 });
 
@@ -248,6 +291,44 @@ describe('view transitions -- az-transition attribute', () => {
         _mock.simulateMessage([replaceOp('Detail')]);
         expect(fn).toHaveBeenCalledOnce();
         expect(fn.mock.calls[0][0].types).toEqual(['slide', 'back']);
+    });
+
+    it('animates an az-patch link on its own reply, not a push ahead of it', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML =
+            '<div id="page" az-view><p az="0">old</p><p az="1">old</p>' +
+            '<a id="lnk" href="/x" az-patch az-transition>go</a></div>';
+        document
+            .getElementById('lnk')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+        const ref = _mock.lastRef();
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'tick']]);
+        expect(fn).not.toHaveBeenCalled();
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']], null, ref);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
+    // A debounced push_event leaves the transition armed until it is sent; an
+    // event sent in between is not the one it waits for.
+    it('binds a debounced event to its own reply', () => {
+        vi.useFakeTimers();
+        try {
+            const fn = document.startViewTransition;
+            document.body.innerHTML =
+                '<div id="page" az-view><p az="0">old</p>' +
+                `<button id="b" az-click='[${JS_TRANSITION},{},[${JS_PUSH_EVENT},"slow"]]' ` +
+                'az-debounce="100">b</button></div>';
+            document.getElementById('b').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            executeJS(document.body, null, [JS_PUSH_EVENT, 'other']);
+            expect(_mock.lastRef()).toBeNull();
+            vi.advanceTimersByTime(100);
+            const ref = _mock.lastRef();
+            expect(ref).toEqual(expect.any(Number));
+            _mock.simulateMessage([[OP.TEXT, 'page:0', 'new']], null, ref);
+            expect(fn).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('animates a client effect on a non-link az_click element', () => {

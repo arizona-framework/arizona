@@ -43,12 +43,24 @@ function setupMockWorker() {
         }
     );
     const disconnect = mod.connect('/ws');
+    const sent = () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
+    /** @type {(ops: *, effects?: *, resync?: boolean, ref?: number|null) => void} */
+    const frame = (ops, effects = null, resync = false, ref = null) =>
+        worker.onmessage({ data: [0, ops, effects, resync, null, ref] });
+    // The server answers every navigate/patch frame, in order, with one frame
+    // carrying its reply ref back.
+    let answered = 0;
+    const owed = () =>
+        sent()
+            .filter((m) => m[0] === 'navigate' || m[0] === 'patch')
+            .map((m) => m[2]);
     return {
         open: (reconnect = false) => worker.onmessage({ data: [1, reconnect] }),
         close: (/** @type {number} */ code) => worker.onmessage({ data: [2, code] }),
-        frame: (/** @type {*} */ ops, /** @type {*} */ effects = null, resync = false) =>
-            worker.onmessage({ data: [0, ops, effects, resync] }),
-        sent: () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1])),
+        frame,
+        answer: (/** @type {*} */ ops, /** @type {*} */ effects = null) =>
+            frame(ops, effects, false, owed()[answered++]),
+        sent,
         restore: () => {
             disconnect();
             globalThis.Worker = OrigWorker;
@@ -70,7 +82,7 @@ const events = () =>
     mock.sent().filter((/** @type {Array<*>} */ m) => m[0] !== 'navigate' && m[0] !== 'patch');
 const click = () => /** @type {HTMLElement} */ (document.querySelector('button')).click();
 const navigate = (/** @type {string} */ path) => mod.applyEffects([[JS_NAVIGATE, path, {}]]);
-const replace = () => mock.frame([[OP_REPLACE, 'page', NEW_PAGE]]);
+const replace = () => mock.answer([[OP_REPLACE, 'page', NEW_PAGE]]);
 
 beforeEach(() => {
     history.replaceState(null, '', '/start');
@@ -89,7 +101,11 @@ describe('navigate page-swap window', () => {
     it('drops an old-page event sent before the OP_REPLACE, sends one after', async () => {
         await connected();
         navigate('/next');
-        expect(mock.sent()).toContainEqual(['navigate', { path: '/next', qs: '' }]);
+        expect(mock.sent()).toContainEqual([
+            'navigate',
+            { path: '/next', qs: '' },
+            expect.any(Number),
+        ]);
 
         click();
         mod.pushEventTo('page', 'bump', {});
@@ -117,7 +133,11 @@ describe('navigate page-swap window', () => {
         );
         mod.mountHooks(document);
         /** @type {HTMLElement} */ (document.getElementById('l')).click();
-        expect(mock.sent()).toContainEqual(['navigate', { path: '/next', qs: '' }]);
+        expect(mock.sent()).toContainEqual([
+            'navigate',
+            { path: '/next', qs: '' },
+            expect.any(Number),
+        ]);
 
         click();
         hook.pushEvent('hooked', {});
@@ -135,17 +155,50 @@ describe('navigate page-swap window', () => {
         expect(events()).toEqual([]);
     });
 
+    // A timer redirect the old page pushes is a navigate of its own, not the
+    // answer to the one in flight: with the push settling it, the window would
+    // close on that navigate's reply while the redirect's is still owed.
+    it('a navigate effect in an old-page push does not settle the navigate in flight', async () => {
+        await connected();
+        navigate('/next');
+        mock.frame(null, [[JS_NAVIGATE, '/timer']]);
+        replace(); // /next's reply: /timer is still in flight
+        click();
+        expect(events()).toEqual([]);
+        replace(); // /timer's reply
+        click();
+        expect(events()).toEqual([['page', 'inc', {}]]);
+    });
+
+    // A cross-handler patch is answered by an OP_REPLACE; it answers the patch,
+    // not a navigate sent after it.
+    it('a patch degraded to a replace does not settle a navigate', async () => {
+        await connected();
+        mod.applyEffects([[JS_PATCH, '/other?tab=2', {}]]);
+        navigate('/next');
+        replace(); // the patch's reply
+        click();
+        expect(events()).toEqual([]);
+        replace(); // the navigate's reply
+        click();
+        expect(events()).toEqual([['page', 'inc', {}]]);
+    });
+
     it('a push_event effect in the OP_REPLACE frame goes out', async () => {
         await connected();
         navigate('/next');
-        mock.frame([[OP_REPLACE, 'page', NEW_PAGE]], [[JS_PUSH_EVENT, 'ready', {}]]);
+        mock.answer([[OP_REPLACE, 'page', NEW_PAGE]], [[JS_PUSH_EVENT, 'ready', {}]]);
         expect(events()).toEqual([[null, 'ready', {}]]);
     });
 
     it('a patch does not block events', async () => {
         await connected();
         mod.applyEffects([[JS_PATCH, '/start?tab=2', {}]]);
-        expect(mock.sent()).toContainEqual(['patch', { path: '/start', qs: 'tab=2' }]);
+        expect(mock.sent()).toContainEqual([
+            'patch',
+            { path: '/start', qs: 'tab=2' },
+            expect.any(Number),
+        ]);
         click();
         expect(events()).toEqual([['page', 'bump', {}]]);
     });
@@ -155,7 +208,7 @@ describe('navigate page-swap window', () => {
         navigate('/next');
         const assign = vi.fn();
         vi.stubGlobal('location', { assign, href: 'http://localhost/' });
-        mock.frame(null, [[JS_NAVIGATE, '/next', { full: true }]]);
+        mock.answer(null, [[JS_NAVIGATE, '/next', { full: true }]]);
         vi.unstubAllGlobals();
         expect(assign).toHaveBeenCalledWith('/next');
         click();
@@ -165,8 +218,12 @@ describe('navigate page-swap window', () => {
     it('a redirect reply re-arms the window for its own navigate', async () => {
         await connected();
         navigate('/admin');
-        mock.frame(null, [[JS_NAVIGATE, '/login']]);
-        expect(mock.sent()).toContainEqual(['navigate', { path: '/login', qs: '' }]);
+        mock.answer(null, [[JS_NAVIGATE, '/login']]);
+        expect(mock.sent()).toContainEqual([
+            'navigate',
+            { path: '/login', qs: '' },
+            expect.any(Number),
+        ]);
         click();
         expect(events()).toEqual([]);
         replace();
@@ -203,7 +260,11 @@ describe('navigate page-swap window', () => {
         history.pushState(null, '', '/other');
         window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
         mod.pushEvent('b', {});
-        expect(mock.sent()).toContainEqual(['navigate', { path: '/other', qs: '' }]);
+        expect(mock.sent()).toContainEqual([
+            'navigate',
+            { path: '/other', qs: '' },
+            expect.any(Number),
+        ]);
         expect(events()).toEqual([[null, 'a', {}]]);
     });
 
@@ -250,7 +311,7 @@ describe('navigate page-swap window', () => {
         await connected();
         navigate('/admin');
         navigate('/b');
-        mock.frame(null, [[JS_NAVIGATE, '/login']]); // /admin's reply re-arms for /login
+        mock.answer(null, [[JS_NAVIGATE, '/login']]); // /admin's reply re-arms for /login
         replace(); // /b's reply: /login still in flight
         click();
         expect(events()).toEqual([]);
@@ -265,7 +326,7 @@ describe('navigate page-swap window', () => {
         navigate('/b');
         const assign = vi.fn();
         vi.stubGlobal('location', { assign, href: 'http://localhost/' });
-        mock.frame(null, [[JS_NAVIGATE, '/a', { full: true }]]);
+        mock.answer(null, [[JS_NAVIGATE, '/a', { full: true }]]);
         vi.unstubAllGlobals();
         expect(assign).toHaveBeenCalledWith('/a');
         click();

@@ -1,4 +1,4 @@
-import { applyEffects, executeJS, formFields, JS_NAVIGATE, osHost } from './arizona-commands.js';
+import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.js';
 import { allDocs, closeAllPip } from './arizona-docs.js';
 import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
 import { destroyAllHooks, mountHooks } from './arizona-hooks.js';
@@ -341,12 +341,42 @@ let _historyIdx = 0;
 // intent until the server response lands; the worker message handler then wraps
 // that message's ops+effects together. `kind` says which batch to wait for:
 // 'replace' (a navigation's page swap -- a stray text/attr tick is ignored) or
-// 'any' (the next non-empty diff from a push_event). Set by the az-transition
-// attribute, an arizona_js:transition command, or replayed from history state
-// on back/forward. Synchronous effects never set it -- they wrap in place.
+// 'any' (the reply to the push_event or patch it wraps, `_transitionRef`). Set by
+// the az-transition attribute, an arizona_js:transition command, or replayed from
+// history state on back/forward. Synchronous effects never set it -- they wrap in
+// place.
 
 /** @type {{types?: string[], kind: 'replace'|'any'}|null} */
 let _pendingTransition = null;
+
+// The reply ref of the frame an 'any' transition waits for, bound when that frame
+// is sent (`null` until then). The reply is the frame carrying it back: a server
+// push landing first is not wrapped, and a reply that changes nothing still
+// answers, so the intent never outlives the frame it was armed for. A frame is
+// tagged only here, so every other event goes out without a ref.
+/** @type {number|null} */
+let _transitionRef = null;
+
+/**
+ * Arm (or, with `null`, drop) the pending view transition; the frame it waits
+ * for is bound when it is sent.
+ * @param {typeof _pendingTransition} t
+ */
+function armPendingTransition(t) {
+    _pendingTransition = t;
+    _transitionRef = null;
+}
+
+// Reply refs, unique per page: a frame tagged with one is answered by exactly one
+// frame carrying it back (`"r"`), even when it changes nothing -- the protocol
+// otherwise sends nothing for such a frame, which no client can tell from a slow
+// reply. Never reused, so a reply owed to a socket that closed cannot settle a
+// frame the next socket was sent.
+let _nextRef = 1;
+
+function nextRef() {
+    return _nextRef++;
+}
 
 // The page-swap window of a navigate: from posting the `navigate` frame until its
 // reply lands. The server replaces the root view when it handles the frame, but
@@ -357,27 +387,23 @@ let _pendingTransition = null;
 // one sent after the swap (frames carry no page epoch), so the client drops it,
 // exactly as a full page load would.
 //
-// Counted, not flagged: navigates can be in flight back to back, and the window
-// must stay open until the LAST one is answered. The server answers each navigate
-// frame exactly once and in order -- with its `OP_REPLACE`, or with a navigate
-// effect (a middleware redirect, which re-arms through `sendNav`, or a full-page
-// load, where the server kept the old view) -- so each such frame settles one
-// (`settleNavReplies`). A close loses every reply still owed: the count moves to
-// `_navAwaitResync`, which the reconnect's resync `OP_REPLACE` clears.
+// Kept by reply ref, not counted: navigates can be in flight back to back, and the
+// window must stay open until the LAST one is answered. Every navigate frame
+// carries a ref, which the server answers with exactly one frame -- its
+// `OP_REPLACE`, or a navigate effect (a middleware redirect, which re-arms through
+// `sendNav`, or a full-page load, where the server kept the old view) -- so only
+// that frame settles it (`settleNavReplies`). A navigate effect in an old-page push
+// (a timer redirect) and the `OP_REPLACE` of a patch the server degraded to a
+// replace answer no navigate ref, so neither closes the window early. A close loses
+// every reply still owed: the window moves to `_navAwaitResync`, which the
+// reconnect's resync `OP_REPLACE` clears.
 //
-// There is no timeout escape hatch, on purpose: every server answer to a navigate
-// frame (replace, redirect, full load) settles it, and a crash closes the socket,
-// which hands over to the resync. A server change that could leave a navigate
-// frame unanswered must add one, or the page stops sending events.
-//
-// Residuals, both where the wire carries no reply id: a navigate effect in an
-// old-page push frame (a timer redirect) that lands ahead of the reply settles
-// one navigate early; so does the `OP_REPLACE` of a patch the server degrades to
-// a replace (a cross-handler patch) while a navigate is in flight, letting a
-// stale click through before the navigate's own reply. A patch does not arm:
-// it usually keeps the view, and the client cannot know ahead that the server
-// will degrade it.
-let _navInFlight = 0;
+// There is no timeout escape hatch, on purpose: the server answers every ref'd
+// frame, and a crash closes the socket, which hands over to the resync. A patch
+// does not arm: it usually keeps the view, and the client cannot know ahead that
+// the server will degrade it.
+/** @type {Set<number>} */
+const _navRefs = new Set();
 
 let _navAwaitResync = false;
 
@@ -392,16 +418,28 @@ let _navEpoch = 0;
  * A drop is reported, like the worker's socket-down drop: silence would read as
  * a handler that never fired. By event name only -- the payload may carry the
  * auto-collected form fields.
+ *
+ * `transition` is the view transition the event was raised under: when it is
+ * still the pending one, the frame is tagged with the reply ref it waits for. A
+ * dropped event takes its transition with it, so the intent cannot settle onto a
+ * later, unrelated reply.
  * @param {string} name event name, for the warning
- * @param {string} msg encoded `[target, event, payload]` frame
+ * @param {Array<*>} frame `[target, event, payload]`
  * @param {number} [epoch] `_navEpoch` when the event was raised
+ * @param {typeof _pendingTransition} [transition]
  */
-function sendEvent(name, msg, epoch = _navEpoch) {
-    if (_navInFlight > 0 || _navAwaitResync || epoch !== _navEpoch) {
+function sendEvent(name, frame, epoch = _navEpoch, transition = null) {
+    const waits = transition !== null && transition === _pendingTransition;
+    if (_navRefs.size > 0 || _navAwaitResync || epoch !== _navEpoch) {
         console.warn(`[arizona] dropped stale event "${name}"`);
+        if (waits) armPendingTransition(null);
         return;
     }
-    workerPost(W_SEND, msg);
+    if (waits && _transitionRef === null) {
+        _transitionRef = nextRef();
+        frame = [...frame, _transitionRef];
+    }
+    workerPost(W_SEND, JSON.stringify(frame));
 }
 
 // The user-facing query string carried to the worker for the next reconnect
@@ -444,6 +482,7 @@ function reconnectUserQs(qs) {
  */
 function navigateTo(path, qs, hash, opts) {
     const kind = opts.kind === 'patch' ? 'patch' : 'navigate';
+    const ref = nextRef();
     const pathAndQs = qs ? `${path}?${qs}` : path;
     const fullUrl = opts.fullUrl || (hash ? `${pathAndQs}#${hash}` : pathAndQs);
     /** @type {{_azTransitionPrev?: typeof _pendingTransition, _azTransitionNext?: typeof _pendingTransition, _azNav?: string, _azIdx?: number}} */
@@ -468,47 +507,62 @@ function navigateTo(path, qs, hash, opts) {
         navState._azIdx = _historyIdx;
         if (_pendingTransition) navState._azTransitionPrev = _pendingTransition;
         history.pushState(navState, '', fullUrl);
-        if (!opts.noscroll) setPendingScroll({ kind: 'push', hash, patch: kind === 'patch' });
+        if (!opts.noscroll) {
+            setPendingScroll({ kind: 'push', hash, patch: kind === 'patch', ref });
+        }
     }
-    sendNav(kind, path, qs);
+    sendNav(kind, path, qs, ref);
 }
 
 /**
- * Settle the navigate replies a server frame carries: its `OP_REPLACE` or a
- * top-level navigate effect. The first frame after a reconnect is the resync,
- * which clears the post-close wait instead. Called
- * before the frame is applied, so its own effects -- a redirect re-arming, the new
- * page's push_event -- see the settled count.
- * @param {Array<Array<*>>|null} ops
- * @param {Array<Array<*>>|null} effects
+ * Settle the navigate a server frame answers, by the reply ref it carries. The
+ * first frame after a reconnect is the resync, which clears the post-close wait
+ * instead. Called before the frame is applied, so its own effects -- a redirect
+ * re-arming, the new page's push_event -- see the window settled.
+ * @param {number|null} ref
  * @param {boolean} resync
  */
-function settleNavReplies(ops, effects, resync) {
+function settleNavReplies(ref, resync) {
     if (resync) {
         _navAwaitResync = false;
         return;
     }
-    if (_navInFlight === 0) return;
-    if (ops?.some((op) => op[0] === OP.REPLACE) || effects?.some((eff) => eff[0] === JS_NAVIGATE)) {
-        _navInFlight--;
-    }
+    if (ref !== null) _navRefs.delete(ref);
 }
 
 /**
- * Post a navigate/patch frame and retarget the reconnect URL. A navigate arms the
- * page-swap window (`_navInFlight`) -- only on a live socket: a frame posted while
- * disconnected is dropped by the worker and gets no reply, and the reconnect's
- * resync is what puts the new page on screen.
+ * A socket that went away owes no more replies. An open page-swap window waits
+ * for the reconnect's resync instead, and a transition waiting for a reply no
+ * longer comes would otherwise sit armed until something re-armed it.
+ */
+function dropOwedReplies() {
+    if (_navRefs.size > 0) {
+        _navRefs.clear();
+        _navAwaitResync = true;
+    }
+    if (_transitionRef !== null) armPendingTransition(null);
+}
+
+/**
+ * Post a navigate/patch frame, tagged with its reply ref, and retarget the
+ * reconnect URL. A navigate arms the page-swap window (`_navRefs`) -- only on a
+ * live socket: a frame posted while disconnected is dropped by the worker and gets
+ * no reply, and the reconnect's resync is what puts the new page on screen. A
+ * patch is what an 'any' transition armed just before it waits for.
  * @param {'navigate'|'patch'} kind
  * @param {string} path
  * @param {string} qs
+ * @param {number} [ref]
  */
-function sendNav(kind, path, qs) {
+function sendNav(kind, path, qs, ref = nextRef()) {
     if (kind === 'navigate' && _connected) {
-        _navInFlight++;
+        _navRefs.add(ref);
         _navEpoch++;
     }
-    workerPost(W_SEND, JSON.stringify([kind, { path, qs }]));
+    if (kind === 'patch' && _pendingTransition?.kind === 'any' && _transitionRef === null) {
+        _transitionRef = ref;
+    }
+    workerPost(W_SEND, JSON.stringify([kind, { path, qs }, ref]));
     workerPost(W_UPDATE_PATH, { path, qs: reconnectUserQs(qs) });
     _currentPath = path;
     _currentQs = qs;
@@ -584,7 +638,7 @@ function navigateEffect(full, opts, kind, transition) {
         if (!opts.noscroll) applyScroll({ kind: 'push', hash });
         return;
     }
-    if (transition !== undefined) _pendingTransition = transition;
+    if (transition !== undefined) armPendingTransition(transition);
     const qs = u.search ? u.search.slice(1) : '';
     navigateTo(u.pathname, qs, hash, { ...opts, fullUrl: full, kind });
 }
@@ -628,7 +682,7 @@ export function pushEvent(event, payload) {
  * @param {*} [payload]
  */
 export function pushEventTo(view, event, payload) {
-    sendEvent(event, JSON.stringify([view ?? null, event, payload]));
+    sendEvent(event, [view ?? null, event, payload]);
 }
 
 // Whether this page has already handed the shell its OS-event callback. Module
@@ -991,11 +1045,12 @@ export function connect(endpoint, params = {}) {
             // Replay the same mode the edge was navigated with (tagged `_azNav`),
             // so back/forward over a patch re-patches rather than replacing.
             const navKind = e.state?._azNav === 'patch' ? 'patch' : 'navigate';
-            setPendingScroll({ kind: 'pop', hash, saved, patch: navKind === 'patch' });
+            const ref = nextRef();
+            setPendingScroll({ kind: 'pop', hash, saved, patch: navKind === 'patch', ref });
             // Replay the transition of the edge just crossed, in either
             // direction; an edge navigated without one stays instant.
-            _pendingTransition = transition || null;
-            sendNav(navKind, path, qs);
+            armPendingTransition(transition || null);
+            sendNav(navKind, path, qs, ref);
         },
         { signal },
     );
@@ -1057,7 +1112,7 @@ export function connect(endpoint, params = {}) {
             const msg = e.data;
             switch (msg[0]) {
                 case 0: {
-                    // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null]
+                    // [0, ops|null, effects|null, firstAfterReconnect, azAttrs|null, ref|null]
                     // A navigate's reply is its new view's OP_REPLACE, which proves
                     // that mount too. Only the first proof on a socket is a
                     // connection event: a later one is a navigate on a live socket.
@@ -1077,22 +1132,21 @@ export function connect(endpoint, params = {}) {
                     // so a listener exists the moment an element declaring one does.
                     if (msg[4]) noteAzAttrs(msg[4]);
                     const apply = () => {
-                        // A patch-scroll intent lives exactly until the first frame
-                        // after the patch request. applyOps consumes it when the
-                        // frame carries ops (the patch reply diff -- scroll applies);
-                        // otherwise it is cleared here, so a no-op patch (the server
-                        // sends nothing back) can't leave the intent armed for an
-                        // unrelated later diff to yank the scroll. Identity-checked
-                        // so an intent armed by THIS frame's effects (a JS_PATCH
-                        // command) survives to its own reply. Residual race: for a
-                        // truly silent patch the next frame -- whatever it is -- is
-                        // indistinguishable from a slow patch reply, so one
-                        // unrelated ops-frame can still scroll; there is no reply
-                        // id on the wire to do better client-side.
+                        // A patch-scroll intent lives until its patch's reply: the
+                        // frame carrying the patch's ref, which the server sends
+                        // even when the patch changed nothing. It scrolls when that
+                        // reply carries a diff and is dropped either way; a push
+                        // landing first is not the reply and leaves it armed. (A
+                        // patch the server degraded to a replace scrolls on its
+                        // OP_REPLACE, inside applyOps, like a navigate.)
                         const armedScroll = _pendingScroll;
+                        const patchReply =
+                            armedScroll?.patch === true &&
+                            msg[5] !== null &&
+                            msg[5] === armedScroll.ref;
                         // Here, not on arrival: a transition defers this, and the
                         // old DOM stays live (and gated) until the swap is applied.
-                        settleNavReplies(msg[1], msg[2], !!msg[3]);
+                        settleNavReplies(msg[5], !!msg[3]);
                         // Re-save what was typed while disconnected: the resync's
                         // OP_REPLACE is about to discard it.
                         if (msg[3] && _savedForms.size > 0) saveFormState();
@@ -1100,12 +1154,14 @@ export function connect(endpoint, params = {}) {
                         // and caret back once the values are restored.
                         const focus = msg[3] ? captureFocus() : null;
                         if (msg[1]) applyOps(msg[1], !!msg[3]);
+                        // Identity-checked: an OP_REPLACE in this frame consumed it.
+                        if (patchReply && _pendingScroll === armedScroll) {
+                            if (msg[1]?.length) applyScroll(armedScroll);
+                            setPendingScroll(null);
+                        }
                         if (msg[2]) applyEffects(msg[2]);
                         if (msg[3]) restoreFormState();
                         if (focus) restoreFocus(focus);
-                        if (armedScroll?.patch && _pendingScroll === armedScroll) {
-                            setPendingScroll(null);
-                        }
                         // Here, not after the dispatch below: a transition defers
                         // this, and a listener must see the remounted view.
                         if (mounted) announceConnected(closes);
@@ -1113,12 +1169,18 @@ export function connect(endpoint, params = {}) {
                     // A pending transition wraps its batch -- ops and effects
                     // together, in order, so the swap and any effect fall inside
                     // one snapshot. 'replace' (navigate) waits for the page-swap
-                    // batch, ignoring stray ticks; 'any' (push_event) takes its
-                    // first response message and is then consumed either way, so a
-                    // no-diff event can't leave the intent dangling onto a later one.
+                    // batch, ignoring stray ticks; 'any' (push_event, patch) waits
+                    // for the reply to the frame it wraps and is consumed by it
+                    // either way, so a reply with no diff cannot leave the intent
+                    // dangling onto a later batch.
                     const pt = _pendingTransition;
-                    const wrap = pt && opsMatchTransition(msg[1], pt.kind);
-                    if (pt && (wrap || pt.kind === 'any')) _pendingTransition = null;
+                    const answers =
+                        pt?.kind === 'any' && _transitionRef !== null && msg[5] === _transitionRef;
+                    const wrap =
+                        pt !== null &&
+                        (pt.kind === 'replace' || answers) &&
+                        opsMatchTransition(msg[1], pt.kind);
+                    if (wrap || answers) armPendingTransition(null);
                     if (wrap) {
                         runTransition({ types: pt.types }, apply);
                     } else {
@@ -1153,10 +1215,7 @@ export function connect(endpoint, params = {}) {
                     _mountProof = null;
                     // The replies still owed died with the socket; the reconnect's
                     // resync is what replaces the page now.
-                    if (_navInFlight > 0) {
-                        _navInFlight = 0;
-                        _navAwaitResync = true;
-                    }
+                    dropOwedReplies();
                     document.documentElement.classList.add('az-disconnected');
                     document.documentElement.classList.remove('az-connected');
                     // A crash after the mount needs no reload: the worker's
@@ -1273,11 +1332,8 @@ export function connect(endpoint, params = {}) {
                 _worker = null;
                 _connected = false;
                 _mountProof = null;
-                // Same as a close: the owed navigate replies die with the socket.
-                if (_navInFlight > 0) {
-                    _navInFlight = 0;
-                    _navAwaitResync = true;
-                }
+                // Same as a close: the owed replies die with the socket.
+                dropOwedReplies();
                 _replayedForms.clear();
                 _replay = null;
                 cancelMountReload();
@@ -1319,8 +1375,8 @@ export function connect(endpoint, params = {}) {
         cancelMountReload();
         setPendingScroll(null);
         _unloadingToOtherPage = false;
-        _pendingTransition = null;
-        _navInFlight = 0;
+        armPendingTransition(null);
+        _navRefs.clear();
         _navAwaitResync = false;
         _connectQs = '';
         _savedForms.clear();
@@ -1351,9 +1407,7 @@ setHost({
     epoch: () => _navEpoch,
     sendEvent,
     awaitsReply: (url) => navRoute(new URL(url, location.href)) === 'server',
-    armTransition: (t) => {
-        _pendingTransition = t;
-    },
+    armTransition: armPendingTransition,
     holdReplay,
     navigate: navigateEffect,
     leavePage,

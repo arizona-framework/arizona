@@ -104,9 +104,20 @@ function setupMockWorker(mod) {
         simulateClose(code = 1006) {
             mockWorkerInstance.onmessage({ data: [2, code] });
         },
-        /** Simulate Worker resolved message [0, ops, effects, firstAfterReconnect, azAttrs] */
-        simulateMessage(ops, effects, firstAfterReconnect = false) {
-            mockWorkerInstance.onmessage({ data: [0, ops, effects, firstAfterReconnect] });
+        /** Simulate Worker resolved message [0, ops, effects, firstAfterReconnect, azAttrs, ref] */
+        simulateMessage(ops, effects, firstAfterReconnect = false, ref = null) {
+            mockWorkerInstance.onmessage({
+                data: [0, ops, effects, firstAfterReconnect, null, ref],
+            });
+        },
+        /** The reply ref the last frame sent carries, or null when it carries none. */
+        lastRef() {
+            const last = posted
+                .filter((d) => d[0] === 1)
+                .map((d) => JSON.parse(d[1]))
+                .at(-1);
+            const ref = last?.at(-1);
+            return typeof ref === 'number' ? ref : null;
         },
         /** Get all [1, jsonString] sends (Main->Worker) and parse them */
         getSentMessages() {
@@ -5791,7 +5802,7 @@ describe('navigation scroll', () => {
 
         clickPatchLink('/to');
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['patch', { path: '/to', qs: '' }]);
+        expect(msgs).toContainEqual(['patch', { path: '/to', qs: '' }, expect.any(Number)]);
         expect(msgs.some((m) => m[0] === 'navigate')).toBe(false);
     });
 
@@ -5814,9 +5825,42 @@ describe('navigation scroll', () => {
 
         clickPatchLink('/next');
         // A patch reply is a diff (OP_TEXT), never an OP_REPLACE.
-        mod.applyOps([[OP.TEXT, 'page:0', 'y']]);
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']], null, false, mock.lastRef());
 
         expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+    });
+
+    // The reply is the frame carrying the patch's ref: a push landing first is
+    // not it, and used to take the scroll with it.
+    it('a push landing ahead of the patch reply does not scroll', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span><span az="1">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickPatchLink('/next');
+        const ref = mock.lastRef();
+        mock.simulateMessage([[OP.TEXT, 'page:1', 'tick']]);
+        expect(scrollSpy).not.toHaveBeenCalled();
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']], null, false, ref);
+        expect(scrollSpy).toHaveBeenCalledWith(0, 0);
+    });
+
+    // A patch that changes nothing is answered by its ref alone; before, it got
+    // no frame, and the next unrelated diff took the scroll.
+    it('a patch answered with nothing does not scroll on a later diff', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        setupView('page', '<span az="0">x</span>');
+        mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        clickPatchLink('/next');
+        mock.simulateMessage(null, null, false, mock.lastRef());
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
+
+        expect(scrollSpy).not.toHaveBeenCalled();
     });
 
     it('a no-op patch does not yank scroll on a later unrelated diff', async () => {
@@ -5829,7 +5873,7 @@ describe('navigation scroll', () => {
         clickPatchLink('/next');
         // The patch round-trip completes without ops (an effects-only reply);
         // the armed scroll intent must die with it.
-        mock.simulateMessage(null, [[14, 'T']]);
+        mock.simulateMessage(null, [[14, 'T']], false, mock.lastRef());
         // A later unrelated push (e.g. a timer tick) must not consume a stale
         // intent and yank the scroll to top.
         mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
@@ -5851,7 +5895,7 @@ describe('navigation scroll', () => {
             }),
         );
         // The patch reply carries no ops; the saved-scroll intent is discarded.
-        mock.simulateMessage(null, null);
+        mock.simulateMessage(null, null, false, mock.lastRef());
         mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
 
         expect(scrollSpy).not.toHaveBeenCalled();
@@ -5867,7 +5911,7 @@ describe('navigation scroll', () => {
         // This frame's EFFECTS arm a fresh patch intent (JS_PATCH = 24); the
         // end-of-frame cleanup must not clear the intent it just armed.
         mock.simulateMessage(null, [[24, '/to']]);
-        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']]);
+        mock.simulateMessage([[OP.TEXT, 'page:0', 'y']], null, false, mock.lastRef());
 
         expect(scrollSpy).toHaveBeenCalledWith(0, 0);
     });
@@ -5882,7 +5926,7 @@ describe('navigation scroll', () => {
         // Cmd shape is [JS_PATCH=24, path, opts?].
         mod.applyEffects([[24, '/to']]);
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['patch', { path: '/to', qs: '' }]);
+        expect(msgs).toContainEqual(['patch', { path: '/to', qs: '' }, expect.any(Number)]);
     });
 
     it('patch tags the outgoing entry _azNav so back to a full-load entry re-patches', async () => {
@@ -5916,7 +5960,7 @@ describe('navigation scroll', () => {
         window.dispatchEvent(new PopStateEvent('popstate', { state: { _azNav: 'patch' } }));
 
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['patch', { path: '/patched', qs: '' }]);
+        expect(msgs).toContainEqual(['patch', { path: '/patched', qs: '' }, expect.any(Number)]);
         expect(msgs.some((m) => m[0] === 'navigate')).toBe(false);
     });
 
@@ -6010,7 +6054,7 @@ describe('navigation scroll', () => {
         expect(history.state?._azScroll).toBeFalsy();
         // Replace still re-renders the destination route -- server must be notified.
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['navigate', { path: '/to', qs: '' }]);
+        expect(msgs).toContainEqual(['navigate', { path: '/to', qs: '' }, expect.any(Number)]);
     });
 
     it('JS_NAVIGATE with {noscroll: true} skips the scroll reset on push', async () => {
@@ -6027,7 +6071,7 @@ describe('navigation scroll', () => {
         expect(scrollSpy).not.toHaveBeenCalled();
         // But the navigate message is still sent (server still re-renders).
         const msgs = mock.getSentMessages();
-        expect(msgs).toContainEqual(['navigate', { path: '/to', qs: '' }]);
+        expect(msgs).toContainEqual(['navigate', { path: '/to', qs: '' }, expect.any(Number)]);
     });
 
     it('JS_NAVIGATE with {full: true} does a full-page navigation, no SPA frame', async () => {
@@ -6166,8 +6210,8 @@ describe('navigation scroll', () => {
             .getSentMessages()
             .filter((m) => m[0] === 'navigate' || m[0] === 'patch');
         expect(frames).toEqual([
-            ['navigate', { path: '/users/1/', qs: 'page=2' }],
-            ['patch', { path: '/users/1/edit', qs: '' }],
+            ['navigate', { path: '/users/1/', qs: 'page=2' }, expect.any(Number)],
+            ['patch', { path: '/users/1/edit', qs: '' }, expect.any(Number)],
         ]);
     });
 
@@ -6225,7 +6269,11 @@ describe('navigation scroll', () => {
         expect(mock.getSentMessages().some((m) => m[0] === 'navigate')).toBe(false);
         // `_self` (and no target) is this tab: still an SPA navigation.
         click({ target: '_self' });
-        expect(mock.getSentMessages()).toContainEqual(['navigate', { path: '/other', qs: '' }]);
+        expect(mock.getSentMessages()).toContainEqual([
+            'navigate',
+            { path: '/other', qs: '' },
+            expect.any(Number),
+        ]);
     });
 
     it('az-navigate link to another origin is left to the browser', async () => {
@@ -6380,9 +6428,9 @@ describe('navigation scroll', () => {
             .getSentMessages()
             .filter((m) => m[0] === 'navigate' || m[0] === 'patch');
         expect(frames).toEqual([
-            ['navigate', { path: '/same', qs: 'tab=1' }],
-            ['patch', { path: '/same', qs: 'tab=1' }],
-            ['navigate', { path: '/same', qs: 'tab=1' }],
+            ['navigate', { path: '/same', qs: 'tab=1' }, expect.any(Number)],
+            ['patch', { path: '/same', qs: 'tab=1' }, expect.any(Number)],
+            ['navigate', { path: '/same', qs: 'tab=1' }, expect.any(Number)],
         ]);
         // Each pushes one entry, the click exactly as the effect does.
         expect(history.length).toBe(len0 + 3);
