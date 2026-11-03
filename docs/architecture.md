@@ -1893,7 +1893,8 @@ type). The transport handler translates the returned result into its native repl
     production a `text/plain; charset=utf-8` `Internal Server Error`; in dev (reloader on) the
     listener's `error_page` template under its backend's media type when one is configured, else
     the crash as `text/plain` (`arizona_error:format_text/3`). Core sets no default page; the HTML
-    one is opt-in via `error_page => {arizona_error_page, render}`
+    one is opt-in via `error_page => {arizona_error_page, render}`. A page that itself crashes
+    is logged and the original error served as `text/plain`
 
 `arizona_roadrunner_http` consumes this helper and maps the three result shapes into roadrunner's
 reply tuple.

@@ -184,7 +184,7 @@ References resolve **anywhere** in the config surface: the scalar keys (`secret_
 
 ## Error page
 
-A page crash answers `500`: production serves a plain-text `Internal Server Error`; with the dev reloader on, the crash (class, reason, location, stack) as plain text (`arizona_error:format_text/3`), or the listener's `error_page => {Module, Function}` template under its backend's media type. There is no default page -- the rich HTML dev page is opt-in, `error_page => {arizona_error_page, render}` in the `server` map, and only it reloads the browser after a fix (a `text/plain` body runs no script, so with none you refresh by hand).
+A page crash answers `500`: production serves a plain-text `Internal Server Error`; with the dev reloader on, the crash (class, reason, location, stack) as plain text (`arizona_error:format_text/3`), or the listener's `error_page => {Module, Function}` template under its backend's media type. There is no default page -- the rich HTML dev page is opt-in, `error_page => {arizona_error_page, render}` in the `server` map, and only it reloads the browser after a fix (a `text/plain` body runs no script, so with none you refresh by hand). An error page that itself crashes is logged and the original error is served as plain text.
 
 ## CSRF / Origin checking
 

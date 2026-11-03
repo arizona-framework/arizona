@@ -231,15 +231,33 @@ error_body(Bindings, Class, Reason, Stacktrace, Opts) ->
 
 %% The page is the listener's `error_page` template, baked into the route's
 %% `Opts` by the router, so each listener renders its own; its backend names
-%% the media type. With none configured the detail is served as plain text.
-dev_error_body(Bindings, ErrorInfo, #{error_page := {Mod, Fun}}) ->
-    case Mod:Fun(Bindings#{error_info => ErrorInfo}) of
+%% the media type. With none configured the detail is served as plain text,
+%% and so it is when the page itself crashes: its own crash is only logged,
+%% so a broken page never hides the error it was asked to show.
+dev_error_body(Bindings, ErrorInfo, #{error_page := {Mod, Fun} = Page}) ->
+    try
+        render_error_page(Page, Bindings#{error_info => ErrorInfo})
+    catch
+        Class:Reason:Stacktrace ->
+            logger:error(
+                "the error page ~ts:~ts/1 crashed; serving the error as plain text~n~ts", [
+                    Mod, Fun, erl_error:format_exception(Class, Reason, Stacktrace)
+                ]
+            ),
+            text_error_body(ErrorInfo)
+    end;
+dev_error_body(_Bindings, ErrorInfo, _Opts) ->
+    text_error_body(ErrorInfo).
+
+render_error_page({Mod, Fun} = Page, Bindings) ->
+    case Mod:Fun(Bindings) of
         #{backend := Backend} = Tmpl ->
             {Backend:content_type(), arizona_render:render_to_iolist(Tmpl)};
         Other ->
-            erlang:error({error_page_not_a_template, {Mod, Fun}, Other}, none, [
+            erlang:error({error_page_not_a_template, Page, Other}, none, [
                 {error_info, #{module => ?MODULE}}
             ])
-    end;
-dev_error_body(_Bindings, #{class := Class, reason := Reason, stacktrace := Stack}, _Opts) ->
+    end.
+
+text_error_body(#{class := Class, reason := Reason, stacktrace := Stack}) ->
     {?TEXT_TYPE, arizona_error:format_text(Class, Reason, Stack)}.
