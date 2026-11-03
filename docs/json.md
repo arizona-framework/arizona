@@ -249,8 +249,9 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    disabled command) fires nothing. The server's `"e"` (effects) array, one
    command per entry, is dispatched after the ops. The portable commands are
    handled — `push_event`, and `navigate` (which sends
-   `["navigate", {path, qs}]` on the same socket; the server's `handle_navigate`
-   re-mounts the target view and replies with `OP_REPLACE`). Web-only effects
+   `["navigate", {path, qs}]` on the same socket, with a reply ref appended when
+   the client waits on it -- see step 7; the server's `handle_navigate` re-mounts
+   the target view and replies with `OP_REPLACE`). Web-only effects
    (`set_title`, `dispatch_event`, …) are skipped on native.
 6. **Reconnect with backoff.** On a dropped socket — any close other than a
    normal `1000`, or an abrupt failure — reopen with exponential backoff
@@ -267,7 +268,8 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    event for a view a diff just removed, a patch whose params change nothing.
    Frames carry no id, so a client that holds a press until it is answered cannot
    tell that silence from a lost frame, and the next frame to arrive may be an
-   unrelated server push. To wait for one, append an integer ref:
+   unrelated server push. To wait for one, append an integer ref from 0 to
+   2^53-1 (the largest integer a JavaScript number holds exactly):
    `[ViewId, Event, Payload, Ref]`, `["navigate", {path, qs}, Ref]` or
    `["patch", {path, qs}, Ref]`. The server answers that frame with exactly one
    frame carrying `"r": Ref`, merged into its reply (`{"r":8,"o":[...]}`) or alone
@@ -275,7 +277,7 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    queue of pending refs settles front to back; a frame without `"r"` (a push, the
    reply to an untagged frame) settles none. Send a ref only where something
    waits: untagged frames behave exactly as before and cost nothing extra. A frame
-   the server cannot read (a non-map payload, a non-integer ref) is dropped, ref
+   the server cannot read (a non-map payload, a ref that is not such an integer) is dropped, ref
    and all, so a ref that never comes back means the frame was lost or refused,
    and a close fails every ref still pending. The ref answers "the server is done
    with this frame", not "something changed".

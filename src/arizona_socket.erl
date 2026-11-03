@@ -26,9 +26,10 @@ later frame only the per-socket delta; see `arizona_event_attrs`). `~"o"` and
 `~"e"` are arrays produced by `arizona_diff` and `arizona_js` respectively.
 
 A frame that changes nothing gets no reply. A client that must know when one
-was handled appends an integer reply ref to a navigate, patch or event frame
-(`[~"navigate", Nav, Ref]`, `[~"patch", Nav, Ref]`, `[ViewId, Event, Payload,
-Ref]`). Such a frame is answered by exactly one frame carrying `~"r" => Ref`:
+was handled appends an integer reply ref, 0 to 2^53-1 (what a JavaScript number
+holds exactly), to a navigate, patch or event frame (`[~"navigate", Nav, Ref]`,
+`[~"patch", Nav, Ref]`, `[ViewId, Event, Payload, Ref]`). Such a frame is
+answered by exactly one frame carrying `~"r" => Ref`:
 merged into its reply when it has one, alone (`{"r":Ref}`) when it changed
 nothing or named a view that no longer exists. Replies keep frame order, and a
 frame without the `~"r"` key (a server push, the reply to an untagged frame)

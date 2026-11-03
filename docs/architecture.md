@@ -1486,7 +1486,10 @@ lives here independent of the server.
   The route adapter for SPA navigate is recovered from `Req` via `arizona_req:adapter/1`
 - `handle_in/2` -- decode incoming text frame: ping/pong, `["cached_fps", FpList]`,
   `["navigate", #{~"path" := Path, ~"qs" := Qs}]` (replace), `["patch", #{~"path", ~"qs"}]`
-  (in-place, same-handler -> `patch/2`, else falls back to navigate), `[target, event, payload]`
+  (in-place, same-handler -> `patch/2`, else falls back to navigate), `[target, event, payload]`.
+  The last three may carry a trailing integer reply ref (`0..2^53-1`), which the frame's result
+  answers exactly once (`answer/2`): spliced into the front of its reply frame, or alone
+  (`{"r":Ref}`) when the frame produced none. A close answers nothing
 - `handle_info/2` -- handle `{arizona_push, ViewId, Ops, Effects}` from `arizona_live` (ops
   tagged with the view id the push names), the `arizona_resync_timeout` backstop, and `EXIT`
   signals from the live process. On a synchronous event/patch/navigate reply, every push already
@@ -2021,10 +2024,12 @@ ops+effects are sent as `{arizona_push, RootViewId, Ops, Effects}` to the transp
 dispatches to `arizona_live:handle_event/4`. The gen_server checks the views map -- if target is a
 known child view, dispatches to child; otherwise dispatches to root handler. Returns
 `{ok, Ops, Effects}`. Ops are scoped with `"viewId:target"` format. The response is sent as a JSON
-envelope `{"o": scopedOps, "e": effects}`.
+envelope `{"o": scopedOps, "e": effects}`, or not at all when the event changed nothing. A client
+that waits on the reply appends a reply ref (`[target, eventName, payload, ref]`): the envelope
+then carries `"r": ref`, and an event that changed nothing is answered by `{"r": ref}` alone.
 
 **SPA navigation + unmount:** Client clicks `[az-navigate]` link -> JS intercepts, calls
-`history.pushState`, sends `["navigate", {path, qs}]` over WebSocket. `arizona_socket`'s navigate
+`history.pushState`, sends `["navigate", {path, qs}, ref]` over WebSocket. `arizona_socket`'s navigate
 handler resolves the new route via the adapter, then runs the new route's middlewares (lifecycle
 parity with HTTP init and WS upgrade). If middleware halts with `arizona_req:redirect/2,3`, the
 socket emits `[arizona_js:navigate(Location, #{replace => true})]` as a client effect -- no
@@ -2064,19 +2069,19 @@ The server cannot protect itself without a wire change: frames are handled in or
 time the stale event is read the replace has already happened, and the event carries nothing that
 tells it from one sent after the client applied the swap (dropping the root id for "a while" would
 eat legitimate events from the new page). So the web client drops every view event raised between
-posting a `navigate` and its reply -- the `OP_REPLACE`, a reconnect's resync `OP_REPLACE`, or a
-full-page navigate effect (the server kept the old view) -- exactly as a full page load would; a
-redirect reply is itself a navigate and re-arms. The window counts navigates in flight, so
-back-to-back navigates keep it open until the last reply (the server answers each navigate frame
-once, in order); an old-page push carrying a navigate effect ahead of the reply is
-indistinguishable from a reply and settles one early, as is the `OP_REPLACE` of a patch the server
-degrades to a replace while a navigate is in flight. A dropped event is logged by name. A `patch`
+posting a `navigate` and its reply -- the frame carrying the navigate's reply ref back (its
+`OP_REPLACE`, or a navigate effect: a full-page load, where the server kept the old view, or a
+redirect, which is itself a navigate and re-arms), or a reconnect's resync `OP_REPLACE` -- exactly
+as a full page load would. The window holds the refs of the navigates in flight, so back-to-back
+navigates keep it open until the last reply, and a frame carrying no navigate's ref settles none:
+an old-page push carrying a navigate effect ahead of the reply, or the `OP_REPLACE` of a patch the
+server degraded to a replace, answers something else. A dropped event is logged by name. A `patch`
 does not arm the window: it usually keeps the view, and the client cannot know ahead that the
 server will degrade a cross-handler patch to a replace, so that case keeps the window. The native
 clients (Android/iOS) do not gate yet.
 
 **SPA patch (in-place):** Client clicks an `[az-patch]` link (or runs `arizona_js:patch`) -> JS
-sends `["patch", {path, qs}]`. `arizona_socket` resolves the route + runs middlewares as for
+sends `["patch", {path, qs}, ref]`. `arizona_socket` resolves the route + runs middlewares as for
 navigate, then compares the resolved handler against the tracked root `handler`: same handler ->
 `arizona_live:patch/2` (the root's `handle_update/3` runs, then a diff-in-place, returning `{ok,
 Ops, Effects}` -- no unmount/remount/`OP_REPLACE`); different handler -> falls back to the
