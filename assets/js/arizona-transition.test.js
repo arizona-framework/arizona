@@ -597,6 +597,46 @@ describe('view transitions -- reply binding', () => {
         expect(history.state?._azTransitionPrev).toBeUndefined();
     });
 
+    // A plain patch link runs under no transition: it neither takes nor clears the
+    // one still waiting for its debounced event.
+    it('a plain az-patch link leaves a transition waiting for its event', () => {
+        vi.useFakeTimers();
+        try {
+            const fn = document.startViewTransition;
+            debounced();
+            document.body.insertAdjacentHTML(
+                'beforeend',
+                '<a id="p" href="/?tab=3" az-patch>p</a>',
+            );
+            document
+                .getElementById('p')
+                .dispatchEvent(
+                    new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }),
+                );
+            _mock.simulateMessage([[OP.TEXT, 'page:0', 'tab']], null, _mock.lastRef());
+            expect(fn).not.toHaveBeenCalled();
+            vi.advanceTimersByTime(100);
+            _mock.simulateMessage([[OP.TEXT, 'page:0', 'slow']], null, _mock.lastRef());
+            expect(fn).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    // The swap window drops the event, so its transition must not displace the
+    // navigate's own, which would then die with it.
+    it('an event transition raised in the swap window keeps the navigate one', () => {
+        const fn = document.startViewTransition;
+        document.body.innerHTML = '<div id="page" az-view><p az="0">old</p></div>';
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_NAVIGATE, '/z']]);
+        const ref = _mock.lastRef();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, 'during']]);
+        warn.mockRestore();
+        _mock.simulateMessage([replaceOp('Z')], null, ref);
+        expect(fn).toHaveBeenCalledOnce();
+    });
+
     // A patch not issued under the transition is not the frame it waits for: the
     // debounced event still goes out on this page and is the one animated.
     it('an unrelated patch does not take a transition waiting for its event', () => {

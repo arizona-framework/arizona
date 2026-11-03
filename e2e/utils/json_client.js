@@ -247,14 +247,14 @@ export class NativeClient {
     // socket).
     navigateAwait(path, timeoutMs = 2000) {
         const [p, qs = ''] = path.split('?');
-        const reply = this._sendAwait(['navigate', { path: p, qs }], `navigate ${path}`, timeoutMs);
-        this._retargetReconnect(p);
-        return reply;
+        return this._sendAwait(['navigate', { path: p, qs }], `navigate ${path}`, timeoutMs, () =>
+            this._retargetReconnect(p),
+        );
     }
 
     // Send `frame` with a fresh reply ref appended and wait for the frame that
-    // carries it back.
-    _sendAwait(frame, label, timeoutMs) {
+    // carries it back. `sent` runs once the frame is actually on the socket.
+    _sendAwait(frame, label, timeoutMs, sent = () => {}) {
         const ref = this._nextRef++;
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -264,6 +264,7 @@ export class NativeClient {
             this._replies.set(ref, { resolve, reject, timer });
             try {
                 this.ws.send(JSON.stringify([...frame, ref]));
+                sent();
             } catch (err) {
                 // Not sent (the socket is still connecting, or already gone), so
                 // no reply is coming: fail now rather than at the timeout.

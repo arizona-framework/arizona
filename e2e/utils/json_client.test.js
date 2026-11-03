@@ -935,6 +935,20 @@ describe('JSON client reply refs', () => {
         }
     });
 
+    it('keeps the reconnect path when a navigate cannot be sent', async () => {
+        const { ws, client } = connected();
+        try {
+            const before = client.wsUrl;
+            client.ws.send = () => {
+                throw new Error('still connecting');
+            };
+            await expect(client.navigateAwait('/elsewhere')).rejects.toThrow('still connecting');
+            expect(client.wsUrl).toBe(before);
+        } finally {
+            ws.restore();
+        }
+    });
+
     it('rejects a frame whose ref never comes back', async () => {
         vi.useFakeTimers();
         const { ws, client } = connected();

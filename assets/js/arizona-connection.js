@@ -1017,13 +1017,20 @@ export function connect(endpoint, params = {}) {
             // az-transition opts this navigation into a view transition. A patch
             // produces a diff (no OP_REPLACE), so its intent is consumed by the
             // first response batch ('any'); a navigate waits for the OP_REPLACE.
+            // A plain patch link runs under no transition rather than clearing
+            // one: a transition still waiting for its (debounced) event stays on
+            // this page, and the patch must not take it from it.
             const t = parseTransitionAttr(el);
             // `el.href` is resolved against the document base, as the browser would.
             navigateEffect(
                 el.href,
                 { noscroll: el.hasAttribute('az-noscroll') },
                 isPatch ? 'patch' : 'navigate',
-                t ? { types: t.types, kind: isPatch ? 'any' : 'replace' } : null,
+                t
+                    ? { types: t.types, kind: isPatch ? 'any' : 'replace' }
+                    : isPatch
+                      ? undefined
+                      : null,
             );
         },
         { signal },
@@ -1441,7 +1448,13 @@ setHost({
     epoch: () => _navEpoch,
     sendEvent,
     awaitsReply: (url) => navRoute(new URL(url, location.href)) === 'server',
-    armTransition: armPendingTransition,
+    // An 'any' transition armed inside the page-swap window waits for an event
+    // the window is about to drop; arming it would only displace the navigate's
+    // own transition, which then dies with the dropped event.
+    armTransition: (t) => {
+        if (t.kind === 'any' && (_navRefs.size > 0 || _navAwaitResync)) return;
+        armPendingTransition(t);
+    },
     holdReplay,
     navigate: navigateEffect,
     leavePage,
