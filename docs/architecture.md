@@ -1889,7 +1889,7 @@ type). The transport handler translates the returned result into its native repl
     defaults to 200, but a view or middleware may stash a non-200 (e.g. 401). `ContentType` is
     the document's media type, answered by its render backend's `content_type/0` (HTML for an
     `?html` view, `application/json` for a `?json` one)
-  - `{error, 500, ContentType, iolist(), Request}` -- crash or stashed hot-reload error. In
+  - `{error, 500, ContentType, iodata(), Request}` -- crash or stashed hot-reload error. In
     production a `text/plain; charset=utf-8` `Internal Server Error`; in dev (reloader on) the
     listener's `error_page` template under its backend's media type when one is configured, else
     the crash as `text/plain` (`arizona_error:format_text/3`). Core sets no default page; the HTML
