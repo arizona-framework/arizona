@@ -310,8 +310,8 @@ transforms_apply_over_the_wire(Config) when is_list(Config) ->
     ]).
 
 %% A `?json` route answers GET and HEAD with its JSON document under
-%% `application/json`, an HTML route with `text/html`, and a render crash's error
-%% page (HTML) keeps `text/html`.
+%% `application/json`, an HTML route with `text/html`, and a render crash's
+%% production 500 is plain text.
 page_carries_its_targets_content_type(Config) when is_list(Config) ->
     Port = ?config(port, Config),
     {200, NativeHeaders, NativeBody} = raw_get(Port, ~"/json_page", []),
@@ -324,7 +324,7 @@ page_carries_its_targets_content_type(Config) when is_list(Config) ->
     Req = manual_body_req(~"", arizona_crashable, #{crash_on_mount => true}),
     {{500, CrashHeaders, _}, _} = arizona_roadrunner_http:handle(Req),
     ?assertEqual(
-        {~"content-type", ~"text/html; charset=utf-8"},
+        {~"content-type", ~"text/plain; charset=utf-8"},
         lists:keyfind(~"content-type", 1, CrashHeaders)
     ).
 

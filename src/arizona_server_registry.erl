@@ -11,11 +11,12 @@ An adapter reports each listener it starts (`listener_up/3`) and stops
   `server` env -- by hand, by a test, or by another framework that owns it --
   still gets its routes refreshed;
 - keeps the node's dev-mode signals in step with the routes running: the
-  `{reload, ...}` route's path (`arizona_reload_url`, which turns on the rich
-  error page and the checked render) and whether a dev MCP route is mounted
-  (`arizona_dev_mcp_route`, read by `arizona_reloader:enabled/0`). A dev
+  `{reload, ...}` route's path (`arizona_reload_url`, which turns on the crash
+  detail in error responses and the checked render) and whether a dev MCP
+  route is mounted (`arizona_dev_mcp_route`, read by
+  `arizona_reloader:enabled/0`). A dev
   listener that stops takes them along, so a production listener started
-  later in the same node never serves the dev error page.
+  later in the same node never serves the crash detail.
 
 Everything lives in `persistent_term`s, so it needs no process: a node that
 never starts a server pays nothing, and readers never call. An adapter is never

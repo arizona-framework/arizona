@@ -18,15 +18,12 @@ the dev watcher reports a successful recompile.
 
 ## Reason formatting
 
-For known reason shapes, the renderer produces a richer summary:
+The title, the reason summary and each stack frame are formatted by
+`arizona_error` (`format_title/3`, `format_reason/3`, `format_fun_name/2`,
+`format_loc/1`), the same helpers the plain-text dev 500 uses.
 
-- `{compile_error, Errors}` -- formatted as a per-file error list; an empty
-  list means the diagnostics went to the console, and says so
-- `{arizona_loc, {Mod, Line}, Reason}` -- prefixes the title with the
-  source location captured by `arizona_render` during dynamic eval
-
-For everything else it falls back to `erl_error:format_exception/3`,
-extracts the shell-style summary, and pretty-prints the raw reason.
+This page is opt-in: a listener serves it when its config sets
+`error_page => {arizona_error_page, render}`.
 """.
 -include("arizona_stateless.hrl").
 
@@ -61,8 +58,8 @@ render(Bindings) ->
     Reason = maps:get(reason, ErrorInfo),
     Stacktrace = maps:get(stacktrace, ErrorInfo),
     ReloadUrl = maps:get(reload_url, ErrorInfo, undefined),
-    Title = format_title(Class, Reason, Stacktrace),
-    ReasonStr = format_reason(Class, Reason, Stacktrace),
+    Title = arizona_error:format_title(Class, Reason, Stacktrace),
+    ReasonStr = arizona_error:format_reason(Class, Reason, Stacktrace),
     ?html(
         {html, [], [
             {head, [], [
@@ -86,11 +83,11 @@ render(Bindings) ->
                 {'div', [{id, ~"stacktrace"}], [
                     ?each(
                         fun({M, F, A, Info}) ->
-                            Loc = format_loc(Info),
+                            Loc = arizona_error:format_loc(Info),
                             {'div', [{class, ~"frame"}], [
                                 {span, [{class, ~"mod"}], [atom_to_binary(M)]},
                                 ~":",
-                                {span, [{class, ~"fun"}], [format_fun_name(F, A)]},
+                                {span, [{class, ~"fun"}], [arizona_error:format_fun_name(F, A)]},
                                 {span, [{class, ~"loc"}], [~" ", Loc]}
                             ]}
                         end,
@@ -106,298 +103,6 @@ render(Bindings) ->
 %% Internal functions
 %% --------------------------------------------------------------------
 
-%% Title is just a short location -- the body shows the full reason.
-%%
-%% Strategy:
-%%
-%% 1. `compile_error` -- always "Compilation Error".
-%% 2. Otherwise, walk the stacktrace for the deepest user frame --
-%%    skipping `arizona_*` (framework) and any OTP/stdlib module.
-%%    That's the user's nearest call site, the line they actually want
-%%    to look at.
-%% 3. If the whole stack is framework/OTP, fall back to the top frame.
-%% 4. If the stack is empty, fall back to `arizona_loc`'s captured
-%%    location (when the reason is wrapped) or the bare class.
-%%
-%% Note: `arizona_loc` captures the *lexical* location of a template
-%% dynamic, which for layouts is the outer dynamic's call site, not
-%% the inner crash site. The stack tells the truth, so prefer it.
-format_title(_Class, {compile_error, _Errors}, _Stacktrace) ->
-    ~"Compilation Error";
-format_title(Class, {arizona_loc, {LocMod, _}, _} = Reason, Stacktrace) ->
-    %% `arizona_loc` names the template module by construction, so prefer a frame
-    %% from THAT module over the generic "first non-framework" walk. Two shapes the
-    %% generic walk gets wrong: an app module named `arizona_*` (every fixture in
-    %% test/support) is dropped as framework and the title falls back to the
-    %% wrapper's own -- outer -- line; and a value that fails AFTER its closure
-    %% returned (`bad_template_value` from a map in a slot) has no template frame
-    %% left on the stack, so the walk keeps going and names the CALLER, which on a
-    %% live server is a roadrunner internal.
-    case strict_user_frame(Stacktrace) of
-        {ok, Mod, Line} ->
-            %% A genuine user frame is the most precise answer -- keep it, so a
-            %% crash inside a helper module still names that module's line.
-            fmt_mod_line(Mod, Line);
-        error ->
-            case frame_from(LocMod, Stacktrace) of
-                {ok, Line} -> fmt_mod_line(LocMod, Line);
-                error -> fallback_title(Class, Reason)
-            end
-    end;
-format_title(Class, Reason, Stacktrace) ->
-    format_title_generic(Class, Reason, Stacktrace).
-
-format_title_generic(Class, Reason, Stacktrace) ->
-    case first_user_frame(Stacktrace) of
-        none ->
-            fallback_title(Class, Reason);
-        {Mod, _Fn, _A, Info} ->
-            case proplists:get_value(line, Info) of
-                undefined -> fallback_title(Class, Reason);
-                Line -> fmt_mod_line(Mod, Line)
-            end
-    end.
-
-%% Like `first_user_frame/1` but with no framework fallback: `error` when every
-%% frame is framework or OTP. That happens when the value failed AFTER its closure
-%% returned (a map reaching `to_bin/1`), leaving no template frame at all -- there
-%% the lexical `arizona_loc` is the only real answer, and the generic walk's
-%% topmost-frame fallback would name an arizona internal instead.
-strict_user_frame([]) ->
-    error;
-strict_user_frame(Stack) ->
-    case lists:dropwhile(fun is_framework_frame/1, Stack) of
-        [] ->
-            error;
-        [{Mod, _Fn, _A, Info} | _] ->
-            case proplists:get_value(line, Info) of
-                undefined -> error;
-                Line -> {ok, Mod, Line}
-            end
-    end.
-
-%% The topmost line from `Mod`, or `error` when it has no frame carrying one.
-frame_from(_Mod, []) ->
-    error;
-frame_from(Mod, [{Mod, _Fn, _A, Info} | Rest]) ->
-    case proplists:get_value(line, Info) of
-        undefined -> frame_from(Mod, Rest);
-        Line -> {ok, Line}
-    end;
-frame_from(Mod, [_Frame | Rest]) ->
-    frame_from(Mod, Rest).
-
-fallback_title(_Class, {arizona_loc, {Mod, Line}, _}) ->
-    fmt_mod_line(Mod, Line);
-fallback_title(Class, _Reason) ->
-    unicode:characters_to_binary(io_lib:format("~s", [Class])).
-
-fmt_mod_line(Mod, Line) ->
-    unicode:characters_to_binary(io_lib:format("~s:~b", [Mod, Line])).
-
-%% Returns the first stack frame whose module is not framework or OTP,
-%% the topmost frame when the whole stack is framework/OTP, or `none`
-%% when the stack is empty.
-first_user_frame([]) ->
-    none;
-first_user_frame([Top | _] = Stack) ->
-    case lists:dropwhile(fun is_framework_frame/1, Stack) of
-        [] -> Top;
-        [User | _] -> User
-    end.
-
-is_framework_frame({Mod, _Fn, _A, _Info}) ->
-    is_arizona_module(Mod) orelse is_otp_module(Mod).
-
-is_arizona_module(Mod) ->
-    case atom_to_list(Mod) of
-        "arizona_" ++ _ -> true;
-        _ -> false
-    end.
-
-%% True for OTP/stdlib modules. Detected via `code:which/1`:
-%% built-ins are `preloaded`, stdlib lives under `code:root_dir()`.
-%% User modules and dependencies (e.g. arizona itself when checked out)
-%% live elsewhere and return false here.
-is_otp_module(Mod) ->
-    case code:which(Mod) of
-        preloaded ->
-            true;
-        Path when is_list(Path) ->
-            string:prefix(Path, code:root_dir() ++ "/") =/= nomatch;
-        _ ->
-            false
-    end.
-
-%% Rewrites OTP-mangled fun names for readability.
-%%
-%%   '-render/1-fun-1-'/N         -> "render/1 (anonymous fun)"
-%%   '-render_ssr_val/1-lc$^0/1-0-'/N -> "render_ssr_val/1 (list comprehension)"
-%%   '-render/1-mc$^0/1-0-'/N         -> "render/1 (map comprehension)"
-%%   <plain Fn>/N                  -> "Fn/N"
-format_fun_name(Fn, A) ->
-    Arity = arity(A),
-    Name = atom_to_list(Fn),
-    case prettify_mangled(Name) of
-        {Outer, Suffix} ->
-            unicode:characters_to_binary([Outer, " (", Suffix, ")"]);
-        plain ->
-            unicode:characters_to_binary([Name, "/", integer_to_list(Arity)])
-    end.
-
-prettify_mangled([$- | Rest]) ->
-    prettify_mangled_body(Rest, [
-        {"-fun-", "anonymous fun"},
-        {"-lc$", "list comprehension"},
-        {"-mc$", "map comprehension"}
-    ]);
-prettify_mangled(_) ->
-    plain.
-
-prettify_mangled_body(_Rest, []) ->
-    plain;
-prettify_mangled_body(Rest, [{Sep, Suffix} | More]) ->
-    case string:split(Rest, Sep) of
-        [Outer, _Tail] when Outer =/= Rest -> {Outer, Suffix};
-        _ -> prettify_mangled_body(Rest, More)
-    end.
-
-%% Use erl_error:format_exception to get the rich, shell-style summary.
-%% Output for an error_info-annotated raise looks like:
-%%   "exception error: missing_binding\n
-%%      in function  arizona_template:get/2\n
-%%         called as arizona_template:get(missing_key, #{a => 1})\n
-%%         *** binding missing_key not found. Available bindings: ...\n
-%%      in call from ..."
-%% The format_error/2 sentence lands on the `*** ` line, nested under
-%% the failing function's frame -- prefer it when present. For errors
-%% without error_info (plain badmatch, etc.) the top "exception <class>: "
-%% line already carries the useful message, so we fall back to that.
-error_summary(Class, Reason, Stacktrace) ->
-    try
-        Flat = lists:flatten(erl_error:format_exception(Class, Reason, Stacktrace)),
-        extract_summary(Flat)
-    catch
-        _:_ ->
-            io_lib:format("~w:~0tp", [Class, Reason])
-    end.
-
-%% Prefer the format_error/2 annotation line when erl_error attached one.
-%% Otherwise take the top "exception <class>: ..." line up to the first
-%% stack frame.
-extract_summary(Flat) ->
-    case extract_format_error_line(Flat) of
-        nomatch -> extract_top_line(Flat);
-        Line -> Line
-    end.
-
-%% erl_error indents the format_error/2 annotation with 5 spaces under
-%% "called as ...". Find that marker, skip it, take the rest of the line.
-extract_format_error_line(Flat) ->
-    Marker = "\n     *** ",
-    case string:find(Flat, Marker) of
-        nomatch ->
-            nomatch;
-        Found ->
-            AfterMarker = string:slice(Found, length(Marker)),
-            take_until_newline(AfterMarker, [])
-    end.
-
-take_until_newline([$\n | _], Acc) -> lists:reverse(Acc);
-take_until_newline([C | Rest], Acc) -> take_until_newline(Rest, [C | Acc]);
-take_until_newline([], Acc) -> lists:reverse(Acc).
-
-extract_top_line("exception " ++ Rest) ->
-    skip_class(Rest);
-extract_top_line(Other) ->
-    Other.
-
-skip_class([$:, $\s | Rest]) ->
-    take_summary(Rest, []);
-skip_class([_ | Rest]) ->
-    skip_class(Rest);
-skip_class([]) ->
-    [].
-
-%% "\n  in " marks start of stack frames -- stop here.
-take_summary([$\n | Rest], Acc) ->
-    Trimmed = skip_spaces(Rest),
-    case Trimmed of
-        [$i, $n, $\s | _] -> lists:reverse(Acc);
-        _ -> take_summary(Trimmed, [$\s | Acc])
-    end;
-take_summary([C | Rest], Acc) ->
-    take_summary(Rest, [C | Acc]);
-take_summary([], Acc) ->
-    lists:reverse(Acc).
-
-skip_spaces([$\s | Rest]) -> skip_spaces(Rest);
-skip_spaces(Other) -> Other.
-
-%% A compile failed but no diagnostics survived: `arizona_reloader` recovers
-%% structured errors by recompiling the files the watcher reported, so a failure
-%% anywhere else -- a dependency, or a file outside this wave -- collects nothing.
-%% rebar's own return is `{throw, rebar_abort}`, which carries no diagnostics
-%% either, and the real output went to the console. Say that, rather than render
-%% an empty box that reads as a bug in the error page.
-format_reason(_Class, {compile_error, []}, _Stacktrace) ->
-    unicode:characters_to_binary([
-        "The compile failed, but none of the files that changed reproduce the error,\n",
-        "so there is nothing to show here.\n\n",
-        "The failure is in a file this reload did not compile -- a dependency, or a\n",
-        "file the watcher did not report. Its diagnostics went to the console running\n",
-        "the server; read them there."
-    ]);
-format_reason(_Class, {compile_error, Errors}, _Stacktrace) ->
-    unicode:characters_to_binary(
-        lists:join("\n\n", [format_file_errors(F, Es) || {F, Es} <:- Errors])
-    );
-format_reason(Class, {arizona_loc, _Loc, Reason}, Stacktrace) ->
-    format_reason(Class, Reason, Stacktrace);
-format_reason(Class, Reason, Stacktrace) ->
-    %% Body shows the full summary -- title is just the location, so
-    %% there's no repetition. Falls back to `~0tp` for plain reasons
-    %% without any erl_error-format output.
-    case error_summary(Class, Reason, Stacktrace) of
-        [] -> unicode:characters_to_binary(io_lib:format("~0tp", [Reason]));
-        Summary -> unicode:characters_to_binary(Summary)
-    end.
-
-format_file_errors(File, Errors) ->
-    [File, ":\n", lists:join("\n", [format_one_error(E) || E <- Errors])].
-
-%% The compiler reports `none` for a diagnostic tied to no line -- an undefined
-%% or crashing parse transform -- which `erl_anno:line/1` rejects.
-format_one_error({none, Mod, Reason}) ->
-    io_lib:format("  ~ts", [Mod:format_error(Reason)]);
-format_one_error({Location, Mod, Reason}) ->
-    Line = erl_anno:line(Location),
-    Msg = Mod:format_error(Reason),
-    io_lib:format("  line ~b: ~ts", [Line, Msg]).
-
-format_loc(Info) ->
-    File = proplists:get_value(file, Info, ""),
-    Line = proplists:get_value(line, Info, 0),
-    case File of
-        "" -> <<>>;
-        _ -> unicode:characters_to_binary([relative_path(File), ":", integer_to_list(Line)])
-    end.
-
-%% Trims the cwd prefix from absolute paths so frames render as e.g.
-%% `src/arizona_template.erl:153` instead of
-%% `/home/.../arizona_template.erl:153`. Falls through unchanged when
-%% cwd lookup fails or the path is already relative / outside cwd.
-relative_path(File) ->
-    case file:get_cwd() of
-        {ok, Cwd} ->
-            case string:prefix(File, Cwd ++ "/") of
-                nomatch -> File;
-                Rel -> Rel
-            end;
-        _ ->
-            File
-    end.
-
 %% Trusted, framework-built markup -- the caller wraps it in `?raw` so the
 %% content slot splices it verbatim and the browser sees a real <script> tag
 %% rather than escaped text (`?raw` must be the literal call at the template
@@ -408,69 +113,7 @@ reload_script(Url) ->
     <<"<script>new EventSource('", Url/binary,
         "').addEventListener('reload',function(){location.reload()})</script>">>.
 
-arity(A) when is_list(A) -> length(A);
-arity(N) when is_integer(N) -> N.
-
 -ifdef(TEST).
-
-format_title_compile_error_test() ->
-    ?assertEqual(~"Compilation Error", format_title(error, {compile_error, []}, [])).
-
-format_title_arizona_loc_test() ->
-    %% Empty stack -> fallback uses arizona_loc's captured location.
-    Title = format_title(error, {arizona_loc, {my_mod, 42}, badarg}, []),
-    ?assertEqual(<<"my_mod:42">>, Title).
-
-format_title_prefers_template_module_frame_test() ->
-    %% An app module named `arizona_*` is dropped by the name-prefix framework
-    %% test, so the generic walk finds no user frame and used to fall back to the
-    %% wrapper's own (outer) line. The loc names the template module, so a frame
-    %% from THAT module is the right answer.
-    Reason = {arizona_loc, {arizona_userapp, 7}, badarg},
-    Stack = [
-        {arizona_template, to_bin, 1, [{line, 400}]},
-        {arizona_userapp, '-render/1-fun-0-', 1, [{line, 9}]}
-    ],
-    ?assertEqual(~"arizona_userapp:9", format_title(error, Reason, Stack)).
-
-format_title_all_framework_stack_uses_loc_test() ->
-    %% A value that fails AFTER its closure returned leaves no template frame at
-    %% all. The generic walk's topmost-frame fallback would name an arizona
-    %% internal; the lexical loc is the only real answer.
-    Reason = {arizona_loc, {my_page, 5}, {bad_template_value, #{}}},
-    Stack = [
-        {arizona_template, to_bin, 1, [{line, 447}]},
-        {arizona_render, zip, 3, [{line, 253}]}
-    ],
-    ?assertEqual(~"my_page:5", format_title(error, Reason, Stack)).
-
-format_title_keeps_genuine_user_frame_test() ->
-    %% A crash inside a helper module still names that module -- the loc-module
-    %% preference must not cost precision where the stack already has the answer.
-    Reason = {arizona_loc, {my_page, 5}, badarg},
-    Stack = [
-        {my_helper, fmt, 1, [{line, 42}]},
-        {my_page, '-render/1-fun-0-', 1, [{line, 5}]}
-    ],
-    ?assertEqual(~"my_helper:42", format_title(error, Reason, Stack)).
-
-format_reason_compile_error_test() ->
-    Errors = [{"src/foo.erl", [{{10, 1}, erl_lint, {unused_var, 'X'}}]}],
-    Bin = format_reason(error, {compile_error, Errors}, []),
-    ?assertNotEqual(nomatch, binary:match(Bin, <<"src/foo.erl">>)),
-    ?assertNotEqual(nomatch, binary:match(Bin, <<"line 10">>)).
-
-format_reason_compile_error_empty_test() ->
-    %% No diagnostics recovered -- the body must still say where they are.
-    Bin = format_reason(error, {compile_error, []}, []),
-    ?assertNotEqual(nomatch, binary:match(Bin, ~"console")),
-    ?assertNotEqual(<<>>, Bin).
-
-format_reason_arizona_loc_test() ->
-    %% arizona_loc wraps another reason -- the wrapper is stripped for body
-    %% and erl_error renders the inner reason via its standard pipeline.
-    Bin = format_reason(error, {arizona_loc, {m, 1}, badarg}, []),
-    ?assertNotEqual(nomatch, binary:match(Bin, <<"bad argument">>)).
 
 render_with_reload_url_test() ->
     ErrorInfo = #{

@@ -11,10 +11,19 @@
 -export([render_answers_the_targets_content_type/1]).
 -export([render_refuses_a_cross_target_layout/1]).
 -export([renderers_name_their_content_type/1]).
--export([error_page_prod_serves_minimal_500/1]).
--export([error_page_dev_serves_rich_page/1]).
+-export([error_page_prod_serves_plain_text_500/1]).
+-export([error_page_dev_without_page_serves_plain_text/1]).
+-export([error_page_dev_renders_the_configured_page/1]).
+-export([error_page_without_backend_is_refused/1]).
+-export([error_page_crash_falls_back_to_text/1]).
+-export([format_error_names_a_unicode_page/1]).
 -export([error_page_logs_the_crash/1]).
 -export([error_page_custom_target_type/1]).
+
+%% An `error_page` that returns no template.
+-export([bare_error_page/1]).
+%% An `error_page` that crashes.
+-export([crashing_error_page/1]).
 
 all() ->
     [{group, render}, {group, error_page}].
@@ -28,13 +37,17 @@ groups() ->
             render_threads_cookie,
             render_answers_the_targets_content_type,
             render_refuses_a_cross_target_layout,
-            renderers_name_their_content_type
+            renderers_name_their_content_type,
+            format_error_names_a_unicode_page
         ]},
         %% Sequential: these toggle the global `arizona_reload_url` persistent_term
         %% (the dev/prod signal), which must not race the parallel render tests.
         {error_page, [], [
-            error_page_prod_serves_minimal_500,
-            error_page_dev_serves_rich_page,
+            error_page_prod_serves_plain_text_500,
+            error_page_dev_without_page_serves_plain_text,
+            error_page_dev_renders_the_configured_page,
+            error_page_without_backend_is_refused,
+            error_page_crash_falls_back_to_text,
             error_page_logs_the_crash,
             error_page_custom_target_type
         ]}
@@ -125,7 +138,7 @@ render_answers_the_targets_content_type(Config) when is_list(Config) ->
 render_refuses_a_cross_target_layout(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(#{}),
     ?assertMatch(
-        {error, 500, ~"text/html; charset=utf-8", _, _},
+        {error, 500, ~"text/plain; charset=utf-8", _, _},
         arizona_http:render(arizona_json_counter_demo, Req, #{
             bindings => #{title => ~"Native"},
             layouts => [{arizona_layout, render}]
@@ -144,30 +157,122 @@ renderers_name_their_content_type(Config) when is_list(Config) ->
 crash_opts() ->
     #{bindings => #{crash_on_mount => true}}.
 
-%% Production (no dev `reload_url`): a render crash yields a minimal 500 with no
-%% exception class/reason/stack -- the rich page must never leak to a visitor.
-error_page_prod_serves_minimal_500(Config) when is_list(Config) ->
+%% Production (no dev `reload_url`): a render crash yields a bare plain-text 500
+%% with no exception class/reason/stack, whatever `error_page` the listener sets.
+error_page_prod_serves_plain_text_500(Config) when is_list(Config) ->
     persistent_term:erase(arizona_reload_url),
     Req = arizona_req_test_adapter:new(#{}),
-    {error, 500, ContentType, Body, _} = arizona_http:render(arizona_crashable, Req, crash_opts()),
-    ?assertEqual(~"text/html; charset=utf-8", ContentType),
-    Bin = iolist_to_binary(Body),
-    ?assertEqual(nomatch, binary:match(Bin, ~"crash_on_mount")),
-    ?assertEqual(nomatch, binary:match(Bin, ~"arizona_crashable")),
-    ?assertNotEqual(nomatch, binary:match(Bin, ~"Internal Server Error")).
+    [
+        ?assertMatch(
+            {error, 500, ~"text/plain; charset=utf-8", ~"Internal Server Error", _},
+            arizona_http:render(arizona_crashable, Req, Opts)
+        )
+     || Opts <- [crash_opts(), (crash_opts())#{error_page => {arizona_error_page, render}}]
+    ].
 
-%% Development (`reload_url` set): the rich page with the exception detail is
-%% still served, so the dev experience is unchanged.
-error_page_dev_serves_rich_page(Config) when is_list(Config) ->
-    persistent_term:put(arizona_reload_url, ~"/arizona/reload"),
-    try
+%% Development with no `error_page` configured: the crash detail as plain text,
+%% naming the reason and the frame it was raised in.
+error_page_dev_without_page_serves_plain_text(Config) when is_list(Config) ->
+    with_dev(fun() ->
         Req = arizona_req_test_adapter:new(#{}),
         {error, 500, ContentType, Body, _} = arizona_http:render(
             arizona_crashable, Req, crash_opts()
         ),
+        ?assertEqual(~"text/plain; charset=utf-8", ContentType),
+        Bin = iolist_to_binary(Body),
+        ?assertNotEqual(nomatch, binary:match(Bin, ~"crash_on_mount")),
+        ?assertMatch(
+            {match, _},
+            re:run(Bin, ~"\n  arizona_crashable:mount/1 [^\n]*arizona_crashable.erl:\\d+")
+        ),
+        ?assertEqual(nomatch, binary:match(Bin, ~"<"))
+    end).
+
+%% Development with an `error_page` configured renders that template.
+error_page_dev_renders_the_configured_page(Config) when is_list(Config) ->
+    with_dev(fun() ->
+        Req = arizona_req_test_adapter:new(#{}),
+        Opts = (crash_opts())#{error_page => {arizona_error_page, render}},
+        {error, 500, ContentType, Body, _} = arizona_http:render(arizona_crashable, Req, Opts),
         ?assertEqual(~"text/html; charset=utf-8", ContentType),
         Bin = iolist_to_binary(Body),
+        ?assertNotEqual(nomatch, binary:match(Bin, ~"<title>500 -- Server Error</title>")),
         ?assertNotEqual(nomatch, binary:match(Bin, ~"crash_on_mount"))
+    end).
+
+%% An error page is a template, so its backend names the media type; a value
+%% with no backend is refused, logged with why, and the original error is
+%% served as plain text rather than under a guessed type.
+error_page_without_backend_is_refused(Config) when is_list(Config) ->
+    with_dev(fun() ->
+        Opts = (crash_opts())#{error_page => {?MODULE, bare_error_page}},
+        {Body, PageLog} = render_with_page_crash(Opts),
+        ?assertNotEqual(nomatch, binary:match(Body, ~"crash_on_mount")),
+        ?assertNotEqual(nomatch, binary:match(PageLog, ~"which is not a template")),
+        ?assertNotEqual(nomatch, binary:match(PageLog, ~"arizona_http:render_error_page/2")),
+        %% No argument dump: the bindings handed to the page stay out of it.
+        ?assertEqual(nomatch, binary:match(PageLog, ~"crash_on_mount"))
+    end).
+
+bare_error_page(#{error_info := #{class := error}}) ->
+    #{s => [~"oops"], d => []}.
+
+%% A page that crashes while rendering never hides the error it was asked to
+%% show: its own crash is logged and the original one is served as plain text.
+error_page_crash_falls_back_to_text(Config) when is_list(Config) ->
+    with_dev(fun() ->
+        Opts = (crash_opts())#{error_page => {?MODULE, crashing_error_page}},
+        {Body, PageLog} = render_with_page_crash(Opts),
+        ?assertNotEqual(nomatch, binary:match(Body, ~"crash_on_mount")),
+        ?assertEqual(nomatch, binary:match(Body, ~"page_broke")),
+        ?assertNotEqual(nomatch, binary:match(PageLog, ~"page_broke"))
+    end).
+
+crashing_error_page(#{error_info := #{class := error}}) ->
+    erlang:error(page_broke).
+
+%% Renders the crashing view under `Opts`, returning the plain-text body and the
+%% log line the error page's own crash produced.
+render_with_page_crash(Opts) ->
+    HandlerId = arizona_http_suite_page_log_capture,
+    ok = logger:add_handler(HandlerId, arizona_test_log_handler, #{
+        level => error,
+        config => #{pid => self()}
+    }),
+    try
+        Req = arizona_req_test_adapter:new(#{}),
+        {error, 500, ContentType, Body, _} = arizona_http:render(arizona_crashable, Req, Opts),
+        ?assertEqual(~"text/plain; charset=utf-8", ContentType),
+        {iolist_to_binary(Body), page_crash_log(1000)}
+    after
+        logger:remove_handler(HandlerId)
+    end.
+
+page_crash_log(Timeout) ->
+    receive
+        {arizona_test_log_handler, #{msg := {Format, Args}}} when is_list(Args) ->
+            Msg = unicode:characters_to_binary(io_lib:format(Format, Args)),
+            case binary:match(Msg, ~"the error page") of
+                nomatch -> page_crash_log(Timeout);
+                _ -> Msg
+            end;
+        {arizona_test_log_handler, _} ->
+            page_crash_log(Timeout)
+    after Timeout ->
+        ct:fail(no_error_page_crash_log)
+    end.
+
+%% The not-a-template explanation names a page whose atoms are outside Latin-1.
+format_error_names_a_unicode_page(Config) when is_list(Config) ->
+    #{general := Msg} = arizona_http:format_error(
+        {error_page_not_a_template, {'中', '页'}, x}, [{arizona_http, render_error_page, 2, []}]
+    ),
+    ?assertNotEqual(nomatch, binary:match(unicode:characters_to_binary(Msg), ~"中:页/1")).
+
+with_dev(Fun) ->
+    persistent_term:put(arizona_reload_url, ~"/arizona/reload"),
+    try
+        Fun()
     after
         persistent_term:erase(arizona_reload_url)
     end.
