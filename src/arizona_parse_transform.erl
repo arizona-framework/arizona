@@ -547,20 +547,37 @@ assert_no_nodiff_call(_Node) ->
 
 %% A one-arg template call no target compiled and the module does not export (a
 %% hand-written `arizona_template:html(Elems)` in a module that never names the
-%% `arizona_html` backend) would otherwise be an `undef` at render.
+%% `arizona_html` backend), or a `fun arizona_template:html/1` no target can rewrite,
+%% would otherwise be an `undef` at render.
 assert_no_unknown_constructor({call, L, {remote, _, {atom, _, Mod}, {atom, _, F}}, [Arg]}) when
     Mod =:= arizona_template orelse Mod =:= az
 ->
-    case lists:member({F, 1}, Mod:module_info(exports)) of
-        true -> assert_no_unknown_constructor(Arg);
-        false -> parse_error({target, {unknown_constructor, Mod, F}}, L)
-    end;
+    ok = assert_template_export(Mod, F, L),
+    assert_no_unknown_constructor(Arg);
+assert_no_unknown_constructor(
+    {'fun', L, {function, {atom, _, Mod}, {atom, _, F}, {integer, _, 1}}}
+) when
+    Mod =:= arizona_template orelse Mod =:= az
+->
+    assert_template_export(Mod, F, L);
 assert_no_unknown_constructor(Node) when is_tuple(Node) ->
     assert_no_unknown_constructor(tuple_to_list(Node));
 assert_no_unknown_constructor(Nodes) when is_list(Nodes) ->
     lists:foreach(fun assert_no_unknown_constructor/1, Nodes);
 assert_no_unknown_constructor(_Node) ->
     ok.
+
+%% Only a render target's name earns the target advice; any other name is a typo.
+assert_template_export(Mod, F, L) ->
+    case lists:member({F, 1}, Mod:module_info(exports)) of
+        true ->
+            ok;
+        false ->
+            case F =:= html orelse F =:= json orelse is_target(F) of
+                true -> parse_error({target, {unknown_constructor, Mod, F}}, L);
+                false -> parse_error({target, {undefined_function, Mod, F}}, L)
+            end
+    end.
 
 %% Map every `{Name, Arity}` to its clause list, so a `?each(fun Name/Arity, _)`
 %% callback can be resolved to its body and inlined like an anonymous fun. Each
@@ -1505,6 +1522,8 @@ format_target_error({target, {unknown_constructor, Mod, F}}) ->
         "~p:target(arizona_html, Elems)",
         [Mod, F, Mod, Mod]
     );
+format_target_error({target, {undefined_function, Mod, F}}) ->
+    io_lib:format("~p:~p/1 is not defined", [Mod, F]);
 format_target_error({target, {bad_backend, Backend}}) ->
     io_lib:format(
         "render backend ~p must be a loadable arizona_renderer module whose target/0 "

@@ -106,6 +106,8 @@
     html_json_macros_name_backend/1,
     html_json_macros_render_unchanged/1,
     unknown_constructor_rejected/1,
+    unknown_constructor_typo_rejected/1,
+    unknown_constructor_fun_ref_rejected/1,
     target_backend_not_literal_rejected/1,
     target_name_clash_rejected/1,
     target_name_reserved_rejected/1,
@@ -1269,6 +1271,8 @@ groups() ->
             html_json_macros_name_backend,
             html_json_macros_render_unchanged,
             unknown_constructor_rejected,
+            unknown_constructor_typo_rejected,
+            unknown_constructor_fun_ref_rejected,
             target_backend_not_literal_rejected,
             target_name_clash_rejected,
             target_name_reserved_rejected,
@@ -9423,6 +9427,47 @@ unknown_constructor_rejected(Config) when is_list(Config) ->
     ?assertMatch({_, _}, binary:match(Msg, ~"az:html/1 is not a template constructor")),
     ?assertMatch({_, _}, binary:match(Msg, ~"?html")),
     ?assertMatch({_, _}, binary:match(Msg, ~"az:target(arizona_html, Elems)")).
+
+%% A name that is no render target is a typo, not a missing target: the message says
+%% the function is undefined and gives no target advice.
+unknown_constructor_typo_rejected(Config) when is_list(Config) ->
+    assert_parse_error(
+        "-module(pt_unknown_ctor). -export([r/1]). "
+        "r(B) -> arizona_template:target(arizona_html, "
+        "{p, [], [arizona_template:nope(arizona_template:get(y, B))]}). ",
+        fun(Reason) -> Reason =:= {target, {undefined_function, arizona_template, nope}} end
+    ),
+    Msg = unicode:characters_to_binary(
+        arizona_parse_transform:format_error(
+            {target, {undefined_function, arizona_template, nope}}
+        )
+    ),
+    ?assertEqual(~"arizona_template:nope/1 is not defined", Msg).
+
+%% A fun reference cannot be rewritten by a target, so `fun arizona_template:html/1`
+%% would be an `undef` at its first call; it is refused like the call, even where the
+%% module names the target.
+unknown_constructor_fun_ref_rejected(Config) when is_list(Config) ->
+    Cases = [
+        {
+            "r(_B) -> fun arizona_template:html/1. ",
+            {target, {unknown_constructor, arizona_template, html}}
+        },
+        {
+            "r(_B) -> {arizona_template:target(arizona_html, {p, [], []}), fun az:html/1}. ",
+            {target, {unknown_constructor, az, html}}
+        },
+        {"r(_B) -> fun az:nope/1. ", {target, {undefined_function, az, nope}}}
+    ],
+    lists:foreach(
+        fun({Body, Expected}) ->
+            assert_parse_error(
+                "-module(pt_unknown_ctor). -export([r/1]). " ++ Body,
+                fun(Reason) -> Reason =:= Expected end
+            )
+        end,
+        Cases
+    ).
 
 write_header_module(Config, Name) ->
     File = filename:join(proplists:get_value(priv_dir, Config), Name ++ ".erl"),
