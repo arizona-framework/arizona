@@ -91,6 +91,11 @@ export class NativeClient {
         this._heartbeatTimer = null;
         this._heartbeatPending = false;
         this._mountedAt = null; // when the open socket's view last mounted
+        // Frames awaiting their reply, by the ref they carried. Replies keep frame
+        // order, but each one names its ref, so a frame without "r" (a push, the
+        // reply to an untagged frame) can never be mistaken for one.
+        this._nextRef = 1;
+        this._replies = new Map();
     }
 
     connect() {
@@ -138,10 +143,15 @@ export class NativeClient {
             // Isolated per effect, like the ops.
             if (msg.e) for (const cmd of msg.e) this._runEffectSafe(cmd);
             if (this.root) this._resolveConnect(this); // first frame applied (no-op after)
+            // After the ops and effects, so an awaited frame resolves on the
+            // state its reply produced.
+            if (msg.r !== undefined) this._settleReply(msg.r);
             this._flushWaiters();
         };
         this.ws.onclose = (e) => {
             this._stopHeartbeat();
+            // A close loses every reply still owed, whatever happens next.
+            this._failReplies(new Error(`socket closed (${e.code}) before the reply`));
             // No reconnect on an intentional close (1000) or a never-connected
             // initial failure; any other drop reconnects with backoff.
             if (this._closing || e.code === 1000 || !this.root) return;
@@ -219,6 +229,39 @@ export class NativeClient {
     // enclosing view (so events reach a stateful child, not just the root).
     pushEvent(event, payload = {}, viewId = this.viewId) {
         this.ws.send(JSON.stringify([viewId, event, payload]));
+    }
+
+    // pushEvent, resolved once the server has handled the event: the frame
+    // carries a reply ref, which the server answers with exactly one frame even
+    // when the event changes nothing (and so would otherwise get no reply). A
+    // ref that never comes back means the frame was lost or refused: the promise
+    // rejects on the timeout, or on a close.
+    pushEventAwait(event, payload = {}, viewId = this.viewId, timeoutMs = 2000) {
+        const ref = this._nextRef++;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this._replies.delete(ref);
+                reject(new Error(`no reply to ${event} (ref ${ref})`));
+            }, timeoutMs);
+            this._replies.set(ref, { resolve, reject, timer });
+            this.ws.send(JSON.stringify([viewId, event, payload, ref]));
+        });
+    }
+
+    _settleReply(ref) {
+        const pending = this._replies.get(ref);
+        if (!pending) return;
+        this._replies.delete(ref);
+        clearTimeout(pending.timer);
+        pending.resolve(this.tree());
+    }
+
+    _failReplies(err) {
+        for (const { reject, timer } of this._replies.values()) {
+            clearTimeout(timer);
+            reject(err);
+        }
+        this._replies.clear();
     }
 
     // SPA navigate: transition to a new view on the same socket (the server's

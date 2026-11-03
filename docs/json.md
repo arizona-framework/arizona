@@ -262,6 +262,23 @@ All three are near-copies of the browser worker (`assets/js/arizona-worker.js` +
    a silently half-open socket (no TCP error), the clients also send a 30s
    heartbeat ping (`'0'`; the server pongs `'1'`); a pong still pending at the next
    tick means the socket is dead, so they drop it and reconnect via the same path.
+7. **Tag a frame you wait on with a reply ref.** A frame that changes nothing gets
+   no reply: an event whose handler returns the same bindings and no effects, an
+   event for a view a diff just removed, a patch whose params change nothing.
+   Frames carry no id, so a client that holds a press until it is answered cannot
+   tell that silence from a lost frame, and the next frame to arrive may be an
+   unrelated server push. To wait for one, append an integer ref:
+   `[ViewId, Event, Payload, Ref]`, `["navigate", {path, qs}, Ref]` or
+   `["patch", {path, qs}, Ref]`. The server answers that frame with exactly one
+   frame carrying `"r": Ref`, merged into its reply (`{"r":8,"o":[...]}`) or alone
+   when there is nothing else to send (`{"r":7}`). Replies keep frame order, so a
+   queue of pending refs settles front to back; a frame without `"r"` (a push, the
+   reply to an untagged frame) settles none. Send a ref only where something
+   waits: untagged frames behave exactly as before and cost nothing extra. A frame
+   the server cannot read (a non-map payload, a non-integer ref) is dropped, ref
+   and all, so a ref that never comes back means the frame was lost or refused,
+   and a close fails every ref still pending. The ref answers "the server is done
+   with this frame", not "something changed".
 
 The `json` e2e exercises each example over the real socket: a counter
 (`/json/counter`), a keyed list (`/json/list`), conditional tab switching

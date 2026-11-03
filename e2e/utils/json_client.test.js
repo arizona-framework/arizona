@@ -788,3 +788,101 @@ describe('JSON client op application', () => {
         expect(warn).toHaveBeenCalledTimes(1);
     });
 });
+
+// An event that changes nothing gets no reply, so a client holding the press
+// cannot tell it handled from lost. pushEventAwait tags the frame with a ref the
+// server always answers, and only a frame naming that ref settles it.
+describe('JSON client reply refs', () => {
+    function connected() {
+        const ws = installWebSocketStub();
+        const client = newClient();
+        client.connect();
+        ws.latest().simulateOpen();
+        ws.latest().simulateMessage(
+            JSON.stringify({
+                o: [[OP_REPLACE, 'json_x', { f: 'R', s: ROOT_STATICS, d: ['json_x', ''] }]],
+            }),
+        );
+        return { ws, client };
+    }
+
+    it('tags the event frame with a ref and resolves on the frame naming it', async () => {
+        const { ws, client } = connected();
+        try {
+            const reply = client.pushEventAwait('save', { id: '1' });
+            expect(JSON.parse(ws.latest().sent.at(-1))).toEqual(['json_x', 'save', { id: '1' }, 1]);
+            let settled = false;
+            reply.then(() => {
+                settled = true;
+            });
+            // A push is not the reply, even when it arrives first.
+            ws.latest().simulateMessage(JSON.stringify({ o: [[OP_TEXT, 'json_x:R-0t0', 'tick']] }));
+            await Promise.resolve();
+            expect(settled).toBe(false);
+            ws.latest().simulateMessage('{"r":1}');
+            await expect(reply).resolves.toBeDefined();
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('resolves on the state the reply produced', async () => {
+        const { ws, client } = connected();
+        try {
+            const reply = client.pushEventAwait('inc');
+            ws.latest().simulateMessage(
+                JSON.stringify({ r: 1, o: [[OP_TEXT, 'json_x:R-0t0', 'one']] }),
+            );
+            const tree = await reply;
+            expect(tree.children).toEqual(['one']);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('settles each pending frame by its own ref', async () => {
+        const { ws, client } = connected();
+        try {
+            const first = client.pushEventAwait('a');
+            const second = client.pushEventAwait('b');
+            let firstDone = false;
+            first.then(() => {
+                firstDone = true;
+            });
+            ws.latest().simulateMessage('{"r":2}');
+            await expect(second).resolves.toBeDefined();
+            expect(firstDone).toBe(false);
+            ws.latest().simulateMessage('{"r":1}');
+            await expect(first).resolves.toBeDefined();
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('rejects every pending frame when the socket closes', async () => {
+        const { ws, client } = connected();
+        try {
+            const reply = client.pushEventAwait('save');
+            client.close();
+            await expect(reply).rejects.toThrow(/closed \(1000\)/);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('rejects a frame whose ref never comes back', async () => {
+        vi.useFakeTimers();
+        const { ws, client } = connected();
+        try {
+            const reply = client.pushEventAwait('save', {}, 'json_x', 50);
+            const caught = expect(reply).rejects.toThrow(/no reply to save \(ref 1\)/);
+            vi.advanceTimersByTime(50);
+            await caught;
+            // A late reply for a ref already given up on is ignored.
+            expect(() => ws.latest().simulateMessage('{"r":1}')).not.toThrow();
+        } finally {
+            ws.restore();
+            vi.useRealTimers();
+        }
+    });
+});

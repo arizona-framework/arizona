@@ -14,6 +14,7 @@ Inbound text frames are JSON arrays:
 ```
 [~"cached_fps", FpList]                           %% client tells us which fingerprints it has
 [~"navigate", #{~"path" := Path, ~"qs" := Qs}]    %% SPA navigation request
+[~"patch", #{~"path" := Path, ~"qs" := Qs}]       %% in-place SPA navigation
 [ViewId, Event, Payload]                          %% UI event
 ~"0"                                              %% ping (replied with ~"1")
 ```
@@ -23,6 +24,17 @@ Outbound text frames are JSON maps with keys `~"o"` (ops), `~"e"`
 frame carries the compile-time walk of the route's handler and layouts, any
 later frame only the per-socket delta; see `arizona_event_attrs`). `~"o"` and
 `~"e"` are arrays produced by `arizona_diff` and `arizona_js` respectively.
+
+A frame that changes nothing gets no reply. A client that must know when one
+was handled appends an integer reply ref to a navigate, patch or event frame
+(`[~"navigate", Nav, Ref]`, `[~"patch", Nav, Ref]`, `[ViewId, Event, Payload,
+Ref]`). Such a frame is answered by exactly one frame carrying `~"r" => Ref`:
+merged into its reply when it has one, alone (`{"r":Ref}`) when it changed
+nothing or named a view that no longer exists. Replies keep frame order, and a
+frame without the `~"r"` key (a server push, the reply to an untagged frame)
+answers no ref. A frame the server cannot read is dropped as ever, ref and all,
+so a ref that never comes back means the frame was lost or refused; a close
+fails every ref still pending.
 
 ## Exit handling
 
@@ -101,6 +113,8 @@ the client reloads it after a jittered delay.
 %% walk on the connect frame, per-socket deltas after (see arizona_event_attrs).
 -define(AZ_ATTRS, ~"a").
 -define(EFFECTS, ~"e").
+%% The reply ref a client frame carried, echoed on the one frame answering it.
+-define(REF, ~"r").
 -define(SYS_PING, ~"0").
 -define(SYS_PONG, ~"1").
 -define(CLOSE_GOING_AWAY, 1001).
@@ -186,7 +200,13 @@ the client reloads it after a jittered delay.
     %% navigate/patch consumed (`carry_consumed/2`); the socket sees no other
     %% cookie change (a controller fetch that rewrites the cookie reaches the
     %% browser, not this socket).
-    carried_cookies = [] :: arizona_req:carried_cookies()
+    carried_cookies = [] :: arizona_req:carried_cookies(),
+    %% The ref the frame being handled carried, if any. A frame that names one is
+    %% answered by exactly one frame carrying it back, even when nothing changed,
+    %% since the protocol otherwise sends nothing for a frame without a delta and a
+    %% client waiting on a reply cannot tell that from a lost frame. Set for the
+    %% frame and consumed by the frame encoding its reply (encode_reply_1/3).
+    reply_ref = undefined :: undefined | integer()
 }).
 
 %% --------------------------------------------------------------------
@@ -322,6 +342,8 @@ Recognized payloads:
 - `[~"patch", #{~"path" := Path, ~"qs" := Qs}]` -- in-place SPA navigation
 - `[ViewId, Event, Payload]` -- UI event dispatch (`Event` a binary,
   `Payload` a map)
+- any of the last three with a trailing integer reply ref, answered by one
+  frame carrying it back (see "Wire protocol" above)
 
 Unrecognized payloads, and frames whose body is not valid JSON, are
 silently dropped (a single bad frame must not crash the socket). An event
@@ -372,14 +394,24 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
             is_binary(Path), is_binary(Qs)
         ->
             handle_navigate(Path, Qs, Socket);
+        [~"navigate", #{~"path" := Path, ~"qs" := Qs}, Ref] when
+            is_binary(Path), is_binary(Qs), is_integer(Ref)
+        ->
+            handle_navigate(Path, Qs, Socket#socket{reply_ref = Ref});
         [~"patch", #{~"path" := Path, ~"qs" := Qs}] when
             is_binary(Path), is_binary(Qs)
         ->
             handle_patch(Path, Qs, Socket);
+        [~"patch", #{~"path" := Path, ~"qs" := Qs}, Ref] when
+            is_binary(Path), is_binary(Qs), is_integer(Ref)
+        ->
+            handle_patch(Path, Qs, Socket#socket{reply_ref = Ref});
         [Target, Event, Payload] when is_binary(Event), is_map(Payload) ->
-            ViewId = event_target(Target, RootViewId),
-            {AllOps, AllEffects, Observed} = dispatch_event(Pid, ViewId, Event, Payload),
-            reply_after_pending(AllOps, AllEffects, Observed, Socket);
+            handle_event(Target, Event, Payload, RootViewId, Socket);
+        [Target, Event, Payload, Ref] when
+            is_binary(Event), is_map(Payload), is_integer(Ref)
+        ->
+            handle_event(Target, Event, Payload, RootViewId, Socket#socket{reply_ref = Ref});
         _ ->
             {ok, Socket}
     catch
@@ -994,6 +1026,11 @@ replace_ops(ViewId, PageHTML) ->
 event_target(Target, _RootViewId) when is_binary(Target) -> Target;
 event_target(_Target, RootViewId) -> RootViewId.
 
+handle_event(Target, Event, Payload, RootViewId, #socket{pid = Pid} = Socket) ->
+    ViewId = event_target(Target, RootViewId),
+    {AllOps, AllEffects, Observed} = dispatch_event(Pid, ViewId, Event, Payload),
+    reply_after_pending(AllOps, AllEffects, Observed, Socket).
+
 dispatch_event(Pid, ViewId, Event, Payload) ->
     {ok, Ops, Effects, Observed} = arizona_live:handle_event(Pid, ViewId, Event, Payload),
     {flatten_ops(ViewId, Ops), Effects, Observed}.
@@ -1146,23 +1183,25 @@ encode_reply(Ops, Effects0, Socket0) ->
     encode_reply_1(Ops, Effects, Socket).
 
 %% The first four clauses are the no-delta fast path -- almost every frame.
-%% They must not touch `az_pending`: reading it costs nothing, but clearing it
-%% would copy the socket record per event for a field that is already empty.
-encode_reply_1([], [], #socket{az_pending = []} = Socket) ->
+%% They must not touch `az_pending` or `reply_ref`: reading them costs nothing,
+%% but clearing them would copy the socket record per event for fields that are
+%% already empty.
+encode_reply_1([], [], #socket{az_pending = [], reply_ref = undefined} = Socket) ->
     {ok, Socket};
-encode_reply_1(Ops, [], #socket{az_pending = []} = Socket) ->
+encode_reply_1(Ops, [], #socket{az_pending = [], reply_ref = undefined} = Socket) ->
     {reply, encode(#{?OPS => Ops}), Socket};
-encode_reply_1([], Effects, #socket{az_pending = []} = Socket) ->
+encode_reply_1([], Effects, #socket{az_pending = [], reply_ref = undefined} = Socket) ->
     {reply, encode(#{?EFFECTS => wire_effects(Effects)}), Socket};
-encode_reply_1(Ops, Effects, #socket{az_pending = []} = Socket) ->
+encode_reply_1(Ops, Effects, #socket{az_pending = [], reply_ref = undefined} = Socket) ->
     {reply, encode(#{?OPS => Ops, ?EFFECTS => wire_effects(Effects)}), Socket};
-encode_reply_1(Ops, Effects, Socket0) ->
+encode_reply_1(Ops, Effects, #socket{reply_ref = Ref} = Socket0) ->
     {Attrs, Socket} = take_az_pending(Socket0),
     Fields =
         [{?OPS, Ops} || Ops =/= []] ++
             [{?EFFECTS, wire_effects(Effects)} || Effects =/= []] ++
-            [{?AZ_ATTRS, Attrs}],
-    {reply, encode(maps:from_list(Fields)), Socket}.
+            [{?AZ_ATTRS, Attrs} || Attrs =/= []] ++
+            [{?REF, Ref} || Ref =/= undefined],
+    {reply, encode(maps:from_list(Fields)), Socket#socket{reply_ref = undefined}}.
 
 unwrap_effects(Effects) ->
     [Cmd || {arizona_effect, Cmd} <:- Effects].
@@ -1261,7 +1300,14 @@ encode(Frame) ->
 %% Clause order carries a trap: map patterns are SUBSET matches, so the
 %% widest key set must match first -- an `o`+`e`+`a` frame reaching the
 %% `o`+`a` clause would re-encode without `e`, silently dropping the
-%% effects on exactly the frames that carry a delta.
+%% effects on exactly the frames that carry a delta. The same trap is why a
+%% frame answering a reply ref is matched first: the ref leads the object and
+%% the rest is the frame it is merged into, encoded by the clauses below.
+encode_frame(#{?REF := Ref} = Frame) when map_size(Frame) =:= 1 ->
+    [<<"{\"r\":">>, integer_to_binary(Ref), $}];
+encode_frame(#{?REF := Ref} = Frame) ->
+    [<<${, Rest/binary>> | Tail] = encode_frame(maps:remove(?REF, Frame)),
+    [<<"{\"r\":">>, integer_to_binary(Ref), $,, Rest | Tail];
 encode_frame(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
     [
         <<"{\"o\":">>,
