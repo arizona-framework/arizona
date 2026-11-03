@@ -35,7 +35,8 @@ By convention an adapter also takes `compress` and `error_page`, and threads bot
 a page crash in dev; pass it through **only when the listener config sets it** -- core has no
 default page. Unset, a dev crash is served as `text/plain` (`arizona_error:format_text/3`), and
 production always serves a plain-text `Internal Server Error`, page or not. The rich HTML dev page
-is opt-in: `error_page => {arizona_error_page, render}`.
+is opt-in: `error_page => {arizona_error_page, render}`, and only it reloads the browser after a
+fix (a plain-text body runs no script).
 
 ## The pieces
 

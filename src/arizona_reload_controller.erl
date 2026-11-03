@@ -4,10 +4,12 @@ The dev hot-reload endpoint (the `{reload, Path, Opts}` route) as a controller,
 so every `arizona_server` adapter that can send a `loop` reply serves it.
 
 The browser connects with `EventSource` and gets a `reload` or `reload_css`
-Server-Sent Event whenever `arizona_reloader` broadcasts one; the dev error page
-injects the script that reloads on the first event after a successful
-recompile. The action joins the reloader's pubsub topic and holds the response
-open as a loop; `handle_info/3` writes each broadcast as an event.
+Server-Sent Event whenever `arizona_reloader` broadcasts one. Pages subscribe
+from their own markup: `arizona_error_page`, when a listener sets it as its
+`error_page`, injects the script that reloads on the first event after a
+successful recompile (the plain-text error served without one cannot). The
+action joins the reloader's pubsub topic and holds the response open as a loop;
+`handle_info/3` writes each broadcast as an event.
 """.
 
 %% --------------------------------------------------------------------
