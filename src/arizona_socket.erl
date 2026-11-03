@@ -115,6 +115,10 @@ the client reloads it after a jittered delay.
 -define(EFFECTS, ~"e").
 %% The reply ref a client frame carried, echoed on the one frame answering it.
 -define(REF, ~"r").
+%% The largest reply ref: the largest integer a JavaScript number holds exactly
+%% (`Number.MAX_SAFE_INTEGER`), so a ref round-trips through any client unchanged.
+-define(MAX_REF, 16#1FFFFFFFFFFFFF).
+-define(is_ref(Ref), (is_integer(Ref) andalso Ref >= 0 andalso Ref =< ?MAX_REF)).
 -define(SYS_PING, ~"0").
 -define(SYS_PONG, ~"1").
 -define(CLOSE_GOING_AWAY, 1001).
@@ -200,13 +204,7 @@ the client reloads it after a jittered delay.
     %% navigate/patch consumed (`carry_consumed/2`); the socket sees no other
     %% cookie change (a controller fetch that rewrites the cookie reaches the
     %% browser, not this socket).
-    carried_cookies = [] :: arizona_req:carried_cookies(),
-    %% The ref the frame being handled carried, if any. A frame that names one is
-    %% answered by exactly one frame carrying it back, even when nothing changed,
-    %% since the protocol otherwise sends nothing for a frame without a delta and a
-    %% client waiting on a reply cannot tell that from a lost frame. Set for the
-    %% frame and consumed by the frame encoding its reply (encode_reply_1/3).
-    reply_ref = undefined :: undefined | integer()
+    carried_cookies = [] :: arizona_req:carried_cookies()
 }).
 
 %% --------------------------------------------------------------------
@@ -395,23 +393,23 @@ do_handle_in(JSON, #socket{pid = Pid, view_id = RootViewId} = Socket) ->
         ->
             handle_navigate(Path, Qs, Socket);
         [~"navigate", #{~"path" := Path, ~"qs" := Qs}, Ref] when
-            is_binary(Path), is_binary(Qs), is_integer(Ref)
+            is_binary(Path), is_binary(Qs), ?is_ref(Ref)
         ->
-            handle_navigate(Path, Qs, Socket#socket{reply_ref = Ref});
+            answer(Ref, handle_navigate(Path, Qs, Socket));
         [~"patch", #{~"path" := Path, ~"qs" := Qs}] when
             is_binary(Path), is_binary(Qs)
         ->
             handle_patch(Path, Qs, Socket);
         [~"patch", #{~"path" := Path, ~"qs" := Qs}, Ref] when
-            is_binary(Path), is_binary(Qs), is_integer(Ref)
+            is_binary(Path), is_binary(Qs), ?is_ref(Ref)
         ->
-            handle_patch(Path, Qs, Socket#socket{reply_ref = Ref});
+            answer(Ref, handle_patch(Path, Qs, Socket));
         [Target, Event, Payload] when is_binary(Event), is_map(Payload) ->
             handle_event(Target, Event, Payload, RootViewId, Socket);
         [Target, Event, Payload, Ref] when
-            is_binary(Event), is_map(Payload), is_integer(Ref)
+            is_binary(Event), is_map(Payload), ?is_ref(Ref)
         ->
-            handle_event(Target, Event, Payload, RootViewId, Socket#socket{reply_ref = Ref});
+            answer(Ref, handle_event(Target, Event, Payload, RootViewId, Socket));
         _ ->
             {ok, Socket}
     catch
@@ -1026,6 +1024,22 @@ replace_ops(ViewId, PageHTML) ->
 event_target(Target, _RootViewId) when is_binary(Target) -> Target;
 event_target(_Target, RootViewId) -> RootViewId.
 
+%% Answer a frame that carried a reply ref: exactly one frame carrying it back,
+%% whatever handling the frame produced. Done here, on the frame's result, rather
+%% than in the encoders its handling reaches, so no path can lose the answer or
+%% leave the ref behind for a later frame (a push would then settle a frame the
+%% client sent next). A reply gets the ref spliced in at the front of its object
+%% (every reply frame is a JSON object built by encode_frame/1); no reply becomes
+%% one carrying only the ref. A close answers nothing: the client fails every
+%% ref still pending on it. A raise never reaches here -- crash_close/4 drops the
+%% frame and the exit or close that follows does the same.
+answer(Ref, {ok, Socket}) ->
+    {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $}], Socket};
+answer(Ref, {reply, [<<${, Rest/binary>> | Tail], Socket}) ->
+    {reply, [<<"{\"r\":">>, integer_to_binary(Ref), $,, Rest | Tail], Socket};
+answer(_Ref, {close, _Code, _Reason, _Socket} = Close) ->
+    Close.
+
 handle_event(Target, Event, Payload, RootViewId, #socket{pid = Pid} = Socket) ->
     ViewId = event_target(Target, RootViewId),
     {AllOps, AllEffects, Observed} = dispatch_event(Pid, ViewId, Event, Payload),
@@ -1183,25 +1197,23 @@ encode_reply(Ops, Effects0, Socket0) ->
     encode_reply_1(Ops, Effects, Socket).
 
 %% The first four clauses are the no-delta fast path -- almost every frame.
-%% They must not touch `az_pending` or `reply_ref`: reading them costs nothing,
-%% but clearing them would copy the socket record per event for fields that are
-%% already empty.
-encode_reply_1([], [], #socket{az_pending = [], reply_ref = undefined} = Socket) ->
+%% They must not touch `az_pending`: reading it costs nothing, but clearing it
+%% would copy the socket record per event for a field that is already empty.
+encode_reply_1([], [], #socket{az_pending = []} = Socket) ->
     {ok, Socket};
-encode_reply_1(Ops, [], #socket{az_pending = [], reply_ref = undefined} = Socket) ->
+encode_reply_1(Ops, [], #socket{az_pending = []} = Socket) ->
     {reply, encode(#{?OPS => Ops}), Socket};
-encode_reply_1([], Effects, #socket{az_pending = [], reply_ref = undefined} = Socket) ->
+encode_reply_1([], Effects, #socket{az_pending = []} = Socket) ->
     {reply, encode(#{?EFFECTS => wire_effects(Effects)}), Socket};
-encode_reply_1(Ops, Effects, #socket{az_pending = [], reply_ref = undefined} = Socket) ->
+encode_reply_1(Ops, Effects, #socket{az_pending = []} = Socket) ->
     {reply, encode(#{?OPS => Ops, ?EFFECTS => wire_effects(Effects)}), Socket};
-encode_reply_1(Ops, Effects, #socket{reply_ref = Ref} = Socket0) ->
+encode_reply_1(Ops, Effects, Socket0) ->
     {Attrs, Socket} = take_az_pending(Socket0),
     Fields =
         [{?OPS, Ops} || Ops =/= []] ++
             [{?EFFECTS, wire_effects(Effects)} || Effects =/= []] ++
-            [{?AZ_ATTRS, Attrs} || Attrs =/= []] ++
-            [{?REF, Ref} || Ref =/= undefined],
-    {reply, encode(maps:from_list(Fields)), Socket#socket{reply_ref = undefined}}.
+            [{?AZ_ATTRS, Attrs}],
+    {reply, encode(maps:from_list(Fields)), Socket}.
 
 unwrap_effects(Effects) ->
     [Cmd || {arizona_effect, Cmd} <:- Effects].
@@ -1300,14 +1312,7 @@ encode(Frame) ->
 %% Clause order carries a trap: map patterns are SUBSET matches, so the
 %% widest key set must match first -- an `o`+`e`+`a` frame reaching the
 %% `o`+`a` clause would re-encode without `e`, silently dropping the
-%% effects on exactly the frames that carry a delta. The same trap is why a
-%% frame answering a reply ref is matched first: the ref leads the object and
-%% the rest is the frame it is merged into, encoded by the clauses below.
-encode_frame(#{?REF := Ref} = Frame) when map_size(Frame) =:= 1 ->
-    [<<"{\"r\":">>, integer_to_binary(Ref), $}];
-encode_frame(#{?REF := Ref} = Frame) ->
-    [<<${, Rest/binary>> | Tail] = encode_frame(maps:remove(?REF, Frame)),
-    [<<"{\"r\":">>, integer_to_binary(Ref), $,, Rest | Tail];
+%% effects on exactly the frames that carry a delta.
 encode_frame(#{?OPS := Ops, ?EFFECTS := Effects, ?AZ_ATTRS := Attrs}) ->
     [
         <<"{\"o\":">>,

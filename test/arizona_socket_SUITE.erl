@@ -1981,10 +1981,11 @@ ref_answers_event_that_changes_nothing(Config) when is_list(Config) ->
     {reply, Frame, Socket2} =
         arizona_socket:handle_in(event_frame(~"counter", ~"noop", 7), Socket1),
     ?assertEqual(~"{\"r\":7}", iolist_to_binary(Frame)),
-    Big = 1 bsl 70,
-    {reply, BigFrame, _Socket3} =
-        arizona_socket:handle_in(event_frame(~"counter", ~"noop", Big), Socket2),
-    ?assertEqual(#{~"r" => Big}, decode(BigFrame)).
+    %% The largest ref a JavaScript number holds exactly round-trips.
+    Max = 1 bsl 53 - 1,
+    {reply, MaxFrame, _Socket3} =
+        arizona_socket:handle_in(event_frame(~"counter", ~"noop", Max), Socket2),
+    ?assertEqual(#{~"r" => Max}, decode(MaxFrame)).
 
 ref_rides_event_reply(Config) when is_list(Config) ->
     Req = arizona_req_test_adapter:new(),
@@ -2082,6 +2083,10 @@ unreadable_frame_with_ref_dropped(Config) when is_list(Config) ->
     Frames = [
         iolist_to_binary(json:encode([~"counter", ~"inc", ~"not-a-map", 12])),
         iolist_to_binary(json:encode([~"counter", ~"inc", #{}, ~"12"])),
+        %% Out of range: no client could have sent it intact.
+        iolist_to_binary(json:encode([~"counter", ~"inc", #{}, -1])),
+        iolist_to_binary(json:encode([~"counter", ~"inc", #{}, 1 bsl 53])),
+        iolist_to_binary(json:encode([~"counter", ~"inc", #{}, 1.5])),
         iolist_to_binary(json:encode([~"navigate", #{~"path" => ~"/x"}, 12]))
     ],
     [?assertMatch({ok, _}, arizona_socket:handle_in(F, Socket0)) || F <- Frames].
