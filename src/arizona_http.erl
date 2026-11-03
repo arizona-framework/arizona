@@ -146,7 +146,7 @@ annotation.
     Reason :: term(),
     Stacktrace :: [tuple()],
     ErrorInfo :: #{general := iolist()}.
-format_error({error_page_not_a_template, {Mod, Fun}, Value}, [{_M, _F, _Args, _Info} | _]) ->
+format_error({error_page_not_a_template, {Mod, Fun}, Value}, _Stacktrace) ->
     #{
         general => io_lib:format(
             "the error page ~ts:~ts/1 returned ~0tp, which is not a template. An error "
@@ -237,7 +237,7 @@ dev_error_body(Bindings, ErrorInfo, #{error_page := {Mod, Fun}}) ->
         #{backend := Backend} = Tmpl ->
             {Backend:content_type(), arizona_render:render_to_iolist(Tmpl)};
         Other ->
-            erlang:error({error_page_not_a_template, {Mod, Fun}, Other}, [Bindings, ErrorInfo], [
+            erlang:error({error_page_not_a_template, {Mod, Fun}, Other}, none, [
                 {error_info, #{module => ?MODULE}}
             ])
     end;

@@ -210,8 +210,11 @@ error_page_without_backend_is_refused(Config) when is_list(Config) ->
                     {error_page_not_a_template, {?MODULE, bare_error_page}, #{s := [~"oops"]}},
                     Reason
                 ),
-                Msg = iolist_to_binary(erl_error:format_exception(error, Reason, ST)),
-                ?assertNotEqual(nomatch, binary:match(Msg, ~"which is not a template"))
+                Msg = unicode:characters_to_binary(erl_error:format_exception(error, Reason, ST)),
+                ?assertNotEqual(nomatch, binary:match(Msg, ~"which is not a template")),
+                ?assertNotEqual(nomatch, binary:match(Msg, ~"arizona_http:dev_error_body/3")),
+                %% No argument dump: the bindings handed to the page stay out of it.
+                ?assertEqual(nomatch, binary:match(Msg, ~"crash_on_mount"))
         end
     end).
 
