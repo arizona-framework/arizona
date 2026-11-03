@@ -65,7 +65,7 @@ Render targets: every target macro names its `arizona_renderer` backend --
 `arizona_template:target(arizona_json, E)` -- so the parse transform has no built-in
 target and one outside core (`?terminal`) works the same way. A target exists in a
 module only once a `target/2` call names it: a hand-written `arizona_template:html(E)`
-there is a compile error (`unknown_constructor`). See "Render targets outside core" in
+there is a compile error (`undefined_function`). See "Render targets outside core" in
 [docs/architecture.md](docs/architecture.md).
 
 Performance: how to measure without fooling yourself (benchmark noise floor, the

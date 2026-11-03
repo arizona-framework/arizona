@@ -244,9 +244,10 @@ where core lists `arizona_html` and `arizona_json`). One name is one backend per
 module, and a name cannot be an `arizona_template` function (`raw`, `each`, ...).
 A target exists in a module only once a `target/2` call names its backend, so a
 hand-written `arizona_template:html(Elems)` (or a `fun arizona_template:html/1`) in a
-module that never does is a compile error (`unknown_constructor`), not an `undef` at
-render; a one-arg call or fun reference to a name that is no target and no template
-function (a typo) is the compile error `undefined_function`. Without the parse
+module that never does is the compile error `undefined_function` -- there it is just
+an undefined function, as is a typo -- not an `undef` at render. A fun reference to a
+target the module does name (`fun arizona_template:html/1`) is `unknown_constructor`:
+the parse transform compiles a target's calls, not a reference written by hand. Without the parse
 transform a `target/2` call raises `parse_transform_not_applied`, and a hand-written
 `html/1` is an `undef`.
 

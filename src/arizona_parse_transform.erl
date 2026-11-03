@@ -567,13 +567,14 @@ assert_no_unknown_constructor(Nodes) when is_list(Nodes) ->
 assert_no_unknown_constructor(_Node) ->
     ok.
 
-%% Only a render target's name earns the target advice; any other name is a typo.
+%% Only a target this module names earns the target advice; any other name is just
+%% undefined here, a target name included, since no `target/2` call made it one.
 assert_template_export(Mod, F, L) ->
     case lists:member({F, 1}, Mod:module_info(exports)) of
         true ->
             ok;
         false ->
-            case F =:= html orelse F =:= json orelse is_target(F) of
+            case is_target(F) of
                 true -> parse_error({target, {unknown_constructor, Mod, F}}, L);
                 false -> parse_error({target, {undefined_function, Mod, F}}, L)
             end
@@ -1517,10 +1518,10 @@ format_target_error({target, {builder_target, Mod, BuilderTarget, Target}}) ->
     );
 format_target_error({target, {unknown_constructor, Mod, F}}) ->
     io_lib:format(
-        "~p:~p/1 is not a template constructor. A render target is named by its "
-        "backend: use its macro (?html, ?json) or ~p:target(Backend, Elems), e.g. "
-        "~p:target(arizona_html, Elems)",
-        [Mod, F, Mod, Mod]
+        "~p:~p/1 is not a template constructor: ~p is a render target here, reached "
+        "through its macro or ~p:target(Backend, Elems), which the parse transform "
+        "compiles; a call or fun reference written by hand bypasses it",
+        [Mod, F, F, Mod]
     );
 format_target_error({target, {undefined_function, Mod, F}}) ->
     io_lib:format("~p:~p/1 is not defined", [Mod, F]);

@@ -9397,10 +9397,11 @@ html_json_macros_render_unchanged(Config) when is_list(Config) ->
         iolist_to_binary(arizona_render:render_to_iolist(Mod:app(B)))
     ).
 
-%% A hand-written `arizona_template:html(...)` in a module that never names
-%% arizona_html has no target to compile with; it is refused rather than left as
-%% an `undef` for render to hit. A target the module does name (`json` here) does
-%% not make another one known.
+%% A target exists in a module only once a `target/2` call names it, so a hand-written
+%% `arizona_template:html(...)` in a module that never does is an undefined function
+%% there, not an `undef` for render to hit; one target the module names (`json`) does
+%% not make another one known. Where the module does name it, a hand-written
+%% reference to it is refused as a constructor written by hand.
 unknown_constructor_rejected(Config) when is_list(Config) ->
     Cases = [
         {"r(_B) -> arizona_template:html({p, [], []}). ", arizona_template, html},
@@ -9416,7 +9417,7 @@ unknown_constructor_rejected(Config) when is_list(Config) ->
         fun({Body, Mod, F}) ->
             assert_parse_error(
                 "-module(pt_unknown_ctor). -export([r/1]). " ++ Body,
-                fun(Reason) -> Reason =:= {target, {unknown_constructor, Mod, F}} end
+                fun(Reason) -> Reason =:= {target, {undefined_function, Mod, F}} end
             )
         end,
         Cases
@@ -9425,8 +9426,10 @@ unknown_constructor_rejected(Config) when is_list(Config) ->
         arizona_parse_transform:format_error({target, {unknown_constructor, az, html}})
     ),
     ?assertMatch({_, _}, binary:match(Msg, ~"az:html/1 is not a template constructor")),
-    ?assertMatch({_, _}, binary:match(Msg, ~"?html")),
-    ?assertMatch({_, _}, binary:match(Msg, ~"az:target(arizona_html, Elems)")).
+    ?assertMatch({_, _}, binary:match(Msg, ~"html is a render target here")),
+    ?assertMatch({_, _}, binary:match(Msg, ~"az:target(Backend, Elems)")),
+    %% No target is named by the transform itself.
+    ?assertEqual(nomatch, binary:match(Msg, [~"?html", ~"?json", ~"arizona_html"])).
 
 %% A name that is no render target is a typo, not a missing target: the message says
 %% the function is undefined and gives no target advice.
@@ -9445,13 +9448,13 @@ unknown_constructor_typo_rejected(Config) when is_list(Config) ->
     ?assertEqual(~"arizona_template:nope/1 is not defined", Msg).
 
 %% A fun reference cannot be rewritten by a target, so `fun arizona_template:html/1`
-%% would be an `undef` at its first call; it is refused like the call, even where the
-%% module names the target.
+%% would be an `undef` at its first call; it is refused like the call: undefined where
+%% the module names no such target, a hand-written constructor where it does.
 unknown_constructor_fun_ref_rejected(Config) when is_list(Config) ->
     Cases = [
         {
             "r(_B) -> fun arizona_template:html/1. ",
-            {target, {unknown_constructor, arizona_template, html}}
+            {target, {undefined_function, arizona_template, html}}
         },
         {
             "r(_B) -> {arizona_template:target(arizona_html, {p, [], []}), fun az:html/1}. ",
