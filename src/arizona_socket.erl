@@ -114,8 +114,6 @@ the client reloads it after a jittered delay.
 %% walk on the connect frame, per-socket deltas after (see arizona_event_attrs).
 -define(AZ_ATTRS, ~"a").
 -define(EFFECTS, ~"e").
-%% The reply ref a client frame carried, echoed on the one frame answering it.
--define(REF, ~"r").
 %% The largest reply ref: the largest integer a JavaScript number holds exactly
 %% (`Number.MAX_SAFE_INTEGER`), so a ref round-trips through any client unchanged.
 -define(MAX_REF, 16#1FFFFFFFFFFFFF).
