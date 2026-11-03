@@ -15,6 +15,7 @@
 -export([error_page_dev_without_page_serves_plain_text/1]).
 -export([error_page_dev_renders_the_configured_page/1]).
 -export([error_page_without_backend_is_refused/1]).
+-export([format_error_names_a_unicode_page/1]).
 -export([error_page_logs_the_crash/1]).
 -export([error_page_custom_target_type/1]).
 
@@ -33,7 +34,8 @@ groups() ->
             render_threads_cookie,
             render_answers_the_targets_content_type,
             render_refuses_a_cross_target_layout,
-            renderers_name_their_content_type
+            renderers_name_their_content_type,
+            format_error_names_a_unicode_page
         ]},
         %% Sequential: these toggle the global `arizona_reload_url` persistent_term
         %% (the dev/prod signal), which must not race the parallel render tests.
@@ -215,6 +217,13 @@ error_page_without_backend_is_refused(Config) when is_list(Config) ->
 
 bare_error_page(#{error_info := #{class := error}}) ->
     #{s => [~"oops"], d => []}.
+
+%% The not-a-template explanation names a page whose atoms are outside Latin-1.
+format_error_names_a_unicode_page(Config) when is_list(Config) ->
+    #{general := Msg} = arizona_http:format_error(
+        {error_page_not_a_template, {'中', '页'}, x}, [{arizona_http, render_error_page, 2, []}]
+    ),
+    ?assertNotEqual(nomatch, binary:match(unicode:characters_to_binary(Msg), ~"中:页/1")).
 
 with_dev(Fun) ->
     persistent_term:put(arizona_reload_url, ~"/arizona/reload"),

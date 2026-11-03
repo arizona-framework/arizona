@@ -149,7 +149,7 @@ annotation.
 format_error({error_page_not_a_template, {Mod, Fun}, Value}, [{_M, _F, _Args, _Info} | _]) ->
     #{
         general => io_lib:format(
-            "the error page ~s:~s/1 returned ~0tp, which is not a template. An error "
+            "the error page ~ts:~ts/1 returned ~0tp, which is not a template. An error "
             "page is a template built by a render target (`?html`, `?json`, ...), "
             "whose backend names the response's media type.",
             [Mod, Fun, Value]

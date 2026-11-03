@@ -298,10 +298,10 @@ frame_from(Mod, [_Frame | Rest]) ->
 fallback_title(_Class, {arizona_loc, {Mod, Line}, _}) ->
     fmt_mod_line(Mod, Line);
 fallback_title(Class, _Reason) ->
-    unicode:characters_to_binary(io_lib:format("~s", [Class])).
+    unicode:characters_to_binary(io_lib:format("~ts", [Class])).
 
 fmt_mod_line(Mod, Line) ->
-    unicode:characters_to_binary(io_lib:format("~s:~b", [Mod, Line])).
+    unicode:characters_to_binary(io_lib:format("~ts:~b", [Mod, Line])).
 
 %% Returns the first stack frame whose module is not framework or OTP,
 %% the topmost frame when the whole stack is framework/OTP, or `none`

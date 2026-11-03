@@ -21,6 +21,7 @@
 -export([format_title_prefers_template_module_frame/1]).
 -export([format_title_all_framework_stack_uses_loc/1]).
 -export([format_title_keeps_genuine_user_frame/1]).
+-export([format_title_unicode_module/1]).
 -export([format_reason_compile_error/1]).
 -export([format_reason_compile_error_empty/1]).
 -export([format_reason_arizona_loc/1]).
@@ -58,6 +59,7 @@ groups() ->
             format_title_prefers_template_module_frame,
             format_title_all_framework_stack_uses_loc,
             format_title_keeps_genuine_user_frame,
+            format_title_unicode_module,
             format_reason_compile_error,
             format_reason_compile_error_empty,
             format_reason_arizona_loc,
@@ -184,6 +186,13 @@ format_title_keeps_genuine_user_frame(Config) when is_list(Config) ->
         {my_page, '-render/1-fun-0-', 1, [{line, 5}]}
     ],
     ?assertEqual(~"my_helper:42", arizona_error:format_title(error, Reason, Stack)).
+
+%% A module atom outside Latin-1 is named, not a `badarg` from the formatter.
+format_title_unicode_module(Config) when is_list(Config) ->
+    ?assertEqual(
+        ~"中:3", arizona_error:format_title(error, badarg, [{'中', f, 0, [{line, 3}]}])
+    ),
+    ?assertEqual(~"中:4", arizona_error:format_title(error, {arizona_loc, {'中', 4}, badarg}, [])).
 
 format_reason_compile_error(Config) when is_list(Config) ->
     Errors = [{"src/foo.erl", [{{10, 1}, erl_lint, {unused_var, 'X'}}]}],
