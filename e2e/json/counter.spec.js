@@ -94,4 +94,16 @@ test.describe('JSON wire -- counter', () => {
             client.close();
         }
     });
+
+    test('answers an awaited navigate with the new view', async ({ baseURL }) => {
+        const client = new NativeClient(baseURL, '/json/counter');
+        await client.connect();
+        try {
+            const tree = await client.navigateAwait('/json/list');
+            expect(tree.id).not.toBe('json_counter');
+            expect(client.viewId).toBe(tree.id);
+        } finally {
+            client.close();
+        }
+    });
 });

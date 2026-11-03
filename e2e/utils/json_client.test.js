@@ -870,6 +870,71 @@ describe('JSON client reply refs', () => {
         }
     });
 
+    it('tags a navigate with a ref and resolves on its OP_REPLACE', async () => {
+        const { ws, client } = connected();
+        try {
+            const reply = client.navigateAwait('/b?x=1');
+            expect(JSON.parse(ws.latest().sent.at(-1))).toEqual([
+                'navigate',
+                { path: '/b', qs: 'x=1' },
+                1,
+            ]);
+            ws.latest().simulateMessage(
+                JSON.stringify({
+                    r: 1,
+                    o: [[OP_REPLACE, 'json_b', { f: 'B', s: ROOT_STATICS, d: ['json_b', ''] }]],
+                }),
+            );
+            const tree = await reply;
+            expect(tree.id).toBe('json_b');
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // The frame answering the navigate carries the full navigate that replaces
+    // the socket: it settles before the reload fails what the socket still owes.
+    it('resolves a navigate answered by a full navigate', async () => {
+        const { ws, client } = connected();
+        try {
+            const reply = client.navigateAwait('/gated');
+            ws.latest().simulateMessage(
+                JSON.stringify({ r: 1, e: [[EFFECT_NAVIGATE, '/gated', { full: true }]] }),
+            );
+            await expect(reply).resolves.toBeDefined();
+        } finally {
+            ws.restore();
+        }
+    });
+
+    // A full navigate detaches the old socket's handlers, so its close fails
+    // nothing: the refs it still owes are failed when it is replaced.
+    it('rejects what a socket replaced by a full navigate still owes', async () => {
+        const { ws, client } = connected();
+        try {
+            const reply = client.pushEventAwait('save');
+            ws.latest().simulateMessage(
+                JSON.stringify({ e: [[EFFECT_NAVIGATE, '/elsewhere', { full: true }]] }),
+            );
+            await expect(reply).rejects.toThrow(/replaced by a full navigate to \/elsewhere/);
+        } finally {
+            ws.restore();
+        }
+    });
+
+    it('rejects at once, and forgets the ref, when the frame cannot be sent', async () => {
+        const { ws, client } = connected();
+        try {
+            client.ws.send = () => {
+                throw new Error('still connecting');
+            };
+            await expect(client.pushEventAwait('save')).rejects.toThrow('still connecting');
+            expect(client._replies.size).toBe(0);
+        } finally {
+            ws.restore();
+        }
+    });
+
     it('rejects a frame whose ref never comes back', async () => {
         vi.useFakeTimers();
         const { ws, client } = connected();

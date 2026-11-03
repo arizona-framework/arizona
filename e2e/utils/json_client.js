@@ -138,14 +138,16 @@ export class NativeClient {
             // navigate's new view.
             if (msg.o?.some((op) => op[0] === OP_REPLACE)) this._mountedAt = Date.now();
             if (msg.o) this._applyOps(msg.o);
+            // After the ops, so an awaited frame resolves on the state its reply
+            // produced; before the effects, so a full navigate among them (which
+            // replaces this socket, failing what it still owes) cannot fail the
+            // very frame this one answers.
+            if (msg.r !== undefined) this._settleReply(msg.r);
             // Handler-returned effects (the "e" array): dispatch the portable
             // ones, skip web-only effects (set_title, dispatch_event, ...).
             // Isolated per effect, like the ops.
             if (msg.e) for (const cmd of msg.e) this._runEffectSafe(cmd);
             if (this.root) this._resolveConnect(this); // first frame applied (no-op after)
-            // After the ops and effects, so an awaited frame resolves on the
-            // state its reply produced.
-            if (msg.r !== undefined) this._settleReply(msg.r);
             this._flushWaiters();
         };
         this.ws.onclose = (e) => {
@@ -237,14 +239,38 @@ export class NativeClient {
     // ref that never comes back means the frame was lost or refused: the promise
     // rejects on the timeout, or on a close.
     pushEventAwait(event, payload = {}, viewId = this.viewId, timeoutMs = 2000) {
+        return this._sendAwait([viewId, event, payload], event, timeoutMs);
+    }
+
+    // navigate, resolved once the server has answered it: with the new view's
+    // OP_REPLACE, a redirect, or a full navigate (whose reload then replaces the
+    // socket).
+    navigateAwait(path, timeoutMs = 2000) {
+        const [p, qs = ''] = path.split('?');
+        const reply = this._sendAwait(['navigate', { path: p, qs }], `navigate ${path}`, timeoutMs);
+        this._retargetReconnect(p);
+        return reply;
+    }
+
+    // Send `frame` with a fresh reply ref appended and wait for the frame that
+    // carries it back.
+    _sendAwait(frame, label, timeoutMs) {
         const ref = this._nextRef++;
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 this._replies.delete(ref);
-                reject(new Error(`no reply to ${event} (ref ${ref})`));
+                reject(new Error(`no reply to ${label} (ref ${ref})`));
             }, timeoutMs);
             this._replies.set(ref, { resolve, reject, timer });
-            this.ws.send(JSON.stringify([viewId, event, payload, ref]));
+            try {
+                this.ws.send(JSON.stringify([...frame, ref]));
+            } catch (err) {
+                // Not sent (the socket is still connecting, or already gone), so
+                // no reply is coming: fail now rather than at the timeout.
+                clearTimeout(timer);
+                this._replies.delete(ref);
+                reject(err);
+            }
         });
     }
 
@@ -270,11 +296,15 @@ export class NativeClient {
     navigate(path) {
         const [p, qs = ''] = path.split('?');
         this.ws.send(JSON.stringify(['navigate', { path: p, qs }]));
-        // Keep the reconnect URL in sync so a drop re-mounts the navigated path,
-        // not the launch path (mirrors the browser worker updating _wsUrl on a
-        // navigate). Reconnect = a fresh mount, so only the route (_az_path) matters.
+        this._retargetReconnect(p);
+    }
+
+    // Keep the reconnect URL in sync so a drop re-mounts the navigated path, not
+    // the launch path (mirrors the browser worker updating _wsUrl on a navigate).
+    // Reconnect = a fresh mount, so only the route (_az_path) matters.
+    _retargetReconnect(path) {
         const u = new URL(this.wsUrl);
-        u.searchParams.set('_az_path', p);
+        u.searchParams.set('_az_path', path);
         this.wsUrl = u.toString();
     }
 
@@ -294,6 +324,9 @@ export class NativeClient {
         }
         for (const [k, v] of new URLSearchParams(qs)) u.searchParams.append(k, v);
         this.wsUrl = u.toString();
+        // The old socket's handlers are detached below, so its close would fail
+        // nothing: what it still owes is lost with it, now.
+        this._failReplies(new Error(`socket replaced by a full navigate to ${path}`));
         const old = this.ws;
         old.onmessage = null;
         old.onclose = null;
