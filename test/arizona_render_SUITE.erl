@@ -1574,7 +1574,7 @@ ssr_inner_content_rejects_raw_wrapper(Config) when is_list(Config) ->
     %% splices the page unescaped -- and the opaque value cannot be unwrapped, so
     %% it raises rather than half-working.
     ?assertError(
-        {arizona_loc, {arizona_inner_content_layouts, _}, {bad_template_value, _}},
+        {arizona_loc, {arizona_inner_content_layouts, _}, {raw_template, #{s := _}}},
         layout_html(arizona_inner_content_layouts, raw)
     ).
 

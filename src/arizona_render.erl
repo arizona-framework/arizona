@@ -996,7 +996,15 @@ render_ssr_val(Backend, #{s := Statics, d := Dynamics} = Tmpl) ->
     },
     arizona_template:maybe_propagate(Tmpl, Snap0);
 render_ssr_val(Backend, Val) ->
-    text_leaf(Backend, arizona_template:to_bin(Val)).
+    text_leaf(Backend, ssr_to_bin(Val)).
+
+%% A literal `?raw` is what reaches here; a map in it is refused by name, as the live
+%% render refuses it. Checked in this body, not a clause head of render_ssr_val/2, so
+%% a template or other map value is not made to test for a tuple first.
+ssr_to_bin({arizona_raw, V}) when is_map(V) ->
+    arizona_template:raw_not_text(V);
+ssr_to_bin(Val) ->
+    arizona_template:to_bin(Val).
 
 %% A child of a chooser the parse transform could not see into (arizona_template:choices/3),
 %% rendered here like any child -- the slot scopes it, scope_slot/2 sees through the tag --

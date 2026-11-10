@@ -177,7 +177,7 @@ Placements that raise, because the value is opaque:
   error term (a rendered page inside an attribute has no meaning);
 - **measured or inspected** -- `iolist_size(az:inner_content(Bindings))` raises
   `badarg`, as does anything else expecting iodata;
-- wrapped in `?raw/1` -- `bad_template_value`. There is nothing to opt out of:
+- wrapped in `?raw/1` -- `raw_template`. There is nothing to opt out of:
   a content slot already splices the page unescaped, so `?raw(?inner_content)`
   is redundant. Drop the wrapper;
 - **inside a list the template cannot see** -- a comprehension, or a list

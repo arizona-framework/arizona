@@ -666,6 +666,14 @@ format_error(parse_transform_not_applied) ->
     "parse transform not applied -- include arizona_stateful.hrl or arizona_stateless.hrl";
 format_error({bad_template_value, V}) ->
     lists:flatten(io_lib:format("cannot convert ~0tp to binary in template", [V]));
+format_error({raw_template, V}) ->
+    lists:flatten(
+        io_lib:format(
+            "raw/1 around ~0tp: raw opts text out of escaping, and a template, component "
+            "or ?local is not text. A template is markup already, so drop the raw",
+            [V]
+        )
+    );
 format_error({effect_in_content, V}) ->
     lists:flatten(
         io_lib:format(
@@ -718,6 +726,8 @@ format_error(missing_binding, [{_M, _F, [Key, Bindings], _Info} | _]) ->
         )
     };
 format_error({bad_template_value, _V} = Reason, _ST) ->
+    #{general => format_error(Reason)};
+format_error({raw_template, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
 format_error({effect_in_content, _V} = Reason, _ST) ->
     #{general => format_error(Reason)};
@@ -860,8 +870,8 @@ when the `raw` call is literal at the template site"). Honor that rule: unwrap
 the raw and escape its inner value like any plain scalar, so a helper wrapping
 user data in `raw/1` cannot smuggle trusted markup past the escaper (on SSR or
 across the live diff). A map inside the raw -- a template, a descriptor, a `?local`
--- is not text, so it raises `{bad_template_value, Map}`, as a literal `?raw` around
-one does at output.
+-- is not text, so it raises `{raw_template, Map}`, as a literal `?raw` around one
+does.
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
@@ -889,14 +899,16 @@ mark_raw_esc(V) when is_map(V) ->
 mark_raw_esc(V) ->
     mark_esc(V).
 
-%% Internal: raises `{bad_template_value, Map}` for a map -- a template, descriptor
-%% or `?local` -- inside a `raw/1`, which opts text out of escaping. Raised where the
-%% slot is evaluated, so the error carries its location; at output it would not.
+%% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
+%% `?local` -- held directly by a `raw/1`, which opts text out of escaping. Raised
+%% where the slot is evaluated, so it carries the slot's location. A map nested
+%% deeper (in a list, in a raw in the raw) is not walked for, which would cost every
+%% raw value; output refuses it as `bad_template_value`.
 -doc false.
 -spec raw_not_text(Value) -> no_return() when
     Value :: map().
 raw_not_text(V) ->
-    erlang:error({bad_template_value, V}, [V], [{error_info, #{module => ?MODULE}}]).
+    erlang:error({raw_template, V}, [V], [{error_info, #{module => ?MODULE}}]).
 
 -doc """
 Propagates the template-level fields that must survive onto a snapshot: `f`
