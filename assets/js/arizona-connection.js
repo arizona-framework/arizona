@@ -370,6 +370,44 @@ function armPendingTransition(t) {
     _transitionRef = null;
 }
 
+// Frames that arrived while an earlier frame's apply waits in a transition's
+// update callback, which the browser runs later. Each frame is a delta against
+// the one before, so applying one early leaves the older frame to land last and
+// overwrite it, with nothing to show the page is stale. `null` when no apply is
+// deferred; `disconnect()` drops it, so a torn-down connection's frames neither
+// apply nor hold the next connection's.
+/** @type {Array<() => void>|null} */
+let _heldFrames = null;
+
+/**
+ * Apply a server frame in arrival order, wrapped in a view transition when
+ * `transition` is set.
+ * @param {() => void} apply
+ * @param {{types?: string[]}|null} transition
+ */
+function applyFrame(apply, transition) {
+    if (_heldFrames) {
+        _heldFrames.push(() => applyFrame(apply, transition));
+        return;
+    }
+    if (!transition) {
+        apply();
+        return;
+    }
+    /** @type {Array<() => void>} */
+    const held = [];
+    _heldFrames = held;
+    runTransition(transition, () => {
+        if (_heldFrames !== held) return;
+        try {
+            apply();
+        } finally {
+            _heldFrames = null;
+            for (const f of held) f();
+        }
+    });
+}
+
 // Reply refs, unique per page: a frame tagged with one is answered by exactly one
 // frame carrying it back (`"r"`), even when it changes nothing -- the protocol
 // otherwise sends nothing for such a frame, which no client can tell from a slow
@@ -1223,11 +1261,7 @@ export function connect(endpoint, params = {}) {
                         (pt.kind === 'replace' || answers) &&
                         opsMatchTransition(msg[1], pt.kind);
                     if (wrap || answers) armPendingTransition(null);
-                    if (wrap) {
-                        runTransition({ types: pt.types }, apply);
-                    } else {
-                        apply();
-                    }
+                    applyFrame(apply, wrap ? { types: pt.types } : null);
                     if (_onmessageHook) {
                         _onmessageHook({
                             data: JSON.stringify({
@@ -1419,6 +1453,7 @@ export function connect(endpoint, params = {}) {
         setPendingScroll(null);
         _unloadingToOtherPage = false;
         armPendingTransition(null);
+        _heldFrames = null;
         _navRefs.clear();
         _navAwaitResync = false;
         _connectQs = '';

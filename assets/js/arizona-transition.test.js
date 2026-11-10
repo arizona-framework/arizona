@@ -655,3 +655,90 @@ describe('view transitions -- reply binding', () => {
         }
     });
 });
+
+// ---------------------------------------------------------------------------
+// Frame order across a deferred apply
+// ---------------------------------------------------------------------------
+
+describe('view transitions -- frame order', () => {
+    // The browser runs the update callback later; hold it until the test runs it.
+    function deferViewTransitions() {
+        const pending = [];
+        document.startViewTransition = vi.fn((arg) => {
+            pending.push(typeof arg === 'object' ? arg.update : arg);
+            return { ready: Promise.resolve() };
+        });
+        return () => {
+            for (const f of pending.splice(0)) f();
+        };
+    }
+
+    function wrappedEvent(name) {
+        executeJS(document.body, null, [JS_TRANSITION, {}, [JS_PUSH_EVENT, name]]);
+        return _mock.lastRef();
+    }
+
+    const value = () => document.querySelector('input').getAttribute('value');
+
+    beforeEach(() => {
+        document.body.innerHTML = '<div id="page" az-view><input az="0" value="x"></div>';
+    });
+
+    it('a later frame waits for a deferred earlier one', () => {
+        const runPending = deferViewTransitions();
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']]);
+        expect(value()).toBe('x');
+        runPending();
+        expect(value()).toBe('ab');
+    });
+
+    it('keeps arrival order for every frame held behind it', () => {
+        const runPending = deferViewTransitions();
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']]);
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'abc']]);
+        runPending();
+        expect(value()).toBe('abc');
+    });
+
+    // A held frame that is itself wrapped defers again, and the frames behind it
+    // keep waiting for it.
+    it('a held frame that is wrapped holds the frames behind it', () => {
+        const runPending = deferViewTransitions();
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']], null, wrappedEvent('b'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'abc']]);
+        runPending();
+        expect(document.startViewTransition).toHaveBeenCalledTimes(2);
+        expect(value()).toBe('a');
+        runPending();
+        expect(value()).toBe('abc');
+    });
+
+    // A frame whose apply throws must not hold the frames behind it forever.
+    it('a deferred frame that throws still releases the frames behind it', () => {
+        const runPending = deferViewTransitions();
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'a']], [null], wrappedEvent('a'));
+        _mock.simulateMessage([[OP.SET_ATTR, 'page:0', 'value', 'ab']]);
+        expect(runPending).toThrow();
+        expect(value()).toBe('ab');
+    });
+
+    // A new connection must not wait on, or receive, frames of a torn-down one.
+    it('disconnect drops the deferred frame and the frames held behind it', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML =
+            '<div id="page" az-view><p az="0">x</p><p az="1">y</p><p az="2">z</p></div>';
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'old-1']], null, wrappedEvent('a'));
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'old-2']]);
+        _mock.restore();
+        _mock = setupMockWorker();
+        _mock.simulateMessage([[OP.TEXT, 'page:2', 'new']]);
+        expect(document.querySelector('[az="2"]').innerHTML).toBe('new');
+        runPending();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('x');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
+        expect(document.querySelector('[az="2"]').innerHTML).toBe('new');
+    });
+});
