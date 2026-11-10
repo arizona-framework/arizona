@@ -756,6 +756,12 @@ This is an **HTML-target** feature: on the live diff a `?raw` value is tagged so
 client `innerHTML`s it (vs text-noding a plain `?get` value -- the escaping boundary).
 The `?json` and `?terminal` targets do not HTML-escape, so `?raw` there is a no-op
 with no defined meaning; using it in a `?json`/`?terminal` template is unsupported.
+
+`Value` is text. A template or other map held directly by the raw raises
+`{raw_template, Map}` where its slot is evaluated, so it is located on every path; a
+template is markup already, so drop the raw. One nested deeper (in a list, or in a
+raw inside the raw) is not looked for, and raises `bad_template_value` at output,
+where only SSR still knows the slot's location.
 """.
 -spec raw(Value) -> {arizona_raw, term()} when
     Value :: term().
@@ -869,9 +875,9 @@ the documented rule forbids ("the parse transform only recognizes the opt-out
 when the `raw` call is literal at the template site"). Honor that rule: unwrap
 the raw and escape its inner value like any plain scalar, so a helper wrapping
 user data in `raw/1` cannot smuggle trusted markup past the escaper (on SSR or
-across the live diff). A map inside the raw -- a template, a descriptor, a `?local`
--- is not text, so it raises `{raw_template, Map}`, as a literal `?raw` around one
-does.
+across the live diff). A map held directly by the raw -- a template, a descriptor,
+a `?local` -- is not text, so it raises `{raw_template, Map}`, as a literal `?raw`
+around one does; one nested deeper is refused only at output (see `raw/1`).
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
@@ -903,7 +909,7 @@ mark_raw_esc(V) ->
 %% `?local` -- held directly by a `raw/1`, which opts text out of escaping. Raised
 %% where the slot is evaluated, so it carries the slot's location. A map nested
 %% deeper (in a list, in a raw in the raw) is not walked for, which would cost every
-%% raw value; output refuses it as `bad_template_value`.
+%% raw value; output refuses it as `bad_template_value`, unlocated on the live render.
 -doc false.
 -spec raw_not_text(Value) -> no_return() when
     Value :: map().
