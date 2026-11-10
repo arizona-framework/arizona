@@ -3,8 +3,8 @@ import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.
 import { allDocs, closeAllPip } from './arizona-docs.js';
 import {
     bindDocumentEvents,
-    embeddedAttrs,
     noteAzAttrs,
+    noteEmbeddedAttrs,
     proven,
     unbindDocuments,
 } from './arizona-events.js';
@@ -1392,7 +1392,7 @@ export function connect(endpoint, params = {}) {
     // known now: the socket's set arrives a round trip after the open, and a
     // click or an HTTP-form submit in between must find its proof.
     bindDocumentEvents(document, signal);
-    noteAzAttrs(embeddedAttrs());
+    noteEmbeddedAttrs(signal);
 
     // Take over scroll restoration so the browser doesn't scroll to a stale
     // position before OP_REPLACE swaps in the new content. See the block

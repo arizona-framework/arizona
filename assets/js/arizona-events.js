@@ -318,7 +318,7 @@ const ATTRS_ID = 'arizona-attrs';
  * with no `</body>` to embed before, gets no element.
  * @returns {string[]}
  */
-export function embeddedAttrs() {
+function embeddedAttrs() {
     // Not `getElementById`: an id can come from user input, and any earlier element
     // carrying this one would win. Escaped content cannot create a script element,
     // and the server writes its embed after the page, so the last match is it.
@@ -332,6 +332,21 @@ export function embeddedAttrs() {
         console.warn(`[arizona] #${ATTRS_ID} is not a JSON list of names; delegating nothing`);
         return [];
     }
+}
+
+/**
+ * Note the names the page embeds, now and, when the document is still parsing,
+ * again once it is parsed: a classic script or an early module may call
+ * `connect`/`start` before the parser reaches the embed, which comes after the page.
+ * @param {AbortSignal} signal
+ */
+export function noteEmbeddedAttrs(signal) {
+    noteAzAttrs(embeddedAttrs());
+    if (document.readyState === 'loading')
+        document.addEventListener('DOMContentLoaded', () => noteAzAttrs(embeddedAttrs()), {
+            once: true,
+            signal,
+        });
 }
 
 /**

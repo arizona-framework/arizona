@@ -21,8 +21,8 @@ import { applyChoosers } from './arizona-attrs.js';
 import { closeAllPip } from './arizona-docs.js';
 import {
     bindDocumentEvents,
-    embeddedAttrs,
     noteAzAttrs,
+    noteEmbeddedAttrs,
     unbindDocuments,
 } from './arizona-events.js';
 import { destroyAllHooks, mountHooks } from './arizona-hooks.js';
@@ -74,7 +74,8 @@ function start(opts = {}) {
     }
     const controller = new AbortController();
     bindDocumentEvents(document, controller.signal);
-    noteAzAttrs(opts.attrs ?? embeddedAttrs());
+    if (opts.attrs) noteAzAttrs(opts.attrs);
+    else noteEmbeddedAttrs(controller.signal);
     mountHooks(document);
     applyChoosers(document);
     let stopped = false;

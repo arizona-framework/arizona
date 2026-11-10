@@ -56,6 +56,30 @@ function mockWorker(/** @type {any} */ mod) {
 
 const EVIL = 'https://evil.example/steal';
 
+/**
+ * Run `fn` while the document reports it is still parsing, as a classic script or
+ * an early module calling `connect`/`start` before the parser reaches the embed.
+ * @param {() => void} fn
+ */
+function whileLoading(fn) {
+    Object.defineProperty(document, 'readyState', { configurable: true, get: () => 'loading' });
+    try {
+        fn();
+    } finally {
+        delete (/** @type {any} */ (document).readyState);
+    }
+}
+
+/** The parser reaching the embed after the page, then finishing the document. */
+function finishParsing(/** @type {string[]} */ names) {
+    const el = document.createElement('script');
+    el.type = 'application/json';
+    el.id = 'arizona-attrs';
+    el.textContent = JSON.stringify(names);
+    document.body.appendChild(el);
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+}
+
 /** @type {ReturnType<typeof mockWorker> | null} */
 let w = null;
 /** @type {any} */
@@ -199,6 +223,18 @@ describe('an unproven az-* value is data on a live page', () => {
         expect(w.sent()).toEqual([['v', 'ok', {}]]);
     });
 
+    it('reads an embed the parser reaches after connect', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view><button id="b" az-click='[0,"inc"]'>+</button></div>`;
+        whileLoading(() => {
+            w = mockWorker(mod);
+        });
+        finishParsing(['az-click']);
+        w?.open();
+        document.getElementById('b')?.click();
+        expect(w?.sent()).toEqual([['v', 'inc', {}]]);
+    });
+
     it('does not run an unproven az-submit, before or after the socket opens', async () => {
         const mod = await fresh();
         document.body.innerHTML =
@@ -281,6 +317,21 @@ describe('an unproven az-* value is data on a static page', () => {
         document.getElementById('b')?.click();
         stop();
         expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('reads an embed the parser reaches after start', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona-static.js');
+        document.body.innerHTML = `<div id="v" az-view><button id="b" type="button" az-click='[22,"/ok",{}]'>x</button></div>`;
+        /** @type {() => void} */
+        let stop = () => {};
+        whileLoading(() => {
+            stop = mod.start();
+        });
+        finishParsing(['az-click']);
+        document.getElementById('b')?.click();
+        stop();
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 
     it('does not run az-click the page did not embed', async () => {
