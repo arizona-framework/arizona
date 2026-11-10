@@ -39,6 +39,9 @@ function mockWorker(/** @type {any} */ mod) {
     const frame = (/** @type {any[]} */ data) => inst.onmessage({ data });
     return {
         open: (reconnect = false) => frame([1, reconnect]),
+        /** A server frame carrying `ops` and, optionally, a proven-name delta. */
+        ops: (/** @type {any[]} */ ops, /** @type {string[]|null} */ names = null) =>
+            frame([0, ops, null, false, names, null]),
         /** A frame carrying `names` as its proven set. */
         names: (/** @type {string[]} */ names) => frame([0, null, null, false, names, null]),
         resync: (/** @type {any[]} */ ops) => frame([0, ops, null, true, null, null]),
@@ -119,6 +122,63 @@ describe('an unproven az-* value is data on a live page', () => {
         w.names(['az-click']);
         document.getElementById('b').click();
         expect(w.sent()).toEqual([['v', 'inc', {}]]);
+    });
+
+    // A diff op writing an `az-*` attribute proves nothing: the server proves a
+    // command-valued dynamic on the frame that ships it (its name delta) and sends
+    // the command as a JSON array, so a string here is the app's data -- which a
+    // user may have chosen.
+    it('does not prove a name a diff op writes a data value under', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view az="0"><form id="f">` +
+            `<input id="i" az="1" name="secret" value="hunter2" az-select="[1]"></form></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        w.ops([[1, 'v:1', 'az-select', `[22,"${EVIL}",{}]`]]);
+        document.getElementById('i').dispatchEvent(new Event('select', { bubbles: true }));
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(document.getElementById('i')?.getAttribute('az-select')).toBe(`[22,"${EVIL}",{}]`);
+    });
+
+    it('does not prove a name a stream item patch writes a data value under', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view az="0"><ul az="1"><li az-key="k">` +
+            `<input id="i" az="2" az-select="[1]"></li></ul></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        w.ops([[7, 'v:1', 'k', [[1, '2', 'az-select', `[22,"${EVIL}",{}]`]]]]);
+        document.getElementById('i').dispatchEvent(new Event('select', { bubbles: true }));
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(document.getElementById('i')?.getAttribute('az-select')).toBe(`[22,"${EVIL}",{}]`);
+    });
+
+    it('does not prove a name a ?local attribute slot writes under', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view>` +
+            `<input id="i" az-local='{"a":{"az-select":"k"}}' az-select="[1]"></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        mod.set('v', 'k', `[22,"${EVIL}",{}]`);
+        document.getElementById('i').dispatchEvent(new Event('select', { bubbles: true }));
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(document.getElementById('i')?.getAttribute('az-select')).toBe(`[22,"${EVIL}",{}]`);
+    });
+
+    it('still runs a command a set_attr effect writes under a new name', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view><input id="i"></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        mod.applyEffects([[7, '#i', 'az-select', '[0,"picked"]']]);
+        document.getElementById('i').dispatchEvent(new Event('select', { bubbles: true }));
+        expect(w.sent()).toEqual([['v', 'picked', { value: '' }]]);
     });
 
     it('does not run an unproven az-submit, before or after the socket opens', async () => {

@@ -123,7 +123,7 @@ function handleEvent(target, eventType, signal) {
         // what makes preventDefault take effect on a page that declares it.
         // `noteAzAttrs` reads the directive out of a frame's set before binding
         // anything from that frame -- but the declaration can also arrive AFTER
-        // the type is bound (a later delta frame, a runtime attribute write), so
+        // the type is bound (a later delta frame, a `set_attr` effect), so
         // a passive registration is recorded for `declarePreventDefault` to
         // rebind. Only the bubble listener needs recording: the four are all
         // NATIVELY_BUBBLING, so the capture listener below never binds for them.
@@ -245,8 +245,9 @@ const AZ_DIRECTIVES = new Set([
 
 /**
  * The az-* event types proven to carry commands: the server's set (embedded in the
- * page, then the connect frame and its deltas), a runtime attribute write, and host
- * markup handed to the exported `mountHooks`. Every executor runs a command only
+ * page, then the connect frame and its deltas), a `set_attr`/`toggle_attr` effect,
+ * and host markup handed to the exported `mountHooks`. A diff op or a `?local`
+ * attribute write proves nothing: its string value is app data. Every executor runs a command only
  * under a type in here -- the generic listeners by being bound only for these, the
  * dedicated and replay paths by asking `proven` -- since `[0,"x"]` is a valid
  * command list and an app's data value under any other `az-*` name would run.
@@ -290,7 +291,7 @@ export function noteAzAttrs(names) {
 
 /**
  * Delegate one `az-*` attribute NAME. The single place the directive/event triage
- * lives, so the server's set and a runtime attribute write cannot drift apart.
+ * lives, so the server's set and a `set_attr` effect cannot drift apart.
  * @param {string} name
  */
 export function noteAzAttr(name) {

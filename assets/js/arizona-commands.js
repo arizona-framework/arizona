@@ -1,5 +1,6 @@
 import { applyRemAttrOp, applySetAttrOp } from './arizona-attrs.js';
 import { allDocs, exitPip, requestPip } from './arizona-docs.js';
+import { noteAzAttr } from './arizona-events.js';
 import { notifyUpdated } from './arizona-hooks.js';
 import { host } from './arizona-host.js';
 import { set, setAll } from './arizona-locals.js';
@@ -499,12 +500,21 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
             });
             break;
         case JS_SET_ATTR:
+            // A runtime `arizona_js:set_attr(sel, "az-toggle", ...)` writes a name
+            // no template contains, and this command was itself proven (it ran from
+            // a proven name or a handler), so it proves the name. No other write
+            // does: a diff op's string value and a `?local` value are app data, and
+            // the server proves a command a diff ships on that frame. Before the
+            // write: a custom element's attributeChangedCallback may synchronously
+            // dispatch the very event the attribute names.
+            noteAzAttr(cmd[2]);
             withQueryAll(cmd[1], (t) => applySetAttrOp(t, cmd[2], cmd[3]));
             break;
         case JS_REMOVE_ATTR:
             withQueryAll(cmd[1], (t) => applyRemAttrOp(t, cmd[2]));
             break;
         case JS_TOGGLE_ATTR:
+            noteAzAttr(cmd[2]);
             // 3 args: presence toggle (remove if present, else set bare). 5 args:
             // value toggle (cmd[3] <-> cmd[4]; any other current value -> cmd[3]).
             // Each match is toggled on its own current state.

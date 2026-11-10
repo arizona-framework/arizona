@@ -206,7 +206,7 @@ describe('open event delegation', () => {
         // handed to the triage is whatever the caller wrote. addEventListener types
         // are case-sensitive, so an unlowered `az-Close` binds a dead `Close` while
         // the DOM holds `az-close` -- the attribute lands and its event never fires.
-        w.ops([[1, 'v:1', 'az-Close', '[0,"closed"]']]);
+        mod.applyEffects([[7, '#dlg', 'az-Close', '[0,"closed"]']]);
         fire(document.getElementById('dlg'), 'close', false);
 
         expect(w.sent()).toEqual([['v', 'closed', {}]]);
@@ -219,15 +219,15 @@ describe('open event delegation', () => {
         w.open();
         w.names(['az-click']);
 
-        // A runtime attribute write names a type no template contains, so the
-        // compile-time set cannot hold it. Every such write funnels through
-        // applySetAttrOp: the op, an item-patch inner op, set_attr/toggle_attr
-        // effects, and a ?local attribute slot.
-        w.ops([[1, 'v:1', 'az-close', '[0,"closed"]']]);
+        // A diff that turns a dynamic into a command ships the command as a JSON
+        // array and proves its name on the same frame, ahead of the op: the
+        // compile-time set cannot hold a name only a runtime value carries.
+        w.names(['az-close'], [[1, 'v:1', 'az-close', [0, 'closed']]]);
         fire(document.getElementById('dlg'), 'close', false);
         expect(w.sent()).toEqual([['v', 'closed', {}]]);
 
-        // ...and via an effect, which never reaches the worker at all.
+        // ...and via a set_attr effect, which never reaches the worker at all:
+        // the command that wrote it was itself proven, so it proves the name.
         mod.applyEffects([[7, '#dlg', 'az-cancel', '[0,"cancelled"]']]);
         fire(document.getElementById('dlg'), 'cancel', false);
         expect(w.sent()).toEqual([
