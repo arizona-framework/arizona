@@ -46,6 +46,8 @@ freezing it. Each function is a distinct scenario driven by `arizona_diff_SUITE`
 -export([interp_raw_attr/1]).
 -export([helper_raw_attr_json/1]).
 -export([literal_raw_attr_json/1]).
+-export([raw_raw_effect/1]).
+-export([raw_raw_effect_attr/1]).
 -export([raw_in_list_item/1]).
 -export([raw_in_stream_item/1]).
 -export([raw_in_branch/1]).
@@ -467,6 +469,18 @@ literal_raw_attr_json(Bindings) ->
 
 text_or_json(true, Name) -> ?json({'Text', [], [Name]});
 text_or_json(false, Name) -> Name.
+
+%% A literal `?raw` around a helper's raw holding a command, once `wrap` is true.
+-spec raw_raw_effect(az:bindings()) -> az:template().
+raw_raw_effect(Bindings) ->
+    ?html({'div', [{id, ~"x"}], [?raw(raw_command(?get(wrap)))]}).
+
+-spec raw_raw_effect_attr(az:bindings()) -> az:template().
+raw_raw_effect_attr(Bindings) ->
+    ?html({'div', [{id, ~"x"}, {title, ?raw(raw_command(?get(wrap)))}], []}).
+
+raw_command(true) -> arizona_template:raw(arizona_js:push_event(~"x"));
+raw_command(false) -> ~"a".
 
 %% A `?get` and a `?raw` side by side in one plain-list `?each` item.
 -spec raw_in_list_item(az:bindings()) -> az:template().

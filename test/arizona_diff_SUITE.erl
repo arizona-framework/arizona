@@ -117,6 +117,7 @@
     helper_raw_template_refused/1,
     helper_raw_template_refused_on_diff/1,
     literal_raw_template_refused/1,
+    raw_in_raw_effect_located/1,
     wire_raw_in_list_item/1,
     wire_raw_in_stream_item/1,
     wire_raw_in_branch/1,
@@ -291,6 +292,7 @@ groups() ->
             helper_raw_template_refused,
             helper_raw_template_refused_on_diff,
             literal_raw_template_refused,
+            raw_in_raw_effect_located,
             wire_raw_in_list_item,
             wire_raw_in_stream_item,
             wire_raw_in_branch,
@@ -2155,6 +2157,30 @@ literal_raw_template_refused(Config) when is_list(Config) ->
             helper_raw_attr_json,
             literal_raw_attr_json
         ]
+    ].
+
+%% A command in a raw inside a literal `?raw` is refused at the slot's line on the
+%% live render and the diff too, not only on SSR, in content and in an attribute.
+raw_in_raw_effect_located(Config) when is_list(Config) ->
+    M = arizona_conditional_freeze,
+    B = #{wrap => true},
+    [
+        begin
+            ?assertError(
+                {arizona_loc, {M, _}, {effect_in_content, _}},
+                arizona_render:render_to_iolist(M:Fun(B))
+            ),
+            ?assertError(
+                {arizona_loc, {M, _}, {effect_in_content, _}},
+                arizona_render:render(M:Fun(B), #{})
+            ),
+            {_, S0, V0} = arizona_render:render(M:Fun(#{wrap => false}), #{}),
+            ?assertError(
+                {arizona_loc, {M, _}, {effect_in_content, _}},
+                arizona_diff:diff(M:Fun(B), S0, V0, #{wrap => true})
+            )
+        end
+     || Fun <- [raw_raw_effect, raw_raw_effect_attr]
     ].
 
 %% Runs `Fun`, which must raise `{raw_template, Template}` located in module `M`,
