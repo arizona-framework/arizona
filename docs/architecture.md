@@ -2469,7 +2469,8 @@ az-nodiff element the fresh state names. A navigate is a new page and keeps noth
 - `az-*` attributes inside the widget's own DOM are markup Arizona did not render: the client
   delegates only the event names the compiled templates declared, and mounts hooks only in markup
   it inserted. Call the exported `mountHooks(root)` on the widget's root after rendering such
-  markup; it scans for both.
+  markup; it scans for both. The scan proves every `az-*` name it finds, so pass only the
+  widget's own root, never `document` or the server-rendered view around it.
 
 ## Connection events
 

@@ -11,6 +11,11 @@ import { warnOnce } from './arizona-util.js';
  * path deliberately calls `mountHooks` instead -- server-rendered markup declares
  * nothing the connect frame did not already deliver, so walking it again would
  * re-derive what we were told, per element per op.
+ *
+ * The scan IS a proof: every `az-*` name under `root` becomes a command name for
+ * the page, a data value's name included. Pass only the subtree the host inserted,
+ * never `document` or server-rendered markup (`{az_select, ?get(ids)}` there is
+ * data the server never proved).
  * @param {Element|Document} root
  */
 export function mountHooksPublic(root) {

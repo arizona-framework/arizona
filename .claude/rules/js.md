@@ -131,7 +131,10 @@ structural, not bugs to patch.
 construction (an effect is always a call, never a literal), a bare or boolean attribute has no
 value to hold a command, and an opaque dynamic that never evaluates to a command is data too --
 `{az_select, ?get(ids)}` rendering `az-select="[1,2,3]"` never enters the set, `select` is never
-delegated, and the value never reaches the command interpreter. That matters because a command list
+delegated, and the value never reaches the command interpreter -- nor when it changes: a diff op
+writing it, like a `?local` attribute write, proves nothing, since the server ships a command a
+diff turns up as a JSON array and proves its name on that same frame, so a string value in an op
+is always data. That matters because a command list
 is a bare JSON array (`arizona_effect:encode/1` emits a single command unwrapped, `[0,"inc"]`), so
 `[1,2,3]` is a structurally valid command -- `toggle` with selector `2` -- and **no client-side
 inspection of the value can separate the two**. Delegating on guesswork would both leave declared
@@ -173,7 +176,7 @@ browser's scroll fast path for the whole page, so an app that only wants to *obs
 would pay scroll jank it never asked for. `az-prevent-default` is recorded in every attribute form
 (it is the one directive the client reads out of the declared set), so on the common path its
 presence is known before the first listener is registered. When the declaration arrives **after** a
-forced-passive type was bound (a later delta frame, a runtime attribute write), the client
+forced-passive type was bound (a later delta frame, a `set_attr` effect), the client
 re-registers those listeners non-passive (`declarePreventDefault`) -- passive is fixed at
 registration, so without the rebind the page would keep ignoring the `preventDefault` it declared.
 The flag must be **stated in both directions**: omitting it entirely makes Chromium register
@@ -234,14 +237,19 @@ imply nothing.
 
 **Three cases the compile-time set cannot cover, and how each is handled:**
 
-- **A runtime attribute write** (`arizona_js:set_attr(sel, "az-toggle", ...)`) uses a name no
-  template contains. Every such write funnels through `applySetAttrOp`, which records the name it
-  just wrote.
+- **A runtime `set_attr`/`toggle_attr` effect** (`arizona_js:set_attr(sel, "az-toggle", ...)`)
+  uses a name no template contains. The effect records the name before writing it: the command
+  that wrote it was itself proven (it ran under a proven name, or a handler returned it). It is
+  the only attribute write that proves a name -- `applySetAttrOp` itself records nothing, so the
+  diff path (`OP_SET_ATTR`, an `OP_ITEM_PATCH` inner op) and a `?local` attribute slot, which
+  carry app data, never do.
 - **`?raw` markup and host-inserted DOM** declare nothing the compiler saw. Call the exported
   `mountHooks` on it, the same contract hooks already have; it walks with `getAttributeNames()`,
   which is exact because the parser already did the parsing. That call **is** the proof: every
   `az-*` name on the markup becomes a proven type for the page, so call it only on markup whose
-  `az-*` attributes the host wrote itself, never on markup holding untrusted data. Calling it on already-mounted markup is
+  `az-*` attributes the host wrote itself, never on markup holding untrusted data. Pass only that
+  subtree, never `document` or a server-rendered view: a scan there proves the names of every
+  data value on it (`{az_select, ?get(ids)}`). Calling it on already-mounted markup is
   safe (`mountHook` returns early for an element it already tracks).
 - **Window-targeted events** (`resize`, `online`/`offline`, `hashchange`, `popstate`, `storage`)
   are not delegated at all: delegation binds on Documents, and their propagation path does not
