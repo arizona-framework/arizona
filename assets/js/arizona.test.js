@@ -8680,6 +8680,63 @@ describe('fetch + az-form-reset via the submit listener', () => {
         mock.restore();
     });
 
+    // A field in no view (a fetch on az-change of a layout input) falls back to
+    // the root view too; as the trigger it would put its own value in the payload.
+    it('relays a response push_event without the value of a field outside any view', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<form><input id="pw" type="password" name="pw" value="hunter2" /></form>' +
+            '<div id="v" az-view></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#pw'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual([null, 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
+    // A field inside a view keeps that view as the trigger, as before.
+    it('relays a response push_event to the view of a field inside one, without its value', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona.js');
+        const mock = setupMockWorker(mod);
+        mock.simulateOpen();
+
+        document.body.innerHTML =
+            '<div id="v" az-view><form><input id="pw" type="password" name="pw" value="hunter2" />' +
+            '</form></div>';
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                text: () => Promise.resolve(JSON.stringify({ e: [[0, 'saved', { ok: 1 }]] })),
+            }),
+        );
+
+        mod.executeJS(document.querySelector('#pw'), null, [22, '/account', {}]);
+
+        await vi.waitFor(() => {
+            const ev = mock.getSentMessages().find((m) => m[1] === 'saved');
+            expect(ev).toEqual(['v', 'saved', { ok: 1 }]);
+        });
+
+        mock.restore();
+    });
+
     it('defers the reset when the fetch is wrapped in transition(...) (E2)', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');

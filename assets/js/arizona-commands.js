@@ -588,13 +588,13 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                         later(() => {
                             // Apply the effects body whenever it parses -- even on a 4xx, so
                             // the server can drive inline validation with a real status. The
-                            // effects run against the enclosing view element (not the form, not
-                            // document), so a `push_event` in the response resolves to the
-                            // submitting view and re-renders it via handle_event (no pubsub) --
-                            // without scraping the form's fields into the event payload (the
-                            // trigger is never the form, so autoPayload is empty; the controller
-                            // passes any result explicitly). An empty 2xx body (a cookie-only
-                            // response) applies nothing. on_error runs only when there is no
+                            // effects run against the enclosing view element (not the form or
+                            // a field, not document), so a `push_event` in the response resolves
+                            // to the submitting view and re-renders it via handle_event (no
+                            // pubsub) -- without scraping the form's fields into the event
+                            // payload (the trigger is never a form or a field, so autoPayload is
+                            // empty; the controller passes any result explicitly). An empty 2xx
+                            // body (a cookie-only response) applies nothing. on_error runs only when there is no
                             // usable effects body: a non-JSON page or an empty non-2xx.
                             let effects = null;
                             if (text) {
@@ -612,14 +612,17 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                             // flow into the .catch would fire on_error/arizona:fetch-error
                             // as a phantom network failure, after effects partially applied.
                             if (effects !== null) {
-                                // Never the form itself (a form view root, or a form
-                                // in no view): as a push_event trigger it would
-                                // scrape its fields into the payload. A detached
-                                // stand-in names the same target instead.
-                                let trigger = el?.closest?.('[az-view]') ?? el;
-                                if (form && trigger === form) {
-                                    const id = resolveTarget(form);
-                                    trigger = form.ownerDocument.createElement('div');
+                                // Never the form or a field: as a push_event trigger
+                                // either would put what was typed in the payload. With
+                                // no enclosing view the trigger would be `el` itself
+                                // (a form, or a field fetching on az-change), and a
+                                // view can be the form; a detached stand-in names the
+                                // same target instead.
+                                const view = el?.closest?.('[az-view]') ?? null;
+                                let trigger = view ?? el;
+                                if (el && (!view || view === form)) {
+                                    const id = resolveTarget(el);
+                                    trigger = el.ownerDocument.createElement('div');
                                     if (id) trigger.setAttribute('az-target', id);
                                 }
                                 try {
