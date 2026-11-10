@@ -594,8 +594,9 @@ function execOne(el, event, cmd, prefix = '', index = 0) {
                             // pubsub) -- without scraping the form's fields into the event
                             // payload (the trigger is never a form or a field, so autoPayload is
                             // empty; the controller passes any result explicitly). An empty 2xx
-                            // body (a cookie-only response) applies nothing. on_error runs only when there is no
-                            // usable effects body: a non-JSON page or an empty non-2xx.
+                            // body (a cookie-only response) applies nothing. on_error runs only
+                            // when there is no usable effects body: a non-JSON page or an empty
+                            // non-2xx.
                             let effects = null;
                             if (text) {
                                 try {
