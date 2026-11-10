@@ -377,6 +377,19 @@ function scanEvents(root) {
 }
 
 /**
+ * Tell the console and the app that a submit ran nothing: every drop warns and
+ * dispatches `arizona:submit-dropped` on the form, so the app can show feedback.
+ * @param {Element} form
+ * @param {'disconnected'|'unproven'} reason
+ */
+function dropSubmit(form, reason) {
+    console.warn(`[arizona] az-submit dropped: ${reason}`);
+    form.dispatchEvent(
+        new CustomEvent('arizona:submit-dropped', { bubbles: true, detail: { reason } }),
+    );
+}
+
+/**
  * Whether an [az-key] item drag is in flight: set on its `dragstart`, cleared
  * on `dragend` or when an az-drop claims the drop. Module-wide, not per
  * document, so an item dragged between the main page and a popped-out view is
@@ -426,7 +439,12 @@ export function bindDocumentEvents(target, signal, abort) {
             // URL. Before the first open and during reconnect backoff that used to
             // be exactly what happened.
             e.preventDefault();
-            if (!_eventTypes.has('submit')) return;
+            // Unproven: the value is app data (or the proof has not arrived, on a
+            // page with nowhere to embed it), and the user still pressed submit.
+            if (!_eventTypes.has('submit')) {
+                dropSubmit(form, 'unproven');
+                return;
+            }
             const raw = form.getAttribute('az-submit');
             /** @type {{event?: boolean, fetch?: boolean, nav?: Array<*>}} */
             let needs = {};
@@ -447,13 +465,7 @@ export function bindDocumentEvents(target, signal, abort) {
                     return;
                 }
                 if (!host.ready() && (needs.event || needs.nav)) {
-                    console.warn('[arizona] az-submit dropped: disconnected');
-                    form.dispatchEvent(
-                        new CustomEvent('arizona:submit-dropped', {
-                            bubbles: true,
-                            detail: { reason: 'disconnected' },
-                        }),
-                    );
+                    dropSubmit(form, 'disconnected');
                     return;
                 }
                 // Flush pending debounced inputs so the server sees them before the

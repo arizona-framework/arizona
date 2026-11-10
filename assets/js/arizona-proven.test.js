@@ -255,6 +255,36 @@ describe('an unproven az-* value is data on a live page', () => {
         expect(post.defaultPrevented).toBe(true);
     });
 
+    // The submit is prevented either way (a native one would put the fields in the
+    // URL), so a page whose proof has not arrived must say so, as a disconnected
+    // drop does: the user pressed a button and nothing happened.
+    it('warns and dispatches arizona:submit-dropped on an unproven az-submit', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><form id="f" az-submit='[22,"/login",{}]'>` +
+            `<input name="u" value="a"></form></div>`;
+        w = mockWorker(mod);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        /** @type {any[]} */
+        const seen = [];
+        const onDrop = (/** @type {Event} */ e) => seen.push(e);
+        document.addEventListener('arizona:submit-dropped', onDrop);
+        try {
+            const form = document.getElementById('f');
+            form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(seen).toHaveLength(1);
+            expect(seen[0].target).toBe(form);
+            expect(seen[0].detail).toEqual({ reason: 'unproven' });
+            expect(seen[0].cancelable).toBe(false);
+            expect(warn.mock.calls.filter(([m]) => m.includes('az-submit dropped'))).toHaveLength(
+                1,
+            );
+        } finally {
+            document.removeEventListener('arizona:submit-dropped', onDrop);
+        }
+    });
+
     it('does not run an unproven az-drop', async () => {
         const mod = await fresh();
         document.body.innerHTML =

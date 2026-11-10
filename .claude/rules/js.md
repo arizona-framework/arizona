@@ -196,7 +196,9 @@ submits it with the form's own method -- a GET by default, putting every field (
 included) in the URL -- which is what happened before the first open and during reconnect backoff.
 That holds for a form with an explicit `method`/`action` too: it no longer falls back to a native
 submission while disconnected. The listener always calls `preventDefault`, then decides by what
-the commands need (`socketNeeds`) -- when `az-submit` is proven; an unproven one runs nothing:
+the commands need (`socketNeeds`) -- when `az-submit` is proven. An unproven one runs nothing and
+is a drop like the disconnected one below (a warning and `arizona:submit-dropped` with
+`detail: {reason: 'unproven'}`): its value is app data, or its proof has not arrived yet.
 
 - **An SPA `navigate`/`patch` alone** (top level or under `transition`) degrades to a full load of
   its URL (`location.assign`, or `location.replace` for a `replace` navigate), exactly what a
@@ -208,8 +210,8 @@ the commands need (`socketNeeds`) -- when `az-submit` is proven; an unproven one
   dispatches a non-cancelable, bubbling `arizona:submit-dropped` `CustomEvent` on the form,
   `detail: {reason: 'disconnected'}`, so the app can tell the user.
 - **A `fetch` or client-only list** runs: an HTTP login form needs no socket. It runs under the
-  page's embedded proof of `az-submit`, so on a page with nowhere to embed it waits for the
-  connect frame.
+  page's embedded proof of `az-submit`, so on a page with nowhere to embed it is dropped as
+  `unproven` until the connect frame proves the name.
 
 Queueing for the reconnect was rejected: a submit replayed seconds later, against a view the resync
 may have remounted, is not what the user pressed. To disable the submit button while down, style it
