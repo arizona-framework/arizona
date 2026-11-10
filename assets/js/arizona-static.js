@@ -19,7 +19,12 @@
 
 import { applyChoosers } from './arizona-attrs.js';
 import { closeAllPip } from './arizona-docs.js';
-import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
+import {
+    bindDocumentEvents,
+    embeddedAttrs,
+    noteAzAttrs,
+    unbindDocuments,
+} from './arizona-events.js';
 import { destroyAllHooks, mountHooks } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
 import { loadPage, warnOnce } from './arizona-util.js';
@@ -29,9 +34,6 @@ export { exitPip, requestPip } from './arizona-docs.js';
 export { mountHooksPublic as mountHooks } from './arizona-events.js';
 export { hooks } from './arizona-hooks.js';
 export { get, set, setAll } from './arizona-locals.js';
-
-/** The element `arizona_static` writes the page's proven `az-*` names into. */
-const ATTRS_ID = 'arizona-attrs';
 
 setHost({
     // Nothing to wait for: commands run whenever an event fires.
@@ -87,23 +89,6 @@ function start(opts = {}) {
     };
     _stop = stop;
     return stop;
-}
-
-/**
- * The names `arizona_static` embedded, or none (a page with no event attributes
- * gets no element).
- * @returns {string[]}
- */
-function embeddedAttrs() {
-    const el = document.getElementById(ATTRS_ID);
-    if (!el) return [];
-    try {
-        const names = JSON.parse(el.textContent || '[]');
-        return Array.isArray(names) ? names.filter((n) => typeof n === 'string') : [];
-    } catch {
-        console.warn(`[arizona] #${ATTRS_ID} is not a JSON list of names; delegating nothing`);
-        return [];
-    }
 }
 
 export { start };

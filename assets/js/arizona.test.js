@@ -15,6 +15,7 @@ import {
     setAll,
 } from './arizona.js';
 import { applyChoosers } from './arizona-attrs.js';
+import { embedAttrs } from './test-proofs.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,7 +93,9 @@ function setupMockWorker(mod) {
         return mockWorkerInstance;
     };
 
+    const unembed = embedAttrs();
     const disconnect = mod.connect('/ws');
+    unembed();
 
     return {
         worker: mockWorkerInstance,
@@ -4783,6 +4786,8 @@ describe('saveFormState / restoreFormState edge cases', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
+        // Connected first: a replay proposes only under a name the page proved.
+        const mock = setupMockWorker(mod);
         document.body.innerHTML =
             '<form id="f" az-change="[0,&quot;validate&quot;]"><div id="v" az-view><input name="x" value="val"></div></form>';
         mod.saveFormState();
@@ -4790,7 +4795,6 @@ describe('saveFormState / restoreFormState edge cases', () => {
         document.body.innerHTML =
             '<form id="f" az-change="[0,&quot;validate&quot;]"><div id="v" az-view><input name="x" value=""></div></form>';
 
-        const mock = setupMockWorker(mod);
         mock.simulateOpen();
         mock.posted.length = 0;
         mod.restoreFormState();
@@ -4804,6 +4808,8 @@ describe('saveFormState / restoreFormState edge cases', () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
 
+        // Connected first: a replay proposes only under a name the page proved.
+        const mock = setupMockWorker(mod);
         document.body.innerHTML =
             '<form id="f" az-change="[0,&quot;my_change&quot;]"><div id="v" az-view><input name="a" value="1"></div></form>';
         mod.saveFormState();
@@ -4811,7 +4817,6 @@ describe('saveFormState / restoreFormState edge cases', () => {
         document.body.innerHTML =
             '<form id="f" az-change="[0,&quot;my_change&quot;]"><div id="v" az-view><input name="a" value=""></div></form>';
 
-        const mock = setupMockWorker(mod);
         mock.simulateOpen();
         mock.posted.length = 0;
         mod.restoreFormState();

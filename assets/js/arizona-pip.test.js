@@ -315,6 +315,22 @@ describe('Document Picture-in-Picture (multi-document views)', () => {
         pip.fire('pagehide');
     });
 
+    // A popped-out view keeps the main page's proofs: a static value under a name
+    // the server never proved is app data there too.
+    it('does not run an unproven az-click in a PiP document', async () => {
+        const mod = await fresh();
+        document.body.innerHTML = `<div id="v15" az-view az="0"><button id="b15" az-click='[0,"evil"]'>x</button></div>`;
+        const conn = connectMock(mod);
+        const pip = makePipWindow();
+        stubPip(pip);
+        await mod.requestPip('v15');
+
+        pip.document.getElementById('b15').dispatchEvent(new Event('click', { bubbles: true }));
+
+        expect(conn.sent()).toEqual([]);
+        pip.fire('pagehide');
+    });
+
     it('delegates a type declared before the window opened', async () => {
         const mod = await fresh();
         document.body.innerHTML =

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { embedAttrs } from './test-proofs.js';
 
 // Parity with a larger design of server-owned controls: its scenarios for the core
 // guarantee, ported to `az-ctl` (a control the server renders shows the server's
@@ -53,7 +54,9 @@ async function start(html, opts = {}) {
             return inst;
         }
     );
+    const unembed = embedAttrs();
     const disconnect = mod.connect('/ws');
+    unembed();
     const frame = (/** @type {any[]} */ data) => inst.onmessage({ data });
     const c = {
         mod,

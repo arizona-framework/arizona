@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { embedAttrs } from './test-proofs.js';
 
 // Op codes (must match include/arizona_wire.hrl / include/arizona_effect.hrl).
 const OP_TEXT = 0;
@@ -42,7 +43,9 @@ function setupMockWorker() {
             return worker;
         }
     );
+    const unembed = embedAttrs();
     const disconnect = mod.connect('/ws');
+    unembed();
     const sent = () => posted.filter((d) => d[0] === 1).map((d) => JSON.parse(d[1]));
     /** @type {(ops: *, effects?: *, resync?: boolean, ref?: number|null) => void} */
     const frame = (ops, effects = null, resync = false, ref = null) =>

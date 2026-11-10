@@ -132,16 +132,17 @@ describe('open event delegation', () => {
         expect(w.sent()).toEqual([['v', 'new"<&', {}]]);
     });
 
-    it('delegates the common types before the connect frame arrives', async () => {
+    it('delegates the names the page embeds before the connect frame arrives', async () => {
         const mod = await fresh();
-        document.body.innerHTML = `<div id="v" az-view><button id="b" az-click='[0,"clicked"]'>go</button></div>`;
+        document.body.innerHTML =
+            `<div id="v" az-view><button id="b" az-click='[0,"clicked"]'>go</button></div>` +
+            `<script type="application/json" id="arizona-attrs">["az-click"]</script>`;
         w = mockWorker(mod);
         w.open();
 
         // The socket is open, so `_connected` is true and the user can click -- but
-        // the name set is a server frame and arrives a round trip later. Without a
-        // bootstrap set the document has no listeners at all in that window and the
-        // click is lost with no symptom.
+        // the name set is a server frame and arrives a round trip later. The page
+        // carries the same set from its render, so the click finds its proof.
         document.getElementById('b').click();
 
         expect(w.sent()).toEqual([['v', 'clicked', {}]]);
@@ -493,7 +494,8 @@ describe('open event delegation', () => {
         document.body.innerHTML = `<div id="v" az-view><a id="l" href="#" az-click="" az-prevent-default>x</a></div>`;
         w = mockWorker(mod);
         w.open();
-        w.names(['az-prevent-default']);
+        // A bare event attribute is proven: it can only be the author's.
+        w.names(['az-click', 'az-prevent-default']);
 
         const ev = fire(document.getElementById('l'), 'click', true, true);
         expect(ev.defaultPrevented).toBe(true);

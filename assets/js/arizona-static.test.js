@@ -55,9 +55,6 @@ describe('static client (no server)', () => {
         expect(sel.value).toBe('b');
     });
 
-    // `dblclick`, not `click`: the common types (click, input, ...) are delegated
-    // on every page from the start, so only another type shows the embedded names
-    // being read.
     it('delegates the events the page embeds, running their commands', async () => {
         const { start } = await fresh();
         document.body.innerHTML =

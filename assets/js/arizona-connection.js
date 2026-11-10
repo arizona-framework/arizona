@@ -1,7 +1,13 @@
 import { applyChooser, applyChoosers, syncsProp } from './arizona-attrs.js';
 import { applyEffects, executeJS, formFields, osHost } from './arizona-commands.js';
 import { allDocs, closeAllPip } from './arizona-docs.js';
-import { bindDocumentEvents, noteAzAttrs, unbindDocuments } from './arizona-events.js';
+import {
+    bindDocumentEvents,
+    embeddedAttrs,
+    noteAzAttrs,
+    proven,
+    unbindDocuments,
+} from './arizona-events.js';
 import { destroyAllHooks, mountHooks, notifyUpdated } from './arizona-hooks.js';
 import { setHost } from './arizona-host.js';
 import { applyOps, OP, opsMatchTransition } from './arizona-ops.js';
@@ -1171,7 +1177,9 @@ export function saveFormState(suspect = null) {
                 new FormData(/** @type {HTMLFormElement} */ (form)),
                 /** @type {HTMLFormElement} */ (form),
             );
-            const azChange = form.getAttribute('az-change') || null;
+            // Only under a proven name: anything else is app data, which a
+            // replay would otherwise run as commands.
+            const azChange = (proven('az-change') && form.getAttribute('az-change')) || null;
             const replay = !suspect?.has(form.id) && (held.get(form.id)?.replay ?? true);
             _savedForms.set(form.id, { fields: data, azChange, replay });
         });
@@ -1380,7 +1388,11 @@ export function connect(endpoint, params = {}) {
 
     // Event delegation on the main document: az-* events, form submit, and
     // drag-and-drop. (requestPip binds the same set on a PiP window's document.)
+    // The names the page embedded are the ones the connect frame will carry,
+    // known now: the socket's set arrives a round trip after the open, and a
+    // click or an HTTP-form submit in between must find its proof.
     bindDocumentEvents(document, signal);
+    noteAzAttrs(embeddedAttrs());
 
     // Take over scroll restoration so the browser doesn't scroll to a stale
     // position before OP_REPLACE swaps in the new content. See the block
