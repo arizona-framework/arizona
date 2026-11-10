@@ -928,8 +928,11 @@ export function restoreFormState() {
             cursor[name] = i + 1;
             return val[i];
         };
-        for (const el of formEl.elements) {
-            if (el instanceof HTMLInputElement) {
+        // Matched by local name, not `instanceof`: a resync re-parses a popped-out
+        // (PiP) form in its window's realm, whose constructors are not ours.
+        for (const field of formEl.elements) {
+            const el = /** @type {any} */ (field);
+            if (el.localName === 'input') {
                 if (!el.name || el.type === 'file') continue;
                 if (el.type === 'checkbox') {
                     // Check by value membership: a checkbox group saves only the
@@ -948,7 +951,7 @@ export function restoreFormState() {
                     // input there, which outweighs a stale server-owned value.
                     if (v !== undefined && !el.readOnly) el.value = v;
                 }
-            } else if (el instanceof HTMLSelectElement) {
+            } else if (el.localName === 'select') {
                 if (!el.name || !(el.name in fields)) continue;
                 if (el.multiple) {
                     const val = fields[el.name];
@@ -958,7 +961,7 @@ export function restoreFormState() {
                     const v = nextValue(el.name);
                     if (v !== undefined) el.value = v;
                 }
-            } else if (el instanceof HTMLTextAreaElement) {
+            } else if (el.localName === 'textarea') {
                 if (el.name && el.name in fields) {
                     const v = nextValue(el.name);
                     if (v !== undefined && !el.readOnly) el.value = v;

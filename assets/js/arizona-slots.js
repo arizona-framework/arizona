@@ -183,7 +183,12 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
  */
 export function parseFragmentIn(parent, html) {
     const doc = parent?.ownerDocument ?? document;
-    if (parent instanceof Element && parent.namespaceURI === SVG_NS) {
+    // `nodeType`, not `instanceof Element`: a PiP document's nodes come from its
+    // window's realm, and a miss parses SVG children as HTML.
+    if (
+        parent?.nodeType === Node.ELEMENT_NODE &&
+        /** @type {Element} */ (parent).namespaceURI === SVG_NS
+    ) {
         const ctx = /** @type {Element} */ (parent.cloneNode(false));
         ctx.innerHTML = html;
         const frag = doc.createDocumentFragment();
