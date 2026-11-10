@@ -418,8 +418,15 @@ export function bindDocumentEvents(target, signal, abort) {
                 // Flush pending debounced inputs so the server sees them before the
                 // submit. Only while connected: a flush now would send them into a
                 // closed socket, while a still-armed timer can deliver them later.
-                if (host.ready())
-                    form.querySelectorAll('[az-debounce],[az-throttle]').forEach(flushTimer);
+                // `form.elements` too: a control associated by `form="id"` sits
+                // outside the form element, and a missed flush lands after the submit.
+                if (host.ready()) {
+                    const sel = '[az-debounce],[az-throttle]';
+                    const pending = new Set(form.querySelectorAll(sel));
+                    for (const el of /** @type {HTMLFormElement} */ (form).elements)
+                        if (el.matches(sel)) pending.add(el);
+                    for (const el of pending) flushTimer(el);
+                }
                 if (cmds) executeJS(form, e, withTransitionAttr(form, cmds));
             } catch (err) {
                 const detail = err instanceof Error ? err.message : String(err);

@@ -6881,6 +6881,41 @@ describe('scheduleSend -- debounce / throttle', () => {
         expect(mock.getSentMessages()).toHaveLength(2);
     });
 
+    // A submit flushes the form's pending debounced sends first, so the server
+    // sees the last typed value before the submit event. A control associated by
+    // `form="id"` from outside the form element is one of its fields too.
+    for (const [where, markup] of [
+        [
+            'inside the form',
+            `<form id="f" az-submit='[[0,"save"]]'>` +
+                `<input id="inp" name="q" az-input='[[0,"typed"]]' az-debounce="300" /></form>`,
+        ],
+        [
+            'associated by form="id"',
+            `<form id="f" az-submit='[[0,"save"]]'></form>` +
+                `<input id="inp" form="f" name="q" az-input='[[0,"typed"]]' az-debounce="300" />`,
+        ],
+    ]) {
+        it(`submit flushes a pending debounced input ${where} before the submit`, async () => {
+            vi.resetModules();
+            const mod = await import('./arizona.js');
+            setupView('page', markup);
+            mock = setupMockWorker(mod);
+            mock.simulateOpen();
+
+            const inp = /** @type {HTMLInputElement} */ (document.getElementById('inp'));
+            inp.value = 'abc';
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+            expect(mock.getSentMessages()).toHaveLength(0);
+
+            document
+                .getElementById('f')
+                ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+            expect(mock.getSentMessages().map((m) => m[1])).toEqual(['typed', 'save']);
+        });
+    }
+
     it('event-name debounce stores pending, flushes on named event', async () => {
         vi.resetModules();
         const mod = await import('./arizona.js');
