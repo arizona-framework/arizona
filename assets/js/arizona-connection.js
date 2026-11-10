@@ -399,12 +399,25 @@ function applyFrame(apply, transition) {
     _heldFrames = held;
     runTransition(transition, () => {
         if (_heldFrames !== held) return;
+        // Each frame on its own: once `_heldFrames` is cleared, a throw would
+        // drop every frame after it with nothing left to apply them. The first
+        // error is rethrown after the rest have run.
+        /** @type {unknown[]} */
+        const errors = [];
         try {
             apply();
-        } finally {
-            _heldFrames = null;
-            for (const f of held) f();
+        } catch (err) {
+            errors.push(err);
         }
+        _heldFrames = null;
+        for (const f of held) {
+            try {
+                f();
+            } catch (err) {
+                errors.push(err);
+            }
+        }
+        if (errors.length) throw errors[0];
     });
 }
 

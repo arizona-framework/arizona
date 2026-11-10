@@ -725,6 +725,35 @@ describe('view transitions -- frame order', () => {
         expect(value()).toBe('ab');
     });
 
+    // A held frame that throws must not drop the held frames after it.
+    it('a held frame that throws still applies the held frames after it', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage(null, [null]);
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'b']]);
+        expect(runPending).toThrow();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('a');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('b');
+    });
+
+    // The first error is the one reported, and a held frame that defers again
+    // still holds the frames after it, even past one that threw.
+    it('a throwing held frame keeps the order behind a held frame that defers again', () => {
+        const runPending = deferViewTransitions();
+        document.body.innerHTML = '<div id="page" az-view><p az="0">x</p><p az="1">y</p></div>';
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'a']], null, wrappedEvent('a'));
+        _mock.simulateMessage(null, [null]);
+        _mock.simulateMessage([[OP.TEXT, 'page:0', 'ab']], null, wrappedEvent('b'));
+        _mock.simulateMessage([[OP.TEXT, 'page:1', 'b']]);
+        expect(runPending).toThrow();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('a');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('y');
+        runPending();
+        expect(document.querySelector('[az="0"]').innerHTML).toBe('ab');
+        expect(document.querySelector('[az="1"]').innerHTML).toBe('b');
+    });
+
     // A new connection must not wait on, or receive, frames of a torn-down one.
     it('disconnect drops the deferred frame and the frames held behind it', () => {
         const runPending = deferViewTransitions();
