@@ -75,6 +75,7 @@ render(Bindings) ->
 -export([mark_esc/1]).
 -export([effect_in_content/1]).
 -export([raw_not_text/1]).
+-export([raw_to_bin/1]).
 -export([dyn_az/1]).
 -export([format_error/1]).
 -export([format_error/2]).
@@ -793,8 +794,8 @@ bool_attr(Value) -> Value.
 -doc """
 Classifies the trusted shapes: a `raw/1` opt-out (`{arizona_raw, V}`, returned
 unwrapped) and an effect command or command list (`{arizona_effect, _}`). Every
-other value is `value`. A raw holding a map raises `{raw_template, Map}`, so every
-caller -- content and each backend's attribute renderer -- refuses it alike.
+other value is `value`. A raw holding a map is still `{raw, Map}`: the callers'
+raw arms refuse it (`raw_to_bin/1`), so no other shape pays to test for it.
 
 The definition of the shape vocabulary -- `escape_value/2`, `mark_esc/1`, and
 the backends' attribute renderers dispatch on it. `to_bin/1` matches the raw
@@ -807,7 +808,6 @@ and `mark_esc/1` deliberately unwraps and re-escapes a helper-produced raw.
 -spec classify_trusted(Value) -> {raw, term()} | {effect, Effect} | value when
     Value :: term(),
     Effect :: term().
-classify_trusted({arizona_raw, V}) when is_map(V) -> raw_not_text(V);
 classify_trusted({arizona_raw, V}) -> {raw, V};
 classify_trusted({arizona_effect, _} = Cmd) -> {effect, Cmd};
 classify_trusted([{arizona_effect, _} | _] = Cmds) -> {effect, Cmds};
@@ -841,7 +841,7 @@ effect command is not text and raises `{effect_in_content, Cmd}`.
     Value :: term().
 escape_value(Backend, V0) ->
     case classify_trusted(V0) of
-        {raw, V} -> to_bin(V);
+        {raw, V} -> raw_to_bin(V);
         {effect, Cmd} -> effect_in_content(Cmd);
         value -> Backend:escape(to_bin(V0))
     end.
@@ -881,8 +881,8 @@ the raw and escape its inner value like any plain scalar, so a helper wrapping
 user data in `raw/1` cannot smuggle trusted markup past the escaper (on SSR or
 across the live diff). A map held directly by the raw -- a template, a descriptor,
 a `?local` -- is not text, so it raises `{raw_template, Map}`, as a literal `?raw`
-around one does (`classify_trusted/1` raises it). A raw inside the raw is unwrapped
-the same way; a map in a list is refused only at output (see `raw/1`).
+around one does. A raw inside the raw is unwrapped the same way; a map in a list is
+refused only at output (see `raw/1`).
 """.
 -spec mark_esc(Value) -> term() when
     Value :: term().
@@ -892,7 +892,7 @@ mark_esc(V) when is_map(V) ->
     V;
 mark_esc(V0) ->
     case classify_trusted(V0) of
-        {raw, V} -> mark_esc(V);
+        {raw, V} -> mark_raw_esc(V);
         {effect, Cmd} -> effect_in_content(Cmd);
         value -> {arizona_esc, V0}
     end.
@@ -903,6 +903,18 @@ mark_esc(V0) ->
 %% init spliced, a template one rendered, any other escaped -- so it keeps diffing.
 mark_local_init({arizona_raw, _} = Raw) -> Raw;
 mark_local_init(Init) -> mark_esc(Init).
+
+mark_raw_esc(V) when is_map(V) -> raw_not_text(V);
+mark_raw_esc(V) -> mark_esc(V).
+
+%% Internal: the raw arm of a `classify_trusted/1` caller. A map held by the raw is
+%% refused here rather than in `classify_trusted/1`, where the raise would cost every
+%% caller's plain-value path a test of the returned shape.
+-doc false.
+-spec raw_to_bin(Value) -> binary() when
+    Value :: term().
+raw_to_bin(V) when is_map(V) -> raw_not_text(V);
+raw_to_bin(V) -> to_bin(V).
 
 %% Internal: raises `{raw_template, Map}` for a map -- a template, descriptor or
 %% `?local` -- held directly by a `raw/1`, which opts text out of escaping. Raised

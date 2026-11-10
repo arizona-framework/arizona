@@ -2113,7 +2113,7 @@ make_op(Az, {attr, Attr, Val}, _Old) ->
         %% nothing, so a bare string would leave `&amp;` literal in the DOM after the
         %% first update. Tagged like the content `?raw`, so the client parses it.
         {raw, V} ->
-            [?OP_SET_ATTR, Az, Attr, #{~"raw" => arizona_template:to_bin(V)}];
+            [?OP_SET_ATTR, Az, Attr, #{~"raw" => arizona_template:raw_to_bin(V)}];
         value ->
             [?OP_SET_ATTR, Az, Attr, arizona_template:to_bin(Val)]
     end;

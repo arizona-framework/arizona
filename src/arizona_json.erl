@@ -226,6 +226,7 @@ wire_attr(_Name, {arizona_bool, Bool}) ->
 wire_attr(_Name, Value) ->
     case arizona_template:classify_trusted(Value) of
         {effect, Cmds} -> arizona_effect:json_value(Cmds);
+        {raw, V} when is_map(V) -> arizona_template:raw_not_text(V);
         _NotACommand -> arizona_template:to_bin(Value)
     end.
 

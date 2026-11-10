@@ -1356,7 +1356,7 @@ render_attr(Name, true) ->
 render_attr(Name, Value) ->
     case arizona_template:classify_trusted(Value) of
         {raw, V} ->
-            attr_unescaped(Name, arizona_template:to_bin(V));
+            attr_unescaped(Name, arizona_template:raw_to_bin(V));
         {effect, Cmd} ->
             %% A live render already observed this name where it evaluated the
             %% value (arizona_eval). The request-free SSR walk evaluates inline
